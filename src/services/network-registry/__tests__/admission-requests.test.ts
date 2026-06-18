@@ -44,7 +44,6 @@ import {
   makeSignedRegistration,
   randomNonce,
   resetStores,
-  makeSignedAdminDecision,
   makeSignedAdminRead,
   type PrincipalKey,
 } from "./helpers";
@@ -100,9 +99,8 @@ async function registerAndGetRequest(principalId: string): Promise<AdmissionRequ
 }
 
 /**
- * Build a signed admission decision for the new /admission-requests routes.
- * The claim uses "admit"/"reject" (AdmissionDecisionClaim vocabulary, not the
- * legacy "grant"/"reject" of IssuanceDecisionClaim).
+ * Build a signed admission decision for the /admission-requests routes.
+ * The claim uses "admit"/"reject" (AdmissionDecisionClaim vocabulary, ADR-0015).
  */
 async function makeSignedAdmissionDecision(
   requestId: string,

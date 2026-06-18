@@ -107,14 +107,12 @@ describe("cortex network admit — dry-run (default)", () => {
     const res = await dispatchNetwork([
       "admit", "req-abc-123",
       "--admin-seed", seedPath,
-      "--network", "metafactory-community",
     ]);
 
     expect(res.exitCode).toBe(0);
     expect(fetchCalled).toBe(false);
     expect(res.stdout).toContain("dry-run");
     expect(res.stdout).toContain("req-abc-123");
-    expect(res.stdout).toContain("metafactory-community");
   });
 
   test("dry-run --json emits applied:false envelope", async () => {

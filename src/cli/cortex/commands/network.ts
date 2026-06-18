@@ -280,10 +280,16 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     // decision claim → POSTs to `/admission-requests/:id/admit` → principal
     // is ADMITTED on the roster. Mints nothing (no arc nats add-bot).
     // Dry-run by DEFAULT: prints the claim it WOULD post; --apply executes.
+    //
+    // NOTE: --network is intentionally absent. The admission request's
+    // network_id is set at register time (when the principal calls
+    // POST /principals/:id/register). The admit subcommand reads the stored
+    // request and acts on whatever network_id the registry recorded.
+    // Tracking issue: cortex#1145 — thread network_id from register through
+    // the admission gate so the stored row is always network-scoped.
     admit: {
       positionals: ["request-id"],
       flags: {
-        "--network": "value",
         "--admin-seed": "value",
         "--registry-url": "value",
         "--discord-member": "value",
@@ -1295,7 +1301,7 @@ async function buildAdmissionDecisionBody(
 }
 
 /**
- * `cortex network admit <request-id> --network <id> --admin-seed <path> [--apply]`
+ * `cortex network admit <request-id> --admin-seed <path> [--apply]`
  *
  * ADR-0015 replacement for `cortex creds grant`. Signs an admission decision
  * claim and POSTs it to `/admission-requests/:id/admit`. Admits the principal
@@ -1303,6 +1309,9 @@ async function buildAdmissionDecisionBody(
  *
  * Dry-run by default (safe posture). Pass --apply to execute.
  * Optionally assigns Discord role (O-5) via --discord-member when applied.
+ *
+ * --network is intentionally absent: the request's network_id is stored at
+ * register time. See cortex#1145 to thread it end-to-end.
  */
 async function runAdmit(
   requestId: string,
@@ -1320,7 +1329,6 @@ async function runAdmit(
   if (!applyRes.ok) return usageError("admit", applyRes.reason, json);
 
   const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_ADMIT_REGISTRY_URL;
-  const networkId = optionalValueFlag(flags, "--network");
   const discordMember = optionalValueFlag(flags, "--discord-member");
   const discordServer = optionalValueFlag(flags, "--discord-server");
   const discordGuild = optionalValueFlag(flags, "--discord-guild");
@@ -1340,7 +1348,6 @@ async function runAdmit(
             subcommand: "admit",
             request_id: requestId,
             registry_url: registryUrl,
-            ...(networkId !== undefined && { network_id: networkId }),
             admin_fingerprint: material.fingerprint,
             applied: "false",
           }),
@@ -1350,7 +1357,6 @@ async function runAdmit(
     const lines = [
       `cortex network admit ${requestId}: dry-run (no registry write; pass --apply to execute)`,
       `  registry:          ${registryUrl}`,
-      ...(networkId !== undefined ? [`  network:           ${networkId}`] : []),
       `  admin_fingerprint: ${material.fingerprint}`,
       ...(discordMember !== undefined ? [`  discord_member:    ${discordMember}`] : []),
       ``,
@@ -1472,7 +1478,6 @@ async function runAdmit(
       request_id: requestId,
       principal_id: requestPrincipalId,
       admin_fingerprint: material.fingerprint,
-      ...(networkId !== undefined && { network_id: networkId }),
       ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
     };
     if (discordWarning) data.discord_warning = discordWarning;
@@ -1482,7 +1487,6 @@ async function runAdmit(
   const lines: string[] = [
     `cortex network admit ${requestId}: admitted`,
     `  principal:   ${requestPrincipalId}`,
-    ...(networkId !== undefined ? [`  network:     ${networkId}`] : []),
     `  admin:       ${material.fingerprint}`,
   ];
   if (discordMember !== undefined) {

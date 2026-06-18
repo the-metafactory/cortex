@@ -20,13 +20,9 @@ import type {
   AdmissionDecisionClaim,
   AdmissionReadClaim,
   Capability,
-  IssuanceDecisionClaim,
-  IssuanceReadClaim,
   RegistrationClaim,
   SignedAdmissionDecision,
   SignedAdmissionRead,
-  SignedIssuanceDecision,
-  SignedIssuanceRead,
   SignedRegistration,
   StackIdentity,
 } from "./types";
@@ -489,146 +485,6 @@ export function validateSignedNetworkCreate(
   };
 }
 
-// =============================================================================
-// O-4a.1 — Issuance decision claim validation
-// =============================================================================
-
-/**
- * Validate the body of `POST /issuance-requests/{id}/grant` and `/reject`.
- * The envelope is { claim: IssuanceDecisionClaim, signature: string }.
- * Mirrors `validateSignedNetworkCreate` exactly in structure so the admin gate
- * can be applied identically (503 / 401 / 403 order).
- */
-export function validateSignedIssuanceDecision(
-  body: unknown,
-): { ok: true; signed: SignedIssuanceDecision } | { ok: false; errors: ValidationError[] } {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
-  }
-  const b = body as Record<string, unknown>;
-  // N1 — envelope-level rejection: signature must be a non-empty base64 string.
-  // Explicit check so a future direct caller sees a clear error rather than
-  // reaching validateIssuanceDecisionClaim with an unfiltered raw cast.
-  if (typeof b.signature !== "string" || b.signature.length === 0) {
-    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
-  }
-  if (!BASE64_RE.test(b.signature)) {
-    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
-  }
-  // N1 — claim must be a plain object (not null, not an array). Arrays pass
-  // the `typeof === "object"` check but are not valid claim shapes.
-  if (typeof b.claim !== "object" || b.claim === null || Array.isArray(b.claim)) {
-    return { ok: false, errors: [{ field: "claim", message: "must be a non-array object" }] };
-  }
-  return {
-    ok: true,
-    signed: { claim: b.claim as IssuanceDecisionClaim, signature: b.signature },
-  };
-}
-
-/**
- * Validate the `IssuanceDecisionClaim` payload before crypto verification.
- * Cross-field rule: claim.request_id MUST match the URL path parameter.
- * claim.decision MUST be "grant" or "reject".
- */
-export function validateIssuanceDecisionClaim(
-  claim: unknown,
-  expectedRequestId: string,
-  expectedDecision: "grant" | "reject",
-): { ok: true; claim: IssuanceDecisionClaim } | { ok: false; errors: ValidationError[] } {
-  const errors: ValidationError[] = [];
-
-  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
-    return { ok: false, errors: [{ field: "claim", message: "must be an object" }] };
-  }
-  const c = claim as Record<string, unknown>;
-
-  // request_id — must match path param (forged-attribution guard).
-  if (typeof c.request_id !== "string" || c.request_id.length === 0) {
-    errors.push({ field: "request_id", message: "must be a non-empty string" });
-  } else if (c.request_id !== expectedRequestId) {
-    errors.push({
-      field: "request_id",
-      message: `body request_id "${c.request_id}" does not match path "${expectedRequestId}"`,
-    });
-  }
-
-  // decision — must match the route's intended decision.
-  if (c.decision !== "grant" && c.decision !== "reject") {
-    errors.push({ field: "decision", message: 'must be "grant" or "reject"' });
-  } else if (c.decision !== expectedDecision) {
-    errors.push({
-      field: "decision",
-      message: `body decision "${c.decision as string}" does not match route "${expectedDecision}"`,
-    });
-  }
-
-  // admin_pubkey — base64 Ed25519 pubkey.
-  if (typeof c.admin_pubkey !== "string" || !isValidPubkey(c.admin_pubkey)) {
-    errors.push({ field: "admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
-  }
-
-  // issued_at — ISO-8601 UTC.
-  if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
-    errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
-  }
-
-  // nonce — same bounds as registration.
-  if (typeof c.nonce !== "string" || c.nonce.length < 8 || c.nonce.length > 128) {
-    errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
-  }
-
-  if (errors.length > 0) return { ok: false, errors };
-
-  return {
-    ok: true,
-    claim: {
-      request_id: c.request_id as string,
-      decision: c.decision as "grant" | "reject",
-      admin_pubkey: c.admin_pubkey as string,
-      issued_at: c.issued_at as string,
-      nonce: c.nonce as string,
-    },
-  };
-}
-
-/**
- * Validate the `x-admin-signed` header envelope for admin-gated GET reads.
- * The header value is JSON: { claim: IssuanceReadClaim, signature: string }.
- * No nonce (reads are idempotent). Clock-skew still applies.
- */
-export function validateSignedIssuanceRead(
-  body: unknown,
-): { ok: true; signed: SignedIssuanceRead } | { ok: false; errors: ValidationError[] } {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
-  }
-  const b = body as Record<string, unknown>;
-  if (typeof b.signature !== "string" || b.signature.length === 0) {
-    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
-  }
-  if (!BASE64_RE.test(b.signature)) {
-    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
-  }
-  if (typeof b.claim !== "object" || b.claim === null) {
-    return { ok: false, errors: [{ field: "claim", message: "missing" }] };
-  }
-  const c = b.claim as Record<string, unknown>;
-  if (typeof c.admin_pubkey !== "string" || !isValidPubkey(c.admin_pubkey)) {
-    return { ok: false, errors: [{ field: "claim.admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" }] };
-  }
-  if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
-    return { ok: false, errors: [{ field: "claim.issued_at", message: "must be an ISO-8601 timestamp" }] };
-  }
-  return {
-    ok: true,
-    signed: {
-      claim: { admin_pubkey: c.admin_pubkey, issued_at: c.issued_at },
-      signature: b.signature,
-    },
-  };
-}
-
 export function validateSignedRegistration(
   body: unknown,
 ): { ok: true; signed: SignedRegistration } | { ok: false; errors: ValidationError[] } {
@@ -658,7 +514,8 @@ export function validateSignedRegistration(
 /**
  * Validate the body of `POST /admission-requests/{id}/admit` and `/reject`.
  * The envelope is { claim: AdmissionDecisionClaim, signature: string }.
- * Structurally identical to validateSignedIssuanceDecision — same admin gate.
+ * Mirrors `validateSignedNetworkCreate` exactly in structure so the admin gate
+ * can be applied identically (503 / 401 / 403 order).
  */
 export function validateSignedAdmissionDecision(
   body: unknown,

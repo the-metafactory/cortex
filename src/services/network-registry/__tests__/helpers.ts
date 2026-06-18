@@ -8,7 +8,7 @@
  */
 
 import { canonicalJSON, generateKeypair, signEd25519 } from "../src/signing";
-import type { Capability, IssuanceDecisionClaim, IssuanceReadClaim, RegistrationClaim, StackIdentity } from "../src/types";
+import type { AdmissionDecisionClaim, AdmissionReadClaim, Capability, RegistrationClaim, StackIdentity } from "../src/types";
 import { _setNonceCacheForTest, _setStoreForTest, _setIssuanceStoreForTest } from "../src/store";
 import { _resetDerivedPublicKeyForTest } from "../src/index";
 import { _resetRateLimitBucketsForTest } from "../src/rate-limit";
@@ -105,16 +105,17 @@ export function randomNonce(): string {
 }
 
 // =============================================================================
-// O-4a.1 — signed-admin issuance decision + read test rig
+// ADR-0015 — signed-admin admission decision + read test rig
 // =============================================================================
 
 /**
- * Build a signed admin decision body for grant/reject.
+ * Build a signed admin admission decision body for admit/reject.
+ * Uses the canonical AdmissionDecisionClaim vocabulary (ADR-0015).
  * Mirrors `makeSignedNetworkCreate` in structure — the admin gate is identical.
  */
 export async function makeSignedAdminDecision(
   requestId: string,
-  decision: "grant" | "reject",
+  decision: "admit" | "reject",
   adminKey: PrincipalKey,
   opts: {
     issuedAt?: string;
@@ -123,8 +124,8 @@ export async function makeSignedAdminDecision(
     signWith?: PrincipalKey;
     adminPubkeyOverride?: string;
   } = {},
-): Promise<{ claim: IssuanceDecisionClaim; signature: string }> {
-  const claim: IssuanceDecisionClaim = {
+): Promise<{ claim: AdmissionDecisionClaim; signature: string }> {
+  const claim: AdmissionDecisionClaim = {
     request_id: requestId,
     decision,
     admin_pubkey: opts.adminPubkeyOverride ?? adminKey.publicKeyB64,
@@ -148,8 +149,8 @@ export async function makeSignedAdminRead(
     /** Sign with a DIFFERENT key — forged signature test. */
     signWith?: PrincipalKey;
   } = {},
-): Promise<{ claim: IssuanceReadClaim; signature: string }> {
-  const claim: IssuanceReadClaim = {
+): Promise<{ claim: AdmissionReadClaim; signature: string }> {
+  const claim: AdmissionReadClaim = {
     admin_pubkey: adminKey.publicKeyB64,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
   };

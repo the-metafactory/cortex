@@ -360,38 +360,12 @@ export interface SignedAdmissionRead {
 }
 
 // ---------------------------------------------------------------------------
-// Back-compat aliases — a few consumers in tests reference the old names.
-// Kept so they resolve without import churn; will be cleaned up in a
-// follow-on vocab sweep. New code MUST use the Admission* names.
+// Back-compat aliases — store-layer names still reference Issuance* names
+// for the underlying D1 table / method vocabulary. These are pure type
+// aliases; the wire vocabulary is Admission* only (ADR-0015).
 // ---------------------------------------------------------------------------
 
 /** @deprecated Use AdmissionStatus */
 export type IssuanceStatus = AdmissionStatus;
 /** @deprecated Use AdmissionRequest */
 export type IssuanceRequest = AdmissionRequest;
-
-/**
- * @deprecated Use AdmissionDecisionClaim.
- * Kept as a structurally distinct type (NOT an alias) so the legacy
- * /issuance-requests routes can keep accepting the old "grant"/"reject"
- * vocabulary at the wire level during the backward-compat transition window.
- */
-export interface IssuanceDecisionClaim {
-  request_id: string;
-  /** @deprecated Use "admit"/"reject" (AdmissionDecisionClaim). */
-  decision: "grant" | "reject";
-  admin_pubkey: string;
-  issued_at: string;
-  nonce: string;
-}
-
-/** @deprecated Use SignedAdmissionDecision */
-export interface SignedIssuanceDecision {
-  claim: IssuanceDecisionClaim;
-  signature: string;
-}
-
-/** @deprecated Use AdmissionReadClaim */
-export type IssuanceReadClaim = AdmissionReadClaim;
-/** @deprecated Use SignedAdmissionRead */
-export type SignedIssuanceRead = SignedAdmissionRead;
