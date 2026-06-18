@@ -857,7 +857,7 @@ function loadCortexShape(
  * the schema flip; principals who grep for the old `{agentName}-discord-{guildId}`
  * pattern will see the collapsed form once cortex.yaml is in effect.
  */
-function flattenDiscordPresences(agents: readonly Agent[]) {
+export function flattenDiscordPresences(agents: readonly Agent[]) {
   const out: (DiscordPresence & { instanceId: string })[] = [];
   for (const a of agents) {
     const p = a.presence.discord;
@@ -867,7 +867,7 @@ function flattenDiscordPresences(agents: readonly Agent[]) {
   return out;
 }
 
-function flattenMattermostPresences(agents: readonly Agent[]) {
+export function flattenMattermostPresences(agents: readonly Agent[]) {
   const out: (MattermostPresence & { instanceId: string })[] = [];
   for (const a of agents) {
     const p = a.presence.mattermost;
@@ -883,7 +883,7 @@ function flattenMattermostPresences(agents: readonly Agent[]) {
  * `flattenMattermostPresences` — empty when no agent declares a
  * `presence.slack` block.
  */
-function flattenSlackPresences(agents: readonly Agent[]) {
+export function flattenSlackPresences(agents: readonly Agent[]) {
   const out: (SlackPresence & { instanceId: string })[] = [];
   for (const a of agents) {
     const p = a.presence.slack;

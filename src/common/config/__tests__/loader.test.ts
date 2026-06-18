@@ -8,7 +8,13 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { stringify } from "yaml";
-import { loadConfig } from "../loader";
+import {
+  loadConfig,
+  flattenDiscordPresences,
+  flattenMattermostPresences,
+  flattenSlackPresences,
+} from "../loader";
+import { AgentSchema, type Agent } from "../../types/cortex-config";
 
 // ---------------------------------------------------------------------------
 // Test fixture helpers
@@ -1121,5 +1127,146 @@ describe("TC-4a — chmod-600 gate on single-file cortex.yaml (cortex#636)", () 
     const loaded = loadConfigWithAgents(path);
     expect(loaded.inlineAgents).toHaveLength(1);
     expect(loaded.principal?.id).toBe("jc");
+  });
+});
+
+// =============================================================================
+// S1 (cortex#1159) — per-agent Discord/Mattermost adapters from agents.d
+// fragments. The flatten helpers are now exported so the cortex.ts boot path
+// can re-run them over the fragment-only agents and APPEND the result to the
+// adapter-construction instance lists (`config.discord` carries inline presence
+// only). These tests pin (a) the helpers' agent→flat-instance mapping +
+// instanceId convention + enabled passthrough, and (b) the exact boot-path
+// append logic — inline ∪ fragment-only, fragments shadowed by inline ids
+// filtered out so a both-inline-and-fragment agent appears once.
+// =============================================================================
+describe("S1 (cortex#1159) — exported presence-flatten helpers + boot-path append", () => {
+  function fragmentAgent(
+    id: string,
+    presence: Record<string, unknown>,
+  ): Agent {
+    return AgentSchema.parse({
+      id,
+      displayName: id.charAt(0).toUpperCase() + id.slice(1),
+      persona: `./personas/${id}.md`,
+      trust: [],
+      presence,
+    });
+  }
+
+  const discordPresence = (over: Record<string, unknown> = {}) => ({
+    discord: {
+      token: `tok-${Math.random().toString(36).slice(2)}`,
+      guildId: "1487023327791808592",
+      agentChannelId: "1487029848164536361",
+      logChannelId: "1487029942129524786",
+      ...over,
+    },
+  });
+
+  const mattermostPresence = (over: Record<string, unknown> = {}) => ({
+    mattermost: {
+      apiUrl: "https://mm.example.com",
+      apiToken: `mm-${Math.random().toString(36).slice(2)}`,
+      channels: ["town-square"],
+      ...over,
+    },
+  });
+
+  test("a fragment Discord agent flattens to an instance bound to the fragment's identity", () => {
+    const persona = "./personas/pier.md";
+    const pier = AgentSchema.parse({
+      id: "pier",
+      displayName: "Pier",
+      persona,
+      trust: ["luna"],
+      presence: discordPresence({ token: "pier-token" }),
+    });
+    const flat = flattenDiscordPresences([pier]);
+    expect(flat).toHaveLength(1);
+    // instanceId follows the `${agent.id}-discord` convention — the same key
+    // `agentByDiscordToken` (built from mergedAgents at boot) uses to bind the
+    // constructed adapter back to the fragment's full Agent (id/persona/trust).
+    expect(flat[0]!.instanceId).toBe("pier-discord");
+    expect(flat[0]!.token).toBe("pier-token");
+    // The fragment carries its own identity; the boot loop's
+    // `agentByDiscordToken.get(instance.token)` resolves to THIS agent.
+    expect(pier.id).toBe("pier");
+    expect(pier.displayName).toBe("Pier");
+    expect(pier.persona).toBe(persona);
+    expect(pier.trust).toEqual(["luna"]);
+  });
+
+  test("a fragment Mattermost agent flattens to a mattermost instance", () => {
+    const ivy = fragmentAgent("ivy", mattermostPresence({ apiToken: "ivy-mm" }));
+    const flat = flattenMattermostPresences([ivy]);
+    expect(flat).toHaveLength(1);
+    expect(flat[0]!.instanceId).toBe("ivy-mattermost");
+    expect(flat[0]!.apiToken).toBe("ivy-mm");
+  });
+
+  test("a disabled fragment presence is still flattened (carries enabled:false); the boot loop's own skip applies", () => {
+    // The flatten helper does NOT filter on `enabled` — it mirrors the inline
+    // path, which also flattens disabled presences and lets the adapter loop's
+    // `if (!instance.enabled) continue` do the skip. The instance must therefore
+    // appear in the flattened list, carrying enabled:false.
+    const dim = fragmentAgent("dim", discordPresence({ enabled: false, token: "dim-tok" }));
+    const flat = flattenDiscordPresences([dim]);
+    expect(flat).toHaveLength(1);
+    expect(flat[0]!.enabled).toBe(false);
+    expect(flat[0]!.instanceId).toBe("dim-discord");
+  });
+
+  test("an agent with no presence block contributes no instance", () => {
+    const headless = fragmentAgent("headless", {});
+    expect(flattenDiscordPresences([headless])).toHaveLength(0);
+    expect(flattenMattermostPresences([headless])).toHaveLength(0);
+    expect(flattenSlackPresences([headless])).toHaveLength(0);
+  });
+
+  // The exact boot-path computation from src/cortex.ts: the adapter loops
+  // iterate `[...config.discord, ...flattenDiscordPresences(fragmentOnlyAgents)]`,
+  // where `fragmentOnlyAgents = fragmentAgents.filter(a => !inlineIds.has(a.id))`.
+  function bootDiscordInstances(
+    inlineFlat: readonly { instanceId?: string; token: string }[],
+    fragmentAgents: readonly Agent[],
+    inlineAgents: readonly Agent[],
+  ) {
+    const inlineIds = new Set(inlineAgents.map((a) => a.id));
+    const fragmentOnlyAgents = fragmentAgents.filter((a) => !inlineIds.has(a.id));
+    return [...inlineFlat, ...flattenDiscordPresences(fragmentOnlyAgents)];
+  }
+
+  test("inline-only stack: instance list is unchanged (regression — no fragments appended)", () => {
+    const inlineAgent = fragmentAgent("luna", discordPresence({ token: "luna-inline" }));
+    const inlineFlat = flattenDiscordPresences([inlineAgent]);
+    // No fragments present → append nothing → byte-identical to the inline list.
+    const instances = bootDiscordInstances(inlineFlat, [], [inlineAgent]);
+    expect(instances).toEqual(inlineFlat);
+    expect(instances).toHaveLength(1);
+    expect(instances[0]!.token).toBe("luna-inline");
+  });
+
+  test("fragment-only Discord agent is appended to the boot instance list", () => {
+    const inlineAgent = fragmentAgent("luna", discordPresence({ token: "luna-inline" }));
+    const inlineFlat = flattenDiscordPresences([inlineAgent]);
+    const pierFragment = fragmentAgent("pier", discordPresence({ token: "pier-frag" }));
+    const instances = bootDiscordInstances(inlineFlat, [pierFragment], [inlineAgent]);
+    expect(instances).toHaveLength(2);
+    expect(instances.map((i) => i.instanceId)).toEqual(["luna-discord", "pier-discord"]);
+    expect(instances[1]!.token).toBe("pier-frag");
+  });
+
+  test("an agent that is BOTH inline and a fragment (same id) appears once — inline wins, fragment shadowed", () => {
+    // Inline luna + a fragment ALSO named luna. The fragment is shadowed (its id
+    // is in inlineIds), so fragmentOnlyAgents excludes it → no duplicate instance.
+    const inlineLuna = fragmentAgent("luna", discordPresence({ token: "luna-inline" }));
+    const inlineFlat = flattenDiscordPresences([inlineLuna]);
+    const fragmentLuna = fragmentAgent("luna", discordPresence({ token: "luna-fragment" }));
+    const instances = bootDiscordInstances(inlineFlat, [fragmentLuna], [inlineLuna]);
+    expect(instances).toHaveLength(1);
+    // Inline's token survives; the shadowed fragment's token never enters.
+    expect(instances[0]!.token).toBe("luna-inline");
+    expect(instances.some((i) => i.token === "luna-fragment")).toBe(false);
   });
 });

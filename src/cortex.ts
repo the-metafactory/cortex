@@ -24,7 +24,15 @@ import { homedir } from "os";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
-import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
+import {
+  loadConfigWithAgents,
+  loadAgentsDirectory,
+  expandTilde,
+  FragmentLoadError,
+  flattenDiscordPresences,
+  flattenMattermostPresences,
+  flattenSlackPresences,
+} from "./common/config/loader";
 import {
   ConfigWatcher,
   AgentsDirectoryWatcher,
@@ -1055,10 +1063,16 @@ export async function startCortex(
   const inlineAgents = options.inlineAgents ?? [];
   const inlineIds = new Set(inlineAgents.map((a) => a.id));
   const shadowedFragmentCount = fragmentAgents.filter((a) => inlineIds.has(a.id)).length;
-  const mergedAgents: Agent[] = [
-    ...inlineAgents,
-    ...fragmentAgents.filter((a) => !inlineIds.has(a.id)),
-  ];
+  // S1 (cortex#1159) — agents installed as agents.d/ fragments (not inline) whose
+  // ids are NOT already shadowed by an inline agent. Inline agents already feed
+  // `config.discord` / `config.mattermost` / `config.slack` via the loader's
+  // presence-flatten; fragment-only agents do not, so their presence blocks must
+  // be flattened and APPENDED to the adapter-construction instance lists below
+  // (see `discordInstances` / `mattermostInstances` / `slackInstances`). Filtering
+  // out inline-shadowed ids here is what keeps the append from double-counting an
+  // agent that is both inline and a fragment (inline wins; fragment shadowed).
+  const fragmentOnlyAgents = fragmentAgents.filter((a) => !inlineIds.has(a.id));
+  const mergedAgents: Agent[] = [...inlineAgents, ...fragmentOnlyAgents];
   // B-0 (cortex#1021) — `agentRegistry` is the live, swappable snapshot. The
   // agents.d/ hot-reload path (below) rebuilds the merged set and reassigns
   // this binding under a bumped generation counter; the handle's
@@ -3437,6 +3451,25 @@ export async function startCortex(
   });
   const gatewayOwned = surfaceOwnershipPlan.ownedSurfaceKeys;
 
+  // S1 (cortex#1159) — the adapter-construction instance lists. `config.discord`
+  // / `config.mattermost` / `config.slack` are flattened by the loader from
+  // INLINE `agents[].presence.*` only; agents installed as agents.d/ fragments
+  // feed the registry (`mergedAgents`) but their presence blocks never enter
+  // those flat lists, so no adapter is constructed for them. We re-run the same
+  // flatten helpers (now exported from the loader — same agent→flat-instance
+  // mapping, identical `instanceId` convention) over the fragment-only agents
+  // and APPEND the result. Inline agents are already in `config.X`, so we append
+  // ONLY `fragmentOnlyAgents` (inline-shadowed fragments filtered out at the
+  // registry-merge block) — no double-counting. Legacy bot.yaml (no inline
+  // agents, empty agents.d) yields empty fragment lists → byte-identical to the
+  // pre-S1 `for (const instance of config.X)` behavior. Each appended instance
+  // carries an explicit `instanceId`, so the loops' `config.X.indexOf` /
+  // `config.X.length` fallback (used only when `instanceId` is absent) never
+  // runs for a fragment instance — that branch stays inline-only.
+  const discordInstances = [...config.discord, ...flattenDiscordPresences(fragmentOnlyAgents)];
+  const mattermostInstances = [...config.mattermost, ...flattenMattermostPresences(fragmentOnlyAgents)];
+  const slackInstances = [...config.slack, ...flattenSlackPresences(fragmentOnlyAgents)];
+
   // MIG-7.2e: per-instance agent lookup. When cortex.yaml supplies
   // `inlineAgents` (reused from the registry-merge block above), each
   // Discord/Mattermost adapter binds to the declared Agent (real id,
@@ -3486,7 +3519,7 @@ export async function startCortex(
   // engine for `(platform, authorId) → principal_id` resolution. The
   // three values are shared with the adapter loops below verbatim.
 
-  for (const instance of config.discord) {
+  for (const instance of discordInstances) {
     if (!instance.enabled) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
       continue;
@@ -3697,7 +3730,7 @@ export async function startCortex(
     console.log("cortex: no discord instances configured");
   }
 
-  for (const instance of config.mattermost) {
+  for (const instance of mattermostInstances) {
     if (!instance.enabled) continue;
     if (!instance.apiUrl || !instance.apiToken) {
       console.error(`cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`);
@@ -3798,7 +3831,7 @@ export async function startCortex(
   }
   const startedSlack: StartedSlack[] = [];
 
-  for (const instance of config.slack) {
+  for (const instance of slackInstances) {
     if (!instance.enabled) {
       console.log(`cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`);
       continue;

@@ -25,9 +25,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { stringify } from "yaml";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent, AgentRuntime } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
@@ -416,6 +417,106 @@ describe("startCortex — agent-presence boot/shutdown (G-1114.B.2+B.3)", () => 
 
     // Genuinely keyless: nothing to announce — the skip is correct here.
     expect(runtime.published.filter((e) => e.type === "agent.online")).toEqual([]);
+
+    await handle.stop();
+  });
+});
+
+// =============================================================================
+// S1 (cortex#1159) — per-agent Discord/Mattermost adapters from agents.d
+// fragments. Boot-path integration: an agent installed ONLY as an agents.d/
+// fragment (not inline) must flow into the adapter-construction instance lists
+// (`config.discord` carries inline presence only). Here we prove the fragment
+// reaches the adapter loop and is governed by the loop's own `enabled` skip —
+// a disabled fragment Discord presence constructs NO adapter and leaks no
+// `system.adapter.*` envelope, exactly like the disabled-inline case
+// (cortex.test.ts "ignores discord instances marked enabled: false"). The
+// enabled-construction path does real network I/O on `.start()`, so the
+// unit-level helper tests in loader.test.ts pin construction + fragment-identity
+// binding; this boot test pins that the fragment ENTERS the iterated list.
+// =============================================================================
+describe("startCortex — S1 (cortex#1159) agents.d fragment → adapter wiring", () => {
+  /** Write a fragment YAML + its persona file into `agentsDir`. */
+  function writeDiscordFragment(
+    agentsDir: string,
+    id: string,
+    presence: Record<string, unknown>,
+  ): void {
+    const personaPath = join(agentsDir, `${id}.md`);
+    writeFileSync(personaPath, `# ${id} persona\n`, "utf-8");
+    const fragment = {
+      id,
+      displayName: id.charAt(0).toUpperCase() + id.slice(1),
+      persona: personaPath,
+      trust: [],
+      presence,
+    };
+    writeFileSync(join(agentsDir, `${id}.yaml`), stringify(fragment), { mode: 0o600 });
+  }
+
+  test("disabled fragment Discord presence enters the list but constructs NO adapter (loop's enabled-skip applies)", async () => {
+    const runtime = createRecordingRuntime();
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-s1-disabled-frag-"));
+    // A fragment-only agent (NOT in inlineAgents) with a DISABLED Discord presence.
+    writeDiscordFragment(tmp, "pier", {
+      discord: {
+        enabled: false,
+        token: "pier-disabled-token",
+        guildId: "g-pier",
+        agentChannelId: "c-pier",
+        logChannelId: "c-pier-log",
+      },
+    });
+
+    const handle = await startCortex(
+      minimalConfig({ mc: { enabled: false, configPath: "", dbPath: "", port: 0 } }),
+      {
+        disableConfigWatcher: true,
+        disableAgentsWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmp,
+        injectRuntime: runtime,
+        inlineAgents: [],
+        principal: { id: "andreas" },
+      },
+    );
+
+    // The fragment reached the adapter loop and was skipped by its own
+    // `if (!instance.enabled) continue` — so NO `system.adapter.*` envelope
+    // leaked (a constructed+started adapter would publish system.adapter.connected).
+    expect(
+      runtime.published.filter((e) => e.type.startsWith("system.adapter.")),
+    ).toEqual([]);
+
+    await handle.stop();
+  });
+
+  test("inline-only stack with empty agents.d: no fragment adapters appended (regression)", async () => {
+    const runtime = createRecordingRuntime();
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-s1-inline-only-"));
+    // Empty agents.d (no fragment files) + one inline keyless agent. The append
+    // of fragment-only presences is a no-op → boot behaves exactly as pre-S1.
+    const handle = await startCortex(
+      minimalConfig({ mc: { enabled: false, configPath: "", dbPath: "", port: 0 } }),
+      {
+        disableConfigWatcher: true,
+        disableAgentsWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmp,
+        injectRuntime: runtime,
+        inlineAgents: [makeAgent("luna", ["code-review.typescript"])],
+        principal: { id: "andreas" },
+      },
+    );
+
+    // No Discord/Mattermost presence anywhere → no adapter envelopes.
+    expect(
+      runtime.published.filter((e) => e.type.startsWith("system.adapter.")),
+    ).toEqual([]);
+    // The inline agent still announces presence (unchanged behavior).
+    expect(runtime.published.filter((e) => e.type === "agent.online")).toHaveLength(1);
 
     await handle.stop();
   });
