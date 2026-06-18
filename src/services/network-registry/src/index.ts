@@ -38,7 +38,6 @@ import { createMiddleware } from "hono/factory";
 import { principalRoutes } from "./routes/principals";
 import { networkRoutes } from "./routes/networks";
 import { capabilityRoutes } from "./routes/capabilities";
-import { issuanceRequestRoutes } from "./routes/issuance-requests";
 import { admissionRequestRoutes } from "./routes/admission-requests";
 import { pubkeyFromPkcs8 } from "./signing";
 import type { RateLimitEnv } from "./rate-limit";
@@ -244,11 +243,10 @@ app.use("/capabilities", readLimited);
 app.route("/", principalRoutes());
 app.route("/", networkRoutes());
 app.route("/", capabilityRoutes());
-// ADR-0015: admission gate routes (new canonical paths).
+// ADR-0015: admission gate routes (the canonical, only paths — the Model-A
+// issuance-request routes were retired here; the registry is not yet deployed,
+// so there are no consumers to keep a compat shim for).
 app.route("/", admissionRequestRoutes());
-// Legacy issuance-request paths kept for backward-compat during the transition
-// window. Remove after all consumers have migrated to /admission-requests.
-app.route("/", issuanceRequestRoutes());
 
 // ---------------------------------------------------------------------------
 // 404

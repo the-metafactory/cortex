@@ -37,7 +37,7 @@ function setMockFetch(
 function urlOf(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.href;
-  return (input as Request).url;
+  return input.url;
 }
 
 // =============================================================================
@@ -211,7 +211,7 @@ describe("cortex network admit — apply path", () => {
         // POST admit
         postedUrl = url;
         if (init?.body) {
-          postedBody = JSON.parse(typeof init.body === "string" ? init.body : String(init.body));
+          postedBody = JSON.parse(init.body as string);
         }
         return new Response(JSON.stringify({ status: "ADMITTED" }), {
           status: 200,
@@ -488,7 +488,7 @@ describe("cortex network admit — signed claim shape", () => {
       const url = urlOf(input);
       if (url.includes("/admit")) {
         if (init?.body) {
-          const body = JSON.parse(typeof init.body === "string" ? init.body : String(init.body)) as { claim: { decision: string } };
+          const body = JSON.parse(init.body as string) as { claim: { decision: string } };
           capturedClaim = body.claim;
         }
         return new Response(JSON.stringify({ status: "ADMITTED" }), {
