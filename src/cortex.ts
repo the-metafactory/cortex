@@ -228,6 +228,7 @@ import { WorklogManager } from "./runner/worklog-manager";
 import { dispatchNetwork } from "./cli/cortex/commands/network";
 import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
+import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
 
@@ -6385,6 +6386,28 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchCreds(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // G4 (#1120) — thin 4-surface deploy orchestrator + version-skew guard.
+  // Dry-run by default (prints the ordered plan, runs nothing). `--apply` runs
+  // non-prod surfaces (bot, dashboard). `--apply --include-prod` also runs the
+  // two production wrangler deploys (api, registry). Same passthrough shape as
+  // `network` / `stack` / `offer` / `creds`: `dispatchRelease` owns its own
+  // arg parsing, so commander hands it the raw remaining argv untouched.
+  program
+    .command("release")
+    .description(
+      "Print the 4-surface deploy plan + version-skew report (dry-run by default; --apply to execute)",
+    )
+    .argument("[args...]", "release flags (see `cortex release --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchRelease(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
