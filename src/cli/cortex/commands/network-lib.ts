@@ -87,6 +87,16 @@ export interface JoiningStack {
    * O-4 (the register→issue handshake) SUPPLIES this; O-3 only consumes it.
    */
   operatorModePackage?: OperatorModeLeafPackage;
+  /**
+   * G1c (#1117, ADR-0013 Model B) — the agents NSC account (nkey-A) where the
+   * stack's dispatch-listener subscribes `federated.>`. This is the
+   * `--to-account` for `arc nats add-federation-export`. Optional today: when
+   * absent the wiring step uses `account` for both sides (same-account path —
+   * the arc primitive handles this as a no-op). A dedicated `agents_account`
+   * config field that splits the federation account from the agents account is
+   * tracked as G1d (cortex#1117 follow-up).
+   */
+  agentsAccount?: string;
 }
 
 // =============================================================================
@@ -289,6 +299,66 @@ export async function joinNetwork(
   // in the creds JWT; an `account:` line there crashes nats-server).
   const leafAccount =
     bindMode.mode === "operator-account" ? bindMode.account : undefined;
+
+  // (b.4) G1c (#1117, ADR-0013 Model B) — WIRE the local-side `federated.>`
+  // export/import BEFORE writing the leaf file (fail-fast: an arc failure here
+  // aborts before any mutation touches the live nats-server config). Skipped
+  // when:
+  //   - no `ports.federationWiring` wired (backwards-compat / pre-G1c callers),
+  //   - OR the bus is not operator-mode (a $G/creds-only bus has no NSC account
+  //     tree to add export/import to — no wiring is needed or possible).
+  //
+  // ADR-0013 Model B invariant: LOCAL accounts only — `federationAccount` is
+  // the leaf-bound nkey-A from `stack.account`; `agentsAccount` is the
+  // stack's own agents account (optional today — G1d tracks the split).
+  // cortex NEVER passes a peer account; no network id goes on the arc call.
+  if (ports.federationWiring !== undefined && leafAccount !== undefined) {
+    // Read apply from the ports bundle (G1c: `NetworkPorts.apply` mirrors the
+    // --apply flag from the CLI). Default: false (dry-run safe — the #794
+    // "never accidentally mutate" principle).
+    const wiringApply = ports.apply === true;
+    let wiringResult: { ok: true; note?: string } | { ok: false; reason: string };
+    try {
+      wiringResult = await ports.federationWiring.wireLocalFederation({
+        federationAccount: leafAccount,
+        agentsAccount: stack.agentsAccount,
+        apply: wiringApply,
+      });
+    } catch (err) {
+      // The port contract says "never throws"; guard here as belt-and-braces so
+      // a buggy port implementation (or a Bun.spawn ENOENT that escapes before
+      // the adapter wraps it) never escapes joinNetwork's "never throws" contract.
+      wiringResult = {
+        ok: false,
+        reason: `federation-wiring port threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!wiringResult.ok) {
+      return {
+        ok: false,
+        steps,
+        reason:
+          `federation-wiring step failed — arc nats add-federation-export returned an error ` +
+          `(${wiringResult.reason}). The join is aborted before any nats-server config ` +
+          `was written. Ensure arc is installed (G1b / arc#243) and the NSC store is ` +
+          `accessible, then re-run join.`,
+      };
+    }
+    const wiringNote = wiringResult.note ?? "export+import wired";
+    steps.push(
+      `wired local-side federated.> export/import ` +
+      `(federation-account=${leafAccount}, ${wiringApply ? "applied" : "dry-run"}: ${wiringNote}) ` +
+      `(G1c ADR-0013 Model B)`,
+    );
+  } else if (ports.federationWiring !== undefined && leafAccount === undefined) {
+    // $G/creds-only bus: no NSC account — federation wiring is a no-op. Log
+    // so the principal can see why the step was skipped.
+    steps.push(
+      "skipped federation-wiring step: $G/creds-only bus has no NSC account " +
+      "(no export/import needed — the creds JWT binds the leaf directly) " +
+      "(G1c ADR-0013 Model B)",
+    );
+  }
 
   // (b.6) #821 — PRE-FLIGHT the creds file BEFORE any mutation. `nats-server -c
   // <cfg> -t` validates HOCON syntax but does NOT dereference the leaf remote's

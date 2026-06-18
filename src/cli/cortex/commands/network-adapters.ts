@@ -85,6 +85,7 @@ import type {
   PlistPort,
   RenderLeafInputs,
 } from "./network-ports";
+import { buildFederationWiringAdapter } from "./network-federation-wiring";
 import type {
   PublicPolicyPort,
   PublicRegistryPort,
@@ -1163,6 +1164,14 @@ function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
     // C-797 — always present now (defaults to the local monitor); status reads
     // the authoritative leafz view instead of falling back to link:unknown.
     leafState: buildLeafStatePort(cfg),
+    // G1c (#1117, ADR-0013 Model B) — wire the local-side `federated.>`
+    // export/import by shelling to `arc nats add-federation-export`. The port
+    // is always wired; step (b.4) in joinNetwork uses it only when the bus is
+    // operator-mode (leafAccount !== undefined). Dry-run ports set apply=false.
+    federationWiring: buildFederationWiringAdapter(),
+    // G1c — mirror the mutate flag as `apply` so the wiring step knows whether
+    // to actually run arc (apply=true) or just print the plan (apply=false).
+    apply: mutate,
   };
 }
 
