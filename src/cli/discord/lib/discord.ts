@@ -283,6 +283,166 @@ export async function resolveThreadByName(
   return null;
 }
 
+// =============================================================================
+// Guild role management (O-5 — community-fleet admission)
+// =============================================================================
+
+/** Result type shared by assignRole and removeRole. */
+export interface RoleResult {
+  success: boolean;
+  error?: string;
+}
+
+/** Discord API role shape (narrowest projection this module reads). */
+interface DiscordApiRole {
+  id: string;
+  name: string;
+}
+
+/**
+ * Assign a guild role to a member.
+ *
+ * Wraps `PUT /guilds/{guild}/members/{user}/roles/{role}` (Discord v10).
+ * Success = 204 (no body). Error mappings:
+ *   403 → bot lacks Manage Roles permission, or its highest role sits below
+ *          the target role in the hierarchy.
+ *   404 → member or role not found in the guild.
+ *   other → surfaces the HTTP status + body for diagnostics.
+ *
+ * The bot token is NEVER included in error messages.
+ *
+ * Prerequisite (document; do NOT attempt to self-grant): the bot must have the
+ * **Manage Roles** permission AND its highest role must sit above `community-fleet`
+ * in the guild role hierarchy. The 403 branch fires if either condition is unmet.
+ */
+export async function assignRole(
+  botToken: string,
+  guildId: string,
+  userId: string,
+  roleId: string
+): Promise<RoleResult> {
+  const res = await fetch(
+    `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${roleId}`,
+    {
+      method: "PUT",
+      headers: { Authorization: `Bot ${botToken}` },
+    }
+  );
+
+  if (res.status === 204) return { success: true };
+
+  const body = await res.text();
+  if (res.status === 403) {
+    return {
+      success: false,
+      error:
+        `Bot lacks Manage Roles permission (or its highest role is below the target role) ` +
+        `in guild ${guildId}. Ensure the bot has Manage Roles and its role is above community-fleet.`,
+    };
+  }
+  if (res.status === 404) {
+    return { success: false, error: `member or role not found in guild ${guildId}` };
+  }
+  return { success: false, error: `${res.status}: ${body}` };
+}
+
+/**
+ * Remove a guild role from a member.
+ *
+ * Wraps `DELETE /guilds/{guild}/members/{user}/roles/{role}` (Discord v10).
+ * Same error-mapping contract as `assignRole`.
+ */
+export async function removeRole(
+  botToken: string,
+  guildId: string,
+  userId: string,
+  roleId: string
+): Promise<RoleResult> {
+  const res = await fetch(
+    `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${roleId}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bot ${botToken}` },
+    }
+  );
+
+  if (res.status === 204) return { success: true };
+
+  const body = await res.text();
+  if (res.status === 403) {
+    return {
+      success: false,
+      error:
+        `Bot lacks Manage Roles permission (or its highest role is below the target role) ` +
+        `in guild ${guildId}. Ensure the bot has Manage Roles and its role is above community-fleet.`,
+    };
+  }
+  if (res.status === 404) {
+    return { success: false, error: `member or role not found in guild ${guildId}` };
+  }
+  return { success: false, error: `${res.status}: ${body}` };
+}
+
+/**
+ * Resolve a role name (or snowflake id) to a role id.
+ *
+ * If `roleNameOrId` is already a Discord snowflake (17–20 digits), it is
+ * returned immediately without an API call.
+ *
+ * Otherwise, `GET /guilds/{guild}/roles` is fetched and matched
+ * case-insensitively by name. Errors:
+ *   - No match → throws with "not found" message.
+ *   - More than one distinct id matches (ambiguous name) → throws listing the
+ *     conflicting names so the principal can pass a raw id instead.
+ *   - API failure → throws with the HTTP status.
+ *
+ * The bot token is NEVER included in thrown error messages.
+ */
+export async function resolveRoleId(
+  botToken: string,
+  guildId: string,
+  roleNameOrId: string
+): Promise<string> {
+  // Snowflake passthrough — no network call needed.
+  if (/^\d{17,20}$/.test(roleNameOrId)) return roleNameOrId;
+
+  const res = await fetch(`${DISCORD_API}/guilds/${guildId}/roles`, {
+    headers: { Authorization: `Bot ${botToken}` },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to list roles in guild ${guildId}: ${res.status}`);
+  }
+
+  const roles = (await res.json()) as DiscordApiRole[];
+  const lower = roleNameOrId.toLowerCase();
+  const matches = roles.filter((r) => r.name.toLowerCase() === lower);
+
+  if (matches.length === 0) {
+    throw new Error(
+      `Role "${roleNameOrId}" not found in guild ${guildId}. ` +
+        `Pass the role's snowflake id directly, or check: discord roles --server <profile>`
+    );
+  }
+
+  // Distinct ids — if two roles have the same name (case-insensitive) but
+  // different ids, the principal must disambiguate with a raw id.
+  const distinctIds = [...new Set(matches.map((r) => r.id))];
+  if (distinctIds.length > 1) {
+    const names = matches.map((r) => `"${r.name}" (${r.id})`).join(", ");
+    throw new Error(
+      `Role name "${roleNameOrId}" is ambiguous — multiple roles match: ${names}. ` +
+        `Pass the exact snowflake id to disambiguate.`
+    );
+  }
+
+  // distinctIds is guaranteed non-empty at this point (matches.length > 0 passed above).
+  // Use a guarded access with a fallback that can never be reached.
+  const id = distinctIds[0];
+  if (!id) throw new Error(`internal: role match produced empty id list`);
+  return id;
+}
+
 /**
  * List active threads in a guild via bot API.
  */

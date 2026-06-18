@@ -141,6 +141,35 @@ cortex creds issue "leaf-$OP" -a "$ACCT" --pub "federated.$OP.>" --sub "federate
 
 ---
 
+## Admit to Discord (grant-and-admit — run immediately after issuing the cred)
+
+After the leaf cred is issued, grant the principal presence in the community Discord by assigning the `community-fleet` role. This is the O-5 admission step: one command, same act as the cred grant.
+
+**Prerequisite (the bot must meet these; the command fails with a clear 403 if not):**
+- The bot token must have **Manage Roles** permission in the `metafactory-community` guild.
+- The bot's highest role must sit **above** `community-fleet` in the guild role hierarchy.
+
+**Command:**
+
+```bash
+OP_DISCORD_ID=<the-principal's-Discord-user-snowflake>
+
+# Assign community-fleet role — admits the principal to the community Discord
+discord role add --server community --role community-fleet --member "$OP_DISCORD_ID"
+```
+
+The `community-fleet` name is passed as-is; `discord role add` resolves it to its snowflake id via `GET /guilds/{guild}/roles`. If the name resolves ambiguously (duplicate role names), pass the snowflake id directly via `--role <id>`.
+
+**Revoke** (on offboarding, after `cortex creds revoke`):
+
+```bash
+discord role remove --server community --role community-fleet --member "$OP_DISCORD_ID"
+```
+
+> This step is human-executed (or admin-agent-executed). It is the "O-5 single act": issuing the cred and admitting to Discord happen in the same admin session, folded together — no separate watcher or daemon needed.
+
+---
+
 ## Hand-off package (out of band — see security note)
 
 Give the principal **four** things:
