@@ -1,3 +1,5 @@
+> **Superseded by [`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) for the end-to-end peer-onboarding path.** Retained for: network join mechanics (all four subcommands: join, leave, status, create), multi-stack join (`--principal-seed`), and the security ramp (`off → permissive → enforce`).
+
 # SOP — Network join (one command)
 
 **Status:** active (S6 / Network Join Control Plane epic #733)

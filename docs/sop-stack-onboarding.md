@@ -1,3 +1,5 @@
+> **Superseded by [`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) for the end-to-end peer-onboarding path.** Retained for: full stack bring-up mechanics (bus config, plist, Discord binding, verify), bus-conversion to operator-mode (§B0.1), and network-create flow (§B1).
+
 # SOP — Stack onboarding (a new Discord-facing cortex stack)
 
 **Status:** active

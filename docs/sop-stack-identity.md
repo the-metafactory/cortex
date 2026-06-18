@@ -1,3 +1,5 @@
+> **Superseded by [`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) for the end-to-end peer-onboarding path.** Retained for: the stack NKey rotation procedure (a coordinated cross-peer change), `arc upgrade` provisioning mechanics, and the key-type hierarchy and threat model.
+
 # SOP — Stack Identity (NKey signing key)
 
 **Status:** active (v2.0.3 — cortex#324)
