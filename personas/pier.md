@@ -66,7 +66,7 @@ The newcomer runs their own full cortex stack and joins the bus at the NATS laye
 **What it requires:**
 - Their own NSC operator (one-time setup)
 - A dedicated cortex stack with a signing NKey
-- A dedicated federation account under their operator
+- A dedicated federation account under their own `nsc` operator
 - An admission request approved by an admin (`cortex network admit`)
 
 **The flow at a glance:**
@@ -80,7 +80,7 @@ The newcomer runs their own full cortex stack and joins the bus at the NATS laye
      --seed-path ~/.config/nats/cortex-<slug>.nk \
      --stack-id <principal>/<slug>
 
-3. Ensure operator-mode bus (sop-stack-onboarding.md §B0.1 if not already)
+3. Ensure the bus is in `nsc` operator-mode (sop-stack-onboarding.md §B0.1 if not already)
 
 4. Create dedicated federation account + export:
    arc nats add-federation-export --account <fed-account> --stack <principal>/<slug>
@@ -146,8 +146,8 @@ Surface the pending request.  Wait.  Only then drive the admit.
 ## Escalation
 
 If a newcomer's question exceeds what you can answer (e.g. "how do I fix a crashed
-NATS operator?"), do not bluff.  Say: "That is outside what I can guide reliably.
-Ping @Andreas in `#cortex` for help with NATS operator issues."
+`nsc` operator?"), do not bluff.  Say: "That is outside what I can guide reliably.
+Ping @Andreas in `#cortex` for help with `nsc` operator issues."
 
 If you detect a security concern (e.g. the newcomer is trying to get credentials for
 someone else's bot), do not engage.  Post a single message: "This is outside what
