@@ -80,8 +80,10 @@ import { dirname, join, resolve } from "path";
 import { homedir } from "os";
 import YAML from "yaml";
 
-import { composeRawConfig } from "../../../common/config/loader";
+import { composeRawConfig, loadAgentsDirectory } from "../../../common/config/loader";
 import { deriveEffectiveCapabilityCatalog } from "../../../common/agents/capability-catalog";
+import type { Agent } from "../../../common/types/cortex-config";
+import type { Capability } from "../../../common/types/capability";
 import {
   type AcceptPolicy,
   type Offering,
@@ -783,6 +785,15 @@ export interface ResolvedTarget {
   configDir: string;
   /** Path to hand `composeRawConfig`. */
   composePath: string;
+  /**
+   * The `agents.d/` fragment directory to fold into the effective catalog when
+   * validating (cortex#1071). Mirrors the daemon-boot convention
+   * `join(dirname(configPath), "agents.d")` — for both config-split (configDir
+   * is the dir) and single-file legacy (configDir is the file's dir) this is
+   * `join(configDir, "agents.d")`. The directory need not exist;
+   * `loadAgentsDirectory` returns `[]` for a missing dir.
+   */
+  agentsDir: string;
   /** True for the legacy single-file form (target IS the cortex.yaml). */
   singleFile: boolean;
 }
@@ -839,7 +850,13 @@ export function resolveTarget(configPath: string, stackId: string | undefined): 
         `--stack ${stackId} given but --config ${resolved} is a single-file (legacy) config with no stacks/ layer`,
       );
     }
-    return { filePath: resolved, configDir, composePath: resolved, singleFile: true };
+    return {
+      filePath: resolved,
+      configDir,
+      composePath: resolved,
+      agentsDir: join(configDir, "agents.d"),
+      singleFile: true,
+    };
   }
 
   const stacksDir = join(configDir, "stacks");
@@ -849,11 +866,12 @@ export function resolveTarget(configPath: string, stackId: string | undefined): 
   }
 
   const composePath = join(configDir, "offer-pointer.yaml");
+  const agentsDir = join(configDir, "agents.d");
 
   if (stackId === undefined) {
     const [only] = stackFiles;
     if (stackFiles.length === 1 && only !== undefined) {
-      return { filePath: only, configDir, composePath, singleFile: false };
+      return { filePath: only, configDir, composePath, agentsDir, singleFile: false };
     }
     const names = stackFiles.map((f) => f.replace(`${stacksDir}/`, "")).join(", ");
     throw new Error(
@@ -867,7 +885,7 @@ export function resolveTarget(configPath: string, stackId: string | undefined): 
     const declaredId = readStackId(file);
     const base = file.slice(file.lastIndexOf("/") + 1).replace(/\.ya?ml$/, "");
     if (declaredId === wanted || base === wanted || base === wantedTail) {
-      return { filePath: file, configDir, composePath, singleFile: false };
+      return { filePath: file, configDir, composePath, agentsDir, singleFile: false };
     }
   }
   const names = stackFiles.map((f) => f.replace(`${stacksDir}/`, "")).join(", ");
@@ -1043,6 +1061,110 @@ function buildBackupPath(filePath: string): string {
 }
 
 // =============================================================================
+// agents.d fold — make the offer-validation catalog match the daemon's (cortex#1071)
+// =============================================================================
+
+/**
+ * Fold `agents.d/` bot-pack fragments into a raw (pre-schema) config object so
+ * the offer-validation path resolves capabilities through the SAME effective
+ * catalog the daemon trusts at boot (cortex#1071).
+ *
+ * The boot path (`src/cortex.ts`) merges `loadAgentsDirectory(agents.d)`
+ * fragments into the live agent set (inline wins on id) and the dispatch
+ * consumer trusts each merged agent's `runtime.capabilities[]` directly. But
+ * `composeRawConfig` only folds `system/ → network/ → surfaces/ → stacks/` — it
+ * NEVER reads `agents.d/`. So a capability provided ONLY by a bot-pack agent
+ * (declared in `agents.d/<id>.yaml` `runtime.capabilities[]`, no top-level
+ * `capabilities[]` entry) is invisible to `offer set/list`, and the composed
+ * config fails `CortexConfigSchema` ("offers <cap>, but no matching entry in
+ * the capabilities[] catalog") even though the daemon resolves it fine.
+ *
+ * This fold closes that gap WITHOUT touching the boot composer. It:
+ *   1. merges the loaded fragment agents into `raw.agents[]` (inline wins on
+ *      id — same rule as `src/cortex.ts` `mergedAgents`), so a synthesized
+ *      `provided_by:[<fragment-id>]` reference resolves to a declared agent;
+ *   2. derives the effective catalog via `deriveEffectiveCapabilityCatalog`
+ *      (the SAME function `offer list` and bot-packs B-0 use) and writes it back
+ *      to `raw.capabilities[]` — explicit entries pass through authoritative,
+ *      and capabilities that exist ONLY via agent declaration synthesize an
+ *      entry. Synthesized entries get a non-empty placeholder description so
+ *      they satisfy `CapabilitySchema` (which the live derivation path skips
+ *      because it runs AFTER parse).
+ *
+ * PURE-ish: returns a NEW object; `raw` is not mutated. Fragment-load failures
+ * propagate as `FragmentLoadError` (the caller surfaces them) — a malformed
+ * bot-pack should fail loudly here just as it does at boot.
+ *
+ * @param raw        the composed (or single-file-parsed) raw config object.
+ * @param agentsDir  the `agents.d/` directory to fold (may not exist →
+ *                   `loadAgentsDirectory` returns `[]`, raw passes through).
+ */
+function foldAgentsDirectoryCatalog(
+  raw: Record<string, unknown>,
+  agentsDir: string,
+): Record<string, unknown> {
+  const fragments = loadAgentsDirectory(agentsDir);
+  if (fragments.length === 0) return raw;
+
+  // Inline (composed) agents win on id — mirror src/cortex.ts mergedAgents.
+  const rawInlineAgents = Array.isArray(raw.agents) ? (raw.agents as unknown[]) : [];
+  const inlineIds = new Set(
+    rawInlineAgents
+      .map((a) => (isPlainObject(a) && typeof a.id === "string" ? a.id : undefined))
+      .filter((id): id is string => id !== undefined),
+  );
+  const newFragments = fragments.filter((f) => !inlineIds.has(f.id));
+  const mergedRawAgents: unknown[] = [...rawInlineAgents, ...newFragments];
+
+  // Build the Agent-shaped view the derivation reads (`id` + `runtime.capabilities`).
+  // Fragments are already-validated `Agent`s; inline raw agents may be only
+  // partially shaped, so we project the two fields the derivation consults.
+  const inlineAgentView: Agent[] = rawInlineAgents
+    .filter(isPlainObject)
+    .filter((a): a is Record<string, unknown> & { id: string } => typeof a.id === "string")
+    .map((a) => {
+      const runtime = isPlainObject(a.runtime) ? a.runtime : undefined;
+      const caps = runtime && Array.isArray(runtime.capabilities)
+        ? runtime.capabilities.filter((c): c is string => typeof c === "string")
+        : [];
+      return { id: a.id, runtime: { capabilities: caps } } as unknown as Agent;
+    });
+  const agentsForDerivation: Agent[] = [...inlineAgentView, ...newFragments];
+
+  const explicit: Capability[] = Array.isArray(raw.capabilities)
+    ? (raw.capabilities as Capability[])
+    : [];
+  const effective = deriveEffectiveCapabilityCatalog(explicit, agentsForDerivation);
+
+  // Synthesized entries carry `description: ""` (the live path skips the schema,
+  // so it never sees them). Our path validates BEFORE parse, and
+  // `CapabilitySchema.description` requires non-empty, so fill a placeholder for
+  // any entry the derivation synthesized (empty description ⇒ derived-only).
+  const foldedCapabilities = effective.map((c) =>
+    c.description === ""
+      ? {
+          ...c,
+          description: `provided by bot-pack agent(s): ${c.provided_by.join(", ") || "(none)"}`,
+        }
+      : c,
+  );
+
+  return { ...raw, agents: mergedRawAgents, capabilities: foldedCapabilities };
+}
+
+/**
+ * Compose the whole config from disk AND fold `agents.d/` into the effective
+ * catalog (cortex#1071). The single entry point all offer validation/list
+ * paths use so they share the daemon's view of provided capabilities.
+ */
+function composeRawConfigWithAgents(
+  composePath: string,
+  agentsDir: string,
+): Record<string, unknown> {
+  return foldAgentsDirectoryCatalog(composeRawConfig(composePath), agentsDir);
+}
+
+// =============================================================================
 // Compose-whole validation (mirrors config-merge.validateComposed)
 // =============================================================================
 
@@ -1058,14 +1180,26 @@ function validateComposed(
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    const res = CortexConfigSchema.safeParse(parsed);
+    // Single-file legacy still folds agents.d (the convention dir alongside the
+    // cortex.yaml) so a bot-pack capability is offerable in the monolith form too.
+    let folded: Record<string, unknown>;
+    try {
+      folded = isPlainObject(parsed)
+        ? foldAgentsDirectoryCatalog(parsed, target.agentsDir)
+        : (parsed as Record<string, unknown>);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    const res = CortexConfigSchema.safeParse(folded);
     return res.success ? { ok: true } : { ok: false, error: res.error.message };
   }
 
   let composed: Record<string, unknown>;
   try {
     writeFileSync(target.filePath, newLayerText, "utf-8");
-    composed = composeRawConfig(target.composePath);
+    // Fold agents.d into the effective catalog (cortex#1071) so a bot-pack-
+    // provided capability validates the same way the daemon resolves it.
+    composed = composeRawConfigWithAgents(target.composePath, target.agentsDir);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
@@ -1245,7 +1379,7 @@ function commitEdit(
   // Re-compose from disk + re-validate (belt-and-braces; catches a serialization
   // surprise the in-memory validation missed). Restore on failure.
   try {
-    const recomposed = composeRawConfig(target.composePath);
+    const recomposed = composeRawConfigWithAgents(target.composePath, target.agentsDir);
     const reval = CortexConfigSchema.safeParse(recomposed);
     if (!reval.success) {
       writeFileSync(target.filePath, originalText, "utf-8");
@@ -1415,10 +1549,16 @@ function runList(
     return opError("list", err instanceof Error ? err.message : String(err), json);
   }
   // Compose the WHOLE config so capabilities[] (a top-level block, possibly in a
-  // different layer) + offerings resolve together.
+  // different layer) + offerings resolve together, AND fold `agents.d/` into the
+  // effective catalog (cortex#1071) so bot-pack-provided capabilities — declared
+  // ONLY in `agents.d/<id>.yaml` `runtime.capabilities[]` — surface in the list,
+  // matching the catalog the daemon trusts at boot.
   let config: Record<string, unknown>;
   try {
-    config = composeRawConfig(target.composePath === target.filePath ? target.filePath : target.composePath);
+    config = composeRawConfigWithAgents(
+      target.composePath === target.filePath ? target.filePath : target.composePath,
+      target.agentsDir,
+    );
   } catch (err) {
     return opError("list", `cannot compose config: ${err instanceof Error ? err.message : String(err)}`, json);
   }
@@ -1427,15 +1567,12 @@ function runList(
     return opError("list", `config failed CortexConfigSchema — cannot list offerings.\n  ${parsed.error.message}`, json);
   }
   const cfg = parsed.data;
-  // EFFECTIVE catalog: explicit entries pass through authoritative; agents
-  // declaring capabilities nobody catalogued get synthesized entries
-  // (cortex#1021 B-0 — kills the manual capabilities[] cross-edit).
-  const effectiveCatalog = deriveEffectiveCapabilityCatalog(
-    cfg.capabilities,
-    cfg.agents,
-  );
+  // `cfg.capabilities` is ALREADY the effective catalog — `composeRawConfigWithAgents`
+  // folded `agents.d/` fragments into both `agents[]` and `capabilities[]` (via
+  // `deriveEffectiveCapabilityCatalog`, cortex#1021 B-0 + cortex#1071) before the
+  // parse above, so we read it directly rather than re-deriving.
   const rows = buildListRows(
-    effectiveCatalog.map((c) => ({ id: c.id, provided_by: c.provided_by })),
+    cfg.capabilities.map((c) => ({ id: c.id, provided_by: c.provided_by })),
     cfg.policy?.offerings,
   );
 

@@ -601,7 +601,11 @@ function stackLayer(extra: Rec = {}): Rec {
   };
 }
 
-function makeSplitDir(stacks: Record<string, Rec>, slug = "offer-test-cfg"): string {
+function makeSplitDir(
+  stacks: Record<string, Rec>,
+  slug = "offer-test-cfg",
+  agentsd: Record<string, Rec> = {},
+): string {
   const dir = join(tmpDir, slug);
   mkdirSync(join(dir, "system"), { recursive: true });
   mkdirSync(join(dir, "stacks"), { recursive: true });
@@ -609,7 +613,40 @@ function makeSplitDir(stacks: Record<string, Rec>, slug = "offer-test-cfg"): str
   for (const [name, content] of Object.entries(stacks)) {
     writeFileSync(join(dir, "stacks", `${name}.yaml`), YAML.stringify(content, { indent: 2, lineWidth: 0 }), "utf-8");
   }
+  // Optional bot-pack agents under `agents.d/<id>.yaml`, each with a sibling
+  // persona file (loadAgentsDirectory rejects a fragment whose persona path
+  // does not resolve). Mirrors the daemon-boot fragment layout (cortex#1071).
+  const entries = Object.entries(agentsd);
+  if (entries.length > 0) {
+    const agentsDir = join(dir, "agents.d");
+    mkdirSync(agentsDir, { recursive: true });
+    for (const [id, fragment] of entries) {
+      writeFileSync(join(agentsDir, `${id}.md`), `# ${id} persona\n`, "utf-8");
+      writeFileSync(
+        join(agentsDir, `${id}.yaml`),
+        YAML.stringify({ persona: `./${id}.md`, ...fragment }, { indent: 2, lineWidth: 0 }),
+        "utf-8",
+      );
+    }
+  }
   return dir;
+}
+
+/**
+ * A bot-pack agent fragment (the `agents.d/<id>.yaml` shape) declaring a
+ * capability via `runtime.capabilities[]` — e.g. the dev-loop `dev` agent
+ * providing `dev.implement` (cortex#1071). There is deliberately NO top-level
+ * `capabilities[]` catalog entry for it on the stack; the catalog the offer
+ * command validates against must be DERIVED from this fragment, mirroring what
+ * the daemon trusts at boot.
+ */
+function botPackAgent(id: string, capabilities: string[]): Rec {
+  return {
+    id,
+    displayName: id,
+    presence: {},
+    runtime: { substrate: "claude-code", mode: "in-process", capabilities },
+  };
 }
 
 async function run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -787,6 +824,99 @@ describe("dispatchOffer — CLI", () => {
     const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
     const net = ((written.policy as Rec).federated as Rec).networks as Rec[];
     expect(net[0]?.announce_capabilities).toEqual(["code-review.typescript"]);
+  });
+
+  // =========================================================================
+  // cortex#1071 — offer set/list folds agents.d (bot-pack-provided caps).
+  //
+  // A capability declared ONLY in a bot-pack fragment's
+  // `agents.d/<id>.yaml` `runtime.capabilities[]` (no top-level
+  // `capabilities[]` catalog entry on the stack) must be offerable: the
+  // offer-validation path derives the effective catalog the same way the
+  // daemon trusts merged agents at boot. Mirrors the dev-loop case
+  // (`dev.implement` provided by the `dev` bot-pack agent).
+  // =========================================================================
+
+  test("set federated for a bot-pack (agents.d) capability validates + writes (cortex#1071)", async () => {
+    const dir = makeSplitDir(
+      {
+        // Stack offers dev.implement but declares NO catalog entry for it —
+        // only the inline echo agent's code-review.typescript / chat exist.
+        work: stackLayer({
+          policy: {
+            federated: {
+              networks: [{ id: "metafactory-net", leaf_node: "leaf", max_hop: 1, peers: [] }],
+              registry: { url: "https://registry.example" },
+            },
+          },
+        }),
+      },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    // Pre-fix this fails: the composed config has no `dev.implement` in
+    // capabilities[] (composeRawConfig doesn't fold agents.d), so
+    // CortexConfigSchema rejects the offering. Post-fix the derived catalog
+    // carries it (provided_by:[dev]) and validation passes.
+    const r = await run([
+      "dev.implement", "--scope", "federated", "--network", "metafactory-net",
+      "--config", dir, "--apply",
+    ]);
+    expect(r.code).toBe(0);
+    const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
+    const policy = written.policy as Rec;
+    expect((policy.offerings as Rec[])[0]?.capability).toBe("dev.implement");
+    const net = (policy.federated as Rec).networks as Rec[];
+    expect(net[0]?.announce_capabilities).toEqual(["dev.implement"]);
+    expect(net[0]?.accept_subjects).toEqual([
+      "federated.andreas.work.tasks.dev.implement.>",
+    ]);
+  });
+
+  test("set local for a bot-pack capability validates (no catalog entry needed) (cortex#1071)", async () => {
+    const dir = makeSplitDir(
+      { work: stackLayer() },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    const r = await run(["dev.implement", "--scope", "local", "--config", dir, "--apply"]);
+    expect(r.code).toBe(0);
+    const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
+    expect(((written.policy as Rec).offerings as Rec[])[0]?.capability).toBe("dev.implement");
+  });
+
+  test("list surfaces a bot-pack capability with its provider agent (cortex#1071)", async () => {
+    const dir = makeSplitDir(
+      {
+        work: stackLayer({
+          policy: {
+            offerings: [{ capability: "dev.implement", scopes: ["local"] }],
+          },
+        }),
+      },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    const r = await run(["list", "--config", dir]);
+    expect(r.code).toBe(0);
+    // The derived catalog makes the bot-pack capability visible in list,
+    // attributed to its providing agent.
+    expect(r.stdout).toContain("dev.implement");
+    expect(r.stdout).toContain("dev");
+  });
+
+  test("a still-unknown capability (no catalog entry, no agents.d provider) → exit 1 (cortex#1071 guard)", async () => {
+    // The fold must not turn the catalog into a free-for-all: a capability
+    // that no inline catalog entry AND no agents.d agent provides still fails.
+    const dir = makeSplitDir(
+      { work: stackLayer() },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    const before = readFileSync(join(dir, "stacks", "work.yaml"), "utf-8");
+    const r = await run(["ghost.capability", "--scope", "local", "--config", dir, "--apply"]);
+    expect(r.code).toBe(1);
+    expect(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")).toBe(before);
   });
 });
 
