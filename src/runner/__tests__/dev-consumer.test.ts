@@ -725,3 +725,166 @@ describe("DevConsumer.processEnvelope — CO-2/CO-4 offer-scope admission gate",
     expect(decision).toEqual({ kind: "nak", delayMs: 999 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Slice convergence A (cortex#1148) — the dev-consumer ECHOES the inbound
+// request's logical `response_routing` onto EVERY lifecycle envelope it emits,
+// so a downstream surface can group all of a slice's activity by that address.
+//
+// The SOURCE that stamps the address is the orchestrator (pilot A′); these
+// tests synthesise an inbound that already carries it (as pilot would) and
+// assert the consumer forwards it verbatim. Pure echo — no routing/naming
+// logic in the worker, and an UN-stamped inbound emits no field (backward
+// compatible).
+// ---------------------------------------------------------------------------
+
+/** The logical slice address a pilot orchestrator would stamp on a dispatch. */
+const SLICE_ROUTING = {
+  surface: "discord",
+  channel: "cortex",
+  thread: "cortex/issue/872",
+} as const;
+
+/**
+ * Build a `tasks.dev.implement` request whose payload already carries a
+ * logical `response_routing` — i.e. an inbound a pilot orchestrator has
+ * stamped (the SOURCE half, pilot A′). The consumer reads this off the wire.
+ */
+function makeRoutedRequest(
+  routing: Record<string, unknown> = { ...SLICE_ROUTING },
+  payload: DevImplementPayload = PAYLOAD,
+): Envelope {
+  const env = makeRequest(payload);
+  (env.payload as Record<string, unknown>).response_routing = routing;
+  return env;
+}
+
+/** Read `payload.response_routing` off an emitted lifecycle envelope. */
+function routingOf(env: Envelope): unknown {
+  return (env.payload as { response_routing?: unknown }).response_routing;
+}
+
+describe("DevConsumer — slice convergence A: response_routing echo (cortex#1148)", () => {
+  test("happy path → started + completed BOTH echo the inbound routing verbatim", async () => {
+    const runtime = createRecordingRuntime();
+    const consumer = new DevConsumer(baseOpts({ runtime }));
+
+    const decision = await consumer.processEnvelope(makeRoutedRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+    // Every emitted lifecycle envelope carries the EXACT inbound address.
+    for (const env of runtime.published) {
+      expect(routingOf(env)).toEqual(SLICE_ROUTING);
+    }
+  });
+
+  test("CC failure → failed echoes the inbound routing", async () => {
+    const runtime = createRecordingRuntime();
+    const cc = fakeCcFactory({
+      success: false,
+      response: "",
+      sessionId: "sess-x",
+      exitCode: 1,
+      durationMs: 10,
+    });
+    const consumer = new DevConsumer(baseOpts({ runtime, ccSessionFactory: cc }));
+
+    await consumer.processEnvelope(makeRoutedRequest(), LOCAL_SUBJECT, null);
+
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    expect(failed).toBeDefined();
+    expect(routingOf(failed)).toEqual(SLICE_ROUTING);
+    // started, emitted before the failure, ALSO carries it.
+    const started = runtime.published.find((e) => e.type === "dispatch.task.started")!;
+    expect(routingOf(started)).toEqual(SLICE_ROUTING);
+  });
+
+  test("CC abort (timeout) → not_now failed echoes the inbound routing", async () => {
+    const runtime = createRecordingRuntime();
+    const cc = fakeCcFactory({
+      success: false,
+      aborted: true,
+      abortReason: "timeout",
+      response: "",
+      sessionId: "sess-y",
+      exitCode: 1,
+      durationMs: 10,
+    });
+    const consumer = new DevConsumer(baseOpts({ runtime, ccSessionFactory: cc }));
+
+    await consumer.processEnvelope(makeRoutedRequest(), LOCAL_SUBJECT, null);
+
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    expect(reasonOf(failed)!.kind).toBe("not_now");
+    expect(routingOf(failed)).toEqual(SLICE_ROUTING);
+  });
+
+  test("gate red → failed echoes the inbound routing", async () => {
+    const runtime = createRecordingRuntime();
+    const runner = fakeRunner((command) => ({ ok: command !== "bun test src/" }));
+    const consumer = new DevConsumer(baseOpts({ runtime, commandRunner: runner }));
+
+    await consumer.processEnvelope(makeRoutedRequest(), LOCAL_SUBJECT, null);
+
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    expect(reasonOf(failed)!.kind).toBe("cant_do");
+    expect(routingOf(failed)).toEqual(SLICE_ROUTING);
+  });
+
+  test("redelivery > 1 → aborted ALSO echoes the inbound routing", async () => {
+    const runtime = createRecordingRuntime();
+    const consumer = new DevConsumer(baseOpts({ runtime }));
+
+    await consumer.processEnvelope(makeRoutedRequest(), LOCAL_SUBJECT, makeJsMsg(2));
+
+    const aborted = runtime.published.find((e) => e.type === "dispatch.task.aborted")!;
+    expect(aborted).toBeDefined();
+    expect(routingOf(aborted)).toEqual(SLICE_ROUTING);
+  });
+
+  test("pre-pipeline failure (bad payload) → failed echoes the inbound routing", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRoutedRequest();
+    request.payload.brief = "   "; // invalid → payload gate fails
+    const consumer = new DevConsumer(baseOpts({ runtime }));
+
+    await consumer.processEnvelope(request, LOCAL_SUBJECT, null);
+
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    expect(reasonOf(failed)!.kind).toBe("cant_do");
+    expect(routingOf(failed)).toEqual(SLICE_ROUTING);
+  });
+
+  test("backward compatible: inbound WITHOUT response_routing → no fabricated address", async () => {
+    const runtime = createRecordingRuntime();
+    const consumer = new DevConsumer(baseOpts({ runtime }));
+
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+
+    // No lifecycle envelope invents a response_routing field.
+    for (const env of runtime.published) {
+      expect(routingOf(env)).toBeUndefined();
+    }
+  });
+
+  test("malformed routing (missing channel) → treated as absent (no echo)", async () => {
+    const runtime = createRecordingRuntime();
+    // Only `surface` present — `readLogicalRouting` requires surface+channel.
+    const consumer = new DevConsumer(baseOpts({ runtime }));
+
+    await consumer.processEnvelope(
+      makeRoutedRequest({ surface: "discord" }),
+      LOCAL_SUBJECT,
+      null,
+    );
+
+    for (const env of runtime.published) {
+      expect(routingOf(env)).toBeUndefined();
+    }
+  });
+});

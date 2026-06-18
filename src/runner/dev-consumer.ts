@@ -35,6 +35,15 @@
  *   8. record the CC session id under the chain id so the next fix-cycle task
  *      resumes it (§3.6b).
  *
+ * **Slice convergence A (cortex#1148):** every lifecycle envelope this
+ * consumer emits ECHOES the inbound request's `payload.response_routing`
+ * (the slice's logical thread address) verbatim, so a downstream surface can
+ * group all of a slice's activity by that address. Pure echo — the SOURCE
+ * that stamps the address is the orchestrator (pilot A′); the worker reads it
+ * (via `readLogicalRouting`) and forwards it, adding NO routing/naming logic
+ * (workers are capability-routed and mutually anonymous). An un-stamped
+ * inbound (no `response_routing`) ⇒ no field emitted (backward compatible).
+ *
  * **typed-failure → ack/term/nak** is the SAME mapping `review-consumer.ts`
  * locks in (`failedReasonToAckDecision`): `cant_do`/`wont_do`/`policy_denied`
  * → term (permanent); `not_now` → nak (transient).
@@ -57,6 +66,7 @@ import {
   createDispatchTaskAbortedEvent,
   type DispatchEventSource,
   type DispatchTaskFailedReason,
+  type AnyResponseRouting,
 } from "../bus/dispatch-events";
 import type { GateFloorDecision } from "../bus/gate-floor";
 import {
@@ -67,6 +77,7 @@ import {
 import type { CCSessionFactory, CCSessionLike } from "../substrates/claude-code/harness";
 import type { CCSessionOpts, CCSessionResult } from "./cc-session";
 import type { DevSessionStore } from "./dev-session-store";
+import { readLogicalRouting } from "../adapters/response-routing-delivery";
 
 // ---------------------------------------------------------------------------
 // Injected seams — the testability + authority surface
@@ -382,6 +393,18 @@ export class DevConsumer {
     // Mirrors review-consumer §2.3: the per-attempt pipeline still runs and
     // emits its own terminal envelope; this is the early "in trouble" signal
     // so a watcher can react before the dead-letter window runs out.
+    // Slice convergence A (cortex#1148) — read the slice's logical thread
+    // address off the inbound request ONCE, then echo it verbatim onto every
+    // lifecycle envelope this consumer emits, so a downstream surface can
+    // group all of a slice's activity by that address. PURE ECHO: the SOURCE
+    // that stamps `response_routing` is the orchestrator (pilot A′); the
+    // worker reads it and forwards it, adding no routing/naming logic (workers
+    // are capability-routed and mutually anonymous). `undefined` (the inbound
+    // carried none) means "pass nothing" — behaviour for un-stamped dispatches
+    // is byte-identical (backward compatible). The review path reads the SAME
+    // logical shape (`bus/review-consumer.ts` `readLogicalResponseRouting`).
+    const responseRouting = readLogicalRouting(envelope) ?? undefined;
+
     const deliveryCount = redeliveryCountFrom(msg);
     if (deliveryCount > 1) {
       await this.safePublish(
@@ -390,6 +413,7 @@ export class DevConsumer {
           taskId: crypto.randomUUID(),
           agentId: this.agent.id,
           correlationId: envelope.id,
+          ...(responseRouting !== undefined && { responseRouting }),
           startedAt: this.clock(),
           abortedAt: this.clock(),
           reason: `redelivery (attempt ${deliveryCount})`,
@@ -407,6 +431,7 @@ export class DevConsumer {
           detail: `envelope type "${envelope.type}" is not a tasks.dev.implement request`,
         },
         `unrecognised dev subject: ${subject}`,
+        responseRouting,
       );
       return { kind: "term", reason: "non-dev subject" };
     }
@@ -421,6 +446,7 @@ export class DevConsumer {
           detail: "payload validation failed (missing/invalid repo, branch, base, or brief)",
         },
         `bad payload for ${subject}`,
+        responseRouting,
       );
       return { kind: "term", reason: "payload validation failed" };
     }
@@ -444,6 +470,7 @@ export class DevConsumer {
           envelope,
           decision.refusal,
           `offer-scope admission denied for ${subject}`,
+          responseRouting,
         );
         return failedReasonToAckDecision(decision.refusal);
       }
@@ -458,6 +485,7 @@ export class DevConsumer {
           detail: `agent "${this.agent.id}" does not claim dev.implement`,
         },
         "no capability match for dev.implement",
+        responseRouting,
       );
       return { kind: "term", reason: "no capability match" };
     }
@@ -484,6 +512,7 @@ export class DevConsumer {
           retry_after_ms: retryAfterMs,
         },
         "dev consumer at maxConcurrent",
+        responseRouting,
       );
       return { kind: "nak", delayMs: retryAfterMs };
     }
@@ -494,6 +523,7 @@ export class DevConsumer {
         envelope,
         { kind: "not_now", detail: "dev consumer is shutting down", retry_after_ms: 0 },
         "consumer shutting down before pipeline start",
+        responseRouting,
       );
       return { kind: "nak", delayMs: 0 };
     }
@@ -506,13 +536,14 @@ export class DevConsumer {
         taskId: crypto.randomUUID(),
         agentId: this.agent.id,
         correlationId: envelope.id,
+        ...(responseRouting !== undefined && { responseRouting }),
         startedAt,
       }),
       "dispatch.task.started",
     );
 
     // 7. Run the pipeline. Track the promise for `stop()` drain.
-    const pipelinePromise = this.runPipeline(envelope, payload, startedAt);
+    const pipelinePromise = this.runPipeline(envelope, payload, startedAt, responseRouting);
     const tracked = pipelinePromise.then((decision) => ({ decision }));
     const drainSentinel = tracked.then(() => undefined);
     this.inFlight.add(drainSentinel);
@@ -578,6 +609,7 @@ export class DevConsumer {
     envelope: Envelope,
     payload: DevImplementPayload,
     startedAt: Date,
+    responseRouting: AnyResponseRouting | undefined,
   ): Promise<AckDecision> {
     const chainId = devCorrelationChainId(envelope);
     let worktreePath: string | null = null;
@@ -596,7 +628,7 @@ export class DevConsumer {
         return await this.failTerminal(envelope, startedAt, {
           kind: "cant_do",
           detail: `worktree create failed: ${errText(err)}`,
-        });
+        }, responseRouting);
       }
 
       // 7b. CC session — warm-resume when the chain has a stored session id.
@@ -631,7 +663,7 @@ export class DevConsumer {
         return await this.failTerminal(envelope, startedAt, {
           kind: "cant_do",
           detail: `cc session threw: ${errText(err)}`,
-        });
+        }, responseRouting);
       }
 
       // Persist the session id for the next fix-cycle resume (§3.6b) — even on
@@ -651,7 +683,7 @@ export class DevConsumer {
               kind: "cant_do",
               detail: `cc session exited ${ccResult.exitCode} without completing the brief`,
             };
-        return await this.failTerminal(envelope, startedAt, reason);
+        return await this.failTerminal(envelope, startedAt, reason, responseRouting);
       }
 
       // 7c. Gates — run in declared order, stop at the first red.
@@ -664,14 +696,14 @@ export class DevConsumer {
           return await this.failTerminal(envelope, startedAt, {
             kind: "cant_do",
             detail: `gate "${command}" could not run: ${errText(err)}`,
-          });
+          }, responseRouting);
         }
         if (!gateResult.ok) {
           const tail = gateResult.output ? ` — ${truncate(gateResult.output)}` : "";
           return await this.failTerminal(envelope, startedAt, {
             kind: "cant_do",
             detail: `gate "${command}" failed${tail}`,
-          });
+          }, responseRouting);
         }
       }
 
@@ -691,7 +723,7 @@ export class DevConsumer {
         return await this.failTerminal(envelope, startedAt, {
           kind: "cant_do",
           detail: `forge openPr failed: ${errText(err)}`,
-        });
+        }, responseRouting);
       }
 
       // 7e. Terminal success — `dispatch.task.completed` carrying the PR ref.
@@ -701,6 +733,7 @@ export class DevConsumer {
           taskId: crypto.randomUUID(),
           agentId: this.agent.id,
           correlationId: envelope.id,
+          ...(responseRouting !== undefined && { responseRouting }),
           startedAt,
           completedAt: this.clock(),
           resultSummary: `opened ${pr.repo}#${pr.number}`,
@@ -740,6 +773,7 @@ export class DevConsumer {
     envelope: Envelope,
     startedAt: Date,
     reason: DispatchTaskFailedReason,
+    responseRouting: AnyResponseRouting | undefined,
   ): Promise<AckDecision> {
     await this.safePublish(
       createDispatchTaskFailedEvent({
@@ -747,6 +781,7 @@ export class DevConsumer {
         taskId: crypto.randomUUID(),
         agentId: this.agent.id,
         correlationId: envelope.id,
+        ...(responseRouting !== undefined && { responseRouting }),
         startedAt,
         failedAt: this.clock(),
         errorSummary: reasonDetail(reason),
@@ -767,6 +802,7 @@ export class DevConsumer {
     request: Envelope,
     reason: DispatchTaskFailedReason,
     errorSummary: string,
+    responseRouting?: AnyResponseRouting,
   ): Promise<void> {
     const now = this.clock();
     await this.safePublish(
@@ -775,6 +811,7 @@ export class DevConsumer {
         taskId: crypto.randomUUID(),
         agentId: this.agent.id,
         correlationId: request.id,
+        ...(responseRouting !== undefined && { responseRouting }),
         startedAt: now,
         failedAt: now,
         errorSummary,
