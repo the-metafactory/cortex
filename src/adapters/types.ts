@@ -77,6 +77,16 @@ export interface AccessDecision {
   };
   /** Disallowed MCP tools for this user */
   toolRestrictions?: string[];
+  /**
+   * cortex#1167 — EXPLICIT tool ALLOWLIST. When present and non-empty, the CC
+   * session is confined to exactly these tools (anything else, including every
+   * `mcp__*`, is denied — allowlist semantics, NOT the allow-by-default of an
+   * absent/empty list). Set ONLY by the open-onboarding anon path so a
+   * zero-authority stranger never gets allow-by-default tool access. Real
+   * principal decisions leave it undefined and keep the existing deny-list
+   * (`toolRestrictions`) behaviour unchanged.
+   */
+  allowedTools?: string[];
   /** Allowed working directories for this user */
   dirRestrictions?: string[];
   /** G-121: Skills this role may invoke. undefined → all; [] → none; [...] → only listed. */

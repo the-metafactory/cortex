@@ -306,6 +306,40 @@ describe("DispatchHandler", () => {
       expect(calls).toBe(1);
       await handler.shutdown();
     });
+
+    // cortex#1167 review MINOR — DM over-reach. An unmapped stranger DMing a
+    // flagged agent must STAY denied (the gate scopes to the public channel).
+    test("unmapped sender DMing a FLAGGED agent → still DENIED, no session", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "should not run", exitCode: 0, durationMs: 1, sessionId: "x" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      adapter.accessDecision = { ...UNMAPPED_DENY, isDM: true };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "let me in", isDM: true }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // G-300: unmapped DMs are silently ignored — no deny message, no session.
+      expect(calls).toBe(0);
+      const replied = adapter.sentMessages.some((m) => m.text.length > 0);
+      expect(replied).toBe(false);
+      await handler.shutdown();
+    });
   });
 
   describe("help mode", () => {
@@ -1613,6 +1647,94 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     // catches any regression where the new envelope shape drifts
     // from the wire contract the dispatch-listener consumes.
     expect(validateEnvelope(envelope).ok).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  // cortex#1167 review BLOCKER — the gate must work on the PRODUCTION path
+  // (runtime + policyEngine WIRED), not just the missing-runtime direct-sync
+  // fallback. With the bus wired, the publish path RE-RESOLVES the originator
+  // from the platform tuple; an unmapped anon sender would be rejected
+  // (`invalid-originator`) unless the gate threads a pre-resolved anon DID
+  // through. This drives the full handleMessage admit path and asserts the
+  // chat envelope is actually PUBLISHED (Pier greets the stranger), carrying
+  // the anon originator DID + the Read-only allowlist.
+  test("WIRED bus: unmapped sender + flagged Pier → chat envelope PUBLISHED (not invalid-originator)", async () => {
+    const runtime = makeRecordingRuntimeWithSubject();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
+      stack: "meta-factory",
+      // The engine maps (discord, 1487204875912609844) → andreas ONLY. JC's id
+      // below is UNMAPPED — exactly the production scenario from the issue.
+      policyEngine: makePublishPolicyEngine(),
+    });
+    const adapter = new MockAdapter();
+    // Adapter denies the unmapped sender with the real engine-derived shape.
+    adapter.accessDecision = {
+      allowed: false,
+      features: { chat: false, async: false, team: false },
+      denyCode: "unmapped_sender",
+      denyReason: "Sorry, I'm not set up to respond to you.",
+    };
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ platform: "discord", authorId: "285727653603049472", authorName: "JC", content: "hi, I'm new here" }),
+      { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
+    );
+
+    // The chat envelope was published (Pier will greet the stranger).
+    expect(runtime.subjectPublishes.length).toBe(1);
+    const { envelope } = runtime.subjectPublishes[0]!;
+    expect(envelope.type).toBe("tasks.chat");
+    // Originator is the DID-grammar-valid anon identity — NOT a re-resolved
+    // (and failing) platform tuple, and NOT a real principal DID.
+    expect(envelope.originator?.identity).toBe("did:mf:anon.discord.285727653603049472");
+    // The envelope must still validate against the myelin wire schema.
+    expect(validateEnvelope(envelope).ok).toBe(true);
+    // cortex#1167 MAJOR — the explicit Read-only allowlist rode the payload.
+    expect(envelope.payload.allowed_tools).toEqual(["Read"]);
+    // No invalid-originator error was posted back.
+    const errored = adapter.sentMessages.some((m) => m.text.includes("could not be mapped"));
+    expect(errored).toBe(false);
+
+    await handler.shutdown();
+  });
+
+  // cortex#1167 — regression: originator validation is UNCHANGED for real
+  // dispatches. A mapped principal still resolves to their real principal DID
+  // via the normal resolver (override is undefined → no bypass).
+  test("WIRED bus: a MAPPED principal still resolves to the REAL principal DID (override not applied)", async () => {
+    const runtime = makeRecordingRuntimeWithSubject();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
+      stack: "meta-factory",
+      policyEngine: makePublishPolicyEngine(),
+    });
+    const adapter = new MockAdapter();
+    // Mapped principal: a real allow (the conversion code never fires).
+    adapter.accessDecision = { allowed: true, features: { chat: true, async: false, team: false } };
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ platform: "discord", authorId: "1487204875912609844", authorName: "andreas", content: "hello" }),
+      { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
+    );
+
+    expect(runtime.subjectPublishes.length).toBe(1);
+    const { envelope } = runtime.subjectPublishes[0]!;
+    // RESOLVED real principal DID — proves the anon override did NOT leak onto
+    // a real, mapped dispatch.
+    expect(envelope.originator?.identity).toBe("did:mf:andreas");
+    expect(envelope.originator?.identity).not.toContain("anon");
+    // No anon allowlist on a real dispatch.
+    expect(envelope.payload.allowed_tools).toBeUndefined();
 
     await handler.shutdown();
   });

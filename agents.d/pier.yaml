@@ -31,7 +31,14 @@ trust: [luna]
 # session can respond — instead of the strict "I'm not set up to respond to
 # you" deny that every other agent keeps. Pier issues nothing, so the blast
 # radius of admitting a stranger is "a reply in the public onboarding channel".
+# The gate fires ONLY for non-DM messages on Pier's bound public channel
+# (agentChannelId) — an unmapped DM stays denied.
 openOnboarding: true
+# cortex#1167 — explicit tool ALLOWLIST for the anonymous onboarding session.
+# MUST mirror the persona allowedTools (personas/pier.md → [Read]). Anything not
+# listed — every mcp__* tool, every future tool — is denied at the CC layer
+# (the anon session must never get allow-by-default tool access).
+openOnboardingAllowedTools: [Read]
 
 # Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
 runtime:

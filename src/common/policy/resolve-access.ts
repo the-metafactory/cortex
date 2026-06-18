@@ -73,8 +73,14 @@ const DENY_NO_POLICY: AccessDecision = {
  *     are FALSE — a stranger cannot spawn background tasks or agent teams.
  *   - `trusted: false` — the inbound prompt-injection filter stays FULLY armed
  *     (a stranger is the LEAST trusted sender there is).
- *   - `toolRestrictions`: the ENTIRE Claude tool inventory — every tool is
- *     restricted. The concierge persona narrows further (Pier → Read only).
+ *   - `allowedTools` (cortex#1167 review MAJOR): an EXPLICIT ALLOWLIST equal to
+ *     the agent's persona allowedTools (Pier → `["Read"]`). This is the real
+ *     tool gate — CC tool confinement is allow-by-default on an EMPTY list, so
+ *     a deny-list alone would leave `mcp__*` and future tools open. With a
+ *     non-empty allowlist, ANYTHING not listed is denied.
+ *   - `toolRestrictions`: the ENTIRE Claude tool inventory is ALSO denied as a
+ *     belt-and-braces backstop (so even if the allowlist were dropped on some
+ *     path the inventory tools stay blocked).
  *   - NO `allowedSkills`, NO `dirRestrictions` grants are emitted, so the
  *     session inherits the deployment's most-restrictive defaults; `bashGuard`
  *     stays ON.
@@ -84,13 +90,27 @@ const DENY_NO_POLICY: AccessDecision = {
  *
  * It exists purely so the chat session has *a* attributed sender; it unlocks
  * no privileged path.
+ *
+ * @param allowedTools the persona allowlist to confine the session to. Defaults
+ *   to the most-restrictive safe floor `["Read"]` when the caller passes
+ *   nothing (or an empty list — an empty allowlist would mean allow-by-default,
+ *   which a stranger must never get, so we coerce up to `["Read"]`).
  */
-export function anonOnboardingAccess(msg: InboundMessage): AccessDecision {
+export function anonOnboardingAccess(
+  msg: InboundMessage,
+  allowedTools?: readonly string[],
+): AccessDecision {
+  const allowlist =
+    allowedTools !== undefined && allowedTools.length > 0
+      ? [...allowedTools]
+      : ["Read"];
   return {
     allowed: true,
     features: { chat: true, async: false, team: false },
-    // Restrict EVERY tool — zero authority. A concierge persona narrows
-    // further; this is the floor, not the ceiling.
+    // Explicit ALLOWLIST — the real confinement. Anything not here (incl.
+    // every `mcp__*`) is denied.
+    allowedTools: allowlist,
+    // Belt-and-braces deny-list backstop: the full known inventory.
     toolRestrictions: [...CLAUDE_TOOL_INVENTORY],
     bashGuard: true,
     trusted: false,
@@ -98,6 +118,26 @@ export function anonOnboardingAccess(msg: InboundMessage): AccessDecision {
     anonPrincipalId: `anon:${msg.platform}:${msg.authorId}`,
     ...(msg.isDM === true && { isDM: true }),
   };
+}
+
+/**
+ * cortex#1167 — DID-grammar-compliant originator identity for an anonymous
+ * open-onboarding sender, threaded through the publish path as the
+ * `originatorIdentityOverride` so the bus-side originator resolver does NOT
+ * re-resolve the (unmapped) platform tuple and reject the chat envelope.
+ *
+ * myelin's `DID_RE` = `/^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$/` — colons in the
+ * tail are illegal, so the human-readable `anon:<platform>:<authorId>` form
+ * cannot be a DID. We encode with dot separators: `did:mf:anon.<platform>.<id>`
+ * (starts with the letter `a`, only `[a-z0-9.]` after). This DID resolves to NO
+ * registered principal — it is purely a syntactically-valid originator label
+ * for the one inbound chat envelope; it grants nothing downstream.
+ */
+export function anonOriginatorDid(platform: string, authorId: string): string {
+  // Keep the tail DID-safe: lowercase, strip anything outside [a-z0-9.].
+  const safeId = authorId.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const safePlatform = platform.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return `did:mf:anon.${safePlatform}.${safeId}`;
 }
 
 /**

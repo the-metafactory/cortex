@@ -31,6 +31,14 @@ export interface InboundChatDispatchPublishOpts {
   allowedDirs: string[];
   disallowedTools: string[];
   /**
+   * cortex#1167 — EXPLICIT tool ALLOWLIST emitted as `allowed_tools` on the
+   * payload. Non-empty → the runner confines the CC session to exactly these
+   * tools (allowlist semantics). Empty/undefined → omitted (the runner's
+   * pre-existing allow-by-default + deny-list behaviour, unchanged for every
+   * real dispatch). Set only by the open-onboarding anon path.
+   */
+  allowedTools?: string[];
+  /**
    * cortex#710 — per-skill grant list. `undefined` → omit `allowed_skills`
    * from the payload (the runner harness applies default-deny: no Skill
    * tool). `[]` → explicit no-skills. `[...]` → grant exactly those skills
@@ -80,6 +88,23 @@ export interface InboundChatDispatchPublishOpts {
    * `invalid-originator`; the caller surfaces a degraded dispatch.
    */
   policyEngine: PolicyEngine | undefined;
+  /**
+   * cortex#1167 — pre-resolved originator DID that BYPASSES the normal
+   * `adapterOriginatorIdentity` platform-tuple resolution. Set ONLY by the
+   * open-onboarding anon path (an unmapped sender, admitted by a flagged
+   * concierge agent, has no registered principal so the normal resolver would
+   * reject the envelope with `invalid-originator` and the concierge would
+   * never reply).
+   *
+   * Security: applied ONLY when present, and the ONLY caller that sets it is
+   * the anon gate (guarded by `access.anonPrincipal === true`). Every real /
+   * mapped / peer / federated dispatch leaves it `undefined`, so originator
+   * validation for those paths is BYTE-UNCHANGED — they still resolve through
+   * `adapterOriginatorIdentity` and are still rejected when unresolvable. The
+   * override DID resolves to no registered principal; it is a syntactically-
+   * valid label for the one inbound chat envelope only and grants nothing.
+   */
+  originatorIdentityOverride?: string;
 }
 
 export interface DispatchSourcePublishResult {
@@ -199,11 +224,21 @@ export async function publishInboundChatDispatchEnvelope(
     return { published: false, reason: "subject-build-failed" };
   }
 
-  const originatorIdentity = adapterOriginatorIdentity(
-    opts.policyEngine,
-    opts.msg.platform,
-    opts.msg.authorId,
-  );
+  // cortex#1167 — open-onboarding anon path supplies a pre-resolved DID so the
+  // unmapped (zero-authority) sender is a valid originator OF ITS OWN inbound
+  // chat. The override is applied ONLY when explicitly set; otherwise the
+  // normal resolver runs and still rejects unresolvable tuples — real/mapped/
+  // peer/federated dispatches are unaffected.
+  let originatorIdentity: string | null;
+  if (opts.originatorIdentityOverride !== undefined) {
+    originatorIdentity = opts.originatorIdentityOverride;
+  } else {
+    originatorIdentity = adapterOriginatorIdentity(
+      opts.policyEngine,
+      opts.msg.platform,
+      opts.msg.authorId,
+    );
+  }
   if (originatorIdentity === null) {
     console.error(
       `dispatch-source: cannot resolve platform identity to a registered principal — platform=${opts.msg.platform} authorId=${opts.msg.authorId}` +
@@ -233,6 +268,11 @@ export async function publishInboundChatDispatchEnvelope(
     }),
     ...(opts.disallowedTools.length > 0 && {
       disallowed_tools: opts.disallowedTools,
+    }),
+    // cortex#1167 — explicit tool ALLOWLIST (anon open-onboarding path only).
+    // Non-empty → the runner confines the session to exactly these tools.
+    ...(opts.allowedTools !== undefined && opts.allowedTools.length > 0 && {
+      allowed_tools: opts.allowedTools,
     }),
     // cortex#710 — carry the per-skill grant list when the source decided
     // one. Emitted even for `[]` (explicit no-skills) so the runner can

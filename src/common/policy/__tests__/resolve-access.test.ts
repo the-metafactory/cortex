@@ -8,9 +8,11 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { DID_RE } from "@the-metafactory/myelin/identity";
 import {
   resolvePolicyAccess,
   anonOnboardingAccess,
+  anonOriginatorDid,
   isOperatorPrincipal,
 } from "../resolve-access";
 import {
@@ -245,6 +247,52 @@ describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#11
   test("threads isDM through when the inbound was a DM", () => {
     expect(anonOnboardingAccess(msg({ isDM: true })).isDM).toBe(true);
     expect(anonOnboardingAccess(msg({ isDM: false })).isDM).toBeUndefined();
+  });
+
+  // cortex#1167 review MAJOR — explicit allowlist (tool confinement is an
+  // allowlist, NOT an allow-by-default deny-list).
+  test("carries an EXPLICIT tool allowlist equal to the persona list", () => {
+    const result = anonOnboardingAccess(msg(), ["Read"]);
+    expect(result.allowedTools).toEqual(["Read"]);
+  });
+
+  test("an unlisted tool (and any mcp__*) is NOT in the allowlist", () => {
+    const result = anonOnboardingAccess(msg(), ["Read"]);
+    expect(result.allowedTools).not.toContain("Bash");
+    expect(result.allowedTools).not.toContain("Write");
+    // The crux of the MAJOR: MCP tools are NOT in the inventory deny-list, so
+    // only the allowlist keeps them out. Prove they are not allowed.
+    expect(result.allowedTools!.some((t) => t.startsWith("mcp__"))).toBe(false);
+  });
+
+  test("falls back to the most-restrictive ['Read'] when no allowlist passed", () => {
+    expect(anonOnboardingAccess(msg()).allowedTools).toEqual(["Read"]);
+  });
+
+  test("coerces an EMPTY allowlist up to ['Read'] (never allow-by-default)", () => {
+    // An empty `--allowedTools` would mean allow-by-default at the CC layer; a
+    // stranger must never get that, so an empty list is coerced to Read-only.
+    expect(anonOnboardingAccess(msg(), []).allowedTools).toEqual(["Read"]);
+  });
+});
+
+describe("anonOriginatorDid — DID-grammar-valid anon originator (cortex#1167)", () => {
+  test("produces a DID_RE-valid identity for a numeric discord author id", () => {
+    const did = anonOriginatorDid("discord", "285727653603049472");
+    expect(did).toBe("did:mf:anon.discord.285727653603049472");
+    // Must satisfy myelin's DID grammar (colons in the tail are illegal — the
+    // human-readable anon:discord:<id> form would be REJECTED on the wire).
+    expect(DID_RE.test(did)).toBe(true);
+  });
+
+  test("the human-readable anon id form is NOT DID-valid (why the override exists)", () => {
+    expect(DID_RE.test("did:mf:anon:discord:123")).toBe(false);
+  });
+
+  test("strips DID-unsafe characters from platform + author id", () => {
+    const did = anonOriginatorDid("Discord", "AB-12.x");
+    expect(DID_RE.test(did)).toBe(true);
+    expect(did).toBe("did:mf:anon.discord.ab12x");
   });
 });
 

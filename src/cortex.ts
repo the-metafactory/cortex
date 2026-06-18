@@ -625,9 +625,15 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools">,
   configDir: string,
-): { id: string; displayName: string; persona: string; openOnboarding?: boolean } {
+): {
+  id: string;
+  displayName: string;
+  persona: string;
+  openOnboarding?: boolean;
+  openOnboardingAllowedTools?: string[];
+} {
   const expandedPersona = expandTilde(agent.persona);
   return {
     id: agent.id,
@@ -638,6 +644,12 @@ function targetAgentForDispatch(
     // cortex#1165 — carry the open-onboarding gate flag per target agent so the
     // dispatch handler can admit unmapped senders for flagged concierges only.
     ...(agent.openOnboarding === true && { openOnboarding: true }),
+    // cortex#1167 — carry the explicit anon-session tool allowlist (mirrors the
+    // persona allowedTools). Only meaningful when openOnboarding is set.
+    ...(agent.openOnboarding === true &&
+      agent.openOnboardingAllowedTools !== undefined && {
+        openOnboardingAllowedTools: agent.openOnboardingAllowedTools,
+      }),
   };
 }
 

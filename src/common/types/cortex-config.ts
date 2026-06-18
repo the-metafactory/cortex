@@ -867,8 +867,28 @@ export const AgentSchema = z.object({
    * The flag opens NO privileged path — the anonymous principal never enters
    * the policy engine/registry, so no role/capability check can ever resolve
    * it (see `anonOnboardingAccess` in `src/common/policy/resolve-access.ts`).
+   *
+   * Scope (cortex#1167 review): the gate only fires for a NON-DM message
+   * arriving on the agent's bound public channel (the adapter already filters
+   * inbound to that channel + guild). An unmapped DM stays denied — a stranger
+   * cannot reach the concierge privately.
    */
   openOnboarding: z.boolean().optional(),
+  /**
+   * cortex#1167 (review MAJOR) — the EXPLICIT tool ALLOWLIST enforced on an
+   * anonymous open-onboarding session. Tool confinement at the CC layer is an
+   * allowlist when `allowedTools` is non-empty, but a DENY-LIST (allow-by-
+   * default, including every `mcp__*`) when it is empty. A zero-authority
+   * stranger must NOT get allow-by-default, so the anon session passes THIS
+   * list as its `allowedTools`; anything not listed — every MCP tool, every
+   * future tool — is denied.
+   *
+   * MUST mirror the agent's persona `allowedTools` (Pier → `[Read]`). Optional;
+   * when `openOnboarding` is true and this is absent, the gate falls back to
+   * the most-restrictive safe default `["Read"]` (read-only). Ignored when
+   * `openOnboarding` is not set.
+   */
+  openOnboardingAllowedTools: z.array(z.string().min(1)).optional(),
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

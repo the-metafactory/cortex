@@ -60,7 +60,7 @@ import {
   type DispatchSourcePublishResult,
 } from "./dispatch-source-publisher";
 import type { PolicyEngine } from "../common/policy/engine";
-import { anonOnboardingAccess } from "../common/policy/resolve-access";
+import { anonOnboardingAccess, anonOriginatorDid } from "../common/policy/resolve-access";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -89,12 +89,20 @@ interface DispatchTargetAgent {
   persona?: string;
   /**
    * cortex#1165 — the Pier open-onboarding gate. When `true`, an inbound
-   * sender who maps to NO principal is attributed to a zero-authority
-   * anonymous principal (and the chat session runs) instead of being denied.
-   * Carried per-target-agent so one shared handler serving multiple agents
-   * applies the gate ONLY to the flagged target. Absent/false → strict deny.
+   * NON-DM sender (on the agent's bound public channel) who maps to NO
+   * principal is attributed to a zero-authority anonymous principal (and the
+   * chat session runs) instead of being denied. Carried per-target-agent so
+   * one shared handler serving multiple agents applies the gate ONLY to the
+   * flagged target. Absent/false → strict deny.
    */
   openOnboarding?: boolean;
+  /**
+   * cortex#1167 — explicit tool allowlist for the anon open-onboarding session
+   * (mirrors the persona allowedTools, Pier → `["Read"]`). When absent the gate
+   * falls back to the most-restrictive `["Read"]`. Anything not listed (incl.
+   * every `mcp__*`) is denied at the CC layer.
+   */
+  openOnboardingAllowedTools?: string[];
 }
 
 export interface DispatchHandlerOpts {
@@ -459,6 +467,8 @@ export class DispatchHandler extends EventEmitter {
     resumeSessionId: string | undefined;
     allowedDirs: string[];
     disallowedTools: string[];
+    /** cortex#1167 — explicit tool allowlist (anon open-onboarding path only). */
+    allowedTools?: string[];
     /** cortex#710 — per-skill grant list (see InboundChatDispatchPublishOpts). */
     allowedSkills: string[] | undefined;
     timeoutMs: number | undefined;
@@ -469,6 +479,8 @@ export class DispatchHandler extends EventEmitter {
     project: string | undefined;
     entity: string | undefined;
     principal: string | undefined;
+    /** cortex#1167 — pre-resolved anon originator DID (anon path only). */
+    originatorIdentityOverride?: string;
   }): Promise<DispatchSourcePublishResult> {
     const wiring = this.canPublishSystemEvent();
     const result = await publishInboundChatDispatchEnvelope({
@@ -570,18 +582,33 @@ export class DispatchHandler extends EventEmitter {
       // per-target-agent flag — so this NEVER fires for unflagged agents
       // (Luna/dev-loop), and NEVER converts a non-`unmapped_sender` deny
       // (no_policy / registry_drift / lockout stay hard denies). The anon
-      // principal carries no roles/skills/dirs, every tool restricted, and is
-      // untrusted for the prompt-injection filter (see `anonOnboardingAccess`).
+      // principal carries no roles/skills/dirs, an explicit Read-only tool
+      // allowlist, and is untrusted for the prompt-injection filter (see
+      // `anonOnboardingAccess`).
+      //
+      // cortex#1167 review MINOR — scope to the agent's bound PUBLIC channel,
+      // NOT DMs. The adapter already filters non-DM inbound to the agent's
+      // bound channel + guild, so `!isDM` is the public-channel guard. An
+      // unmapped DM stays denied (it falls through to the G-300 DM-reject).
+      let anonOriginatorOverride: string | undefined;
       if (
         !access.allowed &&
         access.denyCode === "unmapped_sender" &&
-        targetAgent?.openOnboarding === true
+        targetAgent?.openOnboarding === true &&
+        msg.isDM !== true
       ) {
-        access = anonOnboardingAccess(msg);
+        access = anonOnboardingAccess(msg, targetAgent.openOnboardingAllowedTools);
+        // cortex#1167 BLOCKER — the bus publish path re-resolves the originator
+        // independently and would reject this (unmapped) tuple as
+        // `invalid-originator`. Thread a DID-grammar-valid anon originator DID
+        // through so the chat envelope is accepted as the originator OF ITS OWN
+        // inbound chat. Zero authority — the DID resolves to no principal.
+        anonOriginatorOverride = anonOriginatorDid(msg.platform, msg.authorId);
         console.log(
           `dispatch-handler: [OPEN-ONBOARDING] ${adapter.instanceId} agent=${targetAgent.id} ` +
             `admitting unmapped ${msg.platform} sender ${msg.authorName} (${msg.authorId}) ` +
-            `as zero-authority anon principal ${access.anonPrincipalId}`,
+            `as zero-authority anon principal ${access.anonPrincipalId} ` +
+            `(originator=${anonOriginatorOverride}, allowedTools=[${access.allowedTools?.join(",") ?? ""}])`,
         );
       }
 
@@ -842,6 +869,10 @@ export class DispatchHandler extends EventEmitter {
           resumeSessionId: existingSession?.sessionId,
           allowedDirs: invokeDirs,
           disallowedTools: effectiveDisallowed,
+          // cortex#1167 — explicit tool ALLOWLIST. Set only on the anon
+          // open-onboarding path (`access.allowedTools`); undefined for every
+          // real dispatch (keeps allow-by-default + deny-list unchanged).
+          allowedTools: access.allowedTools,
           // cortex#710 — carry the grant decision so the runner harness
           // applies {broad Skill allow + gate hook} for grants, default-deny
           // otherwise. `access.allowedSkills` is undefined → field omitted.
@@ -854,6 +885,9 @@ export class DispatchHandler extends EventEmitter {
           project: groveProject,
           entity: groveEntity,
           principal,
+          // cortex#1167 — pre-resolved anon originator DID (anon path only;
+          // undefined for real dispatches → normal originator resolution).
+          originatorIdentityOverride: anonOriginatorOverride,
         });
         if (publishResult.published) return;
         if (publishResult.reason === "invalid-originator") {
