@@ -378,13 +378,6 @@ export interface NetworkCreateClaim {
   issued_at: string;
   /** Random nonce to prevent replay. */
   nonce: string;
-  /**
-   * G1a (cortex#1117) — the hub's NSC account public key (nkey-U, `A…`).
-   * OPTIONAL: absent = "same-account / no cross-account wiring needed" (back-compat).
-   * When present MUST satisfy `/^A[A-Z2-7]{55}$/`; validated before storage.
-   * Part of the signed payload so it is tamper-evident (DD-9).
-   */
-  hub_account?: string;
 }
 
 /** The on-wire envelope: an admin claim + detached Ed25519 signature. */
@@ -457,25 +450,8 @@ export function validateNetworkCreateClaim(
     errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
   }
 
-  // hub_account — G1a (cortex#1117). OPTIONAL: absent = back-compat.
-  // When PRESENT must be a valid nkey-U account pubkey: /^A[A-Z2-7]{55}$/.
-  // Reuses isNkeyAccountPubkeyRegistry() — same validator + anti-drift
-  // contract as GrantLeafPackage.account (O-4b).
-  if (c.hub_account !== undefined) {
-    if (typeof c.hub_account !== "string" || !isNkeyAccountPubkeyRegistry(c.hub_account)) {
-      errors.push({
-        field: "hub_account",
-        message:
-          "must be a NATS nkey-U account pubkey (A + 55 uppercase base32 chars) when provided",
-      });
-    }
-  }
-
   if (errors.length > 0) return { ok: false, errors };
 
-  // Build the canonical claim — only include hub_account when present so the
-  // canonical-JSON bytes match exactly what the CLI signed (the CLI also
-  // omits the field when not provided, so the sig covers the same set of keys).
   const result: NetworkCreateClaim = {
     network_id: c.network_id as string,
     hub_url: c.hub_url as string,
@@ -484,9 +460,6 @@ export function validateNetworkCreateClaim(
     issued_at: c.issued_at as string,
     nonce: c.nonce as string,
   };
-  if (typeof c.hub_account === "string") {
-    result.hub_account = c.hub_account;
-  }
   return { ok: true, claim: result };
 }
 

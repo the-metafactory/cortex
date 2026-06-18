@@ -170,13 +170,7 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
     }
 
     const store = getStore(c.env);
-    // G1a: pass hub_account (may be undefined — back-compat: existing calls omit it).
-    const record = await store.putNetwork(
-      claim.network_id,
-      claim.hub_url,
-      claim.leaf_port,
-      claim.hub_account,
-    );
+    const record = await store.putNetwork(claim.network_id, claim.hub_url, claim.leaf_port);
 
     // Return the stored record wrapped in a registry-signed assertion — the
     // same shape GET /networks/:id serves, so the admin gets a verifiable
@@ -198,15 +192,11 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "not_found" }, 404);
     }
     const principals = await store.listPrincipals();
-    // G1a: include hub_account when present so it rides the signed payload (DD-9).
-    // Absent = back-compat: the field is simply not set on the descriptor object,
-    // preserving the existing S1 client contract for networks created without it.
     const descriptor: NetworkDescriptor = {
       network_id: record.network_id,
       hub_url: record.hub_url,
       leaf_port: record.leaf_port,
       members: membersFromPrincipals(principals, networkId),
-      ...(record.hub_account !== undefined && { hub_account: record.hub_account }),
     };
     const assertion = await signAssertion(c.env, descriptor);
     return c.json(assertion);

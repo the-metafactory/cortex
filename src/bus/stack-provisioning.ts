@@ -462,9 +462,6 @@ export async function buildRegistrationClaim(
  * (`src/services/network-registry/src/validate.ts`). Reproduced rather than
  * imported because the registry is a separately-bundled CF Worker excluded
  * from the root tsconfig. MUST stay field-compatible with the route validator.
- *
- * G1a (cortex#1117): hub_account is optional — absent = back-compat
- * (existing calls that omit it continue to work exactly as before).
  */
 export interface NetworkCreateClaimShape {
   network_id: string;
@@ -473,11 +470,6 @@ export interface NetworkCreateClaimShape {
   admin_pubkey: string;
   issued_at: string;
   nonce: string;
-  /**
-   * G1a: optional nkey-U account pubkey (`A…`). When present it is included
-   * in the signed canonical-JSON so the registry's `verifyEd25519` covers it.
-   */
-  hub_account?: string;
 }
 
 /** A network-create claim + detached signature, ready to POST. */
@@ -493,12 +485,6 @@ export interface BuildNetworkCreateClaimOptions {
   readonly leafPort: number;
   /** The admin identity material (carries the seed to sign with). */
   readonly material: StackIdentityMaterial;
-  /**
-   * G1a (cortex#1117): optional nkey-U hub account pubkey (`A…`).
-   * When supplied it is included in the signed claim (tamper-evident, DD-9).
-   * Absent = back-compat: claim has no hub_account field.
-   */
-  readonly hubAccount?: string;
   /** Override issued-at (tests / skew checks). Defaults to now. @internal */
   readonly issuedAt?: string;
   /** Override nonce (tests). Defaults to a fresh random hex. @internal */
@@ -516,9 +502,6 @@ export interface BuildNetworkCreateClaimOptions {
 export async function buildNetworkCreateClaim(
   opts: BuildNetworkCreateClaimOptions,
 ): Promise<SignedNetworkCreateBody> {
-  // Build the claim — omit hub_account entirely when not provided so the
-  // canonical-JSON bytes are identical to what a pre-G1a CLI would have
-  // signed (back-compat: the registry validator treats absent = ok).
   const claim: NetworkCreateClaimShape = {
     network_id: opts.networkId,
     hub_url: opts.hubUrl,
@@ -526,7 +509,6 @@ export async function buildNetworkCreateClaim(
     admin_pubkey: opts.material.pubkeyB64,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
-    ...(opts.hubAccount !== undefined && { hub_account: opts.hubAccount }),
   };
   // Re-derive the KeyPair from the in-memory seed and sign over the SAME
   // canonical-JSON the registry route reconstructs and verifies.

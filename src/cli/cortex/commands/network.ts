@@ -66,8 +66,6 @@ import {
   type LeafPackageFile,
 } from "./network-leaf-package";
 
-import { isNkeyAccountPubkey } from "../../../common/nats/leaf-remote-renderer";
-
 /**
  * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
  * MISSING cortex.yaml is benign (a fully-flagged back-compat invocation works
@@ -254,8 +252,6 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--registry-url": "value",
         "--apply": "bool",
         "--dry-run": "bool",
-        // G1a (cortex#1117): optional nkey-U hub account pubkey.
-        "--hub-account": "value",
       },
     },
     // signal#113 P-11 (#56) — active federated reachability probe. Fires a
@@ -968,21 +964,6 @@ async function runCreate(
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return usageError("create", applyRes.reason, json);
 
-  // G1a (cortex#1117): --hub-account is OPTIONAL. When present it must be
-  // a valid nkey-U account pubkey (/^A[A-Z2-7]{55}$/) — validate locally
-  // before POSTing so the user sees a clear error immediately (exit 2), not
-  // the registry's 400 after a network round-trip.
-  const rawHubAccount = optionalValueFlag(flags, "--hub-account");
-  if (rawHubAccount !== undefined) {
-    if (rawHubAccount.length === 0 || !isNkeyAccountPubkey(rawHubAccount)) {
-      return usageError(
-        "create",
-        `--hub-account "${rawHubAccount}" must be a NATS nkey-U account pubkey (A + 55 uppercase base32 chars, e.g. A…)`,
-        json,
-      );
-    }
-  }
-
   const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_REGISTRY_URL;
 
   // Load the admin nkey seed + derive its base64 pubkey (the SAME key shape +
@@ -997,9 +978,6 @@ async function runCreate(
       hubUrl,
       leafPort,
       material: matRes.material,
-      // G1a: only pass when present so the claim is identical to pre-G1a
-      // for callers that don't supply --hub-account (back-compat).
-      ...(rawHubAccount !== undefined && { hubAccount: rawHubAccount }),
     });
   } catch (err) {
     return opError("create", `failed to build network-create claim: ${err instanceof Error ? err.message : String(err)}`, json);
@@ -1024,7 +1002,6 @@ async function runCreate(
       `  registry:     ${registryUrl}`,
       `  hub_url:      ${hubUrl}`,
       `  leaf_port:    ${leafPort.toString()}`,
-      ...(rawHubAccount !== undefined ? [`  hub_account:  ${rawHubAccount}`] : []),
       `  admin_pubkey: ${matRes.material.pubkeyB64}`,
       `  fingerprint:  ${matRes.material.fingerprint}`,
       ``,
@@ -1067,7 +1044,6 @@ async function runCreate(
   return ok(
     `cortex network create ${networkId}: created/updated at ${registryUrl} (HTTP ${result.status.toString()})\n` +
       `  hub_url:   ${hubUrl}\n  leaf_port: ${leafPort.toString()}\n` +
-      (rawHubAccount !== undefined ? `  hub_account: ${rawHubAccount}\n` : "") +
       `  admin:     ${matRes.material.fingerprint}\n`,
   );
 }
@@ -1459,13 +1435,6 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
   --admin-seed <path>     (create) path to the admin nkey seed (SU…) signing the claim.
                           admin_pubkey is derived from it; the registry's
                           REGISTRY_ADMIN_PUBKEYS allowlist must contain that pubkey.
-  --hub-account <A…>      (create, G1a, cortex#1117) OPTIONAL — the hub's NSC account
-                          public key (nkey-U pubkey, A + 55 uppercase base32 chars).
-                          When provided it is included in the signed claim (tamper-
-                          evident per DD-9) and returned by GET /networks/:id so a
-                          joining stack knows which NSC account to export/import into
-                          (G1c, future slice). Absent = "same-account / no cross-
-                          account wiring needed" (back-compat, Case A).
   --registry-url <url>    (create) registry base URL (default: https://network.meta-factory.ai).
   --apply                 Execute the live mutation (default: dry-run).
   --json                  Emit a { status, items, data, error } envelope.
