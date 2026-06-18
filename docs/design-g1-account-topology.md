@@ -32,7 +32,7 @@ like `OP_ANDREAS_STACK`). A leaf remote binds to one such account. The
 ### Case A — leaf and destination in the same account (no export/import needed)
 
 The leaf remote's `account:` field (`leaf-remote-renderer.ts:95–101`) and the
-stack's runtime account are the **same NSC account on the same operator**.
+stack's runtime account are the **same NSC account on the same NSC operator**.
 nats-server internally routes `federated.>` without any export/import because
 both actors already share the same account namespace. This is the **intra-account
 case**.
@@ -40,7 +40,7 @@ case**.
 When does this apply? Any deployment where the hub principal also runs all the
 leaf principals under a single NSC operator with a single account: one
 `OP_ANDREAS`, everyone uses the `OP_ANDREAS` account. This is probably the
-common case for a single-operator hub.
+common case for a single-NSC-operator hub.
 
 In this case **no nsc surgery is needed** and G1 has nothing to do beyond
 verifying the account matches.
@@ -51,7 +51,7 @@ The joining principal's leaf binds to account `A_PEER` (their own NSC operator
 account), while the hub's stack lives under account `A_HUB`. Traffic that enters
 via the leaf lands in `A_PEER`; for `federated.>` to reach a subscriber under
 `A_HUB`, nats-server requires an NSC subject-export from `A_PEER` +
-subject-import into `A_HUB`, or both accounts must live under a shared operator
+subject-import into `A_HUB`, or both accounts must live under a shared NSC operator
 with `resolver_preload` that names them.
 
 The nsc mechanics are:
@@ -69,11 +69,11 @@ nsc push -a A_HUB
 Both pushes update the account JWTs on the NATS server.
 
 **An alternative to export/import:** co-locate both accounts under the same NSC
-operator and add both JWTs to the hub's `resolver_preload`. The leaf then binds
+NSC operator and add both JWTs to the hub's `resolver_preload`. The leaf then binds
 to its own account (resolves from `resolver_preload`) and nats-server routes
-freely within the operator universe. This requires the hub admin to issue and
+freely within the NSC-operator universe. This requires the hub admin to issue and
 maintain the peer's account JWT — a higher-trust operation that works but creates
-operator-universe coupling.
+NSC-operator-universe coupling.
 
 ### Which case does the metafactory hub hit today?
 
@@ -90,9 +90,9 @@ and is the mechanism G1 must tool.
 issue a new account JWT for the peer under their own NSC operator. That is a
 different (and higher-trust) operation — the hub admin issues the peer's account
 key, not just the leaf user credentials. It is a valid approach but architecturally
-riskier: the peer's bus identity is now bound to the hub admin's operator. The
+riskier: the peer's bus identity is now bound to the hub admin's NSC operator. The
 export/import approach is the lower-trust default: the peer keeps their own
-operator universe; the hub admin only opens a subject tunnel.
+NSC-operator universe; the hub admin only opens a subject tunnel.
 
 ---
 
@@ -362,12 +362,12 @@ Options:
   join`. Explicit, no registry change, but one more flag to remember.
 - **c)** cortex derives it from the leaf's creds JWT. The creds file the hub
   admin issued (via G2 / `cortex creds issue`) is bound to an NSC account — that
-  account IS the hub's account (the one the hub admin's nsc operator issued it
+  account IS the hub's account (the one the hub admin's NSC operator issued it
   under). `nsc describe user -n <bot> -J` on the hub side already reveals
   the account. But the joining side can't run that — the creds are on the hub
   admin's machine.
 - **d)** The hub account is the SAME as the leaf's `--from-account` (Case A —
-  single-operator hub). If `--from-account` == `--to-account`, no export/import
+  single-NSC-operator hub). If `--from-account` == `--to-account`, no export/import
   is needed and G1 is a no-op. This is the detection condition for Case A vs B
   described in §2.
 
@@ -378,7 +378,7 @@ Neither is hard to implement. The design is blocked on this decision.
 ### OQ2 — default: export/import vs. resolver_preload co-location?
 
 §2 described both approaches. The design above proposes export/import as the
-default because it is lower-trust (the peer keeps their own operator universe).
+default because it is lower-trust (the peer keeps their own NSC-operator universe).
 Resolver_preload co-location is higher-trust (the hub admin issues the peer's
 account JWT).
 

@@ -169,6 +169,11 @@ ALLOWLIST_PATHS=(
   # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
   'src/common/config/__tests__/account-signing-key.test.ts'
   'src/common/config/__tests__/stack-signing-key.test.ts'
+  # G1 account-topology design doc — its entire subject is the NSC account tree
+  # (operator/account export-import, resolver_preload, leaf-bound accounts). Every
+  # "operator" is the NATS account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/design-g1-account-topology.md'
   # HISTORICAL removed-field regression test — describes and guards the
   # v3-REMOVED `config.agent.operatorId` legacy field (cortex#429 PR-C). Its
   # whole purpose is to assert a stray reader of the removed field never creeps
