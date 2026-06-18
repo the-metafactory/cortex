@@ -21,6 +21,7 @@
 import { describe, expect, test } from "bun:test";
 import { createUser } from "@nats-io/nkeys";
 import { signEnvelope } from "@the-metafactory/myelin/identity";
+import { directTaskSubject } from "@the-metafactory/myelin/subjects";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import { createSurfaceRouter, type SurfaceRouter } from "../../bus/surface-router";
@@ -3560,5 +3561,130 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
       (e) => e.payload.stage === "recipient-mismatch",
     );
     expect(recipient?.payload.outcome).toBe("fail");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (cortex#1160) — per-agent listener subject isolation (no double-delivery)
+//
+// The boot path (`cortex.ts`) constructs one listener per chat-capable agent,
+// each subscribing to its OWN scoped subtree `tasks.@{enc-did}.>` (via
+// `directTaskSubject`) rather than the shared wildcard `tasks.*.>`. These tests
+// pin the load-bearing invariant: a `tasks.@{B}.chat` envelope reaches B's
+// runner ONLY, never A's — so N listeners on a shared runtime do NOT each
+// process every envelope (the N-fold double-spawn the wildcard would cause).
+// ---------------------------------------------------------------------------
+
+describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160)", () => {
+  test("two scoped listeners: a tasks.@B.chat envelope routes to B only, not A", async () => {
+    const r = recordingRuntime();
+    // Each listener subscribes to its OWN agent subtree — exactly what the
+    // boot loop builds for chatCapableAgents.length >= 2.
+    const subjectA = directTaskSubject("metafactory", "did:mf:agent-a");
+    const subjectB = directTaskSubject("metafactory", "did:mf:agent-b");
+    const facA = fakeFactory(SUCCESS_RESULT);
+    const facB = fakeFactory(SUCCESS_RESULT);
+    // The inbound envelope resolves its principal from `agent_id` (empty-chain
+    // adapter dispatch) → principal `agent-b`; grant it `dispatch.agent-b`.
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "agent-b",
+          home_principal: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.agent-b"] }],
+    });
+    const listenerA = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      subjects: [subjectA],
+      receivingAgentId: "agent-a",
+      ccSessionFactory: facA.factory,
+      policyEngine: engine,
+    });
+    const listenerB = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      subjects: [subjectB],
+      receivingAgentId: "agent-b",
+      ccSessionFactory: facB.factory,
+      policyEngine: engine,
+    });
+    // Sanity: each listener self-subscribes to its OWN scoped subtree, NOT the
+    // shared wildcard — so the runtime never fans an envelope to both.
+    expect(listenerA.subjects).toEqual([subjectA]);
+    expect(listenerB.subjects).toEqual([subjectB]);
+    await listenerA.start();
+    await listenerB.start();
+
+    // Inbound chat envelope addressed to agent-b on agent-b's chat subject.
+    // The runtime fan-out hands it to BOTH listeners' onEnvelope handlers;
+    // A's subject filter rejects it, B's accepts and spawns.
+    r.trigger(
+      makeReceivedEnvelope({ agent_id: "agent-b" }),
+      "local.metafactory.tasks.@did-mf-agent-b.chat",
+    );
+    await settle(() => r.published);
+
+    // B spawned exactly one CC session; A spawned NONE (no double-delivery).
+    expect(facB.optsCaptured).toHaveLength(1);
+    expect(facA.optsCaptured).toHaveLength(0);
+    // The single dispatch ran under B's identity (sourced from payload.agent_id).
+    expect(facB.optsCaptured[0]!.agentId).toBe("agent-b");
+    // Exactly one terminal lifecycle envelope — not two.
+    const terminals = r.published.filter((e) => TERMINAL_TYPES.has(e.type));
+    expect(terminals).toHaveLength(1);
+
+    await listenerA.stop();
+    await listenerB.stop();
+  });
+
+  test("scoped listener IGNORES another agent's subtree (subject-rejected drop)", async () => {
+    const r = recordingRuntime();
+    const subjectA = directTaskSubject("metafactory", "did:mf:agent-a");
+    const facA = fakeFactory(SUCCESS_RESULT);
+    const listenerA = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      subjects: [subjectA],
+      receivingAgentId: "agent-a",
+      ccSessionFactory: facA.factory,
+    });
+    await listenerA.start();
+
+    // An envelope on AGENT-B's subtree must be dropped by A's subject filter.
+    r.trigger(
+      makeReceivedEnvelope({ agent_id: "agent-b" }),
+      "local.metafactory.tasks.@did-mf-agent-b.chat",
+    );
+    await settle(() => r.published);
+
+    // A never spawned and published nothing (a clean drop).
+    expect(facA.optsCaptured).toHaveLength(0);
+    expect(r.published).toEqual([]);
+
+    await listenerA.stop();
+  });
+
+  test("single chat-capable agent path stays on the wildcard (byte-identical regression)", async () => {
+    // The boot loop's `else` branch (<=1 chat-capable agent) omits `subjects`,
+    // so the listener falls back to the canonical wildcard `tasks.*.>` —
+    // identical to pre-S2. This pins that default so the single-agent stack
+    // never silently narrows.
+    const r = recordingRuntime();
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      receivingAgentId: "luna",
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    expect(listener.subjects).toEqual(["local.metafactory.tasks.*.>"]);
+    await listener.start();
+    expect(r.subscribedPatterns).toEqual(["local.metafactory.tasks.*.>"]);
+    await listener.stop();
   });
 });
