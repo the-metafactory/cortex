@@ -1,0 +1,49 @@
+# ~/.config/cortex/agents.d/pier.yaml
+#
+# Pier — onboarding-concierge assistant (ADR-0015, cortex#1142)
+#
+# This fragment is rendered by `arc install pier` into the installing
+# principal's `~/.config/cortex/agents.d/pier.yaml`.  It MUST NOT be
+# hand-edited on the target host — edits are overwritten on the next
+# `arc upgrade pier`.  Edit the source in the pier package instead.
+#
+# Two axes governed here (per design-arc-agent-bots.md §2):
+#   Identity  — id, displayName, roles, trust
+#   Presence  — discord bound to the metafactory community guild
+#
+# Substrate + capabilities are declared in arc-manifest-pier.yaml;
+# the rendered fragment carries them so the cortex dashboard can
+# render accurate provenance ("pier (in-process / claude-code)").
+
+id: pier
+displayName: Pier
+persona: ~/.config/cortex/personas/pier.md
+roles: [agent-restricted]
+trust: [luna]
+
+# Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - onboarding            # drives Tier-1 and Tier-2 community onboarding
+    - chat                  # responds to newcomer messages in #assistant-fleet-onboarding
+
+# Discord presence — bound to the metafactory community guild.
+# The bot token is a secret resolved at install time from the host
+# environment or principal vault.  It is NEVER stored in this file.
+#
+# guildId:   1505549701674700991    (The Metafactory — community guild)
+# channel:   1514679294553751613    (#assistant-fleet-onboarding)
+#
+# env var:   PIER_BOT_TOKEN         — set by the operator before arc install
+presence:
+  discord:
+    enabled: true
+    token: ${PIER_BOT_TOKEN}          # placeholder; resolved at cortex load
+    guildId: "1505549701674700991"    # The Metafactory community guild
+    agentChannelId: "1514679294553751613"  # #assistant-fleet-onboarding
+    logChannelId: "1514679294553751613"    # same channel — Pier is public-facing
+    dmOwner: false                    # Pier never claims DMs; it answers the public channel
+    contextDepth: 10
+    surfaceSubjects: []               # no raw envelope surface — Pier posts only via its persona
