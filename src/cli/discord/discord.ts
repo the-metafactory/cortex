@@ -318,6 +318,11 @@ roleCmd
   .option("-g, --guild <id>", "Guild ID (overrides config)")
   .option("-s, --server <name>", "Named server profile from config (layers guildId + overrides)")
   .action(async (opts: RoleActionOptions) => {
+    if (!isDiscordId(opts.member)) {
+      console.error("--member must be a Discord user id (17–20 digits)");
+      process.exit(1);
+    }
+
     const config = loadConfig();
     const ctx = resolveContextOrExit(config, opts);
 
@@ -359,6 +364,11 @@ roleCmd
   .option("-g, --guild <id>", "Guild ID (overrides config)")
   .option("-s, --server <name>", "Named server profile from config (layers guildId + overrides)")
   .action(async (opts: RoleActionOptions) => {
+    if (!isDiscordId(opts.member)) {
+      console.error("--member must be a Discord user id (17–20 digits)");
+      process.exit(1);
+    }
+
     const config = loadConfig();
     const ctx = resolveContextOrExit(config, opts);
 

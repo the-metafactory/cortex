@@ -293,10 +293,43 @@ export interface RoleResult {
   error?: string;
 }
 
+/**
+ * Returns true if `value` is a valid Discord snowflake (17–20 digit string).
+ *
+ * Used to validate `--member` before URL interpolation so a malformed or
+ * path-traversal-shaped id is rejected locally with a clear message, never
+ * forwarded to the Discord REST API.
+ */
+export function isSnowflake(value: string): boolean {
+  return /^\d{17,20}$/.test(value);
+}
+
 /** Discord API role shape (narrowest projection this module reads). */
 interface DiscordApiRole {
   id: string;
   name: string;
+}
+
+/**
+ * Map a non-204 HTTP response from a role assignment/removal call to a
+ * `RoleResult`. Extracted so `assignRole` and `removeRole` share a single
+ * source of truth for the 403/404/catch-all messages.
+ *
+ * The bot token is NEVER passed here and cannot appear in the output.
+ */
+function mapRoleError(status: number, body: string, guildId: string): RoleResult {
+  if (status === 403) {
+    return {
+      success: false,
+      error:
+        `Bot lacks Manage Roles permission (or its highest role is below the target role) ` +
+        `in guild ${guildId}. Ensure the bot has Manage Roles and its role is above community-fleet.`,
+    };
+  }
+  if (status === 404) {
+    return { success: false, error: `member or role not found in guild ${guildId}` };
+  }
+  return { success: false, error: `${status}: ${body}` };
 }
 
 /**
@@ -332,18 +365,7 @@ export async function assignRole(
   if (res.status === 204) return { success: true };
 
   const body = await res.text();
-  if (res.status === 403) {
-    return {
-      success: false,
-      error:
-        `Bot lacks Manage Roles permission (or its highest role is below the target role) ` +
-        `in guild ${guildId}. Ensure the bot has Manage Roles and its role is above community-fleet.`,
-    };
-  }
-  if (res.status === 404) {
-    return { success: false, error: `member or role not found in guild ${guildId}` };
-  }
-  return { success: false, error: `${res.status}: ${body}` };
+  return mapRoleError(res.status, body, guildId);
 }
 
 /**
@@ -369,18 +391,7 @@ export async function removeRole(
   if (res.status === 204) return { success: true };
 
   const body = await res.text();
-  if (res.status === 403) {
-    return {
-      success: false,
-      error:
-        `Bot lacks Manage Roles permission (or its highest role is below the target role) ` +
-        `in guild ${guildId}. Ensure the bot has Manage Roles and its role is above community-fleet.`,
-    };
-  }
-  if (res.status === 404) {
-    return { success: false, error: `member or role not found in guild ${guildId}` };
-  }
-  return { success: false, error: `${res.status}: ${body}` };
+  return mapRoleError(res.status, body, guildId);
 }
 
 /**
