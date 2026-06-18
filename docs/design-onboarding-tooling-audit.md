@@ -67,14 +67,41 @@ but not unilaterally perform:
 
 Everything else below is closeable with tooling.
 
+## Separation of concerns (the layer split this plan MUST honor)
+
+Per the federation-wire-protocol SOP and `CLAUDE.md`:
+
+- **Cortex (M7)** owns **identity addressing** (which principal / stack / assistant) and
+  **control-plane orchestration** (the CLIs that *call* lower layers). It **never decides
+  topology** and **consumes M2–M6, owning no part of M1–M6**.
+- **arc** owns the **NSC account tree** (`nsc`, operator/account/user JWTs, the `$SYS`
+  account, `resolver_preload`). cortex reaches it only *through* arc — the established
+  precedent is `cortex creds issue → arc nats add-bot`.
+- **myelin (M1–M3)** owns **topology & routing** (networks, leaf links, `selectLink`); the
+  network is a topology fact resolved from `policy.federated.networks[].peers[]`, **never a
+  value on the wire**.
+
+Two distinct concerns the audit deliberately keeps apart (easy to conflate):
+
+- **Account topology** (M1/M4 — arc/myelin transport): *does the leaf bridge the right NATS
+  account so traffic can physically flow.* What G1 addresses — and **NOT cortex's to own**;
+  it is arc's, orchestrated by cortex.
+- **The `federated.` subject scope** (M3 — myelin grammar, governed by the wire-protocol
+  5-check): envelope addressing. None of G1–G5 emit/route/consume `federated.*`
+  **envelopes**, so the 5-check is not triggered by this tooling — but the onboarding-agent
+  capstone, when it drives federated *dispatch*, MUST run it, and no G-item may put a network
+  id on the wire or have cortex decide a route.
+
 ## Make it simple — the plan
 
 Close the closeable gaps as named primitives, then let the onboarding agent orchestrate
 on top:
 
-- **G1 — account-topology tooling** *(highest leverage)*: a command that performs the
-  NSC export/import (or `resolver_preload` co-location) so `federated.>` crosses without
-  hand-`nsc`. Candidate: `cortex network export-federated` or fold into the grant act.
+- **G1 — account-topology tooling** *(highest leverage)*: the NSC export/import (or
+  `resolver_preload` co-location) primitive that lets `federated.>` cross without hand-`nsc`.
+  **Per the layer split above, this lives in `arc`** (the `nsc`/account-tree owner —
+  precedent: `cortex creds issue → arc nats add-bot`); cortex's control plane *orchestrates*
+  it (from `cortex network join` / the grant act) but **never runs `nsc` itself**.
 - **G2 — `cortex creds grant <request-id>`**: wrap the admin-side issuance-request grant
   — sign the decision, issue creds via `arc`, assemble + post the public leaf package,
   and assign the `community-fleet` Discord role (the O-5 helper) — turning the human-grant
