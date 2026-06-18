@@ -29,9 +29,20 @@
  */
 
 import { existsSync, lstatSync, readdirSync } from "fs";
+import { readFile } from "fs/promises";
 import { join } from "path";
 
 import { expandTilde } from "../../../common/config/loader";
+import { enforceChmod600 } from "../../../common/config/file-permissions";
+import {
+  materialFromSeedString,
+  randomNonce,
+  type StackIdentityMaterial,
+} from "../../../bus/stack-provisioning";
+import { canonicalJSON } from "../../../common/registry/signing";
+import { assignRole, resolveRoleId } from "../../discord/lib/discord";
+import { loadConfig as loadDiscordConfig } from "../../discord/lib/config";
+import { resolveServerContext } from "../../discord/lib/server-context";
 import { CliArgsError, MissingPositionalError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { assertExhaustive } from "./_shared/assert-exhaustive";
@@ -44,7 +55,7 @@ import { boolFlag, listFlag, valueFlag } from "./_shared/hydrate";
 // =============================================================================
 
 export interface ParsedCredsArgs {
-  subcommand: "list" | "issue" | "revoke" | "rotate" | "help" | "unknown";
+  subcommand: "list" | "issue" | "revoke" | "rotate" | "grant" | "help" | "unknown";
   rawSubcommand: string;
   agentId: string | undefined;
   credsDir: string | undefined;
@@ -61,6 +72,30 @@ export interface ParsedCredsArgs {
   sub: string[];
   json: boolean;
   help: boolean;
+  // G2 — grant subcommand fields (optional so existing partial-args tests keep compiling)
+  /** G2: request-id positional for `grant`. */
+  requestId?: string | undefined;
+  /** G2: path to admin nkey seed file (chmod-600 gated). */
+  adminSeed?: string | undefined;
+  /** G2: registry base URL (defaults to prod). */
+  registryUrl?: string | undefined;
+  /** G2: NATS subject scope override (e.g. "federated.echo.>"). Space-separated
+   *  multi-subject is accepted; defaults to the request's requested_scope. */
+  scope?: string | undefined;
+  /** G2: NSC operator JWT (for assembling the leaf package). */
+  operatorJwt?: string | undefined;
+  /** G2: Discord member id (snowflake) for the O-5 role admit. Optional. */
+  discordMember?: string | undefined;
+  /** G2: Discord server profile name (from discord cli.yaml) for role resolution. */
+  discordServer?: string | undefined;
+  /** G2: Discord guild id override (wins over profile). */
+  discordGuild?: string | undefined;
+  /** G2: Discord role name to assign (default: community-fleet). */
+  discordRole?: string | undefined;
+  /** G2: dry-run flag (default true — pass --apply to mutate). */
+  dryRun?: boolean;
+  /** G2: explicit --apply flag. */
+  apply?: boolean;
 }
 
 export { type ExitResult } from "./_shared/exit-result";
@@ -179,7 +214,7 @@ type ArcEnvelope =
 // parseCredsArgs
 // =============================================================================
 
-const CREDS_SPEC: SubcommandSpec<"list" | "issue" | "revoke" | "rotate"> = {
+const CREDS_SPEC: SubcommandSpec<"list" | "issue" | "revoke" | "rotate" | "grant"> = {
   cliName: "creds",
   subcommands: {
     list: { flags: { "--creds-dir": "value" } },
@@ -195,6 +230,23 @@ const CREDS_SPEC: SubcommandSpec<"list" | "issue" | "revoke" | "rotate"> = {
     },
     revoke: { positionals: ["agent-id"], flags: { "--account": "value" } },
     rotate: { positionals: ["agent-id"], flags: { "--account": "value" } },
+    // G2 — one-command admin grant act (cortex#1118)
+    grant: {
+      positionals: ["request-id"],
+      flags: {
+        "--admin-seed": "value",
+        "--registry-url": "value",
+        "--scope": "value",
+        "--operator-jwt": "value",
+        "--discord-member": "value",
+        "--discord-server": "value",
+        "--discord-guild": "value",
+        "--discord-role": "value",
+        "--apply": "bool",
+        "--dry-run": "bool",
+        "--account": "value",
+      },
+    },
   },
   universal: { "--help": "bool", "-h": "bool", "--json": "bool" },
 };
@@ -204,13 +256,10 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
   try {
     parsed = parseSubcommandArgs(CREDS_SPEC, argv);
   } catch (err) {
-    if (
-      err instanceof MissingPositionalError &&
-      err.positionalName === "agent-id"
-    ) {
+    if (err instanceof MissingPositionalError) {
       const sub = err.rawSubcommand;
       const known =
-        sub === "list" || sub === "issue" || sub === "revoke" || sub === "rotate"
+        sub === "list" || sub === "issue" || sub === "revoke" || sub === "rotate" || sub === "grant"
           ? sub
           : "unknown";
       return {
@@ -223,6 +272,17 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
         sub: [],
         json: false,
         help: false,
+        requestId: undefined,
+        adminSeed: undefined,
+        registryUrl: undefined,
+        scope: undefined,
+        operatorJwt: undefined,
+        discordMember: undefined,
+        discordServer: undefined,
+        discordGuild: undefined,
+        discordRole: undefined,
+        dryRun: true,
+        apply: false,
       };
     }
     throw err;
@@ -238,6 +298,18 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
     sub: listFlag(parsed.flags, "--sub"),
     json: boolFlag(parsed.flags, "--json"),
     help: parsed.help,
+    // G2 grant fields
+    requestId: parsed.positionals["request-id"],
+    adminSeed: valueFlag(parsed.flags, "--admin-seed"),
+    registryUrl: valueFlag(parsed.flags, "--registry-url"),
+    scope: valueFlag(parsed.flags, "--scope"),
+    operatorJwt: valueFlag(parsed.flags, "--operator-jwt"),
+    discordMember: valueFlag(parsed.flags, "--discord-member"),
+    discordServer: valueFlag(parsed.flags, "--discord-server"),
+    discordGuild: valueFlag(parsed.flags, "--discord-guild"),
+    discordRole: valueFlag(parsed.flags, "--discord-role"),
+    apply: boolFlag(parsed.flags, "--apply"),
+    dryRun: boolFlag(parsed.flags, "--dry-run") || !boolFlag(parsed.flags, "--apply"),
   };
 }
 
@@ -708,6 +780,542 @@ function errorEnvelopeForSubcommand(
 }
 
 // =============================================================================
+// G2 — runCredsGrant: one-command admin grant act (cortex#1118)
+// =============================================================================
+
+/** Default registry URL — mirrors network create / join constants. */
+const DEFAULT_GRANT_REGISTRY_URL = "https://network.meta-factory.ai";
+
+/** Default Discord role for O-5 community-fleet admission. */
+const DEFAULT_DISCORD_ROLE = "community-fleet";
+
+/**
+ * Mirror of the registry's `IssuanceRequest` shape used on the client side.
+ * Reproduced rather than imported (registry is a separately-bundled CF Worker).
+ */
+interface IssuanceRequestClient {
+  request_id: string;
+  principal_id: string;
+  peer_pubkey: string;
+  requested_scope: string;
+  status: "PENDING" | "GRANTED" | "REJECTED";
+  created_at: string;
+  updated_at: string;
+  granted_by: string | null;
+  leaf_package: string | null;
+}
+
+/**
+ * On-wire shape for the grant claim. Mirrors `IssuanceDecisionClaimWithPackage`
+ * from the registry types — reproduced on the client side (same CF Worker
+ * boundary isolation as the rest of the CLI).
+ */
+interface GrantLeafPackageClient {
+  operatorJwt: string;
+  account: string;
+  accountJwt: string;
+  systemAccount?: string;
+  systemAccountJwt?: string;
+  endpoint?: string;
+}
+
+interface IssuanceDecisionClaimWithPackageClient {
+  request_id: string;
+  decision: "grant";
+  admin_pubkey: string;
+  issued_at: string;
+  nonce: string;
+  leaf_package?: GrantLeafPackageClient;
+}
+
+/** Load + derive admin material from a seed file (chmod-600 gated). */
+async function adminMaterialFromSeedPath(
+  seedPath: string,
+): Promise<{ ok: true; material: StackIdentityMaterial } | { ok: false; reason: string }> {
+  const expanded = expandTilde(seedPath);
+  if (!existsSync(expanded)) {
+    return { ok: false, reason: `--admin-seed file not found at ${expanded}` };
+  }
+  try {
+    enforceChmod600(expanded);
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  let seed: string;
+  try {
+    seed = await readFile(expanded, "utf-8");
+  } catch (err) {
+    return { ok: false, reason: `failed to read --admin-seed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  try {
+    return { ok: true, material: materialFromSeedString(seed) };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Build an admin-signed issuance decision body. The claim is canonicalJSON'd
+ * and signed with the admin nkey — exactly the same path as network-create.
+ * The `fromSeed` call is inlined here because `signWithNKey` is not exported;
+ * instead we re-derive the KeyPair from the in-memory seed string, matching
+ * the pattern in `buildNetworkCreateClaim`.
+ */
+async function buildGrantDecisionBody(
+  requestId: string,
+  material: StackIdentityMaterial,
+  leafPackage: GrantLeafPackageClient | undefined,
+  opts: { issuedAt?: string; nonce?: string } = {},
+): Promise<{ claim: IssuanceDecisionClaimWithPackageClient; signature: string }> {
+  const { fromSeed } = await import("nkeys.js");
+
+  // PKCS#8 bridge (mirrors stack-provisioning.ts — same approach, same key shape)
+  const PKCS8_ED25519_PREFIX = Uint8Array.from([
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
+    0x22, 0x04, 0x20,
+  ]);
+
+  const kp = fromSeed(new TextEncoder().encode(material.seed.trim()));
+  const rawSeed = (kp as unknown as { getRawSeed(): Uint8Array }).getRawSeed();
+  const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32);
+  pkcs8.set(PKCS8_ED25519_PREFIX, 0);
+  pkcs8.set(rawSeed, PKCS8_ED25519_PREFIX.length);
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "pkcs8",
+    pkcs8 as BufferSource,
+    { name: "Ed25519" },
+    false,
+    ["sign"],
+  );
+
+  const claim: IssuanceDecisionClaimWithPackageClient = {
+    request_id: requestId,
+    decision: "grant",
+    admin_pubkey: material.pubkeyB64,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+    nonce: opts.nonce ?? randomNonce(),
+    ...(leafPackage !== undefined && { leaf_package: leafPackage }),
+  };
+
+  // Bytes to be signed: canonical-JSON(claim) — same as the registry verifies.
+  let bin = "";
+  const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
+  const sig = await crypto.subtle.sign({ name: "Ed25519" }, cryptoKey, msgBytes);
+  const sigBytes = new Uint8Array(sig);
+  for (const b of sigBytes) bin += String.fromCharCode(b);
+  const signature = btoa(bin);
+
+  return { claim, signature };
+}
+
+/**
+ * Build an admin-signed read claim for the `x-admin-signed` header used on
+ * GET /issuance-requests/{id}. No nonce (reads are idempotent). Clock-skew
+ * applies on the registry side.
+ */
+async function buildAdminReadHeader(
+  material: StackIdentityMaterial,
+): Promise<string> {
+  const { fromSeed } = await import("nkeys.js");
+
+  const PKCS8_ED25519_PREFIX = Uint8Array.from([
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
+    0x22, 0x04, 0x20,
+  ]);
+
+  const kp = fromSeed(new TextEncoder().encode(material.seed.trim()));
+  const rawSeed = (kp as unknown as { getRawSeed(): Uint8Array }).getRawSeed();
+  const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32);
+  pkcs8.set(PKCS8_ED25519_PREFIX, 0);
+  pkcs8.set(rawSeed, PKCS8_ED25519_PREFIX.length);
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "pkcs8",
+    pkcs8 as BufferSource,
+    { name: "Ed25519" },
+    false,
+    ["sign"],
+  );
+
+  const claim = {
+    admin_pubkey: material.pubkeyB64,
+    issued_at: new Date().toISOString(),
+  };
+
+  let bin = "";
+  const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
+  const sig = await crypto.subtle.sign({ name: "Ed25519" }, cryptoKey, msgBytes);
+  const sigBytes = new Uint8Array(sig);
+  for (const b of sigBytes) bin += String.fromCharCode(b);
+  const signature = btoa(bin);
+
+  return JSON.stringify({ claim, signature });
+}
+
+/**
+ * Validate a GrantLeafPackage shape — checks that required JWT-shaped and
+ * nkey-U-shaped fields are non-empty, and that `systemAccount`/`systemAccountJwt`
+ * are either both present or both absent (half-specified is rejected).
+ *
+ * Returns null on success, a reason string on failure.
+ */
+function validateLeafPackage(pkg: GrantLeafPackageClient): string | null {
+  if (!pkg.operatorJwt.startsWith("eyJ")) {
+    return "leaf package: operatorJwt must be a non-empty JWT (eyJ…)";
+  }
+  if (!pkg.account || pkg.account.length < 4) {
+    return "leaf package: account must be a non-empty nkey-A public key";
+  }
+  if (!pkg.accountJwt.startsWith("eyJ")) {
+    return "leaf package: accountJwt must be a non-empty JWT (eyJ…)";
+  }
+  const hasSysAccount = pkg.systemAccount !== undefined && pkg.systemAccount.length > 0;
+  const hasSysJwt = pkg.systemAccountJwt !== undefined && pkg.systemAccountJwt.length > 0;
+  if (hasSysAccount !== hasSysJwt) {
+    return "leaf package: systemAccount and systemAccountJwt must both be present or both absent";
+  }
+  return null;
+}
+
+export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> {
+  if (args.help) {
+    return { exitCode: 0, stdout: grantHelp(), stderr: "" };
+  }
+
+  // --- Usage validation ---
+
+  if (!args.requestId) {
+    return {
+      exitCode: 2,
+      stdout: "",
+      stderr: "cortex creds grant: missing request-id (usage: cortex creds grant <request-id> --admin-seed <path>)\n",
+    };
+  }
+
+  if (!args.adminSeed) {
+    return {
+      exitCode: 2,
+      stdout: "",
+      stderr: "cortex creds grant: --admin-seed <path> is required\n",
+    };
+  }
+
+  const applyFlag = args.apply ?? false;
+  const dryRunFlag = args.dryRun ?? !applyFlag;
+
+  // --apply and --dry-run together is a usage error:
+  // dryRun=true AND apply=true means both were explicitly passed
+  if (applyFlag && dryRunFlag) {
+    return {
+      exitCode: 2,
+      stdout: "",
+      stderr: "cortex creds grant: --apply and --dry-run are mutually exclusive\n",
+    };
+  }
+
+  const registryUrl = args.registryUrl ?? DEFAULT_GRANT_REGISTRY_URL;
+
+  // Load the admin seed (chmod-600 gated) — exit 1 on any failure
+  const matRes = await adminMaterialFromSeedPath(args.adminSeed);
+  if (!matRes.ok) {
+    const reason = matRes.reason;
+    if (args.json) {
+      return {
+        exitCode: 1,
+        stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })),
+        stderr: "",
+      };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+  const material = matRes.material;
+
+  // --- Dry-run: print plan, touch nothing ---
+
+  if (!applyFlag) {
+    if (args.json) {
+      return {
+        exitCode: 0,
+        stdout: renderJson(
+          envelopeOk<CredsItem>([], {
+            subcommand: "grant",
+            request_id: args.requestId,
+            registry_url: registryUrl,
+            admin_fingerprint: material.fingerprint,
+            applied: "false",
+          }),
+        ),
+        stderr: "",
+      };
+    }
+    const lines = [
+      `cortex creds grant ${args.requestId}: dry-run (no registry write; pass --apply to execute)`,
+      `  registry:         ${registryUrl}`,
+      `  admin_fingerprint: ${material.fingerprint}`,
+      `  scope:            ${args.scope ?? "(from request's requested_scope)"}`,
+      `  operator_jwt:     ${args.operatorJwt ? `${args.operatorJwt.slice(0, 20)}…` : "(none — leaf package will be absent)"}`,
+      ...(args.discordMember ? [`  discord_member:   ${args.discordMember}`] : []),
+      ``,
+    ];
+    return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
+  }
+
+  // --- APPLY path ---
+
+  // 1. Fetch the PENDING request (admin-signed GET)
+  let request: IssuanceRequestClient;
+  try {
+    const adminReadHeader = await buildAdminReadHeader(material);
+    const getUrl = `${registryUrl.replace(/\/+$/, "")}/issuance-requests/${encodeURIComponent(args.requestId)}`;
+    const getResp = await globalThis.fetch(getUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-signed": adminReadHeader,
+      },
+    });
+    if (getResp.status === 404) {
+      const reason = `request-id "${args.requestId}" not found in registry (HTTP 404)`;
+      if (args.json) {
+        return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant", request_id: args.requestId })), stderr: "" };
+      }
+      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+    }
+    if (!getResp.ok) {
+      const body = await getResp.text();
+      const reason = `registry GET failed (HTTP ${getResp.status.toString()}): ${body}`;
+      if (args.json) {
+        return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant", request_id: args.requestId })), stderr: "" };
+      }
+      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+    }
+    request = (await getResp.json()) as IssuanceRequestClient;
+  } catch (err) {
+    const reason = `failed to fetch request from registry: ${err instanceof Error ? err.message : String(err)}`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  // Validate request is PENDING — fail clearly if not
+  if (request.status !== "PENDING") {
+    const reason = `request "${args.requestId}" is not PENDING (status: ${request.status}) — cannot grant an already-decided request`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant", request_id: args.requestId, status: request.status })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  // 2. Issue scoped creds via arc (the existing creds-issue path)
+  // Resolve scope: explicit --scope flag > request's requested_scope
+  const rawScope = args.scope ?? request.requested_scope;
+  // Split on whitespace to support multiple subjects in --scope "sub1 sub2"
+  const scopeParts = rawScope.split(/\s+/).filter((s) => s.length > 0);
+  const scopeStr = scopeParts.join(",");
+
+  // Derive a usable agent-id from the principal_id for `arc nats add-bot`
+  // The principal_id is already a valid lower-kebab identifier.
+  const agentId = request.principal_id;
+
+  // Build arc argv — same pattern as runArcSubcommand
+  const arcArgv: string[] = [
+    "nats", "add-bot", agentId,
+    "--pub", scopeStr,
+    "--sub", scopeStr,
+  ];
+  if (args.account) arcArgv.push("--account", args.account);
+  arcArgv.push("--json");
+
+  const arcCall = await callArcNats(arcArgv);
+
+  if (arcCall.spawnError) {
+    const reason = `failed to invoke 'arc nats add-bot' — ${arcCall.spawnError}. Ensure arc (>= ${MIN_ARC_VERSION}) is installed and on PATH.`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  if (!arcCall.envelope) {
+    const reason = `arc returned no valid '${ARC_NATS_SCHEMA_V1}' envelope. Confirm arc >= ${MIN_ARC_VERSION} is installed and supports --json.`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  if (!arcCall.envelope.ok) {
+    const arcErr = arcCall.envelope as { ok: false; error: { code: string; message: string } };
+    const reason = `arc creds issue failed: ${arcErr.error.code}: ${arcErr.error.message}`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant", arc_code: arcErr.error.code })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  // Extract PUBLIC fields from the arc envelope — the secret .creds stays local
+  const arcSuccess = arcCall.envelope as { ok: true; bot: string; account: string; credsPath: string; jwt: string; pubKey: string };
+  const localCredsPath = arcSuccess.credsPath;
+  const issuedAccount = arcSuccess.account;
+  const issuedAccountJwt = arcSuccess.jwt;
+
+  // 3. Assemble the PUBLIC leaf package
+  // operatorJwt comes from --operator-jwt flag. Without it, leaf_package is absent
+  // (grant without a package is valid per O-4a.2 — leaf_package column stays null).
+  let leafPackage: GrantLeafPackageClient | undefined;
+  if (args.operatorJwt) {
+    leafPackage = {
+      operatorJwt: args.operatorJwt,
+      account: issuedAccount,
+      accountJwt: issuedAccountJwt,
+    };
+
+    // Validate before sending
+    const pkgErr = validateLeafPackage(leafPackage);
+    if (pkgErr) {
+      const reason = pkgErr;
+      if (args.json) {
+        return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
+      }
+      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+    }
+  }
+
+  // Safety: verify the package carries no secret material (belt-and-suspenders;
+  // the shape only has public fields, but if there's ever a future bug where
+  // credsPath bleeds in, catch it here).
+  if (leafPackage !== undefined) {
+    const pkgStr = JSON.stringify(leafPackage);
+    if (pkgStr.includes("credsPath") || pkgStr.includes(".creds")) {
+      const reason = "internal: leaf package contains secret field (credsPath) — refusing to POST";
+      process.stderr.write(`cortex creds grant: ${reason}\n`);
+      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+    }
+  }
+
+  // 4. Sign + POST the grant
+  let grantBody: { claim: IssuanceDecisionClaimWithPackageClient; signature: string };
+  try {
+    grantBody = await buildGrantDecisionBody(args.requestId, material, leafPackage);
+  } catch (err) {
+    const reason = `failed to build grant decision claim: ${err instanceof Error ? err.message : String(err)}`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  let grantResponse: unknown;
+  try {
+    const postUrl = `${registryUrl.replace(/\/+$/, "")}/issuance-requests/${encodeURIComponent(args.requestId)}/grant`;
+    const postResp = await globalThis.fetch(postUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(grantBody),
+    });
+    grantResponse = await postResp.json();
+    if (!postResp.ok) {
+      const reason = `registry rejected grant (HTTP ${postResp.status.toString()}): ${JSON.stringify(grantResponse)}`;
+      if (args.json) {
+        return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant", request_id: args.requestId })), stderr: "" };
+      }
+      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+    }
+  } catch (err) {
+    const reason = `registry POST failed: ${err instanceof Error ? err.message : String(err)}`;
+    if (args.json) {
+      return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
+    }
+    return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  // 5. Assign Discord role (O-5) — when --discord-member is given
+  let discordStatus = "skipped";
+  let discordWarning = "";
+
+  if (args.discordMember) {
+    try {
+      // Resolve bot token + guild id from config/flags — mirrors discord.ts role add
+      const discordConfig = loadDiscordConfig();
+      const ctx = resolveServerContext(discordConfig, {
+        server: args.discordServer,
+        guild: args.discordGuild,
+      });
+
+      const botToken = ctx.botToken;
+      const guildId = ctx.guildId;
+
+      if (!botToken) {
+        discordWarning = "Discord role not assigned: no bot token configured (run: discord config set botToken <token>)";
+        discordStatus = "skipped_no_token";
+      } else if (!guildId) {
+        discordWarning = "Discord role not assigned: no guild id configured — pass --discord-guild <id> or run: discord config set guildId <id>";
+        discordStatus = "skipped_no_guild";
+      } else {
+        const roleName = args.discordRole ?? DEFAULT_DISCORD_ROLE;
+        let roleId: string;
+        try {
+          roleId = await resolveRoleId(botToken, guildId, roleName);
+        } catch (err) {
+          discordWarning = `Discord role not assigned: ${err instanceof Error ? err.message : String(err)} — assign manually`;
+          discordStatus = "failed";
+          roleId = "";
+        }
+
+        if (roleId) {
+          const roleResult = await assignRole(botToken, guildId, args.discordMember, roleId);
+          if (roleResult.success) {
+            discordStatus = "assigned";
+          } else {
+            discordWarning = `Discord role assignment failed: ${roleResult.error ?? "unknown error"} — grant already committed, assign role manually`;
+            discordStatus = "failed";
+          }
+        }
+      }
+    } catch (err) {
+      discordWarning = `Discord role assignment error: ${err instanceof Error ? err.message : String(err)} — grant already committed, assign role manually`;
+      discordStatus = "failed";
+    }
+  }
+
+  // 6. Output summary
+  if (args.json) {
+    const data: Record<string, string> = {
+      subcommand: "grant",
+      applied: "true",
+      request_id: args.requestId,
+      principal_id: request.principal_id,
+      scope: scopeStr,
+      creds_path: localCredsPath,
+      admin_fingerprint: material.fingerprint,
+      ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
+    };
+    if (discordWarning) data.discord_warning = discordWarning;
+    return { exitCode: 0, stdout: renderJson(envelopeOk<CredsItem>([], data)), stderr: "" };
+  }
+
+  const lines: string[] = [
+    `cortex creds grant ${args.requestId}: granted`,
+    `  principal:       ${request.principal_id}`,
+    `  scope:           ${scopeStr}`,
+    `  creds_path:      ${localCredsPath}  (local — NOT sent to registry)`,
+    `  leaf_package:    ${leafPackage ? "posted to registry" : "none (no --operator-jwt)"}`,
+    `  admin:           ${material.fingerprint}`,
+  ];
+  if (args.discordMember) {
+    if (discordStatus === "assigned") {
+      lines.push(`  discord:         role "${args.discordRole ?? DEFAULT_DISCORD_ROLE}" assigned to member ${args.discordMember}`);
+    } else {
+      lines.push(`  discord:         ${discordWarning}`);
+    }
+  }
+  lines.push("");
+  return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
+}
+
+// =============================================================================
 // dispatchCreds
 // =============================================================================
 
@@ -735,6 +1343,8 @@ export async function dispatchCreds(argv: string[]): Promise<ExitResult> {
       return await runCredsRevoke(args);
     case "rotate":
       return await runCredsRotate(args);
+    case "grant":
+      return await runCredsGrant(args);
     case "help":
       return { exitCode: 0, stdout: topLevelHelp(), stderr: "" };
     case "unknown":
@@ -780,6 +1390,11 @@ Usage:
   cortex creds issue  <agent-id> [--account <name>] [--pub <subject>]... [--sub <subject>]... [--json]
   cortex creds revoke <agent-id> [--account <name>] [--json]
   cortex creds rotate <agent-id> [--account <name>] [--json]
+  cortex creds grant  <request-id> --admin-seed <path> [--operator-jwt <jwt>]
+                      [--scope <subjects>] [--registry-url <url>]
+                      [--discord-member <id>] [--discord-guild <id>]
+                      [--discord-server <profile>] [--discord-role <name>]
+                      [--apply] [--dry-run] [--json]
   cortex creds --help
 
 Subcommands:
@@ -787,6 +1402,10 @@ Subcommands:
   issue    Mint creds for an agent — shells out to \`arc nats add-bot\`
   revoke   Revoke creds — shells out to \`arc nats remove-bot --delete-creds\`
   rotate   Rotate creds — shells out to \`arc nats reissue-bot\`
+  grant    One-command admin grant act (G2, cortex#1118): fetch pending request,
+           issue scoped creds via arc, post the signed grant + public leaf package
+           to the registry, optionally assign the Discord community-fleet role.
+           DRY-RUN by default (pass --apply to execute).
 
 Per-subcommand options:
   list:    --creds-dir <path>   Directory containing .creds files (default: ~/.config/nats/creds)
@@ -810,6 +1429,57 @@ Exit codes:
   2    usage error (bad flag, bad agent id, missing positional)
 
 Requires: arc >= ${MIN_ARC_VERSION} on PATH.
+`;
+}
+
+function grantHelp(): string {
+  return `cortex creds grant — one-command admin grant act (G2, cortex#1118)
+
+Scripted form of the human grant: fetch the PENDING issuance request,
+issue scoped NATS credentials via arc, assemble the PUBLIC leaf package
+(no creds path or secret), sign + POST the grant to the registry, and
+optionally admit the peer to Discord (O-5 community-fleet role).
+
+Usage:
+  cortex creds grant <request-id> --admin-seed <path> [options]
+
+Required:
+  <request-id>                   Hex issuance request id (from the registry)
+  --admin-seed <path>            Path to the admin nkey seed file (SU…, chmod 600)
+
+Options:
+  --operator-jwt <jwt>           NSC operator JWT — included in the public leaf
+                                 package POSTed to the registry. Omit if you don't
+                                 want to supply the NSC operator JWT hint.
+  --scope <subjects>             Space-separated NATS subjects for pub/sub scope.
+                                 Defaults to the request's requested_scope.
+  --registry-url <url>           Registry base URL (default: https://network.meta-factory.ai)
+  --account <name>               NSC operator account name (passed to arc)
+  --discord-member <snowflake>   Discord user id to assign the community-fleet role
+  --discord-guild <id>           Discord guild id override
+  --discord-server <profile>     Named server profile from discord cli.yaml
+  --discord-role <name>          Role to assign (default: community-fleet)
+  --apply                        Execute the grant (default: dry-run)
+  --dry-run                      Force dry-run (default; mutually exclusive with --apply)
+  --json                         Emit structured JSON envelope
+
+Security guarantees:
+  - The .creds file produced by arc is LOCAL ONLY — it is NEVER sent to the
+    registry. Only public leaf package fields (JWTs, nkey-A account keys) go up.
+  - The admin seed is chmod-600 gated before any I/O.
+  - Dry-run (default) touches no registry and calls no arc.
+
+Partial success:
+  If the grant POST succeeds but the Discord role assignment fails, the command
+  exits 0 with a warning — the grant is already committed and CANNOT be rolled
+  back from here. The admin must assign the role manually.
+
+Exit codes:
+  0    success (or dry-run)
+  1    operational failure (registry error, arc failure, seed not readable)
+  2    usage error (missing positional, bad flags)
+
+Requires: arc >= ${MIN_ARC_VERSION} on PATH (for --apply).
 `;
 }
 
