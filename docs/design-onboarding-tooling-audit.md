@@ -37,7 +37,7 @@ asserted.
 1. **Federated account-topology — zero tooling (the linchpin).** For `federated.>` to
    cross account/operator boundaries on a hub, someone runs `nsc add export` on the
    leaf-bound account + `nsc add import` on the destination account (or co-locates
-   both in one operator universe by hand-copying `resolver_preload`). **Verified: neither
+   both in one operator-mode universe by hand-copying `resolver_preload`). **Verified: neither
    `cortex` nor `arc` tools this** — it is pure manual `nsc` surgery. This is the edge
    that just cost real debugging time, and it's the least tooled.
 2. **Leaf-creds issuance + delivery (two-party, gating).** O-4a built the *broker*
