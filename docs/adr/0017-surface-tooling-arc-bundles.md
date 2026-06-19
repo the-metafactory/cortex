@@ -4,7 +4,7 @@
 
 ## Context
 
-Cortex today vendors each surface's *operator/agent tooling* inline — the Discord
+Cortex today vendors each surface's *principal/agent tooling* inline — the Discord
 CLI + its skill live at `src/cli/discord/` (CLI `discord.ts` + `lib/` + `skill/SKILL.md` + `Workflows/`).
 More surfaces are coming (Mattermost, Slack, …), and the same shape would repeat:
 a per-surface CLI + skills baked into the cortex monolith.
@@ -13,7 +13,7 @@ But there are **two distinct Discord concerns in the repo, and they are already 
 
 1. **The adapter** (`src/adapters/discord/`) — the live bot *presence*, woven into the
    bus / dispatch / surface-router. This *is* cortex's M7 surface; it is the runtime.
-2. **The CLI + skills** (`src/cli/discord/`) — operator/agent *tooling* (post / read /
+2. **The CLI + skills** (`src/cli/discord/`) — principal/agent *tooling* (post / read /
    role / threads, plus the wrapping skill). Nothing in cortex imports from it; it imports
    only its own `./lib/*` plus one shared helper (`common/config/config-path`). It is a
    self-contained unit whose only consumers are external (the `~/bin/discord` shim and
