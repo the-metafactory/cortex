@@ -46,12 +46,14 @@ provides:
       target: ~/bin/cortex-relay
 
     # ─── Operator CLIs (carried forward from MIG-6) ──────────
-    - source: src/cli/discord/discord.ts
-      target: ~/bin/discord
+    # The Discord CLI + its wrapping skill (formerly src/cli/discord/discord.ts →
+    # ~/bin/discord and src/cli/discord/skill → ~/.claude/skills/Discord) were
+    # EXTRACTED to the `metafactory-discord` arc bundle (ADR-0017, epic #1171
+    # S1/S2). The bundle now provides ~/bin/discord and the Discord skill;
+    # cortex declares it under `dependencies:` below. The live Discord ADAPTER
+    # (src/adapters/discord/) STAYS in cortex — only the tooling moved.
     - source: src/cli/cldyo-live
       target: ~/bin/cldyo-live
-    - source: src/cli/discord/skill
-      target: ~/.claude/skills/Discord
 
     # ─── Claude Code hooks ────────────────────────────────────
     # Some hook source filenames keep grove-era names (EventLogger.hook.ts,
@@ -135,6 +137,18 @@ scripts:
 dependencies:
   - name: "arc"
     version: ">=0.25.0"
+  # metafactory-discord (ADR-0017, epic #1171): the Discord CLI + skills were
+  # extracted out of cortex into this standalone arc bundle. It provides
+  # ~/bin/discord and the Discord skill that the cortex repo used to ship from
+  # src/cli/discord/. Cortex consumes it as a dependency; the live Discord
+  # adapter (src/adapters/discord/) stays in cortex.
+  #
+  # Distribution is repo-first (ADR-0017): the bundle is `arc install`-able from
+  # the the-metafactory/metafactory-discord repo. Registry auto-resolution of
+  # this package dep on `arc install Cortex` is PENDING — until arc resolves it,
+  # the bundle is installed explicitly and this declaration records the intent.
+  - name: "metafactory-discord"
+    version: ">=0.1.0"
 # myelin deps still pending — declared once cortex's runtime depends on
 # myelin-side identity primitives.
 # dependencies:

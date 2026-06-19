@@ -27,7 +27,7 @@ During the MIG-7 cutover window the legacy `GROVE_*` env vars remain accepted by
 
 ### Discord CLI (team updates)
 
-Post messages to Discord channels from any terminal session:
+The `discord` CLI is provided by the **`metafactory-discord`** arc bundle (ADR-0017, epic #1171), not by cortex itself — cortex declares the bundle as a dependency in `arc-manifest.yaml`. Once the bundle is installed, post messages to Discord channels from any terminal session:
 
 ```bash
 discord post "PR merged, tests passing"              # Default channel

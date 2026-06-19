@@ -57,9 +57,16 @@ import {
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
 import { canonicalJSON } from "../../../common/registry/signing";
-import { assignRole, resolveRoleId } from "../../discord/lib/discord";
-import { loadConfig as loadDiscordConfig } from "../../discord/lib/config";
-import { resolveServerContext } from "../../discord/lib/server-context";
+// O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
+// cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-discord
+// bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side
+// admit path cannot import from an external arc bundle.
+import {
+  assignRole,
+  resolveRoleId,
+  loadConfig as loadDiscordConfig,
+  resolveServerContext,
+} from "../lib/discord-roles";
 
 import {
   deriveJoinInputs,
