@@ -554,14 +554,20 @@ export interface SystemBusReflexActivationDispatchedOpts {
   decisionId: string;
   /** Original reflex target (Execution Blueprint ref, e.g. `@jc/notify-discord`). */
   target: string;
-  /** Capability the bridge resolved the target to and re-emitted on. */
+  /** Capability the bridge resolved the target to. */
   capability: string;
-  /** Assistant DID the dispatch was addressed to. */
-  targetAssistant: string;
-  /** Subject the re-emitted `tasks.*` dispatch landed on. */
-  dispatchSubject: string;
-  /** Envelope id of the re-emitted dispatch — joins to the executor run. */
-  dispatchEnvelopeId: string;
+  /**
+   * How the activation was fulfilled: `dispatch` = re-emitted as a `tasks.*`
+   * envelope for the CC executor; `handler` = invoked in-process by a code
+   * handler (no bus re-emit). Defaults to `dispatch`.
+   */
+  via?: "dispatch" | "handler";
+  /** Assistant DID the dispatch was addressed to (CC path only). */
+  targetAssistant?: string;
+  /** Subject the re-emitted `tasks.*` dispatch landed on (CC path only). */
+  dispatchSubject?: string;
+  /** Envelope id of the re-emitted dispatch — joins to the executor run (CC path only). */
+  dispatchEnvelopeId?: string;
   /** Correlation id carried from the fired event onto the dispatch. */
   correlationId?: string;
   /**
@@ -590,9 +596,16 @@ export function createSystemBusReflexActivationDispatchedEvent(
       decision_id: opts.decisionId,
       target: opts.target,
       capability: opts.capability,
-      target_assistant: opts.targetAssistant,
-      dispatch_subject: opts.dispatchSubject,
-      dispatch_envelope_id: opts.dispatchEnvelopeId,
+      via: opts.via ?? "dispatch",
+      ...(opts.targetAssistant !== undefined && {
+        target_assistant: opts.targetAssistant,
+      }),
+      ...(opts.dispatchSubject !== undefined && {
+        dispatch_subject: opts.dispatchSubject,
+      }),
+      ...(opts.dispatchEnvelopeId !== undefined && {
+        dispatch_envelope_id: opts.dispatchEnvelopeId,
+      }),
       ...(opts.correlationId !== undefined && {
         correlation_id: opts.correlationId,
       }),
@@ -1243,10 +1256,6 @@ export function createAgentHeartbeatEvent(
 export type SystemDispatchStage =
   | "received"
   | "subject-matched"
-  // F-6 downstream — the dispatch matched a capability fulfilled by an
-  // in-runtime code responder (e.g. notify.discord), so the CC dispatch-
-  // listener yields it instead of spawning a session.
-  | "code-capability-yielded"
   | "subject-rejected"
   | "federation-gated"
   | "parsed"

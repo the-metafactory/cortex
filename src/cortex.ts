@@ -143,11 +143,12 @@ import type {
   SlackPresence,
   StackConfig,
 } from "./common/types/cortex-config";
-import { ReflexActivationListener, inMemoryReflexDedup } from "./bus/reflex-activation-listener";
 import {
-  createNotifyDiscordResponder,
-  type NotifyDiscordResponder,
-} from "./bus/notify-discord-responder";
+  ReflexActivationListener,
+  inMemoryReflexDedup,
+  type ReflexActivationHandler,
+} from "./bus/reflex-activation-listener";
+import { createDiscordNotifier } from "./bus/notify-discord";
 import { policyEngineFromConfig } from "./common/policy/factory";
 import {
   buildPlatformPrincipalIndex,
@@ -4201,19 +4202,10 @@ export async function startCortex(
   // Shared options every listener carries — only `receivingAgentId` + the
   // scoped `subjects` differ per agent. Built once so the per-agent wiring
   // can't drift between listeners.
-  // F-6 downstream — capabilities fulfilled by an in-runtime code responder
-  // (their reflex target declares a `handler`), which the CC dispatch-listener
-  // must yield rather than spawn a session for. Today: `notify.discord`.
-  const codeHandledCapabilities: ReadonlySet<string> = new Set(
-    (options.reflexActivation?.targets ?? [])
-      .filter((t) => t.handler !== undefined)
-      .map((t) => t.capability),
-  );
   const sharedDispatchListenerOpts = {
     runtime,
     source: systemEventSource,
     stack: derivedStack.stack,
-    codeCapabilities: codeHandledCapabilities,
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,
     // TC-0 (#628) — verifier knobs resolved from `security.signing`. `off`/
@@ -4303,12 +4295,26 @@ export async function startCortex(
 
   // F-6 — reflex activation bridge. Config-gated: mounted only when the
   // principal declared `reflex_activation.targets`. Binds a durable consumer
-  // on the reflex-owned REFLEX stream and re-emits fired activations as
-  // `tasks.*` dispatches the executor above already runs. Dormant (and not
-  // constructed) otherwise → zero behaviour change on default deployments.
+  // on the reflex-owned REFLEX stream; CC-prompt targets re-emit as `tasks.*`
+  // dispatches the executor above runs, `handler` targets are invoked
+  // in-process by a code handler below. Dormant (and not constructed)
+  // otherwise → zero behaviour change on default deployments.
   let reflexActivationListener: ReflexActivationListener | undefined;
   const reflexTargets = options.reflexActivation?.targets ?? [];
   if (reflexTargets.length > 0) {
+    // F-6 downstream — code handlers for `handler`-flagged targets. The
+    // notify.discord handler posts reflex-bridged GitHub issues to a per-repo
+    // Discord webhook (no Claude session); mounted only when `notify.discord`
+    // is configured. The bridge invokes it directly — no bus re-emit.
+    const handlers: Record<string, ReflexActivationHandler> = {};
+    const notifyDiscordTargets = options.notify?.discord ?? [];
+    if (notifyDiscordTargets.length > 0) {
+      handlers["discord-webhook"] = createDiscordNotifier({
+        runtime,
+        source: systemEventSource,
+        targets: notifyDiscordTargets,
+      });
+    }
     reflexActivationListener = new ReflexActivationListener({
       runtime,
       source: systemEventSource,
@@ -4321,30 +4327,12 @@ export async function startCortex(
       reflexPrincipal: principalId,
       reflexStack: options.reflexActivation?.stack ?? "default",
       resolveTarget: (target) => reflexTargets.find((t) => t.target === target),
+      handlers,
       dedup: inMemoryReflexDedup(),
     });
     await reflexActivationListener.start();
     console.log(
-      `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s)`,
-    );
-  }
-
-  // F-6 downstream — notify.discord code capability. Config-gated on
-  // `notify.discord` repo mappings; posts reflex-bridged GitHub issues to a
-  // per-repo Discord webhook with no Claude session. Dormant otherwise.
-  let notifyDiscordResponder: NotifyDiscordResponder | undefined;
-  const notifyDiscordTargets = options.notify?.discord ?? [];
-  if (notifyDiscordTargets.length > 0) {
-    notifyDiscordResponder = createNotifyDiscordResponder({
-      runtime,
-      source: systemEventSource,
-      principal: principalId,
-      stack: derivedStack.stack,
-      targets: notifyDiscordTargets,
-    });
-    await notifyDiscordResponder.start();
-    console.log(
-      `cortex: notify-discord-responder mounted — ${notifyDiscordTargets.length} repo(s)`,
+      `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s), ${Object.keys(handlers).length} handler(s)`,
     );
   }
 
@@ -6005,14 +5993,6 @@ export async function startCortex(
         await completeAsync(
           "reflex-activation-listener stop",
           reflexActivationListener.stop(),
-        );
-      }
-      // F-6 downstream — drain the notify.discord responder alongside the
-      // reflex bridge it serves. `stop()` is idempotent.
-      if (notifyDiscordResponder !== undefined) {
-        await completeAsync(
-          "notify-discord-responder stop",
-          notifyDiscordResponder.stop(),
         );
       }
       // S2 (cortex#1160) — drain every per-agent chat dispatch listener.

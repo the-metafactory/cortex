@@ -28,7 +28,6 @@ import { createSurfaceRouter, type SurfaceRouter } from "../../bus/surface-route
 import type { SystemEventSource } from "../../bus/system-events";
 import {
   createDispatchListener,
-  isCodeHandledCapability,
   type CCSessionFactory,
   type DispatchTaskReceivedPayload,
 } from "../dispatch-listener";
@@ -3690,26 +3689,3 @@ describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160
   });
 });
 
-// F-6 downstream — code-handled capability skip helper.
-describe("isCodeHandledCapability", () => {
-  const set = new Set(["notify.discord"]);
-
-  test("matches a direct task dispatch whose dotted capability is code-handled", () => {
-    expect(
-      isCodeHandledCapability("local.jc.default.tasks.@did-mf-reflex.notify.discord", set),
-    ).toBe(true);
-  });
-
-  test("ignores other capabilities on the same prefix", () => {
-    expect(
-      isCodeHandledCapability("local.jc.default.tasks.@did-mf-luna.chat", set),
-    ).toBe(false);
-  });
-
-  test("ignores non-task subjects and empty sets", () => {
-    expect(isCodeHandledCapability("local.jc.default.review.verdict.x", set)).toBe(false);
-    expect(
-      isCodeHandledCapability("local.jc.default.tasks.@did-mf-reflex.notify.discord", new Set()),
-    ).toBe(false);
-  });
-});

@@ -94,6 +94,19 @@ export interface ReflexDedup {
 }
 
 /**
+ * A code handler that fulfils a `handler`-flagged target IN-PROCESS — no bus
+ * re-emit, no Claude session. The bridge is the single gated entry point (it
+ * durably consumes reflex `fired` events, which reflex policy-gated), so a code
+ * handler runs without a second bus hop or an ungated subscriber. Throw to
+ * signal a TRANSIENT failure (the bridge leaves the Decision id un-marked so
+ * reflex can re-fire); return for a handled outcome (success, or a
+ * deterministic skip that re-firing won't fix).
+ */
+export type ReflexActivationHandler = (
+  activation: FiredActivation,
+) => Promise<void>;
+
+/**
  * In-memory dedup default for v1. Sufficient within a single process
  * lifetime: JetStream's durable ack floor handles cross-restart redelivery
  * (DeliverPolicy.New means no historical replay), and a redelivery within
@@ -250,10 +263,9 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   const subject = `${wildcard.slice(0, -2)}.${opts.target.capability}`;
 
   const taskId = crypto.randomUUID();
-  // CC-path targets carry a `prompt` (the executor spawns a Claude session);
-  // code-handler targets (`handler` set) carry NO prompt — the structured
-  // `reflex_payload` below is what the in-runtime responder reads, and the CC
-  // dispatch-listener skips code-handled capabilities entirely.
+  // buildReflexDispatch is only used for the CC path (a target with a
+  // `prompt`); `handler` targets are invoked directly by the bridge and never
+  // re-emitted. The conditional is defensive — prompt is always set here.
   const prompt =
     opts.target.prompt !== undefined
       ? renderPrompt(opts.target.prompt, opts.activation.payload)
@@ -277,10 +289,6 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
       task_id: taskId,
       agent_id: opts.target.assistant,
       ...(prompt !== undefined && { prompt }),
-      // Structured activation payload (the raw fired payload, e.g. the GitHub
-      // issue webhook body) so code-only responders consume it as DATA
-      // without parsing the prompt. Untrusted — consumers treat it as data.
-      reflex_payload: opts.activation.payload,
       // Provenance also echoed in the payload so executor-side worklogs
       // can surface the originating reflex Decision without parsing
       // extensions.
@@ -324,6 +332,13 @@ export interface ReflexActivationListenerOpts {
   reflexStack: string;
   /** Target→capability resolver (config-backed). */
   resolveTarget: (target: string) => ReflexTarget | undefined;
+  /**
+   * Code handlers by name, for `handler`-flagged targets (e.g.
+   * `discord-webhook` → the notify.discord poster). A target whose `handler`
+   * has no registered entry yields a typed failure. Default: none (all targets
+   * must be CC-prompt targets).
+   */
+  handlers?: Record<string, ReflexActivationHandler>;
   /** Decision-id dedup surface. */
   dedup: ReflexDedup;
   /** Originator DID stamped on re-emitted dispatches. Default `did:mf:reflex`. */
@@ -350,6 +365,7 @@ export class ReflexActivationListener {
   private readonly reflexPrincipal: string;
   private readonly reflexStack: string;
   private readonly resolveTarget: (target: string) => ReflexTarget | undefined;
+  private readonly handlers: Record<string, ReflexActivationHandler>;
   private readonly dedup: ReflexDedup;
   private readonly systemDid: string;
   private readonly stream: string;
@@ -367,6 +383,7 @@ export class ReflexActivationListener {
     this.reflexPrincipal = opts.reflexPrincipal;
     this.reflexStack = opts.reflexStack;
     this.resolveTarget = opts.resolveTarget;
+    this.handlers = opts.handlers ?? {};
     this.dedup = opts.dedup;
     this.systemDid = opts.systemDid ?? DEFAULT_SYSTEM_DID;
     this.stream = opts.stream ?? REFLEX_STREAM_NAME;
@@ -421,6 +438,26 @@ export class ReflexActivationListener {
       return { kind: "ack" };
     }
 
+    // Code-handler target: invoke the registered handler IN-PROCESS — no bus
+    // re-emit (no second hop, no ungated subscriber; the bridge is the gated
+    // entry). A throw = transient → don't mark, so reflex can re-fire.
+    if (target.handler !== undefined) {
+      const handler = this.handlers[target.handler];
+      if (handler === undefined) {
+        await this.emitFailed(envelope, act, `unknown_handler:${target.handler}`);
+        return { kind: "ack" };
+      }
+      try {
+        await handler(act);
+      } catch (err) {
+        await this.emitFailed(envelope, act, `handler:${errMsg(err)}`);
+        return { kind: "ack" };
+      }
+      await this.dedup.mark(act.decisionId);
+      await this.emitHandlerDispatched(act, target);
+      return { kind: "ack" };
+    }
+
     let built: { envelope: Envelope; subject: string };
     try {
       built = buildReflexDispatch({
@@ -467,6 +504,22 @@ export class ReflexActivationListener {
       targetAssistant: built.envelope.target_assistant ?? `did:mf:${target.assistant}`,
       dispatchSubject: built.subject,
       dispatchEnvelopeId: built.envelope.id,
+      ...(act.correlationId !== undefined && { correlationId: act.correlationId }),
+      classification: act.classification,
+    });
+    await this.runtime.publish(event);
+  }
+
+  private async emitHandlerDispatched(
+    act: FiredActivation,
+    target: ReflexTarget,
+  ): Promise<void> {
+    const event = createSystemBusReflexActivationDispatchedEvent({
+      source: this.source,
+      decisionId: act.decisionId,
+      target: act.target,
+      capability: target.capability,
+      via: "handler",
       ...(act.correlationId !== undefined && { correlationId: act.correlationId }),
       classification: act.classification,
     });
