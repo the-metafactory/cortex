@@ -1,0 +1,68 @@
+# F-6 Reflex activation bridge — HANDOFF (resume here)
+
+_Last updated: 2026-06-20. Branch: `spec/F-6-reflex-activation-bridge` (cortex)._
+
+## North star
+
+GitHub issue opened → Discord post (per-repo channel), **laptop-free**, with
+**reflex kept pure** (decide-only). Realized as:
+
+```
+GitHub issue ──webhook(HMAC)──▶ reflex-edge (CF)
+   └─ fires Activation Event: local.jc.default.reflex.activation.fired.{target}  (persisted in REFLEX JetStream stream)
+        └─▶ [F-6] cortex ReflexActivationListener (Clawbox, always-on)
+               └─ resolve target → capability → re-emit tasks.{capability}
+                    └─▶ cortex existing executor → Discord-notify capability (per-repo webhook URL)
+```
+
+Pulse/cortex run **always-on on Clawbox** (not laptop) → laptop-free. (We
+ruled out Pulse-on-CF: spawn runs nodes not the Pulse engine; big unbuilt epic.)
+
+## DONE (shipped this session)
+
+- **reflex#24 (merged, main 38f44cd):** `github_hmac` HTTP impulse source on reflex-edge — GitHub webhooks fire reflex directly (HMAC-verified, `where` filter, per-repo via `where:{repository}`, delivery-id in payload). Bearer path unchanged.
+- **reflex#26 (merged, main b6d4ed4):** reflex-edge now provisions the **REFLEX JetStream stream** on DO startup (`ensureReflexStream` in `consumer-do.ts`). Stream `REFLEX` (subjects `local.jc.default.reflex.>`, File storage) is **LIVE on the hub** — fired events now persist (proven: a real fire → `reflex.activation.fired` + `reflex.activation.decision.fired` in the stream). **This was the prerequisite for F-6's durable consumer.**
+- **cortex#1177:** the F-6 issue.
+- **F-6 spec/plan/tasks:** complete + validated (this dir). Phase = `tasks`, ready to implement.
+
+## NEXT: build the F-6 bridge (the large remaining piece)
+
+A new `ReflexActivationListener` in cortex. Concrete seams (already scouted):
+
+1. **Subscribe (durable):** JetStream **durable pull consumer** on `local.jc.default.reflex.activation.fired.>` against the now-live `REFLEX` stream. Mirror `src/runner/dev-consumer-boot.ts` + `src/bus/jetstream/provision.ts` (the stream EXISTS now; just bind a durable consumer — ackPolicy explicit, deliverPolicy new). Survives Clawbox restart.
+2. **New file:** `src/bus/reflex-activation-listener.ts`, sibling of `src/bus/bus-dispatch-listener.ts` (mirror its ctor opts / lifecycle / visibility-emit / stop discipline). NOTE bus-dispatch-listener uses ephemeral `onEnvelope`; we want the **durable** path (dev-consumer pattern) instead.
+3. **Re-emit — DO NOT reuse `publishInboundChatDispatchEnvelope`** (`src/bus/dispatch-source-publisher.ts`): it is **chat-specific** (needs `msg: InboundMessage`, `prompt`, human-author originator resolution via PolicyEngine `(platform, authorId)`). A reflex activation has none of that. Build a **focused producer**: construct the `tasks.@{assistant}.{capability}` envelope directly via `directTaskSubject(principal, targetDid, stack)` (from `@the-metafactory/myelin/subjects`) + `runtime.publishOnSubject(envelope, subject)` (what the chat publisher calls internally at line ~282). Originator = the reflex daemon/system identity, not a human. Preserve classification + correlation_id + provenance (reflex Decision id + original target).
+4. **Resolve target → capability:** config map (`@jc/notify-discord` → capability like `notify.discord`). DECISION OPEN: where the map lives (cortex.yaml extension vs dedicated config). See open questions.
+5. **No re-gate:** reflex already applied policy + guards (auto/approval, cooldown, run-lock). A `fired` event = cleared-to-run. The bridge executes; it does not re-evaluate. (cortex publish-time PolicyEngine is the egress/sovereignty check, compatible — not re-approval.)
+6. **Idempotency:** dedup on the reflex **Decision id** (stable across JetStream redelivery) + explicit ack. DECISION OPEN: dedup store (reuse an existing cortex idempotency surface vs dedicated KV/D1).
+7. **Honor `classification`** from the fired envelope (sovereignty); preserve it on the re-emit. Local principal only v1 (drop foreign subjects).
+8. **Failure:** unknown target / publish fail → typed failure (`dispatch.task.failed` shape) + visibility event + **ack** (no poison loop). Success → `system.bus.reflex_activation_dispatched` visibility (BusDispatchListener parity).
+9. **Mount:** construct + start in `src/cortex.ts` boot (alongside other listeners), **config-gated** (no target map → not mounted → zero behavior change). Stop on shutdown.
+10. **Tests:** mirror `bus-dispatch-listener` tests — resolve/dedup/failure units + integration (synthetic fired envelope → asserted `tasks.{capability}` re-emit; redelivery dedup; unknown-target failure). Full `bun test` + `tsc` clean.
+
+Tasks T-1.1..T-4.1 in `tasks.md`. Execution order there.
+
+## Open questions to resolve during build
+
+1. **target→capability map location** — cortex.yaml extension (e.g. `reflex_targets: [{target, capability, assistant?}]`) vs dedicated config. Check how cortex.yaml is loaded.
+2. **Dedup store** — reuse an existing cortex idempotency surface, or a small KV/D1 keyed on Decision id?
+3. **Exact re-emit subject/type** — `directTaskSubject` `tasks.@{assistant}.{capability}` vs a `dispatch.task.dispatched` envelope. Align with how existing producers (e.g. `sage dispatch`) emit so the executor consumes it unchanged. Read `src/runner/dispatch-listener.ts` for the exact shape the executor expects (originator, target_assistant, capability, payload).
+
+## DOWNSTREAM (after F-6 lands — separate work)
+
+- **Discord-notify capability** (the `target`'s capability): posts to a **per-repo Discord webhook URL** from a config map (`repo → webhook_url`; URL embeds the channel → per-repo channel, no bot token). Registered like any cortex capability (`cortex.yaml` `provided_by`).
+- **reflex `github-issue-opened` blueprint** (trivial KV add): `when.http.auth: {mode: github_hmac, secret_env: GITHUB_WEBHOOK_SECRET}`, `where: {github_event: issues, action: opened}`, `target: @jc/notify-discord`, `policy: auto`. One secret + one blueprint per event type (decided). Then `wrangler secret put GITHUB_WEBHOOK_SECRET` + add the GitHub webhook → `https://reflex-edge.jens-christian-66c.workers.dev/impulse/github-issue-opened`.
+
+## Verification target for F-6
+
+Synthetic `reflex.activation.fired` envelope on `local.jc.default.reflex.activation.fired.>` → cortex consumes (durable) → resolves target → re-emits `tasks.{capability}` the existing executor runs → visibility event. Restart-durable (ack floor), idempotent on redelivery, classification honored, typed failure on unknown target. End-to-end later: real GitHub issue → Discord, laptop offline.
+
+## GOTCHAS (from this session)
+
+- **specflow `specify`/`tasks` run headless (`claude -p`) and FAIL/rate-limit** → write `spec.md`/`plan.md`/`tasks.md` MANUALLY, then advance the phase directly: `sqlite3 .specflow/features.db "UPDATE features SET phase='plan' WHERE id='F-6';"` (values: specify→plan→tasks). `specflow edit --spec-path` does NOT advance phase; `--batch` needs enrich. `specflow validate F-6` to confirm.
+- **Sage review (pilot-review-loop):** `SAGE_STACK=default sage dispatch the-metafactory/cortex#<PR> --org jc --post --wait 300`. `--org jc` (NOT metafactory). Verdict in `result_summary`; commented/0-blockers = effective pass. Pre-flight: `tail ~/.config/cortex/logs/cortex-meta-factory.log | grep 'review consumer ready'`.
+- **Sage is sharp on doc/PR-text overclaims** (HonestOracle) — back every verification claim with embedded command+output; don't cite external issues without evidence; don't mark unrun gates "confirmed".
+- **Sage self-authored PRs** surface as COMMENTED (can't APPROVE own); `reviewDecision` empty is fine; merge gate CLEAN is the signal.
+- This branch's F-6 specflow docs (spec/plan/tasks/HANDOFF) are committed here — `git checkout spec/F-6-reflex-activation-bridge` in cortex to resume.
+- CF account is at the **5-cron-trigger cap** (unrelated, but noted): reflex uses 0 crons now (DO-alarm scheduler, F-002).
+- nsc creds: `~/.local/share/nats/nsc/keys/creds/metafactory/OP_JC/reflex-edge.creds` (scoped `local.jc.>`); SYS creds for `server report connections`.
