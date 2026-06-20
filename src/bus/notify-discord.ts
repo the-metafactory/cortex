@@ -91,18 +91,30 @@ export interface DiscordNotifierOpts {
 }
 
 /**
- * Extract the repo + issue fields from a fired activation payload (the raw
- * GitHub `issues` webhook body). Returns undefined when the repo can't be
- * determined (nothing to route on).
+ * Extract the repo + issue fields from a fired activation payload.
+ *
+ * Two `repository` shapes are accepted:
+ *  - **flat string** — what reflex-edge's `github_hmac` source actually fires:
+ *    it injects `repository` as the repo full_name (overwriting the nested
+ *    object) for flat `where`-matching, e.g. `"repository":"owner/repo"`.
+ *  - **nested `{full_name}`** — the raw GitHub `issues` webhook shape (fallback
+ *    for a bus/manual source that forwards the body verbatim).
+ *
+ * Returns undefined when the repo can't be determined (nothing to route on).
  */
 export function parseIssueActivation(
   payload: unknown,
 ): ParsedIssueActivation | undefined {
   if (payload === null || typeof payload !== "object") return undefined;
   const p = payload as Record<string, unknown>;
-  const repository = p.repository as { full_name?: unknown } | undefined;
+  const repository = p.repository;
   const repo =
-    typeof repository?.full_name === "string" ? repository.full_name : undefined;
+    typeof repository === "string"
+      ? repository
+      : typeof (repository as { full_name?: unknown } | undefined)?.full_name ===
+          "string"
+        ? (repository as { full_name: string }).full_name
+        : undefined;
   if (repo === undefined || repo.length === 0) return undefined;
   const issue = p.issue as
     | { number?: unknown; title?: unknown; html_url?: unknown }

@@ -87,6 +87,16 @@ describe("parseIssueActivation", () => {
       action: "opened",
     });
   });
+  test("accepts the flat `repository` string reflex-edge fires (github_hmac)", () => {
+    const r = parseIssueActivation({
+      action: "opened",
+      issue: { number: 7, title: "t", html_url: "u" },
+      repository: "the-metafactory/cortex", // flat full_name, not nested
+      github_event: "issues",
+    });
+    expect(r?.repo).toBe("the-metafactory/cortex");
+    expect(r?.number).toBe(7);
+  });
   test("non-object / missing repo → undefined", () => {
     expect(parseIssueActivation("nope")).toBeUndefined();
     expect(parseIssueActivation(null)).toBeUndefined();
