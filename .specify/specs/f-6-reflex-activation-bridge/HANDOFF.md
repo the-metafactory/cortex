@@ -25,7 +25,26 @@ ruled out Pulse-on-CF: spawn runs nodes not the Pulse engine; big unbuilt epic.)
 - **cortex#1177:** the F-6 issue.
 - **F-6 spec/plan/tasks:** complete + validated (this dir). Phase = `tasks`, ready to implement.
 
-## NEXT: build the F-6 bridge (the large remaining piece)
+## BUILT (2026-06-20) — bridge implemented, suite green
+
+The F-6 bridge is implemented on this branch. Files:
+- `src/bus/reflex-activation-listener.ts` — `ReflexActivationListener` + pure helpers (`resolveReflexTarget`, `parseFiredEnvelope`, `buildReflexDispatch`, `reflexActivationFilterSubject`, `inMemoryReflexDedup`).
+- `src/bus/__tests__/reflex-activation-listener.test.ts` — 19 tests (parse/resolve/build/handleFired/lifecycle).
+- `src/bus/system-events.ts` — `system.bus.reflex_activation_dispatched` + `_failed` visibility constructors.
+- `src/bus/jetstream/provision.ts` — `provisionReviewConsumer` extended with additive `deliverPolicy?` (defaults All; bridge passes `New`).
+- `src/common/types/cortex-config.ts` — `reflex_activation` block (`ReflexActivationConfigSchema`, `ReflexTargetSchema`).
+- `src/common/config/loader.ts` — carries `reflexActivation` through `LoadedConfig`.
+- `src/cortex.ts` — mounts the listener config-gated after `dispatchListener.start()`; drains it at shutdown.
+
+**Resolved open questions:**
+1. **Stream ownership:** REFLEX stream is owned by reflex-edge (`local.{p}.{s}.reflex.>`). Cortex does NOT provision an overlapping stream — it binds a durable consumer (filter `local.{p}.{s}.reflex.activation.fired`, exact subject; target is opaque, rides in payload — NOT a subject token, correcting the north-star diagram). **DeliverPolicy.New** so a fresh durable doesn't replay the limits-retained stream's history (in-memory dedup is empty on boot).
+2. **Map location:** `reflex_activation.targets[]` in cortex.yaml (`{target, capability, assistant, prompt}`), plus optional `principal`/`stack` for the fired-subject source coords.
+3. **Dedup store:** injected `{seen,mark}` iface; `inMemoryReflexDedup()` default v1 (JetStream ack-floor + DeliverPolicy.New cover cross-restart; persistent D1/KV is a drop-in if needed).
+4. **Re-emit shape:** focused producer (NOT chat publisher) — `buildBaseEnvelope` `type: tasks.{capability}`, subject via `directTaskSubject` + capability, `distribution_mode: direct`, `target_assistant: did:mf:{assistant}`, originator `{did:mf:reflex, delegated}`. Executor requires non-empty `prompt` (dispatch-listener parsePayload) → config `prompt` carries it; `{{payload}}` substitution embeds the activation payload.
+
+Status: `tsc` clean; F-6 suite 19/19; full suite green (one flaky network-registry test unrelated). NOT yet committed/pushed — review then merge.
+
+## (original) NEXT: build the F-6 bridge (the large remaining piece)
 
 A new `ReflexActivationListener` in cortex. Concrete seams (already scouted):
 

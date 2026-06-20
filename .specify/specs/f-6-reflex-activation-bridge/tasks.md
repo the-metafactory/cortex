@@ -4,14 +4,14 @@
 
 | Task | Status | Notes |
 |------|--------|-------|
-| T-1.1 | ☐ | |
-| T-1.2 | ☐ | |
-| T-2.1 | ☐ | |
-| T-2.2 | ☐ | |
-| T-2.3 | ☐ | |
-| T-3.1 | ☐ | |
-| T-3.2 | ☐ | |
-| T-4.1 | ☐ | |
+| T-1.1 | ☑ | `resolveReflexTarget` + config `ReflexTargetSchema` |
+| T-1.2 | ☑ | `parseFiredEnvelope` (decision_id payload→extensions fallback) + local-principal filter |
+| T-2.1 | ☑ | `buildReflexDispatch` (focused producer, not chat publisher) + `_dispatched` visibility |
+| T-2.2 | ☑ | unknown_target/publish-fail → `_failed`+ack; malformed → term; dedup mark after publish |
+| T-2.3 | ☑ | start/stop idempotent; subscriber.stop drain |
+| T-3.1 | ☑ | durable consumer on existing REFLEX stream (no overlap-provision); DeliverPolicy.New |
+| T-3.2 | ☑ | mounted in `cortex.ts` boot, config-gated on `reflex_activation.targets` |
+| T-4.1 | ☑ | 19 unit/integration tests green; full suite green (tsc clean) |
 
 ---
 

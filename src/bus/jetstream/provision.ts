@@ -133,6 +133,18 @@ export interface ProvisionConsumerOpts {
    * re-runs the pipeline → duplicate review + duplicate forge post.
    */
   ackWaitNs?: number;
+  /**
+   * Delivery start policy at consumer-creation time. Defaults to
+   * {@link DeliverPolicy.All} — the review-consumer contract, where the
+   * stream is interest-retained and replaying its (short) backlog is
+   * desirable. Pass {@link DeliverPolicy.New} for a fresh durable on a
+   * *limits*-retained stream that carries long-lived history (e.g. the
+   * REFLEX stream's activation events): "All" would replay every
+   * historical fire on first bind and re-dispatch them. Only honoured
+   * when the consumer is created; an existing durable's deliver_policy is
+   * never reconciled (JetStream forbids changing it in place).
+   */
+  deliverPolicy?: DeliverPolicy;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
 }
 
@@ -252,7 +264,7 @@ export async function provisionReviewConsumer(
   const cfg: Partial<ConsumerConfig> = {
     durable_name: opts.durable,
     ack_policy: AckPolicy.Explicit,
-    deliver_policy: DeliverPolicy.All,
+    deliver_policy: opts.deliverPolicy ?? DeliverPolicy.All,
     max_deliver: maxDeliver,
     ack_wait: ackWaitNs,
   };

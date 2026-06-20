@@ -1,0 +1,526 @@
+/**
+ * F-6 — Reflex activation bridge.
+ *
+ * Consumes reflex `reflex.activation.fired` events from a durable JetStream
+ * pull consumer on the REFLEX stream and re-emits them as the
+ * `tasks.@{assistant}.{capability}` dispatch envelopes cortex's existing
+ * executor already runs. No new execution engine — the bridge resolves a
+ * reflex `target` to a cortex `capability` + `assistant` and republishes.
+ *
+ * Sibling of `bus-dispatch-listener.ts` — mirrors its lifecycle discipline
+ * (registration handle gates idempotent start/stop; `system.bus.*`
+ * visibility emit; no late side effects after stop). It deliberately uses
+ * the **durable pull** path (the `ReviewConsumer.start` /
+ * `dev-consumer-boot` pattern) rather than ephemeral `onEnvelope`, because a
+ * fired activation must survive a Clawbox restart (NFR-2).
+ *
+ * Design decisions resolved during F-6 build:
+ *  - **Stream ownership:** the REFLEX stream is owned/provisioned by
+ *    reflex-edge (subjects `local.{p}.{s}.reflex.>`). The bridge does NOT
+ *    provision an overlapping stream — it only binds a durable consumer
+ *    filtered to `...reflex.activation.fired`.
+ *  - **DeliverPolicy.New:** REFLEX is a *limits*-retained stream with
+ *    long-lived history. A fresh durable with DeliverPolicy.All would
+ *    replay every historical fire on first bind and (with an empty
+ *    in-memory dedup) re-dispatch them. New starts the ack floor at "now".
+ *  - **No re-gate:** a `fired` event means reflex already cleared policy +
+ *    guards (auto/approval, cooldown, run-lock). The bridge executes; it
+ *    does not re-evaluate. Cortex publish-time PolicyEngine remains the
+ *    egress/sovereignty check (compatible — not re-approval).
+ *  - **Re-emit producer:** built here directly (NOT the chat-coupled
+ *    `publishInboundChatDispatchEnvelope`) via `directTaskSubject` +
+ *    `runtime.publishOnSubject`. Originator is the reflex daemon identity,
+ *    `attribution: "delegated"`.
+ *  - **Idempotency:** dedup on the reflex Decision id (stable across
+ *    JetStream redelivery) + explicit ack. Mark AFTER a successful publish
+ *    so a publish failure leaves the activation re-fireable.
+ */
+
+import { DeliverPolicy } from "nats";
+import { directTaskSubject } from "@the-metafactory/myelin/subjects";
+
+import { buildBaseEnvelope } from "./envelope-builder";
+import type { Classification, Envelope } from "./myelin/envelope-validator";
+import type { MyelinRuntime } from "./myelin/runtime";
+import type { AckDecision, MyelinSubscriber } from "./myelin/subscriber";
+import {
+  buildSource,
+  createSystemBusReflexActivationDispatchedEvent,
+  createSystemBusReflexActivationFailedEvent,
+  type SystemEventSource,
+} from "./system-events";
+import {
+  DEFAULT_ACK_WAIT_NS,
+  provisionReviewConsumer,
+} from "./jetstream/provision";
+
+/** JetStream stream carrying reflex events. Owned by reflex-edge. */
+export const REFLEX_STREAM_NAME = "REFLEX";
+
+/** Default originator identity stamped on re-emitted dispatches. */
+const DEFAULT_SYSTEM_DID = "did:mf:reflex";
+
+const FIRED_EVENT_TYPE = "reflex.activation.fired";
+
+/**
+ * A target→capability mapping. The bridge resolves a reflex `target`
+ * (opaque Execution Blueprint ref) to the cortex `capability` + `assistant`
+ * the dispatch is addressed to, plus the `prompt` the capability runs.
+ */
+export interface ReflexTarget {
+  /** Reflex target ref, e.g. `@jc/notify-discord`. */
+  target: string;
+  /** Cortex capability to re-emit on, e.g. `notify.discord`. */
+  capability: string;
+  /** Assistant (agent name) the dispatch is addressed to, e.g. `luna`. */
+  assistant: string;
+  /**
+   * Prompt the capability runs. `{{payload}}` is substituted with the
+   * activation payload as pretty JSON; if the token is absent the payload
+   * is appended in a fenced block so the executor always sees it.
+   */
+  prompt: string;
+}
+
+/** Parsed, validated fired-activation content the bridge acts on. */
+export interface FiredActivation {
+  target: string;
+  payload: Record<string, unknown>;
+  decisionId: string;
+  correlationId: string | undefined;
+  classification: Classification;
+}
+
+export type ParseFiredResult =
+  | { ok: true; activation: FiredActivation }
+  | { ok: false; reason: string };
+
+/** Decision-id keyed idempotency surface (plan API contract). */
+export interface ReflexDedup {
+  seen(decisionId: string): Promise<boolean>;
+  mark(decisionId: string): Promise<void>;
+}
+
+/**
+ * In-memory dedup default for v1. Sufficient within a single process
+ * lifetime: JetStream's durable ack floor handles cross-restart redelivery
+ * (DeliverPolicy.New means no historical replay), and a redelivery within
+ * `ack_wait` is caught by this set. A persistent surface (D1/KV keyed on
+ * Decision id) is a drop-in replacement if cross-restart dedup is needed
+ * before a successful ack lands.
+ */
+export function inMemoryReflexDedup(): ReflexDedup {
+  const seen = new Set<string>();
+  return {
+    seen: (id) => Promise.resolve(seen.has(id)),
+    mark: (id) => {
+      seen.add(id);
+      return Promise.resolve();
+    },
+  };
+}
+
+/** Resolve a reflex target ref to its mapping, or undefined if unmapped. */
+export function resolveReflexTarget(
+  targets: readonly ReflexTarget[],
+  target: string,
+): ReflexTarget | undefined {
+  return targets.find((t) => t.target === target);
+}
+
+/**
+ * Subject the durable consumer filters on. Reflex publishes the fired event
+ * under the myelin grammar `local.{principal}.{stack}.reflex.activation.fired`
+ * (target is opaque and rides in the payload — NOT a subject token). This is
+ * a concrete subject, so it matches `...fired` exactly and does NOT match the
+ * sibling `...reflex.activation.decision.fired` audit event.
+ */
+export function reflexActivationFilterSubject(
+  principal: string,
+  stack: string,
+): string {
+  return `local.${principal}.${stack}.reflex.activation.fired`;
+}
+
+/**
+ * Parse + validate a `reflex.activation.fired` envelope. Returns a typed
+ * failure (not a throw) on malformed input so the caller can term/ack
+ * deterministically. The Decision id is read from `payload.decision_id`
+ * (canonical) with a fallback to `extensions.decision_id` (mirror).
+ */
+export function parseFiredEnvelope(envelope: Envelope): ParseFiredResult {
+  if (envelope.type !== FIRED_EVENT_TYPE) {
+    return { ok: false, reason: `unexpected-type:${envelope.type}` };
+  }
+  const p = envelope.payload as Record<string, unknown> | undefined;
+  if (!p || typeof p.target !== "string" || p.target.length === 0) {
+    return { ok: false, reason: "missing-target" };
+  }
+  const ext = envelope.extensions as Record<string, unknown> | undefined;
+  const decisionId =
+    typeof p.decision_id === "string" && p.decision_id.length > 0
+      ? p.decision_id
+      : typeof ext?.decision_id === "string" && ext.decision_id.length > 0
+        ? (ext.decision_id as string)
+        : undefined;
+  if (decisionId === undefined) {
+    return { ok: false, reason: "missing-decision-id" };
+  }
+  const payload =
+    p.payload !== null && typeof p.payload === "object"
+      ? (p.payload as Record<string, unknown>)
+      : {};
+  return {
+    ok: true,
+    activation: {
+      target: p.target,
+      payload,
+      decisionId,
+      correlationId: envelope.correlation_id,
+      classification: envelope.sovereignty?.classification ?? "local",
+    },
+  };
+}
+
+/** Substitute `{{payload}}` or append the activation payload to the prompt. */
+function renderPrompt(prompt: string, payload: Record<string, unknown>): string {
+  const json = JSON.stringify(payload, null, 2);
+  if (prompt.includes("{{payload}}")) {
+    return prompt.split("{{payload}}").join(json);
+  }
+  return `${prompt}\n\nActivation payload:\n\`\`\`json\n${json}\n\`\`\``;
+}
+
+export interface BuildReflexDispatchOpts {
+  activation: FiredActivation;
+  target: ReflexTarget;
+  /** Cortex principal the dispatch lands under (where the executor listens). */
+  reEmitPrincipal: string;
+  /** Cortex stack, when stack-aware subjects are wired. */
+  reEmitStack?: string;
+  source: SystemEventSource;
+  systemDid: string;
+}
+
+/**
+ * Pure builder for the re-emitted dispatch. Produces the executor's
+ * `DispatchTaskReceivedPayload` contract (`task_id` UUID, `agent_id`,
+ * non-empty `prompt`), `distribution_mode: "direct"`, `target_assistant`
+ * DID, and the canonical `tasks.@{did}.{capability}` subject. Classification
+ * and correlation_id are preserved from the fired event; provenance (reflex
+ * Decision id + original target) rides in `extensions` for traceability.
+ */
+export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
+  envelope: Envelope;
+  subject: string;
+} {
+  const did = `did:mf:${opts.target.assistant}`;
+  // directTaskSubject returns a subscribe-side wildcard ending in `.>`;
+  // the publish subject appends the concrete capability in its place
+  // (mirrors dispatch-source-publisher's buildDirectTaskPublishSubject).
+  const wildcard = directTaskSubject(opts.reEmitPrincipal, did, opts.reEmitStack);
+  if (!wildcard.endsWith(".>")) {
+    throw new Error(`directTaskSubject returned unexpected shape: ${wildcard}`);
+  }
+  const subject = `${wildcard.slice(0, -2)}.${opts.target.capability}`;
+
+  const taskId = crypto.randomUUID();
+  const base = buildBaseEnvelope({
+    // Envelope `type` forbids `@`; the @{did} form lives only in the
+    // subject. `tasks.{capability}` is the bare type.
+    type: `tasks.${opts.target.capability}`,
+    source: buildSource(opts.source),
+    ...(opts.activation.correlationId !== undefined && {
+      correlationId: opts.activation.correlationId,
+    }),
+    sovereignty: {
+      classification: opts.activation.classification,
+      data_residency: opts.source.dataResidency ?? "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    },
+    payload: {
+      task_id: taskId,
+      agent_id: opts.target.assistant,
+      prompt: renderPrompt(opts.target.prompt, opts.activation.payload),
+      // Provenance also echoed in the payload so executor-side worklogs
+      // can surface the originating reflex Decision without parsing
+      // extensions.
+      reflex_decision_id: opts.activation.decisionId,
+      reflex_target: opts.activation.target,
+    },
+  });
+
+  const envelope: Envelope = {
+    ...base,
+    distribution_mode: "direct",
+    target_assistant: did,
+    originator: {
+      identity: opts.systemDid,
+      attribution: "delegated",
+    },
+    extensions: {
+      reflex_decision_id: opts.activation.decisionId,
+      reflex_target: opts.activation.target,
+    },
+  };
+
+  return { envelope, subject };
+}
+
+export interface ReflexActivationListenerOpts {
+  runtime: MyelinRuntime;
+  /** Source attribution for emitted `system.bus.*` visibility events. */
+  source: SystemEventSource;
+  /** Cortex principal the re-emitted dispatch lands under. */
+  reEmitPrincipal: string;
+  /** Cortex stack for stack-aware dispatch subjects. */
+  reEmitStack?: string;
+  /**
+   * Reflex source principal — first segment of the fired-event subject.
+   * Usually equals the cortex principal (shared hub), but the fired
+   * subject is owned by reflex so it's configurable.
+   */
+  reflexPrincipal: string;
+  /** Reflex source stack — second subject segment (reflex default `default`). */
+  reflexStack: string;
+  /** Target→capability resolver (config-backed). */
+  resolveTarget: (target: string) => ReflexTarget | undefined;
+  /** Decision-id dedup surface. */
+  dedup: ReflexDedup;
+  /** Originator DID stamped on re-emitted dispatches. Default `did:mf:reflex`. */
+  systemDid?: string;
+  /** JetStream stream to bind. Default `REFLEX`. */
+  stream?: string;
+  /** Durable consumer name. Default `cortex-reflex-activation-{principal}`. */
+  durable?: string;
+  /** Per-message ack deadline (ns). Default {@link DEFAULT_ACK_WAIT_NS}. */
+  ackWaitNs?: number;
+  log?: { info: (msg: string) => void; warn: (msg: string) => void };
+}
+
+/**
+ * Durable bridge from reflex activation events to cortex dispatch. See file
+ * header. `handleFired` is the independently-testable core; `start`/`stop`
+ * own the JetStream consumer lifecycle.
+ */
+export class ReflexActivationListener {
+  private readonly runtime: MyelinRuntime;
+  private readonly source: SystemEventSource;
+  private readonly reEmitPrincipal: string;
+  private readonly reEmitStack: string | undefined;
+  private readonly reflexPrincipal: string;
+  private readonly reflexStack: string;
+  private readonly resolveTarget: (target: string) => ReflexTarget | undefined;
+  private readonly dedup: ReflexDedup;
+  private readonly systemDid: string;
+  private readonly stream: string;
+  private readonly durable: string;
+  private readonly ackWaitNs: number;
+  private readonly log: { info: (msg: string) => void; warn: (msg: string) => void };
+
+  private subscriber: MyelinSubscriber | undefined;
+
+  constructor(opts: ReflexActivationListenerOpts) {
+    this.runtime = opts.runtime;
+    this.source = opts.source;
+    this.reEmitPrincipal = opts.reEmitPrincipal;
+    this.reEmitStack = opts.reEmitStack;
+    this.reflexPrincipal = opts.reflexPrincipal;
+    this.reflexStack = opts.reflexStack;
+    this.resolveTarget = opts.resolveTarget;
+    this.dedup = opts.dedup;
+    this.systemDid = opts.systemDid ?? DEFAULT_SYSTEM_DID;
+    this.stream = opts.stream ?? REFLEX_STREAM_NAME;
+    this.durable =
+      opts.durable ?? `cortex-reflex-activation-${opts.reEmitPrincipal}`;
+    this.ackWaitNs = opts.ackWaitNs ?? DEFAULT_ACK_WAIT_NS;
+    this.log = opts.log ?? console;
+  }
+
+  /**
+   * Core handler — parse a fired event, resolve, re-emit, ack/term. Pure of
+   * JetStream mechanics (takes the validated `Envelope` the subscriber
+   * already produced) so it is unit-testable with a fake runtime.
+   *
+   * Ack discipline:
+   *  - malformed fired envelope → `term` (garbage must not loop to
+   *    max_deliver) + a `_failed` visibility event.
+   *  - foreign principal → `ack` (v1 is local-only; drop quietly).
+   *  - already-seen Decision id → `ack` (redelivery dedup).
+   *  - unknown target / build / publish failure → `_failed` visibility +
+   *    `ack` (no poison loop; reflex can re-fire on the next impulse).
+   *  - success → mark dedup + `_dispatched` visibility + `ack`.
+   */
+  async handleFired(
+    envelope: Envelope,
+    _subject: string,
+  ): Promise<AckDecision> {
+    const parsed = parseFiredEnvelope(envelope);
+    if (!parsed.ok) {
+      await this.emitFailed(envelope, undefined, `parse:${parsed.reason}`);
+      return { kind: "term", reason: parsed.reason };
+    }
+    const act = parsed.activation;
+
+    // Local-principal filter (v1). The consumer filter already restricts to
+    // our reflex subject prefix; this is belt-and-suspenders for foreign
+    // subjects that slip through a mis-provisioned consumer.
+    if (
+      typeof envelope.source !== "string" ||
+      !envelope.source.startsWith(`${this.reflexPrincipal}.`)
+    ) {
+      return { kind: "ack" };
+    }
+
+    if (await this.dedup.seen(act.decisionId)) {
+      return { kind: "ack" };
+    }
+
+    const target = this.resolveTarget(act.target);
+    if (target === undefined) {
+      await this.emitFailed(envelope, act, "unknown_target");
+      return { kind: "ack" };
+    }
+
+    let built: { envelope: Envelope; subject: string };
+    try {
+      built = buildReflexDispatch({
+        activation: act,
+        target,
+        reEmitPrincipal: this.reEmitPrincipal,
+        ...(this.reEmitStack !== undefined && { reEmitStack: this.reEmitStack }),
+        source: this.source,
+        systemDid: this.systemDid,
+      });
+    } catch (err) {
+      await this.emitFailed(envelope, act, `build:${errMsg(err)}`);
+      return { kind: "ack" };
+    }
+
+    if (typeof this.runtime.publishOnSubject !== "function") {
+      await this.emitFailed(envelope, act, "publish:runtime-no-publishOnSubject");
+      return { kind: "ack" };
+    }
+    try {
+      await this.runtime.publishOnSubject(built.envelope, built.subject);
+    } catch (err) {
+      await this.emitFailed(envelope, act, `publish:${errMsg(err)}`);
+      return { kind: "ack" };
+    }
+
+    // Mark only after a successful publish — a publish failure leaves the
+    // activation re-fireable on the next reflex impulse.
+    await this.dedup.mark(act.decisionId);
+    await this.emitDispatched(act, target, built);
+    return { kind: "ack" };
+  }
+
+  private async emitDispatched(
+    act: FiredActivation,
+    target: ReflexTarget,
+    built: { envelope: Envelope; subject: string },
+  ): Promise<void> {
+    const event = createSystemBusReflexActivationDispatchedEvent({
+      source: this.source,
+      decisionId: act.decisionId,
+      target: act.target,
+      capability: target.capability,
+      targetAssistant: built.envelope.target_assistant ?? `did:mf:${target.assistant}`,
+      dispatchSubject: built.subject,
+      dispatchEnvelopeId: built.envelope.id,
+      ...(act.correlationId !== undefined && { correlationId: act.correlationId }),
+      classification: act.classification,
+    });
+    await this.runtime.publish(event);
+  }
+
+  private async emitFailed(
+    fired: Envelope,
+    act: FiredActivation | undefined,
+    reason: string,
+  ): Promise<void> {
+    const event = createSystemBusReflexActivationFailedEvent({
+      source: this.source,
+      reason,
+      firedEnvelopeId: fired.id,
+      ...(act?.decisionId !== undefined && { decisionId: act.decisionId }),
+      ...(act?.target !== undefined && { target: act.target }),
+      ...(act?.correlationId !== undefined && { correlationId: act.correlationId }),
+    });
+    await this.runtime.publish(event);
+  }
+
+  /**
+   * Provision the durable consumer on the (reflex-owned) REFLEX stream and
+   * bind the pull subscription. Dormant + no-throw when the runtime is
+   * disabled or lacks the JetStream / pull helpers — matches the defensive
+   * contract of `subscribePull` / `jetstreamManager` (capability features
+   * stay dormant when the bus is absent). Idempotent.
+   */
+  async start(): Promise<void> {
+    if (this.subscriber !== undefined) return;
+    if (!this.runtime.enabled) {
+      this.log.info("reflex-activation-listener: runtime disabled — dormant");
+      return;
+    }
+    const jsm = this.runtime.jetstreamManager
+      ? await this.runtime.jetstreamManager()
+      : null;
+    if (jsm === null) {
+      this.log.warn("reflex-activation-listener: no JetStreamManager — dormant");
+      return;
+    }
+    const filter = reflexActivationFilterSubject(
+      this.reflexPrincipal,
+      this.reflexStack,
+    );
+    // Bind a durable consumer on the existing REFLEX stream — do NOT
+    // provision the stream (reflex-edge owns it). DeliverPolicy.New so a
+    // fresh durable does not replay historical fires from the limits-
+    // retained stream.
+    await provisionReviewConsumer({
+      jsm,
+      stream: this.stream,
+      durable: this.durable,
+      filterSubject: filter,
+      ackWaitNs: this.ackWaitNs,
+      deliverPolicy: DeliverPolicy.New,
+      log: this.log,
+    });
+
+    if (typeof this.runtime.subscribePull !== "function") {
+      this.log.warn(
+        "reflex-activation-listener: runtime has no subscribePull — dormant",
+      );
+      return;
+    }
+    const sub = this.runtime.subscribePull({
+      pattern: filter,
+      stream: this.stream,
+      durable: this.durable,
+      onEnvelope: (envelope, subject) => this.handleFired(envelope, subject),
+    });
+    if (sub === null) {
+      this.log.warn("reflex-activation-listener: subscribePull returned null — dormant");
+      return;
+    }
+    this.subscriber = sub;
+    await sub.ready;
+    this.log.info(
+      `reflex-activation-listener: bound durable "${this.durable}" on stream "${this.stream}" (filter=${filter})`,
+    );
+  }
+
+  /** Drain + unsubscribe. Idempotent; no late side effects after return. */
+  async stop(): Promise<void> {
+    if (this.subscriber === undefined) return;
+    await this.subscriber.stop();
+    this.subscriber = undefined;
+  }
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

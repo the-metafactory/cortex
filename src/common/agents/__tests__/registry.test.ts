@@ -63,6 +63,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       id: "andreas",
       dataResidency: "NZ",
     },
+    reflex_activation: { stack: "default", targets: [] },
     bus: {
       review: {
         stream: {

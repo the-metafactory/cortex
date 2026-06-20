@@ -540,6 +540,116 @@ export function createSystemBusPeerDispatchReceivedEvent(
 }
 
 // ---------------------------------------------------------------------------
+// system.bus.reflex_activation_dispatched / _failed — F-6 visibility events
+// ---------------------------------------------------------------------------
+
+export interface SystemBusReflexActivationDispatchedOpts {
+  /** Standard source attribution — who emitted this visibility event. */
+  source: SystemEventSource;
+  /**
+   * Reflex Decision id from the fired event — the stable identifier the
+   * bridge dedups on. Threads the visibility event back to the reflex
+   * Decision that produced the activation.
+   */
+  decisionId: string;
+  /** Original reflex target (Execution Blueprint ref, e.g. `@jc/notify-discord`). */
+  target: string;
+  /** Capability the bridge resolved the target to and re-emitted on. */
+  capability: string;
+  /** Assistant DID the dispatch was addressed to. */
+  targetAssistant: string;
+  /** Subject the re-emitted `tasks.*` dispatch landed on. */
+  dispatchSubject: string;
+  /** Envelope id of the re-emitted dispatch — joins to the executor run. */
+  dispatchEnvelopeId: string;
+  /** Correlation id carried from the fired event onto the dispatch. */
+  correlationId?: string;
+  /**
+   * Classification preserved from the fired event onto the visibility
+   * annotation (sovereignty). Defaults to `"local"`.
+   */
+  classification?: Classification;
+}
+
+/**
+ * F-6 — visibility event emitted when `ReflexActivationListener` resolves a
+ * reflex `reflex.activation.fired` event and re-emits it as a `tasks.*`
+ * dispatch the existing executor runs. Parity with
+ * `system.bus.peer_dispatch_received`: bookkeeping about our own stack,
+ * sovereignty defaults to local even when the underlying activation carries
+ * a different classification (which is preserved on the dispatch itself).
+ */
+export function createSystemBusReflexActivationDispatchedEvent(
+  opts: SystemBusReflexActivationDispatchedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.bus.reflex_activation_dispatched",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      decision_id: opts.decisionId,
+      target: opts.target,
+      capability: opts.capability,
+      target_assistant: opts.targetAssistant,
+      dispatch_subject: opts.dispatchSubject,
+      dispatch_envelope_id: opts.dispatchEnvelopeId,
+      ...(opts.correlationId !== undefined && {
+        correlation_id: opts.correlationId,
+      }),
+    },
+  });
+}
+
+export interface SystemBusReflexActivationFailedOpts {
+  /** Standard source attribution — who emitted this visibility event. */
+  source: SystemEventSource;
+  /**
+   * Reflex Decision id, when the fired event parsed far enough to expose
+   * it. Omitted for malformed envelopes that never yielded a Decision id.
+   */
+  decisionId?: string;
+  /** Original reflex target, when parsed. */
+  target?: string;
+  /**
+   * Why the activation could not be dispatched. Conventional values:
+   * `"unknown_target"` (no config mapping), `"publish:<detail>"` (bus or
+   * policy refusal), `"parse:<detail>"` (malformed fired envelope),
+   * `"build:<detail>"` (subject/envelope construction failed).
+   */
+  reason: string;
+  /** Envelope id of the fired event that failed — joins to the source. */
+  firedEnvelopeId: string;
+  /** Correlation id from the fired event, if present. */
+  correlationId?: string;
+  classification?: Classification;
+}
+
+/**
+ * F-6 — visibility event emitted when `ReflexActivationListener` cannot
+ * dispatch a fired activation (unknown target, publish failure, malformed
+ * envelope). The message is always acked after this is emitted (no poison
+ * loop); a `term` is used only for structurally-malformed fired envelopes.
+ */
+export function createSystemBusReflexActivationFailedEvent(
+  opts: SystemBusReflexActivationFailedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.bus.reflex_activation_failed",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      reason: opts.reason,
+      fired_envelope_id: opts.firedEnvelopeId,
+      ...(opts.decisionId !== undefined && { decision_id: opts.decisionId }),
+      ...(opts.target !== undefined && { target: opts.target }),
+      ...(opts.correlationId !== undefined && {
+        correlation_id: opts.correlationId,
+      }),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // system.access.allowed / system.access.denied — IAW Phase C.4 (cortex#115)
 // ---------------------------------------------------------------------------
 

@@ -19,6 +19,7 @@ import {
   type DiscordPresence,
   type MattermostPresence,
   type Policy,
+  type ReflexActivationConfig,
   type SlackPresence,
   type StackConfig,
 } from "../types/cortex-config";
@@ -127,6 +128,13 @@ export interface LoadedConfig {
    * bot.yaml input yields undefined.
    */
   surfaces?: Surfaces;
+  /**
+   * F-6 — reflex activation bridge block. Always defined for cortex-shape
+   * input (CortexConfigSchema applies an empty-default); `undefined` for
+   * legacy bot.yaml input. The boot path mounts `ReflexActivationListener`
+   * only when `targets` is non-empty.
+   */
+  reflexActivation?: ReflexActivationConfig;
 }
 
 /**
@@ -844,6 +852,9 @@ function loadCortexShape(
     // key; undefined when the input declared no surfaces block. The gateway
     // bootstrap (`maybeCreateSurfaceGateway`) reads this at boot.
     ...(surfaces !== undefined && { surfaces }),
+    // F-6 — carry through the reflex activation bridge block (empty-default
+    // applied by the schema, so always present for cortex-shape input).
+    reflexActivation: cortexConfig.reflex_activation,
   };
 }
 
