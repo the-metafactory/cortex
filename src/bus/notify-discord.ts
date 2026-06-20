@@ -94,9 +94,12 @@ export interface DiscordNotifierOpts {
  * Extract the repo + issue fields from a fired activation payload.
  *
  * Two `repository` shapes are accepted:
- *  - **flat string** — what reflex-edge's `github_hmac` source actually fires:
- *    it injects `repository` as the repo full_name (overwriting the nested
- *    object) for flat `where`-matching, e.g. `"repository":"owner/repo"`.
+ *  - **flat string** — what reflex-edge's `github_hmac` source fires: it injects
+ *    `repository` as the repo full_name (overwriting the nested object) for flat
+ *    `where`-matching (see `the-metafactory/reflex` `src/edge/http.ts`, the
+ *    github_hmac branch: `repository: repo?.full_name`). Verified on the live
+ *    deploy — a signed impulse fired `…payload:{repository:"owner/repo",…}`.
+ *    e.g. `"repository":"owner/repo"`.
  *  - **nested `{full_name}`** — the raw GitHub `issues` webhook shape (fallback
  *    for a bus/manual source that forwards the body verbatim).
  *
