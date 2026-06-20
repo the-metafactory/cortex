@@ -137,6 +137,55 @@ describe("formatEnvelopeAsMarkdown — dispatch lifecycle", () => {
     }))).toBe("Ivy failed: claude exited 1");
   });
 
+  test("renders a dev-implement completed as an 'opened PR #N' milestone beat (slice convergence B / B3)", () => {
+    // The dev.implement consumer's terminal `completed` rides the PR ref as a
+    // JSON blob on `chat_response` (`dev-consumer.ts:744` —
+    // `chatResponse: JSON.stringify({ pr })`). Without this branch the slice
+    // renderer would post the raw `{"pr":{...}}` JSON into the slice thread.
+    // Render it as the clean "opened PR #N · url" milestone beat instead.
+    const pr = {
+      repo: "the-metafactory/cortex",
+      number: 1140,
+      url: "https://github.com/the-metafactory/cortex/pull/1140",
+    };
+    const out = formatDispatchLifecycle(
+      makeEnvelope({
+        type: "dispatch.task.completed",
+        payload: { agent_id: "forge", chat_response: JSON.stringify({ pr }) },
+      }),
+    );
+    expect(out).not.toBeNull();
+    // No raw JSON braces leak into the thread.
+    expect(out).not.toContain('{"pr"');
+    expect(out).toContain("opened");
+    expect(out).toContain("the-metafactory/cortex#1140");
+    expect(out).toContain("https://github.com/the-metafactory/cortex/pull/1140");
+  });
+
+  test("a plain-prose chat_response on completed still renders verbatim (no false PR-parse)", () => {
+    // The PR-milestone branch must only fire on a `{pr:{...}}` JSON blob, never
+    // swallow a normal chat reply (which is the common completed case).
+    const out = formatDispatchLifecycle(
+      makeEnvelope({
+        type: "dispatch.task.completed",
+        payload: { agent_id: "ivy", chat_response: "Here is the answer." },
+      }),
+    );
+    expect(out).toBe("Here is the answer.");
+  });
+
+  test("a completed with no chat_response still falls back to result_summary", () => {
+    // Regression guard: the PR-milestone branch must not disturb the existing
+    // result_summary fallback for non-chat dispatches.
+    const out = formatDispatchLifecycle(
+      makeEnvelope({
+        type: "dispatch.task.completed",
+        payload: { agent_id: "ivy", result_summary: "Done." },
+      }),
+    );
+    expect(out).toBe("Done.");
+  });
+
   test("renders a brain post's own text verbatim (cortex#1039 follow-up)", () => {
     // A brain `post` carries its content under payload.text — the composed
     // flow, the ask_principal prompt, per-step replies. Without rendering it

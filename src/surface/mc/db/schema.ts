@@ -47,6 +47,15 @@ export const SCHEMA_SQL: string[] = [
     source_url TEXT,
     source_external_id TEXT,
     related_refs_json TEXT,
+    -- Slice convergence C (cortex#1150 / docs/design-slice-activity-thread.md §C):
+    -- the slice-rollup link. A dispatch anchor-task points at the issue's
+    -- work_item (the slice) so MC rolls up a slice's per-dispatch activity under
+    -- ONE card. Queryable column (not buried in related_refs_json) so the slice
+    -- card gathers its dispatches with an indexed WHERE work_item_id = ? filter,
+    -- mirroring pull_requests.work_item_id. Intentionally NOT a hard FK: the
+    -- work_item may be a lazily-created stub and ingestion order isn't
+    -- guaranteed, matching pull_requests.work_item_id (wired, not enforced).
+    work_item_id TEXT,
     status TEXT NOT NULL DEFAULT 'open'
       CHECK(status IN ('open','in_progress','done','cancelled')),
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -212,6 +221,16 @@ export const SCHEMA_SQL: string[] = [
   // Composite covers status= filter via leftmost-prefix and the full ORDER BY.
   `CREATE INDEX IF NOT EXISTS idx_tasks_status_priority_updated
      ON tasks(status, priority, updated_at DESC)`,
+  // Slice convergence C (cortex#1150) — the slice card gathers its dispatch
+  // anchor-tasks by work_item_id; indexed for a straight scan, mirroring
+  // idx_pull_requests_work_item. The partner index idx_tasks_work_item is
+  // DELIBERATELY NOT declared here — it indexes work_item_id, a column an
+  // existing pre-C DB does not carry when init.ts runs this SCHEMA_SQL loop
+  // (which precedes the COLUMN_ADD_MIGRATIONS loop). Declaring it here crashes
+  // initDatabase on those DBs with `no such column: work_item_id` (the same
+  // #961/#1048 bug class as parent_session_id / origin_kind). It is created
+  // instead by the work_item_id COLUMN_ADD_MIGRATIONS post[] below, which runs
+  // AFTER the column ALTER AND unconditionally (so fresh DBs get it too).
 
   // --- iterations (F-13 / Decision 3) ---
   // Grove-owned lifecycle for the iteration planning surface. Per F-13
@@ -655,6 +674,21 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     ],
   },
 
+  // Slice convergence C (cortex#1150) — tasks.work_item_id for EXISTING DBs.
+  // Fresh DBs get it from the tasks CREATE TABLE above; an already-initialised
+  // DB (the running stacks) backfills it here via the same pragma_table_info
+  // gate. Nullable, no FK clause (the work_item may be a lazy stub; matches the
+  // pull_requests.work_item_id "wired, not enforced" policy). The partner index
+  // is idempotent via CREATE INDEX IF NOT EXISTS.
+  {
+    table: "tasks",
+    column: "work_item_id",
+    ddl: `ALTER TABLE tasks ADD COLUMN work_item_id TEXT`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_tasks_work_item ON tasks(work_item_id)`,
+    ],
+  },
+
   // ST-P0 / ADR-0011 — canonical session columns for EXISTING DBs. Fresh DBs
   // get these from the sessions CREATE TABLE above; an already-initialised DB
   // (the running stacks) backfills them here via the same pragma_table_info
@@ -765,7 +799,11 @@ export const REBUILD_MIGRATIONS: RebuildMigration[] = [
     detect: (sql) => /source_system\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*source_system\s+IN/i.test(sql),
     steps: [
       // New tasks shape: base columns (source_system CHECK dropped; status CHECK
-      // kept) + the iteration_id column added by COLUMN_ADD_MIGRATIONS.
+      // kept) + every column added by COLUMN_ADD_MIGRATIONS (iteration_id;
+      // work_item_id — slice convergence C, cortex#1150). init.ts runs
+      // COLUMN_ADD_MIGRATIONS BEFORE this rebuild, so on an old-shape DB both
+      // added columns already exist on the live `tasks` table and the INSERT
+      // below can copy them.
       `CREATE TABLE tasks_new (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -776,6 +814,7 @@ export const REBUILD_MIGRATIONS: RebuildMigration[] = [
         source_url TEXT,
         source_external_id TEXT,
         related_refs_json TEXT,
+        work_item_id TEXT,
         status TEXT NOT NULL DEFAULT 'open'
           CHECK(status IN ('open','in_progress','done','cancelled')),
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -785,19 +824,20 @@ export const REBUILD_MIGRATIONS: RebuildMigration[] = [
       // Explicit column list (never SELECT *) so a shape mismatch errors loudly.
       `INSERT INTO tasks_new
          (id, title, description, priority, principal_id, source_system,
-          source_url, source_external_id, related_refs_json, status,
-          created_at, updated_at, iteration_id)
+          source_url, source_external_id, related_refs_json, work_item_id,
+          status, created_at, updated_at, iteration_id)
        SELECT
           id, title, description, priority, principal_id, source_system,
-          source_url, source_external_id, related_refs_json, status,
-          created_at, updated_at, iteration_id
+          source_url, source_external_id, related_refs_json, work_item_id,
+          status, created_at, updated_at, iteration_id
        FROM tasks`,
       `DROP TABLE tasks`,
       `ALTER TABLE tasks_new RENAME TO tasks`,
-      // Recreate the indexes (SCHEMA_SQL's + the iteration_id partner index).
+      // Recreate the indexes (SCHEMA_SQL's + the iteration_id + work_item_id partners).
       `CREATE INDEX IF NOT EXISTS idx_tasks_status_priority_updated
          ON tasks(status, priority, updated_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_tasks_iteration ON tasks(iteration_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_work_item ON tasks(work_item_id)`,
     ],
   },
 ];

@@ -56,6 +56,7 @@ import {
   applyRevoke,
   buildListRows,
   reconcileLayer,
+  mergeOfferAcceptSubjects,
   resolveTarget,
   dispatchOffer,
 } from "../offer";
@@ -394,6 +395,171 @@ describe("reconcileLayer", () => {
 });
 
 // ===========================================================================
+// mergeOfferAcceptSubjects — the pure least-privilege preserve-merge (#1097)
+// ===========================================================================
+
+describe("mergeOfferAcceptSubjects", () => {
+  test("preserves non-offer rows (OWN `.>`, peer `.agent.>`), appends capability rows", () => {
+    const prior = [
+      "federated.andreas.work.>",
+      "federated.jc.sage-host.agent.>",
+    ];
+    const caps = ["federated.andreas.work.tasks.code-review.typescript.>"];
+    expect(mergeOfferAcceptSubjects(prior, caps, "andreas", "work")).toEqual([
+      "federated.andreas.work.>",
+      "federated.jc.sage-host.agent.>",
+      "federated.andreas.work.tasks.code-review.typescript.>",
+    ]);
+  });
+
+  test("regenerates own `…tasks.*.>` rows — a stale capability row is dropped", () => {
+    const prior = [
+      "federated.andreas.work.>",
+      "federated.andreas.work.tasks.old-cap.>", // stale — offer-owned, not in caps
+    ];
+    const caps = ["federated.andreas.work.tasks.new-cap.>"];
+    expect(mergeOfferAcceptSubjects(prior, caps, "andreas", "work")).toEqual([
+      "federated.andreas.work.>",
+      "federated.andreas.work.tasks.new-cap.>",
+    ]);
+  });
+
+  test("does not duplicate a capability row already hand-pinned in prior", () => {
+    const cap = "federated.andreas.work.tasks.code-review.typescript.>";
+    // The hand-pin is an own-`…tasks.` row → the offer writer OWNS it, so it is
+    // dropped from `preserved` and re-added once from caps (no duplicate).
+    expect(mergeOfferAcceptSubjects([cap], [cap], "andreas", "work")).toEqual([cap]);
+  });
+
+  test("empty caps + only presence rows → presence rows survive, no dispatch rows", () => {
+    const prior = ["federated.andreas.work.>", "federated.jc.sage-host.agent.>"];
+    expect(mergeOfferAcceptSubjects(prior, [], "andreas", "work")).toEqual(prior);
+  });
+
+  test("a DIFFERENT principal's `…tasks.` row is NOT offer-owned → preserved", () => {
+    // Defensive: the own-prefix is identity-scoped. A peer's tasks row (should
+    // never appear, but if it does) is not this writer's to regenerate.
+    const prior = ["federated.jc.sage-host.tasks.code-review.>"];
+    const caps = ["federated.andreas.work.tasks.chat.>"];
+    expect(mergeOfferAcceptSubjects(prior, caps, "andreas", "work")).toEqual([
+      "federated.jc.sage-host.tasks.code-review.>",
+      "federated.andreas.work.tasks.chat.>",
+    ]);
+  });
+});
+
+// ===========================================================================
+// reconcileLayer — co-existence with the PRESENCE-wiring accept-list writer
+// (cortex#1097, umbrella #1084 P2.1; least-privilege per #1105)
+//
+// `policy.federated.networks[].accept_subjects` has TWO writers:
+//   - the PRESENCE path (`network join` / reconciler, via `deriveAcceptSubjects`)
+//     writes the OWN `.>` subtree ∪ each roster peer's `.agent.>` presence subtree.
+//   - this offer-mode DISPATCH writer regenerates the capability-dispatch rows
+//     `federated.{me}.{stack}.tasks.{cap}.>` from the offerings.
+// They share ONE array. The offer writer must own ONLY its own-identity
+// `…tasks.*.>` dispatch rows and PRESERVE everything else, or an `offer --apply`
+// silently clobbers the peer presence subtrees and regresses P2/#1105.
+// ===========================================================================
+
+describe("reconcileLayer — preserves presence-wiring accept-subjects (#1097)", () => {
+  const OWN_SUBTREE = "federated.andreas.work.>";
+  const PEER_PRESENCE_JC = "federated.jc.sage-host.agent.>";
+  const PEER_PRESENCE_KZ = "federated.kz.research.agent.>";
+  const CAP_DISPATCH = "federated.andreas.work.tasks.code-review.typescript.>";
+
+  /** A layer whose network already carries the presence-wiring accept-list
+   *  (OWN `.>` ∪ two peer `.agent.>` subtrees), as `network join` would write. */
+  const layerWithPresence = (extraAccept: string[] = []): Rec => ({
+    principal: { id: "andreas" },
+    stack: { id: "andreas/work" },
+    policy: {
+      federated: {
+        networks: [
+          {
+            id: "metafactory-net",
+            leaf_node: "leaf",
+            max_hop: 1,
+            peers: [
+              { principal: "jc", stack: "sage-host" },
+              { principal: "kz", stack: "research" },
+            ],
+            accept_subjects: [OWN_SUBTREE, PEER_PRESENCE_JC, PEER_PRESENCE_KZ, ...extraAccept],
+            announce_capabilities: [],
+          },
+        ],
+        registry: { url: "https://registry.example" },
+      },
+    },
+  });
+
+  test("adding a federated offering PRESERVES the OWN `.>` + peer `.agent.>` presence rows", () => {
+    const { layer } = reconcileLayer(layerWithPresence(), [OFFER_FED_NET]);
+    const net = ((layer.policy as Rec).federated as Rec).networks as Rec[];
+    const accept = net[0]?.accept_subjects as string[];
+    // Presence-wiring rows survive untouched.
+    expect(accept).toContain(OWN_SUBTREE);
+    expect(accept).toContain(PEER_PRESENCE_JC);
+    expect(accept).toContain(PEER_PRESENCE_KZ);
+    // The capability-dispatch row is added alongside them.
+    expect(accept).toContain(CAP_DISPATCH);
+  });
+
+  test("the offer writer never widens to a peer's FULL `.>` subtree (least-privilege #1105)", () => {
+    const { layer } = reconcileLayer(layerWithPresence(), [OFFER_FED_NET]);
+    const net = ((layer.policy as Rec).federated as Rec).networks as Rec[];
+    const accept = net[0]?.accept_subjects as string[];
+    // A peer's full subtree (which would admit peer-DESTINED dispatch) must NOT appear.
+    expect(accept).not.toContain("federated.jc.sage-host.>");
+    expect(accept).not.toContain("federated.kz.research.>");
+  });
+
+  test("revoking the last federated offering drops the stale capability row but KEEPS presence rows", () => {
+    // Seed: presence rows + a stale capability-dispatch row, plus the offering.
+    const seeded = layerWithPresence([CAP_DISPATCH]);
+    (seeded.policy as Rec).offerings = [OFFER_FED_NET];
+    const { layer } = reconcileLayer(seeded, []); // all offerings revoked
+    const net = ((layer.policy as Rec).federated as Rec).networks as Rec[];
+    const accept = net[0]?.accept_subjects as string[];
+    // The offer writer's own stale dispatch row is gone…
+    expect(accept).not.toContain(CAP_DISPATCH);
+    // …but the presence-wiring rows it does NOT own are preserved.
+    expect(accept).toContain(OWN_SUBTREE);
+    expect(accept).toContain(PEER_PRESENCE_JC);
+    expect(accept).toContain(PEER_PRESENCE_KZ);
+  });
+
+  test("regenerating is idempotent — re-running with the same offering does not duplicate rows", () => {
+    const first = reconcileLayer(layerWithPresence(), [OFFER_FED_NET]).layer;
+    const firstNet = ((first.policy as Rec).federated as Rec).networks as Rec[];
+    const second = reconcileLayer(first, [OFFER_FED_NET]).layer;
+    const secondNet = ((second.policy as Rec).federated as Rec).networks as Rec[];
+    expect(secondNet[0]?.accept_subjects).toEqual(firstNet[0]?.accept_subjects);
+    // And exactly one capability-dispatch row.
+    const dispatchRows = (secondNet[0]?.accept_subjects as string[]).filter((s) => s === CAP_DISPATCH);
+    expect(dispatchRows).toHaveLength(1);
+  });
+
+  test("a network with NO prior accept-list (greenfield) still gets the capability dispatch row", () => {
+    // Regression guard: the preserve-merge must not break the empty-prior case
+    // (the existing `reconcileLayer` happy path).
+    const greenfield: Rec = {
+      principal: { id: "andreas" },
+      stack: { id: "andreas/work" },
+      policy: {
+        federated: {
+          networks: [{ id: "metafactory-net", leaf_node: "leaf", max_hop: 1, peers: [] }],
+          registry: { url: "https://registry.example" },
+        },
+      },
+    };
+    const { layer } = reconcileLayer(greenfield, [OFFER_FED_NET]);
+    const net = ((layer.policy as Rec).federated as Rec).networks as Rec[];
+    expect(net[0]?.accept_subjects).toEqual([CAP_DISPATCH]);
+  });
+});
+
+// ===========================================================================
 // CLI — file I/O
 // ===========================================================================
 
@@ -435,7 +601,11 @@ function stackLayer(extra: Rec = {}): Rec {
   };
 }
 
-function makeSplitDir(stacks: Record<string, Rec>, slug = "offer-test-cfg"): string {
+function makeSplitDir(
+  stacks: Record<string, Rec>,
+  slug = "offer-test-cfg",
+  agentsd: Record<string, Rec> = {},
+): string {
   const dir = join(tmpDir, slug);
   mkdirSync(join(dir, "system"), { recursive: true });
   mkdirSync(join(dir, "stacks"), { recursive: true });
@@ -443,7 +613,40 @@ function makeSplitDir(stacks: Record<string, Rec>, slug = "offer-test-cfg"): str
   for (const [name, content] of Object.entries(stacks)) {
     writeFileSync(join(dir, "stacks", `${name}.yaml`), YAML.stringify(content, { indent: 2, lineWidth: 0 }), "utf-8");
   }
+  // Optional bot-pack agents under `agents.d/<id>.yaml`, each with a sibling
+  // persona file (loadAgentsDirectory rejects a fragment whose persona path
+  // does not resolve). Mirrors the daemon-boot fragment layout (cortex#1071).
+  const entries = Object.entries(agentsd);
+  if (entries.length > 0) {
+    const agentsDir = join(dir, "agents.d");
+    mkdirSync(agentsDir, { recursive: true });
+    for (const [id, fragment] of entries) {
+      writeFileSync(join(agentsDir, `${id}.md`), `# ${id} persona\n`, "utf-8");
+      writeFileSync(
+        join(agentsDir, `${id}.yaml`),
+        YAML.stringify({ persona: `./${id}.md`, ...fragment }, { indent: 2, lineWidth: 0 }),
+        "utf-8",
+      );
+    }
+  }
   return dir;
+}
+
+/**
+ * A bot-pack agent fragment (the `agents.d/<id>.yaml` shape) declaring a
+ * capability via `runtime.capabilities[]` — e.g. the dev-loop `dev` agent
+ * providing `dev.implement` (cortex#1071). There is deliberately NO top-level
+ * `capabilities[]` catalog entry for it on the stack; the catalog the offer
+ * command validates against must be DERIVED from this fragment, mirroring what
+ * the daemon trusts at boot.
+ */
+function botPackAgent(id: string, capabilities: string[]): Rec {
+  return {
+    id,
+    displayName: id,
+    presence: {},
+    runtime: { substrate: "claude-code", mode: "in-process", capabilities },
+  };
 }
 
 async function run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -621,6 +824,99 @@ describe("dispatchOffer — CLI", () => {
     const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
     const net = ((written.policy as Rec).federated as Rec).networks as Rec[];
     expect(net[0]?.announce_capabilities).toEqual(["code-review.typescript"]);
+  });
+
+  // =========================================================================
+  // cortex#1071 — offer set/list folds agents.d (bot-pack-provided caps).
+  //
+  // A capability declared ONLY in a bot-pack fragment's
+  // `agents.d/<id>.yaml` `runtime.capabilities[]` (no top-level
+  // `capabilities[]` catalog entry on the stack) must be offerable: the
+  // offer-validation path derives the effective catalog the same way the
+  // daemon trusts merged agents at boot. Mirrors the dev-loop case
+  // (`dev.implement` provided by the `dev` bot-pack agent).
+  // =========================================================================
+
+  test("set federated for a bot-pack (agents.d) capability validates + writes (cortex#1071)", async () => {
+    const dir = makeSplitDir(
+      {
+        // Stack offers dev.implement but declares NO catalog entry for it —
+        // only the inline echo agent's code-review.typescript / chat exist.
+        work: stackLayer({
+          policy: {
+            federated: {
+              networks: [{ id: "metafactory-net", leaf_node: "leaf", max_hop: 1, peers: [] }],
+              registry: { url: "https://registry.example" },
+            },
+          },
+        }),
+      },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    // Pre-fix this fails: the composed config has no `dev.implement` in
+    // capabilities[] (composeRawConfig doesn't fold agents.d), so
+    // CortexConfigSchema rejects the offering. Post-fix the derived catalog
+    // carries it (provided_by:[dev]) and validation passes.
+    const r = await run([
+      "dev.implement", "--scope", "federated", "--network", "metafactory-net",
+      "--config", dir, "--apply",
+    ]);
+    expect(r.code).toBe(0);
+    const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
+    const policy = written.policy as Rec;
+    expect((policy.offerings as Rec[])[0]?.capability).toBe("dev.implement");
+    const net = (policy.federated as Rec).networks as Rec[];
+    expect(net[0]?.announce_capabilities).toEqual(["dev.implement"]);
+    expect(net[0]?.accept_subjects).toEqual([
+      "federated.andreas.work.tasks.dev.implement.>",
+    ]);
+  });
+
+  test("set local for a bot-pack capability validates (no catalog entry needed) (cortex#1071)", async () => {
+    const dir = makeSplitDir(
+      { work: stackLayer() },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    const r = await run(["dev.implement", "--scope", "local", "--config", dir, "--apply"]);
+    expect(r.code).toBe(0);
+    const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
+    expect(((written.policy as Rec).offerings as Rec[])[0]?.capability).toBe("dev.implement");
+  });
+
+  test("list surfaces a bot-pack capability with its provider agent (cortex#1071)", async () => {
+    const dir = makeSplitDir(
+      {
+        work: stackLayer({
+          policy: {
+            offerings: [{ capability: "dev.implement", scopes: ["local"] }],
+          },
+        }),
+      },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    const r = await run(["list", "--config", dir]);
+    expect(r.code).toBe(0);
+    // The derived catalog makes the bot-pack capability visible in list,
+    // attributed to its providing agent.
+    expect(r.stdout).toContain("dev.implement");
+    expect(r.stdout).toContain("dev");
+  });
+
+  test("a still-unknown capability (no catalog entry, no agents.d provider) → exit 1 (cortex#1071 guard)", async () => {
+    // The fold must not turn the catalog into a free-for-all: a capability
+    // that no inline catalog entry AND no agents.d agent provides still fails.
+    const dir = makeSplitDir(
+      { work: stackLayer() },
+      "offer-test-cfg",
+      { dev: botPackAgent("dev", ["dev.implement"]) },
+    );
+    const before = readFileSync(join(dir, "stacks", "work.yaml"), "utf-8");
+    const r = await run(["ghost.capability", "--scope", "local", "--config", dir, "--apply"]);
+    expect(r.code).toBe(1);
+    expect(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")).toBe(before);
   });
 });
 

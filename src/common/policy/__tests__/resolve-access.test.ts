@@ -8,15 +8,25 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { DID_RE } from "@the-metafactory/myelin/identity";
 import {
   resolvePolicyAccess,
+  anonOnboardingAccess,
+  PUBLIC_ORIGINATOR_DID,
   isOperatorPrincipal,
 } from "../resolve-access";
 import {
   buildPlatformPrincipalIndex,
   buildPrincipalRegistry,
+  defaultPolicySovereignty,
 } from "../policy-gate";
-import { policyEngineFromConfig } from "../factory";
+import { CLAUDE_TOOL_INVENTORY } from "../tool-inventory";
+import {
+  policyEngineFromConfig,
+  buildPublicPrincipalEntries,
+  PUBLIC_PRINCIPAL_ID,
+  PUBLIC_ROLE_ID,
+} from "../factory";
 import type { Policy } from "../../types/cortex-config";
 import type { InboundMessage } from "../../../adapters/types";
 
@@ -134,6 +144,200 @@ describe("resolvePolicyAccess — unknown principal deny path", () => {
     expect(result.allowed).toBe(false);
     expect(result.denyReason).toContain("not set up to respond");
     expect(result.denyReason).toContain("policy.principals[].platform_ids");
+  });
+
+  // cortex#1165 — the unmapped-sender deny must carry the stable `unmapped_sender`
+  // code so the open-onboarding gate can key off the category, not the prose.
+  test("stamps denyCode=unmapped_sender on the unknown-principal deny", () => {
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "9999999999999999" }),
+      ...buildHarness(USER_POLICY),
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("unmapped_sender");
+  });
+
+  test("no-policy deny carries denyCode=no_policy (NOT unmapped_sender)", () => {
+    const result = resolvePolicyAccess({
+      msg: msg(),
+      engine: undefined,
+      index: undefined,
+      registry: undefined,
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("no_policy");
+  });
+
+  test("lockout deny (recognized principal, zero keyword caps) carries denyCode=lockout", () => {
+    const lockoutPolicy: Policy = {
+      principals: [
+        {
+          id: "muted",
+          home_principal: "andreas",
+          home_stack: "andreas/meta-factory",
+          role: ["muted"],
+          trust: [],
+          platform_ids: { discord: ["555000111222333444"] },
+        },
+      ],
+      // role exists but grants NO keyword.* and NOT operator
+      roles: [{ id: "muted", capabilities: ["tool.read"] }],
+    };
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "555000111222333444" }),
+      ...buildHarness(lockoutPolicy),
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("lockout");
+  });
+});
+
+describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#1165)", () => {
+  test("allows chat ONLY — async + team stay false (no privileged keywords)", () => {
+    const result = anonOnboardingAccess(msg({ authorId: "285727653603049472" }));
+    expect(result.allowed).toBe(true);
+    expect(result.features.chat).toBe(true);
+    expect(result.features.async).toBe(false);
+    expect(result.features.team).toBe(false);
+  });
+
+  test("is NOT trusted — the inbound prompt-injection filter stays armed", () => {
+    const result = anonOnboardingAccess(msg());
+    // trusted must be explicitly false (not merely undefined) — a stranger is
+    // the least-trusted sender; the filter's trust gate must never let it pass.
+    expect(result.trusted).toBe(false);
+  });
+
+  test("restricts EVERY tool in the canonical inventory (zero tool authority)", () => {
+    const result = anonOnboardingAccess(msg());
+    // The full inventory is restricted — no tool is granted.
+    expect(result.toolRestrictions).toEqual([...CLAUDE_TOOL_INVENTORY]);
+    // Spot-check the dangerous ones explicitly.
+    expect(result.toolRestrictions).toContain("Bash");
+    expect(result.toolRestrictions).toContain("Write");
+    expect(result.toolRestrictions).toContain("Edit");
+    expect(result.toolRestrictions).toContain("Read");
+  });
+
+  test("grants NO skills and NO dir restrictions (inherits most-restrictive defaults), bashGuard ON", () => {
+    const result = anonOnboardingAccess(msg());
+    expect(result.allowedSkills).toBeUndefined();
+    expect(result.dirRestrictions).toBeUndefined();
+    expect(result.bashGuard).toBe(true);
+  });
+
+  test("marks the decision as anon, keeping the per-sender id as an AUDIT label only", () => {
+    const result = anonOnboardingAccess(msg({ platform: "discord", authorId: "285727653603049472" }));
+    expect(result.anonPrincipal).toBe(true);
+    // cortex#1167 — this is an audit label, NOT the authority. Authority is the
+    // single `public` principal (proven in the buildPublicPrincipalEntries +
+    // dispatch-handler round-trip tests).
+    expect(result.anonPrincipalId).toBe("anon:discord:285727653603049472");
+  });
+
+  test("threads isDM through when the inbound was a DM", () => {
+    expect(anonOnboardingAccess(msg({ isDM: true })).isDM).toBe(true);
+    expect(anonOnboardingAccess(msg({ isDM: false })).isDM).toBeUndefined();
+  });
+
+  // cortex#1167 review MAJOR — explicit allowlist (tool confinement is an
+  // allowlist, NOT an allow-by-default deny-list).
+  test("carries an EXPLICIT tool allowlist equal to the persona list", () => {
+    const result = anonOnboardingAccess(msg(), ["Read"]);
+    expect(result.allowedTools).toEqual(["Read"]);
+  });
+
+  test("an unlisted tool (and any mcp__*) is NOT in the allowlist", () => {
+    const result = anonOnboardingAccess(msg(), ["Read"]);
+    expect(result.allowedTools).not.toContain("Bash");
+    expect(result.allowedTools).not.toContain("Write");
+    // The crux of the MAJOR: MCP tools are NOT in the inventory deny-list, so
+    // only the allowlist keeps them out. Prove they are not allowed.
+    expect(result.allowedTools!.some((t) => t.startsWith("mcp__"))).toBe(false);
+  });
+
+  test("falls back to the most-restrictive ['Read'] when no allowlist passed", () => {
+    expect(anonOnboardingAccess(msg()).allowedTools).toEqual(["Read"]);
+  });
+
+  test("coerces an EMPTY allowlist up to ['Read'] (never allow-by-default)", () => {
+    // An empty `--allowedTools` would mean allow-by-default at the CC layer; a
+    // stranger must never get that, so an empty list is coerced to Read-only.
+    expect(anonOnboardingAccess(msg(), []).allowedTools).toEqual(["Read"]);
+  });
+});
+
+describe("PUBLIC_ORIGINATOR_DID — the public principal's wire identity (cortex#1167)", () => {
+  test("is `did:mf:public` and DID-grammar valid", () => {
+    expect(PUBLIC_ORIGINATOR_DID).toBe("did:mf:public");
+    expect(DID_RE.test(PUBLIC_ORIGINATOR_DID)).toBe(true);
+  });
+});
+
+describe("buildPublicPrincipalEntries — single minimal-privilege public principal (cortex#1167)", () => {
+  const HOME_PRINCIPAL = "andreas";
+  const HOME_STACK = "andreas/meta-factory";
+
+  test("no flagged agents → NO public principal registered (unmapped stays denied)", () => {
+    const { principals, roles } = buildPublicPrincipalEntries([], HOME_PRINCIPAL, HOME_STACK);
+    expect(principals).toEqual([]);
+    expect(roles).toEqual([]);
+  });
+
+  test("grants EXACTLY dispatch.<agentId> per flagged agent, and nothing else", () => {
+    const { principals, roles } = buildPublicPrincipalEntries(["pier"], HOME_PRINCIPAL, HOME_STACK);
+    expect(principals).toHaveLength(1);
+    expect(principals[0]!.id).toBe(PUBLIC_PRINCIPAL_ID);
+    expect(principals[0]!.role).toEqual([PUBLIC_ROLE_ID]);
+    // No platform_ids → never resolved via the (platform, authorId) index.
+    expect(principals[0]!.platform_ids).toBeUndefined();
+    expect(roles).toHaveLength(1);
+    expect(roles[0]!.capabilities).toEqual(["dispatch.pier"]);
+  });
+
+  test("multiple flagged agents → one capability each", () => {
+    const { roles } = buildPublicPrincipalEntries(["pier", "concierge"], HOME_PRINCIPAL, HOME_STACK);
+    expect(roles[0]!.capabilities).toEqual(["dispatch.pier", "dispatch.concierge"]);
+  });
+
+  // The security crux: wire the synthetic entries into a real engine and prove
+  // `public` PASSES dispatch.pier but is DENIED everything else.
+  function engineWithPublic(flagged: string[]) {
+    const policy: Policy = {
+      principals: [OPERATOR_POLICY.principals[0]!],
+      roles: OPERATOR_POLICY.roles,
+    };
+    return policyEngineFromConfig(policy, flagged)!;
+  }
+  const sov = defaultPolicySovereignty();
+
+  test("`public` is GRANTED dispatch.pier (functional end-to-end at the listener)", () => {
+    const engine = engineWithPublic(["pier"]);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "dispatch.pier", sovereignty: sov }).allow).toBe(true);
+  });
+
+  test("`public` is DENIED dispatch to a NON-flagged agent (Luna)", () => {
+    const engine = engineWithPublic(["pier"]);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "dispatch.luna", sovereignty: sov }).allow).toBe(false);
+  });
+
+  test("`public` is DENIED operator, every tool, every keyword, admit, and bus", () => {
+    const engine = engineWithPublic(["pier"]);
+    for (const cap of [
+      "operator",
+      "keyword.chat", "keyword.async", "keyword.team",
+      "tool.read", "tool.bash", "tool.write", "tool.edit",
+      "admit", "network.admit",
+      "bus.publish", "publish",
+    ]) {
+      expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: cap, sovereignty: sov }).allow).toBe(false);
+    }
+  });
+
+  test("with NO flagged agents, `public` is an UNKNOWN principal (zero authority, denied everything)", () => {
+    const engine = engineWithPublic([]);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "dispatch.pier", sovereignty: sov }).allow).toBe(false);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "operator", sovereignty: sov }).allow).toBe(false);
   });
 });
 

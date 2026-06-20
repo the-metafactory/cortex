@@ -9,10 +9,13 @@
  *
  * S4 writes the federation config, so it must be on-contract:
  *
- *   - **accept_subjects** = the stack's OWN `federated.{me}.{stack}.>` ONLY.
- *     A network never names itself on the wire; accept-lists gate by the
- *     stack's own principal/stack segment. We NEVER write the network id into
- *     a subject.
+ *   - **accept_subjects** = the stack's OWN `federated.{me}.{stack}.>` (inbound
+ *     dispatch, RECEIVER-addressed) ∪ each roster peer's
+ *     `federated.{peer}.{peer-stack}.>` (inbound presence, SOURCE-addressed) —
+ *     the dual-grammar union derived by `deriveAcceptSubjects` (P2 #1087,
+ *     design §7 P2 / §8 OQ2). A network never names ITSELF on the wire;
+ *     accept-lists gate by principal/stack segments only. We NEVER write the
+ *     network id into a subject.
  *   - **peers[]** declare by `principal_id` (+ `stack_id`), pubkey
  *     registry-resolved (DD-5) — the local principal is never in its own
  *     peers[].
@@ -33,7 +36,12 @@ import type {
   PolicyFederatedPeer,
 } from "../../../common/types/cortex-config";
 import type { NetworkRosterResult } from "../../../common/registry/types";
-import { base64PubkeyToNkey } from "../../../common/registry/encoding";
+import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import { buildRosterPeers } from "../../../bus/agent-network/roster-read";
+import {
+  deriveAcceptSubjects,
+  type FederatedWireIdentity,
+} from "../../../bus/agent-network/accept-subjects";
 
 import {
   brandVerified,
@@ -70,6 +78,25 @@ export interface JoiningStack {
   leafNode?: string;
   /** max_hop to write (schema has no default). Conservative default: 1. */
   maxHop?: number;
+  /**
+   * O-3 (cortex#1053) — the operator-mode "leaf package" (operator JWT + issued
+   * account + account JWT, optional SYS account). Present ⇒ when the stack's bus
+   * is anonymous/hard-isolated (the #794 fail-fast input), `joinNetwork` CONVERTS
+   * it to operator-mode (renders the SOP §B0.1 blocks) instead of refusing, then
+   * proceeds with the existing leaf render. Absent ⇒ the #794 fail-fast stands.
+   * O-4 (the register→issue handshake) SUPPLIES this; O-3 only consumes it.
+   */
+  operatorModePackage?: OperatorModeLeafPackage;
+  /**
+   * G1c (#1117, ADR-0013 Model B) — the agents NSC account (nkey-A) where the
+   * stack's dispatch-listener subscribes `federated.>`. This is the
+   * `--to-account` for `arc nats add-federation-export`. Optional today: when
+   * absent the wiring step uses `account` for both sides (same-account path —
+   * the arc primitive handles this as a no-op). A dedicated `agents_account`
+   * config field that splits the federation account from the agents account is
+   * tracked as G1d (cortex#1117 follow-up).
+   */
+  agentsAccount?: string;
 }
 
 // =============================================================================
@@ -214,7 +241,44 @@ export async function joinNetwork(
   // This is a READ (no mutation), so dry-run surfaces the same decision.
   const hasCreds =
     typeof stack.credentials === "string" && stack.credentials.trim().length > 0;
-  const bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+  let bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+
+  // (b.5.1) O-3 (cortex#1053, spec §4-D2) — AUTO-CONVERT an anonymous bus.
+  //
+  // When the bind-mode pre-flight REFUSES (the #794 fail-fast: an anonymous /
+  // hard-isolated bus has no operator-mode account tree, so the account the leaf
+  // binds can never resolve) AND the joining stack carries a leaf package (O-4's
+  // register→issue handshake supplies it), render the SOP §B0.1 operator-mode
+  // blocks into the bus's nats config — KEEPING its own identity/ports/JS domain,
+  // adding NO leaf include — THEN re-resolve. The converted bus is operator-mode,
+  // so the re-resolve binds the account and the existing join flow proceeds.
+  //
+  // The conversion port is the single writer (live writes the rendered config;
+  // dry-run is inert). `already`/`converted` both let the join continue; a
+  // conversion `refuse` (incomplete package, or a bus already operator-mode under
+  // a DIFFERENT operator JWT — never clobber it) ABORTS before any further mutation.
+  if (bindMode.mode === "refuse" && stack.operatorModePackage !== undefined) {
+    const conversion = ports.leafFile.convertToOperatorMode(
+      stack.operatorModePackage,
+    );
+    if (conversion.status === "refuse") {
+      return {
+        ok: false,
+        steps,
+        reason:
+          `cannot auto-convert the bus to operator-mode (${conversion.reason}). ` +
+          `Refusing to render a leaf that would crash nats-server (cortex#794/#1053).`,
+      };
+    }
+    steps.push(
+      conversion.status === "converted"
+        ? `converted the anonymous bus to operator-mode (rendered the operator/account/resolver blocks — O-3, #1053)`
+        : `bus already operator-mode under this operator — no conversion needed (O-3, #1053)`,
+    );
+    // Re-resolve against the now-operator-mode bus.
+    bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+  }
+
   if (bindMode.mode === "refuse") {
     const configPath = ports.leafFile.natsConfigPath();
     return {
@@ -223,7 +287,8 @@ export async function joinNetwork(
       reason:
         `nats config ${configPath} cannot federate (${bindMode.reason}). ` +
         `An operator-mode bus must DEFINE the leaf account (convert it — see ` +
-        `docs/sop-stack-onboarding.md §Part 2 — or pass a config that does via ` +
+        `docs/sop-stack-onboarding.md §Part 2, or supply a leaf package so join ` +
+        `auto-converts — O-3/#1053 — or pass a config that does via ` +
         `--nats-config); a $G/default bus needs valid leaf creds. Refusing to ` +
         `render a leaf that would crash nats-server (cortex#794/#799).`,
     };
@@ -234,6 +299,66 @@ export async function joinNetwork(
   // in the creds JWT; an `account:` line there crashes nats-server).
   const leafAccount =
     bindMode.mode === "operator-account" ? bindMode.account : undefined;
+
+  // (b.4) G1c (#1117, ADR-0013 Model B) — WIRE the local-side `federated.>`
+  // export/import BEFORE writing the leaf file (fail-fast: an arc failure here
+  // aborts before any mutation touches the live nats-server config). Skipped
+  // when:
+  //   - no `ports.federationWiring` wired (backwards-compat / pre-G1c callers),
+  //   - OR the bus is not operator-mode (a $G/creds-only bus has no NSC account
+  //     tree to add export/import to — no wiring is needed or possible).
+  //
+  // ADR-0013 Model B invariant: LOCAL accounts only — `federationAccount` is
+  // the leaf-bound nkey-A from `stack.account`; `agentsAccount` is the
+  // stack's own agents account (optional today — G1d tracks the split).
+  // cortex NEVER passes a peer account; no network id goes on the arc call.
+  if (ports.federationWiring !== undefined && leafAccount !== undefined) {
+    // Read apply from the ports bundle (G1c: `NetworkPorts.apply` mirrors the
+    // --apply flag from the CLI). Default: false (dry-run safe — the #794
+    // "never accidentally mutate" principle).
+    const wiringApply = ports.apply === true;
+    let wiringResult: { ok: true; note?: string } | { ok: false; reason: string };
+    try {
+      wiringResult = await ports.federationWiring.wireLocalFederation({
+        federationAccount: leafAccount,
+        agentsAccount: stack.agentsAccount,
+        apply: wiringApply,
+      });
+    } catch (err) {
+      // The port contract says "never throws"; guard here as belt-and-braces so
+      // a buggy port implementation (or a Bun.spawn ENOENT that escapes before
+      // the adapter wraps it) never escapes joinNetwork's "never throws" contract.
+      wiringResult = {
+        ok: false,
+        reason: `federation-wiring port threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!wiringResult.ok) {
+      return {
+        ok: false,
+        steps,
+        reason:
+          `federation-wiring step failed — arc nats add-federation-export returned an error ` +
+          `(${wiringResult.reason}). The join is aborted before any nats-server config ` +
+          `was written. Ensure arc is installed (G1b / arc#243) and the NSC store is ` +
+          `accessible, then re-run join.`,
+      };
+    }
+    const wiringNote = wiringResult.note ?? "export+import wired";
+    steps.push(
+      `wired local-side federated.> export/import ` +
+      `(federation-account=${leafAccount}, ${wiringApply ? "applied" : "dry-run"}: ${wiringNote}) ` +
+      `(G1c ADR-0013 Model B)`,
+    );
+  } else if (ports.federationWiring !== undefined && leafAccount === undefined) {
+    // $G/creds-only bus: no NSC account — federation wiring is a no-op. Log
+    // so the principal can see why the step was skipped.
+    steps.push(
+      "skipped federation-wiring step: $G/creds-only bus has no NSC account " +
+      "(no export/import needed — the creds JWT binds the leaf directly) " +
+      "(G1c ADR-0013 Model B)",
+    );
+  }
 
   // (b.6) #821 — PRE-FLIGHT the creds file BEFORE any mutation. `nats-server -c
   // <cfg> -t` validates HOCON syntax but does NOT dereference the leaf remote's
@@ -287,7 +412,6 @@ export async function joinNetwork(
   // converges (idempotent). `try` spans both writes so the step log records how
   // far the mutation got before the failure.
   const resolvedPeers = buildPeers(stack.principalId, roster);
-  const acceptSubject = `federated.${stack.principalId}.${stack.stackSlug}.>`;
   const warnings: string[] = [];
 
   // (d-pre) #762 — never clobber a working hand-pin with 0 resolved peers.
@@ -320,11 +444,34 @@ export async function joinNetwork(
     steps.push(`WARN: ${warn}`);
   }
 
+  // (d) P2 (#1087, design §7 P2 / §8 OQ2) — derive `accept_subjects` from the
+  // FINAL peer set (own ∪ peer subtrees), not OWN-only. The gate
+  // (`evaluateFederationGate`) keys gate-step-3 on the inbound SUBJECT, and the
+  // two federated traffic classes are addressed differently (dual-grammar):
+  //
+  //   - DISPATCH is RECEIVER-addressed → admitted by the OWN subtree
+  //     `federated.{me}.{my-stack}.>` (a peer dispatching TO me publishes here).
+  //   - PRESENCE is SOURCE-addressed → admitted by each PEER's subtree
+  //     `federated.{peer}.{peer-stack}.>` (the federated presence subscriber
+  //     binds `federated.*.*.agent.>`, segment[1] = the SOURCE peer; ADR-0007).
+  //
+  // An OWN-only accept-list (the pre-P2 behaviour) rejected every peer's
+  // presence even though the peer was in `peers[]` — peer membership and the
+  // accept-list are SEPARATE gates. We derive over `peers` (the post-#762 set:
+  // registry-resolved, or the preserved hand-pins) so the accept-list stays
+  // consistent with whatever peers are actually written. With 0 peers the
+  // derivation collapses to exactly the prior OWN-only list (behaviour-
+  // preserving for the empty-roster first-join case).
+  const acceptSubjects = deriveAcceptSubjects(
+    { principal: stack.principalId, stack: stack.stackSlug },
+    peers.map(peerToWireIdentity),
+  );
+
   const entry: PolicyFederatedNetwork = {
     id: networkId,
     leaf_node: stack.leafNode ?? networkId,
     peers,
-    accept_subjects: [acceptSubject],
+    accept_subjects: acceptSubjects,
     deny_subjects: [],
     // #762 — PRESERVE the hand-authored announce_capabilities for this network.
     // `deriveJoinInputs` sources the caps the join announces INTO the roster from
@@ -349,12 +496,14 @@ export async function joinNetwork(
     steps.push(`ensured local.conf includes leafnodes-${networkId}.conf`);
 
     // (d) Merge the network into the federation config with registry-resolved
-    // peers (DD-5) + the OWN accept-subject (wire contract). Idempotent: replace
-    // the entry keyed by network id, never append a duplicate.
+    // peers (DD-5) + the derived own ∪ peer accept-subjects (P2 #1087, wire
+    // contract). Idempotent: replace the entry keyed by network id, never append
+    // a duplicate.
     const merged = mergeNetwork(existing, entry);
     ports.configStore.writeNetworks(merged);
     steps.push(
-      `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), accept ${acceptSubject}`,
+      `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), ` +
+        `accept ${acceptSubjects.join(", ")}`,
     );
   } catch (err) {
     return {
@@ -520,27 +669,45 @@ export async function joinNetwork(
  * `stack_id`; `principal_pubkey` is filled from the roster (re-encoded to
  * nkey-U, DD-8) when the roster carries a re-encodable key — otherwise it is
  * LEFT OFF so the S2 config-load resolver resolves it (DD-5: declare by id).
+ *
+ * P1 (cortex#1086) — the roster-members → peers projection now lives in the
+ * runtime-callable `buildRosterPeers` (`src/bus/agent-network/roster-read.ts`)
+ * so the federation reconciler (P3) shares the exact same read. This is the
+ * thin config-shape adapter: `RosterPeer` → `PolicyFederatedPeer`
+ * (dropping the wire-segment view the config doesn't carry). Behavior-
+ * preserving — `buildRosterPeers` lifted this loop verbatim.
  */
 function buildPeers(
   localPrincipalId: string,
   roster: NetworkRosterResult,
 ): PolicyFederatedPeer[] {
-  const peers: PolicyFederatedPeer[] = [];
-  for (const member of roster.members) {
-    if (member.principal_id === localPrincipalId) continue; // never self
-    const stackId =
-      member.stack_id ?? `${member.principal_id}/default`;
-    const nkey = base64PubkeyToNkey(member.principal_pubkey);
-    const peer: PolicyFederatedPeer = nkey === undefined
-      ? { principal_id: member.principal_id, stack_id: stackId }
-      : {
-          principal_id: member.principal_id,
-          stack_id: stackId,
-          principal_pubkey: nkey,
-        };
-    peers.push(peer);
-  }
-  return peers;
+  return buildRosterPeers(localPrincipalId, roster).map((p) => ({
+    principal_id: p.principal_id,
+    stack_id: p.stack_id,
+    ...(p.principal_pubkey !== undefined && {
+      principal_pubkey: p.principal_pubkey,
+    }),
+  }));
+}
+
+/**
+ * Project a written {@link PolicyFederatedPeer} → the `{principal, stack}` wire
+ * view {@link deriveAcceptSubjects} consumes (P2 #1087). The `stack` segment is
+ * the part AFTER the `/` in `stack_id` (`{principal}/{stack}`); a malformed id
+ * with no usable slash falls back to `default` (mirrors `roster-read`'s
+ * `stackSlugOf`, so the accept-list segment matches the leaf-write/peer view).
+ *
+ * Exported for direct unit testing of the projection in isolation.
+ */
+export function peerToWireIdentity(
+  peer: PolicyFederatedPeer,
+): FederatedWireIdentity {
+  const slash = peer.stack_id.indexOf("/");
+  const stack =
+    slash >= 0 && slash < peer.stack_id.length - 1
+      ? peer.stack_id.slice(slash + 1)
+      : "default";
+  return { principal: peer.principal_id, stack };
 }
 
 /**

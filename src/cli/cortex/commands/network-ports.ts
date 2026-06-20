@@ -34,6 +34,8 @@ import type { NetworkFetchResult } from "../../../common/registry/network-client
 import type {
   AccountBindCheck,
   LeafBindMode,
+  OperatorModeConversion,
+  OperatorModeLeafPackage,
   StackLeafBinding,
 } from "../../../common/nats/leaf-remote-renderer";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
@@ -189,6 +191,28 @@ export interface LeafFilePort {
    * creds path; `account` is the candidate nkey-U (or `undefined`).
    */
   resolveBindMode(account: string | undefined, hasCreds: boolean): LeafBindMode;
+  /**
+   * O-3 (cortex#1053) — CONVERT an anonymous/hard-isolated bus to operator-mode
+   * by rendering the SOP §B0.1 operator-mode blocks (operator JWT +
+   * system_account + `resolver: MEMORY` + `resolver_preload`) from a leaf
+   * package, KEEPING the stack's own identity/ports/JS domain and adding NO leaf
+   * include (the join renders its own). Replaces the #794 "fail-fast and tell a
+   * human to hand-edit `<slug>.conf`" with a one-command conversion.
+   *
+   *   - `converted` — the bus was anonymous; the live adapter WROTE the rendered
+   *     operator-mode config back to `natsConfigPath()` (dry-run is inert).
+   *   - `already` — the bus was already operator-mode under THIS package's
+   *     operator JWT; a byte-stable no-op (no write).
+   *   - `refuse` — material absent/malformed (the preserved #794 fail-fast), OR
+   *     the bus is already operator-mode under a DIFFERENT operator (never
+   *     clobber it).
+   *
+   * Delegates the rendering to {@link renderOperatorModeBlocks} (pure). The
+   * orchestrator calls this ONLY when `resolveBindMode` would refuse an anonymous
+   * bus AND a leaf package is present, then re-resolves the (now operator-mode)
+   * bus. An absent config file reads as anonymous (a brand-new stack).
+   */
+  convertToOperatorMode(pkg: OperatorModeLeafPackage): OperatorModeConversion;
   /**
    * #821 — pre-flight: does the leaf `.creds` file at `path` actually EXIST on
    * disk? `nats-server -c <cfg> -t` only validates HOCON syntax — it does NOT
@@ -352,6 +376,45 @@ export interface LeafLinkState {
   outMsgs?: number;
 }
 
+/**
+ * G1c (#1117, ADR-0013 Model B) — the federation-wiring seam.
+ *
+ * Shells out to `arc nats add-federation-export` (arc#243 / G1b) to wire
+ * the LOCAL-SIDE `federated.>` export/import between the stack's federation
+ * account (leaf-bound) and its agents account. Called at step (b.4) in
+ * `joinNetwork` — after bind-mode resolution (so the leaf account is known),
+ * before the leaf file write (fail-fast before any mutation on arc failure).
+ *
+ * cortex NEVER calls nsc directly (ADR-0013 Model B invariant).
+ * cortex NEVER passes a peer account (local-only wiring).
+ */
+export interface FederationWiringPort {
+  /**
+   * Wire the local-side `federated.>` export/import.
+   *
+   * @param params.federationAccount - The leaf-bound NSC account (nkey-A) —
+   *   `stack.nats_infra.account`, resolved from `JoiningStack.account`.
+   *   This is the `--from-account` for the arc primitive.
+   * @param params.agentsAccount - The agents NSC account where the
+   *   dispatch-listener subscribes (`--to-account`). Optional today: when
+   *   absent (the current single-account config), falls back to
+   *   `federationAccount` (same-account path — no cross-account routing
+   *   needed). A dedicated `agents_account` config field is tracked as G1d
+   *   (cortex#1117 follow-up).
+   * @param params.apply - Mirror the join's dry-run/--apply flag. `false`
+   *   (dry-run) → arc prints the plan, no nsc mutation. `true` → arc runs.
+   *
+   * @returns `{ ok: true, note }` on success (idempotent — already-present
+   *   export+import is also `ok`). `{ ok: false, reason }` on arc failure or
+   *   spawn error. NEVER throws.
+   */
+  wireLocalFederation(params: {
+    federationAccount: string;
+    agentsAccount: string | undefined;
+    apply: boolean;
+  }): Promise<{ ok: true; note?: string } | { ok: false; reason: string }>;
+}
+
 /** The full port bundle the orchestrator depends on. */
 export interface NetworkPorts {
   registry: NetworkRegistryPort;
@@ -368,4 +431,19 @@ export interface NetworkPorts {
   natsServer?: NatsServerPort;
   /** Optional — status link telemetry. Absent → link state "unknown". */
   leafState?: LeafStatePort;
+  /**
+   * G1c (#1117, ADR-0013 Model B) — federation-wiring seam. Optional for
+   * backwards compatibility: when absent the wiring step is skipped (the
+   * pre-G1c behaviour — the join still configures the leaf but does NOT wire
+   * the local-side `federated.>` export/import). Present → step (b.4) runs
+   * before the leaf write.
+   */
+  federationWiring?: FederationWiringPort;
+  /**
+   * G1c (#1117) — mirrors the `--apply` flag from the CLI. The wiring step
+   * passes this to `FederationWiringPort.wireLocalFederation` so the arc
+   * primitive runs in dry-run or apply mode consistently with the rest of the
+   * join. Default: `false` (dry-run safe). Live ports set this to `true`.
+   */
+  apply?: boolean;
 }

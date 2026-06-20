@@ -29,7 +29,8 @@ const EVENT_LABELS: Record<string, string> = {
 export function formatEventForDiscord(event: PublishedEvent): string | null {
   if (!isPostableEvent(event.event_type)) return null;
 
-  const channel = event.grove_channel ?? "unknown";
+  // GV-2 (cortex#1077): canonical `cortex_channel`, legacy `grove_channel` fallback.
+  const channel = event.cortex_channel ?? event.grove_channel ?? "unknown";
   const time = new Date(event.timestamp).toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",

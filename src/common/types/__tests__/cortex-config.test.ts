@@ -1718,6 +1718,44 @@ describe("CortexConfigSchema — federated accept/deny subject scope (ADR 0001)"
     expect(parsed.policy?.federated?.networks[0]?.accept_subjects).toHaveLength(2);
   });
 
+  // P3 (cortex#1088, OQ1) — per-network reconcile opt-in.
+  test("reconcile block is OPTIONAL — absent ⇒ undefined (default OFF)", () => {
+    const parsed = CortexConfigSchema.parse(withFederated({}));
+    expect(parsed.policy?.federated?.networks[0]?.reconcile).toBeUndefined();
+  });
+
+  test("reconcile defaults enabled:false + interval_ms:60000 when block present but partial", () => {
+    const parsed = CortexConfigSchema.parse(withFederated({ reconcile: {} }));
+    const reconcile = parsed.policy?.federated?.networks[0]?.reconcile;
+    expect(reconcile?.enabled).toBe(false);
+    expect(reconcile?.interval_ms).toBe(60000);
+  });
+
+  test("reconcile accepts an explicit enable + custom interval", () => {
+    const parsed = CortexConfigSchema.parse(
+      withFederated({ reconcile: { enabled: true, interval_ms: 30000 } }),
+    );
+    const reconcile = parsed.policy?.federated?.networks[0]?.reconcile;
+    expect(reconcile?.enabled).toBe(true);
+    expect(reconcile?.interval_ms).toBe(30000);
+  });
+
+  test("reconcile.interval_ms is floored at 5000 (anti-hammer)", () => {
+    expect(() =>
+      CortexConfigSchema.parse(
+        withFederated({ reconcile: { enabled: true, interval_ms: 1000 } }),
+      ),
+    ).toThrow();
+  });
+
+  test("reconcile rejects unknown keys (strict — typo guard)", () => {
+    expect(() =>
+      CortexConfigSchema.parse(
+        withFederated({ reconcile: { enabled: true, intervalMs: 30000 } }),
+      ),
+    ).toThrow();
+  });
+
   test("scope principal comes from principal.id, not stack.id's principal-half (override-path silent-drop guard)", () => {
     // The `deriveStackId` "override path": principal.id "andreas" runs a stack
     // whose stack.id declares a DIFFERENT principal-half "jcfischer". The runtime

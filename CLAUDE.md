@@ -41,7 +41,7 @@ Internal componentisation (per `docs/architecture.md` §8):
 - `src/adapters/` — Platform adapters (Discord, Mattermost) that register with the surface-router rather than subscribing to NATS directly. `mock.ts` for tests.
 - `src/runner/` — CC orchestration: cc-session (streaming `claude --print --output-format stream-json`), session-manager (per-thread CC session for `--resume`), stream-parser, agent-team (multi-agent moderator + participants), dispatch-listener, security-preamble, prompt-builder, worklog-manager, task-tracker, bash-guard hook.
 - `src/taps/` — Publishers onto the bus: `cc-events/` (CC hooks + EventLogger + relay + cloud-publisher), `gh-webhook/` (CF Worker at `hooks.meta-factory.ai` validating GitHub HMAC and forwarding).
-- `src/cli/` — Principal CLIs: `discord/` (post messages, read channels, list threads from terminal), `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI).
+- `src/cli/` — Principal CLIs: `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI). The Discord CLI is no longer here — it was extracted to the `metafactory-discord` arc bundle (ADR-0017, epic #1171); cortex consumes it as a dependency. Only the live Discord adapter (`src/adapters/discord/`) stays in cortex.
 - `src/renderers/` — Renderer interface + dashboard renderer + pagerduty renderer (the G-1111 §4.6 fail-safe pair).
 - `src/common/` — Shared types + utilities: agent-detection, event-processor, event-utils, github-events, agents/, config/, timeout, types/, usage.
 - `src/services/` — launchd plists: `ai.meta-factory.cortex.meta-factory.plist` (metafactory dev stack), `ai.meta-factory.cortex.work.plist` (parallel work stack — cortex#244), `ai.meta-factory.cortex.relay.plist` (shared relay).
@@ -110,7 +110,7 @@ During the MIG-7 cutover window the legacy `GROVE_*` env vars remain accepted by
 
 ### Discord CLI (team updates)
 
-Post messages to Discord channels from any terminal session:
+The `discord` CLI is provided by the **`metafactory-discord`** arc bundle (ADR-0017, epic #1171), not by cortex itself — cortex declares the bundle as a dependency in `arc-manifest.yaml`. Once the bundle is installed, post messages to Discord channels from any terminal session:
 
 ```bash
 discord post "PR merged, tests passing"              # Default channel
@@ -442,13 +442,15 @@ The dashboard frontend (`src/surface/mc/dashboard-v2/`) is a React app deployed 
 
 ```bash
 # 1. Build the frontend (from repo root)
-bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser
+bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting
 
 # 2. Deploy to CF Pages
 bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard
 ```
 
-The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify steps 1.
+The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify step 1.
+
+**`--splitting` is load-bearing** (G-1114.D): the Network graph view `React.lazy`-imports the heavy `@xyflow/react` + `elkjs` engine, and code-splitting is what lands that engine in a separate, lazily-loaded `network-canvas-*.js` chunk instead of the entry bundle. Without the flag bun inlines the dynamic import back into the single entry bundle (every principal then downloads the +0.62 MB-gzip graph engine for a tab they may never open). When deploying, ensure the build emits the `network-canvas-*` chunk alongside the entry — that confirms the split held.
 
 **When to deploy:**
 - After any change to `src/surface/mc/dashboard-v2/` files (app.tsx, types.ts, hooks, etc.)

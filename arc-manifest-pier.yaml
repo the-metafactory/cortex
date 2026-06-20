@@ -1,0 +1,125 @@
+# arc-manifest-pier.yaml — Pier, the community onboarding concierge
+#
+# arc install pier
+#
+# This is the arc package manifest for the Pier sub-bot.  It follows the
+# design-arc-agent-bots.md §4 schema: type: agent, targets: [cortex],
+# in-process substrate (claude-code), with Discord presence on the
+# metafactory community guild.
+#
+# ADR-0015 (two-tier onboarding + admission gate), cortex#1142
+#
+# INSTALL SHAPE (§3.1 — in-process):
+#   arc install pier
+#     → drops personas/pier.md   → ~/.config/cortex/personas/pier.md
+#     → drops agents.d/pier.yaml → ~/.config/cortex/agents.d/pier.yaml
+#     → signals cortex reload    → cortex hot-reloads; Pier appears in fleet
+#     → (no NATS creds issued — Pier needs no bus identity of its own;
+#        it drives cortex CLI commands and the discord CLI on behalf of
+#        the principal)
+#
+# REQUIRED ENV VAR (set before arc install):
+#   PIER_BOT_TOKEN  — the Discord bot token for the Pier bot application.
+#                     This is never stored in any file; it is resolved by
+#                     cortex's config loader from the env at startup.
+#                     Obtain the token from the Discord developer portal
+#                     for the "Pier" application in the metafactory org.
+#
+# NO-GOING-LIVE CONSTRAINTS (P1):
+#   - Do not execute `arc install` against a live stack until the principal
+#     has set PIER_BOT_TOKEN and reviewed the persona.
+#   - No `arc install` execution, no `cortex creds issue` for Pier, no
+#     Discord bot login.  This manifest is install-READY; going-live is a
+#     separate operator step documented in §GOING-LIVE below.
+
+name: pier
+version: 0.1.0
+type: agent                    # arc artifact type for bus-participating agents
+targets: [cortex]              # arc#117 — single-target install into cortex HostAdapter
+description: >
+  Onboarding concierge for the metafactory community guild. Lives in
+  #assistant-fleet-onboarding. Admits newcomers + guides them through
+  the two-tier model (Tier-1 chat / Tier-2 sovereign). Issues nothing.
+  Drives discord role add (O-5) and cortex network admit (ADR-0015 gate).
+
+runtime:
+  substrate: claude-code       # in-process under cortex's runner (§3.1)
+  mode: in-process
+  persona-format: ^1.0         # persona-format.md versioning contract
+  capabilities:
+    - onboarding               # claimed capability — Pier drives the O-5 + admission flows
+    - chat                     # secondary capability — conversational triage + guidance
+
+identity:
+  id: pier
+  displayName: Pier
+  roles: [agent-restricted]    # per §4 — declared role bundle; cortex resolves capabilities
+  trust: [luna]                # Pier trusts Luna (the principal's primary DA) to delegate tasks
+
+# Discord presence — community guild only.
+# Token is injected at runtime from env; never hardcoded.
+# guildId and agentChannelId are public identifiers (no-secret).
+presence:
+  discord:
+    enabled: true
+    guildId: "1505549701674700991"          # The Metafactory community guild
+    agentChannelId: "1514679294553751613"   # #assistant-fleet-onboarding
+    # token is resolved at cortex load from env PIER_BOT_TOKEN
+    # (declared in agents.d/pier.yaml as ${PIER_BOT_TOKEN})
+
+# provides — files dropped by arc install (§4 manifest schema)
+provides:
+  files:
+    persona.md: ~/.config/cortex/personas/pier.md
+    agent.yaml: ~/.config/cortex/agents.d/pier.yaml
+
+# lifecycle — arc install hooks (§8.1 sequence for in-process shape)
+#
+# ORDER IS LOAD-BEARING (design-arc-agent-bots.md §8.2 invariant):
+#   1. drop files (persona + fragment) — arc does this before postinstall
+#   2. signal-cortex-reload.sh         — daemon learns about Pier FIRST
+#   3. (no creds issue — Pier is in-process, not bus-sovereign)
+#
+# Pier intentionally skips scripts/issue-nats-creds.sh.  In-process
+# agents share the stack's bus identity; they do not get their own NATS
+# user.  This is consistent with the in-process pattern in §7.1 of the
+# design doc where the bot "appears in dashboard" without a separate cred.
+lifecycle:
+  preinstall:
+    - scripts/pier/check-cortex-version.sh   # verifies cortex >= 5.24.0 + PIER_BOT_TOKEN set
+  postinstall:
+    - scripts/pier/signal-cortex-reload.sh   # FIRST — daemon registers Pier from agents.d/
+
+# dependencies — cortex version floor
+# Pier relies on:
+#   - agents.d/ fragment support (cortex#60 Phase A.1 — loader.ts merged in main)
+#   - discord role add --server / --member flags (O-5 feature)
+#   - cortex network admit subcommand (ADR-0015 R2, cortex#1142)
+# All three are present as of cortex v5.24.0.
+dependencies:
+  - name: cortex
+    version: ">=5.24.0"
+
+# =============================================================================
+# GOING-LIVE (operator steps — NOT executed by arc install)
+# =============================================================================
+#
+# 1. Create the "Pier" Discord application in the Discord developer portal
+#    for the metafactory org.  Note the bot token.
+#
+# 2. Set the env var on the host that runs cortex:
+#      export PIER_BOT_TOKEN=<token>           # or write to ~/.config/cortex/.env
+#
+# 3. In the metafactory-community guild (Discord admin):
+#    a. Create the `community-fleet` role (no guild-wide perms; channel overrides only)
+#       — see docs/sop-community-fleet-admission.md §Step 1
+#    b. Grant the Pier bot Manage-Roles, placed ABOVE community-fleet in role order
+#       — see docs/sop-community-fleet-admission.md §Step 2
+#
+# 4. Install:
+#      arc install pier
+#    (drops files, signals reload — Pier appears in the cortex fleet dashboard)
+#
+# 5. Verify:
+#      cortex agents list       # pier should appear
+#      # In #assistant-fleet-onboarding: ping @Pier to confirm it responds

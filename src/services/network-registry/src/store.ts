@@ -26,6 +26,8 @@
  */
 
 import type {
+  AdmissionRequest,
+  AdmissionStatus,
   Capability,
   CapabilityHit,
   NetworkRecord,
@@ -33,6 +35,12 @@ import type {
   PrincipalRecord,
   StackIdentity,
 } from "./types";
+
+// Back-compat aliases used in a few existing tests that import by the old names.
+/** @deprecated Use AdmissionRequest */
+export type IssuanceRequest = AdmissionRequest;
+/** @deprecated Use AdmissionStatus */
+export type IssuanceStatus = AdmissionStatus;
 
 /**
  * Minimal binding surface this module reads. We DON'T import `Env` from
@@ -149,6 +157,306 @@ export interface RegistryStore {
 
   /** Test/admin helper. Not exposed via HTTP. */
   reset(): Promise<void>;
+}
+
+// =============================================================================
+// ADR-0015 — Network-admission store
+// =============================================================================
+
+/**
+ * Thrown by `transitionAdmissionRequest` when the request has already been
+ * decided (ADMITTED or REJECTED). The route maps this to 409 already_decided.
+ */
+export class AlreadyDecidedError extends Error {
+  constructor(public readonly request: AdmissionRequest) {
+    super(`admission request ${request.request_id} is already ${request.status}`);
+    this.name = "AlreadyDecidedError";
+  }
+}
+
+export interface IssuanceRequestStore {
+  /**
+   * Upsert a PENDING admission request for (principal_id, peer_pubkey).
+   *
+   * Idempotency rule: if a row already exists for this (principal_id, peer_pubkey)
+   * pair — regardless of its current status — return that existing row without
+   * inserting a new one. Re-registration of the same peer pubkey never creates a
+   * duplicate; it returns the existing row (PENDING, ADMITTED, or REJECTED).
+   *
+   * This is the side-effect of `POST /principals/:id/register` AFTER PoP
+   * verification succeeds.
+   */
+  upsertPending(
+    principalId: string,
+    peerPubkey: string,
+    requestedScope: string,
+    networkId?: string,
+  ): Promise<AdmissionRequest>;
+
+  /** Retrieve a single admission request by its request_id. */
+  getIssuanceRequest(requestId: string): Promise<AdmissionRequest | undefined>;
+
+  /**
+   * List admission requests filtered by status.
+   * Returns all rows matching the given status, ordered by created_at ascending.
+   */
+  listIssuanceRequests(status: AdmissionStatus): Promise<AdmissionRequest[]>;
+
+  /**
+   * Transition a PENDING request to ADMITTED or REJECTED.
+   *
+   * The transition is gated on `status = 'PENDING'` (CAS-ish guard): if the
+   * row is already decided, throws `AlreadyDecidedError`.
+   * If the request_id doesn't exist, returns `undefined`.
+   *
+   * Sets `granted_by` to `adminPubkey` and `updated_at` to now.
+   * The gate controls roster membership — no credentials are minted.
+   */
+  transitionIssuanceRequest(
+    requestId: string,
+    newStatus: "ADMITTED" | "REJECTED",
+    adminPubkey: string,
+  ): Promise<AdmissionRequest | undefined>;
+}
+
+// =============================================================================
+// In-memory IssuanceRequestStore
+// =============================================================================
+
+/** Hex UUID generator — URL-safe, collision-resistant for test-scale traffic. */
+function generateRequestId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
+  private readonly requests = new Map<string, AdmissionRequest>();
+  /** (principal_id + "\x00" + peer_pubkey) → request_id */
+  private readonly byPeer = new Map<string, string>();
+
+  async upsertPending(
+    principalId: string,
+    peerPubkey: string,
+    requestedScope: string,
+    networkId?: string,
+  ): Promise<AdmissionRequest> {
+    const peerKey = `${principalId}\x00${peerPubkey}`;
+    const existingId = this.byPeer.get(peerKey);
+    if (existingId !== undefined) {
+      // Idempotent: return the existing row.
+      return this.requests.get(existingId)!;
+    }
+    const now = new Date().toISOString();
+    const request: AdmissionRequest = {
+      request_id: generateRequestId(),
+      principal_id: principalId,
+      peer_pubkey: peerPubkey,
+      requested_scope: requestedScope,
+      network_id: networkId ?? null,
+      status: "PENDING",
+      created_at: now,
+      updated_at: now,
+      granted_by: null,
+    };
+    this.requests.set(request.request_id, request);
+    this.byPeer.set(peerKey, request.request_id);
+    return request;
+  }
+
+  async getIssuanceRequest(requestId: string): Promise<AdmissionRequest | undefined> {
+    return this.requests.get(requestId);
+  }
+
+  async listIssuanceRequests(status: AdmissionStatus): Promise<AdmissionRequest[]> {
+    return [...this.requests.values()]
+      .filter((r) => r.status === status)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  async transitionIssuanceRequest(
+    requestId: string,
+    newStatus: "ADMITTED" | "REJECTED",
+    adminPubkey: string,
+  ): Promise<AdmissionRequest | undefined> {
+    const existing = this.requests.get(requestId);
+    if (!existing) return undefined;
+    if (existing.status !== "PENDING") {
+      throw new AlreadyDecidedError(existing);
+    }
+    const updated: AdmissionRequest = {
+      ...existing,
+      status: newStatus,
+      granted_by: adminPubkey,
+      updated_at: new Date().toISOString(),
+    };
+    this.requests.set(requestId, updated);
+    return updated;
+  }
+}
+
+// =============================================================================
+// D1-backed IssuanceRequestStore
+// =============================================================================
+
+export class D1IssuanceRequestStore implements IssuanceRequestStore {
+  constructor(private readonly db: D1Like) {}
+
+  async upsertPending(
+    principalId: string,
+    peerPubkey: string,
+    requestedScope: string,
+    networkId?: string,
+  ): Promise<AdmissionRequest> {
+    // M3 — atomic upsert: INSERT ... ON CONFLICT(principal_id, peer_pubkey) DO NOTHING.
+    // Mirrors the D1NonceCache atomic insert pattern: the database decides atomically
+    // whether the row exists; no SELECT-then-INSERT race window exists. After the
+    // insert-or-ignore, we unconditionally SELECT the row and return it.
+    // Contract: always returns the PENDING (or already-decided) row for this
+    // (principal_id, peer_pubkey) pair; never throws on a concurrent insert;
+    // never creates a duplicate.
+    const now = new Date().toISOString();
+    const requestId = generateRequestId();
+    await this.db
+      .prepare(
+        `INSERT INTO admission_requests
+           (request_id, principal_id, peer_pubkey, requested_scope, network_id, status, created_at, updated_at, granted_by)
+         VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, NULL)
+         ON CONFLICT(principal_id, peer_pubkey) DO NOTHING`,
+      )
+      .bind(requestId, principalId, peerPubkey, requestedScope, networkId ?? null, now, now)
+      .run();
+
+    // Unconditional SELECT — retrieves the winner (our insert or the existing row).
+    const row = await this.db
+      .prepare(
+        "SELECT * FROM admission_requests WHERE principal_id = ? AND peer_pubkey = ?",
+      )
+      .bind(principalId, peerPubkey)
+      .first<AdmissionRequestRow>();
+
+    // The row MUST exist at this point: either we inserted it or it pre-existed.
+    // A missing row here would indicate a D1 write anomaly outside normal operation.
+    if (!row) {
+      throw new Error(
+        `network-registry: upsertPending invariant violated — no row found for (${principalId}, ${peerPubkey}) after atomic insert`,
+      );
+    }
+    return rowToAdmissionRequest(row);
+  }
+
+  async getIssuanceRequest(requestId: string): Promise<AdmissionRequest | undefined> {
+    const row = await this.db
+      .prepare("SELECT * FROM admission_requests WHERE request_id = ?")
+      .bind(requestId)
+      .first<AdmissionRequestRow>();
+    return row ? rowToAdmissionRequest(row) : undefined;
+  }
+
+  async listIssuanceRequests(status: AdmissionStatus): Promise<AdmissionRequest[]> {
+    const res = await this.db
+      .prepare(
+        "SELECT * FROM admission_requests WHERE status = ? ORDER BY created_at ASC",
+      )
+      .bind(status)
+      .all<AdmissionRequestRow>();
+    return (res.results ?? []).map(rowToAdmissionRequest);
+  }
+
+  async transitionIssuanceRequest(
+    requestId: string,
+    newStatus: "ADMITTED" | "REJECTED",
+    adminPubkey: string,
+  ): Promise<AdmissionRequest | undefined> {
+    // Re-read current state before mutating — needed for AlreadyDecidedError.
+    const existing = await this.getIssuanceRequest(requestId);
+    if (!existing) return undefined;
+    if (existing.status !== "PENDING") {
+      throw new AlreadyDecidedError(existing);
+    }
+
+    const now = new Date().toISOString();
+
+    // CAS-ish: UPDATE only touches the row when status is still PENDING.
+    // If a concurrent admit/reject raced us here, the WHERE status='PENDING'
+    // is false, changes === 0, and we throw AlreadyDecidedError.
+    const res = await this.db
+      .prepare(
+        `UPDATE admission_requests
+         SET status = ?, granted_by = ?, updated_at = ?
+         WHERE request_id = ? AND status = 'PENDING'`,
+      )
+      .bind(newStatus, adminPubkey, now, requestId)
+      .run();
+
+    if ((res.meta?.changes ?? 0) === 0) {
+      // N2 — the pre-UPDATE `existing` row is already in scope and was confirmed
+      // PENDING before the UPDATE ran. `changes === 0` means the
+      // `WHERE status = 'PENDING'` guard flipped false after our read — a
+      // concurrent admit/reject landed between our SELECT and UPDATE. Throw
+      // directly with the row we already have rather than issuing a second
+      // SELECT (which could 404 under a transient D1 error even though the row
+      // exists, causing a spurious 404 vs the correct 409).
+      throw new AlreadyDecidedError(existing);
+    }
+
+    return {
+      ...existing,
+      status: newStatus,
+      granted_by: adminPubkey,
+      updated_at: now,
+    };
+  }
+}
+
+/** Raw column shape for an admission_requests row. */
+interface AdmissionRequestRow {
+  request_id: string;
+  principal_id: string;
+  peer_pubkey: string;
+  requested_scope: string;
+  network_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  granted_by: string | null;
+}
+
+function rowToAdmissionRequest(row: AdmissionRequestRow): AdmissionRequest {
+  return {
+    request_id: row.request_id,
+    principal_id: row.principal_id,
+    peer_pubkey: row.peer_pubkey,
+    requested_scope: row.requested_scope,
+    network_id: row.network_id,
+    status: row.status as AdmissionStatus,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    granted_by: row.granted_by,
+  };
+}
+
+// =============================================================================
+// Singleton accessor
+// =============================================================================
+
+let issuanceStoreSingleton: IssuanceRequestStore | undefined;
+
+export function getIssuanceStore(env: StoreEnv): IssuanceRequestStore {
+  if (!issuanceStoreSingleton) {
+    assertDurableBackendInProd(env);
+    issuanceStoreSingleton = env.DB
+      ? new D1IssuanceRequestStore(env.DB)
+      : new InMemoryIssuanceRequestStore();
+  }
+  return issuanceStoreSingleton;
+}
+
+/** Test-only — swap issuance store between cases. */
+export function _setIssuanceStoreForTest(s: IssuanceRequestStore | undefined): void {
+  issuanceStoreSingleton = s;
 }
 
 // =============================================================================

@@ -1,3 +1,5 @@
+> **Superseded by [`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) for the end-to-end peer-onboarding path.** Retained for: registry internals (keypair generation, deployment, rate-limiting, threat model), TOFU vs pin posture, what-breaks-if-skipped, and operational notes (crash-loop fail-safe, rotation).
+
 # SOP — Network Registry (cross-principal trust anchor)
 
 **Status:** active (TC-2 / Trust & Confidentiality track — #632 / #633 / #635)

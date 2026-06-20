@@ -60,11 +60,12 @@ import {
   type DispatchSourcePublishResult,
 } from "./dispatch-source-publisher";
 import type { PolicyEngine } from "../common/policy/engine";
+import { anonOnboardingAccess, PUBLIC_ORIGINATOR_DID } from "../common/policy/resolve-access";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
 let _cachedVersion: string | null = null;
-function getGroveVersion(): string {
+function getCortexVersion(): string {
   if (_cachedVersion) return _cachedVersion;
   try {
     const manifest = Bun.file(join(import.meta.dir, "../../../arc-manifest.yaml"));
@@ -86,6 +87,22 @@ interface DispatchTargetAgent {
   id: string;
   displayName: string;
   persona?: string;
+  /**
+   * cortex#1165 — the Pier open-onboarding gate. When `true`, an inbound
+   * NON-DM sender (on the agent's bound public channel) who maps to NO
+   * principal is attributed to a zero-authority anonymous principal (and the
+   * chat session runs) instead of being denied. Carried per-target-agent so
+   * one shared handler serving multiple agents applies the gate ONLY to the
+   * flagged target. Absent/false → strict deny.
+   */
+  openOnboarding?: boolean;
+  /**
+   * cortex#1167 — explicit tool allowlist for the anon open-onboarding session
+   * (mirrors the persona allowedTools, Pier → `["Read"]`). When absent the gate
+   * falls back to the most-restrictive `["Read"]`. Anything not listed (incl.
+   * every `mcp__*`) is denied at the CC layer.
+   */
+  openOnboardingAllowedTools?: string[];
 }
 
 export interface DispatchHandlerOpts {
@@ -450,16 +467,20 @@ export class DispatchHandler extends EventEmitter {
     resumeSessionId: string | undefined;
     allowedDirs: string[];
     disallowedTools: string[];
+    /** cortex#1167 — explicit tool allowlist (anon open-onboarding path only). */
+    allowedTools?: string[];
     /** cortex#710 — per-skill grant list (see InboundChatDispatchPublishOpts). */
     allowedSkills: string[] | undefined;
     timeoutMs: number | undefined;
     cwd: string | undefined;
     additionalArgs: string[] | undefined;
-    groveChannel: string | undefined;
-    groveNetwork: string | undefined;
+    channel: string | undefined;
+    network: string | undefined;
     project: string | undefined;
     entity: string | undefined;
     principal: string | undefined;
+    /** cortex#1167 — pre-resolved anon originator DID (anon path only). */
+    originatorIdentityOverride?: string;
   }): Promise<DispatchSourcePublishResult> {
     const wiring = this.canPublishSystemEvent();
     const result = await publishInboundChatDispatchEnvelope({
@@ -551,7 +572,48 @@ export class DispatchHandler extends EventEmitter {
   ): Promise<void> {
     try {
       // 1. Access control
-      const access = adapter.resolveAccess(msg);
+      let access = adapter.resolveAccess(msg);
+
+      // cortex#1165 / #1167 — Pier open-onboarding gate. When the ONLY reason
+      // for the deny is that the sender maps to no principal (`unmapped_sender`)
+      // AND the TARGET agent is flagged `openOnboarding`, attribute the sender
+      // to the single minimal-privilege PUBLIC-DOMAIN principal and allow the
+      // chat session to run. Keyed off the stable `denyCode` (never the prose)
+      // and off the per-target-agent flag — so this NEVER fires for unflagged
+      // agents (Luna/dev-loop), and NEVER converts a non-`unmapped_sender` deny
+      // (no_policy / registry_drift / lockout stay hard denies). The `public`
+      // principal holds EXACTLY `dispatch.<flaggedAgentId>` and nothing else;
+      // the session gets a Read-only allowlist and stays untrusted for the
+      // prompt-injection filter (see `anonOnboardingAccess` + the synthetic
+      // principal in `factory.ts`).
+      //
+      // cortex#1167 review MINOR — scope to the agent's bound PUBLIC channel,
+      // NOT DMs. The adapter already filters non-DM inbound to the agent's
+      // bound channel + guild, so `!isDM` is the public-channel guard. An
+      // unmapped DM stays denied (it falls through to the G-300 DM-reject).
+      let anonOriginatorOverride: string | undefined;
+      if (
+        !access.allowed &&
+        access.denyCode === "unmapped_sender" &&
+        targetAgent?.openOnboarding === true &&
+        msg.isDM !== true
+      ) {
+        access = anonOnboardingAccess(msg, targetAgent.openOnboardingAllowedTools);
+        // cortex#1167 — stamp the registered PUBLIC principal DID as the
+        // originator. The bus publish path + dispatch-listener resolve THIS to
+        // the `public` principal (a real engine entry holding `dispatch.pier`),
+        // so `engine.check` PASSES end-to-end instead of rejecting an unmapped
+        // tuple as `invalid-originator`. Authority = the one `public` principal,
+        // never a per-sender identity.
+        anonOriginatorOverride = PUBLIC_ORIGINATOR_DID;
+        console.log(
+          `dispatch-handler: [OPEN-ONBOARDING] ${adapter.instanceId} agent=${targetAgent.id} ` +
+            `admitting unmapped ${msg.platform} sender ${msg.authorName} (${msg.authorId}) ` +
+            `as public-domain principal (audit-label=${access.anonPrincipalId}, ` +
+            `originator=${anonOriginatorOverride}, allowedTools=[${access.allowedTools?.join(",") ?? ""}])`,
+        );
+      }
+
       if (!access.allowed) {
         // G-300: Unknown DMs are silently ignored (no response to user)
         // But always log for audit — helps decide if permissions need changing
@@ -608,21 +670,21 @@ export class DispatchHandler extends EventEmitter {
 
       // Use channel-resolved repo name for event attribution (e.g., "meta-factory" not "luna")
       // DMs don't get a GROVE_CHANNEL — keeps them off the dashboard
-      const effectiveGroveChannel = msg.isDM ? undefined : (channelCtx.repoShort ?? this.config.agent.name);
+      const effectiveChannel = msg.isDM ? undefined : (channelCtx.repoShort ?? this.config.agent.name);
 
       // G-500: Resolve network from platform context
-      let effectiveGroveNetwork: string | undefined;
+      let effectiveNetwork: string | undefined;
       if (!msg.isDM) {
         if (msg.platform === "discord" && msg.guildId) {
-          effectiveGroveNetwork = getNetworkForGuild(msg.guildId, this.config);
+          effectiveNetwork = getNetworkForGuild(msg.guildId, this.config);
         } else if (msg.platform === "mattermost") {
-          effectiveGroveNetwork = getNetworkForChannel(msg.channelId, this.config);
+          effectiveNetwork = getNetworkForChannel(msg.channelId, this.config);
         }
       }
 
       // G-500: Resolve per-network claude overrides
-      const networkConfig = effectiveGroveNetwork
-        ? this.config.networks.find(n => n.id === effectiveGroveNetwork)
+      const networkConfig = effectiveNetwork
+        ? this.config.networks.find(n => n.id === effectiveNetwork)
         : undefined;
       const networkClaude = networkConfig?.claude;
 
@@ -752,6 +814,18 @@ export class DispatchHandler extends EventEmitter {
         ? access.toolRestrictions
         : [...new Set([...globalDisallowed, ...networkDisallowed])];
 
+      // cortex#1167 review — PATH-INDEPENDENT tool allowlist. `access.allowedTools`
+      // (set only by the anon open-onboarding path) takes precedence over the
+      // config default on EVERY path: the bus path (via the publish payload
+      // below) AND the direct handleSync/handleAsync/handleTeam fallback (which
+      // previously hard-coded `config.claude.allowedTools`, leaving the anon
+      // allowlist un-enforced when the bus is unwired). A non-empty allowlist
+      // confines the CC session to exactly those tools — anything unlisted
+      // (incl. every `mcp__*`) is denied.
+      const effectiveAllowedTools = access.allowedTools?.length
+        ? access.allowedTools
+        : this.config.claude.allowedTools;
+
       // cortex#710 (C-701 Part B) — default-deny + per-skill grants, FLIPPED
       // ATOMICALLY from the legacy binary G-121 gate. The grant decision is
       // `access.allowedSkills`:
@@ -809,6 +883,10 @@ export class DispatchHandler extends EventEmitter {
           resumeSessionId: existingSession?.sessionId,
           allowedDirs: invokeDirs,
           disallowedTools: effectiveDisallowed,
+          // cortex#1167 — explicit tool ALLOWLIST. Set only on the anon
+          // open-onboarding path (`access.allowedTools`); undefined for every
+          // real dispatch (keeps allow-by-default + deny-list unchanged).
+          allowedTools: access.allowedTools,
           // cortex#710 — carry the grant decision so the runner harness
           // applies {broad Skill allow + gate hook} for grants, default-deny
           // otherwise. `access.allowedSkills` is undefined → field omitted.
@@ -816,11 +894,14 @@ export class DispatchHandler extends EventEmitter {
           timeoutMs: this.config.claude.timeoutMs,
           cwd: effectiveCwd,
           additionalArgs: this.config.claude.additionalArgs,
-          groveChannel: effectiveGroveChannel,
-          groveNetwork: effectiveGroveNetwork,
+          channel: effectiveChannel,
+          network: effectiveNetwork,
           project: groveProject,
           entity: groveEntity,
           principal,
+          // cortex#1167 — pre-resolved anon originator DID (anon path only;
+          // undefined for real dispatches → normal originator resolution).
+          originatorIdentityOverride: anonOriginatorOverride,
         });
         if (publishResult.published) return;
         if (publishResult.reason === "invalid-originator") {
@@ -838,13 +919,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
           break;
       }
     } catch (error) {
@@ -874,14 +955,16 @@ export class DispatchHandler extends EventEmitter {
     useSession: boolean,
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
-    groveChannel?: string,
-    groveNetwork?: string,
+    channel?: string,
+    network?: string,
     groveProject?: string,
     groveEntity?: string,
     principal?: string,
     cwd?: string,
     /** cortex#710 — per-skill grant list ([...] → grants; undefined/[] → none). */
     allowedSkills?: string[],
+    /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
+    allowedTools?: string[],
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
 
@@ -913,14 +996,14 @@ export class DispatchHandler extends EventEmitter {
 
     const sessionOpts: CCSessionOpts = {
       prompt,
-      groveChannel: groveChannel,
-      groveNetwork: groveNetwork,
+      channel: channel,
+      network: network,
       agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.timeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
-      allowedTools: this.config.claude.allowedTools,
+      allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
@@ -1211,14 +1294,16 @@ export class DispatchHandler extends EventEmitter {
     sessionKey: string,
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
-    groveChannel?: string,
-    groveNetwork?: string,
+    channel?: string,
+    network?: string,
     groveProject?: string,
     groveEntity?: string,
     principal?: string,
     cwd?: string,
     /** cortex#710 — per-skill grant list ([...] → grants; undefined/[] → none). */
     allowedSkills?: string[],
+    /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
+    allowedTools?: string[],
   ): Promise<void> {
     const taskId = `task-${randomUUID()}`;
 
@@ -1231,14 +1316,14 @@ export class DispatchHandler extends EventEmitter {
 
     const session = new CCSession({
       prompt,
-      groveChannel: groveChannel,
-      groveNetwork: groveNetwork,
+      channel: channel,
+      network: network,
       agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.asyncTimeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
-      allowedTools: this.config.claude.allowedTools,
+      allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
@@ -1343,14 +1428,16 @@ export class DispatchHandler extends EventEmitter {
     disallowedTools: string[],
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
-    groveChannel?: string,
-    groveNetwork?: string,
+    channel?: string,
+    network?: string,
     groveProject?: string,
     groveEntity?: string,
     principal?: string,
     _cwd?: string,
     /** cortex#710 — per-skill grant list ([...] → grants; undefined/[] → none). */
     allowedSkills?: string[],
+    /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
+    allowedTools?: string[],
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
 
@@ -1363,15 +1450,15 @@ export class DispatchHandler extends EventEmitter {
 
     const team = new AgentTeam({
       prompt: teamContent,
-      groveChannel: groveChannel,
-      groveNetwork: groveNetwork,
+      channel: channel,
+      network: network,
       participants: [
         { name: "analyst", prompt: "Deep analytical perspective — examine evidence, data, and logical implications" },
         { name: "creative", prompt: "Creative and lateral thinking — explore unconventional angles and connections" },
         { name: "critic", prompt: "Critical evaluation — identify weaknesses, counterarguments, and risks" },
       ],
       additionalArgs: this.config.claude.additionalArgs,
-      allowedTools: this.config.claude.allowedTools,
+      allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
@@ -1384,7 +1471,7 @@ export class DispatchHandler extends EventEmitter {
     });
 
     // Dummy session for TaskTracker (AgentTeam manages its own sessions)
-    const dummySession = new CCSession({ prompt: "", groveChannel: this.config.agent.name, groveNetwork: groveNetwork });
+    const dummySession = new CCSession({ prompt: "", channel: this.config.agent.name, network: network });
     dummySession.on("error", () => {
       // prevent unhandled error — AgentTeam manages real session errors below
     });
@@ -1434,9 +1521,9 @@ export class DispatchHandler extends EventEmitter {
 
   private async handleHelp(adapter: PlatformAdapter, msg: InboundMessage): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
-    const version = getGroveVersion();
+    const version = getCortexVersion();
     const helpText = [
-      `**${this.config.agent.displayName}** — PAI Agent on Grove v${version}\n`,
+      `**${this.config.agent.displayName}** — PAI Agent on Cortex v${version}\n`,
       "**Chat**",
       "`@mention <message>` — Ask me anything (uses Claude Code)",
       "`context:N <message>` — Override context depth (default 10, max 100)",

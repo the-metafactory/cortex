@@ -69,3 +69,17 @@
 #           - code-review.typescript
 #         # max_hop — federation hop budget (1 = direct peers only).
 #         max_hop: 1
+#         # reconcile — OPTIONAL continuous roster reconciler (P3, cortex#1088).
+#         # DEFAULT OFF (omit the block). When enabled, cortex re-resolves THIS
+#         # network's registry roster on `interval_ms` and auto-widens peers[] +
+#         # accept_subjects to admit every roster-named peer — so a peer that
+#         # joins the network AFTER you do renders on your Network view within
+#         # one interval, WITHOUT a manual `cortex network join`. Per-network
+#         # opt-in: enable it for a network you actively collaborate on; leave it
+#         # off for one you only consume. Trust is UNCHANGED — only the registry
+#         # roster (never the wire) decides membership, chain-verify still gates
+#         # every folded envelope under signing=enforce, and only presence/dispatch
+#         # subtrees (never interiors) are accept-listed.
+#         reconcile:
+#           enabled: true
+#           interval_ms: 60000   # self-poll cadence (min 5000, default 60000)

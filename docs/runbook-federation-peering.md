@@ -1,6 +1,8 @@
-> # ⚠️ SUPERSEDED — use `cortex network join`
+> # ⚠️ SUPERSEDED — see `sop-onboard-peer-principal.md`
 >
-> **This manual, cloudflared-led runbook (#728) is superseded by the one-command join** ([`docs/sop-network-join.md`](./sop-network-join.md), S6 / Network Join Control Plane #733). For the steady-state case, **do not follow the steps below** — run:
+> **Superseded by [`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) for the end-to-end peer-onboarding path.** Retained for: the manual cloudflared-led peering recipe (offline/no-registry fallback), reachability option comparison, and the offline hand-pin steps. For the steady-state case, follow the new runbook instead.
+>
+> **This manual, cloudflared-led runbook (#728) is also superseded by the one-command join** ([`docs/sop-network-join.md`](./sop-network-join.md), S6 / Network Join Control Plane #733). For the steady-state case, **do not follow the steps below** — run:
 >
 > ```bash
 > cortex provision-stack register <principal-id> --seed-path <p> --registry-url <url> --stack-id <id>   # once

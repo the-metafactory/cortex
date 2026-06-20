@@ -26,7 +26,7 @@ Internal componentisation (per `docs/architecture.md` §8):
 - `src/adapters/` — Platform adapters (Discord, Mattermost) that register with the surface-router rather than subscribing to NATS directly. `mock.ts` for tests.
 - `src/runner/` — CC orchestration: cc-session (streaming `claude --print --output-format stream-json`), session-manager (per-thread CC session for `--resume`), stream-parser, agent-team (multi-agent moderator + participants), dispatch-listener, security-preamble, prompt-builder, worklog-manager, task-tracker, bash-guard hook.
 - `src/taps/` — Publishers onto the bus: `cc-events/` (CC hooks + EventLogger + relay + cloud-publisher), `gh-webhook/` (CF Worker at `hooks.meta-factory.ai` validating GitHub HMAC and forwarding).
-- `src/cli/` — Principal CLIs: `discord/` (post messages, read channels, list threads from terminal), `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI).
+- `src/cli/` — Principal CLIs: `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI). The Discord CLI is no longer here — it was extracted to the `metafactory-discord` arc bundle (ADR-0017, epic #1171); cortex consumes it as a dependency. Only the live Discord adapter (`src/adapters/discord/`) stays in cortex.
 - `src/renderers/` — Renderer interface + dashboard renderer + pagerduty renderer (the G-1111 §4.6 fail-safe pair).
 - `src/common/` — Shared types + utilities: agent-detection, event-processor, event-utils, github-events, agents/, config/, timeout, types/, usage.
 - `src/services/` — launchd plists: `ai.meta-factory.cortex.meta-factory.plist` (metafactory dev stack), `ai.meta-factory.cortex.work.plist` (parallel work stack — cortex#244), `ai.meta-factory.cortex.relay.plist` (shared relay).

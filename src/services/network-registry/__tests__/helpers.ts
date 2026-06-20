@@ -8,8 +8,8 @@
  */
 
 import { canonicalJSON, generateKeypair, signEd25519 } from "../src/signing";
-import type { Capability, RegistrationClaim, StackIdentity } from "../src/types";
-import { _setNonceCacheForTest, _setStoreForTest } from "../src/store";
+import type { AdmissionDecisionClaim, AdmissionReadClaim, Capability, RegistrationClaim, StackIdentity } from "../src/types";
+import { _setNonceCacheForTest, _setStoreForTest, _setIssuanceStoreForTest } from "../src/store";
 import { _resetDerivedPublicKeyForTest } from "../src/index";
 import { _resetRateLimitBucketsForTest } from "../src/rate-limit";
 
@@ -47,6 +47,7 @@ export async function makeRegistryKey(): Promise<{
 export function resetStores(): void {
   _setStoreForTest(undefined);
   _setNonceCacheForTest(undefined);
+  _setIssuanceStoreForTest(undefined);
   _resetDerivedPublicKeyForTest();
   _resetRateLimitBucketsForTest();
 }
@@ -101,6 +102,62 @@ export function randomNonce(): string {
     out += bytes[i]!.toString(16).padStart(2, "0");
   }
   return out;
+}
+
+// =============================================================================
+// ADR-0015 — signed-admin admission decision + read test rig
+// =============================================================================
+
+/**
+ * Build a signed admin admission decision body for admit/reject.
+ * Uses the canonical AdmissionDecisionClaim vocabulary (ADR-0015).
+ * Mirrors `makeSignedNetworkCreate` in structure — the admin gate is identical.
+ */
+export async function makeSignedAdminDecision(
+  requestId: string,
+  decision: "admit" | "reject",
+  adminKey: PrincipalKey,
+  opts: {
+    issuedAt?: string;
+    nonce?: string;
+    /** Sign with a DIFFERENT key than the claim declares — forged signature tests. */
+    signWith?: PrincipalKey;
+    adminPubkeyOverride?: string;
+  } = {},
+): Promise<{ claim: AdmissionDecisionClaim; signature: string }> {
+  const claim: AdmissionDecisionClaim = {
+    request_id: requestId,
+    decision,
+    admin_pubkey: opts.adminPubkeyOverride ?? adminKey.publicKeyB64,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+    nonce: opts.nonce ?? randomNonce(),
+  };
+  const message = new TextEncoder().encode(canonicalJSON(claim));
+  const signer = opts.signWith ?? adminKey;
+  const signature = await signEd25519(signer.privateKeyB64, message);
+  return { claim, signature };
+}
+
+/**
+ * Build a signed admin read claim for the x-admin-signed header.
+ * No nonce (reads are idempotent). Clock skew applies.
+ */
+export async function makeSignedAdminRead(
+  adminKey: PrincipalKey,
+  opts: {
+    issuedAt?: string;
+    /** Sign with a DIFFERENT key — forged signature test. */
+    signWith?: PrincipalKey;
+  } = {},
+): Promise<{ claim: AdmissionReadClaim; signature: string }> {
+  const claim: AdmissionReadClaim = {
+    admin_pubkey: adminKey.publicKeyB64,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+  };
+  const message = new TextEncoder().encode(canonicalJSON(claim));
+  const signer = opts.signWith ?? adminKey;
+  const signature = await signEd25519(signer.privateKeyB64, message);
+  return { claim, signature };
 }
 
 // =============================================================================

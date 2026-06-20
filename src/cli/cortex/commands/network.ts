@@ -51,9 +51,22 @@ import {
   materialFromSeedString,
   buildNetworkCreateClaim,
   postNetworkCreate,
+  randomNonce,
+  signClaimWithSeed,
   type StackIdentityMaterial,
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
+import { canonicalJSON } from "../../../common/registry/signing";
+// O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
+// cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-discord
+// bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side
+// admit path cannot import from an external arc bundle.
+import {
+  assignRole,
+  resolveRoleId,
+  loadConfig as loadDiscordConfig,
+  resolveServerContext,
+} from "../lib/discord-roles";
 
 import {
   deriveJoinInputs,
@@ -61,6 +74,7 @@ import {
   tolerantReader,
   type ConfigReader,
 } from "./network-derive";
+// network-leaf-package import removed — ADR-0015 retired O-4b / Model-A.
 
 /**
  * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
@@ -76,7 +90,7 @@ const DEFAULT_READER: ConfigReader = tolerantReader(
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
-import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
 import {
   joinNetwork,
   leaveNetwork,
@@ -114,7 +128,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping";
+type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "admit";
 
 /** Default registry URL when neither --registry-url nor config provides one. */
 const DEFAULT_REGISTRY_URL = "https://network.meta-factory.ai";
@@ -132,7 +146,7 @@ const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
  * daemon-restart can LOCATE the daemon's launchd/systemd service by its
  * `--config` arg instead of guessing `ai.meta-factory.cortex.<stack-slug>`.
  */
-function cortexConfigPathFromFlags(flags: Record<string, string | true>): string {
+function cortexConfigPathFromFlags(flags: FlagMap): string {
   return expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
 }
 
@@ -169,6 +183,17 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal-seed": "value",
         "--creds": "value",
         "--account": "value",
+        // O-3 (cortex#1053) — the operator-mode "leaf package" flags. When the
+        // stack's bus is anonymous/hard-isolated (the #794 fail-fast input),
+        // these let `cortex network join` AUTO-CONVERT it to operator-mode
+        // (render the SOP §B0.1 blocks) instead of refusing. Map to
+        // stack.nats_infra.{operator_jwt,account_jwt,system_account,
+        // system_account_jwt}. O-4 supplies them via the register→issue
+        // handshake; these flags/config fields are the manual/interim path.
+        "--operator-jwt": "value",
+        "--account-jwt": "value",
+        "--system-account": "value",
+        "--system-account-jwt": "value",
         "--nats-config": "value",
         "--plist": "value",
         // #763 — Linux/systemd: the nats-server systemd unit path (the
@@ -258,6 +283,30 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--timeout": "value",
       },
     },
+    // ADR-0015 — one-command admin admission decision. Signs an admission
+    // decision claim → POSTs to `/admission-requests/:id/admit` → principal
+    // is ADMITTED on the roster. Mints nothing (no arc nats add-bot).
+    // Dry-run by DEFAULT: prints the claim it WOULD post; --apply executes.
+    //
+    // NOTE: --network is intentionally absent. The admission request's
+    // network_id is set at register time (when the principal calls
+    // POST /principals/:id/register). The admit subcommand reads the stored
+    // request and acts on whatever network_id the registry recorded.
+    // Tracking issue: cortex#1145 — thread network_id from register through
+    // the admission gate so the stored row is always network-scoped.
+    admit: {
+      positionals: ["request-id"],
+      flags: {
+        "--admin-seed": "value",
+        "--registry-url": "value",
+        "--discord-member": "value",
+        "--discord-server": "value",
+        "--discord-guild": "value",
+        "--discord-role": "value",
+        "--apply": "bool",
+        "--dry-run": "bool",
+      },
+    },
   },
   universal: { "--json": "bool", "--help": "bool", "-h": "bool" },
 };
@@ -267,17 +316,17 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
 // =============================================================================
 
 function requireValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): { ok: true; value: string } | { ok: false; reason: string } {
   const v = flags[name];
   if (v === undefined) return { ok: false, reason: `${name} is required` };
-  if (v === true) return { ok: false, reason: `${name} requires a value` };
+  if (v === true || Array.isArray(v)) return { ok: false, reason: `${name} requires a value` };
   return { ok: true, value: v };
 }
 
 function optionalValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): string | undefined {
   const v = flags[name];
@@ -293,7 +342,7 @@ function optionalValueFlag(
  * (which would otherwise shadow the config value with `undefined`).
  */
 function readOverride(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   flagName: string,
   key?: string,
 ): Record<string, string> {
@@ -304,6 +353,8 @@ function readOverride(
   const resolvedKey = key ?? flagName.replace(/^--/, "").replace(/-/g, "");
   return { [resolvedKey]: v };
 }
+
+// readLeafPackageFlag removed — ADR-0015 retired O-4b / --from-package / Model-A.
 
 /** Resolve the stack slug from `--stack` (`{principal}/{slug}`) or default. */
 function resolveStackSlug(
@@ -382,7 +433,7 @@ function resolveStatusConfigPath(slug: string): string {
  * command resolve identically to `status` and can't drift (the gap that made ping
  * read the flat default and report `not-configured` for a config-split peer).
  */
-function resolveLocalStackConfigPath(flags: Record<string, string | true>): string {
+function resolveLocalStackConfigPath(flags: FlagMap): string {
   const explicitConfig = optionalValueFlag(flags, "--config");
   if (explicitConfig !== undefined) return expandTilde(explicitConfig);
   const stackFlag = optionalValueFlag(flags, "--stack");
@@ -401,7 +452,7 @@ function resolveLocalStackConfigPath(flags: Record<string, string | true>): stri
  * `--apply` and `--dry-run` together is a usage error.
  */
 function resolveApply(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): { ok: true; apply: boolean } | { ok: false; reason: string } {
   const apply = flags["--apply"] === true;
   const dry = flags["--dry-run"] === true;
@@ -417,7 +468,7 @@ function resolveApply(
 
 async function runJoin(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
 ): Promise<ExitResult> {
@@ -452,6 +503,12 @@ async function runJoin(
         ...readOverride(flags, "--unit", "unitPath"),
         ...readOverride(flags, "--account", "account"),
         ...readOverride(flags, "--creds", "credsPath"),
+        // O-3 (cortex#1053) — operator-mode leaf-package overrides.
+        ...readOverride(flags, "--operator-jwt", "operatorJwt"),
+        ...readOverride(flags, "--account-jwt", "accountJwt"),
+        ...readOverride(flags, "--system-account", "systemAccount"),
+        ...readOverride(flags, "--system-account-jwt", "systemAccountJwt"),
+        // (--from-package removed — ADR-0015 retired O-4b / Model-A)
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -490,6 +547,11 @@ async function runJoin(
     account: inputs.account,
     leafNode: optionalValueFlag(flags, "--leaf-node"),
     maxHop,
+    // O-3 (cortex#1053) — pass the operator-mode leaf package (when resolved)
+    // so join auto-converts an anonymous bus instead of fail-fasting (#794).
+    ...(inputs.operatorModePackage !== undefined && {
+      operatorModePackage: inputs.operatorModePackage,
+    }),
   };
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
@@ -504,7 +566,7 @@ async function runJoin(
 
 async function runLeave(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
 ): Promise<ExitResult> {
@@ -575,7 +637,7 @@ async function runLeave(
 }
 
 async function runStatus(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -593,7 +655,7 @@ async function runStatus(
   // instead of the default monolith. Previously status fell through to
   // ~/.config/cortex/cortex.yaml and reported a joined config-split stack as
   // "no networks joined".
-  const statusFlags: Record<string, string | true> =
+  const statusFlags: FlagMap =
     optionalValueFlag(flags, "--config") === undefined
       ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }
       : flags;
@@ -675,7 +737,7 @@ const DEFAULT_PING_BUS_FACTORY: PingBusFactory = async (cfg) => {
 
 async function runPing(
   peerArg: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
   busFactory: PingBusFactory,
@@ -757,7 +819,7 @@ async function runPing(
 
 /** Parse a positive-integer value flag with a default. */
 function parsePositiveInt(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
   dflt: number,
 ): { ok: true; value: number } | { ok: false; reason: string } {
@@ -864,7 +926,7 @@ async function adminMaterialFromSeedFile(
 
 async function runCreate(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   if (!NETWORK_ID_RE.test(networkId)) {
@@ -967,7 +1029,8 @@ async function runCreate(
   }
   return ok(
     `cortex network create ${networkId}: created/updated at ${registryUrl} (HTTP ${result.status.toString()})\n` +
-      `  hub_url:   ${hubUrl}\n  leaf_port: ${leafPort.toString()}\n  admin:     ${matRes.material.fingerprint}\n`,
+      `  hub_url:   ${hubUrl}\n  leaf_port: ${leafPort.toString()}\n` +
+      `  admin:     ${matRes.material.fingerprint}\n`,
   );
 }
 
@@ -985,7 +1048,7 @@ function splitCsv(raw: string | undefined): string[] {
 }
 
 async function runJoinPublic(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -1036,7 +1099,7 @@ async function runJoinPublic(
 }
 
 async function runLeavePublic(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -1067,7 +1130,7 @@ function portsConfig(
   networkId: string,
   principalId: string,
   stackSlug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): LivePortsConfig {
   return {
     networkId,
@@ -1093,7 +1156,7 @@ function portsConfigFromInputs(
   networkId: string,
   inputs: import("./network-derive").DerivedJoinInputs,
   stackSlug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): LivePortsConfig {
   return {
     networkId,
@@ -1179,6 +1242,272 @@ function opError(sub: string, reason: string, json: boolean): ExitResult {
 }
 
 // =============================================================================
+// ADR-0015 — runAdmit: one-command admin admission decision (R2, cortex#1142)
+// =============================================================================
+
+/** Default registry URL — mirrors network create / join constants. */
+const DEFAULT_ADMIT_REGISTRY_URL = "https://network.meta-factory.ai";
+
+/** Default Discord role for O-5 community-fleet admission. */
+const DEFAULT_ADMIT_DISCORD_ROLE = "community-fleet";
+
+/** Minimal Discord client surface injectable for tests. */
+export interface DiscordAdmitClient {
+  resolveRoleId(botToken: string, guildId: string, roleName: string): Promise<string>;
+  assignRole(botToken: string, guildId: string, userId: string, roleId: string): Promise<{ success: boolean; error?: string }>;
+}
+
+let discordAdmitClientOverride: DiscordAdmitClient | null = null;
+
+/** Test-only setter. Production callers never touch this. Null restores default. */
+export function __setDiscordAdmitClientForTests(client: DiscordAdmitClient | null): void {
+  discordAdmitClientOverride = client;
+}
+
+/** Default production client — thin wrappers over the real discord lib. */
+const defaultDiscordAdmitClient: DiscordAdmitClient = {
+  resolveRoleId,
+  assignRole,
+};
+
+/**
+ * Build an admin-signed read claim for the `x-admin-signed` header.
+ * No nonce (reads are idempotent). Uses the shared PKCS#8 signing bridge.
+ */
+async function buildAdmissionReadHeader(
+  material: StackIdentityMaterial,
+): Promise<string> {
+  const claim = {
+    admin_pubkey: material.pubkeyB64,
+    issued_at: new Date().toISOString(),
+  };
+  const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
+  const signature = await signClaimWithSeed(material.seed, msgBytes);
+  return JSON.stringify({ claim, signature });
+}
+
+/**
+ * Build the admin-signed admission decision body (ADR-0015: decision "admit",
+ * no leaf_package — admits to roster only, mints nothing).
+ */
+async function buildAdmissionDecisionBody(
+  requestId: string,
+  material: StackIdentityMaterial,
+  opts: { issuedAt?: string; nonce?: string } = {},
+): Promise<{ claim: { request_id: string; decision: "admit"; admin_pubkey: string; issued_at: string; nonce: string }; signature: string }> {
+  const claim = {
+    request_id: requestId,
+    decision: "admit" as const,
+    admin_pubkey: material.pubkeyB64,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+    nonce: opts.nonce ?? randomNonce(),
+  };
+  const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
+  const signature = await signClaimWithSeed(material.seed, msgBytes);
+  return { claim, signature };
+}
+
+/**
+ * `cortex network admit <request-id> --admin-seed <path> [--apply]`
+ *
+ * ADR-0015 replacement for `cortex creds grant`. Signs an admission decision
+ * claim and POSTs it to `/admission-requests/:id/admit`. Admits the principal
+ * to the network roster. Mints nothing (no arc nats add-bot call).
+ *
+ * Dry-run by default (safe posture). Pass --apply to execute.
+ * Optionally assigns Discord role (O-5) via --discord-member when applied.
+ *
+ * --network is intentionally absent: the request's network_id is stored at
+ * register time. See cortex#1145 to thread it end-to-end.
+ */
+async function runAdmit(
+  requestId: string,
+  flags: FlagMap,
+  json: boolean,
+): Promise<ExitResult> {
+  if (!requestId) {
+    return usageError("admit", "missing request-id (usage: cortex network admit <request-id> --network <id> --admin-seed <path>)", json);
+  }
+
+  const seedRes = requireValueFlag(flags, "--admin-seed");
+  if (!seedRes.ok) return usageError("admit", seedRes.reason, json);
+
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("admit", applyRes.reason, json);
+
+  const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_ADMIT_REGISTRY_URL;
+  const discordMember = optionalValueFlag(flags, "--discord-member");
+  const discordServer = optionalValueFlag(flags, "--discord-server");
+  const discordGuild = optionalValueFlag(flags, "--discord-guild");
+  const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
+
+  // Load + chmod-600-gate the admin seed
+  const matRes = await adminMaterialFromSeedFile(seedRes.value);
+  if (!matRes.ok) return opError("admit", matRes.reason, json);
+  const material = matRes.material;
+
+  // DRY-RUN (default): print the plan, touch nothing
+  if (!applyRes.apply) {
+    if (json) {
+      return ok(
+        renderJson(
+          envelopeOk([], {
+            subcommand: "admit",
+            request_id: requestId,
+            registry_url: registryUrl,
+            admin_fingerprint: material.fingerprint,
+            applied: "false",
+          }),
+        ),
+      );
+    }
+    const lines = [
+      `cortex network admit ${requestId}: dry-run (no registry write; pass --apply to execute)`,
+      `  registry:          ${registryUrl}`,
+      `  admin_fingerprint: ${material.fingerprint}`,
+      ...(discordMember !== undefined ? [`  discord_member:    ${discordMember}`] : []),
+      ``,
+    ];
+    return ok(lines.join("\n"));
+  }
+
+  // APPLY path
+
+  // 1. Fetch the PENDING admission request (admin-signed GET)
+  let requestPrincipalId: string;
+  let requestStatus: string;
+  try {
+    const readHeader = await buildAdmissionReadHeader(material);
+    const getUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}`;
+    const getResp = await globalThis.fetch(getUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-signed": readHeader,
+      },
+    });
+    if (getResp.status === 404) {
+      return opError("admit", `request-id "${requestId}" not found in registry (HTTP 404)`, json);
+    }
+    if (!getResp.ok) {
+      const body = await getResp.text();
+      return opError("admit", `registry GET failed (HTTP ${getResp.status.toString()}): ${body}`, json);
+    }
+    const req = (await getResp.json()) as { request_id: string; principal_id: string; status: string };
+    requestPrincipalId = req.principal_id;
+    requestStatus = req.status;
+  } catch (err) {
+    return opError("admit", `failed to fetch request from registry: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // Must be PENDING to admit
+  if (requestStatus !== "PENDING") {
+    return opError("admit", `request "${requestId}" is not PENDING (status: ${requestStatus}) — cannot admit an already-decided request`, json);
+  }
+
+  // 2. Build + POST the signed admission decision
+  let decisionBody: { claim: { request_id: string; decision: "admit"; admin_pubkey: string; issued_at: string; nonce: string }; signature: string };
+  try {
+    decisionBody = await buildAdmissionDecisionBody(requestId, material);
+  } catch (err) {
+    return opError("admit", `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  try {
+    const postUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}/admit`;
+    const postResp = await globalThis.fetch(postUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(decisionBody),
+    });
+    if (!postResp.ok) {
+      const respBody = await postResp.text();
+      return opError("admit", `registry rejected admission (HTTP ${postResp.status.toString()}): ${respBody}`, json);
+    }
+  } catch (err) {
+    return opError("admit", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // 3. Assign Discord role (O-5) — when --discord-member is given
+  let discordStatus = "skipped";
+  let discordWarning = "";
+
+  if (discordMember !== undefined) {
+    const discordClient = discordAdmitClientOverride;
+    try {
+      const discordConfig = loadDiscordConfig();
+      const ctx = resolveServerContext(discordConfig, {
+        server: discordServer,
+        guild: discordGuild,
+      });
+
+      const botToken = discordClient ? "injected" : ctx.botToken;
+      const guildId = discordClient ? (discordGuild ?? ctx.guildId) : ctx.guildId;
+
+      if (!discordClient && !botToken) {
+        discordWarning = "Discord role not assigned: no bot token configured (run: discord config set botToken <token>)";
+        discordStatus = "skipped_no_token";
+      } else if (!guildId) {
+        discordWarning = "Discord role not assigned: no guild id configured — pass --discord-guild <id> or run: discord config set guildId <id>";
+        discordStatus = "skipped_no_guild";
+      } else {
+        const client = discordClient ?? defaultDiscordAdmitClient;
+        let roleId: string;
+        try {
+          roleId = await client.resolveRoleId(botToken ?? "", guildId, discordRole);
+        } catch (err) {
+          discordWarning = `Discord role not assigned: ${err instanceof Error ? err.message : String(err)} — assign manually`;
+          discordStatus = "failed";
+          roleId = "";
+        }
+
+        if (roleId) {
+          const roleResult = await client.assignRole(botToken ?? "", guildId, discordMember, roleId);
+          if (roleResult.success) {
+            discordStatus = "assigned";
+          } else {
+            discordWarning = `Discord role assignment failed: ${roleResult.error ?? "unknown error"} — admission committed, assign role manually`;
+            discordStatus = "failed";
+          }
+        }
+      }
+    } catch (err) {
+      discordWarning = `Discord role assignment error: ${err instanceof Error ? err.message : String(err)} — admission committed, assign role manually`;
+      discordStatus = "failed";
+    }
+  }
+
+  // 4. Output summary
+  if (json) {
+    const data: Record<string, string> = {
+      subcommand: "admit",
+      applied: "true",
+      request_id: requestId,
+      principal_id: requestPrincipalId,
+      admin_fingerprint: material.fingerprint,
+      ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
+    };
+    if (discordWarning) data.discord_warning = discordWarning;
+    return ok(renderJson(envelopeOk([], data)));
+  }
+
+  const lines: string[] = [
+    `cortex network admit ${requestId}: admitted`,
+    `  principal:   ${requestPrincipalId}`,
+    `  admin:       ${material.fingerprint}`,
+  ];
+  if (discordMember !== undefined) {
+    if (discordStatus === "assigned") {
+      lines.push(`  discord:     role "${discordRole}" assigned to member ${discordMember}`);
+    } else {
+      lines.push(`  discord:     ${discordWarning}`);
+    }
+  }
+  lines.push("");
+  return ok(lines.join("\n"));
+}
+
+// =============================================================================
 // Dispatcher
 // =============================================================================
 
@@ -1226,6 +1555,8 @@ export async function dispatchNetwork(
       return runCreate(parsed.positionals.network ?? "", parsed.flags, json);
     case "ping":
       return runPing(parsed.positionals.peer ?? "", parsed.flags, json, load, pingBusFactory);
+    case "admit":
+      return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json);
   }
 }
 
@@ -1237,11 +1568,14 @@ function topLevelHelp(): string {
   return `cortex network — one-command join to the Internet of Agentic Work (S4, #738; #752/#753)
 
 Usage:
-  cortex network join  <network> [--apply] [--config <p>] [overrides…]
+  cortex network join   <network> [--apply] [--config <p>] [overrides…]
   cortex network leave  <network> [--apply] [--config <p>] [overrides…]
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
   cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--registry-url <url>] [--apply]
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
+  cortex network admit  <request-id> --admin-seed <path> [--network <id>] [--registry-url <url>]
+                        [--discord-member <id>] [--discord-guild <id>] [--discord-server <profile>]
+                        [--discord-role <name>] [--apply] [--dry-run] [--json]
 
 The one-liner (#753): \`cortex network join <network>\` derives EVERYTHING from
 the loaded cortex.yaml — principal (principal.id), stack (stack.id), signing
@@ -1282,6 +1616,13 @@ Subcommands:
           signed claim it WOULD POST); pass --apply to actually write. The
           registry FAILS CLOSED if its REGISTRY_ADMIN_PUBKEYS allowlist is
           unset, and rejects (403) an admin key not on the allowlist.
+  admit   (ADR-0015) One-command admin admission decision. Verifies the admin
+          seed (chmod-600 gated), builds a signed admission decision claim
+          (decision: "admit"), and POSTs it to /admission-requests/:id/admit
+          in the registry. The principal is ADMITTED to the network roster.
+          Mints nothing (no arc nats add-bot call — Model-A retired). Optionally
+          assigns the Discord community-fleet role (O-5) via --discord-member.
+          DRY-RUN by default; pass --apply to execute.
 
   join public   (S5, #739) Opt into the PUBLIC scope — the open square of the
           Internet of Agentic Work. Announces --capabilities to the registry
@@ -1320,6 +1661,17 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
                           2nd stack — not to re-run a converged one.
   --creds <p>             Override stack.nats_infra.creds_path (default: ~/.config/nats/<network>.creds).
   --account <nkey-U>      Override stack.nats_infra.account (A… nkey-U the leaf binds to).
+  --operator-jwt <eyJ…>   (O-3, #1053) NSC operator JWT. With --account-jwt + --account, lets join
+                          AUTO-CONVERT an anonymous/hard-isolated bus to operator-mode (render the
+                          SOP §B0.1 blocks) instead of fail-fasting (#794). Maps to
+                          stack.nats_infra.operator_jwt. O-4 supplies it via the register→issue
+                          handshake; this flag/config is the manual/interim path.
+  --account-jwt <eyJ…>    (O-3, #1053) The issued account JWT (preloaded under resolver_preload).
+                          Maps to stack.nats_infra.account_jwt.
+  --system-account <A…>   (O-3, #1053) OPTIONAL system account nkey-U (sets system_account). Maps
+                          to stack.nats_infra.system_account.
+  --system-account-jwt <eyJ…> (O-3, #1053) OPTIONAL system account JWT. Maps to
+                          stack.nats_infra.system_account_jwt.
   --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).
   --plist <p>             Override stack.nats_infra.plist_path (macOS nats-server launchd plist).
   --unit <p>              Override stack.nats_infra.unit_path (Linux nats-server systemd unit; #763).

@@ -249,3 +249,123 @@ export interface CapabilityHit {
   networks: string[];
   description?: string;
 }
+
+// =============================================================================
+// ADR-0015 — Network-admission gate types
+//
+// The O-4a issuance-request state machine is repurposed as the
+// NETWORK-ADMISSION gate (ADR-0015). It gates roster membership, mints
+// nothing. The `register → PENDING → admit` flow is unchanged structurally;
+// only the vocabulary and the payload (no leaf package) change.
+// =============================================================================
+
+/**
+ * The lifecycle status of a network admission request.
+ * Transitions: PENDING → ADMITTED (on admin admit/grant)
+ *              PENDING → REJECTED (on admin reject)
+ * Re-transitions are forbidden (409 already_decided).
+ */
+export type AdmissionStatus = "PENDING" | "ADMITTED" | "REJECTED";
+
+/**
+ * A persisted admission request — the metadata record that a verified
+ * registration creates. No secrets; no credentials; mints nothing.
+ * The gate controls roster membership for the target network.
+ */
+export interface AdmissionRequest {
+  /** Opaque hex UUID, URL-safe. Primary key. */
+  request_id: string;
+  /** The principal requesting admission. */
+  principal_id: string;
+  /**
+   * Base64 Ed25519 pubkey of the peer stack being onboarded.
+   * The (principal_id, peer_pubkey) pair is unique — re-registration
+   * returns the existing row rather than inserting a duplicate.
+   */
+  peer_pubkey: string;
+  /**
+   * The NATS subject scope the peer is requesting,
+   * e.g. `federated.<peer_slug>.>`.
+   */
+  requested_scope: string;
+  /**
+   * The target network id for this admission request.
+   * Null for rows migrated from the pre-ADR-0015 issuance_requests table;
+   * new rows always carry the network id.
+   */
+  network_id: string | null;
+  /** Current lifecycle state. */
+  status: AdmissionStatus;
+  /** ISO-8601 UTC; when the request was first created. */
+  created_at: string;
+  /** ISO-8601 UTC; updated on admit/reject. */
+  updated_at: string;
+  /**
+   * The admin pubkey (base64) that admitted or rejected this request.
+   * Null while PENDING.
+   */
+  granted_by: string | null;
+}
+
+/**
+ * The admin-signed claim carried by
+ * `POST /admission-requests/{request_id}/admit` and `/reject`.
+ *
+ * Mirrors `NetworkCreateClaim` in structure so the admin gate can be
+ * reused verbatim: admin signs canonicalJSON(claim); registry verifies
+ * the signature against claim.admin_pubkey and checks the allowlist.
+ */
+export interface AdmissionDecisionClaim {
+  /** Must equal the URL path parameter. Echoed for canonicalisation. */
+  request_id: string;
+  /** The decision: "admit" or "reject". Part of the signed payload. */
+  decision: "admit" | "reject";
+  /** Base64 Ed25519 pubkey of the admin signing this claim. */
+  admin_pubkey: string;
+  /** ISO-8601 UTC timestamp at which the admin signed this claim. */
+  issued_at: string;
+  /** Random nonce to prevent replay (same replay cache as network-create). */
+  nonce: string;
+}
+
+/** On-wire envelope for an admit/reject decision. */
+export interface SignedAdmissionDecision {
+  claim: AdmissionDecisionClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+/**
+ * The admin-signed claim carried by GET /admission-requests reads.
+ * The GET endpoints are operational metadata; we gate them behind
+ * an admin signature sent via `x-admin-signed` header. This prevents
+ * any unauthenticated enumeration of the onboarding queue.
+ *
+ * A lightweight claim (no nonce/replay check — reads are idempotent
+ * and don't mutate state). Clock-skew check applies to prevent stale
+ * tokens lingering. The admin proves allowlisted possession.
+ */
+export interface AdmissionReadClaim {
+  /** The admin's own pubkey — used for allowlist check. */
+  admin_pubkey: string;
+  /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
+  issued_at: string;
+}
+
+/** On-wire envelope for an admin read authorisation. */
+export interface SignedAdmissionRead {
+  claim: AdmissionReadClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+// ---------------------------------------------------------------------------
+// Back-compat aliases — store-layer names still reference Issuance* names
+// for the underlying D1 table / method vocabulary. These are pure type
+// aliases; the wire vocabulary is Admission* only (ADR-0015).
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use AdmissionStatus */
+export type IssuanceStatus = AdmissionStatus;
+/** @deprecated Use AdmissionRequest */
+export type IssuanceRequest = AdmissionRequest;

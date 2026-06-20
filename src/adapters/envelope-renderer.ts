@@ -85,7 +85,19 @@ export function formatDispatchLifecycle(envelope: Envelope): string | null {
     // cortex#491 — full reply when present (chat round-trip), else the
     // dashboard summary label, else a terse default.
     const full = typeof payload.chat_response === "string" ? payload.chat_response.trim() : "";
-    if (full) return full;
+    if (full) {
+      // cortex#1149 (slice convergence B / B3) — the dev.implement consumer's
+      // terminal completed rides the PR ref as a JSON blob on `chat_response`
+      // (`dev-consumer.ts` — `chatResponse: JSON.stringify({ pr })`), because
+      // the dispatch builder has no dedicated `pr` field. On the slice thread
+      // that blob would post as raw JSON; render it instead as the clean
+      // "opened PR #N · url" milestone beat. Only a `{ pr: { repo, number } }`
+      // shape triggers this — any other prose falls through verbatim, so a
+      // normal chat reply is never swallowed.
+      const milestone = formatPrMilestone(full);
+      if (milestone !== null) return milestone;
+      return full;
+    }
     const summary = typeof payload.result_summary === "string" ? payload.result_summary.trim() : "Done.";
     return summary || "Done.";
   }
@@ -101,6 +113,42 @@ export function formatDispatchLifecycle(envelope: Envelope): string | null {
   }
 
   return null;
+}
+
+/**
+ * cortex#1149 (slice convergence B / B3) — parse a dev.implement completed's
+ * `chat_response` PR blob and render the "opened PR #N · url" milestone beat.
+ *
+ * The dev consumer rides the PR ref as `JSON.stringify({ pr })` on
+ * `chat_response` (there's no dedicated `pr` field on the dispatch builder).
+ * On the slice thread that blob would otherwise post as raw JSON. Returns the
+ * milestone string for a `{ pr: { repo, number, url? } }` shape, or `null` for
+ * any other text (a normal prose chat reply) so the caller falls through to
+ * rendering it verbatim — the parse is intentionally narrow.
+ */
+function formatPrMilestone(chatResponse: string): string | null {
+  // Cheap pre-check: only attempt a parse on something that looks like the
+  // `{pr:...}` blob, never on arbitrary prose.
+  if (!chatResponse.startsWith("{") || !chatResponse.includes('"pr"')) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(chatResponse);
+  } catch {
+    // Not JSON (prose that merely happens to start with `{`) — fall through.
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const pr = (parsed as Record<string, unknown>).pr;
+  if (pr === null || typeof pr !== "object") return null;
+  const ref = pr as Record<string, unknown>;
+  const repo = typeof ref.repo === "string" ? ref.repo : null;
+  const number = typeof ref.number === "number" ? ref.number : null;
+  if (repo === null || number === null) return null;
+  const url = typeof ref.url === "string" && ref.url.length > 0 ? ref.url : null;
+  const head = `opened ${repo}#${number}`;
+  return url ? `${head} · ${url}` : head;
 }
 
 /**

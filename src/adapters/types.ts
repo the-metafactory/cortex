@@ -77,6 +77,16 @@ export interface AccessDecision {
   };
   /** Disallowed MCP tools for this user */
   toolRestrictions?: string[];
+  /**
+   * cortex#1167 — EXPLICIT tool ALLOWLIST. When present and non-empty, the CC
+   * session is confined to exactly these tools (anything else, including every
+   * `mcp__*`, is denied — allowlist semantics, NOT the allow-by-default of an
+   * absent/empty list). Set ONLY by the open-onboarding anon path so a
+   * zero-authority stranger never gets allow-by-default tool access. Real
+   * principal decisions leave it undefined and keep the existing deny-list
+   * (`toolRestrictions`) behaviour unchanged.
+   */
+  allowedTools?: string[];
   /** Allowed working directories for this user */
   dirRestrictions?: string[];
   /** G-121: Skills this role may invoke. undefined → all; [] → none; [...] → only listed. */
@@ -101,6 +111,35 @@ export interface AccessDecision {
   trusted?: boolean;
   /** Human-readable denial reason */
   denyReason?: string;
+  /**
+   * cortex#1165 — stable machine code for WHY a deny happened, so callers can
+   * branch on the *category* without brittle `denyReason` string matching.
+   * Only present when `allowed === false`.
+   *
+   *   - `no_policy`       — no policy block / engine wiring (migrate-config).
+   *   - `unmapped_sender` — the (platform, authorId) tuple maps to NO
+   *                         principal. This is the one category the Pier
+   *                         open-onboarding gate (AgentSchema.openOnboarding)
+   *                         may convert into a zero-authority anon ALLOW.
+   *   - `registry_drift`  — index resolved an id the registry lacks.
+   *   - `lockout`         — recognized principal with zero keyword caps.
+   */
+  denyCode?: "no_policy" | "unmapped_sender" | "registry_drift" | "lockout";
+  /**
+   * cortex#1165 — set `true` ONLY on the synthetic zero-authority anonymous
+   * principal minted by the Pier open-onboarding gate. It carries NO roles and
+   * unlocks NO privileged path; the marker exists so downstream/audit code can
+   * see "this session is an unauthenticated stranger" at a glance. Never set on
+   * a real, principal-resolved decision.
+   */
+  anonPrincipal?: boolean;
+  /**
+   * cortex#1165 — the synthetic principal id assigned to an open-onboarding
+   * anonymous sender (e.g. `anon:discord:<authorId>`). Present iff
+   * `anonPrincipal === true`. Used for log/audit correlation only — it is NOT
+   * a registry id and resolves to no capabilities.
+   */
+  anonPrincipalId?: string;
 }
 
 /** Where to send a response */

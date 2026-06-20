@@ -100,3 +100,49 @@ export {
   type PublishFn,
 } from "./capability-registry";
 /* eslint-enable @typescript-eslint/no-deprecated */
+
+// ── Transport runtime (M2) ───────────────────────────────────────────────
+// The connect-with-creds + sign-on-publish primitive. Re-exported so M7 apps
+// (pilot) publish via `startMyelinRuntime(config)` + `runtime.publish(envelope)`
+// — the runtime opens the NatsLink with the stack's `nats.credsPath` and signs
+// each envelope — instead of hand-rolling a raw `connect()` + `signEnvelope()`.
+// The barrel previously surfaced `NatsLink`/`MyelinSubscriber` (so pilot's
+// SUBSCRIBERS were cred-aware) but NOT the runtime, which is exactly why the
+// publishers reinvented the transport (the F8 root cause of the cred-less
+// `Authorization Violation` on the operator-mode bus).
+export {
+  startMyelinRuntime,
+  type MyelinRuntime,
+  type MyelinRuntimeOptions,
+  type MyelinSubscribePullOpts,
+  type BusEnvelopeSigner,
+} from "./myelin/runtime";
+
+// ── Dispatch lifecycle envelope builders (M3) ────────────────────────────
+// Single source of truth for `dispatch.task.{started,completed,failed,aborted}`.
+// Re-exported so producers/reactors NEVER hand-build a dispatch envelope (the
+// schema-drift hazard the audit found in pilot's publish-dispatch-lifecycle).
+export {
+  createDispatchTaskStartedEvent,
+  createDispatchTaskCompletedEvent,
+  createDispatchTaskFailedEvent,
+  createDispatchTaskAbortedEvent,
+  type DispatchTaskCommonOpts,
+  type DispatchTaskStartedOpts,
+  type DispatchTaskCompletedOpts,
+  type DispatchTaskFailedOpts,
+  type DispatchTaskAbortedOpts,
+  type DispatchTaskFailedReason,
+  type DispatchEventSource,
+} from "./dispatch-events";
+
+// ── dev.implement request builder (M3) ───────────────────────────────────
+// The canonical `tasks.dev.implement` Offer builder + payload parser, so the
+// producer (pilot's tick) constructs the envelope via this rather than a local
+// copy, and the round-trip stays byte-identical to the consumer's parse.
+export {
+  createDevImplementRequestEvent,
+  parseDevImplementPayload,
+  type DevImplementPayload,
+  type CreateDevImplementRequestEventOpts,
+} from "./dev-events";

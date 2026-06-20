@@ -196,7 +196,16 @@ export interface DispatchTaskReceivedPayload {
   agent_id: string;
   /** The CC prompt — what claude should do. Required. */
   prompt: string;
-  /** Optional CC session opts — passed through to CCSession constructor. */
+  /**
+   * Optional CC session opts — passed through to CCSession constructor.
+   * GV-2 (cortex#1077): `cortex_channel`/`cortex_network` are the canonical
+   * dispatch-payload labels; `grove_channel`/`grove_network` are the legacy
+   * aliases kept for back-compat. The source DUAL-WRITES both; the listener
+   * reads cortex-first with a grove fallback. The grove aliases retire at the
+   * breaking v3.0.0 (cortex#774 lockstep). All optional.
+   */
+  cortex_channel?: string;
+  cortex_network?: string;
   grove_channel?: string;
   grove_network?: string;
   agent_name?: string;
@@ -1064,7 +1073,7 @@ function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
  *
  * **Why CC-runtime fields live on `req.runtime` and not the top level.**
  * `DispatchRequest` is the substrate-agnostic contract. Fields like
- * `cwd`, `bashAllowlist`, `groveChannel`, etc. are CC-specific. Putting
+ * `cwd`, `bashAllowlist`, `channel`, etc. are CC-specific. Putting
  * them under `runtime` means future harnesses (`bus-peer`, `cursor`, ...)
  * see a clean separation: dispatch-contract on top, substrate-specific
  * knobs in the `runtime` block. CC reads what it needs; others ignore.
@@ -1091,8 +1100,12 @@ function buildDispatchRequest(
   if (payload.cwd !== undefined) runtime.cwd = payload.cwd;
   if (payload.allowed_dirs !== undefined) runtime.allowedDirs = payload.allowed_dirs;
   if (payload.additional_args !== undefined) runtime.additionalArgs = payload.additional_args;
-  if (payload.grove_channel !== undefined) runtime.groveChannel = payload.grove_channel;
-  if (payload.grove_network !== undefined) runtime.groveNetwork = payload.grove_network;
+  // GV-2 (cortex#1077): read the canonical `cortex_*` label first, fall back
+  // to the legacy `grove_*` alias (a pre-GV-2 source still sends grove only).
+  const channelLabel = payload.cortex_channel ?? payload.grove_channel;
+  if (channelLabel !== undefined) runtime.channel = channelLabel;
+  const networkLabel = payload.cortex_network ?? payload.grove_network;
+  if (networkLabel !== undefined) runtime.network = networkLabel;
   if (payload.resume_session_id !== undefined) runtime.resumeSessionId = payload.resume_session_id;
   // ST-P1 (cortex#964) — map the session-tree parent onto the runtime block.
   if (payload.parent_session_id !== undefined) runtime.parentSessionId = payload.parent_session_id;

@@ -90,6 +90,20 @@ export function StackHubCard({
   // transport overlay is on AND signal observed it). Taken verbatim from signal.
   const badge =
     data.transportVerdict !== undefined ? verdictBadge(data.transportVerdict) : null;
+  // #1089 P4 — signal-OPTIONAL liveness enrichment. WHEN signal is present its
+  // folded transport verdict keys two hub treatments (OQ4); when signal is absent
+  // `transportVerdict` is undefined and BOTH stay false, so the hub renders purely
+  // from cortex's own federated presence — strictly additive, no signal dependency.
+  //   - `registered-absent` (registered, no live leaf) → MUTE the hub: render it
+  //     (the principal wants to see WHO is on the network, live or not — OQ4: muted,
+  //     not omitted), but dimmed so a transport-dead peer doesn't read as live.
+  //   - `unregistered-present` (a live leaf with no registry entry — reality \ intent)
+  //     → flag an ANOMALY: the security-relevant case gets an explicit affordance
+  //     beyond the alert badge so the Network view can surface it distinctly.
+  // Muting/anomaly are conveyed by class + `data-*` (opacity/treatment), never hue
+  // alone (a11y). `connected` is healthy → neither.
+  const transportMuted = data.transportVerdict === "registered-absent";
+  const transportAnomaly = data.transportVerdict === "unregistered-present";
   // #1068 — the hub is a toggle button for its subtree selection. When
   // interactive (a toggle handler is wired), it's focusable + Enter/Space
   // activates it; the selected/dimmed state is on `aria-pressed` + `data-*` +
@@ -102,7 +116,11 @@ export function StackHubCard({
         (foreign ? " network-node-hub-foreign" : " network-node-hub-local") +
         ` network-node-hub-${category}` +
         (selected ? " network-node-selected" : "") +
-        (dimmed ? " network-node-dimmed" : "")
+        (dimmed ? " network-node-dimmed" : "") +
+        // #1089 P4 — signal-optional transport treatments (additive; only when a
+        // verdict is folded in). registered-absent → muted, unregistered-present → anomaly.
+        (transportMuted ? " network-node-hub-muted" : "") +
+        (transportAnomaly ? " network-node-hub-anomaly" : "")
       }
       // #1068 — the stack's deterministic color, exposed as a CSS custom property
       // the hub styling references for its accent/border. ADDITIVE: the shape
@@ -115,6 +133,10 @@ export function StackHubCard({
       data-selected={selected ? "true" : undefined}
       data-dimmed={dimmed ? "true" : undefined}
       data-transport-verdict={data.transportVerdict ?? undefined}
+      // #1089 P4 — a11y/automation can read the transport treatment off the hub
+      // without relying on colour. Undefined (no `true`) when signal is absent.
+      data-transport-muted={transportMuted ? "true" : undefined}
+      data-transport-anomaly={transportAnomaly ? "true" : undefined}
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? 0 : undefined}
       aria-pressed={interactive ? selected : undefined}

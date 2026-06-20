@@ -17,6 +17,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import YAML from "yaml";
+import {
+  cortexConfigPath,
+  migrateGroveConfigFile,
+  resolveConfigFilePath,
+} from "../../../common/config/config-path";
 
 // =============================================================================
 // Pure functions (testable, no side effects)
@@ -389,7 +394,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   // Try to read repos from bot.yaml if available
   let repos = defaultRepos;
   try {
-    const configPath = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
+    const configPath = resolveConfigFilePath("bot.yaml"); // cortex-first, grove-fallback (GV-1)
     if (existsSync(configPath)) {
       const configContent = readFileSync(configPath, "utf-8");
       // Simple yaml parsing — look for repos array under github:
@@ -493,9 +498,13 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   // --- Step 11: Print summary & save credentials ---
   step(11, TOTAL_STEPS, "Saving credentials and printing summary...");
 
-  const credDir = join(process.env.HOME ?? "~", ".config", "grove");
-  mkdirSync(credDir, { recursive: true });
-  const credPath = join(credDir, "cloud-credentials.txt");
+  // GV-1: write credentials cortex-side. Copy any legacy grove copy to the
+  // cortex path first (mode-preserving — the grove original is intentionally
+  // KEPT so the grove-fallback resolver still works during transition), then
+  // write the fresh credentials to the canonical cortex path.
+  migrateGroveConfigFile("cloud-credentials.txt");
+  const credPath = cortexConfigPath("cloud-credentials.txt");
+  mkdirSync(dirname(credPath), { recursive: true });
 
   const summary = buildCredentialsSummary({
     workerUrl,
@@ -535,7 +544,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   }
 
   console.log("\nNext steps:");
-  console.log("  1. Add the bot.yaml snippet above to ~/.config/grove/bot.yaml");
+  console.log("  1. Add the bot.yaml snippet above to ~/.config/cortex/bot.yaml");
   console.log("  2. Restart cortex: cortex stop && cortex start");
   console.log("  3. Add more principals: cortex cloud add-principal --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
 }
@@ -675,7 +684,9 @@ async function cloudStatus(flags: Record<string, string>): Promise<void> {
 // cloud repos — Repo management (bot.yaml + Worker secret + D1)
 // =============================================================================
 
-const DEFAULT_CONFIG_PATH = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
+// GV-1: cortex-first, grove-fallback. Resolved at module load; the daemon and
+// `cortex cloud repos` both read (never write) bot.yaml here.
+const DEFAULT_CONFIG_PATH = resolveConfigFilePath("bot.yaml");
 
 interface BotYamlGithub {
   repos?: string[];
@@ -712,7 +723,7 @@ function loadBotYaml(configPath: string): { raw: string; parsed: BotYaml } {
 }
 
 function readAdminSecret(): string | null {
-  const credPath = join(process.env.HOME ?? "~", ".config", "grove", "cloud-credentials.txt");
+  const credPath = resolveConfigFilePath("cloud-credentials.txt"); // cortex-first, grove-fallback (GV-1)
   if (!existsSync(credPath)) return null;
   const content = readFileSync(credPath, "utf-8");
   const match = /Admin Secret:\s+(\S+)/.exec(content);
@@ -745,7 +756,7 @@ async function cloudRepos(subcommand: string, flags: Record<string, string>, ext
       console.log("  add <repo>      Add a repo (updates bot.yaml + Worker secret + triggers sync)");
       console.log("  remove <repo>   Remove a repo (updates bot.yaml + Worker secret + prunes D1)\n");
       console.log("Options:");
-      console.log("  --config PATH   Path to bot.yaml (default: ~/.config/grove/bot.yaml)");
+      console.log("  --config PATH   Path to bot.yaml (default: ~/.config/cortex/bot.yaml, falls back to ~/.config/grove/bot.yaml)");
       console.log("  --cf-api-token  Cloudflare API token (for updating Worker secret)");
       console.log("  --admin-key     Admin secret (for D1 prune; auto-detected from credentials)\n");
       console.log("Examples:");
@@ -907,7 +918,7 @@ async function pruneRepoFromD1(repo: string, config: BotYaml, flags: Record<stri
 
   if (!endpoint || !adminKey) {
     warn("No endpoint or admin key — skipping D1 prune");
-    console.log("    Pass --admin-key or ensure ~/.config/grove/cloud-credentials.txt exists");
+    console.log("    Pass --admin-key or ensure ~/.config/cortex/cloud-credentials.txt exists");
     return;
   }
 

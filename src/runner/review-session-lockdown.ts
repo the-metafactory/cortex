@@ -31,7 +31,7 @@
  *   - **`allowedDirs`** — SCRATCH ONLY (the caller passes the per-review scratch
  *     dir). The reviewer cannot read or write outside it, so it cannot reach the
  *     principal's config, other repos, or secrets on disk.
- *   - **`groveChannel`** — set to the agent id so `bash-guard.hook.ts`'s Gate-1
+ *   - **`channel`** — set to the agent id so `bash-guard.hook.ts`'s Gate-1
  *     engagement precondition is met (without a channel the guard pass()es
  *     through on every Bash command — the same disengagement the dev-consumer
  *     boot fixed). A locked allowlist with a disengaged guard is no lock at all.
@@ -168,7 +168,7 @@ export function lockdownReviewSessionOpts(input: LockdownInput): ReviewSessionOp
     agentId: input.agentId,
     // bash-guard Gate-1 engagement — without a channel the guard disengages on
     // every Bash command (a locked allowlist with a disengaged guard is no lock).
-    groveChannel: input.agentId,
+    channel: input.agentId,
     // Minimal tool set + explicit write/spawn denials.
     allowedTools: [...LOCKED_REVIEW_ALLOWED_TOOLS],
     disallowedTools: [...LOCKED_REVIEW_DISALLOWED_TOOLS],

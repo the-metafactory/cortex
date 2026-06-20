@@ -9,8 +9,12 @@ import type { AgentConfig } from "../../common/types/config";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import type { DispatchSourcePublishResult } from "../dispatch-source-publisher";
-import { validateEnvelope } from "../myelin/envelope-validator";
+import { validateEnvelope, getActorPrincipal } from "../myelin/envelope-validator";
 import { PolicyEngine } from "../../common/policy/engine";
+import { policyEngineFromConfig } from "../../common/policy/factory";
+import { defaultPolicySovereignty } from "../../common/policy/policy-gate";
+import { extractAgentIdFromDid } from "../../common/policy/did";
+import type { Policy } from "../../common/types/cortex-config";
 import type {
   CCSessionFactory,
   CCSessionLike,
@@ -48,6 +52,30 @@ function makePublishPolicyEngine(): PolicyEngine {
     ],
     roles: [{ id: "operator", capabilities: ["dispatch.test-agent"] }],
   });
+}
+
+/**
+ * cortex#1167 — the PRODUCTION engine shape: built via `policyEngineFromConfig`
+ * (exactly how cortex.ts wires it) so the synthetic `public` principal is
+ * registered with `dispatch.<agentId>` per flagged agent. Maps
+ * (discord, 1487204875912609844) → andreas (a fully-privileged principal). Used
+ * by the round-trip tests that prove the listener's engine.check passes for `public`.
+ */
+function makeWiredEngineWithPublic(openOnboardingAgentIds: string[]): PolicyEngine {
+  const policy: Policy = {
+    principals: [
+      {
+        id: "andreas",
+        home_principal: "andreas",
+        home_stack: "andreas/meta-factory",
+        role: ["operator"],
+        trust: [],
+        platform_ids: { discord: ["1487204875912609844"] },
+      },
+    ],
+    roles: [{ id: "operator", capabilities: ["operator", "keyword.chat", "dispatch.test-agent", "dispatch.pier"] }],
+  };
+  return policyEngineFromConfig(policy, openOnboardingAgentIds)!;
 }
 
 // Minimal config that satisfies AgentConfig shape for testing
@@ -149,6 +177,196 @@ describe("DispatchHandler", () => {
 
       expect(adapter.sentMessages).toHaveLength(1);
       expect(adapter.sentMessages[0]!.text).toContain("Not authorized");
+    });
+  });
+
+  // cortex#1165 — Pier open-onboarding gate. An unmapped sender + a flagged
+  // target agent → admitted as a zero-authority anon principal; the chat
+  // session runs. Unflagged agents stay denied. Non-`unmapped_sender` denies
+  // are NEVER converted.
+  describe("open-onboarding gate (cortex#1165)", () => {
+    const UNMAPPED_DENY = {
+      allowed: false as const,
+      features: { chat: false, async: false, team: false },
+      denyCode: "unmapped_sender" as const,
+      // Trimmed to the assertion-relevant prefix — the full prose lives in
+      // resolve-access.ts; the test only keys off this substring + denyCode.
+      denyReason: "Sorry, I'm not set up to respond to you.",
+    };
+
+    test("unmapped sender + FLAGGED agent → admitted (no deny posted, session runs)", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "welcome!", exitCode: 0, durationMs: 1, sessionId: "anon-sess" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      adapter.accessDecision = { ...UNMAPPED_DENY };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "hi, I'm new here" }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // The strict deny message must NOT have been posted...
+      const denied = adapter.sentMessages.some((m) => m.text.includes("not set up to respond"));
+      expect(denied).toBe(false);
+      // ...and the chat session must have run (allow→dispatch).
+      expect(calls).toBe(1);
+      await handler.shutdown();
+    });
+
+    test("unmapped sender + UNFLAGGED agent (regression) → still DENIED, no session", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "should not run", exitCode: 0, durationMs: 1, sessionId: "x" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      adapter.accessDecision = { ...UNMAPPED_DENY };
+
+      // No targetAgent / openOnboarding absent → strict deny path.
+      await handler.handleMessage(adapter, makeMsg({ content: "hi" }), {
+        id: "luna",
+        displayName: "Luna",
+        // openOnboarding intentionally absent
+      });
+
+      expect(adapter.sentMessages).toHaveLength(1);
+      expect(adapter.sentMessages[0]!.text).toContain("not set up to respond");
+      expect(calls).toBe(0);
+      await handler.shutdown();
+    });
+
+    test("FLAGGED agent does NOT convert a non-unmapped deny (lockout stays denied)", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "x", exitCode: 0, durationMs: 1, sessionId: "x" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      // A recognized-but-muted principal → lockout deny, NOT unmapped_sender.
+      adapter.accessDecision = {
+        allowed: false,
+        features: { chat: false, async: false, team: false },
+        denyCode: "lockout",
+        denyReason: 'Principal "muted" has no keyword capabilities ...',
+      };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "let me in" }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // Lockout is a real principal with zero caps — open-onboarding must NOT
+      // rescue it (it is a different deny category).
+      expect(adapter.sentMessages).toHaveLength(1);
+      expect(adapter.sentMessages[0]!.text).toContain("no keyword capabilities");
+      expect(calls).toBe(0);
+      await handler.shutdown();
+    });
+
+    test("a MAPPED principal is unaffected — flagged agent still uses the real allow", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "real reply", exitCode: 0, durationMs: 1, sessionId: "real" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      // A real, mapped principal: allowed with real grants — NOT anon.
+      adapter.accessDecision = {
+        allowed: true,
+        features: { chat: true, async: false, team: false },
+      };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // No deny posted, session runs as the real principal (conversion code
+      // only fires on `!allowed && unmapped_sender`).
+      const denied = adapter.sentMessages.some((m) => m.text.includes("not set up to respond"));
+      expect(denied).toBe(false);
+      expect(calls).toBe(1);
+      await handler.shutdown();
+    });
+
+    // cortex#1167 review MINOR — DM over-reach. An unmapped stranger DMing a
+    // flagged agent must STAY denied (the gate scopes to the public channel).
+    test("unmapped sender DMing a FLAGGED agent → still DENIED, no session", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "should not run", exitCode: 0, durationMs: 1, sessionId: "x" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      adapter.accessDecision = { ...UNMAPPED_DENY, isDM: true };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "let me in", isDM: true }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // G-300: unmapped DMs are silently ignored — no deny message, no session.
+      expect(calls).toBe(0);
+      const replied = adapter.sentMessages.some((m) => m.text.length > 0);
+      expect(replied).toBe(false);
+      await handler.shutdown();
     });
   });
 
@@ -1373,8 +1591,8 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     timeoutMs: 120_000,
     cwd: "/Users/andreas/Developer/cortex",
     additionalArgs: ["--foo"],
-    groveChannel: "cortex",
-    groveNetwork: undefined,
+    channel: "cortex",
+    network: undefined,
     project: "cortex",
     entity: "issue/409",
     principal: "andreas",
@@ -1457,6 +1675,118 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     // catches any regression where the new envelope shape drifts
     // from the wire contract the dispatch-listener consumes.
     expect(validateEnvelope(envelope).ok).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  // cortex#1167 review BLOCKER (PIVOT) — full publish → LISTENER round-trip with
+  // runtime + policyEngine WIRED (production config). The earlier whack-a-mole
+  // anon-DID approach left the dispatch-listener gate (engine.check(...,
+  // "dispatch.pier") at dispatch-listener.ts:1687) DENYING the unmapped sender
+  // as unknown_principal. The fix attributes the sender to the single
+  // registered `public` principal (originator `did:mf:public`) which the engine
+  // GRANTS `dispatch.pier`. This test drives the admit path, then reproduces the
+  // listener's EXACT principal resolution + engine.check on the published
+  // envelope to PROVE it is NOT denied at 1687 (Pier's session would run).
+  test("WIRED bus round-trip: unmapped sender → flagged Pier → published AND PASSES the listener's engine.check", async () => {
+    const runtime = makeRecordingRuntimeWithSubject();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
+      stack: "meta-factory",
+      // PRODUCTION engine: built via the factory WITH the public principal
+      // granted dispatch.pier (exactly how cortex.ts wires it). It maps
+      // (discord, 1487204875912609844) → andreas; JC's id below is UNMAPPED.
+      policyEngine: makeWiredEngineWithPublic(["pier"]),
+    });
+    const adapter = new MockAdapter();
+    adapter.accessDecision = {
+      allowed: false,
+      features: { chat: false, async: false, team: false },
+      denyCode: "unmapped_sender",
+      denyReason: "Sorry, I'm not set up to respond to you.",
+    };
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ platform: "discord", authorId: "285727653603049472", authorName: "JC", content: "hi, I'm new here" }),
+      { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
+    );
+
+    // 1. The chat envelope was published with the PUBLIC originator.
+    expect(runtime.subjectPublishes.length).toBe(1);
+    const { envelope } = runtime.subjectPublishes[0]!;
+    expect(envelope.type).toBe("tasks.chat");
+    expect(envelope.originator?.identity).toBe("did:mf:public");
+    expect(validateEnvelope(envelope).ok).toBe(true);
+    // MAJOR — the explicit Read-only allowlist rode the payload (every path).
+    expect(envelope.payload.allowed_tools).toEqual(["Read"]);
+
+    // 2. ROUND-TRIP — reproduce the dispatch-listener's gate (dispatch-listener.ts
+    //    resolvePrincipalId → engine.check("dispatch.<agent_id>")). The published
+    //    envelope must PASS, not get denied as unknown_principal at line 1687.
+    const listenerEngine = makeWiredEngineWithPublic(["pier"]);
+    const actorDid = getActorPrincipal(envelope);
+    expect(actorDid).toBe("did:mf:public");
+    const principalId = extractAgentIdFromDid(actorDid!);
+    expect(principalId).toBe("public");
+    const decision = listenerEngine.check(principalId!, {
+      capability: `dispatch.${envelope.payload.agent_id as string}`,
+      sovereignty: defaultPolicySovereignty(),
+    });
+    expect(decision.allow).toBe(true); // NOT denied at dispatch-listener.ts:1687
+
+    // 3. No invalid-originator error posted back.
+    const errored = adapter.sentMessages.some((m) => m.text.includes("could not be mapped"));
+    expect(errored).toBe(false);
+
+    await handler.shutdown();
+  });
+
+  // cortex#1167 — the listener gate DENIES the public principal dispatching to a
+  // NON-flagged agent (Luna): same engine, different capability claim.
+  test("WIRED bus round-trip: public principal is DENIED dispatch to a NON-flagged agent (Luna) at the listener", () => {
+    const listenerEngine = makeWiredEngineWithPublic(["pier"]);
+    const decision = listenerEngine.check("public", {
+      capability: "dispatch.luna",
+      sovereignty: defaultPolicySovereignty(),
+    });
+    expect(decision.allow).toBe(false);
+  });
+
+  // cortex#1167 — regression: originator validation is UNCHANGED for real
+  // dispatches. A mapped principal still resolves to their real principal DID
+  // via the normal resolver (override is undefined → no bypass).
+  test("WIRED bus: a MAPPED principal still resolves to the REAL principal DID (override not applied)", async () => {
+    const runtime = makeRecordingRuntimeWithSubject();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
+      stack: "meta-factory",
+      policyEngine: makeWiredEngineWithPublic(["pier"]),
+    });
+    const adapter = new MockAdapter();
+    // Mapped principal: a real allow (the conversion code never fires).
+    adapter.accessDecision = { allowed: true, features: { chat: true, async: false, team: false } };
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ platform: "discord", authorId: "1487204875912609844", authorName: "andreas", content: "hello" }),
+      { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
+    );
+
+    expect(runtime.subjectPublishes.length).toBe(1);
+    const { envelope } = runtime.subjectPublishes[0]!;
+    // RESOLVED real principal DID — proves the public override did NOT leak onto
+    // a real, mapped dispatch (originator validation unchanged for real paths).
+    expect(envelope.originator?.identity).toBe("did:mf:andreas");
+    expect(envelope.originator?.identity).not.toContain("public");
+    // No anon allowlist on a real dispatch.
+    expect(envelope.payload.allowed_tools).toBeUndefined();
 
     await handler.shutdown();
   });

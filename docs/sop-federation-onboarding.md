@@ -1,3 +1,5 @@
+> **Superseded by [`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) for the end-to-end peer-onboarding path.** Retained for: three-layer model detail (network/identity/dispatch), manual fallback (`peers[]` hand-pin, §3), dispatch anatomy (Offer vs Direct, §4), and the current honest status of the federated dispatch path (§7).
+
 # SOP — Cross-principal federation onboarding (peer principal)
 
 **Status:** active (TC-2 / Trust & Confidentiality track) — but see [§7 Current status](#7-current-status--be-honest) before assuming the dispatch path works

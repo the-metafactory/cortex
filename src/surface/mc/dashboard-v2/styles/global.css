@@ -590,6 +590,26 @@ html, body {
   border-style: dashed;
 }
 
+/* #1089 P4 — signal-OPTIONAL liveness enrichment on a stack hub. Only present
+   when signal folded a transport verdict for the hub; absent signal = no class,
+   so these rules never affect a signal-less Network view (strictly additive).
+   A registered-absent peer (registered, NO live leaf) is MUTED — rendered, not
+   omitted (OQ4: the principal wants to see who is on the network, live or not),
+   but dimmed so a transport-dead peer doesn't read as live. Conveyed by opacity
+   + a dashed treatment, never hue alone (a11y). */
+.network-node-hub-muted {
+  opacity: 0.5;
+  filter: saturate(0.75);
+}
+/* The unregistered-present anomaly (a live leaf with NO registry entry — the
+   security-relevant reality \ intent case) gets an explicit alert ring beyond
+   the alert-severity badge, so it's hard to miss on the canvas. */
+.network-node-hub-anomaly {
+  outline: 2px dashed color-mix(in oklch, var(--danger, var(--warn)) 70%, transparent);
+  outline-offset: 2px;
+  border-color: color-mix(in oklch, var(--danger, var(--warn)) 60%, var(--line));
+}
+
 /* Legend overlay (bottom-right of the canvas). */
 .network-legend {
   position: absolute; right: 10px; bottom: 10px; z-index: 5;

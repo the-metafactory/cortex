@@ -24,7 +24,15 @@ import { homedir } from "os";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
-import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
+import {
+  loadConfigWithAgents,
+  loadAgentsDirectory,
+  expandTilde,
+  FragmentLoadError,
+  flattenDiscordPresences,
+  flattenMattermostPresences,
+  flattenSlackPresences,
+} from "./common/config/loader";
 import {
   ConfigWatcher,
   AgentsDirectoryWatcher,
@@ -176,6 +184,12 @@ import type { Surfaces } from "./common/types/surfaces";
 import type { SurfaceGateway } from "./gateway/surface-gateway";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
+// S2 (cortex#1160) — per-agent chat dispatch listeners derive their scoped
+// subscription subject (`local.{principal}.{stack}.tasks.@{enc-did}.>`) via the
+// canonical myelin subject builder so the subscribe-side pattern matches the
+// `dispatch-source-publisher` emit side byte-for-byte.
+import { directTaskSubject } from "@the-metafactory/myelin/subjects";
+import { chatCapableAgents } from "./runner/chat-capable-agents";
 // G-1114.B.2 — live agent-presence producer (online/heartbeat/offline) wired
 // into boot. G-1114.B.3 — the runtime registry subscriber it feeds.
 import {
@@ -193,6 +207,13 @@ import {
   startFederatedAgentPresenceSubscriber,
   type FederatedAgentPresenceSubscriberHandle,
 } from "./bus/agent-network/federated-subscriber";
+// P3 (cortex#1088) — continuous federation roster reconciler. Mutates the LIVE
+// `policy.federated.networks[]` the gate reads so a later-joining roster peer is
+// admitted within one reconcile interval, no manual `network join`.
+import {
+  startFederationReconciler,
+  type FederationReconcilerHandle,
+} from "./bus/agent-network/federation-reconciler";
 // P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (the
 // observability sibling of the presence subscriber; same Option-D trust path +
 // the curation gate, origin-badged).
@@ -223,13 +244,16 @@ import { WorklogManager } from "./runner/worklog-manager";
 import { dispatchNetwork } from "./cli/cortex/commands/network";
 import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
+import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
+import { dispatchCreds } from "./cli/cortex/commands/creds";
 
 import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
 import {
   RegistryClient,
   PrincipalPubkeyResolver,
   MultiPrincipalIdentityRegistry,
+  NetworkRegistryClient,
 } from "./common/registry";
 import type {
   RegistryClientReader,
@@ -612,9 +636,15 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools">,
   configDir: string,
-): { id: string; displayName: string; persona: string } {
+): {
+  id: string;
+  displayName: string;
+  persona: string;
+  openOnboarding?: boolean;
+  openOnboardingAllowedTools?: string[];
+} {
   const expandedPersona = expandTilde(agent.persona);
   return {
     id: agent.id,
@@ -622,6 +652,15 @@ function targetAgentForDispatch(
     persona: isAbsolute(expandedPersona)
       ? expandedPersona
       : join(configDir, expandedPersona),
+    // cortex#1165 — carry the open-onboarding gate flag per target agent so the
+    // dispatch handler can admit unmapped senders for flagged concierges only.
+    ...(agent.openOnboarding === true && { openOnboarding: true }),
+    // cortex#1167 — carry the explicit anon-session tool allowlist (mirrors the
+    // persona allowedTools). Only meaningful when openOnboarding is set.
+    ...(agent.openOnboarding === true &&
+      agent.openOnboardingAllowedTools !== undefined && {
+        openOnboardingAllowedTools: agent.openOnboardingAllowedTools,
+      }),
   };
 }
 
@@ -1056,10 +1095,24 @@ export async function startCortex(
   const inlineAgents = options.inlineAgents ?? [];
   const inlineIds = new Set(inlineAgents.map((a) => a.id));
   const shadowedFragmentCount = fragmentAgents.filter((a) => inlineIds.has(a.id)).length;
-  const mergedAgents: Agent[] = [
-    ...inlineAgents,
-    ...fragmentAgents.filter((a) => !inlineIds.has(a.id)),
-  ];
+  // S1 (cortex#1159) — agents installed as agents.d/ fragments (not inline) whose
+  // ids are NOT already shadowed by an inline agent. Inline agents already feed
+  // `config.discord` / `config.mattermost` / `config.slack` via the loader's
+  // presence-flatten; fragment-only agents do not, so their presence blocks must
+  // be flattened and APPENDED to the adapter-construction instance lists below
+  // (see `discordInstances` / `mattermostInstances` / `slackInstances`). Filtering
+  // out inline-shadowed ids here is what keeps the append from double-counting an
+  // agent that is both inline and a fragment (inline wins; fragment shadowed).
+  const fragmentOnlyAgents = fragmentAgents.filter((a) => !inlineIds.has(a.id));
+  const mergedAgents: Agent[] = [...inlineAgents, ...fragmentOnlyAgents];
+  // cortex#1167 — ids of agents flagged `openOnboarding`. Threaded into the
+  // policy engine so the single synthetic `public` principal is granted exactly
+  // `dispatch.<id>` for each (and nothing else). Boot snapshot; an agents.d
+  // hot-reload that toggles the flag requires a restart to re-grant (acceptable
+  // for an auth-gate flag — same posture as the rest of the policy block).
+  const openOnboardingAgentIds: string[] = mergedAgents
+    .filter((a) => a.openOnboarding === true)
+    .map((a) => a.id);
   // B-0 (cortex#1021) — `agentRegistry` is the live, swappable snapshot. The
   // agents.d/ hot-reload path (below) rebuilds the merged set and reassigns
   // this binding under a bumped generation counter; the handle's
@@ -3358,7 +3411,7 @@ export async function startCortex(
   // adapter loop) so the DispatchHandler can consume the engine for
   // adapter-side platform-id → principal resolution at envelope-publish
   // time. See `dispatch-source-publisher` / CONTEXT.md §Dispatch-source.
-  const adapterPolicyEngine = policyEngineFromConfig(resolvedPolicy);
+  const adapterPolicyEngine = policyEngineFromConfig(resolvedPolicy, openOnboardingAgentIds);
   const adapterPolicyLookup = buildPlatformPrincipalIndex(resolvedPolicy);
   const adapterPolicyRegistry = buildPrincipalRegistry(resolvedPolicy);
 
@@ -3438,6 +3491,25 @@ export async function startCortex(
   });
   const gatewayOwned = surfaceOwnershipPlan.ownedSurfaceKeys;
 
+  // S1 (cortex#1159) — the adapter-construction instance lists. `config.discord`
+  // / `config.mattermost` / `config.slack` are flattened by the loader from
+  // INLINE `agents[].presence.*` only; agents installed as agents.d/ fragments
+  // feed the registry (`mergedAgents`) but their presence blocks never enter
+  // those flat lists, so no adapter is constructed for them. We re-run the same
+  // flatten helpers (now exported from the loader — same agent→flat-instance
+  // mapping, identical `instanceId` convention) over the fragment-only agents
+  // and APPEND the result. Inline agents are already in `config.X`, so we append
+  // ONLY `fragmentOnlyAgents` (inline-shadowed fragments filtered out at the
+  // registry-merge block) — no double-counting. Legacy bot.yaml (no inline
+  // agents, empty agents.d) yields empty fragment lists → byte-identical to the
+  // pre-S1 `for (const instance of config.X)` behavior. Each appended instance
+  // carries an explicit `instanceId`, so the loops' `config.X.indexOf` /
+  // `config.X.length` fallback (used only when `instanceId` is absent) never
+  // runs for a fragment instance — that branch stays inline-only.
+  const discordInstances = [...config.discord, ...flattenDiscordPresences(fragmentOnlyAgents)];
+  const mattermostInstances = [...config.mattermost, ...flattenMattermostPresences(fragmentOnlyAgents)];
+  const slackInstances = [...config.slack, ...flattenSlackPresences(fragmentOnlyAgents)];
+
   // MIG-7.2e: per-instance agent lookup. When cortex.yaml supplies
   // `inlineAgents` (reused from the registry-merge block above), each
   // Discord/Mattermost adapter binds to the declared Agent (real id,
@@ -3487,7 +3559,7 @@ export async function startCortex(
   // engine for `(platform, authorId) → principal_id` resolution. The
   // three values are shared with the adapter loops below verbatim.
 
-  for (const instance of config.discord) {
+  for (const instance of discordInstances) {
     if (!instance.enabled) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
       continue;
@@ -3698,7 +3770,7 @@ export async function startCortex(
     console.log("cortex: no discord instances configured");
   }
 
-  for (const instance of config.mattermost) {
+  for (const instance of mattermostInstances) {
     if (!instance.enabled) continue;
     if (!instance.apiUrl || !instance.apiToken) {
       console.error(`cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`);
@@ -3799,7 +3871,7 @@ export async function startCortex(
   }
   const startedSlack: StartedSlack[] = [];
 
-  for (const instance of config.slack) {
+  for (const instance of slackInstances) {
     if (!instance.enabled) {
       console.log(`cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`);
       continue;
@@ -4037,7 +4109,7 @@ export async function startCortex(
       `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
     );
   }
-  const policyEngine = policyEngineFromConfig(resolvedPolicy);
+  const policyEngine = policyEngineFromConfig(resolvedPolicy, openOnboardingAgentIds);
   if (policyEngine !== undefined) {
     console.log(
       `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (signed_by chain verified; empty chains accepted for adapter-originated dispatches)`,
@@ -4062,7 +4134,61 @@ export async function startCortex(
   // under the surface-router's 5s render-timeout. See
   // `src/runner/dispatch-listener.ts` file-header docblock for the
   // executor-vs-renderer rationale.
-  const dispatchListener: DispatchListener = createDispatchListener({
+  // S2 (cortex#1160) — per-agent builtin chat dispatch listeners.
+  //
+  // The builtin chat path is `createDispatchListener`: it consumes
+  // `tasks.@{agent}.chat` envelopes off the bus and spawns a CC session. The
+  // PERSONA / identity it runs under is NOT carried on the listener — it rides
+  // the envelope payload (`agent_id`, `agent_name`, the persona-baked `prompt`)
+  // stamped on the EMIT side by the per-agent `DispatchHandler.handleMessage`
+  // (S1 routes each adapter instance to its matched agent via
+  // `agentByDiscordToken`). So the only per-agent state a listener carries is
+  // (a) its `receivingAgentId` trust anchor and (b) its subscribed subject.
+  //
+  // Pre-S2 a SINGLE listener was constructed bound to `firstAgent.id`,
+  // subscribing to the default wildcard `tasks.*.>`. The wildcard caught EVERY
+  // agent's tasks subtree, but the handler does NOT filter inbound `agent_id`
+  // against `receivingAgentId` — so a second presence agent (Pier, installed as
+  // an agents.d fragment per S1) had an adapter that published
+  // `tasks.@pier.chat` but no listener consuming it on a per-agent subject →
+  // silence (epic #1158 Gap 2).
+  //
+  // The fix constructs one listener per CHAT-CAPABLE agent: an agent in
+  // `mergedAgents` with a platform `presence` (the surfaces it can be
+  // @-mentioned on) AND a builtin brain (NOT `runtime.brain.kind === "exec"` —
+  // those route via `BrainConsumer`). Headless agents (`presence: {}` —
+  // approver/dev/release) get NONE; they run via the dispatch-listener as
+  // bus-only workers but are never @-mentioned on a surface.
+  //
+  // **Double-delivery safety.** Because the handler does NOT filter by
+  // `agent_id`, N listeners ALL subscribing to the shared wildcard `tasks.*.>`
+  // would each process every agent's envelope → N-fold double-spawn. So when
+  // there are 2+ chat-capable agents, each listener subscribes to its OWN
+  // scoped subtree `local.{principal}.{stack}.tasks.@{enc-did}.>` (built via
+  // the canonical `directTaskSubject`, byte-matching the emit side) — the
+  // runtime fan-out delivers an agent's envelopes ONLY to that agent's
+  // listener. No subject overlap ⇒ no double-delivery.
+  //
+  // **Single-agent byte-identity (non-negotiable).** When there is AT MOST one
+  // chat-capable agent, we construct exactly ONE listener bound to
+  // `firstAgent.id` with the subject OMITTED — i.e. the default wildcard
+  // `tasks.*.>` — wiring byte-identical to pre-S2. This covers the common
+  // single-inline-agent stack (Luna-only), a legacy flat `bot.yaml` (no
+  // `agents[]` ⇒ `firstAgent` undefined ⇒ the existing no-listener guard), AND
+  // a headless-only multi-agent stack (dev-loop): none gain a spurious extra
+  // chat listener.
+  // S2 (cortex#1160) — the chat-capable set: an enabled platform presence AND a
+  // builtin (non-exec) brain. `isExecBrainAgent` is the SAME predicate the
+  // brain-hosting path uses, injected so the rule can't drift. Pure helper in
+  // `runner/chat-capable-agents.ts` so boot + tests share one definition.
+  const chatAgents = chatCapableAgents(mergedAgents, isExecBrainAgent);
+  // Per-agent listeners; `start()`/`stop()`-ed as a set (mirrors how
+  // `reviewConsumers` / `brainConsumers` are tracked + drained).
+  const dispatchListeners: DispatchListener[] = [];
+  // Shared options every listener carries — only `receivingAgentId` + the
+  // scoped `subjects` differ per agent. Built once so the per-agent wiring
+  // can't drift between listeners.
+  const sharedDispatchListenerOpts = {
     runtime,
     source: systemEventSource,
     stack: derivedStack.stack,
@@ -4075,7 +4201,6 @@ export async function startCortex(
     cryptoVerify: signingKnobs.cryptoVerify,
     rejectEmpty: signingKnobs.rejectEmpty,
     principalId,
-    ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
     // cortex#480 — implicit own-stack trust. Adapter-originated
     // dispatches are signed by the stack identity (`did:mf:<principal>-
     // <stack>`) via MyelinRuntime.publish; without this the verifier
@@ -4113,8 +4238,46 @@ export async function startCortex(
     ...(config.claude.bashAllowlist !== undefined && {
       bashAllowlist: config.claude.bashAllowlist,
     }),
-  });
-  await dispatchListener.start();
+  };
+  if (chatAgents.length >= 2) {
+    // Multi-agent: each chat-capable agent gets its OWN listener on its OWN
+    // scoped subtree subject so the runtime never fans the same envelope to
+    // two listeners.
+    for (const agent of chatAgents) {
+      const agentChatSubject = directTaskSubject(
+        principalId,
+        `did:mf:${agent.id}`,
+        derivedStack.stack,
+      );
+      const listener = createDispatchListener({
+        ...sharedDispatchListenerOpts,
+        receivingAgentId: agent.id,
+        subjects: [agentChatSubject],
+        // Disambiguate stderr/audit log prefixes per agent.
+        adapterId: `runner-dispatch-listener-${agent.id}`,
+      });
+      dispatchListeners.push(listener);
+      console.log(
+        `cortex: dispatch-listener started — receivingAgentId=${agent.id} ` +
+          `subject=${agentChatSubject}`,
+      );
+    }
+  } else {
+    // At-most-one chat-capable agent → exactly ONE listener, wiring
+    // byte-identical to pre-S2: bound to `firstAgent.id` (the existing
+    // `mergedAgents[0]` fallback, or undefined → the no-receivingAgentId
+    // path) with the default wildcard `tasks.*.>` subscription (subject
+    // OMITTED). Legacy flat bot.yaml (`firstAgent` undefined) keeps the
+    // historical no-op-receiver behaviour.
+    const listener = createDispatchListener({
+      ...sharedDispatchListenerOpts,
+      ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
+    });
+    dispatchListeners.push(listener);
+  }
+  for (const listener of dispatchListeners) {
+    await listener.start();
+  }
 
   // F-6 — reflex activation bridge. Config-gated: mounted only when the
   // principal declared `reflex_activation.targets`. Binds a durable consumer
@@ -4974,6 +5137,11 @@ export async function startCortex(
   // G-1114.E.2 — trust-verified federated presence subscriber (folds peers'
   // agents into the SAME registry, tagged with foreign provenance).
   let federatedPresenceHandle: FederatedAgentPresenceSubscriberHandle | null = null;
+  // P3 (cortex#1088) — continuous federation roster reconciler. Mutates the
+  // LIVE `resolvedPolicy.federated.networks[]` (the SAME objects the gate above
+  // reads) so a later-joining roster peer's presence is admitted within one
+  // reconcile interval. INERT unless a network opts in (`reconcile.enabled`).
+  let federationReconcilerHandle: FederationReconcilerHandle | null = null;
   // P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (folds peers'
   // curated+signed system.{transport,federation}.* into the observability
   // projection, ORIGIN-BADGED — the Option-D sibling of the presence subscriber).
@@ -5156,6 +5324,62 @@ export async function startCortex(
         }),
         ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
       });
+
+      // P3 (cortex#1088, design §4/§7) — the continuous federation roster
+      // reconciler. The subscriber above binds the principal-WILDCARD presence
+      // firehose (`federated.*.*.agent.>`) ONCE and gates admissibility at fold
+      // time off `resolvedPolicy.federated.networks[]`. So to admit a peer that
+      // joins a shared network AFTER us, we don't re-bind NATS — we re-resolve
+      // the registry roster on an interval and MUTATE those SAME network objects
+      // (peers + accept_subjects, OWN ∪ peer subtrees) IN PLACE. The gate sees
+      // the widened accept-list on the next inbound envelope; the firehose
+      // already carries every peer's presence. OPT-IN per network (OQ1, default
+      // OFF); cortex-owned self-poll (OQ3, signal-optional — no signal import).
+      // Best-effort: a registry outage / poison network never throws out of the
+      // tick or perturbs the serving stack (mirrors the #989 aggregator).
+      //
+      // The roster READ uses cortex's OWN NetworkRegistryClient (P1's
+      // NetworkRosterProvider slice), built from `policy.federated.registry` —
+      // the SAME verified-fetch + DD-10 cache the boot peer-resolve + CLI join
+      // use. A test seam (`options.bootFederatedRosterProvider`) injects a fake
+      // so the reconciler runs with no network I/O. When no registry is
+      // configured AND no test provider is injected, the reconciler stays inert
+      // (a fully hand-pinned deployment has no roster to poll).
+      const reconcileNetworks = resolvedPolicy?.federated?.networks;
+      const reconcileRegistry = resolvedPolicy?.federated?.registry;
+      const reconcileProvider: NetworkRosterProvider | undefined =
+        options.bootFederatedRosterProvider ??
+        (reconcileRegistry !== undefined
+          ? new NetworkRegistryClient({
+              url: reconcileRegistry.url,
+              ...(reconcileRegistry.pubkey !== undefined && {
+                pubkey: reconcileRegistry.pubkey,
+              }),
+            })
+          : undefined);
+      if (
+        reconcileNetworks !== undefined &&
+        reconcileNetworks.some((n) => n.reconcile?.enabled === true) &&
+        reconcileProvider !== undefined
+      ) {
+        federationReconcilerHandle = startFederationReconciler({
+          networks: reconcileNetworks,
+          self: { principal: principalId, stack: derivedStack.stack },
+          client: reconcileProvider,
+          onResult: (result) => {
+            if (result.outcome === "applied") {
+              console.log(
+                `cortex: federation reconcile — ${result.networkId}: ${result.detail}`,
+              );
+            }
+          },
+        });
+        if (federationReconcilerHandle.active) {
+          console.log(
+            "cortex: federation roster reconciler started — continuously admitting roster-named peers (opt-in per network; registry-authoritative; chain-verify unchanged)",
+          );
+        }
+      }
 
       // P-14 U3.3 (#937) — the trust-verified federated OBSERVABILITY fold, the
       // observability sibling of the presence subscriber above. Reuses the EXACT
@@ -5616,6 +5840,14 @@ export async function startCortex(
         "federated agent-presence subscriber stop",
         federatedPresenceHandle?.stop(),
       );
+      // P3 (cortex#1088) — stop the federation roster reconciler poller (cancels
+      // the interval + awaits any in-flight pass). It only mutates the in-memory
+      // policy objects, so ordering vs. the registry/subscriber teardown is
+      // immaterial; stopping it here keeps it adjacent to the subscriber it feeds.
+      await completeAsync(
+        "federation roster reconciler stop",
+        federationReconcilerHandle?.stop(),
+      );
       // P-14 U3.3 — stop the federated observability fold (drains its push
       // subscriber + unregisters its fan-out handler). Projected observability
       // ROWS are append-only history retained by db/retention.ts — stopping the
@@ -5723,10 +5955,10 @@ export async function startCortex(
           );
         }
       }
-      // F-6 — drain the reflex activation bridge BEFORE the executor it feeds.
+      // F-6 — drain the reflex activation bridge BEFORE the executors it feeds.
       // Stopping the bridge first guarantees it can't consume + re-emit a
-      // `tasks.*` dispatch after the dispatch-listener has drained (which would
-      // leave the activation unhandled mid-shutdown). Only present when
+      // `tasks.*` dispatch after the dispatch listeners have drained (which
+      // would leave the activation unhandled mid-shutdown). Only present when
       // config-gated on; `stop()` is idempotent.
       if (reflexActivationListener !== undefined) {
         await completeAsync(
@@ -5734,7 +5966,16 @@ export async function startCortex(
           reflexActivationListener.stop(),
         );
       }
-      await completeAsync("dispatch-listener stop", dispatchListener.stop());
+      // S2 (cortex#1160) — drain every per-agent chat dispatch listener.
+      for (let i = 0; i < dispatchListeners.length; i++) {
+        const listener = dispatchListeners[i];
+        if (listener) {
+          await completeAsync(
+            `dispatch-listener stop[${i}]`,
+            listener.stop(),
+          );
+        }
+      }
       // signal#113 P-11 (#56) — drain the echo responder on the same boundary
       // as the dispatch listener. `stop()` is idempotent (no-op when dormant).
       await completeAsync("probe-responder stop", probeResponder.stop());
@@ -6338,6 +6579,49 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchOffer(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // O-2.5 (#1061) — per-agent NATS user credentials (issue/list/revoke/rotate),
+  // a thin delegator to `arc nats … --json`. Same passthrough shape as
+  // `network` / `stack` / `offer`: `dispatchCreds` owns its own arg parsing
+  // (incl. the `creds issue <agent-id> --account/--pub/--sub` form), so
+  // commander hands it the raw remaining argv untouched. The module landed in
+  // #1061 but was never wired into the CLI here — `cortex creds …` was an
+  // unknown command until this registration.
+  program
+    .command("creds")
+    .description("Manage per-agent NATS user credentials (issue / list / revoke / rotate)")
+    .argument("[args...]", "creds subcommand + flags (see `cortex creds --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchCreds(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // G4 (#1120) — thin 4-surface deploy orchestrator + version-skew guard.
+  // Dry-run by default (prints the ordered plan, runs nothing). `--apply` runs
+  // non-prod surfaces (bot, dashboard). `--apply --include-prod` also runs the
+  // two production wrangler deploys (api, registry). Same passthrough shape as
+  // `network` / `stack` / `offer` / `creds`: `dispatchRelease` owns its own
+  // arg parsing, so commander hands it the raw remaining argv untouched.
+  program
+    .command("release")
+    .description(
+      "Print the 4-surface deploy plan + version-skew report (dry-run by default; --apply to execute)",
+    )
+    .argument("[args...]", "release flags (see `cortex release --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchRelease(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);

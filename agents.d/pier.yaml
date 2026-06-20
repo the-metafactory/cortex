@@ -1,0 +1,74 @@
+# ~/.config/cortex/agents.d/pier.yaml
+#
+# Pier — onboarding-concierge assistant (ADR-0015, cortex#1142)
+#
+# This fragment is rendered by `arc install pier` into the installing
+# principal's `~/.config/cortex/agents.d/pier.yaml`.  It MUST NOT be
+# hand-edited on the target host — edits are overwritten on the next
+# `arc upgrade pier`.  Edit the source in the pier package instead.
+#
+# Two axes governed here (per design-arc-agent-bots.md §2):
+#   Identity  — id, displayName, trust
+#   Presence  — discord bound to the metafactory community guild
+#
+# Substrate + capabilities are declared in arc-manifest-pier.yaml;
+# the rendered fragment carries them so the cortex dashboard can
+# render accurate provenance ("pier (in-process / claude-code)").
+
+id: pier
+displayName: Pier
+persona: ~/.config/cortex/personas/pier.md
+# `roles:` is intentionally absent — AgentSchema.roles[] was retired at the
+# v2.0.0 cutover (cortex#297) and authorization now lives on policy.principals[].
+# Pier's "issues nothing" boundary is enforced by its persona + the admission
+# gate it can only *surface* (never approve); it mints no NATS credentials.
+trust: [luna]
+
+# cortex#1165 — open-onboarding gate. Pier is a concierge that must greet
+# strangers: senders not (yet) mapped to any principal. With this flag set,
+# such an unmapped sender is attributed to a ZERO-AUTHORITY anonymous principal
+# (no roles, no privileged capability, every tool restricted, untrusted) so Pier's chat
+# session can respond — instead of the strict "I'm not set up to respond to
+# you" deny that every other agent keeps. Pier issues nothing, so the blast
+# radius of admitting a stranger is "a reply in the public onboarding channel".
+# The gate fires ONLY for non-DM messages on Pier's bound public channel
+# (agentChannelId) — an unmapped DM stays denied.
+openOnboarding: true
+# cortex#1167 — explicit tool ALLOWLIST for the anonymous onboarding session.
+# MUST mirror the persona allowedTools (personas/pier.md → [Read]). Anything not
+# listed — every mcp__* tool, every future tool — is denied at the CC layer
+# (the anon session must never get allow-by-default tool access).
+openOnboardingAllowedTools: [Read]
+
+# Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - onboarding            # drives Tier-1 and Tier-2 community onboarding
+    - chat                  # responds to newcomer messages in #onboard-your-fleet
+
+# Discord presence — bound to the metafactory community guild.
+# The bot token is a secret resolved at install time from the host
+# environment or principal vault.  It is NEVER stored in this file.
+#
+# Three-channel topology (the public-entry / private-back-office split):
+#   guildId:        1505549701674700991  (The Metafactory — community guild)
+#   agentChannelId: 1517154685595942972  (#onboard-your-fleet — PUBLIC entry;
+#                                          newcomers must reach Pier here before
+#                                          they hold the community-fleet role)
+#   logChannelId:   1514679294553751613  (#assistant-fleet-onboarding — PRIVATE
+#                                          back-office; admission audit trail,
+#                                          principal + Pier only)
+#
+# env var:   PIER_BOT_TOKEN         — set by the operator before arc install
+presence:
+  discord:
+    enabled: true
+    token: ${PIER_BOT_TOKEN}          # placeholder; resolved at cortex load
+    guildId: "1505549701674700991"        # The Metafactory community guild
+    agentChannelId: "1517154685595942972" # #onboard-your-fleet — public entry
+    logChannelId: "1514679294553751613"   # #assistant-fleet-onboarding — private back-office
+    dmOwner: false                    # Pier never claims DMs; it answers the public channel
+    contextDepth: 10
+    surfaceSubjects: []               # no raw envelope surface — Pier posts only via its persona

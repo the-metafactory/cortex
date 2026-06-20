@@ -26,7 +26,71 @@
  */
 
 import { PolicyEngine, type FederatedPolicy } from "./engine";
+import type { Principal, RoleDefinition } from "./types";
 import type { Policy } from "../types/cortex-config";
+
+/**
+ * cortex#1167 — the single, minimal-privilege PUBLIC-DOMAIN principal.
+ *
+ * Pier (and any agent flagged `openOnboarding`) is a public surface: it
+ * answers questions and holds NOTHING. Both admissions (Tier-1 community-fleet
+ * role, Tier-2 network admit) are HUMAN gates — Pier mints no credentials.
+ *
+ * Every unmapped inbound sender reaching a flagged agent's PUBLIC channel is
+ * attributed to THIS ONE principal (the per-sender id is kept only as an audit
+ * label). It is a REAL engine entry so `engine.check` PASSES at every gate
+ * (adapter, publisher, dispatch-listener) instead of being denied as an
+ * unknown principal — but it holds EXACTLY ONE kind of capability:
+ * `dispatch.<agentId>` for each `openOnboarding` agent, and NOTHING else (no
+ * operator, no `keyword.*`, no `tool.*`, no dispatch to non-onboarding agents,
+ * no admit, no bus). Working WITH the engine, not carving the deny out at N
+ * layers.
+ */
+export const PUBLIC_PRINCIPAL_ID = "public";
+/** The synthetic role id the public principal holds. */
+export const PUBLIC_ROLE_ID = "public-domain";
+
+/**
+ * Build the synthetic public principal + role for the engine, granting exactly
+ * `dispatch.<agentId>` per flagged agent. Returns empty arrays when there are
+ * no flagged agents (the public principal would have zero capability and is not
+ * worth registering — and an unmapped sender to a non-flagged agent must stay
+ * denied). Pure.
+ *
+ * @param openOnboardingAgentIds ids of agents flagged `openOnboarding`.
+ * @param homePrincipal stack's home principal id (diagnostic / home_principal).
+ * @param homeStack stack's `{principal}/{stack}` id (diagnostic / home_stack).
+ */
+export function buildPublicPrincipalEntries(
+  openOnboardingAgentIds: readonly string[],
+  homePrincipal: string,
+  homeStack: string,
+): { principals: Principal[]; roles: RoleDefinition[] } {
+  const ids = [...new Set(openOnboardingAgentIds)].filter((id) => id.length > 0);
+  if (ids.length === 0) return { principals: [], roles: [] };
+  const capabilities = ids.map((agentId) => `dispatch.${agentId}`);
+  return {
+    principals: [
+      {
+        id: PUBLIC_PRINCIPAL_ID,
+        home_principal: homePrincipal,
+        home_stack: homeStack,
+        role: [PUBLIC_ROLE_ID],
+        trust: [],
+        // NO platform_ids — the public principal is not one person; it is
+        // never resolved via the (platform, authorId) index. The dispatch
+        // handler attributes unmapped senders to it explicitly.
+      },
+    ],
+    roles: [
+      {
+        id: PUBLIC_ROLE_ID,
+        // EXACTLY the dispatch-to-flagged-agent capabilities. Nothing else.
+        capabilities,
+      },
+    ],
+  };
+}
 
 /**
  * Build a PolicyEngine from a parsed `policy:` block.
@@ -47,9 +111,20 @@ import type { Policy } from "../types/cortex-config";
  */
 export function policyEngineFromConfig(
   policy: Policy | undefined,
+  openOnboardingAgentIds: readonly string[] = [],
 ): PolicyEngine | undefined {
   if (policy === undefined) return undefined;
-  if (policy.principals.length === 0) return undefined;
+  const [first] = policy.principals;
+  if (first === undefined) return undefined;
+  // cortex#1167 — synthesise the single public-domain principal (one capability
+  // per flagged agent: dispatch.<agentId>). Home principal/stack are diagnostic
+  // only; borrow the first real principal's so the synthetic entry is
+  // well-formed. No-op (empty) when no agent is flagged.
+  const publicEntries = buildPublicPrincipalEntries(
+    openOnboardingAgentIds,
+    first.home_principal,
+    first.home_stack,
+  );
   // IAW Phase D.3 — narrow the parsed federated block to the engine's
   // slim `FederatedPolicy` shape. The engine only reads `id` +
   // `peers[].stack_id`; other fields (`accept_subjects`,
@@ -65,22 +140,30 @@ export function policyEngineFromConfig(
       }
     : undefined;
   return new PolicyEngine({
-    principals: policy.principals.map((p) => ({
-      id: p.id,
-      home_principal: p.home_principal,
-      home_stack: p.home_stack,
-      role: p.role,
-      trust: p.trust,
-      // IAW cortex#482 — thread platform_ids onto the engine so it
-      // can back-resolve adapter-originated `did:mf:<platform>-<authorId>`
-      // DIDs to a principal id. The Zod schema defaults the map to `{}`
-      // (per `PolicyPrincipalSchema.platform_ids`); forward as-is.
-      platform_ids: p.platform_ids,
-    })),
-    roles: policy.roles.map((r) => ({
-      id: r.id,
-      capabilities: r.capabilities,
-    })),
+    principals: [
+      ...policy.principals.map((p) => ({
+        id: p.id,
+        home_principal: p.home_principal,
+        home_stack: p.home_stack,
+        role: p.role,
+        trust: p.trust,
+        // IAW cortex#482 — thread platform_ids onto the engine so it
+        // can back-resolve adapter-originated `did:mf:<platform>-<authorId>`
+        // DIDs to a principal id. The Zod schema defaults the map to `{}`
+        // (per `PolicyPrincipalSchema.platform_ids`); forward as-is.
+        platform_ids: p.platform_ids,
+      })),
+      // cortex#1167 — the synthetic public-domain principal (after the real
+      // ones; no platform_ids so it never collides in the lookup index).
+      ...publicEntries.principals,
+    ],
+    roles: [
+      ...policy.roles.map((r) => ({
+        id: r.id,
+        capabilities: r.capabilities,
+      })),
+      ...publicEntries.roles,
+    ],
     ...(federated !== undefined && { federated }),
   });
 }

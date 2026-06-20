@@ -169,6 +169,34 @@ ALLOWLIST_PATHS=(
   # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
   'src/common/config/__tests__/account-signing-key.test.ts'
   'src/common/config/__tests__/stack-signing-key.test.ts'
+  # G1 account-topology design doc — its entire subject is the NSC account tree
+  # (operator/account export-import, resolver_preload, leaf-bound accounts). Every
+  # "operator" is the NATS account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/design-g1-account-topology.md'
+  # ADR-0013 sovereign federation — its whole subject is the NSC operator/account
+  # model (own-operator federation, per-side export/import). Every "operator" is the
+  # NATS account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/adr/0013-sovereign-federation-model.md'
+  # ADR-0015 two-tier onboarding + admission gate — federation/NSC-operator subject
+  # throughout (sovereign tier, network-admission gate). Every "operator" is the NATS
+  # account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/adr/0015-two-tier-onboarding-and-admission-gate.md'
+  # ADR-0015 companion runbook — retired leaf-cred issuance runbook (Model-A, now
+  # tombstoned). Its body carries legacy NSC operator issuance steps as historical
+  # reference; the tombstone header also uses "NSC operator" in its summary of what
+  # supersedes it. Every "operator" is the NATS account-tree root, never the principal.
+  # Class: NSC + HISTORICAL (retired doc).
+  # RETIRE: when the file is removed from the repo.
+  'docs/runbook-leaf-cred-issuance.md'
+  # G5 peer-onboarding runbook — the end-to-end onboarding SOP teaches the sovereign
+  # federation path (ADR-0013): every occurrence of "operator" is "NSC operator" (the
+  # NATS account-tree root, qualified throughout). Same class as ADR-0013 and the G1
+  # account-topology design doc above. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/sop-onboard-peer-principal.md'
   # HISTORICAL removed-field regression test — describes and guards the
   # v3-REMOVED `config.agent.operatorId` legacy field (cortex#429 PR-C). Its
   # whole purpose is to assert a stray reader of the removed field never creeps
@@ -233,6 +261,32 @@ CARVEOUT_LINE_PATTERNS=(
   'operator_pubkey'
   'operator-mode'
   '[Oo]peratorRecord'
+  # O-3 (cortex#1053) — the NSC operator-JWT / operator-mode-conversion vocabulary
+  # that `cortex network join` auto-converts an anonymous bus with. ALL the NSC
+  # account-tree sense (the operator JWT the leaf binds under), NEVER the
+  # principal. Class: NSC (the permanent qualified survivor). Covers:
+  #   - the `OperatorMode*` renderer type/symbol prefix (OperatorModeLeafPackage,
+  #     OperatorModeConversion, renderOperatorModeBlocks, convertToOperatorMode);
+  #   - the `operatorJwt` field + the `operator_jwt` config key + `--operator-jwt`
+  #     flag (the operator JWT, an NSC artifact);
+  #   - a rendered `operator:` config line (the operator-mode block this writes).
+  '[Oo]peratorMode'
+  'operatorJwt'
+  'operator_jwt'
+  '--operator-jwt'
+  'operator:[[:space:]]*\$\{?operatorJwt'
+  '`operator:'
+  'operator[[:space:]]+(JWT|that owns)'
+  # O-3 test fixtures — the operator-mode-conversion suite's NSC vocabulary:
+  #   - `foreign-operator` — the bus-type fixture modelling a bus already
+  #     operator-mode under a DIFFERENT operator JWT (the never-clobber case);
+  #   - a rendered `operator: eyJ…` block line + its `A_DIFFERENT_OPERATOR` fake;
+  #   - the design-doc filename `…-operator-onboarding.md`.
+  # All the NSC account-tree sense, never the principal. Class: NSC.
+  'foreign-operator'
+  'operator: eyJ'
+  'A_DIFFERENT_OPERATOR'
+  'operator-onboarding'
   # NSC operator-account signing seed/nkey file paths (`operator.nk`, `operator.nkey`,
   # `operator.creds`). The NATS account-tree root seed (CONTEXT.md → NSC operator);
   # a filesystem path to the operator-account key, never the principal. Class: NSC.

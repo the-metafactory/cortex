@@ -18,6 +18,8 @@
 
 import type { Database } from "bun:sqlite";
 
+import { upsertWorkItem, getWorkItem } from "../db/work-items";
+
 /**
  * Deterministic MC task id prefix for a dispatch correlation_id. One MC task per
  * dispatch (`dispatch-lifecycle.ts` mints `${ANCHOR_TASK_PREFIX}${correlationId}`
@@ -52,4 +54,113 @@ export function findAnchorSession(
     )
     .get(anchorTaskId(correlationId)) as { session_id: string } | null;
   return row ? row.session_id : null;
+}
+
+// ---------------------------------------------------------------------------
+// Slice convergence C (cortex#1150 / docs/design-slice-activity-thread.md §C):
+// the slice IS the issue's `work_item`. The slice address `{repo}/issue/N`
+// rides every dispatch as `response_routing.thread` (slice convergence A); MC
+// resolves it to ONE work_item per issue and links the per-dispatch anchor
+// `task` to it, so the slice card rolls up all of a slice's dispatches.
+//
+// This is the anchor-join schema change the module docblock anticipated — a
+// `work_item` reference on the anchor task — landing here in the single anchor
+// home, alongside the correlation_id→anchor join (which stays intact).
+// ---------------------------------------------------------------------------
+
+/**
+ * A slice address parsed from a dispatch's `response_routing.thread`. The thread
+ * is the channel-routing SOP's `{repo}/issue/N` form — a SHORT repo name (the
+ * `#<repo-short>` channel convention), not `owner/repo`. The projection is
+ * config-free (no `github.repos` to resolve short→owner/repo), so the SHORT
+ * repo name is the convergence key both this projection and a per-slice GitHub
+ * issue enrichment key off — see {@link workItemIdForSlice}.
+ */
+export interface SliceRef {
+  repo: string;
+  issueNumber: number;
+}
+
+/** `{repo}/issue/N` — the channel-routing SOP slice-thread form. */
+const SLICE_THREAD_RE = /^([^/]+)\/issue\/(\d+)$/;
+
+/**
+ * Parse a `response_routing.thread` as a slice address. Returns null for any
+ * non-issue thread (e.g. a legacy `{repo}/pr/N` thread, or a free-form thread):
+ * those carry no slice work_item, so the projection leaves the anchor unlinked
+ * (backward compatible — the no-`response_routing` path is unchanged).
+ */
+export function parseSliceThread(thread: string | undefined): SliceRef | null {
+  if (typeof thread !== "string") return null;
+  const m = SLICE_THREAD_RE.exec(thread);
+  if (m === null) return null;
+  const repo = m[1];
+  const rawNumber = m[2];
+  if (repo === undefined || rawNumber === undefined) return null;
+  const issueNumber = Number(rawNumber);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) return null;
+  return { repo, issueNumber };
+}
+
+/**
+ * The deterministic MC `work_item` id for a slice's issue. Keyed off the slice
+ * address (`github:{repo}/issue/N`), provider-namespaced like the `github:`
+ * repo-id convention in `adapters/github/ingest.ts`. Both the slice projection
+ * (here) and a per-slice GitHub issue enrichment derive the SAME id from the
+ * SAME `{repo}/issue/N` address, so the two converge on ONE row (upsert by id —
+ * no duplicate, no parallel entity), satisfying §C2's upsert-by-issue-key.
+ */
+export function workItemIdForSlice(ref: SliceRef): string {
+  return `github:${ref.repo}/issue/${ref.issueNumber}`;
+}
+
+/**
+ * Resolve the issue's `work_item` for a slice and link the per-dispatch anchor
+ * `task` to it (slice convergence C). Idempotent:
+ *
+ *   - the work_item is LAZY-created by its deterministic id ({@link workItemIdForSlice})
+ *     via the existing `upsertWorkItem` — but only when ABSENT. A later GitHub
+ *     ingest enriches the SAME row by the same key; we must not clobber a richer
+ *     row's `status`/`priority` with empty stub defaults on a redelivery, so we
+ *     create-if-absent rather than blind-upsert (the "stub now, enrich later,
+ *     never downgrade" rule). The id is the convergence key — one row per issue.
+ *   - the anchor task's `work_item_id` is set to that id.
+ *
+ * Called from the dispatch-lifecycle projection inside its anchor transaction.
+ * A no-op for a non-issue / absent thread (the caller passes null).
+ */
+export function linkAnchorToSliceWorkItem(
+  db: Database,
+  correlationId: string,
+  ref: SliceRef,
+): string {
+  const workItemId = workItemIdForSlice(ref);
+
+  // Create-if-absent: the stub carries only the identity fields the convergence
+  // key implies. If the row already exists (a prior dispatch's stub, OR a GitHub
+  // ingest's enriched row), we leave it untouched — reusing `upsertWorkItem`
+  // strictly for creation so a redelivery never resets an enriched status/priority
+  // to the empty stub defaults.
+  if (getWorkItem(db, workItemId) === null) {
+    upsertWorkItem(db, {
+      id: workItemId,
+      planId: null,
+      phaseId: null,
+      parentId: null,
+      title: `${ref.repo}#${ref.issueNumber}`,
+      description: null,
+      status: "",
+      priority: "",
+      provider: "github",
+      externalId: `${ref.repo}#${ref.issueNumber}`,
+      url: null,
+    });
+  }
+
+  db.query(`UPDATE tasks SET work_item_id = ? WHERE id = ?`).run(
+    workItemId,
+    anchorTaskId(correlationId),
+  );
+
+  return workItemId;
 }

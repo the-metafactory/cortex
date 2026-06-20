@@ -32,6 +32,7 @@ import {
 } from "../surface-router";
 import type { PolicyPublic } from "../../common/types/cortex-config";
 import type { SystemEventSource } from "../system-events";
+import { deriveAcceptSubjects } from "../agent-network/accept-subjects";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1509,6 +1510,93 @@ describe("evaluateFederationGate — accept-list", () => {
       networksMap([makeNetwork({ accept_subjects: [] })]),
     );
     expect(decision).toMatchObject({ kind: "peer_not_in_accept_list", networkId: "research-collab" });
+  });
+});
+
+describe("evaluateFederationGate — P2 (#1087) derived accept-list admits peer presence", () => {
+  // The OQ2 regression guard: BEFORE P2, an OWN-only accept-list rejected a
+  // peer's SOURCE-addressed presence subject even though the peer was in
+  // `peers[]`. AFTER P2 the accept-list is derived own ∪ peer subtrees, so the
+  // SAME gate ADMITS it. We drive the gate with the EXACT accept-list
+  // `deriveAcceptSubjects` produces (not a hand-written one) to prove the
+  // derivation and the gate agree end-to-end.
+
+  // Self = this stack; peer = jc/default (source of the presence).
+  const SELF = { principal: "andreas", stack: "meta-factory" } as const;
+  const derived = deriveAcceptSubjects(SELF, [
+    { principal: "jc", stack: "default" },
+  ]);
+
+  // The network jc rides in on — jc ∈ peers[] so `resolveSourceNetwork`
+  // resolves the source principal, and the derived accept-list is installed.
+  function networkWithJcPeer(): PolicyFederatedNetwork {
+    return makeNetwork({
+      id: "metafactory",
+      leaf_node: "primary", // skip the F-3d source-link cross-check in this test
+      peers: [
+        {
+          principal_id: "jc",
+          stack_id: "jc/default",
+          principal_pubkey: FED_PEER_PUBKEY,
+        },
+      ],
+      accept_subjects: derived,
+    });
+  }
+
+  test("OWN-only accept-list REJECTS jc's presence (the pre-P2 bug, asserted)", () => {
+    const ownOnly = makeNetwork({
+      id: "metafactory",
+      leaf_node: "primary",
+      peers: [
+        {
+          principal_id: "jc",
+          stack_id: "jc/default",
+          principal_pubkey: FED_PEER_PUBKEY,
+        },
+      ],
+      accept_subjects: ["federated.andreas.meta-factory.>"], // OWN-only
+    });
+    const decision = evaluateFederationGate(
+      "federated.jc.default.agent.online",
+      makeFederatedEnvelope({ source: "jc.default.cortex" }),
+      networksMap([ownOnly]),
+    );
+    // jc IS in peers[] (source resolves) but the subject misses the accept-list.
+    expect(decision).toMatchObject({
+      kind: "peer_not_in_accept_list",
+      networkId: "metafactory",
+    });
+  });
+
+  test("derived accept-list ADMITS jc's SOURCE-addressed presence subject", () => {
+    const decision = evaluateFederationGate(
+      "federated.jc.default.agent.online",
+      makeFederatedEnvelope({ source: "jc.default.cortex" }),
+      networksMap([networkWithJcPeer()]),
+    );
+    expect(decision).toBe("allow");
+  });
+
+  test("derived accept-list still ADMITS dispatch addressed TO me (own subtree retained)", () => {
+    const decision = evaluateFederationGate(
+      "federated.andreas.meta-factory.tasks.code-review.ts",
+      makeFederatedEnvelope({ source: "jc.default.cortex" }),
+      networksMap([networkWithJcPeer()]),
+    );
+    expect(decision).toBe("allow");
+  });
+
+  test("a NON-peer's presence is still denied (source unresolved — no over-admission)", () => {
+    const decision = evaluateFederationGate(
+      "federated.stranger.default.agent.online",
+      makeFederatedEnvelope({ source: "stranger.default.cortex" }),
+      networksMap([networkWithJcPeer()]),
+    );
+    expect(decision).toMatchObject({
+      kind: "peer_not_in_accept_list",
+      unknown_network: true,
+    });
   });
 });
 

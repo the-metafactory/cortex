@@ -9,7 +9,7 @@
  *   3. fail-closed Skill deny: disallowedTools === ["Skill"]
  *   4. taskId is non-empty on each call
  *   5. taskId is unique across two calls (crypto.randomUUID — no collision)
- *   6. Optional opts (resumeSessionId, groveChannel, groveNetwork, timeoutMs,
+ *   6. Optional opts (resumeSessionId, channel, network, timeoutMs,
  *      cwd, additionalArgs, project, entity) are all undefined
  *   7. { published: false, reason: "invalid-originator" } → logged to stderr,
  *      no throw
@@ -218,8 +218,8 @@ describe("BusInboundSink", () => {
     if (opts === undefined) throw new Error("expected publishFn to have been called");
 
     expect(opts.resumeSessionId).toBeUndefined();
-    expect(opts.groveChannel).toBeUndefined();
-    expect(opts.groveNetwork).toBeUndefined();
+    expect(opts.channel).toBeUndefined();
+    expect(opts.network).toBeUndefined();
     expect(opts.timeoutMs).toBeUndefined();
     expect(opts.cwd).toBeUndefined();
     expect(opts.additionalArgs).toBeUndefined();

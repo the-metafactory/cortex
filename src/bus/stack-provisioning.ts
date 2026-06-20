@@ -186,6 +186,19 @@ async function signWithNKey(kp: KeyPair, message: Uint8Array): Promise<string> {
   return bytesToBase64(new Uint8Array(sig));
 }
 
+/**
+ * Sign `message` using an NKey seed string (`SU…`). Public API for callers
+ * that hold a seed string (e.g. the `creds grant` command) without needing to
+ * reconstruct the full PKCS#8 bridge inline — divergent prefix bytes between
+ * callers would produce silent signature mismatches. Single source of truth.
+ *
+ * Returns a base64 raw 64-byte ed25519 signature over `message`.
+ */
+export async function signClaimWithSeed(seed: string, message: Uint8Array): Promise<string> {
+  const kp = fromSeed(new TextEncoder().encode(seed.trim()));
+  return signWithNKey(kp, message);
+}
+
 // =============================================================================
 // Identity generation + seed-file write
 // =============================================================================
