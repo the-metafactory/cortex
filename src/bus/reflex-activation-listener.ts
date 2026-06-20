@@ -488,6 +488,18 @@ export class ReflexActivationListener {
       this.log.info("reflex-activation-listener: runtime disabled — dormant");
       return;
     }
+    // Check the pull-subscribe capability BEFORE provisioning the consumer.
+    // Provisioning a durable we cannot then bind is a harmful side effect:
+    // a DeliverPolicy.New durable created here would set its starting floor
+    // at "now" and, on a limits-retained stream, activation messages arriving
+    // before a later boot manages to bind could age out unhandled. Bail
+    // first so we never create an orphan consumer.
+    if (typeof this.runtime.subscribePull !== "function") {
+      this.log.warn(
+        "reflex-activation-listener: runtime has no subscribePull — dormant",
+      );
+      return;
+    }
     const jsm = this.runtime.jetstreamManager
       ? await this.runtime.jetstreamManager()
       : null;
@@ -513,12 +525,6 @@ export class ReflexActivationListener {
       log: this.log,
     });
 
-    if (typeof this.runtime.subscribePull !== "function") {
-      this.log.warn(
-        "reflex-activation-listener: runtime has no subscribePull — dormant",
-      );
-      return;
-    }
     const sub = this.runtime.subscribePull({
       pattern: filter,
       stream: this.stream,

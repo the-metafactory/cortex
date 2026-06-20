@@ -88,8 +88,8 @@ reuse an existing cortex idempotency surface or a small KV/D1 (open question).
 ## Implementation Strategy
 
 ### Phase 1: Provision + subscribe
-- [ ] Provision a `REFLEX_ACTIVATION` JetStream stream covering `local.{p}.{s}.reflex.activation.fired.>` (mirror `bus/jetstream/provision.ts`).
-- [ ] `ReflexActivationListener` class (ctor opts {runtime, config, publisher, dedup}); durable pull consumer (`subscribePull`, ackPolicy explicit, deliverPolicy new); start/stop lifecycle (mirror `BusDispatchListener`).
+- [x] **Stream ownership (RESOLVED during build):** do NOT provision a `REFLEX_ACTIVATION` stream. The `REFLEX` stream is owned and provisioned by **reflex-edge** (subjects `local.{p}.{s}.reflex.>`, `ensureReflexStream`); a second cortex-side stream covering the same subjects would be an overlapping-subject conflict. The bridge binds a **durable pull consumer on the existing `REFLEX` stream**, filtered to the exact fired subject `local.{p}.{s}.reflex.activation.fired` (the `target` is opaque — it rides in the payload, NOT as a subject token, correcting the earlier `…fired.{target}` shape). Implemented via `provisionReviewConsumer` (consumer only, no stream add).
+- [x] `ReflexActivationListener` class; durable pull consumer (`subscribePull`, ackPolicy explicit, **deliverPolicy New** so a fresh durable doesn't replay the limits-retained REFLEX backlog); start/stop lifecycle (mirror `BusDispatchListener`). `subscribePull` capability is checked BEFORE provisioning so no orphan consumer is created.
 
 ### Phase 2: Resolve + re-emit
 - [ ] Parse `FiredPayload`; local-principal filter (drop foreign subjects, v1).

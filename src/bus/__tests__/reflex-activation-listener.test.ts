@@ -477,4 +477,35 @@ describe("ReflexActivationListener — lifecycle", () => {
     await listener.stop();
     expect(stopped).toBe(true);
   });
+
+  test("no subscribePull → does NOT provision an orphan consumer (Sage cycle-3)", async () => {
+    const ctrl = fakeRuntime();
+    const consumerAdds: Array<{ stream: string }> = [];
+    const jsm: ProvisionJsm = {
+      streams: { info: async () => ({}) as never, add: async () => ({}) as never },
+      consumers: {
+        info: async () => {
+          throw Object.assign(new Error("consumer not found"), {
+            api_error: { err_code: 10014 },
+          });
+        },
+        add: async (stream: string) => {
+          consumerAdds.push({ stream });
+          return {} as never;
+        },
+        update: async () => ({}) as never,
+      },
+    };
+    const augmented = ctrl.runtime as unknown as Record<string, unknown>;
+    augmented.jetstreamManager = async () => jsm;
+    // No subscribePull on the runtime — the consumer must NOT be provisioned,
+    // else a DeliverPolicy.New durable is created with no binder and messages
+    // can advance past it unhandled.
+    delete augmented.subscribePull;
+
+    const { listener } = listenerWith(ctrl);
+    await listener.start();
+
+    expect(consumerAdds).toHaveLength(0);
+  });
 });

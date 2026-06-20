@@ -4,7 +4,14 @@
 
 ## Problem Statement
 
-**Core problem.** Reflex (the activation runtime) decides *when* declared work should start and publishes an **Activation Event** on `local.{principal}.{stack}.reflex.activation.fired.{target}` (type `reflex.activation.fired`; payload carries the `target` Execution Blueprint ref + the Activation Payload). **Nothing consumes it** — a grep across cortex and pulse finds zero subscribers to `reflex.activation.fired.*`. Reflex fires into the void: an Activation Event never becomes a run.
+**Core problem.** Reflex (the activation runtime) decides *when* declared work should start and publishes an **Activation Event** on `local.{principal}.{stack}.reflex.activation.fired` (type `reflex.activation.fired`; payload carries the `target` Execution Blueprint ref + the Activation Payload; the `target` is opaque payload data, not a subject token). **Nothing consumes it** — Reflex fires into the void: an Activation Event never becomes a run.
+
+> Negative-discovery evidence (reproducible, run at commit `b4e9cbd` on this branch; the only hit is this PR's own new code):
+> ```
+> $ grep -rnE "reflex\.activation\.fired|reflex\.activation\.>" src | grep -viE "reflex-activation-listener|__tests__|\.test\."
+> src/bus/system-events.ts:576:  * reflex `reflex.activation.fired` event and re-emits it as a `tasks.*`
+> $ grep -rnE "reflex\.activation\.fired|reflex\.activation" ~/work/mf/pulse/src   # (no output → zero subscribers)
+> ```
 
 **Urgency.** This blocks every reflex→execution path. Concrete driver: a reflex `github-issue-opened` blueprint (the-metafactory/reflex#23, merged) fires on a new GitHub issue, but no run results. Reflex is pure decide-only by design; cortex is the always-on executor (Clawbox).
 
