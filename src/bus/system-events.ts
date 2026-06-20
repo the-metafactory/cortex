@@ -650,6 +650,51 @@ export function createSystemBusReflexActivationFailedEvent(
 }
 
 // ---------------------------------------------------------------------------
+// system.bus.notify_discord — F-6 downstream code-capability visibility
+// ---------------------------------------------------------------------------
+
+export interface SystemBusNotifyDiscordOpts {
+  /** Standard source attribution — who emitted this visibility event. */
+  source: SystemEventSource;
+  /** `posted` (webhook 2xx), `failed` (post error / non-2xx), `skipped` (no repo mapping / unparseable payload). */
+  outcome: "posted" | "failed" | "skipped";
+  /** GitHub repo full name from the activation payload, when known. */
+  repo?: string;
+  /** Reflex Decision id carried on the dispatch (provenance), when present. */
+  decisionId?: string;
+  /** Human-readable detail for failed/skipped outcomes. */
+  reason?: string;
+  /** Correlation id carried from the dispatch. */
+  correlationId?: string;
+  classification?: Classification;
+}
+
+/**
+ * F-6 downstream — visibility event emitted by `NotifyDiscordResponder` when
+ * it handles a `notify.discord` dispatch (posts to / skips / fails on a
+ * per-repo Discord webhook). Bookkeeping about our own stack — sovereignty
+ * defaults to local. The webhook URL is NEVER included (it is a secret).
+ */
+export function createSystemBusNotifyDiscordEvent(
+  opts: SystemBusNotifyDiscordOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.bus.notify_discord",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      outcome: opts.outcome,
+      ...(opts.repo !== undefined && { repo: opts.repo }),
+      ...(opts.decisionId !== undefined && { decision_id: opts.decisionId }),
+      ...(opts.reason !== undefined && { reason: opts.reason }),
+      ...(opts.correlationId !== undefined && {
+        correlation_id: opts.correlationId,
+      }),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // system.access.allowed / system.access.denied — IAW Phase C.4 (cortex#115)
 // ---------------------------------------------------------------------------
 
@@ -1198,6 +1243,10 @@ export function createAgentHeartbeatEvent(
 export type SystemDispatchStage =
   | "received"
   | "subject-matched"
+  // F-6 downstream — the dispatch matched a capability fulfilled by an
+  // in-runtime code responder (e.g. notify.discord), so the CC dispatch-
+  // listener yields it instead of spawning a session.
+  | "code-capability-yielded"
   | "subject-rejected"
   | "federation-gated"
   | "parsed"

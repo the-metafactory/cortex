@@ -139,10 +139,15 @@ import type {
   MattermostPresence,
   Policy,
   ReflexActivationConfig,
+  NotifyConfig,
   SlackPresence,
   StackConfig,
 } from "./common/types/cortex-config";
 import { ReflexActivationListener, inMemoryReflexDedup } from "./bus/reflex-activation-listener";
+import {
+  createNotifyDiscordResponder,
+  type NotifyDiscordResponder,
+} from "./bus/notify-discord-responder";
 import { policyEngineFromConfig } from "./common/policy/factory";
 import {
   buildPlatformPrincipalIndex,
@@ -564,6 +569,14 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   reflexActivation?: ReflexActivationConfig;
+  /**
+   * F-6 downstream — `notify:` block from `LoadedConfig.notify`. The boot path
+   * mounts `NotifyDiscordResponder` only when `notify.discord` is non-empty;
+   * absent/empty → no responder, zero behaviour change.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  notify?: NotifyConfig;
   /**
    * IAW GW (cortex#524) — validated surface binding map from
    * `LoadedConfig.surfaces`. Consumed ONLY by the flag-gated
@@ -4188,10 +4201,19 @@ export async function startCortex(
   // Shared options every listener carries — only `receivingAgentId` + the
   // scoped `subjects` differ per agent. Built once so the per-agent wiring
   // can't drift between listeners.
+  // F-6 downstream — capabilities fulfilled by an in-runtime code responder
+  // (their reflex target declares a `handler`), which the CC dispatch-listener
+  // must yield rather than spawn a session for. Today: `notify.discord`.
+  const codeHandledCapabilities: ReadonlySet<string> = new Set(
+    (options.reflexActivation?.targets ?? [])
+      .filter((t) => t.handler !== undefined)
+      .map((t) => t.capability),
+  );
   const sharedDispatchListenerOpts = {
     runtime,
     source: systemEventSource,
     stack: derivedStack.stack,
+    codeCapabilities: codeHandledCapabilities,
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,
     // TC-0 (#628) — verifier knobs resolved from `security.signing`. `off`/
@@ -4304,6 +4326,25 @@ export async function startCortex(
     await reflexActivationListener.start();
     console.log(
       `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s)`,
+    );
+  }
+
+  // F-6 downstream — notify.discord code capability. Config-gated on
+  // `notify.discord` repo mappings; posts reflex-bridged GitHub issues to a
+  // per-repo Discord webhook with no Claude session. Dormant otherwise.
+  let notifyDiscordResponder: NotifyDiscordResponder | undefined;
+  const notifyDiscordTargets = options.notify?.discord ?? [];
+  if (notifyDiscordTargets.length > 0) {
+    notifyDiscordResponder = createNotifyDiscordResponder({
+      runtime,
+      source: systemEventSource,
+      principal: principalId,
+      stack: derivedStack.stack,
+      targets: notifyDiscordTargets,
+    });
+    await notifyDiscordResponder.start();
+    console.log(
+      `cortex: notify-discord-responder mounted — ${notifyDiscordTargets.length} repo(s)`,
     );
   }
 
@@ -5966,6 +6007,14 @@ export async function startCortex(
           reflexActivationListener.stop(),
         );
       }
+      // F-6 downstream — drain the notify.discord responder alongside the
+      // reflex bridge it serves. `stop()` is idempotent.
+      if (notifyDiscordResponder !== undefined) {
+        await completeAsync(
+          "notify-discord-responder stop",
+          notifyDiscordResponder.stop(),
+        );
+      }
       // S2 (cortex#1160) — drain every per-agent chat dispatch listener.
       for (let i = 0; i < dispatchListeners.length; i++) {
         const listener = dispatchListeners[i];
@@ -6436,7 +6485,7 @@ if (import.meta.main) {
       // exits the process non-zero instead of being swallowed as a "non-fatal"
       // unhandled rejection. The daemon must not survive a failed security gate.
       const handle = await bootOrDie(async () => {
-        const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation } =
+        const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation, notify } =
           loadConfigWithAgents(options.config);
         return startCortex(config, {
           configPath: options.config,
@@ -6449,6 +6498,8 @@ if (import.meta.main) {
           ...(bus !== undefined && { bus }),
           // F-6 — thread the reflex activation bridge block through.
           ...(reflexActivation !== undefined && { reflexActivation }),
+          // F-6 downstream — thread the notify block (notify.discord) through.
+          ...(notify !== undefined && { notify }),
           // IAW GW (cortex#524) — thread the validated surface binding map
           // through so the flag-gated gateway block in startCortex can read it.
           // Dormant unless CORTEX_GATEWAY is set; undefined when no surfaces:

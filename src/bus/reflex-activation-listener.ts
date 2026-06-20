@@ -227,11 +227,13 @@ export interface BuildReflexDispatchOpts {
 
 /**
  * Pure builder for the re-emitted dispatch. Produces the executor's
- * `DispatchTaskReceivedPayload` contract (`task_id` UUID, `agent_id`,
- * non-empty `prompt`), `distribution_mode: "direct"`, `target_assistant`
- * DID, and the canonical `tasks.@{did}.{capability}` subject. Classification
- * and correlation_id are preserved from the fired event; provenance (reflex
- * Decision id + original target) rides in `extensions` for traceability.
+ * `DispatchTaskReceivedPayload` contract (`task_id` UUID, `agent_id`, and —
+ * for CC-path targets — a non-empty `prompt`), `distribution_mode: "direct"`,
+ * `target_assistant` DID, and the canonical `tasks.@{did}.{capability}`
+ * subject. Code-handler targets omit the prompt and rely on the structured
+ * `reflex_payload`. Classification and correlation_id are preserved from the
+ * fired event; provenance (reflex Decision id + original target) rides in
+ * `extensions` for traceability.
  */
 export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   envelope: Envelope;
@@ -248,6 +250,14 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   const subject = `${wildcard.slice(0, -2)}.${opts.target.capability}`;
 
   const taskId = crypto.randomUUID();
+  // CC-path targets carry a `prompt` (the executor spawns a Claude session);
+  // code-handler targets (`handler` set) carry NO prompt — the structured
+  // `reflex_payload` below is what the in-runtime responder reads, and the CC
+  // dispatch-listener skips code-handled capabilities entirely.
+  const prompt =
+    opts.target.prompt !== undefined
+      ? renderPrompt(opts.target.prompt, opts.activation.payload)
+      : undefined;
   const base = buildBaseEnvelope({
     // Envelope `type` forbids `@`; the @{did} form lives only in the
     // subject. `tasks.{capability}` is the bare type.
@@ -266,7 +276,11 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
     payload: {
       task_id: taskId,
       agent_id: opts.target.assistant,
-      prompt: renderPrompt(opts.target.prompt, opts.activation.payload),
+      ...(prompt !== undefined && { prompt }),
+      // Structured activation payload (the raw fired payload, e.g. the GitHub
+      // issue webhook body) so code-only responders consume it as DATA
+      // without parsing the prompt. Untrusted — consumers treat it as data.
+      reflex_payload: opts.activation.payload,
       // Provenance also echoed in the payload so executor-side worklogs
       // can surface the originating reflex Decision without parsing
       // extensions.

@@ -258,6 +258,14 @@ export interface DispatchListenerOptions {
   /** Source identity for the lifecycle envelopes the listener emits. */
   source: SystemEventSource;
   /**
+   * F-6 downstream — capability names (the trailing subject segment, e.g.
+   * `notify.discord`) that are fulfilled by an in-runtime code responder, NOT
+   * a Claude session. The listener yields any matching `tasks.@{did}.{cap}`
+   * envelope to that responder instead of parsing/dispatching it. Default:
+   * empty set (every capability dispatches to the CC harness, as before).
+   */
+  codeCapabilities?: ReadonlySet<string>;
+  /**
    * Principal stack segment (IAW Phase A.5, cortex#267) used to build the
    * subscription subject and the audit-envelope `dispatch.task.received`
    * synthesis path. When supplied, both subjects land on the 6-segment
@@ -778,6 +786,14 @@ export function createDispatchListener(
     bashGuardDisabled,
     adapterId = "runner-dispatch-listener",
   } = opts;
+  // F-6 downstream — capabilities fulfilled by an in-runtime code responder
+  // (e.g. `notify.discord` → NotifyDiscordResponder) rather than a Claude
+  // session. The CC dispatch-listener and the code responder both receive
+  // every `tasks.*` envelope via the `onEnvelope` fan-out, so the listener
+  // must YIELD these to their responder — otherwise a prompt-less
+  // code-dispatch trips the `malformed` path (console.error) and a
+  // prompt-bearing one would wastefully spawn a duplicate CC session.
+  const codeCapabilities = opts.codeCapabilities ?? new Set<string>();
   // v2.0.2 default: structural trust + ed25519 crypto verification.
   // Adapter-originated dispatches arrive with empty `signed_by[]` and
   // fall through `rejectEmpty: false`; signed bus traffic MUST verify.
@@ -938,6 +954,22 @@ export function createDispatchListener(
           return;
         }
         trace(traceDispatch, runtime, source, "subject-matched", "pass", traceCtx);
+        // F-6 downstream — yield code-handled capabilities to their in-runtime
+        // responder. The capability is the subject's trailing segment(s) after
+        // `tasks.@{did}.`; a dotted capability like `notify.discord` is matched
+        // whole. This MUST run before parsePayload so a prompt-less code
+        // dispatch is not mis-traced as `malformed`.
+        if (isCodeHandledCapability(subject, codeCapabilities)) {
+          trace(
+            traceDispatch,
+            runtime,
+            source,
+            "code-capability-yielded",
+            "info",
+            traceCtx,
+          );
+          return;
+        }
         // cortex#484 — federation gate runs BEFORE chain verification
         // and policy gating, mirroring the surface-router's D.2 order:
         // an envelope that fails the network's accept/deny rules never
@@ -1040,6 +1072,28 @@ export function createDispatchListener(
 // cortex#196 — strict UUID v1-v5 check (`isUuid`) is now shared in
 // `src/common/types/uuid.ts`; the local `UUID_RE` regex was inlined
 // here pre-extraction.
+
+/**
+ * F-6 downstream — true when `subject` is a direct task dispatch whose
+ * trailing capability segment(s) name a code-handled capability. The subject
+ * shape is `…tasks.@{did}.{capability}`; `capability` may be dotted
+ * (`notify.discord`), so we match the whole trailing segment after the
+ * `.tasks.@{did}.` prefix rather than a single token.
+ */
+export function isCodeHandledCapability(
+  subject: string,
+  codeCapabilities: ReadonlySet<string>,
+): boolean {
+  if (codeCapabilities.size === 0) return false;
+  const marker = ".tasks.@";
+  const at = subject.indexOf(marker);
+  if (at === -1) return false;
+  // Skip past `.tasks.@{did}.` to the capability tail.
+  const afterDid = subject.indexOf(".", at + marker.length);
+  if (afterDid === -1) return false;
+  const capability = subject.slice(afterDid + 1);
+  return codeCapabilities.has(capability);
+}
 
 function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
   const p = envelope.payload as Partial<DispatchTaskReceivedPayload> | undefined;

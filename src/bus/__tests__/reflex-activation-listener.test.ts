@@ -296,6 +296,31 @@ describe("buildReflexDispatch", () => {
     // the structural fence) — the attacker contributed none.
     expect((prompt.match(/<\/untrusted-content>/g) ?? []).length).toBe(2);
   });
+
+  test("always carries structured reflex_payload for code consumers", () => {
+    const { envelope } = buildReflexDispatch({
+      activation: activationFixture({ payload: { issue: 7 } }),
+      target: TARGETS[0]!,
+      reEmitPrincipal: "metafactory",
+      source: SOURCE,
+      systemDid: "did:mf:reflex",
+    });
+    expect((envelope.payload).reflex_payload).toEqual({ issue: 7 });
+  });
+
+  test("code-handler target: no prompt, payload still carried", () => {
+    const { envelope } = buildReflexDispatch({
+      activation: activationFixture({ payload: { issue: 9 } }),
+      target: { target: "@jc/notify-discord", capability: "notify.discord", assistant: "reflex", handler: "discord-webhook" },
+      reEmitPrincipal: "metafactory",
+      source: SOURCE,
+      systemDid: "did:mf:reflex",
+    });
+    const p = envelope.payload;
+    expect(p.prompt).toBeUndefined();
+    expect(p.reflex_payload).toEqual({ issue: 9 });
+    expect(p.agent_id).toBe("reflex");
+  });
 });
 
 // =============================================================================

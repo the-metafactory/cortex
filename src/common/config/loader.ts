@@ -18,6 +18,7 @@ import {
   type CortexConfig,
   type DiscordPresence,
   type MattermostPresence,
+  type NotifyConfig,
   type Policy,
   type ReflexActivationConfig,
   type SlackPresence,
@@ -135,6 +136,12 @@ export interface LoadedConfig {
    * only when `targets` is non-empty.
    */
   reflexActivation?: ReflexActivationConfig;
+  /**
+   * F-6 downstream — `notify:` block (outbound code-capability routing, e.g.
+   * notify.discord). Always defined for cortex-shape input (empty-default);
+   * `undefined` for legacy bot.yaml input.
+   */
+  notify?: NotifyConfig;
 }
 
 /**
@@ -855,6 +862,8 @@ function loadCortexShape(
     // F-6 — carry through the reflex activation bridge block (empty-default
     // applied by the schema, so always present for cortex-shape input).
     reflexActivation: cortexConfig.reflex_activation,
+    // F-6 downstream — carry through the notify block (notify.discord etc.).
+    notify: cortexConfig.notify,
   };
 }
 

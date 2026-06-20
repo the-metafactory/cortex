@@ -64,6 +64,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       dataResidency: "NZ",
     },
     reflex_activation: { stack: "default", targets: [] },
+    notify: { discord: [] },
     bus: {
       review: {
         stream: {
