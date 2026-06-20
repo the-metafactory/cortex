@@ -69,11 +69,22 @@ export interface ParsedIssueActivation {
   action: string | undefined;
 }
 
+/**
+ * Discord webhook URL shape — host-locked so a resolved secret cannot turn this
+ * capability into an arbitrary outbound POST sink (SSRF). Accepts canonical
+ * `discord.com` (+ `canary`/`ptb`) and legacy `discordapp.com`, with or without
+ * an `/api/vN` version segment.
+ */
+export const DISCORD_WEBHOOK_URL_RE =
+  /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api(\/v\d+)?\/webhooks\/\d+\/[\w-]+$/;
+
 export interface DiscordNotifierOpts {
   runtime: MyelinRuntime;
   source: SystemEventSource;
-  /** repo → webhook_url mappings (from `notify.discord` config). */
+  /** repo → `webhook_url_env` mappings (from `notify.discord` config). */
   targets: readonly DiscordNotifyTarget[];
+  /** Env source the `webhook_url_env` bindings resolve against. Default `process.env`. */
+  env?: Record<string, string | undefined>;
   /** Injectable HTTP poster (default: `fetch`). */
   post?: WebhookPoster;
   log?: { warn: (m: string) => void; error: (m: string) => void };
@@ -142,9 +153,28 @@ export function renderIssueMessage(issue: ParsedIssueActivation): string {
 export function createDiscordNotifier(opts: DiscordNotifierOpts): ReflexActivationHandler {
   const post = opts.post ?? defaultPoster;
   const log = opts.log ?? console;
-  const webhookByRepo = new Map(
-    opts.targets.map((t) => [t.repo, t.webhook_url] as const),
-  );
+  const env = opts.env ?? process.env;
+  // Resolve each target's `webhook_url_env` binding at construction. A binding
+  // that is unset, or resolves to a non-Discord URL, is dropped + warned (that
+  // repo simply gets no notification) — the bearer-token URL never lives in
+  // config, and a mis-set secret can't become an arbitrary POST sink.
+  const webhookByRepo = new Map<string, string>();
+  for (const t of opts.targets) {
+    const url = env[t.webhook_url_env];
+    if (url === undefined || url.length === 0) {
+      log.warn(
+        `notify-discord: webhook env "${t.webhook_url_env}" for repo "${t.repo}" is unset — repo will not be notified`,
+      );
+      continue;
+    }
+    if (!DISCORD_WEBHOOK_URL_RE.test(url)) {
+      log.warn(
+        `notify-discord: webhook env "${t.webhook_url_env}" for repo "${t.repo}" is not a Discord webhook URL — ignored`,
+      );
+      continue;
+    }
+    webhookByRepo.set(t.repo, url);
+  }
 
   const emit = (
     outcome: "posted" | "failed" | "skipped",

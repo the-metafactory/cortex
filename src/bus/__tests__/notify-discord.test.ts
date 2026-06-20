@@ -25,7 +25,8 @@ import {
 
 const SOURCE = { principal: "jc", agent: "cortex", instance: "local" };
 const WEBHOOK = "https://discord.com/api/webhooks/123/abc";
-const TARGETS: DiscordNotifyTarget[] = [{ repo: "jc/reflex", webhook_url: WEBHOOK }];
+const TARGETS: DiscordNotifyTarget[] = [{ repo: "jc/reflex", webhook_url_env: "DISCORD_WH_REFLEX" }];
+const ENV = { DISCORD_WH_REFLEX: WEBHOOK };
 
 const ISSUE = {
   action: "opened",
@@ -121,7 +122,7 @@ describe("createDiscordNotifier", () => {
   test("known repo → POST with allowed_mentions + posted visibility", async () => {
     const ctrl = fakeRuntime();
     const poster = recordingPoster();
-    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, post: poster.post });
+    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: ENV, post: poster.post });
 
     await handler(activation(ISSUE));
     await flush();
@@ -137,7 +138,7 @@ describe("createDiscordNotifier", () => {
   test("unknown repo → skipped, no POST, no throw", async () => {
     const ctrl = fakeRuntime();
     const poster = recordingPoster();
-    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, post: poster.post });
+    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: ENV, post: poster.post });
 
     await handler(activation({ repository: { full_name: "other/repo" }, issue: { number: 1 } }));
     await flush();
@@ -150,7 +151,7 @@ describe("createDiscordNotifier", () => {
   test("unparseable payload → skipped, no throw", async () => {
     const ctrl = fakeRuntime();
     const poster = recordingPoster();
-    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, post: poster.post });
+    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: ENV, post: poster.post });
 
     await handler(activation({ no: "repo" }));
     await flush();
@@ -162,7 +163,7 @@ describe("createDiscordNotifier", () => {
   test("non-2xx → failed visibility + throws (transient)", async () => {
     const ctrl = fakeRuntime();
     const poster = recordingPoster({ ok: false, status: 500 });
-    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, post: poster.post });
+    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: ENV, post: poster.post });
 
     let threw = false;
     try { await handler(activation(ISSUE)); } catch { threw = true; }
@@ -172,10 +173,40 @@ describe("createDiscordNotifier", () => {
     expect(lastNotify(ctrl.published)?.reason).toBe("http-500");
   });
 
+  test("unset webhook env binding → repo not notified (skipped)", async () => {
+    const ctrl = fakeRuntime();
+    const poster = recordingPoster();
+    const handler = createDiscordNotifier({
+      runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: {}, post: poster.post,
+    });
+
+    await handler(activation(ISSUE));
+    await flush();
+
+    expect(poster.calls).toHaveLength(0);
+    expect(lastNotify(ctrl.published)?.outcome).toBe("skipped");
+  });
+
+  test("env binding resolving to a non-Discord URL → repo dropped (SSRF guard)", async () => {
+    const ctrl = fakeRuntime();
+    const poster = recordingPoster();
+    const handler = createDiscordNotifier({
+      runtime: ctrl.runtime, source: SOURCE, targets: TARGETS,
+      env: { DISCORD_WH_REFLEX: "https://evil.example.com/api/webhooks/1/x" },
+      post: poster.post,
+    });
+
+    await handler(activation(ISSUE));
+    await flush();
+
+    expect(poster.calls).toHaveLength(0);
+    expect(lastNotify(ctrl.published)?.outcome).toBe("skipped");
+  });
+
   test("poster throws → failed visibility + rethrows", async () => {
     const ctrl = fakeRuntime();
     const handler = createDiscordNotifier({
-      runtime: ctrl.runtime, source: SOURCE, targets: TARGETS,
+      runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: ENV,
       post: async () => { throw new Error("network down"); },
     });
 

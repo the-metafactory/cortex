@@ -1876,33 +1876,19 @@ describe("round-2: exec-brain capability wildcard rejection", () => {
 });
 
 describe("DiscordNotifyTargetSchema (F-6 notify.discord)", () => {
-  test("accepts a Discord webhook URL", () => {
+  test("accepts repo + webhook_url_env (secret reference, not the URL)", () => {
     expect(
       DiscordNotifyTargetSchema.safeParse({
         repo: "jc/reflex",
-        webhook_url: "https://discord.com/api/webhooks/123/abc-DEF_456",
+        webhook_url_env: "DISCORD_WEBHOOK_REFLEX",
       }).success,
     ).toBe(true);
   });
-  test("accepts legacy discordapp.com + versioned path", () => {
+  test("rejects a raw webhook_url (must be an env binding, not the secret)", () => {
     expect(
       DiscordNotifyTargetSchema.safeParse({
         repo: "jc/reflex",
-        webhook_url: "https://discordapp.com/api/v10/webhooks/123/abc",
-      }).success,
-    ).toBe(true);
-  });
-  test("rejects a non-Discord URL (SSRF guard)", () => {
-    expect(
-      DiscordNotifyTargetSchema.safeParse({
-        repo: "jc/reflex",
-        webhook_url: "https://evil.example.com/api/webhooks/1/x",
-      }).success,
-    ).toBe(false);
-    expect(
-      DiscordNotifyTargetSchema.safeParse({
-        repo: "jc/reflex",
-        webhook_url: "https://discord.com.evil.com/api/webhooks/1/x",
+        webhook_url: "https://discord.com/api/webhooks/123/abc",
       }).success,
     ).toBe(false);
   });
