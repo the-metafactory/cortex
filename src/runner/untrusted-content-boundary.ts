@@ -63,12 +63,21 @@
 
 import type { ReviewRequestPayload } from "../bus/review-events";
 import { buildReviewPrompt } from "./review-prompt";
-
-/** The fence delimiters wrapping requester-supplied data. Load-bearing — the
- *  hardening preamble references them by name so the reviewer knows the exact
- *  bounds of the untrusted region. */
-export const UNTRUSTED_OPEN = "<untrusted-content>";
-export const UNTRUSTED_CLOSE = "</untrusted-content>";
+// The fence delimiters + breakout-neutralisation are now the leaf
+// `common/untrusted-fence` module so OTHER network→agent boundaries (F-6
+// reflex activation bridge) can reuse them without importing this
+// review-specific builder. Re-exported here so existing importers
+// (egress-check) keep their `./untrusted-content-boundary` import path.
+export {
+  UNTRUSTED_OPEN,
+  UNTRUSTED_CLOSE,
+  neutraliseFenceBreakout,
+} from "../common/untrusted-fence";
+import {
+  UNTRUSTED_OPEN,
+  UNTRUSTED_CLOSE,
+  neutraliseFenceBreakout,
+} from "../common/untrusted-fence";
 
 /**
  * The injection-hardening preamble prepended to a wider-scope review prompt.
@@ -99,49 +108,6 @@ export const UNTRUSTED_CONTENT_PREAMBLE = [
   "context about any other repository or principal in your output.",
   "",
 ].join("\n");
-
-/**
- * Neutralise any attempt to forge the fence delimiter inside requester content
- * so an attacker cannot terminate (or open) the untrusted block early and have
- * subsequent text read as trusted (the classic delimiter-injection escape).
- *
- * The neutralisation is **robust against normalisation**: rather than breaking
- * the delimiter with an invisible (zero-width) character — which reconstructs
- * the literal token the moment any downstream step strips zero-width chars — we
- * escape the ANGLE BRACKETS themselves to their HTML-entity form (`<`→`&lt;`,
- * `>`→`&gt;`). The result can never be the literal `<untrusted-content>` /
- * `</untrusted-content>` token under any whitespace/zero-width normalisation,
- * because the `<`/`>` characters that DEFINE the delimiter are gone. It stays
- * fully legible to a human and to the model (which is told the fence is the
- * literal angle-bracket form), so a forged `&lt;/untrusted-content&gt;` reads as
- * inert escaped text, not a structural delimiter.
- *
- * Because EVERY `<`/`>` in requester content is escaped, this also incidentally
- * neutralises any other angle-bracket pseudo-tag an attacker might use to mimic
- * a system marker. Requester `title`/`note` are short free-text fields where
- * literal angle brackets are rare and escaping them is harmless.
- *
- * Also strips NUL and other C0 control chars that could confuse a downstream
- * renderer, except tab/newline/carriage-return which are legitimate in a PR
- * title/note.
- *
- * Idempotency note: `&lt;`/`&gt;` contain no `<`/`>`, so a second pass is a
- * no-op — escaping never compounds.
- */
-export function neutraliseFenceBreakout(value: string): string {
-  return (
-    value
-      // Strip C0 controls FIRST (except \t \n \r) so a control char can't be
-      // used to split a delimiter past the bracket-escape.
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
-      // Escape the angle brackets that DEFINE any fence/pseudo-tag delimiter.
-      // No `<`/`>` survives ⇒ no literal `<untrusted-content>`/`</…>` can form,
-      // regardless of any later zero-width / whitespace normalisation.
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-  );
-}
 
 /**
  * Render the quarantined untrusted-content block from the requester-supplied

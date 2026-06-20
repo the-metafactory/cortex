@@ -2454,7 +2454,13 @@ export const ReflexTargetSchema = z.object({
   capability: z.string().min(1),
   /** Assistant (agent name) the dispatch is addressed to, e.g. `luna`. */
   assistant: z.string().min(1),
-  /** Prompt the capability runs (supports `{{payload}}`). */
+  /**
+   * Trusted task the capability runs — the sole instruction channel. The
+   * (untrusted, webhook-controlled) activation payload is appended by the
+   * bridge inside a quarantined `<untrusted-content>` fence, NEVER
+   * interpolated into this text, so a malicious payload cannot become
+   * executable prompt instructions.
+   */
   prompt: z.string().min(1),
 });
 

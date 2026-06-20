@@ -21,7 +21,7 @@ ruled out Pulse-on-CF: spawn runs nodes not the Pulse engine; big unbuilt epic.)
 ## DONE (shipped this session)
 
 - **reflex#24 (merged, main 38f44cd):** `github_hmac` HTTP impulse source on reflex-edge — GitHub webhooks fire reflex directly (HMAC-verified, `where` filter, per-repo via `where:{repository}`, delivery-id in payload). Bearer path unchanged.
-- **reflex#26 (merged, main b6d4ed4):** reflex-edge now provisions the **REFLEX JetStream stream** on DO startup (`ensureReflexStream` in `consumer-do.ts`). Stream `REFLEX` (subjects `local.jc.default.reflex.>`, File storage) is **LIVE on the hub** — fired events now persist (proven: a real fire → `reflex.activation.fired` + `reflex.activation.decision.fired` in the stream). **This was the prerequisite for F-6's durable consumer.**
+- **reflex#26 (merged, main b6d4ed4):** reflex-edge provisions the **REFLEX JetStream stream** on DO startup (`ensureReflexStream` in `consumer-do.ts`). Stream `REFLEX` (subjects `local.jc.default.reflex.>`, File storage) is the prerequisite for F-6's durable consumer. NOTE (HonestOracle): the prior-session claim that the stream is "live on the hub" and that a real fire was observed persisting is an **external prerequisite recorded from that session — NOT re-verified in this PR**. Confirm against the running hub before relying on it (e.g. `nats stream info REFLEX` with the `reflex-edge.creds`, see GOTCHAS).
 - **cortex#1177:** the F-6 issue.
 - **F-6 spec/plan/tasks:** complete + validated (this dir). Phase = `tasks`, ready to implement.
 
@@ -40,9 +40,9 @@ The F-6 bridge is implemented on this branch. Files:
 1. **Stream ownership:** REFLEX stream is owned by reflex-edge (`local.{p}.{s}.reflex.>`). Cortex does NOT provision an overlapping stream — it binds a durable consumer (filter `local.{p}.{s}.reflex.activation.fired`, exact subject; target is opaque, rides in payload — NOT a subject token, correcting the north-star diagram). **DeliverPolicy.New** so a fresh durable doesn't replay the limits-retained stream's history (in-memory dedup is empty on boot).
 2. **Map location:** `reflex_activation.targets[]` in cortex.yaml (`{target, capability, assistant, prompt}`), plus optional `principal`/`stack` for the fired-subject source coords.
 3. **Dedup store:** injected `{seen,mark}` iface; `inMemoryReflexDedup()` default v1 (JetStream ack-floor + DeliverPolicy.New cover cross-restart; persistent D1/KV is a drop-in if needed).
-4. **Re-emit shape:** focused producer (NOT chat publisher) — `buildBaseEnvelope` `type: tasks.{capability}`, subject via `directTaskSubject` + capability, `distribution_mode: direct`, `target_assistant: did:mf:{assistant}`, originator `{did:mf:reflex, delegated}`. Executor requires non-empty `prompt` (dispatch-listener parsePayload) → config `prompt` carries it; `{{payload}}` substitution embeds the activation payload.
+4. **Re-emit shape:** focused producer (NOT chat publisher) — `buildBaseEnvelope` `type: tasks.{capability}`, subject via `directTaskSubject` + capability, `distribution_mode: direct`, `target_assistant: did:mf:{assistant}`, originator `{did:mf:reflex, delegated}`. Executor requires non-empty `prompt` (dispatch-listener parsePayload) → config `prompt` is the trusted task; the untrusted activation payload is appended inside a breakout-neutralised `<untrusted-content>` fence (`common/untrusted-fence`, CO-7 M1 pattern), never interpolated into the instruction text.
 
-Status: `tsc` clean; F-6 suite 19/19; full suite green (one flaky network-registry test unrelated). NOT yet committed/pushed — review then merge.
+Verification (reproduce locally — not captured in this PR artifact): `bunx tsc --noEmit` and `bun test src/bus/__tests__/reflex-activation-listener.test.ts` (F-6 unit/integration suite). Full `bun test` was green at authoring time apart from one environment-dependent network-registry test (`leaf-state fetch ECONNREFUSED`) that passes on re-run; CI on this PR is the authoritative signal.
 
 ## (original) NEXT: build the F-6 bridge (the large remaining piece)
 
