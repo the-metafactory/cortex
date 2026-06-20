@@ -2635,9 +2635,10 @@ export const DiscordNotifyTargetSchema = z.object({
 
 /**
  * Top-level `notify:` block — outbound notification routing for code-only
- * capabilities (no Claude session). v1: `discord` repo→webhook map consumed by
- * `NotifyDiscordResponder` (the `notify.discord` capability the F-6 reflex
- * bridge dispatches to). Optional; empty `discord` → responder not mounted.
+ * capabilities (no Claude session). v1: `discord` repo→webhook map read by the
+ * notify.discord code handler, which the F-6 reflex bridge invokes DIRECTLY
+ * in-process for a `handler: discord-webhook` target (no bus re-emit).
+ * Optional; empty `discord` → no handler registered.
  */
 export const NotifyConfigSchema = z.object({
   discord: z.array(DiscordNotifyTargetSchema).default([]),

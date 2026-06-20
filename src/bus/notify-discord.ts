@@ -105,11 +105,23 @@ export function parseIssueActivation(
   };
 }
 
+/**
+ * Backslash-escape Discord markdown control characters so an untrusted issue
+ * title can't inject formatting / masked links (`[text](url)`) / fences into
+ * the internal message. Pairs with `allowed_mentions:{parse:[]}` (which stops
+ * pings) — this stops visual/link spoofing.
+ */
+export function escapeDiscordMarkdown(text: string): string {
+  // Only true markdown/link controls — bold/italic/strike/spoiler/code (`*_~|``),
+  // blockquote (`>`), masked links (`[]()`), and the escape char itself.
+  return text.replace(/[\\*_~`|>[\]()]/g, "\\$&");
+}
+
 /** Render the Discord message `content` for an issue activation. */
 export function renderIssueMessage(issue: ParsedIssueActivation): string {
   const ref =
     issue.number !== undefined ? `${issue.repo}#${issue.number}` : issue.repo;
-  const title = issue.title ?? "(no title)";
+  const title = escapeDiscordMarkdown(issue.title ?? "(no title)");
   const head = `🟢 New issue **${ref}** — ${title}`;
   const body = issue.url !== undefined ? `${head}\n${issue.url}` : head;
   // Discord content cap is 2000 chars; keep well under.

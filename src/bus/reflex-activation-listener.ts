@@ -436,25 +436,9 @@ export class ReflexActivationListener {
       return { kind: "ack" };
     }
 
-    // Code-handler target: invoke the registered handler IN-PROCESS — no bus
-    // re-emit (no second hop, no ungated subscriber; the bridge is the gated
-    // entry). A throw = transient → ack but DON'T mark the Decision id, so a
-    // later reflex re-fire of the same Decision is not deduped away.
+    // Code-handler target → its own arm; CC-prompt target falls through.
     if (target.handler !== undefined) {
-      const handler = this.handlers[target.handler];
-      if (handler === undefined) {
-        await this.emitFailed(envelope, act, `unknown_handler:${target.handler}`);
-        return { kind: "ack" };
-      }
-      try {
-        await handler(act);
-      } catch (err) {
-        await this.emitFailed(envelope, act, `handler:${errMsg(err)}`);
-        return { kind: "ack" };
-      }
-      await this.dedup.mark(act.decisionId);
-      await this.emitHandlerDispatched(act, target);
-      return { kind: "ack" };
+      return this.handleHandlerTarget(envelope, act, target);
     }
 
     // CC path: a non-handler target must carry a prompt (schema enforces the
@@ -495,6 +479,35 @@ export class ReflexActivationListener {
     // activation re-fireable on the next reflex impulse.
     await this.dedup.mark(act.decisionId);
     await this.emitDispatched(act, target, built);
+    return { kind: "ack" };
+  }
+
+  /**
+   * Fulfil a `handler`-flagged target by invoking the registered code handler
+   * IN-PROCESS — no bus re-emit (no second hop, no ungated subscriber; the
+   * bridge is the gated entry). A throw from the handler = transient → ack but
+   * DON'T mark the Decision id, so a later reflex re-fire of the same Decision
+   * is not deduped away.
+   */
+  private async handleHandlerTarget(
+    fired: Envelope,
+    act: FiredActivation,
+    target: ReflexTarget,
+  ): Promise<AckDecision> {
+    const handlerName = target.handler;
+    const handler = handlerName !== undefined ? this.handlers[handlerName] : undefined;
+    if (handler === undefined) {
+      await this.emitFailed(fired, act, `unknown_handler:${handlerName ?? ""}`);
+      return { kind: "ack" };
+    }
+    try {
+      await handler(act);
+    } catch (err) {
+      await this.emitFailed(fired, act, `handler:${errMsg(err)}`);
+      return { kind: "ack" };
+    }
+    await this.dedup.mark(act.decisionId);
+    await this.emitHandlerDispatched(act, target);
     return { kind: "ack" };
   }
 

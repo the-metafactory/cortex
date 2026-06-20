@@ -104,6 +104,17 @@ describe("renderIssueMessage", () => {
     );
     expect(msg.length).toBeLessThanOrEqual(1900);
   });
+  test("escapes Discord markdown in untrusted titles (masked-link/format injection)", () => {
+    const msg = renderIssueMessage(
+      parseIssueActivation({
+        repository: { full_name: "a/b" },
+        issue: { number: 1, title: "[click](https://evil.example) **bold** `code`" },
+      })!,
+    );
+    // The injected markdown controls are backslash-escaped → inert.
+    expect(msg).not.toContain("[click](https://evil.example)");
+    expect(msg).toContain("\\[click\\]");
+  });
 });
 
 describe("createDiscordNotifier", () => {
