@@ -141,9 +141,11 @@ export function renderIssueMessage(issue: ParsedIssueActivation): string {
 
 /**
  * Build the `notify.discord` handler. The returned function:
- *  - parses the issue + resolves repo → webhook_url; on no-repo / no-mapping it
- *    emits a `skipped` visibility and RETURNS (deterministic — re-firing won't
- *    help).
+ *  - parses the issue + resolves repo → webhook URL; on no-repo (unparseable
+ *    payload) or no-mapping (no env binding resolved at startup) it emits a
+ *    `skipped` visibility and RETURNS. Re-firing within THIS process won't help
+ *    (bindings resolve once at construction); fixing the env/config and
+ *    restarting cortex will.
  *  - POSTs `{content, allowed_mentions:{parse:[]}}`; on 2xx emits `posted` and
  *    returns; on non-2xx or a thrown fetch it emits `failed` and THROWS. The
  *    bridge then does NOT mark the Decision id as seen, so a later reflex

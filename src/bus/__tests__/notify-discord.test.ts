@@ -7,8 +7,10 @@
  *  2. renderIssueMessage — formats; truncates over the Discord cap.
  *  3. createDiscordNotifier handler — known repo → webhook POST (with
  *     allowed_mentions:{parse:[]}) + `posted` visibility; unknown repo →
- *     `skipped` (returns, no throw); unparseable → `skipped`; non-2xx / throw
- *     → `failed` + THROWS (transient, bridge leaves re-fireable).
+ *     `skipped` (returns, no throw); unparseable → `skipped`; a failed POST
+ *     (non-2xx of any status, or a thrown fetch) → `failed` + THROWS so the
+ *     bridge leaves the Decision un-marked. (v1 does not classify 4xx-permanent
+ *     vs 5xx-transient — any failure throws; reflex's guards bound re-fires.)
  */
 
 import { describe, test, expect } from "bun:test";
