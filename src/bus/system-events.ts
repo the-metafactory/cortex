@@ -543,7 +543,7 @@ export function createSystemBusPeerDispatchReceivedEvent(
 // system.bus.reflex_activation_dispatched / _failed — F-6 visibility events
 // ---------------------------------------------------------------------------
 
-export interface SystemBusReflexActivationDispatchedOpts {
+interface SystemBusReflexActivationDispatchedBase {
   /** Standard source attribution — who emitted this visibility event. */
   source: SystemEventSource;
   /**
@@ -556,19 +556,7 @@ export interface SystemBusReflexActivationDispatchedOpts {
   target: string;
   /** Capability the bridge resolved the target to. */
   capability: string;
-  /**
-   * How the activation was fulfilled: `dispatch` = re-emitted as a `tasks.*`
-   * envelope for the CC executor; `handler` = invoked in-process by a code
-   * handler (no bus re-emit). Defaults to `dispatch`.
-   */
-  via?: "dispatch" | "handler";
-  /** Assistant DID the dispatch was addressed to (CC path only). */
-  targetAssistant?: string;
-  /** Subject the re-emitted `tasks.*` dispatch landed on (CC path only). */
-  dispatchSubject?: string;
-  /** Envelope id of the re-emitted dispatch — joins to the executor run (CC path only). */
-  dispatchEnvelopeId?: string;
-  /** Correlation id carried from the fired event onto the dispatch. */
+  /** Correlation id carried from the fired event. */
   correlationId?: string;
   /**
    * Classification preserved from the fired event onto the visibility
@@ -576,6 +564,23 @@ export interface SystemBusReflexActivationDispatchedOpts {
    */
   classification?: Classification;
 }
+
+/**
+ * Discriminated on `via`: the CC path (`dispatch`) re-emits a `tasks.*`
+ * envelope and so carries the assistant DID + dispatch subject + envelope id;
+ * the code-handler path (`handler`) invokes in-process and has none of those.
+ */
+export type SystemBusReflexActivationDispatchedOpts =
+  | (SystemBusReflexActivationDispatchedBase & {
+      via: "dispatch";
+      /** Assistant DID the dispatch was addressed to. */
+      targetAssistant: string;
+      /** Subject the re-emitted `tasks.*` dispatch landed on. */
+      dispatchSubject: string;
+      /** Envelope id of the re-emitted dispatch — joins to the executor run. */
+      dispatchEnvelopeId: string;
+    })
+  | (SystemBusReflexActivationDispatchedBase & { via: "handler" });
 
 /**
  * F-6 — visibility event emitted when `ReflexActivationListener` resolves a
@@ -596,14 +601,10 @@ export function createSystemBusReflexActivationDispatchedEvent(
       decision_id: opts.decisionId,
       target: opts.target,
       capability: opts.capability,
-      via: opts.via ?? "dispatch",
-      ...(opts.targetAssistant !== undefined && {
+      via: opts.via,
+      ...(opts.via === "dispatch" && {
         target_assistant: opts.targetAssistant,
-      }),
-      ...(opts.dispatchSubject !== undefined && {
         dispatch_subject: opts.dispatchSubject,
-      }),
-      ...(opts.dispatchEnvelopeId !== undefined && {
         dispatch_envelope_id: opts.dispatchEnvelopeId,
       }),
       ...(opts.correlationId !== undefined && {

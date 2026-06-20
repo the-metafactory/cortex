@@ -122,8 +122,10 @@ export function renderIssueMessage(issue: ParsedIssueActivation): string {
  *    emits a `skipped` visibility and RETURNS (deterministic — re-firing won't
  *    help).
  *  - POSTs `{content, allowed_mentions:{parse:[]}}`; on 2xx emits `posted` and
- *    returns; on non-2xx or a thrown fetch it emits `failed` and THROWS so the
- *    bridge leaves the activation re-fireable.
+ *    returns; on non-2xx or a thrown fetch it emits `failed` and THROWS. The
+ *    bridge then does NOT mark the Decision id as seen, so a later reflex
+ *    re-fire of the same Decision is not deduped away (whether reflex re-fires
+ *    is reflex's concern, not shown here).
  */
 export function createDiscordNotifier(opts: DiscordNotifierOpts): ReflexActivationHandler {
   const post = opts.post ?? defaultPoster;
@@ -181,7 +183,7 @@ export function createDiscordNotifier(opts: DiscordNotifierOpts): ReflexActivati
       res = await post(webhookUrl, body);
     } catch (err) {
       emit("failed", activation, issue.repo, errMsg(err));
-      // Transient — throw so the bridge does not mark the Decision id.
+      // Transient — throw so the bridge does not mark the Decision id as seen.
       throw err instanceof Error ? err : new Error(String(err));
     }
     if (!res.ok) {

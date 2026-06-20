@@ -25,6 +25,8 @@ import {
   ClaudeConfigSchema,
   CortexConfigSchema,
   DashboardRendererSchema,
+  DiscordNotifyTargetSchema,
+  ReflexTargetSchema,
   ExecutionConfigSchema,
   GithubConfigSchema,
   NatsConfigSchema,
@@ -1870,5 +1872,56 @@ describe("round-2: exec-brain capability wildcard rejection", () => {
     expect(
       AgentRuntimeSchema.safeParse({ mode: "in-process", capabilities: ["WEIRD CAPS"] }).success,
     ).toBe(true); // builtin: legacy looseness preserved
+  });
+});
+
+describe("DiscordNotifyTargetSchema (F-6 notify.discord)", () => {
+  test("accepts a Discord webhook URL", () => {
+    expect(
+      DiscordNotifyTargetSchema.safeParse({
+        repo: "jc/reflex",
+        webhook_url: "https://discord.com/api/webhooks/123/abc-DEF_456",
+      }).success,
+    ).toBe(true);
+  });
+  test("accepts legacy discordapp.com + versioned path", () => {
+    expect(
+      DiscordNotifyTargetSchema.safeParse({
+        repo: "jc/reflex",
+        webhook_url: "https://discordapp.com/api/v10/webhooks/123/abc",
+      }).success,
+    ).toBe(true);
+  });
+  test("rejects a non-Discord URL (SSRF guard)", () => {
+    expect(
+      DiscordNotifyTargetSchema.safeParse({
+        repo: "jc/reflex",
+        webhook_url: "https://evil.example.com/api/webhooks/1/x",
+      }).success,
+    ).toBe(false);
+    expect(
+      DiscordNotifyTargetSchema.safeParse({
+        repo: "jc/reflex",
+        webhook_url: "https://discord.com.evil.com/api/webhooks/1/x",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("ReflexTargetSchema (F-6 prompt XOR handler)", () => {
+  const base = { target: "@jc/notify-discord", capability: "notify.discord", assistant: "luna" };
+  test("accepts a prompt-only (CC) target", () => {
+    expect(ReflexTargetSchema.safeParse({ ...base, prompt: "do it" }).success).toBe(true);
+  });
+  test("accepts a handler-only (code) target", () => {
+    expect(ReflexTargetSchema.safeParse({ ...base, handler: "discord-webhook" }).success).toBe(true);
+  });
+  test("rejects neither prompt nor handler", () => {
+    expect(ReflexTargetSchema.safeParse(base).success).toBe(false);
+  });
+  test("rejects both prompt and handler", () => {
+    expect(
+      ReflexTargetSchema.safeParse({ ...base, prompt: "x", handler: "discord-webhook" }).success,
+    ).toBe(false);
   });
 });

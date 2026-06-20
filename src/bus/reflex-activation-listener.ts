@@ -438,7 +438,8 @@ export class ReflexActivationListener {
 
     // Code-handler target: invoke the registered handler IN-PROCESS — no bus
     // re-emit (no second hop, no ungated subscriber; the bridge is the gated
-    // entry). A throw = transient → don't mark, so reflex can re-fire.
+    // entry). A throw = transient → ack but DON'T mark the Decision id, so a
+    // later reflex re-fire of the same Decision is not deduped away.
     if (target.handler !== undefined) {
       const handler = this.handlers[target.handler];
       if (handler === undefined) {
@@ -507,6 +508,7 @@ export class ReflexActivationListener {
       decisionId: act.decisionId,
       target: act.target,
       capability: target.capability,
+      via: "dispatch",
       targetAssistant: built.envelope.target_assistant ?? `did:mf:${target.assistant}`,
       dispatchSubject: built.subject,
       dispatchEnvelopeId: built.envelope.id,

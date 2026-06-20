@@ -2608,11 +2608,29 @@ export type ReflexActivationConfig = z.infer<typeof ReflexActivationConfigSchema
  * webhooks/{id}/{token}`) — per-repo routing, no bot token. Treat the URL as
  * a secret (it grants post access to that channel).
  */
+/**
+ * Discord webhook URL shape — host-locked so a `notify.discord` target cannot
+ * be repointed at an arbitrary origin (SSRF / exfil). Accepts the canonical
+ * `discord.com` (+ `canary`/`ptb` subdomains) and the legacy `discordapp.com`,
+ * with or without an `/api/vN` version segment.
+ */
+const DISCORD_WEBHOOK_URL_RE =
+  /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api(\/v\d+)?\/webhooks\/\d+\/[\w-]+$/;
+
 export const DiscordNotifyTargetSchema = z.object({
   /** GitHub repo full name, e.g. `owner/repo` (matched against the activation payload). */
   repo: z.string().min(1),
-  /** Discord webhook URL the issue summary is POSTed to. */
-  webhook_url: z.url(),
+  /**
+   * Discord webhook URL the issue summary is POSTed to. Constrained to the
+   * Discord webhook host so this notify capability cannot be turned into an
+   * arbitrary outbound POST sink / SSRF vector by a mis-scoped config.
+   */
+  webhook_url: z
+    .url()
+    .refine((u) => DISCORD_WEBHOOK_URL_RE.test(u), {
+      message:
+        "webhook_url must be a Discord webhook URL (https://discord.com/api/webhooks/...)",
+    }),
 });
 
 /**
