@@ -219,11 +219,19 @@ describe("reflexActivationFilterSubject", () => {
 // 2. buildReflexDispatch
 // =============================================================================
 
+// A CC-path target (prompt required) for the dispatch builder.
+const CC_TARGET = {
+  target: "@jc/notify-discord",
+  capability: "notify.discord",
+  assistant: "luna",
+  prompt: "Post this GitHub issue to Discord.",
+};
+
 describe("buildReflexDispatch", () => {
   test("produces canonical subject + executor payload contract + provenance", () => {
     const { envelope, subject } = buildReflexDispatch({
       activation: activationFixture(),
-      target: TARGETS[0]!,
+      target: CC_TARGET,
       reEmitPrincipal: "metafactory",
       reEmitStack: "default",
       source: SOURCE,
@@ -259,7 +267,7 @@ describe("buildReflexDispatch", () => {
   test("preserves federated classification onto the dispatch", () => {
     const { envelope } = buildReflexDispatch({
       activation: activationFixture({ classification: "federated" }),
-      target: TARGETS[0]!,
+      target: CC_TARGET,
       reEmitPrincipal: "metafactory",
       source: SOURCE,
       systemDid: "did:mf:reflex",

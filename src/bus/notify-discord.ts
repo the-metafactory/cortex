@@ -76,7 +76,7 @@ export interface DiscordNotifierOpts {
   targets: readonly DiscordNotifyTarget[];
   /** Injectable HTTP poster (default: `fetch`). */
   post?: WebhookPoster;
-  log?: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void };
+  log?: { warn: (m: string) => void; error: (m: string) => void };
 }
 
 /**

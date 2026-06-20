@@ -2558,13 +2558,12 @@ export const ReflexTargetSchema = z
      */
     prompt: z.string().min(1).optional(),
     /**
-     * Code-path: the capability is fulfilled by an in-runtime code responder
-     * (no Claude session), so there is no prompt. `discord-webhook` →
-     * `NotifyDiscordResponder` posts the activation payload to a per-repo
-     * Discord webhook (see the top-level `notify.discord` block). The bridge
-     * carries the structured activation payload as `reflex_payload` on the
-     * dispatch and omits the prompt; the CC dispatch-listener skips
-     * code-handled capabilities. Mutually exclusive with `prompt`.
+     * Code-path: the capability is fulfilled by an in-process code handler
+     * (no Claude session, no prompt). `discord-webhook` → the F-6 bridge
+     * invokes the notify.discord handler DIRECTLY with the activation payload
+     * (it posts to a per-repo Discord webhook — see the top-level
+     * `notify.discord` block); there is no bus re-emit and no `tasks.*`
+     * dispatch for a handler target. Mutually exclusive with `prompt`.
      */
     handler: z.enum(["discord-webhook"]).optional(),
   })

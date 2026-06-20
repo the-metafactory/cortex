@@ -229,7 +229,13 @@ function renderPrompt(prompt: string, payload: Record<string, unknown>): string 
 
 export interface BuildReflexDispatchOpts {
   activation: FiredActivation;
-  target: ReflexTarget;
+  /**
+   * A CC-path target — `prompt` is required here. Code-handler targets never
+   * reach this builder (the bridge invokes their handler directly), so the
+   * type narrows to a prompt target rather than carrying an unreachable
+   * handler shape.
+   */
+  target: ReflexTarget & { prompt: string };
   /** Cortex principal the dispatch lands under (where the executor listens). */
   reEmitPrincipal: string;
   /** Cortex stack, when stack-aware subjects are wired. */
@@ -239,14 +245,12 @@ export interface BuildReflexDispatchOpts {
 }
 
 /**
- * Pure builder for the re-emitted dispatch. Produces the executor's
- * `DispatchTaskReceivedPayload` contract (`task_id` UUID, `agent_id`, and —
- * for CC-path targets — a non-empty `prompt`), `distribution_mode: "direct"`,
- * `target_assistant` DID, and the canonical `tasks.@{did}.{capability}`
- * subject. Code-handler targets omit the prompt and rely on the structured
- * `reflex_payload`. Classification and correlation_id are preserved from the
- * fired event; provenance (reflex Decision id + original target) rides in
- * `extensions` for traceability.
+ * Pure builder for the re-emitted CC dispatch. Produces the executor's
+ * `DispatchTaskReceivedPayload` contract (`task_id` UUID, `agent_id`, non-empty
+ * `prompt`), `distribution_mode: "direct"`, `target_assistant` DID, and the
+ * canonical `tasks.@{did}.{capability}` subject. Classification and
+ * correlation_id are preserved from the fired event; provenance (reflex
+ * Decision id + original target) rides in `extensions` for traceability.
  */
 export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   envelope: Envelope;
@@ -263,13 +267,7 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   const subject = `${wildcard.slice(0, -2)}.${opts.target.capability}`;
 
   const taskId = crypto.randomUUID();
-  // buildReflexDispatch is only used for the CC path (a target with a
-  // `prompt`); `handler` targets are invoked directly by the bridge and never
-  // re-emitted. The conditional is defensive — prompt is always set here.
-  const prompt =
-    opts.target.prompt !== undefined
-      ? renderPrompt(opts.target.prompt, opts.activation.payload)
-      : undefined;
+  const prompt = renderPrompt(opts.target.prompt, opts.activation.payload);
   const base = buildBaseEnvelope({
     // Envelope `type` forbids `@`; the @{did} form lives only in the
     // subject. `tasks.{capability}` is the bare type.
@@ -288,7 +286,7 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
     payload: {
       task_id: taskId,
       agent_id: opts.target.assistant,
-      ...(prompt !== undefined && { prompt }),
+      prompt,
       // Provenance also echoed in the payload so executor-side worklogs
       // can surface the originating reflex Decision without parsing
       // extensions.
@@ -458,11 +456,19 @@ export class ReflexActivationListener {
       return { kind: "ack" };
     }
 
+    // CC path: a non-handler target must carry a prompt (schema enforces the
+    // prompt-XOR-handler invariant; this guard also narrows the type).
+    if (target.prompt === undefined) {
+      await this.emitFailed(envelope, act, "target-missing-prompt-and-handler");
+      return { kind: "ack" };
+    }
+    const ccTarget = { ...target, prompt: target.prompt };
+
     let built: { envelope: Envelope; subject: string };
     try {
       built = buildReflexDispatch({
         activation: act,
-        target,
+        target: ccTarget,
         reEmitPrincipal: this.reEmitPrincipal,
         ...(this.reEmitStack !== undefined && { reEmitStack: this.reEmitStack }),
         source: this.source,
