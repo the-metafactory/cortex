@@ -4129,9 +4129,11 @@ export async function startCortex(
       source: systemEventSource,
       reEmitPrincipal: principalId,
       reEmitStack: derivedStack.stack,
-      // The fired-event subject is owned by reflex; default its principal to
-      // ours (shared hub) and its stack to the configured reflex stack.
-      reflexPrincipal: options.reflexActivation?.principal ?? principalId,
+      // Same-principal only (v1): consume + re-emit under THIS principal.
+      // Bridging another principal's `local.` subject would breach the
+      // principal boundary (CONTEXT.md §Network) — that's a federated path,
+      // out of scope here. Only the reflex stack segment is configurable.
+      reflexPrincipal: principalId,
       reflexStack: options.reflexActivation?.stack ?? "default",
       resolveTarget: (target) => reflexTargets.find((t) => t.target === target),
       dedup: inMemoryReflexDedup(),
@@ -5721,15 +5723,18 @@ export async function startCortex(
           );
         }
       }
-      await completeAsync("dispatch-listener stop", dispatchListener.stop());
-      // F-6 — drain the reflex activation bridge on the same boundary. Only
-      // present when config-gated on; `stop()` is idempotent.
+      // F-6 — drain the reflex activation bridge BEFORE the executor it feeds.
+      // Stopping the bridge first guarantees it can't consume + re-emit a
+      // `tasks.*` dispatch after the dispatch-listener has drained (which would
+      // leave the activation unhandled mid-shutdown). Only present when
+      // config-gated on; `stop()` is idempotent.
       if (reflexActivationListener !== undefined) {
         await completeAsync(
           "reflex-activation-listener stop",
           reflexActivationListener.stop(),
         );
       }
+      await completeAsync("dispatch-listener stop", dispatchListener.stop());
       // signal#113 P-11 (#56) — drain the echo responder on the same boundary
       // as the dispatch listener. `stop()` is idempotent (no-op when dormant).
       await completeAsync("probe-responder stop", probeResponder.stop());

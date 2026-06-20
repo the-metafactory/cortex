@@ -1,6 +1,6 @@
 # Specification: F-6 — Reflex activation bridge
 
-> Tracked in the-metafactory/cortex#1177. Interview folded onto the open design forks; problem/context carried from the reflex→pulse bridge discovery (no consumer of `reflex.activation.fired.*` exists today).
+> Tracked in the-metafactory/cortex#1177. Interview folded onto the open design forks; problem/context carried from the reflex→pulse bridge discovery (no consumer of `reflex.activation.fired` exists today).
 
 ## Problem Statement
 
@@ -26,13 +26,13 @@
 
 - **Reflex** publishes `reflex.activation.fired` after applying its full pipeline — policy (auto/approval), guards (cooldown, run-lock, idempotency). A `fired` event means *cleared to run* (`reflex/src/bus/envelopes.ts`, R-104).
 - **Cortex** is the executor (cortex#484 "Option D"): it subscribes to bus subjects via `runtime.onEnvelope` + `subjectMatches` (`src/bus/bus-dispatch-listener.ts`, `src/runner/dispatch-listener.ts`) and dispatches `tasks.*` envelopes to agents/pipelines (capability-keyed; `cortex.yaml` `capabilities[].provided_by[]`), spawning a harness / running a pipeline per envelope. Runs always-on on Clawbox.
-- **Gap:** no listener maps `reflex.activation.fired.*` into that dispatch path.
+- **Gap:** no listener maps `reflex.activation.fired` into that dispatch path.
 
 ## Solution Overview
 
 A `ReflexActivationListener` (sibling of `BusDispatchListener`) that bridges reflex Activation Events into cortex's existing dispatch executor:
 
-1. **Subscribe** to `local.{principal}.{stack}.reflex.activation.fired.>` via a **durable JetStream consumer** (survives a Clawbox restart; at-least-once + dedup).
+1. **Subscribe** to `local.{principal}.{stack}.reflex.activation.fired` via a **durable JetStream consumer** (survives a Clawbox restart; at-least-once + dedup).
 2. **Resolve** the envelope's `target` (Execution Blueprint ref, e.g. `@jc/notify-discord`) to a **capability** via a target→capability map.
 3. **Re-emit** the work as the `tasks.{capability}` / `dispatch.task.*` envelope cortex's existing executor already consumes — carrying the Activation Payload, correlation id, and provenance — so the proven dispatch/execute path runs it unchanged.
 
@@ -44,7 +44,7 @@ The bridge does **not** re-gate: reflex already applied policy + guards, so a fi
 
 | ID | Requirement | Source |
 |----|-------------|--------|
-| FR-1 | A `ReflexActivationListener` subscribes to `local.{principal}.{stack}.reflex.activation.fired.>` via a durable JetStream consumer and handles each fired envelope. | Durability decision |
+| FR-1 | A `ReflexActivationListener` subscribes to `local.{principal}.{stack}.reflex.activation.fired` via a durable JetStream consumer and handles each fired envelope. | Durability decision |
 | FR-2 | For each fired envelope, resolve `target` → a capability via a configured target→capability map; re-emit a `tasks.{capability}` / `dispatch.task.*` envelope that cortex's existing executor consumes, carrying the Activation Payload + correlation id + provenance (originating reflex Decision id, target). | Target-resolution decision |
 | FR-3 | The bridge does NOT re-apply policy/approval/guards — reflex already cleared the activation. A `fired` event = execute. | Current state (reflex semantics) |
 | FR-4 | Idempotent: a redelivered fired envelope (same Decision id / envelope id) does not double-dispatch (durable-consumer ack + dedup). | Idempotency |
@@ -81,7 +81,7 @@ The bridge does **not** re-gate: reflex already applied policy + guards, so a fi
 
 ## Success Criteria
 
-**Definition of done.** A reflex `fired` Activation Event on `local.jc.default.reflex.activation.fired.>` is consumed by cortex on Clawbox, resolved to a capability, and re-emitted as a dispatch the existing executor runs — verified end to end (a test target capability runs from a real fired event); restart-durable; idempotent on redelivery; honors classification; typed failure on unknown target.
+**Definition of done.** A reflex `fired` Activation Event on `local.jc.default.reflex.activation.fired` is consumed by cortex on Clawbox, resolved to a capability, and re-emitted as a dispatch the existing executor runs — verified end to end (a test target capability runs from a real fired event); restart-durable; idempotent on redelivery; honors classification; typed failure on unknown target.
 
 **MVP.** The listener + durable consumer + target→capability resolution + re-emit + idempotency + failure/visibility events, with unit/integration tests. A concrete capability (Discord-notify) is downstream, separate work.
 

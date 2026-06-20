@@ -2468,17 +2468,18 @@ export const ReflexTargetSchema = z.object({
 
 /**
  * F-6 — Reflex activation bridge block. Optional; when `targets` is empty the
- * `ReflexActivationListener` is not mounted (zero behaviour change). The
- * fired-event subject is owned by reflex, so the source coordinates
- * (`principal`/`stack`) are configurable — they default to the cortex
- * principal and reflex's `default` stack.
+ * `ReflexActivationListener` is not mounted (zero behaviour change).
+ *
+ * The bridge is **same-principal only (v1)**: it consumes the cortex
+ * principal's own `local.{principal}.{stack}.reflex.activation.fired` and
+ * re-emits under that same principal. There is deliberately NO `principal`
+ * override — bridging another principal's `local.` subject onto this stack's
+ * `local.` dispatch would violate the principal boundary (CONTEXT.md §Network:
+ * `local.` never crosses principals; cross-principal reach is the `federated.`
+ * scope, a separate path). Only the reflex `stack` (a within-principal subject
+ * segment) is configurable.
  */
 export const ReflexActivationConfigSchema = z.object({
-  /**
-   * Reflex source principal (first subject segment of the fired event).
-   * Defaults to the cortex principal at mount time when omitted.
-   */
-  principal: z.string().min(1).optional(),
   /** Reflex source stack (second subject segment). Defaults to `default`. */
   stack: z.string().min(1).default("default"),
   /** Target→capability mappings. Empty → bridge not mounted. */

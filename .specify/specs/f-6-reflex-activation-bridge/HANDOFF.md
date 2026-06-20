@@ -9,7 +9,7 @@ GitHub issue opened → Discord post (per-repo channel), **laptop-free**, with
 
 ```
 GitHub issue ──webhook(HMAC)──▶ reflex-edge (CF)
-   └─ fires Activation Event: local.jc.default.reflex.activation.fired.{target}  (persisted in REFLEX JetStream stream)
+   └─ fires Activation Event: local.jc.default.reflex.activation.fired  (persisted in REFLEX JetStream stream)
         └─▶ [F-6] cortex ReflexActivationListener (Clawbox, always-on)
                └─ resolve target → capability → re-emit tasks.{capability}
                     └─▶ cortex existing executor → Discord-notify capability (per-repo webhook URL)
@@ -38,7 +38,7 @@ The F-6 bridge is implemented on this branch. Files:
 
 **Resolved open questions:**
 1. **Stream ownership:** REFLEX stream is owned by reflex-edge (`local.{p}.{s}.reflex.>`). Cortex does NOT provision an overlapping stream — it binds a durable consumer (filter `local.{p}.{s}.reflex.activation.fired`, exact subject; target is opaque, rides in payload — NOT a subject token, correcting the north-star diagram). **DeliverPolicy.New** so a fresh durable doesn't replay the limits-retained stream's history (in-memory dedup is empty on boot).
-2. **Map location:** `reflex_activation.targets[]` in cortex.yaml (`{target, capability, assistant, prompt}`), plus optional `principal`/`stack` for the fired-subject source coords.
+2. **Map location:** `reflex_activation.targets[]` in cortex.yaml (`{target, capability, assistant, prompt}`), plus an optional `stack` for the fired-subject source segment. **Same-principal only (v1):** no `principal` override — the bridge consumes + re-emits under the cortex principal; bridging another principal's `local.` subject would breach the principal boundary (that's a `federated.` path, out of scope).
 3. **Dedup store:** injected `{seen,mark}` iface; `inMemoryReflexDedup()` default v1 (JetStream ack-floor + DeliverPolicy.New cover cross-restart; persistent D1/KV is a drop-in if needed).
 4. **Re-emit shape:** focused producer (NOT chat publisher) — `buildBaseEnvelope` `type: tasks.{capability}`, subject via `directTaskSubject` + capability, `distribution_mode: direct`, `target_assistant: did:mf:{assistant}`, originator `{did:mf:reflex, delegated}`. Executor requires non-empty `prompt` (dispatch-listener parsePayload) → config `prompt` is the trusted task; the untrusted activation payload is appended inside a breakout-neutralised `<untrusted-content>` fence (`common/untrusted-fence`, CO-7 M1 pattern), never interpolated into the instruction text.
 
@@ -48,7 +48,7 @@ Verification (reproduce locally — not captured in this PR artifact): `bunx tsc
 
 A new `ReflexActivationListener` in cortex. Concrete seams (already scouted):
 
-1. **Subscribe (durable):** JetStream **durable pull consumer** on `local.jc.default.reflex.activation.fired.>` against the now-live `REFLEX` stream. Mirror `src/runner/dev-consumer-boot.ts` + `src/bus/jetstream/provision.ts` (the stream EXISTS now; just bind a durable consumer — ackPolicy explicit, deliverPolicy new). Survives Clawbox restart.
+1. **Subscribe (durable):** JetStream **durable pull consumer** on `local.jc.default.reflex.activation.fired` against the now-live `REFLEX` stream. Mirror `src/runner/dev-consumer-boot.ts` + `src/bus/jetstream/provision.ts` (the stream EXISTS now; just bind a durable consumer — ackPolicy explicit, deliverPolicy new). Survives Clawbox restart.
 2. **New file:** `src/bus/reflex-activation-listener.ts`, sibling of `src/bus/bus-dispatch-listener.ts` (mirror its ctor opts / lifecycle / visibility-emit / stop discipline). NOTE bus-dispatch-listener uses ephemeral `onEnvelope`; we want the **durable** path (dev-consumer pattern) instead.
 3. **Re-emit — DO NOT reuse `publishInboundChatDispatchEnvelope`** (`src/bus/dispatch-source-publisher.ts`): it is **chat-specific** (needs `msg: InboundMessage`, `prompt`, human-author originator resolution via PolicyEngine `(platform, authorId)`). A reflex activation has none of that. Build a **focused producer**: construct the `tasks.@{assistant}.{capability}` envelope directly via `directTaskSubject(principal, targetDid, stack)` (from `@the-metafactory/myelin/subjects`) + `runtime.publishOnSubject(envelope, subject)` (what the chat publisher calls internally at line ~282). Originator = the reflex daemon/system identity, not a human. Preserve classification + correlation_id + provenance (reflex Decision id + original target).
 4. **Resolve target → capability:** config map (`@jc/notify-discord` → capability like `notify.discord`). DECISION OPEN: where the map lives (cortex.yaml extension vs dedicated config). See open questions.
@@ -74,7 +74,7 @@ Tasks T-1.1..T-4.1 in `tasks.md`. Execution order there.
 
 ## Verification target for F-6
 
-Synthetic `reflex.activation.fired` envelope on `local.jc.default.reflex.activation.fired.>` → cortex consumes (durable) → resolves target → re-emits `tasks.{capability}` the existing executor runs → visibility event. Restart-durable (ack floor), idempotent on redelivery, classification honored, typed failure on unknown target. End-to-end later: real GitHub issue → Discord, laptop offline.
+Synthetic `reflex.activation.fired` envelope on `local.jc.default.reflex.activation.fired` → cortex consumes (durable) → resolves target → re-emits `tasks.{capability}` the existing executor runs → visibility event. Restart-durable (ack floor), idempotent on redelivery, classification honored, typed failure on unknown target. End-to-end later: real GitHub issue → Discord, laptop offline.
 
 ## GOTCHAS (from this session)
 
