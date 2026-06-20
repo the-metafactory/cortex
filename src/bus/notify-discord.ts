@@ -211,9 +211,12 @@ export function createDiscordNotifier(opts: DiscordNotifierOpts): ReflexActivati
       emit("skipped", activation, undefined, "unparseable-payload");
       return;
     }
-    const webhookUrl = webhookByRepo.get(issue.repo);
+    // Exact repo mapping first, then the `"*"` catch-all (one webhook for every
+    // repo — pairs with an org-level GitHub webhook). An exact entry overrides
+    // the catch-all.
+    const webhookUrl = webhookByRepo.get(issue.repo) ?? webhookByRepo.get("*");
     if (webhookUrl === undefined) {
-      log.warn(`notify-discord: no webhook configured for repo "${issue.repo}" — skipped`);
+      log.warn(`notify-discord: no webhook configured for repo "${issue.repo}" (no catch-all) — skipped`);
       emit("skipped", activation, issue.repo, "no-webhook-for-repo");
       return;
     }

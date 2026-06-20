@@ -2609,7 +2609,12 @@ export type ReflexActivationConfig = z.infer<typeof ReflexActivationConfigSchema
  * a secret (it grants post access to that channel).
  */
 export const DiscordNotifyTargetSchema = z.object({
-  /** GitHub repo full name, e.g. `owner/repo` (matched against the activation payload). */
+  /**
+   * GitHub repo full name, e.g. `owner/repo` (matched against the activation
+   * payload). The special value `"*"` is a catch-all: any repo with no exact
+   * entry routes to this webhook (pair with an org-level GitHub webhook to
+   * notify every repo through one channel; an exact entry overrides it).
+   */
   repo: z.string().min(1),
   /**
    * Env/secret BINDING NAME holding the Discord webhook URL — never the URL

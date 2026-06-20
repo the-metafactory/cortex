@@ -137,6 +137,43 @@ describe("createDiscordNotifier", () => {
     expect(lastNotify(ctrl.published)?.outcome).toBe("posted");
   });
 
+  test("`*` catch-all routes a repo with no exact entry", async () => {
+    const ctrl = fakeRuntime();
+    const poster = recordingPoster();
+    const handler = createDiscordNotifier({
+      runtime: ctrl.runtime, source: SOURCE,
+      targets: [{ repo: "*", webhook_url_env: "DISCORD_WH_ALL" }],
+      env: { DISCORD_WH_ALL: WEBHOOK },
+      post: poster.post,
+    });
+
+    await handler(activation({ repository: { full_name: "the-metafactory/anything" }, issue: { number: 9, title: "x" } }));
+    await flush();
+
+    expect(poster.calls).toHaveLength(1);
+    expect(poster.calls[0]!.url).toBe(WEBHOOK);
+    expect(lastNotify(ctrl.published)?.outcome).toBe("posted");
+  });
+
+  test("exact repo entry overrides the `*` catch-all", async () => {
+    const ctrl = fakeRuntime();
+    const poster = recordingPoster();
+    const handler = createDiscordNotifier({
+      runtime: ctrl.runtime, source: SOURCE,
+      targets: [
+        { repo: "*", webhook_url_env: "DISCORD_WH_ALL" },
+        { repo: "jc/reflex", webhook_url_env: "DISCORD_WH_REFLEX" },
+      ],
+      env: { DISCORD_WH_ALL: "https://discord.com/api/webhooks/9/all", DISCORD_WH_REFLEX: WEBHOOK },
+      post: poster.post,
+    });
+
+    await handler(activation(ISSUE)); // repo jc/reflex
+    await flush();
+
+    expect(poster.calls[0]!.url).toBe(WEBHOOK); // exact, not the catch-all
+  });
+
   test("unknown repo → skipped, no POST, no throw", async () => {
     const ctrl = fakeRuntime();
     const poster = recordingPoster();
