@@ -105,14 +105,14 @@ function activationFixture(overrides: Partial<FiredActivation> = {}): FiredActiv
 interface FakeRuntimeControls {
   runtime: MyelinRuntime;
   published: Envelope[];
-  onSubject: Array<{ envelope: Envelope; subject: string }>;
+  onSubject: { envelope: Envelope; subject: string }[];
 }
 
 function fakeRuntime(opts: {
   publishOnSubjectThrows?: boolean;
 } = {}): FakeRuntimeControls {
   const published: Envelope[] = [];
-  const onSubject: Array<{ envelope: Envelope; subject: string }> = [];
+  const onSubject: { envelope: Envelope; subject: string }[] = [];
   const runtime = {
     enabled: true,
     onEnvelope() {
@@ -185,7 +185,7 @@ describe("parseFiredEnvelope", () => {
 
   test("missing target → typed failure", () => {
     const env = firedEnvelope({});
-    delete (env.payload as Record<string, unknown>).target;
+    delete (env.payload).target;
     const res = parseFiredEnvelope(env);
     expect(res.ok).toBe(false);
     if (res.ok) return;
@@ -236,7 +236,7 @@ describe("buildReflexDispatch", () => {
     expect(envelope.target_assistant).toBe("did:mf:luna");
     expect(envelope.originator).toEqual({ identity: "did:mf:reflex", attribution: "delegated" });
 
-    const p = envelope.payload as Record<string, unknown>;
+    const p = envelope.payload;
     expect(typeof p.task_id).toBe("string");
     expect((p.task_id as string).length).toBeGreaterThan(0);
     expect(p.agent_id).toBe("luna");
@@ -280,7 +280,7 @@ describe("buildReflexDispatch", () => {
       source: SOURCE,
       systemDid: "did:mf:reflex",
     });
-    const prompt = (envelope.payload as Record<string, unknown>).prompt as string;
+    const prompt = (envelope.payload).prompt as string;
 
     // Trusted task comes first and is the sole instruction channel.
     expect(prompt.startsWith("Post this to Discord.")).toBe(true);
@@ -320,7 +320,7 @@ describe("ReflexActivationListener.handleFired", () => {
       (e) => e.type === "system.bus.reflex_activation_dispatched",
     );
     expect(vis).toBeDefined();
-    const vp = vis!.payload as Record<string, unknown>;
+    const vp = vis!.payload;
     expect(vp.decision_id).toBe("decision-123");
     expect(vp.capability).toBe("notify.discord");
     expect(vp.dispatch_subject).toBe(
@@ -354,14 +354,14 @@ describe("ReflexActivationListener.handleFired", () => {
       (e) => e.type === "system.bus.reflex_activation_failed",
     );
     expect(fail).toBeDefined();
-    expect((fail!.payload as Record<string, unknown>).reason).toBe("unknown_target");
+    expect((fail!.payload).reason).toBe("unknown_target");
   });
 
   test("malformed fired envelope → term + _failed (no poison loop)", async () => {
     const ctrl = fakeRuntime();
     const { listener } = listenerWith(ctrl);
     const env = firedEnvelope({});
-    delete (env.payload as Record<string, unknown>).target;
+    delete (env.payload).target;
 
     const decision = await listener.handleFired(env, "subj");
 
@@ -398,7 +398,7 @@ describe("ReflexActivationListener.handleFired", () => {
       (e) => e.type === "system.bus.reflex_activation_failed",
     );
     expect(fail).toBeDefined();
-    expect((fail!.payload as Record<string, unknown>).reason as string).toContain(
+    expect((fail!.payload).reason as string).toContain(
       "publish:",
     );
   });
@@ -422,7 +422,7 @@ describe("ReflexActivationListener — lifecycle", () => {
 
   test("start provisions durable consumer + binds pull; stop unsubscribes", async () => {
     const ctrl = fakeRuntime();
-    const consumerAdds: Array<{ stream: string; cfg: Record<string, unknown> }> = [];
+    const consumerAdds: { stream: string; cfg: Record<string, unknown> }[] = [];
     let stopped = false;
     const jsm: ProvisionJsm = {
       streams: {
@@ -475,7 +475,7 @@ describe("ReflexActivationListener — lifecycle", () => {
 
   test("no subscribePull → does NOT provision an orphan consumer (Sage cycle-3)", async () => {
     const ctrl = fakeRuntime();
-    const consumerAdds: Array<{ stream: string }> = [];
+    const consumerAdds: { stream: string }[] = [];
     const jsm: ProvisionJsm = {
       streams: { info: async () => ({}) as never, add: async () => ({}) as never },
       consumers: {

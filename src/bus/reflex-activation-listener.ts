@@ -148,12 +148,12 @@ export function parseFiredEnvelope(envelope: Envelope): ParseFiredResult {
   if (!p || typeof p.target !== "string" || p.target.length === 0) {
     return { ok: false, reason: "missing-target" };
   }
-  const ext = envelope.extensions as Record<string, unknown> | undefined;
+  const ext = envelope.extensions;
   const decisionId =
     typeof p.decision_id === "string" && p.decision_id.length > 0
       ? p.decision_id
       : typeof ext?.decision_id === "string" && ext.decision_id.length > 0
-        ? (ext.decision_id as string)
+        ? (ext.decision_id)
         : undefined;
   if (decisionId === undefined) {
     return { ok: false, reason: "missing-decision-id" };
@@ -169,7 +169,7 @@ export function parseFiredEnvelope(envelope: Envelope): ParseFiredResult {
       payload,
       decisionId,
       correlationId: envelope.correlation_id,
-      classification: envelope.sovereignty?.classification ?? "local",
+      classification: envelope.sovereignty.classification,
     },
   };
 }
