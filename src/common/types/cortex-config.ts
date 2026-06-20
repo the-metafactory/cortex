@@ -2444,8 +2444,10 @@ export type Policy = z.infer<typeof PolicySchema>;
  * F-6 — Reflex activation bridge config. A single target→capability mapping:
  * the reflex `target` (opaque Execution Blueprint ref) resolves to the cortex
  * `capability` + `assistant` a re-emitted dispatch is addressed to, and the
- * `prompt` that capability runs. `{{payload}}` in the prompt is substituted
- * with the activation payload (else it is appended as a fenced JSON block).
+ * trusted `prompt` that capability runs. The (untrusted, webhook-controlled)
+ * activation payload is appended by the bridge inside a quarantined
+ * `<untrusted-content>` fence — it is NEVER interpolated into the prompt text,
+ * so a malicious payload cannot become executable prompt instructions.
  */
 export const ReflexTargetSchema = z.object({
   /** Reflex target ref, e.g. `@jc/notify-discord`. */
