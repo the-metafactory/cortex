@@ -38,14 +38,14 @@ reflex-edge ──fired──▶ local.jc.default.reflex.activation.fired.{targe
 |-----------|--------|-----------|
 | Runtime | Bun / TS | cortex standard |
 | Subscribe | JetStream durable pull consumer | survives Clawbox restart (NFR-2); mirror `dev-consumer-boot` + `bus/jetstream/provision.ts` |
-| Re-emit | `dispatch-source-publisher.ts` (`directTaskSubject`) | reuse the existing `tasks.@{assistant}.{capability}` producer + publish-time PolicyEngine (NFR-1) |
+| Re-emit | built directly via `directTaskSubject` + `buildBaseEnvelope` + `runtime.publishOnSubject` | mirrors `dispatch-source-publisher.ts`'s producer but does NOT reuse its chat-coupled entrypoint (`publishInboundChatDispatchEnvelope` needs a chat `InboundMessage` + human-author resolution); a reflex activation has neither. Re-emit lands on the same publish-time PolicyEngine (NFR-1). |
 | Visibility | `runtime.publish` `system.bus.*` | parity with `BusDispatchListener` |
 | Dedup | Decision-id keyed store | idempotency (FR-4) — store TBD (open question) |
 
 ## Constitutional Compliance
 
 - [x] **CLI-First:** no new CLI; operates on the bus. Target→capability map is config (cortex.yaml).
-- [x] **Library-First:** the listener is a self-contained module reusing `dispatch-source-publisher` + the JetStream provisioning helpers; no duplicated executor.
+- [x] **Library-First:** the listener is a self-contained module — it mirrors `dispatch-source-publisher`'s producer pattern (without reusing its chat-coupled entrypoint) and reuses the JetStream provisioning helpers + the `common/untrusted-fence` primitives; no duplicated executor.
 - [x] **Test-First:** unit (resolve/dedup/failure) + integration (fired envelope → re-emit) authored before wiring; mirror `bus-dispatch-listener` tests.
 - [x] **Deterministic:** resolution + re-emit are pure functions of (envelope, config); JetStream provides delivery.
 - [x] **Code Before Prompts:** pure plumbing, no prompt surface.
@@ -76,7 +76,7 @@ interface ReflexTarget {
 
 ### Re-emitted (existing dispatch contract)
 
-`tasks.@{assistant}.{capability}` via `dispatch-source-publisher` — carries the
+`tasks.@{assistant}.{capability}` built directly (subject via `directTaskSubject`, envelope via `buildBaseEnvelope`, published via `runtime.publishOnSubject`) — carries the
 Activation Payload, `correlation_id` (preserved from the fired event), and
 provenance (reflex Decision id + original target) so the run is traceable back.
 
@@ -95,7 +95,7 @@ reuse an existing cortex idempotency surface or a small KV/D1 (open question).
 - [ ] Parse `FiredPayload`; local-principal filter (drop foreign subjects, v1).
 - [ ] Dedup on Decision id → skip + ack if seen.
 - [ ] Resolve `target` → capability via config; unknown → typed failure + visibility + ack.
-- [ ] Re-emit via `dispatch-source-publisher` (`directTaskSubject`), preserving classification + correlation + provenance. NO re-gate (reflex already applied policy/guards; cortex publish-time PolicyEngine is the egress/sovereignty check, not re-approval).
+- [x] Re-emit built directly (`directTaskSubject` + `buildBaseEnvelope` + `runtime.publishOnSubject`), preserving classification + correlation + provenance. NO re-gate (reflex already applied policy/guards; cortex publish-time PolicyEngine is the egress/sovereignty check, not re-approval).
 - [ ] Emit `system.bus.reflex_activation_dispatched` visibility on success; ack.
 
 ### Phase 3: Wire + verify
@@ -107,7 +107,7 @@ reuse an existing cortex idempotency surface or a small KV/D1 (open question).
 ```
 src/bus/
 ├── reflex-activation-listener.ts     # NEW: the listener
-├── dispatch-source-publisher.ts      # reused (re-emit)
+├── ../common/untrusted-fence.ts      # NEW: payload-quarantine primitives (shared)
 └── jetstream/provision.ts            # extended: REFLEX_ACTIVATION stream
 src/cortex.ts                          # MODIFIED: mount the listener
 src/bus/__tests__/
@@ -168,7 +168,7 @@ class ReflexActivationListener {
 
 ## Dependencies
 
-- Internal: `dispatch-source-publisher.ts`, `bus/jetstream/provision.ts`, `MyelinRuntime`, the existing executor (dispatch-listener/dev-consumer).
+- Internal: `bus/jetstream/provision.ts`, `common/untrusted-fence.ts`, `@the-metafactory/myelin/subjects` (`directTaskSubject`), `MyelinRuntime` (`publishOnSubject`/`subscribePull`/`jetstreamManager`), the existing executor (dispatch-listener/dev-consumer). Mirrors `dispatch-source-publisher.ts` but does not depend on it.
 - External: none new.
 - Cross-repo: reflex must publish fired events to a subject covered by a JetStream stream (coordinate stream ownership — hub vs cortex-provisioned).
 

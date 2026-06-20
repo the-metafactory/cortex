@@ -23,7 +23,7 @@ ruled out Pulse-on-CF: spawn runs nodes not the Pulse engine; big unbuilt epic.)
 - **reflex#24 (merged, main 38f44cd):** `github_hmac` HTTP impulse source on reflex-edge — GitHub webhooks fire reflex directly (HMAC-verified, `where` filter, per-repo via `where:{repository}`, delivery-id in payload). Bearer path unchanged.
 - **reflex#26 (merged, main b6d4ed4):** reflex-edge provisions the **REFLEX JetStream stream** on DO startup (`ensureReflexStream` in `consumer-do.ts`). Stream `REFLEX` (subjects `local.jc.default.reflex.>`, File storage) is the prerequisite for F-6's durable consumer. NOTE (HonestOracle): the prior-session claim that the stream is "live on the hub" and that a real fire was observed persisting is an **external prerequisite recorded from that session — NOT re-verified in this PR**. Confirm against the running hub before relying on it (e.g. `nats stream info REFLEX` with the `reflex-edge.creds`, see GOTCHAS).
 - **cortex#1177:** the F-6 issue.
-- **F-6 spec/plan/tasks:** complete + validated (this dir). Phase = `tasks`, ready to implement.
+- **F-6 spec/plan/tasks:** authored (this dir). (Prior-session note said "validated"; no `specflow validate` output is captured in this PR — re-run `specflow validate F-6` to confirm phase state if you depend on it.)
 
 ## BUILT (2026-06-20) — bridge implemented, suite green
 

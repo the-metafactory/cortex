@@ -110,7 +110,6 @@ interface FakeRuntimeControls {
 
 function fakeRuntime(opts: {
   publishOnSubjectThrows?: boolean;
-  noPublishOnSubject?: boolean;
 } = {}): FakeRuntimeControls {
   const published: Envelope[] = [];
   const onSubject: Array<{ envelope: Envelope; subject: string }> = [];
@@ -122,14 +121,10 @@ function fakeRuntime(opts: {
     async publish(envelope: Envelope) {
       published.push(envelope);
     },
-    ...(opts.noPublishOnSubject
-      ? {}
-      : {
-          async publishOnSubject(envelope: Envelope, subject: string) {
-            if (opts.publishOnSubjectThrows) throw new Error("bus refused");
-            onSubject.push({ envelope, subject });
-          },
-        }),
+    async publishOnSubject(envelope: Envelope, subject: string) {
+      if (opts.publishOnSubjectThrows) throw new Error("bus refused");
+      onSubject.push({ envelope, subject });
+    },
     async stop() {},
   } as unknown as MyelinRuntime;
   return { runtime, published, onSubject };
