@@ -663,6 +663,59 @@ export function createSystemBusReflexActivationFailedEvent(
   });
 }
 
+export interface SystemBusReflexActivationSkippedOpts {
+  /** Standard source attribution — who emitted this visibility event. */
+  source: SystemEventSource;
+  /** Reflex Decision id from the fired event. */
+  decisionId: string;
+  /** Original reflex target (Execution Blueprint ref). */
+  target: string;
+  /** Capability the bridge resolved the target to. */
+  capability: string;
+  /**
+   * Why the dispatch was skipped. Conventional value: `"author_trusted"` (the
+   * fired activation's author is in the target's configurable `skip_authors`).
+   */
+  reason: string;
+  /** The matched author login that triggered the skip (audit trail). */
+  author: string;
+  /** Envelope id of the fired event that was skipped — joins to the source. */
+  firedEnvelopeId: string;
+  /** Correlation id from the fired event, if present. */
+  correlationId?: string;
+  classification?: Classification;
+}
+
+/**
+ * F-6 — visibility event emitted when `ReflexActivationListener` deliberately
+ * DROPS a fired activation because its author is trusted (in the target's
+ * configurable `skip_authors`). This is an honest policy SKIP, not a failure:
+ * no dispatch, no error, the Decision id is marked (a redelivery re-skips
+ * silently). Distinct from `_failed` (which means the bridge could not
+ * dispatch) so the audit trail distinguishes "we chose not to" from "we
+ * could not".
+ */
+export function createSystemBusReflexActivationSkippedEvent(
+  opts: SystemBusReflexActivationSkippedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.bus.reflex_activation_skipped",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      reason: opts.reason,
+      author: opts.author,
+      target: opts.target,
+      capability: opts.capability,
+      fired_envelope_id: opts.firedEnvelopeId,
+      decision_id: opts.decisionId,
+      ...(opts.correlationId !== undefined && {
+        correlation_id: opts.correlationId,
+      }),
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // system.bus.notify_discord — F-6 downstream code-capability visibility
 // ---------------------------------------------------------------------------

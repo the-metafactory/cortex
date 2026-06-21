@@ -52,6 +52,7 @@ import {
   buildSource,
   createSystemBusReflexActivationDispatchedEvent,
   createSystemBusReflexActivationFailedEvent,
+  createSystemBusReflexActivationSkippedEvent,
   type SystemEventSource,
 } from "./system-events";
 import {
@@ -436,6 +437,18 @@ export class ReflexActivationListener {
       return { kind: "ack" };
     }
 
+    // Configurable author trust gate (deterministic, BEFORE any dispatch arm):
+    // if the fired activation's GitHub author is in this target's `skip_authors`,
+    // drop it. The login comes from the untrusted payload, so this gate runs in
+    // code here — never as an LLM "please skip" instruction the prompt could be
+    // tricked out of. Marked as seen so a redelivery re-skips without re-work.
+    const skipAuthor = matchSkippedAuthor(target.skip_authors, act.payload);
+    if (skipAuthor !== undefined) {
+      await this.dedup.mark(act.decisionId);
+      await this.emitSkipped(envelope, act, target, skipAuthor);
+      return { kind: "ack" };
+    }
+
     // Code-handler target → its own arm; CC-prompt target falls through.
     if (target.handler !== undefined) {
       return this.handleHandlerTarget(envelope, act, target);
@@ -563,6 +576,26 @@ export class ReflexActivationListener {
     await this.runtime.publish(event);
   }
 
+  private async emitSkipped(
+    fired: Envelope,
+    act: FiredActivation,
+    target: ReflexTarget,
+    author: string,
+  ): Promise<void> {
+    const event = createSystemBusReflexActivationSkippedEvent({
+      source: this.source,
+      decisionId: act.decisionId,
+      target: act.target,
+      capability: target.capability,
+      reason: "author_trusted",
+      author,
+      firedEnvelopeId: fired.id,
+      ...(act.correlationId !== undefined && { correlationId: act.correlationId }),
+      classification: act.classification,
+    });
+    await this.runtime.publish(event);
+  }
+
   /**
    * Provision the durable consumer on the (reflex-owned) REFLEX stream and
    * bind the pull subscription. Dormant + no-throw when the runtime is
@@ -640,4 +673,47 @@ export class ReflexActivationListener {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The GitHub author login of a fired activation, or undefined when none is
+ * present. Reads the canonical author for the common event shapes —
+ * `pull_request.user.login` (PR), `issue.user.login` (issue) — and falls back
+ * to `sender.login` (the actor who triggered the delivery; for an `opened`
+ * action that is the author). Reflex's edge injection preserves these nested
+ * objects, so they survive onto the fired payload.
+ */
+export function extractAuthorLogin(payload: Record<string, unknown>): string | undefined {
+  const nestedLogin = (key: string): string | undefined => {
+    const obj = payload[key];
+    if (obj === null || typeof obj !== "object") return undefined;
+    const user = (obj as Record<string, unknown>).user;
+    if (user === null || typeof user !== "object") return undefined;
+    const login = (user as Record<string, unknown>).login;
+    return typeof login === "string" && login.length > 0 ? login : undefined;
+  };
+  const senderLogin = (): string | undefined => {
+    const sender = payload.sender;
+    if (sender === null || typeof sender !== "object") return undefined;
+    const login = (sender as Record<string, unknown>).login;
+    return typeof login === "string" && login.length > 0 ? login : undefined;
+  };
+  return nestedLogin("pull_request") ?? nestedLogin("issue") ?? senderLogin();
+}
+
+/**
+ * The author login to skip on, or undefined to proceed. Returns the matched
+ * login (for the audit trail) when the fired activation's author is in
+ * `skipAuthors`; GitHub logins are case-insensitive, so the compare is too.
+ * An empty/absent list never matches (no gate configured).
+ */
+export function matchSkippedAuthor(
+  skipAuthors: readonly string[] | undefined,
+  payload: Record<string, unknown>,
+): string | undefined {
+  if (skipAuthors === undefined || skipAuthors.length === 0) return undefined;
+  const author = extractAuthorLogin(payload);
+  if (author === undefined) return undefined;
+  const lowered = author.toLowerCase();
+  return skipAuthors.some((a) => a.toLowerCase() === lowered) ? author : undefined;
 }

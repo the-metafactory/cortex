@@ -24,7 +24,9 @@ import type { ProvisionJsm } from "../jetstream/types";
 import {
   ReflexActivationListener,
   buildReflexDispatch,
+  extractAuthorLogin,
   inMemoryReflexDedup,
+  matchSkippedAuthor,
   parseFiredEnvelope,
   reflexActivationFilterSubject,
   resolveReflexTarget,
@@ -499,6 +501,110 @@ describe("ReflexActivationListener.handleFired", () => {
     expect((fail!.payload).reason as string).toContain(
       "unknown_handler",
     );
+  });
+});
+
+// =============================================================================
+// 3b. Author trust gate (configurable skip_authors)
+// =============================================================================
+
+const REVIEW_TARGETS: ReflexTarget[] = [
+  {
+    target: "@jc/sage-pr-review",
+    capability: "code-review.generic",
+    assistant: "sage",
+    prompt: "Review this PR.",
+    skip_authors: ["jcfischer", "mellanon"],
+  },
+];
+
+function firedPrEnvelope(authorLogin: string, opts: { decisionId?: string } = {}): Envelope {
+  return firedEnvelope({
+    target: "@jc/sage-pr-review",
+    payload: { action: "opened", pull_request: { user: { login: authorLogin } } },
+    ...(opts.decisionId !== undefined && { decisionId: opts.decisionId }),
+  });
+}
+
+describe("extractAuthorLogin", () => {
+  test("prefers pull_request.user.login", () => {
+    expect(
+      extractAuthorLogin({ pull_request: { user: { login: "octocat" } }, sender: { login: "bot" } }),
+    ).toBe("octocat");
+  });
+  test("falls back to issue.user.login", () => {
+    expect(extractAuthorLogin({ issue: { user: { login: "reporter" } } })).toBe("reporter");
+  });
+  test("falls back to sender.login when no pr/issue", () => {
+    expect(extractAuthorLogin({ sender: { login: "actor" } })).toBe("actor");
+  });
+  test("undefined when no author anywhere", () => {
+    expect(extractAuthorLogin({ action: "opened" })).toBeUndefined();
+  });
+});
+
+describe("matchSkippedAuthor", () => {
+  const payload = { pull_request: { user: { login: "JCFischer" } } };
+  test("empty / absent list never matches", () => {
+    expect(matchSkippedAuthor(undefined, payload)).toBeUndefined();
+    expect(matchSkippedAuthor([], payload)).toBeUndefined();
+  });
+  test("case-insensitive match returns the actual login", () => {
+    expect(matchSkippedAuthor(["jcfischer"], payload)).toBe("JCFischer");
+  });
+  test("non-member author → undefined (proceed)", () => {
+    expect(matchSkippedAuthor(["jcfischer"], { pull_request: { user: { login: "outsider" } } })).toBeUndefined();
+  });
+});
+
+describe("ReflexActivationListener.handleFired — author trust gate", () => {
+  test("trusted author → skipped: no dispatch, dedup marked, _skipped visibility, ack", async () => {
+    const ctrl = fakeRuntime();
+    const { listener, dedup } = listenerWith(ctrl, {
+      resolveTarget: (t) => resolveReflexTarget(REVIEW_TARGETS, t),
+    });
+
+    const decision = await listener.handleFired(firedPrEnvelope("jcfischer"), "subj");
+
+    expect(decision).toEqual({ kind: "ack" });
+    expect(ctrl.onSubject).toHaveLength(0); // no CC dispatch
+    expect(await dedup.seen("decision-123")).toBe(true); // marked → redelivery re-skips
+
+    const vis = ctrl.published.find((e) => e.type === "system.bus.reflex_activation_skipped");
+    expect(vis).toBeDefined();
+    const vp = vis!.payload;
+    expect(vp.reason).toBe("author_trusted");
+    expect(vp.author).toBe("jcfischer");
+    expect(vp.target).toBe("@jc/sage-pr-review");
+    expect(vp.capability).toBe("code-review.generic");
+    // It must NOT look like a failure.
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_failed")).toBe(false);
+  });
+
+  test("untrusted author → dispatches the review normally", async () => {
+    const ctrl = fakeRuntime();
+    const { listener } = listenerWith(ctrl, {
+      resolveTarget: (t) => resolveReflexTarget(REVIEW_TARGETS, t),
+    });
+
+    const decision = await listener.handleFired(firedPrEnvelope("external-contributor"), "subj");
+
+    expect(decision).toEqual({ kind: "ack" });
+    expect(ctrl.onSubject).toHaveLength(1); // CC review dispatched
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(false);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_dispatched")).toBe(true);
+  });
+
+  test("case-insensitive: MELLANON skipped against config mellanon", async () => {
+    const ctrl = fakeRuntime();
+    const { listener } = listenerWith(ctrl, {
+      resolveTarget: (t) => resolveReflexTarget(REVIEW_TARGETS, t),
+    });
+
+    await listener.handleFired(firedPrEnvelope("MELLANON"), "subj");
+
+    expect(ctrl.onSubject).toHaveLength(0);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(true);
   });
 });
 
