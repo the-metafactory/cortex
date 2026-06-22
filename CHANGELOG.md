@@ -15,8 +15,11 @@
   (verified producer-side here; the consumer claim path is covered by the existing
   ReviewConsumer suite). This closes the gap where a review target's `@{did}`
   subject previously fell onto the claude-session dispatch-listener instead of the
-  review consumer. The local twin of the public-surface
-  `translatePrOpenedToOffer` path. `skip_authors` runs first (trusted authors
+  review consumer. Mirrors how the public-surface `translatePrOpenedToOffer`
+  builds a `tasks.code-review.<flavor>` request from a PR event — but on the
+  LOCAL bus and without that path's public-Offer admission / surface-predicate
+  gating (this is a trusted internal reflex activation, not a public Offer).
+  `skip_authors` runs first (trusted authors
   never reach the review publish). Schema enforces exactly one of
   prompt|handler|review and a flavored `code-review.*` capability for review
   targets. Pure helpers `reviewFlavorOf` / `extractReviewRequest` +

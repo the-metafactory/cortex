@@ -401,7 +401,9 @@ export function buildReflexReviewDispatch(
       pr: review.pr,
       // Informational — the consumer routes by subject flavor, not this field.
       reviewer: opts.target.assistant,
-      // The reflex path always wants the verdict posted back to the PR.
+      // Post the verdict back to the PR. The only review target today
+      // (`@jc/sage-pr-review`) wants this; if a non-posting review target ever
+      // appears, lift this to a per-target field rather than a constant.
       post: true,
       forge: "github",
       ...(review.title !== undefined && { title: review.title }),
@@ -692,8 +694,18 @@ export class ReflexActivationListener {
     }
     // Mark only after a successful publish — a publish failure leaves the
     // activation re-fireable on the next reflex impulse (CC-arm invariant).
+    // The review request IS now published, so we mark BEFORE the audit event:
+    // re-firing would DOUBLE-publish the review (worse than a lost audit line).
+    // The `_dispatched` visibility is therefore best-effort — a failure to emit
+    // it is logged, never propagated (which would trigger that double-publish).
     await this.dedup.mark(act.decisionId);
-    await this.emitDispatched(act, target, built);
+    try {
+      await this.emitDispatched(act, target, built);
+    } catch (err) {
+      this.log.warn(
+        `reflex-activation: _dispatched audit emit failed for decision ${act.decisionId} (review published, dedup marked): ${errMsg(err)}`,
+      );
+    }
     return { kind: "ack" };
   }
 
