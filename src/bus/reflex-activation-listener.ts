@@ -320,30 +320,30 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
 // existing importers (and tests) are unaffected.
 export { reviewFlavorOfCapability as reviewFlavorOf } from "../common/types/review-flavors";
 
+/** The `owner/repo` full name from a GitHub `repository` field. Accepts both
+ *  the reflex-flattened string (reflex `src/edge/http.ts`) and GitHub's native
+ *  `{ full_name }` object, so the bridge is robust to either delivery shape. */
+function repoFullName(repoRaw: unknown): string | undefined {
+  if (typeof repoRaw === "string") return repoRaw.length > 0 ? repoRaw : undefined;
+  if (repoRaw !== null && typeof repoRaw === "object") {
+    const fullName = (repoRaw as { full_name?: unknown }).full_name;
+    if (typeof fullName === "string" && fullName.length > 0) return fullName;
+  }
+  return undefined;
+}
+
 /** The review routing keys adapted from a fired activation's GitHub PR event,
- *  or null when the payload is not a reviewable PR (no repo / no PR number).
- *  Reflex's edge injection flattens `repository` to its full_name string
- *  (reflex `src/edge/http.ts`), but we ALSO accept GitHub's native
- *  `{ full_name }` object so the bridge is robust to either delivery shape. */
+ *  or null when the payload is not a reviewable PR (no repo, or no positive PR
+ *  number — the ReviewConsumer rejects `pr <= 0`, so we never dispatch one). */
 export function extractReviewRequest(
   payload: Record<string, unknown>,
 ): { repo: string; pr: number; title?: string } | null {
-  const repoRaw = payload.repository;
-  const repo =
-    typeof repoRaw === "string" && repoRaw.length > 0
-      ? repoRaw
-      : repoRaw !== null &&
-          typeof repoRaw === "object" &&
-          typeof (repoRaw as { full_name?: unknown }).full_name === "string" &&
-          (repoRaw as { full_name: string }).full_name.length > 0
-        ? (repoRaw as { full_name: string }).full_name
-        : undefined;
+  const repo = repoFullName(payload.repository);
+  if (repo === undefined) return null;
   const pull = payload.pull_request;
-  const pr =
-    pull !== null && typeof pull === "object" && Number.isInteger((pull as { number?: unknown }).number)
-      ? ((pull as { number: number }).number)
-      : undefined;
-  if (repo === undefined || pr === undefined) return null;
+  if (pull === null || typeof pull !== "object") return null;
+  const pr = (pull as { number?: unknown }).number;
+  if (typeof pr !== "number" || !Number.isInteger(pr) || pr <= 0) return null;
   const titleRaw = (pull as { title?: unknown }).title;
   const title = typeof titleRaw === "string" && titleRaw.length > 0 ? titleRaw : undefined;
   return { repo, pr, ...(title !== undefined && { title }) };
@@ -647,13 +647,15 @@ export class ReflexActivationListener {
 
   /**
    * Fulfil a review target (`review: true`) by re-emitting a
-   * `tasks.code-review.<flavor>` REVIEW REQUEST on the ReviewConsumer's
-   * capability subject (NOT the `@{did}` agent-session subject the CC path
-   * uses). cortex's `engine: sage` ReviewConsumer claims it and runs the sage
-   * lens-CLI. A payload that is not a reviewable PR (no repo / PR number) is a
-   * deterministic skip-as-failure (re-firing won't fix it → ack, mark, no
+   * `tasks.code-review.<flavor>` REVIEW REQUEST on the capability subject the
+   * `engine: sage` ReviewConsumer binds (NOT the `@{did}` agent-session subject
+   * the CC path uses) — so that consumer can claim and review it. This arm is
+   * producer-side only; the consumer/lens execution is its own pipeline. A
+   * payload that is not a reviewable PR (no repo / PR number) is a deterministic
+   * skip-as-failure (re-firing won't fix it → emit `_failed`, then mark, no
    * poison loop); a publish error is transient (ack, NOT marked → re-fireable),
-   * mirroring the CC arm.
+   * mirroring the CC arm. Note `skip_authors` is enforced BEFORE this arm, so a
+   * trusted author is skipped regardless of payload shape.
    */
   private async handleReviewTarget(
     fired: Envelope,

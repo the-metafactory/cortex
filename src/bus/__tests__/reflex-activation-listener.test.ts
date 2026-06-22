@@ -677,6 +677,10 @@ describe("reviewFlavorOf / extractReviewRequest", () => {
     expect(extractReviewRequest({ pull_request: { number: 7 } })).toBeNull();
     expect(extractReviewRequest({ repository: "o/r", pull_request: { number: 1.5 } })).toBeNull();
   });
+  test("extractReviewRequest: rejects non-positive PR numbers (ReviewConsumer rejects pr<=0)", () => {
+    expect(extractReviewRequest({ repository: "o/r", pull_request: { number: 0 } })).toBeNull();
+    expect(extractReviewRequest({ repository: "o/r", pull_request: { number: -3 } })).toBeNull();
+  });
   test("extractReviewRequest: accepts BOTH reflex-flattened string AND GitHub-native {full_name}", () => {
     // reflex edge flattens repository → full_name string; we also accept the
     // native object shape defensively (sage cortex#1185).

@@ -20,9 +20,11 @@
   never reach the review publish). Schema enforces exactly one of
   prompt|handler|review and a flavored `code-review.*` capability for review
   targets. Pure helpers `reviewFlavorOf` / `extractReviewRequest` +
-  `buildReflexReviewDispatch` are exported and unit-tested; a non-reviewable
-  payload is an honest `_failed` (re-firing won't fix), a publish error stays
-  re-fireable. Drives reflex `@jc/sage-pr-review` (the-metafactory/reflex#28).
+  `buildReflexReviewDispatch` are exported and unit-tested. Ordering: a trusted
+  `skip_authors` author is skipped first (regardless of payload); otherwise a
+  non-reviewable payload (no repo / non-positive PR number) is an honest
+  `_failed` (re-firing won't fix), and a publish error stays re-fireable. Drives
+  reflex `@jc/sage-pr-review` (the-metafactory/reflex#28).
 
 - **F-6 reflex bridge — configurable author trust gate (`skip_authors`)**.
   `reflex_activation.targets[].skip_authors` (optional `string[]`) lets a
