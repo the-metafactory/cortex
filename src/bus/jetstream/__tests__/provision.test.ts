@@ -377,6 +377,9 @@ describe("provisionReviewConsumer", () => {
     expect(state.consumerAddCalls[0]!.cfg.filter_subject).toBe(
       "local.jc.clawbox.tasks.code-review.>",
     );
+    // The recreated durable must start from `New`, NOT replay the backlog —
+    // a migration must not re-review + re-post every historical PR (cortex#1186).
+    expect(state.consumerAddCalls[0]!.cfg.deliver_policy).toBe("new");
   });
 
   test("cortex#1186 — matching filter + drifted ack_wait → update in place, NO delete/recreate", async () => {

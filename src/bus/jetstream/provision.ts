@@ -236,6 +236,10 @@ export async function provisionReviewConsumer(
   const maxDeliver = opts.maxDeliver ?? DEFAULT_MAX_DELIVER;
   const ackWaitNs = opts.ackWaitNs ?? DEFAULT_ACK_WAIT_NS;
 
+  // Set when the drift branch deletes a durable to migrate its (immutable)
+  // filter_subject — the recreated durable then starts from `New` (see below).
+  let recreatedForFilter = false;
+
   try {
     const existing = await opts.jsm.consumers.info(opts.stream, opts.durable);
     // cortex#1186 — `filter_subject` is IMMUTABLE on a JetStream durable, so a
@@ -243,15 +247,22 @@ export async function provisionReviewConsumer(
     // the migration path for durables created before the per-scope filter was
     // wired (those carry `filter_subject: ""` and therefore claim EVERY message
     // on the stream — the multi-durable fan-out that double-posts a review).
-    // The brief delete→recreate gap re-delivers any in-flight message; the
-    // review-consumer's redelivery>1 abort makes that safe.
+    //
+    // SAFETY: the recreated durable is forced to `DeliverPolicy.New` (below), so
+    // it does NOT replay the stream backlog — a migration must not re-review +
+    // re-post every historical PR. A message in-flight on the OLD durable at
+    // migration time is dropped (the new durable starts from "now"); that is the
+    // safe direction for a one-shot fix (a missed review is re-fireable; a
+    // re-posted one is not). Provisioning runs at boot, BEFORE the consumer
+    // pulls, so there is no concurrently-processing delivery to race.
     const desiredFilter = opts.filterSubject ?? "";
     const existingFilter = existing.config.filter_subject ?? "";
     if (existingFilter !== desiredFilter) {
       log.info(
-        `jetstream-provision: consumer "${opts.durable}" filter drift ("${existingFilter || "<none>"}" → "${desiredFilter || "<none>"}") — recreating durable (cortex#1186)`,
+        `jetstream-provision: consumer "${opts.durable}" filter drift ("${existingFilter || "<none>"}" → "${desiredFilter || "<none>"}") — recreating durable from New (cortex#1186)`,
       );
       await opts.jsm.consumers.delete(opts.stream, opts.durable);
+      recreatedForFilter = true;
       // Fall through to the create path below (re-applies the correct filter).
     } else {
       // cortex#422 — `ack_wait` is the one consumer field we reconcile in place
@@ -280,7 +291,9 @@ export async function provisionReviewConsumer(
   const cfg: Partial<ConsumerConfig> = {
     durable_name: opts.durable,
     ack_policy: AckPolicy.Explicit,
-    deliver_policy: opts.deliverPolicy ?? DeliverPolicy.All,
+    // A filter-drift recreate forces `New` so the migration never replays the
+    // backlog (cortex#1186). A genuine first create honours the caller's policy.
+    deliver_policy: recreatedForFilter ? DeliverPolicy.New : (opts.deliverPolicy ?? DeliverPolicy.All),
     max_deliver: maxDeliver,
     ack_wait: ackWaitNs,
   };
