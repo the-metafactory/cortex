@@ -4,6 +4,25 @@
 
 ### Non-breaking
 
+- **F-6 reflex bridge — review-consumer dispatch (`review: true`)**. A new
+  fulfilment channel on `reflex_activation.targets[]`, alongside `prompt` (CC
+  agent-session) and `handler` (code responder). With `review: true` +
+  `capability: code-review.<flavor>`, the bridge no longer addresses an agent
+  session on `tasks.@{did}.{capability}`; it emits a **`tasks.code-review.<flavor>`
+  REVIEW REQUEST** (`{repo, pr, post:true, forge:"github"}`, adapted from the
+  GitHub PR event in the activation payload) on the ReviewConsumer's capability
+  subject. That is the subject cortex's `engine: sage` ReviewConsumer binds, so a
+  reflex activation now routes to the deterministic sage lens-CLI — closing the
+  gap where a review target previously fell onto the claude-session
+  dispatch-listener instead. The local twin of the public-surface
+  `translatePrOpenedToOffer` path. `skip_authors` runs first (trusted authors
+  never reach the review publish). Schema enforces exactly one of
+  prompt|handler|review and a flavored `code-review.*` capability for review
+  targets. Pure helpers `reviewFlavorOf` / `extractReviewRequest` +
+  `buildReflexReviewDispatch` are exported and unit-tested; a non-reviewable
+  payload is an honest `_failed` (re-firing won't fix), a publish error stays
+  re-fireable. Drives reflex `@jc/sage-pr-review` (the-metafactory/reflex#28).
+
 - **F-6 reflex bridge — configurable author trust gate (`skip_authors`)**.
   `reflex_activation.targets[].skip_authors` (optional `string[]`) lets a
   target deterministically DROP a fired activation when its GitHub author is

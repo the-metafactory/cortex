@@ -37,7 +37,8 @@
  */
 
 import { DeliverPolicy } from "nats";
-import { directTaskSubject } from "@the-metafactory/myelin/subjects";
+import { directTaskSubject, taskSubject } from "@the-metafactory/myelin/subjects";
+import type { ReviewFlavor } from "./review-events";
 
 import {
   UNTRUSTED_CLOSE,
@@ -313,6 +314,123 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   return { envelope, subject };
 }
 
+const REVIEW_FLAVORS: ReadonlySet<string> = new Set<ReviewFlavor>([
+  "generic",
+  "typescript",
+  "python",
+  "rust",
+  "go",
+  "sql",
+  "docs",
+  "security",
+]);
+
+/** The `<flavor>` of a `code-review.<flavor>` capability, or undefined if the
+ *  capability is not a known flavored review capability. */
+export function reviewFlavorOf(capability: string): ReviewFlavor | undefined {
+  const match = /^code-review\.([a-z][a-z0-9-]*)$/.exec(capability);
+  if (match === null) return undefined;
+  const flavor = match[1]!;
+  return REVIEW_FLAVORS.has(flavor) ? (flavor as ReviewFlavor) : undefined;
+}
+
+/** The review routing keys adapted from a fired activation's GitHub PR event,
+ *  or null when the payload is not a reviewable PR (no repo / no PR number).
+ *  Reflex's edge injection flattens `repository` to its full_name string and
+ *  preserves `pull_request`. */
+export function extractReviewRequest(
+  payload: Record<string, unknown>,
+): { repo: string; pr: number; title?: string } | null {
+  const repo =
+    typeof payload.repository === "string" && payload.repository.length > 0
+      ? payload.repository
+      : undefined;
+  const pull = payload.pull_request;
+  const pr =
+    pull !== null && typeof pull === "object" && Number.isInteger((pull as { number?: unknown }).number)
+      ? ((pull as { number: number }).number)
+      : undefined;
+  if (repo === undefined || pr === undefined) return null;
+  const titleRaw = (pull as { title?: unknown }).title;
+  const title = typeof titleRaw === "string" && titleRaw.length > 0 ? titleRaw : undefined;
+  return { repo, pr, ...(title !== undefined && { title }) };
+}
+
+export interface BuildReflexReviewDispatchOpts {
+  activation: FiredActivation;
+  /** A review target: `review: true`, `capability: code-review.<flavor>`. */
+  target: ReflexTarget;
+  reEmitPrincipal: string;
+  reEmitStack?: string;
+  source: SystemEventSource;
+  systemDid: string;
+}
+
+/**
+ * Build a `tasks.code-review.<flavor>` REVIEW REQUEST for a review-kind target.
+ *
+ * Unlike {@link buildReflexDispatch} (which addresses an agent SESSION on
+ * `tasks.@{did}.{capability}` with a prompt — consumed by the claude-session
+ * dispatch-listener), this lands on the ReviewConsumer's capability subject
+ * `local.{p}.{s}.tasks.code-review.<flavor>` with a `ReviewRequestPayload`
+ * (`{repo, pr, post}`), so cortex's `engine: sage` runner reviews the PR. The
+ * `{repo, pr}` are adapted from the GitHub PR event in the activation payload.
+ *
+ * Returns null when the capability is not a known flavor (schema-guarded;
+ * defensive) or the payload is not a reviewable PR event.
+ */
+export function buildReflexReviewDispatch(
+  opts: BuildReflexReviewDispatchOpts,
+): { envelope: Envelope; subject: string } | null {
+  const flavor = reviewFlavorOf(opts.target.capability);
+  if (flavor === undefined) return null;
+  const review = extractReviewRequest(opts.activation.payload);
+  if (review === null) return null;
+
+  const subject = taskSubject(opts.reEmitPrincipal, opts.target.capability, opts.reEmitStack);
+  const base = buildBaseEnvelope({
+    // Bare `tasks.code-review.<flavor>` type; the subject carries the same
+    // path. The ReviewConsumer routes on the `<flavor>` suffix, NOT a `@{did}`.
+    type: `tasks.code-review.${flavor}`,
+    source: buildSource(opts.source),
+    ...(opts.activation.correlationId !== undefined && {
+      correlationId: opts.activation.correlationId,
+    }),
+    sovereignty: {
+      classification: opts.activation.classification,
+      data_residency: opts.source.dataResidency ?? "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    },
+    payload: {
+      repo: review.repo,
+      pr: review.pr,
+      // Informational — the consumer routes by subject flavor, not this field.
+      reviewer: opts.target.assistant,
+      // The reflex path always wants the verdict posted back to the PR.
+      post: true,
+      forge: "github",
+      ...(review.title !== undefined && { title: review.title }),
+      reflex_decision_id: opts.activation.decisionId,
+      reflex_target: opts.activation.target,
+    },
+  });
+  const envelope: Envelope = {
+    ...base,
+    originator: {
+      identity: opts.systemDid,
+      attribution: "delegated",
+    },
+    extensions: {
+      reflex_decision_id: opts.activation.decisionId,
+      reflex_target: opts.activation.target,
+    },
+  };
+
+  return { envelope, subject };
+}
+
 export interface ReflexActivationListenerOpts {
   runtime: MyelinRuntime;
   /** Source attribution for emitted `system.bus.*` visibility events. */
@@ -455,7 +573,11 @@ export class ReflexActivationListener {
       return { kind: "ack" };
     }
 
-    // Code-handler target → its own arm; CC-prompt target falls through.
+    // Review target → ReviewConsumer dispatch; code-handler → its own arm;
+    // CC-prompt target falls through.
+    if (target.review === true) {
+      return this.handleReviewTarget(envelope, act, target);
+    }
     if (target.handler !== undefined) {
       return this.handleHandlerTarget(envelope, act, target);
     }
@@ -527,6 +649,53 @@ export class ReflexActivationListener {
     }
     await this.dedup.mark(act.decisionId);
     await this.emitHandlerDispatched(act, target);
+    return { kind: "ack" };
+  }
+
+  /**
+   * Fulfil a review target (`review: true`) by re-emitting a
+   * `tasks.code-review.<flavor>` REVIEW REQUEST on the ReviewConsumer's
+   * capability subject (NOT the `@{did}` agent-session subject the CC path
+   * uses). cortex's `engine: sage` ReviewConsumer claims it and runs the sage
+   * lens-CLI. A payload that is not a reviewable PR (no repo / PR number) is a
+   * deterministic skip-as-failure (re-firing won't fix it → ack, mark, no
+   * poison loop); a publish error is transient (ack, NOT marked → re-fireable),
+   * mirroring the CC arm.
+   */
+  private async handleReviewTarget(
+    fired: Envelope,
+    act: FiredActivation,
+    target: ReflexTarget,
+  ): Promise<AckDecision> {
+    const built = buildReflexReviewDispatch({
+      activation: act,
+      target,
+      reEmitPrincipal: this.reEmitPrincipal,
+      ...(this.reEmitStack !== undefined && { reEmitStack: this.reEmitStack }),
+      source: this.source,
+      systemDid: this.systemDid,
+    });
+    if (built === null) {
+      // Not a reviewable PR event (or non-flavor capability) — re-firing the
+      // same Decision can't fix it. Mark so a redelivery doesn't re-evaluate.
+      await this.dedup.mark(act.decisionId);
+      await this.emitFailed(fired, act, "review-payload-not-a-reviewable-pr");
+      return { kind: "ack" };
+    }
+    if (typeof this.runtime.publishOnSubject !== "function") {
+      await this.emitFailed(fired, act, "publish:runtime-no-publishOnSubject");
+      return { kind: "ack" };
+    }
+    try {
+      await this.runtime.publishOnSubject(built.envelope, built.subject);
+    } catch (err) {
+      await this.emitFailed(fired, act, `publish:${errMsg(err)}`);
+      return { kind: "ack" };
+    }
+    // Mark only after a successful publish — a publish failure leaves the
+    // activation re-fireable on the next reflex impulse (CC-arm invariant).
+    await this.dedup.mark(act.decisionId);
+    await this.emitDispatched(act, target, built);
     return { kind: "ack" };
   }
 

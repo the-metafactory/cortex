@@ -1910,4 +1910,32 @@ describe("ReflexTargetSchema (F-6 prompt XOR handler)", () => {
       ReflexTargetSchema.safeParse({ ...base, prompt: "x", handler: "discord-webhook" }).success,
     ).toBe(false);
   });
+
+  // Third channel: review-consumer dispatch (review: true).
+  const reviewBase = { target: "@jc/sage-pr-review", capability: "code-review.typescript", assistant: "sage" };
+  test("accepts a review-only target with a flavored code-review capability", () => {
+    expect(ReflexTargetSchema.safeParse({ ...reviewBase, review: true }).success).toBe(true);
+  });
+  test("accepts skip_authors on a review target", () => {
+    expect(
+      ReflexTargetSchema.safeParse({ ...reviewBase, review: true, skip_authors: ["jcfischer"] }).success,
+    ).toBe(true);
+  });
+  test("rejects review combined with prompt (two channels)", () => {
+    expect(ReflexTargetSchema.safeParse({ ...reviewBase, review: true, prompt: "x" }).success).toBe(false);
+  });
+  test("rejects review combined with handler (two channels)", () => {
+    expect(
+      ReflexTargetSchema.safeParse({ ...base, review: true, handler: "discord-webhook" }).success,
+    ).toBe(false);
+  });
+  test("rejects review: true with a non-code-review capability", () => {
+    expect(
+      ReflexTargetSchema.safeParse({ ...base, capability: "notify.discord", review: true }).success,
+    ).toBe(false);
+  });
+  test("rejects review: true with a bare/unknown-flavor code-review capability", () => {
+    expect(ReflexTargetSchema.safeParse({ ...reviewBase, capability: "code-review", review: true }).success).toBe(false);
+    expect(ReflexTargetSchema.safeParse({ ...reviewBase, capability: "code-review.elvish", review: true }).success).toBe(false);
+  });
 });

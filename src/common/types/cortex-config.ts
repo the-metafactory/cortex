@@ -2574,15 +2574,41 @@ export const ReflexTargetSchema = z
      * `matchSkippedAuthor` helper — not duplicated here.
      */
     skip_authors: z.array(z.string().min(1)).optional(),
+    /**
+     * Review-consumer dispatch. When `true`, the F-6 bridge does NOT address an
+     * agent session (`tasks.@{did}.{capability}` + prompt); it emits a
+     * `tasks.code-review.<flavor>` REVIEW REQUEST (`{repo, pr}` adapted from the
+     * GitHub PR event in the activation payload) so cortex's `engine: sage`
+     * ReviewConsumer runs the deterministic sage lens-CLI on the PR. Requires
+     * `capability: code-review.<flavor>`; mutually exclusive with `prompt` and
+     * `handler` (a review request carries no prompt — sage runs fixed lenses).
+     */
+    review: z.boolean().optional(),
   })
   .superRefine((t, ctx) => {
-    // Exactly one fulfilment channel: a CC prompt, or a code handler.
-    if ((t.prompt === undefined) === (t.handler === undefined)) {
+    // Exactly one fulfilment channel: a CC prompt, a code handler, or a
+    // review-consumer dispatch.
+    const channels =
+      Number(t.prompt !== undefined) + Number(t.handler !== undefined) + Number(t.review === true);
+    if (channels !== 1) {
       ctx.addIssue({
         code: "custom",
         message:
-          "reflex target must set exactly one of `prompt` (CC dispatch) or `handler` (code responder)",
+          "reflex target must set exactly one of `prompt` (CC dispatch), `handler` (code responder), or `review: true` (review-consumer dispatch)",
         path: ["prompt"],
+      });
+    }
+    // A review target routes by the `code-review.<flavor>` subject suffix, so
+    // its capability must BE a flavored review capability.
+    if (
+      t.review === true &&
+      !/^code-review\.(generic|typescript|python|rust|go|sql|docs|security)$/.test(t.capability)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "a review target (`review: true`) requires `capability: code-review.<flavor>` (generic|typescript|python|rust|go|sql|docs|security)",
+        path: ["capability"],
       });
     }
   });

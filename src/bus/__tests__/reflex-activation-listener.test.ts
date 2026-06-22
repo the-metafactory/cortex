@@ -25,8 +25,10 @@ import {
   ReflexActivationListener,
   buildReflexDispatch,
   extractAuthorLogin,
+  extractReviewRequest,
   inMemoryReflexDedup,
   matchSkippedAuthor,
+  reviewFlavorOf,
   parseFiredEnvelope,
   reflexActivationFilterSubject,
   resolveReflexTarget,
@@ -623,6 +625,125 @@ describe("ReflexActivationListener.handleFired — author trust gate", () => {
 
     expect(ctrl.onSubject).toHaveLength(0);
     expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(true);
+  });
+});
+
+// =============================================================================
+// 3c. Review dispatch (engine:sage path) — review: true targets
+// =============================================================================
+
+const SAGE_REVIEW_TARGETS: ReflexTarget[] = [
+  {
+    target: "@jc/sage-pr-review",
+    capability: "code-review.typescript",
+    assistant: "sage",
+    review: true,
+    skip_authors: ["jcfischer", "mellanon"],
+  },
+];
+
+function firedReviewablePr(
+  opts: { author?: string; repo?: string; pr?: number; title?: string } = {},
+): Envelope {
+  return firedEnvelope({
+    target: "@jc/sage-pr-review",
+    payload: {
+      action: "opened",
+      repository: opts.repo ?? "the-metafactory/cortex",
+      pull_request: {
+        number: opts.pr ?? 42,
+        title: opts.title ?? "Add feature",
+        user: { login: opts.author ?? "external-dev" },
+      },
+    },
+  });
+}
+
+describe("reviewFlavorOf / extractReviewRequest", () => {
+  test("reviewFlavorOf: known flavor, rejects unknown / non-review / bare", () => {
+    expect(reviewFlavorOf("code-review.typescript")).toBe("typescript");
+    expect(reviewFlavorOf("code-review.generic")).toBe("generic");
+    expect(reviewFlavorOf("code-review.elvish")).toBeUndefined();
+    expect(reviewFlavorOf("notify.discord")).toBeUndefined();
+    expect(reviewFlavorOf("code-review")).toBeUndefined();
+  });
+  test("extractReviewRequest: repo+pr+title, null when not a reviewable PR", () => {
+    expect(extractReviewRequest({ repository: "o/r", pull_request: { number: 7, title: "T" } })).toEqual({
+      repo: "o/r",
+      pr: 7,
+      title: "T",
+    });
+    expect(extractReviewRequest({ repository: "o/r" })).toBeNull();
+    expect(extractReviewRequest({ pull_request: { number: 7 } })).toBeNull();
+    expect(extractReviewRequest({ repository: "o/r", pull_request: { number: 1.5 } })).toBeNull();
+  });
+});
+
+describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)", () => {
+  const reviewListener = (ctrl: FakeRuntimeControls) =>
+    listenerWith(ctrl, { resolveTarget: (t) => resolveReflexTarget(SAGE_REVIEW_TARGETS, t) });
+
+  test("PR event → publishes tasks.code-review.<flavor> REQUEST on the consumer subject, marks dedup, _dispatched", async () => {
+    const ctrl = fakeRuntime();
+    const { listener, dedup } = reviewListener(ctrl);
+
+    const decision = await listener.handleFired(
+      firedReviewablePr({ author: "external-dev", repo: "the-metafactory/cortex", pr: 99, title: "Fix bug" }),
+      "subj",
+    );
+
+    expect(decision).toEqual({ kind: "ack" });
+    expect(ctrl.onSubject).toHaveLength(1);
+    // The capability subject (NO @{did}) — what the sage ReviewConsumer binds.
+    expect(ctrl.onSubject[0]!.subject).toBe("local.metafactory.default.tasks.code-review.typescript");
+    const env = ctrl.onSubject[0]!.envelope;
+    expect(env.type).toBe("tasks.code-review.typescript");
+    expect(env.payload).toMatchObject({
+      repo: "the-metafactory/cortex",
+      pr: 99,
+      post: true,
+      forge: "github",
+      reviewer: "sage",
+      title: "Fix bug",
+    });
+    expect(await dedup.seen("decision-123")).toBe(true);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_dispatched")).toBe(true);
+  });
+
+  test("trusted author → skipped BEFORE any review publish", async () => {
+    const ctrl = fakeRuntime();
+    const { listener } = reviewListener(ctrl);
+
+    await listener.handleFired(firedReviewablePr({ author: "jcfischer" }), "subj");
+
+    expect(ctrl.onSubject).toHaveLength(0);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(true);
+  });
+
+  test("non-PR payload → _failed (not-a-reviewable-pr), dedup marked, no publish", async () => {
+    const ctrl = fakeRuntime();
+    const { listener, dedup } = reviewListener(ctrl);
+
+    await listener.handleFired(
+      firedEnvelope({ target: "@jc/sage-pr-review", payload: { action: "opened" } }),
+      "subj",
+    );
+
+    expect(ctrl.onSubject).toHaveLength(0);
+    const fail = ctrl.published.find((e) => e.type === "system.bus.reflex_activation_failed");
+    expect(fail).toBeDefined();
+    expect((fail!.payload).reason).toBe("review-payload-not-a-reviewable-pr");
+    expect(await dedup.seen("decision-123")).toBe(true);
+  });
+
+  test("publish failure → _failed + ack, dedup NOT marked (re-fireable)", async () => {
+    const ctrl = fakeRuntime({ publishOnSubjectThrows: true });
+    const { listener, dedup } = reviewListener(ctrl);
+
+    await listener.handleFired(firedReviewablePr({}), "subj");
+
+    expect(await dedup.seen("decision-123")).toBe(false);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_failed")).toBe(true);
   });
 });
 
