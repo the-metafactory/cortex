@@ -98,6 +98,7 @@ import {
   provisionReviewStream,
   provisionReviewConsumer,
 } from "./bus/jetstream/provision";
+import { reviewScopePatterns } from "./bus/jetstream/review-subjects";
 import {
   verifySignedByChain,
   nkeyToBase64Pubkey,
@@ -1605,7 +1606,10 @@ export async function startCortex(
   // `>` never matches (NATS requires literal segments before the `>`).
   // Reuses `derivedStack.stack` resolved at boot (line 308) — same source
   // sage's bridge subscription already uses for `local.{principal}.{stack}.>`.
-  const reviewSubjectPattern = `local.${reviewPrincipalId}.${derivedStack.stack}.tasks.code-review.>`;
+  // cortex#1186 — sourced from the shared `reviewScopePatterns` builder so the
+  // consumer filters and the disjointness test prove the SAME contract.
+  const reviewScopePats = reviewScopePatterns(reviewPrincipalId, derivedStack.stack);
+  const reviewSubjectPattern = reviewScopePats.local;
   // CO-2 (cortex#941) — the offering-derived consumer binding for the
   // `code-review` capability. `resolveOffering` reads the per-stack offering
   // policy (default-deny ⇒ `local`-only when `policy.offerings` is absent);
@@ -1638,7 +1642,7 @@ export async function startCortex(
   // filter/consumer (back-compat — local path byte-for-byte unchanged).
   const federationConfigured =
     (resolvedPolicy?.federated?.networks ?? []).length > 0;
-  const reviewFederatedSubjectPattern = `federated.${reviewPrincipalId}.${derivedStack.stack}.tasks.code-review.>`;
+  const reviewFederatedSubjectPattern = reviewScopePats.federatedOffer;
   // cortex#725 (ADR 0001/0002 §2) — the FEDERATED **Direct** review pattern.
   // pilot#149's `--reviewer {name}@{principal}/{stack}` Direct dispatch lands
   // on `federated.{me}.{my-stack}.tasks.@{did-encoded-reviewer}.code-review.{flavor}`:
@@ -1655,7 +1659,7 @@ export async function startCortex(
   // (the `@{did}` lives ONLY on the subject — myelin's `type` grammar forbids
   // `@`), so `extractFlavor` + the whole federated consumer path work
   // unchanged: only this extra subscription differs from the Offer path.
-  const reviewFederatedDirectSubjectPattern = `federated.${reviewPrincipalId}.${derivedStack.stack}.tasks.*.code-review.>`;
+  const reviewFederatedDirectSubjectPattern = reviewScopePats.federatedDirect;
   const reviewConfig = options.bus?.review;
   const reviewStream = reviewConfig?.stream.name ?? "CODE_REVIEW";
   const reviewStreamMaxAgeNs =

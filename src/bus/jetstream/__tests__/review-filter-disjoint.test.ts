@@ -4,13 +4,14 @@
  *
  * The double-post bug was that every review durable was provisioned with NO
  * `filter_subject` (claims every message). The fix wires each durable's filter
- * to the pattern its consumer binds. This test proves those patterns can't
- * overlap — the CHANGELOG's "disjoint by scope" claim, shown not asserted.
+ * to the pattern its consumer binds. This test exercises the SAME production
+ * builder cortex provisions from (`reviewScopePatterns`), so it proves the real
+ * filters are disjoint — not hand-copied sample strings (sage cortex#1187 R2).
  *
- * Self-contained NATS subject matcher (token wildcards `*` and trailing `>`) so
- * the property is verified without importing cortex's private pattern consts.
+ * Self-contained NATS subject matcher (token wildcards `*` and trailing `>`).
  */
 import { describe, expect, test } from "bun:test";
+import { reviewScopePatterns } from "../review-subjects";
 
 /** Minimal NATS subject/pattern match: `*` = exactly one token, `>` = one-or-more
  *  trailing tokens (only valid as the last token). */
@@ -26,12 +27,9 @@ function subjectMatches(subject: string, pattern: string): boolean {
   return subTokens.length === patTokens.length;
 }
 
-// The three scope patterns cortex provisions (principal=jc, stack=clawbox), per
-// `reviewSubjectPattern` / `reviewFederatedSubjectPattern` /
-// `reviewFederatedDirectSubjectPattern` in src/cortex.ts.
-const LOCAL = "local.jc.clawbox.tasks.code-review.>";
-const FED_OFFER = "federated.jc.clawbox.tasks.code-review.>";
-const FED_DIRECT = "federated.jc.clawbox.tasks.*.code-review.>";
+// The REAL scope patterns cortex provisions from (principal=jc, stack=clawbox).
+const { local: LOCAL, federatedOffer: FED_OFFER, federatedDirect: FED_DIRECT } =
+  reviewScopePatterns("jc", "clawbox");
 
 describe("cortex#1186 — review-consumer filter patterns are disjoint by scope", () => {
   test("a local review request matches ONLY the local filter", () => {
