@@ -112,6 +112,7 @@ interface FakeRuntimeControls {
 
 function fakeRuntime(opts: {
   publishOnSubjectThrows?: boolean;
+  publishThrows?: boolean;
 } = {}): FakeRuntimeControls {
   const published: Envelope[] = [];
   const onSubject: { envelope: Envelope; subject: string }[] = [];
@@ -121,6 +122,7 @@ function fakeRuntime(opts: {
       return { unregister: () => {} };
     },
     async publish(envelope: Envelope) {
+      if (opts.publishThrows) throw new Error("bus refused publish");
       published.push(envelope);
     },
     async publishOnSubject(envelope: Envelope, subject: string) {
@@ -593,6 +595,22 @@ describe("ReflexActivationListener.handleFired — author trust gate", () => {
     expect(ctrl.onSubject).toHaveLength(1); // CC review dispatched
     expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(false);
     expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_dispatched")).toBe(true);
+  });
+
+  test("audit publish fails AFTER author match → dedup NOT marked, re-fireable", async () => {
+    // Regression for the mark-before-emit ordering bug (sage cortex#1184): the
+    // skip must mark dedup only after _skipped publishes, so a failed audit
+    // leaves the activation re-fireable instead of silently suppressing both
+    // the review and the audit event.
+    const ctrl = fakeRuntime({ publishThrows: true });
+    const { listener, dedup } = listenerWith(ctrl, {
+      resolveTarget: (t) => resolveReflexTarget(REVIEW_TARGETS, t),
+    });
+
+    await expect(listener.handleFired(firedPrEnvelope("jcfischer"), "subj")).rejects.toThrow();
+
+    expect(await dedup.seen("decision-123")).toBe(false); // re-fireable
+    expect(ctrl.onSubject).toHaveLength(0);
   });
 
   test("case-insensitive: MELLANON skipped against config mellanon", async () => {

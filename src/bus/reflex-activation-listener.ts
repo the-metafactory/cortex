@@ -444,8 +444,14 @@ export class ReflexActivationListener {
     // tricked out of. Marked as seen so a redelivery re-skips without re-work.
     const skipAuthor = matchSkippedAuthor(target.skip_authors, act.payload);
     if (skipAuthor !== undefined) {
-      await this.dedup.mark(act.decisionId);
+      // Emit the audit event BEFORE marking dedup — same invariant the dispatch
+      // and handler arms hold: a failed side-effect must leave the activation
+      // re-fireable, never dedup-suppressed. If emitSkipped throws, the mark
+      // never lands, so a redelivery re-skips and re-emits (the `_skipped`
+      // event is idempotent — a duplicate audit line is harmless; a SILENTLY
+      // dropped one is not).
       await this.emitSkipped(envelope, act, target, skipAuthor);
+      await this.dedup.mark(act.decisionId);
       return { kind: "ack" };
     }
 

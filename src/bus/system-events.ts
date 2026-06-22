@@ -673,10 +673,12 @@ export interface SystemBusReflexActivationSkippedOpts {
   /** Capability the bridge resolved the target to. */
   capability: string;
   /**
-   * Why the dispatch was skipped. Conventional value: `"author_trusted"` (the
-   * fired activation's author is in the target's configurable `skip_authors`).
+   * Why the dispatch was skipped. The only v1 value is `"author_trusted"` (the
+   * fired activation's author is in the target's configurable `skip_authors`);
+   * a named union (not an open string) keeps future call sites from drifting
+   * into ad hoc reasons.
    */
-  reason: string;
+  reason: "author_trusted";
   /** The matched author login that triggered the skip (audit trail). */
   author: string;
   /** Envelope id of the fired event that was skipped — joins to the source. */

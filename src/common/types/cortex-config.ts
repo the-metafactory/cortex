@@ -2567,15 +2567,11 @@ export const ReflexTargetSchema = z
      */
     handler: z.enum(["discord-webhook"]).optional(),
     /**
-     * Configurable author trust gate. When the fired activation's GitHub
-     * author login (case-insensitive: `pull_request.user.login` →
-     * `issue.user.login` → `sender.login`) is in this list, the F-6 bridge
-     * DROPS the dispatch deterministically BEFORE any Claude session or code
-     * handler runs — it never relies on the LLM to honour a "skip" instruction
-     * (the login arrives in the untrusted, webhook-controlled payload). Empty /
-     * absent = no gate (review/dispatch everyone). Used by `@jc/sage-pr-review`
-     * to skip trusted authors (the org's own committers) while auto-reviewing
-     * external PRs. See reflex `examples/github-pr-review/reflex.yaml`.
+     * Configurable author trust gate: GitHub author logins the F-6 bridge
+     * drops (deterministically, before any dispatch) instead of reviewing.
+     * Empty / absent = no gate. Rationale, author-resolution order, and the
+     * `@jc/sage-pr-review` use case live in CHANGELOG (Unreleased) +
+     * `ReflexActivationListener.matchSkippedAuthor` — not duplicated here.
      */
     skip_authors: z.array(z.string().min(1)).optional(),
   })
