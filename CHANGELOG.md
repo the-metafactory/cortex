@@ -22,8 +22,11 @@
   visibility event (reason `author_trusted`, with the matched `author`) and
   marks the Decision id so a redelivery re-skips silently. Empty/absent list =
   no gate (dispatch everyone). Drives reflex's `@jc/sage-pr-review` target
-  (the-metafactory/reflex#28): auto-review external PRs, skip the org's own
-  committers — edit the list in config, no code or blueprint change.
+  (the-metafactory/reflex#28): review any PR whose author is NOT on the
+  maintained `skip_authors` login list, skip the rest. It is a literal login
+  list, not org-membership or external-contributor detection — "trusted" means
+  exactly "a login you put in this list"; you keep it current in config, no
+  code or blueprint change.
 - **`migrate-config` now produces Stage-4/5-complete output** (cortex#428,
   PR-B of cortex#426 follow-up). The migrator's emitted `cortex.yaml`
   runs Stage 4-A end-to-end on v3.0.x without manual editing. Three
