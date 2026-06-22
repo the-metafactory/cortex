@@ -10,11 +10,12 @@
   `capability: code-review.<flavor>`, the bridge no longer addresses an agent
   session on `tasks.@{did}.{capability}`; it emits a **`tasks.code-review.<flavor>`
   REVIEW REQUEST** (`{repo, pr, post:true, forge:"github"}`, adapted from the
-  GitHub PR event in the activation payload) on the ReviewConsumer's capability
-  subject. That is the subject cortex's `engine: sage` ReviewConsumer binds, so a
-  reflex activation now routes to the deterministic sage lens-CLI — closing the
-  gap where a review target previously fell onto the claude-session
-  dispatch-listener instead. The local twin of the public-surface
+  GitHub PR event in the activation payload) on `local.{p}.{s}.tasks.code-review.
+  <flavor>` — the capability subject cortex's `engine: sage` ReviewConsumer binds
+  (verified producer-side here; the consumer claim path is covered by the existing
+  ReviewConsumer suite). This closes the gap where a review target's `@{did}`
+  subject previously fell onto the claude-session dispatch-listener instead of the
+  review consumer. The local twin of the public-surface
   `translatePrOpenedToOffer` path. `skip_authors` runs first (trusted authors
   never reach the review publish). Schema enforces exactly one of
   prompt|handler|review and a flavored `code-review.*` capability for review

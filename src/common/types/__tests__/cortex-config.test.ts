@@ -1934,6 +1934,10 @@ describe("ReflexTargetSchema (F-6 prompt XOR handler)", () => {
       ReflexTargetSchema.safeParse({ ...base, capability: "notify.discord", review: true }).success,
     ).toBe(false);
   });
+  test("rejects review: false (literal-true guard — no silent extra field)", () => {
+    // `review: false` + prompt must NOT slip through as a prompt-only target.
+    expect(ReflexTargetSchema.safeParse({ ...base, prompt: "x", review: false }).success).toBe(false);
+  });
   test("rejects review: true with a bare/unknown-flavor code-review capability", () => {
     expect(ReflexTargetSchema.safeParse({ ...reviewBase, capability: "code-review", review: true }).success).toBe(false);
     expect(ReflexTargetSchema.safeParse({ ...reviewBase, capability: "code-review.elvish", review: true }).success).toBe(false);

@@ -139,7 +139,7 @@ export type { DispatchTaskFailedReason } from "./dispatch-events";
 // The review-flavor vocabulary lives in the zero-import leaf `review-flavors.ts`
 // (single source for bus + config layers — sage cortex#1185). Re-exported here
 // so existing `review-events` importers are unaffected.
-import { REVIEW_FLAVORS, isReviewFlavor, type ReviewFlavor } from "./review-flavors";
+import { REVIEW_FLAVORS, isReviewFlavor, type ReviewFlavor } from "../common/types/review-flavors";
 export { REVIEW_FLAVORS, isReviewFlavor };
 export type { ReviewFlavor };
 

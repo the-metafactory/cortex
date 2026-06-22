@@ -35,8 +35,8 @@
 import { z } from "zod/v4";
 
 import { BRAIN_PROTOCOL_ID } from "../../brain/protocol";
-import { REVIEW_FLAVORS, isReviewFlavor } from "../../bus/review-flavors";
 import { CapabilitySchema } from "./capability";
+import { REVIEW_FLAVORS, reviewFlavorOfCapability } from "./review-flavors";
 import {
   CockpitSchema,
   GroveSchema,
@@ -2584,7 +2584,7 @@ export const ReflexTargetSchema = z
      * `capability: code-review.<flavor>`; mutually exclusive with `prompt` and
      * `handler` (a review request carries no prompt — sage runs fixed lenses).
      */
-    review: z.boolean().optional(),
+    review: z.literal(true).optional(),
   })
   .superRefine((t, ctx) => {
     // Exactly one fulfilment channel: a CC prompt, a code handler, or a
@@ -2603,15 +2603,12 @@ export const ReflexTargetSchema = z
     // its capability must BE a flavored review capability. The flavor set is the
     // shared leaf `bus/review-flavors.ts` (single source — the bridge's
     // `reviewFlavorOf` validates the same set; adding a flavor edits one file).
-    if (t.review === true) {
-      const match = /^code-review\.([a-z][a-z0-9-]*)$/.exec(t.capability);
-      if (match === null || !isReviewFlavor(match[1]!)) {
-        ctx.addIssue({
-          code: "custom",
-          message: `a review target (\`review: true\`) requires \`capability: code-review.<flavor>\` (${REVIEW_FLAVORS.join("|")})`,
-          path: ["capability"],
-        });
-      }
+    if (t.review === true && reviewFlavorOfCapability(t.capability) === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: `a review target (\`review: true\`) requires \`capability: code-review.<flavor>\` (${REVIEW_FLAVORS.join("|")})`,
+        path: ["capability"],
+      });
     }
   });
 

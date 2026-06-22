@@ -38,7 +38,7 @@
 
 import { DeliverPolicy } from "nats";
 import { directTaskSubject, taskSubject } from "@the-metafactory/myelin/subjects";
-import { isReviewFlavor, type ReviewFlavor } from "./review-flavors";
+import { reviewFlavorOfCapability } from "../common/types/review-flavors";
 
 import {
   UNTRUSTED_CLOSE,
@@ -314,16 +314,11 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   return { envelope, subject };
 }
 
-/** The `<flavor>` of a `code-review.<flavor>` capability, or undefined if the
- *  capability is not a known flavored review capability. Flavor vocabulary is
- *  the shared leaf `review-flavors.ts` (single source — schema validates the
- *  same set). */
-export function reviewFlavorOf(capability: string): ReviewFlavor | undefined {
-  const match = /^code-review\.([a-z][a-z0-9-]*)$/.exec(capability);
-  if (match === null) return undefined;
-  const flavor = match[1]!;
-  return isReviewFlavor(flavor) ? flavor : undefined;
-}
+// `reviewFlavorOf` is the shared parser in `common/types/review-flavors.ts`
+// (single source for vocabulary AND `code-review.<flavor>` syntax — the config
+// schema uses the same function). Re-exported under the historical name so
+// existing importers (and tests) are unaffected.
+export { reviewFlavorOfCapability as reviewFlavorOf } from "../common/types/review-flavors";
 
 /** The review routing keys adapted from a fired activation's GitHub PR event,
  *  or null when the payload is not a reviewable PR (no repo / no PR number).
@@ -373,7 +368,7 @@ export interface BuildReflexReviewDispatchOpts {
 export function buildReflexReviewDispatch(
   opts: BuildReflexReviewDispatchOpts,
 ): { envelope: Envelope; subject: string } | null {
-  const flavor = reviewFlavorOf(opts.target.capability);
+  const flavor = reviewFlavorOfCapability(opts.target.capability);
   if (flavor === undefined) return null;
   const review = extractReviewRequest(opts.activation.payload);
   if (review === null) return null;
