@@ -29,6 +29,7 @@ interface RecorderState {
   consumerInfoCalls: { stream: string; durable: string }[];
   consumerAddCalls: { stream: string; cfg: Record<string, unknown> }[];
   consumerUpdateCalls: { stream: string; durable: string; cfg: Record<string, unknown> }[];
+  consumerDeleteCalls: { stream: string; durable: string }[];
 }
 
 function makeJsm(opts: {
@@ -41,6 +42,7 @@ function makeJsm(opts: {
     consumerInfoCalls: [],
     consumerAddCalls: [],
     consumerUpdateCalls: [],
+    consumerDeleteCalls: [],
   };
   const jsm: ProvisionJsm = {
     streams: {
@@ -80,6 +82,10 @@ function makeJsm(opts: {
       update: async (stream, durable, cfg) => {
         state.consumerUpdateCalls.push({ stream, durable, cfg });
         return { name: durable, config: cfg } as unknown as ConsumerInfo;
+      },
+      delete: async (stream, durable) => {
+        state.consumerDeleteCalls.push({ stream, durable });
+        return true;
       },
     },
   };
@@ -330,6 +336,66 @@ describe("provisionReviewConsumer", () => {
     expect(cfg.ack_wait).toBe(DEFAULT_ACK_WAIT_NS);
     // No filter subject when not requested.
     expect("filter_subject" in cfg).toBe(false);
+  });
+
+  test("cortex#1186 — filterSubject is applied to the durable config on create", async () => {
+    const { jsm, state } = makeJsm({ existingConsumer: "not-found" });
+    const outcome = await provisionReviewConsumer({
+      jsm,
+      stream: "CODE_REVIEW",
+      durable: "cortex-review-consumer-jc-sage",
+      filterSubject: "local.jc.clawbox.tasks.code-review.>",
+      log: silentLog(),
+    });
+    expect(outcome).toBe("created");
+    expect(state.consumerAddCalls[0]!.cfg.filter_subject).toBe(
+      "local.jc.clawbox.tasks.code-review.>",
+    );
+  });
+
+  test("cortex#1186 — filter drift (durable created without filter) → delete + recreate with the filter", async () => {
+    // Pre-fix durable: created with no filter_subject (claims every message).
+    const existing = {
+      name: "cortex-review-consumer-jc-sage",
+      config: { ack_wait: DEFAULT_ACK_WAIT_NS, filter_subject: "" },
+    } as unknown as ConsumerInfo;
+    const { jsm, state } = makeJsm({ existingConsumer: existing });
+    const outcome = await provisionReviewConsumer({
+      jsm,
+      stream: "CODE_REVIEW",
+      durable: "cortex-review-consumer-jc-sage",
+      filterSubject: "local.jc.clawbox.tasks.code-review.>",
+      log: silentLog(),
+    });
+    // filter_subject is immutable → delete + recreate, not an in-place update.
+    expect(outcome).toBe("created");
+    expect(state.consumerDeleteCalls).toEqual([
+      { stream: "CODE_REVIEW", durable: "cortex-review-consumer-jc-sage" },
+    ]);
+    expect(state.consumerUpdateCalls.length).toBe(0);
+    expect(state.consumerAddCalls.length).toBe(1);
+    expect(state.consumerAddCalls[0]!.cfg.filter_subject).toBe(
+      "local.jc.clawbox.tasks.code-review.>",
+    );
+  });
+
+  test("cortex#1186 — matching filter + drifted ack_wait → update in place, NO delete/recreate", async () => {
+    const existing = {
+      name: "cortex-review-consumer-jc-sage",
+      config: { ack_wait: 30_000_000_000, filter_subject: "local.jc.clawbox.tasks.code-review.>" },
+    } as unknown as ConsumerInfo;
+    const { jsm, state } = makeJsm({ existingConsumer: existing });
+    const outcome = await provisionReviewConsumer({
+      jsm,
+      stream: "CODE_REVIEW",
+      durable: "cortex-review-consumer-jc-sage",
+      filterSubject: "local.jc.clawbox.tasks.code-review.>",
+      log: silentLog(),
+    });
+    expect(outcome).toBe("updated");
+    expect(state.consumerDeleteCalls.length).toBe(0);
+    expect(state.consumerAddCalls.length).toBe(0);
+    expect(state.consumerUpdateCalls.length).toBe(1);
   });
 
   test("idempotent — exists path with matching ack_wait returns 'exists' without add/update", async () => {

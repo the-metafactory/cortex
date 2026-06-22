@@ -2202,6 +2202,15 @@ export async function startCortex(
       // instead of unconditionally claiming "ready".
       const durable = `cortex-review-consumer-${reviewPrincipalId}-${agent.id}`;
 
+      // The durable's filter MUST match the subscription pattern this consumer
+      // binds (`consumer.start({ pattern })` below), or the durable claims every
+      // message on the stream — the cortex#1186 multi-durable fan-out that
+      // double-posts a review when an agent has >1 scope consumer (local +
+      // federated + …). `reviewOfferingPatterns[0]` is the local scope's
+      // pattern (CO-1 default = `reviewSubjectPattern`); hoisted here so it
+      // feeds BOTH the provision filter and the start pattern below.
+      const primaryReviewPattern = reviewOfferingPatterns[0] ?? reviewSubjectPattern;
+
       // cortex#338 — provision the per-agent durable consumer up-front
       // so `consumer.start()` below binds successfully against a virgin
       // broker. Reuses `reviewJsm` resolved once before this loop.
@@ -2214,6 +2223,7 @@ export async function startCortex(
             jsm: reviewJsm,
             stream: reviewStream,
             durable,
+            filterSubject: primaryReviewPattern,
             maxDeliver: reviewConsumerMaxDeliver,
           });
           if (outcome === "created") {
@@ -2247,7 +2257,8 @@ export async function startCortex(
       // mirroring the cortex#686/#725 federated-consumer idiom. With no
       // offerings, `reviewOfferingPatterns` is exactly `[reviewSubjectPattern]`
       // and this slice-loop is empty — zero added boot behaviour.
-      const primaryReviewPattern = reviewOfferingPatterns[0] ?? reviewSubjectPattern;
+      // (`primaryReviewPattern` is hoisted above so it also feeds the durable's
+      // `filterSubject` — cortex#1186.)
       const started = await consumer.start({
         pattern: primaryReviewPattern,
         stream: reviewStream,
@@ -2316,6 +2327,9 @@ export async function startCortex(
               jsm: reviewJsm,
               stream: reviewStream,
               durable: offerDurable,
+              // Filter to THIS offer scope's pattern so it doesn't claim the
+              // local/other-scope durables' traffic (cortex#1186 fan-out).
+              filterSubject: extraPattern,
               maxDeliver: reviewConsumerMaxDeliver,
             });
             if (outcome === "created") {
@@ -2383,6 +2397,10 @@ export async function startCortex(
                 jsm: reviewJsm,
                 stream: reviewStream,
                 durable,
+                // Filter to THIS federated consumer's `federated.…` pattern so
+                // it claims only cross-principal traffic, never the local
+                // durable's `local.…` requests (cortex#1186 fan-out).
+                filterSubject: pattern,
                 maxDeliver: reviewConsumerMaxDeliver,
               });
               if (outcome === "created") {

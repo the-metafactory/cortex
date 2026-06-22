@@ -36,5 +36,8 @@ export interface ProvisionJsm {
       durable: string,
       cfg: Partial<ConsumerConfig>,
     ): Promise<ConsumerInfo>;
+    // cortex#1186 — `filter_subject` is immutable on a durable, so a filter
+    // drift is migrated by delete + recreate.
+    delete(stream: string, durable: string): Promise<boolean>;
   };
 }

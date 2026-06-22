@@ -238,23 +238,39 @@ export async function provisionReviewConsumer(
 
   try {
     const existing = await opts.jsm.consumers.info(opts.stream, opts.durable);
-    // cortex#422 — `ack_wait` is the one consumer field we DO reconcile on
-    // drift. The original durable was created without it (JetStream default
-    // 30s), so already-provisioned brokers carry the bug until the consumer
-    // is recreated. Update it in place when it doesn't match the desired
-    // deadline so a redeploy fixes live durables without a manual
-    // `nats consumer rm`. Other fields stay un-reconciled (v1 policy).
-    if (existing.config.ack_wait !== ackWaitNs) {
-      await opts.jsm.consumers.update(opts.stream, opts.durable, {
-        ...existing.config,
-        ack_wait: ackWaitNs,
-      });
+    // cortex#1186 — `filter_subject` is IMMUTABLE on a JetStream durable, so a
+    // drift can't be patched in place: it must be deleted + recreated. This is
+    // the migration path for durables created before the per-scope filter was
+    // wired (those carry `filter_subject: ""` and therefore claim EVERY message
+    // on the stream — the multi-durable fan-out that double-posts a review).
+    // The brief delete→recreate gap re-delivers any in-flight message; the
+    // review-consumer's redelivery>1 abort makes that safe.
+    const desiredFilter = opts.filterSubject ?? "";
+    const existingFilter = existing.config.filter_subject ?? "";
+    if (existingFilter !== desiredFilter) {
       log.info(
-        `jetstream-provision: updated consumer "${opts.durable}" ack_wait ${Math.round((existing.config.ack_wait ?? 0) / 1_000_000_000)}s → ${Math.round(ackWaitNs / 1_000_000_000)}s (cortex#422)`,
+        `jetstream-provision: consumer "${opts.durable}" filter drift ("${existingFilter || "<none>"}" → "${desiredFilter || "<none>"}") — recreating durable (cortex#1186)`,
       );
-      return "updated";
+      await opts.jsm.consumers.delete(opts.stream, opts.durable);
+      // Fall through to the create path below (re-applies the correct filter).
+    } else {
+      // cortex#422 — `ack_wait` is the one consumer field we reconcile in place
+      // (no filter drift, so an in-place update is legal). The original durable
+      // was created without it (JetStream default 30s); update it so a redeploy
+      // fixes live durables without a manual `nats consumer rm`. Other fields
+      // stay un-reconciled (v1 policy).
+      if (existing.config.ack_wait !== ackWaitNs) {
+        await opts.jsm.consumers.update(opts.stream, opts.durable, {
+          ...existing.config,
+          ack_wait: ackWaitNs,
+        });
+        log.info(
+          `jetstream-provision: updated consumer "${opts.durable}" ack_wait ${Math.round((existing.config.ack_wait ?? 0) / 1_000_000_000)}s → ${Math.round(ackWaitNs / 1_000_000_000)}s (cortex#422)`,
+        );
+        return "updated";
+      }
+      return "exists";
     }
-    return "exists";
   } catch (err) {
     if (!isNotFoundError(err)) {
       throw err;

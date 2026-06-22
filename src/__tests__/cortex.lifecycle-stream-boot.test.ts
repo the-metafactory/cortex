@@ -96,6 +96,7 @@ function makeRecordingJsm(): JsmRecorder {
         ({ name: cfg.durable_name } as unknown as ConsumerInfo),
       update: async (_stream, durable, cfg) =>
         ({ name: durable, config: cfg } as unknown as ConsumerInfo),
+      delete: async () => true,
     },
   };
   return { jsm, streamAdds };

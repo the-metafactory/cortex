@@ -814,6 +814,7 @@ describe("ReflexActivationListener — lifecycle", () => {
           return {} as never;
         },
         update: async () => ({}) as never,
+        delete: async () => true,
       },
     };
     let boundOpts: Record<string, unknown> | undefined;
@@ -863,6 +864,7 @@ describe("ReflexActivationListener — lifecycle", () => {
           return {} as never;
         },
         update: async () => ({}) as never,
+        delete: async () => true,
       },
     };
     const augmented = ctrl.runtime as unknown as Record<string, unknown>;
