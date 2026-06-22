@@ -39,7 +39,6 @@ export function isReviewFlavor(flavor: string): flavor is ReviewFlavor {
  * the reflex bridge.
  */
 export function reviewFlavorOfCapability(capability: string): ReviewFlavor | undefined {
-  const match = /^code-review\.([a-z][a-z0-9-]*)$/.exec(capability);
-  if (match === null) return undefined;
-  return isReviewFlavor(match[1]!) ? match[1] : undefined;
+  const flavor = /^code-review\.([a-z][a-z0-9-]*)$/.exec(capability)?.[1];
+  return flavor !== undefined && isReviewFlavor(flavor) ? flavor : undefined;
 }
