@@ -677,6 +677,18 @@ describe("reviewFlavorOf / extractReviewRequest", () => {
     expect(extractReviewRequest({ pull_request: { number: 7 } })).toBeNull();
     expect(extractReviewRequest({ repository: "o/r", pull_request: { number: 1.5 } })).toBeNull();
   });
+  test("extractReviewRequest: accepts BOTH reflex-flattened string AND GitHub-native {full_name}", () => {
+    // reflex edge flattens repository → full_name string; we also accept the
+    // native object shape defensively (sage cortex#1185).
+    expect(extractReviewRequest({ repository: "the-metafactory/cortex", pull_request: { number: 5 } })).toEqual({
+      repo: "the-metafactory/cortex",
+      pr: 5,
+    });
+    expect(
+      extractReviewRequest({ repository: { full_name: "the-metafactory/cortex" }, pull_request: { number: 5 } }),
+    ).toEqual({ repo: "the-metafactory/cortex", pr: 5 });
+    expect(extractReviewRequest({ repository: {}, pull_request: { number: 5 } })).toBeNull();
+  });
 });
 
 describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)", () => {

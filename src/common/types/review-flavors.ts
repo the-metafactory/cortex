@@ -7,8 +7,12 @@
  * the config layer (`cortex-config.ts` schema validation) and the bus layer
  * (`reflex-activation-listener.ts`, re-exported via `bus/review-events.ts`)
  * import it, so config never depends on `src/bus/`. Zero imports → no cycle.
- * Adding a flavor or changing the capability syntax edits ONLY this file
- * (sage cortex#1185 review).
+ *
+ * This is the single source WITHIN cortex, but the flavor set is a cross-repo
+ * wire contract: it must stay in lockstep with pilot's `KNOWN_SPECIALIZATIONS`
+ * (`design-pilot-restructure.md` §4.1), since pilot is the other producer of
+ * `tasks.code-review.<flavor>`. Adding a flavor edits this file AND requires the
+ * matching pilot-side update (sage cortex#1185 review).
  */
 export const REVIEW_FLAVORS = [
   "generic",

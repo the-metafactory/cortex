@@ -322,15 +322,22 @@ export { reviewFlavorOfCapability as reviewFlavorOf } from "../common/types/revi
 
 /** The review routing keys adapted from a fired activation's GitHub PR event,
  *  or null when the payload is not a reviewable PR (no repo / no PR number).
- *  Reflex's edge injection flattens `repository` to its full_name string and
- *  preserves `pull_request`. */
+ *  Reflex's edge injection flattens `repository` to its full_name string
+ *  (reflex `src/edge/http.ts`), but we ALSO accept GitHub's native
+ *  `{ full_name }` object so the bridge is robust to either delivery shape. */
 export function extractReviewRequest(
   payload: Record<string, unknown>,
 ): { repo: string; pr: number; title?: string } | null {
+  const repoRaw = payload.repository;
   const repo =
-    typeof payload.repository === "string" && payload.repository.length > 0
-      ? payload.repository
-      : undefined;
+    typeof repoRaw === "string" && repoRaw.length > 0
+      ? repoRaw
+      : repoRaw !== null &&
+          typeof repoRaw === "object" &&
+          typeof (repoRaw as { full_name?: unknown }).full_name === "string" &&
+          (repoRaw as { full_name: string }).full_name.length > 0
+        ? (repoRaw as { full_name: string }).full_name
+        : undefined;
   const pull = payload.pull_request;
   const pr =
     pull !== null && typeof pull === "object" && Number.isInteger((pull as { number?: unknown }).number)
