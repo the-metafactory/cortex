@@ -136,15 +136,12 @@ export type { DispatchTaskFailedReason } from "./dispatch-events";
  * pilot's vocabulary. New flavors land by extending this union in
  * lockstep with pilot's `KNOWN_SPECIALIZATIONS`.
  */
-export type ReviewFlavor =
-  | "generic"
-  | "typescript"
-  | "python"
-  | "rust"
-  | "go"
-  | "sql"
-  | "docs"
-  | "security";
+// The review-flavor vocabulary lives in the zero-import leaf `review-flavors.ts`
+// (single source for bus + config layers — sage cortex#1185). Re-exported here
+// so existing `review-events` importers are unaffected.
+import { REVIEW_FLAVORS, isReviewFlavor, type ReviewFlavor } from "./review-flavors";
+export { REVIEW_FLAVORS, isReviewFlavor };
+export type { ReviewFlavor };
 
 /**
  * Request envelope payload per `design-pilot-restructure.md` §4.1.

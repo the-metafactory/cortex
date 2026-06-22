@@ -745,6 +745,21 @@ describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)
     expect(await dedup.seen("decision-123")).toBe(false);
     expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_failed")).toBe(true);
   });
+
+  test("non-reviewable payload + audit publish fails → dedup NOT marked (re-fireable)", async () => {
+    // Regression for the mark-before-emit ordering in the non-reviewable branch
+    // (sage cortex#1185): emit the _failed BEFORE marking dedup, so a failed
+    // audit publish leaves the activation re-fireable, not silently suppressed.
+    const ctrl = fakeRuntime({ publishThrows: true });
+    const { listener, dedup } = reviewListener(ctrl);
+
+    await expect(
+      listener.handleFired(firedEnvelope({ target: "@jc/sage-pr-review", payload: { action: "opened" } }), "subj"),
+    ).rejects.toThrow();
+
+    expect(await dedup.seen("decision-123")).toBe(false);
+    expect(ctrl.onSubject).toHaveLength(0);
+  });
 });
 
 // =============================================================================

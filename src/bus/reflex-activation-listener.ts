@@ -38,7 +38,7 @@
 
 import { DeliverPolicy } from "nats";
 import { directTaskSubject, taskSubject } from "@the-metafactory/myelin/subjects";
-import type { ReviewFlavor } from "./review-events";
+import { isReviewFlavor, type ReviewFlavor } from "./review-flavors";
 
 import {
   UNTRUSTED_CLOSE,
@@ -314,24 +314,15 @@ export function buildReflexDispatch(opts: BuildReflexDispatchOpts): {
   return { envelope, subject };
 }
 
-const REVIEW_FLAVORS: ReadonlySet<string> = new Set<ReviewFlavor>([
-  "generic",
-  "typescript",
-  "python",
-  "rust",
-  "go",
-  "sql",
-  "docs",
-  "security",
-]);
-
 /** The `<flavor>` of a `code-review.<flavor>` capability, or undefined if the
- *  capability is not a known flavored review capability. */
+ *  capability is not a known flavored review capability. Flavor vocabulary is
+ *  the shared leaf `review-flavors.ts` (single source — schema validates the
+ *  same set). */
 export function reviewFlavorOf(capability: string): ReviewFlavor | undefined {
   const match = /^code-review\.([a-z][a-z0-9-]*)$/.exec(capability);
   if (match === null) return undefined;
   const flavor = match[1]!;
-  return REVIEW_FLAVORS.has(flavor) ? (flavor as ReviewFlavor) : undefined;
+  return isReviewFlavor(flavor) ? flavor : undefined;
 }
 
 /** The review routing keys adapted from a fired activation's GitHub PR event,
@@ -677,9 +668,12 @@ export class ReflexActivationListener {
     });
     if (built === null) {
       // Not a reviewable PR event (or non-flavor capability) — re-firing the
-      // same Decision can't fix it. Mark so a redelivery doesn't re-evaluate.
-      await this.dedup.mark(act.decisionId);
+      // same Decision can't fix it, so we mark to stop re-evaluation. But emit
+      // the audit event BEFORE marking (skip/publish-arm invariant): if
+      // emitFailed throws, the mark never lands and a redelivery re-emits it,
+      // rather than silently suppressing the promised `_failed`.
       await this.emitFailed(fired, act, "review-payload-not-a-reviewable-pr");
+      await this.dedup.mark(act.decisionId);
       return { kind: "ack" };
     }
     if (typeof this.runtime.publishOnSubject !== "function") {

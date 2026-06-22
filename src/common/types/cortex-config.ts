@@ -35,6 +35,7 @@
 import { z } from "zod/v4";
 
 import { BRAIN_PROTOCOL_ID } from "../../brain/protocol";
+import { REVIEW_FLAVORS, isReviewFlavor } from "../../bus/review-flavors";
 import { CapabilitySchema } from "./capability";
 import {
   CockpitSchema,
@@ -2599,17 +2600,18 @@ export const ReflexTargetSchema = z
       });
     }
     // A review target routes by the `code-review.<flavor>` subject suffix, so
-    // its capability must BE a flavored review capability.
-    if (
-      t.review === true &&
-      !/^code-review\.(generic|typescript|python|rust|go|sql|docs|security)$/.test(t.capability)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "a review target (`review: true`) requires `capability: code-review.<flavor>` (generic|typescript|python|rust|go|sql|docs|security)",
-        path: ["capability"],
-      });
+    // its capability must BE a flavored review capability. The flavor set is the
+    // shared leaf `bus/review-flavors.ts` (single source — the bridge's
+    // `reviewFlavorOf` validates the same set; adding a flavor edits one file).
+    if (t.review === true) {
+      const match = /^code-review\.([a-z][a-z0-9-]*)$/.exec(t.capability);
+      if (match === null || !isReviewFlavor(match[1]!)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `a review target (\`review: true\`) requires \`capability: code-review.<flavor>\` (${REVIEW_FLAVORS.join("|")})`,
+          path: ["capability"],
+        });
+      }
     }
   });
 
