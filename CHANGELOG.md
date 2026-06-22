@@ -19,8 +19,11 @@
   builds a `tasks.code-review.<flavor>` request from a PR event — but on the
   LOCAL bus and without that path's public-Offer admission / surface-predicate
   gating (this is a trusted internal reflex activation, not a public Offer).
-  `skip_authors` runs first (trusted authors
-  never reach the review publish). Schema enforces exactly one of
+  `skip_authors` runs first: a trusted author — identified by GitHub login
+  (`pull_request.user.login` → `issue.user.login` → `sender.login`) — is
+  skipped before any review publish. The gate fails OPEN by design: a payload
+  with no extractable author is reviewed, not silently skipped (for reflex's
+  GitHub-PR webhooks the login is always present). Schema enforces exactly one of
   prompt|handler|review and a flavored `code-review.*` capability for review
   targets. Pure helpers `reviewFlavorOf` / `extractReviewRequest` +
   `buildReflexReviewDispatch` are exported and unit-tested. Ordering: a trusted

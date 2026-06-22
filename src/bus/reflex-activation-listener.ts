@@ -891,6 +891,11 @@ export function extractAuthorLogin(payload: Record<string, unknown>): string | u
  * login (for the audit trail) when the fired activation's author is in
  * `skipAuthors`; GitHub logins are case-insensitive, so the compare is too.
  * An empty/absent list never matches (no gate configured).
+ *
+ * Fails OPEN by design: if the payload has no extractable author, this returns
+ * undefined (proceed/dispatch), NOT a skip. For a review-trigger gate that is
+ * the safe direction — better to review an unclassifiable PR than to silently
+ * skip a real external one. (Reflex's GitHub-PR webhooks always carry a login.)
  */
 export function matchSkippedAuthor(
   skipAuthors: readonly string[] | undefined,
@@ -898,7 +903,7 @@ export function matchSkippedAuthor(
 ): string | undefined {
   if (skipAuthors === undefined || skipAuthors.length === 0) return undefined;
   const author = extractAuthorLogin(payload);
-  if (author === undefined) return undefined;
+  if (author === undefined) return undefined; // fail open — see doc above
   const lowered = author.toLowerCase();
   return skipAuthors.some((a) => a.toLowerCase() === lowered) ? author : undefined;
 }
