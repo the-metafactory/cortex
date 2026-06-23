@@ -72,11 +72,11 @@ function fakeRuntime() {
 }
 
 function fakeSpawn(opts: { exitCode?: number; throwOnSpawn?: boolean; hang?: boolean; ignoreSigterm?: boolean } = {}) {
-  const calls: { cmd: string[]; cwd: string }[] = [];
+  const calls: { cmd: string[]; cwd: string; env?: Record<string, string> }[] = [];
   const signals: string[] = [];
   let killed = false;
   const spawn: Spawn = (cmd, o) => {
-    calls.push({ cmd, cwd: o.cwd });
+    calls.push({ cmd, cwd: o.cwd, ...(o.env !== undefined && { env: o.env }) });
     if (opts.throwOnSpawn === true) throw new Error("spawn boom");
     let resolveExit!: (n: number) => void;
     const exited = new Promise<number>((r) => { resolveExit = r; });
@@ -196,6 +196,24 @@ describe("createProcessRunner", () => {
     expect(sp.calls[0]!.cmd).toContain("7");
     expect(outcomes(published)).toEqual(["started", "completed"]);
     expect(last(published)!.process).toBe("build-journal");
+  });
+
+  test("env allow-list → child gets only the listed vars (omitted → inherit)", async () => {
+    globalThis.process.env.PR_TEST_ALLOWED = "yes";
+    globalThis.process.env.PR_TEST_SECRET = "nope";
+    // allow-list set → restricted env
+    const sp1 = fakeSpawn({ exitCode: 0 });
+    const allowSpec: ProcessSpec = { ...SPEC, env: ["PR_TEST_ALLOWED"] };
+    await createProcessRunner({ runtime: fakeRuntime().runtime, source: SOURCE, processesDir: "/x", loadSpec: () => allowSpec, spawn: sp1.spawn })(activation({}), target());
+    await flush();
+    expect(sp1.calls[0]!.env).toEqual({ PR_TEST_ALLOWED: "yes" }); // PR_TEST_SECRET excluded
+    // omitted → inherit (no env passed to spawn)
+    const sp2 = fakeSpawn({ exitCode: 0 });
+    await createProcessRunner({ runtime: fakeRuntime().runtime, source: SOURCE, processesDir: "/x", loadSpec: () => SPEC, spawn: sp2.spawn })(activation({}), target());
+    await flush();
+    expect(sp2.calls[0]!.env).toBeUndefined();
+    delete globalThis.process.env.PR_TEST_ALLOWED;
+    delete globalThis.process.env.PR_TEST_SECRET;
   });
 
   test("the spec name comes from target.process, NOT the payload", async () => {

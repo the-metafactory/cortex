@@ -31,8 +31,13 @@
  *    RETURN. Re-firing the SAME activation won't fix a config error; the next
  *    scheduled fire will, once the file is fixed.
  *  - Runtime failure (non-zero exit, spawn error, watchdog timeout) → emit
- *    `failed` and THROW, so the bridge leaves the Decision id un-marked
- *    (re-fireable). Specs are expected to be idempotent.
+ *    `failed` and THROW. The bridge ACKS the JetStream message either way (it
+ *    does NOT nack/redeliver — same as notify.discord); "re-fireable" means only
+ *    that a THROW leaves the Decision id UN-marked in the bridge's dedup, so a
+ *    LATER reflex fire of the same Decision (e.g. the next schedule tick) is not
+ *    deduped away. There is no immediate retry. Specs are expected idempotent.
+ *    (Detached specs already returned, so they report `failed` via visibility
+ *    only — they cannot throw; the next scheduled fire re-runs them.)
  */
 
 import { readFileSync } from "node:fs";
@@ -138,6 +143,16 @@ export const ProcessSpecSchema = z.object({
    * Default `false` = synchronous (the bridge awaits; failures re-fire).
    */
   detach: z.boolean().default(false),
+  /**
+   * Environment ALLOW-LIST: names of vars passed through from cortex's env to
+   * the child. When set, the child gets ONLY these (so a process can't read
+   * unrelated cortex secrets — bus creds, webhook tokens, LLM keys). When
+   * OMITTED, the child inherits cortex's FULL environment — convenient for a
+   * trusted spec that needs many vars (build-journal needs claude / wrangler /
+   * discord auth + HOME/PATH), but it means that spec sees every cortex secret.
+   * Prefer an allow-list for anything that doesn't genuinely need the world.
+   */
+  env: z.array(z.string().min(1)).optional(),
   /** Declared params `{name}` tokens may reference. */
   params: z.record(z.string(), ProcessParamSchema).default({}),
 });
@@ -151,14 +166,23 @@ export interface SpawnedProc {
   kill: (signal?: string) => void;
 }
 
-/** Spawn function — defaults to `Bun.spawn`; injected in tests. */
-export type Spawn = (cmd: string[], opts: { cwd: string }) => SpawnedProc;
+/**
+ * Spawn function — defaults to `Bun.spawn`; injected in tests. `env` undefined
+ * means "inherit the parent environment" (Bun's default); a record restricts
+ * the child to exactly those vars.
+ */
+export type Spawn = (cmd: string[], opts: { cwd: string; env?: Record<string, string> }) => SpawnedProc;
 
 const defaultSpawn: Spawn = (cmd, opts) => {
   // stdio inherit → the (verbose, minutes-long) run streams into cortex-prod's
   // journald, where an operator debugs a failed run. No captured pipe → no
   // buffer-fill deadlock during a long run.
-  const p = Bun.spawn(cmd, { cwd: opts.cwd, stdout: "inherit", stderr: "inherit" });
+  const p = Bun.spawn(cmd, {
+    cwd: opts.cwd,
+    stdout: "inherit",
+    stderr: "inherit",
+    ...(opts.env !== undefined && { env: opts.env }),
+  });
   return { exited: p.exited, kill: (signal) => p.kill(signal as never) };
 };
 
@@ -302,12 +326,26 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       return;
     }
 
-    log.info(`process-runner: running "${process}" → ${argv.join(" ")} (decision ${activation.decisionId})`);
+    // Log the un-substituted spec template (tokens, not values) — a resolved
+    // argv could carry a param value that is a secret (esp. a `freeform` slot).
+    log.info(`process-runner: running "${process}" → ${spec.argv.join(" ")} (decision ${activation.decisionId})`);
     emit("started", process, activation);
+
+    // Restrict the child to the spec's env allow-list when present; omitted →
+    // inherit the full cortex env (see `env` on ProcessSpecSchema for the risk).
+    const childEnv =
+      spec.env !== undefined
+        ? Object.fromEntries(
+            spec.env
+              // `process` is shadowed by the local spec-name var → use the global.
+              .map((k) => [k, globalThis.process.env[k]] as const)
+              .filter((e): e is readonly [string, string] => e[1] !== undefined),
+          )
+        : undefined;
 
     let proc: SpawnedProc;
     try {
-      proc = spawn(argv, { cwd: spec.cwd });
+      proc = spawn(argv, { cwd: spec.cwd, ...(childEnv !== undefined && { env: childEnv }) });
     } catch (err) {
       emit("failed", process, activation, `spawn:${errMsg(err)}`);
       throw err instanceof Error ? err : new Error(String(err));

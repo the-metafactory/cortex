@@ -17,11 +17,16 @@
   payload (type-validated against the declared `params`), and spawns argv with
   **no shell**. Trust: the spec NAME comes from the trusted `target.process`
   (never the payload), `cwd`/`argv` come only from the on-disk spec, and a param
-  value is always a single argv element — an untrusted payload cannot pick the
-  command, inject flags, or traverse out of the processes dir (name is
-  `[a-z0-9-]`). A `string` param is `enum`-constrained unless `freeform: true`
-  is set explicitly (so an unconstrained arg slot is a deliberate, greppable
-  choice); param defaults are type/enum-validated at load. `timeout_ms` is
+  value is always a single argv element — so an untrusted payload cannot
+  word-split, inject a shell command, or pick the command (`cwd`/`argv`/the spec
+  name are spec/target only), and the spec name can't traverse the processes dir
+  (`[a-z0-9-]`). A `string` param is `enum`-constrained unless `freeform: true`
+  is set explicitly — an `enum` value can't be an arbitrary flag, while a
+  `freeform` value IS a single arbitrary arg the child may read as a flag (hence
+  the opt-in). Param defaults are type/enum-validated at load. Each spec may
+  declare an `env` allow-list; omitting it inherits cortex's full env (handy for
+  a trusted spec, but it then sees every cortex secret — prefer an allow-list).
+  The handler logs the un-substituted argv TEMPLATE, never resolved param values. `timeout_ms` is
   capped under the JetStream `ack_wait` so the watchdog's "kills before
   redelivery" guarantee is enforced by the schema, not just asserted. A 15-minute (spec-`timeout_ms`) watchdog kills a hung run (under
   the 20-minute JetStream `ack_wait`); deterministic misconfig (no name / bad
