@@ -16,11 +16,11 @@
  *
  * ## Trust boundary (why this is safe)
  *
- *  - The spec NAME comes from the TARGET config (`target.process`) — operator-
+ *  - The spec NAME comes from the TARGET config (`target.process`) — config-
  *    authored, trusted. It is NEVER read from the untrusted activation payload,
  *    so a payload cannot pick which command runs.
  *  - `cwd` and `argv` come from the spec FILE, not the activation. The spec is
- *    operator-controlled config; its trust rests on the filesystem permissions
+ *    deployment-controlled config; its trust rests on the filesystem permissions
  *    of the processes directory (the same trust as cortex.yaml), NOT on any
  *    code check here — this layer validates SHAPE, not provenance. What this
  *    layer DOES guarantee: the payload can only fill DECLARED, TYPED parameter
@@ -124,7 +124,7 @@ export const ProcessParamSchema = z
     }
   });
 
-/** A process spec — the DATA unit operators drop into the processes directory. */
+/** A process spec — the DATA unit dropped into the processes directory. */
 export const ProcessSpecSchema = z.object({
   /** Spec name; must equal the file basename and the target's `process:` value. */
   name: z.string().regex(PROCESS_NAME_RE, "process name must be [a-z0-9-]"),
@@ -182,7 +182,7 @@ export type Spawn = (cmd: string[], opts: { cwd: string; env?: Record<string, st
 
 const defaultSpawn: Spawn = (cmd, opts) => {
   // stdio inherit → the (verbose, minutes-long) run streams into cortex-prod's
-  // journald, where an operator debugs a failed run. No captured pipe → no
+  // journald, where an admin debugs a failed run. No captured pipe → no
   // buffer-fill deadlock during a long run.
   const p = Bun.spawn(cmd, {
     cwd: opts.cwd,
@@ -190,7 +190,7 @@ const defaultSpawn: Spawn = (cmd, opts) => {
     stderr: "inherit",
     ...(opts.env !== undefined && { env: opts.env }),
   });
-  return { exited: p.exited, kill: (signal) => p.kill(signal as never) };
+  return { exited: p.exited, kill: (signal) => { p.kill(signal as never); } };
 };
 
 const TOKEN_RE = /\{([a-zA-Z0-9_]+)\}/g;
@@ -199,7 +199,10 @@ const TOKEN_RE = /\{([a-zA-Z0-9_]+)\}/g;
 function argvTokens(argv: readonly string[]): Set<string> {
   const tokens = new Set<string>();
   for (const el of argv) {
-    for (const m of el.matchAll(TOKEN_RE)) tokens.add(m[1]!);
+    for (const m of el.matchAll(TOKEN_RE)) {
+      const name = m[1];
+      if (name !== undefined) tokens.add(name);
+    }
   }
   return tokens;
 }
@@ -362,8 +365,8 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       // background; report via visibility only (the handler already returned, so
       // a failure can't re-fire — the next scheduled fire re-runs the job).
       void superviseRun(proc, spec.timeout_ms, sigkillGraceMs)
-        .then((r) => emit(r.ok ? "completed" : "failed", processName, activation, r.ok ? undefined : r.reason))
-        .catch((err: unknown) => log.error(`process-runner: detached supervise threw: ${errMsg(err)}`));
+        .then((r) => { emit(r.ok ? "completed" : "failed", processName, activation, r.ok ? undefined : r.reason); })
+        .catch((err: unknown) => { log.error(`process-runner: detached supervise threw: ${errMsg(err)}`); });
       return;
     }
 
@@ -389,24 +392,30 @@ async function superviseRun(
   timeoutMs: number,
   sigkillGraceMs: number,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  let timedOut = false;
-  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  // A holder object (not a bare `let`) so the watchdog's async mutation is
+  // visible to readers below — and so static analysis doesn't treat the flag as
+  // a provable constant.
+  const state: { timedOut: boolean; killTimer?: ReturnType<typeof setTimeout> } = { timedOut: false };
   const watchdog = setTimeout(() => {
-    timedOut = true;
+    state.timedOut = true;
     proc.kill(); // SIGTERM — give the child a chance to clean up…
     // …then SIGKILL (uncatchable) so a SIGTERM-ignoring child still unblocks us.
-    killTimer = setTimeout(() => proc.kill("SIGKILL"), sigkillGraceMs);
+    state.killTimer = setTimeout(() => { proc.kill("SIGKILL"); }, sigkillGraceMs);
   }, timeoutMs);
+  const clearTimers = () => {
+    clearTimeout(watchdog);
+    if (state.killTimer !== undefined) clearTimeout(state.killTimer);
+  };
   try {
     const exitCode = await proc.exited;
-    clearTimeout(watchdog);
-    if (killTimer !== undefined) clearTimeout(killTimer);
-    if (exitCode === 0 && !timedOut) return { ok: true };
-    if (timedOut) return { ok: false, reason: `timeout-${timeoutMs}ms` };
+    clearTimers();
+    // exit 0 = the run finished its own work (a watchdog-killed run exits
+    // non-zero), so treat it as success even if the watchdog just fired.
+    if (exitCode === 0) return { ok: true };
+    if (state.timedOut) return { ok: false, reason: `timeout-${timeoutMs}ms` };
     return { ok: false, reason: `exit-${exitCode}` };
   } catch (err) {
-    clearTimeout(watchdog);
-    if (killTimer !== undefined) clearTimeout(killTimer);
+    clearTimers();
     return { ok: false, reason: `wait:${errMsg(err)}` };
   }
 }

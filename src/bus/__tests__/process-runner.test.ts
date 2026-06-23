@@ -47,7 +47,7 @@ function target(over: Partial<ReflexTarget> = {}): ReflexTarget {
     handler: "process",
     process: "build-journal",
     ...over,
-  } as ReflexTarget;
+  };
 }
 
 function activation(payload: unknown): FiredActivation {
@@ -100,7 +100,7 @@ async function flush() {
 }
 
 const events = (published: Envelope[]) =>
-  published.filter((e) => e.type === "system.bus.process").map((e) => e.payload as Record<string, unknown>);
+  published.filter((e) => e.type === "system.bus.process").map((e) => e.payload);
 const outcomes = (published: Envelope[]) => events(published).map((p) => p.outcome);
 const last = (published: Envelope[]) => { const e = events(published); return e[e.length - 1]; };
 

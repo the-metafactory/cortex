@@ -4350,7 +4350,7 @@ export async function startCortex(
       (expandedConfigPath !== undefined
         ? join(dirname(expandedConfigPath), "processes")
         : join(homedir(), ".config", "cortex", "processes"));
-    handlers["process"] = createProcessRunner({
+    handlers.process = createProcessRunner({
       runtime,
       source: systemEventSource,
       processesDir,

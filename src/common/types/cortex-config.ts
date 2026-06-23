@@ -2574,7 +2574,7 @@ export const ReflexTargetSchema = z
     handler: z.enum(["discord-webhook", "process"]).optional(),
     /**
      * For a `handler: "process"` target: the process spec NAME to run (the
-     * basename of `<processes-dir>/<name>.yaml`). TRUSTED (operator config) —
+     * basename of `<processes-dir>/<name>.yaml`). TRUSTED (deployment config) —
      * the runner never takes the spec name from the untrusted activation
      * payload. Required iff `handler === "process"`; forbidden otherwise.
      */
