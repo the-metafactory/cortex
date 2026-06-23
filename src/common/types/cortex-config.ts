@@ -2565,8 +2565,12 @@ export const ReflexTargetSchema = z
      * (it posts to a per-repo Discord webhook — see the top-level
      * `notify.discord` block); there is no bus re-emit and no `tasks.*`
      * dispatch for a handler target. Mutually exclusive with `prompt`.
+     *
+     * `build-journal` → the F-6 bridge invokes the build-journal.run handler
+     * DIRECTLY: it shells the pulse build-journal pipeline (see the top-level
+     * `build_journal` block) to publish the weekly public build journal.
      */
-    handler: z.enum(["discord-webhook"]).optional(),
+    handler: z.enum(["discord-webhook", "build-journal"]).optional(),
     /**
      * Configurable author trust gate: GitHub author logins the F-6 bridge
      * drops (deterministically, before any dispatch) instead of reviewing.
@@ -2673,6 +2677,25 @@ export const NotifyConfigSchema = z.object({
 
 export type DiscordNotifyTarget = z.infer<typeof DiscordNotifyTargetSchema>;
 export type NotifyConfig = z.infer<typeof NotifyConfigSchema>;
+
+/**
+ * Top-level `build_journal:` block — config for the `build-journal.run` code
+ * handler the F-6 reflex bridge invokes for a `handler: build-journal` target
+ * (target `@jc/build-journal`, fired by the reflex `build-journal-weekly`
+ * schedule). The handler shells `bun examples/build-journal/run-journal.ts`
+ * inside `pulse_repo`. Optional; absent → no handler registered (the target,
+ * if any, fails to resolve to a handler — a `_failed` audit line, no side
+ * effect). The publish credentials the run needs (claude / discord / wrangler
+ * + a site checkout) are the HOST's environment, never cortex config.
+ */
+export const BuildJournalConfigSchema = z.object({
+  /** Absolute path to the pulse repo root the runner is shelled from. */
+  pulse_repo: z.string().min(1),
+  /** Journal period when an activation payload omits `days`. Default 7 (weekly). */
+  days_default: z.number().int().positive().default(7),
+});
+
+export type BuildJournalConfig = z.infer<typeof BuildJournalConfigSchema>;
 
 /**
  * The cortex deployment configuration. One file per principal
@@ -2886,6 +2909,9 @@ export const CortexConfigSchema = z.object({
 
   /** Outbound notification routing for code-only capabilities (notify.discord). */
   notify: emptyDefault(NotifyConfigSchema),
+
+  /** Config for the build-journal.run code handler. Optional; absent → not registered. */
+  build_journal: BuildJournalConfigSchema.optional(),
 }).refine(
   (config) => {
     const ids = config.agents.map((a) => a.id);

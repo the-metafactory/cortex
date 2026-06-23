@@ -4,6 +4,24 @@
 
 ### Non-breaking
 
+- **F-6 reflex bridge — `build-journal.run` code handler.** A new in-process
+  code handler (`handler: "build-journal"` on a `reflex_activation.targets[]`
+  entry), alongside `discord-webhook`. The bridge invokes it DIRECTLY for the
+  `@jc/build-journal` target — fired by reflex's `build-journal-weekly` Sunday
+  schedule — and it shells the pulse build-journal pipeline (`bun
+  examples/build-journal/run-journal.ts --llm --days N [--post] [--deploy]`)
+  inside the configured `pulse_repo` to publish the weekly public build journal.
+  A new top-level `build_journal:` config block (`pulse_repo`, `days_default`)
+  registers it; absent → no handler. Deterministic (no LLM in the control path)
+  because the run deploys a public site unattended; the activation payload is
+  DATA (`days`/`post`/`deploy`), never instructions. A 15-minute watchdog kills
+  a hung run (well under the 20-minute JetStream `ack_wait`); a non-zero exit /
+  spawn error / timeout emits `system.bus.build_journal{outcome:failed}` and
+  THROWS, leaving the Decision re-fireable (the pipeline is idempotent — a
+  re-run overwrites that date's entry; a clean site repo makes the commit a
+  no-op). Covered by `build-journal.test.ts`. Pairs with reflex's
+  `build-journal-weekly` blueprint + `docs/deploy-build-journal-weekly.md`.
+
 - **Review consumers no longer fan out + double-post (cortex#1186).** Each
   per-agent review durable (local + federated-offer + federated-direct) is now
   provisioned with a `filterSubject` matching the subject pattern its consumer

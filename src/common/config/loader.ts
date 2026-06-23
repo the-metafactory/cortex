@@ -15,6 +15,7 @@ import {
   CortexConfigSchema,
   type Agent,
   type BusConfig,
+  type BuildJournalConfig,
   type CortexConfig,
   type DiscordPresence,
   type MattermostPresence,
@@ -142,6 +143,12 @@ export interface LoadedConfig {
    * `undefined` for legacy bot.yaml input.
    */
   notify?: NotifyConfig;
+  /**
+   * build-journal.run code-handler config (`build_journal:` block). Defined
+   * only when the input declares the block; `undefined` otherwise. The boot
+   * path registers the handler only when present.
+   */
+  buildJournal?: BuildJournalConfig;
 }
 
 /**
@@ -864,6 +871,8 @@ function loadCortexShape(
     reflexActivation: cortexConfig.reflex_activation,
     // F-6 downstream — carry through the notify block (notify.discord etc.).
     notify: cortexConfig.notify,
+    // build-journal.run — carry through the build_journal handler config.
+    buildJournal: cortexConfig.build_journal,
   };
 }
 

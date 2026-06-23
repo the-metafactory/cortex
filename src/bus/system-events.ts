@@ -764,6 +764,51 @@ export function createSystemBusNotifyDiscordEvent(
 }
 
 // ---------------------------------------------------------------------------
+// system.bus.build_journal — build-journal.run code-handler visibility
+// ---------------------------------------------------------------------------
+
+export interface SystemBusBuildJournalOpts {
+  /** Standard source attribution — who emitted this visibility event. */
+  source: SystemEventSource;
+  /** `started` (run spawned), `completed` (exit 0), `failed` (non-zero / spawn error / timeout). */
+  outcome: "started" | "completed" | "failed";
+  /** Journal period (days) the run covered. */
+  days?: number;
+  /** Reflex Decision id carried on the activation (provenance), when present. */
+  decisionId?: string;
+  /** Human-readable detail for the failed outcome (e.g. `exit-1`, `timeout-900000ms`). */
+  reason?: string;
+  /** Correlation id carried from the activation. */
+  correlationId?: string;
+  classification?: Classification;
+}
+
+/**
+ * Visibility event emitted by the `build-journal.run` code handler as it shells
+ * the pulse build-journal pipeline (the F-6 bridge invokes it directly for a
+ * `handler: build-journal` target). Bookkeeping about our own stack —
+ * sovereignty defaults to local.
+ */
+export function createSystemBusBuildJournalEvent(
+  opts: SystemBusBuildJournalOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.bus.build_journal",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      outcome: opts.outcome,
+      ...(opts.days !== undefined && { days: opts.days }),
+      ...(opts.decisionId !== undefined && { decision_id: opts.decisionId }),
+      ...(opts.reason !== undefined && { reason: opts.reason }),
+      ...(opts.correlationId !== undefined && {
+        correlation_id: opts.correlationId,
+      }),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // system.access.allowed / system.access.denied — IAW Phase C.4 (cortex#115)
 // ---------------------------------------------------------------------------
 
