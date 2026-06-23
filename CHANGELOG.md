@@ -17,13 +17,14 @@
   payload (type-validated against the declared `params`), and spawns argv with
   **no shell**. Trust: the spec NAME comes from the trusted `target.process`
   (never the payload), `cwd`/`argv` come only from the on-disk spec, and a param
-  value is always a single argv element — so an untrusted payload cannot
-  word-split, inject a shell command, or pick the command (`cwd`/`argv`/the spec
-  name are spec/target only), and the spec name can't traverse the processes dir
-  (`[a-z0-9-]`). A `string` param is `enum`-constrained unless `freeform: true`
-  is set explicitly — an `enum` value can't be an arbitrary flag, while a
-  `freeform` value IS a single arbitrary arg the child may read as a flag (hence
-  the opt-in). Param defaults are type/enum-validated at load. Each spec may
+  value is always a single argv element. So with NO shell there is no
+  word-splitting and no shell-command injection; and the COMMAND (`cwd`/`argv`/
+  the spec name) comes from spec/target config, never the payload, so a payload
+  can't pick what runs or traverse the processes dir (name is `[a-z0-9-]`). The
+  remaining surface is per-arg: a `string` param is `enum`-constrained by default
+  (an enum value can't be an arbitrary flag), and an unconstrained value is only
+  possible via explicit `freeform: true` — which IS a single arbitrary arg the
+  child may read as a flag (that is exactly why it is opt-in, not the default). Param defaults are type/enum-validated at load. Each spec may
   declare an `env` allow-list; omitting it inherits cortex's full env (handy for
   a trusted spec, but it then sees every cortex secret — prefer an allow-list).
   The handler logs the un-substituted argv TEMPLATE, never resolved param values. `timeout_ms` is
@@ -41,8 +42,9 @@
   visibility only (it cannot re-fire — fine for an idempotent scheduled job).
   Covered by `process-runner.test.ts`. First user: the weekly public build
   journal — `examples/processes/build-journal.yaml` (`detach: true`; operator
-  copies it in), fired by reflex's `build-journal-weekly` schedule (reflex#30);
-  see `docs/deploy-build-journal-weekly.md`.
+  copies it in), fired by reflex's `build-journal-weekly` schedule; the
+  blueprint and the operator runbook (`docs/deploy-build-journal-weekly.md`)
+  live in the **reflex** repo (reflex#30), not here.
 
 - **Review consumers no longer fan out + double-post (cortex#1186).** Each
   per-agent review durable (local + federated-offer + federated-direct) is now

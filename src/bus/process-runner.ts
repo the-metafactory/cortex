@@ -7,6 +7,13 @@
  * handler for any target whose config declares `handler: "process"`; the target
  * also names which spec to run (`process: "<name>"`).
  *
+ * NOTE on placement: like `notify-discord.ts`, this code handler lives under
+ * `src/bus` because it is invoked DIRECTLY by the reflex-activation bridge (the
+ * gated entry point), not over a second bus hop. CONTEXT.md's "bus stays dumb,
+ * smarts at M7" ideal would put both handlers in an application module; moving
+ * them is a separate refactor that should relocate `notify.discord` too, so
+ * this PR keeps the established precedent rather than splitting it.
+ *
  * ## Trust boundary (why this is safe)
  *
  *  - The spec NAME comes from the TARGET config (`target.process`) — operator-
@@ -40,8 +47,8 @@
  *    only — they cannot throw; the next scheduled fire re-runs them.)
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { MyelinRuntime } from "./myelin/runtime";
@@ -122,7 +129,7 @@ export const ProcessSpecSchema = z.object({
   /** Spec name; must equal the file basename and the target's `process:` value. */
   name: z.string().regex(PROCESS_NAME_RE, "process name must be [a-z0-9-]"),
   /** Absolute working directory the command runs in. */
-  cwd: z.string().min(1),
+  cwd: z.string().min(1).refine((c) => isAbsolute(c), "cwd must be an absolute path"),
   /** argv array (no shell). Elements may contain `{param}` tokens. */
   argv: z.array(z.string().min(1)).min(1),
   /** Watchdog timeout; default {@link DEFAULT_PROCESS_TIMEOUT_MS}, capped at {@link MAX_PROCESS_TIMEOUT_MS}. */
@@ -203,12 +210,12 @@ function argvTokens(argv: readonly string[]): Set<string> {
  * disagrees with the filename, or an argv `{token}` with no matching param
  * (fail-closed — a typo can't silently pass an empty string).
  */
-export function loadProcessSpec(dir: string, name: string): ProcessSpec {
+export async function loadProcessSpec(dir: string, name: string): Promise<ProcessSpec> {
   if (!PROCESS_NAME_RE.test(name)) {
     throw new Error(`invalid process name "${name}" (must be ${PROCESS_NAME_RE})`);
   }
   const path = join(dir, `${name}.yaml`);
-  const raw = parseYaml(readFileSync(path, "utf-8")) as unknown;
+  const raw = parseYaml(await readFile(path, "utf-8")) as unknown;
   const spec = ProcessSpecSchema.parse(raw);
   if (spec.name !== name) {
     throw new Error(`spec name "${spec.name}" in ${path} must match filename "${name}"`);
@@ -260,7 +267,7 @@ export interface ProcessRunnerOpts {
   /** Directory holding `<name>.yaml` spec files. */
   processesDir: string;
   /** Injectable spec loader (default: read from {@link processesDir}). */
-  loadSpec?: (name: string) => ProcessSpec;
+  loadSpec?: (name: string) => ProcessSpec | Promise<ProcessSpec>;
   /** Injectable spawn (default: `Bun.spawn`). */
   spawn?: Spawn;
   /** SIGTERM→SIGKILL grace (default {@link SIGKILL_GRACE_MS}); overridable for tests. */
@@ -305,8 +312,8 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
   };
 
   return async (activation, target) => {
-    const process = target?.process;
-    if (process === undefined || process.length === 0) {
+    const processName = target?.process;
+    if (processName === undefined || processName.length === 0) {
       // Misconfig: a `handler: process` target with no `process:` name. The
       // schema forbids this, so this is a belt-and-braces guard — deterministic,
       // re-firing won't fix it.
@@ -318,18 +325,18 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     let spec: ProcessSpec;
     let argv: string[];
     try {
-      spec = loadSpec(process);
+      spec = await loadSpec(processName);
       argv = resolveArgv(spec, activation.payload);
     } catch (err) {
       // Deterministic: a bad spec / param won't fix on re-fire of THIS decision.
-      emit("failed", process, activation, `spec:${errMsg(err)}`);
+      emit("failed", processName, activation, `spec:${errMsg(err)}`);
       return;
     }
 
     // Log the un-substituted spec template (tokens, not values) — a resolved
     // argv could carry a param value that is a secret (esp. a `freeform` slot).
-    log.info(`process-runner: running "${process}" → ${spec.argv.join(" ")} (decision ${activation.decisionId})`);
-    emit("started", process, activation);
+    log.info(`process-runner: running "${processName}" → ${spec.argv.join(" ")} (decision ${activation.decisionId})`);
+    emit("started", processName, activation);
 
     // Restrict the child to the spec's env allow-list when present; omitted →
     // inherit the full cortex env (see `env` on ProcessSpecSchema for the risk).
@@ -337,8 +344,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       spec.env !== undefined
         ? Object.fromEntries(
             spec.env
-              // `process` is shadowed by the local spec-name var → use the global.
-              .map((k) => [k, globalThis.process.env[k]] as const)
+              .map((k) => [k, process.env[k]] as const)
               .filter((e): e is readonly [string, string] => e[1] !== undefined),
           )
         : undefined;
@@ -347,7 +353,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     try {
       proc = spawn(argv, { cwd: spec.cwd, ...(childEnv !== undefined && { env: childEnv }) });
     } catch (err) {
-      emit("failed", process, activation, `spawn:${errMsg(err)}`);
+      emit("failed", processName, activation, `spawn:${errMsg(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
 
@@ -356,7 +362,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       // background; report via visibility only (the handler already returned, so
       // a failure can't re-fire — the next scheduled fire re-runs the job).
       void superviseRun(proc, spec.timeout_ms, sigkillGraceMs)
-        .then((r) => emit(r.ok ? "completed" : "failed", process, activation, r.ok ? undefined : r.reason))
+        .then((r) => emit(r.ok ? "completed" : "failed", processName, activation, r.ok ? undefined : r.reason))
         .catch((err: unknown) => log.error(`process-runner: detached supervise threw: ${errMsg(err)}`));
       return;
     }
@@ -365,10 +371,10 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     // left un-marked (re-fireable).
     const result = await superviseRun(proc, spec.timeout_ms, sigkillGraceMs);
     if (!result.ok) {
-      emit("failed", process, activation, result.reason);
-      throw new Error(`process "${process}" failed: ${result.reason} (decision ${activation.decisionId})`);
+      emit("failed", processName, activation, result.reason);
+      throw new Error(`process "${processName}" failed: ${result.reason} (decision ${activation.decisionId})`);
     }
-    emit("completed", process, activation);
+    emit("completed", processName, activation);
   };
 }
 

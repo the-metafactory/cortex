@@ -136,46 +136,50 @@ describe("loadProcessSpec", () => {
   beforeAll(() => { dir = mkdtempSync(join(tmpdir(), "cortex-processes-")); });
   afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
-  test("loads + validates a well-formed spec", () => {
+  test("loads + validates a well-formed spec", async () => {
     write("good", "name: good\ncwd: /abs\nargv: [bun, run.ts, --days, \"{days}\"]\nparams:\n  days: { type: int, default: 7 }\n");
-    const spec = loadProcessSpec(dir, "good");
+    const spec = await loadProcessSpec(dir, "good");
     expect(spec.cwd).toBe("/abs");
     expect(spec.timeout_ms).toBeGreaterThan(0); // schema default applied
   });
-  test("rejects a traversal / non-segment name", () => {
-    expect(() => loadProcessSpec(dir, "../etc/passwd")).toThrow(/process name/);
+  test("rejects a traversal / non-segment name", async () => {
+    await expect(loadProcessSpec(dir, "../etc/passwd")).rejects.toThrow(/process name/);
   });
-  test("rejects a name/filename mismatch", () => {
+  test("rejects a relative cwd", async () => {
+    write("relcwd", "name: relcwd\ncwd: ./rel\nargv: [echo, hi]\n");
+    await expect(loadProcessSpec(dir, "relcwd")).rejects.toThrow(/absolute/);
+  });
+  test("rejects a name/filename mismatch", async () => {
     write("mism", "name: other\ncwd: /abs\nargv: [echo, hi]\n");
-    expect(() => loadProcessSpec(dir, "mism")).toThrow(/must match filename/);
+    await expect(loadProcessSpec(dir, "mism")).rejects.toThrow(/must match filename/);
   });
-  test("rejects an undeclared argv token (fail-closed)", () => {
+  test("rejects an undeclared argv token (fail-closed)", async () => {
     write("badtok", "name: badtok\ncwd: /abs\nargv: [echo, \"{nope}\"]\n");
-    expect(() => loadProcessSpec(dir, "badtok")).toThrow(/no declared param/);
+    await expect(loadProcessSpec(dir, "badtok")).rejects.toThrow(/no declared param/);
   });
-  test("rejects `enum` on an int param (fail-closed)", () => {
+  test("rejects `enum` on an int param (fail-closed)", async () => {
     write("intenum", "name: intenum\ncwd: /abs\nargv: [echo, \"{n}\"]\nparams:\n  n: { type: int, enum: [\"1\", \"2\"] }\n");
-    expect(() => loadProcessSpec(dir, "intenum")).toThrow(/enum/);
+    await expect(loadProcessSpec(dir, "intenum")).rejects.toThrow(/enum/);
   });
-  test("rejects an unconstrained string param (needs enum or freeform)", () => {
+  test("rejects an unconstrained string param (needs enum or freeform)", async () => {
     write("freestr", "name: freestr\ncwd: /abs\nargv: [echo, \"{s}\"]\nparams:\n  s: { type: string }\n");
-    expect(() => loadProcessSpec(dir, "freestr")).toThrow(/enum.*freeform|freeform/);
+    await expect(loadProcessSpec(dir, "freestr")).rejects.toThrow(/enum.*freeform|freeform/);
   });
-  test("accepts an explicitly free-form string param", () => {
+  test("accepts an explicitly free-form string param", async () => {
     write("freeok", "name: freeok\ncwd: /abs\nargv: [echo, \"{s}\"]\nparams:\n  s: { type: string, freeform: true }\n");
-    expect(loadProcessSpec(dir, "freeok").params.s!.freeform).toBe(true);
+    expect((await loadProcessSpec(dir, "freeok")).params.s!.freeform).toBe(true);
   });
-  test("rejects a non-integer default on an int param", () => {
+  test("rejects a non-integer default on an int param", async () => {
     write("badint", "name: badint\ncwd: /abs\nargv: [echo, \"{n}\"]\nparams:\n  n: { type: int, default: 1.5 }\n");
-    expect(() => loadProcessSpec(dir, "badint")).toThrow(/default.*integer/);
+    await expect(loadProcessSpec(dir, "badint")).rejects.toThrow(/default.*integer/);
   });
-  test("rejects a timeout_ms over the ack_wait ceiling", () => {
+  test("rejects a timeout_ms over the ack_wait ceiling", async () => {
     write("slow", "name: slow\ncwd: /abs\nargv: [echo, hi]\ntimeout_ms: 1500000\n"); // 25 min > 19 min cap
-    expect(() => loadProcessSpec(dir, "slow")).toThrow(/ack_wait|timeout_ms/);
+    await expect(loadProcessSpec(dir, "slow")).rejects.toThrow(/ack_wait|timeout_ms/);
   });
-  test("the shipped examples/processes/build-journal.yaml is a valid spec", () => {
+  test("the shipped examples/processes/build-journal.yaml is a valid spec", async () => {
     const examplesDir = join(import.meta.dir, "..", "..", "..", "examples", "processes");
-    const spec = loadProcessSpec(examplesDir, "build-journal");
+    const spec = await loadProcessSpec(examplesDir, "build-journal");
     expect(spec.detach).toBe(true);
     expect(spec.params.days!.type).toBe("int");
   });
