@@ -157,6 +157,28 @@ describe("loadProcessSpec", () => {
     write("intenum", "name: intenum\ncwd: /abs\nargv: [echo, \"{n}\"]\nparams:\n  n: { type: int, enum: [\"1\", \"2\"] }\n");
     expect(() => loadProcessSpec(dir, "intenum")).toThrow(/enum/);
   });
+  test("rejects an unconstrained string param (needs enum or freeform)", () => {
+    write("freestr", "name: freestr\ncwd: /abs\nargv: [echo, \"{s}\"]\nparams:\n  s: { type: string }\n");
+    expect(() => loadProcessSpec(dir, "freestr")).toThrow(/enum.*freeform|freeform/);
+  });
+  test("accepts an explicitly free-form string param", () => {
+    write("freeok", "name: freeok\ncwd: /abs\nargv: [echo, \"{s}\"]\nparams:\n  s: { type: string, freeform: true }\n");
+    expect(loadProcessSpec(dir, "freeok").params.s!.freeform).toBe(true);
+  });
+  test("rejects a non-integer default on an int param", () => {
+    write("badint", "name: badint\ncwd: /abs\nargv: [echo, \"{n}\"]\nparams:\n  n: { type: int, default: 1.5 }\n");
+    expect(() => loadProcessSpec(dir, "badint")).toThrow(/default.*integer/);
+  });
+  test("rejects a timeout_ms over the ack_wait ceiling", () => {
+    write("slow", "name: slow\ncwd: /abs\nargv: [echo, hi]\ntimeout_ms: 1500000\n"); // 25 min > 19 min cap
+    expect(() => loadProcessSpec(dir, "slow")).toThrow(/ack_wait|timeout_ms/);
+  });
+  test("the shipped examples/processes/build-journal.yaml is a valid spec", () => {
+    const examplesDir = join(import.meta.dir, "..", "..", "..", "examples", "processes");
+    const spec = loadProcessSpec(examplesDir, "build-journal");
+    expect(spec.detach).toBe(true);
+    expect(spec.params.days!.type).toBe("int");
+  });
 });
 
 describe("createProcessRunner", () => {

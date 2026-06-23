@@ -19,7 +19,11 @@
   (never the payload), `cwd`/`argv` come only from the on-disk spec, and a param
   value is always a single argv element — an untrusted payload cannot pick the
   command, inject flags, or traverse out of the processes dir (name is
-  `[a-z0-9-]`). A 15-minute (spec-`timeout_ms`) watchdog kills a hung run (under
+  `[a-z0-9-]`). A `string` param is `enum`-constrained unless `freeform: true`
+  is set explicitly (so an unconstrained arg slot is a deliberate, greppable
+  choice); param defaults are type/enum-validated at load. `timeout_ms` is
+  capped under the JetStream `ack_wait` so the watchdog's "kills before
+  redelivery" guarantee is enforced by the schema, not just asserted. A 15-minute (spec-`timeout_ms`) watchdog kills a hung run (under
   the 20-minute JetStream `ack_wait`); deterministic misconfig (no name / bad
   spec / param violation) emits `system.bus.process{failed}` and RETURNS, while
   a runtime failure (non-zero exit / spawn error / timeout) emits `failed` and

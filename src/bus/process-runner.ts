@@ -12,11 +12,15 @@
  *  - The spec NAME comes from the TARGET config (`target.process`) — operator-
  *    authored, trusted. It is NEVER read from the untrusted activation payload,
  *    so a payload cannot pick which command runs.
- *  - `cwd` and `argv` come ENTIRELY from the spec file (trusted, on-disk). The
- *    payload may only fill DECLARED, TYPED parameter slots (`{name}` tokens an
- *    int/string param), validated before substitution. argv is an ARRAY passed
- *    to `Bun.spawn` with NO shell — a param value is always a single argv
- *    element, so it cannot split into extra flags or inject a second command.
+ *  - `cwd` and `argv` come from the spec FILE, not the activation. The spec is
+ *    operator-controlled config; its trust rests on the filesystem permissions
+ *    of the processes directory (the same trust as cortex.yaml), NOT on any
+ *    code check here — this layer validates SHAPE, not provenance. What this
+ *    layer DOES guarantee: the payload can only fill DECLARED, TYPED parameter
+ *    slots (`{name}` tokens), validated before substitution; a `string` slot is
+ *    `enum`-constrained unless `freeform` is explicitly set. argv is an ARRAY
+ *    passed to `Bun.spawn` with NO shell — a param value is always a single
+ *    argv element, so it cannot split into extra flags or inject a 2nd command.
  *  - The spec name is path-segment validated (`[a-z0-9-]`), so `target.process`
  *    cannot traverse out of the processes directory.
  *
@@ -48,6 +52,13 @@ import {
 /** Default watchdog — kills a hung run well below the 20m JetStream ack_wait. */
 export const DEFAULT_PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
 
+/**
+ * Hard ceiling on a spec's `timeout_ms`. The watchdog must fire BEFORE the
+ * 20-min JetStream `ack_wait` (`DEFAULT_ACK_WAIT_NS`) so a killed run is reported
+ * and acked before the broker redelivers it — keep a margin under it.
+ */
+export const MAX_PROCESS_TIMEOUT_MS = 19 * 60 * 1000;
+
 /** Grace between the watchdog's SIGTERM and the SIGKILL that can't be ignored. */
 export const SIGKILL_GRACE_MS = 10 * 1000;
 
@@ -62,12 +73,42 @@ export const ProcessParamSchema = z
     default: z.union([z.number(), z.string()]).optional(),
     /** For `string` params: the closed set of allowed values. */
     enum: z.array(z.string().min(1)).optional(),
+    /**
+     * Opt in to an UNCONSTRAINED string value (no `enum`). A free-form string
+     * param's value reaches argv as a single token, so for a target wired to an
+     * untrusted impulse source (http/github) it is one attacker-controlled arg.
+     * Requiring this flag makes that a deliberate, greppable choice rather than
+     * an oversight — a `string` param is otherwise `enum`-constrained.
+     */
+    freeform: z.boolean().optional(),
   })
   .superRefine((p, ctx) => {
-    // `enum` only constrains string params (resolveArgv ignores it for int) —
-    // reject it on an int param rather than silently dropping the constraint.
-    if (p.type === "int" && p.enum !== undefined) {
-      ctx.addIssue({ code: "custom", message: "`enum` is only valid on a `string` param", path: ["enum"] });
+    if (p.type === "int") {
+      if (p.enum !== undefined) {
+        ctx.addIssue({ code: "custom", message: "`enum` is only valid on a `string` param", path: ["enum"] });
+      }
+      if (p.freeform === true) {
+        ctx.addIssue({ code: "custom", message: "`freeform` is only valid on a `string` param", path: ["freeform"] });
+      }
+      if (p.default !== undefined && (typeof p.default !== "number" || !Number.isInteger(p.default))) {
+        ctx.addIssue({ code: "custom", message: "`default` for an `int` param must be an integer", path: ["default"] });
+      }
+    } else {
+      // A string value reaches argv verbatim — require it be constrained by an
+      // `enum`, or that free-form is opted into explicitly.
+      if (p.enum === undefined && p.freeform !== true) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a `string` param needs `enum: [...]` or `freeform: true` (its value reaches argv unconstrained)",
+          path: ["enum"],
+        });
+      }
+      if (p.default !== undefined && typeof p.default !== "string") {
+        ctx.addIssue({ code: "custom", message: "`default` for a `string` param must be a string", path: ["default"] });
+      }
+      if (p.enum !== undefined && typeof p.default === "string" && !p.enum.includes(p.default)) {
+        ctx.addIssue({ code: "custom", message: "`default` must be one of `enum`", path: ["default"] });
+      }
     }
   });
 
@@ -79,8 +120,13 @@ export const ProcessSpecSchema = z.object({
   cwd: z.string().min(1),
   /** argv array (no shell). Elements may contain `{param}` tokens. */
   argv: z.array(z.string().min(1)).min(1),
-  /** Watchdog timeout; default {@link DEFAULT_PROCESS_TIMEOUT_MS}. */
-  timeout_ms: z.number().int().positive().default(DEFAULT_PROCESS_TIMEOUT_MS),
+  /** Watchdog timeout; default {@link DEFAULT_PROCESS_TIMEOUT_MS}, capped at {@link MAX_PROCESS_TIMEOUT_MS}. */
+  timeout_ms: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_PROCESS_TIMEOUT_MS, "timeout_ms must stay under the 20-min JetStream ack_wait")
+    .default(DEFAULT_PROCESS_TIMEOUT_MS),
   /**
    * Long-running? When `true`, the handler spawns + emits `started` + RETURNS
    * immediately, supervising the run (watchdog + `completed`/`failed`
@@ -267,40 +313,11 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       throw err instanceof Error ? err : new Error(String(err));
     }
 
-    /**
-     * Await the spawned run with a SIGTERM→SIGKILL watchdog. Returns a typed
-     * outcome; the caller decides whether a failure also THROWS (synchronous
-     * mode → re-fireable) or is visibility-only (detached mode).
-     */
-    const supervise = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
-      let timedOut = false;
-      let killTimer: ReturnType<typeof setTimeout> | undefined;
-      const watchdog = setTimeout(() => {
-        timedOut = true;
-        proc.kill(); // SIGTERM — give the child a chance to clean up…
-        // …then SIGKILL (uncatchable) so a child that ignores SIGTERM can't
-        // leave us parked on `proc.exited` forever (which would wedge the bridge).
-        killTimer = setTimeout(() => proc.kill("SIGKILL"), sigkillGraceMs);
-      }, spec.timeout_ms);
-      try {
-        const exitCode = await proc.exited;
-        clearTimeout(watchdog);
-        if (killTimer !== undefined) clearTimeout(killTimer);
-        if (exitCode === 0 && !timedOut) return { ok: true };
-        if (timedOut) return { ok: false, reason: `timeout-${spec.timeout_ms}ms` };
-        return { ok: false, reason: `exit-${exitCode}` };
-      } catch (err) {
-        clearTimeout(watchdog);
-        if (killTimer !== undefined) clearTimeout(killTimer);
-        return { ok: false, reason: `wait:${errMsg(err)}` };
-      }
-    };
-
     if (spec.detach) {
       // Long-running: don't block the serial bridge pull loop. Supervise in the
       // background; report via visibility only (the handler already returned, so
       // a failure can't re-fire — the next scheduled fire re-runs the job).
-      void supervise()
+      void superviseRun(proc, spec.timeout_ms, sigkillGraceMs)
         .then((r) => emit(r.ok ? "completed" : "failed", process, activation, r.ok ? undefined : r.reason))
         .catch((err: unknown) => log.error(`process-runner: detached supervise threw: ${errMsg(err)}`));
       return;
@@ -308,13 +325,46 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
 
     // Synchronous: the bridge awaits, and a failure THROWS so the Decision is
     // left un-marked (re-fireable).
-    const result = await supervise();
+    const result = await superviseRun(proc, spec.timeout_ms, sigkillGraceMs);
     if (!result.ok) {
       emit("failed", process, activation, result.reason);
       throw new Error(`process "${process}" failed: ${result.reason} (decision ${activation.decisionId})`);
     }
     emit("completed", process, activation);
   };
+}
+
+/**
+ * Await a spawned run under a SIGTERM→SIGKILL watchdog. Returns a typed outcome
+ * (never throws); the caller decides whether a failure also THROWS (synchronous
+ * mode → re-fireable) or is visibility-only (detached mode). SIGKILL escalation
+ * ensures a child that ignores SIGTERM can't park us on `proc.exited` forever.
+ */
+async function superviseRun(
+  proc: SpawnedProc,
+  timeoutMs: number,
+  sigkillGraceMs: number,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  let timedOut = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = setTimeout(() => {
+    timedOut = true;
+    proc.kill(); // SIGTERM — give the child a chance to clean up…
+    // …then SIGKILL (uncatchable) so a SIGTERM-ignoring child still unblocks us.
+    killTimer = setTimeout(() => proc.kill("SIGKILL"), sigkillGraceMs);
+  }, timeoutMs);
+  try {
+    const exitCode = await proc.exited;
+    clearTimeout(watchdog);
+    if (killTimer !== undefined) clearTimeout(killTimer);
+    if (exitCode === 0 && !timedOut) return { ok: true };
+    if (timedOut) return { ok: false, reason: `timeout-${timeoutMs}ms` };
+    return { ok: false, reason: `exit-${exitCode}` };
+  } catch (err) {
+    clearTimeout(watchdog);
+    if (killTimer !== undefined) clearTimeout(killTimer);
+    return { ok: false, reason: `wait:${errMsg(err)}` };
+  }
 }
 
 function errMsg(err: unknown): string {
