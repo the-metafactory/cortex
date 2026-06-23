@@ -764,19 +764,19 @@ export function createSystemBusNotifyDiscordEvent(
 }
 
 // ---------------------------------------------------------------------------
-// system.bus.build_journal — build-journal.run code-handler visibility
+// system.bus.process — generic `process` reflex code-handler visibility
 // ---------------------------------------------------------------------------
 
-export interface SystemBusBuildJournalOpts {
+export interface SystemBusProcessOpts {
   /** Standard source attribution — who emitted this visibility event. */
   source: SystemEventSource;
-  /** `started` (run spawned), `completed` (exit 0), `failed` (non-zero / spawn error / timeout). */
+  /** `started` (run spawned), `completed` (exit 0), `failed` (non-zero / spawn error / timeout / misconfig). */
   outcome: "started" | "completed" | "failed";
-  /** Journal period (days) the run covered. */
-  days?: number;
+  /** The process spec name that ran (from the trusted `target.process`). */
+  process: string;
   /** Reflex Decision id carried on the activation (provenance), when present. */
   decisionId?: string;
-  /** Human-readable detail for the failed outcome (e.g. `exit-1`, `timeout-900000ms`). */
+  /** Human-readable detail for the failed outcome (e.g. `exit-1`, `timeout-900000ms`, `spec:…`). */
   reason?: string;
   /** Correlation id carried from the activation. */
   correlationId?: string;
@@ -784,21 +784,21 @@ export interface SystemBusBuildJournalOpts {
 }
 
 /**
- * Visibility event emitted by the `build-journal.run` code handler as it shells
- * the pulse build-journal pipeline (the F-6 bridge invokes it directly for a
- * `handler: build-journal` target). Bookkeeping about our own stack —
- * sovereignty defaults to local.
+ * Visibility event emitted by the generic `process` code handler as it runs a
+ * config-declared command (the F-6 bridge invokes it for a `handler: process`
+ * target; the spec is named by `target.process`). Bookkeeping about our own
+ * stack — sovereignty defaults to local.
  */
-export function createSystemBusBuildJournalEvent(
-  opts: SystemBusBuildJournalOpts,
+export function createSystemBusProcessEvent(
+  opts: SystemBusProcessOpts,
 ): Envelope {
   return buildBaseEnvelope({
-    type: "system.bus.build_journal",
+    type: "system.bus.process",
     source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     payload: {
       outcome: opts.outcome,
-      ...(opts.days !== undefined && { days: opts.days }),
+      process: opts.process,
       ...(opts.decisionId !== undefined && { decision_id: opts.decisionId }),
       ...(opts.reason !== undefined && { reason: opts.reason }),
       ...(opts.correlationId !== undefined && {

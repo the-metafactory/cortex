@@ -1,0 +1,40 @@
+# Example `process` spec — the weekly public build journal.
+#
+# Copy to the cortex processes directory on the host that runs the job:
+#   $CORTEX_PROCESSES_DIR, else <config-dir>/processes, else
+#   ~/.config/cortex/processes/
+#     cp examples/processes/build-journal.yaml ~/.config/cortex/processes/
+#
+# Paired with:
+#   - a reflex target row (cortex.yaml):
+#       reflex_activation.targets:
+#         - target: "@jc/build-journal"
+#           capability: "process.run"      # free-form label
+#           assistant: cortex              # required by schema; ignored for code handlers
+#           handler: "process"
+#           process: "build-journal"       # → this file
+#   - the reflex `build-journal-weekly` schedule blueprint (reflex#30) that
+#     fires `@jc/build-journal` every Sunday 18:00 Europe/Zurich.
+#
+# The generic `process` handler (process-runner.ts) reads this fresh on each
+# fire, fills `{days}` from the activation payload (or the default below),
+# spawns argv with NO shell, and 15-min-watchdogs the run. Adding ANOTHER
+# scheduled process is a new spec file here + a target row — no cortex release.
+#
+# The host must carry the run's publish credentials (claude / discord / wrangler
+# + a myelin-cortex-site checkout) in its environment — never cortex config.
+name: build-journal
+cwd: /home/jc/work/mf/pulse          # absolute path to the pulse repo ON THIS HOST — adjust
+argv:
+  - bun
+  - examples/build-journal/run-journal.ts
+  - --llm
+  - --days
+  - "{days}"
+  - --post
+  - --deploy
+timeout_ms: 900000                    # 15 min — under the 20-min JetStream ack_wait
+params:
+  days:
+    type: int
+    default: 7                        # weekly window when the payload omits `days`

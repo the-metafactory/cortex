@@ -141,7 +141,6 @@ import type {
   Policy,
   ReflexActivationConfig,
   NotifyConfig,
-  BuildJournalConfig,
   SlackPresence,
   StackConfig,
 } from "./common/types/cortex-config";
@@ -151,7 +150,7 @@ import {
   type ReflexActivationHandler,
 } from "./bus/reflex-activation-listener";
 import { createDiscordNotifier } from "./bus/notify-discord";
-import { createBuildJournalRunner } from "./bus/build-journal";
+import { createProcessRunner } from "./bus/process-runner";
 import { policyEngineFromConfig } from "./common/policy/factory";
 import {
   buildPlatformPrincipalIndex,
@@ -581,14 +580,6 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   notify?: NotifyConfig;
-  /**
-   * build-journal.run code-handler config (`build_journal:` block from
-   * `LoadedConfig.buildJournal`). The boot path registers the `build-journal`
-   * handler only when present; absent → no handler, zero behaviour change.
-   *
-   * @internal — not part of the public API; semver does not apply.
-   */
-  buildJournal?: BuildJournalConfig;
   /**
    * IAW GW (cortex#524) — validated surface binding map from
    * `LoadedConfig.surfaces`. Consumed ONLY by the flag-gated
@@ -4347,18 +4338,22 @@ export async function startCortex(
         targets: notifyDiscordTargets,
       });
     }
-    // build-journal.run — shells the pulse build-journal pipeline for a
-    // `handler: build-journal` target (the weekly Sunday schedule). Mounted
-    // only when the `build_journal` block is configured.
-    const buildJournalConfig = options.buildJournal;
-    if (buildJournalConfig !== undefined) {
-      handlers["build-journal"] = createBuildJournalRunner({
-        runtime,
-        source: systemEventSource,
-        pulseRepo: buildJournalConfig.pulse_repo,
-        daysDefault: buildJournalConfig.days_default,
-      });
-    }
+    // Generic command runner for `handler: "process"` targets. Shipped once;
+    // each process is a DATA spec file in the processes directory (read fresh
+    // per fire, so a new spec needs no restart). Always registered when the
+    // bridge mounts — inert unless a `handler: process` target fires. The dir:
+    // $CORTEX_PROCESSES_DIR, else `<config-dir>/processes`, else
+    // `~/.config/cortex/processes`.
+    const processesDir =
+      process.env.CORTEX_PROCESSES_DIR ??
+      (options.configPath !== undefined
+        ? join(dirname(options.configPath), "processes")
+        : join(homedir(), ".config", "cortex", "processes"));
+    handlers["process"] = createProcessRunner({
+      runtime,
+      source: systemEventSource,
+      processesDir,
+    });
     reflexActivationListener = new ReflexActivationListener({
       runtime,
       source: systemEventSource,
@@ -6509,7 +6504,7 @@ if (import.meta.main) {
       // exits the process non-zero instead of being swallowed as a "non-fatal"
       // unhandled rejection. The daemon must not survive a failed security gate.
       const handle = await bootOrDie(async () => {
-        const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation, notify, buildJournal } =
+        const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation, notify } =
           loadConfigWithAgents(options.config);
         return startCortex(config, {
           configPath: options.config,
@@ -6524,8 +6519,6 @@ if (import.meta.main) {
           ...(reflexActivation !== undefined && { reflexActivation }),
           // F-6 downstream — thread the notify block (notify.discord) through.
           ...(notify !== undefined && { notify }),
-          // build-journal.run — thread the build_journal handler config through.
-          ...(buildJournal !== undefined && { buildJournal }),
           // IAW GW (cortex#524) — thread the validated surface binding map
           // through so the flag-gated gateway block in startCortex can read it.
           // Dormant unless CORTEX_GATEWAY is set; undefined when no surfaces:

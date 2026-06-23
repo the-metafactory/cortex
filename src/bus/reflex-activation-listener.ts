@@ -106,6 +106,13 @@ export interface ReflexDedup {
  */
 export type ReflexActivationHandler = (
   activation: FiredActivation,
+  /**
+   * The resolved target config the bridge matched. Always passed by the bridge;
+   * optional so handlers that don't need it (e.g. notify.discord) can ignore it.
+   * The generic `process` handler reads `target.process` (the TRUSTED spec name
+   * — never taken from the untrusted activation payload).
+   */
+  target?: ReflexTarget,
 ) => Promise<void>;
 
 /**
@@ -637,7 +644,7 @@ export class ReflexActivationListener {
       return { kind: "ack" };
     }
     try {
-      await handler(act);
+      await handler(act, target);
     } catch (err) {
       await this.emitFailed(fired, act, `handler:${errMsg(err)}`);
       return { kind: "ack" };

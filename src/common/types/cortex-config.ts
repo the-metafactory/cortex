@@ -2560,17 +2560,25 @@ export const ReflexTargetSchema = z
     prompt: z.string().min(1).optional(),
     /**
      * Code-path: the capability is fulfilled by an in-process code handler
-     * (no Claude session, no prompt). `discord-webhook` → the F-6 bridge
-     * invokes the notify.discord handler DIRECTLY with the activation payload
-     * (it posts to a per-repo Discord webhook — see the top-level
-     * `notify.discord` block); there is no bus re-emit and no `tasks.*`
-     * dispatch for a handler target. Mutually exclusive with `prompt`.
+     * (no Claude session, no prompt). The F-6 bridge invokes it DIRECTLY with
+     * the activation payload — no bus re-emit, no `tasks.*` dispatch. Mutually
+     * exclusive with `prompt`.
      *
-     * `build-journal` → the F-6 bridge invokes the build-journal.run handler
-     * DIRECTLY: it shells the pulse build-journal pipeline (see the top-level
-     * `build_journal` block) to publish the weekly public build journal.
+     *  - `discord-webhook` → posts a GitHub-issue summary to a per-repo Discord
+     *    webhook (see the top-level `notify.discord` block).
+     *  - `process` → the GENERIC config-driven command runner: it runs the
+     *    process spec named by the sibling `process:` field (a DATA file in the
+     *    processes directory — see `process-runner.ts`). New automated processes
+     *    are added as spec files, with NO cortex code change / re-release.
      */
-    handler: z.enum(["discord-webhook", "build-journal"]).optional(),
+    handler: z.enum(["discord-webhook", "process"]).optional(),
+    /**
+     * For a `handler: "process"` target: the process spec NAME to run (the
+     * basename of `<processes-dir>/<name>.yaml`). TRUSTED (operator config) —
+     * the runner never takes the spec name from the untrusted activation
+     * payload. Required iff `handler === "process"`; forbidden otherwise.
+     */
+    process: z.string().min(1).optional(),
     /**
      * Configurable author trust gate: GitHub author logins the F-6 bridge
      * drops (deterministically, before any dispatch) instead of reviewing.
@@ -2612,6 +2620,24 @@ export const ReflexTargetSchema = z
         code: "custom",
         message: `a review target (\`review: true\`) requires \`capability: code-review.<flavor>\` (${REVIEW_FLAVORS.join("|")})`,
         path: ["capability"],
+      });
+    }
+    // The generic command runner is selected by `handler: "process"` and routed
+    // by `process:` (the spec name). The two travel together: a `process` name
+    // without the handler would never run; the handler without a name has
+    // nothing to run.
+    if (t.handler === "process" && t.process === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: 'a `handler: "process"` target requires `process: <spec-name>`',
+        path: ["process"],
+      });
+    }
+    if (t.process !== undefined && t.handler !== "process") {
+      ctx.addIssue({
+        code: "custom",
+        message: '`process:` is only valid with `handler: "process"`',
+        path: ["process"],
       });
     }
   });
@@ -2677,25 +2703,6 @@ export const NotifyConfigSchema = z.object({
 
 export type DiscordNotifyTarget = z.infer<typeof DiscordNotifyTargetSchema>;
 export type NotifyConfig = z.infer<typeof NotifyConfigSchema>;
-
-/**
- * Top-level `build_journal:` block — config for the `build-journal.run` code
- * handler the F-6 reflex bridge invokes for a `handler: build-journal` target
- * (target `@jc/build-journal`, fired by the reflex `build-journal-weekly`
- * schedule). The handler shells `bun examples/build-journal/run-journal.ts`
- * inside `pulse_repo`. Optional; absent → no handler registered (the target,
- * if any, fails to resolve to a handler — a `_failed` audit line, no side
- * effect). The publish credentials the run needs (claude / discord / wrangler
- * + a site checkout) are the HOST's environment, never cortex config.
- */
-export const BuildJournalConfigSchema = z.object({
-  /** Absolute path to the pulse repo root the runner is shelled from. */
-  pulse_repo: z.string().min(1),
-  /** Journal period when an activation payload omits `days`. Default 7 (weekly). */
-  days_default: z.number().int().positive().default(7),
-});
-
-export type BuildJournalConfig = z.infer<typeof BuildJournalConfigSchema>;
 
 /**
  * The cortex deployment configuration. One file per principal
@@ -2909,9 +2916,6 @@ export const CortexConfigSchema = z.object({
 
   /** Outbound notification routing for code-only capabilities (notify.discord). */
   notify: emptyDefault(NotifyConfigSchema),
-
-  /** Config for the build-journal.run code handler. Optional; absent → not registered. */
-  build_journal: BuildJournalConfigSchema.optional(),
 }).refine(
   (config) => {
     const ids = config.agents.map((a) => a.id);
