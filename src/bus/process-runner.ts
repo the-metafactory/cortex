@@ -48,17 +48,28 @@ import {
 /** Default watchdog — kills a hung run well below the 20m JetStream ack_wait. */
 export const DEFAULT_PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
 
+/** Grace between the watchdog's SIGTERM and the SIGKILL that can't be ignored. */
+export const SIGKILL_GRACE_MS = 10 * 1000;
+
 /** Path-segment grammar for a spec name (no traversal, stable file mapping). */
 export const PROCESS_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 /** A declared, typed parameter a `{name}` argv token can be filled from. */
-export const ProcessParamSchema = z.object({
-  type: z.enum(["int", "string"]),
-  /** Default used when the activation payload omits the param. */
-  default: z.union([z.number(), z.string()]).optional(),
-  /** For `string` params: the closed set of allowed values. */
-  enum: z.array(z.string().min(1)).optional(),
-});
+export const ProcessParamSchema = z
+  .object({
+    type: z.enum(["int", "string"]),
+    /** Default used when the activation payload omits the param. */
+    default: z.union([z.number(), z.string()]).optional(),
+    /** For `string` params: the closed set of allowed values. */
+    enum: z.array(z.string().min(1)).optional(),
+  })
+  .superRefine((p, ctx) => {
+    // `enum` only constrains string params (resolveArgv ignores it for int) —
+    // reject it on an int param rather than silently dropping the constraint.
+    if (p.type === "int" && p.enum !== undefined) {
+      ctx.addIssue({ code: "custom", message: "`enum` is only valid on a `string` param", path: ["enum"] });
+    }
+  });
 
 /** A process spec — the DATA unit operators drop into the processes directory. */
 export const ProcessSpecSchema = z.object({
@@ -70,6 +81,17 @@ export const ProcessSpecSchema = z.object({
   argv: z.array(z.string().min(1)).min(1),
   /** Watchdog timeout; default {@link DEFAULT_PROCESS_TIMEOUT_MS}. */
   timeout_ms: z.number().int().positive().default(DEFAULT_PROCESS_TIMEOUT_MS),
+  /**
+   * Long-running? When `true`, the handler spawns + emits `started` + RETURNS
+   * immediately, supervising the run (watchdog + `completed`/`failed`
+   * visibility) in the background — so a minutes-long run does NOT block the
+   * single, serial reflex bridge pull loop (other activations keep flowing).
+   * Trade-off: a detached run reports failure via `system.bus.process{failed}`
+   * only — it cannot THROW to re-fire the Decision (the handler already
+   * returned). Fine for an idempotent scheduled job; the next fire re-runs it.
+   * Default `false` = synchronous (the bridge awaits; failures re-fire).
+   */
+  detach: z.boolean().default(false),
   /** Declared params `{name}` tokens may reference. */
   params: z.record(z.string(), ProcessParamSchema).default({}),
 });
@@ -79,21 +101,20 @@ export type ProcessSpec = z.infer<typeof ProcessSpecSchema>;
 /** Minimal view of a spawned subprocess (injectable for tests). */
 export interface SpawnedProc {
   exited: Promise<number>;
-  kill: () => void;
+  /** Send a signal (default SIGTERM); the watchdog escalates to SIGKILL. */
+  kill: (signal?: string) => void;
 }
 
 /** Spawn function — defaults to `Bun.spawn`; injected in tests. */
 export type Spawn = (cmd: string[], opts: { cwd: string }) => SpawnedProc;
 
-const defaultSpawn: Spawn = (cmd, opts) =>
+const defaultSpawn: Spawn = (cmd, opts) => {
   // stdio inherit → the (verbose, minutes-long) run streams into cortex-prod's
   // journald, where an operator debugs a failed run. No captured pipe → no
   // buffer-fill deadlock during a long run.
-  Bun.spawn(cmd, {
-    cwd: opts.cwd,
-    stdout: "inherit",
-    stderr: "inherit",
-  }) as unknown as SpawnedProc;
+  const p = Bun.spawn(cmd, { cwd: opts.cwd, stdout: "inherit", stderr: "inherit" });
+  return { exited: p.exited, kill: (signal) => p.kill(signal as never) };
+};
 
 const TOKEN_RE = /\{([a-zA-Z0-9_]+)\}/g;
 
@@ -172,6 +193,8 @@ export interface ProcessRunnerOpts {
   loadSpec?: (name: string) => ProcessSpec;
   /** Injectable spawn (default: `Bun.spawn`). */
   spawn?: Spawn;
+  /** SIGTERM→SIGKILL grace (default {@link SIGKILL_GRACE_MS}); overridable for tests. */
+  sigkillGraceMs?: number;
   log?: { info: (m: string) => void; error: (m: string) => void };
 }
 
@@ -185,6 +208,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
   const spawn = opts.spawn ?? defaultSpawn;
   const log = opts.log ?? console;
   const loadSpec = opts.loadSpec ?? ((name: string) => loadProcessSpec(opts.processesDir, name));
+  const sigkillGraceMs = opts.sigkillGraceMs ?? SIGKILL_GRACE_MS;
 
   const emit = (
     outcome: "started" | "completed" | "failed",
@@ -243,29 +267,51 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       throw err instanceof Error ? err : new Error(String(err));
     }
 
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill();
-    }, spec.timeout_ms);
+    /**
+     * Await the spawned run with a SIGTERM→SIGKILL watchdog. Returns a typed
+     * outcome; the caller decides whether a failure also THROWS (synchronous
+     * mode → re-fireable) or is visibility-only (detached mode).
+     */
+    const supervise = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+      let timedOut = false;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const watchdog = setTimeout(() => {
+        timedOut = true;
+        proc.kill(); // SIGTERM — give the child a chance to clean up…
+        // …then SIGKILL (uncatchable) so a child that ignores SIGTERM can't
+        // leave us parked on `proc.exited` forever (which would wedge the bridge).
+        killTimer = setTimeout(() => proc.kill("SIGKILL"), sigkillGraceMs);
+      }, spec.timeout_ms);
+      try {
+        const exitCode = await proc.exited;
+        clearTimeout(watchdog);
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        if (exitCode === 0 && !timedOut) return { ok: true };
+        if (timedOut) return { ok: false, reason: `timeout-${spec.timeout_ms}ms` };
+        return { ok: false, reason: `exit-${exitCode}` };
+      } catch (err) {
+        clearTimeout(watchdog);
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        return { ok: false, reason: `wait:${errMsg(err)}` };
+      }
+    };
 
-    let exitCode: number;
-    try {
-      exitCode = await proc.exited;
-    } catch (err) {
-      clearTimeout(timer);
-      emit("failed", process, activation, `wait:${errMsg(err)}`);
-      throw err instanceof Error ? err : new Error(String(err));
+    if (spec.detach) {
+      // Long-running: don't block the serial bridge pull loop. Supervise in the
+      // background; report via visibility only (the handler already returned, so
+      // a failure can't re-fire — the next scheduled fire re-runs the job).
+      void supervise()
+        .then((r) => emit(r.ok ? "completed" : "failed", process, activation, r.ok ? undefined : r.reason))
+        .catch((err: unknown) => log.error(`process-runner: detached supervise threw: ${errMsg(err)}`));
+      return;
     }
-    clearTimeout(timer);
 
-    if (timedOut) {
-      emit("failed", process, activation, `timeout-${spec.timeout_ms}ms`);
-      throw new Error(`process "${process}" exceeded ${spec.timeout_ms}ms watchdog (killed)`);
-    }
-    if (exitCode !== 0) {
-      emit("failed", process, activation, `exit-${exitCode}`);
-      throw new Error(`process "${process}" exited ${exitCode} (decision ${activation.decisionId})`);
+    // Synchronous: the bridge awaits, and a failure THROWS so the Decision is
+    // left un-marked (re-fireable).
+    const result = await supervise();
+    if (!result.ok) {
+      emit("failed", process, activation, result.reason);
+      throw new Error(`process "${process}" failed: ${result.reason} (decision ${activation.decisionId})`);
     }
     emit("completed", process, activation);
   };

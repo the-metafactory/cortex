@@ -34,6 +34,9 @@ argv:
   - --post
   - --deploy
 timeout_ms: 900000                    # 15 min — under the 20-min JetStream ack_wait
+detach: true                          # long-running (~7-10 min): spawn + return so the
+                                      # serial reflex bridge keeps processing other
+                                      # activations; outcome reported via system.bus.process
 params:
   days:
     type: int

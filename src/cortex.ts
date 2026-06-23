@@ -4344,10 +4344,11 @@ export async function startCortex(
     // bridge mounts — inert unless a `handler: process` target fires. The dir:
     // $CORTEX_PROCESSES_DIR, else `<config-dir>/processes`, else
     // `~/.config/cortex/processes`.
+    const expandedConfigPath = options.configPath?.replace(/^~/, homedir());
     const processesDir =
       process.env.CORTEX_PROCESSES_DIR ??
-      (options.configPath !== undefined
-        ? join(dirname(options.configPath), "processes")
+      (expandedConfigPath !== undefined
+        ? join(dirname(expandedConfigPath), "processes")
         : join(homedir(), ".config", "cortex", "processes"));
     handlers["process"] = createProcessRunner({
       runtime,

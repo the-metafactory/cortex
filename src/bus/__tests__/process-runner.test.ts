@@ -35,6 +35,7 @@ const SPEC: ProcessSpec = {
   cwd: "/abs/pulse",
   argv: ["bun", "examples/build-journal/run-journal.ts", "--llm", "--days", "{days}", "--post", "--deploy"],
   timeout_ms: 900_000,
+  detach: false,
   params: { days: { type: "int", default: 7 } },
 };
 
@@ -70,18 +71,28 @@ function fakeRuntime() {
   return { runtime, published };
 }
 
-function fakeSpawn(opts: { exitCode?: number; throwOnSpawn?: boolean; hang?: boolean } = {}) {
+function fakeSpawn(opts: { exitCode?: number; throwOnSpawn?: boolean; hang?: boolean; ignoreSigterm?: boolean } = {}) {
   const calls: { cmd: string[]; cwd: string }[] = [];
+  const signals: string[] = [];
   let killed = false;
   const spawn: Spawn = (cmd, o) => {
     calls.push({ cmd, cwd: o.cwd });
     if (opts.throwOnSpawn === true) throw new Error("spawn boom");
     let resolveExit!: (n: number) => void;
     const exited = new Promise<number>((r) => { resolveExit = r; });
-    if (opts.hang !== true) resolveExit(opts.exitCode ?? 0);
-    return { exited, kill: () => { killed = true; resolveExit(opts.exitCode ?? 143); } };
+    // ignoreSigterm implies the run is in-flight until SIGKILL.
+    if (opts.hang !== true && opts.ignoreSigterm !== true) resolveExit(opts.exitCode ?? 0);
+    return {
+      exited,
+      kill: (sig) => {
+        signals.push(sig ?? "SIGTERM");
+        if (opts.ignoreSigterm === true && (sig ?? "SIGTERM") !== "SIGKILL") return; // child traps SIGTERM
+        killed = true;
+        resolveExit(opts.exitCode ?? 143);
+      },
+    };
   };
-  return { spawn, calls, wasKilled: () => killed };
+  return { spawn, calls, signals, wasKilled: () => killed };
 }
 
 async function flush() {
@@ -109,12 +120,12 @@ describe("resolveArgv", () => {
     expect(() => resolveArgv(SPEC, { days: 1.5 })).toThrow(/integer/);
   });
   test("string param honours an enum", () => {
-    const s: ProcessSpec = { name: "x", cwd: "/c", argv: ["echo", "{mode}"], timeout_ms: 1000, params: { mode: { type: "string", enum: ["a", "b"] } } };
+    const s: ProcessSpec = { name: "x", cwd: "/c", argv: ["echo", "{mode}"], timeout_ms: 1000, detach: false, params: { mode: { type: "string", enum: ["a", "b"] } } };
     expect(resolveArgv(s, { mode: "a" })).toEqual(["echo", "a"]);
     expect(() => resolveArgv(s, { mode: "c" })).toThrow(/one of/);
   });
   test("missing required param (no default) throws", () => {
-    const s: ProcessSpec = { name: "x", cwd: "/c", argv: ["echo", "{v}"], timeout_ms: 1000, params: { v: { type: "string" } } };
+    const s: ProcessSpec = { name: "x", cwd: "/c", argv: ["echo", "{v}"], timeout_ms: 1000, detach: false, params: { v: { type: "string" } } };
     expect(() => resolveArgv(s, {})).toThrow(/required/);
   });
 });
@@ -141,6 +152,10 @@ describe("loadProcessSpec", () => {
   test("rejects an undeclared argv token (fail-closed)", () => {
     write("badtok", "name: badtok\ncwd: /abs\nargv: [echo, \"{nope}\"]\n");
     expect(() => loadProcessSpec(dir, "badtok")).toThrow(/no declared param/);
+  });
+  test("rejects `enum` on an int param (fail-closed)", () => {
+    write("intenum", "name: intenum\ncwd: /abs\nargv: [echo, \"{n}\"]\nparams:\n  n: { type: int, enum: [\"1\", \"2\"] }\n");
+    expect(() => loadProcessSpec(dir, "intenum")).toThrow(/enum/);
   });
 });
 
@@ -207,6 +222,41 @@ describe("createProcessRunner", () => {
     await flush();
     expect(threw).toBe(true);
     expect(String(last(published)!.reason)).toContain("spawn");
+  });
+
+  test("watchdog escalates SIGTERM → SIGKILL when the child ignores SIGTERM", async () => {
+    const { runtime, published } = fakeRuntime();
+    const sp = fakeSpawn({ ignoreSigterm: true });
+    const fastSpec: ProcessSpec = { ...SPEC, timeout_ms: 10 };
+    const handler = createProcessRunner({
+      runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => fastSpec, spawn: sp.spawn, sigkillGraceMs: 10,
+    });
+    let threw = false;
+    try { await handler(activation({}), target()); } catch { threw = true; }
+    await flush();
+    expect(sp.signals).toContain("SIGKILL");   // escalated past the ignored SIGTERM
+    expect(threw).toBe(true);
+    expect(String(last(published)!.reason)).toContain("timeout");
+  });
+
+  test("detach: handler returns before the run finishes; completes in background", async () => {
+    const { runtime, published } = fakeRuntime();
+    const detachSpec: ProcessSpec = { ...SPEC, detach: true };
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => detachSpec, spawn: fakeSpawn({ exitCode: 0 }).spawn });
+    await handler(activation({}), target());   // returns without awaiting the run
+    await flush();                             // background supervise settles
+    expect(outcomes(published)).toEqual(["started", "completed"]);
+  });
+
+  test("detach + non-zero exit → failed visibility, NO throw (can't re-fire)", async () => {
+    const { runtime, published } = fakeRuntime();
+    const detachSpec: ProcessSpec = { ...SPEC, detach: true };
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => detachSpec, spawn: fakeSpawn({ exitCode: 1 }).spawn });
+    let threw = false;
+    try { await handler(activation({}), target()); } catch { threw = true; }
+    await flush();
+    expect(threw).toBe(false);
+    expect(outcomes(published)).toEqual(["started", "failed"]);
   });
 
   test("no process name → failed + RETURNS (deterministic, no throw, no started)", async () => {

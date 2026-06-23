@@ -23,10 +23,17 @@
   the 20-minute JetStream `ack_wait`); deterministic misconfig (no name / bad
   spec / param violation) emits `system.bus.process{failed}` and RETURNS, while
   a runtime failure (non-zero exit / spawn error / timeout) emits `failed` and
-  THROWS to leave the Decision re-fireable. Covered by `process-runner.test.ts`.
-  First user: the weekly public build journal — `examples/processes/build-journal.yaml`
-  (operator copies it in), fired by reflex's `build-journal-weekly` schedule
-  (reflex#30); see `docs/deploy-build-journal-weekly.md`.
+  THROWS to leave the Decision re-fireable. The watchdog escalates **SIGTERM →
+  SIGKILL** (after a grace) so a child that traps SIGTERM can't park the handler
+  on `proc.exited` forever. Specs that run for minutes set **`detach: true`**:
+  the handler spawns + emits `started` + RETURNS so the run does NOT block the
+  single, serial reflex bridge pull loop (other activations — issue→Discord,
+  PR→sage — keep flowing); a detached run reports `completed`/`failed` via
+  visibility only (it cannot re-fire — fine for an idempotent scheduled job).
+  Covered by `process-runner.test.ts`. First user: the weekly public build
+  journal — `examples/processes/build-journal.yaml` (`detach: true`; operator
+  copies it in), fired by reflex's `build-journal-weekly` schedule (reflex#30);
+  see `docs/deploy-build-journal-weekly.md`.
 
 - **Review consumers no longer fan out + double-post (cortex#1186).** Each
   per-agent review durable (local + federated-offer + federated-direct) is now
