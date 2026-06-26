@@ -31,8 +31,8 @@ interface RecordingIO extends WorktreeIO {
 
 function recordingIO(state: {
   branchExists: boolean;
-  commitsAhead?: number;
-  openPrNumber?: number | null;
+  commitsAhead?: number | "unknown";
+  openPrNumber?: number | null | "unknown";
 }): RecordingIO {
   const calls: string[] = [];
   return {
@@ -103,6 +103,41 @@ describe("decideBranchAction", () => {
     const action = decideBranchAction({ branchExists: true, commitsAhead: 9, openPrNumber: 42 });
     expect(action).toEqual({ kind: "reuse-existing", openPrNumber: 42 });
   });
+
+  // FAIL-SAFE: an indeterminate probe must NEVER reach recreate-stale.
+  test("commitsAhead unknown (probe failed) → reuse-existing, never delete", () => {
+    expect(
+      decideBranchAction({ branchExists: true, commitsAhead: "unknown", openPrNumber: null }).kind,
+    ).toBe("reuse-existing");
+  });
+
+  test("openPrNumber unknown (probe failed) → reuse-existing, never delete", () => {
+    expect(
+      decideBranchAction({ branchExists: true, commitsAhead: 0, openPrNumber: "unknown" }).kind,
+    ).toBe("reuse-existing");
+  });
+
+  test("both probes unknown → reuse-existing (when in doubt, keep the branch)", () => {
+    expect(
+      decideBranchAction({
+        branchExists: true,
+        commitsAhead: "unknown",
+        openPrNumber: "unknown",
+      }).kind,
+    ).toBe("reuse-existing");
+  });
+
+  test("a CONFIRMED open PR still wins even when commitsAhead is unknown", () => {
+    expect(
+      decideBranchAction({ branchExists: true, commitsAhead: "unknown", openPrNumber: 7 }),
+    ).toEqual({ kind: "reuse-existing", openPrNumber: 7 });
+  });
+
+  test("recreate-stale requires BOTH probes confirmed (0 commits AND no PR)", () => {
+    expect(
+      decideBranchAction({ branchExists: true, commitsAhead: 0, openPrNumber: null }).kind,
+    ).toBe("recreate-stale");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -146,6 +181,31 @@ describe("createWorktreeHandlingExistingBranch", () => {
 
     expect(result.action).toEqual({ kind: "reuse-existing", openPrNumber: 88 });
     expect(io.calls).toContain("addWorktreeExistingBranch");
+    expect(io.calls).not.toContain("deleteBranch");
+  });
+
+  // FAIL-SAFE (regression guard for the major review finding): a probe that
+  // FAILS (commitsAhead/openPrNumber → "unknown") must REUSE the branch, never
+  // `git branch -D` it. Locks in "when in doubt, never delete unpushed work".
+  test("commitsAhead probe failed (unknown) → reuse, branch is NEVER deleted", async () => {
+    const io = recordingIO({ branchExists: true, commitsAhead: "unknown", openPrNumber: null });
+    const result = await createWorktreeHandlingExistingBranch(io, OPTS);
+
+    expect(result.action.kind).toBe("reuse-existing");
+    expect(io.calls).toContain("addWorktreeExistingBranch");
+    expect(io.calls).not.toContain("deleteBranch");
+    expect(io.calls).not.toContain("addWorktreeNewBranch");
+  });
+
+  test("both probes failed (unknown) → reuse, branch is NEVER deleted", async () => {
+    const io = recordingIO({
+      branchExists: true,
+      commitsAhead: "unknown",
+      openPrNumber: "unknown",
+    });
+    const result = await createWorktreeHandlingExistingBranch(io, OPTS);
+
+    expect(result.action.kind).toBe("reuse-existing");
     expect(io.calls).not.toContain("deleteBranch");
   });
 });

@@ -450,8 +450,13 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
         ["rev-list", "--count", `origin/${base}..${branch}`],
         { cwd: opts.repoRoot, env: opts.env, allowFailure: true },
       );
+      // FAIL SAFE: a probe ERROR is "unknown", NEVER 0. Coercing a failed
+      // `git rev-list` to 0 would let a branch with unpushed local commits be
+      // mis-read as stale and force-deleted (data loss). Only a code-0,
+      // parseable count is a CONFIRMED number.
+      if (r.code !== 0) return "unknown";
       const n = Number(r.stdout.trim());
-      return r.code === 0 && Number.isFinite(n) ? n : 0;
+      return Number.isFinite(n) ? n : "unknown";
     },
     openPrNumber: async (branch) => {
       const r = await run(
@@ -459,8 +464,14 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
         ["pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number // empty"],
         { cwd: opts.repoRoot, env: ghEnv, allowFailure: true },
       );
-      const n = Number(r.stdout.trim());
-      return r.code === 0 && Number.isInteger(n) && n > 0 ? n : null;
+      // FAIL SAFE: a `gh` ERROR is "unknown", NEVER null — an "I couldn't check
+      // for a PR" must not read as "there is no PR → deletable". A CONFIRMED
+      // empty result (code 0, no number) is the only `null`.
+      if (r.code !== 0) return "unknown";
+      const s = r.stdout.trim();
+      if (s === "") return null;
+      const n = Number(s);
+      return Number.isInteger(n) && n > 0 ? n : null;
     },
     pruneWorktrees: async () => {
       await run("git", ["worktree", "prune"], {
@@ -527,18 +538,23 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
   // push boundary refuses unsigned commits) when it forgot to.
   const gitInspector: DevGitInspector = {
     status: async ({ cwd, base }) => {
+      // FAIL SAFE (review nit — same fail-to-0 footgun as the worktree probes):
+      // a probe error PROPAGATES (no `allowFailure`), so a failed `rev-list` /
+      // `status` surfaces as a clear `cant_do` ("git state inspection failed")
+      // via the consumer's try/catch — NEVER a false "no implementation
+      // produced" verdict synthesised from a coerced-to-0 count + empty status.
       const ahead = await run(
         "git",
         ["rev-list", "--count", `origin/${base}..HEAD`],
-        { cwd, env: opts.env, allowFailure: true },
+        { cwd, env: opts.env },
       );
-      const n = Number(ahead.stdout.trim());
-      const commitsAhead = ahead.code === 0 && Number.isFinite(n) ? n : 0;
-      const st = await run("git", ["status", "--porcelain"], {
-        cwd,
-        env: opts.env,
-        allowFailure: true,
-      });
+      const commitsAhead = Number(ahead.stdout.trim());
+      if (!Number.isFinite(commitsAhead)) {
+        throw new Error(
+          `unexpected git rev-list output: ${JSON.stringify(ahead.stdout)}`,
+        );
+      }
+      const st = await run("git", ["status", "--porcelain"], { cwd, env: opts.env });
       return { commitsAhead, hasUncommittedChanges: st.stdout.trim().length > 0 };
     },
     commitAll: async ({ cwd, message }) => {

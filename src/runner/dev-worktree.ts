@@ -42,10 +42,18 @@
 export interface BranchState {
   /** Does a local ref `refs/heads/<branch>` already exist? */
   branchExists: boolean;
-  /** Commits on the branch ahead of `origin/<base>` (0 when the branch is absent). */
-  commitsAhead: number;
-  /** The number of an OPEN PR whose head is this branch, or `null` when none. */
-  openPrNumber: number | null;
+  /**
+   * Commits on the branch ahead of `origin/<base>`. `"unknown"` when the probe
+   * could NOT determine it (a `git rev-list` error) — a fail-SAFE sentinel the
+   * decider treats as "do not delete", NEVER coerced to `0`.
+   */
+  commitsAhead: number | "unknown";
+  /**
+   * The number of an OPEN PR whose head is this branch, `null` when CONFIRMED
+   * none, or `"unknown"` when the probe failed (a `gh` error) — the same
+   * fail-SAFE sentinel that forbids the destructive path.
+   */
+  openPrNumber: number | null | "unknown";
 }
 
 /** What {@link createWorktreeHandlingExistingBranch} does about the branch. */
@@ -60,16 +68,26 @@ export type BranchAction =
 /**
  * Decide what to do about a (possibly pre-existing) dispatched branch. PURE.
  *
- * Order is load-bearing: an OPEN PR or commits-ahead ALWAYS wins (reuse — never
- * destroy work that a human may be reviewing). Only a truly stale branch (no
- * commits ahead AND no open PR) is reclaimed.
+ * Order is load-bearing, and the invariant is FAIL-SAFE: the destructive path
+ * (`recreate-stale` → `git branch -D`) is reachable ONLY when BOTH probes
+ * CONFIRMED the branch is worthless — `commitsAhead === 0` AND `openPrNumber ===
+ * null`. An OPEN PR, commits-ahead, OR an INDETERMINATE probe (`"unknown"`, e.g.
+ * a transient git/gh error) all route to `reuse-existing` — never delete from
+ * an unknown state, because unpushed local commits live only in this branch
+ * (the warm-resume case Bug 2 creates). When in doubt, keep the branch.
  */
 export function decideBranchAction(state: BranchState): BranchAction {
   if (!state.branchExists) return { kind: "create-fresh" };
-  if (state.openPrNumber !== null) {
+  // A CONFIRMED open PR always reuses (carry the number for the log).
+  if (typeof state.openPrNumber === "number") {
     return { kind: "reuse-existing", openPrNumber: state.openPrNumber };
   }
+  // FAIL SAFE: any indeterminate probe ⇒ reuse, NEVER the `git branch -D` path.
+  if (state.commitsAhead === "unknown" || state.openPrNumber === "unknown") {
+    return { kind: "reuse-existing", openPrNumber: null };
+  }
   if (state.commitsAhead > 0) return { kind: "reuse-existing", openPrNumber: null };
+  // Both probes CONFIRMED: 0 commits ahead, no open PR → genuinely stale.
   return { kind: "recreate-stale" };
 }
 
@@ -82,10 +100,19 @@ export function decideBranchAction(state: BranchState): BranchAction {
 export interface WorktreeIO {
   /** True iff a local ref `refs/heads/<branch>` exists. */
   branchExists(branch: string): Promise<boolean>;
-  /** Count of commits on `<branch>` ahead of `origin/<base>`. */
-  commitsAhead(branch: string, base: string): Promise<number>;
-  /** The number of an OPEN PR whose head is `<branch>`, or `null`. */
-  openPrNumber(branch: string): Promise<number | null>;
+  /**
+   * Count of commits on `<branch>` ahead of `origin/<base>`. MUST return
+   * `"unknown"` (not `0`) when the probe cannot determine it — a probe error
+   * read as `0` would mis-classify a branch with unpushed commits as stale and
+   * delete it. Fail SAFE.
+   */
+  commitsAhead(branch: string, base: string): Promise<number | "unknown">;
+  /**
+   * The number of an OPEN PR whose head is `<branch>`, `null` when CONFIRMED
+   * none, or `"unknown"` when the probe failed. Same fail-SAFE contract as
+   * {@link WorktreeIO.commitsAhead}.
+   */
+  openPrNumber(branch: string): Promise<number | null | "unknown">;
   /** Prune worktree refs whose directories no longer exist (best-effort). */
   pruneWorktrees(): Promise<void>;
   /** Delete the local branch (`git branch -D <branch>`). */
