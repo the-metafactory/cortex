@@ -3464,6 +3464,21 @@ export async function startCortex(
     // `cortex network join public`; an inbound public sender is admitted only
     // when `enabled: true` AND its source principal is on `allow_principals[]`.
     ...(resolvedPolicy?.public !== undefined && { public: resolvedPolicy.public }),
+    // cortex#1222 — self short-circuit + dedupe on the federation dispatch-deny
+    // path (the #1214 follow-up for THIS surface-router path). Mirrors the
+    // `startFederatedAgentPresenceSubscriber` wiring EXACTLY: a self-loopback
+    // `federated.{us}.{stack}.agent.*` dispatch (signed by our OWN stack DID)
+    // is recognised + bytes-checked + dropped instead of denied every tick,
+    // and a genuinely-denied foreign dispatch is audited ≤ once per window.
+    trustResolver,
+    ...(mergedAgents[0]?.id !== undefined && { receivingAgentId: mergedAgents[0].id }),
+    principalId,
+    cryptoVerify: signingKnobs.cryptoVerify,
+    rejectEmpty: signingKnobs.rejectEmpty,
+    ...(signer !== undefined && { stackIdentity: signer.principal }),
+    ...(stackNKeyPubForVerifier !== undefined && {
+      stackNKeyPub: stackNKeyPubForVerifier,
+    }),
     onAdapterError: (adapterId, err) => {
       console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
     },
