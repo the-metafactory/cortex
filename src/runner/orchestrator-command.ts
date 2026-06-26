@@ -3,7 +3,7 @@
  * → `dev.implement` dispatch.
  *
  * See `docs/design-operator-driven-dev-loop.md`. This module is the in-process
- * meta-factory orchestrator's command boundary: when the Pilot/vega agent
+ * meta-factory orchestrator's command boundary: when the orchestrator agent
  * receives a Discord message from the PRINCIPAL matching `implement {repo}#{N}`,
  * it publishes a `tasks.dev.implement` dispatch through the STACK's own runtime
  * (the [[use-stack-primitives]] rule) instead of spawning a `claude -p` chat
@@ -41,7 +41,7 @@ import {
 
 /**
  * The capability that marks an agent as the in-process dev-loop orchestrator
- * (Pilot/vega). The agent fragment declares it under `runtime.capabilities[]`;
+ * (e.g. vega). The agent fragment declares it under `runtime.capabilities[]`;
  * cortex surfaces it to the dispatch-handler so the orchestrator command
  * branch only ever activates for the orchestrator agent — never a chat agent.
  *
@@ -200,7 +200,7 @@ export interface OrchestratorCommandInput {
   runtime: MyelinRuntime | undefined;
   /**
    * The `{principal}.{agent}.{instance}` source stamped on the dispatch. The
-   * `agent` segment names the orchestrator (e.g. `pilot`).
+   * `agent` segment names the orchestrator (e.g. `vega`).
    */
   source: DevEventSource | undefined;
 }

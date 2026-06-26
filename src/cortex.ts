@@ -680,7 +680,7 @@ function targetAgentForDispatch(
       }),
     // #1206 (operator-driven dev-loop, S1) — carry the agent's declared
     // `runtime.capabilities[]` so the dispatch handler's orchestrator-command
-    // gate activates ONLY for the agent declaring `dev.orchestrate` (Pilot/vega).
+    // gate activates ONLY for the agent declaring `dev.orchestrate` (e.g. vega).
     ...(agent.runtime?.capabilities !== undefined && {
       capabilities: agent.runtime.capabilities,
     }),

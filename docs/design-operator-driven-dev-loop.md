@@ -18,7 +18,7 @@ The current dev-loop entry is `pilot tick`: a **standalone `pilot` daemon** scan
 
 ```
 Andreas (Discord, gated to user 1134325176796987522)
-   │  "@pilot implement cortex#1196"        (or: review cortex#1204)
+   │  "@vega implement cortex#1196"        (or: review cortex#1204)
    ▼
 Pilot/vega  — IN-PROCESS meta-factory agent (agents.d fragment, rides the stack identity + runtime)
    │  1. gate: honor ONLY the principal's Discord id
@@ -31,7 +31,7 @@ dev  — live consumer claims it → worktree → claude -p → opens PR → dis
 Pilot/vega reacts to the lifecycle:
    • PR open  → request review (echo, code-review.<flavor> dispatch)
    • verdict  → changes-requested → dispatch a fix back to dev
-              → approved          → HOLD at the OPERATOR MERGE GATE (Andreas merges)
+              → approved          → HOLD at the principal merge gate (Andreas merges)
 ```
 
 **Dropped vs the old loop:** the blueprint scan, the auto-pick, the veto window, the standalone daemon, the `CORTEX_CONFIG` juggling. **Kept:** the pilot-review-loop *orchestration pattern* (dispatch → wait → triage → review → merge), lifted into an in-process reactor.
@@ -51,8 +51,8 @@ This is the [[use-stack-primitives]] rule applied: bus work delegates to `Myelin
 
 ## 4. Components
 
-### 4.1 Pilot/vega agent fragment (`agents.d/pilot.yaml` + `personas/pilot.md`)
-In-process meta-factory agent, same shape as `approver.yaml`/`dev.yaml`: `id: pilot` (instance/callsign `vega`), `displayName`, `persona`, **no per-agent signing material** (rides the stack identity). Declares an **orchestrator capability** (it dispatches; it does not run `claude -p` itself). *Naming reconciliation (open Q1).*
+### 4.1 vega agent fragment (`agents.d/vega.yaml` + `personas/vega.md`)
+In-process meta-factory agent, same shape as `approver.yaml`/`dev.yaml`: `id: vega`, `displayName: Vega`, `persona`, **no per-agent signing material** (rides the stack identity). "Pilot" is the orchestrator *role*; **vega** is the principal's instance/name for it (the principal addresses her as `@vega`), so the `agents.d` id is `vega` (Q1 resolved). Declares the **`dev.orchestrate` capability** (it dispatches; it does not run `claude -p` itself). The command handler routes on this capability, never on the id, so the fragment is the dispatch target purely by declaring it.
 
 ### 4.2 The principal-gated command handler
 Pilot's inbound path recognises an **orchestrator command** (`implement {repo}#{N}` / `review {repo}#{N}`) and, **only when the sender is the principal's Discord id**, performs a *dispatch action* instead of a chat/`claude -p` turn. Gate enforced at the command boundary (mirrors the openOnboarding/admission gates). Every non-principal sender is ignored. *Inbound-routing hook is open Q2.*
@@ -64,7 +64,7 @@ Pilot's inbound path recognises an **orchestrator command** (`implement {repo}#{
 Pilot subscribes to the `dispatch.task.*` lifecycle + review verdict envelopes (it already runs in the daemon that sees them) and drives: PR-open → review request → verdict → fix-cycle or **principal merge gate**. **The merge stays a human gate (Andreas).** Lift the state machine from the `pilot-review-loop` skill.
 
 ### 4.5 Deployment
-`agents.d/pilot.yaml` + `personas/pilot.md` in the meta-factory config, shipped via **`arc upgrade Cortex`** — identical to every other agent. One daemon, one config, one lifecycle. No plist, no pilot.env, no blueprint, no standalone process.
+`agents.d/vega.yaml` + `personas/vega.md` in the meta-factory config, shipped via **`arc upgrade Cortex`** — identical to every other agent. One daemon, one config, one lifecycle. No plist, no pilot.env, no blueprint, no standalone process.
 
 ## 5. Slices (build order — each a thin, reviewable PR via the auto-dev SOP)
 
@@ -75,7 +75,7 @@ Pilot subscribes to the `dispatch.task.*` lifecycle + review verdict envelopes (
 
 ## 6. Open questions
 
-- **Q1 — naming.** CONTEXT.md's assistant is **Pilot**; `pilot.env` sets `PILOT_AGENT_NAME=vega`. Is `vega` the *instance/callsign* of the Pilot assistant on Andreas's stack, or the assistant name? Pick one for `agents.d` `id` + the `@{assistant}` dispatch segment. (Lean: `id: pilot`, instance/displayName `vega`.)
+- **Q1 — naming. RESOLVED (S1).** "Pilot" is the orchestrator *role*; **vega** is the principal's instance/name for it, and the principal addresses her as `@vega`. The `agents.d` id + `displayName` are therefore `vega`/`Vega`, and the dispatch target is selected by the `dev.orchestrate` capability (agent-agnostic), not by the id.
 - **Q2 — inbound command hook.** Exactly where a Discord message reaches an agent handler that can branch to a *dispatch action* vs a `claude -p` turn (dispatch-listener? the runner's inbound path? a new orchestrator handler?). S1 begins by mapping this precisely.
 - **Q3 — reuse vs reimplement pilot logic.** Lift the `pilot-review-loop` state machine into the in-process reactor (S2/S3) vs a thin new reactor. Lean: lift the *pattern*, write fresh for the in-process runtime (the standalone CLI assumptions don't carry).
 - **Q4 — does the existing `dev` consumer brief format match what `dev-events` builds?** Confirm `buildDevImplementRequestEvent` produces what `dev-consumer` parses (it should — same module family).

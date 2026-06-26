@@ -111,7 +111,7 @@ interface DispatchTargetAgent {
    * #1206 (operator-driven dev-loop, S1) — the target agent's declared
    * `runtime.capabilities[]`. Carried per-target-agent (one shared handler
    * serves multiple agents) so the orchestrator-command gate activates ONLY
-   * for the agent that declares {@link ORCHESTRATOR_CAPABILITY} (Pilot/vega)
+   * for the agent that declares {@link ORCHESTRATOR_CAPABILITY} (e.g. vega)
    * and never for a chat agent. Absent/empty → no orchestrator branch.
    */
   capabilities?: readonly string[];
@@ -650,7 +650,7 @@ export class DispatchHandler extends EventEmitter {
 
       // 2.5. #1206 (operator-driven dev-loop, S1) — orchestrator command gate.
       // When the receiving agent is the in-process dev-loop orchestrator
-      // (Pilot/vega, declares ORCHESTRATOR_CAPABILITY) AND the principal posts
+      // (e.g. vega, declares ORCHESTRATOR_CAPABILITY) AND the principal posts
       // `implement {repo}#{N}`, publish a `tasks.dev.implement` dispatch via the
       // STACK runtime instead of spawning a `claude -p` chat turn. The gate is
       // fail-closed: only the principal's authenticated Discord id (the

@@ -24,7 +24,7 @@ import {
 
 const SOURCE: DevEventSource = {
   principal: "andreas",
-  agent: "pilot",
+  agent: "vega",
   instance: "local",
 };
 
@@ -217,7 +217,7 @@ describe("handleOrchestratorCommand — dispatch publish", () => {
     const env = published[0]!;
     // Built by the dev-events builder: correct type + UUID id + local sovereignty.
     expect(env.type).toBe("tasks.dev.implement");
-    expect(env.source).toBe("andreas.pilot.local");
+    expect(env.source).toBe("andreas.vega.local");
     expect(env.sovereignty?.classification).toBe("local");
     expect(typeof env.id).toBe("string");
     expect(env.id.length).toBeGreaterThan(0);
