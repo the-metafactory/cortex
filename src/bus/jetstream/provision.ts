@@ -89,15 +89,22 @@ export interface ProvisionStreamOpts {
    */
   maxAgeNs?: number;
   /**
-   * Stream `max_bytes` cap. Default 512 MiB. Live deployment of #338
+   * Stream `max_bytes` cap. Default 64 MiB. Live deployment of #338
    * surfaced that NATS servers running with an account-level storage
    * reservation cap reject `max_bytes: -1` (unlimited) with
    * "insufficient storage resources available" even when raw disk is
-   * abundant. The 512 MiB default matches sibling stream sizing on
-   * JC's laptop (GROVE_EVENTS) and is large enough to absorb ~100k
-   * typical review-task envelopes; principals can override via
-   * `cortex.yaml` `bus.review.maxBytes` once that surface lands
-   * (G-1111e / #341).
+   * abundant — so the default must be a finite RESERVATION, not unlimited.
+   *
+   * cortex#1197: the previous 512 MiB default was ~8000× the actual
+   * footprint (these are interest-retention, max-age-bounded CONTROL-plane
+   * streams holding KB), and it capped a stack at only TWO streams under
+   * the common `max_file: 1gb` JetStream limit (2 × 512 MiB = the whole GB).
+   * The third stream a dev-loop stack needs — `DEV_IMPLEMENT` (and the
+   * release stream) — then failed to provision with "insufficient storage
+   * resources", silently disabling the `dev.implement` consumer. 64 MiB
+   * still absorbs ~100k typical envelopes yet fits ~16 streams per GB.
+   * Principals can override via `cortex.yaml` `bus.review.maxBytes` once
+   * that surface lands (G-1111e / #341).
    */
   maxBytes?: number;
   /**
@@ -149,7 +156,7 @@ export interface ProvisionConsumerOpts {
 }
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
-const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_DELIVER = 5;
 /**
  * Default per-message ack deadline: 20 minutes in nanoseconds. Sized well

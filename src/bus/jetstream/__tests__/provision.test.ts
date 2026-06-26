@@ -230,7 +230,9 @@ describe("provisionReviewStream", () => {
     // Finite max_bytes default — live deployment surfaced that NATS
     // accounts with storage-reservation caps reject max_bytes=-1
     // (unlimited) with "insufficient storage resources available".
-    expect(cfg.max_bytes).toBe(512 * 1024 * 1024);
+    // cortex#1197: 64 MiB (was 512 MiB) so >2 control-plane streams fit
+    // under the common `max_file: 1gb` JetStream cap (DEV_IMPLEMENT + release).
+    expect(cfg.max_bytes).toBe(64 * 1024 * 1024);
   });
 
   test("honors maxBytes override", async () => {
