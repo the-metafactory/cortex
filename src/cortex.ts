@@ -3192,6 +3192,32 @@ export async function startCortex(
         scopeToken === "local"
           ? `cortex-dev-consumer-${principalId}-${consumer.agent.id}`
           : `cortex-dev-consumer-offer-${scopeToken}-${principalId}-${consumer.agent.id}`;
+      // cortex#1203 — provision the DEV_IMPLEMENT durable UP-FRONT, then bind.
+      // The review, brain and release lanes all `provisionReviewConsumer(...)`
+      // (jsm.consumers.add) before `consumer.start()`; the dev lane was the ONLY
+      // one that didn't — and `consumer.start()`/`subscribePull` BINDS an
+      // existing durable rather than creating it. With no `consumers.add`, the
+      // bind fails "consumer not found" and `dev.implement` never reaches ready
+      // (the F-2.1 consumer silently dormant). Mirrors the brain lane: the
+      // per-scope `pattern` is the durable's `filter_subject` (cortex#1186).
+      if (reviewJsm !== null) {
+        try {
+          await provisionReviewConsumer({
+            jsm: reviewJsm,
+            stream: "DEV_IMPLEMENT",
+            durable,
+            filterSubject: pattern,
+            maxDeliver: reviewConsumerMaxDeliver,
+          });
+        } catch (provisionErr) {
+          // Don't abort — let `consumer.start()` surface the bind failure via
+          // its own dormant/skip path (mirrors the review + brain lanes).
+          process.stderr.write(
+            `cortex: provisionReviewConsumer (dev) failed for "${durable}": ` +
+              `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
+          );
+        }
+      }
       const started = await consumer.start({
         pattern,
         stream: "DEV_IMPLEMENT",
