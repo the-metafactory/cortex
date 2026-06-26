@@ -1627,7 +1627,12 @@ export async function startCortex(
   // offering layer decides reachability, the existing federation block decides
   // verdict-routing. They compose; CO-2 touches only the Offer binding.
   const reviewOfferingPatterns = offeringSubjectPatterns(
-    "tasks.code-review.>",
+    // cortex#1199 — single-token `*` (not `>`): a `code-review.{flavor}` task is
+    // exactly `…tasks.code-review.{flavor}` (3 task tokens), so this stays
+    // JetStream stream-subject disjoint from the 4-token federated Direct
+    // pattern `…tasks.*.code-review.>`. A trailing `>` here overlaps Direct and
+    // makes CODE_REVIEW fail to provision once code-review is offered federated.
+    "tasks.code-review.*",
     reviewPrincipalId,
     derivedStack.stack,
     resolveOffering("code-review", resolvedPolicy?.offerings),
