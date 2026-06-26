@@ -26,6 +26,10 @@ import {
 } from "../types/cortex-config";
 import { foldSurfaceBindings, SurfacesSchema, type Surfaces } from "../types/surfaces";
 import { enforceChmod600 } from "./file-permissions";
+import {
+  resolveAgentPresenceTokens,
+  resolveSurfaceTokensInRawConfig,
+} from "./resolve-env-placeholders";
 
 /**
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
@@ -503,6 +507,18 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   // file. Capture the validated `Surfaces` binding map before the fold drops
   // the top-level `surfaces:` key (GW.a.3b.2a, cortex#524).
   const { raw, surfaces } = composeRawConfigWithSurfaces(expandedPath);
+
+  // cortex#1209 — resolve `__ENV__` placeholders in the surface secret fields
+  // (`agents[].presence.{discord.token, mattermost.apiToken, slack.botToken/
+  // appToken}`) from `process.env` BEFORE the schema parse. Runs here, after
+  // the deep-merge compose, so the resolved value reaches the flattened
+  // presence → adapter login, and so the Slack `^xoxb-`/`^xapp-` regexes in
+  // SlackPresenceSchema see a real token rather than a placeholder. A declared
+  // placeholder with an unset env var throws a fatal, env-var-named error
+  // (fail-closed) — the literal `__X__` never reaches an adapter. Inline tokens
+  // pass through byte-identical. Mutates `raw` in place (it is a freshly
+  // composed object — see `deepMerge`/single-file `parseYaml`).
+  resolveSurfaceTokensInRawConfig(raw);
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
@@ -1025,6 +1041,17 @@ export function loadAgentFromFile(filePath: string, personaBaseDir: string): Age
         `agents-loader: fragment ${filename} declares id "${declaredId}" which differs from its filename stem "${filenameStem}". Convention is to match — principal tooling (arc, cortex agents list) keys on the id, but mismatch obscures filesystem lookup.`,
       );
     }
+  }
+
+  // cortex#1209 — resolve `__ENV__` placeholders in this fragment's surface
+  // secret tokens (`presence.{discord.token, mattermost.apiToken,
+  // slack.botToken/appToken}`) BEFORE the schema parse. agents.d/ fragments
+  // (e.g. Pier's `presence.discord.token: __PIER_BOT_TOKEN__`) do NOT pass
+  // through `composeRawConfig`, so they get the same fail-closed, never-on-disk
+  // resolution here. A pure raw record is required; non-object raw falls
+  // straight to AgentSchema.parse which raises the principal-friendly error.
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    resolveAgentPresenceTokens(raw as Record<string, unknown>, filename);
   }
 
   let agent: Agent;
