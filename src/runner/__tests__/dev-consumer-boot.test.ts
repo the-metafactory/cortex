@@ -28,6 +28,7 @@ import type {
   DevWorkspace,
   DevCommandRunner,
   DevForge,
+  DevGitInspector,
 } from "../dev-consumer";
 import { MemoryDevSessionStore } from "../dev-session-store";
 
@@ -57,6 +58,10 @@ const NOOP_SEAMS: NonNullable<WireDevConsumersOpts["seamsOverride"]> = {
   forge: {
     openPr: async () => ({ repo: "o/r", number: 1, url: "u" }),
   } satisfies DevForge,
+  gitInspector: {
+    status: async () => ({ commitsAhead: 1, hasUncommittedChanges: false }),
+    commitAll: async () => {},
+  } satisfies DevGitInspector,
   sessionStore: new MemoryDevSessionStore(),
 };
 

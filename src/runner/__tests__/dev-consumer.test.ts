@@ -48,8 +48,10 @@ import {
   type DevCommandResult,
   type DevForge,
   type DevPrRef,
+  type DevGitInspector,
   type DevOfferAdmissionGate,
 } from "../dev-consumer";
+import type { DevWorktreeStatus } from "../dev-worktree";
 import { MemoryDevSessionStore, type DevSessionStore } from "../dev-session-store";
 import type { CCSessionFactory, CCSessionLike } from "../../substrates/claude-code/harness";
 import type { CCSessionOpts, CCSessionResult } from "../cc-session";
@@ -173,6 +175,37 @@ function fakeForge(opts: { fail?: boolean; pr?: DevPrRef } = {}): FakeForge {
   };
 }
 
+interface FakeGitInspector extends DevGitInspector {
+  committed: { cwd: string; message: string }[];
+  statusCalls: { cwd: string; base: string; branch: string }[];
+}
+/**
+ * Fake commit-safety seam. Defaults to "agent committed" (1 commit ahead,
+ * clean tree) so the existing happy-path tests proceed unchanged. Override
+ * `status` to simulate uncommitted-leftover / nothing-produced. `commitAll`
+ * flips the recorded status to clean+ahead so a re-inspect would proceed.
+ */
+function fakeGitInspector(
+  opts: { status?: DevWorktreeStatus; failStatus?: boolean; failCommit?: boolean } = {},
+): FakeGitInspector {
+  const committed: FakeGitInspector["committed"] = [];
+  const statusCalls: FakeGitInspector["statusCalls"] = [];
+  const status = opts.status ?? { commitsAhead: 1, hasUncommittedChanges: false };
+  return {
+    committed,
+    statusCalls,
+    status: async (c) => {
+      statusCalls.push(c);
+      if (opts.failStatus) throw new Error("git rev-list failed");
+      return status;
+    },
+    commitAll: async (c) => {
+      committed.push(c);
+      if (opts.failCommit) throw new Error("git commit -S failed: no signing key");
+    },
+  };
+}
+
 /** A CC session factory returning a fixed result; records the opts it saw. */
 function fakeCcFactory(
   result: CCSessionResult,
@@ -210,6 +243,7 @@ function baseOpts(overrides: Partial<DevConsumerOpts> = {}): DevConsumerOpts {
     workspace: overrides.workspace ?? fakeWorkspace(),
     commandRunner: overrides.commandRunner ?? fakeRunner(),
     forge: overrides.forge ?? fakeForge(),
+    gitInspector: overrides.gitInspector ?? fakeGitInspector(),
     sessionStore: overrides.sessionStore ?? new MemoryDevSessionStore(),
     ...overrides,
   };
@@ -487,6 +521,126 @@ describe("DevConsumer.processEnvelope — F-2.1", () => {
     const consumer = new DevConsumer(baseOpts({ workspace }));
     await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
     expect(workspace.removed).toEqual([{ path: "/tmp/Cortex-c-300" }]);
+  });
+
+  // --- cortex#1230 Bug 2 — commit safety -----------------------------------
+
+  test("1230: session edits + commits → push + PR (happy path, no fallback commit)", async () => {
+    const runtime = createRecordingRuntime();
+    const forge = fakeForge();
+    // Agent committed: 1 commit ahead, clean tree.
+    const git = fakeGitInspector({ status: { commitsAhead: 1, hasUncommittedChanges: false } });
+
+    const consumer = new DevConsumer(baseOpts({ runtime, forge, gitInspector: git }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    expect(decision).toEqual({ kind: "ack" });
+    // No fallback commit — the agent committed its own work.
+    expect(git.committed).toHaveLength(0);
+    expect(git.statusCalls).toHaveLength(1);
+    expect(forge.calls).toHaveLength(1);
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("1230: session edits but forgets to commit → consumer commits the leftover + pushes", async () => {
+    const runtime = createRecordingRuntime();
+    const forge = fakeForge();
+    // Agent forgot: nothing committed, but the working tree is dirty.
+    const git = fakeGitInspector({
+      status: { commitsAhead: 0, hasUncommittedChanges: true },
+    });
+
+    const consumer = new DevConsumer(baseOpts({ runtime, forge, gitInspector: git }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    expect(decision).toEqual({ kind: "ack" });
+    // Consumer committed the leftover with a conventional fallback message.
+    expect(git.committed).toHaveLength(1);
+    expect(git.committed[0]!.cwd).toBe("/tmp/Cortex-c-300");
+    expect(git.committed[0]!.message).toBe(
+      "feat: implement the-metafactory/cortex#300 (dev-loop fallback commit)",
+    );
+    // The run is NOT lost — the PR still opens.
+    expect(forge.calls).toHaveLength(1);
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("1230: session produces NOTHING → clear typed failure (NOT the forge push error)", async () => {
+    const runtime = createRecordingRuntime();
+    const forge = fakeForge();
+    // Nothing produced: no commits ahead, clean tree.
+    const git = fakeGitInspector({
+      status: { commitsAhead: 0, hasUncommittedChanges: false },
+    });
+
+    const consumer = new DevConsumer(baseOpts({ runtime, forge, gitInspector: git }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    expect(decision.kind).toBe("term");
+    // No commit attempted, and the forge push is NEVER reached.
+    expect(git.committed).toHaveLength(0);
+    expect(forge.calls).toHaveLength(0);
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    const detail = (reasonOf(failed) as { detail: string }).detail;
+    // The CLEAR "no implementation" reason — NOT forge's "no commits to verify".
+    expect(detail).toContain("session produced no implementation/commits");
+    expect(detail).not.toContain("no commits to verify");
+  });
+
+  test("1230: fallback commit message falls back to a truncated brief when no issue", async () => {
+    const runtime = createRecordingRuntime();
+    const git = fakeGitInspector({
+      status: { commitsAhead: 0, hasUncommittedChanges: true },
+    });
+    const noIssue: DevImplementPayload = { ...PAYLOAD };
+    delete (noIssue as { issue?: number }).issue;
+
+    const consumer = new DevConsumer(baseOpts({ runtime, gitInspector: git }));
+    await consumer.processEnvelope(makeRequest(noIssue), LOCAL_SUBJECT, null);
+
+    expect(git.committed).toHaveLength(1);
+    expect(git.committed[0]!.message).toMatch(/^feat: .+ \(dev-loop fallback commit\)$/);
+  });
+
+  test("1230: git status inspection throws → cant_do + term; worktree removed; PR not opened", async () => {
+    const runtime = createRecordingRuntime();
+    const workspace = fakeWorkspace();
+    const forge = fakeForge();
+    const git = fakeGitInspector({ failStatus: true });
+
+    const consumer = new DevConsumer(baseOpts({ runtime, workspace, forge, gitInspector: git }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    expect(decision.kind).toBe("term");
+    expect(forge.calls).toHaveLength(0);
+    expect(workspace.removed).toHaveLength(1);
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    expect((reasonOf(failed) as { detail: string }).detail).toContain(
+      "git state inspection failed",
+    );
+  });
+
+  test("1230: fallback commit throws → cant_do + term; PR not opened", async () => {
+    const runtime = createRecordingRuntime();
+    const forge = fakeForge();
+    const git = fakeGitInspector({
+      status: { commitsAhead: 0, hasUncommittedChanges: true },
+      failCommit: true,
+    });
+
+    const consumer = new DevConsumer(baseOpts({ runtime, forge, gitInspector: git }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    expect(decision.kind).toBe("term");
+    expect(forge.calls).toHaveLength(0);
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed")!;
+    expect((reasonOf(failed) as { detail: string }).detail).toContain("fallback commit");
   });
 
   test("worktree create failure → cant_do + term; no CC spawned", async () => {

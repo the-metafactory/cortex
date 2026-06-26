@@ -134,9 +134,12 @@ function buildBrief(repo: string, issue: number): string {
     `Implement ${repo}#${issue}. ` +
     `Read the issue for the full spec and acceptance criteria ` +
     `(\`gh issue view ${issue} --repo ${repo}\`), follow the repo's CONTEXT.md ` +
-    `and Standard Operating Procedures, work in a worktree-isolated feature ` +
-    `branch, and open a PR that closes #${issue}. Do NOT merge — the merge is ` +
-    `a human gate.`
+    `and Standard Operating Procedures, and work in your worktree. ` +
+    `When the implementation is done you MUST COMMIT your work with a ` +
+    `conventional-commit message (e.g. \`feat: … (closes #${issue})\`) before ` +
+    `you finish — the dev-loop pushes your branch and opens the PR for you, so ` +
+    `you only need to COMMIT (do NOT push or open the PR yourself, and do NOT ` +
+    `merge — the merge is a human gate).`
   );
 }
 

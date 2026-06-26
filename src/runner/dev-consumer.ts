@@ -78,6 +78,7 @@ import type { CCSessionFactory, CCSessionLike } from "../substrates/claude-code/
 import type { CCSessionOpts, CCSessionResult } from "./cc-session";
 import type { DevSessionStore } from "./dev-session-store";
 import { readLogicalRouting } from "../adapters/response-routing-delivery";
+import { decidePostSessionAction, type DevWorktreeStatus } from "./dev-worktree";
 
 // ---------------------------------------------------------------------------
 // Injected seams — the testability + authority surface
@@ -162,6 +163,32 @@ export interface DevPrRef {
   url: string;
 }
 
+/**
+ * Commit-safety seam (cortex#1230 Bug 2). After the CC session and before the
+ * forge push, the consumer inspects the worktree's git state and, if the agent
+ * edited but forgot to commit, commits the leftover so the run isn't lost.
+ * Production wires real `git` (see `dev-consumer-boot.ts`); tests inject git
+ * state. Kept narrow — exactly inspect + commit.
+ */
+export interface DevGitInspector {
+  /**
+   * Inspect the worktree at `cwd`: commits ahead of `origin/<base>` and whether
+   * the working tree has uncommitted changes (tracked or untracked). Throws on
+   * a git failure — the consumer maps the throw to a `cant_do` failure.
+   */
+  status(opts: {
+    cwd: string;
+    base: string;
+    branch: string;
+  }): Promise<DevWorktreeStatus>;
+  /**
+   * Commit ALL changes in the worktree at `cwd` with `message` (the fallback
+   * commit when the agent forgot). MUST produce a SIGNED commit — the forge
+   * push boundary refuses unsigned commits (W5.0). Throws on failure.
+   */
+  commitAll(opts: { cwd: string; message: string }): Promise<void>;
+}
+
 // ---------------------------------------------------------------------------
 // Construction options
 // ---------------------------------------------------------------------------
@@ -238,6 +265,12 @@ export interface DevConsumerOpts {
   /** Forge push + PR-open seam (carries the agent's scoped identity). */
   forge: DevForge;
   /**
+   * Commit-safety seam (cortex#1230 Bug 2) — inspect the worktree's git state
+   * after the CC session and commit leftover changes the agent forgot. Tests
+   * inject git state; production wires real `git`.
+   */
+  gitInspector: DevGitInspector;
+  /**
    * Warm-session store (§3.6b). Maps correlation-chain id → CC session id so
    * a fix-cycle resumes the implement session. Tests inject
    * `MemoryDevSessionStore`; production wires `FileDevSessionStore`.
@@ -302,6 +335,7 @@ export class DevConsumer {
   private readonly workspace: DevWorkspace;
   private readonly commandRunner: DevCommandRunner;
   private readonly forge: DevForge;
+  private readonly gitInspector: DevGitInspector;
   private readonly sessionStore: DevSessionStore;
   private readonly sessionOpts?: Partial<
     Omit<CCSessionOpts, "prompt" | "cwd" | "resumeSessionId">
@@ -328,6 +362,7 @@ export class DevConsumer {
     this.workspace = opts.workspace;
     this.commandRunner = opts.commandRunner;
     this.forge = opts.forge;
+    this.gitInspector = opts.gitInspector;
     this.sessionStore = opts.sessionStore;
     if (opts.sessionOpts !== undefined) this.sessionOpts = opts.sessionOpts;
     this.offerAdmission = opts.offerAdmission;
@@ -686,6 +721,55 @@ export class DevConsumer {
         return await this.failTerminal(envelope, startedAt, reason, responseRouting);
       }
 
+      // 7b-2. Commit safety (cortex#1230 Bug 2). The pipeline pushes + opens
+      //       the PR, but the AGENT must commit. The brief now tells it to
+      //       (orchestrator-command `buildBrief`); this is the belt-and-braces
+      //       backstop for the two real failure modes:
+      //         - agent edited but forgot to commit → commit the leftover so
+      //           the run isn't lost (+ WARN — the agent should commit itself).
+      //         - agent produced nothing at all     → a CLEAR typed failure
+      //           naming "no implementation", NOT forge's confusing "no commits
+      //           to verify" surfaced from deep in the push path.
+      let gitStatus: DevWorktreeStatus;
+      try {
+        gitStatus = await this.gitInspector.status({
+          cwd: worktreePath,
+          base: payload.base,
+          branch: payload.branch,
+        });
+      } catch (err) {
+        return await this.failTerminal(envelope, startedAt, {
+          kind: "cant_do",
+          detail: `git state inspection failed: ${errText(err)}`,
+        }, responseRouting);
+      }
+
+      const postSession = decidePostSessionAction(gitStatus);
+      if (postSession.kind === "fail-no-implementation") {
+        return await this.failTerminal(envelope, startedAt, {
+          kind: "cant_do",
+          detail:
+            "session produced no implementation/commits — no commits ahead of " +
+            `${payload.base} and a clean working tree`,
+        }, responseRouting);
+      }
+      if (postSession.kind === "commit-then-proceed") {
+        const message = fallbackCommitMessage(payload);
+        try {
+          await this.gitInspector.commitAll({ cwd: worktreePath, message });
+        } catch (err) {
+          return await this.failTerminal(envelope, startedAt, {
+            kind: "cant_do",
+            detail: `fallback commit of the session's uncommitted changes failed: ${errText(err)}`,
+          }, responseRouting);
+        }
+        process.stderr.write(
+          `dev-consumer: agent left uncommitted changes for ${payload.repo}` +
+            `${payload.issue !== undefined ? `#${payload.issue}` : ""} — committed ` +
+            `them with a fallback message (the agent should commit its own work)\n`,
+        );
+      }
+
       // 7c. Gates — run in declared order, stop at the first red.
       const gates = payload.gates ?? [];
       for (const command of gates) {
@@ -899,6 +983,20 @@ function redeliveryCountFrom(msg: JsMsg | null): number {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Build the conventional-commit message for the fallback commit when the agent
+ * edited but forgot to commit (cortex#1230 Bug 2). Prefers the issue ref for a
+ * short, stable subject; falls back to a truncated brief. The `(dev-loop
+ * fallback commit)` suffix marks it as the safety-net commit in the log.
+ */
+export function fallbackCommitMessage(payload: DevImplementPayload): string {
+  const subject =
+    payload.issue !== undefined
+      ? `implement ${payload.repo}#${payload.issue}`
+      : truncate(payload.brief, 60);
+  return `feat: ${subject} (dev-loop fallback commit)`;
 }
 
 /** Cap a gate's output tail for the failure detail. */

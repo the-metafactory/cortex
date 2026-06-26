@@ -61,10 +61,15 @@ import {
   type DevCommandResult,
   type DevForge,
   type DevPrRef,
+  type DevGitInspector,
   type DevOfferAdmissionGate,
 } from "./dev-consumer";
 import { FileDevSessionStore, type DevSessionStore } from "./dev-session-store";
 import { readCommitSignatures, type CommitSigningIO } from "./commit-signing";
+import {
+  createWorktreeHandlingExistingBranch,
+  type WorktreeIO,
+} from "./dev-worktree";
 
 export { DevConsumer } from "./dev-consumer";
 
@@ -165,6 +170,7 @@ export interface WireDevConsumersOpts {
     workspace: DevWorkspace;
     commandRunner: DevCommandRunner;
     forge: DevForge;
+    gitInspector: DevGitInspector;
     sessionStore: DevSessionStore;
   };
   /** Optional logger. Defaults to `console`. */
@@ -286,6 +292,7 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
           workspace: seams.workspace,
           commandRunner: seams.commandRunner,
           forge: seams.forge,
+          gitInspector: seams.gitInspector,
           sessionStore: seams.sessionStore,
           sessionOpts,
           ...(opts.offerAdmission !== undefined && {
@@ -402,6 +409,7 @@ interface BuiltSeams {
   workspace: DevWorkspace;
   commandRunner: DevCommandRunner;
   forge: DevForge;
+  gitInspector: DevGitInspector;
   sessionStore: DevSessionStore;
 }
 
@@ -415,16 +423,95 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
   const slugify = (branch: string): string =>
     branch.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "dev";
 
+  // §3.5b — the scoped forge token (when set) is injected into the child env as
+  // GH_TOKEN for every `gh` call (the open-PR-lookup probe + the actual push),
+  // never the principal's ambient PAT unless the scoped token is absent (the
+  // warned ambient-fallback path).
+  const ghEnv: Record<string, string | undefined> = { ...opts.env };
+  if (opts.scopedToken !== undefined && opts.scopedToken.length > 0) {
+    ghEnv.GH_TOKEN = opts.scopedToken;
+  }
+
+  // cortex#1230 Bug 1 — the IO seam the branch-collision handling drives. Each
+  // verb is a thin `git`/`gh` spawn; the decision (create-fresh / recreate-stale
+  // / reuse-existing) lives in the pure `decideBranchAction` (dev-worktree.ts).
+  const worktreeIO: WorktreeIO = {
+    branchExists: async (branch) => {
+      const r = await run(
+        "git",
+        ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+        { cwd: opts.repoRoot, env: opts.env, allowFailure: true },
+      );
+      return r.code === 0;
+    },
+    commitsAhead: async (branch, base) => {
+      const r = await run(
+        "git",
+        ["rev-list", "--count", `origin/${base}..${branch}`],
+        { cwd: opts.repoRoot, env: opts.env, allowFailure: true },
+      );
+      const n = Number(r.stdout.trim());
+      return r.code === 0 && Number.isFinite(n) ? n : 0;
+    },
+    openPrNumber: async (branch) => {
+      const r = await run(
+        "gh",
+        ["pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number // empty"],
+        { cwd: opts.repoRoot, env: ghEnv, allowFailure: true },
+      );
+      const n = Number(r.stdout.trim());
+      return r.code === 0 && Number.isInteger(n) && n > 0 ? n : null;
+    },
+    pruneWorktrees: async () => {
+      await run("git", ["worktree", "prune"], {
+        cwd: opts.repoRoot,
+        env: opts.env,
+        allowFailure: true,
+      });
+    },
+    deleteBranch: async (branch) => {
+      await run("git", ["branch", "-D", branch], {
+        cwd: opts.repoRoot,
+        env: opts.env,
+        allowFailure: true,
+      });
+    },
+    addWorktreeNewBranch: async (path, branch, base) => {
+      await run("git", ["worktree", "add", path, "-b", branch, `origin/${base}`], {
+        cwd: opts.repoRoot,
+        env: opts.env,
+      });
+    },
+    addWorktreeExistingBranch: async (path, branch) => {
+      await run("git", ["worktree", "add", path, branch], {
+        cwd: opts.repoRoot,
+        env: opts.env,
+      });
+    },
+  };
+
   const workspace: DevWorkspace = {
     create: async ({ branch, base, chainId }) => {
       // Worktree-discipline SOP: `../Cortex-{slug}` cut from origin/{base}.
+      // cortex#1230 Bug 1 — handle a PRE-EXISTING branch (a re-dispatch of the
+      // fixed `feat/{N}-{repo}` branch) instead of hard-failing on `-b`.
       const slug = `${slugify(branch)}-${chainId.slice(0, 8)}`;
       const path = `${opts.repoRoot}/../Cortex-${slug}`;
-      await run(
-        "git",
-        ["worktree", "add", path, "-b", branch, `origin/${base}`],
-        { cwd: opts.repoRoot, env: opts.env },
-      );
+      const result = await createWorktreeHandlingExistingBranch(worktreeIO, {
+        branch,
+        base,
+        path,
+      });
+      if (result.action.kind !== "create-fresh") {
+        const prNote =
+          result.action.kind === "reuse-existing" && result.action.openPrNumber !== null
+            ? ` (open PR #${result.action.openPrNumber})`
+            : "";
+        process.stderr.write(
+          `cortex/dev-consumer: branch ${branch} already existed — ` +
+            `${result.action.kind}${prNote}\n`,
+        );
+      }
       return { path };
     },
     remove: async ({ path }) => {
@@ -432,6 +519,33 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
         cwd: opts.repoRoot,
         env: opts.env,
       });
+    },
+  };
+
+  // cortex#1230 Bug 2 — commit-safety seam. Inspect the worktree's git state
+  // after the CC session; commit the agent's leftover changes (SIGNED — the
+  // push boundary refuses unsigned commits) when it forgot to.
+  const gitInspector: DevGitInspector = {
+    status: async ({ cwd, base }) => {
+      const ahead = await run(
+        "git",
+        ["rev-list", "--count", `origin/${base}..HEAD`],
+        { cwd, env: opts.env, allowFailure: true },
+      );
+      const n = Number(ahead.stdout.trim());
+      const commitsAhead = ahead.code === 0 && Number.isFinite(n) ? n : 0;
+      const st = await run("git", ["status", "--porcelain"], {
+        cwd,
+        env: opts.env,
+        allowFailure: true,
+      });
+      return { commitsAhead, hasUncommittedChanges: st.stdout.trim().length > 0 };
+    },
+    commitAll: async ({ cwd, message }) => {
+      await run("git", ["add", "-A"], { cwd, env: opts.env });
+      // `-S` — the fallback commit MUST be signed (W5.0); the forge push
+      // boundary fails closed on any unsigned commit. NEVER `--no-gpg-sign`.
+      await run("git", ["commit", "-S", "-m", message], { cwd, env: opts.env });
     },
   };
 
@@ -509,7 +623,7 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
   };
 
   const sessionStore = new FileDevSessionStore(opts.sessionStorePath);
-  return { workspace, commandRunner, forge, sessionStore };
+  return { workspace, commandRunner, forge, gitInspector, sessionStore };
 }
 
 interface RunResult {
