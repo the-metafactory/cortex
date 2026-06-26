@@ -3218,7 +3218,7 @@ export async function startCortex(
             // ack-wait to that (+60s) so a legitimately-long run isn't redelivered
             // mid-flight (the 20-min review default would → dead-letter → dup
             // session). Defaults to 30m+ when the timeout is unset.
-            ackWaitNs: ((config.claude.asyncTimeoutMs ?? 1_800_000) + 60_000) * 1_000_000,
+            ackWaitNs: (config.claude.asyncTimeoutMs + 60_000) * 1_000_000,
           });
         } catch (provisionErr) {
           // Don't abort — let `consumer.start()` surface the bind failure via
