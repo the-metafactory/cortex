@@ -15,6 +15,12 @@
  *   - `presence.discord.token`
  *   - `presence.mattermost.apiToken`
  *   - `presence.slack.botToken`, `presence.slack.appToken`
+ *   - the gateway-binding mirror of the same fields under a `surfaces.yaml`
+ *     binding map (`surfaces.{discord,slack,mattermost}[].binding.<token>`),
+ *     which the surface gateway consumes via a SEPARATELY-captured `Surfaces`
+ *     object that bypasses the raw-config walk (cortex#1209 review — the
+ *     `CORTEX_GATEWAY=1` path was leaking the literal placeholder to
+ *     `connect()`).
  *
  * These are the surface secret fields per the issue. The Slack tokens MUST be
  * resolved on the RAW object BEFORE the Zod parse, because
@@ -41,6 +47,9 @@
  * through unchanged. The capture is `[A-Z0-9_]+` — conventional SCREAMING_CASE
  * env-var names (the Pier/vega precedent: `PIER_BOT_TOKEN`, `VEGA_BOT_TOKEN`).
  */
+import { isPlainObject } from "../types/object-guards";
+import type { Surfaces } from "../types/surfaces";
+
 export const ENV_PLACEHOLDER_PATTERN = /^__([A-Z0-9_]+)__$/;
 
 /**
@@ -67,15 +76,13 @@ export class EnvPlaceholderError extends Error {
   }
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
 /**
  * Resolve a single scalar value. A non-string, or a string that is NOT a pure
  * `__ENV__` placeholder, is returned byte-identical (the backward-compat
  * invariant — inline tokens are untouched). A pure placeholder is resolved
- * from `process.env`; an unset/empty env var throws `EnvPlaceholderError`.
+ * from `process.env`; an unset / empty / whitespace-only env var throws
+ * `EnvPlaceholderError` (a whitespace-only value would otherwise reach
+ * `connect()` as a garbage token — cortex#1209 review nit 1).
  */
 function resolveScalar(value: unknown, fieldPath: string): unknown {
   if (typeof value !== "string") return value;
@@ -83,10 +90,24 @@ function resolveScalar(value: unknown, fieldPath: string): unknown {
   if (match === null) return value; // inline literal — passthrough
   const envVar = match[1] as string;
   const resolved = process.env[envVar];
-  if (resolved === undefined || resolved === "") {
+  if (resolved === undefined || resolved.trim() === "") {
     throw new EnvPlaceholderError(envVar, fieldPath);
   }
   return resolved;
+}
+
+/**
+ * Defence-in-depth assertion (cortex#1209 review — belt-and-suspenders). Throws
+ * `EnvPlaceholderError` if `value` is STILL an unresolved `__ENV__` placeholder
+ * at the point a token is about to be handed to an adapter. Every load path is
+ * supposed to have resolved placeholders already; this guards against a future
+ * path that forgets to, so a literal `__X__` can never reach `connect()`.
+ */
+export function assertNoUnresolvedPlaceholder(value: unknown, fieldPath: string): void {
+  if (typeof value !== "string") return;
+  const match = ENV_PLACEHOLDER_PATTERN.exec(value);
+  if (match === null) return;
+  throw new EnvPlaceholderError(match[1] as string, fieldPath);
 }
 
 /**
@@ -153,6 +174,52 @@ export function resolveSurfaceTokensInRawConfig(raw: Record<string, unknown>): v
     const agent = agents[i];
     if (isPlainObject(agent)) {
       resolveAgentPresenceTokens(agent, `agents[${i}]`);
+    }
+  }
+}
+
+/**
+ * The secret token field(s) under each platform's `surfaces[].binding`. Mirror
+ * of the `presence.{platform}` token fields above — the surfaces.yaml binding
+ * map carries the SAME credentials in a `binding` sub-object.
+ */
+const SURFACE_BINDING_TOKEN_FIELDS: { platform: keyof Surfaces; fields: readonly string[] }[] = [
+  { platform: "discord", fields: ["token"] },
+  { platform: "slack", fields: ["botToken", "appToken"] },
+  { platform: "mattermost", fields: ["apiToken"] },
+];
+
+/**
+ * cortex#1209 review (MAJOR) — resolve `__ENV__` placeholders in the
+ * gateway-binding token fields of the SEPARATELY-captured `Surfaces` object.
+ *
+ * `composeRawConfigWithSurfaces` captures + validates the `surfaces:` binding
+ * map BEFORE `foldSurfaceBindings` folds it into `raw.agents[].presence`, then
+ * threads that pre-resolution object through `LoadedConfig.surfaces` →
+ * `startGatewayIfEnabled` → `buildGatewayAdapters`, which parses each
+ * `binding` and constructs an adapter from it. `resolveSurfaceTokensInRawConfig`
+ * only touches the folded `raw.agents[]` copy, so the gateway path would
+ * otherwise hand the literal `__X__` to Discord/Mattermost `connect()`.
+ *
+ * Resolving here (same fail-closed `EnvPlaceholderError`, same trim check) on
+ * the captured object closes the leak symmetrically. Mutates `surfaces` in
+ * place — it is the fresh result of `SurfacesSchema.parse`, not aliased to raw.
+ */
+export function resolveSurfaceBindingTokens(surfaces: Surfaces): void {
+  for (const { platform, fields } of SURFACE_BINDING_TOKEN_FIELDS) {
+    const entries = surfaces[platform];
+    if (!Array.isArray(entries)) continue;
+    for (let i = 0; i < entries.length; i++) {
+      const binding = (entries[i] as { binding?: unknown }).binding;
+      if (!isPlainObject(binding)) continue;
+      for (const field of fields) {
+        if (field in binding) {
+          binding[field] = resolveScalar(
+            binding[field],
+            `surfaces.${platform}[${i}].binding.${field}`,
+          );
+        }
+      }
     }
   }
 }

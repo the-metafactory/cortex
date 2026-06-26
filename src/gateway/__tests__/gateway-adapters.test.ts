@@ -385,3 +385,56 @@ describe("buildGatewayAdapters", () => {
     expect(_msgType).toBeUndefined();
   });
 });
+
+// =============================================================================
+// cortex#1209 belt-and-suspenders — a binding token that is STILL an
+// unresolved `__ENV__` placeholder at adapter-construction is a fail-fast, so
+// no path can ever hand the literal `__X__` to `connect()`.
+// =============================================================================
+describe("buildGatewayAdapters — unresolved placeholder fail-fast (#1209)", () => {
+  test("discord binding.token still __X__ → throws before the factory is called", () => {
+    const { factory, calls } = makeRecordingFactory();
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "vega",
+          stack: "andreas/research",
+          binding: {
+            token: "__VEGA_BOT_TOKEN__",
+            guildId: "111222333444555666",
+            agentChannelId: "aaa000000000000001",
+            logChannelId: "bbb000000000000002",
+          },
+        },
+      ],
+    };
+    expect(() => buildGatewayAdapters(surfaces, makeDeps(factory))).toThrow(/VEGA_BOT_TOKEN/);
+    // fail-fast: the factory must never have been reached with the literal
+    expect(calls.length).toBe(0);
+  });
+
+  test("mattermost binding.apiToken still __X__ → throws before the factory is called", () => {
+    const { factory, calls } = makeRecordingFactory();
+    const surfaces: Surfaces = {
+      mattermost: [
+        {
+          agent: "echo",
+          stack: "andreas/ops",
+          binding: {
+            apiUrl: "https://mm.example.com",
+            apiToken: "__MM_API_TOKEN__",
+          },
+        },
+      ],
+    };
+    expect(() => buildGatewayAdapters(surfaces, makeDeps(factory))).toThrow(/MM_API_TOKEN/);
+    expect(calls.length).toBe(0);
+  });
+
+  test("resolved (inline) tokens pass the guard and construct normally", () => {
+    const { factory, calls } = makeRecordingFactory();
+    const adapters = buildGatewayAdapters(DISCORD_SURFACES, makeDeps(factory));
+    expect(adapters.length).toBe(1);
+    expect(calls.length).toBe(1);
+  });
+});

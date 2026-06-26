@@ -17,20 +17,32 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { stringify } from "yaml";
 
 import {
   ENV_PLACEHOLDER_PATTERN,
   EnvPlaceholderError,
+  assertNoUnresolvedPlaceholder,
   resolveAgentPresenceTokens,
+  resolveSurfaceBindingTokens,
   resolveSurfaceTokensInRawConfig,
 } from "../resolve-env-placeholders";
+import type { Surfaces } from "../../types/surfaces";
 import { loadConfigWithAgents, loadAgentFromFile } from "../loader";
 
 // ---------------------------------------------------------------------------
 // env hygiene — snapshot + restore the env vars these tests poke so they never
 // leak across tests (the resolver reads process.env directly).
 // ---------------------------------------------------------------------------
-const TOUCHED = ["VEGA_BOT_TOKEN", "PIER_BOT_TOKEN", "MM_API_TOKEN", "SLACK_BOT", "SLACK_APP"];
+const TOUCHED = [
+  "VEGA_BOT_TOKEN",
+  "PIER_BOT_TOKEN",
+  "MM_API_TOKEN",
+  "SLACK_BOT",
+  "SLACK_APP",
+  "GW_DISCORD_TOKEN",
+  "WS_ONLY_TOKEN",
+];
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -255,5 +267,165 @@ presence:
     const fragPath = writePierFragment("inline-pier-token");
     const agent = loadAgentFromFile(fragPath, dir);
     expect(agent?.presence.discord?.token).toBe("inline-pier-token");
+  });
+});
+
+// ===========================================================================
+// cortex#1209 review — whitespace-only env (nit 1)
+// ===========================================================================
+describe("fail-closed on whitespace-only env (nit 1)", () => {
+  test("env var set to '   ' is treated as unset → fatal", () => {
+    process.env.VEGA_BOT_TOKEN = "   ";
+    const agent: Record<string, unknown> = {
+      presence: { discord: { token: "__VEGA_BOT_TOKEN__" } },
+    };
+    expect(() => resolveAgentPresenceTokens(agent, "agents[0]")).toThrow(EnvPlaceholderError);
+  });
+});
+
+// ===========================================================================
+// cortex#1209 review (MAJOR) — surfaces.yaml gateway-binding resolution
+// ===========================================================================
+describe("resolveSurfaceBindingTokens — gateway binding map", () => {
+  function surfacesWith(discordToken: string): Surfaces {
+    return {
+      discord: [
+        {
+          agent: "vega",
+          stack: "andreas/research",
+          binding: {
+            token: discordToken,
+            guildId: "111",
+            agentChannelId: "222",
+            logChannelId: "333",
+          },
+        },
+      ],
+    } as unknown as Surfaces;
+  }
+
+  test("resolves a discord binding.token placeholder from env", () => {
+    process.env.GW_DISCORD_TOKEN = "real-gw-token";
+    const surfaces = surfacesWith("__GW_DISCORD_TOKEN__");
+    resolveSurfaceBindingTokens(surfaces);
+    expect((surfaces.discord as any)[0].binding.token).toBe("real-gw-token");
+  });
+
+  test("fail-closed: unset env → EnvPlaceholderError naming the var (not the literal)", () => {
+    delete process.env.GW_DISCORD_TOKEN;
+    const surfaces = surfacesWith("__GW_DISCORD_TOKEN__");
+    let err: unknown;
+    try {
+      resolveSurfaceBindingTokens(surfaces);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(EnvPlaceholderError);
+    expect((err as EnvPlaceholderError).envVar).toBe("GW_DISCORD_TOKEN");
+    expect((err as Error).message).toContain("surfaces.discord[0].binding.token");
+  });
+
+  test("inline binding token → unchanged", () => {
+    const surfaces = surfacesWith("inline-gw-token");
+    resolveSurfaceBindingTokens(surfaces);
+    expect((surfaces.discord as any)[0].binding.token).toBe("inline-gw-token");
+  });
+
+  test("resolves slack botToken/appToken + mattermost apiToken bindings", () => {
+    process.env.SLACK_BOT = "xoxb-real";
+    process.env.SLACK_APP = "xapp-real";
+    process.env.MM_API_TOKEN = "mm-real";
+    const surfaces = {
+      slack: [
+        {
+          agent: "sage",
+          binding: { botToken: "__SLACK_BOT__", appToken: "__SLACK_APP__", workspaceId: "T0123456789" },
+        },
+      ],
+      mattermost: [
+        { agent: "echo", binding: { apiUrl: "https://mm.example.com", apiToken: "__MM_API_TOKEN__" } },
+      ],
+    } as unknown as Surfaces;
+    resolveSurfaceBindingTokens(surfaces);
+    expect((surfaces.slack as any)[0].binding.botToken).toBe("xoxb-real");
+    expect((surfaces.slack as any)[0].binding.appToken).toBe("xapp-real");
+    expect((surfaces.mattermost as any)[0].binding.apiToken).toBe("mm-real");
+  });
+});
+
+describe("assertNoUnresolvedPlaceholder (belt-and-suspenders)", () => {
+  test("throws naming the env var on a literal placeholder", () => {
+    expect(() => assertNoUnresolvedPlaceholder("__GW_DISCORD_TOKEN__", "x")).toThrow(/GW_DISCORD_TOKEN/);
+  });
+  test("passes a resolved / inline value", () => {
+    expect(() => assertNoUnresolvedPlaceholder("real-token", "x")).not.toThrow();
+    expect(() => assertNoUnresolvedPlaceholder(undefined, "x")).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// End-to-end: a surfaces.yaml directory layout resolves binding tokens into
+// LoadedConfig.surfaces (the object the gateway consumes).
+// ===========================================================================
+describe("loader integration — surfaces.yaml directory layout (gateway path)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "c1209-surfaces-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function systemBlocks(): Record<string, unknown> {
+    return {
+      claude: { timeoutMs: 300000 },
+      paths: { publishedEventsDir: "/tmp/events/published", logDir: "/tmp/cortex/logs" },
+    };
+  }
+
+  function writeLayout(discordToken: string): string {
+    mkdirSync(join(dir, "system"), { recursive: true });
+    writeFileSync(join(dir, "system", "system.yaml"), stringify(systemBlocks()));
+    mkdirSync(join(dir, "surfaces"), { recursive: true });
+    writeFileSync(
+      join(dir, "surfaces", "surfaces.yaml"),
+      stringify({
+        surfaces: {
+          discord: [
+            {
+              agent: "vega",
+              stack: "andreas/research",
+              binding: {
+                token: discordToken,
+                guildId: "111",
+                agentChannelId: "222",
+                logChannelId: "333",
+              },
+            },
+          ],
+        },
+      }),
+    );
+    mkdirSync(join(dir, "stacks"), { recursive: true });
+    const persona = join(dir, "vega.md");
+    writeFileSync(persona, "# vega\n");
+    writeFileSync(
+      join(dir, "stacks", "research.yaml"),
+      stringify({
+        principal: { id: "andreas" },
+        agents: [{ id: "vega", displayName: "Vega", persona, trust: [], presence: {} }],
+      }),
+    );
+    return join(dir, "cortex.yaml");
+  }
+
+  test("placeholder in surfaces.yaml binding resolves into LoadedConfig.surfaces with env set", () => {
+    process.env.GW_DISCORD_TOKEN = "real-gw-secret";
+    const loaded = loadConfigWithAgents(writeLayout("__GW_DISCORD_TOKEN__"));
+    expect((loaded.surfaces?.discord as any)?.[0]?.binding.token).toBe("real-gw-secret");
+  });
+
+  test("placeholder in surfaces.yaml binding + unset env → fatal, env-var-named", () => {
+    delete process.env.GW_DISCORD_TOKEN;
+    expect(() => loadConfigWithAgents(writeLayout("__GW_DISCORD_TOKEN__"))).toThrow(/GW_DISCORD_TOKEN/);
   });
 });

@@ -73,6 +73,7 @@
 import { z } from "zod/v4";
 
 import { LETTER_PREFIX_ID_REGEX } from "./id";
+import { isPlainObject } from "./object-guards";
 
 // =============================================================================
 // Per-platform binding schemas — the credential/instance subset that moves
@@ -219,10 +220,6 @@ export type MattermostSurfaceBinding = z.infer<typeof MattermostSurfaceBindingSc
 // =============================================================================
 
 const PLATFORMS = ["discord", "slack", "mattermost"] as const;
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
 
 /**
  * CFG.c.1/CFG.c.2 — fold a `surfaces:` block into the composed raw config's

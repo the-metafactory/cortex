@@ -67,6 +67,7 @@ import {
 } from "../common/types/cortex-config";
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
+import { assertNoUnresolvedPlaceholder } from "../common/config/resolve-env-placeholders";
 import { groupDiscordBindingsByToken } from "./discord-token-groups";
 // Back-compat re-export for callers that still import the old suppression helper here.
 export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
@@ -235,6 +236,12 @@ export function buildGatewayAdapters(
     const presence = presences[0];
     const firstBinding = group.entries[0]?.binding;
     if (!presence || !firstBinding) continue;
+    // cortex#1209 belt-and-suspenders — a resolved binding can never carry a
+    // literal `__X__` token; fail-fast if one slipped past the load-time
+    // resolver before it reaches Discord `connect()`.
+    for (const p of presences) {
+      assertNoUnresolvedPlaceholder(p.token, "surfaces.discord[].binding.token");
+    }
     const presenceByGuildId = new Map(presences.map((p) => [p.guildId, p] as const));
     const allowedGuildIds = new Set(presenceByGuildId.keys());
     adapters.push(
@@ -253,6 +260,8 @@ export function buildGatewayAdapters(
   // ── Slack — demux key = workspaceId ───────────────────────────────────────
   for (const entry of surfaces.slack ?? []) {
     const presence = SlackPresenceSchema.parse(entry.binding);
+    assertNoUnresolvedPlaceholder(presence.botToken, "surfaces.slack[].binding.botToken");
+    assertNoUnresolvedPlaceholder(presence.appToken, "surfaces.slack[].binding.appToken");
     const instanceId = `slack:${presence.workspaceId}`;
     adapters.push(
       factory.slack({
@@ -268,6 +277,7 @@ export function buildGatewayAdapters(
   // ── Mattermost — demux key = apiUrl (single-binding fallback) ─────────────
   for (const entry of surfaces.mattermost ?? []) {
     const presence = MattermostPresenceSchema.parse(entry.binding);
+    assertNoUnresolvedPlaceholder(presence.apiToken, "surfaces.mattermost[].binding.apiToken");
     // apiUrl is optional on the presence schema but required on the binding
     // schema; the binding-resolver keys the interim instance on it too.
     const instanceId = `mattermost:${presence.apiUrl ?? "<unset>"}`;

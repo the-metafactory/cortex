@@ -28,6 +28,7 @@ import { foldSurfaceBindings, SurfacesSchema, type Surfaces } from "../types/sur
 import { enforceChmod600 } from "./file-permissions";
 import {
   resolveAgentPresenceTokens,
+  resolveSurfaceBindingTokens,
   resolveSurfaceTokensInRawConfig,
 } from "./resolve-env-placeholders";
 
@@ -519,6 +520,14 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   // pass through byte-identical. Mutates `raw` in place (it is a freshly
   // composed object — see `deepMerge`/single-file `parseYaml`).
   resolveSurfaceTokensInRawConfig(raw);
+
+  // cortex#1209 review (MAJOR) — the captured `surfaces` binding map is a
+  // SEPARATE pre-fold object threaded straight to the surface gateway
+  // (`buildGatewayAdapters`), bypassing the `raw.agents[]` walk above. Resolve
+  // its `binding.<token>` fields too so the `CORTEX_GATEWAY=1` path can never
+  // hand a literal `__X__` to Discord/Mattermost `connect()`. Same fail-closed
+  // contract; mutates the freshly-parsed `surfaces` object in place.
+  if (surfaces !== undefined) resolveSurfaceBindingTokens(surfaces);
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
