@@ -3204,10 +3204,21 @@ export async function startCortex(
         try {
           await provisionReviewConsumer({
             jsm: reviewJsm,
-            stream: "DEV_IMPLEMENT",
+            // cortex#1203 review major-1: the config-resolved stream name (NOT a
+            // hardcoded "DEV_IMPLEMENT") — must match the stream as provisioned
+            // AND the `consumer.start({ stream })` below, or a renamed
+            // `bus.devImplement.stream.name` reproduces the very "consumer not
+            // found" this fixes.
+            stream: devImplementStream,
             durable,
             filterSubject: pattern,
             maxDeliver: reviewConsumerMaxDeliver,
+            // cortex#1203 review major-2: a dev implement runs far longer than a
+            // review, but is bounded by the dev session timeout. Size the durable
+            // ack-wait to that (+60s) so a legitimately-long run isn't redelivered
+            // mid-flight (the 20-min review default would → dead-letter → dup
+            // session). Defaults to 30m+ when the timeout is unset.
+            ackWaitNs: ((config.claude.asyncTimeoutMs ?? 1_800_000) + 60_000) * 1_000_000,
           });
         } catch (provisionErr) {
           // Don't abort — let `consumer.start()` surface the bind failure via
@@ -3220,7 +3231,9 @@ export async function startCortex(
       }
       const started = await consumer.start({
         pattern,
-        stream: "DEV_IMPLEMENT",
+        // cortex#1203 review major-1 — config-resolved name, matches the durable
+        // provisioned just above (not a hardcoded literal).
+        stream: devImplementStream,
         durable,
       });
       const scopeTag = scopeToken === "local" ? "" : ` (offer:${scopeToken})`;
