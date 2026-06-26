@@ -37,6 +37,7 @@ import {
   createDevImplementRequestEvent,
   type DevEventSource,
   type DevImplementPayload,
+  type LogicalResponseRouting,
 } from "../bus/dev-events";
 
 /**
@@ -165,14 +166,64 @@ export function buildImplementPayload(
   };
 }
 
+/**
+ * The surface stamped on the run-thread routing when a caller predates the
+ * `surface` input (back-compat). Discord is the only live dev-loop surface.
+ */
+export const DEFAULT_RUN_SURFACE = "discord";
+
+/**
+ * Build the LOGICAL run-thread routing for a dispatched implement (cortex#1206
+ * S2 — dev-loop thread consolidation).
+ *
+ * A run is ONE thread, keyed on the ENTITY (the issue), addressed the
+ * channel-routing-SOP way:
+ *   - `channel` = the repo SHORT name — "repos get channels".
+ *   - `thread`  = `{repo-short}/issue/{N}` — "GitHub entities get threads".
+ *
+ * Keying on the issue (not the eventual PR) is deliberate: the dev consumer
+ * echoes THIS routing onto every `dispatch.task.*` lifecycle envelope, and the
+ * review-sink resolves it via the idempotent `findOrCreateThreadByName`, so
+ * vega's ack, the dev agent's progress + PR-opened, and echo's verdict all
+ * collapse into the single `{repo-short}/issue/{N}` thread — the run is one
+ * thread start-to-finish, never split issue→PR into two (cortex#1206 brief).
+ *
+ * Pure — no I/O. The native thread snowflake is created lazily by the surface
+ * (`resolveLogicalTarget`), keeping this boundary unit-testable.
+ */
+export function buildRunThreadRouting(
+  repo: string,
+  issue: number,
+  surface: string,
+): LogicalResponseRouting {
+  const repoShort = repo.slice(repo.indexOf("/") + 1);
+  return {
+    surface,
+    channel: repoShort,
+    thread: `${repoShort}/issue/${issue}`,
+  };
+}
+
 /** The decision the orchestrator command boundary returns to the handler. */
 export type OrchestratorOutcome =
   /** Not an orchestrator command — the caller falls through to normal chat. */
   | { kind: "pass-through" }
   /** Command matched but the gate refused (non-principal sender). Dropped. */
   | { kind: "ignored"; reason: string }
-  /** Command matched + dispatched. `ack` is the principal-facing confirmation. */
-  | { kind: "dispatched"; envelope: Envelope; repo: string; issue: number; ack: string }
+  /**
+   * Command matched + dispatched. `ack` is the principal-facing confirmation;
+   * `routing` is the run's LOGICAL thread address (cortex#1206 S2) stamped on
+   * the dispatch — the handler resolves it to post the ack into the SAME thread
+   * the dev-agent lifecycle + review verdict render to.
+   */
+  | {
+      kind: "dispatched";
+      envelope: Envelope;
+      repo: string;
+      issue: number;
+      ack: string;
+      routing: LogicalResponseRouting;
+    }
   /** Command matched but could not be actioned. `ack` explains why. */
   | { kind: "error"; ack: string };
 
@@ -203,6 +254,14 @@ export interface OrchestratorCommandInput {
    * `agent` segment names the orchestrator (e.g. `vega`).
    */
   source: DevEventSource | undefined;
+  /**
+   * cortex#1206 (S2) — the inbound surface (`msg.platform`, e.g. `"discord"`)
+   * the command arrived on. Stamped as the run-thread routing's `surface` so
+   * the lifecycle + ack consolidate on the right platform. Optional for
+   * back-compat with callers that predate run-thread consolidation; defaults to
+   * {@link DEFAULT_RUN_SURFACE}.
+   */
+  surface?: string;
 }
 
 /**
@@ -247,9 +306,20 @@ export async function handleOrchestratorCommand(
     };
   }
 
+  // cortex#1206 (S2) — the run-thread address. Stamped on the dispatch so the
+  // dev consumer echoes it onto every lifecycle envelope and the review-sink
+  // resolves it to the ONE run thread; ALSO returned so the handler posts the
+  // ack into that same thread (not the flat channel the command came from).
+  const routing = buildRunThreadRouting(
+    payload.repo,
+    cmd.issue,
+    input.surface ?? DEFAULT_RUN_SURFACE,
+  );
+
   const envelope = createDevImplementRequestEvent({
     source: input.source,
     payload,
+    responseRouting: routing,
   });
 
   await input.runtime.publish(envelope);
@@ -259,6 +329,7 @@ export async function handleOrchestratorCommand(
     envelope,
     repo: payload.repo,
     issue: cmd.issue,
+    routing,
     ack:
       `On it — dispatched \`dev.implement\` for **${payload.repo}#${cmd.issue}** ` +
       `(branch \`${payload.branch}\`). The dev agent will pick it up, open a PR, ` +

@@ -14,11 +14,15 @@ import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../../bus/myelin/runtime";
 import type { DevEventSource } from "../../bus/dev-events";
 import { parseDevImplementPayload } from "../../bus/dev-events";
+import { createDispatchTaskCompletedEvent } from "../../bus/dispatch-events";
+import { readLogicalRouting } from "../../adapters/response-routing-delivery";
 import {
   ORCHESTRATOR_CAPABILITY,
+  DEFAULT_RUN_SURFACE,
   parseImplementCommand,
   resolveRepo,
   buildImplementPayload,
+  buildRunThreadRouting,
   handleOrchestratorCommand,
 } from "../orchestrator-command";
 
@@ -236,5 +240,107 @@ describe("handleOrchestratorCommand — dispatch publish", () => {
 describe("ORCHESTRATOR_CAPABILITY", () => {
   test("is the stable routing marker id", () => {
     expect(ORCHESTRATOR_CAPABILITY).toBe("dev.orchestrate");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1206 (S2) — dev-loop thread consolidation: run-thread routing
+// ---------------------------------------------------------------------------
+
+describe("buildRunThreadRouting", () => {
+  test("keys the run thread on the ENTITY (issue), repo-short channel", () => {
+    expect(buildRunThreadRouting("the-metafactory/cortex", 1196, "discord")).toEqual({
+      surface: "discord",
+      channel: "cortex",
+      thread: "cortex/issue/1196",
+    });
+  });
+
+  test("carries the inbound surface verbatim", () => {
+    expect(buildRunThreadRouting("the-metafactory/myelin", 7, "mattermost").surface).toBe(
+      "mattermost",
+    );
+  });
+});
+
+describe("handleOrchestratorCommand — run-thread routing (cortex#1206 S2)", () => {
+  test("stamps the LOGICAL run-thread routing on the dispatch envelope", async () => {
+    const { runtime, published } = recordingRuntime();
+    const outcome = await handleOrchestratorCommand({
+      text: "implement cortex#1196",
+      isOrchestrator: true,
+      authorIsPrincipal: true,
+      knownRepos: REPOS,
+      runtime,
+      source: SOURCE,
+      surface: "discord",
+    });
+
+    expect(outcome.kind).toBe("dispatched");
+    if (outcome.kind !== "dispatched") return;
+
+    // The outcome carries the routing so the handler can post the ack into it.
+    expect(outcome.routing).toEqual({
+      surface: "discord",
+      channel: "cortex",
+      thread: "cortex/issue/1196",
+    });
+
+    // The dispatch envelope carries the SAME routing as `response_routing` —
+    // this is exactly what the dev consumer reads via `readLogicalRouting`
+    // and echoes onto every lifecycle envelope.
+    const env = published[0]!;
+    expect(readLogicalRouting(env)).toEqual(outcome.routing);
+  });
+
+  test("surface defaults to discord when the caller omits it", async () => {
+    const { runtime, published } = recordingRuntime();
+    const outcome = await handleOrchestratorCommand({
+      text: "implement cortex#1196",
+      isOrchestrator: true,
+      authorIsPrincipal: true,
+      knownRepos: REPOS,
+      runtime,
+      source: SOURCE,
+    });
+    expect(outcome.kind).toBe("dispatched");
+    expect(readLogicalRouting(published[0]!)?.surface).toBe(DEFAULT_RUN_SURFACE);
+  });
+
+  test("the run routing flows dispatch → lifecycle unchanged (one thread key)", async () => {
+    const { runtime, published } = recordingRuntime();
+    const outcome = await handleOrchestratorCommand({
+      text: "implement cortex#1196",
+      isOrchestrator: true,
+      authorIsPrincipal: true,
+      knownRepos: REPOS,
+      runtime,
+      source: SOURCE,
+      surface: "discord",
+    });
+    expect(outcome.kind).toBe("dispatched");
+
+    // Simulate the dev consumer echoing the request's routing onto a terminal
+    // `dispatch.task.completed` (PR opened). The lifecycle envelope must carry
+    // the IDENTICAL logical thread address, so the review-sink resolves both
+    // the dispatch and the lifecycle to the SAME `{repo}/issue/N` thread.
+    const echoed = readLogicalRouting(published[0]!);
+    expect(echoed).not.toBeNull();
+    const completed = createDispatchTaskCompletedEvent({
+      source: SOURCE,
+      taskId: crypto.randomUUID(),
+      agentId: "forge",
+      correlationId: published[0]!.id,
+      responseRouting: echoed!,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      resultSummary: "opened the-metafactory/cortex#1200",
+      chatResponse: JSON.stringify({ pr: { number: 1200 } }),
+    });
+    expect(readLogicalRouting(completed)).toEqual({
+      surface: "discord",
+      channel: "cortex",
+      thread: "cortex/issue/1196",
+    });
   });
 });

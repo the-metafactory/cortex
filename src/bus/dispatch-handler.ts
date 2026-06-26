@@ -669,13 +669,27 @@ export class DispatchHandler extends EventEmitter {
           source: this.systemEventSource
             ? { ...this.systemEventSource, agent: targetAgent.id }
             : undefined,
+          // cortex#1206 (S2) — the run-thread routing's surface is the inbound
+          // platform, so the lifecycle + ack consolidate on the right surface.
+          surface: msg.platform,
         });
         if (outcome.kind === "dispatched") {
           console.log(
             `dispatch-handler: [DEV-LOOP] ${adapter.instanceId} agent=${targetAgent.id} ` +
               `dispatched dev.implement for ${outcome.repo}#${outcome.issue} (envelope ${outcome.envelope.id})`,
           );
-          await adapter.postResponse(this.targetFromMsg(adapter, msg), outcome.ack);
+          // cortex#1206 (S2) — post the ack INTO the run thread (not the flat
+          // channel) so the principal follows the run start-to-finish in one
+          // place. Eagerly create-or-find the `{repo-short}/issue/{N}` thread via
+          // the SAME `resolveLogicalTarget` the review-sink uses for the dev
+          // lifecycle + verdict, so all of them land together. Degrade to the
+          // inbound channel target when the surface can't thread (non-Discord,
+          // missing repo channel, thread-create failure) — never drop the ack.
+          const runThreadTarget = await this.resolveRunThreadTarget(adapter, outcome.routing);
+          await adapter.postResponse(
+            runThreadTarget ?? this.targetFromMsg(adapter, msg),
+            outcome.ack,
+          );
           return;
         }
         if (outcome.kind === "ignored") {
@@ -1661,6 +1675,34 @@ export class DispatchHandler extends EventEmitter {
   private inboundCorrelationId(adapter: PlatformAdapter, msg: InboundMessage): string {
     const nativeId = (msg._native as { id?: string } | undefined)?.id;
     return nativeId ?? `synthetic:${adapter.instanceId}:${msg.channelId}:${msg.timestamp.toISOString()}`;
+  }
+
+  /**
+   * cortex#1206 (S2) — resolve the run's LOGICAL thread address to a native
+   * target so vega's dispatch ack lands in the SAME thread the dev-agent
+   * lifecycle + review verdict render to (the review-sink resolves the
+   * identical logical routing). `resolveLogicalTarget` is idempotent — it
+   * create-or-finds the `{repo-short}/issue/{N}` thread — and already falls back
+   * to a channel-scope target internally when the thread can't be created.
+   *
+   * Returns `null` when the surface/channel can't resolve (non-Discord surface,
+   * no repo channel) OR the resolve throws, so the caller degrades to the
+   * inbound channel target. The ack is NEVER dropped.
+   */
+  private async resolveRunThreadTarget(
+    adapter: PlatformAdapter,
+    routing: { surface: string; channel: string; thread?: string },
+  ): Promise<ResponseTarget | null> {
+    try {
+      return await adapter.resolveLogicalTarget(routing);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `dispatch-handler: [DEV-LOOP] run-thread resolve failed ` +
+          `(surface=${routing.surface}, channel=${routing.channel}): ${detail}`,
+      );
+      return null;
+    }
   }
 
   private targetFromMsg(adapter: PlatformAdapter, msg: InboundMessage): ResponseTarget {

@@ -39,6 +39,12 @@
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
 import type { SystemEventSource } from "./system-events";
+import type { LogicalResponseRouting } from "./dispatch-events";
+
+// Re-export so the orchestrator + dev consumer import the run-thread routing
+// shape from one place (it is defined alongside the lifecycle builders that
+// echo it). Purely ergonomic — the underlying type lives in `dispatch-events`.
+export type { LogicalResponseRouting } from "./dispatch-events";
 
 // Re-export the source shape under a domain-neutral alias — mirrors
 // `ReviewEventSource` in `review-events.ts`. Callers import from one place.
@@ -136,6 +142,17 @@ export interface CreateDevImplementRequestEventOpts {
   classification?: Classification;
   /** Payload per §3.4 step 1. */
   payload: DevImplementPayload;
+  /**
+   * cortex#1206 (S2) — the run's LOGICAL response routing (`{ surface, channel,
+   * thread }` — repo-short channel + `{repo-short}/issue/{N}` entity thread per
+   * the channel-routing SOP). Stamped VERBATIM onto `payload.response_routing`
+   * so the dev consumer echoes it onto every `dispatch.task.*` lifecycle
+   * envelope (`readLogicalRouting`) and the review-sink resolves it to the ONE
+   * run thread (the cortex#502/#1148 logical-routing spine). The builder never
+   * inspects it. Omitted ⇒ no `response_routing` on the wire — byte-identical to
+   * a pre-#1206 unrouted dispatch (backward compatible).
+   */
+  responseRouting?: LogicalResponseRouting;
 }
 
 /**
@@ -172,6 +189,12 @@ export function createDevImplementRequestEvent(
       ...(p.gates !== undefined && { gates: [...p.gates] }),
       ...(p.feature !== undefined && { feature: p.feature }),
       ...(p.title !== undefined && { title: p.title }),
+      // cortex#1206 (S2) — the run-thread address. Echoed verbatim by the dev
+      // consumer onto every lifecycle envelope; the review-sink resolves it to
+      // the one run thread. Omitted when absent (backward compatible).
+      ...(opts.responseRouting !== undefined && {
+        response_routing: opts.responseRouting,
+      }),
     },
   });
 }

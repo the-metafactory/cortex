@@ -20,6 +20,8 @@ import type {
   CCSessionLike,
 } from "../../substrates/claude-code/harness";
 import type { CCSessionResult, CCSessionOpts } from "../../runner/cc-session";
+import { ORCHESTRATOR_CAPABILITY } from "../../runner/orchestrator-command";
+import { readLogicalRouting } from "../../adapters/response-routing-delivery";
 
 /**
  * cortex#486 — adapter-side platform-id → principal resolution at
@@ -2329,5 +2331,118 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     expect(wouldIntercept("team")).toBe(false);
     expect(wouldIntercept("help")).toBe(false);
     expect(wouldIntercept("learning")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1206 (S2) — dev-loop thread consolidation.
+//
+// When the orchestrator agent (vega) dispatches `implement {repo}#{N}` for the
+// principal, the dispatch carries the run's LOGICAL thread routing AND vega's
+// ack posts INTO that run thread (not the flat channel), so the principal
+// follows the whole run — ack → dev lifecycle → review verdict — in one place.
+// ---------------------------------------------------------------------------
+describe("DispatchHandler — dev-loop thread consolidation (cortex#1206 S2)", () => {
+  let originalLog: typeof console.log;
+
+  beforeEach(() => {
+    originalLog = console.log;
+    console.log = () => {};
+  });
+  afterEach(() => {
+    console.log = originalLog;
+  });
+
+  function makeOrchestratorHandler(): { handler: DispatchHandler; runtime: RecordingRuntime } {
+    const runtime = makeRecordingRuntime();
+    const handler = new DispatchHandler({
+      config: makeConfig({
+        github: { ...makeConfig().github, repos: ["the-metafactory/cortex"] },
+      }),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
+    });
+    return { handler, runtime };
+  }
+
+  const VEGA = {
+    id: "vega",
+    displayName: "Vega",
+    capabilities: [ORCHESTRATOR_CAPABILITY],
+  };
+
+  test("principal `implement` dispatches with run-thread routing + posts ack INTO the run thread", async () => {
+    const { handler, runtime } = makeOrchestratorHandler();
+    const adapter = new MockAdapter();
+    adapter.logicalSurface = "mock"; // the inbound surface resolves a thread
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ content: "implement cortex#1196", authorIsPrincipal: true }),
+      VEGA,
+    );
+
+    // 1. The dispatch envelope carries the LOGICAL run-thread routing.
+    expect(runtime.publishes).toHaveLength(1);
+    const env = runtime.publishes[0]!;
+    expect(env.type).toBe("tasks.dev.implement");
+    expect(readLogicalRouting(env)).toEqual({
+      surface: "mock",
+      channel: "cortex",
+      thread: "cortex/issue/1196",
+    });
+
+    // 2. The handler resolved that logical address to a native thread (the SAME
+    //    `resolveLogicalTarget` the review-sink uses for the dev lifecycle).
+    expect(adapter.logicalTargetsResolved).toContainEqual({
+      surface: "mock",
+      channel: "cortex",
+      thread: "cortex/issue/1196",
+    });
+
+    // 3. vega's ack landed in the run thread, not the flat channel.
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.target.threadId).toBe("thread:cortex/issue/1196");
+    expect(adapter.sentMessages[0]!.text).toContain("the-metafactory/cortex#1196");
+  });
+
+  test("FALLBACK: when the surface can't thread, the ack degrades to the channel (never dropped)", async () => {
+    const { handler, runtime } = makeOrchestratorHandler();
+    const adapter = new MockAdapter();
+    // The mock drives a DIFFERENT logical surface, so `resolveLogicalTarget`
+    // returns null for the inbound `"mock"` surface — exactly the non-Discord /
+    // missing-channel degrade path.
+    adapter.logicalSurface = "some-other-surface";
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ content: "implement cortex#1196", authorIsPrincipal: true }),
+      VEGA,
+    );
+
+    // The dispatch still published (the run still starts).
+    expect(runtime.publishes).toHaveLength(1);
+    // The ack is NOT dropped — it falls back to the inbound channel target
+    // (today's behaviour): channel-scope, no thread.
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.target.channelId).toBe("ch1");
+    expect(adapter.sentMessages[0]!.target.threadId).toBeUndefined();
+  });
+
+  test("FAIL-CLOSED: a non-principal `implement` is ignored — no dispatch, no thread, no ack", async () => {
+    const { handler, runtime } = makeOrchestratorHandler();
+    const adapter = new MockAdapter();
+    adapter.logicalSurface = "mock";
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({ content: "implement cortex#1196", authorIsPrincipal: false }),
+      VEGA,
+    );
+
+    expect(runtime.publishes).toHaveLength(0);
+    expect(adapter.logicalTargetsResolved).toHaveLength(0);
+    expect(adapter.sentMessages).toHaveLength(0);
   });
 });
