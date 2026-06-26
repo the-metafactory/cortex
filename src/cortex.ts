@@ -32,6 +32,9 @@ import {
   flattenDiscordPresences,
   flattenMattermostPresences,
   flattenSlackPresences,
+  surfaceInstanceEnabled,
+  dedupeSurfaceWarnings,
+  type SurfaceTokenWarning,
 } from "./common/config/loader";
 import {
   ConfigWatcher,
@@ -592,6 +595,17 @@ export interface StartCortexOptions {
    */
   surfaces?: Surfaces;
   /**
+   * cortex#1217 — disabled-surface warnings from the INLINE/gateway config
+   * load (`LoadedConfig.surfaceWarnings`). The boot path merges these with the
+   * agents.d/ FRAGMENT disabled-surface warnings (collected when this function
+   * loads `agents.d/`) and emits ONE consolidated, deduped principal-facing
+   * banner — so a fail-soft-disabled surface on a fragment agent (e.g. vega)
+   * bubbles UP, not only to stderr. Undefined/empty → no banner.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  surfaceWarnings?: SurfaceTokenWarning[];
+  /**
    * v2.0.0 cutover (cortex#297) — principal's platform-side ids surfaced
    * from `PrincipalConfigSchema` via `LoadedConfig.principal`. Replaces the
    * `AgentConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
@@ -1100,14 +1114,39 @@ export async function startCortex(
   const agentsDir = options.agentsDir
     ?? (options.configPath ? join(dirname(expandedConfigPath), "agents.d") : expandTilde("~/.config/cortex/agents.d/"));
   let fragmentAgents: Agent[] = [];
+  // cortex#1217 — collect fail-soft disabled-surface warnings from agents.d/
+  // fragments (vega ships its Discord token as a fragment placeholder). These
+  // are merged with the inline/gateway warnings from `options.surfaceWarnings`
+  // and surfaced in ONE consolidated boot banner below — so a disabled fragment
+  // surface bubbles UP, not only to stderr.
+  const fragmentSurfaceWarnings: SurfaceTokenWarning[] = [];
   try {
-    fragmentAgents = loadAgentsDirectory(agentsDir);
+    fragmentAgents = loadAgentsDirectory(agentsDir, fragmentSurfaceWarnings);
   } catch (err) {
     if (err instanceof FragmentLoadError) {
       console.error(`cortex: agents.d fragment load failed (non-fatal during AgentConfig migration): ${err.message}`);
     } else {
       throw err;
     }
+  }
+
+  // cortex#1217 — consolidated disabled-surface banner: inline/gateway warnings
+  // (from the config load) + agents.d/ fragment warnings, deduped per
+  // agent|platform|envVar so each disabled surface is reported ONCE. The
+  // per-surface stderr WARN already fired at resolve time; this is the
+  // principal-facing roll-up that names exactly what degraded and how to fix it.
+  const allSurfaceWarnings = dedupeSurfaceWarnings([
+    ...(options.surfaceWarnings ?? []),
+    ...fragmentSurfaceWarnings,
+  ]);
+  if (allSurfaceWarnings.length > 0) {
+    const lines = allSurfaceWarnings
+      .map((w) => `  • ${w.platform} for agent "${w.agent}" — set ${w.envVar} (\`arc secrets set ${w.agent} ${w.envVar}\`)`)
+      .join("\n");
+    console.warn(
+      `cortex: ${allSurfaceWarnings.length} surface(s) DISABLED due to unresolved secret placeholders ` +
+        `(the stack booted; only these surfaces are degraded):\n${lines}`,
+    );
   }
 
   // Merge: inline wins on id conflict (design §6.1). AgentConfig today carries
@@ -3647,7 +3686,9 @@ export async function startCortex(
   // three values are shared with the adapter loops below verbatim.
 
   for (const instance of discordInstances) {
-    if (!instance.enabled) {
+    // cortex#1217 — shared no-fail-open gate: a surface disabled by fail-soft
+    // token degradation is skipped here BEFORE `new DiscordAdapter` / login.
+    if (!surfaceInstanceEnabled(instance)) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
       continue;
     }
@@ -3858,7 +3899,8 @@ export async function startCortex(
   }
 
   for (const instance of mattermostInstances) {
-    if (!instance.enabled) continue;
+    // cortex#1217 — shared no-fail-open gate (see discord loop).
+    if (!surfaceInstanceEnabled(instance)) continue;
     if (!instance.apiUrl || !instance.apiToken) {
       console.error(`cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`);
       continue;
@@ -3959,7 +4001,8 @@ export async function startCortex(
   const startedSlack: StartedSlack[] = [];
 
   for (const instance of slackInstances) {
-    if (!instance.enabled) {
+    // cortex#1217 — shared no-fail-open gate (see discord loop).
+    if (!surfaceInstanceEnabled(instance)) {
       console.log(`cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`);
       continue;
     }
@@ -6559,20 +6602,11 @@ if (import.meta.main) {
           loadConfigWithAgents(options.config);
         // cortex#1217 — a surface secret placeholder with an unset env var no
         // longer FATAL-boots the daemon (which crash-looped the whole stack).
-        // The resolver disabled that ONE surface + already emitted a per-surface
-        // stderr WARN; re-surface a consolidated, principal-facing boot banner so
-        // the disabled surfaces are not buried in the per-field lines. The daemon
-        // boots normally with every still-resolvable surface live.
-        if (surfaceWarnings !== undefined && surfaceWarnings.length > 0) {
-          const lines = surfaceWarnings
-            .map((w) => `  • ${w.platform} for agent "${w.agent}" — set ${w.envVar} (\`arc secrets set ${w.agent} ${w.envVar}\`)`)
-            .join("\n");
-          console.warn(
-            `cortex: ${surfaceWarnings.length} surface(s) DISABLED due to unresolved secret placeholders ` +
-              `(the stack booted; only these surfaces are degraded):\n${lines}`,
-          );
-        }
+        // The resolver disabled that ONE surface; thread the inline/gateway
+        // warnings into startCortex, which merges them with the agents.d/
+        // fragment warnings it collects and emits ONE consolidated banner.
         return startCortex(config, {
+          ...(surfaceWarnings !== undefined && surfaceWarnings.length > 0 && { surfaceWarnings }),
           configPath: options.config,
           ...(inlineAgents.length > 0 && { inlineAgents }),
           ...(stack !== undefined && { stack }),

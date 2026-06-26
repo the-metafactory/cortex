@@ -377,14 +377,14 @@ export function resolveSurfaceBindingTokens(
     const entries = surfaces[platform];
     if (!Array.isArray(entries)) continue;
 
-    const kept: unknown[] = [];
+    // Indices of unresolvable binding entries, recorded as we scan, then spliced
+    // out (descending) after the scan. Splice mutates the typed array in place —
+    // the same reference threaded to `LoadedConfig.surfaces` — without any cast.
+    const dropIndices: number[] = [];
     for (let i = 0; i < entries.length; i++) {
       const entry: unknown = entries[i];
       const binding = isPlainObject(entry) ? entry.binding : undefined;
-      if (!isPlainObject(binding)) {
-        kept.push(entry); // nothing to resolve — keep verbatim
-        continue;
-      }
+      if (!isPlainObject(binding)) continue; // nothing to resolve — keep verbatim
 
       let missingEnvVar: string | undefined;
       let missingField: string | undefined;
@@ -401,7 +401,8 @@ export function resolveSurfaceBindingTokens(
       }
 
       if (missingEnvVar !== undefined && missingField !== undefined) {
-        // Fail soft: drop this binding entry so the gateway never builds it.
+        // Fail soft: mark this binding entry for drop so the gateway never
+        // builds it (there is no per-binding `enabled` flag to flip).
         const agent =
           isPlainObject(entry) && typeof entry.agent === "string" && entry.agent.length > 0
             ? entry.agent
@@ -414,14 +415,14 @@ export function resolveSurfaceBindingTokens(
         };
         emitSurfaceDisabledWarning(warning);
         if (warnings !== undefined) warnings.push(warning);
-        // entry NOT pushed to `kept` — it is dropped.
-      } else {
-        kept.push(entry);
+        dropIndices.push(i);
       }
     }
 
-    // Mutate the array in place (same reference threaded to LoadedConfig.surfaces).
-    entries.length = 0;
-    for (const e of kept) entries.push(e as never);
+    // Remove dropped entries back-to-front so earlier indices stay valid.
+    for (let j = dropIndices.length - 1; j >= 0; j--) {
+      const idx = dropIndices[j];
+      if (idx !== undefined) entries.splice(idx, 1);
+    }
   }
 }

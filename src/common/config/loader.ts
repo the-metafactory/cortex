@@ -33,6 +33,8 @@ import {
   type SurfaceTokenWarning,
 } from "./resolve-env-placeholders";
 
+export type { SurfaceTokenWarning } from "./resolve-env-placeholders";
+
 /**
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
  * unbounded readFileSync against an attacker- or accident-controlled file
@@ -640,7 +642,7 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
  * order. The per-surface stderr WARN still fires at resolve time; this is the
  * structured "bubble up once" list the boot path consumes.
  */
-function dedupeSurfaceWarnings(warnings: SurfaceTokenWarning[]): SurfaceTokenWarning[] {
+export function dedupeSurfaceWarnings(warnings: SurfaceTokenWarning[]): SurfaceTokenWarning[] {
   const seen = new Set<string>();
   const out: SurfaceTokenWarning[] = [];
   for (const w of warnings) {
@@ -993,6 +995,21 @@ export function flattenSlackPresences(agents: readonly Agent[]) {
   return out;
 }
 
+/**
+ * cortex#1217 — the boot adapter loop's "should this surface instance start?"
+ * gate, extracted so the no-fail-open guarantee is a SHARED, tested unit rather
+ * than three inline `!instance.enabled` checks. The per-platform
+ * adapter-construction loops in `src/cortex.ts` (discord / mattermost / slack)
+ * each `continue` past an instance for which this returns `false` BEFORE
+ * constructing the adapter or calling `connect()`. A surface disabled by
+ * fail-soft surface-token degradation (`resolveAgentPresenceTokens` →
+ * `enabled: false`) is carried through the presence-flatten, so this predicate
+ * is exactly what stops a missing-secret surface from ever opening a connection.
+ */
+export function surfaceInstanceEnabled(instance: { enabled: boolean }): boolean {
+  return instance.enabled;
+}
+
 // =============================================================================
 // F-2 — agents.d/ fragment loader
 // =============================================================================
@@ -1048,7 +1065,11 @@ export class FragmentLoadError extends Error {
  * this call (ENOENT race). The directory loader skips such files; single-file
  * callers translate `null` into a clear "file disappeared" error.
  */
-export function loadAgentFromFile(filePath: string, personaBaseDir: string): Agent | null {
+export function loadAgentFromFile(
+  filePath: string,
+  personaBaseDir: string,
+  warnings?: SurfaceTokenWarning[],
+): Agent | null {
   // Echo M3 — size guard before readFileSync.
   let size: number;
   try {
@@ -1115,7 +1136,11 @@ export function loadAgentFromFile(filePath: string, personaBaseDir: string): Age
   // resolution here. A pure raw record is required; non-object raw falls
   // straight to AgentSchema.parse which raises the principal-friendly error.
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-    resolveAgentPresenceTokens(raw as Record<string, unknown>, filename);
+    // cortex#1217 — pass the warnings sink so a fragment agent's disabled
+    // surface (vega ships `presence.discord.token: __VEGA_BOT_TOKEN__` as an
+    // agents.d/ fragment) is COLLECTED, not just emitted to stderr — the boot
+    // path threads these into the consolidated disabled-surface banner.
+    resolveAgentPresenceTokens(raw as Record<string, unknown>, filename, warnings);
   }
 
   let agent: Agent;
@@ -1154,7 +1179,7 @@ export function loadAgentFromFile(filePath: string, personaBaseDir: string): Age
   return { ...agent, persona: personaPathResolved };
 }
 
-export function loadAgentsDirectory(dir: string): Agent[] {
+export function loadAgentsDirectory(dir: string, warnings?: SurfaceTokenWarning[]): Agent[] {
   const expandedDir = expandTilde(dir);
 
   if (!existsSync(expandedDir)) {
@@ -1168,7 +1193,9 @@ export function loadAgentsDirectory(dir: string): Agent[] {
 
   for (const filename of files) {
     const filePath = join(expandedDir, filename);
-    const agent = loadAgentFromFile(filePath, expandedDir);
+    // cortex#1217 — thread the sink so fragment-agent disabled-surface warnings
+    // reach the boot banner (deduped at the call site like the inline path).
+    const agent = loadAgentFromFile(filePath, expandedDir, warnings);
     if (agent === null) {
       // File vanished between readdir and read — skip silently.
       continue;

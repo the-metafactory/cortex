@@ -34,7 +34,14 @@ import {
   type SurfaceTokenWarning,
 } from "../resolve-env-placeholders";
 import type { Surfaces } from "../../types/surfaces";
-import { loadConfigWithAgents, loadAgentFromFile } from "../loader";
+import {
+  loadConfigWithAgents,
+  loadAgentFromFile,
+  loadAgentsDirectory,
+  flattenDiscordPresences,
+  surfaceInstanceEnabled,
+} from "../loader";
+import type { Agent } from "../../types/cortex-config";
 
 // ---------------------------------------------------------------------------
 // env hygiene — snapshot + restore the env vars these tests poke so they never
@@ -619,5 +626,178 @@ describe("loader integration — surfaces.yaml directory layout (gateway path)",
       platform: "discord",
       envVar: "GW_DISCORD_TOKEN",
     });
+  });
+});
+
+// ===========================================================================
+// cortex#1217 review (MAJOR) — agents.d/ FRAGMENT disabled-surface warnings
+// must be COLLECTED into the sink (vega is a fragment), not only emitted to
+// stderr, so they reach the consolidated boot banner.
+// ===========================================================================
+describe("loadAgentsDirectory — fragment disabled-surface warnings reach the sink", () => {
+  let dir: string;
+  let agentsDir: string;
+  let personaPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "c1217-fragdir-"));
+    agentsDir = join(dir, "agents.d");
+    mkdirSync(agentsDir, { recursive: true });
+    personaPath = join(dir, "persona.md");
+    writeFileSync(personaPath, "# persona\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function writeFragment(id: string, token: string): void {
+    writeFileSync(
+      join(agentsDir, `${id}.yaml`),
+      `
+id: ${id}
+displayName: ${id}
+persona: ${personaPath}
+trust: []
+presence:
+  discord:
+    enabled: true
+    token: ${token}
+    guildId: "111"
+    agentChannelId: "222"
+    logChannelId: "333"
+`,
+    );
+  }
+
+  test("vega fragment with unset token → warning is COLLECTED (not just stderr) + surface disabled", () => {
+    delete process.env.VEGA_BOT_TOKEN;
+    writeFragment("vega", "__VEGA_BOT_TOKEN__");
+    // an enabled, inline-token sibling fragment that loads fine
+    writeFragment("luna", "inline-luna-token");
+
+    const warnings: SurfaceTokenWarning[] = [];
+    const agents = loadAgentsDirectory(agentsDir, warnings);
+
+    // both fragment agents still load (no throw, no aborted directory load)
+    expect(agents.map((a) => a.id).sort()).toEqual(["luna", "vega"]);
+    const vega = agents.find((a) => a.id === "vega");
+    expect(vega?.presence.discord?.enabled).toBe(false);
+
+    // the disabled-surface warning reached the sink → it can reach the banner
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      agent: "vega",
+      platform: "discord",
+      envVar: "VEGA_BOT_TOKEN",
+    });
+  });
+});
+
+// ===========================================================================
+// cortex#1217 review (NIT 2) — boot-loop no-fail-open lock.
+//
+// Reproduce the EXACT instance list + gate the boot path builds/uses
+// (`src/cortex.ts`: `discordInstances = [...config.discord,
+// ...flattenDiscordPresences(fragmentOnlyAgents)]`, then
+// `for (const instance of discordInstances) { if (!surfaceInstanceEnabled(...))
+// continue; new DiscordAdapter(...).start() }`). A `construct` spy stands in for
+// `new DiscordAdapter` / `.start()`/`connect()`. Asserts a fail-soft-disabled
+// surface is `continue`d past BEFORE construction — locking the guarantee at the
+// boot level, not just the resolver level.
+// ===========================================================================
+describe("boot adapter loop — disabled surface is skipped BEFORE construct/connect", () => {
+  let dir: string;
+  let agentsDir: string;
+  let personaPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "c1217-bootloop-"));
+    agentsDir = join(dir, "agents.d");
+    mkdirSync(agentsDir, { recursive: true });
+    personaPath = join(dir, "persona.md");
+    writeFileSync(personaPath, "# persona\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function writeInlineCortexYaml(): string {
+    const cfgPath = join(dir, "cortex.yaml");
+    // luna: inline token → enabled. vega: placeholder + (unset env) → disabled.
+    writeFileSync(
+      cfgPath,
+      `
+principal:
+  id: andreas
+claude:
+  timeoutMs: 120000
+agents:
+  - id: luna
+    displayName: Luna
+    persona: ${personaPath}
+    presence:
+      discord:
+        enabled: true
+        token: inline-luna-token
+        guildId: "444"
+        agentChannelId: "555"
+        logChannelId: "666"
+  - id: vega
+    displayName: Vega
+    persona: ${personaPath}
+    presence:
+      discord:
+        enabled: true
+        token: __VEGA_BOT_TOKEN__
+        guildId: "111"
+        agentChannelId: "222"
+        logChannelId: "333"
+`,
+    );
+    chmodSync(cfgPath, 0o600);
+    return cfgPath;
+  }
+
+  test("the gate skips every disabled instance before the adapter is constructed", () => {
+    delete process.env.VEGA_BOT_TOKEN;
+    const cfgPath = writeInlineCortexYaml();
+    const loaded = loadConfigWithAgents(cfgPath);
+
+    // Faithfully reconstruct the boot path's instance list (cortex.ts ~3634).
+    const inlineIds = new Set(loaded.inlineAgents.map((a) => a.id));
+    const fragmentOnlyAgents: Agent[] = loadAgentsDirectory(agentsDir).filter(
+      (a) => !inlineIds.has(a.id),
+    );
+    const discordInstances = [
+      ...loaded.config.discord,
+      ...flattenDiscordPresences(fragmentOnlyAgents),
+    ];
+
+    // `construct` stands in for `new DiscordAdapter(...).start()` (which would
+    // call `client.login(token)` → connect). It must NEVER run for a disabled
+    // instance, and must never receive a literal placeholder.
+    const constructed: { guildId: string; token: string }[] = [];
+    const connectAttempts: string[] = [];
+    for (const instance of discordInstances) {
+      // EXACT production gate (cortex.ts: `if (!surfaceInstanceEnabled(instance))`).
+      if (!surfaceInstanceEnabled(instance)) continue;
+      // Past the gate ⇒ the adapter would be constructed + login attempted.
+      constructed.push({ guildId: instance.guildId, token: instance.token });
+      connectAttempts.push(instance.token);
+    }
+
+    // luna (enabled) was constructed; vega (disabled) was skipped before construct.
+    expect(constructed.map((c) => c.guildId)).toEqual(["444"]);
+    expect(constructed.map((c) => c.token)).toEqual(["inline-luna-token"]);
+
+    // No connect attempt ever carried the literal placeholder OR vega's scrubbed
+    // sentinel — the disabled surface never reached connect at all.
+    expect(connectAttempts).not.toContain("__VEGA_BOT_TOKEN__");
+    for (const t of connectAttempts) {
+      expect(ENV_PLACEHOLDER_PATTERN.test(t)).toBe(false);
+    }
+
+    // Sanity: vega's instance IS present in the list but gated off (enabled:false)
+    // and carries no literal — proving the gate, not absence, is what protects it.
+    const vegaInstance = loaded.config.discord.find((d) => d.guildId === "111");
+    expect(vegaInstance?.enabled).toBe(false);
+    expect(surfaceInstanceEnabled(vegaInstance ?? { enabled: true })).toBe(false);
+    expect(ENV_PLACEHOLDER_PATTERN.test(vegaInstance?.token ?? "")).toBe(false);
   });
 });
