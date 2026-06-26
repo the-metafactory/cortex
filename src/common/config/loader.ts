@@ -30,6 +30,7 @@ import {
   resolveAgentPresenceTokens,
   resolveSurfaceBindingTokens,
   resolveSurfaceTokensInRawConfig,
+  type SurfaceTokenWarning,
 } from "./resolve-env-placeholders";
 
 /**
@@ -147,6 +148,18 @@ export interface LoadedConfig {
    * `undefined` for legacy bot.yaml input.
    */
   notify?: NotifyConfig;
+  /**
+   * cortex#1217 — surfaces disabled by fail-soft surface-token degradation. A
+   * surface secret placeholder (`presence.discord.token: __VEGA_BOT_TOKEN__`,
+   * the surfaces.yaml gateway bindings, …) whose env var is unset/empty no
+   * longer aborts the whole config load (which crash-looped the daemon and took
+   * the WHOLE stack offline) — that ONE surface is disabled + scrubbed, and the
+   * load continues. Each disabled surface is recorded here so the boot path can
+   * re-surface a consolidated principal-facing notification (the resolver
+   * already emits a per-surface stderr WARN at load time). Absent / empty when
+   * every surface token resolved.
+   */
+  surfaceWarnings?: SurfaceTokenWarning[];
 }
 
 /**
@@ -509,25 +522,33 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   // the top-level `surfaces:` key (GW.a.3b.2a, cortex#524).
   const { raw, surfaces } = composeRawConfigWithSurfaces(expandedPath);
 
-  // cortex#1209 — resolve `__ENV__` placeholders in the surface secret fields
-  // (`agents[].presence.{discord.token, mattermost.apiToken, slack.botToken/
-  // appToken}`) from `process.env` BEFORE the schema parse. Runs here, after
-  // the deep-merge compose, so the resolved value reaches the flattened
-  // presence → adapter login, and so the Slack `^xoxb-`/`^xapp-` regexes in
-  // SlackPresenceSchema see a real token rather than a placeholder. A declared
-  // placeholder with an unset env var throws a fatal, env-var-named error
-  // (fail-closed) — the literal `__X__` never reaches an adapter. Inline tokens
-  // pass through byte-identical. Mutates `raw` in place (it is a freshly
-  // composed object — see `deepMerge`/single-file `parseYaml`).
-  resolveSurfaceTokensInRawConfig(raw);
+  // cortex#1209 / cortex#1217 — resolve `__ENV__` placeholders in the surface
+  // secret fields (`agents[].presence.{discord.token, mattermost.apiToken,
+  // slack.botToken/appToken}`) from `process.env` BEFORE the schema parse. Runs
+  // here, after the deep-merge compose, so the resolved value reaches the
+  // flattened presence → adapter login, and so the Slack `^xoxb-`/`^xapp-`
+  // regexes in SlackPresenceSchema see a real token rather than a placeholder.
+  //
+  // cortex#1217: a declared placeholder with an UNSET env var no longer throws
+  // (which FATAL-booted the daemon → launchd crash loop → whole stack offline).
+  // Instead that ONE surface is disabled (`presence.<platform>.enabled = false`)
+  // + the literal scrubbed, the load continues, and the miss is recorded in
+  // `surfaceWarnings` (the resolver also emits a per-surface stderr WARN). A
+  // resolved placeholder still resolves; an inline token is byte-identical.
+  // Mutates `raw` in place (it is a freshly composed object — see
+  // `deepMerge`/single-file `parseYaml`).
+  const surfaceWarnings: SurfaceTokenWarning[] = [];
+  resolveSurfaceTokensInRawConfig(raw, surfaceWarnings);
 
   // cortex#1209 review (MAJOR) — the captured `surfaces` binding map is a
   // SEPARATE pre-fold object threaded straight to the surface gateway
   // (`buildGatewayAdapters`), bypassing the `raw.agents[]` walk above. Resolve
   // its `binding.<token>` fields too so the `CORTEX_GATEWAY=1` path can never
-  // hand a literal `__X__` to Discord/Mattermost `connect()`. Same fail-closed
-  // contract; mutates the freshly-parsed `surfaces` object in place.
-  if (surfaces !== undefined) resolveSurfaceBindingTokens(surfaces);
+  // hand a literal `__X__` to Discord/Mattermost `connect()`. cortex#1217: an
+  // unresolvable binding ENTRY is dropped (the gateway has no per-binding
+  // enabled flag), recorded in the same `surfaceWarnings` sink. Mutates the
+  // freshly-parsed `surfaces` object in place.
+  if (surfaces !== undefined) resolveSurfaceBindingTokens(surfaces, surfaceWarnings);
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
@@ -546,8 +567,20 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   );
   const networks = loadNetworkFiles(networksDir, explicitNetworksDir);
 
+  // cortex#1217 — a surfaces.yaml binding is BOTH folded into the per-agent
+  // `presence` (so `resolveSurfaceTokensInRawConfig` disables it) AND resolved
+  // on the separately-captured gateway `surfaces` object (so
+  // `resolveSurfaceBindingTokens` drops it) — one missing env var therefore
+  // produces two records for the same root cause. Dedupe by agent+platform+var
+  // so the boot path bubbles each disabled surface up ONCE.
+  const dedupedWarnings = dedupeSurfaceWarnings(surfaceWarnings);
+
   if (isCortexShape(raw)) {
-    return loadCortexShape(raw, networks, surfaces);
+    const loaded = loadCortexShape(raw, networks, surfaces);
+    // Thread any fail-soft disabled-surface warnings through so the boot path
+    // can re-surface them. Only attach when non-empty (keeps the happy-path
+    // `LoadedConfig` byte-identical to pre-#1217).
+    return dedupedWarnings.length > 0 ? { ...loaded, surfaceWarnings: dedupedWarnings } : loaded;
   }
 
   // ---------------------------------------------------------------------
@@ -594,7 +627,29 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   return {
     config: AgentConfigSchema.parse(merged),
     inlineAgents: [],
+    // cortex#1217 — legacy bot.yaml carries inline tokens (no agents[].presence
+    // walk), so this is normally empty; attach for shape-parity when non-empty.
+    ...(dedupedWarnings.length > 0 && { surfaceWarnings: dedupedWarnings }),
   };
+}
+
+/**
+ * cortex#1217 — collapse duplicate disabled-surface warnings (a surfaces.yaml
+ * binding is reported by both the folded-presence walk and the gateway-binding
+ * resolver) to one record per `agent|platform|envVar`, preserving first-seen
+ * order. The per-surface stderr WARN still fires at resolve time; this is the
+ * structured "bubble up once" list the boot path consumes.
+ */
+function dedupeSurfaceWarnings(warnings: SurfaceTokenWarning[]): SurfaceTokenWarning[] {
+  const seen = new Set<string>();
+  const out: SurfaceTokenWarning[] = [];
+  for (const w of warnings) {
+    const key = `${w.agent}|${w.platform}|${w.envVar}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(w);
+  }
+  return out;
 }
 
 /**

@@ -1,11 +1,16 @@
 /**
- * cortex#1209 — `__ENV__` placeholder resolution for surface secret fields.
+ * cortex#1209 / cortex#1217 — `__ENV__` placeholder resolution for surface
+ * secret fields, with fail-SOFT per-surface degradation.
  *
- * Acceptance cases (from the issue):
+ * Acceptance cases:
  *   - `token: __VEGA_BOT_TOKEN__` + env set → adapter receives the real token.
- *   - placeholder + unset env → fatal, env-var-named error (NOT the literal).
+ *   - placeholder + UNSET env → that ONE surface is DISABLED (`enabled:false`)
+ *     + scrubbed (no literal `__X__` survives) + a WARN is collected; the load
+ *     does NOT throw and the agent + rest of the config still load (cortex#1217
+ *     — the fail-closed throw used to crash-loop the whole stack).
  *   - inline token → unchanged.
  *   - Pier's `__PIER_BOT_TOKEN__` resolves the same way (fragment path).
+ *   - the surfaces.yaml gateway-binding path fails soft by DROPPING the entry.
  *
  * The unit layer here exercises the resolver directly + through the loader
  * (`loadConfigWithAgents` for inline `agents[]`, `loadAgentFromFile` for an
@@ -26,6 +31,7 @@ import {
   resolveAgentPresenceTokens,
   resolveSurfaceBindingTokens,
   resolveSurfaceTokensInRawConfig,
+  type SurfaceTokenWarning,
 } from "../resolve-env-placeholders";
 import type { Surfaces } from "../../types/surfaces";
 import { loadConfigWithAgents, loadAgentFromFile } from "../loader";
@@ -69,51 +75,37 @@ describe("ENV_PLACEHOLDER_PATTERN", () => {
     expect(ENV_PLACEHOLDER_PATTERN.test("xoxb-real-token")).toBe(false);
     expect(ENV_PLACEHOLDER_PATTERN.test("__A B__")).toBe(false);
   });
+
+  test("the scrub sentinels are NOT themselves placeholders (assert never re-fires)", () => {
+    // The disabled-surface sentinels must not look like `__ENV__` placeholders,
+    // or a downstream resolve pass / the belt-and-suspenders assert would trip.
+    expect(ENV_PLACEHOLDER_PATTERN.test("DISABLED-MISSING-SECRET-VEGA_BOT_TOKEN")).toBe(false);
+    expect(ENV_PLACEHOLDER_PATTERN.test("xoxb-DISABLED-SLACK_BOT")).toBe(false);
+    expect(ENV_PLACEHOLDER_PATTERN.test("xapp-DISABLED-SLACK_APP")).toBe(false);
+  });
 });
 
-describe("resolveAgentPresenceTokens", () => {
+describe("resolveAgentPresenceTokens — resolve / inline (unchanged behaviour)", () => {
   test("resolves a discord token placeholder from env", () => {
     process.env.VEGA_BOT_TOKEN = "real-vega-token";
     const agent: Record<string, unknown> = {
-      presence: { discord: { token: "__VEGA_BOT_TOKEN__" } },
+      id: "vega",
+      presence: { discord: { enabled: true, token: "__VEGA_BOT_TOKEN__" } },
     };
     resolveAgentPresenceTokens(agent, "agents[0]");
     expect((agent.presence as any).discord.token).toBe("real-vega-token");
-  });
-
-  test("fail-closed: unset env → EnvPlaceholderError naming the var, not the literal", () => {
-    delete process.env.VEGA_BOT_TOKEN;
-    const agent: Record<string, unknown> = {
-      presence: { discord: { token: "__VEGA_BOT_TOKEN__" } },
-    };
-    let err: unknown;
-    try {
-      resolveAgentPresenceTokens(agent, "agents[0]");
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(EnvPlaceholderError);
-    expect((err as EnvPlaceholderError).envVar).toBe("VEGA_BOT_TOKEN");
-    expect((err as Error).message).toContain("VEGA_BOT_TOKEN");
-    expect((err as Error).message).toContain("agents[0].presence.discord.token");
-    // the literal placeholder must NOT silently survive onto the object
-    expect((agent.presence as any).discord.token).toBe("__VEGA_BOT_TOKEN__");
-  });
-
-  test("fail-closed: EMPTY env var is treated as unset", () => {
-    process.env.VEGA_BOT_TOKEN = "";
-    const agent: Record<string, unknown> = {
-      presence: { discord: { token: "__VEGA_BOT_TOKEN__" } },
-    };
-    expect(() => resolveAgentPresenceTokens(agent, "agents[0]")).toThrow(EnvPlaceholderError);
+    // resolved surface stays enabled
+    expect((agent.presence as any).discord.enabled).toBe(true);
   });
 
   test("inline token passes through byte-identical", () => {
     const agent: Record<string, unknown> = {
-      presence: { discord: { token: "inline-real-token-123" } },
+      id: "vega",
+      presence: { discord: { enabled: true, token: "inline-real-token-123" } },
     };
     resolveAgentPresenceTokens(agent, "agents[0]");
     expect((agent.presence as any).discord.token).toBe("inline-real-token-123");
+    expect((agent.presence as any).discord.enabled).toBe(true);
   });
 
   test("resolves mattermost.apiToken + slack.botToken/appToken", () => {
@@ -121,6 +113,7 @@ describe("resolveAgentPresenceTokens", () => {
     process.env.SLACK_BOT = "xoxb-real";
     process.env.SLACK_APP = "xapp-real";
     const agent: Record<string, unknown> = {
+      id: "echo",
       presence: {
         mattermost: { apiToken: "__MM_API_TOKEN__" },
         slack: { botToken: "__SLACK_BOT__", appToken: "__SLACK_APP__" },
@@ -138,18 +131,111 @@ describe("resolveAgentPresenceTokens", () => {
   });
 });
 
+describe("resolveAgentPresenceTokens — fail SOFT on unset env (cortex#1217)", () => {
+  test("unset env → surface DISABLED, literal scrubbed, NO throw, WARN collected", () => {
+    delete process.env.VEGA_BOT_TOKEN;
+    const agent: Record<string, unknown> = {
+      id: "vega",
+      presence: { discord: { enabled: true, token: "__VEGA_BOT_TOKEN__" } },
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    // does NOT throw
+    expect(() => resolveAgentPresenceTokens(agent, "agents[0]", warnings)).not.toThrow();
+    const discord = (agent.presence as any).discord;
+    // surface disabled
+    expect(discord.enabled).toBe(false);
+    // the literal placeholder must NOT survive
+    expect(discord.token).not.toBe("__VEGA_BOT_TOKEN__");
+    expect(ENV_PLACEHOLDER_PATTERN.test(discord.token)).toBe(false);
+    // warning names the agent + env var (never a thrown error)
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      agent: "vega",
+      platform: "discord",
+      envVar: "VEGA_BOT_TOKEN",
+      fieldPath: "agents[0].presence.discord.token",
+    });
+  });
+
+  test("EMPTY / whitespace-only env var is treated as unset → soft-disable", () => {
+    process.env.VEGA_BOT_TOKEN = "   ";
+    const agent: Record<string, unknown> = {
+      id: "vega",
+      presence: { discord: { enabled: true, token: "__VEGA_BOT_TOKEN__" } },
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    resolveAgentPresenceTokens(agent, "agents[0]", warnings);
+    expect((agent.presence as any).discord.enabled).toBe(false);
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("slack botToken missing → disabled + scrubbed to a schema-valid xoxb- sentinel", () => {
+    delete process.env.SLACK_BOT;
+    process.env.SLACK_APP = "xapp-real";
+    const agent: Record<string, unknown> = {
+      id: "sage",
+      presence: { slack: { enabled: true, botToken: "__SLACK_BOT__", appToken: "__SLACK_APP__" } },
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    resolveAgentPresenceTokens(agent, "agents[0]", warnings);
+    const slack = (agent.presence as any).slack;
+    expect(slack.enabled).toBe(false);
+    // scrubbed sentinel still satisfies the `^xoxb-` schema regex (so the parse
+    // downstream does not choke), but is plainly not a real token + not a literal
+    expect(slack.botToken.startsWith("xoxb-")).toBe(true);
+    expect(ENV_PLACEHOLDER_PATTERN.test(slack.botToken)).toBe(false);
+    expect(warnings[0]?.platform).toBe("slack");
+  });
+
+  test("one disabled surface does not affect a sibling resolvable surface", () => {
+    delete process.env.VEGA_BOT_TOKEN;
+    process.env.MM_API_TOKEN = "mm-real";
+    const agent: Record<string, unknown> = {
+      id: "vega",
+      presence: {
+        discord: { enabled: true, token: "__VEGA_BOT_TOKEN__" },
+        mattermost: { enabled: true, apiToken: "__MM_API_TOKEN__" },
+      },
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    resolveAgentPresenceTokens(agent, "agents[0]", warnings);
+    // discord disabled, mattermost still live + resolved
+    expect((agent.presence as any).discord.enabled).toBe(false);
+    expect((agent.presence as any).mattermost.enabled).toBe(true);
+    expect((agent.presence as any).mattermost.apiToken).toBe("mm-real");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.platform).toBe("discord");
+  });
+});
+
 describe("resolveSurfaceTokensInRawConfig", () => {
   test("walks agents[] and resolves each presence token", () => {
     process.env.VEGA_BOT_TOKEN = "real-vega";
     const raw: Record<string, unknown> = {
       agents: [
-        { id: "vega", presence: { discord: { token: "__VEGA_BOT_TOKEN__" } } },
-        { id: "luna", presence: { discord: { token: "inline-luna" } } },
+        { id: "vega", presence: { discord: { enabled: true, token: "__VEGA_BOT_TOKEN__" } } },
+        { id: "luna", presence: { discord: { enabled: true, token: "inline-luna" } } },
       ],
     };
     resolveSurfaceTokensInRawConfig(raw);
     expect((raw.agents as any)[0].presence.discord.token).toBe("real-vega");
     expect((raw.agents as any)[1].presence.discord.token).toBe("inline-luna");
+  });
+
+  test("one agent's unset env disables only THAT agent's surface; others untouched", () => {
+    delete process.env.VEGA_BOT_TOKEN;
+    const raw: Record<string, unknown> = {
+      agents: [
+        { id: "vega", presence: { discord: { enabled: true, token: "__VEGA_BOT_TOKEN__" } } },
+        { id: "luna", presence: { discord: { enabled: true, token: "inline-luna" } } },
+      ],
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    resolveSurfaceTokensInRawConfig(raw, warnings);
+    expect((raw.agents as any)[0].presence.discord.enabled).toBe(false);
+    expect((raw.agents as any)[1].presence.discord.enabled).toBe(true);
+    expect((raw.agents as any)[1].presence.discord.token).toBe("inline-luna");
+    expect(warnings.map((w) => w.agent)).toEqual(["vega"]);
   });
 
   test("no agents[] (legacy bot.yaml shape) → no-op", () => {
@@ -167,13 +253,15 @@ describe("loader integration — inline cortex.yaml agents[]", () => {
   let personaPath: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "c1209-inline-"));
+    dir = mkdtempSync(join(tmpdir(), "c1217-inline-"));
     personaPath = join(dir, "persona.md");
     writeFileSync(personaPath, "# persona\n");
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  function writeCortexYaml(token: string): string {
+  // Two agents so we can assert the rest of the config still loads when one
+  // agent's surface token is missing (cortex#1217 blast-radius containment).
+  function writeCortexYaml(vegaToken: string): string {
     const cfgPath = join(dir, "cortex.yaml");
     const yaml = `
 principal:
@@ -187,10 +275,20 @@ agents:
     presence:
       discord:
         enabled: true
-        token: ${token}
+        token: ${vegaToken}
         guildId: "111"
         agentChannelId: "222"
         logChannelId: "333"
+  - id: luna
+    displayName: Luna
+    persona: ${personaPath}
+    presence:
+      discord:
+        enabled: true
+        token: inline-luna-token
+        guildId: "444"
+        agentChannelId: "555"
+        logChannelId: "666"
 `;
     writeFileSync(cfgPath, yaml);
     chmodSync(cfgPath, 0o600);
@@ -201,22 +299,66 @@ agents:
     process.env.VEGA_BOT_TOKEN = "real-vega-secret";
     const cfgPath = writeCortexYaml("__VEGA_BOT_TOKEN__");
     const loaded = loadConfigWithAgents(cfgPath);
-    expect(loaded.inlineAgents[0]?.presence.discord?.token).toBe("real-vega-secret");
+    const vega = loaded.inlineAgents.find((a) => a.id === "vega");
+    expect(vega?.presence.discord?.token).toBe("real-vega-secret");
+    expect(vega?.presence.discord?.enabled).toBe(true);
     // flattened legacy-shape array (what the adapter loop consumes) too
-    expect(loaded.config.discord[0]?.token).toBe("real-vega-secret");
+    const vegaInstance = loaded.config.discord.find((d) => d.token === "real-vega-secret");
+    expect(vegaInstance?.enabled).toBe(true);
+    expect(loaded.surfaceWarnings).toBeUndefined();
   });
 
-  test("placeholder + unset env → fatal error naming the var, never the literal", () => {
+  test("placeholder + UNSET env → surface disabled, NO throw, rest of stack loads", () => {
     delete process.env.VEGA_BOT_TOKEN;
     const cfgPath = writeCortexYaml("__VEGA_BOT_TOKEN__");
-    expect(() => loadConfigWithAgents(cfgPath)).toThrow(/VEGA_BOT_TOKEN/);
-    expect(() => loadConfigWithAgents(cfgPath)).toThrow(EnvPlaceholderError);
+    // The whole load must NOT throw (cortex#1217 — this is the crash-loop fix).
+    const loaded = loadConfigWithAgents(cfgPath);
+
+    // vega's discord surface is disabled + scrubbed (never the literal).
+    const vega = loaded.inlineAgents.find((a) => a.id === "vega");
+    expect(vega?.presence.discord?.enabled).toBe(false);
+    expect(vega?.presence.discord?.token).not.toBe("__VEGA_BOT_TOKEN__");
+    expect(ENV_PLACEHOLDER_PATTERN.test(vega?.presence.discord?.token ?? "")).toBe(false);
+
+    // luna (and the rest of the config) loaded normally.
+    const luna = loaded.inlineAgents.find((a) => a.id === "luna");
+    expect(luna?.presence.discord?.enabled).toBe(true);
+    expect(luna?.presence.discord?.token).toBe("inline-luna-token");
+
+    // bubbled up once, naming the agent + env var.
+    expect(loaded.surfaceWarnings).toHaveLength(1);
+    expect(loaded.surfaceWarnings?.[0]).toMatchObject({
+      agent: "vega",
+      platform: "discord",
+      envVar: "VEGA_BOT_TOKEN",
+    });
+  });
+
+  test("NO fail-open: the disabled surface is skipped by the adapter loop (enabled:false)", () => {
+    delete process.env.VEGA_BOT_TOKEN;
+    const cfgPath = writeCortexYaml("__VEGA_BOT_TOKEN__");
+    const loaded = loadConfigWithAgents(cfgPath);
+    // The flattened legacy-shape array (`config.discord`) is exactly what the
+    // boot-time adapter loop iterates, skipping every `enabled === false`
+    // instance before it ever constructs a DiscordAdapter / calls connect().
+    // Assert vega's flattened instance is present-but-disabled and carries no
+    // literal placeholder.
+    const vegaInstance = loaded.config.discord.find((d) => d.guildId === "111");
+    expect(vegaInstance).toBeDefined();
+    expect(vegaInstance?.enabled).toBe(false);
+    expect(ENV_PLACEHOLDER_PATTERN.test(vegaInstance?.token ?? "")).toBe(false);
+    // luna's live instance is untouched.
+    const lunaInstance = loaded.config.discord.find((d) => d.guildId === "444");
+    expect(lunaInstance?.enabled).toBe(true);
   });
 
   test("inline token → unchanged", () => {
     const cfgPath = writeCortexYaml("inline-discord-token-xyz");
     const loaded = loadConfigWithAgents(cfgPath);
-    expect(loaded.inlineAgents[0]?.presence.discord?.token).toBe("inline-discord-token-xyz");
+    const vega = loaded.inlineAgents.find((a) => a.id === "vega");
+    expect(vega?.presence.discord?.token).toBe("inline-discord-token-xyz");
+    expect(vega?.presence.discord?.enabled).toBe(true);
+    expect(loaded.surfaceWarnings).toBeUndefined();
   });
 });
 
@@ -225,7 +367,7 @@ describe("loader integration — agents.d/ fragment (Pier path)", () => {
   let personaPath: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "c1209-frag-"));
+    dir = mkdtempSync(join(tmpdir(), "c1217-frag-"));
     personaPath = join(dir, "persona.md");
     writeFileSync(personaPath, "# pier\n");
   });
@@ -255,36 +397,31 @@ presence:
     const fragPath = writePierFragment("__PIER_BOT_TOKEN__");
     const agent = loadAgentFromFile(fragPath, dir);
     expect(agent?.presence.discord?.token).toBe("real-pier-secret");
+    expect(agent?.presence.discord?.enabled).toBe(true);
   });
 
-  test("Pier fragment placeholder + unset env → fatal, env-var-named", () => {
+  test("Pier fragment placeholder + unset env → loads with discord DISABLED (no throw)", () => {
     delete process.env.PIER_BOT_TOKEN;
     const fragPath = writePierFragment("__PIER_BOT_TOKEN__");
-    expect(() => loadAgentFromFile(fragPath, dir)).toThrow(/PIER_BOT_TOKEN/);
+    // cortex#1217 — the fragment loader must NOT throw; the agent loads with its
+    // discord surface disabled rather than aborting the whole agents.d/ load.
+    const agent = loadAgentFromFile(fragPath, dir);
+    expect(agent).not.toBeNull();
+    expect(agent?.presence.discord?.enabled).toBe(false);
+    expect(agent?.presence.discord?.token).not.toBe("__PIER_BOT_TOKEN__");
+    expect(ENV_PLACEHOLDER_PATTERN.test(agent?.presence.discord?.token ?? "")).toBe(false);
   });
 
   test("inline fragment token → unchanged", () => {
     const fragPath = writePierFragment("inline-pier-token");
     const agent = loadAgentFromFile(fragPath, dir);
     expect(agent?.presence.discord?.token).toBe("inline-pier-token");
+    expect(agent?.presence.discord?.enabled).toBe(true);
   });
 });
 
 // ===========================================================================
-// cortex#1209 review — whitespace-only env (nit 1)
-// ===========================================================================
-describe("fail-closed on whitespace-only env (nit 1)", () => {
-  test("env var set to '   ' is treated as unset → fatal", () => {
-    process.env.VEGA_BOT_TOKEN = "   ";
-    const agent: Record<string, unknown> = {
-      presence: { discord: { token: "__VEGA_BOT_TOKEN__" } },
-    };
-    expect(() => resolveAgentPresenceTokens(agent, "agents[0]")).toThrow(EnvPlaceholderError);
-  });
-});
-
-// ===========================================================================
-// cortex#1209 review (MAJOR) — surfaces.yaml gateway-binding resolution
+// cortex#1209 review (MAJOR) + cortex#1217 — surfaces.yaml gateway bindings
 // ===========================================================================
 describe("resolveSurfaceBindingTokens — gateway binding map", () => {
   function surfacesWith(discordToken: string): Surfaces {
@@ -311,18 +448,40 @@ describe("resolveSurfaceBindingTokens — gateway binding map", () => {
     expect((surfaces.discord as any)[0].binding.token).toBe("real-gw-token");
   });
 
-  test("fail-closed: unset env → EnvPlaceholderError naming the var (not the literal)", () => {
+  test("fail SOFT: unset env → the binding ENTRY is dropped (gateway never builds it)", () => {
     delete process.env.GW_DISCORD_TOKEN;
     const surfaces = surfacesWith("__GW_DISCORD_TOKEN__");
-    let err: unknown;
-    try {
-      resolveSurfaceBindingTokens(surfaces);
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(EnvPlaceholderError);
-    expect((err as EnvPlaceholderError).envVar).toBe("GW_DISCORD_TOKEN");
-    expect((err as Error).message).toContain("surfaces.discord[0].binding.token");
+    const warnings: SurfaceTokenWarning[] = [];
+    expect(() => resolveSurfaceBindingTokens(surfaces, warnings)).not.toThrow();
+    // the unresolvable entry is gone — no literal can reach buildGatewayAdapters
+    expect(surfaces.discord).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      agent: "vega",
+      platform: "discord",
+      envVar: "GW_DISCORD_TOKEN",
+      fieldPath: "surfaces.discord[0].binding.token",
+    });
+  });
+
+  test("fail SOFT drops ONLY the unresolvable entry; resolvable siblings survive", () => {
+    delete process.env.GW_DISCORD_TOKEN;
+    const surfaces = {
+      discord: [
+        {
+          agent: "vega",
+          binding: { token: "__GW_DISCORD_TOKEN__", guildId: "1", agentChannelId: "2", logChannelId: "3" },
+        },
+        {
+          agent: "luna",
+          binding: { token: "inline-live-token", guildId: "4", agentChannelId: "5", logChannelId: "6" },
+        },
+      ],
+    } as unknown as Surfaces;
+    resolveSurfaceBindingTokens(surfaces);
+    expect(surfaces.discord).toHaveLength(1);
+    expect((surfaces.discord as any)[0].agent).toBe("luna");
+    expect((surfaces.discord as any)[0].binding.token).toBe("inline-live-token");
   });
 
   test("inline binding token → unchanged", () => {
@@ -351,15 +510,40 @@ describe("resolveSurfaceBindingTokens — gateway binding map", () => {
     expect((surfaces.slack as any)[0].binding.appToken).toBe("xapp-real");
     expect((surfaces.mattermost as any)[0].binding.apiToken).toBe("mm-real");
   });
+
+  test("fail SOFT: a missing slack botToken drops the slack binding", () => {
+    delete process.env.SLACK_BOT;
+    process.env.SLACK_APP = "xapp-real";
+    const surfaces = {
+      slack: [
+        {
+          agent: "sage",
+          binding: { botToken: "__SLACK_BOT__", appToken: "__SLACK_APP__", workspaceId: "T0123456789" },
+        },
+      ],
+    } as unknown as Surfaces;
+    const warnings: SurfaceTokenWarning[] = [];
+    resolveSurfaceBindingTokens(surfaces, warnings);
+    expect(surfaces.slack).toHaveLength(0);
+    expect(warnings[0]?.platform).toBe("slack");
+    expect(warnings[0]?.envVar).toBe("SLACK_BOT");
+  });
 });
 
-describe("assertNoUnresolvedPlaceholder (belt-and-suspenders)", () => {
+describe("assertNoUnresolvedPlaceholder (belt-and-suspenders, retained strict path)", () => {
   test("throws naming the env var on a literal placeholder", () => {
     expect(() => assertNoUnresolvedPlaceholder("__GW_DISCORD_TOKEN__", "x")).toThrow(/GW_DISCORD_TOKEN/);
+  });
+  test("the thrown type is still EnvPlaceholderError", () => {
+    expect(() => assertNoUnresolvedPlaceholder("__GW_DISCORD_TOKEN__", "x")).toThrow(EnvPlaceholderError);
   });
   test("passes a resolved / inline value", () => {
     expect(() => assertNoUnresolvedPlaceholder("real-token", "x")).not.toThrow();
     expect(() => assertNoUnresolvedPlaceholder(undefined, "x")).not.toThrow();
+  });
+  test("passes a disabled-surface scrub sentinel (it is not a placeholder)", () => {
+    expect(() => assertNoUnresolvedPlaceholder("xoxb-DISABLED-SLACK_BOT", "x")).not.toThrow();
+    expect(() => assertNoUnresolvedPlaceholder("DISABLED-MISSING-SECRET-VEGA_BOT_TOKEN", "x")).not.toThrow();
   });
 });
 
@@ -371,7 +555,7 @@ describe("loader integration — surfaces.yaml directory layout (gateway path)",
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "c1209-surfaces-"));
+    dir = mkdtempSync(join(tmpdir(), "c1217-surfaces-"));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -422,10 +606,18 @@ describe("loader integration — surfaces.yaml directory layout (gateway path)",
     process.env.GW_DISCORD_TOKEN = "real-gw-secret";
     const loaded = loadConfigWithAgents(writeLayout("__GW_DISCORD_TOKEN__"));
     expect((loaded.surfaces?.discord as any)?.[0]?.binding.token).toBe("real-gw-secret");
+    expect(loaded.surfaceWarnings).toBeUndefined();
   });
 
-  test("placeholder in surfaces.yaml binding + unset env → fatal, env-var-named", () => {
+  test("placeholder in surfaces.yaml binding + unset env → binding dropped, NO throw", () => {
     delete process.env.GW_DISCORD_TOKEN;
-    expect(() => loadConfigWithAgents(writeLayout("__GW_DISCORD_TOKEN__"))).toThrow(/GW_DISCORD_TOKEN/);
+    const loaded = loadConfigWithAgents(writeLayout("__GW_DISCORD_TOKEN__"));
+    // the gateway map drops the unresolvable binding (no literal survives)
+    expect(loaded.surfaces?.discord ?? []).toHaveLength(0);
+    expect(loaded.surfaceWarnings).toHaveLength(1);
+    expect(loaded.surfaceWarnings?.[0]).toMatchObject({
+      platform: "discord",
+      envVar: "GW_DISCORD_TOKEN",
+    });
   });
 });

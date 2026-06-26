@@ -6555,8 +6555,23 @@ if (import.meta.main) {
       // exits the process non-zero instead of being swallowed as a "non-fatal"
       // unhandled rejection. The daemon must not survive a failed security gate.
       const handle = await bootOrDie(async () => {
-        const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation, notify } =
+        const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation, notify, surfaceWarnings } =
           loadConfigWithAgents(options.config);
+        // cortex#1217 — a surface secret placeholder with an unset env var no
+        // longer FATAL-boots the daemon (which crash-looped the whole stack).
+        // The resolver disabled that ONE surface + already emitted a per-surface
+        // stderr WARN; re-surface a consolidated, principal-facing boot banner so
+        // the disabled surfaces are not buried in the per-field lines. The daemon
+        // boots normally with every still-resolvable surface live.
+        if (surfaceWarnings !== undefined && surfaceWarnings.length > 0) {
+          const lines = surfaceWarnings
+            .map((w) => `  • ${w.platform} for agent "${w.agent}" — set ${w.envVar} (\`arc secrets set ${w.agent} ${w.envVar}\`)`)
+            .join("\n");
+          console.warn(
+            `cortex: ${surfaceWarnings.length} surface(s) DISABLED due to unresolved secret placeholders ` +
+              `(the stack booted; only these surfaces are degraded):\n${lines}`,
+          );
+        }
         return startCortex(config, {
           configPath: options.config,
           ...(inlineAgents.length > 0 && { inlineAgents }),
