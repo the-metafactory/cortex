@@ -33,11 +33,19 @@ export interface ReviewScopePatterns {
   federatedDirect: string;
 }
 
+/**
+ * The Offer-family task suffix — single-token `*` flavor (cortex#1199). THE one
+ * place this literal lives; cortex's offering-pattern call site imports it rather
+ * than re-typing the string, so the stream filter can't drift from the consumer
+ * patterns (the cortex#1199 review-major).
+ */
+export const REVIEW_OFFER_TASK_SUFFIX = "tasks.code-review.*";
+
 /** Build the per-scope review subject patterns for a principal/stack. */
 export function reviewScopePatterns(principal: string, stack: string): ReviewScopePatterns {
   return {
-    local: `local.${principal}.${stack}.tasks.code-review.*`,
-    federatedOffer: `federated.${principal}.${stack}.tasks.code-review.*`,
+    local: `local.${principal}.${stack}.${REVIEW_OFFER_TASK_SUFFIX}`,
+    federatedOffer: `federated.${principal}.${stack}.${REVIEW_OFFER_TASK_SUFFIX}`,
     federatedDirect: `federated.${principal}.${stack}.tasks.*.code-review.>`,
   };
 }
