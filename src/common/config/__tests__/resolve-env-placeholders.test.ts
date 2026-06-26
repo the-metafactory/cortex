@@ -50,7 +50,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const k of TOUCHED) {
-    if (saved[k] === undefined) delete process.env[k];
+    if (saved[k] === undefined) Reflect.deleteProperty(process.env, k);
     else process.env[k] = saved[k];
   }
 });
@@ -301,7 +301,7 @@ describe("resolveSurfaceBindingTokens — gateway binding map", () => {
           },
         },
       ],
-    } as unknown as Surfaces;
+    };
   }
 
   test("resolves a discord binding.token placeholder from env", () => {

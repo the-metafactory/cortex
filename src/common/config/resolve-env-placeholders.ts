@@ -86,9 +86,12 @@ export class EnvPlaceholderError extends Error {
  */
 function resolveScalar(value: unknown, fieldPath: string): unknown {
   if (typeof value !== "string") return value;
-  const match = ENV_PLACEHOLDER_PATTERN.exec(value);
-  if (match === null) return value; // inline literal — passthrough
-  const envVar = match[1] as string;
+  // The capture group is `string | undefined`; an absent match (inline literal)
+  // OR an unexpectedly-empty capture both pass through unchanged. The undefined
+  // guard narrows `envVar` to `string` without a type assertion (the project
+  // lint forbids both `as` and `!` here).
+  const envVar = ENV_PLACEHOLDER_PATTERN.exec(value)?.[1];
+  if (envVar === undefined) return value; // inline literal — passthrough
   const resolved = process.env[envVar];
   if (resolved === undefined || resolved.trim() === "") {
     throw new EnvPlaceholderError(envVar, fieldPath);
@@ -105,9 +108,9 @@ function resolveScalar(value: unknown, fieldPath: string): unknown {
  */
 export function assertNoUnresolvedPlaceholder(value: unknown, fieldPath: string): void {
   if (typeof value !== "string") return;
-  const match = ENV_PLACEHOLDER_PATTERN.exec(value);
-  if (match === null) return;
-  throw new EnvPlaceholderError(match[1] as string, fieldPath);
+  const envVar = ENV_PLACEHOLDER_PATTERN.exec(value)?.[1];
+  if (envVar === undefined) return;
+  throw new EnvPlaceholderError(envVar, fieldPath);
 }
 
 /**
@@ -171,7 +174,7 @@ export function resolveSurfaceTokensInRawConfig(raw: Record<string, unknown>): v
   const agents = raw.agents;
   if (!Array.isArray(agents)) return;
   for (let i = 0; i < agents.length; i++) {
-    const agent = agents[i];
+    const agent: unknown = agents[i];
     if (isPlainObject(agent)) {
       resolveAgentPresenceTokens(agent, `agents[${i}]`);
     }
