@@ -105,6 +105,11 @@ import {
 } from "../surface-router";
 import { emitSystemAccessDenied } from "../emit-system-access-denied";
 import { verifySignedByChain } from "../verify-signed-by-chain";
+import {
+  AccessDeniedDeduper,
+  type DenialDecision,
+  type DenialIdentity,
+} from "../access-denied-dedup";
 import { AgentPresenceRegistry } from "./registry";
 import { AGENT_PRESENCE_TYPES } from "./envelopes";
 
@@ -206,6 +211,29 @@ export interface StartFederatedAgentPresenceSubscriberOptions {
   resolveFederatedPeer?: (
     peerPrincipal: string,
   ) => Promise<FederatedPeerResolution>;
+  /**
+   * cortex#1213 — windowed deduper for the `system.access.denied` audit emits
+   * this consumer makes. A TEST SEAM: production omits it and a fresh
+   * 60s-window deduper is created internally. Tests inject one with an injected
+   * clock to assert "audited at most once per window".
+   */
+  denialDeduper?: AccessDeniedDeduper;
+  /**
+   * cortex#1213 — principal-facing "bubble up" hook, invoked ONCE per distinct
+   * denial tuple (the first time it is seen). Default writes a clear WARN to
+   * `process.stderr`; production may also route a notify/dashboard signal. A
+   * self-deny or federation misconfig surfaces to the principal ONCE here
+   * rather than re-spamming the audit subject every tick.
+   */
+  onDenialBubbleUp?: (info: DenialBubbleUp) => void;
+}
+
+/** cortex#1213 — payload handed to {@link StartFederatedAgentPresenceSubscriberOptions.onDenialBubbleUp}. */
+export interface DenialBubbleUp {
+  /** The denied tuple (capability/subject/reason/source). */
+  identity: DenialIdentity;
+  /** Human-readable one-line summary (already includes a remediation hint). */
+  message: string;
 }
 
 /**
@@ -233,6 +261,50 @@ export async function startFederatedAgentPresenceSubscriber(
     resolveFederatedPeer,
   } = opts;
   const cryptoVerify = opts.cryptoVerify ?? true;
+  // cortex#1213 — dedupe the `system.access.denied` audit emits. Default to a
+  // fresh 60s-window deduper; tests inject one with an injected clock.
+  const denialDeduper = opts.denialDeduper ?? new AccessDeniedDeduper();
+  // cortex#1213 — principal-facing bubble-up. Default: a clear WARN to stderr,
+  // emitted ONCE per distinct denial tuple (the deduper's `firstSeen` flag).
+  const onDenialBubbleUp =
+    opts.onDenialBubbleUp ??
+    ((info: DenialBubbleUp): void => {
+      process.stderr.write(`[federated-presence] WARN ${info.message}\n`);
+    });
+
+  /**
+   * cortex#1213 — emit a `system.access.denied` audit through the deduper.
+   * `doEmit` performs the actual `runtime.publish` (via the existing
+   * emitFederationDenied / emitSystemAccessDenied helpers). We call it ONLY
+   * when the deduper says to (first occurrence or a post-window rollup), so a
+   * genuinely-repeated denial is still audited — security preserved — but never
+   * floods the bus. The first occurrence of each tuple also bubbles up ONCE.
+   */
+  const emitDeny = (id: DenialIdentity, doEmit: () => void): void => {
+    const decision: DenialDecision = denialDeduper.decide(id);
+    if (decision.firstSeen) {
+      onDenialBubbleUp({
+        identity: id,
+        message:
+          `federation denial: capability=${id.capability} subject=${id.subject} ` +
+          `reason=${id.reason} source=${id.source} — verify this peer is on a ` +
+          `shared network's peers[]/accept_subjects[] (or remove the federated ` +
+          `publish if this is the stack's OWN presence looping back).`,
+      });
+    }
+    if (decision.emit) doEmit();
+  };
+
+  /**
+   * cortex#1213 — bubble up a non-audited condition (no `system.access.denied`
+   * to emit) to the principal ONCE per distinct tuple. Routed through the SAME
+   * deduper so it can never flood stderr on a per-tick loopback.
+   */
+  const bubbleUpOnce = (id: DenialIdentity, message: string): void => {
+    if (denialDeduper.decide(id).firstSeen) {
+      onDenialBubbleUp({ identity: id, message });
+    }
+  };
   // POSTURE-GATED, matching the #484 dispatch-listener EXACTLY: production passes
   // `signingKnobs.rejectEmpty` (off/permissive → false ⇒ accept-list-only trust;
   // enforce → true ⇒ require a verifiable chain). Default `false` mirrors the
@@ -273,21 +345,58 @@ export async function startFederatedAgentPresenceSubscriber(
     if (!subjectMatches(pattern, subject)) return;
     if (!presenceTypes.has(envelope.type)) return;
 
+    const sourcePrincipal = envelope.source.split(".")[0] ?? envelope.source;
+
+    // === SELF-LOOPBACK SHORT-CIRCUIT (cortex#1213, mirrors cortex#480) =====
+    // A federated stack publishes its OWN presence onto `federated.{us}.agent.>`
+    // so peers see it; that publish LOOPS BACK to this subscriber. The
+    // accept-list gate below would then deny it (we are not our own peer →
+    // `peer_not_in_accept_list` / `unknown_network`) and audit it on EVERY
+    // heartbeat tick — a self-deny FLOOD (#1213).
+    //
+    // Detect the self-claim the SAME way `verifySignedByChain` does (cortex#480):
+    // the SOURCE stamp's `identity` equals the receiving stack's OWN signing DID
+    // (`stackIdentity`, from config — NOT the spoofable `envelope.source` /
+    // `payload` fields). When it matches, SKIP the federation accept-list (TRUST)
+    // gate — but the crypto bytes-check below STILL runs against `stackNKeyPub`,
+    // so a spoofed self-DID without our private key is rejected exactly as a
+    // forged foreign envelope. A crypto-verified self-loopback is silently
+    // DROPPED (B.3 already folds our LOCAL presence — we never fold our own as a
+    // foreign record) and emits NO deny-audit.
+    const claimsOwnStack =
+      stackIdentity !== undefined &&
+      getSignedByChain(envelope)[0]?.identity === stackIdentity;
+
     // === TRUST GATE 1 — federation accept-list (E.5) ======================
     // Mirror of the dispatch-listener's Option-D gate (cortex#484). A foreign
     // presence envelope from a peer NOT in any configured network's `peers[]`,
     // OR on a denied subject, OR over the hop budget, OR cross-network-spoofed
     // on the wrong leaf, is DROPPED here — never folded. The audit envelope
-    // makes the drop observable.
-    const decision = evaluateFederationGate(
-      subject,
-      envelope,
-      federatedNetworksById,
-      sourceLink,
-    );
-    if (decision !== "allow") {
-      emitFederationDenied(runtime, source, envelope, subject, decision);
-      return;
+    // makes the drop observable (deduped per #1213 so a repeat can't flood).
+    // SKIPPED for a self-loopback claim (the short-circuit above) — our own DID
+    // is never in our own `peers[]`, and the bytes-check (GATE 2) is the real
+    // boundary for a self-claim.
+    if (!claimsOwnStack) {
+      const decision = evaluateFederationGate(
+        subject,
+        envelope,
+        federatedNetworksById,
+        sourceLink,
+      );
+      if (decision !== "allow") {
+        emitDeny(
+          {
+            capability: "federated.subject_dispatch",
+            subject,
+            reason: decision.kind,
+            source: sourcePrincipal,
+          },
+          () => {
+            emitFederationDenied(runtime, source, envelope, subject, decision);
+          },
+        );
+        return;
+      }
     }
 
     // === TRUST GATE 2 — signed_by[] chain verification (E.5) ===============
@@ -295,6 +404,13 @@ export async function startFederatedAgentPresenceSubscriber(
     // failure DROPS the envelope (never folds). When no `trustResolver` /
     // `receivingAgentId` is wired, the chain check is skipped (the gate above
     // still bounded which peers can appear) and the envelope folds directly.
+    //
+    // For a self-loopback claim this is THE security check — the cortex#480
+    // own-stack short-circuit inside `verifySignedByChain` accepts the stamp
+    // structurally, then the crypto pass verifies the bytes against
+    // `stackNKeyPub`. The `resolveFederatedPeer` seam is OMITTED for a
+    // self-claim: the signer is our OWN stack, not a federated peer, so there is
+    // nothing to resolve (resolving ourselves as a peer would wrongly reject).
     if (trustResolver !== undefined && receivingAgentId !== undefined) {
       void verifySignedByChain(envelope, {
         resolver: trustResolver,
@@ -304,31 +420,47 @@ export async function startFederatedAgentPresenceSubscriber(
         ...(principalId !== undefined && { principalId }),
         ...(stackIdentity !== undefined && { stackIdentity }),
         ...(stackNKeyPub !== undefined && { stackNKeyPub }),
-        ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+        ...(!claimsOwnStack &&
+          resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
       })
         .then((result) => {
           if (!result.valid) {
-            // Chain failed — DROP. A foreign presence envelope that can't be
-            // cryptographically attributed never appears in the view.
+            // Chain failed — DROP. A presence envelope that can't be
+            // cryptographically attributed never appears in the view. For a
+            // self-claim this is the spoofed-self path (a forged self-DID whose
+            // bytes don't verify against our NKey) — STILL rejected + audited.
             process.stderr.write(
-              `federated-agent-presence: dropping foreign presence ${envelope.type} ` +
+              `federated-agent-presence: dropping ${claimsOwnStack ? "self-claimed" : "foreign"} presence ${envelope.type} ` +
                 `(id=${envelope.id}) — signed_by chain verification failed: ` +
                 `${result.reason.kind}\n`,
             );
-            // cortex#932 — the drop was stderr-only; emit a queryable
-            // `system.access.denied` on our local audit stream so governance
-            // sees the chain-verify rejection. Carries signed_by[] verbatim.
-            emitSystemAccessDenied(runtime, source, envelope, {
-              envelopeSubject: subject,
-              principalId: envelope.source.split(".")[0] ?? envelope.source,
-              capability: envelope.type,
-              reason: {
-                kind: "chain_verify_failed",
-                verify_reason: result.reason.kind,
+            // cortex#932 — emit a queryable `system.access.denied` on our local
+            // audit stream so governance sees the chain-verify rejection.
+            // Deduped (#1213) so a repeated bad signer can't flood.
+            emitDeny(
+              {
+                capability: envelope.type,
+                subject,
+                reason: "chain_verify_failed",
+                source: sourcePrincipal,
               },
-            });
+              () => {
+                emitSystemAccessDenied(runtime, source, envelope, {
+                  envelopeSubject: subject,
+                  principalId: sourcePrincipal,
+                  capability: envelope.type,
+                  reason: {
+                    kind: "chain_verify_failed",
+                    verify_reason: result.reason.kind,
+                  },
+                });
+              },
+            );
             return;
           }
+          // Verified. A self-loopback is OUR OWN presence — silently DROP (do
+          // NOT fold our own agents as foreign records; B.3 owns the local copy).
+          if (claimsOwnStack) return;
           foldForeign(registry, envelope);
         })
         .catch((err: unknown) => {
@@ -342,20 +474,45 @@ export async function startFederatedAgentPresenceSubscriber(
           );
           // cortex#932 — a verifier FAULT is also a fail-closed drop; make it
           // observable on the local audit stream (distinct reason kind from a
-          // clean chain rejection so governance can tell "verifier broke" from
-          // "signature didn't verify").
-          emitSystemAccessDenied(runtime, source, envelope, {
-            envelopeSubject: subject,
-            principalId: envelope.source.split(".")[0] ?? envelope.source,
-            capability: envelope.type,
-            reason: { kind: "chain_verify_fault", fault: faultMessage },
-          });
+          // clean chain rejection). Deduped (#1213).
+          emitDeny(
+            {
+              capability: envelope.type,
+              subject,
+              reason: "chain_verify_fault",
+              source: sourcePrincipal,
+            },
+            () => {
+              emitSystemAccessDenied(runtime, source, envelope, {
+                envelopeSubject: subject,
+                principalId: sourcePrincipal,
+                capability: envelope.type,
+                reason: { kind: "chain_verify_fault", fault: faultMessage },
+              });
+            },
+          );
         });
       return;
     }
 
-    // No chain verifier wired — fold directly (the accept-list gate already
-    // bounded the admissible peers).
+    // No chain verifier wired. A self-loopback claim CANNOT be cryptographically
+    // verified here, so we cannot fold it (it would be our own presence anyway)
+    // — DROP it silently to stop the self-deny flood; the once-per-tuple
+    // bubble-up notes it is unverifiable. A foreign envelope folds directly (the
+    // accept-list gate already bounded the admissible peers).
+    if (claimsOwnStack) {
+      bubbleUpOnce(
+        {
+          capability: envelope.type,
+          subject,
+          reason: "self_loopback_unverifiable",
+          source: sourcePrincipal,
+        },
+        `self-loopback presence ${envelope.type} on ${subject} dropped — no ` +
+          `chain verifier wired to confirm the self-signature; not folded.`,
+      );
+      return;
+    }
     foldForeign(registry, envelope);
   };
 
