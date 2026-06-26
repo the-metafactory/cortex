@@ -682,9 +682,13 @@ export class DispatchHandler extends EventEmitter {
           // channel) so the principal follows the run start-to-finish in one
           // place. Eagerly create-or-find the `{repo-short}/issue/{N}` thread via
           // the SAME `resolveLogicalTarget` the review-sink uses for the dev
-          // lifecycle + verdict, so all of them land together. Degrade to the
-          // inbound channel target when the surface can't thread (non-Discord,
-          // missing repo channel, thread-create failure) — never drop the ack.
+          // lifecycle + verdict, so all of them land together. The `?? ` here
+          // degrades to the inbound channel ONLY when `resolveRunThreadTarget`
+          // returns null — i.e. the surface/channel didn't resolve (non-Discord
+          // surface, missing repo channel) or the resolve threw. A thread-CREATE
+          // failure does NOT land here: `resolveLogicalTarget` returns a
+          // channel-scope target for the repo-short channel, so the ack posts in
+          // `#{repo-short}` un-threaded. Either way the ack is never dropped.
           const runThreadTarget = await this.resolveRunThreadTarget(adapter, outcome.routing);
           await adapter.postResponse(
             runThreadTarget ?? this.targetFromMsg(adapter, msg),
