@@ -1,0 +1,72 @@
+# =============================================================================
+# agent.yaml — the Pilot/vega in-process dev-loop ORCHESTRATOR fragment (#1206)
+# =============================================================================
+# This is a TEMPLATE, not repo code. It is DEPLOYED config: drop it into a
+# stack's `agents.d/` (with the persona under `personas/`) and run
+# `cortex agents reload`. See `docs/examples/dev-loop/README.md`.
+#
+# The orchestrator is an IN-PROCESS meta-factory agent — same shape as
+# `agents.d/dev.yaml` / `agents.d/approver.yaml` — that rides the stack's
+# single signing identity + the stack's live MyelinRuntime + the stack's
+# Discord adapter + the `arc upgrade` lifecycle. It is NOT a standalone daemon
+# and has NO per-agent signing material, NO pilot.env, NO plist.
+#
+# Naming (design Q1): `id: pilot` (the assistant), instance/displayName `vega`
+# (the callsign on Andreas's stack). The `<id>.yaml` filename stem MUST equal
+# `id` (`pilot`) — born-aligned, same rule as dev.yaml/approver.yaml.
+
+id: pilot
+displayName: vega
+
+# Persona path — resolved by cortex's loader RELATIVE TO THE FRAGMENT'S
+# DIRECTORY. Installed at agents.d/pilot.yaml + personas/pilot.md, so from
+# agents.d/ the persona is ../personas/pilot.md.
+persona: ../personas/pilot.md
+
+# ── M3 — NO per-agent signing material ───────────────────────────────────────
+# In-process → rides the stack's single signing identity (`stack.nkey_seed_path`).
+# The stack signs every envelope on the wire; pilot's policy-actor identity is
+# the DID `did:mf:pilot`, derived from `id`, never a signing key. No `nkey_pub`,
+# no seed — identical to the live echo/forge/luna/dev model.
+
+# Peer agents pilot trusts for bot↔bot origin attribution. The orchestrator
+# dispatches to `dev` (and, in S2/S3, requests review from the reviewer fleet).
+# Each id must resolve in the merged AgentRegistry at boot.
+trust: []
+
+# runtime — IN-PROCESS under cortex's runner. `dev.orchestrate` is the routing
+# MARKER the dispatch-handler reads to activate the principal-gated
+# orchestrator-command branch for THIS agent only (#1206 S1). It is NOT a
+# bus-consumed capability — no consumer subscribes to it; the orchestrator
+# PUBLISHES `dev.implement` (which the `dev` agent provides) and never runs
+# `claude -p` itself. Post-#1027 `deriveEffectiveCapabilityCatalog` synthesizes
+# a catalog entry (`provided_by: [pilot]`) for it automatically — no manual
+# capability-catalog edit needed.
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - dev.orchestrate
+
+# presence — Pilot/vega RECEIVES the principal's Discord commands, so unlike the
+# headless dev/approver agents it binds a Discord surface. Style (B) inline
+# binding shown; a stack using surfaces/surfaces.yaml can instead use the
+# folded-in form (`presence: {}` + a surfaces binding). Replace every
+# <REPLACE_ME> with this agent's own bot identity.
+#
+# The trust-path gate does NOT depend on this binding — the orchestrator command
+# is honored ONLY from the principal's authenticated Discord id (PolicyEngine
+# `authorIsPrincipal`), which is resolved from `policy.principals[].platform_ids`
+# regardless of which channel the message arrives on.
+presence:
+  discord:
+    enabled: true
+    dmOwner: false                   # true only if this stack owns the principal's DMs
+    token: <REPLACE_ME>              # vega's own bot token (chmod 600 the file)
+    guildId: "<REPLACE_ME>"
+    agentChannelId: "<REPLACE_ME>"   # nominal default; vega answers @mentions guild-wide
+    logChannelId: "<REPLACE_ME>"
+    contextDepth: 10
+    # Leave empty — inbound task envelopes must NOT be surfaced here (would
+    # render raw envelope JSON to Discord, the cortex#477/#479 leak).
+    surfaceSubjects: []

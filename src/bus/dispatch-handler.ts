@@ -61,6 +61,10 @@ import {
 } from "./dispatch-source-publisher";
 import type { PolicyEngine } from "../common/policy/engine";
 import { anonOnboardingAccess, PUBLIC_ORIGINATOR_DID } from "../common/policy/resolve-access";
+import {
+  handleOrchestratorCommand,
+  ORCHESTRATOR_CAPABILITY,
+} from "../runner/orchestrator-command";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -103,6 +107,14 @@ interface DispatchTargetAgent {
    * every `mcp__*`) is denied at the CC layer.
    */
   openOnboardingAllowedTools?: string[];
+  /**
+   * #1206 (operator-driven dev-loop, S1) — the target agent's declared
+   * `runtime.capabilities[]`. Carried per-target-agent (one shared handler
+   * serves multiple agents) so the orchestrator-command gate activates ONLY
+   * for the agent that declares {@link ORCHESTRATOR_CAPABILITY} (Pilot/vega)
+   * and never for a chat agent. Absent/empty → no orchestrator branch.
+   */
+  capabilities?: readonly string[];
 }
 
 export interface DispatchHandlerOpts {
@@ -634,6 +646,50 @@ export class DispatchHandler extends EventEmitter {
       } else {
         // Principal notification (non-principal guild messages)
         await this.notifyPrincipalIfNeeded(adapter, msg);
+      }
+
+      // 2.5. #1206 (operator-driven dev-loop, S1) — orchestrator command gate.
+      // When the receiving agent is the in-process dev-loop orchestrator
+      // (Pilot/vega, declares ORCHESTRATOR_CAPABILITY) AND the principal posts
+      // `implement {repo}#{N}`, publish a `tasks.dev.implement` dispatch via the
+      // STACK runtime instead of spawning a `claude -p` chat turn. The gate is
+      // fail-closed: only the principal's authenticated Discord id (the
+      // non-spoofable `msg.authorIsPrincipal` PolicyEngine signal) is honored;
+      // every other sender's command is dropped. A non-command message to the
+      // orchestrator falls through to normal chat handling below.
+      if (targetAgent?.capabilities?.includes(ORCHESTRATOR_CAPABILITY)) {
+        const outcome = await handleOrchestratorCommand({
+          text: msg.content,
+          isOrchestrator: true,
+          authorIsPrincipal: msg.authorIsPrincipal === true,
+          knownRepos: this.allRepos,
+          runtime: this.runtime,
+          // Stamp the orchestrator agent (not the handler-wide `cortex` source)
+          // as the dispatch's `{principal}.{agent}.{instance}` actor.
+          source: this.systemEventSource
+            ? { ...this.systemEventSource, agent: targetAgent.id }
+            : undefined,
+        });
+        if (outcome.kind === "dispatched") {
+          console.log(
+            `dispatch-handler: [DEV-LOOP] ${adapter.instanceId} agent=${targetAgent.id} ` +
+              `dispatched dev.implement for ${outcome.repo}#${outcome.issue} (envelope ${outcome.envelope.id})`,
+          );
+          await adapter.postResponse(this.targetFromMsg(adapter, msg), outcome.ack);
+          return;
+        }
+        if (outcome.kind === "ignored") {
+          console.log(
+            `dispatch-handler: [DEV-LOOP] ${adapter.instanceId} agent=${targetAgent.id} ` +
+              `ignored orchestrator command from ${msg.authorName} (${msg.authorId}) — ${outcome.reason}`,
+          );
+          return;
+        }
+        if (outcome.kind === "error") {
+          await adapter.postResponse(this.targetFromMsg(adapter, msg), outcome.ack);
+          return;
+        }
+        // outcome.kind === "pass-through" → fall through to normal chat handling.
       }
 
       // 3. Parse keywords

@@ -652,7 +652,7 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime">,
   configDir: string,
 ): {
   id: string;
@@ -660,6 +660,7 @@ function targetAgentForDispatch(
   persona: string;
   openOnboarding?: boolean;
   openOnboardingAllowedTools?: string[];
+  capabilities?: readonly string[];
 } {
   const expandedPersona = expandTilde(agent.persona);
   return {
@@ -677,6 +678,12 @@ function targetAgentForDispatch(
       agent.openOnboardingAllowedTools !== undefined && {
         openOnboardingAllowedTools: agent.openOnboardingAllowedTools,
       }),
+    // #1206 (operator-driven dev-loop, S1) — carry the agent's declared
+    // `runtime.capabilities[]` so the dispatch handler's orchestrator-command
+    // gate activates ONLY for the agent declaring `dev.orchestrate` (Pilot/vega).
+    ...(agent.runtime?.capabilities !== undefined && {
+      capabilities: agent.runtime.capabilities,
+    }),
   };
 }
 

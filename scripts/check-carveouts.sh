@@ -449,6 +449,14 @@ CARVEOUT_LINE_PATTERNS=(
   '(deprecated alias|back-compat|transition schema still accepts)'
   # (8) the "Operator vision" reference label.
   'Operator vision'
+  # (9) the #1206 "operator-driven dev-loop" FEATURE reference label + its design
+  # doc filename. `operator` here is the established proper-name of the feature
+  # (GitHub issue #1206 title) and the name of its design doc — a reference
+  # label, NOT a use of the deprecated human-role term (the feature's own prose +
+  # code use `principal`). Same class as the 'Operator vision' label and the
+  # 'design-dm-operator-channel' filename citation above.
+  '[Oo]perator-driven dev-loop'
+  'design-operator-driven-dev-loop'
 )
 
 usage() {
