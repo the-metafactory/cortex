@@ -294,8 +294,8 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // `deriveStackId` default-derives `'default'`. Pre-cortex#318 this
     // was a 4-segment pattern that never matched stack-aware publishes.
     expect(patterns).toEqual([
-      "local.test-op.default.tasks.code-review.>",
-      "local.test-op.default.tasks.code-review.>",
+      "local.test-op.default.tasks.code-review.*",
+      "local.test-op.default.tasks.code-review.*",
     ]);
     const durables = runtime.subscribePullCalls.map((c) => c.durable).sort();
     expect(durables).toEqual([
@@ -333,7 +333,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // extra consumer (the `.slice(1)` loop is empty).
     expect(runtime.subscribePullCalls.length).toBe(1);
     expect(runtime.subscribePullCalls[0]!.pattern).toBe(
-      "local.test-op.default.tasks.code-review.>",
+      "local.test-op.default.tasks.code-review.*",
     );
     expect(runtime.subscribePullCalls[0]!.durable).toBe(
       "cortex-review-consumer-test-op-echo",
@@ -344,7 +344,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
 
   test("CO-2: code-review offered at federated scope → BOTH local + federated patterns bound (MAJOR-1: federated extra-scope consumer wired)", async () => {
     // Widening `code-review` to `federated` binds the local pattern PLUS a
-    // `federated.…tasks.code-review.>` offer-scope consumer. The MAJOR-1 fix is
+    // `federated.…tasks.code-review.*` offer-scope consumer. The MAJOR-1 fix is
     // that this extra-scope consumer is constructed with `federated: true`
     // (verdict routes cross-principal, proven at the unit level in
     // review-consumer.test.ts); here we assert the BINDING exists.
@@ -397,8 +397,8 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     const patterns = runtime.subscribePullCalls.map((c) => c.pattern);
     // The local binding is still present (byte-identical local), PLUS the
     // offering-driven federated binding.
-    expect(patterns).toContain("local.test-op.default.tasks.code-review.>");
-    expect(patterns).toContain("federated.test-op.default.tasks.code-review.>");
+    expect(patterns).toContain("local.test-op.default.tasks.code-review.*");
+    expect(patterns).toContain("federated.test-op.default.tasks.code-review.*");
     // The federated offer-scope consumer binds on its own scope-named durable.
     const durables = runtime.subscribePullCalls.map((c) => c.durable);
     expect(
