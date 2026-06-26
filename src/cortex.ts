@@ -132,7 +132,7 @@ import {
 
 import { DiscordAdapter } from "./adapters/discord";
 import { createRenderer, type Renderer } from "./renderers";
-import { RendererSchema, deriveStackId } from "./common/types/cortex-config";
+import { RendererSchema, deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
 import type {
   Agent,
   BusConfig,
@@ -1666,7 +1666,7 @@ export async function startCortex(
   const reviewStreamMaxAgeNs =
     (reviewConfig?.stream.maxAgeSeconds ?? 86_400) * 1_000_000_000;
   const reviewStreamMaxBytes =
-    reviewConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
+    reviewConfig?.stream.maxBytes ?? DEFAULT_STREAM_MAX_BYTES;
   const reviewConsumerMaxDeliver = reviewConfig?.consumer.maxDeliver ?? 5;
 
   // cortex#835 / pilot#154 — the REVIEW_LIFECYCLE stream. A SECOND JetStream
@@ -1685,7 +1685,7 @@ export async function startCortex(
   const lifecycleStreamMaxAgeNs =
     (lifecycleConfig?.stream.maxAgeSeconds ?? 86_400) * 1_000_000_000;
   const lifecycleStreamMaxBytes =
-    lifecycleConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
+    lifecycleConfig?.stream.maxBytes ?? DEFAULT_STREAM_MAX_BYTES;
 
   // ── F-2.2 (cortex#835 → cortex#865) DEV_IMPLEMENT config ──────────────────
   // Resolve the DEV_IMPLEMENT stream knobs alongside the review knobs. Sibling
@@ -1698,7 +1698,7 @@ export async function startCortex(
   const devImplementStreamMaxAgeNs =
     (devImplementConfig?.stream.maxAgeSeconds ?? 86_400) * 1_000_000_000;
   const devImplementStreamMaxBytes =
-    devImplementConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
+    devImplementConfig?.stream.maxBytes ?? DEFAULT_STREAM_MAX_BYTES;
   // ── /F-2.2 DEV_IMPLEMENT config ───────────────────────────────────────────
 
   // cortex#338 — resolve the provisioning JSM and provision the
@@ -2948,10 +2948,10 @@ export async function startCortex(
     );
     const releaseStream = "RELEASE";
     // Reuse the review-lane stream defaults: a release-cut request is small +
-    // infrequent; 24h retention + 512MiB is ample and matches the operational
+    // infrequent; 24h retention + 64MiB is ample and matches the operational
     // posture principals already understand from CODE_REVIEW.
     const releaseStreamMaxAgeNs = 86_400 * 1_000_000_000;
-    const releaseStreamMaxBytes = 512 * 1024 * 1024;
+    const releaseStreamMaxBytes = DEFAULT_STREAM_MAX_BYTES;
     const releaseConsumerMaxDeliver = 5;
 
     // Resolve the provisioning JSM once (same contained-failure contract as the

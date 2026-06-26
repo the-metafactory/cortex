@@ -23,6 +23,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
+import { DEFAULT_STREAM_MAX_BYTES } from "../../../common/types/cortex-config";
 
 // =============================================================================
 // Discovery
@@ -298,7 +299,7 @@ bus:
     stream:
       name: CODE_REVIEW
       maxAgeSeconds: 86400
-      maxBytes: 536870912
+      maxBytes: ${DEFAULT_STREAM_MAX_BYTES}
     consumer:
       maxDeliver: 5
 `;

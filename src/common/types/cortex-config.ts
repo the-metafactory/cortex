@@ -55,6 +55,29 @@ import { checkPublicOfferingBackendGate } from "./public-offering-backend-gate";
 import { StackConfigSchema, deriveStackId } from "./stack";
 
 // =============================================================================
+// JetStream stream sizing — single source of truth (cortex#1197)
+// =============================================================================
+
+/**
+ * Default `max_bytes` RESERVATION for a cortex control-plane JetStream stream
+ * (CODE_REVIEW, REVIEW_LIFECYCLE, DEV_IMPLEMENT, the release stream).
+ *
+ * These are interest-retention, max-age-bounded control streams that hold
+ * KB-scale envelopes. A live deployment showed the previous 512 MiB default
+ * was ~8000× the footprint AND — fatally — capped a stack at only TWO streams
+ * under the common `max_file: 1gb` JetStream limit (2 × 512 MiB = the whole GB),
+ * so the third stream a dev-loop stack needs (`DEV_IMPLEMENT`, plus the release
+ * stream) failed to provision with "insufficient storage resources available",
+ * silently disabling the `dev.implement` consumer (cortex#1197). 64 MiB still
+ * absorbs ~100k typical envelopes and fits ~16 streams per GB.
+ *
+ * EVERY stream-provisioning site reads this constant so the reservation can
+ * never drift between the schema defaults, the boot path, the provisioning
+ * helper fallback, and the `stack create` scaffold.
+ */
+export const DEFAULT_STREAM_MAX_BYTES = 64 * 1024 * 1024;
+
+// =============================================================================
 // Helper — Zod v4 empty-default workaround
 // =============================================================================
 
@@ -1230,11 +1253,11 @@ export const BusReviewConfigSchema = z.object({
       .number()
       .int("bus.review.stream.maxBytes must be an integer number of bytes")
       .positive("bus.review.stream.maxBytes must be positive")
-      .default(512 * 1024 * 1024),
+      .default(DEFAULT_STREAM_MAX_BYTES),
   }).default({
     name: "CODE_REVIEW",
     maxAgeSeconds: 86_400,
-    maxBytes: 512 * 1024 * 1024,
+    maxBytes: DEFAULT_STREAM_MAX_BYTES,
   }),
   consumer: z.object({
     /** Delivery attempts before JetStream stops redelivering the task. */
@@ -1263,7 +1286,7 @@ export const BusReviewConfigSchema = z.object({
  * across streams — the two streams partition the subject space cleanly).
  *
  * Posture mirrors `BusReviewConfigSchema.stream` EXACTLY (Interest
- * retention, File storage, 24h max_age, finite 512 MiB max_bytes). There
+ * retention, File storage, 24h max_age, finite 64 MiB max_bytes). There
  * is intentionally NO `consumer` sub-block: cortex provisions the stream
  * only; the durable consumers that read it are the DOWNSTREAM reactor's
  * concern (pilot's durable-consumer upgrade — the cortex#835 follow-up).
@@ -1287,11 +1310,11 @@ export const BusLifecycleConfigSchema = z.object({
       .number()
       .int("bus.lifecycle.stream.maxBytes must be an integer number of bytes")
       .positive("bus.lifecycle.stream.maxBytes must be positive")
-      .default(512 * 1024 * 1024),
+      .default(DEFAULT_STREAM_MAX_BYTES),
   }).default({
     name: "REVIEW_LIFECYCLE",
     maxAgeSeconds: 86_400,
-    maxBytes: 512 * 1024 * 1024,
+    maxBytes: DEFAULT_STREAM_MAX_BYTES,
   }),
 });
 
@@ -1312,7 +1335,7 @@ export const BusLifecycleConfigSchema = z.object({
  * after `tasks.`), so no subject of one is a prefix of any subject of another.
  *
  * Posture mirrors `BusReviewConfigSchema.stream` EXACTLY (Interest retention,
- * File storage, 24h max_age, finite 512 MiB max_bytes). There is intentionally
+ * File storage, 24h max_age, finite 64 MiB max_bytes). There is intentionally
  * NO `consumer` sub-block: cortex provisions the stream only; the durable
  * consumer that reads it is the dev-agent's concern (F-2.1, cortex#853).
  */
@@ -1335,11 +1358,11 @@ export const BusDevImplementConfigSchema = z.object({
       .number()
       .int("bus.devImplement.stream.maxBytes must be an integer number of bytes")
       .positive("bus.devImplement.stream.maxBytes must be positive")
-      .default(512 * 1024 * 1024),
+      .default(DEFAULT_STREAM_MAX_BYTES),
   }).default({
     name: "DEV_IMPLEMENT",
     maxAgeSeconds: 86_400,
-    maxBytes: 512 * 1024 * 1024,
+    maxBytes: DEFAULT_STREAM_MAX_BYTES,
   }),
 });
 
@@ -1348,7 +1371,7 @@ export const BusConfigSchema = z.object({
     stream: {
       name: "CODE_REVIEW",
       maxAgeSeconds: 86_400,
-      maxBytes: 512 * 1024 * 1024,
+      maxBytes: DEFAULT_STREAM_MAX_BYTES,
     },
     consumer: { maxDeliver: 5 },
   }),
@@ -1356,7 +1379,7 @@ export const BusConfigSchema = z.object({
     stream: {
       name: "REVIEW_LIFECYCLE",
       maxAgeSeconds: 86_400,
-      maxBytes: 512 * 1024 * 1024,
+      maxBytes: DEFAULT_STREAM_MAX_BYTES,
     },
   }),
   // F-2.2 (cortex#835 → cortex#865) — DEV_IMPLEMENT stream knobs. Sibling of
@@ -1368,7 +1391,7 @@ export const BusConfigSchema = z.object({
     stream: {
       name: "DEV_IMPLEMENT",
       maxAgeSeconds: 86_400,
-      maxBytes: 512 * 1024 * 1024,
+      maxBytes: DEFAULT_STREAM_MAX_BYTES,
     },
   }),
 });

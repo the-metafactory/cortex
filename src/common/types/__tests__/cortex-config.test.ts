@@ -1017,7 +1017,7 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     // Existing CODE_REVIEW posture — unchanged.
     expect(parsed.review.stream.name).toBe("CODE_REVIEW");
     expect(parsed.review.stream.maxAgeSeconds).toBe(86_400);
-    expect(parsed.review.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect(parsed.review.stream.maxBytes).toBe(64 * 1024 * 1024);
     expect(parsed.review.consumer.maxDeliver).toBe(5);
     // New REVIEW_LIFECYCLE stream — mirrors CODE_REVIEW's stream posture
     // exactly, and intentionally carries NO consumer sub-block (cortex
@@ -1025,7 +1025,7 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     // reactor's concern — the cortex#835 follow-up).
     expect(parsed.lifecycle.stream.name).toBe("REVIEW_LIFECYCLE");
     expect(parsed.lifecycle.stream.maxAgeSeconds).toBe(86_400);
-    expect(parsed.lifecycle.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect(parsed.lifecycle.stream.maxBytes).toBe(64 * 1024 * 1024);
     expect("consumer" in parsed.lifecycle).toBe(false);
     // The two stream names MUST differ — they own disjoint subject spaces,
     // and a shared name would clash on `streams.add`.
@@ -1035,7 +1035,7 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     // stream; the dev-agent's durable consumer is F-2.1's concern, cortex#853).
     expect(parsed.devImplement.stream.name).toBe("DEV_IMPLEMENT");
     expect(parsed.devImplement.stream.maxAgeSeconds).toBe(86_400);
-    expect(parsed.devImplement.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect(parsed.devImplement.stream.maxBytes).toBe(64 * 1024 * 1024);
     expect("consumer" in parsed.devImplement).toBe(false);
     // The DEV_IMPLEMENT name MUST differ from BOTH siblings — they own disjoint
     // subject spaces, and a shared name would clash on `streams.add`.

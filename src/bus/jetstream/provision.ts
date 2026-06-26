@@ -48,6 +48,7 @@ import type { ConsumerConfig, StreamInfo } from "nats";
 // Background: sage review on #338 round 3 (architecture).
 export type { ProvisionJsm } from "./types";
 import type { ProvisionJsm } from "./types";
+import { DEFAULT_STREAM_MAX_BYTES } from "../../common/types/cortex-config";
 
 /**
  * Outcome of `provisionReviewStream`. Includes `config-drift-warning`
@@ -156,7 +157,7 @@ export interface ProvisionConsumerOpts {
 }
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
-const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = DEFAULT_STREAM_MAX_BYTES;
 const DEFAULT_MAX_DELIVER = 5;
 /**
  * Default per-message ack deadline: 20 minutes in nanoseconds. Sized well

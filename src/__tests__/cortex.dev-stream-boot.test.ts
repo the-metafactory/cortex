@@ -248,11 +248,11 @@ describe("startCortex â€” DEV_IMPLEMENT stream boot wiring (F-2.2, cortex#835 â†
       `local.${PRINCIPAL}.${STACK}.tasks.dev.>`,
     ]);
     // Config posture mirrors CODE_REVIEW EXACTLY: Interest retention, File
-    // storage, 24h max_age, finite 512 MiB max_bytes, single replica.
+    // storage, 24h max_age, finite 64 MiB max_bytes, single replica.
     expect(String(dev.retention)).toBe("interest");
     expect(String(dev.storage)).toBe("file");
     expect(dev.max_age).toBe(24 * 3600 * 1e9);
-    expect(dev.max_bytes).toBe(512 * 1024 * 1024);
+    expect(dev.max_bytes).toBe(64 * 1024 * 1024);
     expect(dev.max_msgs).toBe(-1);
     expect(dev.num_replicas).toBe(1);
 

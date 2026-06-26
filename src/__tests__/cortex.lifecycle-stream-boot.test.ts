@@ -247,11 +247,11 @@ describe("startCortex — REVIEW_LIFECYCLE stream boot wiring (cortex#835 / pilo
       `local.${PRINCIPAL}.${STACK}.dispatch.task.>`,
     ]);
     // Config posture mirrors CODE_REVIEW EXACTLY: Interest retention, File
-    // storage, 24h max_age, finite 512 MiB max_bytes, single replica.
+    // storage, 24h max_age, finite 64 MiB max_bytes, single replica.
     expect(String(lifecycle.retention)).toBe("interest");
     expect(String(lifecycle.storage)).toBe("file");
     expect(lifecycle.max_age).toBe(24 * 3600 * 1e9);
-    expect(lifecycle.max_bytes).toBe(512 * 1024 * 1024);
+    expect(lifecycle.max_bytes).toBe(64 * 1024 * 1024);
     expect(lifecycle.max_msgs).toBe(-1);
     expect(lifecycle.num_replicas).toBe(1);
 
