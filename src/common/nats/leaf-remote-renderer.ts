@@ -1024,6 +1024,48 @@ export interface NatsBaseIdentity {
 }
 
 /**
+ * Parse a stack's own `nats.url` into a SAFE loopback `host:port` for a
+ * synthesised hard-isolated base `listen` (cortex#1265). Returns `undefined` when
+ * the URL is absent, malformed, carries userinfo/a path, names a non-numeric or
+ * out-of-range port, or resolves to a NON-loopback host — so the make-live caller
+ * DECLINES to synthesise and falls back to its refuse-floor (operator supplies
+ * `--nats-config` or fixes `nats.url`) instead of binding an over-exposed
+ * (`0.0.0.0`) or unbindable address that would only fail at nats-server start.
+ *
+ * Security (review #1302): a from-scratch isolated bus MUST bind loopback only —
+ * the whole point is a private, process-local bus (cortex#692). Allowlist
+ * `127.0.0.1` / `localhost` / `::1`; reject everything else (incl. `0.0.0.0`,
+ * `::`, any routable host). Stricter than the old "strip the scheme" derivation,
+ * which would have passed a non-loopback `nats.url` straight through.
+ */
+export function parseLoopbackListen(natsUrl: string | undefined): string | undefined {
+  if (natsUrl === undefined) return undefined;
+  const stripped = natsUrl.replace(/^(?:nats|tls):\/\//, "").trim();
+  // userinfo (`user:pass@`) or a path/query are not valid in a bare `host:port`.
+  if (stripped === "" || stripped.includes("@") || stripped.includes("/")) return undefined;
+
+  let host: string;
+  let port: string;
+  const v6 = stripped.match(/^\[([0-9a-fA-F:]+)\]:(\d+)$/);
+  if (v6 !== null) {
+    host = v6[1]!;
+    port = v6[2]!;
+  } else {
+    const idx = stripped.lastIndexOf(":");
+    if (idx <= 0) return undefined; // need a `host:port`
+    host = stripped.slice(0, idx);
+    port = stripped.slice(idx + 1);
+  }
+  if (!/^\d+$/.test(port)) return undefined;
+  const portNum = Number(port);
+  if (portNum < 1 || portNum > 65535) return undefined;
+
+  const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
+  if (!LOOPBACK.has(host)) return undefined;
+  return host === "::1" ? `[::1]:${portNum}` : `${host}:${portNum}`;
+}
+
+/**
  * Render the SOP §B0.1 **hard-isolated base** nats-server config from a stack's
  * own derived identity. PURE (data in, text out). Emits exactly the isolation-wall
  * base — `server_name` / `listen` / `jetstream { store_dir, domain }` — and

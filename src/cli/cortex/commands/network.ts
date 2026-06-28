@@ -130,6 +130,7 @@ import {
 } from "./network-make-live-lib";
 import { buildLiveMakeLivePorts, buildResolverPreloadAdapter } from "./network-make-live-adapters";
 import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/nats/leaf-remote-renderer";
+import { parseLoopbackListen } from "../../../common/nats/leaf-remote-renderer";
 import {
   runNetworkSecret,
   type SecretAction,
@@ -1973,14 +1974,15 @@ function deriveMakeLiveInputs(
   // truly from-scratch stack (no `<slug>.conf` yet) can have its hard-isolated
   // base SYNTHESISED + bootstrapped in one make-live, instead of refusing. Every
   // field comes from the stack's own config — never fabricated: `listen` is the
-  // host:port the stack's own daemon already dials (`nats.url` minus scheme), the
-  // names are the canonical `<slug>-<principal>`. Undefined when `nats.url` can't
-  // be read — make-live then keeps the "create the base config first" refusal for
-  // an absent file (never invent a server identity).
-  const natsUrl = cfg.config.nats?.url;
-  const listen = natsUrl !== undefined ? natsUrl.replace(/^(?:nats|tls):\/\//, "").trim() : "";
+  // host:port the stack's own daemon already dials (`nats.url`), validated to a
+  // LOOPBACK host:port (parseLoopbackListen, review #1302) so a misconfigured
+  // non-loopback / `0.0.0.0` / userinfo `nats.url` can't synthesise an over-exposed
+  // bus; the names are the canonical `<slug>-<principal>`. Undefined when `nats.url`
+  // is absent or not a safe loopback host:port — make-live then keeps the "create
+  // the base config first" refusal for an absent file (never invent or over-expose).
+  const listen = parseLoopbackListen(cfg.config.nats?.url);
   const baseIdentity: NatsBaseIdentity | undefined =
-    listen !== ""
+    listen !== undefined
       ? {
           serverName: `${slug}-${principal}`,
           listen,

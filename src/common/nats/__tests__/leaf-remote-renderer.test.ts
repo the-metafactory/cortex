@@ -29,6 +29,7 @@ import {
   renderBaseIsolatedConfig,
   renderOperatorModeBlocks,
   resolveLeafBindMode,
+  parseLoopbackListen,
   type LeafRemote,
   type StackLeafBinding,
 } from "../leaf-remote-renderer";
@@ -730,5 +731,40 @@ describe("docs/config-layout/nats-server.conf.example — template ↔ renderer 
     // No real principal/stack names leaked into the public template.
     expect(template).not.toMatch(/\bandreas\b/);
     expect(template).not.toMatch(/meta-factory/);
+  });
+});
+
+describe("parseLoopbackListen — safe loopback host:port for a synthesised base (review #1302)", () => {
+  test("accepts loopback host:port and strips the scheme", () => {
+    expect(parseLoopbackListen("nats://127.0.0.1:4222")).toBe("127.0.0.1:4222");
+    expect(parseLoopbackListen("nats://localhost:4222")).toBe("localhost:4222");
+    expect(parseLoopbackListen("tls://127.0.0.1:4223")).toBe("127.0.0.1:4223");
+    expect(parseLoopbackListen("127.0.0.1:4222")).toBe("127.0.0.1:4222"); // bare host:port
+  });
+
+  test("accepts bracketed IPv6 loopback", () => {
+    expect(parseLoopbackListen("nats://[::1]:4222")).toBe("[::1]:4222");
+  });
+
+  test("DECLINES non-loopback / over-exposed hosts (→ refuse-floor, no synthesis)", () => {
+    expect(parseLoopbackListen("nats://0.0.0.0:4222")).toBeUndefined();
+    expect(parseLoopbackListen("nats://example.com:4222")).toBeUndefined();
+    expect(parseLoopbackListen("nats://10.0.0.5:4222")).toBeUndefined();
+    expect(parseLoopbackListen("nats://[::]:4222")).toBeUndefined();
+  });
+
+  test("DECLINES userinfo, paths, and malformed host:port", () => {
+    expect(parseLoopbackListen("nats://user:pass@127.0.0.1:4222")).toBeUndefined();
+    expect(parseLoopbackListen("nats://127.0.0.1:4222/leaf")).toBeUndefined();
+    expect(parseLoopbackListen("nats://127.0.0.1")).toBeUndefined(); // no port
+    expect(parseLoopbackListen("nats://127.0.0.1:abc")).toBeUndefined(); // non-numeric port
+    expect(parseLoopbackListen("nats://127.0.0.1:0")).toBeUndefined(); // out-of-range
+    expect(parseLoopbackListen("nats://127.0.0.1:70000")).toBeUndefined();
+  });
+
+  test("DECLINES absent / empty", () => {
+    expect(parseLoopbackListen(undefined)).toBeUndefined();
+    expect(parseLoopbackListen("")).toBeUndefined();
+    expect(parseLoopbackListen("nats://")).toBeUndefined();
   });
 });
