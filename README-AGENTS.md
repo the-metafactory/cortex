@@ -10,6 +10,19 @@ proceeding, and prefer the dry-run form of every command before `--apply`.
 
 ---
 
+## Which mode are you setting up?
+
+cortex runs in layers — start at the bottom; each higher layer is **additive and opt-in**.
+
+| Mode | What it is | Beyond the base, you need |
+|---|---|---|
+| **Local** | Your own stack, standalone — your assistants, your bus, your machine. No one else involved. | Just the base prerequisites (§1) + an isolated bus (§4). |
+| **Federated** | Connect your stack to a *specific peer you trust* — sovereign, two-party federation: your stack runs its own **operator-mode** bus and links to the peer's. | An **operator-mode** bus + the `provision → make-live → join` ladder (§6 + [`sop-onboard-peer-principal.md`](docs/sop-onboard-peer-principal.md)). |
+
+**Local is the starting point** — get a local stack running first; federation is a later, opt-in step.
+
+---
+
 ## 1. Prerequisites
 
 Verify each before starting:
@@ -17,16 +30,21 @@ Verify each before starting:
 | Requirement | Check | Notes |
 |---|---|---|
 | Bun | `bun --version` | The only supported runtime. Never use npm/yarn/node. |
-| NATS server with JetStream | `nats-server --version` | One isolated bus per stack (see §4). |
+| NATS server with JetStream | `nats-server --version` | One isolated bus per stack (see §4). **Install:** macOS `brew install nats-server`; Linux — binary from [nats-io/nats-server releases](https://github.com/nats-io/nats-server/releases) or your distro package (JetStream is built in, enabled per-config). |
 | Claude Code, authenticated | `claude --version` | Default execution substrate for dispatched work. |
 | Discord bot token + guild | — | Bot must already be a **member of the target guild** with the **Message Content intent enabled** (Developer Portal). Only the principal can do this. |
 | guild id + channel ids | — | Discord client → Developer Mode → copy id. |
 | `arc` (optional) | `arc --version` | metafactory package manager; manages install + launchd lifecycle + signing-seed provisioning. |
 
-Platform: macOS (launchd plists ship in `src/services/`) or Linux (no systemd
-template ships in-repo — mirror the launchd plists in `src/services/` as a user
-unit: `ExecStart=<path>/cortex start --config <pointer>`, `Restart=always`,
-plus the `CORTEX_CHANNEL` env var and a `PATH` that includes `~/.bun/bin`).
+**Platform — macOS and Linux both supported.** The runtime is OS-agnostic (Bun,
+NATS, and the config `.conf` are identical); only the **service manager** differs:
+- **macOS** — launchd. `arc upgrade` renders the plists (`src/services/`) for you.
+- **Linux** — systemd **user** units. arc's auto-rendering of systemd units is WIP
+  ([arc#140](https://github.com/the-metafactory/arc/issues/140)); for now hand-write a
+  user unit mirroring the launchd plist — `ExecStart=<path>/cortex start --config
+  <pointer>`, `Restart=always`, `CORTEX_CHANNEL` set, `~/.bun/bin` on `PATH` — then
+  `systemctl --user enable --now`. cortex's `daemon-locator` finds it. (Or run directly:
+  `bun src/cortex.ts start --config <pointer>`.)
 
 ## 2. Install
 
@@ -143,8 +161,10 @@ jetstream {
 }
 ```
 
-Load it via a launchd plist (`ai.meta-factory.nats.<slug>.plist`) or systemd
-unit, then verify: `lsof -nP -iTCP:<port> -sTCP:LISTEN | grep nats`.
+Run it via your OS's service manager — a **launchd** plist
+(`ai.meta-factory.nats.<slug>.plist`) on macOS, or a **systemd user** unit on Linux
+(`systemctl --user enable --now`) — or directly while testing: `nats-server -c
+~/.config/nats/<slug>.conf`. Verify: `lsof -nP -iTCP:<port> -sTCP:LISTEN | grep nats`.
 
 Point `system/system.yaml` `nats.url` at `nats://127.0.0.1:<port>`.
 
