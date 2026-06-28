@@ -979,3 +979,39 @@ html, body {
 .tone-warn { color: var(--warn); }
 .tone-danger { color: var(--bad); }
 .tone-pending { color: var(--accent); }
+
+/* MC-B1 (cortex#1278) — Pier queue (operator inbox of pending admission
+   requests). Additive section in the Network view, below the roster panel. */
+.pier-queue-panel {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.pier-queue-title { margin: 0 0 2px; font-size: 14px; }
+.pier-queue-subtitle { margin: 0 0 10px; font-size: 12px; }
+.pier-queue-empty { font-size: 12px; padding: 4px 0; }
+.pier-queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pier-queue-group {
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+.pier-queue-group-header {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 6px;
+}
+.pier-queue-id { font-weight: 600; font-family: var(--mono); }
+.pier-queue-leaf { font-size: 11px; }
+.pier-queue-count { font-size: 11px; margin-left: auto; }
+.pier-queue-requests { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pier-queue-request { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pier-queue-principal { font-family: var(--mono); }
+.pier-queue-stacks { font-size: 11px; margin-left: auto; }
+.pier-queue-badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.pier-queue-footnote { font-size: 11px; margin: 8px 0 0; }

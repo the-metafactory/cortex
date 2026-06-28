@@ -72,6 +72,7 @@ import { NetworkDetailPanel } from "./network-detail-panel";
 import { NetworkFilterBar } from "./network-filter-bar";
 import { NetworkSpotlight } from "./network-spotlight";
 import { NetworkRosterPanel } from "./network-roster-panel";
+import { PierQueue } from "./pier-queue";
 import type { NetworkMembershipDTO } from "../hooks/use-networks";
 
 // Lazy: the xyflow + elk engine chunk loads only when this resolves (first
@@ -373,6 +374,11 @@ export function NetworkView({
       {/* MC-A1 — networks as first-class trust groups (admitted roster ⋈
           presence → membership verdict). Renders nothing when none are joined. */}
       <NetworkRosterPanel networks={networks} localPrincipal={servingPrincipal} />
+
+      {/* MC-B1 (cortex#1278) — Pier queue: PENDING admission requests for the
+          networks this principal ADMINS (operator posture). Read-only; renders
+          nothing when the principal admins no networks. */}
+      <PierQueue networks={networks} />
 
       {mode === "error" && (
         <div className="network-view-error">⚠ {state.error}</div>
