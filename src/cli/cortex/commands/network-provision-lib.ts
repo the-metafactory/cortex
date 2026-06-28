@@ -12,8 +12,9 @@
  *   4. ensure the stack signing seed  (provision-stack generate) — chmod 600, no-clobber
  *   5. wire federated.> export/import (arc nats add-federation-export) — fed → agents
  *   6. export operator-mode JWTs       (arc nats export-{operator,account,system}) — cortex#1265
- *   7. write stack.nats_infra back    (account, agents_account, creds_path, nkey_seed_path,
- *                                       operator_jwt, account_jwt, system_account[_jwt])
+ *   7. write stack.nats_infra back    (account, agents_account, creds_path, config_path,
+ *                                       nkey_seed_path, operator_jwt, account_jwt,
+ *                                       system_account[_jwt])
  *
  * After this the stack is ready for `cortex network join` — only the two
  * irreducible two-party steps remain (the leaf shared secret + hub topology
@@ -24,6 +25,14 @@
  * `stack.nats_infra.{operator_jwt, account_jwt, system_account, system_account_jwt}`
  * fields the O-3 join (and make-live bootstrap) read, so the operator runs zero
  * raw `nsc generate config`. It writes ONLY config, never the `.conf`.
+ *
+ * cortex#1265 (PR8) also closes the provision→make-live loop: provision now
+ * records the per-stack nats-server config path under `stack.nats_infra.config_path`
+ * (the conventional `~/.config/nats/<slug>.conf`, the same field `make-live` /
+ * `network join` derive their `--nats-config` from). Without it make-live had NO
+ * per-stack target and could not find the bus to bootstrap — the operator fell
+ * back to a manual `nsc generate config --mem-resolver`. The value is preserved
+ * if already set (never clobbered) and falls back to the convention otherwise.
  *
  * This module is PURE over injected ports — zero fs / arc / nsc. The live
  * adapters live in `network-provision-adapters.ts`; the arc account-tree seam is
@@ -111,6 +120,14 @@ export interface ProvisionConfigWritePort {
     account: string;
     agentsAccount: string;
     credsPath: string;
+    /**
+     * cortex#1265 (PR8) — the per-stack nats-server config path, persisted under
+     * `stack.nats_infra.config_path` (conventional `~/.config/nats/<slug>.conf`).
+     * make-live derives its `--nats-config` target from this exact field; without
+     * it make-live has no bus to bootstrap and the operator falls back to a manual
+     * `nsc generate config`. Closes the provision→make-live loop.
+     */
+    configPath: string;
     seedPath: string;
     nkeyPub?: string;
     /**
@@ -194,6 +211,13 @@ export interface ProvisionInputs {
   seedPath: string;
   /** Conventional leaf `.creds` path recorded in config (minted at join). */
   credsPath: string;
+  /**
+   * cortex#1265 (PR8) — the per-stack nats-server config path recorded under
+   * `stack.nats_infra.config_path` (conventional `~/.config/nats/<slug>.conf`).
+   * make-live derives its `--nats-config` from this; writing it here closes the
+   * provision→make-live loop (no manual `nsc generate config`).
+   */
+  configPath: string;
   force: boolean;
   apply: boolean;
   state: ProvisionState;
@@ -215,7 +239,7 @@ export interface ProvisionResult {
   /** Human-readable plan/result lines for the CLI renderer. */
   steps: string[];
   /** The resolved fields (present on a successful apply). */
-  resolved?: { account: string; agentsAccount: string; credsPath: string; seedPath: string };
+  resolved?: { account: string; agentsAccount: string; credsPath: string; configPath: string; seedPath: string };
 }
 
 // =============================================================================
@@ -271,7 +295,7 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
     {
       step: "stack.nats_infra write-back",
       status: "wire",
-      detail: "account, agents_account, creds_path, nkey_seed_path, operator_jwt, account_jwt, system_account[_jwt]",
+      detail: "account, agents_account, creds_path, config_path, nkey_seed_path, operator_jwt, account_jwt, system_account[_jwt]",
     },
   ];
 }
@@ -444,6 +468,7 @@ export async function provisionStack(
     account: resolvedAccount,
     agentsAccount: resolvedAgents,
     credsPath: inputs.credsPath,
+    configPath: inputs.configPath,
     seedPath: inputs.seedPath,
     ...(resolvedNkeyPub !== undefined && { nkeyPub: resolvedNkeyPub }),
     ...(operatorJwt !== undefined && { operatorJwt }),
@@ -453,7 +478,7 @@ export async function provisionStack(
   });
   if (!written.ok) return fail(plan, steps, `config write-back failed: ${written.reason}`);
   steps.push(
-    "stack.nats_infra written (account, agents_account, creds_path, nkey_seed_path" +
+    "stack.nats_infra written (account, agents_account, creds_path, config_path, nkey_seed_path" +
       (operatorJwt !== undefined ? ", operator_jwt, account_jwt" : "") +
       (systemAccount !== undefined ? ", system_account, system_account_jwt" : "") +
       ")",
@@ -471,6 +496,7 @@ export async function provisionStack(
       account: resolvedAccount,
       agentsAccount: resolvedAgents,
       credsPath: inputs.credsPath,
+      configPath: inputs.configPath,
       seedPath: inputs.seedPath,
     },
   };

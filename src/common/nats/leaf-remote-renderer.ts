@@ -1004,6 +1004,62 @@ export function renderOperatorModeBlocks(
 }
 
 /**
+ * cortex#1265 (PR8) — the minimal per-stack nats-server **base** identity used to
+ * synthesise a hard-isolated bus config when none exists yet, so make-live can
+ * bootstrap the operator-mode blocks onto it (see {@link renderBaseIsolatedConfig}).
+ *
+ * Every field is DERIVED from the stack's own config (never fabricated): `listen`
+ * is the host:port the stack's own daemon already dials (`nats.url`), and the
+ * names are the canonical `<slug>-<principal>` identity. This is the distinction
+ * the make-live adapter holds onto — it synthesises a base from the stack's OWN
+ * declared truth, it does NOT invent an arbitrary (collision-prone) server.
+ */
+export interface NatsBaseIdentity {
+  /** `server_name` + jetstream `domain` — canonically `<slug>-<principal>`. */
+  serverName: string;
+  /** `listen` host:port — the stack's own `nats.url` minus the scheme. */
+  listen: string;
+  /** jetstream `store_dir` — canonically `~/.config/nats/<slug>-jetstream`. */
+  jetstreamStoreDir: string;
+}
+
+/**
+ * Render the SOP §B0.1 **hard-isolated base** nats-server config from a stack's
+ * own derived identity. PURE (data in, text out). Emits exactly the isolation-wall
+ * base — `server_name` / `listen` / `jetstream { store_dir, domain }` — and
+ * DELIBERATELY no `leafnodes` / `cluster` / `gateway` block (that absence IS the
+ * isolation wall, cortex#692; a spoke stack needs no accept block — `cortex
+ * network join` renders its own per-network leaf REMOTE include later). No `http`
+ * monitor either: it is optional for nats-server and has no collision-safe source
+ * to derive (the operator picks a non-colliding `82xx` by hand if they want one).
+ *
+ * The result is a complete, nats-server-loadable anonymous bus; make-live then
+ * appends the operator-mode blocks via {@link renderOperatorModeBlocks} to make
+ * it operator-mode. `listen` is HOCON-quoted; it is derived from the stack's own
+ * `nats.url`, never attacker-controlled, but quoting keeps a stray space/`#` from
+ * breaking the line.
+ */
+export function renderBaseIsolatedConfig(identity: NatsBaseIdentity): string {
+  const serverName = identity.serverName.trim();
+  const listen = identity.listen.trim();
+  const storeDir = identity.jetstreamStoreDir.trim();
+  return [
+    "// --- hard-isolated base config rendered by cortex network make-live (cortex#1265) ---",
+    `server_name: "${serverName}"`,
+    `listen: "${listen}"`,
+    "jetstream {",
+    `  store_dir: "${storeDir}"`,
+    "  max_mem: 64mb",
+    "  max_file: 1gb",
+    `  domain: "${serverName}"`,
+    "}",
+    "// NO leafnodes{} / cluster{} / gateway{} — that absence IS the isolation wall (cortex#692).",
+    "// `cortex network join` renders this stack's per-network leaf REMOTE include itself.",
+    "",
+  ].join("\n");
+}
+
+/**
  * A JWT shape guard for the operator JWT + account JWTs emitted bare into the config.
  * NSC JWTs are `eyJ…` (a base64url-encoded `{"alg":…}` header) — EXACTLY three
  * base64url segments joined by `.` (header.payload.signature). We require the

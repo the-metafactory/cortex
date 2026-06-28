@@ -78,6 +78,10 @@ export function buildProvisionConfigWriteAdapter(stackConfigPath: string): Provi
         doc.setIn(["stack", "nats_infra", "account"], fields.account);
         doc.setIn(["stack", "nats_infra", "agents_account"], fields.agentsAccount);
         doc.setIn(["stack", "nats_infra", "creds_path"], fields.credsPath);
+        // cortex#1265 (PR8) — the per-stack nats-server config path make-live
+        // derives its `--nats-config` target from. Closes the provision→make-live
+        // loop: without it make-live has no bus to bootstrap.
+        doc.setIn(["stack", "nats_infra", "config_path"], fields.configPath);
         doc.setIn(["stack", "nkey_seed_path"], fields.seedPath);
         if (fields.nkeyPub !== undefined) {
           doc.setIn(["stack", "nkey_pub"], fields.nkeyPub);

@@ -158,6 +158,9 @@ credential.
 | [`network/example-network.yaml`](./network/example-network.yaml) | federation roster (OPTIONAL) | peers, registry, accept-subjects — only if you federate; inert until uncommented |
 | [`surfaces/surfaces.yaml`](./surfaces/surfaces.yaml) | shared surface bindings (OPTIONAL) | Discord/Slack/Mattermost `token` / `guild` / channels for each agent |
 | [`stacks/research.yaml`](./stacks/research.yaml) | per-deployment stack | `principal`, `stack` signing keys, `policy` (principal-only pattern), `agents`, `github.repos` |
+| [`nats-server.conf.example`](./nats-server.conf.example) | nats-server config (NOT a cortex config layer) | annotated operator-mode / MEMORY-resolver reference. Usually **generated** by `cortex network provision` + `cortex network make-live`; copy + fill only as a manual fallback |
+
+> **`nats-server.conf.example` is the nats-server config, not part of the cortex config-split.** It documents the shape `cortex network make-live` bootstraps (the make-live bootstrap renderer is the single source of truth; a drift test keeps the two in sync). You point `nats-server -c` at your filled copy; you point the cortex daemon at the pointer file above.
 
 - **`stacks/research.yaml`** is the file you edit daily. It carries the
   `<REPLACE_ME>` markers for your principal id, stack signing keys, the

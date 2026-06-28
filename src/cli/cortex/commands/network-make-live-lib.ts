@@ -15,7 +15,11 @@
  *      never disturbs the other stacks' accounts already there (multi-stack safe).
  *      cortex#1265 — when the bus has NO `resolver_preload` yet (a fresh local-only
  *      stack that never federates), BOOTSTRAP the operator-mode skeleton first from
- *      the JWTs provision wrote into `stack.nats_infra` (instead of refusing).
+ *      the JWTs provision wrote into `stack.nats_infra` (instead of refusing). PR8:
+ *      when the target `<slug>.conf` does not exist AT ALL (truly from-scratch), the
+ *      stack's OWN derived base identity (`baseIdentity` — listen from `nats.url`,
+ *      names `<slug>-<principal>`) lets make-live SYNTHESISE the hard-isolated base
+ *      first and render the operator-mode blocks onto it, in one shot, zero raw nsc.
  *   3. restart the NATS server so the MEMORY resolver loads the new account
  *      (a SIGHUP reload does NOT pick up resolver_preload — a hard restart is
  *      required; verified empirically, see docs/design-make-live-daemon-switch.md).
@@ -51,7 +55,7 @@
  * daemon restart, fail-fast (any port failure aborts and surfaces how far it got).
  */
 
-import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/nats/leaf-remote-renderer";
 
 // =============================================================================
 // Ports
@@ -109,10 +113,19 @@ export interface ResolverPreloadPort {
    * already operator-mode under the SAME operator. Refuses (ok:false) on a
    * malformed package OR a bus already operator-mode under a DIFFERENT operator
    * (never clobber). The subsequent `appendAccount` then adds the agents account.
+   *
+   * cortex#1265 (PR8) — when the target config does NOT exist yet (a truly
+   * from-scratch stack), `baseIdentity` (when supplied) lets the adapter SYNTHESISE
+   * the hard-isolated base config first (server_name/listen/jetstream, derived
+   * from the stack's OWN config — never fabricated) and then render the
+   * operator-mode blocks onto it, so the whole config is created in one shot. When
+   * the file is absent AND `baseIdentity` is undefined the adapter keeps the
+   * historical refusal (never invent a server identity).
    */
   bootstrapOperatorMode(opts: {
     natsConfigPath: string;
     package: OperatorModeLeafPackage;
+    baseIdentity?: NatsBaseIdentity;
   }): { ok: true; changed: boolean } | { ok: false; reason: string };
 }
 
@@ -175,6 +188,14 @@ export interface MakeLiveInputs {
    * ⇒ the #794 refusal stands (no JWTs to render with).
    */
   operatorModePackage?: OperatorModeLeafPackage;
+  /**
+   * cortex#1265 (PR8) — the stack's own derived nats-server base identity, used to
+   * SYNTHESISE a hard-isolated base config when `natsConfigPath` does not exist yet
+   * (the truly from-scratch path). Derived from the stack's own config (listen from
+   * `nats.url`, names `<slug>-<principal>`) — never fabricated. Absent ⇒ a missing
+   * config file keeps the historical "create the base config first" refusal.
+   */
+  baseIdentity?: NatsBaseIdentity;
   /**
    * Path to the nats-server config carrying resolver_preload. BLOCK 1 — derived
    * PER-STACK from `stack.nats_infra.config_path` (or `--nats-config`); there is
@@ -390,6 +411,7 @@ export async function makeLiveStack(
     const boot = ports.resolver.bootstrapOperatorMode({
       natsConfigPath: inputs.natsConfigPath,
       package: inputs.operatorModePackage,
+      ...(inputs.baseIdentity !== undefined && { baseIdentity: inputs.baseIdentity }),
     });
     if (!boot.ok) return fail(plan, steps, `operator-mode bootstrap failed: ${boot.reason}`);
     resolverChanged = boot.changed;

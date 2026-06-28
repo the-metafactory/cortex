@@ -46,9 +46,10 @@ const PROVISIONED = loaded({
 });
 
 /** Recording fake ports factory. */
-function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; writePath: string[] } {
+function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; writePath: string[]; written: Record<string, unknown>[] } {
   const calls: string[] = [];
   const writePath: string[] = [];
+  const written: Record<string, unknown>[] = [];
   const factory: ProvisionPortsFactory = (stackConfigPath) => {
     writePath.push(stackConfigPath);
     const operator: OperatorProvisioningPort = {
@@ -71,7 +72,7 @@ function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; write
       operator,
       federationWiring,
       signing: { exists: () => false, generate: () => { calls.push("signing"); return { ok: true, nkeyPub: "U" + "Z".repeat(55), fingerprint: "fp" }; } },
-      configWrite: { write: () => { calls.push("config-write"); return { ok: true }; } },
+      configWrite: { write: (fields) => { calls.push("config-write"); written.push(fields); return { ok: true }; } },
       export: {
         exportOperator: async ({ name }) => { calls.push(`export-operator:${name}`); return { ok: true, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }; },
         exportAccount: async (name) => { calls.push(`export-account:${name}`); return { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }; },
@@ -80,7 +81,7 @@ function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; write
     };
     return ports;
   };
-  return { factory, calls, writePath };
+  return { factory, calls, writePath, written };
 }
 
 describe("cortex network provision — dry-run (default)", () => {
@@ -139,6 +140,36 @@ describe("cortex network provision — apply", () => {
       "export-system:SYS",
       "config-write",
     ]);
+  });
+
+  test("write-back records config_path at the convention default `~/.config/nats/<slug>.conf`", async () => {
+    // UNPROVISIONED carries no `nats_infra.config_path`, so provision must fall
+    // back to the convention — the field make-live derives `--nats-config` from.
+    const { factory, written } = fakeFactory();
+    const res = await dispatchNetwork(
+      ["provision", "andreas/research", "--config", "/x/research.yaml", "--apply"],
+      reader(UNPROVISIONED),
+      undefined,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.configPath).toBe("~/.config/nats/research.conf");
+  });
+
+  test("an existing nats_infra.config_path is PRESERVED (never clobbered)", async () => {
+    // PROVISIONED already pins `config_path: ~/.config/nats/local.conf` (a shared
+    // bus). provision must keep it, not overwrite it with the convention.
+    const { factory, written } = fakeFactory();
+    const res = await dispatchNetwork(
+      ["provision", "andreas/research", "--config", "/x/research.yaml", "--apply"],
+      reader(PROVISIONED),
+      undefined,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.configPath).toBe("~/.config/nats/local.conf");
   });
 
   test("--apply + --dry-run is a usage error (exit 2)", async () => {

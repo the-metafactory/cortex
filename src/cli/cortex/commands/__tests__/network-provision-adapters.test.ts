@@ -98,6 +98,7 @@ describe("buildProvisionConfigWriteAdapter — operator-mode JWT write-back (cor
       account: FED,
       agentsAccount: AGENTS,
       credsPath: "~/.config/nats/research.creds",
+      configPath: "~/.config/nats/research.conf",
       seedPath: "~/.config/nats/andreas-research.seed",
       operatorJwt: OP_JWT,
       accountJwt: FED_JWT,
@@ -113,6 +114,8 @@ describe("buildProvisionConfigWriteAdapter — operator-mode JWT write-back (cor
     expect(doc.getIn(["stack", "nats_infra", "system_account_jwt"])).toBe(SYS_JWT);
     // The pre-existing account-tree fields are written too.
     expect(doc.getIn(["stack", "nats_infra", "account"])).toBe(FED);
+    // cortex#1265 (PR8) — the per-stack nats-server config path make-live reads.
+    expect(doc.getIn(["stack", "nats_infra", "config_path"])).toBe("~/.config/nats/research.conf");
   });
 
   test("omitted JWT fields are NOT written (never clobber a hand-tuned value)", () => {
@@ -125,6 +128,7 @@ describe("buildProvisionConfigWriteAdapter — operator-mode JWT write-back (cor
       account: FED,
       agentsAccount: AGENTS,
       credsPath: "~/c.creds",
+      configPath: "~/.config/nats/research.conf",
       seedPath: "~/s.seed",
       operatorJwt: OP_JWT,
       accountJwt: FED_JWT,

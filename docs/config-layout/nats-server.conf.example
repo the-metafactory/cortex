@@ -1,0 +1,107 @@
+# =============================================================================
+# Cortex — annotated nats-server config TEMPLATE (operator-mode / MEMORY resolver)
+# =============================================================================
+#
+# Run with:   nats-server -c nats-server.conf
+#
+# THIS IS A REFERENCE TEMPLATE, NOT A WORKING CONFIG. Every <PLACEHOLDER> must be
+# replaced before nats-server will load it. It contains NO real secrets, NO real
+# keys/JWTs, and NO real principal/stack names — author your copy by filling the
+# placeholders, never by pasting a captured live config.
+#
+# ── You usually do NOT write this by hand ───────────────────────────────────
+# The metafactory onboarding flow GENERATES this config for you:
+#
+#   1. cortex network provision <stack> --apply
+#        → mints your NSC operator + accounts, and records the per-stack
+#          nats-server config path under `stack.nats_infra.config_path`
+#          (conventionally ~/.config/nats/<stack>.conf).
+#   2. cortex network make-live <stack> --apply
+#        → BOOTSTRAPS exactly the operator-mode blocks below (operator +
+#          system_account + `resolver: MEMORY` + `resolver_preload`) onto the
+#          stack's bus config — zero raw `nsc generate config`.
+#
+# SINGLE SOURCE OF TRUTH: the make-live bootstrap renderer
+# (`renderBaseIsolatedConfig` + `renderOperatorModeBlocks` in
+# `src/common/nats/leaf-remote-renderer.ts`) is the canonical generator. THIS
+# FILE DOCUMENTS THE SHAPE that renderer emits. A drift test
+# (`leaf-remote-renderer.test.ts`) asserts the rendered config's keys all appear
+# here so the two cannot silently diverge.
+#
+# ── Manual fallback ─────────────────────────────────────────────────────────
+# If you must stand a bus up by hand (e.g. air-gapped, or debugging), copy this
+# file, fill the placeholders with YOUR OWN `nsc` material, and point the daemon
+# at it with `--nats-config <path>`. Generate the operator/account JWTs with your
+# own nsc operator — never copy another principal's operator JWT, account, or
+# creds (that re-introduces the retired cross-operator trust model, ADR-0013).
+# =============================================================================
+
+
+# ── Server identity (the "hard-isolated base") ──────────────────────────────
+# server_name + the jetstream domain are conventionally `<stack>-<principal>`.
+# Use values unique to THIS bus on the host so two co-located buses never clash.
+server_name: "<your-stack>-<your-principal>"
+
+# The client listen address. MUST match the `nats.url` your cortex daemon dials
+# (system/system.yaml → `nats.url`). Pick a port free on this host; 4222 is the
+# nats-server default for a single local bus — a SECOND co-located bus must use a
+# different port (e.g. 4223) to avoid a collision.
+listen: "127.0.0.1:4222"
+
+# OPTIONAL HTTP monitoring endpoint (/varz, /connz, …). Pick a non-colliding
+# port (convention: 82xx). Omit the whole line if you do not want monitoring.
+# http: "127.0.0.1:8222"
+
+
+# ── JetStream ───────────────────────────────────────────────────────────────
+jetstream {
+  store_dir: "~/.config/nats/<your-stack>-jetstream"   # per-stack store dir
+  max_mem: 64mb
+  max_file: 1gb
+  domain: "<your-stack>-<your-principal>"               # = server_name, by convention
+}
+
+
+# ── Operator mode (NSC operator + MEMORY resolver) ──────────────────────────
+# These four blocks are what `cortex network make-live` renders for you. They
+# turn an anonymous bus into one rooted in YOUR OWN nsc operator.
+#
+# <OPERATOR_JWT>        — your nsc operator JWT. A bare `eyJ…` token (3 segments).
+# <SYSTEM_ACCOUNT_PUBKEY> / <SYSTEM_ACCOUNT_JWT> — OPTIONAL SYS account. `nsc add
+#                         operator` does NOT mint one; omit both lines if absent.
+# <ACCOUNT_PUBKEY>      — an account public key (nkey-U, starts with `A`, 56 chars).
+# <ACCOUNT_JWT>         — that account's JWT (bare `eyJ…`).
+#
+# All values below are OBVIOUSLY-FAKE placeholders — replace every one.
+
+operator: <OPERATOR_JWT>
+
+# OPTIONAL — only when you have a SYS account (delete both this line and its
+# resolver_preload entry below if you do not).
+system_account: <SYSTEM_ACCOUNT_PUBKEY>
+
+resolver: MEMORY
+
+# One `<account_pubkey>: <account_jwt>` entry per account the server must know.
+# `cortex network make-live` appends each stack's agents account here over time
+# (keyed on the account pubkey — idempotent, multi-stack safe).
+resolver_preload: {
+  # Your stack's federation/agents account:
+  <ACCOUNT_PUBKEY>: <ACCOUNT_JWT>
+  # The SYS account (only if `system_account` is set above):
+  <SYSTEM_ACCOUNT_PUBKEY>: <SYSTEM_ACCOUNT_JWT>
+}
+
+
+# ── Leafnodes (federation) — OPTIONAL ───────────────────────────────────────
+# A LOCAL-ONLY stack OMITS this whole block — the absence of leafnodes/cluster/
+# gateway IS the isolation wall (cortex#692), and a spoke does not accept inbound
+# leafs. DO NOT hand-add a `remotes` entry: `cortex network join <network>`
+# renders this stack's per-network leaf REMOTE into its own include file and
+# wires it in. The `listen` accept block below is only for a bus that itself acts
+# as a federation HUB (accepting inbound leaf connections).
+#
+# leafnodes {
+#   listen: "127.0.0.1:7422"                  # hub-only: accept inbound leafs
+#   # remotes are managed by `cortex network join` — do not hand-edit.
+# }

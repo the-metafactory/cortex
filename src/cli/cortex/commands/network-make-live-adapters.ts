@@ -9,12 +9,12 @@
  * tree + JWT come from arc (ADR-0013 Model B invariant).
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync, mkdirSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 
 import { expandTilde } from "../../../common/config/loader";
-import { renderOperatorModeBlocks } from "../../../common/nats/leaf-remote-renderer";
+import { renderOperatorModeBlocks, renderBaseIsolatedConfig } from "../../../common/nats/leaf-remote-renderer";
 import {
   selectNatsServiceManager,
   currentServicePlatform,
@@ -232,13 +232,24 @@ export function buildResolverPreloadAdapter(): ResolverPreloadPort {
     // cortex#1265 — bootstrap an initial operator-mode skeleton (local-only path).
     // Reuses renderOperatorModeBlocks (the SINGLE source of the §B0.1 grammar) so
     // the bootstrapped conf is byte-identical to one `cortex network join` would
-    // render. APPENDS the operator-mode blocks to the bus's EXISTING config — it
-    // requires that config to exist (it carries the bus's server_name/listen/http),
-    // never fabricating a server identity.
-    bootstrapOperatorMode: ({ natsConfigPath, package: pkg }) => {
+    // render.
+    //
+    // Two cases on the target config:
+    //   - EXISTS (the SOP §B0.1 base, carrying server_name/listen/jetstream): APPEND
+    //     the operator-mode blocks onto it.
+    //   - ABSENT + `baseIdentity` supplied (cortex#1265 PR8, the truly from-scratch
+    //     path): SYNTHESISE the hard-isolated base from the stack's OWN derived
+    //     identity (renderBaseIsolatedConfig — listen from the stack's nats.url,
+    //     names <slug>-<principal>), then render the operator-mode blocks onto it.
+    //     One shot, zero raw `nsc generate config`.
+    //   - ABSENT + no `baseIdentity`: keep the historical refusal — never INVENT a
+    //     server identity (the #1265 PR1 invariant; a join-path caller passes no
+    //     identity and still gets the refuse).
+    bootstrapOperatorMode: ({ natsConfigPath, package: pkg, baseIdentity }) => {
       try {
         const abs = expandTilde(natsConfigPath);
-        if (!existsSync(abs)) {
+        const fileExists = existsSync(abs);
+        if (!fileExists && baseIdentity === undefined) {
           return {
             ok: false,
             reason:
@@ -246,12 +257,23 @@ export function buildResolverPreloadAdapter(): ResolverPreloadPort {
               "EXISTING bus config (carrying its server_name/listen/http). Create the base config first.",
           };
         }
-        const current = readFileSync(abs, "utf-8");
+        // ABSENT + identity ⇒ synthesise the hard-isolated base from the stack's
+        // OWN config; EXISTS ⇒ read it. Either way `current` is the base the
+        // operator-mode blocks render onto.
+        const current = fileExists
+          ? readFileSync(abs, "utf-8")
+          : renderBaseIsolatedConfig(baseIdentity!);
         const result = renderOperatorModeBlocks(current, pkg);
         if (result.status === "refuse") return { ok: false, reason: result.reason };
         if (result.status === "already") return { ok: true, changed: false };
-        // converted — back up first (the rollback artefact), then write in place.
-        copyFileSync(abs, `${abs}.bak-makelive-${Date.now().toString()}`);
+        // converted — back up an existing file first (the rollback artefact); a
+        // freshly-synthesised config has nothing to back up. Ensure the parent dir
+        // exists, then write in place.
+        if (fileExists) {
+          copyFileSync(abs, `${abs}.bak-makelive-${Date.now().toString()}`);
+        } else {
+          mkdirSync(dirname(abs), { recursive: true });
+        }
         writeFileSync(abs, result.conf, "utf-8");
         return { ok: true, changed: true };
       } catch (err) {

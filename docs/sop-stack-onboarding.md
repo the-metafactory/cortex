@@ -100,6 +100,8 @@ jetstream {
 # Anonymous auth: process + port + store separation is the boundary.
 ```
 
+> 📄 **Reference template:** [`docs/config-layout/nats-server.conf.example`](./config-layout/nats-server.conf.example) is the annotated, copy-and-fill version of this file (it also shows the operator-mode blocks added in §B0.1). For a federating stack you usually don't write this by hand at all — `cortex network provision` + `cortex network make-live` generate it (see §B0.1).
+
 Write `~/Library/LaunchAgents/ai.meta-factory.nats.<slug>.plist` (`nats-server -c ~/.config/nats/<slug>.conf`, `RunAtLoad`/`KeepAlive`), then:
 
 ```bash
@@ -220,7 +222,21 @@ nats-server: cannot find local account "AADPQ7…" specified in leafnode remote
 
 → the daemon fails to start and the stack's bus goes **down**. The fix (cortex#794) makes `cortex network join` **detect an anonymous bus and refuse, fail-fast** — rather than rendering a leaf that crashes the server — so a join never silently takes a bus offline. (Surfaced joining `andreas/community` on `:4224` to `metafactory-community`; recovered with `cortex network leave`. The fail-fast lands with #794; until it does, the guard below — convert the bus to operator-mode first — is the principal's responsibility.)
 
-**To federate a hard-isolated stack, stand up your OWN NSC operator first — do not copy the hub's.** Each principal roots their federation identity in their **own** operator (ADR-0013 §Decision-1); nobody's identity lives in anybody else's operator. Edit the stack's `~/.config/nats/<slug>.conf` to add **your own** NSC operator / system-account / resolver blocks plus **one dedicated federation account** (distinct from the agents account, per ADR-0013 §Decision-3 / [ADR-0012](./adr/0012-external-operator-account-isolation.md)):
+> ✅ **This is now automated (cortex#1265) — you should NOT hand-run `nsc` for this.** The two-command flow stands the operator-mode bus up for you:
+>
+> ```bash
+> cortex network provision <slug> --apply     # mints your OWN nsc operator + accounts;
+>                                             # records stack.nats_infra.config_path
+>                                             # (~/.config/nats/<slug>.conf) + the operator/
+>                                             # account JWTs into the stack config
+> cortex network make-live <slug> --apply     # BOOTSTRAPS the operator-mode blocks below
+>                                             # (operator + system_account + resolver: MEMORY
+>                                             # + resolver_preload) onto the bus — zero raw nsc
+> ```
+>
+> `provision` writes the per-stack `config_path` that `make-live` (and `cortex network join`) derive `--nats-config` from, so the loop closes without a manual `nsc generate config --mem-resolver`. **Manual fallback:** copy [`docs/config-layout/nats-server.conf.example`](./config-layout/nats-server.conf.example), fill in your own JWTs/pubkeys, and point the daemon at it with `--nats-config <path>`. The hand-edited shape below is exactly what the template documents and what `make-live` emits.
+
+**To federate a hard-isolated stack, stand up your OWN NSC operator first — do not copy the hub's.** Each principal roots their federation identity in their **own** operator (ADR-0013 §Decision-1); nobody's identity lives in anybody else's operator. The automated flow above does this for you; the hand-edit below is the manual fallback. Edit the stack's `~/.config/nats/<slug>.conf` to add **your own** NSC operator / system-account / resolver blocks plus **one dedicated federation account** (distinct from the agents account, per ADR-0013 §Decision-3 / [ADR-0012](./adr/0012-external-operator-account-isolation.md)):
 
 ```hocon
 server_name: <slug>-<principal>          # KEEP the stack's own identity/ports/JS domain

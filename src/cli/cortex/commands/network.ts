@@ -129,7 +129,7 @@ import {
   type MakeLivePorts,
 } from "./network-make-live-lib";
 import { buildLiveMakeLivePorts, buildResolverPreloadAdapter } from "./network-make-live-adapters";
-import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/nats/leaf-remote-renderer";
 import {
   runNetworkSecret,
   type SecretAction,
@@ -1969,6 +1969,25 @@ function deriveMakeLiveInputs(
         }
       : undefined;
 
+  // cortex#1265 (PR8) — derive the stack's OWN nats-server base identity so a
+  // truly from-scratch stack (no `<slug>.conf` yet) can have its hard-isolated
+  // base SYNTHESISED + bootstrapped in one make-live, instead of refusing. Every
+  // field comes from the stack's own config — never fabricated: `listen` is the
+  // host:port the stack's own daemon already dials (`nats.url` minus scheme), the
+  // names are the canonical `<slug>-<principal>`. Undefined when `nats.url` can't
+  // be read — make-live then keeps the "create the base config first" refusal for
+  // an absent file (never invent a server identity).
+  const natsUrl = cfg.config.nats?.url;
+  const listen = natsUrl !== undefined ? natsUrl.replace(/^(?:nats|tls):\/\//, "").trim() : "";
+  const baseIdentity: NatsBaseIdentity | undefined =
+    listen !== ""
+      ? {
+          serverName: `${slug}-${principal}`,
+          listen,
+          jetstreamStoreDir: `~/.config/nats/${slug}-jetstream`,
+        }
+      : undefined;
+
   const inputs: MakeLiveInputs = {
     principal,
     stackSlug: slug,
@@ -1983,6 +2002,7 @@ function deriveMakeLiveInputs(
     apply: applyRes.apply,
     state,
     ...(operatorModePackage !== undefined && { operatorModePackage }),
+    ...(baseIdentity !== undefined && { baseIdentity }),
   };
   return { ok: true, inputs };
 }
@@ -2088,6 +2108,12 @@ function deriveProvisionInputs(
 
   const seedPath = optionalValueFlag(flags, "--seed-path") ?? cfg.stack?.nkey_seed_path ?? `~/.config/nats/${principal}-${slug}.seed`;
   const credsPath = optionalValueFlag(flags, "--creds") ?? cfg.stack?.nats_infra?.creds_path ?? `~/.config/nats/${slug}.creds`;
+  // cortex#1265 (PR8) — the per-stack nats-server config path make-live + join
+  // derive their `--nats-config` from. Preserve a value already in config (the
+  // SOP §B2 / hand-set path — never clobber), else the convention `~/.config/
+  // nats/<slug>.conf` (docs/sop-stack-onboarding.md §B0.1 + §B2). Writing it here
+  // is what closes the provision→make-live loop (no manual `nsc generate config`).
+  const natsConfigPath = optionalValueFlag(flags, "--nats-config") ?? cfg.stack?.nats_infra?.config_path ?? `~/.config/nats/${slug}.conf`;
 
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return { ok: false, reason: applyRes.reason, usage: true };
@@ -2114,6 +2140,7 @@ function deriveProvisionInputs(
     systemAccountName,
     seedPath,
     credsPath,
+    configPath: natsConfigPath,
     force: flags["--force"] === true,
     apply: applyRes.apply,
     state: {
@@ -2153,6 +2180,7 @@ async function runProvision(
     if (res.resolved !== undefined) {
       data.account = res.resolved.account;
       data.agents_account_pubkey = res.resolved.agentsAccount;
+      data.config_path = res.resolved.configPath;
     }
     const env = res.ok
       ? envelopeOk([{ stack: inputs.stackId, plan: res.plan }], data)

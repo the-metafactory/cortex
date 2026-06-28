@@ -410,11 +410,49 @@ describe("buildResolverPreloadAdapter — bootstrapOperatorMode (cortex#1265)", 
     if (second.ok) expect(second.changed).toBe(false);
   });
 
-  test("refuses when the base config file is absent (never fabricate server identity)", () => {
+  test("refuses when the base config file is absent AND no baseIdentity (never fabricate server identity)", () => {
     const adapter = buildResolverPreloadAdapter();
     const r = adapter.bootstrapOperatorMode({ natsConfigPath: join(dir, "missing.conf"), package: PKG });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("not found");
+  });
+
+  // cortex#1265 (PR8) — from-scratch path: absent file + derived baseIdentity ⇒
+  // SYNTHESISE the hard-isolated base, then render the operator-mode blocks onto
+  // it → a complete, nats-server-loadable operator-mode config, in one shot.
+  test("absent file + baseIdentity → synthesises a COMPLETE loadable operator-mode config (zero raw nsc)", () => {
+    const path = join(dir, "research.conf"); // does NOT exist yet
+    const adapter = buildResolverPreloadAdapter();
+
+    const r = adapter.bootstrapOperatorMode({
+      natsConfigPath: path,
+      package: PKG,
+      baseIdentity: {
+        serverName: "research-acme",
+        listen: "127.0.0.1:4222",
+        jetstreamStoreDir: "~/.config/nats/research-jetstream",
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.changed).toBe(true);
+
+    const out = readFileSync(path, "utf-8");
+    // Base identity (derived, not fabricated) …
+    expect(out).toContain('server_name: "research-acme"');
+    expect(out).toContain('listen: "127.0.0.1:4222"');
+    expect(out).toContain("jetstream {");
+    expect(out).toContain('store_dir: "~/.config/nats/research-jetstream"');
+    expect(out).toContain('domain: "research-acme"');
+    // … plus the full operator-mode block set (the loadable MEMORY-resolver shape).
+    expect(out).toContain("operator: " + PKG.operatorJwt);
+    expect(out).toContain("resolver: MEMORY");
+    expect(out).toContain("resolver_preload: {");
+    expect(out).toContain(`${PKG.account}: ${PKG.accountJwt}`);
+    // The isolation wall: no leafnodes/cluster/gateway accept block (join adds the
+    // per-network leaf REMOTE later).
+    expect(out).not.toMatch(/^\s*leafnodes\s*\{/m);
+    // The probe now reports operator-mode (so the subsequent append finds the block).
+    expect(adapter.hasResolverPreload(path)).toBe(true);
   });
 });
 

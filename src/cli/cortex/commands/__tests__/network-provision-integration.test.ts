@@ -116,6 +116,7 @@ function inputs(): ProvisionInputs {
     systemAccountName: "SYS",
     seedPath: "~/.config/nats/cortex-work.nk",
     credsPath: "~/.config/nats/work.creds",
+    configPath: "~/.config/nats/work.conf",
     force: false,
     apply: true,
     state: { federationAccount: undefined, agentsAccount: undefined, signingSeedExists: false, operatorModeJwtsPresent: false },
@@ -135,6 +136,10 @@ describe("C-1225 — provision → real arc wiring adapter (faithful arc CLI con
     expect(result.resolved?.account).toBe(FED_PUB);
     expect(result.resolved?.agentsAccount).toBe(AGENTS_PUB);
     expect(written).toHaveLength(1);
+    // cortex#1265 (PR8) — the write-back carries the per-stack nats-server config
+    // path make-live reads (closes the provision→make-live loop).
+    expect((written[0] as { configPath?: string }).configPath).toBe("~/.config/nats/work.conf");
+    expect(result.resolved?.configPath).toBe("~/.config/nats/work.conf");
 
     // The adapter emitted arc's REAL contract: `nats add-federation-export`
     // with --from-account/--to-account/--apply/--json and NO `--dry-run`.

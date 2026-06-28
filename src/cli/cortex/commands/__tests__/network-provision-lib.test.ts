@@ -109,6 +109,7 @@ function baseInputs(over?: Partial<ProvisionInputs>, state?: Partial<ProvisionSt
     systemAccountName: "SYS",
     seedPath: "~/.config/nats/andreas-research.seed",
     credsPath: "~/.config/nats/research.creds",
+    configPath: "~/.config/nats/research.conf",
     force: false,
     apply: false,
     state: {
@@ -230,8 +231,12 @@ describe("provisionStack — apply on an empty stack", () => {
       systemAccount: SYS_PUB,
       systemAccountJwt: SYS_JWT,
     });
+    // cortex#1265 (PR8) — the per-stack nats-server config path make-live reads.
+    // Closes the provision→make-live loop (no manual `nsc generate config`).
+    expect(written[0]?.configPath).toBe("~/.config/nats/research.conf");
     expect(res.resolved?.account).toBe(FED_PUB);
     expect(res.resolved?.agentsAccount).toBe(AGENTS_PUB);
+    expect(res.resolved?.configPath).toBe("~/.config/nats/research.conf");
   });
 
   test("the federated.> wire is CROSS-account (distinct from/to)", async () => {

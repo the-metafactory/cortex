@@ -26,10 +26,14 @@ import {
   mergeLeafRemotes,
   renderLeafIncludeFile,
   renderLeafRemote,
+  renderBaseIsolatedConfig,
+  renderOperatorModeBlocks,
   resolveLeafBindMode,
   type LeafRemote,
   type StackLeafBinding,
 } from "../leaf-remote-renderer";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 // =============================================================================
 // Fixtures — a registry-served descriptor + the stack's local leaf binding.
@@ -630,5 +634,101 @@ describe("renderLeafIncludeFile — C-1224 Model B secret-auth serialization", (
       'credentials: "/Users/andreas/.config/nats/andreas.creds"',
     );
     expect(conf).not.toContain("@nats.meta-factory.dev");
+  });
+});
+
+// =============================================================================
+// cortex#1265 (PR8) — renderBaseIsolatedConfig + the template-drift guard
+// =============================================================================
+
+describe("renderBaseIsolatedConfig — the from-scratch base skeleton", () => {
+  const IDENTITY = {
+    serverName: "research-acme",
+    listen: "127.0.0.1:4222",
+    jetstreamStoreDir: "~/.config/nats/research-jetstream",
+  };
+
+  test("emits a complete hard-isolated base (server_name/listen/jetstream)", () => {
+    const conf = renderBaseIsolatedConfig(IDENTITY);
+    expect(conf).toContain('server_name: "research-acme"');
+    expect(conf).toContain('listen: "127.0.0.1:4222"');
+    expect(conf).toContain("jetstream {");
+    expect(conf).toContain('store_dir: "~/.config/nats/research-jetstream"');
+    expect(conf).toContain('domain: "research-acme"');
+  });
+
+  test("DELIBERATELY omits leafnodes/cluster/gateway (the isolation wall, cortex#692)", () => {
+    const conf = renderBaseIsolatedConfig(IDENTITY);
+    expect(conf).not.toMatch(/^\s*leafnodes\s*\{/m);
+    expect(conf).not.toMatch(/^\s*cluster\s*\{/m);
+    expect(conf).not.toMatch(/^\s*gateway\s*\{/m);
+  });
+
+  test("is anonymous (no account tree) until operator-mode blocks are rendered onto it", () => {
+    const base = renderBaseIsolatedConfig(IDENTITY);
+    expect(natsConfigHasAccountTree(base)).toBe(false);
+    // renderOperatorModeBlocks then converts it to a complete operator-mode config.
+    const pkg = {
+      operatorJwt: "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJPUCJ9.sig",
+      account: "A" + "F".repeat(55),
+      accountJwt: "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBRkVEIn0.sig",
+    };
+    const result = renderOperatorModeBlocks(base, pkg);
+    expect(result.status).toBe("converted");
+    if (result.status === "converted") {
+      // The whole config is loadable: base identity + operator-mode block set.
+      expect(result.conf).toContain('server_name: "research-acme"');
+      expect(result.conf).toContain("operator: " + pkg.operatorJwt);
+      expect(result.conf).toContain("resolver: MEMORY");
+      expect(result.conf).toContain("resolver_preload: {");
+    }
+  });
+});
+
+describe("docs/config-layout/nats-server.conf.example — template ↔ renderer drift guard", () => {
+  // The template documents the SHAPE the bootstrap renderer emits. If the
+  // renderer grows/renames a structural key, this guard fails until the template
+  // is updated too — so the human-readable reference can never silently drift.
+  const templatePath = join(__dirname, "..", "..", "..", "..", "docs", "config-layout", "nats-server.conf.example");
+  const template = readFileSync(templatePath, "utf-8");
+
+  test("the template carries every structural key the renderer emits", () => {
+    const base = renderBaseIsolatedConfig({
+      serverName: "s", listen: "127.0.0.1:4222", jetstreamStoreDir: "~/x",
+    });
+    const operatorMode = renderOperatorModeBlocks(base, {
+      operatorJwt: "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJPUCJ9.sig",
+      account: "A" + "F".repeat(55),
+      accountJwt: "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBRkVEIn0.sig",
+      systemAccount: "A" + "S".repeat(55),
+      systemAccountJwt: "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJTWVMifQ.sig",
+    });
+    const rendered = operatorMode.status === "converted" ? operatorMode.conf : "";
+    // Every structural key the renderer emits must be documented in the template.
+    for (const key of [
+      "server_name:",
+      "listen:",
+      "jetstream {",
+      "store_dir:",
+      "domain:",
+      "operator:",
+      "system_account:",
+      "resolver: MEMORY",
+      "resolver_preload:",
+    ]) {
+      expect(rendered).toContain(key); // sanity: the renderer really emits it
+      expect(template).toContain(key); // the template documents it
+    }
+  });
+
+  test("the template is placeholder-only — no real JWT/NKEY/principal material", () => {
+    // No bare `eyJ…` JWT tokens (3 base64url segments) — only `<PLACEHOLDER>` forms.
+    expect(template).not.toMatch(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+    // No real 56-char nkey public keys (A…/O…/U…) or seeds (S…).
+    expect(template).not.toMatch(/\b[AOU][A-Z2-7]{55}\b/);
+    expect(template).not.toMatch(/\bS[A-Z2-7]{55}\b/);
+    // No real principal/stack names leaked into the public template.
+    expect(template).not.toMatch(/\bandreas\b/);
+    expect(template).not.toMatch(/meta-factory/);
   });
 });
