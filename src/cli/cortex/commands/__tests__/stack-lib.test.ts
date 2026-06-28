@@ -141,14 +141,18 @@ describe("renderScaffold", () => {
     expect(stack?.contents).toContain("luna");
   });
 
-  test("system/system.yaml seeds the conventional bus credsPath (~/.config/nats/<slug>.creds)", () => {
+  test("system/system.yaml seeds the bus/bot credsPath (~/.config/nats/<slug>-bot.creds), distinct from the federation default", () => {
     // v5.30.2 (C-1265c): a from-scratch stack carries nats.credsPath explicitly,
     // so `cortex network make-live` needs no --creds flag. The path is the
-    // daemon's OWN bus creds under the agents account — the conventional
-    // per-stack path, NOT the federation leaf creds.
+    // daemon's OWN bus/bot creds under the agents account. The `-bot` suffix is
+    // load-bearing: it keeps this DISTINCT from provision's federation-user
+    // default `~/.config/nats/<slug>.creds` (different NATS account → must be a
+    // different file, or the second mint clobbers the first).
     const files = renderScaffold(inputs);
     const system = files.find((f) => f.relPath === "system/system.yaml");
-    expect(system?.contents).toContain("credsPath: ~/.config/nats/demo.creds");
+    expect(system?.contents).toContain("credsPath: ~/.config/nats/demo-bot.creds");
+    // The bus path must NOT equal the federation default for the same slug.
+    expect(system?.contents).not.toContain("credsPath: ~/.config/nats/demo.creds");
   });
 
   test("does NOT inline any signing seed material (key auto-provisioned later)", () => {

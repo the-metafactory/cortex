@@ -236,8 +236,19 @@ describe("cortex network make-live — apply", () => {
   });
 });
 
+// The two default paths that MUST stay distinct (different NATS accounts).
+// BUS_DEFAULT is make-live's bus/bot-user creds (agents account); FED_DEFAULT is
+// provision's federation-user creds default (deriveProvisionInputs, network.ts).
+// slug = community for these tests.
+const BUS_CREDS_DEFAULT = "~/.config/nats/community-bot.creds";
+const FED_CREDS_DEFAULT = "~/.config/nats/community.creds";
+
 describe("cortex network make-live — credsPath default (v5.30.2, C-1265c)", () => {
-  test("defaults nats.credsPath to ~/.config/nats/<slug>.creds when unset (no --creds, no config)", async () => {
+  test("defaults nats.credsPath to ~/.config/nats/<slug>-bot.creds, DISTINCT from provision's federation default", async () => {
+    // Guard the invariant directly: the bus/bot default and the federation
+    // default must never resolve to the same file (different NATS accounts).
+    expect(BUS_CREDS_DEFAULT).not.toBe(FED_CREDS_DEFAULT);
+
     const { factory } = fakeFactory();
     const res = await run(
       // No --creds; UNSEEDED_CREDS has no config.nats.credsPath. slug=community.
@@ -246,10 +257,15 @@ describe("cortex network make-live — credsPath default (v5.30.2, C-1265c)", ()
       factory,
     );
     expect(res.exitCode).toBe(0); // no longer a usage error — a path is always derivable
-    // The bus-creds plan line names the conventional default per-stack bus creds…
-    expect(res.stdout).toContain("~/.config/nats/community.creds");
-    // …and NEVER the federation leaf creds (stack.nats_infra.creds_path) — proving
-    // the two are not conflated (a leaf-creds fallback was the wrong fix).
+    // The bus-creds plan line names the conventional `-bot` bus/bot-user path…
+    expect(res.stdout).toContain(BUS_CREDS_DEFAULT);
+    // …and NEVER provision's FEDERATION default `~/.config/nats/<slug>.creds`
+    // (`community-bot.creds` does not contain that substring) — proving make-live's
+    // bus user and `network join`'s federation user resolve to DIFFERENT files and
+    // cannot clobber each other on a fresh stack.
+    expect(res.stdout).not.toContain(FED_CREDS_DEFAULT);
+    // …and NEVER the stack's federation leaf creds (stack.nats_infra.creds_path) —
+    // a leaf-creds fallback was the wrong fix.
     expect(res.stdout).not.toContain("community-leaf.creds");
   });
 
@@ -262,7 +278,7 @@ describe("cortex network make-live — credsPath default (v5.30.2, C-1265c)", ()
     );
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain(ABSENT_CREDS);
-    expect(res.stdout).not.toContain("~/.config/nats/community.creds");
+    expect(res.stdout).not.toContain(BUS_CREDS_DEFAULT);
   });
 
   test("--creds flag takes precedence over both config and the default", async () => {
@@ -275,6 +291,6 @@ describe("cortex network make-live — credsPath default (v5.30.2, C-1265c)", ()
     );
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain(customCreds);
-    expect(res.stdout).not.toContain("~/.config/nats/community.creds");
+    expect(res.stdout).not.toContain(BUS_CREDS_DEFAULT);
   });
 });
