@@ -1,6 +1,6 @@
 /**
  * MC-B1 (cortex#1278) — pure selection adapter for the **Pier queue**: the
- * OPERATOR view of PENDING admission requests awaiting Tier-2 grant.
+ * ADMIN view of PENDING admission requests awaiting Tier-2 grant.
  *
  * ## What the Pier queue is (and what it is NOT)
  *
@@ -15,7 +15,7 @@
  * ## Two postures (the load-bearing trust boundary)
  *
  * CONTEXT.md / the vision distinguish two postures:
- *   - OPERATOR — the admin of a network they own. They CAN read the network's
+ *   - ADMIN — the admin of a network they own. They CAN read the network's
  *     full pending list (the registry `GET /admission-requests?status=PENDING`
  *     is admin-gated). For this principal, pending requests are theirs to see —
  *     and (in B2) to grant.
@@ -25,9 +25,9 @@
  *
  * `/api/networks` (MC-A1) carries this distinction as `roster_scope`:
  *   - `roster_status === "ok" && roster_scope === "complete"` → an
- *     admin-authoritative read succeeded → OPERATOR posture for that network.
+ *     admin-authoritative read succeeded → ADMIN posture for that network.
  *   - any other status/scope (`self`, `unreachable`, `unauthorized`,
- *     `not_configured`) → NOT operator-authoritative.
+ *     `not_configured`) → NOT admin-authoritative.
  *
  * This adapter surfaces pending **only** for `complete`-scope networks. A
  * self-scoped or degraded read NEVER contributes a pending entry — fail-closed:
@@ -37,12 +37,12 @@
  *
  * Pure: no I/O, no bus, no crypto. The membership verdict (`pending`) is
  * computed server-side from the admission rows (ADR-0018 Q3); this is purely a
- * verdict/scope → operator-queue projection, trivially unit-testable.
+ * verdict/scope → admin-queue projection, trivially unit-testable.
  */
 
 import type { NetworkMembershipDTO } from "../../api/networks";
 
-/** One pending admission request awaiting Tier-2 grant, for the operator inbox. */
+/** One pending admission request awaiting Tier-2 grant, for the admin inbox. */
 export interface PierQueueRequest {
   /** The network the principal has requested to join. */
   networkId: string;
@@ -58,7 +58,7 @@ export interface PierQueueRequest {
   presentStacks: string[];
 }
 
-/** Pending requests grouped under one operator-posture (admin) network. */
+/** Pending requests grouped under one admin-posture (admin) network. */
 export interface PierQueueNetworkGroup {
   networkId: string;
   leafNode: string;
@@ -66,40 +66,40 @@ export interface PierQueueNetworkGroup {
   requests: PierQueueRequest[];
 }
 
-/** The reconciled Pier queue: the operator's pending-admission inbox. */
+/** The reconciled Pier queue: the admin's pending-admission inbox. */
 export interface PierQueue {
   /** Admin (complete-roster) networks that have ≥1 pending request. */
   groups: PierQueueNetworkGroup[];
-  /** Total pending requests across all operator-posture networks. */
+  /** Total pending requests across all admin-posture networks. */
   totalPending: number;
   /**
    * Count of joined networks the principal ADMINS (complete-roster read). Defines
-   * the queue's authority scope — when 0, the operator queue does not apply.
+   * the queue's authority scope — when 0, the admin queue does not apply.
    */
   adminNetworkCount: number;
   /**
    * Count of joined networks the principal does NOT admin (self-scoped or
    * degraded read). Pending is NOT visible for these (honest posture, surfaced
-   * to the operator as a footnote — never as an error).
+   * to the admin as a footnote — never as an error).
    */
   nonAdminNetworkCount: number;
 }
 
 /**
- * Operator posture for ONE network: true iff the admin-authoritative
+ * Admin posture for ONE network: true iff the admin-authoritative
  * (`complete`) admission-rows read succeeded. This is the single gate that
  * decides whether a network's pending requests are the viewer's to see.
  */
-export function isOperatorPosture(net: NetworkMembershipDTO): boolean {
+export function isAdminPosture(net: NetworkMembershipDTO): boolean {
   return net.roster_status === "ok" && net.roster_scope === "complete";
 }
 
 /**
- * Project the `/api/networks` DTO into the operator Pier queue.
+ * Project the `/api/networks` DTO into the admin Pier queue.
  *
- * For each joined network: if it is NOT operator-posture, count it as non-admin
+ * For each joined network: if it is NOT admin-posture, count it as non-admin
  * and contribute NO pending entries (the trust boundary — fail-closed). If it
- * IS operator-posture, collect its `pending`-verdict members as requests; a
+ * IS admin-posture, collect its `pending`-verdict members as requests; a
  * network becomes a group only when it has ≥1 pending request.
  *
  * Pure — does not mutate its input.
@@ -113,7 +113,7 @@ export function selectPierQueue(
   let nonAdminNetworkCount = 0;
 
   for (const net of networks) {
-    if (!isOperatorPosture(net)) {
+    if (!isAdminPosture(net)) {
       // Trust boundary: pending is not ours to see for a network we don't admin.
       nonAdminNetworkCount += 1;
       continue;

@@ -1,5 +1,5 @@
 /**
- * MC-B1 (cortex#1278) — the **Pier queue** panel: an operator's inbox of
+ * MC-B1 (cortex#1278) — the **Pier queue** panel: an admin's inbox of
  * PENDING admission requests awaiting Tier-2 grant (ADR-0015 / ADR-0018;
  * CONTEXT.md §172).
  *
@@ -30,7 +30,7 @@ export interface PierQueueProps {
 export function PierQueue({ networks }: PierQueueProps) {
   const queue = selectPierQueue(networks);
 
-  // The operator queue only exists for someone who admins a network. Admin
+  // The admin queue only exists for someone who admins a network. Admin
   // nothing → render nothing (keep a pure-member / non-federated stack
   // untouched).
   if (queue.adminNetworkCount === 0) return null;

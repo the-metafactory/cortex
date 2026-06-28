@@ -376,7 +376,7 @@ export function NetworkView({
       <NetworkRosterPanel networks={networks} localPrincipal={servingPrincipal} />
 
       {/* MC-B1 (cortex#1278) — Pier queue: PENDING admission requests for the
-          networks this principal ADMINS (operator posture). Read-only; renders
+          networks this principal ADMINS (admin posture). Read-only; renders
           nothing when the principal admins no networks. */}
       <PierQueue networks={networks} />
 

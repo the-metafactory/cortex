@@ -1,10 +1,10 @@
 /**
  * MC-B1 (cortex#1278) — PierQueue render tests (DOM-free via renderToStaticMarkup).
  *
- * Asserts the OPERATOR-posture rendering + the load-bearing trust boundary:
+ * Asserts the ADMIN-posture rendering + the load-bearing trust boundary:
  *   - renders the pending requests for networks you ADMIN (complete roster);
  *   - renders NOTHING when you admin no networks (a pure member / non-federated
- *     stack is byte-identical — no operator queue applies);
+ *     stack is byte-identical — no admin queue applies);
  *   - renders a reassuring empty-inbox state when you admin networks but the
  *     queue is clear;
  *   - NEVER renders a pending principal sourced from a self-scoped / degraded

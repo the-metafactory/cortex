@@ -1,7 +1,7 @@
 /**
  * MC-B1 (cortex#1278) — unit tests for the pure Pier-queue selection adapter.
  *
- * The Pier queue is the OPERATOR posture: PENDING admission requests for the
+ * The Pier queue is the ADMIN posture: PENDING admission requests for the
  * networks the serving principal ADMINS, awaiting Tier-2 grant (ADR-0015 /
  * ADR-0018; CONTEXT.md §172). The load-bearing property is the TRUST BOUNDARY —
  * pending is surfaced ONLY for a network whose admin-authoritative (`complete`)
@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { selectPierQueue, isOperatorPosture } from "../lib/pier-queue-adapter";
+import { selectPierQueue, isAdminPosture } from "../lib/pier-queue-adapter";
 import type { NetworkMembershipDTO, MembershipMemberDTO } from "../../api/networks";
 
 function member(
@@ -34,19 +34,19 @@ function net(over: Partial<NetworkMembershipDTO> & { network_id: string }): Netw
   };
 }
 
-describe("isOperatorPosture", () => {
+describe("isAdminPosture", () => {
   it("is true ONLY for an ok + complete (admin-authoritative) roster read", () => {
-    expect(isOperatorPosture(net({ network_id: "n", roster_status: "ok", roster_scope: "complete" }))).toBe(true);
+    expect(isAdminPosture(net({ network_id: "n", roster_status: "ok", roster_scope: "complete" }))).toBe(true);
   });
 
   it("is false for a self-scoped read (member posture — pending not yours to see)", () => {
-    expect(isOperatorPosture(net({ network_id: "n", roster_status: "ok", roster_scope: "self" }))).toBe(false);
+    expect(isAdminPosture(net({ network_id: "n", roster_status: "ok", roster_scope: "self" }))).toBe(false);
   });
 
   it("is false for every degraded read (unreachable / unauthorized / not_configured)", () => {
-    expect(isOperatorPosture(net({ network_id: "n", roster_status: "unreachable", roster_scope: null }))).toBe(false);
-    expect(isOperatorPosture(net({ network_id: "n", roster_status: "unauthorized", roster_scope: null }))).toBe(false);
-    expect(isOperatorPosture(net({ network_id: "n", roster_status: "not_configured", roster_scope: null }))).toBe(false);
+    expect(isAdminPosture(net({ network_id: "n", roster_status: "unreachable", roster_scope: null }))).toBe(false);
+    expect(isAdminPosture(net({ network_id: "n", roster_status: "unauthorized", roster_scope: null }))).toBe(false);
+    expect(isAdminPosture(net({ network_id: "n", roster_status: "not_configured", roster_scope: null }))).toBe(false);
   });
 });
 
@@ -97,7 +97,7 @@ describe("selectPierQueue", () => {
         roster_status: "ok",
         roster_scope: "self",
         // even if the DTO somehow carried a pending member, a self read is not
-        // admin-authoritative — it must NOT appear in the operator queue.
+        // admin-authoritative — it must NOT appear in the admin queue.
         members: [member({ principal: "intruder", verdict: "pending" })],
       }),
     ]);
