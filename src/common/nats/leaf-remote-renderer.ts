@@ -1046,10 +1046,10 @@ export function parseLoopbackListen(natsUrl: string | undefined): string | undef
 
   let host: string;
   let port: string;
-  const v6 = stripped.match(/^\[([0-9a-fA-F:]+)\]:(\d+)$/);
+  const v6 = /^\[([0-9a-fA-F:]+)\]:(\d+)$/.exec(stripped);
   if (v6 !== null) {
-    host = v6[1]!;
-    port = v6[2]!;
+    host = v6[1] ?? "";
+    port = v6[2] ?? "";
   } else {
     const idx = stripped.lastIndexOf(":");
     if (idx <= 0) return undefined; // need a `host:port`

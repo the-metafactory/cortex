@@ -260,9 +260,21 @@ export function buildResolverPreloadAdapter(): ResolverPreloadPort {
         // ABSENT + identity ⇒ synthesise the hard-isolated base from the stack's
         // OWN config; EXISTS ⇒ read it. Either way `current` is the base the
         // operator-mode blocks render onto.
-        const current = fileExists
-          ? readFileSync(abs, "utf-8")
-          : renderBaseIsolatedConfig(baseIdentity!);
+        let current: string;
+        if (fileExists) {
+          current = readFileSync(abs, "utf-8");
+        } else if (baseIdentity !== undefined) {
+          current = renderBaseIsolatedConfig(baseIdentity);
+        } else {
+          // ABSENT + no derivable identity = the refuse-floor (guarded upstream,
+          // re-asserted here for the type): never invent a server.
+          return {
+            ok: false,
+            reason:
+              `${abs} does not exist and no base identity could be derived from the ` +
+              "stack's nats.url — refusing to invent a server (create the base config first).",
+          };
+        }
         const result = renderOperatorModeBlocks(current, pkg);
         if (result.status === "refuse") return { ok: false, reason: result.reason };
         if (result.status === "already") return { ok: true, changed: false };
