@@ -227,10 +227,10 @@ nats-server: cannot find local account "AADPQ7…" specified in leafnode remote
 > ```bash
 > cortex network provision <slug> --apply     # mints your OWN nsc operator + accounts;
 >                                             # records stack.nats_infra.config_path
->                                             # (~/.config/nats/<slug>.conf) + the operator/
->                                             # account JWTs into the stack config
+>                                             # (~/.config/nats/<slug>.conf) + the operator JWT +
+>                                             # account JWT into the stack config
 > cortex network make-live <slug> --apply     # BOOTSTRAPS the operator-mode blocks below
->                                             # (operator + system_account + resolver: MEMORY
+>                                             # (operator JWT + system_account + resolver: MEMORY
 >                                             # + resolver_preload) onto the bus — zero raw nsc
 > ```
 >

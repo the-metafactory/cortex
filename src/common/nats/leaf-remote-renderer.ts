@@ -1028,8 +1028,8 @@ export interface NatsBaseIdentity {
  * synthesised hard-isolated base `listen` (cortex#1265). Returns `undefined` when
  * the URL is absent, malformed, carries userinfo/a path, names a non-numeric or
  * out-of-range port, or resolves to a NON-loopback host — so the make-live caller
- * DECLINES to synthesise and falls back to its refuse-floor (operator supplies
- * `--nats-config` or fixes `nats.url`) instead of binding an over-exposed
+ * DECLINES to synthesise and falls back to its refuse-floor (you supply
+ * `--nats-config` or fix `nats.url`) instead of binding an over-exposed
  * (`0.0.0.0`) or unbindable address that would only fail at nats-server start.
  *
  * Security (review #1302): a from-scratch isolated bus MUST bind loopback only —
@@ -1073,7 +1073,7 @@ export function parseLoopbackListen(natsUrl: string | undefined): string | undef
  * isolation wall, cortex#692; a spoke stack needs no accept block — `cortex
  * network join` renders its own per-network leaf REMOTE include later). No `http`
  * monitor either: it is optional for nats-server and has no collision-safe source
- * to derive (the operator picks a non-colliding `82xx` by hand if they want one).
+ * to derive (you pick a non-colliding `82xx` by hand if you want one).
  *
  * The result is a complete, nats-server-loadable anonymous bus; make-live then
  * appends the operator-mode blocks via {@link renderOperatorModeBlocks} to make

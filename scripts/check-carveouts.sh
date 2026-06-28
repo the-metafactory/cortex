@@ -204,6 +204,12 @@ ALLOWLIST_PATHS=(
   'src/cli/cortex/commands/network-make-live-adapters.ts'
   'src/cli/cortex/commands/__tests__/network-make-live.test.ts'
   'src/cli/cortex/commands/__tests__/network-make-live-cli.test.ts'
+  # leaf-remote-renderer renders the NSC operator-mode blocks (renderOperatorModeBlocks),
+  # the from-scratch isolated base, and leaf remotes; its test asserts the rendered
+  # operator: / system_account: / resolver: directives. Every "operator" is the NSC
+  # account-tree / operator-mode sense, never the principal. Same class as
+  # network-make-live.test.ts. Class: NSC.
+  'src/common/nats/__tests__/leaf-remote-renderer.test.ts'
   'docs/design-make-live-daemon-switch.md'
   'src/cli/cortex/commands/__tests__/operator-provisioning.test.ts'
   'src/cli/cortex/commands/__tests__/network-provision-lib.test.ts'
