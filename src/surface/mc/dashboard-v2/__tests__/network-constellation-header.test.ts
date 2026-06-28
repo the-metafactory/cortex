@@ -91,6 +91,27 @@ describe("buildConstellationHeader", () => {
     expect(row?.confidentiality).toBe("encrypted-required");
   });
 
+  test("D4 — sealed network carries the key epoch (the mockup's K7)", () => {
+    const [enabled] = buildConstellationHeader([
+      net({ confidentiality: { mode: "enabled", key_present: true, key_id: "k7" } }),
+    ]);
+    expect(enabled?.keyId).toBe("k7");
+  });
+
+  test("D4 HONESTY HINGE — no key epoch shown without a held key (off / degraded / unknown)", () => {
+    // off: encryption disabled → no epoch.
+    const [off] = buildConstellationHeader([
+      net({ confidentiality: { mode: "off", key_present: false, key_id: null } }),
+    ]);
+    expect(off?.keyId).toBeNull();
+    // degraded: configured to seal but NO key → never show an epoch (cleartext-with-warning).
+    const [degraded] = buildConstellationHeader([
+      net({ confidentiality: { mode: "required", key_present: false, key_id: "k7" } }),
+    ]);
+    expect(degraded?.confidentiality).toBe("degraded");
+    expect(degraded?.keyId).toBeNull();
+  });
+
   test("VOCAB GATE — posture is only ever 'admin' or 'member' (deprecated label gated)", () => {
     const rows = buildConstellationHeader([
       net({ roster_scope: "complete" }),
@@ -110,9 +131,10 @@ describe("buildConstellationHeader", () => {
       }),
     ]);
     const keys = Object.keys(row ?? {});
-    // The row is a presence-level aggregate: id, posture, stack count, A3 token.
+    // The row is a presence-level aggregate: id, posture, stack count, A3 token,
+    // and the per-network key epoch (D4). All network-scoped — nothing per-session.
     expect(keys.sort()).toEqual(
-      ["confidentiality", "networkId", "posture", "stackCount"].sort(),
+      ["confidentiality", "keyId", "networkId", "posture", "stackCount"].sort(),
     );
     // Defensively assert nothing session-shaped leaked in.
     for (const k of keys) {

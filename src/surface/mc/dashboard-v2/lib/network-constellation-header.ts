@@ -61,6 +61,13 @@ export interface ConstellationHeaderNetwork {
    * (honest — `degraded`/`unknown` are never badged as encrypted).
    */
   confidentiality: ConfidentialityPostureToken;
+  /**
+   * MC-D4 (#1291) — the per-network payload-key id/epoch (ADR-0019), the
+   * mockup's `K7`. `null` when no key is held (off / degraded / unknown), so the
+   * skin shows the epoch ONLY alongside a genuinely-sealed marker — never a key
+   * label without a held key (the A3 honesty hinge, carried up to the header).
+   */
+  keyId: string | null;
 }
 
 /** Count distinct `{principal}/{stack}` pairs observed present across members. */
@@ -82,10 +89,18 @@ function countDistinctPresentStacks(net: NetworkMembershipDTO): number {
 export function buildConstellationHeader(
   networks: readonly NetworkMembershipDTO[],
 ): ConstellationHeaderNetwork[] {
-  return networks.map((net) => ({
-    networkId: net.network_id,
-    posture: isAdminPosture(net) ? "admin" : "member",
-    stackCount: countDistinctPresentStacks(net),
-    confidentiality: confidentialityBadge(net.confidentiality).posture,
-  }));
+  return networks.map((net) => {
+    const posture = confidentialityBadge(net.confidentiality).posture;
+    // Carry the key-id ONLY when a key is genuinely held (sealed posture). For
+    // off/degraded/unknown there is no live key, so no epoch is shown — the A3
+    // honesty hinge, preserved up to the header (never a key label sans key).
+    const sealed = posture === "encrypted" || posture === "encrypted-required";
+    return {
+      networkId: net.network_id,
+      posture: isAdminPosture(net) ? "admin" : "member",
+      stackCount: countDistinctPresentStacks(net),
+      confidentiality: posture,
+      keyId: sealed ? (net.confidentiality?.key_id ?? null) : null,
+    };
+  });
 }

@@ -94,6 +94,15 @@ export function ConstellationHeader({ networks }: ConstellationHeaderProps) {
                   title={marker.title}
                 >
                   {marker.label}
+                  {row.keyId && (
+                    <span
+                      className="mc-ch-keyid"
+                      data-key-id={row.keyId}
+                      title={`Per-network payload key (epoch) ${row.keyId} — ADR-0019`}
+                    >
+                      {" · "}K{row.keyId}
+                    </span>
+                  )}
                 </span>
               )}
             </li>
