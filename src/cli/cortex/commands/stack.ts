@@ -355,8 +355,10 @@ function renderPlan(
     lines.push("Next steps:");
     lines.push("  1. Fill the <REPLACE_ME> markers (Discord token/guild/channels, your Discord id).");
     lines.push(`  2. Provision the signing seed: arc upgrade Cortex   (auto-provisions ${seedPath} on first install)`);
-    lines.push(`  3. Point your daemon at the pointer: cortex start --config ${join(targetDir, `${slug}.yaml`)}`);
-    lines.push(`  4. Federate (optional): cortex network join <network>   (run from this stack's config)`);
+    lines.push(`  3. Mint this stack's bus account tree: cortex network provision ${slug} --apply   (mints the agents/system accounts)`);
+    lines.push(`  4. Bring the bus live: cortex network make-live ${slug} --apply   (mints this daemon's bus creds at ~/.config/nats/${slug}.creds + restarts nats-server)`);
+    lines.push(`  5. Point your daemon at the pointer: cortex start --config ${join(targetDir, `${slug}.yaml`)}`);
+    lines.push(`  6. Federate (optional): cortex network join <network>   (run from this stack's config)`);
   } else {
     lines.push("Re-run with --apply to write these files.");
   }

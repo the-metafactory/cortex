@@ -284,11 +284,14 @@ describe("create --apply", () => {
     expect(loaded.stack?.id).toBe("andreas/demo");
   });
 
-  test("prints next steps (provision → point daemon → network join)", async () => {
+  test("prints next steps (provision → make-live → point daemon → network join)", async () => {
     const cfg = freshDir();
     const res = await dispatchStack(["create", "demo", "--principal", "andreas", "--config-dir", cfg, "--apply"]);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("arc upgrade");
+    // v5.30.2 (C-1265c): the provision → make-live bus-bring-up ladder is surfaced.
+    expect(res.stdout).toContain("cortex network provision demo");
+    expect(res.stdout).toContain("cortex network make-live demo");
     expect(res.stdout).toContain("network join");
   });
 });

@@ -235,7 +235,7 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   const Display = displayName;
 
   return [
-    { relPath: "system/system.yaml", contents: systemYaml() },
+    { relPath: "system/system.yaml", contents: systemYaml(slug) },
     { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
     { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath) },
     { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
@@ -243,7 +243,7 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   ];
 }
 
-function systemYaml(): string {
+function systemYaml(slug: string): string {
   // The cross-cutting substrate layer — substituted from
   // docs/config-layout/system/system.yaml. Identity is left at the safe
   // conventional default; `arc upgrade Cortex` auto-provisions the seed.
@@ -286,6 +286,12 @@ nats:
   url: nats://127.0.0.1:4222
   name: cortex
   subjects: []
+  # credsPath — the daemon's OWN bus creds, minted under the \`agents\` account by
+  # \`cortex network make-live\` (via add-bot). DISTINCT from
+  # stacks/${slug}.yaml's \`stack.nats_infra.creds_path\` (the FEDERATION LEAF creds,
+  # minted at \`cortex network join\` under a different account) — never conflate
+  # them. Conventional per-stack path, mirroring \`~/.config/nats/<slug>.conf\`.
+  credsPath: ~/.config/nats/${slug}.creds
   # NKey identity for envelope signing. The seedPath is the conventional path
   # \`arc upgrade Cortex\` auto-provisions on first install; publicKey is pinned
   # after first boot (paste from the cortex log \`stack signing key staged …\`).

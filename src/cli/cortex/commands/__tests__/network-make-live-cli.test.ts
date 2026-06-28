@@ -69,6 +69,29 @@ const PROVISIONED_WITH_CONFIGPATH = loaded({
   },
 });
 
+/**
+ * v5.30.2 — a provisioned, federation-ready stack whose `config.nats` carries NO
+ * `credsPath` (a from-scratch `cortex stack create` stack before the seed lands,
+ * OR a pre-existing unseeded stack). make-live must DEFAULT credsPath to the
+ * conventional `~/.config/nats/<slug>.creds` rather than erroring for `--creds`.
+ */
+const UNSEEDED_CREDS = loaded({
+  principal: { id: "andreas" },
+  config: { nats: { name: "cortex-community" } } as unknown as AgentConfig,
+  stack: {
+    id: "andreas/community",
+    nkey_seed_path: "~/.config/nats/cortex-community.nk",
+    nats_infra: {
+      account: "A" + "B".repeat(55),
+      agents_account: AGENTS_PUB,
+      config_path: ABSENT_COMMUNITY_NATS,
+      // FEDERATION leaf creds — deliberately a DISTINCT path so a test can prove
+      // make-live does NOT conflate it with the defaulted bus creds.
+      creds_path: "~/.config/nats/community-leaf.creds",
+    },
+  },
+});
+
 function fakeFactory(): { factory: MakeLivePortsFactory; calls: string[]; mutates: boolean[] } {
   const calls: string[] = [];
   const mutates: boolean[] = [];
@@ -210,5 +233,48 @@ describe("cortex network make-live — apply", () => {
     );
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain("mutually exclusive");
+  });
+});
+
+describe("cortex network make-live — credsPath default (v5.30.2, C-1265c)", () => {
+  test("defaults nats.credsPath to ~/.config/nats/<slug>.creds when unset (no --creds, no config)", async () => {
+    const { factory } = fakeFactory();
+    const res = await run(
+      // No --creds; UNSEEDED_CREDS has no config.nats.credsPath. slug=community.
+      ["make-live", "community", "--config", "/x/community.yaml"],
+      UNSEEDED_CREDS,
+      factory,
+    );
+    expect(res.exitCode).toBe(0); // no longer a usage error — a path is always derivable
+    // The bus-creds plan line names the conventional default per-stack bus creds…
+    expect(res.stdout).toContain("~/.config/nats/community.creds");
+    // …and NEVER the federation leaf creds (stack.nats_infra.creds_path) — proving
+    // the two are not conflated (a leaf-creds fallback was the wrong fix).
+    expect(res.stdout).not.toContain("community-leaf.creds");
+  });
+
+  test("config nats.credsPath takes precedence over the conventional default", async () => {
+    const { factory } = fakeFactory();
+    const res = await run(
+      ["make-live", "community", "--config", "/x/community.yaml"],
+      PROVISIONED_WITH_CONFIGPATH, // config.nats.credsPath = ABSENT_CREDS
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(ABSENT_CREDS);
+    expect(res.stdout).not.toContain("~/.config/nats/community.creds");
+  });
+
+  test("--creds flag takes precedence over both config and the default", async () => {
+    const { factory } = fakeFactory();
+    const customCreds = "/custom/explicit/path.creds";
+    const res = await run(
+      ["make-live", "community", "--config", "/x/community.yaml", "--creds", customCreds],
+      UNSEEDED_CREDS,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(customCreds);
+    expect(res.stdout).not.toContain("~/.config/nats/community.creds");
   });
 });

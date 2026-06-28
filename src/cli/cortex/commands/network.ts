@@ -1910,10 +1910,26 @@ function deriveMakeLiveInputs(
     };
   }
 
-  const credsPath = optionalValueFlag(flags, "--creds") ?? cfg.config.nats?.credsPath;
-  if (credsPath === undefined || credsPath === "") {
-    return { ok: false, reason: "cannot resolve nats.credsPath — pass --creds or set `nats.credsPath` in config", usage: true };
-  }
+  // `nats.credsPath` is the daemon's OWN BUS creds — the user minted under the
+  // `agents` account by make-live's own `add-bot` (network-make-live-lib.ts:179,
+  // network-make-live-adapters.ts:96). It is DISTINCT from
+  // `stack.nats_infra.creds_path`, the FEDERATION LEAF creds minted under a
+  // DIFFERENT account at `network join`. The two must NEVER be conflated: a
+  // fallback to `nats_infra.creds_path` here would mint the bus user under the
+  // wrong account and collide with the leaf at join time (a tester proposed
+  // exactly that — it is wrong). When neither --creds nor config supplies a path,
+  // default to the conventional per-stack bus-creds path
+  // `~/.config/nats/<slug>.creds` — mirroring the nats-server config_path
+  // convention (`~/.config/nats/<slug>.conf`) and what live stacks already carry
+  // (community.creds, …). A from-scratch `cortex stack create` stack now also
+  // seeds this key explicitly in system.yaml, so this runtime default is the belt
+  // to that brace: a pre-existing, unseeded stack needs NO --creds flag for
+  // from-scratch make-live.
+  const credsPathRaw = optionalValueFlag(flags, "--creds") ?? cfg.config.nats?.credsPath;
+  const credsPath =
+    credsPathRaw !== undefined && credsPathRaw !== ""
+      ? credsPathRaw
+      : `~/.config/nats/${slug}.creds`;
   const botName = cfg.config.nats?.name ?? "cortex";
   // BLOCK 1 — derive the nats-server config PER STACK from the stack's OWN config
   // (`stack.nats_infra.config_path`, the same field `network join` derives from),

@@ -18,6 +18,19 @@ The federation model (ADR-0013, Model B) is **sovereign**: every principal runs 
 
 This is the ordered sequence for a **new peer principal** joining an existing network. Both principals go through the same steps on their own side; the two irreducible two-party moments are called out explicitly in section 3.
 
+### Prerequisites
+
+Before Step 1, confirm your machine has:
+
+- **Bun** — the only supported runtime (`bun --version`). Never use npm / yarn / node.
+- **NATS server with JetStream** — one isolated bus per stack (`nats-server --version`). A federating stack's bus must also be operator-mode (NSC operator + the account the leaf binds to); see Step 3.
+- **Claude Code, authenticated** — the default execution substrate for dispatched work (`claude --version`).
+- **`arc`** *(recommended)* — the metafactory package manager (`arc --version`). It manages install, the launchd lifecycle, and signing-seed provisioning; `arc upgrade Cortex` auto-provisions your stack's NKey seed on first install. Cortex runs without it, but you then provision the seed and lifecycle by hand.
+
+**`soma` is not required** to run cortex — it is a separate, optional layer.
+
+Canonical prereq source: [`README-AGENTS.md` §1](../README-AGENTS.md#1-prerequisites).
+
 ### Step 1 — Stand up your own stack
 
 If you do not have a cortex stack yet, create one. The command scaffolds a born-aligned config-split skeleton (slug == `stack.id` trailing segment, no drift can form) and sets `stack.nkey_seed_path` to the conventional path:

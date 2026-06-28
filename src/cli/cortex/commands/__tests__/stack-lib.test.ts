@@ -141,6 +141,16 @@ describe("renderScaffold", () => {
     expect(stack?.contents).toContain("luna");
   });
 
+  test("system/system.yaml seeds the conventional bus credsPath (~/.config/nats/<slug>.creds)", () => {
+    // v5.30.2 (C-1265c): a from-scratch stack carries nats.credsPath explicitly,
+    // so `cortex network make-live` needs no --creds flag. The path is the
+    // daemon's OWN bus creds under the agents account — the conventional
+    // per-stack path, NOT the federation leaf creds.
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).toContain("credsPath: ~/.config/nats/demo.creds");
+  });
+
   test("does NOT inline any signing seed material (key auto-provisioned later)", () => {
     const files = renderScaffold(inputs);
     const all = files.map((f) => f.contents).join("\n");
