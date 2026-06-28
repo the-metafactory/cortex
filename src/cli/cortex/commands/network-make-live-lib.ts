@@ -147,11 +147,34 @@ export interface ServiceRestartPort {
   restartDaemon(cortexConfigPath: string): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
+/**
+ * cortex#1265 (v5.30.2) — config write-back for a DEFAULTED `nats.credsPath`. When
+ * make-live had to synthesise the bus-creds path (neither `--creds` nor config
+ * supplied it), it persists the resolved path into the daemon's config so the
+ * daemon actually connects with it (runtime.ts only passes `credsPath` when set —
+ * an unset path → no creds → own-auth Authorization Violation on the operator-mode
+ * bus) and the config self-documents. Targets the SYSTEM/bus layer
+ * (`config.nats.credsPath`), NEVER `stack.nats_infra`: a surgical single-key set
+ * that preserves every other key + comment (encryption / federated JWTs survive).
+ */
+export interface MakeLiveConfigWritePort {
+  /** Persist `nats.credsPath = credsPath` into `systemConfigPath` (idempotent). */
+  writeBusCredsPath(opts: { systemConfigPath: string; credsPath: string }):
+    | { ok: true; path: string; changed: boolean }
+    | { ok: false; reason: string };
+}
+
 export interface MakeLivePorts {
   creds: CredsMintPort;
   accountExport: AccountExportPort;
   resolver: ResolverPreloadPort;
   restart: ServiceRestartPort;
+  /**
+   * cortex#1265 (v5.30.2) — OPTIONAL: persist a DEFAULTED `nats.credsPath` back to
+   * config. Absent ⇒ the write-back is skipped (back-compat for callers/tests that
+   * predate it; only `deriveMakeLiveInputs` + `buildLiveMakeLivePorts` supply it).
+   */
+  configWrite?: MakeLiveConfigWritePort;
 }
 
 // =============================================================================
@@ -180,6 +203,20 @@ export interface MakeLiveInputs {
   credsPath: string;
   /** Path to the cortex config the daemon loads (for daemon-restart discovery). */
   cortexConfigPath: string;
+  /**
+   * cortex#1265 (v5.30.2) — true when `credsPath` was DEFAULTED (neither `--creds`
+   * nor `config.nats.credsPath` supplied it). Drives the config write-back: a
+   * defaulted path is persisted into `systemConfigWritePath` so the daemon connects
+   * with it. An explicit `--creds`/config value is NEVER overwritten.
+   */
+  credsPathDefaulted?: boolean;
+  /**
+   * cortex#1265 (v5.30.2) — the config file a DEFAULTED `nats.credsPath` is written
+   * back into: the SYSTEM-layer `system/system.yaml` in a config-split layout, else
+   * the legacy monolith file. Consulted only when `credsPathDefaulted` is true AND
+   * `ports.configWrite` is present.
+   */
+  systemConfigWritePath?: string;
   /**
    * cortex#1265 — the operator-mode leaf package assembled from
    * `stack.nats_infra.{operator_jwt, account, account_jwt, system_account,
@@ -379,6 +416,14 @@ export async function makeLiveStack(
           `${inputs.cortexConfigPath} was found — --apply would fail at the daemon restart.`,
       );
     }
+    // cortex#1265 (v5.30.2) — preview the credsPath write-back when it was defaulted.
+    const defaultNote =
+      inputs.credsPathDefaulted === true && inputs.systemConfigWritePath !== undefined
+        ? [
+            "",
+            `nats.credsPath defaulted → ${inputs.credsPath} (would be written to config ${inputs.systemConfigWritePath} on --apply)`,
+          ]
+        : [];
     return {
       ok: true,
       applied: false,
@@ -388,6 +433,7 @@ export async function makeLiveStack(
         "",
         ...targetLines,
         ...(warnings.length > 0 ? ["", ...warnings] : []),
+        ...defaultNote,
         "",
         credsNeeded || resolverNeeded
           ? "Re-run with --apply to land the daemon on its agents account."
@@ -489,6 +535,38 @@ export async function makeLiveStack(
     steps.push(`bus creds minted: ${inputs.botName} @ ${inputs.agentsAccountName} → ${minted.credsPath} (chmod 600)`);
   } else {
     steps.push(`bus creds present (untouched): ${inputs.credsPath}`);
+  }
+
+  // 3.5 (cortex#1265, v5.30.2). When `nats.credsPath` was DEFAULTED (neither
+  //     --creds nor config supplied it), persist the resolved path into the daemon's
+  //     config BEFORE the daemon restart, so it reconnects with the creds it just
+  //     minted. runtime.ts only passes credsPath when set — an unset path means no
+  //     creds → own-auth Authorization Violation on the operator-mode bus. Surgical
+  //     single-key set on the SYSTEM/bus layer; NEVER touches nats_infra. Fail-fast
+  //     (before the restart) so we never restart into a broken-auth state.
+  if (
+    inputs.credsPathDefaulted === true &&
+    inputs.systemConfigWritePath !== undefined &&
+    ports.configWrite !== undefined
+  ) {
+    const wrote = ports.configWrite.writeBusCredsPath({
+      systemConfigPath: inputs.systemConfigWritePath,
+      credsPath: inputs.credsPath,
+    });
+    if (!wrote.ok) {
+      return fail(
+        plan,
+        steps,
+        `nats.credsPath write-back failed: ${wrote.reason}. The bus creds were minted at ` +
+          `${inputs.credsPath} but the daemon config still lacks nats.credsPath — add ` +
+          `\`nats.credsPath: ${inputs.credsPath}\` to ${inputs.systemConfigWritePath} by hand, then re-run.`,
+      );
+    }
+    steps.push(
+      wrote.changed
+        ? `nats.credsPath defaulted → ${inputs.credsPath} (written to config ${wrote.path})`
+        : `nats.credsPath already ${inputs.credsPath} in config ${wrote.path} (no-op)`,
+    );
   }
 
   // 4. Restart the cortex daemon so it reconnects with the new creds.

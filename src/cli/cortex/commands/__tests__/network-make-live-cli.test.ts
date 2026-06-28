@@ -73,7 +73,8 @@ const PROVISIONED_WITH_CONFIGPATH = loaded({
  * v5.30.2 — a provisioned, federation-ready stack whose `config.nats` carries NO
  * `credsPath` (a from-scratch `cortex stack create` stack before the seed lands,
  * OR a pre-existing unseeded stack). make-live must DEFAULT credsPath to the
- * conventional `~/.config/nats/<slug>.creds` rather than erroring for `--creds`.
+ * conventional bus/bot path `~/.config/nats/<slug>-bot.creds` (DISTINCT from the
+ * FEDERATION default `~/.config/nats/<slug>.creds`) rather than erroring for `--creds`.
  */
 const UNSEEDED_CREDS = loaded({
   principal: { id: "andreas" },
@@ -92,9 +93,22 @@ const UNSEEDED_CREDS = loaded({
   },
 });
 
-function fakeFactory(): { factory: MakeLivePortsFactory; calls: string[]; mutates: boolean[] } {
+/** A recorded credsPath write-back call (v5.30.2). */
+interface ConfigWriteCall {
+  systemConfigPath: string;
+  credsPath: string;
+}
+
+function fakeFactory(): {
+  factory: MakeLivePortsFactory;
+  calls: string[];
+  mutates: boolean[];
+  configWrites: ConfigWriteCall[];
+} {
   const calls: string[] = [];
   const mutates: boolean[] = [];
+  // Recorded into a SEPARATE array so it never disturbs the `calls`-ordering assertions.
+  const configWrites: ConfigWriteCall[] = [];
   const factory: MakeLivePortsFactory = (mutate) => {
     mutates.push(mutate);
     const ports: MakeLivePorts = {
@@ -121,10 +135,16 @@ function fakeFactory(): { factory: MakeLivePortsFactory; calls: string[]; mutate
         restartNats: async () => { calls.push("restart-nats"); return { ok: true }; },
         restartDaemon: async () => { calls.push("restart-daemon"); return { ok: true }; },
       },
+      configWrite: {
+        writeBusCredsPath: ({ systemConfigPath, credsPath }) => {
+          configWrites.push({ systemConfigPath, credsPath });
+          return { ok: true, path: systemConfigPath, changed: true };
+        },
+      },
     };
     return ports;
   };
-  return { factory, calls, mutates };
+  return { factory, calls, mutates, configWrites };
 }
 
 function run(argv: string[], cfg: LoadedConfig, factory: MakeLivePortsFactory) {
@@ -292,5 +312,48 @@ describe("cortex network make-live — credsPath default (v5.30.2, C-1265c)", ()
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain(customCreds);
     expect(res.stdout).not.toContain(BUS_CREDS_DEFAULT);
+  });
+});
+
+describe("cortex network make-live — credsPath write-back (v5.30.2, C-1265c)", () => {
+  test("on --apply, a DEFAULTED credsPath is written back into config.nats.credsPath", async () => {
+    const { factory, configWrites } = fakeFactory();
+    const res = await run(
+      ["make-live", "community", "--config", "/x/community.yaml", "--apply"],
+      UNSEEDED_CREDS, // no config.nats.credsPath, no --creds ⇒ defaulted
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    // Exactly one write-back, carrying the resolved `-bot` path…
+    expect(configWrites).toHaveLength(1);
+    expect(configWrites[0]?.credsPath).toBe(BUS_CREDS_DEFAULT);
+    // …targeting the SYSTEM-layer config. No `/x/system/system.yaml` marker exists
+    // for this test path, so it resolves to the monolith file (`/x/community.yaml`).
+    expect(configWrites[0]?.systemConfigPath).toBe("/x/community.yaml");
+    // …and the transcript records the self-documenting write.
+    expect(res.stdout).toContain("nats.credsPath defaulted");
+    expect(res.stdout).toContain("written to config");
+  });
+
+  test("on --apply, an EXPLICIT --creds is NEVER written back (no config mutation)", async () => {
+    const { factory, configWrites } = fakeFactory();
+    const res = await run(
+      ["make-live", "community", "--config", "/x/community.yaml", "--creds", "/custom/explicit/path.creds", "--apply"],
+      UNSEEDED_CREDS,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(configWrites).toHaveLength(0); // credsPathDefaulted=false ⇒ no write-back
+  });
+
+  test("on --apply, an EXPLICIT config.nats.credsPath is NEVER written back", async () => {
+    const { factory, configWrites } = fakeFactory();
+    const res = await run(
+      ["make-live", "community", "--config", "/x/community.yaml", "--apply"],
+      PROVISIONED_WITH_CONFIGPATH, // config.nats.credsPath = ABSENT_CREDS (explicit)
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(configWrites).toHaveLength(0);
   });
 });

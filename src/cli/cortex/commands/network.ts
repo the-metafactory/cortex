@@ -1928,10 +1928,8 @@ function deriveMakeLiveInputs(
   // system.yaml, so this runtime default is the belt to that brace: a pre-existing,
   // unseeded stack needs NO --creds flag for from-scratch make-live.
   const credsPathRaw = optionalValueFlag(flags, "--creds") ?? cfg.config.nats?.credsPath;
-  const credsPath =
-    credsPathRaw !== undefined && credsPathRaw !== ""
-      ? credsPathRaw
-      : `~/.config/nats/${slug}-bot.creds`;
+  const credsPathExplicit = credsPathRaw !== undefined && credsPathRaw !== "";
+  const credsPath = credsPathExplicit ? credsPathRaw : `~/.config/nats/${slug}-bot.creds`;
   const botName = cfg.config.nats?.name ?? "cortex";
   // BLOCK 1 — derive the nats-server config PER STACK from the stack's OWN config
   // (`stack.nats_infra.config_path`, the same field `network join` derives from),
@@ -2017,6 +2015,12 @@ function deriveMakeLiveInputs(
     botName,
     credsPath,
     cortexConfigPath: configPath,
+    // cortex#1265 (v5.30.2) — when credsPath was DEFAULTED, make-live persists the
+    // resolved path into the SYSTEM-layer config so the daemon connects with it
+    // (runtime.ts only passes credsPath when set). An explicit --creds/config value
+    // is never overwritten (credsPathDefaulted stays false).
+    credsPathDefaulted: !credsPathExplicit,
+    systemConfigWritePath: resolveSystemWriteConfigPath(configPath),
     natsConfigPath,
     force,
     apply: applyRes.apply,
@@ -2069,6 +2073,23 @@ function resolveStackWriteConfigPath(configPath: string): string {
     const base = (expanded.split("/").pop() ?? "").replace(/\.ya?ml$/i, "");
     return join(configDir, "stacks", `${base}.yaml`);
   }
+  return expanded;
+}
+
+/**
+ * Resolve where a DEFAULTED `nats.credsPath` write-back lands (cortex#1265,
+ * v5.30.2). `nats` is the SYSTEM/bus layer: in a config-split layout it lives in
+ * `<configDir>/system/system.yaml`; a legacy monolith carries it in the single
+ * file. Sibling of {@link resolveStackWriteConfigPath} but targeting the SYSTEM
+ * layer — the stack-layer file owns `nats_infra`, NOT `config.nats`. Writing
+ * `nats.credsPath` to the stack file would split-brain it away from the
+ * stack-create seed (which writes system.yaml) and from the config-table owner.
+ */
+function resolveSystemWriteConfigPath(configPath: string): string {
+  const expanded = expandTilde(configPath);
+  const configDir = expanded.replace(/\/[^/]*$/, "");
+  const systemYaml = join(configDir, "system", "system.yaml");
+  if (existsSync(systemYaml)) return systemYaml;
   return expanded;
 }
 

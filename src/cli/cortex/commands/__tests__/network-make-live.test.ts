@@ -8,7 +8,11 @@
  * under the agents account, the agents JWT appended to resolver_preload exactly
  * once, both services restarted ONLY when state changed (and in the right order:
  * nats BEFORE the daemon), idempotent re-runs, and that the orchestrator never
- * touches the stack config (so encryption / federated config survives).
+ * touches the STACK config / `nats_infra` (so encryption / federated config
+ * survives). NOTE (v5.30.2, cortex#1265): make-live MAY now write a single
+ * SYSTEM-layer key — `config.nats.credsPath` — but ONLY when it had to default it
+ * (`credsPathDefaulted` + an injected `configWrite` port). These unit tests pass an
+ * explicit credsPath and no `configWrite`, so that path never fires here.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 
@@ -499,5 +503,89 @@ describe("findNatsServerDescriptor", () => {
       io: io(files),
     });
     expect(found).toBeUndefined();
+  });
+});
+
+// ── credsPath write-back on a DEFAULTED path (v5.30.2, cortex#1265) ──────────────
+
+describe("makeLiveStack — defaulted credsPath write-back", () => {
+  /** makePorts() + a recording configWrite spy (optionally forced to fail). */
+  function portsWithConfigWrite(fail?: boolean): {
+    ports: MakeLivePorts;
+    calls: string[];
+    writes: { systemConfigPath: string; credsPath: string }[];
+  } {
+    const { ports, calls } = makePorts();
+    const writes: { systemConfigPath: string; credsPath: string }[] = [];
+    return {
+      ports: {
+        ...ports,
+        configWrite: {
+          writeBusCredsPath: ({ systemConfigPath, credsPath }) => {
+            writes.push({ systemConfigPath, credsPath });
+            calls.push("config-write");
+            return fail === true
+              ? { ok: false, reason: "EACCES" }
+              : { ok: true, path: systemConfigPath, changed: true };
+          },
+        },
+      },
+      calls,
+      writes,
+    };
+  }
+
+  test("writes the defaulted path back BEFORE the daemon restart, in order", async () => {
+    const { ports, calls, writes } = portsWithConfigWrite();
+    const res = await makeLiveStack(
+      makeInputs(
+        { credsFileExists: false, resolverHasAccount: false },
+        {
+          credsPath: "~/.config/nats/work-bot.creds",
+          credsPathDefaulted: true,
+          systemConfigWritePath: "/Users/x/.config/cortex/work/system/system.yaml",
+        },
+      ),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    expect(writes).toEqual([
+      { systemConfigPath: "/Users/x/.config/cortex/work/system/system.yaml", credsPath: "~/.config/nats/work-bot.creds" },
+    ]);
+    // config-write lands AFTER the mint and BEFORE the daemon restart.
+    expect(calls.indexOf("config-write")).toBeGreaterThan(calls.findIndex((c) => c.startsWith("mint:")));
+    expect(calls.indexOf("config-write")).toBeLessThan(calls.indexOf("restart-daemon"));
+  });
+
+  test("write-back failure fail-fasts and the daemon is NOT restarted", async () => {
+    const { ports, calls } = portsWithConfigWrite(true);
+    const res = await makeLiveStack(
+      makeInputs(
+        { credsFileExists: false, resolverHasAccount: false },
+        {
+          credsPath: "~/.config/nats/work-bot.creds",
+          credsPathDefaulted: true,
+          systemConfigWritePath: "/Users/x/.config/cortex/work/system/system.yaml",
+        },
+      ),
+      ports,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("nats.credsPath write-back failed");
+      expect(res.reason).toContain("by hand"); // actionable manual-fix instruction
+    }
+    expect(calls).not.toContain("restart-daemon"); // never restart into broken-auth
+  });
+
+  test("an EXPLICIT credsPath (credsPathDefaulted unset) never triggers a write-back", async () => {
+    const { ports, calls, writes } = portsWithConfigWrite();
+    const res = await makeLiveStack(
+      makeInputs({ credsFileExists: false, resolverHasAccount: false }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    expect(writes).toHaveLength(0);
+    expect(calls).not.toContain("config-write");
   });
 });

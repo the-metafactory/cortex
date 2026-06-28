@@ -13,6 +13,8 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readd
 import { homedir } from "os";
 import { join, dirname } from "path";
 
+import { parseDocument } from "yaml";
+
 import { expandTilde } from "../../../common/config/loader";
 import { renderOperatorModeBlocks, renderBaseIsolatedConfig } from "../../../common/nats/leaf-remote-renderer";
 import {
@@ -33,6 +35,7 @@ import type {
   AccountExportPort,
   ResolverPreloadPort,
   ServiceRestartPort,
+  MakeLiveConfigWritePort,
   MakeLivePorts,
 } from "./network-make-live-lib";
 
@@ -425,6 +428,39 @@ export function buildServiceRestartAdapter(mutate: boolean): ServiceRestartPort 
 // Full live port bundle
 // =============================================================================
 
+/**
+ * cortex#1265 (v5.30.2) — persist a DEFAULTED `nats.credsPath` back to the daemon's
+ * config. Surgical single-key set via the YAML Document API (`setIn`), so every
+ * other key + comment (encryption, federated JWTs, `nats_infra`) survives. Targets
+ * the SYSTEM/bus layer only. On a dry-run (`mutate=false`) it no-ops (mirrors the
+ * restart adapter). A missing target file is an ERROR (never synthesise a partial
+ * config) — the daemon's config always exists by the time make-live runs.
+ */
+export function buildMakeLiveConfigWriteAdapter(mutate: boolean): MakeLiveConfigWritePort {
+  return {
+    writeBusCredsPath: ({ systemConfigPath, credsPath }) => {
+      const expanded = expandTilde(systemConfigPath);
+      if (!mutate) return { ok: true, path: expanded, changed: false };
+      try {
+        if (!existsSync(expanded)) {
+          return { ok: false, reason: `config file ${expanded} not found — cannot write nats.credsPath` };
+        }
+        const doc = parseDocument(readFileSync(expanded, "utf-8"));
+        // Idempotent: a matching value already present ⇒ no write, no churn.
+        if (doc.getIn(["nats", "credsPath"]) === credsPath) {
+          return { ok: true, path: expanded, changed: false };
+        }
+        doc.setIn(["nats", "credsPath"], credsPath);
+        mkdirSync(dirname(expanded), { recursive: true });
+        writeFileSync(expanded, doc.toString(), "utf-8");
+        return { ok: true, path: expanded, changed: true };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  };
+}
+
 /** Build the live {@link MakeLivePorts} bundle for a real `--apply` run. */
 export function buildLiveMakeLivePorts(mutate: boolean): MakeLivePorts {
   return {
@@ -432,5 +468,6 @@ export function buildLiveMakeLivePorts(mutate: boolean): MakeLivePorts {
     accountExport: buildAccountExportAdapter(),
     resolver: buildResolverPreloadAdapter(),
     restart: buildServiceRestartAdapter(mutate),
+    configWrite: buildMakeLiveConfigWriteAdapter(mutate),
   };
 }
