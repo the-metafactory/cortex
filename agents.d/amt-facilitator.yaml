@@ -31,7 +31,6 @@ trust: [luna]
 # dispatches to it via the work stack's policy.  Unmapped senders are already
 # hard-blocked by the policy engine.
 
-# Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
 # Headless — no Discord binding. This agent is dispatched by the work stack's
 # runner (via the AMT web surface, WEB-2). `presence: {}` is the required
 # empty-presence declaration for a headless in-process agent (cortex#245).
