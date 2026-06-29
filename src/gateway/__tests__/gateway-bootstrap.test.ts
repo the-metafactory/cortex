@@ -503,3 +503,61 @@ describe("maybeCreateSurfaceGateway — error propagation", () => {
     ).toThrow(/ambiguous discord config/);
   });
 });
+
+// =============================================================================
+// maybeCreateSurfaceGateway — web surfaces (C-110 / WEB-1 gateway routing fix)
+//
+// WEB-1 added the web adapter but `countBindings` previously excluded
+// `surfaces.web`, so a web-only stack reported "0 bindings" and the gateway
+// never started. This block pins the corrected path.
+// =============================================================================
+
+/** Web-only surfaces — one binding, instanceId "amt". */
+const WEB_SURFACES: Surfaces = {
+  web: [
+    {
+      agent: "pylon",
+      stack: "andreas/amt",
+      binding: {
+        instanceId: "amt",
+        port: 8090,
+        broadcastUrl: "http://localhost:9090/broadcast",
+        transport: "ws",
+        authScheme: "cf-access",
+      },
+    },
+  ],
+};
+
+describe("maybeCreateSurfaceGateway — web surfaces", () => {
+  test("returns a SurfaceGateway when web-only surfaces provided (countBindings counts web)", () => {
+    const result = maybeCreateSurfaceGateway({
+      enabled: true,
+      surfaces: WEB_SURFACES,
+      adapters: [makeFakeAdapter("fake-web-1")],
+    });
+    expect(result).toBeInstanceOf(SurfaceGateway);
+  });
+
+  test("does NOT return undefined or log a no-bindings warning for web-only surfaces", () => {
+    const messages: string[] = [];
+    const stderrSpy = spyOn(process.stderr, "write").mockImplementation((m) => {
+      messages.push(String(m));
+      return true;
+    });
+    try {
+      const result = maybeCreateSurfaceGateway({
+        enabled: true,
+        surfaces: WEB_SURFACES,
+        adapters: [makeFakeAdapter("fake-web-2")],
+      });
+      // Must have created the gateway, not hit the "no bindings" early-exit
+      expect(result).toBeInstanceOf(SurfaceGateway);
+      // No "no surfaces bindings found" warning
+      const warned = messages.some((m) => m.includes("no surfaces bindings found"));
+      expect(warned).toBe(false);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});

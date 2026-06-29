@@ -228,3 +228,77 @@ describe("gatewayAdapterInstanceCollisions", () => {
     expect(collisions).toEqual([]);
   });
 });
+
+// ─── Web platform coverage (C-110 / WEB-1 gateway routing fix) ───────────────
+//
+// WEB-1 added the web adapter but countSurfaceBindings / ownedKeys /
+// gatewayInstanceIds previously excluded `surfaces.web`, so a web-only stack
+// was invisible to the ownership plan (0 bindings → gateway never started).
+// These tests pin the corrected paths.
+
+/** Web-only surfaces — one binding, instanceId "amt", agent "pylon". */
+const WEB_SURFACES: Surfaces = {
+  web: [
+    {
+      agent: "pylon",
+      stack: "andreas/amt",
+      binding: {
+        instanceId: "amt",
+        port: 8090,
+        broadcastUrl: "http://localhost:9090/broadcast",
+        transport: "ws",
+        authScheme: "cf-access",
+      },
+    },
+  ],
+};
+
+describe("planSurfaceOwnership — web surfaces", () => {
+  test("countSurfaceBindings includes web — web-only surfaces make the plan start-eligible", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: WEB_SURFACES,
+      gatewayEnabled: true,
+      principal: "andreas",
+    });
+    expect(plan.hasSurfaceBindings).toBe(true);
+    expect(plan.gatewayStartEligible).toBe(true);
+  });
+
+  test("ownedKeys includes the web binding's '{platform}:{agent}' key", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: WEB_SURFACES,
+      gatewayEnabled: true,
+      principal: "andreas",
+    });
+    expect([...plan.ownedSurfaceKeys]).toContain("web:pylon");
+  });
+
+  test("gatewayAdapterInstanceIds includes the web binding's 'web:{instanceId}'", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: WEB_SURFACES,
+      gatewayEnabled: true,
+      principal: "andreas",
+    });
+    expect(plan.gatewayAdapterInstanceIds).toContain("web:amt");
+  });
+
+  test("outboundStacks includes the web binding's stack leaf", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: WEB_SURFACES,
+      gatewayEnabled: true,
+      principal: "andreas",
+    });
+    expect(plan.outboundStacks).toContain("amt");
+  });
+
+  test("flag off with web-only surfaces keeps the inactive plan (gateway never starts)", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: WEB_SURFACES,
+      gatewayEnabled: false,
+      principal: "andreas",
+    });
+    expect(plan.hasSurfaceBindings).toBe(true); // bindings exist…
+    expect(plan.gatewayStartEligible).toBe(false); // …but flag is off
+    expect([...plan.ownedSurfaceKeys]).toEqual([]);
+  });
+});

@@ -52,7 +52,8 @@ function countSurfaceBindings(surfaces: Surfaces | undefined): number {
   return (
     (surfaces.discord?.length ?? 0) +
     (surfaces.slack?.length ?? 0) +
-    (surfaces.mattermost?.length ?? 0)
+    (surfaces.mattermost?.length ?? 0) +
+    (surfaces.web?.length ?? 0)
   );
 }
 
@@ -62,6 +63,7 @@ function ownedKeys(surfaces: Surfaces | undefined): Set<string> {
   for (const entry of surfaces.discord ?? []) keys.add(`discord:${entry.agent}`);
   for (const entry of surfaces.slack ?? []) keys.add(`slack:${entry.agent}`);
   for (const entry of surfaces.mattermost ?? []) keys.add(`mattermost:${entry.agent}`);
+  for (const entry of surfaces.web ?? []) keys.add(`web:${entry.agent}`);
   return keys;
 }
 
@@ -76,6 +78,9 @@ function gatewayInstanceIds(surfaces: Surfaces | undefined): string[] {
   }
   for (const entry of surfaces.mattermost ?? []) {
     ids.push(`mattermost:${entry.binding.apiUrl}`);
+  }
+  for (const entry of surfaces.web ?? []) {
+    ids.push(`web:${entry.binding.instanceId}`);
   }
   return ids;
 }
