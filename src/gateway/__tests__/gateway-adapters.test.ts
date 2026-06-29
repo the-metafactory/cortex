@@ -30,7 +30,7 @@ import type { MyelinRuntime } from "../../bus/myelin/runtime";
 // =============================================================================
 
 interface FactoryCall {
-  platform: "discord" | "slack" | "mattermost";
+  platform: "discord" | "slack" | "mattermost" | "web";
   instanceId: string;
   source: SystemEventSource;
   /** The credential block handed to the factory (presence-shaped). */
@@ -41,7 +41,7 @@ interface FactoryCall {
 }
 
 function makeFakeAdapter(
-  platform: "discord" | "slack" | "mattermost",
+  platform: "discord" | "slack" | "mattermost" | "web",
   instanceId: string,
 ): PlatformAdapter {
   return {
@@ -111,6 +111,16 @@ function makeRecordingFactory(): {
         runtime: args.runtime,
       });
       return makeFakeAdapter("mattermost", args.instanceId);
+    },
+    web: (args) => {
+      calls.push({
+        platform: "web",
+        instanceId: args.instanceId,
+        source: args.source,
+        binding: args.binding,
+        runtime: args.runtime,
+      });
+      return makeFakeAdapter("web", args.instanceId);
     },
   };
   return { factory, calls };
@@ -372,6 +382,7 @@ describe("buildGatewayAdapters", () => {
       },
       slack: (args) => makeFakeAdapter("slack", args.instanceId),
       mattermost: (args) => makeFakeAdapter("mattermost", args.instanceId),
+      web: (args) => makeFakeAdapter("web", args.instanceId),
     };
     buildGatewayAdapters(DISCORD_SURFACES, {
       principal: "andreas",

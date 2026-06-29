@@ -18,6 +18,7 @@ features:
       - C-107
       - C-108
       - C-109
+      - C-110
 
   C-101:
     name: MIG-0 — Cortex repo bootstrap
@@ -120,6 +121,17 @@ features:
     parent: C-100
     issue: 10
     depends_on: [C-108]
+
+  C-110:
+    name: Generic web/SSE surface adapter
+    status: in-progress
+    description: >
+      WebAdapter implements PlatformAdapter for any web or SSE-backed bot surface.
+      Any web app becomes a cortex-backed bot by POSTing to POST /message and
+      receiving responses via a configurable broadcastUrl. Includes WebBindingSchema
+      + WebSurfaceBindingSchema types, gateway-adapter factory wiring, and a full
+      45-test suite. Completely AMT-agnostic — a second tenant binds with its own
+      instanceId + broadcastUrl + agent, zero adapter-code changes.
 
   I-100:
     name: Internet of Agentic Work (umbrella META)

@@ -54,8 +54,10 @@
 import { DiscordAdapter } from "../adapters/discord";
 import { SlackAdapter } from "../adapters/slack";
 import { MattermostAdapter } from "../adapters/mattermost";
+import { WebAdapter } from "../adapters/web";
 import type { PlatformAdapter } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
+import type { WebBinding } from "../common/types/surfaces";
 import {
   DiscordPresenceSchema,
   SlackPresenceSchema,
@@ -106,6 +108,12 @@ interface MattermostFactoryArgs extends FactoryArgsBase {
   presence: MattermostPresence;
 }
 
+/** Args for the web factory call. `binding` carries the typed WebBinding. */
+interface WebFactoryArgs extends FactoryArgsBase {
+  /** Typed web binding (port, broadcastUrl, transport, authScheme). */
+  webBinding: WebBinding;
+}
+
 /**
  * The injected adapter-construction seam. One builder per platform. Production
  * uses {@link defaultGatewayAdapterFactory}; tests inject a recording fake that
@@ -115,6 +123,8 @@ export interface GatewayAdapterFactory {
   discord(args: DiscordFactoryArgs): PlatformAdapter;
   slack(args: SlackFactoryArgs): PlatformAdapter;
   mattermost(args: MattermostFactoryArgs): PlatformAdapter;
+  /** C-110: Generic web/SSE surface adapter. */
+  web(args: WebFactoryArgs): PlatformAdapter;
 }
 
 /** Injected dependencies for {@link buildGatewayAdapters}. */
@@ -191,6 +201,22 @@ export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
         principal: {},
         ...(runtime !== undefined && { runtime }),
         systemEventSource: source,
+      },
+    ),
+
+  /**
+   * C-110: Generic web/SSE surface adapter. No presence schema re-parse
+   * needed — the WebBinding carries everything the adapter needs directly.
+   * No reconnect credentials to guard (no bot token); the binding's
+   * `broadcastUrl` is already validated by `WebBindingSchema`.
+   */
+  web: ({ instanceId, webBinding, source }) =>
+    new WebAdapter(
+      syntheticGatewayAgent(source.agent, {}),
+      webBinding,
+      {
+        instanceId,
+        principal: {},
       },
     ),
 };
@@ -288,6 +314,31 @@ export function buildGatewayAdapters(
         binding: entry.binding,
         runtime,
         presence,
+      }),
+    );
+  }
+
+  // ── Web/SSE — demux key = binding.instanceId ──────────────────────────────
+  //
+  // C-110: generic web/SSE surface. No presence schema re-parse (the
+  // WebBinding already carries all runtime fields via WebBindingSchema). The
+  // instanceId is `web:{binding.instanceId}` — the tenant slug the binding
+  // declares. Unlike Discord (token-keyed) or Slack/Mattermost (URL-keyed),
+  // the web binding carries an explicit `instanceId` so multi-tenant
+  // deployments can give each surface a stable, operator-chosen name.
+  //
+  // No placeholder guard: the web binding carries no secrets (broadcastUrl
+  // is a non-secret endpoint; auth is CF Access at the edge, not a bot token).
+  for (const entry of surfaces.web ?? []) {
+    const webBinding: WebBinding = entry.binding;
+    const instanceId = `web:${webBinding.instanceId}`;
+    adapters.push(
+      factory.web({
+        instanceId,
+        source: gatewaySource(principal, instanceId),
+        binding: entry.binding,
+        runtime,
+        webBinding,
       }),
     );
   }

@@ -148,6 +148,78 @@ export const MattermostBindingSchema = z
   })
   .catchall(z.unknown());
 
+/**
+ * Web surface binding — generic HTTP ingress + broadcast-push outbound.
+ *
+ * Any web/SSE app becomes a cortex-backed bot by:
+ *  1. Posting inbound messages to cortex at `POST /message`.
+ *  2. Receiving responses via the broadcast target (WS Durable Object or SSE
+ *     endpoint) at `broadcastUrl`.
+ *
+ * Multi-tenant: each web application binds with its own `instanceId` +
+ * `broadcastUrl` + agent. Zero surface-code changes are needed to add a
+ * second consumer.
+ *
+ * Auth: cortex NEVER trusts `authorId` from the request body. It is derived
+ * from platform-signed headers:
+ *   - `cf-access`: `Cf-Access-Jwt-Assertion` JWT `sub` claim (default — CF
+ *     Access-protected deployments). The JWT is decoded without verification
+ *     at the adapter layer; CF Access already verified it at the edge.
+ *   - `header`: a named request header carries the caller-identity directly
+ *     (see `authHeader`). Suitable for trusted internal surfaces.
+ *   - `none`: no auth header — falls back to the static instanceId as the
+ *     authorId. DEV ONLY — never enable on a public-facing endpoint.
+ */
+export const WebBindingSchema = z
+  .object({
+    /**
+     * Tenant/instance identifier — the `{tenant}` segment of `web:{tenant}`.
+     * Must be unique across all web bindings for this principal so the
+     * dispatch-sink can route responses to the correct adapter instance.
+     * Example: `"amt"` → instanceId `"web:amt"`.
+     */
+    instanceId: z.string().min(1, "surfaces.web[].binding.instanceId is required"),
+    /**
+     * Port for the Bun HTTP ingress server. Each binding gets its own port
+     * so multiple web surfaces can coexist on the same host. Default: 8090.
+     */
+    port: z.number().int().min(1).max(65535).default(8090),
+    /**
+     * URL to POST broadcast messages to when cortex wants to push a reply to
+     * the web surface. For `transport: "ws"` this is the WS Durable Object's
+     * `/broadcast` endpoint (mirrors `dashboard-socket.ts` DO protocol); for
+     * `transport: "sse"` it is an SSE push server's ingest endpoint. The
+     * payload shape is identical: `{ adapter_instance, target, type, text }`.
+     */
+    broadcastUrl: z
+      .string()
+      .min(1, "surfaces.web[].binding.broadcastUrl is required")
+      .regex(
+        /^https?:\/\/.+/,
+        "surfaces.web[].binding.broadcastUrl must be an http/https URL",
+      ),
+    /**
+     * Transport flavour for the push half. `ws` (default) mirrors the
+     * dashboard-socket DO protocol (POST /broadcast with a JSON body). `sse`
+     * targets a plain SSE ingest endpoint with the same payload shape. The
+     * adapter's push path is identical for both — the distinction lives in
+     * the receiving server's delivery mechanism.
+     */
+    transport: z.enum(["ws", "sse"]).default("ws"),
+    /**
+     * Auth scheme for deriving `authorId` from inbound HTTP requests.
+     * See module docstring for the full contract. Default: `cf-access`.
+     */
+    authScheme: z.enum(["cf-access", "header", "none"]).default("cf-access"),
+    /**
+     * Header name used when `authScheme = "header"`. The adapter reads this
+     * header's value verbatim as the `authorId`. Ignored for other schemes.
+     * Example: `"X-Cortex-User-Id"`.
+     */
+    authHeader: z.string().optional(),
+  })
+  .catchall(z.unknown());
+
 // =============================================================================
 // Binding entry — one surface-instance bound to one stack's agent
 // =============================================================================
@@ -189,22 +261,47 @@ export const MattermostSurfaceBindingSchema = z.object({
   binding: MattermostBindingSchema,
 });
 
+/**
+ * Web surface binding entry.
+ *
+ * Unlike the Discord/Slack/Mattermost entries, the `web` binding does NOT fold
+ * into `agents[*].presence.web` at config-compose time (there is no legacy
+ * `cortex.yaml` web-presence shape to fold into). Instead, the gateway
+ * consumes `surfaces.web[]` directly from the `Surfaces` object and constructs
+ * a `WebAdapter` per entry. The `agent` field is still the join key used by
+ * `buildGatewayAdapters` to build the synthetic gateway agent; the `stack`
+ * field carries the `{principal}/{stack}` routing target as usual.
+ */
+export const WebSurfaceBindingSchema = z.object({
+  ...bindingEntryBase,
+  binding: WebBindingSchema,
+});
+
 // =============================================================================
 // Top-level `surfaces:` block
 // =============================================================================
 
 /**
  * The `surfaces:` block — the binding map. Keyed by platform; each platform
- * holds a list of `{agent, stack?, binding}` entries. All three platforms are
+ * holds a list of `{agent, stack?, binding}` entries. All platforms are
  * optional (a deployment may bind only Discord). `.strict()` rejects an
  * unknown platform key loudly so a typo (`discrod:`) surfaces at load rather
  * than silently contributing nothing to the fold.
+ *
+ * Note: `web[]` bindings are NOT folded by `foldSurfaceBindings` (there is no
+ * legacy presence shape). The gateway factory consumes them directly.
  */
 export const SurfacesSchema = z
   .object({
     discord: z.array(DiscordSurfaceBindingSchema).optional(),
     slack: z.array(SlackSurfaceBindingSchema).optional(),
     mattermost: z.array(MattermostSurfaceBindingSchema).optional(),
+    /**
+     * Web/SSE bindings — generic HTTP-ingress + broadcast-push surface.
+     * Multi-tenant: one entry per web application. Not folded into the
+     * per-stack config; the gateway factory constructs a WebAdapter per entry.
+     */
+    web: z.array(WebSurfaceBindingSchema).optional(),
   })
   // `.strict()` rejects an unknown platform key loudly so a typo (`discrod:`)
   // surfaces at load rather than silently contributing nothing to the fold.
@@ -214,6 +311,8 @@ export type Surfaces = z.infer<typeof SurfacesSchema>;
 export type DiscordSurfaceBinding = z.infer<typeof DiscordSurfaceBindingSchema>;
 export type SlackSurfaceBinding = z.infer<typeof SlackSurfaceBindingSchema>;
 export type MattermostSurfaceBinding = z.infer<typeof MattermostSurfaceBindingSchema>;
+export type WebSurfaceBinding = z.infer<typeof WebSurfaceBindingSchema>;
+export type WebBinding = z.infer<typeof WebBindingSchema>;
 
 // =============================================================================
 // The fold — surfaces.yaml bindings → agents[*].presence.{platform}
