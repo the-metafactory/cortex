@@ -514,6 +514,13 @@ export interface NetworkCreateClaimShape {
   admin_pubkey: string;
   issued_at: string;
   nonce: string;
+  /**
+   * #1321 — OPTIONAL per-network admin allowlist (comma-separated base64 Ed25519
+   * pubkeys). Only a GLOBAL admin's create/update may set it (the registry
+   * enforces that — ADR-0020). Omitted on a plain topology create/update so the
+   * canonical-JSON the registry verifies stays byte-identical to pre-#1321 claims.
+   */
+  admin_pubkeys?: string;
 }
 
 /** A network-create claim + detached signature, ready to POST. */
@@ -533,6 +540,12 @@ export interface BuildNetworkCreateClaimOptions {
   readonly issuedAt?: string;
   /** Override nonce (tests). Defaults to a fresh random hex. @internal */
   readonly nonce?: string;
+  /**
+   * #1321 — OPTIONAL per-network admin allowlist to set on the network record
+   * (comma-separated base64 pubkeys). Accepted by the registry only from a GLOBAL
+   * admin (ADR-0020). Omit on a plain topology create/update.
+   */
+  readonly adminPubkeys?: string;
 }
 
 /**
@@ -553,6 +566,9 @@ export async function buildNetworkCreateClaim(
     admin_pubkey: opts.material.pubkeyB64,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
+    // Only include admin_pubkeys when set — keeps canonicalJSON byte-identical to
+    // pre-#1321 claims when omitted, so existing signatures/tests are unaffected.
+    ...(opts.adminPubkeys !== undefined && { admin_pubkeys: opts.adminPubkeys }),
   };
   // Re-derive the KeyPair from the in-memory seed and sign over the SAME
   // canonical-JSON the registry route reconstructs and verifies.

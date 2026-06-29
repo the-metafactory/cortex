@@ -31,6 +31,7 @@ import {
   makeRegistryKey,
   resetStores,
 } from "../../../../services/network-registry/__tests__/helpers";
+import { getStore } from "../../../../services/network-registry/src/store";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -119,6 +120,98 @@ describe("create usage", () => {
     ]);
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("not found");
+  });
+
+  test("--network-admins with a malformed pubkey (exit 2)", async () => {
+    const { seedPath } = await mintAdminSeed();
+    const res = await dispatchNetwork([
+      "create", "research-collab", "--hub", "tls://hub:7422", "--leaf-port", "7422",
+      "--admin-seed", seedPath, "--network-admins", "not-a-valid-pubkey",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("--network-admins");
+  });
+
+  test("--network-admins with only blanks/commas (exit 2)", async () => {
+    const { seedPath } = await mintAdminSeed();
+    const res = await dispatchNetwork([
+      "create", "research-collab", "--hub", "tls://hub:7422", "--leaf-port", "7422",
+      "--admin-seed", seedPath, "--network-admins", " , , ",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("at least one");
+  });
+});
+
+// =============================================================================
+// #1321 — --network-admins (per-network admin allowlist)
+// =============================================================================
+
+describe("create --network-admins (#1321)", () => {
+  test("dry-run: a valid --network-admins lands in the signed claim (normalised)", async () => {
+    const { seedPath } = await mintAdminSeed();
+    const { adminPubkey: pna } = await mintAdminSeed();
+
+    globalThis.fetch = (() => {
+      throw new Error("dry-run must not perform network I/O");
+    }) as unknown as typeof globalThis.fetch;
+
+    const res = await dispatchNetwork([
+      "create", "research-collab",
+      "--hub", "tls://hub.meta-factory.ai:7422", "--leaf-port", "7422",
+      "--admin-seed", seedPath,
+      "--network-admins", ` ${pna} , `, // whitespace + trailing comma → normalised
+      "--json",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { items: { claim: Record<string, unknown> }[] };
+    expect(env.items[0]!.claim.admin_pubkeys).toBe(pna);
+  });
+
+  test("dry-run: omitting --network-admins leaves admin_pubkeys absent (back-compat)", async () => {
+    const { seedPath } = await mintAdminSeed();
+    globalThis.fetch = (() => {
+      throw new Error("dry-run must not perform network I/O");
+    }) as unknown as typeof globalThis.fetch;
+
+    const res = await dispatchNetwork([
+      "create", "research-collab",
+      "--hub", "tls://hub:7422", "--leaf-port", "7422", "--admin-seed", seedPath, "--json",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { items: { claim: Record<string, unknown> }[] };
+    expect(env.items[0]!.claim.admin_pubkeys).toBeUndefined();
+  });
+
+  test("--apply: a global admin's --network-admins persists to the network record", async () => {
+    const { seedPath, adminPubkey } = await mintAdminSeed();
+    const { adminPubkey: pna } = await mintAdminSeed();
+    const reg = await makeRegistryKey();
+    const registryEnv: Env = {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      REGISTRY_ADMIN_PUBKEYS: adminPubkey,
+      ENVIRONMENT: "test",
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, registryEnv);
+    }) as typeof globalThis.fetch;
+
+    const res = await dispatchNetwork([
+      "create", "research-collab",
+      "--hub", "tls://hub.meta-factory.ai:7422", "--leaf-port", "7422",
+      "--admin-seed", seedPath,
+      "--network-admins", pna,
+      "--registry-url", "https://network.test",
+      "--apply",
+    ]);
+    expect(res.exitCode).toBe(0);
+
+    // The per-network admin set is persisted on the network record (end-to-end:
+    // CLI → signed claim → real registry route → store).
+    const stored = await getStore(registryEnv).getNetwork("research-collab");
+    expect(stored?.admin_pubkeys).toBe(pna);
   });
 });
 
