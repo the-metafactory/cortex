@@ -325,7 +325,7 @@ export function buildGatewayAdapters(
   // instanceId is `web:{binding.instanceId}` — the tenant slug the binding
   // declares. Unlike Discord (token-keyed) or Slack/Mattermost (URL-keyed),
   // the web binding carries an explicit `instanceId` so multi-tenant
-  // deployments can give each surface a stable, operator-chosen name.
+  // deployments can give each surface a stable, configured name.
   //
   // No placeholder guard: the web binding carries no secrets (broadcastUrl
   // is a non-secret endpoint; auth is CF Access at the edge, not a bot token).
