@@ -396,6 +396,14 @@ export interface NetworkCreateClaim {
   issued_at: string;
   /** Random nonce to prevent replay. */
   nonce: string;
+  /**
+   * #1321 — OPTIONAL per-network admin allowlist to set on the network record:
+   * comma-separated base64 Ed25519 pubkeys (same grammar as the global var).
+   * Only a GLOBAL admin may set/change this (the route enforces that — a
+   * per-network admin supplying it is rejected 403). Omitted on a plain
+   * topology update.
+   */
+  admin_pubkeys?: string;
 }
 
 /** The on-wire envelope: an admin claim + detached Ed25519 signature. */
@@ -468,6 +476,26 @@ export function validateNetworkCreateClaim(
     errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
   }
 
+  // admin_pubkeys (#1321) — OPTIONAL comma-separated base64 pubkeys; same shape
+  // as the global allowlist. Validate every entry so a malformed set is rejected
+  // pre-crypto rather than persisted. Authorization (only-global-may-set) is the
+  // route's job, not the validator's.
+  if (c.admin_pubkeys !== undefined) {
+    if (typeof c.admin_pubkeys !== "string") {
+      errors.push({ field: "admin_pubkeys", message: "must be a string (comma-separated base64 pubkeys) or omitted" });
+    } else {
+      const entries = c.admin_pubkeys
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (entries.length === 0) {
+        errors.push({ field: "admin_pubkeys", message: "must contain at least one pubkey when present" });
+      } else if (!entries.every((e) => isValidPubkey(e))) {
+        errors.push({ field: "admin_pubkeys", message: "every entry must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
+      }
+    }
+  }
+
   if (errors.length > 0) return { ok: false, errors };
 
   const result: NetworkCreateClaim = {
@@ -477,6 +505,7 @@ export function validateNetworkCreateClaim(
     admin_pubkey: c.admin_pubkey as string,
     issued_at: c.issued_at as string,
     nonce: c.nonce as string,
+    ...(c.admin_pubkeys !== undefined && { admin_pubkeys: c.admin_pubkeys as string }),
   };
   return { ok: true, claim: result };
 }

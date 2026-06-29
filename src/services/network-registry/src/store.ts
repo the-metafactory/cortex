@@ -147,6 +147,8 @@ export interface RegistryStore {
     networkId: string,
     hubUrl: string,
     leafPort: number,
+    /** #1321 — per-network admin allowlist (comma-separated base64). Omit to leave unset. */
+    adminPubkeys?: string,
   ): Promise<NetworkRecord>;
 
   /**
@@ -732,12 +734,14 @@ export class InMemoryRegistryStore implements RegistryStore {
     networkId: string,
     hubUrl: string,
     leafPort: number,
+    adminPubkeys?: string,
   ): Promise<NetworkRecord> {
     const record: NetworkRecord = {
       network_id: networkId,
       hub_url: hubUrl,
       leaf_port: leafPort,
       updated_at: new Date().toISOString(),
+      ...(adminPubkeys !== undefined && { admin_pubkeys: adminPubkeys }),
     };
     this.networks.set(networkId, record);
     return record;
@@ -882,25 +886,28 @@ export class D1RegistryStore implements RegistryStore {
     networkId: string,
     hubUrl: string,
     leafPort: number,
+    adminPubkeys?: string,
   ): Promise<NetworkRecord> {
     const record: NetworkRecord = {
       network_id: networkId,
       hub_url: hubUrl,
       leaf_port: leafPort,
       updated_at: new Date().toISOString(),
+      ...(adminPubkeys !== undefined && { admin_pubkeys: adminPubkeys }),
     };
     // UPSERT: re-seeding a network replaces the topology row in place.
     // Parameterised — no value is string-interpolated into SQL.
     await this.db
       .prepare(
-        `INSERT INTO networks (network_id, hub_url, leaf_port, updated_at)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO networks (network_id, hub_url, leaf_port, updated_at, admin_pubkeys)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(network_id) DO UPDATE SET
-           hub_url    = excluded.hub_url,
-           leaf_port  = excluded.leaf_port,
-           updated_at = excluded.updated_at`,
+           hub_url       = excluded.hub_url,
+           leaf_port     = excluded.leaf_port,
+           updated_at    = excluded.updated_at,
+           admin_pubkeys = excluded.admin_pubkeys`,
       )
-      .bind(networkId, hubUrl, leafPort, record.updated_at)
+      .bind(networkId, hubUrl, leafPort, record.updated_at, adminPubkeys ?? null)
       .run();
     return record;
   }
@@ -908,7 +915,7 @@ export class D1RegistryStore implements RegistryStore {
   async getNetwork(networkId: string): Promise<NetworkRecord | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT network_id, hub_url, leaf_port, updated_at FROM networks WHERE network_id = ?",
+        "SELECT network_id, hub_url, leaf_port, updated_at, admin_pubkeys FROM networks WHERE network_id = ?",
       )
       .bind(networkId)
       .first<NetworkRow>();
@@ -946,6 +953,8 @@ interface NetworkRow {
   /** SQLite stores the INTEGER column; D1 returns it as a JS number. */
   leaf_port: number;
   updated_at: string;
+  /** #1321 — nullable per-network admin allowlist (TEXT column, migration 0011). */
+  admin_pubkeys?: string | null;
 }
 
 function rowToNetworkRecord(row: NetworkRow): NetworkRecord {
@@ -954,6 +963,8 @@ function rowToNetworkRecord(row: NetworkRow): NetworkRecord {
     hub_url: row.hub_url,
     leaf_port: row.leaf_port,
     updated_at: row.updated_at,
+    // Normalise SQL NULL → undefined so the record shape matches the InMemory store.
+    ...(row.admin_pubkeys != null && { admin_pubkeys: row.admin_pubkeys }),
   };
 }
 

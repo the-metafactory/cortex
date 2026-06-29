@@ -44,8 +44,8 @@
  */
 
 import { Hono, type Context } from "hono";
-import { parseAdminPubkeys, parseHubAdminPubkeys, type Env } from "../index";
-import { getNonceCache, getIssuanceStore, AlreadyDecidedError } from "../store";
+import { parseAdminPubkeys, parseHubAdminPubkeys, parseNetworkAdminPubkeys, type Env } from "../index";
+import { getNonceCache, getIssuanceStore, getStore, AlreadyDecidedError } from "../store";
 import {
   validateSignedAdmissionDecision,
   validateAdmissionDecisionClaim,
@@ -165,14 +165,28 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
 
     // 4. Signature verification FIRST (before recording nonce).
     const message = new TextEncoder().encode(canonicalJSON(claim)) as Uint8Array<ArrayBuffer>;
-    const gateResult = await applyAdminGate(
-      adminPubkeys,
-      claim.admin_pubkey,
-      signed.signature,
-      message,
-    );
-    if (gateResult) {
-      return c.json({ error: gateResult.error }, gateResult.status as 401 | 403);
+    const sigValid = await verifyEd25519(claim.admin_pubkey, signed.signature, message);
+    if (!sigValid) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+
+    // 4b. Authorisation (#1321 per-network admin). The proven key must be
+    // authorised to admit onto THIS request's network — either a GLOBAL admin
+    // (REGISTRY_ADMIN_PUBKEYS, the metafactory bootstrap) OR a PER-NETWORK admin
+    // listed in the target network's `admin_pubkeys` (the **Network posture**
+    // authority — each network sovereign over its own roster, CONTEXT.md). A
+    // network-less request (network_id null) is global-admin-only. Authorization
+    // is keyed off the request's stored network_id, NEVER off anything on the
+    // wire — control-plane only.
+    const issuanceStore = getIssuanceStore(c.env);
+    const reqForAuth = await issuanceStore.getIssuanceRequest(requestId);
+    let authorized = adminPubkeys.has(claim.admin_pubkey);
+    if (!authorized && reqForAuth?.network_id) {
+      const net = await getStore(c.env).getNetwork(reqForAuth.network_id);
+      authorized = parseNetworkAdminPubkeys(net?.admin_pubkeys).has(claim.admin_pubkey);
+    }
+    if (!authorized) {
+      return c.json({ error: "admin_not_authorized" }, 403);
     }
 
     // 5. Replay check — only on authentic + authorised path.

@@ -37,6 +37,8 @@ interface NetworkRow {
   hub_url: string;
   leaf_port: number;
   updated_at: string;
+  /** #1321 — nullable per-network admin allowlist. */
+  admin_pubkeys?: string | null;
 }
 
 interface IssuanceRequestRow {
@@ -181,17 +183,19 @@ export class MockD1 {
 
     // networks: UPSERT (S2.5)
     if (sql.startsWith("INSERT INTO networks")) {
-      const [networkId, hubUrl, leafPort, updatedAt] = args as [
+      const [networkId, hubUrl, leafPort, updatedAt, adminPubkeys] = args as [
         string,
         string,
         number,
         string,
+        string | null | undefined,
       ];
       this.networks.set(networkId, {
         network_id: networkId,
         hub_url: hubUrl,
         leaf_port: leafPort,
         updated_at: updatedAt,
+        admin_pubkeys: adminPubkeys ?? null,
       });
       // An UPSERT always touches exactly one row (insert or update).
       return { meta: { changes: 1 } };

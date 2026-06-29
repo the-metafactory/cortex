@@ -178,6 +178,8 @@ export interface NetworkCreateClaim {
   admin_pubkey: string;
   issued_at: string;
   nonce: string;
+  /** #1321 — optional per-network admin allowlist (comma-separated base64 pubkeys). */
+  admin_pubkeys?: string;
 }
 
 /**
@@ -198,6 +200,8 @@ export async function makeSignedNetworkCreate(
     adminPubkeyOverride?: string;
     /** Sign with a DIFFERENT key than the claim declares — forged signature. */
     signWith?: PrincipalKey;
+    /** #1321 — per-network admin allowlist to bootstrap (comma-separated base64). */
+    adminPubkeys?: string;
   } = {},
 ): Promise<{ claim: NetworkCreateClaim; signature: string }> {
   const claim: NetworkCreateClaim = {
@@ -207,6 +211,9 @@ export async function makeSignedNetworkCreate(
     admin_pubkey: opts.adminPubkeyOverride ?? adminKey.publicKeyB64,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
+    // Only include admin_pubkeys when supplied — keeps canonicalJSON stable for
+    // the existing #747 tests that sign a claim without the field.
+    ...(opts.adminPubkeys !== undefined && { admin_pubkeys: opts.adminPubkeys }),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));
   const signer = opts.signWith ?? adminKey;
