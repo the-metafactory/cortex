@@ -168,6 +168,15 @@ Run it via your OS's service manager — a **launchd** plist
 
 Point `system/system.yaml` `nats.url` at `nats://127.0.0.1:<port>`.
 
+**Multiple stacks on one machine are first-class** — the port is per-stack; nothing
+assumes `:4222`. Each stack picks its own **client + monitor** port and sets them in two
+places that must agree: the `.conf` `listen:` / `http:` lines and `system/system.yaml`
+`nats.url`. cortex reads `nats.url` — it never hardcodes a port. A second co-located
+stack just takes the next free pair — e.g. **stack A `:4222`/`:8222`, stack B
+`:4223`/`:8223`** — each its own isolated nats-server. This is how several stacks run
+side-by-side under one user account; `systemd --user` units (true user-space) work the
+same way — no system-level / one-stack-per-machine fallback needed.
+
 > Gotcha: a stray system-wide `nats-server` (e.g. homebrew, no JetStream) on
 > the same port silently hijacks connections — JetStream consumers go dormant.
 > Verify which process owns the port before debugging anything else.
