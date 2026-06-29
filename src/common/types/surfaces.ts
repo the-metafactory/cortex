@@ -217,6 +217,32 @@ export const WebBindingSchema = z
      * Example: `"X-Cortex-User-Id"`.
      */
     authHeader: z.string().optional(),
+    /**
+     * Service-to-service inbound auth token (POST /message → cortex).
+     *
+     * When set, the adapter requires the inbound request to carry:
+     *   `Authorization: Bearer <inboundToken>`
+     * Requests missing or mismatching the token receive `401 Unauthorized`
+     * before any message is dispatched.
+     *
+     * **Omit only on loopback deployments** where the network perimeter is
+     * the sole trust boundary. Required for any cross-machine deployment.
+     * Structured as a bearer-token seam so mTLS or a stronger scheme can
+     * replace it via config alone — no code change required.
+     */
+    inboundToken: z.string().optional(),
+    /**
+     * Service-to-service outbound auth token (cortex → broadcastUrl POST).
+     *
+     * When set, every broadcast POST carries:
+     *   `Authorization: Bearer <broadcastToken>`
+     * The broadcast endpoint MUST verify this token — an unauthenticated
+     * public broadcast endpoint is a cortex Critical Rule violation (SEV-1).
+     *
+     * **Omit only on loopback deployments.** Required for any cross-machine
+     * deployment. Same bearer-token seam as `inboundToken`.
+     */
+    broadcastToken: z.string().optional(),
   })
   .catchall(z.unknown());
 

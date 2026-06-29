@@ -22,7 +22,7 @@ import type { PlatformAdapter } from "../../types";
 // Fixtures
 // =============================================================================
 
-const BROADCAST_CAPTURES: { url: string; body: unknown }[] = [];
+const BROADCAST_CAPTURES: { url: string; body: unknown; headers: Record<string, string> }[] = [];
 
 /** Intercept all fetch calls that go to the broadcastUrl. */
 const originalFetch = globalThis.fetch;
@@ -33,7 +33,8 @@ async function withBroadcastCapture(fn: () => Promise<void>): Promise<void> {
     const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     if (urlStr.includes("broadcast")) {
       const body = init?.body ? JSON.parse(init.body as string) : null;
-      BROADCAST_CAPTURES.push({ url: urlStr, body });
+      const headers = { ...(init?.headers as Record<string, string> | undefined) };
+      BROADCAST_CAPTURES.push({ url: urlStr, body, headers });
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -209,6 +210,85 @@ describe("WebAdapter — HTTP ingress", () => {
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(messages[0]?.threadId).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// 2b. Inbound service auth (inboundToken — service-to-service gate)
+// =============================================================================
+
+describe("WebAdapter — inbound service auth (inboundToken)", () => {
+  let adapter: WebAdapter;
+  let port: number;
+
+  afterEach(async () => {
+    await adapter.stop();
+  });
+
+  async function startWithToken(token?: string): Promise<void> {
+    adapter = new WebAdapter(
+      makeSyntheticAgent(),
+      makeBinding({ port: 0, authScheme: "none", inboundToken: token }),
+      makeInfra({ instanceId: "web:svc-test" }),
+    );
+    await adapter.start(async () => {});
+    port = adapter.serverPort!;
+  }
+
+  const validBody = JSON.stringify({ channel: "room-1", body: "hello" });
+  const jsonHeaders = { "Content-Type": "application/json" };
+
+  test("no inboundToken → any request accepted (localhost default)", async () => {
+    await startWithToken(undefined);
+    const res = await fetch(`http://localhost:${port}/message`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: validBody,
+    });
+    expect(res.status).toBe(202);
+  });
+
+  test("inboundToken set, missing Authorization → 401", async () => {
+    await startWithToken("secret-svc-token");
+    const res = await fetch(`http://localhost:${port}/message`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: validBody,
+    });
+    expect(res.status).toBe(401);
+    const json = await res.json() as { error: string };
+    expect(json.error).toBe("Unauthorized");
+  });
+
+  test("inboundToken set, wrong token → 401", async () => {
+    await startWithToken("secret-svc-token");
+    const res = await fetch(`http://localhost:${port}/message`, {
+      method: "POST",
+      headers: { ...jsonHeaders, Authorization: "Bearer wrong-token" },
+      body: validBody,
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("inboundToken set, correct Bearer token → 202 Accepted", async () => {
+    await startWithToken("secret-svc-token");
+    const res = await fetch(`http://localhost:${port}/message`, {
+      method: "POST",
+      headers: { ...jsonHeaders, Authorization: "Bearer secret-svc-token" },
+      body: validBody,
+    });
+    expect(res.status).toBe(202);
+  });
+
+  test("401 fires before body parsing — malformed JSON still returns 401, not 400", async () => {
+    await startWithToken("tok");
+    const res = await fetch(`http://localhost:${port}/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "NOT_JSON",
+    });
+    // Auth gate runs first — must be 401 (not 400 from body parse failure)
+    expect(res.status).toBe(401);
   });
 });
 
@@ -399,6 +479,24 @@ describe("WebAdapter — outbound broadcast", () => {
     const adapter = new WebAdapter(makeSyntheticAgent(), failBinding, infra);
     // Must not reject — await directly; any thrown error would fail the test
     await adapter.postResponse({ instanceId: "web:amt", channelId: "ch" }, "text");
+  });
+
+  test("broadcastToken set → POST includes Authorization: Bearer header", async () => {
+    const tokenBinding = makeBinding({ broadcastToken: "cortex-svc-secret" });
+    const adapter = new WebAdapter(makeSyntheticAgent(), tokenBinding, infra);
+    await withBroadcastCapture(async () => {
+      await adapter.postResponse({ instanceId: "web:amt", channelId: "ch" }, "text");
+    });
+    expect(BROADCAST_CAPTURES[0]?.headers?.Authorization).toBe("Bearer cortex-svc-secret");
+  });
+
+  test("no broadcastToken → POST has no Authorization header (localhost default)", async () => {
+    // binding has no broadcastToken (localhost — no outbound service auth)
+    const adapter = new WebAdapter(makeSyntheticAgent(), binding, infra);
+    await withBroadcastCapture(async () => {
+      await adapter.postResponse({ instanceId: "web:amt", channelId: "ch" }, "text");
+    });
+    expect(BROADCAST_CAPTURES[0]?.headers?.Authorization).toBeUndefined();
   });
 });
 

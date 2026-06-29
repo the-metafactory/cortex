@@ -34,15 +34,29 @@
  * surface-router never double-delivers lifecycle envelopes (dispatch-sink owns
  * the sole delivery path per `dispatch-sink.ts:18-28`).
  *
- * ## Auth
+ * ## Auth — two independent layers
  *
- * authorId is derived from the request headers, never the body:
+ * ### Layer 1: Service-to-service (inbound gate)
+ * When `binding.inboundToken` is set, every `POST /message` must carry:
+ *   `Authorization: Bearer <inboundToken>`
+ * Requests missing or mismatching the token return `401` before the body is
+ * parsed. Omit only on loopback deployments; required for cross-machine.
+ * Bearer-token seam — mTLS can replace via config, no code change.
+ *
+ * ### Layer 2: Per-user identity (authorId derivation)
+ * After the service gate, `authorId` is derived from the user-identifying header:
  *   - `cf-access` (default): `Cf-Access-Jwt-Assertion` header → base64-decode
  *     the JWT payload → extract `sub` claim. CF Access verifies the JWT at the
  *     edge; the adapter decodes without re-verifying.
  *   - `header`: a named request header (`authHeader`) carries the caller id.
  *   - `none`: falls back to the static `instanceId` (DEV ONLY — never on a
  *     public endpoint).
+ *
+ * ### Outbound auth
+ * When `binding.broadcastToken` is set, every broadcast POST carries:
+ *   `Authorization: Bearer <broadcastToken>`
+ * The broadcast endpoint MUST verify this — an unauthenticated public broadcast
+ * endpoint is a cortex Critical Rule violation (SEV-1). Omit only on loopback.
  *
  * ## Reusability
  *
@@ -399,6 +413,20 @@ export class WebAdapter implements PlatformAdapter {
   }
 
   private async handleInbound(req: Request): Promise<Response> {
+    // 0. Service-to-service inbound auth gate.
+    //    When `inboundToken` is configured, the request MUST carry:
+    //      Authorization: Bearer <inboundToken>
+    //    Requests missing or mismatching the token are rejected before any body
+    //    is parsed — this is service auth, separate from the per-user CF-Access /
+    //    header auth that produces `authorId`.
+    if (this.binding.inboundToken) {
+      const authHeader = req.headers.get("Authorization");
+      const expected = `Bearer ${this.binding.inboundToken}`;
+      if (authHeader !== expected) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
     // 1. Parse body
     let body: WebInboundBody;
     try {
@@ -464,10 +492,17 @@ export class WebAdapter implements PlatformAdapter {
    *      runner level, not here.
    */
   private async broadcast(payload: WebBroadcastPayload): Promise<void> {
+    // Build headers — always Content-Type; add Authorization when
+    // `broadcastToken` is configured (service-to-service outbound auth).
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.binding.broadcastToken) {
+      headers.Authorization = `Bearer ${this.binding.broadcastToken}`;
+    }
+
     try {
       const res = await fetch(this.binding.broadcastUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
