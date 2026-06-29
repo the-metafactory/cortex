@@ -72,7 +72,7 @@ import type { InboundMessage } from "../adapters/types";
  */
 export interface GatewayBindingMatch {
   /** Platform the inbound message arrived on. */
-  platform: "discord" | "slack" | "mattermost";
+  platform: "discord" | "slack" | "mattermost" | "web";
 
   /**
    * The `agent` id from the binding entry — the stack-local agent id that
@@ -136,6 +136,8 @@ export interface GatewayBindingIndex {
   discord: Map<string, IndexEntry>;
   /** Slack: keyed by `binding.workspaceId` */
   slack: Map<string, IndexEntry>;
+  /** Web: keyed by the adapter instanceId stamped on InboundMessage (e.g. `web:amt`). */
+  web: Map<string, IndexEntry>;
   /**
    * Mattermost single-binding fallback.
    * `null`  → no mattermost bindings.
@@ -230,6 +232,7 @@ export function distinctBoundStacks(
   for (const e of surfaces.discord ?? []) add(e.stack);
   for (const e of surfaces.slack ?? []) add(e.stack);
   for (const e of surfaces.mattermost ?? []) add(e.stack);
+  for (const e of surfaces.web ?? []) add(e.stack);
   return out;
 }
 
@@ -310,6 +313,7 @@ export function distinctBoundPrincipalStacks(
   for (const e of surfaces.discord ?? []) add(e.stack);
   for (const e of surfaces.slack ?? []) add(e.stack);
   for (const e of surfaces.mattermost ?? []) add(e.stack);
+  for (const e of surfaces.web ?? []) add(e.stack);
   return out;
 }
 
@@ -359,6 +363,7 @@ export function crossPrincipalBindings(
   for (const e of surfaces.discord ?? []) check(e.stack);
   for (const e of surfaces.slack ?? []) check(e.stack);
   for (const e of surfaces.mattermost ?? []) check(e.stack);
+  for (const e of surfaces.web ?? []) check(e.stack);
   return out;
 }
 
@@ -379,6 +384,7 @@ export function crossPrincipalBindings(
 export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
   const discord = new Map<string, IndexEntry>();
   const slack = new Map<string, IndexEntry>();
+  const web = new Map<string, IndexEntry>();
   let mattermostSingle: IndexEntry | null = null;
   let mattermostMulti = false;
 
@@ -455,7 +461,29 @@ export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
     // mattermostMulti flag as the documented reason.
   }
 
-  return { discord, slack, mattermostSingle, mattermostMulti };
+  // ── Web ──────────────────────────────────────────────────────────────────
+  // Demux key = the adapter instanceId the WebAdapter stamps on every
+  // InboundMessage (`web:${binding.instanceId}`), matched verbatim in
+  // resolveBinding. Web carries no platform-native guild/server id.
+  for (const entry of surfaces.web ?? []) {
+    const demuxKey = `web:${entry.binding.instanceId}`;
+    if (web.has(demuxKey)) {
+      throw new Error(
+        `gateway binding-resolver: ambiguous web config — two bindings share instanceId "${entry.binding.instanceId}". ` +
+          `Each (platform, instanceId) pair must map to exactly one binding. ` +
+          `Fix the surfaces.yaml web bindings to remove the duplicate.`,
+      );
+    }
+    const { principal, stack } = parseStack(entry.stack);
+    web.set(demuxKey, {
+      agent: entry.agent,
+      principal,
+      stack,
+      instance: demuxKey,
+    });
+  }
+
+  return { discord, slack, web, mattermostSingle, mattermostMulti };
 }
 
 // =============================================================================
@@ -526,6 +554,14 @@ export function resolveBinding(
       return null;
     }
     return matchFrom("mattermost", index.mattermostSingle);
+  }
+
+  if (platform === "web") {
+    // Web demuxes by the adapter instanceId stamped on the InboundMessage
+    // (`web:${binding.instanceId}`) — no platform-native guild/server id.
+    const entry = index.web.get(inbound.instanceId);
+    if (!entry) return null;
+    return matchFrom("web", entry);
   }
 
   // Unknown platform — no bindings.

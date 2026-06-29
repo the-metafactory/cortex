@@ -169,7 +169,8 @@ function countBindings(surfaces: Surfaces): number {
   return (
     (surfaces.discord?.length ?? 0) +
     (surfaces.slack?.length ?? 0) +
-    (surfaces.mattermost?.length ?? 0)
+    (surfaces.mattermost?.length ?? 0) +
+    (surfaces.web?.length ?? 0)
   );
 }
 
