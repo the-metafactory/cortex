@@ -2492,8 +2492,8 @@ describe("agentDisallowedTools — WEB-2/B1 per-agent structural confinement (co
     };
 
     await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
-      id: "amt-facilitator",
-      displayName: "AMT Facilitator",
+      id: "pylon",
+      displayName: "Pylon",
       // Per-agent extras beyond the policy inventory — task-dispatch tool
       // and exit-plan-mode are not in CLAUDE_TOOL_INVENTORY but are still
       // CC-available; agentDisallowedTools adds them to the deny set explicitly.

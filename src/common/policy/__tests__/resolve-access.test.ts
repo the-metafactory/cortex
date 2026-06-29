@@ -548,55 +548,75 @@ describe("isOperatorPrincipal", () => {
 });
 
 // WEB-2 / B1 — zero-tool airgap: the facilitator-role principal profile mirrors
-// the amt-facilitator principal in ~/.config/cortex/work/stacks/work.yaml.
-// It holds keyword.chat only — no tool.* capabilities — so every CLAUDE_TOOL_INVENTORY
-// entry lands in toolRestrictions.  This is the policy-layer floor of the airgap;
-// the dispatch layer then adds agentDisallowedTools (Task, ExitPlanMode) on top.
-describe("resolvePolicyAccess — facilitator-role: zero-tool policy confinement (WEB-2/B1)", () => {
-  const FACILITATOR_POLICY: Policy = {
+// the pylon principal in ~/.config/cortex/work/stacks/work.yaml.
+// facilitator-role carries `grill` only — no keyword.* and no tool.* capabilities.
+// That combination means pylon is locked-out as a sender (correct security posture:
+// pylon should never initiate chats; it is dispatched TO by luna).
+// The actual dispatch-layer tool enforcement (agentDisallowedTools) is proven in
+// dispatch-handler.test.ts; these tests pin the policy-layer lockout contract.
+describe("resolvePolicyAccess — facilitator-role: pylon locked-out as sender (WEB-2/B1)", () => {
+  const PYLON_POLICY: Policy = {
     principals: [
       {
-        id: "amt-facilitator",
+        id: "pylon",
         home_principal: "andreas",
         home_stack: "andreas/work",
         role: ["facilitator-role"],
         trust: [],
-        platform_ids: { discord: ["amt-facilitator-test-id"] },
+        platform_ids: { discord: ["pylon-test-id"] },
       },
     ],
     roles: [
       {
-        // Mirrors policy.roles[facilitator-role] in work.yaml: keyword.chat ONLY,
-        // no tool.* capabilities → full CLAUDE_TOOL_INVENTORY denied by inversion.
+        // Mirrors policy.roles[facilitator-role] in work.yaml: `grill` ONLY —
+        // no keyword.* → pylon cannot initiate chats (lockout as sender).
+        // no tool.* → if the lockout path were ever bypassed, all 14 inventory
+        // tools would still be denied by policy inversion.
         id: "facilitator-role",
-        capabilities: ["keyword.chat"],
+        capabilities: ["grill"],
       },
     ],
   };
 
-  test("all 14 CLAUDE_TOOL_INVENTORY tools land in toolRestrictions (deny-all via policy inversion)", () => {
+  test("facilitator-role with grill-only caps → pylon is locked out as a sender (correct posture)", () => {
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "amt-facilitator-test-id" }),
-      ...buildHarness(FACILITATOR_POLICY),
+      msg: msg({ authorId: "pylon-test-id" }),
+      ...buildHarness(PYLON_POLICY),
     });
-    expect(result.allowed).toBe(true);
-    expect(result.features.chat).toBe(true);
-    // toolRestrictions must exactly equal the full inventory — nothing granted, nothing slips through.
-    expect(result.toolRestrictions).toEqual([...CLAUDE_TOOL_INVENTORY]);
-    // Spot-check the high-impact tools explicitly.
-    for (const tool of ["Bash", "Edit", "Write", "Read", "Grep", "Glob", "Agent", "Skill", "WebFetch", "WebSearch"]) {
-      expect(result.toolRestrictions).toContain(tool);
-    }
-  });
-
-  test("facilitator-role has no operator short-circuit — async and team stay false", () => {
-    const result = resolvePolicyAccess({
-      msg: msg({ authorId: "amt-facilitator-test-id" }),
-      ...buildHarness(FACILITATOR_POLICY),
-    });
+    // No keyword.* → locked out. Pylon must never be a sender; dispatched TO by luna.
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("lockout");
+    expect(result.features.chat).toBe(false);
     expect(result.features.async).toBe(false);
     expect(result.features.team).toBe(false);
-    // Not an operator → not trusted (prompt-injection filter stays armed)
-    expect(result.trusted).toBeUndefined();
+  });
+
+  test("operator role with dispatch.pylon → luna CAN dispatch to pylon", () => {
+    // luna's operator role includes dispatch.pylon. Prove the engine allows it.
+    const operatorPolicy: Policy = {
+      principals: [
+        {
+          id: "luna",
+          home_principal: "andreas",
+          home_stack: "andreas/work",
+          role: ["operator"],
+          trust: [],
+          platform_ids: { discord: ["1134325176796987522"] },
+        },
+      ],
+      roles: [
+        {
+          id: "operator",
+          capabilities: ["operator", "keyword.chat", "keyword.async", "keyword.team", "dispatch.pylon"],
+        },
+      ],
+    };
+    const engine = policyEngineFromConfig(operatorPolicy);
+    if (engine === undefined) throw new Error("policyEngineFromConfig returned undefined");
+    const sovereignty = defaultPolicySovereignty();
+    // luna can dispatch to pylon
+    expect(engine.check("luna", { capability: "dispatch.pylon", sovereignty }).allow).toBe(true);
+    // pylon cannot dispatch to anything (not registered)
+    expect(engine.check("pylon", { capability: "dispatch.luna", sovereignty }).allow).toBe(false);
   });
 });

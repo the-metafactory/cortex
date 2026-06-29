@@ -1,25 +1,24 @@
-# ~/.config/cortex/agents.d/amt-facilitator.yaml
+# ~/.config/cortex/agents.d/pylon.yaml
 #
-# AMT Facilitator — domain-language grilling concierge for the Northpower
+# Pylon — domain-language grilling concierge for the Northpower
 # Asset Management Transformation (Maximo) programme (WEB-2, cortex#1312)
 #
-# This fragment is rendered by `arc install amt-facilitator` into the
-# installing principal's `~/.config/cortex/agents.d/amt-facilitator.yaml`.
+# This fragment is rendered by `arc install pylon` into the
+# installing principal's `~/.config/cortex/agents.d/pylon.yaml`.
 # It MUST NOT be hand-edited on the target host — edits are overwritten on
-# the next `arc upgrade amt-facilitator`.  Edit the source in the
-# amt-facilitator package instead.
+# the next `arc upgrade pylon`.  Edit the source in the pylon package instead.
 #
 # Two axes governed here (per design-arc-agent-bots.md §2):
 #   Identity  — id, displayName, trust
 #   Presence  — none (known-principal rooms only; no Discord binding here)
 #
-# Substrate + capabilities are declared in arc-manifest-amt-facilitator.yaml;
+# Substrate + capabilities are declared in arc-manifest-pylon.yaml;
 # the rendered fragment carries them so the cortex dashboard can render
-# accurate provenance ("amt-facilitator (in-process / claude-code)").
+# accurate provenance ("pylon (in-process / claude-code)").
 
-id: amt-facilitator
-displayName: AMT Facilitator
-persona: ~/.config/cortex/personas/amt-facilitator.md
+id: pylon
+displayName: Pylon
+persona: ~/.config/cortex/personas/pylon.md
 # `roles:` is intentionally absent — AgentSchema.roles[] was retired at the
 # v2.0.0 cutover (cortex#297) and authorization now lives on policy.principals[].
 trust: [luna]
@@ -39,7 +38,7 @@ runtime:
   substrate: claude-code
   mode: in-process
   capabilities:
-    - chat                  # AMT grill-with-docs conversational dispatch
+    - grill                  # AMT grill-with-docs domain-language facilitation
 
 # WEB-2 / B1 — structural tool confinement enforced at the dispatch layer.
 #

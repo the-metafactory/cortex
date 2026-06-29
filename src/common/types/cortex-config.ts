@@ -921,7 +921,7 @@ export const AgentSchema = z.object({
    * Unlike the policy-based confinement path (which inverts `tool.*` capability
    * grants from `CLAUDE_TOOL_INVENTORY`), this explicit list is authoritative at
    * the agent-declaration layer — no policy grant can widen it. Intended for
-   * zero-tool facilitator agents (e.g. amt-facilitator) whose inbound messages
+   * zero-tool facilitator agents (e.g. pylon) whose inbound messages
    * carry untrusted content and MUST NOT drive host execution.
    *
    * Mirrors grill.ts's explicit `--disallowedTools` DENY list on the brain-call
