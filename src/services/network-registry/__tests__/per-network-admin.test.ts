@@ -187,6 +187,24 @@ describe("network create/update — per-network admin", () => {
     expect(stored?.hub_url).toBe("tls://new:7500");
   });
 
+  test("a per-network topology update PRESERVES the existing admin set (no clobber)", async () => {
+    const pna = await makePrincipalKey();
+    expect((await createNetwork("research-collab", pna.publicKeyB64)).status).toBe(201);
+
+    // pna updates only topology — the claim carries no admin_pubkeys.
+    const update = await makeSignedNetworkCreate("research-collab", pna, { hubUrl: "tls://moved:7600", leafPort: 7600 });
+    expect((await post("/networks/research-collab", update)).status).toBe(201);
+
+    // The admin set must survive the update — not be nulled to global-only.
+    const stored = await getStore(env).getNetwork("research-collab");
+    expect(stored?.admin_pubkeys).toBe(pna.publicKeyB64);
+
+    // And the per-network admin can still admit afterwards (proves preservation end-to-end).
+    const req = await registerInto("joel", "research-collab");
+    const decision = await makeDecision(req.request_id, "admit", pna);
+    expect((await post(`/admission-requests/${req.request_id}/admit`, decision)).status).toBe(200);
+  });
+
   test("a per-network admin CANNOT change admin_pubkeys (anti-self-escalation) → 403", async () => {
     const pna = await makePrincipalKey();
     const accomplice = await makePrincipalKey();
