@@ -5,7 +5,7 @@
 ## Context
 
 The federation-decentralisation research (#1319) found cortex is already
-sovereign at the operator + leaf + export/import layer (ADR-0013, Model B = BGP
+sovereign at the operator-account + leaf + export/import layer (ADR-0013, Model B = BGP
 peering), but three meta-layer artifacts remained central. The first code-level
 gap: the **Network-admission gate** (who is admitted to a network's roster) and
 the network create/update gate both keyed on the **registry-wide**
