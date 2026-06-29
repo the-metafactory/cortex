@@ -1,0 +1,93 @@
+# arc-manifest-amt-facilitator.yaml — AMT Facilitator, domain-language grilling concierge
+#
+# arc install amt-facilitator
+#
+# This is the arc package manifest for the AMT Facilitator sub-bot.  It follows
+# the design-arc-agent-bots.md §4 schema: type: agent, targets: [cortex],
+# in-process substrate (claude-code), NO Discord presence (known-principal
+# rooms only — the web surface dispatches to it directly).
+#
+# WEB-2, Northpower AMT programme
+#
+# INSTALL SHAPE (§3.1 — in-process):
+#   arc install amt-facilitator
+#     → drops personas/amt-facilitator.md → ~/.config/cortex/personas/amt-facilitator.md
+#     → drops agents.d/amt-facilitator.yaml → ~/.config/cortex/agents.d/amt-facilitator.yaml
+#     → signals cortex reload              → cortex hot-reloads; AMT Facilitator appears
+#     → (no NATS creds issued — in-process agent shares the stack's bus identity.
+#        Zero-tool airgap: the persona declares allowedTools: [] — the agent can
+#        only transform text→JSON, never touch host execution.)
+#
+# PERSONA-AS-BRAIN:
+#   The AMT Facilitator uses the cortex in-process runner with its persona as
+#   the system prompt.  No custom brain subprocess (no `runtime.brain: {kind: exec}`).
+#   The SKILL system prompt (ported from amt/app/src/grill.ts) lives in the
+#   persona body; grounding arrives via the inbound message (BYOG pattern).
+#
+# ZERO-TOOL AIRGAP (security design):
+#   - allowedTools: []  in the persona (CC --allowedTools empty = deny-all tools)
+#   - The inbound message embeds untrusted chat (SME transcript); a prompt-injected
+#     message must not drive tool or host execution.
+#   - The agent transforms text→JSON only.  All persistence (CONTEXT.md writes,
+#     ADR commits, git pushes) is the responsibility of the AMT server (amt/grill.ts).
+#
+# NO DISCORD PRESENCE:
+#   This agent is a backend facilitator called by the AMT web surface (WEB-2).
+#   It has no Discord bot token and no channel binding.  It answers the principal
+#   (luna) via the work stack's dispatch path only.
+
+name: amt-facilitator
+version: 0.1.0
+type: agent                    # arc artifact type for bus-participating agents
+targets: [cortex]              # arc#117 — single-target install into cortex HostAdapter
+description: >
+  Domain-language grilling concierge for Northpower's Asset Management
+  Transformation (Maximo) programme.  Drives "grill-with-docs" sessions in
+  multi-user team chat: asks one sharpening question at a time, grounds each
+  question in KG/CONTEXT.md signals (arrive via the inbound message — BYOG),
+  and records decisions as structured JSON for the server to persist.  Zero
+  tools — text→JSON transformation only.
+
+runtime:
+  substrate: claude-code       # in-process under cortex's runner (§3.1)
+  mode: in-process
+  persona-format: ^1.0         # persona-format.md versioning contract
+  capabilities:
+    - chat                     # AMT grill-with-docs conversational dispatch
+
+identity:
+  id: amt-facilitator
+  displayName: AMT Facilitator
+  # `roles:` intentionally absent — retired at v2.0.0 cutover (cortex#297);
+  # authorization lives on policy.principals[].
+  trust: [luna]                # AMT Facilitator trusts Luna (the principal's DA)
+
+# No Discord presence — known-principal rooms only.
+# The web surface (WEB-2) dispatches to this agent directly via the work stack.
+# No bot token, no guild, no channel binding.
+
+# provides — files dropped by arc install (§4 manifest schema)
+provides:
+  files:
+    personas/amt-facilitator.md: ~/.config/cortex/personas/amt-facilitator.md
+    agents.d/amt-facilitator.yaml: ~/.config/cortex/agents.d/amt-facilitator.yaml
+
+# lifecycle — arc install hooks (§8.1 sequence for in-process shape)
+#
+# ORDER IS LOAD-BEARING (design-arc-agent-bots.md §8.2 invariant):
+#   1. drop files (persona + fragment) — arc does this before postinstall
+#   2. signal-cortex-reload.sh         — daemon learns about AMT Facilitator FIRST
+#   3. (no creds issue — in-process; shares the stack's bus identity)
+#
+# AMT Facilitator intentionally skips scripts/issue-nats-creds.sh.
+lifecycle:
+  postinstall:
+    - scripts/signal-cortex-reload.sh   # FIRST — daemon registers agent from agents.d/
+
+# dependencies — cortex version floor
+# AMT Facilitator relies on:
+#   - agents.d/ fragment support (cortex#60 Phase A.1 — loader.ts merged in main)
+#   - in-process runner (substrate: claude-code, mode: in-process)
+dependencies:
+  - name: cortex
+    version: ">=5.24.0"

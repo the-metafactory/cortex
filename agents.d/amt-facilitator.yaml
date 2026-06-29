@@ -1,0 +1,45 @@
+# ~/.config/cortex/agents.d/amt-facilitator.yaml
+#
+# AMT Facilitator — domain-language grilling concierge for the Northpower
+# Asset Management Transformation (Maximo) programme (WEB-2, cortex#1xxx)
+#
+# This fragment is rendered by `arc install amt-facilitator` into the
+# installing principal's `~/.config/cortex/agents.d/amt-facilitator.yaml`.
+# It MUST NOT be hand-edited on the target host — edits are overwritten on
+# the next `arc upgrade amt-facilitator`.  Edit the source in the
+# amt-facilitator package instead.
+#
+# Two axes governed here (per design-arc-agent-bots.md §2):
+#   Identity  — id, displayName, trust
+#   Presence  — none (known-principal rooms only; no Discord binding here)
+#
+# Substrate + capabilities are declared in arc-manifest-amt-facilitator.yaml;
+# the rendered fragment carries them so the cortex dashboard can render
+# accurate provenance ("amt-facilitator (in-process / claude-code)").
+
+id: amt-facilitator
+displayName: AMT Facilitator
+persona: ~/.config/cortex/personas/amt-facilitator.md
+# `roles:` is intentionally absent — AgentSchema.roles[] was retired at the
+# v2.0.0 cutover (cortex#297) and authorization now lives on policy.principals[].
+# AMT Facilitator's "zero-tools" boundary is enforced by its persona + the
+# in-process harness; it transforms text→JSON only and mints nothing.
+trust: [luna]
+
+# Known-principal rooms only — no openOnboarding needed.
+# This agent is called from the AMT web surface (WEB-2); the principal (luna)
+# dispatches to it via the work stack's policy.  Unmapped senders are already
+# hard-blocked by the policy engine.
+
+# Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
+# Headless — no Discord binding. This agent is dispatched by the work stack's
+# runner (via the AMT web surface, WEB-2). `presence: {}` is the required
+# empty-presence declaration for a headless in-process agent (cortex#245).
+presence: {}
+
+# Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - chat                  # AMT grill-with-docs conversational dispatch
