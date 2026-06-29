@@ -913,6 +913,32 @@ export const AgentSchema = z.object({
    * `openOnboarding` is not set.
    */
   openOnboardingAllowedTools: z.array(z.string().min(1)).optional(),
+  /**
+   * WEB-2 / B1 — per-agent structural tool confinement. When set, these tool
+   * names are added to `effectiveDisallowed` for EVERY CC session this agent
+   * runs, regardless of the sender's policy tool grants.
+   *
+   * Unlike the policy-based confinement path (which inverts `tool.*` capability
+   * grants from `CLAUDE_TOOL_INVENTORY`), this explicit list is authoritative at
+   * the agent-declaration layer — no policy grant can widen it. Intended for
+   * zero-tool facilitator agents (e.g. amt-facilitator) whose inbound messages
+   * carry untrusted content and MUST NOT drive host execution.
+   *
+   * Mirrors grill.ts's explicit `--disallowedTools` DENY list on the brain-call
+   * path. Optional: when absent, no per-agent tools are added to the deny set.
+   */
+  agentDisallowedTools: z.array(z.string().min(1)).optional(),
+  /**
+   * WEB-2 / B1 — when `true`, adds `--strict-mcp-config` to the CC session args
+   * for this agent. Prevents the agent from inheriting MCP tools from the
+   * principal's `~/.claude/settings.json` or project-level `CLAUDE.md`.
+   *
+   * Required for a complete zero-tool airgap: without it MCP tools (`mcp__*`)
+   * remain accessible even when all 14 known CC tools appear in
+   * `agentDisallowedTools`. Mirrors grill.ts's `--strict-mcp-config` flag.
+   * Default `false`/absent.
+   */
+  strictMcpConfig: z.boolean().optional(),
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

@@ -14,9 +14,7 @@
 #     → drops personas/amt-facilitator.md → ~/.config/cortex/personas/amt-facilitator.md
 #     → drops agents.d/amt-facilitator.yaml → ~/.config/cortex/agents.d/amt-facilitator.yaml
 #     → signals cortex reload              → cortex hot-reloads; AMT Facilitator appears
-#     → (no NATS creds issued — in-process agent shares the stack's bus identity.
-#        Zero-tool airgap: the persona declares allowedTools: [] — the agent can
-#        only transform text→JSON, never touch host execution.)
+#     → (no NATS creds issued — in-process agent shares the stack's bus identity)
 #
 # PERSONA-AS-BRAIN:
 #   The AMT Facilitator uses the cortex in-process runner with its persona as
@@ -25,7 +23,15 @@
 #   persona body; grounding arrives via the inbound message (BYOG pattern).
 #
 # ZERO-TOOL AIRGAP (security design):
-#   - allowedTools: []  in the persona (CC --allowedTools empty = deny-all tools)
+#   - `agentDisallowedTools` in agents.d/amt-facilitator.yaml — the authoritative
+#     enforcement point. Merged into effectiveDisallowed at the dispatch layer
+#     (dispatch-handler.ts) for EVERY CC session this agent runs.
+#   - `strictMcpConfig: true` in the same fragment — adds --strict-mcp-config so
+#     the agent cannot inherit MCP tools from the principal's environment.
+#   - NOTE: `allowedTools: []` in the persona frontmatter is NOT enforcement —
+#     it is persona metadata only. Empty allowedTools in cc-session.ts means
+#     no --allowedTools flag is emitted, leaving CC allow-by-default. The actual
+#     airgap is the agentDisallowedTools + strictMcpConfig pair in agents.d/.
 #   - The inbound message embeds untrusted chat (SME transcript); a prompt-injected
 #     message must not drive tool or host execution.
 #   - The agent transforms text→JSON only.  All persistence (CONTEXT.md writes,

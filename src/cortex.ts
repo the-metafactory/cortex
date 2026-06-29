@@ -684,7 +684,7 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime" | "agentDisallowedTools" | "strictMcpConfig">,
   configDir: string,
 ): {
   id: string;
@@ -693,6 +693,8 @@ function targetAgentForDispatch(
   openOnboarding?: boolean;
   openOnboardingAllowedTools?: string[];
   capabilities?: readonly string[];
+  agentDisallowedTools?: string[];
+  strictMcpConfig?: boolean;
 } {
   const expandedPersona = expandTilde(agent.persona);
   return {
@@ -716,6 +718,13 @@ function targetAgentForDispatch(
     ...(agent.runtime?.capabilities !== undefined && {
       capabilities: agent.runtime.capabilities,
     }),
+    // WEB-2 / B1 — carry the per-agent structural tool-confinement fields so the
+    // dispatch handler can merge them into effectiveDisallowed and add
+    // --strict-mcp-config regardless of which dispatch path fires.
+    ...(agent.agentDisallowedTools !== undefined && {
+      agentDisallowedTools: agent.agentDisallowedTools,
+    }),
+    ...(agent.strictMcpConfig === true && { strictMcpConfig: true }),
   };
 }
 

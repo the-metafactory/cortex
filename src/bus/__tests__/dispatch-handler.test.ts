@@ -21,6 +21,7 @@ import type {
 } from "../../substrates/claude-code/harness";
 import type { CCSessionResult, CCSessionOpts } from "../../runner/cc-session";
 import { ORCHESTRATOR_CAPABILITY } from "../../runner/orchestrator-command";
+import { CLAUDE_TOOL_INVENTORY } from "../../common/policy/tool-inventory";
 import { readLogicalRouting } from "../../adapters/response-routing-delivery";
 
 /**
@@ -2453,5 +2454,59 @@ describe("DispatchHandler — dev-loop thread consolidation (cortex#1206 S2)", (
     expect(runtime.publishes).toHaveLength(0);
     expect(adapter.logicalTargetsResolved).toHaveLength(0);
     expect(adapter.sentMessages).toHaveLength(0);
+  });
+});
+
+// WEB-2 / B1 — per-agent structural tool confinement. agentDisallowedTools in
+// the DispatchTargetAgent config are merged into effectiveDisallowed AFTER
+// the policy-based toolRestrictions, so they are denied regardless of role or
+// network overrides. This is belt-and-braces atop the policy-layer floor tested
+// in resolve-access.test.ts (facilitator-role denies all 14 inventory tools).
+describe("agentDisallowedTools — WEB-2/B1 per-agent structural confinement (cortex#1312)", () => {
+  test("agentDisallowedTools are merged into disallowedTools passed to every CCSession", async () => {
+    let capturedDisallowed: string[] = [];
+    const factory: CCSessionFactory = (opts) => {
+      capturedDisallowed = [...(opts.disallowedTools ?? [])];
+      const session: CCSessionLike = {
+        start() { return session; },
+        async wait(): Promise<CCSessionResult> {
+          return { success: true, response: "ok", exitCode: 0, durationMs: 1, sessionId: "test-sess" };
+        },
+      };
+      return session;
+    };
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+    // Simulate facilitator-role: all 14 inventory tools denied by policy inversion.
+    // This is the access decision resolvePolicyAccess would return for a principal
+    // whose role holds no tool.* capabilities (see resolve-access.test.ts counterpart).
+    adapter.accessDecision = {
+      allowed: true,
+      features: { chat: true, async: false, team: false },
+      toolRestrictions: [...CLAUDE_TOOL_INVENTORY],
+      bashGuard: true,
+    };
+
+    await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+      id: "amt-facilitator",
+      displayName: "AMT Facilitator",
+      // Per-agent extras beyond the policy inventory — task-dispatch tool
+      // and exit-plan-mode are not in CLAUDE_TOOL_INVENTORY but are still
+      // CC-available; agentDisallowedTools adds them to the deny set explicitly.
+      agentDisallowedTools: ["Task", "ExitPlanMode"],
+    });
+
+    // All 14 policy-layer inventory denials must reach the session.
+    for (const tool of CLAUDE_TOOL_INVENTORY) {
+      expect(capturedDisallowed).toContain(tool);
+    }
+    // Per-agent extras must also be present — belt-and-braces beyond the inventory.
+    expect(capturedDisallowed).toContain("Task");
+    expect(capturedDisallowed).toContain("ExitPlanMode");
+    await handler.shutdown();
   });
 });

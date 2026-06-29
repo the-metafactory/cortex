@@ -546,3 +546,57 @@ describe("isOperatorPrincipal", () => {
     expect(isOperatorPrincipal("discord", "1134325176796987522", undefined, undefined)).toBe(false);
   });
 });
+
+// WEB-2 / B1 — zero-tool airgap: the facilitator-role principal profile mirrors
+// the amt-facilitator principal in ~/.config/cortex/work/stacks/work.yaml.
+// It holds keyword.chat only — no tool.* capabilities — so every CLAUDE_TOOL_INVENTORY
+// entry lands in toolRestrictions.  This is the policy-layer floor of the airgap;
+// the dispatch layer then adds agentDisallowedTools (Task, ExitPlanMode) on top.
+describe("resolvePolicyAccess — facilitator-role: zero-tool policy confinement (WEB-2/B1)", () => {
+  const FACILITATOR_POLICY: Policy = {
+    principals: [
+      {
+        id: "amt-facilitator",
+        home_principal: "andreas",
+        home_stack: "andreas/work",
+        role: ["facilitator-role"],
+        trust: [],
+        platform_ids: { discord: ["amt-facilitator-test-id"] },
+      },
+    ],
+    roles: [
+      {
+        // Mirrors policy.roles[facilitator-role] in work.yaml: keyword.chat ONLY,
+        // no tool.* capabilities → full CLAUDE_TOOL_INVENTORY denied by inversion.
+        id: "facilitator-role",
+        capabilities: ["keyword.chat"],
+      },
+    ],
+  };
+
+  test("all 14 CLAUDE_TOOL_INVENTORY tools land in toolRestrictions (deny-all via policy inversion)", () => {
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "amt-facilitator-test-id" }),
+      ...buildHarness(FACILITATOR_POLICY),
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.features.chat).toBe(true);
+    // toolRestrictions must exactly equal the full inventory — nothing granted, nothing slips through.
+    expect(result.toolRestrictions).toEqual([...CLAUDE_TOOL_INVENTORY]);
+    // Spot-check the high-impact tools explicitly.
+    for (const tool of ["Bash", "Edit", "Write", "Read", "Grep", "Glob", "Agent", "Skill", "WebFetch", "WebSearch"]) {
+      expect(result.toolRestrictions).toContain(tool);
+    }
+  });
+
+  test("facilitator-role has no operator short-circuit — async and team stay false", () => {
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "amt-facilitator-test-id" }),
+      ...buildHarness(FACILITATOR_POLICY),
+    });
+    expect(result.features.async).toBe(false);
+    expect(result.features.team).toBe(false);
+    // Not an operator → not trusted (prompt-injection filter stays armed)
+    expect(result.trusted).toBeUndefined();
+  });
+});

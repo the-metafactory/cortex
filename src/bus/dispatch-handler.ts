@@ -116,6 +116,20 @@ interface DispatchTargetAgent {
    * and never for a chat agent. Absent/empty → no orchestrator branch.
    */
   capabilities?: readonly string[];
+  /**
+   * WEB-2 / B1 — per-agent structural tool confinement. When set, these tool
+   * names are merged into effectiveDisallowed for EVERY CC session this agent
+   * runs, regardless of the sender's policy tool grants. Set in
+   * `agents.d/<id>.yaml` or the inline `agents:` block as `agentDisallowedTools`.
+   */
+  agentDisallowedTools?: string[];
+  /**
+   * WEB-2 / B1 — when true, `--strict-mcp-config` is added to the CC session
+   * argv so the agent cannot inherit MCP tools from the principal's
+   * `~/.claude/settings.json` or any project-level CLAUDE.md. Required for a
+   * complete zero-tool airgap alongside `agentDisallowedTools`.
+   */
+  strictMcpConfig?: boolean;
 }
 
 export interface DispatchHandlerOpts {
@@ -896,6 +910,16 @@ export class DispatchHandler extends EventEmitter {
         ? access.toolRestrictions
         : [...new Set([...globalDisallowed, ...networkDisallowed])];
 
+      // WEB-2 / B1 — per-agent structural confinement. Merged after
+      // policy-based toolRestrictions so they're denied regardless of role or
+      // network overrides. Mirrors grill.ts's explicit --disallowedTools list
+      // on the brain-call path.
+      if (targetAgent?.agentDisallowedTools?.length) {
+        for (const t of targetAgent.agentDisallowedTools) {
+          if (!effectiveDisallowed.includes(t)) effectiveDisallowed.push(t);
+        }
+      }
+
       // cortex#1167 review — PATH-INDEPENDENT tool allowlist. `access.allowedTools`
       // (set only by the anon open-onboarding path) takes precedence over the
       // config default on EVERY path: the bus path (via the publish payload
@@ -950,6 +974,12 @@ export class DispatchHandler extends EventEmitter {
         : undefined;
       const principal = msg.authorName;
 
+      // WEB-2 / B1 — per-agent --strict-mcp-config. Computed alongside
+      // effectiveDisallowed so all dispatch paths (bus sync, direct sync,
+      // async, team) carry it uniformly via the effectiveAdditionalArgs param.
+      const effectiveAdditionalArgs = targetAgent?.strictMcpConfig === true
+        ? [...this.config.claude.additionalArgs, "--strict-mcp-config"]
+        : this.config.claude.additionalArgs;
 
       // 11b. Direction A Stage 4-B (cortex#409) — chat/direct dispatches
       // take the canonical bus-mediated path by default. Async + team
@@ -975,7 +1005,7 @@ export class DispatchHandler extends EventEmitter {
           allowedSkills: skillGrants,
           timeoutMs: this.config.claude.timeoutMs,
           cwd: effectiveCwd,
-          additionalArgs: this.config.claude.additionalArgs,
+          additionalArgs: effectiveAdditionalArgs,
           channel: effectiveChannel,
           network: effectiveNetwork,
           project: groveProject,
@@ -1001,13 +1031,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs);
           break;
       }
     } catch (error) {
@@ -1047,6 +1077,8 @@ export class DispatchHandler extends EventEmitter {
     allowedSkills?: string[],
     /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
     allowedTools?: string[],
+    /** WEB-2 / B1 — pre-computed effective additionalArgs (may include --strict-mcp-config). */
+    additionalArgs?: string[],
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
 
@@ -1083,7 +1115,7 @@ export class DispatchHandler extends EventEmitter {
       agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.timeoutMs,
-      additionalArgs: this.config.claude.additionalArgs,
+      additionalArgs: additionalArgs ?? this.config.claude.additionalArgs,
       resumeSessionId,
       allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
@@ -1386,6 +1418,8 @@ export class DispatchHandler extends EventEmitter {
     allowedSkills?: string[],
     /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
     allowedTools?: string[],
+    /** WEB-2 / B1 — pre-computed effective additionalArgs (may include --strict-mcp-config). */
+    additionalArgs?: string[],
   ): Promise<void> {
     const taskId = `task-${randomUUID()}`;
 
@@ -1403,7 +1437,7 @@ export class DispatchHandler extends EventEmitter {
       agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.asyncTimeoutMs,
-      additionalArgs: this.config.claude.additionalArgs,
+      additionalArgs: additionalArgs ?? this.config.claude.additionalArgs,
       resumeSessionId,
       allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
@@ -1520,6 +1554,8 @@ export class DispatchHandler extends EventEmitter {
     allowedSkills?: string[],
     /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
     allowedTools?: string[],
+    /** WEB-2 / B1 — pre-computed effective additionalArgs (may include --strict-mcp-config). */
+    additionalArgs?: string[],
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
 
@@ -1539,7 +1575,7 @@ export class DispatchHandler extends EventEmitter {
         { name: "creative", prompt: "Creative and lateral thinking — explore unconventional angles and connections" },
         { name: "critic", prompt: "Critical evaluation — identify weaknesses, counterarguments, and risks" },
       ],
-      additionalArgs: this.config.claude.additionalArgs,
+      additionalArgs: additionalArgs ?? this.config.claude.additionalArgs,
       allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),

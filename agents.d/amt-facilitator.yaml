@@ -1,7 +1,7 @@
 # ~/.config/cortex/agents.d/amt-facilitator.yaml
 #
 # AMT Facilitator — domain-language grilling concierge for the Northpower
-# Asset Management Transformation (Maximo) programme (WEB-2, cortex#1xxx)
+# Asset Management Transformation (Maximo) programme (WEB-2, cortex#1312)
 #
 # This fragment is rendered by `arc install amt-facilitator` into the
 # installing principal's `~/.config/cortex/agents.d/amt-facilitator.yaml`.
@@ -22,8 +22,6 @@ displayName: AMT Facilitator
 persona: ~/.config/cortex/personas/amt-facilitator.md
 # `roles:` is intentionally absent — AgentSchema.roles[] was retired at the
 # v2.0.0 cutover (cortex#297) and authorization now lives on policy.principals[].
-# AMT Facilitator's "zero-tools" boundary is enforced by its persona + the
-# in-process harness; it transforms text→JSON only and mints nothing.
 trust: [luna]
 
 # Known-principal rooms only — no openOnboarding needed.
@@ -42,3 +40,37 @@ runtime:
   mode: in-process
   capabilities:
     - chat                  # AMT grill-with-docs conversational dispatch
+
+# WEB-2 / B1 — structural tool confinement enforced at the dispatch layer.
+#
+# `agentDisallowedTools` is merged into effectiveDisallowed for EVERY CC session
+# this agent runs (see dispatch-handler.ts). It is the authoritative enforcement
+# point: policy-based tool-inversion (facilitator-role carries no `tool.*`
+# capabilities, so all 14 CLAUDE_TOOL_INVENTORY tools are denied via
+# toolRestrictions) covers known CC tools, but cannot deny MCP tools without
+# --strict-mcp-config.
+#
+# This list mirrors grill.ts's explicit DENY list on the brain-call path and
+# extends it with the full CLAUDE_TOOL_INVENTORY for belt-and-suspenders.
+#
+# `strictMcpConfig: true` adds --strict-mcp-config to the CC session argv,
+# preventing the agent from inheriting MCP tools from the principal's
+# ~/.claude/settings.json or any project-level CLAUDE.md.
+agentDisallowedTools:
+  - Bash
+  - Edit
+  - Write
+  - NotebookEdit
+  - Read
+  - Glob
+  - Grep
+  - WebFetch
+  - WebSearch
+  - Task
+  - Agent
+  - Skill
+  - ExitPlanMode
+  - TodoWrite
+  - BashOutput
+  - KillShell
+strictMcpConfig: true

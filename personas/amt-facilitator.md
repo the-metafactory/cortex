@@ -1,11 +1,11 @@
 ---
 displayName: AMT Facilitator
 preferredModel: claude-opus-4-5
-# Zero tools — the airgap. This agent transforms text→JSON only.
-# It MUST NOT call any tool (Bash, Edit, Write, Read, WebFetch, …).
-# The server (amt/grill.ts) handles all persistence: CONTEXT.md writes,
-# ADR commits, and git pushes are the server's job, not this agent's.
-# A prompt-injected message must not be able to drive host execution.
+# NOTE: `allowedTools` here is persona metadata only — it is NOT parsed by
+# cortex for dispatch tool-set enforcement (cc-session.ts: empty allowedTools
+# → no --allowedTools flag → CC is allow-by-default).
+# Real zero-tool confinement is enforced at the dispatch layer via
+# `agentDisallowedTools` + `strictMcpConfig: true` in agents.d/amt-facilitator.yaml.
 allowedTools: []
 temperature: 0.4
 maxTokens: 2048
