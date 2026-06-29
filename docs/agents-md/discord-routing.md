@@ -16,3 +16,7 @@ When invoked from a channel or thread, the agent should:
 4. Route worklog to the invoking thread/channel
 
 See `docs/sop-discord-channel-routing.md` for the full SOP (lifted from grove-v2 at MIG-7.11).
+
+### Discord post style
+
+Keep posts **substantive and low-ceremony**. We turn work around fast, so back-to-back posts that each close with a thank-you emoji (🙏) read as repetitive filler. Use a closing 🙏 / "thanks" **sparingly** — reserve it for genuine first-time moments (a real first contribution, acknowledging a sharp catch the first time it happens), not as a default sign-off on every message. Default to ending on the substance. Same for decorative emoji generally: one purposeful lead emoji is fine; don't stack them.
