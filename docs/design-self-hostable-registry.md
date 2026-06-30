@@ -156,10 +156,12 @@ There are two authority modes, and the verifier MUST NOT blur them:
    closed with `403 admin_pubkeys_requires_global_admin`.
 2. **Self-hosted manifest mode (this design).** There is no global admin above a
    sovereign network. The authority root is the joiner's already-pinned
-   `trust_anchors[]`, resolved to Ed25519 verification keys. A manifest may
-   rotate or change `admin_dids[]` only if the update is signed by an
-   already-pinned anchor, then explicitly persisted as the new pin set. A
-   self-declared first manifest cannot bootstrap its own admin set.
+   `trust_anchors[]`, resolved to Ed25519 verification keys. Ordinary 1-of-N
+   manifest signing may update roster/topology, but it MUST NOT rotate or change
+   `admin_dids[]` / `trust_anchors[]`. Admin-set changes require an explicit
+   local re-pin approval (or a future M-of-N admin-set-change proof) before the
+   new set is persisted. A self-declared first manifest cannot bootstrap its own
+   admin set.
 
 That second mode is coherent, but it is a different privilege model from the
 hosted registry's global-admin anti-self-escalation rule. Slice 1 must therefore
@@ -181,7 +183,9 @@ key-continuity model before the offline verifier is treated as the trust model.
   automatic DNS/HTTPS update.
 - **1-of-N signing blast radius:** v1 accepts a manifest signed by any one
   pinned admin DID. One compromised admin key can forge the whole manifest and
-  roster until expiry/re-pin. M-of-N admin signing is the future hardening path.
+  roster until expiry/re-pin, but cannot persist itself as the new admin set
+  without explicit local re-pin approval. M-of-N admin signing is the future
+  hardening path.
 - **`network_id` is anchor-relative:** once manifests are self-hosted, two
   networks can both claim `network_id: acme` under different admin anchors. This
   is not a trust break, but config and UX must treat `network_id` as meaningful
