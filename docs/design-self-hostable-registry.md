@@ -4,9 +4,9 @@
 **Issue:** #1322 · **Parent:** #110 · **Depends on:** #1321 (per-network admin in schema)
 **Refs:** companion research PR #1319, ADR-0003 (network-join control plane), ADR-0013 (sovereign federation), ADR-0015 (admission mints nothing), ADR-0020 (`docs/adr/0020-per-network-admin-authority.md` / #1321), ADR-0005 (session-interior / cortex↔signal boundary), CONTEXT.md §Joining a network / §boundary-with-signal
 
-> SPECIFY+PLAN artifact for #1322. The design's open questions have since been
-> **resolved with JC (2026-06-29)** — see the Decisions section below. #1321 has
-> merged; **implementation still waits on JC/Luna approving this design.**
+> SPECIFY+PLAN artifact for #1322. The current design choices are captured in
+> the Decisions section below for review. #1321 has merged; **implementation
+> still waits on JC/Luna approving this design.**
 
 ## Problem
 
@@ -38,9 +38,9 @@ central URL, and verifies a **portable signed manifest** offline.
 - Agent/peer **presence** + the MC Network view — that's cortex's own `agent`-domain
   lifecycle (`agent.{online|heartbeat|offline|capabilities-changed}`, CONTEXT.md
   §Agent presence), not this registry spec. Session-interior / trace observability
-  is signal's domain (CONTEXT.md §boundary-with-signal, ADR-0005). This design is
+  is owned by signal (CONTEXT.md §boundary-with-signal, ADR-0005). This design is
   cortex control-plane only: a stack's own join/anchor config.
-- An admission-credential / offline-roster-proof follow-on (see below) — separate scope.
+- An offline-roster-proof follow-on (see below) — separate scope.
 
 ## Design
 
@@ -136,7 +136,7 @@ trust model.
 - **Verification:** offline signature check against pinned anchors. No hosted
   service must be online or honest for a cached manifest to be trusted.
 - **Revocation/freshness:** `expires_at` + re-fetch; short manifest lifetimes
-  over online revocation. (Admission credentials, below, sharpen this.)
+  over online revocation.
 
 ### Admin-set authority and ADR-0020
 
@@ -189,15 +189,21 @@ stack's own anchor/join config, not network-wide observability.
 
 ## Dependencies & staging
 
-1. **#1321** (per-network admin) — prerequisite: the registry now stores the raw
+1. **Contract amendment** — update CONTEXT.md and/or ADR-0003 before
+   implementation so `policy.federated.networks[].{trust_anchors,manifest_sources}`
+   is part of the authoritative join/config contract rather than a parallel
+   trust-anchor model.
+2. **#1321** (per-network admin) — prerequisite: the registry now stores the raw
    per-network admin Ed25519 pubkeys. Stage 2 adds the DID wrapper/adapter that
    resolves a pinned admin DID to those bytes for manifest verification.
-2. Manifest schema + offline verifier (generalise the existing registry response
-   verifier to "verify against any pinned anchor DID").
-3. `policy.federated.trust_anchors` + `manifest_sources` config (back-compat with
-   `registry.{url,pubkey}`).
-4. Multi-source fetch with ordered fallback (generalises DD-10 cached-fallback).
-5. (Optional, later) per-principal `.well-known`/DNS endpoint publication.
+3. Manifest schema + offline verifier (generalise the existing registry response
+   verifier to "verify against a configured per-network admin trust-anchor DID").
+4. Per-network `policy.federated.networks[].{trust_anchors,manifest_sources}`
+   config (back-compat with `registry.{url,pubkey}`).
+5. Multi-source fetch that verifies reachable sources, selects the newest valid
+   `issued_at`, and falls back to cache only when no valid source is reachable
+   (generalises DD-10 cached-fallback).
+6. (Optional, later) per-principal `.well-known`/DNS endpoint publication.
 
 ## Follow-on (separate issue, NOT this scope)
 
@@ -217,14 +223,16 @@ bearer credential.
 
 ## Constraint from the #1321 implementation
 
-Both #1321 gates keep the `REGISTRY_ADMIN_PUBKEYS`-empty → **503 fail-closed
-FIRST** ordering (`src/services/network-registry/src/routes/networks.ts`,
+Both hosted-registry gates keep the `REGISTRY_ADMIN_PUBKEYS`-empty → **503
+fail-closed FIRST** ordering (`src/services/network-registry/src/routes/networks.ts`,
 `src/services/network-registry/src/routes/admission-requests.ts`; covered by
-`src/services/network-registry/__tests__/admission-requests.test.ts` and
-`src/services/network-registry/__tests__/per-network-admin.test.ts`): a
-per-network admin cannot operate on a registry with no **global** admin
-configured. That is correct for the hosted `metafactory` registry — but a
-**self-hostable registry is exactly the no-global-admin case**.
+`src/services/network-registry/__tests__/network-create.test.ts` and
+`src/services/network-registry/__tests__/admission-requests.test.ts`). Separately,
+#1321's per-network admin authorization is covered by
+`src/services/network-registry/__tests__/per-network-admin.test.ts`: a per-network
+admin cannot operate on a hosted registry with no **global** admin configured.
+That is correct for the hosted `metafactory` registry — but a **self-hostable
+registry is exactly the no-global-admin case**.
 This design MUST therefore relax that coupling: on a self-hosted manifest/registry,
 there is no global super-admin above the network. The fail-closed condition becomes
 "no pinned trust anchor configured" rather than "no global admin configured". The
@@ -232,7 +240,7 @@ trust anchor is the joiner's pinned per-network admin DID/key set, and changes t
 that set follow the key-continuity rule in [Admin-set authority and ADR-0020](#admin-set-authority-and-adr-0020).
 Carry this into the manifest-verifier + any self-host registry mode.
 
-## Decisions (resolved with JC, 2026-06-29)
+## Decisions (captured for review, 2026-06-29)
 
 1. **DID method — `did:web` for durable principals/admins; `did:mf` remains the
    stack identity.** Principals get rotatable, domain-anchored
@@ -255,7 +263,7 @@ Carry this into the manifest-verifier + any self-host registry mode.
    stays a default source throughout (back-compat).
 3. **Manifest lifetime (`expires_at`)** — **24h, tunable per network**
    (short enough to bound revocation latency, long enough to avoid churn).
-   Revisit alongside the admission-credentials follow-on.
+   Revisit alongside the offline-roster-proof follow-on.
 4. **Per-principal `.well-known`/DNS endpoint publication** — **deferred** until a
    principal actually needs to relocate a stack endpoint (not in the first slices).
 
