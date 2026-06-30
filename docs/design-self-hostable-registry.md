@@ -66,9 +66,10 @@ NetworkManifest {
 Key shift from today: the manifest is signed by a **network-admin DID** whose
 resolved Ed25519 key matches the pinned network-admin key material, so it no
 longer *requires* the hosted registry's signing key as a trust anchor — that key
-is transport / back-compat metadata, never trust. The manifest can be served from
-**anywhere**: git, an HTTPS file, a NATS object-store bucket, or the existing
-hosted registry. Verification is **offline** against the pinned admin DID set.
+is transport / back-compat metadata, never trust. The first manifest sources are
+git/HTTPS files or the existing hosted registry; later source adapters can add
+NATS object-store buckets or other transports without changing the signature
+contract. Verification is **offline** against the pinned admin DID set.
 
 The manifest roster is a signed **discovery/recognition cache only**. A roster
 entry says "this principal/stack is recognized as admitted by this network's
@@ -105,8 +106,10 @@ stack opts into `trust_anchors[]`. All reachable sources are fetched and
 verified; **freshness wins over reachability**: the manifest with the
 newest valid `issued_at` is selected, so a reachable source serving an older
 (still-unexpired) manifest cannot shadow a newer one. Each client stores the
-newest accepted `issued_at` per `(network_id, trust_anchor)` and rejects any
-older reachable manifest unless an explicit rollback override is configured.
+newest accepted `issued_at` per `(network_id, admin_set_id)`, where
+`admin_set_id` is derived from the canonical pinned admin-anchor set, and rejects
+any older reachable manifest signed by any pinned anchor in that set unless an
+explicit rollback override is configured.
 Cache is used only when no valid source is reachable, and only if the cached
 manifest is unexpired and satisfies the same monotonic `issued_at` floor — DD-10
 cached-fallback covers *unreachable*, not *stale-but-up*. If two valid reachable
@@ -171,7 +174,8 @@ key-continuity model before the offline verifier is treated as the trust model.
 - **Rollback window:** a joiner with no stored monotonic floor (first use, empty
   cache, or explicit admin override) can still accept an older-but-unexpired
   manifest. Once a newer manifest has been accepted for a `(network_id,
-  trust_anchor)`, older manifests fail closed until an explicit rollback override.
+  admin_set_id)`, older manifests from any pinned anchor in that admin set fail
+  closed until an explicit rollback override.
 - **Rotation is explicit:** `did:web` names are not implicitly re-resolved for
   trust. Key/DID-document-hash rotation is an out-of-band signed re-pin, not an
   automatic DNS/HTTPS update.
@@ -284,7 +288,8 @@ Carry this into the manifest-verifier + any self-host registry mode.
    with `registry.{url,pubkey}`.
 3. **git/HTTPS manifest fetcher** — fetch reachable sources, verify offline
    against pinned anchors, select the newest valid `issued_at`, persist the
-   newest accepted `issued_at` per `(network_id, trust_anchor)`, reject older
-   manifests unless an explicit rollback override is configured, and use only an
-   unexpired cache when no valid source is reachable (generalises DD-10).
+   newest accepted `issued_at` per `(network_id, admin_set_id)`, reject older
+   manifests from any pinned anchor in that admin set unless an explicit rollback
+   override is configured, and use only an unexpired cache when no valid source
+   is reachable (generalises DD-10).
 4. (later) NATS object-store source; per-principal `.well-known`/DNS.
