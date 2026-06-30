@@ -407,8 +407,10 @@ export async function provisionStack(
   // 3.5 (cortex#1333) — ensure the SYS (system) account; see the rationale on the
   //     "system account" plan item above. Gated on state.systemAccount: mint only
   //     when config records no system_account, otherwise skip — this gate is the
-  //     idempotency, no arc-side addAccount dedup is assumed. The export below then
-  //     wires system_account[_jwt] for make-live/join to render.
+  //     idempotency, no arc-side addAccount dedup is assumed. The dedicated SYS
+  //     export at step 5.6 (gated on the SAME condition) writes system_account[_jwt]
+  //     to config even when the operator/account JWTs are already present — see the
+  //     blocker that decoupling fixed (cortex#1335).
   const sysNeeded = force || state.systemAccount === undefined;
   if (sysNeeded) {
     const sys = await ports.operator.addAccount({ name: inputs.systemAccountName });
@@ -471,32 +473,38 @@ export async function provisionStack(
       );
     }
     accountJwt = acctRes.jwt;
+    steps.push(`operator-mode JWTs exported: operator + ${inputs.federationAccountName}`);
+  } else {
+    steps.push("operator-mode JWTs present in config (untouched)");
+  }
 
-    // SYS was ensured above (cortex#1333 — JetStream operator-mode requires it), so
-    // it MUST export now. The `notFound` branch below is kept only as a defensive
-    // guard against an arc store inconsistency — it is no longer the happy path.
+  // 5.6 (cortex#1335 blocker) — the SYS export is gated INDEPENDENTLY of the
+  // operator/account JWT export. An older provisioned stack can have
+  // operatorModeJwtsPresent === true (JWTs already in config) yet still lack
+  // system_account; folding SYS into jwtExportNeeded would mint SYS at step 3.5 but
+  // then SKIP the only write of system_account, leaving the JetStream boot-fatal in
+  // place. Gate on the SYS config field — the same condition that minted it above —
+  // so SYS is exported and written exactly when (and only when) config lacks it.
+  const sysExportNeeded = force || state.systemAccount === undefined;
+  if (sysExportNeeded) {
     const sysRes = await ports.export.exportSystem({ name: inputs.systemAccountName });
     if (sysRes.ok) {
       systemAccount = sysRes.pubKey;
       systemAccountJwt = sysRes.jwt;
-      steps.push(
-        `operator-mode JWTs exported: operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system)`,
-      );
+      steps.push(`system_account exported + wired: ${inputs.systemAccountName}`);
     } else if (sysRes.notFound) {
+      // SYS was ensured at step 3.5, so not-found here implies an arc store
+      // inconsistency — surface it loudly rather than silently leaving config short
+      // (a stack that boots JetStream would still hit the boot-fatal).
       steps.push(
-        `operator-mode JWTs exported: operator + ${inputs.federationAccountName} ` +
-          `(no ${inputs.systemAccountName} account — system_account skipped, optional)`,
+        `WARNING: ${inputs.systemAccountName} not found at export despite ensure — ` +
+          `system_account NOT written; JetStream boot-fatal may persist`,
       );
     } else {
-      // A non-"not-found" arc failure on the OPTIONAL system export: soft-skip
-      // with a visible warning rather than aborting the whole provision.
       steps.push(
-        `operator-mode JWTs exported: operator + ${inputs.federationAccountName} ` +
-          `(WARNING: system export skipped — ${sysRes.reason})`,
+        `WARNING: system export skipped — ${sysRes.reason}; system_account NOT written`,
       );
     }
-  } else {
-    steps.push("operator-mode JWTs present in config (untouched)");
   }
 
   // 6. Write the resolved nats_infra fields back to the stack config.

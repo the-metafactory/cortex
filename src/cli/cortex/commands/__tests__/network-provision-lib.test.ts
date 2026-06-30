@@ -46,7 +46,10 @@ function makePorts(overrides?: {
     },
     addAccount: async ({ name }) => {
       calls.push(`add-account:${name}`);
-      const pubKey = name.endsWith("_AGENTS") ? AGENTS_PUB : name === "SYS" ? SYS_PUB : FED_PUB;
+      let pubKey: string;
+      if (name.endsWith("_AGENTS")) pubKey = AGENTS_PUB;
+      else if (name === "SYS") pubKey = SYS_PUB;
+      else pubKey = FED_PUB;
       return { ok: true, account: name, pubKey, created: true, alreadyExisted: false };
     },
     ...overrides?.operator,
@@ -310,16 +313,19 @@ describe("provisionStack — cortex#1265 operator-mode JWT export", () => {
     });
   });
 
-  test("an ABSENT SYS account is a clean skip — operator+account still written", async () => {
+  test("SYS missing at export despite ensure → WARNS, omits (never clobbers) system fields", async () => {
+    // SYS is ensured at step 3.5 (cortex#1333), so exportSystem reporting it absent
+    // is an arc store inconsistency — surface it loudly, don't treat it as a benign
+    // optional skip (the old, pre-#1333 semantic).
     const { ports, calls, written } = makePorts({ systemAbsent: true });
     const res = await provisionStack(baseInputs({ apply: true }), ports);
     expect(res.ok).toBe(true);
     expect(calls).toContain("export-system:SYS");
     expect(written[0]).toMatchObject({ operatorJwt: OP_JWT, accountJwt: FED_JWT });
-    // system fields omitted (not clobbered) when SYS is absent.
+    // system fields omitted (not clobbered) when the export can't resolve SYS.
     expect(written[0]?.systemAccount).toBeUndefined();
     expect(written[0]?.systemAccountJwt).toBeUndefined();
-    expect(res.steps.join("\n")).toContain("system_account skipped");
+    expect(res.steps.join("\n")).toContain("not found at export despite ensure");
   });
 
   test("idempotent: JWTs already in config → NO export calls (ensure-shaped)", async () => {
@@ -327,13 +333,39 @@ describe("provisionStack — cortex#1265 operator-mode JWT export", () => {
     const res = await provisionStack(
       baseInputs(
         { apply: true },
-        { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, signingSeedExists: true, operatorModeJwtsPresent: true },
+        // a TRULY fully-provisioned stack — system_account present too, else SYS
+        // export must still fire (see the cortex#1335 blocker test below).
+        { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, systemAccount: SYS_PUB, signingSeedExists: true, operatorModeJwtsPresent: true },
       ),
       ports,
     );
     expect(res.ok).toBe(true);
     expect(calls.some((c) => c.startsWith("export-"))).toBe(false);
     expect(res.steps.join("\n")).toContain("operator-mode JWTs present in config (untouched)");
+  });
+
+  test("cortex#1335 blocker: JWTs present but NO system_account → SYS still exported + written", async () => {
+    // An older provisioned stack: operator/account JWTs already in config, but
+    // system_account was never minted. SYS provisioning must NOT be coupled to the
+    // JWT export gate — otherwise apply finishes without writing system_account and
+    // the JetStream boot-fatal survives the "fix".
+    const { ports, calls, written } = makePorts();
+    const res = await provisionStack(
+      baseInputs(
+        { apply: true },
+        { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, systemAccount: undefined, signingSeedExists: true, operatorModeJwtsPresent: true },
+      ),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    // operator/account JWT export stays skipped (present, untouched)...
+    expect(calls).not.toContain("export-operator:OP_ANDREAS");
+    expect(res.steps.join("\n")).toContain("operator-mode JWTs present in config (untouched)");
+    // ...but SYS is minted AND exported AND written — the decoupled gate.
+    expect(calls).toContain("add-account:SYS");
+    expect(calls).toContain("export-system:SYS");
+    expect(written[0]?.systemAccount).toBe(SYS_PUB);
+    expect(written[0]?.systemAccountJwt).toBe(SYS_JWT);
   });
 
   test("--force re-exports the JWTs even when already present", async () => {

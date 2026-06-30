@@ -119,7 +119,7 @@ function inputs(): ProvisionInputs {
     configPath: "~/.config/nats/work.conf",
     force: false,
     apply: true,
-    state: { federationAccount: undefined, agentsAccount: undefined, signingSeedExists: false, operatorModeJwtsPresent: false },
+    state: { federationAccount: undefined, agentsAccount: undefined, systemAccount: undefined, signingSeedExists: false, operatorModeJwtsPresent: false },
   };
 }
 
