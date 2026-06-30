@@ -63,16 +63,24 @@ stack config — which doesn't exist until §3.1 scaffolds it. On a fresh machin
 install (this section) → configure (§3) → re-run `arc upgrade Cortex` (or
 provision manually per §3.3) so the seed lands at the declared path.
 
-**Path B — from source:**
+**Path B — from source** (for contributors / the fork-and-PR workflow; Path A is
+the managed path for normal operation):
 
 ```bash
 git clone https://github.com/the-metafactory/cortex
 cd cortex
 bun install
+bun link          # puts `cortex` on PATH via ~/.bun/bin
+cortex --version  # confirm it resolves
 ```
 
-Run the daemon directly with `bun src/cortex.ts start --config <pointer>` or
-via an installed `cortex` binary. Verify with `bun test` and `bun run lint`.
+Run the daemon with `cortex start --config <pointer>` (or directly with
+`bun src/cortex.ts start --config <pointer>`). Verify with `bun test` and
+`bun run lint`.
+
+**Updating a from-source clone:** `cd cortex && git pull && bun install` — a clean
+fast-forward if you haven't modified anything. For an arc-managed install, update
+with `arc upgrade Cortex` instead (Path A).
 
 ## 3. Configure a stack
 
