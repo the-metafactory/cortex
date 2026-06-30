@@ -104,12 +104,15 @@ hosted-registry response verifier against the pinned registry pubkey until a
 stack opts into `trust_anchors[]`. All reachable sources are fetched and
 verified; **freshness wins over reachability**: the manifest with the
 newest valid `issued_at` is selected, so a reachable source serving an older
-(still-unexpired) manifest cannot shadow a newer one. Cache is used only when no
-valid source is reachable — DD-10 cached-fallback covers *unreachable*, not
-*stale-but-up*. If two valid reachable manifests have the same newest
-`issued_at`, their canonical payload bytes must match exactly; divergent
-same-freshness manifests fail closed as a split-brain signal. The hosted
-registry remains a valid (default) source.
+(still-unexpired) manifest cannot shadow a newer one. Each client stores the
+newest accepted `issued_at` per `(network_id, trust_anchor)` and rejects any
+older reachable manifest unless an explicit rollback override is configured.
+Cache is used only when no valid source is reachable, and only if the cached
+manifest is unexpired and satisfies the same monotonic `issued_at` floor — DD-10
+cached-fallback covers *unreachable*, not *stale-but-up*. If two valid reachable
+manifests have the same newest `issued_at`, their canonical payload bytes must
+match exactly; divergent same-freshness manifests fail closed as a split-brain
+signal. The hosted registry remains a valid (default) source.
 
 ### 3. Per-principal endpoint self-publication
 
@@ -134,9 +137,10 @@ trust model.
   signer semantics). Thin, replaceable, explicit — matching the RIR/DNS-root/CT
   pattern named in the problem framing above.
 - **Verification:** offline signature check against pinned anchors. No hosted
-  service must be online or honest for a cached manifest to be trusted.
+  service must be online or honest for an unexpired cached manifest at or above
+  the local monotonic `issued_at` floor to be trusted.
 - **Revocation/freshness:** `expires_at` + re-fetch; short manifest lifetimes
-  over online revocation.
+  over online revocation. Expired cached manifests fail closed.
 
 ### Admin-set authority and ADR-0020
 
@@ -164,9 +168,10 @@ key-continuity model before the offline verifier is treated as the trust model.
 - **Revocation latency:** offline pinning has no live revocation channel. The
   24h `expires_at` default is therefore the v1 compromise-recovery bound unless
   an admin performs an out-of-band re-pin sooner.
-- **Rollback window:** "freshness wins" only compares reachable valid sources.
-  A joiner that can reach only a malicious source can be rolled back to an
-  older-but-unexpired manifest inside the lifetime window.
+- **Rollback window:** a joiner with no stored monotonic floor (first use, empty
+  cache, or explicit admin override) can still accept an older-but-unexpired
+  manifest. Once a newer manifest has been accepted for a `(network_id,
+  trust_anchor)`, older manifests fail closed until an explicit rollback override.
 - **Rotation is explicit:** `did:web` names are not implicitly re-resolved for
   trust. Key/DID-document-hash rotation is an out-of-band signed re-pin, not an
   automatic DNS/HTTPS update.
@@ -278,6 +283,8 @@ Carry this into the manifest-verifier + any self-host registry mode.
    Ed25519 pubkeys or DID-document hashes) + `manifest_sources[]`, back-compat
    with `registry.{url,pubkey}`.
 3. **git/HTTPS manifest fetcher** — fetch reachable sources, verify offline
-   against pinned anchors, select the newest valid `issued_at`, and use cache only
-   when no valid source is reachable (generalises DD-10).
+   against pinned anchors, select the newest valid `issued_at`, persist the
+   newest accepted `issued_at` per `(network_id, trust_anchor)`, reject older
+   manifests unless an explicit rollback override is configured, and use only an
+   unexpired cache when no valid source is reachable (generalises DD-10).
 4. (later) NATS object-store source; per-principal `.well-known`/DNS.
