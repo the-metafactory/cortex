@@ -120,11 +120,14 @@ signal. The hosted registry remains a valid (default) source.
 ### 3. Per-principal endpoint self-publication
 
 Decouple stable identity from physical endpoint (the Matrix `.well-known`
-pattern): a principal publishes its current endpoint under its own control —
+pattern), but do not make DNS/HTTPS reachability authoritative. This is deferred
+until a principal needs endpoint relocation. A future endpoint record at
 `https://{principal-domain}/.well-known/metafactory/stack.json` or DNS
-`SRV _mf-leaf._tcp` + `TXT`. The manifest pins the **identity/keys**; the
-well-known/DNS record updates the **location** unilaterally. Optional and
-additive — hand-pinned peers (today's offline fallback) still work.
+`SRV _mf-leaf._tcp` + `TXT` MUST be a signed endpoint document bound to
+`network_id`, `principal_id`, stack DID, endpoint URL, `issued_at`, and
+`expires_at`, verified against the manifest-pinned stack signing key before it
+can update location. Unsigned well-known/DNS data is only a transport hint.
+Hand-pinned peers (today's offline fallback) still work.
 
 ### 4. No DHT, no gossip (yet)
 
