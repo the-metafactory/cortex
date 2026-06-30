@@ -14,6 +14,23 @@ The federation model (ADR-0013, Model B) is **sovereign**: every principal runs 
 
 ---
 
+## Core concepts: App vs principal vs slug
+
+**Three different kinds of thing.** A Discord **App**, a **principal**, and a **slug** are not variants of one idea — they are a *Discord object*, a *human identity*, and a *stack label* respectively. Conflating them is the most common onboarding stumble, so get them straight before the steps below.
+
+- **Discord App** — the bot identity in Discord; its token is what the stack authenticates with. **Scope:** one per stack instance, reused across guilds (the C-704 `guildId` filter isolates each stack). **How to choose:** name it after the assistant / stack, *not* after a server.
+- **principal** — the human the assistant answers to; the root of the trust and policy model. **Scope:** one human, one or more stacks. **How to choose:** a GitHub username is fine — stable, unique, something you won't want to rename.
+- **slug** — the label for *this* stack / deployment. It's the second subject segment (`local.{principal}.{slug}.…`) and the config dir name. **Scope:** one per stack. **How to choose:** name it for the scope it serves. `community`, `work`, `halden` are *examples, not reserved words* — `halden` is just a location handle (a Norwegian city). Don't reuse a CONTEXT.md scope term such as `public` for a closed stack.
+
+**Rule of thumb:**
+- **App name** — the assistant's public face: one, reused across servers.
+- **principal** — *you*: a GitHub handle is fine.
+- **slug** — *this stack's* private label: descriptive of THIS deployment.
+
+One bot identity (the App) can serve **N guilds** — you do **not** create a new App per Discord server. You create a second App only when you run a genuinely separate stack: different brain, different principal. See [`CONTEXT.md`](../CONTEXT.md#principals-stacks-networks) for the canonical glossary entries.
+
+---
+
 ## 2. The happy path, end to end
 
 This is the ordered sequence for a **new peer principal** joining an existing network. Both principals go through the same steps on their own side; the two irreducible two-party moments are called out explicitly in section 3.

@@ -70,6 +70,8 @@ understand each generated file, or to stand a stack up without the command.
 
 ### Step 0 — Choose a semantic slug
 
+> **New to App vs principal vs slug?** They're three different *kinds* of thing — a Discord object, a human identity, a stack label — and the most common onboarding stumble. Read the [Core concepts primer](sop-onboard-peer-principal.md#core-concepts-app-vs-principal-vs-slug) first.
+
 The slug is the second subject segment (`local.{principal}.{slug}.…`) and the config dir name. **Pick it for the scope it serves**, per `CONTEXT.md` §Scope — do **not** call a closed/federated stack `public` (the `public.` scope is the open IoAW square; a closed collaborator set is **federated**). e.g. `community`, `work`, `halden`.
 
 ### Step 1 — Generate the stack signing identity
