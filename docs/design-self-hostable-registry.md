@@ -103,8 +103,11 @@ a later schema variant). The legacy hosted-registry path remains a separate
 compatibility path: existing `registry: { url, pubkey }` pins continue to use the
 hosted-registry response verifier against the pinned registry pubkey until a
 stack opts into `trust_anchors[]`. All reachable sources are fetched and
-verified; **freshness wins over reachability**: the manifest with the
-newest valid `issued_at` is selected, so a reachable source serving an older
+verified; **freshness wins over reachability**: a manifest is time-valid only if
+`issued_at <= now + max_clock_skew`, `expires_at > now`, and
+`expires_at - issued_at <= max_manifest_ttl` from local per-network config
+(default 24h). Among time-valid manifests, the manifest with the newest valid
+`issued_at` is selected, so a reachable source serving an older
 (still-unexpired) manifest cannot shadow a newer one. Each client stores the
 newest accepted `issued_at` per `(network_id, admin_set_id)`, where
 `admin_set_id` is derived from the canonical pinned admin-anchor set, and rejects
@@ -174,8 +177,9 @@ key-continuity model before the offline verifier is treated as the trust model.
 ### Residual risks to carry into slice 1
 
 - **Revocation latency:** offline pinning has no live revocation channel. The
-  24h `expires_at` default is therefore the v1 compromise-recovery bound unless
-  an admin performs an out-of-band re-pin sooner.
+  local `max_manifest_ttl` default is therefore the v1 compromise-recovery bound:
+  the verifier rejects manifests whose `expires_at - issued_at` exceeds that
+  limit, unless an admin performs an out-of-band re-pin sooner.
 - **Rollback window:** a joiner with no stored monotonic floor (first use, empty
   cache, or explicit admin override) can still accept an older-but-unexpired
   manifest. Once a newer manifest has been accepted for a `(network_id,
@@ -277,9 +281,11 @@ Carry this into the manifest-verifier + any self-host registry mode.
    served from a git repo or any HTTPS host: simplest to stand up and review with
    normal diff/history tooling. NATS object store + others come later. The
    hosted registry stays a default source throughout (back-compat).
-3. **Manifest lifetime (`expires_at`)** — **24h, tunable per network**
-   (short enough to bound revocation latency, long enough to avoid churn).
-   Revisit alongside the offline-roster-proof follow-on.
+3. **Manifest lifetime (`expires_at`)** — local verifier `max_manifest_ttl`
+   defaults to **24h** and is tunable per network (short enough to bound
+   revocation latency, long enough to avoid churn). A manifest signer cannot
+   extend the accepted lifetime beyond that local cap. Revisit alongside the
+   offline-roster-proof follow-on.
 4. **Per-principal `.well-known`/DNS endpoint publication** — **deferred** until a
    principal actually needs to relocate a stack endpoint (not in the first slices).
 
@@ -294,9 +300,10 @@ Carry this into the manifest-verifier + any self-host registry mode.
    Ed25519 pubkeys or DID-document hashes) + `manifest_sources[]`, back-compat
    with `registry.{url,pubkey}`.
 3. **git/HTTPS manifest fetcher** — fetch reachable sources, verify offline
-   against pinned anchors, select the newest valid `issued_at`, persist the
-   newest accepted `issued_at` per `(network_id, admin_set_id)`, reject older
-   manifests from any pinned anchor in that admin set unless an explicit rollback
-   override is configured, and use only an unexpired cache when no valid source
-   is reachable (generalises DD-10).
+   against pinned anchors, reject future-dated manifests beyond `max_clock_skew`,
+   enforce the local `max_manifest_ttl`, select the newest valid `issued_at`,
+   persist the newest accepted `issued_at` per `(network_id, admin_set_id)`,
+   reject older manifests from any pinned anchor in that admin set unless an
+   explicit rollback override is configured, and use only an unexpired cache when
+   no valid source is reachable (generalises DD-10).
 4. (later) NATS object-store source; per-principal `.well-known`/DNS.
