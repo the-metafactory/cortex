@@ -33,7 +33,8 @@ central URL, and verifies a **portable signed manifest** offline.
 ## Non-goals
 
 - Abolishing the registry / pure trustless P2P.
-- A DHT (at tens of principals it degenerates to a full mesh — pure overhead).
+- A DHT in the first manifest slice; distributed lookup/gossip can be revisited
+  if multi-source manifests become a measured bottleneck.
 - Agent/peer **presence** + the MC Network view — that's cortex's own `agent`-domain
   lifecycle (`agent.{online|heartbeat|offline|capabilities-changed}`, CONTEXT.md
   §Agent presence), not this registry spec. Session-interior / trace observability
@@ -55,17 +56,17 @@ verifiable **offline** against pinned admin DIDs:
 NetworkManifest {
   network_id
   hub_url, leaf_port              // topology (today's descriptor)
-  admin_dids[]                    // the network's admins (from #1321 admin_pubkeys, as DIDs)
+  admin_dids[]                    // DID wrappers around #1321 admin_pubkeys
   roster[] { principal_id, stack_id, stack_signing_pubkey }   // discovery/recognition only (DD-5)
   issued_at, expires_at
   signature                       // by a network admin DID (not a hosted-registry key)
 }
 ```
 
-Key shift from today: the manifest is signed by a **network-admin DID** (the
-authority a joiner already trusts via #1321), so it no longer *requires* the
-hosted registry's signing key as a trust anchor — that key is transport /
-back-compat metadata, never trust. The manifest can be served from
+Key shift from today: the manifest is signed by a **network-admin DID** whose
+resolved Ed25519 key matches the pinned network-admin key material, so it no
+longer *requires* the hosted registry's signing key as a trust anchor — that key
+is transport / back-compat metadata, never trust. The manifest can be served from
 **anywhere**: git, an HTTPS file, a NATS object-store bucket, or the existing
 hosted registry. Verification is **offline** against the pinned admin DID set.
 
@@ -87,6 +88,7 @@ policy.federated:
     - id: metafactory
       trust_anchors:             # NEW — who may sign THIS network's manifest
         - did: did:web:meta-factory.ai:andreas
+          ed25519_pubkey: <base64-32-byte-pubkey>    # pinned resolved key, not live DID resolution
       manifest_sources:          # NEW — one OR MORE places to fetch THIS network's manifest
         - https://network.meta-factory.ai/networks/metafactory    # hosted registry stays a default
         - https://raw.githubusercontent.com/.../networks/metafactory.json
@@ -95,10 +97,11 @@ policy.federated:
 ```
 
 For the new manifest path, a manifest is accepted iff its signature verifies
-against a pinned `trust_anchor` DID. The legacy hosted-registry path remains a
-separate compatibility path: existing `registry: { url, pubkey }` pins continue
-to use the hosted-registry response verifier against the pinned registry pubkey
-until a stack opts into `trust_anchors[]`. All reachable sources are fetched and
+against a pinned `trust_anchor` DID's pinned Ed25519 key (or DID-document hash in
+a later schema variant). The legacy hosted-registry path remains a separate
+compatibility path: existing `registry: { url, pubkey }` pins continue to use the
+hosted-registry response verifier against the pinned registry pubkey until a
+stack opts into `trust_anchors[]`. All reachable sources are fetched and
 verified; **freshness wins over reachability**: the manifest with the
 newest valid `issued_at` is selected, so a reachable source serving an older
 (still-unexpired) manifest cannot shadow a newer one. Cache is used only when no
@@ -119,15 +122,17 @@ additive — hand-pinned peers (today's offline fallback) still work.
 
 ### 4. No DHT, no gossip (yet)
 
-At tens of principals, a signed manifest + multi-source fetch is sufficient.
-Live membership (SWIM-style gossip) is a later option only if real-time
-up/down membership is needed; it would run *under* the manifest's trust model.
+For the first slice, a signed manifest + multi-source fetch is the chosen
+discovery mechanism. Live membership (SWIM-style gossip) is a later option only
+if real-time up/down membership is needed; it would run *under* the manifest's
+trust model.
 
 ## Trust model
 
-- **Anchor:** the pinned network-admin DID set (#1321 makes per-network admins
-  real; this design lets a manifest be signed by them). Thin, replaceable,
-  explicit — exactly the RIR/DNS-root/CT pattern the research endorsed.
+- **Anchor:** the pinned network-admin DID + Ed25519 key set (#1321 makes raw
+  per-network admin keys real; this design adds the DID wrapper and manifest
+  signer semantics). Thin, replaceable, explicit — matching the RIR/DNS-root/CT
+  pattern named in the problem framing above.
 - **Verification:** offline signature check against pinned anchors. No hosted
   service must be online or honest for a cached manifest to be trusted.
 - **Revocation/freshness:** `expires_at` + re-fetch; short manifest lifetimes
@@ -210,12 +215,16 @@ bearer credential.
 > it is recorded here as a possibility, not a decision. Same Ed25519 primitive the
 > nsc nkeys use. File separately when/if pursued.
 
-## Constraint surfaced by the #1321 review (Luna)
+## Constraint from the #1321 implementation
 
 Both #1321 gates keep the `REGISTRY_ADMIN_PUBKEYS`-empty → **503 fail-closed
-FIRST** ordering: a per-network admin cannot operate on a registry with no
-**global** admin configured. That is correct for the hosted `metafactory`
-registry — but a **self-hostable registry is exactly the no-global-admin case**.
+FIRST** ordering (`src/services/network-registry/src/routes/networks.ts`,
+`src/services/network-registry/src/routes/admission-requests.ts`; covered by
+`src/services/network-registry/__tests__/admission-requests.test.ts` and
+`src/services/network-registry/__tests__/per-network-admin.test.ts`): a
+per-network admin cannot operate on a registry with no **global** admin
+configured. That is correct for the hosted `metafactory` registry — but a
+**self-hostable registry is exactly the no-global-admin case**.
 This design MUST therefore relax that coupling: on a self-hosted manifest/registry,
 there is no global super-admin above the network. The fail-closed condition becomes
 "no pinned trust anchor configured" rather than "no global admin configured". The
@@ -253,12 +262,13 @@ Carry this into the manifest-verifier + any self-host registry mode.
 ## Implementation slices (Stage 2)
 
 1. **Manifest schema + offline verifier** — define `NetworkManifest`; generalise
-   the existing registry response verifier to "verify against ANY pinned
-   network-admin trust-anchor DID" (`did:web` principal/admin anchors resolved to
-   Ed25519 pubkeys). Stack `did:mf` resolution remains for roster member signing
-   keys; it is not a manifest-signing authority. Tracer bullet.
-2. **Pin config** — per-network `trust_anchors[]` (admin DIDs) +
-   `manifest_sources[]`, back-compat with `registry.{url,pubkey}`.
+   the existing registry response verifier to "verify against a configured
+   per-network admin trust-anchor DID" (`did:web` principal/admin anchors resolved
+   to Ed25519 pubkeys). Stack `did:mf` resolution remains for roster member
+   signing keys; it is not a manifest-signing authority. Tracer bullet.
+2. **Pin config** — per-network `trust_anchors[]` (admin DIDs plus pinned
+   Ed25519 pubkeys or DID-document hashes) + `manifest_sources[]`, back-compat
+   with `registry.{url,pubkey}`.
 3. **git/HTTPS manifest fetcher** — fetch reachable sources, verify offline
    against pinned anchors, select the newest valid `issued_at`, and use cache only
    when no valid source is reachable (generalises DD-10).
