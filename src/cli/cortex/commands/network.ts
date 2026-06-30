@@ -293,6 +293,7 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--hub": "value",
         "--leaf-port": "value",
         "--admin-seed": "value",
+        "--network-admins": "value",
         "--registry-url": "value",
         "--apply": "bool",
         "--dry-run": "bool",
@@ -1167,6 +1168,24 @@ async function runCreate(
 
   const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_REGISTRY_URL;
 
+  // #1321 — optional per-network admins (comma-separated base64 Ed25519 pubkeys).
+  // The registry accepts admin_pubkeys ONLY from a GLOBAL admin (ADR-0020); the
+  // CLI validates the SHAPE locally for fast feedback and normalises (trim, drop
+  // blanks) before signing. Omitted → a plain topology create/update.
+  let adminPubkeys: string | undefined;
+  const networkAdminsRaw = optionalValueFlag(flags, "--network-admins");
+  if (networkAdminsRaw !== undefined) {
+    const entries = networkAdminsRaw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+    if (entries.length === 0) {
+      return usageError("create", "--network-admins must list at least one base64 pubkey", json);
+    }
+    const bad = entries.find((e) => !MEMBER_PUBKEY_RE.test(e));
+    if (bad !== undefined) {
+      return usageError("create", `--network-admins entry "${bad}" must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)`, json);
+    }
+    adminPubkeys = entries.join(",");
+  }
+
   // Load the admin nkey seed + derive its base64 pubkey (the SAME key shape +
   // signing path provision-stack uses), then build the signed claim.
   const matRes = await adminMaterialFromSeedFile(seedRes.value);
@@ -1179,6 +1198,7 @@ async function runCreate(
       hubUrl,
       leafPort,
       material: matRes.material,
+      adminPubkeys,
     });
   } catch (err) {
     return opError("create", `failed to build network-create claim: ${err instanceof Error ? err.message : String(err)}`, json);
@@ -1205,6 +1225,7 @@ async function runCreate(
       `  leaf_port:    ${leafPort.toString()}`,
       `  admin_pubkey: ${matRes.material.pubkeyB64}`,
       `  fingerprint:  ${matRes.material.fingerprint}`,
+      `  network_admins: ${adminPubkeys ?? "(none — defers to global REGISTRY_ADMIN_PUBKEYS)"}`,
       ``,
       `Would POST ${registryUrl}/networks/${networkId}:`,
       JSON.stringify(body, null, 2),
@@ -2400,7 +2421,7 @@ Usage:
   cortex network join   <network> [--apply] [--config <p>] [overrides…]
   cortex network leave  <network> [--apply] [--config <p>] [overrides…]
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
-  cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--registry-url <url>] [--apply]
+  cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--network-admins <csv>] [--registry-url <url>] [--apply]
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
   cortex network admit  <request-id> --admin-seed <path> [--network <id>] [--registry-url <url>]
                         [--discord-member <id>] [--discord-guild <id>] [--discord-server <profile>]
@@ -2560,6 +2581,10 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
   --admin-seed <path>     (create) path to the admin nkey seed (SU…) signing the claim.
                           admin_pubkey is derived from it; the registry's
                           REGISTRY_ADMIN_PUBKEYS allowlist must contain that pubkey.
+  --network-admins <csv>  (create) comma-separated base64 Ed25519 pubkeys to set as
+                          THIS network's per-network admins (#1321). They may admit
+                          onto its roster + update its topology. Accepted only from a
+                          GLOBAL admin's claim. Omit → defers to REGISTRY_ADMIN_PUBKEYS.
   --registry-url <url>    (create) registry base URL (default: https://network.meta-factory.ai).
   --apply                 Execute the live mutation (default: dry-run).
   --json                  Emit a { status, items, data, error } envelope.

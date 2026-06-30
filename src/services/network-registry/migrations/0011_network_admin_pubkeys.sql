@@ -1,0 +1,25 @@
+-- #1321 (per-network admin authorization):
+-- Add `admin_pubkeys` to the `networks` table so each network carries its OWN
+-- admin allowlist — the **Network posture (admin vs member)** concept
+-- (cortex CONTEXT.md §Network posture) encoded into the registry schema. The
+-- per-network admins may admit/reject onto THIS network's roster and update its
+-- topology; the network is thereby sovereign over its own roster (ADR-0015
+-- admission gate, completed). Descends from ADR-0003 (network-join control
+-- plane) — control-plane only, no wire-grammar change.
+--
+-- Strictly additive: the column is NULLABLE so existing rows remain valid
+-- (NULL = "defer to the global REGISTRY_ADMIN_PUBKEYS only" — the `metafactory`
+-- bootstrap case). Existing network-create calls without the field continue to
+-- work exactly as before. Only a GLOBAL admin may set/change this column
+-- (anti-self-escalation, enforced at the route layer).
+--
+-- Format: comma-separated base64 Ed25519 pubkeys, mirroring the
+-- REGISTRY_ADMIN_PUBKEYS env var. The SQL column is TEXT (D1 has no regex
+-- constraint syntax); each entry is shape-validated at the route layer via
+-- isValidPubkey() before it reaches the store.
+--
+-- Apply:
+--   bunx wrangler d1 migrations apply cortex-network-registry-dev --env dev --remote
+--   bunx wrangler d1 migrations apply cortex-network-registry      --env production --remote
+
+ALTER TABLE networks ADD COLUMN admin_pubkeys TEXT;

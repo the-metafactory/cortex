@@ -248,6 +248,18 @@ export interface NetworkRecord {
   leaf_port: number;
   /** ISO-8601 UTC; when the topology was last (re-)seeded. */
   updated_at: string;
+  /**
+   * #1321 — this network's admin allowlist: comma-separated base64 Ed25519
+   * pubkeys authorized to admit/reject onto THIS network's roster and to update
+   * its topology (the **Network posture (admin vs member)** concept, CONTEXT.md
+   * §Network posture, encoded into the schema). Format mirrors the global
+   * `REGISTRY_ADMIN_PUBKEYS` env var. `undefined`/empty means "global
+   * `REGISTRY_ADMIN_PUBKEYS` only" — the `metafactory` bootstrap case. Only a
+   * GLOBAL admin may set or change this field (anti-self-escalation). It is NOT
+   * exposed in {@link NetworkDescriptor} (kept off the public descriptor; MC
+   * posture rendering is a follow-up).
+   */
+  admin_pubkeys?: string;
 }
 
 /**

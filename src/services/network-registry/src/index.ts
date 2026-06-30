@@ -116,6 +116,15 @@ export function parseHubAdminPubkeys(env: Env): Set<string> {
   return hub.size > 0 ? hub : parseAdminPubkeys(env);
 }
 
+/**
+ * #1321 — parse a network's per-network `admin_pubkeys` field into a set. Same
+ * comma-separated base64 grammar as the global allowlist; an unset/blank field
+ * yields an EMPTY set (→ "this network defers to the global admins only").
+ */
+export function parseNetworkAdminPubkeys(raw: string | undefined): Set<string> {
+  return parsePubkeySet(raw);
+}
+
 /** Shared parser: comma-separated base64 pubkeys → trimmed, non-empty set. */
 function parsePubkeySet(raw: string | undefined): Set<string> {
   if (typeof raw !== "string" || raw.trim().length === 0) return new Set();

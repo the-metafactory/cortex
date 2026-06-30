@@ -26,7 +26,7 @@
  */
 
 import { Hono } from "hono";
-import { getRegistryPublicKey, parseAdminPubkeys, type Env } from "../index";
+import { getRegistryPublicKey, parseAdminPubkeys, parseNetworkAdminPubkeys, type Env } from "../index";
 import { signAssertion } from "./principals";
 import {
   getIssuanceStore,
@@ -159,12 +159,30 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "signature_invalid" }, 401);
     }
 
-    // Authorisation: the (cryptographically proven) admin_pubkey MUST be in the
-    // configured allowlist. A valid signature from a NON-allowlisted key is a
-    // 403 — possession is proven, but the key is not authorised to write
-    // network topology. This is the core admin gate of #747.
-    if (!adminPubkeys.has(claim.admin_pubkey)) {
+    // Authorisation (#747 + #1321 per-network admin). The (cryptographically
+    // proven) admin_pubkey must be authorised to write THIS network — either:
+    //   (a) a GLOBAL admin (REGISTRY_ADMIN_PUBKEYS, the metafactory bootstrap), OR
+    //   (b) a PER-NETWORK admin listed in the existing record's `admin_pubkeys`
+    //       (the **Network posture (admin vs member)** authority — CONTEXT.md).
+    // On CREATE (no existing record) there is no per-network set yet, so only a
+    // global admin can create — network creation stays a hierarchical act
+    // (RIR/IANA-style), per the federation-decentralisation research.
+    const store = getStore(c.env);
+    const existing = await store.getNetwork(networkId);
+    const isGlobalAdmin = adminPubkeys.has(claim.admin_pubkey);
+    const perNetworkAdmins = parseNetworkAdminPubkeys(existing?.admin_pubkeys);
+    const isPerNetworkAdmin = perNetworkAdmins.has(claim.admin_pubkey);
+    if (!isGlobalAdmin && !isPerNetworkAdmin) {
       return c.json({ error: "admin_not_authorized" }, 403);
+    }
+
+    // Anti-self-escalation (#1321): only a GLOBAL admin may set or change a
+    // network's admin_pubkeys. A per-network admin governs the roster + topology
+    // but cannot add co-admins or lock out the global admin. A per-network admin
+    // who supplies admin_pubkeys is refused (403) rather than silently ignored,
+    // so the attempt is visible.
+    if (claim.admin_pubkeys !== undefined && !isGlobalAdmin) {
+      return c.json({ error: "admin_pubkeys_requires_global_admin" }, 403);
     }
 
     // Replay check — only on the authentic+authorised path so a nonce row is
@@ -176,8 +194,19 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "nonce_replayed" }, 409);
     }
 
-    const store = getStore(c.env);
-    const record = await store.putNetwork(claim.network_id, claim.hub_url, claim.leaf_port);
+    // Resolve the admin_pubkeys to persist: a global admin may set it from the
+    // claim; otherwise PRESERVE the existing set (never clobber on a per-network
+    // topology update). Always pass the resolved value so both store backends
+    // write the same thing.
+    const adminPubkeysToStore = isGlobalAdmin
+      ? (claim.admin_pubkeys ?? existing?.admin_pubkeys)
+      : existing?.admin_pubkeys;
+    const record = await store.putNetwork(
+      claim.network_id,
+      claim.hub_url,
+      claim.leaf_port,
+      adminPubkeysToStore,
+    );
 
     // Return the stored record wrapped in a registry-signed assertion — the
     // same shape GET /networks/:id serves, so the admin gets a verifiable

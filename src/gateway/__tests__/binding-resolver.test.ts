@@ -785,3 +785,192 @@ describe("crossPrincipalBindings — single-principal v1 guard", () => {
     expect(crossPrincipalBindings(surfaces, "andreas")).toEqual(["other/x"]);
   });
 });
+
+// ─── Web platform coverage (C-110 / WEB-1 gateway routing fix) ───────────────
+//
+// The web adapter was added by WEB-1 but the gateway's binding-presence guards
+// and inbound router were not taught about the `web` platform until this fix.
+// These tests pin the newly-wired paths so a future refactor can't silently
+// drop them again.
+
+/** One web binding — instanceId "amt" → demux key "web:amt". */
+const WEB_SURFACES: Surfaces = {
+  web: [
+    {
+      agent: "pylon",
+      stack: "andreas/amt",
+      binding: {
+        instanceId: "amt",
+        port: 8090,
+        broadcastUrl: "http://localhost:9090/broadcast",
+        transport: "ws",
+        authScheme: "cf-access",
+      },
+    },
+  ],
+};
+
+describe("buildBindingIndex — web happy path", () => {
+  test("web: indexes by instanceId prefixed with 'web:'", () => {
+    const index = buildBindingIndex(WEB_SURFACES);
+    expect(index.web.size).toBe(1);
+    expect(index.web.has("web:amt")).toBe(true);
+  });
+
+  test("web entry carries agent, principal, stack, and instance from fixture", () => {
+    const index = buildBindingIndex(WEB_SURFACES);
+    const entry = index.web.get("web:amt");
+    expect(entry).toBeDefined();
+    expect(entry!.agent).toBe("pylon");
+    expect(entry!.principal).toBe("andreas");
+    expect(entry!.stack).toBe("amt");
+    expect(entry!.instance).toBe("web:amt");
+  });
+
+  test("empty surfaces: web map is empty (web key present with size 0)", () => {
+    const index = buildBindingIndex({});
+    expect(index.web.size).toBe(0);
+  });
+});
+
+describe("buildBindingIndex — web collision throws", () => {
+  test("two web bindings sharing the same instanceId → throws with instanceId in message", () => {
+    const ambiguous: Surfaces = {
+      web: [
+        {
+          agent: "pylon",
+          stack: "andreas/amt",
+          binding: {
+            instanceId: "amt",
+            port: 8090,
+            broadcastUrl: "http://localhost:9090/broadcast",
+            transport: "ws",
+            authScheme: "cf-access",
+          },
+        },
+        {
+          agent: "relay",
+          stack: "andreas/work",
+          binding: {
+            instanceId: "amt", // duplicate — same demux key "web:amt"
+            port: 8091,
+            broadcastUrl: "http://localhost:9091/broadcast",
+            transport: "ws",
+            authScheme: "cf-access",
+          },
+        },
+      ],
+    };
+    expect(() => buildBindingIndex(ambiguous)).toThrow(/web.*amt/i);
+  });
+});
+
+describe("resolveBinding — web happy path", () => {
+  test("web: resolves by instanceId (full 'web:<id>' key stamped by the WebAdapter)", () => {
+    const index = buildBindingIndex(WEB_SURFACES);
+    // The WebAdapter stamps instanceId="web:amt" on every inbound message
+    const inbound = msg({ platform: "web", instanceId: "web:amt" });
+    const match = resolveBinding(index, inbound);
+    expect(match).not.toBeNull();
+    expect(match!.platform).toBe("web");
+    expect(match!.agent).toBe("pylon");
+    expect(match!.principal).toBe("andreas");
+    expect(match!.stack).toBe("amt");
+    expect(match!.instance).toBe("web:amt");
+  });
+
+  test("web: instanceId not in index → null", () => {
+    const index = buildBindingIndex(WEB_SURFACES);
+    const inbound = msg({ platform: "web", instanceId: "web:unknown" });
+    expect(resolveBinding(index, inbound)).toBeNull();
+  });
+
+  test("web inbound against discord-only index → null (web map is empty)", () => {
+    const index = buildBindingIndex(DISCORD_SURFACES);
+    const inbound = msg({ platform: "web", instanceId: "web:amt" });
+    expect(resolveBinding(index, inbound)).toBeNull();
+  });
+});
+
+describe("distinctBoundStacks — web bindings", () => {
+  test("web-only surfaces: includes the web binding's stack leaf", () => {
+    expect(distinctBoundStacks(WEB_SURFACES)).toEqual(["amt"]);
+  });
+
+  test("web stack deduped when the same leaf appears in both discord and web", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "andreas/amt",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+      ],
+      web: [
+        {
+          agent: "pylon",
+          stack: "andreas/amt", // same leaf — collapses to one entry
+          binding: {
+            instanceId: "amt",
+            port: 8090,
+            broadcastUrl: "http://localhost:9090/broadcast",
+            transport: "ws",
+            authScheme: "cf-access",
+          },
+        },
+      ],
+    };
+    expect(distinctBoundStacks(surfaces)).toEqual(["amt"]);
+  });
+
+  test("web adds a distinct stack leaf beyond discord's set", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "andreas/meta-factory",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+      ],
+      web: [
+        {
+          agent: "pylon",
+          stack: "andreas/amt",
+          binding: {
+            instanceId: "amt",
+            port: 8090,
+            broadcastUrl: "http://localhost:9090/broadcast",
+            transport: "ws",
+            authScheme: "cf-access",
+          },
+        },
+      ],
+    };
+    expect(distinctBoundStacks(surfaces)).toEqual(["meta-factory", "amt"]);
+  });
+});
+
+describe("crossPrincipalBindings — web bindings", () => {
+  test("web binding under the gateway principal → no offenders", () => {
+    expect(crossPrincipalBindings(WEB_SURFACES, "andreas")).toEqual([]);
+  });
+
+  test("web binding under another principal → flagged", () => {
+    const surfaces: Surfaces = {
+      web: [
+        {
+          agent: "pylon",
+          stack: "other/amt",
+          binding: {
+            instanceId: "amt",
+            port: 8090,
+            broadcastUrl: "http://localhost:9090/broadcast",
+            transport: "ws",
+            authScheme: "cf-access",
+          },
+        },
+      ],
+    };
+    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual(["other/amt"]);
+  });
+});
