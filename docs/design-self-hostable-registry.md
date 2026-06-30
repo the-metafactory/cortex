@@ -79,16 +79,18 @@ acceptance policy. Admission remains ADR-0015-compatible: it mints nothing.
 
 ### 2. Pin admin DIDs, not a URL
 
-Generalise the pin (`policy.federated.registry`):
+Generalise the per-network config pin (`policy.federated.networks[]`):
 
 ```
 policy.federated:
-  trust_anchors:                 # NEW — the thin anchor: who may sign a manifest
-    - did: did:web:meta-factory.ai:andreas
-  manifest_sources:              # NEW — one OR MORE places to fetch the manifest
-    - https://network.meta-factory.ai/networks/{id}    # the hosted registry stays a default source
-    - https://raw.githubusercontent.com/.../networks/{id}.json
-    - nats://object-store/networks/{id}
+  networks:
+    - id: metafactory
+      trust_anchors:             # NEW — who may sign THIS network's manifest
+        - did: did:web:meta-factory.ai:andreas
+      manifest_sources:          # NEW — one OR MORE places to fetch THIS network's manifest
+        - https://network.meta-factory.ai/networks/metafactory    # hosted registry stays a default
+        - https://raw.githubusercontent.com/.../networks/metafactory.json
+        - nats://object-store/networks/metafactory
   registry: { url, pubkey }      # KEPT, deprecated-but-supported (back-compat)
 ```
 
@@ -101,7 +103,10 @@ verified; **freshness wins over reachability**: the manifest with the
 newest valid `issued_at` is selected, so a reachable source serving an older
 (still-unexpired) manifest cannot shadow a newer one. Cache is used only when no
 valid source is reachable — DD-10 cached-fallback covers *unreachable*, not
-*stale-but-up*. The hosted registry remains a valid (default) source.
+*stale-but-up*. If two valid reachable manifests have the same newest
+`issued_at`, their canonical payload bytes must match exactly; divergent
+same-freshness manifests fail closed as a split-brain signal. The hosted
+registry remains a valid (default) source.
 
 ### 3. Per-principal endpoint self-publication
 
@@ -179,8 +184,9 @@ stack's own anchor/join config, not network-wide observability.
 
 ## Dependencies & staging
 
-1. **#1321** (per-network admin) — prerequisite: the manifest is signed by a
-   per-network admin DID, which #1321 introduces.
+1. **#1321** (per-network admin) — prerequisite: the registry now stores the raw
+   per-network admin Ed25519 pubkeys. Stage 2 adds the DID wrapper/adapter that
+   resolves a pinned admin DID to those bytes for manifest verification.
 2. Manifest schema + offline verifier (generalise the existing registry response
    verifier to "verify against any pinned anchor DID").
 3. `policy.federated.trust_anchors` + `manifest_sources` config (back-compat with
@@ -248,9 +254,10 @@ Carry this into the manifest-verifier + any self-host registry mode.
 
 1. **Manifest schema + offline verifier** — define `NetworkManifest`; generalise
    the existing registry response verifier to "verify against ANY pinned
-   trust-anchor DID" (`did:web` principal/admin anchors and canonical stack
-   `did:mf` resolution to Ed25519 pubkeys). Tracer bullet.
-2. **Pin config** — `policy.federated.trust_anchors[]` (admin DIDs) +
+   network-admin trust-anchor DID" (`did:web` principal/admin anchors resolved to
+   Ed25519 pubkeys). Stack `did:mf` resolution remains for roster member signing
+   keys; it is not a manifest-signing authority. Tracer bullet.
+2. **Pin config** — per-network `trust_anchors[]` (admin DIDs) +
    `manifest_sources[]`, back-compat with `registry.{url,pubkey}`.
 3. **git/HTTPS manifest fetcher** — fetch reachable sources, verify offline
    against pinned anchors, select the newest valid `issued_at`, and use cache only
