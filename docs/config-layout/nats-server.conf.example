@@ -67,8 +67,16 @@ jetstream {
 # turn an anonymous bus into one rooted in YOUR OWN nsc operator.
 #
 # <OPERATOR_JWT>        — your nsc operator JWT. A bare `eyJ…` token (3 segments).
-# <SYSTEM_ACCOUNT_PUBKEY> / <SYSTEM_ACCOUNT_JWT> — OPTIONAL SYS account. `nsc add
-#                         operator` does NOT mint one; omit both lines if absent.
+# <SYSTEM_ACCOUNT_PUBKEY> / <SYSTEM_ACCOUNT_JWT> — the SYS (system) account.
+#                         REQUIRED whenever JetStream is enabled (the cortex
+#                         default — see the jetstream{} block above): an
+#                         operator-mode server with JetStream fatals at boot
+#                         without a system account, because JetStream's internal
+#                         $JS/$SYS subscriptions need one ("Can't start JetStream:
+#                         setting up internal jetstream subscriptions failed:
+#                         system account not setup"). Only omittable if you have
+#                         removed the jetstream{} block. `nsc add operator` does
+#                         NOT mint one — create it with `nsc add account SYS`.
 # <ACCOUNT_PUBKEY>      — an account public key (nkey-U, starts with `A`, 56 chars).
 # <ACCOUNT_JWT>         — that account's JWT (bare `eyJ…`).
 #
@@ -76,8 +84,9 @@ jetstream {
 
 operator: <OPERATOR_JWT>
 
-# OPTIONAL — only when you have a SYS account (delete both this line and its
-# resolver_preload entry below if you do not).
+# REQUIRED with JetStream (the jetstream{} block above) — an operator-mode bus
+# with JetStream fatals at boot without it. Only removable (together with its
+# resolver_preload entry below) if you also remove the jetstream{} block.
 system_account: <SYSTEM_ACCOUNT_PUBKEY>
 
 resolver: MEMORY
@@ -88,7 +97,7 @@ resolver: MEMORY
 resolver_preload: {
   # Your stack's federation/agents account:
   <ACCOUNT_PUBKEY>: <ACCOUNT_JWT>
-  # The SYS account (only if `system_account` is set above):
+  # The SYS account (required with JetStream; must match system_account above):
   <SYSTEM_ACCOUNT_PUBKEY>: <SYSTEM_ACCOUNT_JWT>
 }
 

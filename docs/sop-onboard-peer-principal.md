@@ -76,9 +76,11 @@ This prints your `nkey_pub` (`U…`, 56 chars). Keep the seed chmod 600 — it i
 
 ### Step 3 — Ensure your bus is operator-mode
 
-Your stack's local NATS bus must be **operator-mode** (it must define your NSC operator, optionally the system account, and the resolver preload including the federation account) before it can bind a leaf link to an operator-mode hub. A hard-isolated anonymous bus (no NSC operator, no accounts) cannot federate.
+Your stack's local NATS bus must be **operator-mode** (it must define your NSC operator, the system account when JetStream is enabled — almost always; see the note below, and the resolver preload including the federation account) before it can bind a leaf link to an operator-mode hub. A hard-isolated anonymous bus (no NSC operator, no accounts) cannot federate.
 
-> **What operator-mode means here.** Your bus config must include the NSC operator JWT, optionally `system_account`, `resolver: MEMORY`, and `resolver_preload` containing your federation account (and, once landed, your agents account). Keep your stack's own `server_name`, `listen` port, `jetstream.domain`, and `http` monitor port — `cortex network join` renders its own leaf include for your stack.
+> **What operator-mode means here.** Your bus config must include the NSC operator JWT, `system_account` (see the JetStream note below), `resolver: MEMORY`, and `resolver_preload` containing your federation account (and, once landed, your agents account). Keep your stack's own `server_name`, `listen` port, `jetstream.domain`, and `http` monitor port — `cortex network join` renders its own leaf include for your stack.
+
+> **JetStream requires a system account.** A cortex stack runs **JetStream by default** (the `jetstream{}` block in your bus config). In operator mode JetStream needs a configured **`system_account`** for its internal `$JS`/`$SYS` subscriptions — without one, `nats-server` fatals at boot with `Can't start JetStream: setting up internal jetstream subscriptions failed: system account not setup`. So for any JetStream-enabled stack the SYS account is **required, not optional**: create it once with `nsc add account SYS`, and `cortex network provision` (Step 4a) then carries `system_account[_jwt]` into `stack.nats_infra` so `make-live` / `join` render it for you. It is only optional if you remove the `jetstream{}` block.
 
 **You no longer hand-edit this (cortex#1265).** `cortex network provision` (step 4a) now **exports the operator-mode JWTs** — operator + federation account (+ SYS account, when present) — into `stack.nats_infra.{operator_jwt, account_jwt, system_account, system_account_jwt}`. From there the conversion is automatic and command-only:
 
