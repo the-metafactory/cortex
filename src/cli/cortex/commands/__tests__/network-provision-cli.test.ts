@@ -132,6 +132,7 @@ describe("cortex network provision — apply", () => {
       "init-operator:OP_ANDREAS",
       "add-account:ANDREAS_RESEARCH_FED",
       "add-account:ANDREAS_RESEARCH_AGENTS",
+      "add-account:SYS",
       "signing",
       "wire",
       // cortex#1265 — the operator-mode JWT export bridges wiring → config write.

@@ -188,6 +188,12 @@ export interface ProvisionState {
   federationAccount: string | undefined;
   /** `stack.nats_infra.agents_account` (`A…` pubkey), if set. */
   agentsAccount: string | undefined;
+  /**
+   * cortex#1333 — `stack.nats_infra.system_account` (the SYS account `A…` pubkey),
+   * if set. Drives the ensure-shape of the SYS mint: present ⇒ skip (no-op),
+   * absent ⇒ mint (JetStream operator-mode requires it). `--force` re-mints.
+   */
+  systemAccount: string | undefined;
   /** Does the signing seed file exist on disk? */
   signingSeedExists: boolean;
   /**
@@ -258,6 +264,7 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
   const operatorPresent = !force && state.federationAccount !== undefined;
   const fedPresent = !force && state.federationAccount !== undefined;
   const agentsPresent = !force && state.agentsAccount !== undefined;
+  const sysPresent = !force && state.systemAccount !== undefined;
   const signingPresent = !force && state.signingSeedExists;
   const jwtsPresent = !force && state.operatorModeJwtsPresent;
 
@@ -278,6 +285,19 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
       detail: agentsPresent ? `${inputs.agentsAccountName} (${state.agentsAccount})` : inputs.agentsAccountName,
     },
     {
+      // cortex#1333 — the SYS (system) account. A cortex stack runs JetStream by
+      // default, and operator-mode + JetStream FATALS at boot without a configured
+      // system_account. So SYS is part of the account tree, not an optional extra:
+      // ensure it here (idempotent in arc) so make-live/join wire system_account
+      // and the next joiner never hits a bare boot-fatal. Killed the raw `nsc add
+      // account SYS` onboarding step (#1332 documented the interim workaround).
+      step: "system account",
+      status: sysPresent ? "ok" : "mint",
+      detail: sysPresent
+        ? `${inputs.systemAccountName} (${state.systemAccount})`
+        : `${inputs.systemAccountName} (required by JetStream operator-mode)`,
+    },
+    {
       step: "signing seed",
       status: signingPresent ? "ok" : "generate",
       detail: inputs.seedPath,
@@ -290,7 +310,7 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
     {
       step: "operator-mode JWTs export",
       status: jwtsPresent ? "ok" : "export",
-      detail: `operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system, best-effort)`,
+      detail: `operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system, ensured)`,
     },
     {
       step: "stack.nats_infra write-back",
@@ -382,6 +402,21 @@ export async function provisionStack(
     steps.push(`agents account present: ${resolvedAgents}`);
   }
 
+  // 3.5 (cortex#1333) — SYS (system) account. A cortex stack runs JetStream by
+  //     default, and operator-mode + JetStream FATALS at boot without a configured
+  //     system_account. Ensure SYS as part of the account tree (idempotent in arc)
+  //     so the export below wires system_account[_jwt] and make-live/join render it
+  //     — killing the raw `nsc add account SYS` onboarding step (#1332's interim).
+  //     Fail fast: a JetStream stack missing SYS boot-fatals three steps downstream.
+  const sysNeeded = force || state.systemAccount === undefined;
+  if (sysNeeded) {
+    const sys = await ports.operator.addAccount({ name: inputs.systemAccountName });
+    if (!sys.ok) return fail(plan, steps, `add-account (system ${inputs.systemAccountName}) failed: ${sys.reason}`);
+    steps.push(`system account ${sys.created ? "minted" : "present"}: ${sys.account} (${sys.pubKey})`);
+  } else {
+    steps.push(`system account present: ${state.systemAccount}`);
+  }
+
   // 4. Signing seed (chmod 600, no-clobber unless --force).
   if (signingNeeded) {
     const r = ports.signing.generate({ seedPath: inputs.seedPath, force });
@@ -436,9 +471,9 @@ export async function provisionStack(
     }
     accountJwt = acctRes.jwt;
 
-    // SYS is OPTIONAL + best-effort: `nsc add operator` does NOT mint one, and an
-    // operator-mode bus runs without it (the renderer treats system_account as
-    // optional). A missing SYS account is a clean skip, never a provision failure.
+    // SYS was ensured above (cortex#1333 — JetStream operator-mode requires it), so
+    // it MUST export now. The `notFound` branch below is kept only as a defensive
+    // guard against an arc store inconsistency — it is no longer the happy path.
     const sysRes = await ports.export.exportSystem({ name: inputs.systemAccountName });
     if (sysRes.ok) {
       systemAccount = sysRes.pubKey;

@@ -46,7 +46,7 @@ function makePorts(overrides?: {
     },
     addAccount: async ({ name }) => {
       calls.push(`add-account:${name}`);
-      const pubKey = name.endsWith("_AGENTS") ? AGENTS_PUB : FED_PUB;
+      const pubKey = name.endsWith("_AGENTS") ? AGENTS_PUB : name === "SYS" ? SYS_PUB : FED_PUB;
       return { ok: true, account: name, pubKey, created: true, alreadyExisted: false };
     },
     ...overrides?.operator,
@@ -115,6 +115,7 @@ function baseInputs(over?: Partial<ProvisionInputs>, state?: Partial<ProvisionSt
     state: {
       federationAccount: undefined,
       agentsAccount: undefined,
+      systemAccount: undefined,
       signingSeedExists: false,
       operatorModeJwtsPresent: false,
       ...state,
@@ -156,20 +157,21 @@ describe("deriveProvisionNames", () => {
 });
 
 describe("buildProvisionPlan", () => {
-  test("empty stack → 4 ensure actions (operator + 2 accounts + signing) + 2 wire steps", () => {
+  test("empty stack → 5 ensure actions (operator + 3 accounts + signing) + 2 wire steps", () => {
     const plan = buildProvisionPlan(baseInputs());
     const mintLike = plan.filter((p) => p.status === "mint" || p.status === "generate");
     expect(mintLike.map((p) => p.step)).toEqual([
       "nsc operator",
       "federation account",
       "agents account",
+      "system account",
       "signing seed",
     ]);
   });
 
   test("fully-provisioned stack → every account/seed step is [ok]", () => {
     const plan = buildProvisionPlan(
-      baseInputs({}, { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, signingSeedExists: true }),
+      baseInputs({}, { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, systemAccount: SYS_PUB, signingSeedExists: true }),
     );
     const mintLike = plan.filter((p) => p.status === "mint" || p.status === "generate");
     expect(mintLike).toEqual([]);
@@ -177,7 +179,7 @@ describe("buildProvisionPlan", () => {
 
   test("partial state: operator+fed present, agents absent → only agents mints", () => {
     const plan = buildProvisionPlan(
-      baseInputs({}, { federationAccount: FED_PUB, agentsAccount: undefined, signingSeedExists: true }),
+      baseInputs({}, { federationAccount: FED_PUB, agentsAccount: undefined, systemAccount: SYS_PUB, signingSeedExists: true }),
     );
     const mintLike = plan.filter((p) => p.status === "mint" || p.status === "generate");
     expect(mintLike.map((p) => p.step)).toEqual(["agents account"]);
@@ -188,7 +190,7 @@ describe("buildProvisionPlan", () => {
       baseInputs({ force: true }, { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, signingSeedExists: true }),
     );
     const mintLike = plan.filter((p) => p.status === "mint" || p.status === "generate");
-    expect(mintLike.length).toBe(4);
+    expect(mintLike.length).toBe(5);
   });
 });
 
@@ -213,6 +215,7 @@ describe("provisionStack — apply on an empty stack", () => {
       "init-operator:OP_ANDREAS",
       "add-account:ANDREAS_RESEARCH_FED",
       "add-account:ANDREAS_RESEARCH_AGENTS",
+      "add-account:SYS",
       "signing-generate:~/.config/nats/andreas-research.seed",
       `wire:${FED_PUB}->${AGENTS_PUB}:apply`,
       // cortex#1265 — the JWT export bridges wiring → config write-back.
@@ -252,7 +255,10 @@ describe("provisionStack — idempotent apply re-run", () => {
   test("fully-provisioned stack → no operator/account/signing mint calls", async () => {
     const { ports, calls } = makePorts({ signing: { exists: () => true } });
     const res = await provisionStack(
-      baseInputs({ apply: true }, { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, signingSeedExists: true }),
+      baseInputs(
+        { apply: true },
+        { federationAccount: FED_PUB, agentsAccount: AGENTS_PUB, systemAccount: SYS_PUB, signingSeedExists: true },
+      ),
       ports,
     );
     expect(res.ok).toBe(true);

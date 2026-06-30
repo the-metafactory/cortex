@@ -2212,6 +2212,7 @@ function deriveProvisionInputs(
     state: {
       federationAccount: cfg.stack?.nats_infra?.account,
       agentsAccount: cfg.stack?.nats_infra?.agents_account,
+      systemAccount: cfg.stack?.nats_infra?.system_account,
       signingSeedExists: existsSync(expandTilde(seedPath)),
       operatorModeJwtsPresent,
     },
