@@ -285,12 +285,14 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
       detail: agentsPresent ? `${inputs.agentsAccountName} (${state.agentsAccount})` : inputs.agentsAccountName,
     },
     {
-      // cortex#1333 — the SYS (system) account. A cortex stack runs JetStream by
-      // default, and operator-mode + JetStream FATALS at boot without a configured
-      // system_account. So SYS is part of the account tree, not an optional extra:
-      // ensure it here (idempotent in arc) so make-live/join wire system_account
-      // and the next joiner never hits a bare boot-fatal. Killed the raw `nsc add
-      // account SYS` onboarding step (#1332 documented the interim workaround).
+      // cortex#1333 — the SYS (system) account. An operator-mode NATS bus with
+      // JetStream enabled FATALS at boot without a configured system_account. We
+      // can't tell from this path whether a given stack enables JetStream — but SYS
+      // is inert when it doesn't and load-bearing when it does, so ensuring it is
+      // the safe default either way, and it removes the downstream boot-fatal for
+      // the JetStream case. Minting is gated on state.systemAccount in provisionStack
+      // (present-in-config => skip, absent => mint). Retires the raw `nsc add
+      // account SYS` workaround that #1332 documented.
       step: "system account",
       status: sysPresent ? "ok" : "mint",
       detail: sysPresent
@@ -402,12 +404,11 @@ export async function provisionStack(
     steps.push(`agents account present: ${resolvedAgents}`);
   }
 
-  // 3.5 (cortex#1333) — SYS (system) account. A cortex stack runs JetStream by
-  //     default, and operator-mode + JetStream FATALS at boot without a configured
-  //     system_account. Ensure SYS as part of the account tree (idempotent in arc)
-  //     so the export below wires system_account[_jwt] and make-live/join render it
-  //     — killing the raw `nsc add account SYS` onboarding step (#1332's interim).
-  //     Fail fast: a JetStream stack missing SYS boot-fatals three steps downstream.
+  // 3.5 (cortex#1333) — ensure the SYS (system) account; see the rationale on the
+  //     "system account" plan item above. Gated on state.systemAccount: mint only
+  //     when config records no system_account, otherwise skip — this gate is the
+  //     idempotency, no arc-side addAccount dedup is assumed. The export below then
+  //     wires system_account[_jwt] for make-live/join to render.
   const sysNeeded = force || state.systemAccount === undefined;
   if (sysNeeded) {
     const sys = await ports.operator.addAccount({ name: inputs.systemAccountName });
