@@ -188,9 +188,9 @@ key-continuity model before the offline verifier is treated as the trust model.
 
 Control-plane only. No subject shape, no envelope field, no
 `selectLink`/`source`/`originator` change — discovery/anchor config never appears
-on the wire; the network stays a topology fact resolved from `peers[]`
-(federation-wire-protocol SOP check 1). cortex↔signal split honoured: this is a
-stack's own anchor/join config, not network-wide observability.
+on the wire. The network remains local topology/config state resolved before
+dispatch, not a wire token. cortex↔signal split honoured: this is a stack's own
+anchor/join config, not network-wide observability.
 
 ## Dependencies & staging
 
@@ -263,9 +263,9 @@ Carry this into the manifest-verifier + any self-host registry mode.
    stack-signing-key path; `did:web` **rotation** is therefore an explicit,
    signed update to the pinned anchor set, never an implicit re-resolve.
 2. **First alternate manifest source — git / HTTPS file.** A signed manifest JSON
-   served from a git repo or any HTTPS host: simplest to stand up + audit (free
-   version history). NATS object store + others come later. The hosted registry
-   stays a default source throughout (back-compat).
+   served from a git repo or any HTTPS host: simplest to stand up and review with
+   normal diff/history tooling. NATS object store + others come later. The
+   hosted registry stays a default source throughout (back-compat).
 3. **Manifest lifetime (`expires_at`)** — **24h, tunable per network**
    (short enough to bound revocation latency, long enough to avoid churn).
    Revisit alongside the offline-roster-proof follow-on.
