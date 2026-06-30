@@ -2,7 +2,7 @@
 
 **Status:** design / spec (implementation deferred pending JC/Luna approval; prerequisite #1321 ✓ merged) · **Date:** 2026-06-29
 **Issue:** #1322 · **Parent:** #110 · **Depends on:** #1321 (per-network admin in schema)
-**Refs:** `docs/research-federation-decentralization.md`, ADR-0003 (network-join control plane), ADR-0013 (sovereign federation), ADR-0015 (admission mints nothing), ADR-0020/#1321 (per-network admin authority), ADR-0005 (session-interior / cortex↔signal boundary), CONTEXT.md §Joining a network / §boundary-with-signal
+**Refs:** `docs/research-federation-decentralization.md`, ADR-0003 (network-join control plane), ADR-0013 (sovereign federation), ADR-0015 (admission mints nothing), ADR-0020 (`docs/adr/0020-per-network-admin-authority.md` / #1321), ADR-0005 (session-interior / cortex↔signal boundary), CONTEXT.md §Joining a network / §boundary-with-signal
 
 > SPECIFY+PLAN artifact for #1322. The design's open questions have since been
 > **resolved with JC (2026-06-29)** — see the Decisions section below. #1321 has
@@ -17,7 +17,8 @@ registry (`policy.federated.registry.{url,pubkey}`). The registry's *role* is
 correct — it is the **"DNS of the federation"**, the thin trust anchor that
 issues no identity and signs no credential (ADR-0013). The problem is only that
 it is **the** registry, not **a** registry: there is no way to run your own, and
-no peer-to-peer discovery (CONTEXT.md: "No peer-to-peer discovery implemented").
+the checked-in control-plane docs expose registry-mediated discovery plus
+hand-pinned fallbacks, not a peer-to-peer discovery mechanism.
 
 The research is explicit: **keep a thin anchor** (RPKI is rooted in the RIRs, DNS
 in the root, CT in root programs) — do **not** chase trustless P2P. So this is
@@ -93,12 +94,16 @@ policy.federated:
   registry: { url, pubkey }      # KEPT, deprecated-but-supported (back-compat)
 ```
 
-A manifest is accepted iff its signature verifies against a pinned `trust_anchor`
-DID. Sources are tried in order, but **freshness wins over reachability**: the
-manifest with the newest valid `issued_at` is selected, so a reachable source
-serving an older (still-unexpired) manifest cannot shadow a newer one — DD-10
-cached-fallback covers *unreachable*, not *stale-but-up*. The hosted registry
-remains a valid (default) source — existing pins keep working.
+For the new manifest path, a manifest is accepted iff its signature verifies
+against a pinned `trust_anchor` DID. The legacy hosted-registry path remains a
+separate compatibility path: existing `registry: { url, pubkey }` pins continue
+to verify hosted-registry `SignedAssertion` responses against the pinned registry
+pubkey until a stack opts into `trust_anchors[]`. Sources are tried in order, but
+**freshness wins over reachability**: the manifest with the newest valid
+`issued_at` is selected, so a reachable source serving an older
+(still-unexpired) manifest cannot shadow a newer one — DD-10 cached-fallback
+covers *unreachable*, not *stale-but-up*. The hosted registry remains a valid
+(default) source.
 
 ### 3. Per-principal endpoint self-publication
 
@@ -216,26 +221,28 @@ Carry this into the manifest-verifier + any self-host registry mode.
 
 ## Decisions (resolved with JC, 2026-06-29)
 
-1. **DID method — `did:web` for principals, `did:key` for stacks.** Principals get
-   rotatable, domain-anchored `did:web:meta-factory.ai:andreas`; ephemeral
-   stacks/agents get zero-infra `did:key:z6Mk…`. Rationale: principals are durable
-   (need rotation), stacks are disposable. #1321 stores raw base64 pubkeys today;
-   a thin DID wrapper/adapter maps a stack pubkey ↔ `did:key` and a principal ↔
-   `did:web` without changing the stored bytes.
+1. **DID method — `did:web` for durable principals/admins; `did:mf` remains the
+   stack identity.** Principals get rotatable, domain-anchored
+   `did:web:meta-factory.ai:andreas`. Stack signing identities stay aligned with
+   CONTEXT.md: `did:mf:{principal}-{stack-leaf}` (derived from `stack.id`, e.g.
+   `did:mf:andreas-meta-factory`). #1321 stores raw base64 pubkeys today; a thin
+   verifier adapter may internally treat a raw Ed25519 verification key as
+   self-certifying, but that does not replace the public stack DID used on the
+   wire or in the glossary.
    **Security — pin the key, not just the name:** a pinned `trust_anchor` MUST
    store the resolved Ed25519 verification key (or a hash of the DID document),
    not merely the `did:web` URL — otherwise verification depends on live DNS/HTTPS
    and a domain/CA compromise could swap the manifest-signing key (breaking the
-   offline-trust property). `did:key` is self-certifying (the key *is* the name).
-   `did:web` **rotation** is therefore an explicit, signed update to the pinned
-   anchor set, never an implicit re-resolve.
+   offline-trust property). Stack `did:mf` resolution remains the existing
+   stack-signing-key path; `did:web` **rotation** is therefore an explicit,
+   signed update to the pinned anchor set, never an implicit re-resolve.
 2. **First alternate manifest source — git / HTTPS file.** A signed manifest JSON
    served from a git repo or any HTTPS host: simplest to stand up + audit (free
    version history). NATS object store + others come later. The hosted registry
    stays a default source throughout (back-compat).
 3. **Manifest lifetime (`expires_at`)** — **24h, tunable per network**
-   (short enough to bound revocation latency, long enough to avoid churn);
-   tunable per network. Revisit alongside the admission-credentials follow-on.
+   (short enough to bound revocation latency, long enough to avoid churn).
+   Revisit alongside the admission-credentials follow-on.
 4. **Per-principal `.well-known`/DNS endpoint publication** — **deferred** until a
    principal actually needs to relocate a stack endpoint (not in the first slices).
 
@@ -243,7 +250,8 @@ Carry this into the manifest-verifier + any self-host registry mode.
 
 1. **Manifest schema + offline verifier** — define `NetworkManifest`; generalise
    the existing `SignedAssertion` verify to "verify against ANY pinned trust-anchor
-   DID" (`did:web`/`did:key` resolution to an Ed25519 pubkey). Tracer bullet.
+   DID" (`did:web` principal/admin anchors and canonical stack `did:mf` resolution
+   to Ed25519 pubkeys). Tracer bullet.
 2. **Pin config** — `policy.federated.trust_anchors[]` (admin DIDs) +
    `manifest_sources[]`, back-compat with `registry.{url,pubkey}`.
 3. **git/HTTPS manifest fetcher** — ordered multi-source fetch with cached
