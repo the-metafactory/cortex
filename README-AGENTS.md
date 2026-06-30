@@ -21,6 +21,8 @@ cortex runs in layers — start at the bottom; each higher layer is **additive a
 
 **Local is the starting point** — get a local stack running first; federation is a later, opt-in step.
 
+> **This is about your *agent network* (the bus), not your chat surface.** Discord — a private server or a shared one — is just how you talk to your *own* assistant, and that choice is independent of the mode. **Local** = your stack stands alone (your agents, your bus, your machine; nobody else's stack involved). **Federated** = your bus links to a **specific trusted peer's**, so your agents and theirs can exchange work across the boundary — you choose exactly who you peer with; it is *not* an open or public group. (A public, open-to-anyone mode is not supported yet.)
+
 ---
 
 ## 1. Prerequisites
