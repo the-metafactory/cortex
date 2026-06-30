@@ -2,7 +2,7 @@
 
 **Status:** design / spec (implementation deferred pending JC/Luna approval; prerequisite #1321 ✓ merged) · **Date:** 2026-06-29
 **Issue:** #1322 · **Parent:** #110 · **Depends on:** #1321 (per-network admin in schema)
-**Refs:** `docs/research-federation-decentralization.md`, ADR-0003 (network-join control plane), ADR-0013 (sovereign federation), ADR-0015 (admission mints nothing), ADR-0020 (`docs/adr/0020-per-network-admin-authority.md` / #1321), ADR-0005 (session-interior / cortex↔signal boundary), CONTEXT.md §Joining a network / §boundary-with-signal
+**Refs:** companion research PR #1319, ADR-0003 (network-join control plane), ADR-0013 (sovereign federation), ADR-0015 (admission mints nothing), ADR-0020 (`docs/adr/0020-per-network-admin-authority.md` / #1321), ADR-0005 (session-interior / cortex↔signal boundary), CONTEXT.md §Joining a network / §boundary-with-signal
 
 > SPECIFY+PLAN artifact for #1322. The design's open questions have since been
 > **resolved with JC (2026-06-29)** — see the Decisions section below. #1321 has
@@ -20,9 +20,9 @@ it is **the** registry, not **a** registry: there is no way to run your own, and
 the checked-in control-plane docs expose registry-mediated discovery plus
 hand-pinned fallbacks, not a peer-to-peer discovery mechanism.
 
-The research is explicit: **keep a thin anchor** (RPKI is rooted in the RIRs, DNS
-in the root, CT in root programs) — do **not** chase trustless P2P. So this is
-*un-monopolise*, not *abolish*.
+The governing premise for this slice is: **keep a thin anchor** (RPKI is rooted
+in the RIRs, DNS in the root, CT in root programs) — do **not** chase trustless
+P2P. So this is *un-monopolise*, not *abolish*.
 
 ## Goal
 
@@ -32,7 +32,7 @@ central URL, and verifies a **portable signed manifest** offline.
 
 ## Non-goals
 
-- Abolishing the registry / pure trustless P2P (the research's explicit anti-goal).
+- Abolishing the registry / pure trustless P2P.
 - A DHT (at tens of principals it degenerates to a full mesh — pure overhead).
 - Agent/peer **presence** + the MC Network view — that's cortex's own `agent`-domain
   lifecycle (`agent.{online|heartbeat|offline|capabilities-changed}`, CONTEXT.md
@@ -45,20 +45,18 @@ central URL, and verifies a **portable signed manifest** offline.
 
 ### 1. Portable signed network manifest
 
-The descriptor is **already** a `SignedAssertion` — the registry signs each
-*response* for transport integrity, but it anchors **no trust** (CONTEXT.md
-§Joining a network: the registry "signs nothing" in the trust sense — it is a
-pubkey directory, not a CA; clients pin + verify, DD-9). Promote it to a
-self-contained, relocatable
-**network manifest** that carries everything a joiner needs and is verifiable
-**offline** against pinned admin DIDs:
+The registry descriptor is already the control-plane shape a joiner needs:
+topology plus roster, consumed through the existing pinned-registry compatibility
+path. The registry remains a pubkey directory, not a CA; this design promotes
+that descriptor into a self-contained, relocatable **network manifest** that is
+verifiable **offline** against pinned admin DIDs:
 
 ```
 NetworkManifest {
   network_id
   hub_url, leaf_port              // topology (today's descriptor)
   admin_dids[]                    // the network's admins (from #1321 admin_pubkeys, as DIDs)
-  roster[] { principal_id, stack_id, principal_pubkey }   // discovery/recognition only (DD-5)
+  roster[] { principal_id, stack_id, stack_signing_pubkey }   // discovery/recognition only (DD-5)
   issued_at, expires_at
   signature                       // by a network admin DID (not a hosted-registry key)
 }
@@ -86,7 +84,7 @@ Generalise the pin (`policy.federated.registry`):
 ```
 policy.federated:
   trust_anchors:                 # NEW — the thin anchor: who may sign a manifest
-    - did: did:mf:andreas-meta-factory
+    - did: did:web:meta-factory.ai:andreas
   manifest_sources:              # NEW — one OR MORE places to fetch the manifest
     - https://network.meta-factory.ai/networks/{id}    # the hosted registry stays a default source
     - https://raw.githubusercontent.com/.../networks/{id}.json
@@ -97,13 +95,13 @@ policy.federated:
 For the new manifest path, a manifest is accepted iff its signature verifies
 against a pinned `trust_anchor` DID. The legacy hosted-registry path remains a
 separate compatibility path: existing `registry: { url, pubkey }` pins continue
-to verify hosted-registry `SignedAssertion` responses against the pinned registry
-pubkey until a stack opts into `trust_anchors[]`. Sources are tried in order, but
-**freshness wins over reachability**: the manifest with the newest valid
-`issued_at` is selected, so a reachable source serving an older
-(still-unexpired) manifest cannot shadow a newer one — DD-10 cached-fallback
-covers *unreachable*, not *stale-but-up*. The hosted registry remains a valid
-(default) source.
+to use the hosted-registry response verifier against the pinned registry pubkey
+until a stack opts into `trust_anchors[]`. All reachable sources are fetched and
+verified; **freshness wins over reachability**: the manifest with the
+newest valid `issued_at` is selected, so a reachable source serving an older
+(still-unexpired) manifest cannot shadow a newer one. Cache is used only when no
+valid source is reachable — DD-10 cached-fallback covers *unreachable*, not
+*stale-but-up*. The hosted registry remains a valid (default) source.
 
 ### 3. Per-principal endpoint self-publication
 
@@ -183,8 +181,8 @@ stack's own anchor/join config, not network-wide observability.
 
 1. **#1321** (per-network admin) — prerequisite: the manifest is signed by a
    per-network admin DID, which #1321 introduces.
-2. Manifest schema + offline verifier (generalise the existing `SignedAssertion`
-   verify to "verify against any pinned anchor DID").
+2. Manifest schema + offline verifier (generalise the existing registry response
+   verifier to "verify against any pinned anchor DID").
 3. `policy.federated.trust_anchors` + `manifest_sources` config (back-compat with
    `registry.{url,pubkey}`).
 4. Multi-source fetch with ordered fallback (generalises DD-10 cached-fallback).
@@ -249,11 +247,12 @@ Carry this into the manifest-verifier + any self-host registry mode.
 ## Implementation slices (Stage 2)
 
 1. **Manifest schema + offline verifier** — define `NetworkManifest`; generalise
-   the existing `SignedAssertion` verify to "verify against ANY pinned trust-anchor
-   DID" (`did:web` principal/admin anchors and canonical stack `did:mf` resolution
-   to Ed25519 pubkeys). Tracer bullet.
+   the existing registry response verifier to "verify against ANY pinned
+   trust-anchor DID" (`did:web` principal/admin anchors and canonical stack
+   `did:mf` resolution to Ed25519 pubkeys). Tracer bullet.
 2. **Pin config** — `policy.federated.trust_anchors[]` (admin DIDs) +
    `manifest_sources[]`, back-compat with `registry.{url,pubkey}`.
-3. **git/HTTPS manifest fetcher** — ordered multi-source fetch with cached
-   fallback (generalises DD-10); verify offline against the pinned anchors.
+3. **git/HTTPS manifest fetcher** — fetch reachable sources, verify offline
+   against pinned anchors, select the newest valid `issued_at`, and use cache only
+   when no valid source is reachable (generalises DD-10).
 4. (later) NATS object-store source; per-principal `.well-known`/DNS.
