@@ -2,7 +2,7 @@
 # grove-bot deprecation shim — manual operator step, NOT installed by arc.
 #
 # Why this file exists:
-#   At MIG-7.7 the `arc upgrade Cortex` flow does NOT touch ~/bin/grove-bot
+#   At MIG-7.7 the `arc upgrade cortex` flow does NOT touch ~/bin/grove-bot
 #   (that symlink is owned by the legacy `Grove` manifest). Operators
 #   upgrading from grove run `arc uninstall Grove` first, which removes the
 #   symlink entirely. Any external automation that still spells the binary

@@ -165,7 +165,7 @@ describe("dispatchRelease — dry-run (default)", () => {
     // Must mention it's a dry-run
     expect(result.stdout.toLowerCase()).toContain("dry-run");
     // Must show the exact arc upgrade command for bot
-    expect(result.stdout).toContain("arc upgrade Cortex");
+    expect(result.stdout).toContain("arc upgrade cortex");
     // Must show bun build command for dashboard
     expect(result.stdout).toContain("bun build");
     // Must show wrangler deploy for api and registry
@@ -198,7 +198,7 @@ describe("dispatchRelease — dry-run (default)", () => {
     expect(result.stdout).toContain("bot");
     // Dashboard/api/registry should NOT appear as action items (they're not selected)
     // The plan output should say arc upgrade for bot
-    expect(result.stdout).toContain("arc upgrade Cortex");
+    expect(result.stdout).toContain("arc upgrade cortex");
   });
 
   test("prod surfaces (api, registry) show manual run instructions", async () => {
@@ -250,7 +250,7 @@ describe("dispatchRelease — --apply without --include-prod", () => {
     expect(result.stdout).toContain("skip");
   });
 
-  test("arc upgrade Cortex is invoked for bot surface", async () => {
+  test("arc upgrade cortex is invoked for bot surface", async () => {
     const shell = mockShell(() => ({ exitCode: 0, stdout: "", stderr: "" }));
     const fetcher = mockFetcher(() => healthDown());
     __setShellRunnerForTests(shell.runner);

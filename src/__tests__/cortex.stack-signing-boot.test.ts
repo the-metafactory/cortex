@@ -8,7 +8,7 @@
  * actionable fix-path. This test pins the contract:
  *
  *   - WARN appears on stderr when `options.stack.nkey_seed_path` is absent.
- *   - WARN includes the `arc upgrade Cortex` fix-path AND the manual
+ *   - WARN includes the `arc upgrade cortex` fix-path AND the manual
  *     `stack.nkey_seed_path` fix-path AND the SOP doc cross-link.
  *   - The pre-existing info-level `console.log` line stays (operability).
  *   - When `nkey_seed_path` IS set with a valid seed, no WARN appears.
@@ -138,7 +138,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
     expect(stderr).toContain("unsigned envelopes");
     expect(stderr).toContain("verify signed_by");
     // …and BOTH fix-paths so principals see auto-provision + manual edit.
-    expect(stderr).toContain("arc upgrade Cortex");
+    expect(stderr).toContain("arc upgrade cortex");
     expect(stderr).toContain("stack.nkey_seed_path");
     // …and the SOP cross-link.
     expect(stderr).toContain("docs/sop-stack-identity.md");
@@ -167,7 +167,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
     const { result: handle } = bootResult;
 
     expect(stderr).toContain("WARNING: stack identity not configured");
-    expect(stderr).toContain("arc upgrade Cortex");
+    expect(stderr).toContain("arc upgrade cortex");
 
     await handle.stop();
   });

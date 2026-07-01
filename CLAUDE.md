@@ -382,7 +382,7 @@ cortex uses one feature numbering scheme during MIG-0..MIG-8 and adds a second o
 
 | Command | Purpose |
 |---|---|
-| `cortex stack create <slug> [--principal <id>] [--apply]` | Scaffold a born-aligned (dir==slug==`stack.id` trailing segment), unique-within-principal config-split stack from the `docs/config-layout/` template (#808). Sets `stack.nkey_seed_path` to the conventional path — `arc upgrade Cortex` auto-provisions the seed. Dry-run by default; never overwrites an existing dir. |
+| `cortex stack create <slug> [--principal <id>] [--apply]` | Scaffold a born-aligned (dir==slug==`stack.id` trailing segment), unique-within-principal config-split stack from the `docs/config-layout/` template (#808). Sets `stack.nkey_seed_path` to the conventional path — `arc upgrade cortex` auto-provisions the seed. Dry-run by default; never overwrites an existing dir. |
 | `cortex stack list [--config-dir <path>]` | List discovered stacks with their `stack.id` and an aligned/DRIFT flag. |
 
 ### Network lifecycle
@@ -434,7 +434,7 @@ See `compass/sops/versioning.md` for the full procedure. Key repo-specific detai
 
 - Version source of truth: `arc-manifest.yaml`
 - Release title format: `"Cortex vX.Y.Z -- Short Description"`
-- Deploy command: `arc upgrade Cortex`
+- Deploy command: `arc upgrade cortex`
 
 ## Dashboard Deployment
 
@@ -459,7 +459,7 @@ The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify step 
 **When to deploy:**
 - After any change to `src/surface/mc/dashboard-v2/` files (app.tsx, types.ts, hooks, etc.)
 - After merging a PR that modifies dashboard components
-- The backend (`cortex` bot via `arc upgrade Cortex`) and the frontend (CF Pages via `wrangler`) are deployed independently.
+- The backend (`cortex` bot via `arc upgrade cortex`) and the frontend (CF Pages via `wrangler`) are deployed independently.
 
 **Architecture:**
 - `cortex` serves the REST API + WebSocket at `localhost:8767` locally, or via the CF Worker at `grove.meta-factory.ai/api/*` in production (`src/surface/mc/worker/`).

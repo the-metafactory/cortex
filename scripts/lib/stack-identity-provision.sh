@@ -2,7 +2,7 @@
 # cortex#324 (v2.0.3) — stack identity auto-provisioning for arc upgrade.
 #
 # Walk-the-talk: stack signing should be ON by default. When a principal
-# runs `arc upgrade Cortex` and their cortex.yaml lacks
+# runs `arc upgrade cortex` and their cortex.yaml lacks
 # `stack.nkey_seed_path`, this helper:
 #
 #   1. Detects the canonical NKey path for the stack (default

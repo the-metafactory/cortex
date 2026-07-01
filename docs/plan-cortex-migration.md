@@ -129,8 +129,8 @@ This is the affirmative case for cortex. The §1.1 symptoms are real, but the lo
 | `src/webhook-proxy/` | ~475 | tap (GitHub) | `src/taps/gh-webhook/` | CF Worker; HMAC-validated GitHub webhook → forward |
 | `src/shared/format-utils.ts` | — | infra | `src/common/format-utils.ts` | The single file in `src/shared/`. |
 | `src/common/` (5 files: agent-detection, event-processor, event-utils, github-events, types) | — | shared types | `src/common/` | Stays at top level. |
-| `src/services/com.grove.bot.plist` + `com.grove.relay.plist` | — | deployment templates | `src/services/com.cortex.bot.plist` (renamed) + `com.cortex.relay.plist` | macOS launchd plist templates rendered into `~/Library/LaunchAgents/` by `arc upgrade Cortex`. Renamed at MIG-7.8 to match the new `com.cortex.*` identifiers; relay template kept for now (relay still in cortex's tap layer per MIG-5). |
-| `src/settings/grove-hooks.json` | — | deployment template | `src/settings/cortex-hooks.json` (renamed) | Claude Code hooks-config template installed by `arc upgrade Cortex` into `~/.claude/`. The `grove-` prefix renames to `cortex-` at MIG-7. |
+| `src/services/com.grove.bot.plist` + `com.grove.relay.plist` | — | deployment templates | `src/services/com.cortex.bot.plist` (renamed) + `com.cortex.relay.plist` | macOS launchd plist templates rendered into `~/Library/LaunchAgents/` by `arc upgrade cortex`. Renamed at MIG-7.8 to match the new `com.cortex.*` identifiers; relay template kept for now (relay still in cortex's tap layer per MIG-5). |
+| `src/settings/grove-hooks.json` | — | deployment template | `src/settings/cortex-hooks.json` (renamed) | Claude Code hooks-config template installed by `arc upgrade cortex` into `~/.claude/`. The `grove-` prefix renames to `cortex-` at MIG-7. |
 | `src/worker/` (CF Worker REST API) | ~2,300 | surface backend | `src/surface/mc/worker/` | The Cloudflare Worker for `grove.meta-factory.ai` |
 | `arc-manifest.yaml` | — | infra | rewrite as cortex's | `name: Cortex, version: 0.1.0` |
 | `blueprint.yaml` | — | infra | new file in cortex with C-1xxx IDs | grove-v2's blueprint stays in grove-v2 (archived) |
@@ -283,7 +283,7 @@ If a §2.1 row is missing from this matrix, it's a bug — file an issue.
 | `src/cli/cldyo-live` (single bash script) | `src/cli/cldyo-live` (single bash script — no trailing slash) | MIG-6 | Move file; preserve as a single executable script, do NOT create a directory. |
 | `src/bot/grove-bot.ts` | `src/cortex.ts` | MIG-7 | Rewrite imports + rename |
 | `src/bot/types/config.ts` + `src/bot/lib/config-{loader,watcher}.ts` + `src/common/` (5 files) + `src/shared/format-utils.ts` + `src/bot/lib/usage-monitor.ts` + `src/bot/lib/timeout.ts` (post-#82) + `src/bot/lib/network-resolver.ts` | `src/common/` | MIG-7 | Move + minor reorg. **No `usage-fetcher.ts`** — legacy-grove-only per §2.2. |
-| `src/services/*.plist` + `src/settings/grove-hooks.json` | `src/services/com.cortex.*.plist` + `src/settings/cortex-hooks.json` | MIG-7 | Rename templates at cutover (grove-prefix → cortex-prefix); content unchanged except for binary path inside the plist. Rendered by `arc upgrade Cortex` into `~/Library/LaunchAgents/` and `~/.claude/`. |
+| `src/services/*.plist` + `src/settings/grove-hooks.json` | `src/services/com.cortex.*.plist` + `src/settings/cortex-hooks.json` | MIG-7 | Rename templates at cutover (grove-prefix → cortex-prefix); content unchanged except for binary path inside the plist. Rendered by `arc upgrade cortex` into `~/Library/LaunchAgents/` and `~/.claude/`. |
 | `arc-manifest.yaml` | rewrite as cortex's | MIG-7 | Replaces `name: Grove` with `name: Cortex` |
 | `package.json` + `bun.lock` + `tsconfig.json` | rewrite | MIG-7 | New cortex shell |
 | `docs/design-*.md` + `docs/iteration-*.md` | `docs/` | MIG-7 | Move; archive stale ones |
@@ -479,7 +479,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [ ] **6.6** Tests moved + green. *(deferred-with-justification — no CLI tests exist in grove-v2 either; tsc green + `--help` smoke + live channel post are the parity baseline; new test work is post-migration follow-up, not migration scope)*
 
 **Acceptance:**
-- `discord` and `cldyo-live` work post-`arc upgrade Cortex` (which becomes real in MIG-7).
+- `discord` and `cldyo-live` work post-`arc upgrade cortex` (which becomes real in MIG-7).
 
 **PR:** `cortex#PR-7 — CLIs: discord + cldyo-live`
 
@@ -487,7 +487,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 
 ### MIG-7 — Top-level wiring + arc cutover
 
-**Goal:** Cortex is installable via `arc upgrade Cortex`, runs the bot, replaces the deployed Grove bot. The agent-bundle config schema flips to first-class `agents:` + `renderers:` per `design-cortex.md` §9.
+**Goal:** Cortex is installable via `arc upgrade cortex`, runs the bot, replaces the deployed Grove bot. The agent-bundle config schema flips to first-class `agents:` + `renderers:` per `design-cortex.md` §9.
 
 **Issue:** `cortex#8 — MIG-7: Top-level wiring + arc package switchover`
 
@@ -511,20 +511,20 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
   - `name: Cortex`
   - `version: 0.1.0`
   - `provides:` lists `cortex` binary + `discord` + `cldyo-live` + hooks + relay
-  - **Pre-flight**: verify legacy grove is uninstalled (`arc list | grep -i grove` returns nothing) before MIG-7. If legacy grove is still installed, the symlink at `~/bin/grove-bot` is owned by legacy's manifest; running `arc upgrade Cortex` does NOT touch it. Sequence: `arc uninstall Grove` (legacy) → `arc upgrade Cortex` → verify `~/bin/cortex` resolves and `~/bin/grove-bot` no longer exists.
+  - **Pre-flight**: verify legacy grove is uninstalled (`arc list | grep -i grove` returns nothing) before MIG-7. If legacy grove is still installed, the symlink at `~/bin/grove-bot` is owned by legacy's manifest; running `arc upgrade cortex` does NOT touch it. Sequence: `arc uninstall Grove` (legacy) → `arc upgrade cortex` → verify `~/bin/cortex` resolves and `~/bin/grove-bot` no longer exists.
   - **Deprecation shim**: separately, install a one-line `~/bin/grove-bot` shim that prints "use `cortex` instead" and execs `~/bin/cortex "$@"`. Manual operator step, not part of the manifest. Removed in MIG-8.4.
-  - **Rollback**: `arc uninstall Cortex` + `arc upgrade Grove` (re-installs legacy at v0.29.0). Both `arc upgrade` commands are idempotent.
+  - **Rollback**: `arc uninstall cortex` + `arc upgrade Grove` (re-installs legacy at v0.29.0). Both `arc upgrade` commands are idempotent.
 - [x] **7.8** Cut launchd over from legacy `com.grove.{bot,relay}.plist` to `ai.meta-factory.cortex.{bot,relay}.plist`. *(cortex#53 hardening — legacy plist cleanup in preupgrade.sh)*
-  - **Implementation**: handled automatically by `arc upgrade Cortex` via the MIG-7.7 lifecycle scripts (extended by MIG-7.8):
+  - **Implementation**: handled automatically by `arc upgrade cortex` via the MIG-7.7 lifecycle scripts (extended by MIG-7.8):
     - `scripts/preupgrade.sh` — kills any lingering `~/bin/grove-bot` / `~/bin/grove-relay` PIDs, unloads (`launchctl unload`) and removes (`rm -f`) `~/Library/LaunchAgents/com.grove.bot.plist` and `com.grove.relay.plist` when present, then unloads cortex's own plists ready for symlink refresh. Idempotent on hosts where legacy was never installed.
     - `scripts/postinstall.sh` — renders `ai.meta-factory.cortex.{bot,relay}.plist` into `~/Library/LaunchAgents/`.
     - `scripts/postupgrade.sh` — `launchctl load`s the freshly rendered plists.
-  - **Principal command**: `arc upgrade Cortex` — single command runs the full cutover. The pre-flight `arc uninstall Grove` (plan §4 7.7) is *recommended* but no longer load-bearing; the preupgrade cleanup is belt-and-braces.
-  - **Verification**: after `arc upgrade Cortex` completes:
+  - **Principal command**: `arc upgrade cortex` — single command runs the full cutover. The pre-flight `arc uninstall Grove` (plan §4 7.7) is *recommended* but no longer load-bearing; the preupgrade cleanup is belt-and-braces.
+  - **Verification**: after `arc upgrade cortex` completes:
     - `launchctl list | grep ai.meta-factory.cortex` — two entries (bot + relay)
     - `pgrep -f "${HOME}/bin/cortex start"` — non-empty PID
     - `ls ~/Library/LaunchAgents/com.grove.*.plist 2>/dev/null` — empty (legacy plists removed)
-  - **Rollback**: `arc uninstall Cortex && arc upgrade Grove` re-installs legacy at v0.29.0 — grove's own installer re-renders `com.grove.bot.plist` from its own source. Cortex's preupgrade.sh removed the legacy plist; on a re-install grove rewrites it. No manual recovery needed.
+  - **Rollback**: `arc uninstall cortex && arc upgrade Grove` re-installs legacy at v0.29.0 — grove's own installer re-renders `com.grove.bot.plist` from its own source. Cortex's preupgrade.sh removed the legacy plist; on a re-install grove rewrites it. No manual recovery needed.
 - [ ] **7.9** Migrate `~/.config/grove/bot.yaml` → `~/.config/cortex/cortex.yaml`.
   - **Note**: this is a **schema transformation** (per §9 / `migrate-config.ts` from step 7.2e), not just a path rename. The new file has different top-level keys (`agents:` + `renderers:` instead of `discord:` + `mattermost:` + `trustedAgentBots:`).
   - **Sequence**:
@@ -540,7 +540,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [ ] **7.14** Bump cortex version. **Pick one path — see §6 question 3:** either `v0.2.0` (post-bootstrap, signals "running but not yet hardened") OR `v1.0.0` (signals "production target"). §6.3's lean is `v1.0.0`; if that lean holds at MIG-7 cutover time, bump to v1.0.0 here. Otherwise v0.2.0 stays.
 
 **Acceptance:**
-- Principal runs `arc upgrade Cortex` (fresh install).
+- Principal runs `arc upgrade cortex` (fresh install).
 - Principal runs `cortex start --config ~/.config/cortex/cortex.yaml`.
 - Bot connects, dashboard loads, Discord round-trip works.
 - E2E NATS messaging works (per JC's identity config requirement).

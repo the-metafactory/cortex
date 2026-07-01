@@ -21,7 +21,7 @@ The stack NKey is **different** from:
 | **Stack signing** (this doc) | Signs outbound envelopes | `SU` | Medium — forge envelopes from this stack |
 | **NATS auth user** | Authenticates with NATS server | `SU` | Medium — connect as this user |
 
-In practice, single-principal deployments can reuse one user-class (`SU`) NKey for both stack signing and NATS auth — that's what `arc upgrade Cortex` provisions by default, and what `migrate-config --auto-stack-key` migrates legacy configs onto.
+In practice, single-principal deployments can reuse one user-class (`SU`) NKey for both stack signing and NATS auth — that's what `arc upgrade cortex` provisions by default, and what `migrate-config --auto-stack-key` migrates legacy configs onto.
 
 ## Why ON by default?
 
@@ -29,7 +29,7 @@ cortex#320 (v2.0.2) wired the verification side: every peer running cortex now c
 
 Through cortex#314 (v2.0.0) and earlier, `stack.nkey_seed_path` was **opt-in**: principals had to know to declare it, generate a key, chmod 600 it, and update their config. The dominant install shape was unsigned — including the principal's own deployment.
 
-cortex#324 (v2.0.3) flips the default. Stack signing is ON. `arc upgrade Cortex` auto-provisions the key; cortex.ts emits a loud stderr WARNING when the field is missing; cortex.yaml.example ships the worked example. Principals upgrading from v2.0.2 either get auto-provisioned (recommended) or see the warning on first boot.
+cortex#324 (v2.0.3) flips the default. Stack signing is ON. `arc upgrade cortex` auto-provisions the key; cortex.ts emits a loud stderr WARNING when the field is missing; cortex.yaml.example ships the worked example. Principals upgrading from v2.0.2 either get auto-provisioned (recommended) or see the warning on first boot.
 
 v2.0.4 will promote the missing-field condition to a refuse-to-boot.
 
@@ -43,7 +43,7 @@ The seed file format is whatever `nsc generate nkey -u` produces — a single li
 
 ## How does arc provision it?
 
-On every `arc upgrade Cortex`, `scripts/postupgrade.sh` sources `scripts/lib/stack-identity-provision.sh` and calls `provision_stack_identity`:
+On every `arc upgrade cortex`, `scripts/postupgrade.sh` sources `scripts/lib/stack-identity-provision.sh` and calls `provision_stack_identity`:
 
 1. **Idempotency check** — if `cortex.yaml` already declares `stack.nkey_seed_path`, skip. No edits.
 2. **NKey existence check** — if `~/.config/nats/cortex.nk` is present, reuse it. Otherwise generate a fresh `SU`-prefixed seed via `nsc` (preferred) or via `bun` + `nkeys.js` (fallback).
@@ -72,7 +72,7 @@ Boot log line on missing-field:
 ```
 WARNING: stack identity not configured — cortex will publish unsigned envelopes.
   Peers that verify signed_by[] will reject these messages.
-  Run `arc upgrade Cortex --force` to auto-provision, or add
+  Run `arc upgrade cortex --force` to auto-provision, or add
   `stack.nkey_seed_path` (+ optionally `stack.nkey_pub`) to cortex.yaml.
   See docs/sop-stack-identity.md for the full SOP.
 ```

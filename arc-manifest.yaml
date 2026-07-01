@@ -1,7 +1,7 @@
 # arc-manifest.yaml -- cortex
 # See: https://github.com/the-metafactory/arc
 
-name: "Cortex"
+name: "cortex"
 # v4.0.0 BREAKING (cortex#436 R2.I/R2.G/R3) — the legacy principal-identity
 # config keys are no longer accepted: the top-level `operator:` block, the cloud
 # `operatorId` key, and the federated-peer `operator_id` / `operator_pubkey` keys
@@ -20,13 +20,13 @@ repository: "the-metafactory/cortex"
 # Provides surface at MIG-7.7 cutover: bot binary + relay + operator CLIs +
 # hooks + launchd plists. Mirrors grove-v2's deliverables under cortex names.
 #
-# Pre-flight (operator step before `arc upgrade Cortex`):
+# Pre-flight (operator step before `arc upgrade cortex`):
 #   - `arc list | grep -i grove` must return nothing. The legacy grove
 #     manifest owns the `~/bin/grove-bot` and `~/bin/grove-relay` symlinks
-#     and `com.grove.bot` / `com.grove.relay` plists; `arc upgrade Cortex`
+#     and `com.grove.bot` / `com.grove.relay` plists; `arc upgrade cortex`
 #     does NOT touch them while grove is installed. Sequence:
 #       1. `arc uninstall Grove` (legacy)
-#       2. `arc upgrade Cortex`
+#       2. `arc upgrade cortex`
 #       3. Verify `~/bin/cortex` resolves and `~/bin/grove-bot` is gone.
 #
 # Deprecation shim (separate manual step, not part of this manifest):
@@ -35,7 +35,7 @@ repository: "the-metafactory/cortex"
 #     this in place during cutover so old aliases keep working. Removed in
 #     MIG-8.4.
 #
-# Rollback (idempotent): `arc uninstall Cortex` + `arc upgrade Grove`
+# Rollback (idempotent): `arc uninstall cortex` + `arc upgrade Grove`
 # reinstalls legacy at v0.29.0.
 provides:
   files:
@@ -145,7 +145,7 @@ dependencies:
   #
   # Distribution is repo-first (ADR-0017): the bundle is `arc install`-able from
   # the the-metafactory/metafactory-discord repo. Registry auto-resolution of
-  # this package dep on `arc install Cortex` is PENDING — until arc resolves it,
+  # this package dep on `arc install cortex` is PENDING — until arc resolves it,
   # the bundle is installed explicitly and this declaration records the intent.
   - name: "metafactory-discord"
     version: ">=0.1.0"

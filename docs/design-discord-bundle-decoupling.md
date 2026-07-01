@@ -48,7 +48,7 @@ Skills provided:
   the metafactory registry yet.
 - **Cortex dependency:** cortex `arc-manifest.yaml` `dependencies:` declares
   `metafactory-discord`. (Confirm whether arc auto-resolves package deps on
-  `arc install Cortex`; if not, install the bundle explicitly + record the intent.)
+  `arc install cortex`; if not, install the bundle explicitly + record the intent.)
 - **Later:** registry publication → `arc install metafactory-discord` by name.
 
 ## Onboarding wiring (the payoff)

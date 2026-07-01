@@ -24,7 +24,7 @@ cortex stack create research --principal andreas
 cortex stack create research --principal andreas --apply
 
 # Then provision the signing seed → point your daemon → (optionally) federate:
-arc upgrade Cortex                                              # auto-provisions ~/.config/nats/cortex-research.nk
+arc upgrade cortex                                              # auto-provisions ~/.config/nats/cortex-research.nk
 cortex start --config ~/.config/cortex/research/research.yaml
 cortex network join <network>                                  # federate (optional)
 ```

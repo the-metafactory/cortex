@@ -64,7 +64,7 @@ Pilot's inbound path recognises an **orchestrator command** (`implement {repo}#{
 Pilot subscribes to the `dispatch.task.*` lifecycle + review verdict envelopes (it already runs in the daemon that sees them) and drives: PR-open → review request → verdict → fix-cycle or **principal merge gate**. **The merge stays a human gate (Andreas).** Lift the state machine from the `pilot-review-loop` skill.
 
 ### 4.5 Deployment
-`agents.d/vega.yaml` + `personas/vega.md` in the meta-factory config, shipped via **`arc upgrade Cortex`** — identical to every other agent. One daemon, one config, one lifecycle. No plist, no pilot.env, no blueprint, no standalone process.
+`agents.d/vega.yaml` + `personas/vega.md` in the meta-factory config, shipped via **`arc upgrade cortex`** — identical to every other agent. One daemon, one config, one lifecycle. No plist, no pilot.env, no blueprint, no standalone process.
 
 ## 5. Slices (build order — each a thin, reviewable PR via the auto-dev SOP)
 

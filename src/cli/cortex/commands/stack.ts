@@ -27,7 +27,7 @@
  * SAFETY (mirrors `cortex network`): `create` is dry-run unless `--apply`, so
  * an accidental run during development is inert. It never generates signing
  * keys — `stack.nkey_seed_path` is set to the conventional path and
- * `arc upgrade Cortex` auto-provisions the seed on first install
+ * `arc upgrade cortex` auto-provisions the seed on first install
  * (taps/.../postupgrade.sh §2 — the existing flow).
  *
  * Exit codes: 0 success · 1 operational failure (conflict / write error) · 2 usage.
@@ -346,7 +346,7 @@ function renderPlan(
   lines.push(`  principal:  ${principal}`);
   lines.push(`  stack.id:   ${stackId}   (born aligned: dir == slug == trailing segment)`);
   lines.push(`  agent:      ${agentId}`);
-  lines.push(`  seed path:  ${seedPath}   (auto-provisioned by 'arc upgrade Cortex' — NOT generated here)`);
+  lines.push(`  seed path:  ${seedPath}   (auto-provisioned by 'arc upgrade cortex' — NOT generated here)`);
   lines.push("");
   lines.push(`  ${applied ? "wrote" : "would write"} under ${targetDir}:`);
   for (const f of files) lines.push(`    • ${f.relPath}`);
@@ -354,7 +354,7 @@ function renderPlan(
   if (applied) {
     lines.push("Next steps:");
     lines.push("  1. Fill the <REPLACE_ME> markers (Discord token/guild/channels, your Discord id).");
-    lines.push(`  2. Provision the signing seed: arc upgrade Cortex   (auto-provisions ${seedPath} on first install)`);
+    lines.push(`  2. Provision the signing seed: arc upgrade cortex   (auto-provisions ${seedPath} on first install)`);
     lines.push(`  3. Mint this stack's bus account tree: cortex network provision ${slug} --apply   (mints the agents/system accounts)`);
     lines.push(`  4. Bring the bus live: cortex network make-live ${slug} --apply   (mints this daemon's bus creds at ~/.config/nats/${slug}-bot.creds + restarts nats-server)`);
     lines.push(`  5. Point your daemon at the pointer: cortex start --config ${join(targetDir, `${slug}.yaml`)}`);
@@ -498,7 +498,7 @@ Subcommands:
           kept only for true secrets — Discord token/guild/channels + the
           post-first-boot nkey_pub). Derives stack.id = {principal}/{slug};
           sets stack.nkey_seed_path to the conventional ~/.config/nats/
-          cortex-<slug>.nk and does NOT generate the seed — 'arc upgrade Cortex'
+          cortex-<slug>.nk and does NOT generate the seed — 'arc upgrade cortex'
           auto-provisions it on first install. NEVER overwrites an existing dir.
   list    Show discovered stacks (split-layout dirs + legacy cortex*.yaml
           monoliths) with their stack.id and an aligned/DRIFT flag.

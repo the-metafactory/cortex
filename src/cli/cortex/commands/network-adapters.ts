@@ -949,7 +949,7 @@ function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
           ok: false,
           reason:
             `no cortex daemon service found referencing --config ${cfg.cortexConfigPath} ` +
-            `under ${where} — is the stack daemon installed? (arc upgrade Cortex)`,
+            `under ${where} — is the stack daemon installed? (arc upgrade cortex)`,
         };
       }
       let mgr;

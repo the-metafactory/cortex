@@ -49,7 +49,7 @@ halden network — NATS :4223 (HARD-ISOLATED, no leaf bridge)
 
 - **Config-split is live + durable.** Every stack runs from `~/.config/cortex/<stack>/` (per-stack `system/system.yaml` + `stacks/<stack>.yaml` + a per-stack sentinel `<stack>.yaml`). The retained root monoliths are rollback anchors only.
 - **The PID-collision lesson (migration 0003):** the `--config` sentinel **must** be named per-stack (`<stack>.yaml`) — the single-instance PID file derives from the `--config` basename, so a uniform `cortex.yaml` would collide on `cortex-cortex.pid`. Now `cortex-<slug>.pid`, all unique.
-- **`arc upgrade Cortex` is config-split-aware (#717):** it discovers per-stack dirs, renders `--config` at the sentinels, and ignores the monoliths — upgrades preserve the split. Verified live on the v4.5.1 deploy (the held #700 smoke-test).
+- **`arc upgrade cortex` is config-split-aware (#717):** it discovers per-stack dirs, renders `--config` at the sentinels, and ignores the monoliths — upgrades preserve the split. Verified live on the v4.5.1 deploy (the held #700 smoke-test).
 
 ### Config-migration pathway (for a new/existing stack)
 Per `docs/migrations/0003-config-split-layout.md`:

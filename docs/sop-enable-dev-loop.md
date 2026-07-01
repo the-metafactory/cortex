@@ -134,7 +134,7 @@ cortex offer code-review.typescript --scope local --config ~/.config/cortex/<slu
 cortex offer list --config ~/.config/cortex/<slug>
 
 # 3. Restart the stack so the daemon re-composes config + re-binds consumers
-arc upgrade Cortex     # or reload the stack's launchd plist
+arc upgrade cortex     # or reload the stack's launchd plist
 ```
 
 After restart, the boot log shows the dev-loop consumers **ready** (rather than

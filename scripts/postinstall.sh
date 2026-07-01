@@ -2,7 +2,7 @@
 set -e
 
 # Cortex postinstall — first-time install setup.
-# Runs once when `arc install Cortex` succeeds for the first time on a host.
+# Runs once when `arc install cortex` succeeds for the first time on a host.
 # Symlinks are created by arc via provides.files BEFORE this script runs.
 #
 # This script handles:
@@ -37,7 +37,7 @@ echo "  ✓ Runtime directories created"
 # Idempotent: skip chmod when the file is already executable. Both entry
 # points are tracked as mode 100755 in git (cortex#101), so on a normal
 # `git clone`/`git pull` host this loop is a no-op and the pkg dir stays
-# clean — which means the next `arc upgrade Cortex` can `git pull` without
+# clean — which means the next `arc upgrade cortex` can `git pull` without
 # "local changes would be overwritten" aborting the upgrade.
 # Belt-and-braces: on hosts where the executable bit somehow doesn't survive
 # (alternate filesystem, copy-not-clone, archived tarball install), the

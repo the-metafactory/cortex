@@ -9,7 +9,7 @@
  * `--include-prod` so a bare `cortex release --apply` never auto-deploys prod.
  *
  * The 4 surfaces, in deploy order:
- *   1. bot        — `arc upgrade Cortex`             (per-host, non-prod)
+ *   1. bot        — `arc upgrade cortex`             (per-host, non-prod)
  *   2. dashboard  — `bun build … + bunx wrangler pages deploy …` (CF Pages, non-prod)
  *   3. api        — `wrangler deploy --env production` from src/surface/mc/worker/
  *   4. registry   — `wrangler deploy --env production` from src/services/network-registry/
@@ -237,7 +237,7 @@ function surfaceCommands(surface: Surface): string[][] {
 function surfaceLabel(surface: Surface): string {
   switch (surface) {
     case "bot":
-      return "Bot binary (arc upgrade Cortex — per-host)";
+      return "Bot binary (arc upgrade cortex — per-host)";
     case "dashboard":
       return "Dashboard (bun build + wrangler pages deploy grove-dashboard)";
     case "api":

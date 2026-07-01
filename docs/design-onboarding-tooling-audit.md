@@ -30,7 +30,7 @@ asserted.
 | **Join — 2nd+ stack** | same + `--principal-seed <root>` | flag-only, no config field | Minor friction |
 | **Onboard a NEW peer principal** | partial: `provision-stack register` + the O-4a register→PENDING→grant→serve broker | **leaf-creds handoff (two-party)**, **leafnode topology + reachability (two-party)**, **federated account export/import (manual NSC)**, registry pin, `accept_subjects` | **The hard one — ~15 steps, 6 SOPs** |
 | **Issue leaf creds** (hub side) | `cortex creds issue` → `arc nats add-bot` (local hub only) | admin-grant is a **raw signed HTTP call** (no CLI wrapper); cross-account material manual | Half-tooled |
-| **Version / release / deploy** | `arc-manifest.yaml` + `arc upgrade Cortex` | **4 independent deploy surfaces** (bot via arc; dashboard, MC API worker, registry via 3× wrangler), nothing orchestrates them | Fragmented |
+| **Version / release / deploy** | `arc-manifest.yaml` + `arc upgrade cortex` | **4 independent deploy surfaces** (bot via arc; dashboard, MC API worker, registry via 3× wrangler), nothing orchestrates them | Fragmented |
 
 ## Where the complexity actually lives — ranked
 

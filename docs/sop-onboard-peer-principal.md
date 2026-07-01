@@ -42,7 +42,7 @@ Before Step 1, confirm your machine has:
 - **Bun** — the only supported runtime (`bun --version`). Never use npm / yarn / node.
 - **NATS server with JetStream** — one isolated bus per stack (`nats-server --version`). A federating stack's bus must also be operator-mode (NSC operator + the account the leaf binds to); see Step 3.
 - **Claude Code, authenticated** — the default execution substrate for dispatched work (`claude --version`).
-- **`arc`** *(recommended)* — the metafactory package manager (`arc --version`). It manages install, the launchd lifecycle, and signing-seed provisioning; `arc upgrade Cortex` auto-provisions your stack's NKey seed on first install. Cortex runs without it, but you then provision the seed and lifecycle by hand.
+- **`arc`** *(recommended)* — the metafactory package manager (`arc --version`). It manages install, the launchd lifecycle, and signing-seed provisioning; `arc upgrade cortex` auto-provisions your stack's NKey seed on first install. Cortex runs without it, but you then provision the seed and lifecycle by hand.
 
 **`soma` is not required** to run cortex — it is a separate, optional layer.
 
@@ -56,7 +56,7 @@ If you do not have a cortex stack yet, create one. The command scaffolds a born-
 cortex stack create <slug> --principal <principal> --apply
 ```
 
-Then fill the `<REPLACE_ME>` secrets (Discord token/guild/channels). `arc upgrade Cortex` auto-provisions the NKey seed on first install.
+Then fill the `<REPLACE_ME>` secrets (Discord token/guild/channels). `arc upgrade cortex` auto-provisions the NKey seed on first install.
 
 If you already have a stack, skip to step 2.
 

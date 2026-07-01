@@ -385,7 +385,7 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 
 | Aspect | Detail |
 |--------|--------|
-| Cortex is a metafactory bundle | Installable via `arc upgrade Cortex` once MIG-7 lands. Pre-cutover the package name is `Grove`; the rename to `Cortex` happens at MIG-7.7. |
+| Cortex is a metafactory bundle | Installable via `arc upgrade cortex` once MIG-7 lands. Pre-cutover the package name is `Grove`; the rename to `Cortex` happens at MIG-7.7. |
 | Cortex's `arc-manifest.yaml` | Declares `provides:` — `~/bin/cortex` (the bot binary), `~/bin/discord` (principal CLI), `~/bin/cldyo-live` (CC instrumentation wrapper), CC hooks, skills. The same shape grove-v2 has today. |
 | Cortex consumes other bundles indirectly | Principals install `myelin` (via arc) for the bus protocol; `signal` (via arc) for the observability tap; `cortex` (via arc) for the surface. Each is independently rolled out. |
 | Cortex does NOT runtime-import arc | arc is a build/install-time tool. At runtime cortex doesn't know it was installed by arc — it just finds its config at the configured path and runs. |

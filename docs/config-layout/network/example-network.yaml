@@ -41,7 +41,7 @@
 #     # PRE-PINNED, compiled into cortex (the "root-CA" anchor), so a fresh
 #     # install trusts it with zero paste and zero TOFU. Only declare `registry:`
 #     # below to (a) point at a CUSTOM (non-default) network, or (b) override the
-#     # baked default. TODO(arc-populate): `arc upgrade Cortex` is intended to
+#     # baked default. TODO(arc-populate): `arc upgrade cortex` is intended to
 #     # also WRITE this block from the compiled-in DEFAULT_REGISTRY anchor
 #     # (defense-in-depth — pinned in binary AND visible in config); that
 #     # arc-side populate is a follow-up (tracked on #1228).

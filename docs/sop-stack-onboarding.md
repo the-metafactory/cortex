@@ -57,7 +57,7 @@ the `<slug>.yaml` pointer, and a `personas/<agent>.md` stub — filling your rea
 slug / principal / agent and keeping `<REPLACE_ME>` only for true secrets
 (Discord token/guild/channels + the post-first-boot `nkey_pub`). It sets
 `stack.nkey_seed_path` to the conventional `~/.config/nats/cortex-<slug>.nk` and
-does **not** generate the seed — `arc upgrade Cortex` auto-provisions it on first
+does **not** generate the seed — `arc upgrade cortex` auto-provisions it on first
 install (Step 1 below).
 
 After it writes, the remaining work is: pick a free bus port (Step 2), fill the
