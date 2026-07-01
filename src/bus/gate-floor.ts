@@ -121,7 +121,7 @@ export interface GateFloorContext {
   /**
    * **CO-7 seam.** Whether the compliance hook cleared the request. A `false`
    * is `compliance_block` (a permanent refusal — the request is structurally
-   * forbidden, not merely throttled). The hook itself (STD-NPW-AI-001 / output
+   * forbidden, not merely throttled). The hook itself (STD-EXAMPLE-AI-001 / output
    * egress / persona) is CO-7 territory; CO-4 maps its verdict.
    */
   readonly complianceOk: boolean;
