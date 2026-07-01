@@ -503,7 +503,7 @@ describe("createReviewTaskFailedEvent", () => {
       ...baseOpts,
       reason: {
         kind: "compliance_block",
-        detail: "STD-NPW-AI-001 gate: external review not attested",
+        detail: "STD-EXAMPLE-AI-001 gate: external review not attested",
       },
     });
     const payload = env.payload as {

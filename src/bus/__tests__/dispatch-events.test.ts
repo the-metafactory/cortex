@@ -284,7 +284,7 @@ describe("createDispatchTaskFailedEvent", () => {
       errorSummary: "compliance attestation forbids",
       reason: {
         kind: "compliance_block",
-        detail: "STD-NPW-AI-001 gate: external review not attested",
+        detail: "STD-EXAMPLE-AI-001 gate: external review not attested",
       },
     });
     const payload = env.payload as {
@@ -292,7 +292,7 @@ describe("createDispatchTaskFailedEvent", () => {
     };
     expect(payload.reason?.kind).toBe("compliance_block");
     expect(payload.reason?.detail).toBe(
-      "STD-NPW-AI-001 gate: external review not attested",
+      "STD-EXAMPLE-AI-001 gate: external review not attested",
     );
     expect(validateEnvelope(env).ok).toBe(true);
   });

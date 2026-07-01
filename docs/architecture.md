@@ -505,7 +505,7 @@ local.{org}.dispatch.task.aborted      ── principal-cancelled or system-abor
 - `cant_do` — capability mismatch (agent doesn't claim this capability)
 - `wont_do` — sovereignty refuses (agent could but policy says no)
 - `not_now` — backpressure (retry me later, capability still valid)
-- `compliance_block` — agent's compliance attestation forbids it (e.g. STD-NPW-AI-001 gate)
+- `compliance_block` — agent's compliance attestation forbids it (e.g. STD-EXAMPLE-AI-001 gate)
 
 This four-way discrimination is what makes Delegate-mode observability tractable. "Pilot couldn't drive this PR" is materially different from "Pilot won't drive this PR right now" or "Pilot is compliance-blocked from acting on this PR."
 
@@ -526,7 +526,7 @@ myelin#36 draws an explicit boundary. Five concerns DO NOT live in the bus proto
 |---------|----------|----------------------|
 | Agent capability declaration (tools, envs, creds, reach) | M7 deployment config | `cortex.yaml` `agents[].roles + .trust + .presence` per §9 |
 | Orchestrator translation of principal intent → task graph | M7 orchestrator agent | The Delegate-receiving agent's internal logic (e.g. pilot's review-loop logic — not in cortex; pilot is its own M7 app) |
-| Compliance attestation (e.g. Northpower STD-NPW-AI-001) | M7 deployment-time, signed at install | Cortex's `arc-manifest.yaml` + agent persona declarations; out of scope for v1 cortex but the slot exists |
+| Compliance attestation (e.g. a customer Gen-AI compliance standard) | M7 deployment-time, signed at install | Cortex's `arc-manifest.yaml` + agent persona declarations; out of scope for v1 cortex but the slot exists |
 | Notification surface routing | M7 surface-router | `cortex/src/bus/surface-router.ts` (§8) — exactly this concern |
 | Sub-agent trust floor | M7 orchestrator policy + chain-of-stamps | Cortex's agent registry + chain-of-stamps verification (myelin#31) |
 

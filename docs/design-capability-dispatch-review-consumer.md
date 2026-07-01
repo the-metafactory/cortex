@@ -559,7 +559,7 @@ The consumer's preconditions decide which nak kind to emit. Concrete preconditio
 
 **Preconditions:**
 
-- The agent's `compliance` block in cortex.yaml (per the Northpower STD-NPW-AI-001 pattern, anchor doc §1 stratification §7.5) declares the request's classification / model-class / data-residency combination as forbidden.
+- The agent's `compliance` block in cortex.yaml (per a customer Gen-AI compliance-standard pattern, anchor doc §1 stratification §7.5) declares the request's classification / model-class / data-residency combination as forbidden.
 - The request's `extensions.actor.id` is on a compliance deny-list for this agent.
 
 **Emit:** `dispatch.task.failed` with `reason: { kind: "compliance_block", detail: "<compliance rule>" }`. Ack — compliance refusal is permanent for this request.
@@ -837,7 +837,7 @@ Open: extend the taxonomy in cortex#237's PR cluster, or file separately?
 
 ### §13.5 — Compliance attestation schema (§7.4 dependency)
 
-The `compliance_block` nak kind is wired in code but has no cortex.yaml schema for compliance attestations. Architecture §7.5 says "the slot exists"; the schema does not. What does an agent's compliance attestation look like in cortex.yaml? STD-NPW-AI-001 is the cited example but its schema isn't anywhere in the repo.
+The `compliance_block` nak kind is wired in code but has no cortex.yaml schema for compliance attestations. Architecture §7.5 says "the slot exists"; the schema does not. What does an agent's compliance attestation look like in cortex.yaml? STD-EXAMPLE-AI-001 is the cited example but its schema isn't anywhere in the repo.
 
 Recommendation: out of scope for cortex#237. The `compliance_block` branch is structurally wired but operationally never fires until compliance attestation is specified in a separate issue. Track in §13.
 

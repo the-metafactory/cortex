@@ -446,7 +446,7 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
  *                           `retry_after_ms` hints at a backpressure
  *                           window.
  *   - `compliance_block`  — agent's compliance attestation forbids it
- *                           (e.g. STD-NPW-AI-001 gate).
+ *                           (e.g. STD-EXAMPLE-AI-001 gate).
  *
  * Subscribers correlating on task_id (worklog-manager, agent-team, and the
  * planned pilot-side `subscribe-verdict.ts` per `design-pilot-restructure.md`
