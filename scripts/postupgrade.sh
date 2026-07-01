@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Cortex postupgrade — runs after every `arc upgrade Cortex` once symlinks
+# Cortex postupgrade — runs after every `arc upgrade cortex` once symlinks
 # have been refreshed. Re-templates plists (via shared lib) and restarts
 # daemons.
 #

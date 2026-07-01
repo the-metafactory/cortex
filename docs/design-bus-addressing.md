@@ -205,7 +205,7 @@ Until R1 lands, the pilot review loop cannot deliver verdicts on this deployment
 ## 13. Open questions
 
 1. **Principal-slug collisions across networks.** If `andreas` peers into two networks and a *different* `andreas` exists in the second, the slug collides. Globally-unique principal slugs, or a network-scoped principal registry? (§9.)
-2. **Per-stack descriptor generation + drift.** Should `arc` render `stack-{name}.md` on `arc upgrade Cortex`? A drift check in CI? (Mirrors the compass `CLAUDE.md` generation question — arc#181.)
+2. **Per-stack descriptor generation + drift.** Should `arc` render `stack-{name}.md` on `arc upgrade cortex`? A drift check in CI? (Mirrors the compass `CLAUDE.md` generation question — arc#181.)
 3. **Federation identity mapping.** When a `federated.` task is claimed by an agent from another principal, whose policy scope does it carry? (myelin#43 territory — cross-ref, don't re-solve here.)
 4. **Should the network ever be observable?** A diagnostic case for "which network did this reach" — but per §3 it must never be a subject segment. An envelope metadata field, perhaps. Deferred.
 

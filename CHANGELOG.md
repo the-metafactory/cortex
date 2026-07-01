@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking
+
+- **arc package renamed `Cortex` → `cortex`** (#1337) — the arc package name now
+  matches the binary/CLI (`~/bin/cortex`, `cortex …`) and the sibling packages
+  (`arc`, `metafactory-discord`). arc is **case-sensitive** (correct on Linux,
+  where `Cortex` and `cortex` are distinct paths), so this is a real rename, not
+  a case-fold. **One-time migration for existing installs** (anyone already on
+  `Cortex`): run **`arc uninstall Cortex && arc install cortex`** once — the same
+  idiom as the Grove→Cortex rename. Configs under `~/.config/cortex/` are
+  untouched. New installs just use `arc install cortex` / `arc upgrade cortex`.
+
 ### Non-breaking
 
 - **F-6 reflex bridge — generic `process` code handler (config-driven command
@@ -226,7 +237,7 @@ mv ~/.config/cortex/cortex.yaml.new ~/.config/cortex/cortex.yaml
 #      CORTEX_OPERATOR_ID=andreas    →    CORTEX_PRINCIPAL_ID=andreas
 
 # 4. Upgrade.
-arc upgrade Cortex
+arc upgrade cortex
 ```
 
 ### What is NOT changed

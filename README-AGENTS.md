@@ -53,7 +53,7 @@ NATS, and the config `.conf` are identical); only the **service manager** differ
 **Path A — arc-managed (preferred when `arc` is available):**
 
 ```bash
-arc upgrade Cortex
+arc upgrade cortex
 ```
 
 This installs the released package and renders + loads the launchd agents
@@ -62,7 +62,7 @@ not `main`.
 
 **Ordering:** seed auto-provisioning reads `stack.nkey_seed_path` from the
 stack config — which doesn't exist until §3.1 scaffolds it. On a fresh machine:
-install (this section) → configure (§3) → re-run `arc upgrade Cortex` (or
+install (this section) → configure (§3) → re-run `arc upgrade cortex` (or
 provision manually per §3.3) so the seed lands at the declared path.
 
 **Path B — from source** (for contributors / the fork-and-PR workflow; Path A is
@@ -82,7 +82,7 @@ Run the daemon with `cortex start --config <pointer>` (or directly with
 
 **Updating a from-source clone:** `cd cortex && git pull && bun install` — a clean
 fast-forward if you haven't modified anything. For an arc-managed install, update
-with `arc upgrade Cortex` instead (Path A).
+with `arc upgrade cortex` instead (Path A).
 
 ## 3. Configure a stack
 
@@ -123,7 +123,7 @@ Composition precedence (later wins on leaf keys):
 
 ### 3.3 Signing identity
 
-`arc upgrade Cortex` auto-provisions the seed at
+`arc upgrade cortex` auto-provisions the seed at
 `~/.config/nats/cortex-<slug>.nk`. Manual alternative:
 
 ```bash

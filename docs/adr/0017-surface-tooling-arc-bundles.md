@@ -54,7 +54,7 @@ grant, from one shared pack.
 - The bundle is reusable outside cortex (a PAI session can `arc install metafactory-discord`
   for the skills without running the daemon).
 - A dependency edge is introduced (cortex → metafactory-discord). Until arc auto-resolves
-  package dependencies on `arc install Cortex`, the bundle is installed explicitly; the
+  package dependencies on `arc install cortex`, the bundle is installed explicitly; the
   `dependencies:` declaration records the intent and is the seam to close.
 
 ## Alternatives considered

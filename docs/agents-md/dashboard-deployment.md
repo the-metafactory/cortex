@@ -21,7 +21,7 @@ The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify step 
 **When to deploy:**
 - After any change to `src/surface/mc/dashboard-v2/` files (app.tsx, types.ts, hooks, etc.)
 - After merging a PR that modifies dashboard components
-- The backend (`cortex` bot via `arc upgrade Cortex`) and the frontend (CF Pages via `wrangler`) are deployed independently.
+- The backend (`cortex` bot via `arc upgrade cortex`) and the frontend (CF Pages via `wrangler`) are deployed independently.
 
 **Architecture:**
 - `cortex` serves the REST API + WebSocket at `localhost:8767` locally, or via the CF Worker at `grove.meta-factory.ai/api/*` in production (`src/surface/mc/worker/`).

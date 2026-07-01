@@ -972,7 +972,7 @@ export async function startCortex(
     //
     // Same wording pattern as the cortex#314 capability-registry and
     // review-consumer skip warnings (`src/cortex.ts:~640, ~774`): info
-    // log + stderr WARNING with the `arc upgrade Cortex` fix-path AND
+    // log + stderr WARNING with the `arc upgrade cortex` fix-path AND
     // the manual cortex.yaml fix-path, plus a docs/sop-stack-identity.md
     // cross-link for the rotation / threat-model background.
     console.log(
@@ -981,7 +981,7 @@ export async function startCortex(
     process.stderr.write(
       "WARNING: stack identity not configured — cortex will publish unsigned envelopes.\n" +
         "  Peers that verify signed_by[] will reject these messages.\n" +
-        "  Run `arc upgrade Cortex --force` to auto-provision, or add\n" +
+        "  Run `arc upgrade cortex --force` to auto-provision, or add\n" +
         "  `stack.nkey_seed_path` (+ optionally `stack.nkey_pub`) to cortex.yaml.\n" +
         "  See docs/sop-stack-identity.md for the full SOP.\n",
     );

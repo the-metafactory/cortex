@@ -77,7 +77,7 @@ principal:
 # -----------------------------------------------------------------------------
 # stack — identity of this cortex deployment within the principal
 # -----------------------------------------------------------------------------
-# v2.0.3 (cortex#324) — stack signing is ON by default. `arc upgrade Cortex`
+# v2.0.3 (cortex#324) — stack signing is ON by default. `arc upgrade cortex`
 # auto-provisions `nkey_seed_path` + `nkey_pub` if you don't declare them;
 # the values below are the worked example a fresh install renders. Without
 # a `nkey_seed_path`, cortex emits a stderr WARNING and publishes envelopes
@@ -93,7 +93,7 @@ stack:
   # principal-id half in sync with `principal.id` above.
   id: principal-name/meta-factory  # <REPLACE_ME>: keep principal-name half in sync with principal.id
   # NKey seed file (NATS user-class, `SU…`-prefixed). Must be chmod 600.
-  # `arc upgrade Cortex` provisions one at this path if missing. Rotate
+  # `arc upgrade cortex` provisions one at this path if missing. Rotate
   # by regenerating the seed + updating `nkey_pub` below; see SOP.
   nkey_seed_path: ~/.config/nats/cortex.nk  # <REPLACE_ME or rely on arc upgrade auto-provision>
   # 56-char base32 NKey public key (`U…`-prefixed). Optional but

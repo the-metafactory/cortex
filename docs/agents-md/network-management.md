@@ -8,7 +8,7 @@
 
 | Command | Purpose |
 |---|---|
-| `cortex stack create <slug> [--principal <id>] [--apply]` | Scaffold a born-aligned (dir==slug==`stack.id` trailing segment), unique-within-principal config-split stack from the `docs/config-layout/` template (#808). Sets `stack.nkey_seed_path` to the conventional path — `arc upgrade Cortex` auto-provisions the seed. Dry-run by default; never overwrites an existing dir. |
+| `cortex stack create <slug> [--principal <id>] [--apply]` | Scaffold a born-aligned (dir==slug==`stack.id` trailing segment), unique-within-principal config-split stack from the `docs/config-layout/` template (#808). Sets `stack.nkey_seed_path` to the conventional path — `arc upgrade cortex` auto-provisions the seed. Dry-run by default; never overwrites an existing dir. |
 | `cortex stack list [--config-dir <path>]` | List discovered stacks with their `stack.id` and an aligned/DRIFT flag. |
 
 ### Network lifecycle

@@ -212,7 +212,7 @@ export interface ScaffoldInputs {
   agentId: string;
   displayName: string;
   /** Conventional seed path (`~/.config/nats/cortex-<slug>.nk`). NOT generated
-   *  here — `arc upgrade Cortex` auto-provisions the seed on first install. */
+   *  here — `arc upgrade cortex` auto-provisions the seed on first install. */
   seedPath: string;
 }
 
@@ -228,7 +228,7 @@ export interface ScaffoldFile {
  * substituted for the real slug / principal / agent, keeping `<REPLACE_ME>`
  * only for true secrets (Discord token/guild/channel ids + the post-first-boot
  * `nkey_pub`). NEVER emits private key material — the seed is auto-provisioned
- * later (see `arc upgrade Cortex` / postupgrade.sh §2).
+ * later (see `arc upgrade cortex` / postupgrade.sh §2).
  */
 export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   const { slug, principal, stackId, agentId, displayName, seedPath } = inputs;
@@ -246,7 +246,7 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
 function systemYaml(slug: string): string {
   // The cross-cutting substrate layer — substituted from
   // docs/config-layout/system/system.yaml. Identity is left at the safe
-  // conventional default; `arc upgrade Cortex` auto-provisions the seed.
+  // conventional default; `arc upgrade cortex` auto-provisions the seed.
   return `# =============================================================================
 # system.yaml — the cross-cutting machine / substrate layer (IAW CFG.b)
 # =============================================================================
@@ -295,7 +295,7 @@ nats:
   # different files — a shared path would clobber on the second mint.
   credsPath: ~/.config/nats/${slug}-bot.creds
   # NKey identity for envelope signing. The seedPath is the conventional path
-  # \`arc upgrade Cortex\` auto-provisions on first install; publicKey is pinned
+  # \`arc upgrade cortex\` auto-provisions on first install; publicKey is pinned
   # after first boot (paste from the cortex log \`stack signing key staged …\`).
   identity:
     seedPath: ~/.config/nats/cortex.nk
@@ -393,7 +393,7 @@ principal:
 # -----------------------------------------------------------------------------
 # stack — identity of THIS deployment within the principal (signing identity)
 # -----------------------------------------------------------------------------
-# \`arc upgrade Cortex\` auto-provisions the seed at nkey_seed_path on first
+# \`arc upgrade cortex\` auto-provisions the seed at nkey_seed_path on first
 # install if it is missing — do NOT generate it by hand. After first boot, paste
 # the U-prefixed pubkey from the cortex log line \`stack signing key staged …\`
 # into nkey_pub to pin it.

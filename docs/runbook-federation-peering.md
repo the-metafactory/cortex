@@ -24,7 +24,7 @@
 
 ## Prerequisites (BOTH sides)
 
-- **cortex ≥ v4.7.0** (federated review consumer, Offer + Direct) — `arc upgrade Cortex`.
+- **cortex ≥ v4.7.0** (federated review consumer, Offer + Direct) — `arc upgrade cortex`.
 - **pilot ≥ v1.3.0** (cross-principal `--principal` / `--reviewer` flags) — update the pilot checkout (`cd ~/Developer/pilot && git pull`) or `arc upgrade pilot` where managed.
 - A reviewer **assistant** on the *receiving* side that declares a `code-review.*` capability (e.g. Echo on JC's stack).
 - NATS server admin on at least one side (to host the leaf hub).

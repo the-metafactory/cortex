@@ -45,7 +45,7 @@ principal:
 # — so `signed_by` cannot be relied on as a trust gate; bus-layer auth (NATS
 # leaf-node/user auth) is the effective trust boundary under `off`. Only set
 # `off` explicitly on a hardened bus.
-# `arc upgrade Cortex` auto-provisions a seed at `nkey_seed_path` if missing.
+# `arc upgrade cortex` auto-provisions a seed at `nkey_seed_path` if missing.
 # See docs/sop-stack-identity.md for rotation + threat-model background.
 stack:
   id: andreas/research                          # <REPLACE_ME>: keep the principal half in sync with principal.id

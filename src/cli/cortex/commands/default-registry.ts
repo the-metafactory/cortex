@@ -33,7 +33,7 @@
  *
  * ## Defense-in-depth (the arc-populate half)
  *
- * `arc upgrade Cortex` is intended to also WRITE `policy.federated.registry.
+ * `arc upgrade cortex` is intended to also WRITE `policy.federated.registry.
  * {url,pubkey}` from this anchor so the pin is both compiled into the binary
  * AND visible in config. That arc-side populate is NOT in this repo — see the
  * TODO in `docs/config-layout/network/example-network.yaml`. The in-cortex

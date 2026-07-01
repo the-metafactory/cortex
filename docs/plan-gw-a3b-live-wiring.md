@@ -69,7 +69,7 @@ Collapsing N connections to 1 concentrates the failure domain. a.3b.1/2 inherit 
 
 - **Reconnect/backoff per connection** — reuse adapter retry; surface a **connection-health `system.*` event** on the bus (the `systemEventSource` pattern, `cortex.ts:647`) so the dashboard shows "Luna-Discord down — N stacks affected."
 - **Inbound durability** — already structural: inbound is published to the bus; a down stack's consumer redelivers via JetStream. A stack outage does **not** require a gateway reconnect (§6.2 mitigation 1).
-- **a.3c launchd** — run the gateway as its own supervised plist (sibling to `ai.meta-factory.cortex.bot.plist`) so a stack deploy (`arc upgrade Cortex`) doesn't bounce the shared connection.
+- **a.3c launchd** — run the gateway as its own supervised plist (sibling to `ai.meta-factory.cortex.bot.plist`) so a stack deploy (`arc upgrade cortex`) doesn't bounce the shared connection.
 
 ## 7. Outbound mux (a.3d, sketch)
 

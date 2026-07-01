@@ -18,7 +18,7 @@ REQUIRED_MINOR=24
 # ── 1. Check cortex is on PATH ─────────────────────────────────────────────
 if ! command -v cortex &>/dev/null; then
   echo "pier preinstall ERROR: 'cortex' binary not found on PATH." >&2
-  echo "  Install cortex first:  arc install Cortex" >&2
+  echo "  Install cortex first:  arc install cortex" >&2
   exit 1
 fi
 
@@ -34,7 +34,7 @@ MINOR="$(echo "$CORTEX_VERSION" | cut -d. -f2)"
 
 if (( MAJOR < REQUIRED_MAJOR || (MAJOR == REQUIRED_MAJOR && MINOR < REQUIRED_MINOR) )); then
   echo "pier preinstall ERROR: cortex ${CORTEX_VERSION} found; >= ${REQUIRED_MAJOR}.${REQUIRED_MINOR}.0 required." >&2
-  echo "  Upgrade:  arc upgrade Cortex" >&2
+  echo "  Upgrade:  arc upgrade cortex" >&2
   exit 1
 fi
 

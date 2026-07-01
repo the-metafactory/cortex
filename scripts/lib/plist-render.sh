@@ -27,7 +27,7 @@ resolve_bun_path() {
   bun_path="$(command -v bun 2>/dev/null || true)"
   if [ -z "${bun_path}" ]; then
     echo "  ⚠ bun not found in PATH — cannot render launchd plists" >&2
-    echo "    Install bun (https://bun.sh) and re-run \`arc upgrade Cortex\`." >&2
+    echo "    Install bun (https://bun.sh) and re-run \`arc upgrade cortex\`." >&2
     return 1
   fi
   printf '%s' "${bun_path}"

@@ -73,7 +73,7 @@ if [ "$(uname)" = "Darwin" ]; then
   # - `ai.meta-factory.cortex.bot`: pre-cortex#251 name for the
   #   metafactory dev stack plist (renamed to `.meta-factory` to make
   #   the identity legible alongside the `andreas/work` sibling). First
-  #   `arc upgrade Cortex` after merge unloads + removes the stale
+  #   `arc upgrade cortex` after merge unloads + removes the stale
   #   `.bot` plist so the renamed one owns launchd cleanly.
   #
   # Idempotent: short-circuits when the legacy plist is absent.
