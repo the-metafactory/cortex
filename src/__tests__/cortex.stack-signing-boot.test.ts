@@ -18,7 +18,7 @@
  * capture pattern, same WARNING-is-additive shape.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -108,6 +108,14 @@ function withCapturedConsoleLog<T>(fn: () => Promise<T>): Promise<{ result: T; l
 // ---------------------------------------------------------------------------
 
 describe("startCortex — stack-signing boot warning (cortex#324)", () => {
+  // Isolate from the principal's real ~/.config/cortex/agents.d/. startCortex
+  // falls back to that dir when `agentsDir` is omitted, which leaked installed
+  // fragments (e.g. an amt-facilitator agent trusting `luna`) into these tests
+  // and tripped trust-closure validation locally while passing in CI. Point the
+  // registry assembly at an empty dir so boot sees only the in-memory config.
+  const emptyAgentsDir = mkdtempSync(join(tmpdir(), "cortex-stack-signing-empty-agents-"));
+  afterAll(() => rmSync(emptyAgentsDir, { recursive: true, force: true }));
+
   test("no stack.nkey_seed_path → stderr carries the WARNING with the actionable fix-path", async () => {
     // No `options.stack` at all — the legacy opt-in shape that's the
     // dominant install state pre-v2.0.3. Boot must surface the WARN.
@@ -115,6 +123,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
     const { result: bootResult, stderr } = await withCapturedStderr(() =>
       withCapturedConsoleLog(() =>
         startCortex(minimalConfig(), {
+          agentsDir: emptyAgentsDir,
           disableConfigWatcher: true,
           disableDashboard: true,
           disableOutboundPoller: true,
@@ -156,6 +165,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
       withCapturedConsoleLog(() =>
         startCortex(minimalConfig(), {
           stack: { id: "test-op/research" },
+          agentsDir: emptyAgentsDir,
           disableConfigWatcher: true,
           disableDashboard: true,
           disableOutboundPoller: true,
@@ -202,6 +212,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
         withCapturedConsoleLog(() =>
           startCortex(cfg, {
             stack: { id: "test-op/research", nkey_seed_path: seedPath },
+            agentsDir: emptyAgentsDir,
             disableConfigWatcher: true,
             disableDashboard: true,
             disableOutboundPoller: true,
