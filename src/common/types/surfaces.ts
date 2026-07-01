@@ -185,6 +185,13 @@ export const WebBindingSchema = z
      */
     port: z.number().int().min(1).max(65535).default(8090),
     /**
+     * Bind address for the Bun HTTP ingress. Defaults to loopback so the
+     * ingress is never exposed on all interfaces; the CF-Access + cloudflared
+     * perimeter is the only public path. Set to `"0.0.0.0"` ONLY for a
+     * deliberately multi-homed deployment.
+     */
+    host: z.string().default("127.0.0.1"),
+    /**
      * URL to POST broadcast messages to when cortex wants to push a reply to
      * the web surface. For `transport: "ws"` this is the WS Durable Object's
      * `/broadcast` endpoint (mirrors `dashboard-socket.ts` DO protocol); for

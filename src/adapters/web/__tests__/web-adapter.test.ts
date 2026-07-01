@@ -50,6 +50,7 @@ async function withBroadcastCapture(fn: () => Promise<void>): Promise<void> {
 
 function makeBinding(overrides: Partial<WebBinding> = {}): WebBinding {
   return {
+    host: "127.0.0.1",
     instanceId: "amt",
     port: 0, // ephemeral — overridden per test
     broadcastUrl: "http://localhost:9999/broadcast",
@@ -574,9 +575,27 @@ describe("WebBindingSchema — validation", () => {
       broadcastUrl: "http://example.com/broadcast",
     });
     expect(result.instanceId).toBe("amt");
+    expect(result.host).toBe("127.0.0.1"); // default — loopback only
     expect(result.port).toBe(8090); // default
     expect(result.transport).toBe("ws"); // default
     expect(result.authScheme).toBe("cf-access"); // default
+  });
+
+  test("host defaults to loopback", () => {
+    const r = WebBindingSchema.parse({
+      instanceId: "amt",
+      broadcastUrl: "http://x.com/b",
+    });
+    expect(r.host).toBe("127.0.0.1");
+  });
+
+  test("host override is honoured", () => {
+    const r = WebBindingSchema.parse({
+      instanceId: "amt",
+      broadcastUrl: "http://x.com/b",
+      host: "0.0.0.0",
+    });
+    expect(r.host).toBe("0.0.0.0");
   });
 
   test("missing instanceId fails validation", () => {
@@ -698,6 +717,7 @@ describe("buildGatewayAdapters — web bindings", () => {
         {
           agent: "ivy",
           binding: {
+            host: "127.0.0.1",
             instanceId: "amt",
             broadcastUrl: "http://example.com/broadcast",
             port: 8090,
@@ -721,8 +741,8 @@ describe("buildGatewayAdapters — web bindings", () => {
     const { factory, calls } = makeRecordingFactory();
     const surfaces: Surfaces = {
       web: [
-        { agent: "ivy", binding: { instanceId: "app-a", broadcastUrl: "http://a.com/broadcast", port: 8091, transport: "ws", authScheme: "none" } },
-        { agent: "ivy", binding: { instanceId: "app-b", broadcastUrl: "http://b.com/broadcast", port: 8092, transport: "sse", authScheme: "header" } },
+        { agent: "ivy", binding: { host: "127.0.0.1", instanceId: "app-a", broadcastUrl: "http://a.com/broadcast", port: 8091, transport: "ws", authScheme: "none" } },
+        { agent: "ivy", binding: { host: "127.0.0.1", instanceId: "app-b", broadcastUrl: "http://b.com/broadcast", port: 8092, transport: "sse", authScheme: "header" } },
       ],
     };
     const adapters = buildGatewayAdapters(surfaces, {
@@ -757,7 +777,7 @@ describe("buildGatewayAdapters — web bindings", () => {
       },
     };
     buildGatewayAdapters(
-      { web: [{ agent: "ivy", binding: { instanceId: "amt", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }] },
+      { web: [{ agent: "ivy", binding: { host: "127.0.0.1", instanceId: "amt", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }] },
       { principal: "andreas", runtime: RUNTIME_STUB, factory },
     );
     expect(capturedSource).toMatchObject({
@@ -779,7 +799,7 @@ describe("buildGatewayAdapters — web bindings", () => {
       },
     };
     buildGatewayAdapters(
-      { web: [{ agent: "ivy", binding: { instanceId: "amt", broadcastUrl: "http://x.com/b", port: 8090, transport: "sse", authScheme: "header", authHeader: "X-User" } }] },
+      { web: [{ agent: "ivy", binding: { host: "127.0.0.1", instanceId: "amt", broadcastUrl: "http://x.com/b", port: 8090, transport: "sse", authScheme: "header", authHeader: "X-User" } }] },
       { principal: "andreas", runtime: RUNTIME_STUB, factory },
     );
     const b = capturedWebBinding as Record<string, unknown>;
@@ -794,7 +814,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     // WebAdapter must never subscribe to bus subjects (double-delivery prevention).
     // No surfaceConfig on the adapter — surfaceSubjects:[] means it's intentionally absent.
     const surfaces: Surfaces = {
-      web: [{ agent: "ivy", binding: { instanceId: "test", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }],
+      web: [{ agent: "ivy", binding: { host: "127.0.0.1", instanceId: "test", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }],
     };
     const { factory } = makeRecordingFactory();
     const adapters = buildGatewayAdapters(surfaces, {
@@ -853,8 +873,8 @@ describe("WebAdapter — AMT agnosticism", () => {
 
     const surfaces: Surfaces = {
       web: [
-        { agent: "ivy", binding: { instanceId: "tenant-a", broadcastUrl: "http://a.com/b", port: 8091, transport: "ws", authScheme: "cf-access" } },
-        { agent: "oak", binding: { instanceId: "tenant-b", broadcastUrl: "http://b.com/b", port: 8092, transport: "ws", authScheme: "cf-access" } },
+        { agent: "ivy", binding: { host: "127.0.0.1", instanceId: "tenant-a", broadcastUrl: "http://a.com/b", port: 8091, transport: "ws", authScheme: "cf-access" } },
+        { agent: "oak", binding: { host: "127.0.0.1", instanceId: "tenant-b", broadcastUrl: "http://b.com/b", port: 8092, transport: "ws", authScheme: "cf-access" } },
       ],
     };
 

@@ -243,6 +243,7 @@ const WEB_SURFACES: Surfaces = {
       agent: "pylon",
       stack: "andreas/amt",
       binding: {
+        host: "127.0.0.1",
         instanceId: "amt",
         port: 8090,
         broadcastUrl: "http://localhost:9090/broadcast",

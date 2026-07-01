@@ -800,6 +800,7 @@ const WEB_SURFACES: Surfaces = {
       agent: "pylon",
       stack: "andreas/amt",
       binding: {
+        host: "127.0.0.1",
         instanceId: "amt",
         port: 8090,
         broadcastUrl: "http://localhost:9090/broadcast",
@@ -841,6 +842,7 @@ describe("buildBindingIndex — web collision throws", () => {
           agent: "pylon",
           stack: "andreas/amt",
           binding: {
+            host: "127.0.0.1",
             instanceId: "amt",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
@@ -852,6 +854,7 @@ describe("buildBindingIndex — web collision throws", () => {
           agent: "relay",
           stack: "andreas/work",
           binding: {
+            host: "127.0.0.1",
             instanceId: "amt", // duplicate — same demux key "web:amt"
             port: 8091,
             broadcastUrl: "http://localhost:9091/broadcast",
@@ -911,6 +914,7 @@ describe("distinctBoundStacks — web bindings", () => {
           agent: "pylon",
           stack: "andreas/amt", // same leaf — collapses to one entry
           binding: {
+            host: "127.0.0.1",
             instanceId: "amt",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
@@ -937,6 +941,7 @@ describe("distinctBoundStacks — web bindings", () => {
           agent: "pylon",
           stack: "andreas/amt",
           binding: {
+            host: "127.0.0.1",
             instanceId: "amt",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
@@ -962,6 +967,7 @@ describe("crossPrincipalBindings — web bindings", () => {
           agent: "pylon",
           stack: "other/amt",
           binding: {
+            host: "127.0.0.1",
             instanceId: "amt",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",

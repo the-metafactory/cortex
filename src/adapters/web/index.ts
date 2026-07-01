@@ -238,13 +238,14 @@ export class WebAdapter implements PlatformAdapter {
     this.onMessageCallback = onMessage;
 
     this.server = Bun.serve({
+      hostname: this.binding.host,
       port: this.binding.port,
       fetch: (req) => this.handleRequest(req),
     });
     this._serverPort = this.server.port ?? null;
 
     console.log(
-      `web-adapter[${this.instanceId}] agent=${this.agentId}: HTTP ingress listening on port ${this._serverPort} (transport=${this.binding.transport})`,
+      `web-adapter[${this.instanceId}] agent=${this.agentId}: HTTP ingress listening on ${this.binding.host}:${this._serverPort} (transport=${this.binding.transport})`,
     );
     return Promise.resolve();
   }
