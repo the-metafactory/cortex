@@ -188,6 +188,12 @@ export interface ProvisionState {
   federationAccount: string | undefined;
   /** `stack.nats_infra.agents_account` (`A…` pubkey), if set. */
   agentsAccount: string | undefined;
+  /**
+   * cortex#1333 — `stack.nats_infra.system_account` (the SYS account `A…` pubkey),
+   * if set. Drives the ensure-shape of the SYS mint: present ⇒ skip (no-op),
+   * absent ⇒ mint (JetStream operator-mode requires it). `--force` re-mints.
+   */
+  systemAccount: string | undefined;
   /** Does the signing seed file exist on disk? */
   signingSeedExists: boolean;
   /**
@@ -258,6 +264,7 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
   const operatorPresent = !force && state.federationAccount !== undefined;
   const fedPresent = !force && state.federationAccount !== undefined;
   const agentsPresent = !force && state.agentsAccount !== undefined;
+  const sysPresent = !force && state.systemAccount !== undefined;
   const signingPresent = !force && state.signingSeedExists;
   const jwtsPresent = !force && state.operatorModeJwtsPresent;
 
@@ -278,6 +285,21 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
       detail: agentsPresent ? `${inputs.agentsAccountName} (${state.agentsAccount})` : inputs.agentsAccountName,
     },
     {
+      // cortex#1333 — the SYS (system) account. An operator-mode NATS bus with
+      // JetStream enabled FATALS at boot without a configured system_account. We
+      // can't tell from this path whether a given stack enables JetStream — but SYS
+      // is inert when it doesn't and load-bearing when it does, so ensuring it is
+      // the safe default either way, and it removes the downstream boot-fatal for
+      // the JetStream case. Minting is gated on state.systemAccount in provisionStack
+      // (present-in-config => skip, absent => mint). Retires the raw `nsc add
+      // account SYS` workaround that #1332 documented.
+      step: "system account",
+      status: sysPresent ? "ok" : "mint",
+      detail: sysPresent
+        ? `${inputs.systemAccountName} (${state.systemAccount})`
+        : `${inputs.systemAccountName} (required by JetStream operator-mode)`,
+    },
+    {
       step: "signing seed",
       status: signingPresent ? "ok" : "generate",
       detail: inputs.seedPath,
@@ -290,7 +312,7 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
     {
       step: "operator-mode JWTs export",
       status: jwtsPresent ? "ok" : "export",
-      detail: `operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system, best-effort)`,
+      detail: `operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system, ensured)`,
     },
     {
       step: "stack.nats_infra write-back",
@@ -382,6 +404,22 @@ export async function provisionStack(
     steps.push(`agents account present: ${resolvedAgents}`);
   }
 
+  // 3.5 (cortex#1333) — ensure the SYS (system) account; see the rationale on the
+  //     "system account" plan item above. Gated on state.systemAccount: mint only
+  //     when config records no system_account, otherwise skip — this gate is the
+  //     idempotency, no arc-side addAccount dedup is assumed. The dedicated SYS
+  //     export at step 5.6 (gated on the SAME condition) writes system_account[_jwt]
+  //     to config even when the operator/account JWTs are already present — see the
+  //     blocker that decoupling fixed (cortex#1335).
+  const sysNeeded = force || state.systemAccount === undefined;
+  if (sysNeeded) {
+    const sys = await ports.operator.addAccount({ name: inputs.systemAccountName });
+    if (!sys.ok) return fail(plan, steps, `add-account (system ${inputs.systemAccountName}) failed: ${sys.reason}`);
+    steps.push(`system account ${sys.created ? "minted" : "present"}: ${sys.account} (${sys.pubKey})`);
+  } else {
+    steps.push(`system account present: ${state.systemAccount}`);
+  }
+
   // 4. Signing seed (chmod 600, no-clobber unless --force).
   if (signingNeeded) {
     const r = ports.signing.generate({ seedPath: inputs.seedPath, force });
@@ -435,32 +473,54 @@ export async function provisionStack(
       );
     }
     accountJwt = acctRes.jwt;
+    steps.push(`operator-mode JWTs exported: operator + ${inputs.federationAccountName}`);
+  } else {
+    steps.push("operator-mode JWTs present in config (untouched)");
+  }
 
-    // SYS is OPTIONAL + best-effort: `nsc add operator` does NOT mint one, and an
-    // operator-mode bus runs without it (the renderer treats system_account as
-    // optional). A missing SYS account is a clean skip, never a provision failure.
+  // 5.6 (cortex#1335 blocker) — the SYS export is gated INDEPENDENTLY of the
+  // operator/account JWT export. An older provisioned stack can have
+  // operatorModeJwtsPresent === true (JWTs already in config) yet still lack
+  // system_account; folding SYS into jwtExportNeeded would mint SYS at step 3.5 but
+  // then SKIP the only write of system_account, leaving the JetStream boot-fatal in
+  // place. Gate on the SYS config field — the same condition that minted it above —
+  // so SYS is exported and written exactly when (and only when) config lacks it.
+  const sysExportNeeded = force || state.systemAccount === undefined;
+  if (sysExportNeeded) {
     const sysRes = await ports.export.exportSystem({ name: inputs.systemAccountName });
     if (sysRes.ok) {
       systemAccount = sysRes.pubKey;
       systemAccountJwt = sysRes.jwt;
-      steps.push(
-        `operator-mode JWTs exported: operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system)`,
-      );
+      steps.push(`system_account exported + wired: ${inputs.systemAccountName}`);
     } else if (sysRes.notFound) {
-      steps.push(
-        `operator-mode JWTs exported: operator + ${inputs.federationAccountName} ` +
-          `(no ${inputs.systemAccountName} account — system_account skipped, optional)`,
+      // cortex#1333 — SYS was ensured at step 3.5, so a not-found at export implies
+      // an arc operator-store inconsistency. Do NOT warn-and-continue: writing the
+      // config without system_account lets provision claim success while a JetStream
+      // stack still boot-fatals ("system account not setup") at first start — the
+      // exact bug this issue kills. Fail loudly, with the remediation, before the
+      // config write (step 6) so no short/misleading config is ever persisted.
+      return fail(
+        plan,
+        steps,
+        `system account ${inputs.systemAccountName} was ensured this run but exportSystem reports it ` +
+          `not-found — the arc operator store is inconsistent. system_account NOT written (a JetStream ` +
+          `stack would boot-fatal at first start). Remediation: re-run \`cortex network provision\`; if it ` +
+          `persists, inspect the store with \`arc nats export-system --name ${inputs.systemAccountName} --json\` ` +
+          `and repair the operator account tree.`,
       );
     } else {
-      // A non-"not-found" arc failure on the OPTIONAL system export: soft-skip
-      // with a visible warning rather than aborting the whole provision.
-      steps.push(
-        `operator-mode JWTs exported: operator + ${inputs.federationAccountName} ` +
-          `(WARNING: system export skipped — ${sysRes.reason})`,
+      // Any non-not-found arc failure on the SYS export is likewise fatal now — the
+      // same reasoning: a stack config missing system_account boot-fatals JetStream,
+      // so we must not exit 0 with it unwritten.
+      return fail(
+        plan,
+        steps,
+        `system account ${inputs.systemAccountName} export failed: ${sysRes.reason}. system_account NOT ` +
+          `written (a JetStream stack would boot-fatal at first start). Remediation: re-run ` +
+          `\`cortex network provision\`; if it persists, inspect the store with ` +
+          `\`arc nats export-system --name ${inputs.systemAccountName} --json\`.`,
       );
     }
-  } else {
-    steps.push("operator-mode JWTs present in config (untouched)");
   }
 
   // 6. Write the resolved nats_infra fields back to the stack config.

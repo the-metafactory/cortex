@@ -67,8 +67,11 @@ jetstream {
 # turn an anonymous bus into one rooted in YOUR OWN nsc operator.
 #
 # <OPERATOR_JWT>        — your nsc operator JWT. A bare `eyJ…` token (3 segments).
-# <SYSTEM_ACCOUNT_PUBKEY> / <SYSTEM_ACCOUNT_JWT> — OPTIONAL SYS account. `nsc add
-#                         operator` does NOT mint one; omit both lines if absent.
+# <SYSTEM_ACCOUNT_PUBKEY> / <SYSTEM_ACCOUNT_JWT> — the SYS account. REQUIRED when
+#                         JetStream is enabled (the default): an operator-mode bus
+#                         with JetStream boot-fatals without a system_account.
+#                         `cortex network provision` mints + wires it for you
+#                         (cortex#1333) — no raw `nsc add account SYS` needed.
 # <ACCOUNT_PUBKEY>      — an account public key (nkey-U, starts with `A`, 56 chars).
 # <ACCOUNT_JWT>         — that account's JWT (bare `eyJ…`).
 #
@@ -76,8 +79,9 @@ jetstream {
 
 operator: <OPERATOR_JWT>
 
-# OPTIONAL — only when you have a SYS account (delete both this line and its
-# resolver_preload entry below if you do not).
+# REQUIRED when JetStream is enabled (the default). `cortex network provision`
+# mints + wires the SYS account for you (cortex#1333) — keep this line and its
+# resolver_preload entry below. Only a non-JetStream bus may omit both.
 system_account: <SYSTEM_ACCOUNT_PUBKEY>
 
 resolver: MEMORY
@@ -88,7 +92,7 @@ resolver: MEMORY
 resolver_preload: {
   # Your stack's federation/agents account:
   <ACCOUNT_PUBKEY>: <ACCOUNT_JWT>
-  # The SYS account (only if `system_account` is set above):
+  # The SYS account (required alongside `system_account` above when JetStream is on):
   <SYSTEM_ACCOUNT_PUBKEY>: <SYSTEM_ACCOUNT_JWT>
 }
 

@@ -76,7 +76,10 @@ function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; write
       export: {
         exportOperator: async ({ name }) => { calls.push(`export-operator:${name}`); return { ok: true, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }; },
         exportAccount: async (name) => { calls.push(`export-account:${name}`); return { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }; },
-        exportSystem: async ({ name }) => { calls.push(`export-system:${name}`); return { ok: false, reason: "no SYS", notFound: true }; },
+        // cortex#1333 — SYS is ensured at step 3.5, so a faithful export succeeds
+        // (a just-minted SYS is exportable). exportSystem returning not-found now
+        // hard-fails provision; the inconsistency path is covered in the lib suite.
+        exportSystem: async ({ name }) => { calls.push(`export-system:${name}`); return { ok: true, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }; },
       },
     };
     return ports;
@@ -132,6 +135,7 @@ describe("cortex network provision — apply", () => {
       "init-operator:OP_ANDREAS",
       "add-account:ANDREAS_RESEARCH_FED",
       "add-account:ANDREAS_RESEARCH_AGENTS",
+      "add-account:SYS",
       "signing",
       "wire",
       // cortex#1265 — the operator-mode JWT export bridges wiring → config write.

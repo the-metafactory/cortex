@@ -98,7 +98,10 @@ function buildPorts(runner: ArcFederationRunner): { ports: ProvisionPorts; writt
   const exportPort = {
     exportOperator: async () => ({ ok: true as const, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }),
     exportAccount: async () => ({ ok: true as const, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }),
-    exportSystem: async () => ({ ok: false as const, reason: "no SYS", notFound: true }),
+    // cortex#1333 — SYS is ensured at step 3.5, so a faithful export succeeds. A
+    // not-found here now hard-fails provision (covered in the lib suite); the full
+    // chain must model the healthy path where SYS exports cleanly.
+    exportSystem: async () => ({ ok: true as const, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }),
   };
   // The REAL wiring adapter — only the arc subprocess runner is swapped.
   const federationWiring = buildFederationWiringAdapter(runner);
@@ -119,7 +122,7 @@ function inputs(): ProvisionInputs {
     configPath: "~/.config/nats/work.conf",
     force: false,
     apply: true,
-    state: { federationAccount: undefined, agentsAccount: undefined, signingSeedExists: false, operatorModeJwtsPresent: false },
+    state: { federationAccount: undefined, agentsAccount: undefined, systemAccount: undefined, signingSeedExists: false, operatorModeJwtsPresent: false },
   };
 }
 

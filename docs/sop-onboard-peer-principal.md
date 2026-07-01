@@ -76,7 +76,7 @@ This prints your `nkey_pub` (`U…`, 56 chars). Keep the seed chmod 600 — it i
 
 ### Step 3 — Ensure your bus is operator-mode
 
-Your stack's local NATS bus must be **operator-mode** (it must define your NSC operator, optionally the system account, and the resolver preload including the federation account) before it can bind a leaf link to an operator-mode hub. A hard-isolated anonymous bus (no NSC operator, no accounts) cannot federate.
+Your stack's local NATS bus must be **operator-mode** (it must define your NSC operator, the system (SYS) account — **required** whenever JetStream is enabled, which is the default; `cortex network provision` mints and wires it for you (cortex#1333), so no raw `nsc add account SYS` is needed — and the resolver preload including the federation account) before it can bind a leaf link to an operator-mode hub. A hard-isolated anonymous bus (no NSC operator, no accounts) cannot federate.
 
 > **What operator-mode means here.** Your bus config must include the NSC operator JWT, optionally `system_account`, `resolver: MEMORY`, and `resolver_preload` containing your federation account (and, once landed, your agents account). Keep your stack's own `server_name`, `listen` port, `jetstream.domain`, and `http` monitor port — `cortex network join` renders its own leaf include for your stack.
 
