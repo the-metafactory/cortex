@@ -18,25 +18,19 @@
  *   - temp-dir config trees (pattern: PR #1343 stack-signing-boot isolation).
  *
  * The registry's module-scoped singletons (store, nonce cache, derived pubkey,
- * rate-limit buckets) are reset between runs via {@link resetRegistry} — the same
- * discipline `src/services/network-registry/__tests__/helpers.ts` uses.
+ * rate-limit buckets) are reset between runs via {@link resetRegistry}, which
+ * delegates to the registry's own exported `resetStores()`
+ * (`src/services/network-registry/__tests__/helpers.ts`) — the single source of
+ * truth for that reset list.
  */
 
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import app, {
-  type Env,
-  _resetDerivedPublicKeyForTest,
-} from "../../../../../services/network-registry/src/index";
+import app, { type Env } from "../../../../../services/network-registry/src/index";
 import { generateKeypair } from "../../../../../services/network-registry/src/signing";
-import {
-  _setStoreForTest,
-  _setIssuanceStoreForTest,
-  _setNonceCacheForTest,
-} from "../../../../../services/network-registry/src/store";
-import { _resetRateLimitBucketsForTest } from "../../../../../services/network-registry/src/rate-limit";
+import { resetStores } from "../../../../../services/network-registry/__tests__/helpers";
 import type { HubAuthPort } from "../../network-secret-ports";
 import type {
   NetworkPorts,
@@ -60,14 +54,14 @@ export const REGISTRY_BASE = "http://127.0.0.1:18771";
 
 /**
  * Reset EVERY module-scoped registry singleton so a run starts from a clean
- * store. Mirrors `resetStores()` in the registry's own test helpers.
+ * store. Delegates to the registry's own exported `resetStores()` instead of
+ * re-listing the `_set*` / `_reset*` hooks here, so a newly-added registry
+ * singleton is picked up automatically rather than silently drifting out of a
+ * hand-maintained copy (which would leak state between runs in the exact suite
+ * meant to catch regressions).
  */
 export function resetRegistry(): void {
-  _setStoreForTest(undefined);
-  _setIssuanceStoreForTest(undefined);
-  _setNonceCacheForTest(undefined);
-  _resetDerivedPublicKeyForTest();
-  _resetRateLimitBucketsForTest();
+  resetStores();
 }
 
 /**

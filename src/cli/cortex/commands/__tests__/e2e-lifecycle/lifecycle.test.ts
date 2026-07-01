@@ -225,9 +225,12 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
 
   // ===========================================================================
   // Step 3 — Register: the #1262 regression anchor.
-  //   A registered principal MUST leave a PENDING admission row. The #1262 bug
-  //   was a registered principal with NO row (the register hook swallowed the
-  //   upsert failure), so the admin saw nothing to admit.
+  //   A registered principal MUST leave a PENDING admission row. In #1262 a
+  //   principal landed in the registry with NO PENDING row, so the admin saw
+  //   nothing to admit; the issue flags register + raise-admission-request as
+  //   separate steps and leaves the exact cause open (asking whether
+  //   `register --network` is meant to auto-raise). This guard pins the intended
+  //   outcome — register --network yields exactly one PENDING row.
   // ===========================================================================
   test("step 3: register joiner --network testnet → PENDING admission row EXISTS (#1262)", async () => {
     const res = await dispatchProvisionStack([
