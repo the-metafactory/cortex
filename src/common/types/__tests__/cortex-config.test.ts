@@ -39,6 +39,8 @@ import {
   PolicyPublicSchema,
   PolicySchema,
   RendererSchema,
+  isFederatedSubjectInOwnScope,
+  ownFederatedSubjectScopePrefix,
 } from "../cortex-config";
 
 // =============================================================================
@@ -1718,6 +1720,26 @@ describe("CortexConfigSchema — federated accept/deny subject scope (ADR 0001)"
       }),
     );
     expect(parsed.policy?.federated?.networks[0]?.accept_subjects).toHaveLength(2);
+  });
+
+  test("the exported scope predicate agrees with the schema (the rule network join enforces before write, #1220)", () => {
+    // `isFederatedSubjectInOwnScope` is the SINGLE rule the boot validator (this
+    // schema) AND `network join`'s validate-before-write both use, so a subject
+    // the join persists can never be one the daemon then rejects (#1220).
+    const own = "federated.andreas.default.>";
+    const peer = "federated.jc.sage-host.agent.>"; // the #1220 peer PRESENCE subtree
+
+    // Predicate: own in scope, peer out of scope.
+    expect(ownFederatedSubjectScopePrefix("andreas", "default")).toBe("federated.andreas.default.");
+    expect(isFederatedSubjectInOwnScope(own, "andreas", "default")).toBe(true);
+    expect(isFederatedSubjectInOwnScope(peer, "andreas", "default")).toBe(false);
+
+    // Schema AGREES: the own subtree parses; the peer subtree is rejected — the
+    // join guard (predicate) refuses exactly what CortexConfigSchema refuses.
+    expect(() => CortexConfigSchema.parse(withFederated({ accept_subjects: [own] }))).not.toThrow();
+    expect(() =>
+      CortexConfigSchema.parse(withFederated({ accept_subjects: [peer] })),
+    ).toThrow(/must begin with.*federated\.andreas\.default\./);
   });
 
   // P3 (cortex#1088, OQ1) — per-network reconcile opt-in.

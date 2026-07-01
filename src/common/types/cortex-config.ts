@@ -2806,6 +2806,36 @@ export type DiscordNotifyTarget = z.infer<typeof DiscordNotifyTargetSchema>;
 export type NotifyConfig = z.infer<typeof NotifyConfigSchema>;
 
 /**
+ * ADR 0001 — the receiving stack's own federated subject scope prefix:
+ * `federated.{principal}.{stack}.`. Every
+ * `policy.federated.networks[].accept_subjects[]` / `deny_subjects[]` entry MUST
+ * begin with this (federated subjects carry `{principal}.{stack}`, the network is
+ * never on the wire). Exported so the boot validator's subject-scope superRefine
+ * (below) AND imperative callers — notably `network join`'s validate-before-write
+ * (cortex#1220) — enforce ONE rule that cannot drift (mirrors
+ * `invalidSubscribeSubjectReason` in `nats-subjects.ts`).
+ */
+export function ownFederatedSubjectScopePrefix(
+  principalId: string,
+  stackSlug: string,
+): string {
+  return `federated.${principalId}.${stackSlug}.`;
+}
+
+/**
+ * True iff `pattern` is within the receiving stack's own federated scope
+ * (ADR 0001). The single predicate the boot config validator and `network join`
+ * both use, so a subject the join persists can never be one the daemon rejects.
+ */
+export function isFederatedSubjectInOwnScope(
+  pattern: string,
+  principalId: string,
+  stackSlug: string,
+): boolean {
+  return pattern.startsWith(ownFederatedSubjectScopePrefix(principalId, stackSlug));
+}
+
+/**
  * The cortex deployment configuration. One file per principal
  * (`~/.config/cortex/cortex.yaml`). Loaded at startup; hot-reloaded by
  * `config-watcher.ts` for fields that don't require a restart.
@@ -3159,7 +3189,7 @@ export const CortexConfigSchema = z.object({
     // it at boot (`derivedStack.stack` → `MyelinRuntimeOptions.stack`).
     const stack = deriveStackId(config).stack;
     const principal = config.principal.id;
-    const expectedSubjectPrefix = `federated.${principal}.${stack}.`;
+    const expectedSubjectPrefix = ownFederatedSubjectScopePrefix(principal, stack);
     config.policy.federated.networks.forEach((network, networkIdx) => {
       const validateSubjectScope = (
         list: readonly string[],

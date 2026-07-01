@@ -141,6 +141,26 @@ export function deriveAcceptSubjects(
 }
 
 /**
+ * The OWN-scope-only accept-list: exactly `[federated.{me}.{stack}.>]`.
+ *
+ * This is the subset of {@link deriveAcceptSubjects} that is SAFE TO PERSIST to a
+ * stack's config file. The full `deriveAcceptSubjects` (own ∪ peer PRESENCE
+ * subtrees) is correct for the RUNTIME gate, but a persisted peer subtree
+ * (`federated.{peer}.{stack}.agent.>`) is OUT of the receiving stack's own scope
+ * and FAILS the boot config validator (ADR 0001 / cortex#1220 — jc/default's
+ * daemon refused to boot). So `network join` persists ONLY this own subtree; the
+ * peer PRESENCE subtrees are re-derived IN-MEMORY at runtime by the
+ * federation-reconciler (`federation-reconciler.ts` — `replaceArrayContents`,
+ * never written to disk), which keeps inbound peer presence admitted WITHOUT
+ * persisting a config that cannot boot.
+ *
+ * Pure; never `[]` for a valid `self` (the own subtree is always present).
+ */
+export function ownAcceptSubjects(self: AcceptSubjectsSelf): string[] {
+  return [federatedSubtree(self.principal, self.stack)];
+}
+
+/**
  * The FULL `federated.{principal}.{stack}.>` subtree wildcard — admits every
  * federated subject addressed to (dispatch) or sourced from (presence)
  * `{principal}/{stack}`. Used for the OWN subtree only (I accept all traffic

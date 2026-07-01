@@ -9,13 +9,15 @@
  *
  * S4 writes the federation config, so it must be on-contract:
  *
- *   - **accept_subjects** = the stack's OWN `federated.{me}.{stack}.>` (inbound
- *     dispatch, RECEIVER-addressed) ∪ each roster peer's
- *     `federated.{peer}.{peer-stack}.>` (inbound presence, SOURCE-addressed) —
- *     the dual-grammar union derived by `deriveAcceptSubjects` (P2 #1087,
- *     design §7 P2 / §8 OQ2). A network never names ITSELF on the wire;
- *     accept-lists gate by principal/stack segments only. We NEVER write the
- *     network id into a subject.
+ *   - **accept_subjects** = the stack's OWN `federated.{me}.{stack}.>` ONLY
+ *     (inbound dispatch, RECEIVER-addressed). cortex#1220: a persisted PEER
+ *     presence subtree (`federated.{peer}.{peer-stack}.agent.>`) is OUT of the
+ *     receiving stack's own scope and FAILS the boot config validator (ADR 0001),
+ *     so `join` persists own-scope ONLY. Inbound peer PRESENCE is still admitted
+ *     at runtime — the federation-reconciler re-derives the full own ∪ peer
+ *     accept-list from the roster and applies it IN-MEMORY (never to disk). A
+ *     network never names ITSELF on the wire; accept-lists gate by principal/stack
+ *     segments only. We NEVER write the network id into a subject.
  *   - **peers[]** declare by `principal_id` (+ `stack_id`), pubkey
  *     registry-resolved (DD-5) — the local principal is never in its own
  *     peers[].
@@ -35,11 +37,15 @@ import type {
   PolicyFederatedNetwork,
   PolicyFederatedPeer,
 } from "../../../common/types/cortex-config";
+import {
+  isFederatedSubjectInOwnScope,
+  ownFederatedSubjectScopePrefix,
+} from "../../../common/types/cortex-config";
 import type { NetworkRosterResult } from "../../../common/registry/types";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { buildRosterPeers } from "../../../bus/agent-network/roster-read";
 import {
-  deriveAcceptSubjects,
+  ownAcceptSubjects,
   type FederatedWireIdentity,
 } from "../../../bus/agent-network/accept-subjects";
 
@@ -495,28 +501,25 @@ export async function joinNetwork(
     steps.push(`WARN: ${warn}`);
   }
 
-  // (d) P2 (#1087, design §7 P2 / §8 OQ2) — derive `accept_subjects` from the
-  // FINAL peer set (own ∪ peer subtrees), not OWN-only. The gate
-  // (`evaluateFederationGate`) keys gate-step-3 on the inbound SUBJECT, and the
-  // two federated traffic classes are addressed differently (dual-grammar):
+  // (d) cortex#1220 — PERSIST the OWN-scope subtree ONLY. The daemon's boot
+  // config validator (ADR 0001, `CortexConfigSchema` subject-scope superRefine)
+  // requires every persisted `accept_subjects[]` entry to begin with the
+  // RECEIVING stack's own scope `federated.{me}.{my-stack}.`. A PEER PRESENCE
+  // subtree (`federated.{peer}.{peer-stack}.agent.>`) does NOT — persisting one
+  // (the pre-fix `deriveAcceptSubjects` own ∪ peers behaviour) wrote a config the
+  // daemon then REFUSED to boot (jc/default, 2026-06-26).
   //
-  //   - DISPATCH is RECEIVER-addressed → admitted by the OWN subtree
-  //     `federated.{me}.{my-stack}.>` (a peer dispatching TO me publishes here).
-  //   - PRESENCE is SOURCE-addressed → admitted by each PEER's subtree
-  //     `federated.{peer}.{peer-stack}.>` (the federated presence subscriber
-  //     binds `federated.*.*.agent.>`, segment[1] = the SOURCE peer; ADR-0007).
-  //
-  // An OWN-only accept-list (the pre-P2 behaviour) rejected every peer's
-  // presence even though the peer was in `peers[]` — peer membership and the
-  // accept-list are SEPARATE gates. We derive over `peers` (the post-#762 set:
-  // registry-resolved, or the preserved hand-pins) so the accept-list stays
-  // consistent with whatever peers are actually written. With 0 peers the
-  // derivation collapses to exactly the prior OWN-only list (behaviour-
-  // preserving for the empty-roster first-join case).
-  const acceptSubjects = deriveAcceptSubjects(
-    { principal: stack.principalId, stack: stack.stackSlug },
-    peers.map(peerToWireIdentity),
-  );
+  // Peer presence acceptance is NOT lost: the federation-reconciler
+  // (`federation-reconciler.ts`) re-derives the FULL own ∪ peer accept-list from
+  // the roster and applies it IN-MEMORY at runtime (`replaceArrayContents` on the
+  // live gate object — never written to disk). So the on-disk config stays
+  // boot-valid (own-scope only) while the running gate still admits each peer's
+  // presence. `peers` is still written below for the gate's source-network
+  // resolution; only the persisted accept-list narrows to own-scope.
+  const acceptSubjects = ownAcceptSubjects({
+    principal: stack.principalId,
+    stack: stack.stackSlug,
+  });
 
   const entry: PolicyFederatedNetwork = {
     id: networkId,
@@ -534,6 +537,47 @@ export async function joinNetwork(
     max_hop: stack.maxHop ?? 1,
   };
 
+  // (d) Merge the network into the federation config with registry-resolved
+  // peers (DD-5) + the own-scope accept-subjects (#1220). Idempotent: replace the
+  // entry keyed by network id, never append a duplicate.
+  const merged = mergeNetwork(existing, entry);
+
+  // (d.1) cortex#1220 — VALIDATE-BEFORE-WRITE. The rendered
+  // policy.federated.networks[] MUST pass the SAME own-scope rule the daemon
+  // enforces at boot (`isFederatedSubjectInOwnScope`, ADR 0001) — refuse to
+  // persist a config that would fail boot rather than write it and brick the next
+  // daemon start (the #1220 failure mode). Validates the WHOLE merged set: the
+  // entry just built is own-scope by construction, but a STALE peer subtree left
+  // by a pre-fix join surfaces here (self-heals when THAT network is re-joined —
+  // the replace overwrites it — or is named in the error for manual removal)
+  // instead of silently reappearing at boot.
+  const expectedPrefix = ownFederatedSubjectScopePrefix(stack.principalId, stack.stackSlug);
+  const outOfScope: string[] = [];
+  for (const n of merged) {
+    for (const [i, p] of n.accept_subjects.entries()) {
+      if (!isFederatedSubjectInOwnScope(p, stack.principalId, stack.stackSlug)) {
+        outOfScope.push(`networks["${n.id}"].accept_subjects[${i.toString()}] "${p}"`);
+      }
+    }
+    for (const [i, p] of n.deny_subjects.entries()) {
+      if (!isFederatedSubjectInOwnScope(p, stack.principalId, stack.stackSlug)) {
+        outOfScope.push(`networks["${n.id}"].deny_subjects[${i.toString()}] "${p}"`);
+      }
+    }
+  }
+  if (outOfScope.length > 0) {
+    return {
+      ok: false,
+      steps,
+      reason:
+        `refusing to write policy.federated.networks — ${outOfScope.length.toString()} accept/deny ` +
+        `subject(s) fall outside this stack's own federated scope "${expectedPrefix}" and would fail ` +
+        `daemon boot (ADR 0001 / cortex#1220): ${outOfScope.join("; ")}. Re-run join for the offending ` +
+        `network to re-render its accept-list, or remove the stale entry from the config.`,
+      ...(warnings.length > 0 && { warnings }),
+    };
+  }
+
   try {
     // (c, cont.) Ensure the plist loads the nats config (DD-6).
     ports.plist.ensureConfigLoaded(ports.leafFile.natsConfigPath());
@@ -546,15 +590,10 @@ export async function joinNetwork(
     ports.leafFile.ensureInclude(networkId);
     steps.push(`ensured local.conf includes leafnodes-${networkId}.conf`);
 
-    // (d) Merge the network into the federation config with registry-resolved
-    // peers (DD-5) + the derived own ∪ peer accept-subjects (P2 #1087, wire
-    // contract). Idempotent: replace the entry keyed by network id, never append
-    // a duplicate.
-    const merged = mergeNetwork(existing, entry);
     ports.configStore.writeNetworks(merged);
     steps.push(
       `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), ` +
-        `accept ${acceptSubjects.join(", ")}`,
+        `accept ${acceptSubjects.join(", ")} (own-scope; peer presence added in-memory by the reconciler)`,
     );
   } catch (err) {
     return {
