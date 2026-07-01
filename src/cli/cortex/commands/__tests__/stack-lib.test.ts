@@ -120,7 +120,7 @@ describe("renderScaffold", () => {
     slug: "demo",
     principal: "andreas",
     stackId: "andreas/demo",
-    agentId: "luna",
+    agentId: "assistant",
     displayName: "Demo",
     seedPath: "~/.config/nats/cortex-demo.nk",
   };
@@ -129,7 +129,7 @@ describe("renderScaffold", () => {
     const files = renderScaffold(inputs);
     const rels = files.map((f) => f.relPath).sort();
     expect(rels).toEqual(
-      ["demo.yaml", "personas/luna.md", "stacks/demo.yaml", "surfaces/surfaces.yaml", "system/system.yaml"].sort(),
+      ["demo.yaml", "personas/assistant.md", "stacks/demo.yaml", "surfaces/surfaces.yaml", "system/system.yaml"].sort(),
     );
   });
 
@@ -138,7 +138,7 @@ describe("renderScaffold", () => {
     const stack = files.find((f) => f.relPath === "stacks/demo.yaml");
     expect(stack?.contents).toContain("id: andreas/demo");
     expect(stack?.contents).toContain("nkey_seed_path: ~/.config/nats/cortex-demo.nk");
-    expect(stack?.contents).toContain("luna");
+    expect(stack?.contents).toContain("assistant");
   });
 
   test("system/system.yaml seeds the bus/bot credsPath (~/.config/nats/<slug>-bot.creds), distinct from the federation default", () => {

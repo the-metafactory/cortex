@@ -216,7 +216,7 @@ describe("create dry-run (default)", () => {
     expect(res.stdout).toContain("system/system.yaml");
     expect(res.stdout).toContain("stacks/demo.yaml");
     expect(res.stdout).toContain("demo.yaml");
-    expect(res.stdout).toContain("personas/luna.md");
+    expect(res.stdout).toContain("personas/assistant.md");
     // NOTHING was written.
     expect(existsSync(join(cfg, "demo"))).toBe(false);
   });
@@ -243,14 +243,14 @@ describe("create --apply", () => {
     expect(existsSync(join(dir, "system", "system.yaml"))).toBe(true);
     expect(existsSync(join(dir, "stacks", "demo.yaml"))).toBe(true);
     expect(existsSync(join(dir, "demo.yaml"))).toBe(true);
-    expect(existsSync(join(dir, "personas", "luna.md"))).toBe(true);
+    expect(existsSync(join(dir, "personas", "assistant.md"))).toBe(true);
 
     // dir basename == slug == trailing segment of stack.id (the #808 invariant).
     const stackYaml = readFileSync(join(dir, "stacks", "demo.yaml"), "utf-8");
     expect(stackYaml).toContain("id: andreas/demo");
     expect(stackYaml).toContain("nkey_seed_path: ~/.config/nats/cortex-demo.nk");
-    // The chosen agent id is luna by default.
-    expect(stackYaml).toContain("luna");
+    // The chosen agent id is the neutral 'assistant' by default (#1338).
+    expect(stackYaml).toContain("assistant");
   });
 
   test("honours --agent + --display-name", async () => {
