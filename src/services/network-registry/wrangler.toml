@@ -68,6 +68,18 @@ migrations_dir = "migrations"
 name = "cortex-network-registry-dev"
 workers_dev = false
 
+# Dev route. The principal must create the proxied DNS record for
+# network-dev.meta-factory.ai in the meta-factory.ai zone, then
+# `wrangler deploy --env dev`. Same-zone TLS + CF Access still apply.
+# Additional TLDs (.dev/.io) can be added analogously if multi-TLD is wanted.
+# NOTE: `routes` must sit ABOVE the [[env.dev.d1_databases]] table-array —
+# TOML scopes any key that follows a table-array header to that array
+# element, so a misplaced `routes` deploys the dev worker with NO triggers
+# (wrangler: 'Unexpected fields found in env.dev.d1_databases[0]: "routes"').
+routes = [
+  { pattern = "network-dev.meta-factory.ai/*", zone_name = "meta-factory.ai" }
+]
+
 # #682 — dev D1 (cortex-network-registry-dev). Same `binding = "DB"` as
 # prod; only the database differs.
 [[env.dev.d1_databases]]
@@ -75,14 +87,6 @@ binding = "DB"
 database_name = "cortex-network-registry-dev"
 database_id = "19925196-a7ba-4fe0-85fa-4c8181a96bba"
 migrations_dir = "migrations"
-
-# Dev route. The principal must create the proxied DNS record for
-# network-dev.meta-factory.ai in the meta-factory.ai zone, then
-# `wrangler deploy --env dev`. Same-zone TLS + CF Access still apply.
-# Additional TLDs (.dev/.io) can be added analogously if multi-TLD is wanted.
-routes = [
-  { pattern = "network-dev.meta-factory.ai/*", zone_name = "meta-factory.ai" }
-]
 
 [env.dev.vars]
 ENVIRONMENT = "development"
