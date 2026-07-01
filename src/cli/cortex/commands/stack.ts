@@ -69,8 +69,8 @@ const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 /** Default config dir (same canonical path the daemon + network CLI use). */
 const DEFAULT_CONFIG_DIR = "~/.config/cortex";
-/** Default agent id for the scaffolded stack. */
-const DEFAULT_AGENT_ID = "luna";
+/** Default agent id for the scaffolded stack — neutral placeholder, not a personal persona name (#1338). */
+const DEFAULT_AGENT_ID = "assistant";
 
 const SPEC: SubcommandSpec<StackSubcommand> = {
   cliName: "stack",
@@ -512,7 +512,7 @@ Flags (create):
                         the single existing principal under --config-dir; if
                         zero or 2+ principals are present, it is REQUIRED.
   --display-name <name> The agent's display name (default: capitalized agent id).
-  --agent <id>          The agent id on the scaffolded stack (default: luna).
+  --agent <id>          The agent id on the scaffolded stack (default: assistant).
   --config-dir <path>   Config dir to create the stack under (default:
                         ~/.config/cortex). The stack lands at <config-dir>/<slug>/.
   --apply               Write the files (default: dry-run).
