@@ -276,6 +276,15 @@ import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
+// #1352 — `agents` + `migrate-config` were complete standalone `import.meta.main`
+// scripts, unreachable from the installed binary while docs
+// (docs/design-arc-agent-bots.md) and cortex.ts:682 told users to run them as
+// `cortex agents …` / `cortex migrate-config …`. Registered as passthrough
+// commander subcommands below so those references resolve. `dispatchAgents`
+// returns an ExitResult synchronously; `runMigrateConfig` returns the exit code
+// (it writes its own stdout/stderr). Neither boots the daemon — only `start` does.
+import { dispatchAgents } from "./cli/cortex/commands/agents";
+import { runMigrateConfig } from "./cli/cortex/commands/migrate-config";
 
 import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
 import {
@@ -6990,6 +6999,43 @@ if (import.meta.main) {
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
+    });
+
+  // #1352 — `agents`: inspect + validate agents.d/ fragments and signal the
+  // running runtime to reload (SIGHUP). Same passthrough shape as `network` /
+  // `stack` / `creds`: `dispatchAgents` owns its own arg parsing (subcommand +
+  // flags + its own `--help`), so commander hands it the raw remaining argv
+  // untouched. `dispatchAgents` is synchronous (returns an ExitResult) — no
+  // await needed, but the write+exit tail matches the other verbs exactly.
+  program
+    .command("agents")
+    .description("Inspect + validate agent fragments; reload the running runtime (reload / list)")
+    .argument("[args...]", "agents subcommand + flags (see `cortex agents --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action((args: string[]) => {
+      const result = dispatchAgents(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // #1352 — `migrate-config`: convert a grove-v2 bot.yaml / legacy cortex.yaml
+  // to the cortex config shape (MIG-7.2e). Makes the cortex.ts:682 upgrade hint
+  // (`run \`cortex migrate-config\``) true. Same passthrough shape as the verbs
+  // above. `runMigrateConfig` writes its own stdout/stderr and returns the exit
+  // code, so the action just propagates that code.
+  program
+    .command("migrate-config")
+    .description("Convert a grove-v2 bot.yaml / legacy cortex.yaml to the cortex config shape")
+    .argument("[args...]", "migrate-config input + flags (see `cortex migrate-config --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const exitCode = await runMigrateConfig(args);
+      process.exit(exitCode);
     });
 
   program.parse();

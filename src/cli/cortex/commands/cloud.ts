@@ -546,7 +546,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   console.log("\nNext steps:");
   console.log("  1. Add the bot.yaml snippet above to ~/.config/cortex/bot.yaml");
   console.log("  2. Restart cortex: cortex stop && cortex start");
-  console.log("  3. Add more principals: cortex cloud add-principal --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
+  console.log("  3. Add more principals: bun src/cli/cortex/commands/cloud.ts add-principal --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
 }
 
 // =============================================================================
@@ -561,7 +561,7 @@ async function cloudAddPrincipal(flags: Record<string, string>): Promise<void> {
 
   if (!name || !agentName || !endpoint || !adminKey) {
     throw new Error(
-      "Usage: cortex cloud add-principal --name <principal> --agent-name <agent> --endpoint <URL> --admin-key <SECRET>",
+      "Usage: bun src/cli/cortex/commands/cloud.ts add-principal --name <principal> --agent-name <agent> --endpoint <URL> --admin-key <SECRET>",
     );
   }
 
@@ -685,7 +685,7 @@ async function cloudStatus(flags: Record<string, string>): Promise<void> {
 // =============================================================================
 
 // GV-1: cortex-first, grove-fallback. Resolved at module load; the daemon and
-// `cortex cloud repos` both read (never write) bot.yaml here.
+// `bun src/cli/cortex/commands/cloud.ts repos` both read (never write) bot.yaml here.
 const DEFAULT_CONFIG_PATH = resolveConfigFilePath("bot.yaml");
 
 interface BotYamlGithub {

@@ -102,7 +102,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 function printHelp(): void {
   console.log("cortex migrate-config — convert grove-v2 bot.yaml or cortex.yaml to cortex.yaml + policy block\n");
   console.log("Usage:");
-  console.log("  bun src/cli/cortex/commands/migrate-config.ts <input.yaml> [options]\n");
+  console.log("  cortex migrate-config <input.yaml> [options]\n");
   console.log("Options:");
   console.log("  --out FILE     Write to FILE (default: stdout)");
   console.log("  --labels FILE  Principal-id label overrides ({\"<platform>:<id>\": \"<principal-id>\"})");
