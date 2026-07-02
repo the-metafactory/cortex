@@ -16,7 +16,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { dispatchNetwork, joinBlockerMessage } from "../network";
+import { dispatchNetwork, joinBlockerMessage, shouldReplaceCredsPreflightError } from "../network";
 import type { OwnAdmissionState } from "../../../../common/registry/admission-state";
 import type { LoadedConfig } from "../../../../common/config/loader";
 import type { AgentConfig } from "../../../../common/types/config";
@@ -667,5 +667,76 @@ describe("joinBlockerMessage (C-1315)", () => {
 
   test("unknown status → undefined (keep the original error)", () => {
     expect(joinBlockerMessage(NET, st({ state: "unknown" }))).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// C-1315 (review major, #1397) — shouldReplaceCredsPreflightError: the #821
+// creds-preflight error is rewritten to the Model-B admission message ONLY on
+// the Model-B no-secret path, and NEVER on an explicit `--creds` / `--leaf-
+// secret` join or a non-#821 failure.
+// =============================================================================
+
+describe("shouldReplaceCredsPreflightError (C-1315 #821 guard, #1397)", () => {
+  const CREDS_821 =
+    "leaf creds file not found at /tmp/typo.creds — refusing to render a leaf remote " +
+    "that cannot authenticate to the hub. Set stack.nats_infra.creds_path (or pass --creds) " +
+    "to an existing .creds file (cortex#821).";
+
+  test("Model-B no-secret path (no --creds, no leaf secret, #821) → replace", () => {
+    expect(
+      shouldReplaceCredsPreflightError({
+        joinOk: false,
+        resolvedLeafSecret: undefined,
+        explicitCredsFlag: undefined,
+        reason: CREDS_821,
+      }),
+    ).toBe(true);
+  });
+
+  test("explicit --creds <bad-path> join → KEEP the original creds-not-found error (NOT the Model-B rewrite)", () => {
+    // The review-major regression: a user who opted into creds-file auth and
+    // typo'd the path must see the genuine error, never "a .creds file is NOT the fix".
+    expect(
+      shouldReplaceCredsPreflightError({
+        joinOk: false,
+        resolvedLeafSecret: undefined,
+        explicitCredsFlag: "/tmp/typo.creds",
+        reason: CREDS_821,
+      }),
+    ).toBe(false);
+  });
+
+  test("explicit --leaf-secret join (leaf secret resolved) → keep original", () => {
+    expect(
+      shouldReplaceCredsPreflightError({
+        joinOk: false,
+        resolvedLeafSecret: "SECRET",
+        explicitCredsFlag: undefined,
+        reason: CREDS_821,
+      }),
+    ).toBe(false);
+  });
+
+  test("a non-#821 failure → keep original (marker absent)", () => {
+    expect(
+      shouldReplaceCredsPreflightError({
+        joinOk: false,
+        resolvedLeafSecret: undefined,
+        explicitCredsFlag: undefined,
+        reason: "some other join failure",
+      }),
+    ).toBe(false);
+  });
+
+  test("a successful join → never replace", () => {
+    expect(
+      shouldReplaceCredsPreflightError({
+        joinOk: true,
+        resolvedLeafSecret: undefined,
+        explicitCredsFlag: undefined,
+        reason: CREDS_821,
+      }),
+    ).toBe(false);
   });
 });

@@ -684,6 +684,35 @@ export function joinBlockerMessage(networkId: string, s: OwnAdmissionState): str
 }
 
 /**
+ * C-1315 — decide whether a failed join's `#821` creds-preflight error should be
+ * REPLACED with the actionable Model-B admission-state message. Pure + exported
+ * so the invariant is unit-testable. The rewrite is confined to the Model-B
+ * no-secret path; it must fire ONLY when ALL hold:
+ *   - the join failed (`!joinOk`),
+ *   - no leaf secret was resolved (flag/config/auto-fetch) — else it's not the
+ *     no-secret path,
+ *   - NO explicit `--creds` flag was given — an explicit `--creds` join opted
+ *     into creds-file (Model-A) auth, so a missing/typo'd creds path is a genuine
+ *     "creds not found" error, NOT a Model-B admission gap; keep it verbatim
+ *     (review major, #1397), and
+ *   - the failure carries the `cortex#821` preflight marker.
+ */
+export function shouldReplaceCredsPreflightError(args: {
+  joinOk: boolean;
+  resolvedLeafSecret: string | undefined;
+  explicitCredsFlag: string | undefined;
+  reason: unknown;
+}): boolean {
+  return (
+    !args.joinOk &&
+    args.resolvedLeafSecret === undefined &&
+    args.explicitCredsFlag === undefined &&
+    typeof args.reason === "string" &&
+    args.reason.includes("cortex#821")
+  );
+}
+
+/**
  * C-1315 — when a join fails the Model-B creds preflight (#821) with no resolved
  * leaf secret, probe the joiner's OWN admission row (PoP `/mine` read) and return
  * the actionable state message. Best-effort: any inability to probe (no seed on
@@ -868,10 +897,12 @@ async function runJoin(
   // secret join, or a registry we can't reach, keeps the original #821 error.
   let effectiveReason = res.reason;
   if (
-    !res.ok &&
-    resolvedLeafSecret === undefined &&
-    typeof res.reason === "string" &&
-    res.reason.includes("cortex#821")
+    shouldReplaceCredsPreflightError({
+      joinOk: res.ok,
+      resolvedLeafSecret,
+      explicitCredsFlag: optionalValueFlag(flags, "--creds"),
+      reason: res.reason,
+    })
   ) {
     const actionable = await classifyModelBJoinBlocker(networkId, {
       seedPath: inputs.seedPath,
