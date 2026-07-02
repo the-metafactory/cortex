@@ -21,14 +21,26 @@
  *
  *   1. **`pid_file` directive** — if the hub config declares `pid_file: <path>`,
  *      that file holds the running server's PID. Preferred: it is the server's
- *      own authoritative self-report. → `nats-server --signal reload=<pid>`.
+ *      own self-report — but a `pid_file` is NOT removed on crash / `kill -9`,
+ *      so a stale file can point at a recycled, unrelated PID.
  *   2. **config-path match** — otherwise, find the single running nats-server
  *      whose argv carries `-c <thisHubConfig>` (the resolved absolute path).
- *      → `kill -SIGHUP <pid>`.
  *
- * The I/O (reading the pid_file, listing processes, sending the signal) lives in
- * the adapter (`network-secret-adapters.ts`); this module only decides the
- * target from already-gathered inputs.
+ * ## Trust-path invariant — never signal an unverified PID (#1396)
+ *
+ * Both a stale `pid_file` and the enumerate→signal TOCTOU window can put an
+ * innocent PID in front of the signal. So the adapter re-verifies the resolved
+ * PID's LIVE argv through {@link argvIsNatsServerForConfig} immediately before it
+ * `process.kill(pid, "SIGHUP")`s it — an argv that is not a nats-server loading
+ * THIS config is never signalled. This matters because SIGHUP's default
+ * disposition is TERMINATE: an unverified signal to a recycled PID would kill an
+ * arbitrary process. The signal is a raw `process.kill` (nats-server applies the
+ * authorization change in place); the argv re-check — NOT a nats-aware
+ * `--signal reload=<pid>` form — is the load-bearing safety.
+ *
+ * The I/O (reading the pid_file, listing/inspecting processes, sending the
+ * signal) lives in the adapter (`network-secret-adapters.ts`); this module
+ * decides the target from already-gathered inputs and owns the argv predicate.
  */
 
 import { resolve as resolvePath } from "path";
@@ -43,8 +55,9 @@ export interface NatsProcess {
 
 /**
  * The resolved reload target. `pid` is the process to signal; `via` records how
- * it was resolved (for plan/log output). `pidFilePath`, when present, is the
- * pid_file the PID came from (the adapter prefers `--signal reload=<pid>`).
+ * it was resolved (for plan/log output). The adapter re-verifies `pid`'s LIVE
+ * argv (see {@link argvIsNatsServerForConfig}) before signalling, regardless of
+ * how `via` resolved it.
  */
 export interface HubReloadTarget {
   pid: number;
@@ -68,11 +81,43 @@ export function readPidFileDirective(confText: string): string | undefined {
   return raw === "" ? undefined : raw;
 }
 
+/**
+ * Matches the `nats-server` binary at the head of a command line (path-tolerant:
+ * `nats-server`, `/opt/nats/nats-server …`). The ONE definition of "is this argv
+ * a nats-server", reused by the adapter's process lister AND the pre-signal argv
+ * re-check — so the two never drift.
+ */
+const NATS_SERVER_COMMAND = /(^|\/)nats-server(\s|$)/;
+
+/** Is `command` an invocation of the nats-server binary? */
+export function isNatsServerCommand(command: string): boolean {
+  return NATS_SERVER_COMMAND.test(command);
+}
+
+/**
+ * The trust-path predicate (#1396): may the PID whose LIVE argv is `command` be
+ * SIGHUP'd as the hub for `configPath`? True iff the argv (a) is a nats-server
+ * AND (b) loads THIS config via `-c`/`--config`. BOTH resolution paths call this
+ * ONE helper on the freshly-read argv immediately before signalling — the
+ * pid_file path to guard against a stale, PID-recycled file, and the config-match
+ * path to collapse the enumerate→signal TOCTOU window. A PID whose argv fails
+ * this check is NEVER signalled (SIGHUP's default disposition is TERMINATE).
+ */
+export function argvIsNatsServerForConfig(command: string, configPath: string): boolean {
+  return isNatsServerCommand(command) && commandLoadsConfig(command, configPath);
+}
+
 /** Does this process command load `configPath` via `-c`/`--config`? */
 function commandLoadsConfig(command: string, configPath: string): boolean {
   // Tokenise on whitespace; match the resolved abs path against the value that
   // follows `-c`/`--config`, or the `--config=<path>` fused form. Resolve both
   // sides so `./local.conf` and an absolute path compare equal.
+  //
+  // Known limitation: a config path containing whitespace cannot be recovered
+  // from unquoted `ps` output (argv is space-joined), so such a server never
+  // config-matches — it degrades to a fail-loud zero-match, never a mis-signal.
+  // Declare a `pid_file` for spaced paths. cortex configs live under
+  // ~/.config/cortex (no spaces), so real-world impact is nil.
   const want = resolvePath(configPath);
   const toks = command.split(/\s+/).filter((t) => t.length > 0);
   for (let i = 0; i < toks.length; i++) {

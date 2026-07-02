@@ -14,6 +14,8 @@ import { resolve } from "path";
 import {
   readPidFileDirective,
   resolveHubReloadTarget,
+  argvIsNatsServerForConfig,
+  isNatsServerCommand,
   type NatsProcess,
 } from "../hub-reload-target";
 
@@ -94,6 +96,45 @@ describe("resolveHubReloadTarget — config-path match (the multi-stack case)", 
     // `local.conf.bak` must not match `local.conf`.
     const res = resolveHubReloadTarget(HUB, undefined, [proc(5, `${HUB}.bak`)]);
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("argvIsNatsServerForConfig — the pre-signal trust-path predicate (#1396)", () => {
+  test("true iff argv is a nats-server AND loads THIS config", () => {
+    expect(argvIsNatsServerForConfig(`nats-server -c ${HUB} -js`, HUB)).toBe(true);
+    expect(argvIsNatsServerForConfig(`/opt/nats/nats-server --config=${HUB}`, HUB)).toBe(true);
+  });
+
+  test("false for a nats-server serving a DIFFERENT config (stale/recycled guard)", () => {
+    expect(argvIsNatsServerForConfig(`nats-server -c ${OTHER1} -js`, HUB)).toBe(false);
+  });
+
+  test("false for a NON-nats process even if the path appears (recycled PID guard)", () => {
+    // A recycled PID running an unrelated process that merely mentions the path.
+    expect(argvIsNatsServerForConfig(`/usr/bin/tail -f ${HUB}`, HUB)).toBe(false);
+    expect(argvIsNatsServerForConfig(`postgres -c ${HUB}`, HUB)).toBe(false);
+  });
+
+  test("false on empty / non-matching argv", () => {
+    expect(argvIsNatsServerForConfig("", HUB)).toBe(false);
+    expect(argvIsNatsServerForConfig("nats-server -c /some/other.conf", HUB)).toBe(false);
+  });
+
+  test("resolves relative vs absolute config paths equal", () => {
+    const abs = resolve("./local.conf");
+    expect(argvIsNatsServerForConfig(`nats-server -c ./local.conf`, abs)).toBe(true);
+  });
+});
+
+describe("isNatsServerCommand", () => {
+  test("matches the binary at head, path-tolerant", () => {
+    expect(isNatsServerCommand("nats-server -c x")).toBe(true);
+    expect(isNatsServerCommand("/opt/nats/nats-server -c x")).toBe(true);
+  });
+  test("does not match unrelated processes or substrings", () => {
+    expect(isNatsServerCommand("postgres -D /data")).toBe(false);
+    expect(isNatsServerCommand("my-nats-server-wrapper")).toBe(false);
+    expect(isNatsServerCommand("")).toBe(false);
   });
 });
 
