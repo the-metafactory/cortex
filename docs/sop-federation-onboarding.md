@@ -15,7 +15,7 @@
 
 Two distinct paths lead here — pick one and follow **its** canonical SOP. This document is shared **reference depth** (the three-layer model, the `peers[]` hand-pin fallback, dispatch anatomy, and the live-status record), **not** a third set of steps to walk:
 
-- **Sovereign peer principal** — a different human running their own cortex stack + NSC operator, federating with you as an equal. → **[`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) is canonical** for the end-to-end happy path (Steps 1–8: provision → register → admit → join → go-private).
+- **Sovereign peer principal** — a different human running their own cortex stack on their own NSC operator (an operator-mode bus), federating with you as an equal. → **[`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) is canonical** for the end-to-end happy path (Steps 1–8: provision → register → admit → join → go-private).
 - **Community fleet member** — a newcomer arriving through the metafactory-community server.
   - **Tier 1 (chat-only** — Discord `community-fleet` role, presence + channel access, **no bus)** → [`docs/sop-community-fleet-admission.md`](./sop-community-fleet-admission.md).
   - **Tier 2 (sovereign bus)** → the newcomer runs their own stack and follows the sovereign path above; the two-channel Pier airgap is [`sop-onboard-peer-principal.md` §4b](./sop-onboard-peer-principal.md#4b-community-onboarding--the-two-channel-airgap-process-b).
