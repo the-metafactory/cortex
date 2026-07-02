@@ -20,6 +20,8 @@
  */
 
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 // import.meta.dir = …/src/__tests__ ; the entrypoint is …/src/cortex.ts
@@ -31,12 +33,18 @@ interface RunResult {
   stderr: string;
 }
 
-async function runCortex(args: string[]): Promise<RunResult> {
+async function runCortex(
+  args: string[],
+  envOverlay: Record<string, string> = {},
+): Promise<RunResult> {
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     // Clean env: no CORTEX_*/GROVE_* instrumentation leaking from the runner.
-    env: { ...process.env, CORTEX_GATEWAY: "" },
+    // `envOverlay` lets a test pin e.g. a temp $HOME so a subcommand that reads
+    // the global cache (`network status` → ~/.config/cortex/network-cache, C-850)
+    // stays hermetic instead of leaking the developer's real cached descriptors.
+    env: { ...process.env, CORTEX_GATEWAY: "", ...envOverlay },
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -65,19 +73,31 @@ describe("#752 — network passthrough", () => {
   });
 
   test("`cortex network status --principal …` is handled by the dispatcher (no commander flag interception)", async () => {
-    // status with a unique slug → no networks joined, exit 0. Proves the
-    // `--principal` / `--stack` flags reach the dispatcher untouched.
-    const r = await runCortex([
-      "network",
-      "status",
-      "--principal",
-      "andreas",
-      "--stack",
-      `andreas/dispatch${Date.now().toString()}`,
-    ]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("no networks joined");
-    expect(r.stdout + r.stderr).not.toContain("cortex: starting");
+    // status with a unique slug → no networks registered or joined, exit 0.
+    // Proves the `--principal` / `--stack` flags reach the dispatcher untouched.
+    // Pin a temp $HOME: since C-850, `network status` also reads the global
+    // network-cache (~/.config/cortex/network-cache), so an empty temp home is
+    // what makes the empty-state assertion hermetic (a real dev cache would
+    // surface `registered` rows and never hit the empty message).
+    const home = mkdtempSync(join(tmpdir(), "cortex-dispatch-status-"));
+    try {
+      const r = await runCortex(
+        [
+          "network",
+          "status",
+          "--principal",
+          "andreas",
+          "--stack",
+          `andreas/dispatch${Date.now().toString()}`,
+        ],
+        { HOME: home },
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("no networks registered or joined");
+      expect(r.stdout + r.stderr).not.toContain("cortex: starting");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
