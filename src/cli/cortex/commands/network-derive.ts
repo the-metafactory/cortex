@@ -40,6 +40,7 @@
 import type { LoadedConfig } from "../../../common/config/loader";
 import type { ServicePlatform } from "../../../common/nats/nats-service-manager";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import { deriveStackId } from "../../../common/types/stack";
 import { resolveRegistryAnchor } from "./default-registry";
 // network-leaf-package import removed — ADR-0015 retired O-4b / Model-A.
 
@@ -50,8 +51,28 @@ import { resolveRegistryAnchor } from "./default-registry";
 /** The five join inputs `cortex network join` previously demanded as flags. */
 export interface DerivedJoinInputs {
   principal: string;
-  /** `{principal}/{slug}` canonical stack id. */
+  /**
+   * `{principal}/{slug}` canonical stack id — flag-honouring. `--stack` wins,
+   * else `stack.id`, else `{principal}/default` (see {@link resolveStack}). This
+   * feeds the LOCATOR / write-path (`portsConfigFromInputs` → `stackId`), which
+   * per ADR-0004 DA-5 follows the file the daemon composes policy from — NOT the
+   * federation-identity authority.
+   */
   stack: string;
+  /**
+   * C-1364 — the boot-authoritative own-scope stack slug: `deriveStackId(cfg).stack`,
+   * the trailing segment of `stack.id` ALONE (ADR-0004: `stack.id` is the single
+   * stack-slug authority). This is the SAME derivation the daemon boot validator
+   * runs (`CortexConfigSchema` federated subject-scope superRefine →
+   * `deriveStackId(config).stack`), so the join own-scope guard and boot can never
+   * split on a drifted stack (locator/`--stack` slug ≠ `stack.id` trailing segment).
+   * Unlike {@link stack} it is flag-INDEPENDENT — a `--stack` override changes the
+   * write-path locator but must NOT move the federation identity boot enforces.
+   * The join own-scope guard (`ownAcceptSubjects` / `ownFederatedSubjectScopePrefix`
+   * / `isFederatedSubjectInOwnScope` in `network-lib.ts`) MUST build its
+   * `federated.{me}.{stack}.` scope from THIS, never from {@link stack}'s slug.
+   */
+  bootStackSlug: string;
   seedPath: string;
   registryUrl: string;
   registryPubkey?: string;
@@ -359,6 +380,14 @@ export function deriveJoinInputs(
 
   const stack = resolveStack(principal, overrides.stack, cfg);
 
+  // C-1364 — the boot-authoritative own-scope stack slug. Derived from the SAME
+  // loaded config the daemon boots from, via the SAME resolver the boot
+  // validator uses (`deriveStackId(cfg).stack`, ADR-0004 / ADR-0001 superRefine).
+  // This is flag-INDEPENDENT on purpose: a `--stack` override retargets the
+  // write-path locator (DA-5) but must never move the federation identity boot
+  // enforces, or the join own-scope guard and boot would split on a drifted stack.
+  const bootStackSlug = deriveStackId(cfg).stack;
+
   // seed-path — flag wins, else stack.nkey_seed_path.
   const seedPath = overrides.seedPath ?? cfg.stack?.nkey_seed_path;
   if (seedPath === undefined || seedPath === "") {
@@ -473,6 +502,7 @@ export function deriveJoinInputs(
     inputs: {
       principal,
       stack,
+      bootStackSlug,
       seedPath,
       registryUrl,
       ...(registryPubkey !== undefined && { registryPubkey }),

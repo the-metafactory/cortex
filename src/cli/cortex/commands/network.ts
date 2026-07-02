@@ -893,7 +893,16 @@ async function runJoin(
 
   const stack: JoiningStack = {
     principalId: inputs.principal,
-    stackSlug: slugRes.slug,
+    // C-1364 — the own-scope federation identity MUST derive from `stack.id` via
+    // `deriveStackId` (ADR-0004), the SAME single authority the daemon boot
+    // validator uses (`CortexConfigSchema` federated subject-scope superRefine).
+    // `slugRes.slug` (below) is the flag/locator-honouring slug and stays the
+    // write-path target per ADR-0004 DA-5 — but a `--stack` override or a drifted
+    // stack (locator slug ≠ `stack.id` trailing segment) would make it diverge
+    // from what boot enforces, letting a config pass the join own-scope guard yet
+    // fail daemon boot (or be falsely refused). Pin the guard to `bootStackSlug`
+    // so guard + boot can never split. See cortex#1364.
+    stackSlug: inputs.bootStackSlug,
     credentials: expandTilde(inputs.credsPath),
     account: inputs.account,
     // C-1224 (ADR-0013 Model B) — pass the secret-auth leaf material (when

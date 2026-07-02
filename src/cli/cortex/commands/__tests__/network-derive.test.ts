@@ -22,6 +22,12 @@ import {
 import { DEFAULT_REGISTRY } from "../default-registry";
 import type { LoadedConfig } from "../../../../common/config/loader";
 import type { AgentConfig } from "../../../../common/types/config";
+import {
+  CortexConfigSchema,
+  deriveStackId,
+  ownFederatedSubjectScopePrefix,
+} from "../../../../common/types/cortex-config";
+import { ownAcceptSubjects } from "../../../../bus/agent-network/accept-subjects";
 
 // A minimal LoadedConfig stub — only the fields the deriver reads matter; the
 // `config` AgentConfig is never inspected by the deriver, so a bare cast keeps
@@ -78,6 +84,9 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
     expect(res.inputs).toEqual({
       principal: "andreas",
       stack: "andreas/meta-factory",
+      // C-1364 — boot-authoritative slug from stack.id (born-aligned here: equals
+      // the `stack` id's trailing segment). deriveStackId(FULL).stack.
+      bootStackSlug: "meta-factory",
       seedPath: "~/.config/nats/cortex.nk",
       registryUrl: "https://registry.meta-factory.ai",
       registryPubkey: "A".repeat(43) + "=",
@@ -245,6 +254,12 @@ describe("deriveJoinInputs — flag overrides win", () => {
     expect(res.inputs).toEqual({
       principal: "override-p",
       stack: "override-p/other",
+      // C-1364 — the `--stack` flag moves the LOCATOR/write-path id ("other"),
+      // but `bootStackSlug` stays the config's stack.id trailing segment
+      // ("meta-factory" from FULL). A flag override CANNOT move the federation
+      // identity the daemon boot validator enforces — this is the drift the fix
+      // pins shut: guard scope derives from bootStackSlug, never `stack`'s slug.
+      bootStackSlug: "meta-factory",
       seedPath: "/flag/seed.nk",
       registryUrl: "https://flag.registry",
       registryPubkey: "Z".repeat(43) + "=",
@@ -831,5 +846,171 @@ describe("C-1224 — leaf-secret (secret-auth pipe) derivation", () => {
     expect(res.inputs?.leafSecret).toBeUndefined();
     // leafUser is meaningless without a secret — never resolved on its own.
     expect(res.inputs?.leafUser).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// C-1364 — the join own-scope guard and the daemon boot validator MUST derive
+// the stack identity from ONE authority (`deriveStackId` → stack.id, ADR-0004).
+//
+// Latent drift (found by the PR #1361 adversarial review, vector 4): the join
+// own-scope guard built its `federated.{me}.{stack}.` scope from the flag/
+// locator-honouring slug (`resolveStackSlug(inputs.stack)`), while the boot
+// validator (`CortexConfigSchema` federated subject-scope superRefine) derives
+// it from `deriveStackId(config).stack`. For a BORN-ALIGNED stack the two agree;
+// for a DRIFTED stack (a `--stack` override, or a locator slug ≠ stack.id
+// trailing segment) they DISAGREE — the join then persists an accept-list scoped
+// to one identity that the daemon refuses to boot against, or falsely refuses a
+// valid one. The fix threads `bootStackSlug = deriveStackId(cfg).stack` and pins
+// the guard to it, so guard + boot can never split.
+// =============================================================================
+
+describe("C-1364 — join own-scope identity converges with boot on deriveStackId", () => {
+  // A DRIFTED stack: config `stack.id` trailing segment is "work", and the join
+  // is invoked with `--stack andreas/research` (slug "research" ≠ "work"). This
+  // is exactly the "slug ≠ stack.id trailing segment" class ADR-0004 targets.
+  const DRIFTED = loaded({
+    principal: { id: "andreas" },
+    stack: {
+      id: "andreas/work",
+      nkey_seed_path: "~/seed.nk",
+      nats_infra: {
+        config_path: "~/local.conf",
+        plist_path: "~/nats.plist",
+        account: "A" + "B".repeat(55),
+      },
+    },
+    policy: {
+      principals: [],
+      roles: [],
+      federated: {
+        networks: [],
+        registry: { url: DEFAULT_REGISTRY.url, pubkey: DEFAULT_REGISTRY.pubkey },
+      },
+    },
+  });
+
+  // Build a raw cortex config the DAEMON BOOTS from — stack.id "andreas/work",
+  // one federated network whose accept-list is the argument. Parsing it through
+  // CortexConfigSchema runs the REAL subject-scope superRefine (the boot verdict).
+  function bootConfigWithAccept(accept: string[]): Record<string, unknown> {
+    return {
+      principal: { id: "andreas" },
+      agents: [
+        {
+          id: "luna",
+          displayName: "Luna",
+          persona: "./personas/luna.md",
+          presence: {
+            discord: {
+              token: "DISCORD_TOKEN",
+              guildId: "123456789012345678",
+              agentChannelId: "234567890123456789",
+              logChannelId: "345678901234567890",
+            },
+          },
+        },
+      ],
+      renderers: [],
+      claude: { model: "claude-opus-4-5", apiKey: "env:ANTHROPIC_API_KEY" },
+      // The authority: stack.id trailing segment "work".
+      stack: { id: "andreas/work" },
+      policy: {
+        federated: {
+          networks: [
+            {
+              id: "metafactory",
+              leaf_node: "leaf",
+              peers: [],
+              accept_subjects: accept,
+              deny_subjects: [],
+              announce_capabilities: [],
+              max_hop: 1,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  test("bootStackSlug tracks stack.id, NOT the --stack flag → guard + boot prefixes are identical", () => {
+    // Join with a --stack override whose slug ("research") disagrees with stack.id.
+    const res = deriveJoinInputs(
+      "metafactory",
+      { stack: "andreas/research" },
+      "/cfg",
+      reader(DRIFTED),
+      "darwin",
+    );
+    expect(res.ok).toBe(true);
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+
+    // The flag moved the LOCATOR / write-path id (DA-5) ...
+    expect(inputs.stack).toBe("andreas/research");
+    // ... but the boot-authoritative own-scope slug stays stack.id's segment.
+    expect(inputs.bootStackSlug).toBe("work");
+
+    // BOOT derives its prefix EXACTLY as the superRefine does:
+    // ownFederatedSubjectScopePrefix(config.principal.id, deriveStackId(config).stack).
+    const bootPrefix = ownFederatedSubjectScopePrefix("andreas", deriveStackId(DRIFTED).stack);
+    // The JOIN GUARD now derives from bootStackSlug — must be identical (no split).
+    const guardPrefix = ownFederatedSubjectScopePrefix(inputs.principal, inputs.bootStackSlug);
+    expect(guardPrefix).toBe(bootPrefix);
+    expect(guardPrefix).toBe("federated.andreas.work.");
+
+    // Regression witness: the PRE-FIX derivation (the flag/locator slug off
+    // inputs.stack) WOULD have produced a different prefix — the split this closes.
+    const preFixSlug = inputs.stack.split("/")[1];
+    if (preFixSlug === undefined) throw new Error("expected slug");
+    expect(preFixSlug).toBe("research");
+    expect(ownFederatedSubjectScopePrefix(inputs.principal, preFixSlug)).not.toBe(bootPrefix);
+  });
+
+  test("accept-list the join persists from bootStackSlug PASSES boot; the pre-fix flag-slug list is REFUSED (no split verdict)", () => {
+    const res = deriveJoinInputs(
+      "metafactory",
+      { stack: "andreas/research" },
+      "/cfg",
+      reader(DRIFTED),
+      "darwin",
+    );
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+
+    // What the join own-scope guard builds + persists (network-lib.ts): the
+    // own-scope accept-list from bootStackSlug ("work").
+    const acceptFromBoot = ownAcceptSubjects({
+      principal: inputs.principal,
+      stack: inputs.bootStackSlug,
+    });
+    expect(acceptFromBoot.every((s) => s.startsWith("federated.andreas.work."))).toBe(true);
+
+    // The PRE-FIX path built the accept-list from the flag/locator slug ("research").
+    const preFixSlug = inputs.stack.split("/")[1];
+    if (preFixSlug === undefined) throw new Error("expected slug");
+    const acceptFromFlag = ownAcceptSubjects({
+      principal: inputs.principal,
+      stack: preFixSlug,
+    });
+
+    // AGREEMENT: the daemon boot validator ACCEPTS exactly what the fixed join
+    // writes — both accept, no split.
+    expect(() => CortexConfigSchema.parse(bootConfigWithAccept(acceptFromBoot))).not.toThrow();
+    // And it REFUSES the pre-fix flag-slug list — proving the latent split the
+    // fix closes (join would have written a config the daemon bricks on).
+    expect(() => CortexConfigSchema.parse(bootConfigWithAccept(acceptFromFlag))).toThrow();
+  });
+
+  test("BORN-ALIGNED stack (no drift) is unchanged: bootStackSlug == the flag/locator slug", () => {
+    // FULL is born-aligned (stack.id andreas/meta-factory); no --stack override.
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL), "darwin");
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+    // The two derivations coincide for a born-aligned stack — the exact
+    // pre-fix behaviour, preserved.
+    expect(inputs.bootStackSlug).toBe("meta-factory");
+    expect(inputs.stack.split("/")[1]).toBe("meta-factory");
+    expect(inputs.bootStackSlug).toBe(deriveStackId(FULL).stack);
   });
 });
