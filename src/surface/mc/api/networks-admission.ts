@@ -14,12 +14,17 @@
  *
  * ## The two gates (both required — reject if either is absent)
  *
- *  1. **CF-Access principal identity.** The `Cf-Access-Authenticated-User-Email`
- *     header, injected by Cloudflare Access at the authenticated edge (the same
- *     identity the worker's `getCfAccessEmail` derives). Absent/empty ⇒ 401. The
- *     local MC server additionally binds loopback-only (server.ts SEV-2), so this
- *     identity gate composes on top of the loopback boundary that already
- *     protects the on-disk seed.
+ *  1. **CF-Access principal identity — bind-conditioned (#1410).** On a
+ *     **loopback** bind (every current deployment; server.ts SEV-2) the
+ *     `Cf-Access-Authenticated-User-Email` header is trusted as-is — the
+ *     request can only reach the local signer over the principal's own
+ *     loopback interface (the invariant the #1279 http test locks). On a
+ *     **non-loopback** bind that header is forgeable, so the route instead
+ *     REQUIRES a `Cf-Access-Jwt-Assertion` verified against the CF Access team
+ *     JWKS (`aud`/`iss`/`exp`/`nbf` + RS256 signature) and takes the principal
+ *     from the verified `email` claim. Fail-closed off loopback: no
+ *     `cfAccess.aud` configured ⇒ 503; missing/invalid JWT ⇒ 401. This turns
+ *     the loopback bind into defense-in-depth rather than the sole gate.
  *  2. **Typed-confirm.** The client must echo the target `request_id` in the
  *     `confirm` field — the deliberate, mirror of the CLI's
  *     `cortex network admit <request-id> --apply` posture (the principal types the
@@ -78,6 +83,46 @@ export interface AdmissionDecider {
 
 /** The `Cf-Access-Authenticated-User-Email` header (CF Access injects it at the edge). */
 export const CF_ACCESS_EMAIL_HEADER = "Cf-Access-Authenticated-User-Email";
+
+/** The signed `Cf-Access-Jwt-Assertion` header (the JWT CF Access injects at the edge). */
+export const CF_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
+
+/** Hostnames that denote a loopback bind. Single source of "is this loopback". */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * cortex#1410 — whether an MC bind hostname is a loopback interface.
+ *
+ * On a **loopback** bind the admission route trusts the CF-Access email header
+ * directly: the request can only originate from the principal's own machine
+ * (the boundary the #1279 http test locks). On **any other** bind that header
+ * is trivially forgeable, so the route instead requires a CF-Access JWT
+ * verified against the team JWKS. An empty/unknown hostname is treated as
+ * NON-loopback (fail-safe → demands the JWT).
+ */
+export function isLoopbackBind(hostname: string): boolean {
+  return LOOPBACK_HOSTS.has(hostname.trim().toLowerCase());
+}
+
+/**
+ * Gate-1 auth inputs, resolved by the server per request. The bind decides
+ * which identity proof is required (see {@link isLoopbackBind}).
+ */
+export interface AdmissionAuthContext {
+  /** True when MC is bound to a loopback interface. */
+  isLoopback: boolean;
+  /** Raw `Cf-Access-Authenticated-User-Email` — trusted ONLY on a loopback bind. */
+  emailHeader: string | undefined;
+  /** Raw `Cf-Access-Jwt-Assertion` — verified on a non-loopback bind. */
+  jwtAssertion: string | undefined;
+  /**
+   * CF-Access JWT verifier, pre-bound to the configured `aud` + `teamDomain`.
+   * Present iff `cfAccess.aud` is configured. On a non-loopback bind its
+   * ABSENCE fails the route closed (503). Returns the verified claims, or
+   * `null` to reject (fail closed).
+   */
+  verifyJwt?: (token: string) => Promise<Record<string, unknown> | null>;
+}
 
 /** The POST body the dashboard sends. */
 interface AdmissionDecisionBody {
@@ -170,32 +215,110 @@ function parseBody(
 }
 
 /**
- * Handle `POST /api/networks/admission-decision`.
+ * Resolve the CF-Access principal for Gate 1 — bind-conditioned (#1410):
  *
- * @param decider   The injected signer seam. `null` ⇒ 503 (no
- *                  federation/registry/signing identity configured).
- * @param principal The CF-Access principal email, extracted by the server from
- *                  {@link CF_ACCESS_EMAIL_HEADER}. Empty/undefined ⇒ 401.
- * @param rawBody   The parsed JSON body (server already enforced the size cap).
+ *  - **Loopback bind:** trust the `Cf-Access-Authenticated-User-Email` header
+ *    as-is (unchanged pre-#1410 behavior; the loopback boundary is the gate,
+ *    locked by the #1279 http test). Empty ⇒ 401.
+ *  - **Non-loopback bind:** the raw email header is forgeable, so REQUIRE a
+ *    CF-Access JWT verified against the team JWKS; the principal comes from the
+ *    verified `email` claim. Fails closed on every branch:
+ *      · `cfAccess.aud` not configured (no verifier) ⇒ 503
+ *      · missing JWT header ⇒ 401
+ *      · JWT fails verification (sig/aud/iss/exp/nbf) ⇒ 401
+ *      · verified JWT carries no `email` claim ⇒ 401
+ *
+ * Returns the resolved principal email, or a `Response` to return verbatim.
  */
-export async function handleAdmissionDecision(
-  decider: AdmissionDecider | null,
-  principal: string | undefined,
-  rawBody: unknown,
-): Promise<Response> {
-  // Gate 1 — a CF-Access principal identity is required for a mutation.
-  const who = (principal ?? "").trim();
-  if (who.length === 0) {
+async function resolveAdmissionPrincipal(
+  auth: AdmissionAuthContext,
+): Promise<string | Response> {
+  if (auth.isLoopback) {
+    const who = (auth.emailHeader ?? "").trim();
+    if (who.length === 0) {
+      return json(
+        {
+          error: "unauthenticated",
+          detail:
+            "a CF-Access authenticated principal identity is required to admit/reject " +
+            `(missing/empty ${CF_ACCESS_EMAIL_HEADER}). This mutation is not available on an unauthenticated request.`,
+        },
+        401,
+      );
+    }
+    return who;
+  }
+
+  // Non-loopback: do NOT trust the raw email header — verify the JWT.
+  if (!auth.verifyJwt) {
+    return json(
+      {
+        error: "not_configured",
+        detail:
+          "cf-access is not configured for a non-loopback Mission Control bind — set " +
+          "`cfAccess.aud` (the Access application audience) so admit/reject can verify " +
+          `the ${CF_ACCESS_JWT_HEADER}. Refusing to trust the raw email header off loopback.`,
+      },
+      503,
+    );
+  }
+
+  const token = (auth.jwtAssertion ?? "").trim();
+  if (token.length === 0) {
     return json(
       {
         error: "unauthenticated",
         detail:
-          "a CF-Access authenticated principal identity is required to admit/reject " +
-          `(missing/empty ${CF_ACCESS_EMAIL_HEADER}). This mutation is not available on an unauthenticated request.`,
+          "a verified CF-Access JWT is required to admit/reject on a non-loopback bind " +
+          `(missing/empty ${CF_ACCESS_JWT_HEADER}).`,
       },
       401,
     );
   }
+
+  const claims = await auth.verifyJwt(token);
+  if (claims === null) {
+    return json(
+      {
+        error: "unauthenticated",
+        detail:
+          "the CF-Access JWT failed verification (bad signature, wrong audience/issuer, " +
+          "expired, or not yet valid). Refusing to admit/reject.",
+      },
+      401,
+    );
+  }
+
+  const email = typeof claims.email === "string" ? claims.email.trim() : "";
+  if (email.length === 0) {
+    return json(
+      {
+        error: "unauthenticated",
+        detail: "the verified CF-Access JWT carries no `email` claim to attribute the decision to.",
+      },
+      401,
+    );
+  }
+  return email;
+}
+
+/**
+ * Handle `POST /api/networks/admission-decision`.
+ *
+ * @param decider The injected signer seam. `null` ⇒ 503 (no
+ *                federation/registry/signing identity configured).
+ * @param auth    Gate-1 auth inputs (bind-conditioned; see
+ *                {@link resolveAdmissionPrincipal}).
+ * @param rawBody The parsed JSON body (server already enforced the size cap).
+ */
+export async function handleAdmissionDecision(
+  decider: AdmissionDecider | null,
+  auth: AdmissionAuthContext,
+  rawBody: unknown,
+): Promise<Response> {
+  // Gate 1 — a CF-Access principal identity is required for a mutation.
+  const who = await resolveAdmissionPrincipal(auth);
+  if (who instanceof Response) return who;
 
   // Gate 2 — body shape + typed-confirm.
   const parsed = parseBody(rawBody);

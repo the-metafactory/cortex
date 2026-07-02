@@ -44,8 +44,12 @@ import { handleListNetworks, type NetworksView } from "./api/networks";
 import {
   handleAdmissionDecision,
   CF_ACCESS_EMAIL_HEADER,
+  CF_ACCESS_JWT_HEADER,
+  isLoopbackBind,
   type AdmissionDecider,
+  type AdmissionAuthContext,
 } from "./api/networks-admission";
+import { verifyCfAccessJwt } from "../../common/auth/cf-access-jwt";
 import type {
   LocalAggregationContext,
   LocalAggregationProvider,
@@ -224,6 +228,20 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const maxClients = config.ws.maxClients;
 
+  // cortex#1410 — bind-conditioned Gate 1 for the admission-decision route.
+  // On a loopback bind we keep trusting the CF-Access email header; off
+  // loopback we require a verified CF-Access JWT. Computed once here (the bind
+  // + config are fixed for the server's lifetime) and passed into handleApi.
+  const isLoopback = isLoopbackBind(config.hostname);
+  const cfAccess = config.cfAccess;
+  const cfAccessVerifier: AdmissionAuthContext["verifyJwt"] = cfAccess
+    ? (token: string): Promise<Record<string, unknown> | null> =>
+        verifyCfAccessJwt(token, {
+          aud: cfAccess.aud,
+          teamDomain: cfAccess.teamDomain ?? "metafactory",
+        })
+    : undefined;
+
   const apiDeps: ApiDeps | null = options.processManager
     ? {
         processManager: options.processManager,
@@ -311,6 +329,8 @@ export function startServer(
           localAggregation,
           networks,
           admissionDecider,
+          isLoopback,
+          cfAccessVerifier,
         );
       }
 
@@ -468,7 +488,9 @@ async function handleApi(
   agentPresence: AgentPresenceView | null,
   localAggregation: LocalAggregationContext | null,
   networks: NetworksView | null = null,
-  admissionDecider: AdmissionDecider | null = null
+  admissionDecider: AdmissionDecider | null = null,
+  isLoopback = true,
+  cfAccessVerifier?: AdmissionAuthContext["verifyJwt"]
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -700,10 +722,17 @@ async function handleApi(
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
     }
-    const principal = req.headers.get(CF_ACCESS_EMAIL_HEADER) ?? undefined;
+    const emailHeader = req.headers.get(CF_ACCESS_EMAIL_HEADER) ?? undefined;
+    const jwtAssertion = req.headers.get(CF_ACCESS_JWT_HEADER) ?? undefined;
     const body = await parseJsonBody(req);
     if (body.error) return body.error;
-    return handleAdmissionDecision(admissionDecider, principal, body.value);
+    const auth: AdmissionAuthContext = {
+      isLoopback,
+      emailHeader,
+      jwtAssertion,
+      ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
+    };
+    return handleAdmissionDecision(admissionDecider, auth, body.value);
   }
 
   // F-17 — principal-driven GitHub iteration import.

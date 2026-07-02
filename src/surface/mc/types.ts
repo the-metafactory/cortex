@@ -550,6 +550,23 @@ export interface Config {
   log: { level: LogLevel };
   hooks: HooksConfig;
   ws: WsConfig;
+  /**
+   * cortex#1410 — CF Access verification for the mutating admission-decision
+   * route when MC is bound BEYOND loopback. On a loopback bind this is unused
+   * (the loopback boundary is the gate). On a non-loopback bind it MUST be set,
+   * or the route fails closed: whoever exposes MC non-loopback supplies the
+   * Access application `aud` at deploy time. `teamDomain` defaults to
+   * "metafactory". Omitted entirely on every current (loopback) deployment.
+   */
+  cfAccess?: CfAccessConfig;
+}
+
+/** cortex#1410 — CF Access application binding for non-loopback MC. */
+export interface CfAccessConfig {
+  /** The Access application AUD tag the CF-Access JWT must be scoped to. */
+  aud: string;
+  /** CF Access team slug → issuer + JWKS URL. Defaults to "metafactory". */
+  teamDomain?: string;
 }
 
 export interface WsConfig {

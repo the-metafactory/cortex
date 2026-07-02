@@ -1,18 +1,47 @@
 /**
- * MC-B2 (cortex#1279) — tests for `handleAdmissionDecision`: the two gates
- * (CF-Access principal identity + typed-confirm) and the decider-verdict → HTTP
- * mapping. Pure — the decider is a stub; no bus, no network.
+ * MC-B2 (cortex#1279) + #1410 — tests for `handleAdmissionDecision`: the two
+ * gates (bind-conditioned CF-Access principal identity + typed-confirm) and the
+ * decider-verdict → HTTP mapping.
+ *
+ * Loopback cases are pure (stub decider). Non-loopback cases exercise the REAL
+ * shared CF-Access verifier against a locally-generated RS256 keypair + a
+ * stubbed JWKS fetch — no network.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 import {
   handleAdmissionDecision,
   type AdmissionDecider,
+  type AdmissionDecisionInput,
   type AdmissionDecisionResult,
+  type AdmissionAuthContext,
 } from "../networks-admission";
+import {
+  verifyCfAccessJwt,
+  resetCfAccessJwksCache,
+  cfAccessIssuer,
+} from "../../../../common/auth/cf-access-jwt";
+
+const TEAM = "metafactory";
+const AUD = "test-access-aud-tag";
+const ISS = cfAccessIssuer(TEAM);
 
 function decider(result: AdmissionDecisionResult): AdmissionDecider {
   return { decide: () => Promise.resolve(result) };
+}
+
+/** A decider that records its input (to assert the resolved principal). */
+function recordingDecider(): { decider: AdmissionDecider; calls: AdmissionDecisionInput[] } {
+  const calls: AdmissionDecisionInput[] = [];
+  return {
+    calls,
+    decider: {
+      decide: (input) => {
+        calls.push(input);
+        return Promise.resolve({ ok: true, status: "ADMITTED", requestId: input.requestId });
+      },
+    },
+  };
 }
 
 /** A decider that must NOT be called (asserts the gate fired first). */
@@ -29,59 +58,221 @@ const OK_BODY = {
   confirm: "req-abc-123",
 };
 
+/** Loopback auth context (current behavior): trusts the email header. */
+function loopbackAuth(email: string | undefined): AdmissionAuthContext {
+  return { isLoopback: true, emailHeader: email, jwtAssertion: undefined };
+}
+
+/**
+ * Non-loopback auth context. `emailHeader` is deliberately set to a FORGED
+ * value to prove it is ignored off loopback — only the verified JWT counts.
+ */
+function nonLoopbackAuth(
+  jwt: string | undefined,
+  verifyJwt?: AdmissionAuthContext["verifyJwt"],
+): AdmissionAuthContext {
+  return {
+    isLoopback: false,
+    emailHeader: "forged@evil.test",
+    jwtAssertion: jwt,
+    ...(verifyJwt ? { verifyJwt } : {}),
+  };
+}
+
 async function body(res: Response): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
-describe("handleAdmissionDecision — gate 1: CF-Access principal identity", () => {
+// ── Crypto helpers for the non-loopback (verified-JWT) cases ───────────────
+
+function b64url(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64urlStr(s: string): string {
+  return b64url(new TextEncoder().encode(s));
+}
+
+const RSA_PARAMS = {
+  name: "RSASSA-PKCS1-v1_5",
+  modulusLength: 2048,
+  publicExponent: new Uint8Array([1, 0, 1]),
+  hash: "SHA-256",
+} as const;
+
+let signKey: CryptoKey; // the "real" signer whose pubkey is in the stub JWKS
+let wrongKey: CryptoKey; // an off-JWKS signer, for the bad-signature case
+let jwksJwk: JsonWebKey & { kid: string };
+
+async function mint(
+  key: CryptoKey,
+  claims: Record<string, unknown>,
+  kid = "test-kid",
+): Promise<string> {
+  const header = b64urlStr(JSON.stringify({ alg: "RS256", kid, typ: "JWT" }));
+  const payload = b64urlStr(JSON.stringify(claims));
+  const data = new TextEncoder().encode(`${header}.${payload}`);
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, data);
+  return `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
+}
+
+/** stub fetch returning our single-key JWKS. */
+const stubFetch = ((): Promise<Response> =>
+  Promise.resolve({ ok: true, json: () => Promise.resolve({ keys: [jwksJwk] }) } as unknown as Response)) as unknown as typeof fetch;
+
+/** stub fetch that fails (JWKS unavailable). */
+const failFetch = ((): Promise<Response> =>
+  Promise.resolve({ ok: false, status: 503 } as unknown as Response)) as unknown as typeof fetch;
+
+/** Build a verifier bound to aud+team, an injected fetch, and a fixed clock. */
+function verifierWith(
+  fetchImpl: typeof fetch,
+  nowSeconds: number,
+): AdmissionAuthContext["verifyJwt"] {
+  return (token: string) =>
+    verifyCfAccessJwt(token, { aud: AUD, teamDomain: TEAM, fetchImpl, nowSeconds });
+}
+
+const NOW = 1_700_000_000;
+function validClaims(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return { aud: AUD, iss: ISS, email: "principal@example.com", iat: NOW - 30, exp: NOW + 3600, ...over };
+}
+
+beforeAll(async () => {
+  const kp = await crypto.subtle.generateKey(RSA_PARAMS, true, ["sign", "verify"]);
+  const kp2 = await crypto.subtle.generateKey(RSA_PARAMS, true, ["sign", "verify"]);
+  signKey = kp.privateKey;
+  wrongKey = kp2.privateKey;
+  const exported = await crypto.subtle.exportKey("jwk", kp.publicKey);
+  jwksJwk = { ...exported, kid: "test-kid", alg: "RS256" };
+});
+
+beforeEach(() => {
+  resetCfAccessJwksCache();
+});
+
+describe("handleAdmissionDecision — gate 1 (loopback): CF-Access email header", () => {
   it("401 when the principal identity is absent", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, undefined, OK_BODY);
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth(undefined), OK_BODY);
     expect(res.status).toBe(401);
     expect((await body(res)).error).toBe("unauthenticated");
   });
 
   it("401 when the principal identity is blank/whitespace", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "   ", OK_BODY);
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("   "), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("trusts the email header on loopback (no JWT needed) — reaches the decider", async () => {
+    const { decider: d, calls } = recordingDecider();
+    const res = await handleAdmissionDecision(d, loopbackAuth("op@x.io"), OK_BODY);
+    expect(res.status).toBe(200);
+    expect(calls[0]?.principal).toBe("op@x.io");
+  });
+});
+
+describe("handleAdmissionDecision — gate 1 (non-loopback): verified CF-Access JWT (#1410)", () => {
+  it("503 fail-closed when cfAccess is not configured (no verifier)", async () => {
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth("x.y.z"), OK_BODY);
+    expect(res.status).toBe(503);
+    expect((await body(res)).error).toBe("not_configured");
+  });
+
+  it("401 when the JWT assertion header is absent", async () => {
+    const auth = nonLoopbackAuth(undefined, verifierWith(stubFetch, NOW));
+    const res = await handleAdmissionDecision(throwingDecider, auth, OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("accepts a valid JWT and takes the principal from the verified email claim (ignoring the forged header)", async () => {
+    const token = await mint(signKey, validClaims());
+    const { decider: d, calls } = recordingDecider();
+    const res = await handleAdmissionDecision(d, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(200);
+    expect(calls[0]?.principal).toBe("principal@example.com");
+    expect(calls[0]?.principal).not.toBe("forged@evil.test");
+  });
+
+  it("401 fail-closed on a bad signature (signed by an off-JWKS key)", async () => {
+    const token = await mint(wrongKey, validClaims());
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("401 fail-closed on an expired token", async () => {
+    const token = await mint(signKey, validClaims({ exp: NOW - 3600, iat: NOW - 7200 }));
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("401 fail-closed on the wrong audience", async () => {
+    const token = await mint(signKey, validClaims({ aud: "some-other-app" }));
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("401 fail-closed on the wrong issuer", async () => {
+    const token = await mint(signKey, validClaims({ iss: cfAccessIssuer("someone-else") }));
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("401 fail-closed when nbf is in the future", async () => {
+    const token = await mint(signKey, validClaims({ nbf: NOW + 3600, exp: NOW + 7200 }));
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("401 fail-closed when the JWKS fetch fails (never falls open)", async () => {
+    const token = await mint(signKey, validClaims());
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(failFetch, NOW)), OK_BODY);
+    expect(res.status).toBe(401);
+  });
+
+  it("401 fail-closed when the verified JWT carries no email claim", async () => {
+    const token = await mint(signKey, validClaims({ email: undefined }));
+    const res = await handleAdmissionDecision(throwingDecider, nonLoopbackAuth(token, verifierWith(stubFetch, NOW)), OK_BODY);
     expect(res.status).toBe(401);
   });
 });
 
 describe("handleAdmissionDecision — gate 2: body + typed-confirm", () => {
   it("400 when the body is not an object", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "op@x.io", null);
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("op@x.io"), null);
     expect(res.status).toBe(400);
   });
 
   it("400 when request_id is invalid", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "op@x.io", { ...OK_BODY, request_id: "!", confirm: "!" });
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("op@x.io"), { ...OK_BODY, request_id: "!", confirm: "!" });
     expect(res.status).toBe(400);
   });
 
   it("400 when network_id is invalid", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "op@x.io", { ...OK_BODY, network_id: "Bad Net" });
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("op@x.io"), { ...OK_BODY, network_id: "Bad Net" });
     expect(res.status).toBe(400);
   });
 
   it("400 when decision is neither admit nor reject", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "op@x.io", { ...OK_BODY, decision: "revoke" });
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("op@x.io"), { ...OK_BODY, decision: "revoke" });
     expect(res.status).toBe(400);
   });
 
   it("400 when confirm does not exactly echo request_id (typed-confirm gate)", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "op@x.io", { ...OK_BODY, confirm: "req-abc-124" });
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("op@x.io"), { ...OK_BODY, confirm: "req-abc-124" });
     expect(res.status).toBe(400);
     expect((await body(res)).error).toBe("confirm must exactly match request_id");
   });
 
   it("400 when confirm has stray whitespace (exact echo, not trimmed)", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, "op@x.io", { ...OK_BODY, confirm: "req-abc-123 " });
+    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("op@x.io"), { ...OK_BODY, confirm: "req-abc-123 " });
     expect(res.status).toBe(400);
   });
 });
 
 describe("handleAdmissionDecision — decider wiring", () => {
   it("503 when the decider is not wired (null)", async () => {
-    const res = await handleAdmissionDecision(null, "op@x.io", OK_BODY);
+    const res = await handleAdmissionDecision(null, loopbackAuth("op@x.io"), OK_BODY);
     expect(res.status).toBe(503);
     expect((await body(res)).error).toBe("not_configured");
   });
@@ -89,7 +280,7 @@ describe("handleAdmissionDecision — decider wiring", () => {
   it("200 + status when the decider admits", async () => {
     const res = await handleAdmissionDecision(
       decider({ ok: true, status: "ADMITTED", requestId: "req-abc-123" }),
-      "op@x.io",
+      loopbackAuth("op@x.io"),
       OK_BODY,
     );
     expect(res.status).toBe(200);
@@ -101,7 +292,7 @@ describe("handleAdmissionDecision — decider wiring", () => {
   it("200 + REJECTED when rejecting", async () => {
     const res = await handleAdmissionDecision(
       decider({ ok: true, status: "REJECTED", requestId: "req-abc-123" }),
-      "op@x.io",
+      loopbackAuth("op@x.io"),
       { ...OK_BODY, decision: "reject" },
     );
     expect(res.status).toBe(200);
@@ -111,7 +302,7 @@ describe("handleAdmissionDecision — decider wiring", () => {
   it("403 when the registry says not_authorized", async () => {
     const res = await handleAdmissionDecision(
       decider({ ok: false, reason: "not_authorized", detail: "not an admin" }),
-      "op@x.io",
+      loopbackAuth("op@x.io"),
       OK_BODY,
     );
     expect(res.status).toBe(403);
@@ -130,7 +321,7 @@ describe("handleAdmissionDecision — decider wiring", () => {
       [{ ok: false, reason: "unreachable", detail: "x" }, 502],
     ];
     for (const [result, status] of cases) {
-      const res = await handleAdmissionDecision(decider(result), "op@x.io", OK_BODY);
+      const res = await handleAdmissionDecision(decider(result), loopbackAuth("op@x.io"), OK_BODY);
       expect(res.status).toBe(status);
     }
   });

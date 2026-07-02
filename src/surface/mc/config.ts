@@ -6,7 +6,7 @@ import { readFileSync, existsSync } from "fs";
 import { parse as parseYaml } from "yaml";
 import { join } from "path";
 import { homedir } from "os";
-import type { Config, LogLevel } from "./types";
+import type { Config, LogLevel, CfAccessConfig } from "./types";
 import { resolveConfigFilePath } from "../../common/config/config-path";
 
 const VALID_LOG_LEVELS: ReadonlySet<LogLevel> = new Set([
@@ -95,6 +95,34 @@ export function loadConfig(configPath?: string): Readonly<Config> {
   const hooks = parsed.hooks as Record<string, unknown> | undefined;
   const ws = parsed.ws as Record<string, unknown> | undefined;
 
+  // cortex#1410 — CF Access binding (only meaningful on a non-loopback bind).
+  // Parsed strictly: `cfAccess.aud` must be a non-empty string when the block
+  // is present; a malformed block throws rather than silently disabling the
+  // gate on a non-loopback MC.
+  const cfAccessRaw = parsed.cfAccess as Record<string, unknown> | undefined;
+  let cfAccess: CfAccessConfig | undefined;
+  if (cfAccessRaw !== undefined) {
+    if (typeof cfAccessRaw.aud !== "string" || cfAccessRaw.aud.trim() === "") {
+      throw new Error(
+        `cfAccess.aud must be a non-empty string in ${resolvedPath} (the Access application audience tag)`,
+      );
+    }
+    if (
+      cfAccessRaw.teamDomain !== undefined &&
+      (typeof cfAccessRaw.teamDomain !== "string" || cfAccessRaw.teamDomain.trim() === "")
+    ) {
+      throw new Error(
+        `cfAccess.teamDomain must be a non-empty string when set in ${resolvedPath}`,
+      );
+    }
+    cfAccess = {
+      aud: cfAccessRaw.aud,
+      ...(typeof cfAccessRaw.teamDomain === "string"
+        ? { teamDomain: cfAccessRaw.teamDomain }
+        : {}),
+    };
+  }
+
   let level: LogLevel = DEFAULT_CONFIG.log.level;
   if (typeof log?.level === "string") {
     if (!VALID_LOG_LEVELS.has(log.level as LogLevel)) {
@@ -147,6 +175,7 @@ export function loadConfig(configPath?: string): Readonly<Config> {
           ? ws.maxClients
           : DEFAULT_CONFIG.ws.maxClients,
     },
+    ...(cfAccess ? { cfAccess } : {}),
   };
 
   return Object.freeze(config);
