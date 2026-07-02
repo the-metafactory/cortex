@@ -23,9 +23,13 @@
  *     `Write`, `NotebookEdit`, no `Task`/sub-agent spawn, no MCP write tools.
  *   - **`bashAllowlist`** — a TIGHT allowlist: read-only inspection (`git
  *     show/diff/log`, `cat`, `ls`, …) + the forge review post (`gh pr review`,
- *     `gh pr diff`, `gh pr view`, `glab`). NO general `git`/`bun`/`gh` (the dev
- *     path's broad allowlist is the HIGHER-authority profile and must NOT leak
- *     into a public review). Anything else is denied by `bash-guard.hook.ts`.
+ *     `gh pr diff`, `gh pr view`, `glab`) + TWO tightly-anchored read-only
+ *     exceptions (compass#98 C2): `gh api repos/<o>/<r>/contents/<path>` (the F6
+ *     CONTEXT.md/ADR grounding fetch) and `gh repo view <r> --json visibility`
+ *     (the #89/#96 exposure check — previously DENIED here). NO general
+ *     `git`/`bun`/`gh`, no bare `gh api`/`gh repo` (the dev path's broad
+ *     allowlist is the HIGHER-authority profile and must NOT leak into a public
+ *     review). Anything else is denied by `bash-guard.hook.ts`.
  *   - **`disallowedTools`** — belt-and-braces explicit denials of the
  *     write/spawn tools even if a future baseline `allowedTools` widens.
  *   - **`allowedDirs`** — SCRATCH ONLY (the caller passes the per-review scratch
@@ -111,8 +115,23 @@ export const LOCKED_REVIEW_BASH_ALLOWLIST: {
     // style smuggling.
     { pattern: "^git (show|diff|log|status|blame|cat-file)( |$)" },
     // Forge review post + read (GitHub). `gh pr review|diff|view|checkout` only;
-    // NO `gh repo`, `gh secret`, `gh api`, `gh auth`, etc.
+    // NO broad `gh repo`, `gh secret`, `gh auth`, etc. (the two read-only
+    // exceptions immediately below are the ONLY `gh api`/`gh repo` forms allowed).
     { pattern: "^gh pr (review|diff|view|checkout|comment)( |$)" },
+    // compass#98 C2 — read-only grounding + exposure. TWO tightly-anchored
+    // exceptions to the "no gh api / no gh repo" rule above, and NOTHING broader:
+    //   1. `gh api repos/<owner>/<repo>/contents/<path>` — the F6 CONTEXT.md/ADR
+    //      grounding fetch (§ArchitectureDocs). Bound to the read-only `contents`
+    //      endpoint of SOME repo; a bare `gh api`, `gh api user`, or
+    //      `gh api repos/o/r/actions/secrets` (no `/contents/` segment) never
+    //      matches, so secrets/actions/user endpoints stay denied.
+    { pattern: "^gh api repos/[^ ]+/contents/[^ ]+( |$)" },
+    //   2. `gh repo view <repo> --json visibility` — the #89/#96 exposure check
+    //      (public-vs-private, fail-closed). Anchored to `--json visibility` so it
+    //      cannot widen to `gh repo delete/clone` or arbitrary `--json` field sets.
+    //      This unblocks the exposure check, which was DENIED under lockdown before
+    //      C2 (it only matched `gh pr view`, not `gh repo view`).
+    { pattern: "^gh repo view [^ ]+ --json visibility( |$)" },
     // Forge review post + read (GitLab).
     { pattern: "^glab mr (note|diff|view|approve)( |$)" },
     // Read-only filesystem inspection within the scratch dir.

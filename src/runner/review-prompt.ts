@@ -128,6 +128,50 @@ export function buildReviewPrompt(payload: ReviewRequestPayload): string {
     `Invoke the CodeReview skill — **${workflow}** workflow — then emit the ` +
     `verdict block below.`;
 
+  // compass#98 F6 — CONTEXT.md/ADR grounding. Between the lens directive and the
+  // exposure block, ground the review in the TARGET repo's own documented
+  // architecture. This is the SAME grounding contract the CodeReview skill's
+  // ArchitectureDocs carrier and the sage engine implement — ONE contract, THREE
+  // carriers; this is cortex's bus-path carrier. The pinned provenance line is
+  // byte-identical to the skill + sage carriers so downstream parsers (pilot,
+  // dashboard, audit log) grep for ONE shape.
+  //
+  // Builder stays PURE: it emits the instruction TEXT; the REVIEWER runs the
+  // read-only `gh api` fetch at review time. Flavor-independent (fires on every
+  // review), so it never affects drift-1.
+  //
+  // Fetch form is the PIPE-FREE raw-media variant, NOT the ArchitectureDocs
+  // `… --jq .content | base64 -d` pipe: a wider-scope review runs under the M2
+  // session lockdown whose bash-guard (`rejectsChaining`, bash-guard.hook.ts)
+  // DENIES any pipe / redirect OUTRIGHT — before the allowlist is even consulted
+  // — so the piped decode would be blocked regardless of the C2 allowlist widen.
+  // `-H "Accept: application/vnd.github.raw"` returns the decoded file in a
+  // single un-piped GET that the widened allowlist (review-session-lockdown.ts)
+  // permits and rejectsChaining allows.
+  const groundingInstruction = [
+    "Ground this review in the TARGET repo's own documented architecture before",
+    "emitting findings. Read-only and best-effort: fetch each of these canonical",
+    `docs from ${payload.repo} with a SINGLE un-piped GET —`,
+    '`gh api repos/<owner>/<repo>/contents/<path> -H "Accept: application/vnd.github.raw"`',
+    "(a non-zero exit means the doc is absent — expected and non-fatal; do NOT",
+    "pipe to `base64 -d`, the review session's bash guard forbids pipes):",
+    "(1) `CONTEXT.md` — the bounded-context glossary (canonical terms + `_Avoid_`",
+    "alias lists); (2) `docs/architecture.md` — the M1–M7 layer model and",
+    "componentisation; (3) `compass/ecosystem/CONTEXT-MAP.md` — ecosystem boundary",
+    "terms. Cross-check the diff against them: flag any added or renamed symbol",
+    "whose normalized token sequence matches a CONTEXT.md `_Avoid_` alias",
+    "(camelCase / snake_case / kebab-case / dotted forms are the SAME sequence —",
+    "a case- and separator-insensitive match), and any new import that crosses an",
+    "M1–M7 layer boundary in the wrong direction (a lower layer importing a higher",
+    "one, or an M7 surface taking on an M2–M6 concern). NEVER quote suspected",
+    "confidential content — cite each finding by `file:line` and canonical term",
+    "only. You MUST include, in the posted review, a one-line provenance string",
+    "naming which docs loaded, in this EXACT pinned shape (downstream parsers grep",
+    "for the `(loaded)` / `(not-found)` pair — use hyphenated `(not-found)`, never",
+    "`(missing)` or `(absent)`):",
+    "`architecture-docs: CONTEXT.md (loaded|not-found), docs/architecture.md (loaded|not-found), CONTEXT-MAP.md (loaded|not-found)`.",
+  ].join(" ");
+
   // ALWAYS-ON exposure + confidentiality instruction — appended for EVERY
   // flavor (design-software-factory-confidentiality.md §4 L3: "Confidentiality
   // runs on every review of an exposed repo regardless of flavor"). The builder
@@ -152,6 +196,8 @@ export function buildReviewPrompt(payload: ReviewRequestPayload): string {
     `Review ${target} ${ref}.`,
     "",
     lensDirective,
+    "",
+    groundingInstruction,
     "",
     exposureInstruction,
     "",

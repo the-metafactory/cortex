@@ -207,3 +207,85 @@ describe("buildReviewPrompt — always-on exposure + confidentiality (compass#89
     );
   });
 });
+
+describe("buildReviewPrompt — CONTEXT.md/ADR grounding (compass#98 F6)", () => {
+  test("emits the grounding directive on every review", () => {
+    const p = buildReviewPrompt(payload());
+    expect(p).toContain(
+      "Ground this review in the TARGET repo's own documented architecture",
+    );
+  });
+
+  test("names all three canonical grounding docs (skill ArchitectureDocs §1)", () => {
+    const p = buildReviewPrompt(payload());
+    expect(p).toContain("CONTEXT.md");
+    expect(p).toContain("docs/architecture.md");
+    expect(p).toContain("compass/ecosystem/CONTEXT-MAP.md");
+  });
+
+  test("instructs the PIPE-FREE raw-media gh api fetch (M2 guard forbids pipes)", () => {
+    const p = buildReviewPrompt(payload());
+    // The un-piped raw-media form the widened lockdown allowlist (C2) permits.
+    expect(p).toContain(
+      'gh api repos/<owner>/<repo>/contents/<path> -H "Accept: application/vnd.github.raw"',
+    );
+    // …and explicitly steers OFF the ArchitectureDocs `| base64 -d` pipe, which
+    // rejectsChaining would block before the allowlist is consulted.
+    expect(p).toContain("base64 -d");
+    expect(p).toMatch(/bash guard forbids pipes/i);
+  });
+
+  test("instructs the _Avoid_ alias + M1–M7 layer-direction cross-check", () => {
+    const p = buildReviewPrompt(payload());
+    expect(p).toContain("_Avoid_");
+    expect(p).toMatch(/layer boundary in the wrong direction/i);
+  });
+
+  test("requires the pinned, greppable provenance line (identical shape across carriers)", () => {
+    const p = buildReviewPrompt(payload());
+    expect(p).toContain(
+      "architecture-docs: CONTEXT.md (loaded|not-found), docs/architecture.md (loaded|not-found), CONTEXT-MAP.md (loaded|not-found)",
+    );
+    // The canonical line uses the hyphenated `(not-found)` token, not `(missing)`
+    // — enforced by the pinned shape above (the prompt also explicitly names the
+    // forbidden `(missing)`/`(absent)` variants as guidance, so we cannot assert
+    // their global absence; the pinned-shape match is the real contract).
+    expect(p).toContain("CONTEXT-MAP.md (loaded|not-found)");
+  });
+
+  test("grounding sits BETWEEN the lens directive and the exposure block", () => {
+    const p = buildReviewPrompt(payload({ flavor: "security" }));
+    const lensIdx = p.indexOf("Invoke the CodeReview skill");
+    const groundIdx = p.indexOf("Ground this review in the TARGET repo");
+    const exposureIdx = p.indexOf(
+      "Before reviewing, determine the target repo's exposure",
+    );
+    expect(lensIdx).toBeGreaterThanOrEqual(0);
+    expect(exposureIdx).toBeGreaterThanOrEqual(0);
+    expect(groundIdx).toBeGreaterThan(lensIdx);
+    expect(exposureIdx).toBeGreaterThan(groundIdx);
+  });
+
+  test("never-quote redaction discipline is carried into the grounding step too", () => {
+    const p = buildReviewPrompt(payload());
+    expect(p).toContain("NEVER quote suspected confidential content");
+  });
+
+  test("builder stays PURE with grounding (same input → byte-identical output)", () => {
+    expect(buildReviewPrompt(payload({ flavor: "typescript" }))).toBe(
+      buildReviewPrompt(payload({ flavor: "typescript" })),
+    );
+  });
+
+  test("grounding is flavor-independent, yet drift-1 (security ≠ typescript) still holds", () => {
+    const security = buildReviewPrompt(payload({ flavor: "security" }));
+    const typescript = buildReviewPrompt(payload({ flavor: "typescript" }));
+    // The whole prompts still differ (the lens directive names a distinct
+    // workflow) — drift-1 stays pinned shut.
+    expect(security).not.toBe(typescript);
+    // …but the grounding directive itself is identical across flavors.
+    const ground = "Ground this review in the TARGET repo's own documented architecture";
+    expect(security).toContain(ground);
+    expect(typescript).toContain(ground);
+  });
+});
