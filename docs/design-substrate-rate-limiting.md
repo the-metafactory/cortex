@@ -415,7 +415,7 @@ Exactly the existing taxonomy — nothing new on the wire:
 2. **Default key depth:** ship tiers 1–2 (stack + principal) only, or is
    principal×agent (tier 3) needed from day one for the AMT/pylon seam?
 3. **Config home:** `policy.admission` (proposed) vs. limits as fields on
-   `RoleDefinition` — any preference for where operators tune this?
+   `RoleDefinition` — any preference for where these limits are tuned?
 4. **Phase-3 timing:** is multi-node cortex close enough that the JetStream
    work-queue migration (double-spawn fix) should be pulled into this epic, or does
    R26 ship phases 1–2 and the transport migration stays a separate issue?

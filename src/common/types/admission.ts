@@ -42,7 +42,7 @@
  *
  * The window fields reuse the `offering.ts` rate vocabulary exactly
  * (`per_minute`/`per_hour`/`per_day` from `RatePredicateSchema`,
- * `max_concurrent` from `PublicLimitsSchema`) so operators tune ONE dialect
+ * `max_concurrent` from `PublicLimitsSchema`) so a stack tunes ONE dialect
  * across public-offering limits and admission limits.
  */
 

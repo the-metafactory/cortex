@@ -167,7 +167,7 @@ describe("PolicySchema integration — the CO-4 inertness + cross-refs", () => {
         trust: [],
       },
     ],
-    roles: [{ id: "principal", capabilities: ["operator"] }],
+    roles: [{ id: "principal", capabilities: ["dispatch.pylon"] }],
   };
 
   test("absent admission block parses to undefined (limiter fully inert)", () => {
