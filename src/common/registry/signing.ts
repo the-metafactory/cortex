@@ -20,53 +20,23 @@
  */
 
 // =============================================================================
-// Canonical JSON — recursive sort-keys, no whitespace.
+// Canonical JSON — the ONE shared source (#1416). Previously a hand-maintained
+// mirror of the registry's copy; both now import + re-export the single pure-TS
+// canonicaliser at `./canonical-json` so they cannot drift (a drift silently
+// re-opened a signature-bytes mismatch → self-inflicted 401 on one path). Depth
+// (#832) + width/size (#1418) caps live there. Re-exported here so every
+// existing importer of this module keeps working unchanged.
 // =============================================================================
 
-/**
- * Hard cap on nesting depth. Mirrors the registry's guard (#832) so the two
- * canonicalisers stay byte-compatible: a legitimate claim nests ~3 levels, so
- * 64 never triggers for any real signing input — it exists only so the two
- * implementations remain literally identical (the registry now canonicalizes
- * attacker-controlled input and needs the DoS guard; carrying it here too keeps
- * the RFC-8785 cross-checker pair from silently diverging).
- */
-export const MAX_CANONICAL_DEPTH = 64;
-
-/** Thrown by {@link canonicalJSON} when nesting exceeds {@link MAX_CANONICAL_DEPTH}. */
-export class CanonicalDepthError extends Error {
-  constructor() {
-    super(`canonical JSON nesting exceeded ${MAX_CANONICAL_DEPTH} levels`);
-    this.name = "CanonicalDepthError";
-  }
-}
-
-/**
- * Mirror of the registry's `canonicalJSON`. Object keys sorted
- * lexicographically + recursively; `undefined` values skipped (to
- * match `JSON.stringify` behaviour after a parse/stringify round-trip);
- * no whitespace. Throws {@link CanonicalDepthError} beyond
- * {@link MAX_CANONICAL_DEPTH} (matches the registry's #832 DoS guard).
- */
-export function canonicalJSON(value: unknown, depth = 0): string {
-  if (depth > MAX_CANONICAL_DEPTH) {
-    throw new CanonicalDepthError();
-  }
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return "[" + value.map((v) => canonicalJSON(v, depth + 1)).join(",") + "]";
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj)
-    .filter((k) => obj[k] !== undefined)
-    .sort();
-  const parts = keys.map(
-    (k) => JSON.stringify(k) + ":" + canonicalJSON(obj[k], depth + 1),
-  );
-  return "{" + parts.join(",") + "}";
-}
+export {
+  MAX_CANONICAL_DEPTH,
+  MAX_CANONICAL_KEYS,
+  MAX_CANONICAL_ARRAY_LEN,
+  MAX_CANONICAL_NODES,
+  CanonicalDepthError,
+  CanonicalWidthError,
+  canonicalJSON,
+} from "./canonical-json";
 
 // =============================================================================
 // Base64 helpers — standard alphabet (NOT url-safe).
