@@ -164,7 +164,22 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     }
 
     // 4. Signature verification FIRST (before recording nonce).
-    const message = new TextEncoder().encode(canonicalJSON(claim)) as Uint8Array<ArrayBuffer>;
+    // #1414 — verify over the claim AS RECEIVED (canonicalJSON(signed.claim)),
+    // NOT the whitelist reconstruction, converging on the #832 register pattern:
+    // a future signed field the reconstruction doesn't echo can no longer
+    // silently 401 a legitimate decision. The reconstruction (`claim`) stays for
+    // structural validation + the pubkey/allowlist/storage — validation already
+    // proved claim.admin_pubkey === signed.claim.admin_pubkey, so the key we
+    // verify + allowlist against is unchanged; only the signed BYTES converge.
+    // Fail closed (401) if the shared guarded canonicaliser throws on an
+    // over-deep/over-wide hostile body (#832 depth + #1418 width) — it can never
+    // match a real signature anyway.
+    let message: Uint8Array<ArrayBuffer>;
+    try {
+      message = new TextEncoder().encode(canonicalJSON(signed.claim)) as Uint8Array<ArrayBuffer>;
+    } catch (_err) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
     const sigValid = await verifyEd25519(claim.admin_pubkey, signed.signature, message);
     if (!sigValid) {
       return c.json({ error: "signature_invalid" }, 401);
@@ -378,7 +393,18 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     }
 
     // 4. Signature verification FIRST (before recording nonce), then allowlist.
-    const message = new TextEncoder().encode(canonicalJSON(claim)) as Uint8Array<ArrayBuffer>;
+    // #1414 — verify over the wire claim (canonicalJSON(signed.claim)), not the
+    // reconstruction (#832 pattern), so sealed-secret + revoke can't be broken by
+    // a future signed field. Validation already proved claim.hub_admin_pubkey ===
+    // signed.claim.hub_admin_pubkey, so the key we gate on is unchanged. Fail
+    // closed (401) if the guarded canonicaliser throws (over-deep/over-wide,
+    // #832/#1418).
+    let message: Uint8Array<ArrayBuffer>;
+    try {
+      message = new TextEncoder().encode(canonicalJSON(envelopeCheck.signed.claim)) as Uint8Array<ArrayBuffer>;
+    } catch (_err) {
+      return { ok: false, response: c.json({ error: "signature_invalid" }, 401) };
+    }
     const gateResult = await applyAdminGate(
       hubAdminPubkeys,
       claim.hub_admin_pubkey,

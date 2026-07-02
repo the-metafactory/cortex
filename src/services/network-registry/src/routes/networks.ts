@@ -153,7 +153,19 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
     // Signature verification FIRST (before recording the nonce — #695 rationale:
     // a bad-sig POST must not burn a durable nonce row). The admin signs
     // canonicalJSON(claim) with the key whose pubkey the claim declares.
-    const message = new TextEncoder().encode(canonicalJSON(claim));
+    // #1414 — verify over the claim AS RECEIVED (canonicalJSON(signed.claim)),
+    // NOT the whitelist reconstruction, converging on the #832 register pattern
+    // so a future signed field (mirroring #1321's admin_pubkeys) can't silently
+    // 401. The reconstruction (`claim`) still drives validation + the pubkey we
+    // verify/authorise against (validation proved claim.admin_pubkey ===
+    // signed.claim.admin_pubkey) + storage. Fail closed (401) if the shared
+    // guarded canonicaliser throws on an over-deep/over-wide body (#832/#1418).
+    let message: Uint8Array<ArrayBuffer>;
+    try {
+      message = new TextEncoder().encode(canonicalJSON(signed.claim)) as Uint8Array<ArrayBuffer>;
+    } catch (_err) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
     const valid = await verifyEd25519(claim.admin_pubkey, signed.signature, message);
     if (!valid) {
       return c.json({ error: "signature_invalid" }, 401);
