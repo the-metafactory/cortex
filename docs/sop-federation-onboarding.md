@@ -2,12 +2,25 @@
 
 # SOP — Cross-principal federation onboarding (peer principal)
 
-**Status:** active (TC-2 / Trust & Confidentiality track) — but see [§7 Current status](#7-current-status--be-honest) before assuming the dispatch path works
+**Status:** active (TC-2 / Trust & Confidentiality track) — the federated dispatch path is **live** (see [§7 Current status](#7-current-status--the-federated-dispatch-path-is-live))
 **Owner:** principal
 **Audience:** a principal onboarding a **peer principal** (a different human running their own cortex stack and assistant) into cross-principal federation with `andreas` / the `metafactory` network — and the peer principal doing the mirror-image steps on their side
 **Worked example:** onboarding **JC** (principal `jcfischer`), who runs the assistant **Holly**, into federation with **Andreas** (principal `andreas`, network `metafactory`)
 
 > **Authority:** [`docs/adr/0013-sovereign-federation-model.md`](./adr/0013-sovereign-federation-model.md) (Model B — sovereign own-operator + per-side export/import, accepted). **Nobody issues you a federation `.creds`.** Each principal runs **their own** NSC operator and roots their own federation account; the only cross-party handoff is the **leaf shared secret + who-hosts-the-hub**, exchanged out-of-band (via the admission gate, [ADR-0015](./adr/0015-two-tier-onboarding-and-admission-gate.md)). The retired Model A (hub-minted guest accounts/creds) is gone — [ADR-0012](./adr/0012-external-operator-account-isolation.md) is superseded by ADR-0015.
+
+---
+
+## 0. Which onboarding path? (route, don't duplicate)
+
+Two distinct paths lead here — pick one and follow **its** canonical SOP. This document is shared **reference depth** (the three-layer model, the `peers[]` hand-pin fallback, dispatch anatomy, and the live-status record), **not** a third set of steps to walk:
+
+- **Sovereign peer principal** — a different human running their own cortex stack + NSC operator, federating with you as an equal. → **[`docs/sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) is canonical** for the end-to-end happy path (Steps 1–8: provision → register → admit → join → go-private).
+- **Community fleet member** — a newcomer arriving through the metafactory-community server.
+  - **Tier 1 (chat-only** — Discord `community-fleet` role, presence + channel access, **no bus)** → [`docs/sop-community-fleet-admission.md`](./sop-community-fleet-admission.md).
+  - **Tier 2 (sovereign bus)** → the newcomer runs their own stack and follows the sovereign path above; the two-channel Pier airgap is [`sop-onboard-peer-principal.md` §4b](./sop-onboard-peer-principal.md#4b-community-onboarding--the-two-channel-airgap-process-b).
+
+Both bus paths converge on the same sovereign mechanics ([ADR-0013](./adr/0013-sovereign-federation-model.md)) — there is **no hub-minted guest bus tier** ([ADR-0015](./adr/0015-two-tier-onboarding-and-admission-gate.md)). Read the sections below for the *why* behind the steps; run the canonical SOP for the *how*.
 
 ---
 
@@ -132,7 +145,7 @@ policy:
 - `accept_subjects[]` is an explicit allow-list (empty = accept nothing). `deny_subjects[]` overrides it. `max_hop` is **required** (no default — a hop budget must be a conscious choice; `cortex-config.ts` rejects a missing `max_hop`).
 - `announce_capabilities[]` are published on `system.capability.announced.<network_id>` so peers can route by capability (Offer mode) without knowing your agent inventory.
 
-> ⚠️ **Grammar note (read [§7](#7-current-status--be-honest)).** The *current schema* default and cross-validation key `accept_subjects` on `federated.{network_id}.>`. ADR-0001 (**Accepted**) reworks this to `federated.{principal}.{stack}.>` — the network name comes **off the wire** entirely. That rework is cortex#691, in progress. Stage the network entry now; expect the accept-pattern segment to change from `{network_id}` → `{principal}.{stack}` when #691 lands.
+> ⚠️ **Grammar note.** The wire grammar is `federated.{principal}.{stack}.>` — the network name is **off the wire** entirely (a network is topology, resolved from `peers[]`, never a subject segment). This is the ADR-0001 grammar and it has **landed** (cortex#691, **shipped**); the `accept_subjects` example above (`federated.andreas.meta-factory.>`) already reflects the `{principal}.{stack}` form. (Some schema *comments* in `src/common/types/cortex-config.ts` still describe the older `{network_id}` prefix — comment drift, cleaned up separately; the wire form is `{principal}.{stack}`.)
 
 ---
 
@@ -171,15 +184,15 @@ Lifecycle events flow back on `federated.{requester}.{stack}.dispatch.task.{star
 
 ---
 
-## 5. Verify (staging-only today)
+## 5. Verify
 
-What you *can* verify now (config + identity layers):
+Config + identity layers:
 
 1. **Registry up + signed:** `GET https://network.meta-factory.ai/api/health` → `{ "status": "ok" }`; `GET /registry/pubkey` → `{ "algorithm": "Ed25519", "public_key": "ErrjF…" }` (not 503, not `"unconfigured"`).
 2. **Peer resolves:** `GET https://network.meta-factory.ai/principals/jcfischer` returns a `SignedAssertion` whose `registry` equals your pinned pubkey and whose `payload.principal_pubkey` is JC's registered key. A 404 means JC hasn't registered yet.
-3. **Your own identity round-trips:** under `security.signing: enforce`, the boot `verifier-self-check` (`src/bus/verifier-self-check.ts`) logs `cortex: verifier-self-check OK …`. (Note: enforce is **not** today's default — see [§7](#7-current-status--be-honest).)
+3. **Your own identity round-trips:** under `security.signing: enforce`, the boot `verifier-self-check` (`src/bus/verifier-self-check.ts`) logs `cortex: verifier-self-check OK …`. (Note: enforce is **not** today's default — the signing posture ramps `off → permissive → enforce`; see [§7](#7-current-status--the-federated-dispatch-path-is-live).)
 
-What you **cannot** verify yet: an actual cross-principal *dispatch* landing on the peer — the consumer doesn't exist yet ([§7](#7-current-status--be-honest)).
+Dispatch layer: you can also verify an actual cross-principal *dispatch* end-to-end now — the federated review-consumer landed (the F-6 reflex bridge, cortex#1185), so a Direct/Offer dispatch reaches a peer assistant and the verdict returns on the `federated.{requester}.{stack}.dispatch.task.{started|completed|failed|aborted}` lifecycle subjects ([§7](#7-current-status--the-federated-dispatch-path-is-live)).
 
 ---
 
@@ -195,6 +208,10 @@ In cortex.yaml the link is named by `policy.federated.networks[].leaf_node` and 
 **Counter-example — `andreas/halden` is deliberately UNbridged.** `halden` is one of Andreas's own stacks (`andreas/halden`, per `CONTEXT.md` §Principal and `docs/design-bus-addressing.md`). It runs `local.andreas.halden.>` and is reachable on `federated.andreas.halden.>` **only if a leaf link is stood up for it** — by default it isn't. It shows that *having an identity / being in the config* is not the same as *being on the wire*: a stack with no leaf link is unreachable cross-network no matter what the registry says about it. Identity (registry) and reachability (leaf link) are orthogonal.
 
 > **The leaf hub is operator-mode, so the leaf side must be too (#794).** The `halden` / `community` pattern stands a stack up on a **hard-isolated, anonymous** bus (no NSC operator, no accounts). Such a bus **cannot bind a leaf** to an operator-mode hub — the rendered remote names an account the anonymous server doesn't know and `nats-server` crashes (`cannot find local account`). `cortex network join` fails fast on this rather than crashing the bus; to federate a hard-isolated stack, **stand up its own NSC operator** (Model B, [ADR-0013](./adr/0013-sovereign-federation-model.md)) and bind the leaf to a local account first — you never copy the hub's operator. Full procedure: [`sop-stack-onboarding.md` §B0.1](./sop-stack-onboarding.md#b01--the-bus-must-be-operator-mode-the-794-lesson).
+
+> **The leaf-side operator-mode conversion + the local `federated.>` export/import are now command-driven (cortex#1265).** You no longer hand-run raw `nsc generate config` or `arc nats add-federation-export` on the **joining** side. `cortex network provision <principal>/<slug> --apply` mints your operator + a dedicated federation account + the per-stack agents account, wires the local `federated.>` export/import, and **exports the operator-mode JWTs** into `stack.nats_infra`; then `cortex network join` renders the operator-mode `.conf` + the leaf remote from those JWTs (a local-only, never-federating stack uses `cortex network make-live <slug> --apply` to bootstrap the same resolver). The **hub-side** `leafnodes{}` standup (whose hub, what URL, what leaf secret) is still a principal-provisioned NATS-infrastructure step, as above. Canonical steps: [`sop-onboard-peer-principal.md` §Step 4a](./sop-onboard-peer-principal.md) + design [`docs/design-wrap-server-config-tooling.md`](./design-wrap-server-config-tooling.md).
+
+> **Include-path gotcha (#754, surfaced again on the first external onboarding walk, #1262).** Rendering the per-network `leafnodes-<network>.conf` is not enough on its own: the stack's **top-level** nats config must carry an `include "leafnodes-<network>.conf"` directive, or `nats-server` loads a config that never references the leaf and the link stays **dormant**. `cortex network join` ensures that top-level `include` automatically (and `cortex network leave` removes exactly that one directive) — so **never hand-add the include line**. If a leaf looks configured but never establishes, confirm the top-level config actually includes the rendered file.
 
 ### 6.1 Per-network trust-domain separation (metafactory vs community) — #1320
 
@@ -214,21 +231,19 @@ Two pieces:
 
 ---
 
-## 7. Current status — be honest
+## 7. Current status — the federated dispatch path is LIVE
 
-**Nothing is live on the federated DISPATCH path yet.** You can *stage* the onboarding config (identity, registry pin, network entry) today, but bus dispatch to a peer **will not fire** until the in-flight work lands:
+**Cross-principal dispatch reaches a peer assistant today.** The three items that used to gate this path have all landed:
 
-| Item | What it is | State |
+| Item | What it was | State |
 |---|---|---|
-| **cortex#691** | ADR-0001 federated subject-grammar rework — `federated.{principal}.{stack}` on the wire, network off-wire; `accept_subjects` default moves `{network_id}` → `{principal}.{stack}`. | **OPEN / in progress** |
-| **cortex#686** | The federated review **consumer** — the cortex receiver that subscribes to inbound cross-principal review-requests on the conformant grammar and emits the verdict back. | **OPEN / in progress** |
-| **pilot#149** | Re-target the pilot review request as a **Direct** dispatch (`@reviewer@{principal}/{stack}`) emitting the conformant subject; merges in lockstep with #686. | in progress |
+| **cortex#691** | ADR-0001 federated subject-grammar rework — `federated.{principal}.{stack}` on the wire, network off-wire; `accept_subjects` moves `{network_id}` → `{principal}.{stack}`. | **CLOSED — shipped.** |
+| **cortex#686** | The federated review **consumer** — the cortex receiver that subscribes to inbound cross-principal review-requests and emits the verdict back. | **CLOSED — landed as the F-6 reflex bridge, cortex#1185 (merged).** |
+| **pilot#149** | Re-target the pilot review request as a federated dispatch (ADR-0002 addressing + verdict-back, requester half). | **MERGED.** |
 
-Per ADR-0001 §Consequences: *"nothing is live on the federated path yet (no consumer existed), so there is no production traffic to migrate."*
+On top of the consumer landing, **roster-driven federation auto-wiring is live (v5.24.0)** — a stack resolves its `policy.federated.networks[]` peers from the signature-verified registry roster and the reconciler wires the leaf, so you no longer hand-maintain peer lists — and **end-to-end payload confidentiality ships as of v5.27.0** ([ADR-0019](./adr/0019-federated-payload-encryption.md)): a network is a **trust group**, and all federated payloads (**Direct/Delegate/Offer**) are sealed with **one per-network key `K`** — readable by every admitted member, opaque to any outsider on the transport. Encryption is **opt-in per network** (`policy.federated.networks[].encryption: enabled` + `payload_key`), with a both-accepted transition window before you flip to `required`. The signing posture still ramps **independently** `off → permissive → enforce` (DD-7) — encryption and signing are separate axes. The end-to-end go-private procedure is [`sop-onboard-peer-principal.md` §Step 8 — Go private](./sop-onboard-peer-principal.md).
 
-**The federated dispatch path is now LIVE, and confidentiality ships.** The federated review-consumer landed (the F-6 reflex bridge, cortex#1185), so cross-principal dispatch reaches a peer assistant today. **Payload encryption ships as of v5.27.0** ([ADR-0019](./adr/0019-federated-payload-encryption.md)): a network is a **trust group**, and all federated payloads (**Direct/Delegate/Offer**) are sealed with **one per-network key `K`** — readable by every admitted member, opaque to any outsider on the transport. It is **opt-in per network** (`policy.federated.networks[].encryption: enabled` + `payload_key`), with a both-accepted transition window before you flip to `required`. The signing posture still ramps **independently** `off → permissive → enforce` (DD-7) — encryption and signing are separate axes. The end-to-end go-private procedure is [`sop-onboard-peer-principal.md` §Step 8 — Go private](./sop-onboard-peer-principal.md).
-
-> **Historic note.** This section previously read "signing and encryption are OFF / payload encryption deferred / cleartext-over-TLS in v1." That was accurate **before** the community federation tier shipped — M3 was deferred while the bus was a single principal's private mesh. The community tier admits parties beyond a trusted pair, so M3 now ships **with** the tier it protects (ADR-0019 reverses the CONTEXT.md §222 deferral).
+> **Historic note.** This section previously carried two contradictory claims — "nothing is live on the federated DISPATCH path yet" (with #691/#686/pilot#149 listed as OPEN) alongside a later "the dispatch path is now LIVE." The "nothing live" reading was accurate **before** the review-consumer (cortex#1185) landed — dispatch had no receiver to fire against — and the earlier "signing and encryption are OFF / payload encryption deferred / cleartext-over-TLS in v1" note was accurate while the bus was a single principal's private mesh. The community federation tier admits parties beyond a trusted pair, so M3 now ships **with** the tier it protects (ADR-0019 reverses the CONTEXT.md §222 deferral). Both blockers are resolved; this section is the single source of the live status.
 
 **Net:** onboarding config is staged the same way (identity provisioned, registry pinned, network entry written), and the dispatch path is live — register, wire the leaf link, and go private with one `encryption:` block on each side.
 
@@ -244,7 +259,7 @@ Per ADR-0001 §Consequences: *"nothing is live on the federated path yet (no con
 - `src/common/types/cortex-config.ts` — `PolicyFederatedRegistrySchema`, `PolicyFederatedNetworkSchema`, `PolicyFederatedPeerSchema`.
 - `src/services/network-registry/src/routes/principals.ts` — the registration contract.
 - `src/cli/cortex/commands/provision-stack.ts` — `generate` / `claim` / `register`.
-- **Issues:** cortex#686 (federated review consumer), cortex#691 (ADR-0001 grammar rework), pilot#149.
+- **Issues (all shipped):** cortex#686 → landed as cortex#1185 (federated review consumer, the F-6 reflex bridge), cortex#691 (ADR-0001 grammar rework), pilot#149 (federated dispatch addressing + verdict-back).
 
 ---
 
@@ -288,10 +303,9 @@ things from you:
        --stack-id <your-stack>
 
    That publishes your principal_id + stack + pubkey + the capabilities
-   Holly offers (e.g. code-review.typescript). Hold this step until
-   cortex#686 (the federated review consumer) lands — there's no live
-   dispatch path to receive traffic before then, so registering earlier
-   just stages it.
+   Holly offers (e.g. code-review.typescript). The federated review
+   consumer is live now (cortex#1185), so once you're registered and
+   admitted, dispatch to Holly fires — no need to hold this step.
 
 One thing worth stressing: my config will only ever pin the *registry*
 (its URL + pubkey) — I never hardcode Holly, or your stack key, in my
