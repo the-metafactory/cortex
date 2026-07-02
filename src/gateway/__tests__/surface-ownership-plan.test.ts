@@ -236,14 +236,14 @@ describe("gatewayAdapterInstanceCollisions", () => {
 // was invisible to the ownership plan (0 bindings → gateway never started).
 // These tests pin the corrected paths.
 
-/** Web-only surfaces — one binding, instanceId "amt", agent "pylon". */
+/** Web-only surfaces — one binding, instanceId "acme", agent "pylon". */
 const WEB_SURFACES: Surfaces = {
   web: [
     {
       agent: "pylon",
-      stack: "andreas/amt",
+      stack: "andreas/acme",
       binding: {
-        instanceId: "amt",
+        instanceId: "acme",
         port: 8090,
         broadcastUrl: "http://localhost:9090/broadcast",
         transport: "ws",
@@ -279,7 +279,7 @@ describe("planSurfaceOwnership — web surfaces", () => {
       gatewayEnabled: true,
       principal: "andreas",
     });
-    expect(plan.gatewayAdapterInstanceIds).toContain("web:amt");
+    expect(plan.gatewayAdapterInstanceIds).toContain("web:acme");
   });
 
   test("outboundStacks includes the web binding's stack leaf", () => {
@@ -288,7 +288,7 @@ describe("planSurfaceOwnership — web surfaces", () => {
       gatewayEnabled: true,
       principal: "andreas",
     });
-    expect(plan.outboundStacks).toContain("amt");
+    expect(plan.outboundStacks).toContain("acme");
   });
 
   test("flag off with web-only surfaces keeps the inactive plan (gateway never starts)", () => {

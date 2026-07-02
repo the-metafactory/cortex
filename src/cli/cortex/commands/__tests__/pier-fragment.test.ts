@@ -14,7 +14,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { join } from "path";
 import { parse as parseYaml } from "yaml";
 
 // ---------------------------------------------------------------------------
@@ -110,39 +110,48 @@ describe("Pier agent fragment (agents.d/pier.yaml)", () => {
     expect(discord.enabled).toBe(true);
   });
 
-  test("presence.discord.guildId is the community guild snowflake", () => {
+  // compass#84 (L2) — the shippable fragment carries NO live snowflakes. Every
+  // surface id is an `__ENV__` placeholder resolved at cortex load from the
+  // daemon environment (the guild id, the public entry channel, and — most
+  // sensitively — the PRIVATE back-office channel). These assertions pin the
+  // placeholder form; a regression that re-hardcodes a literal id fails here.
+  test("presence.discord.guildId is a resolve-at-install placeholder (no literal snowflake)", () => {
     const f = loadFragment();
     const presence = f.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
-    // The Metafactory community guild (metafactory-community Discord server)
-    expect(discord.guildId).toBe("1505549701674700991");
+    expect(discord.guildId).toBe("__PIER_GUILD_ID__");
+    // defence in depth: never a bare 17-20 digit snowflake
+    expect(discord.guildId as string).not.toMatch(/^\d{17,20}$/);
   });
 
-  test("presence.discord.agentChannelId is #onboard-your-fleet (PUBLIC entry channel)", () => {
+  test("presence.discord.agentChannelId (PUBLIC entry) is a placeholder", () => {
     const f = loadFragment();
     const presence = f.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
-    // Pier must greet newcomers in a channel they can reach BEFORE holding the
-    // community-fleet role — the public entry, not the gated working surface.
-    expect(discord.agentChannelId).toBe("1517154685595942972");
+    // Pier greets newcomers in a channel they can reach BEFORE holding the
+    // community-fleet role — the public entry, shipped as a placeholder.
+    expect(discord.agentChannelId).toBe("__PIER_AGENT_CHANNEL_ID__");
+    expect(discord.agentChannelId as string).not.toMatch(/^\d{17,20}$/);
   });
 
-  test("presence.discord.logChannelId is #assistant-fleet-onboarding (PRIVATE back-office)", () => {
+  test("presence.discord.logChannelId (PRIVATE back-office) is a placeholder", () => {
     const f = loadFragment();
     const presence = f.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
-    // Admission audit trail lands in the private back-office (principal + Pier only),
-    // distinct from the public entry channel.
-    expect(discord.logChannelId).toBe("1514679294553751613");
+    // Admission audit trail lands in the private back-office (principal + Pier
+    // only). This id is the most sensitive — it MUST never be committed literally.
+    expect(discord.logChannelId).toBe("__PIER_LOG_CHANNEL_ID__");
+    expect(discord.logChannelId as string).not.toMatch(/^\d{17,20}$/);
   });
 
   test("presence.discord.token references env var placeholder (not a real token)", () => {
     const f = loadFragment();
     const presence = f.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
-    // Must be an env-var placeholder, never a hardcoded token
+    // Must be an `__ENV__` placeholder (the form the cortex config loader
+    // resolves), never a hardcoded token.
     const token = discord.token as string;
-    expect(token).toMatch(/\$\{.*TOKEN.*\}/);
+    expect(token).toMatch(/^__[A-Z0-9_]*TOKEN[A-Z0-9_]*__$/);
   });
 
   test("presence.discord.dmOwner is false (Pier is public-channel only)", () => {
@@ -305,10 +314,13 @@ describe("Pier arc-manifest (arc-manifest-pier.yaml)", () => {
 describe("Pier AIRGAP — structurally cannot admit or hold a secret", () => {
   const MANIFEST = join(REPO_ROOT, "arc-manifest-pier.yaml");
 
-  // The public entry channel (#onboard-your-fleet) and the private back-office
-  // (#assistant-fleet-onboarding). Pier greets in the PUBLIC channel.
-  const PUBLIC_ENTRY_CHANNEL = "1517154685595942972";
-  const PRIVATE_BACKOFFICE_CHANNEL = "1514679294553751613";
+  // The public entry channel and the private back-office channel — shipped as
+  // resolve-at-install `__ENV__` placeholders (compass#84 / L2), never literal
+  // snowflakes. Pier greets in the PUBLIC channel. The airgap invariant is that
+  // the manifest binds the PUBLIC entry, distinct from the PRIVATE back-office;
+  // asserting on the placeholders preserves that check without committing ids.
+  const PUBLIC_ENTRY_CHANNEL = "__PIER_AGENT_CHANNEL_ID__";
+  const PRIVATE_BACKOFFICE_CHANNEL = "__PIER_LOG_CHANNEL_ID__";
 
   // Any of these in a tool allowlist would break the airgap: Bash/Skill let Pier
   // shell out to the privileged CLI; Write/Edit let it tamper with config.

@@ -1,6 +1,12 @@
 # arc-manifest-pier.yaml — Pier, the community onboarding concierge
 #
+# audience: generic
+#
 # arc install pier
+#
+# This manifest ships in the PUBLIC arc package and carries NO live deployment
+# identifiers: the bot token and every guild/channel id are resolve-at-install
+# `__ENV__` placeholders (compass#84 / L2).
 #
 # This is the arc package manifest for the Pier sub-bot.  It follows the
 # design-arc-agent-bots.md §4 schema: type: agent, targets: [cortex],
@@ -20,16 +26,20 @@
 #        no Skill — so it is structurally incapable of running
 #        `cortex network admit` / `cortex network secret` (ADR-0015 airgap).)
 #
-# REQUIRED ENV VAR (set before arc install):
-#   PIER_BOT_TOKEN  — the Discord bot token for the Pier bot application.
-#                     This is never stored in any file; it is resolved by
-#                     cortex's config loader from the env at startup.
-#                     Obtain the token from the Discord developer portal
-#                     for the "Pier" application in the metafactory org.
+# REQUIRED ENV VARS (set before arc install):
+#   PIER_BOT_TOKEN         — the Discord bot token for the Pier application.
+#                            Obtain it from the Discord developer portal for the
+#                            "Pier" application in the metafactory org.
+#   PIER_GUILD_ID          — the metafactory community guild id.
+#   PIER_AGENT_CHANNEL_ID  — the PUBLIC entry channel id.
+#   PIER_LOG_CHANNEL_ID    — the PRIVATE back-office channel id (admission audit).
+# None are stored in any shippable file; cortex's config loader resolves each
+# from the daemon environment at startup (compass#84 / L2). An unset value fails
+# SOFT — Pier's Discord surface is disabled, the rest of the stack still boots.
 #
 # NO-GOING-LIVE CONSTRAINTS (P1):
 #   - Do not execute `arc install` against a live stack until the principal
-#     has set PIER_BOT_TOKEN and reviewed the persona.
+#     has set the PIER_* env vars and reviewed the persona.
 #   - No `arc install` execution, no `cortex creds issue` for Pier, no
 #     Discord bot login.  This manifest is install-READY; going-live is a
 #     separate operator step documented in §GOING-LIVE below.
@@ -64,23 +74,25 @@ identity:
   trust: [luna]                # Pier trusts Luna (the principal's primary DA) to delegate tasks
 
 # Discord presence — community guild only.
-# Token is injected at runtime from env; never hardcoded.
-# guildId and the channel ids are public identifiers (no-secret).
+# Every identifier is a resolve-at-install `__ENV__` placeholder; NO live token
+# or snowflake is stored in this shippable manifest (compass#84 / L2). The
+# logChannelId in particular is a PRIVATE back-office channel — never commit its
+# literal id. All values resolve at cortex config-load from the daemon env.
 #
 # Three-channel topology (public-entry / private-back-office split) — MUST match
 # agents.d/pier.yaml:
-#   agentChannelId: #onboard-your-fleet      (PUBLIC entry — newcomers reach Pier
-#                                             here BEFORE they hold any role)
-#   logChannelId:   #assistant-fleet-onboarding (PRIVATE back-office — admission
-#                                             audit trail, principal + Pier only)
+#   agentChannelId (__PIER_AGENT_CHANNEL_ID__) — PUBLIC entry; newcomers reach
+#                    Pier here BEFORE they hold any role
+#   logChannelId   (__PIER_LOG_CHANNEL_ID__)   — PRIVATE back-office; admission
+#                    audit trail, principal + Pier only
 presence:
   discord:
     enabled: true
-    guildId: "1505549701674700991"          # The Metafactory community guild
-    agentChannelId: "1517154685595942972"   # #onboard-your-fleet — public entry
-    logChannelId: "1514679294553751613"     # #assistant-fleet-onboarding — private back-office
-    # token is resolved at cortex load from env PIER_BOT_TOKEN
-    # (declared in agents.d/pier.yaml as ${PIER_BOT_TOKEN})
+    guildId: __PIER_GUILD_ID__               # resolve-at-install; community guild
+    agentChannelId: __PIER_AGENT_CHANNEL_ID__   # resolve-at-install; public entry
+    logChannelId: __PIER_LOG_CHANNEL_ID__    # resolve-at-install; private back-office
+    # token + all ids resolve at cortex load from the daemon env
+    # (agents.d/pier.yaml declares the token as __PIER_BOT_TOKEN__)
 
 # provides — files dropped by arc install (§4 manifest schema)
 provides:
@@ -101,7 +113,7 @@ provides:
 # design doc where the bot "appears in dashboard" without a separate cred.
 lifecycle:
   preinstall:
-    - scripts/pier/check-cortex-version.sh   # verifies cortex >= 5.24.0 + PIER_BOT_TOKEN set
+    - scripts/pier/check-cortex-version.sh   # verifies cortex >= 5.24.0 + PIER_* env vars set
   postinstall:
     - scripts/pier/signal-cortex-reload.sh   # FIRST — daemon registers Pier from agents.d/
 
@@ -122,8 +134,13 @@ dependencies:
 # 1. Create the "Pier" Discord application in the Discord developer portal
 #    for the metafactory org.  Note the bot token.
 #
-# 2. Set the env var on the host that runs cortex:
-#      export PIER_BOT_TOKEN=<token>           # or write to ~/.config/cortex/.env
+# 2. Set the env vars on the host that runs cortex (the DAEMON's environment —
+#    the launchd plist EnvironmentVariables or ~/.config/cortex/.env — not just
+#    the install shell; cortex resolves them at config-load, after install):
+#      export PIER_BOT_TOKEN=<token>
+#      export PIER_GUILD_ID=<community-guild-id>
+#      export PIER_AGENT_CHANNEL_ID=<public-entry-channel-id>
+#      export PIER_LOG_CHANNEL_ID=<private-back-office-channel-id>
 #
 # 3. In the metafactory-community guild (Discord admin):
 #    a. Create the `community-fleet` role (no guild-wide perms; channel overrides only)

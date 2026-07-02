@@ -1,6 +1,14 @@
 # ~/.config/cortex/agents.d/pier.yaml
 #
+# audience: generic
+#
 # Pier — onboarding-concierge assistant (ADR-0015, cortex#1142)
+#
+# This fragment ships in the PUBLIC arc package. It carries NO live deployment
+# identifiers: the Discord bot token AND every guild/channel id are `__ENV__`
+# placeholders resolved at cortex config-load from the daemon environment
+# (compass#84 / confidentiality L2). Set the PIER_* env vars before install; an
+# unset id/token fails SOFT — Pier's Discord surface is disabled, not a crash.
 #
 # This fragment is rendered by `arc install pier` into the installing
 # principal's `~/.config/cortex/agents.d/pier.yaml`.  It MUST NOT be
@@ -49,26 +57,29 @@ runtime:
     - chat                  # responds to newcomer messages in #onboard-your-fleet
 
 # Discord presence — bound to the metafactory community guild.
-# The bot token is a secret resolved at install time from the host
-# environment or principal vault.  It is NEVER stored in this file.
+# Every identifier below is a resolve-at-install `__ENV__` placeholder; NO live
+# token or snowflake is stored in this shippable fragment. All resolve at cortex
+# config-load from the daemon environment (compass#84 / L2). An unset value fails
+# SOFT — the Discord surface is disabled, the rest of the stack still boots.
 #
 # Three-channel topology (the public-entry / private-back-office split):
-#   guildId:        1505549701674700991  (The Metafactory — community guild)
-#   agentChannelId: 1517154685595942972  (#onboard-your-fleet — PUBLIC entry;
-#                                          newcomers must reach Pier here before
-#                                          they hold the community-fleet role)
-#   logChannelId:   1514679294553751613  (#assistant-fleet-onboarding — PRIVATE
-#                                          back-office; admission audit trail,
-#                                          principal + Pier only)
+#   guildId        (__PIER_GUILD_ID__)         — the metafactory community guild
+#   agentChannelId (__PIER_AGENT_CHANNEL_ID__) — the PUBLIC entry channel;
+#                    newcomers must reach Pier here before they hold the
+#                    community-fleet role
+#   logChannelId   (__PIER_LOG_CHANNEL_ID__)   — the PRIVATE back-office channel;
+#                    admission audit trail, principal + Pier only (never commit
+#                    its literal id)
 #
-# env var:   PIER_BOT_TOKEN         — set by the operator before arc install
+# env vars (set by the operator before arc install; see arc-manifest-pier.yaml):
+#   PIER_BOT_TOKEN · PIER_GUILD_ID · PIER_AGENT_CHANNEL_ID · PIER_LOG_CHANNEL_ID
 presence:
   discord:
     enabled: true
-    token: ${PIER_BOT_TOKEN}          # placeholder; resolved at cortex load
-    guildId: "1505549701674700991"        # The Metafactory community guild
-    agentChannelId: "1517154685595942972" # #onboard-your-fleet — public entry
-    logChannelId: "1514679294553751613"   # #assistant-fleet-onboarding — private back-office
+    token: __PIER_BOT_TOKEN__               # placeholder; resolved at cortex load
+    guildId: __PIER_GUILD_ID__              # resolve-at-install; community guild
+    agentChannelId: __PIER_AGENT_CHANNEL_ID__  # resolve-at-install; public entry
+    logChannelId: __PIER_LOG_CHANNEL_ID__   # resolve-at-install; private back-office
     dmOwner: false                    # Pier never claims DMs; it answers the public channel
     contextDepth: 10
     surfaceSubjects: []               # no raw envelope surface — Pier posts only via its persona

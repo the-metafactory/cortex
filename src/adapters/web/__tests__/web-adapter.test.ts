@@ -50,7 +50,7 @@ async function withBroadcastCapture(fn: () => Promise<void>): Promise<void> {
 
 function makeBinding(overrides: Partial<WebBinding> = {}): WebBinding {
   return {
-    instanceId: "amt",
+    instanceId: "acme",
     port: 0, // ephemeral — overridden per test
     broadcastUrl: "http://localhost:9999/broadcast",
     transport: "ws",
@@ -61,7 +61,7 @@ function makeBinding(overrides: Partial<WebBinding> = {}): WebBinding {
 
 function makeInfra(overrides: Partial<WebAdapterInfra> = {}): WebAdapterInfra {
   return {
-    instanceId: "web:amt",
+    instanceId: "web:acme",
     principal: {},
     ...overrides,
   };
@@ -88,14 +88,14 @@ describe("WebAdapter — identity", () => {
   });
 
   test("instanceId comes from infra", () => {
-    const adapter = new WebAdapter(makeSyntheticAgent(), makeBinding(), makeInfra({ instanceId: "web:amt" }));
-    expect(adapter.instanceId).toBe("web:amt");
+    const adapter = new WebAdapter(makeSyntheticAgent(), makeBinding(), makeInfra({ instanceId: "web:acme" }));
+    expect(adapter.instanceId).toBe("web:acme");
   });
 
   test("getPlatformUserId returns stable web:{instanceId}", async () => {
-    const adapter = new WebAdapter(makeSyntheticAgent(), makeBinding(), makeInfra({ instanceId: "web:amt" }));
+    const adapter = new WebAdapter(makeSyntheticAgent(), makeBinding(), makeInfra({ instanceId: "web:acme" }));
     const id = await adapter.getPlatformUserId();
-    expect(id).toBe("web:web:amt");
+    expect(id).toBe("web:web:acme");
   });
 });
 
@@ -114,7 +114,7 @@ describe("WebAdapter — HTTP ingress", () => {
     adapter = new WebAdapter(
       makeSyntheticAgent(),
       makeBinding({ port: 0, authScheme: "none" }),
-      makeInfra({ instanceId: "web:amt" }),
+      makeInfra({ instanceId: "web:acme" }),
     );
     await adapter.start(async (msg) => {
       messages.push(msg);
@@ -131,7 +131,7 @@ describe("WebAdapter — HTTP ingress", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { status: string; adapter: string };
     expect(body.status).toBe("ok");
-    expect(body.adapter).toBe("web:amt");
+    expect(body.adapter).toBe("web:acme");
   });
 
   test("unknown path returns 404", async () => {
@@ -191,7 +191,7 @@ describe("WebAdapter — HTTP ingress", () => {
     expect(messages).toHaveLength(1);
     const msg = messages[0]!;
     expect(msg.platform).toBe("web");
-    expect(msg.instanceId).toBe("web:amt");
+    expect(msg.instanceId).toBe("web:acme");
     expect(msg.content).toBe("hello cortex");
     expect(msg.channelId).toBe("general");
     expect(msg.threadId).toBe("thread-123");
@@ -406,23 +406,23 @@ describe("WebAdapter — auth extraction", () => {
 
 describe("WebAdapter — outbound broadcast", () => {
   const binding = makeBinding({
-    instanceId: "amt",
+    instanceId: "acme",
     broadcastUrl: "http://localhost:9999/broadcast",
     authScheme: "none",
   });
-  const infra = makeInfra({ instanceId: "web:amt" });
+  const infra = makeInfra({ instanceId: "web:acme" });
 
   test("postResponse POSTs correct payload shape", async () => {
     const adapter = new WebAdapter(makeSyntheticAgent(), binding, infra);
     await withBroadcastCapture(async () => {
       await adapter.postResponse(
-        { instanceId: "web:amt", channelId: "general", threadId: "t1" },
+        { instanceId: "web:acme", channelId: "general", threadId: "t1" },
         "Hello from cortex",
       );
     });
     expect(BROADCAST_CAPTURES).toHaveLength(1);
     const payload = BROADCAST_CAPTURES[0]?.body as Record<string, unknown>;
-    expect(payload.adapter_instance).toBe("web:amt");
+    expect(payload.adapter_instance).toBe("web:acme");
     expect(payload.type).toBe("response");
     expect(payload.text).toBe("Hello from cortex");
     expect((payload.target as Record<string, unknown>).channel).toBe("general");
@@ -433,7 +433,7 @@ describe("WebAdapter — outbound broadcast", () => {
     const adapter = new WebAdapter(makeSyntheticAgent(), binding, infra);
     await withBroadcastCapture(async () => {
       await adapter.postResponse(
-        { instanceId: "web:amt", channelId: "general" },
+        { instanceId: "web:acme", channelId: "general" },
         "Response",
       );
     });
@@ -445,7 +445,7 @@ describe("WebAdapter — outbound broadcast", () => {
     const adapter = new WebAdapter(makeSyntheticAgent(), binding, infra);
     await withBroadcastCapture(async () => {
       await adapter.sendProgress(
-        { instanceId: "web:amt", channelId: "general" },
+        { instanceId: "web:acme", channelId: "general" },
         "Working...",
       );
     });
@@ -457,7 +457,7 @@ describe("WebAdapter — outbound broadcast", () => {
   test("clearProgress POSTs type=clear_progress without text", async () => {
     const adapter = new WebAdapter(makeSyntheticAgent(), binding, infra);
     await withBroadcastCapture(async () => {
-      await adapter.clearProgress({ instanceId: "web:amt", channelId: "general" });
+      await adapter.clearProgress({ instanceId: "web:acme", channelId: "general" });
     });
     const payload = BROADCAST_CAPTURES[0]?.body as Record<string, unknown>;
     expect(payload.type).toBe("clear_progress");
@@ -478,14 +478,14 @@ describe("WebAdapter — outbound broadcast", () => {
     const failBinding = makeBinding({ broadcastUrl: "http://localhost:1/unreachable" });
     const adapter = new WebAdapter(makeSyntheticAgent(), failBinding, infra);
     // Must not reject — await directly; any thrown error would fail the test
-    await adapter.postResponse({ instanceId: "web:amt", channelId: "ch" }, "text");
+    await adapter.postResponse({ instanceId: "web:acme", channelId: "ch" }, "text");
   });
 
   test("broadcastToken set → POST includes Authorization: Bearer header", async () => {
     const tokenBinding = makeBinding({ broadcastToken: "cortex-svc-secret" });
     const adapter = new WebAdapter(makeSyntheticAgent(), tokenBinding, infra);
     await withBroadcastCapture(async () => {
-      await adapter.postResponse({ instanceId: "web:amt", channelId: "ch" }, "text");
+      await adapter.postResponse({ instanceId: "web:acme", channelId: "ch" }, "text");
     });
     expect(BROADCAST_CAPTURES[0]?.headers?.Authorization).toBe("Bearer cortex-svc-secret");
   });
@@ -494,7 +494,7 @@ describe("WebAdapter — outbound broadcast", () => {
     // binding has no broadcastToken (localhost — no outbound service auth)
     const adapter = new WebAdapter(makeSyntheticAgent(), binding, infra);
     await withBroadcastCapture(async () => {
-      await adapter.postResponse({ instanceId: "web:amt", channelId: "ch" }, "text");
+      await adapter.postResponse({ instanceId: "web:acme", channelId: "ch" }, "text");
     });
     expect(BROADCAST_CAPTURES[0]?.headers?.Authorization).toBeUndefined();
   });
@@ -509,12 +509,12 @@ describe("WebAdapter — interface contract", () => {
 
   test("sendTyping is a no-op", async () => {
     // Must resolve without throwing
-    await adapter.sendTyping({ instanceId: "web:amt", channelId: "ch" });
+    await adapter.sendTyping({ instanceId: "web:acme", channelId: "ch" });
   });
 
   test("fetchContext returns empty array", async () => {
     const ctx = await adapter.fetchContext(
-      { platform: "web", instanceId: "web:amt", authorId: "u1", authorName: "U",
+      { platform: "web", instanceId: "web:acme", authorId: "u1", authorName: "U",
         content: "x", channelId: "ch", attachments: [], timestamp: new Date() },
       10,
     );
@@ -528,18 +528,18 @@ describe("WebAdapter — interface contract", () => {
 
   test("createThread returns a ResponseTarget with threadId", async () => {
     const msg: InboundMessage = {
-      platform: "web", instanceId: "web:amt", authorId: "u1", authorName: "U",
+      platform: "web", instanceId: "web:acme", authorId: "u1", authorName: "U",
       content: "x", channelId: "channel-1", attachments: [], timestamp: new Date(),
     };
     const target = await adapter.createThread(msg, "thread-name");
-    expect(target.instanceId).toBe("web:amt");
+    expect(target.instanceId).toBe("web:acme");
     expect(target.channelId).toBe("channel-1");
     expect(target.threadId).toBe("channel-1"); // no threadId on msg → uses channelId
   });
 
   test("createThread preserves existing threadId", async () => {
     const msg: InboundMessage = {
-      platform: "web", instanceId: "web:amt", authorId: "u1", authorName: "U",
+      platform: "web", instanceId: "web:acme", authorId: "u1", authorName: "U",
       content: "x", channelId: "channel-1", threadId: "thread-root",
       attachments: [], timestamp: new Date(),
     };
@@ -552,7 +552,7 @@ describe("WebAdapter — interface contract", () => {
     // The adapter must pass through whatever `resolvePolicyAccess` decides;
     // it must NOT short-circuit to allow-all.
     const msg: InboundMessage = {
-      platform: "web", instanceId: "web:amt", authorId: "u1", authorName: "U",
+      platform: "web", instanceId: "web:acme", authorId: "u1", authorName: "U",
       content: "x", channelId: "ch", attachments: [], timestamp: new Date(),
     };
     const decision = adapter.resolveAccess(msg);
@@ -570,10 +570,10 @@ describe("WebBindingSchema — validation", () => {
 
   test("valid binding parses correctly with defaults", () => {
     const result = WebBindingSchema.parse({
-      instanceId: "amt",
+      instanceId: "acme",
       broadcastUrl: "http://example.com/broadcast",
     });
-    expect(result.instanceId).toBe("amt");
+    expect(result.instanceId).toBe("acme");
     expect(result.port).toBe(8090); // default
     expect(result.transport).toBe("ws"); // default
     expect(result.authScheme).toBe("cf-access"); // default
@@ -587,19 +587,19 @@ describe("WebBindingSchema — validation", () => {
 
   test("missing broadcastUrl fails validation", () => {
     expect(() =>
-      WebBindingSchema.parse({ instanceId: "amt" }),
+      WebBindingSchema.parse({ instanceId: "acme" }),
     ).toThrow();
   });
 
   test("invalid broadcastUrl (not http) fails validation", () => {
     expect(() =>
-      WebBindingSchema.parse({ instanceId: "amt", broadcastUrl: "ftp://example.com" }),
+      WebBindingSchema.parse({ instanceId: "acme", broadcastUrl: "ftp://example.com" }),
     ).toThrow();
   });
 
   test("invalid transport fails validation", () => {
     expect(() =>
-      WebBindingSchema.parse({ instanceId: "amt", broadcastUrl: "http://x.com", transport: "grpc" }),
+      WebBindingSchema.parse({ instanceId: "acme", broadcastUrl: "http://x.com", transport: "grpc" }),
     ).toThrow();
   });
 });
@@ -616,14 +616,14 @@ describe("SurfacesSchema — web bindings", () => {
         {
           agent: "ivy",
           binding: {
-            instanceId: "amt",
+            instanceId: "acme",
             broadcastUrl: "http://example.com/broadcast",
           },
         },
       ],
     });
     expect(result.web).toHaveLength(1);
-    expect(result.web?.[0]?.binding.instanceId).toBe("amt");
+    expect(result.web?.[0]?.binding.instanceId).toBe("acme");
   });
 
   test("unknown top-level key still rejects (strict mode preserved)", () => {
@@ -638,7 +638,7 @@ describe("SurfacesSchema — web bindings", () => {
       web: [
         {
           agent: "ivy",
-          binding: { instanceId: "amt", broadcastUrl: "http://x.com" },
+          binding: { instanceId: "acme", broadcastUrl: "http://x.com" },
         },
       ],
     });
@@ -698,7 +698,7 @@ describe("buildGatewayAdapters — web bindings", () => {
         {
           agent: "ivy",
           binding: {
-            instanceId: "amt",
+            instanceId: "acme",
             broadcastUrl: "http://example.com/broadcast",
             port: 8090,
             transport: "ws",
@@ -713,7 +713,7 @@ describe("buildGatewayAdapters — web bindings", () => {
       factory,
     });
     expect(adapters).toHaveLength(1);
-    expect(calls[0]?.instanceId).toBe("web:amt");
+    expect(calls[0]?.instanceId).toBe("web:acme");
     expect(calls[0]?.platform).toBe("web");
   });
 
@@ -757,13 +757,13 @@ describe("buildGatewayAdapters — web bindings", () => {
       },
     };
     buildGatewayAdapters(
-      { web: [{ agent: "ivy", binding: { instanceId: "amt", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }] },
+      { web: [{ agent: "ivy", binding: { instanceId: "acme", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }] },
       { principal: "andreas", runtime: RUNTIME_STUB, factory },
     );
     expect(capturedSource).toMatchObject({
       principal: "andreas",
       agent: "gateway",
-      instance: "web:amt",
+      instance: "web:acme",
     });
   });
 
@@ -779,11 +779,11 @@ describe("buildGatewayAdapters — web bindings", () => {
       },
     };
     buildGatewayAdapters(
-      { web: [{ agent: "ivy", binding: { instanceId: "amt", broadcastUrl: "http://x.com/b", port: 8090, transport: "sse", authScheme: "header", authHeader: "X-User" } }] },
+      { web: [{ agent: "ivy", binding: { instanceId: "acme", broadcastUrl: "http://x.com/b", port: 8090, transport: "sse", authScheme: "header", authHeader: "X-User" } }] },
       { principal: "andreas", runtime: RUNTIME_STUB, factory },
     );
     const b = capturedWebBinding as Record<string, unknown>;
-    expect(b.instanceId).toBe("amt");
+    expect(b.instanceId).toBe("acme");
     expect(b.broadcastUrl).toBe("http://x.com/b");
     expect(b.transport).toBe("sse");
     expect(b.authScheme).toBe("header");
@@ -813,18 +813,18 @@ describe("buildGatewayAdapters — web bindings", () => {
 });
 
 // =============================================================================
-// 9. AMT-agnostic verification
+// 9. tenant-agnostic verification
 // =============================================================================
 
-describe("WebAdapter — AMT agnosticism", () => {
-  test("adapter source contains no AMT-specific strings", () => {
-    // Verify the adapter module text has no hardcoded AMT references.
+describe("WebAdapter — tenant agnosticism", () => {
+  test("adapter source contains no tenant-specific strings", () => {
+    // Verify the adapter module text has no hardcoded tenant references.
     // We do this by checking the exported constructor behaves identically
     // for any tenant name.
     const a1 = new WebAdapter(
       makeSyntheticAgent("ivy"),
-      makeBinding({ instanceId: "amt" }),
-      makeInfra({ instanceId: "web:amt" }),
+      makeBinding({ instanceId: "acme" }),
+      makeInfra({ instanceId: "web:acme" }),
     );
     const a2 = new WebAdapter(
       makeSyntheticAgent("oak"),
@@ -832,7 +832,7 @@ describe("WebAdapter — AMT agnosticism", () => {
       makeInfra({ instanceId: "web:acme-bot" }),
     );
     expect(a1.platform).toBe(a2.platform);
-    expect(a1.instanceId).toBe("web:amt");
+    expect(a1.instanceId).toBe("web:acme");
     expect(a2.instanceId).toBe("web:acme-bot");
   });
 

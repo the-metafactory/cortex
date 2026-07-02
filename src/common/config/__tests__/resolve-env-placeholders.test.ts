@@ -568,9 +568,9 @@ presence:
   discord:
     enabled: true
     token: ${token}
-    guildId: "1505549701674700991"
-    agentChannelId: "1517154685595942972"
-    logChannelId: "1514679294553751613"
+    guildId: "000000000000000000"
+    agentChannelId: "000000000000000000"
+    logChannelId: "000000000000000000"
 `;
     writeFileSync(fragPath, yaml);
     return fragPath;

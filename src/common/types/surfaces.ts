@@ -176,7 +176,7 @@ export const WebBindingSchema = z
      * Tenant/instance identifier — the `{tenant}` segment of `web:{tenant}`.
      * Must be unique across all web bindings for this principal so the
      * dispatch-sink can route responses to the correct adapter instance.
-     * Example: `"amt"` → instanceId `"web:amt"`.
+     * Example: `"acme"` → instanceId `"web:acme"`.
      */
     instanceId: z.string().min(1, "surfaces.web[].binding.instanceId is required"),
     /**

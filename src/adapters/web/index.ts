@@ -12,7 +12,7 @@
  * Accepts `POST /message` with JSON body `{ channel, thread?, body, user? }`.
  * Maps to cortex's neutral `InboundMessage` with:
  *   - `platform: "web"`
- *   - `instanceId`: from the binding (e.g. `"web:amt"`)
+ *   - `instanceId`: from the binding (e.g. `"web:acme"`)
  *   - `authorId`: derived from platform-signed headers ONLY — NEVER from the
  *     request body (CF-Access JWT `sub`, or a trusted internal header)
  *   - `channelId` / `threadId`: from the body `channel` / `thread` fields
@@ -60,7 +60,7 @@
  *
  * ## Reusability
  *
- * No AMT-specific logic lives here. A second web app binds with its own
+ * No tenant-specific logic lives here. A second web app binds with its own
  * `instanceId` + `broadcastUrl` + agent, zero surface-code changes.
  */
 

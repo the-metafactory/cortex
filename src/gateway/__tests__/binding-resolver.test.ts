@@ -793,14 +793,14 @@ describe("crossPrincipalBindings — single-principal v1 guard", () => {
 // These tests pin the newly-wired paths so a future refactor can't silently
 // drop them again.
 
-/** One web binding — instanceId "amt" → demux key "web:amt". */
+/** One web binding — instanceId "acme" → demux key "web:acme". */
 const WEB_SURFACES: Surfaces = {
   web: [
     {
       agent: "pylon",
-      stack: "andreas/amt",
+      stack: "andreas/acme",
       binding: {
-        instanceId: "amt",
+        instanceId: "acme",
         port: 8090,
         broadcastUrl: "http://localhost:9090/broadcast",
         transport: "ws",
@@ -814,17 +814,17 @@ describe("buildBindingIndex — web happy path", () => {
   test("web: indexes by instanceId prefixed with 'web:'", () => {
     const index = buildBindingIndex(WEB_SURFACES);
     expect(index.web.size).toBe(1);
-    expect(index.web.has("web:amt")).toBe(true);
+    expect(index.web.has("web:acme")).toBe(true);
   });
 
   test("web entry carries agent, principal, stack, and instance from fixture", () => {
     const index = buildBindingIndex(WEB_SURFACES);
-    const entry = index.web.get("web:amt");
+    const entry = index.web.get("web:acme");
     expect(entry).toBeDefined();
     expect(entry!.agent).toBe("pylon");
     expect(entry!.principal).toBe("andreas");
-    expect(entry!.stack).toBe("amt");
-    expect(entry!.instance).toBe("web:amt");
+    expect(entry!.stack).toBe("acme");
+    expect(entry!.instance).toBe("web:acme");
   });
 
   test("empty surfaces: web map is empty (web key present with size 0)", () => {
@@ -839,9 +839,9 @@ describe("buildBindingIndex — web collision throws", () => {
       web: [
         {
           agent: "pylon",
-          stack: "andreas/amt",
+          stack: "andreas/acme",
           binding: {
-            instanceId: "amt",
+            instanceId: "acme",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
             transport: "ws",
@@ -852,7 +852,7 @@ describe("buildBindingIndex — web collision throws", () => {
           agent: "relay",
           stack: "andreas/work",
           binding: {
-            instanceId: "amt", // duplicate — same demux key "web:amt"
+            instanceId: "acme", // duplicate — same demux key "web:acme"
             port: 8091,
             broadcastUrl: "http://localhost:9091/broadcast",
             transport: "ws",
@@ -861,22 +861,22 @@ describe("buildBindingIndex — web collision throws", () => {
         },
       ],
     };
-    expect(() => buildBindingIndex(ambiguous)).toThrow(/web.*amt/i);
+    expect(() => buildBindingIndex(ambiguous)).toThrow(/web.*acme/i);
   });
 });
 
 describe("resolveBinding — web happy path", () => {
   test("web: resolves by instanceId (full 'web:<id>' key stamped by the WebAdapter)", () => {
     const index = buildBindingIndex(WEB_SURFACES);
-    // The WebAdapter stamps instanceId="web:amt" on every inbound message
-    const inbound = msg({ platform: "web", instanceId: "web:amt" });
+    // The WebAdapter stamps instanceId="web:acme" on every inbound message
+    const inbound = msg({ platform: "web", instanceId: "web:acme" });
     const match = resolveBinding(index, inbound);
     expect(match).not.toBeNull();
     expect(match!.platform).toBe("web");
     expect(match!.agent).toBe("pylon");
     expect(match!.principal).toBe("andreas");
-    expect(match!.stack).toBe("amt");
-    expect(match!.instance).toBe("web:amt");
+    expect(match!.stack).toBe("acme");
+    expect(match!.instance).toBe("web:acme");
   });
 
   test("web: instanceId not in index → null", () => {
@@ -887,14 +887,14 @@ describe("resolveBinding — web happy path", () => {
 
   test("web inbound against discord-only index → null (web map is empty)", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
-    const inbound = msg({ platform: "web", instanceId: "web:amt" });
+    const inbound = msg({ platform: "web", instanceId: "web:acme" });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
 });
 
 describe("distinctBoundStacks — web bindings", () => {
   test("web-only surfaces: includes the web binding's stack leaf", () => {
-    expect(distinctBoundStacks(WEB_SURFACES)).toEqual(["amt"]);
+    expect(distinctBoundStacks(WEB_SURFACES)).toEqual(["acme"]);
   });
 
   test("web stack deduped when the same leaf appears in both discord and web", () => {
@@ -902,16 +902,16 @@ describe("distinctBoundStacks — web bindings", () => {
       discord: [
         {
           agent: "luna",
-          stack: "andreas/amt",
+          stack: "andreas/acme",
           binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
         },
       ],
       web: [
         {
           agent: "pylon",
-          stack: "andreas/amt", // same leaf — collapses to one entry
+          stack: "andreas/acme", // same leaf — collapses to one entry
           binding: {
-            instanceId: "amt",
+            instanceId: "acme",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
             transport: "ws",
@@ -920,7 +920,7 @@ describe("distinctBoundStacks — web bindings", () => {
         },
       ],
     };
-    expect(distinctBoundStacks(surfaces)).toEqual(["amt"]);
+    expect(distinctBoundStacks(surfaces)).toEqual(["acme"]);
   });
 
   test("web adds a distinct stack leaf beyond discord's set", () => {
@@ -935,9 +935,9 @@ describe("distinctBoundStacks — web bindings", () => {
       web: [
         {
           agent: "pylon",
-          stack: "andreas/amt",
+          stack: "andreas/acme",
           binding: {
-            instanceId: "amt",
+            instanceId: "acme",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
             transport: "ws",
@@ -946,7 +946,7 @@ describe("distinctBoundStacks — web bindings", () => {
         },
       ],
     };
-    expect(distinctBoundStacks(surfaces)).toEqual(["meta-factory", "amt"]);
+    expect(distinctBoundStacks(surfaces)).toEqual(["meta-factory", "acme"]);
   });
 });
 
@@ -960,9 +960,9 @@ describe("crossPrincipalBindings — web bindings", () => {
       web: [
         {
           agent: "pylon",
-          stack: "other/amt",
+          stack: "other/acme",
           binding: {
-            instanceId: "amt",
+            instanceId: "acme",
             port: 8090,
             broadcastUrl: "http://localhost:9090/broadcast",
             transport: "ws",
@@ -971,6 +971,6 @@ describe("crossPrincipalBindings — web bindings", () => {
         },
       ],
     };
-    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual(["other/amt"]);
+    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual(["other/acme"]);
   });
 });
