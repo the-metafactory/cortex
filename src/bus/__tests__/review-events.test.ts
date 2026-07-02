@@ -18,6 +18,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { canonicalizeForSigning } from "@the-metafactory/myelin/identity";
 import { validateEnvelope, type Envelope } from "../myelin/envelope-validator";
 import {
   createReviewRequestEvent,
@@ -279,6 +280,31 @@ describe("createReviewVerdictEvent", () => {
     expect(env2.correlation_id).toBe(REQUEST_ENVELOPE_ID);
     // ...but the envelope ids themselves are distinct
     expect(env1.id).not.toBe(env2.id);
+  });
+
+  test("compass#95 (replay-fix) — payload carries request_id == correlationId, and it is inside the SIGNED canonical bytes", () => {
+    const env = createReviewVerdictEvent({
+      source: SOURCE,
+      kind: "approved",
+      correlationId: REQUEST_ENVELOPE_ID,
+      payload: makeVerdictPayload({ verdict: "approved" }),
+    });
+    // The SIGNED request-binding: pilot asserts `payload.request_id === awaited
+    // correlationId` to defeat replay-rebind (top-level correlation_id is NOT
+    // signed). It must equal the request envelope id verbatim.
+    expect((env.payload as { request_id?: unknown }).request_id).toBe(
+      REQUEST_ENVELOPE_ID,
+    );
+    // ...and it must land in the canonical bytes the signer commits to — proving
+    // an attacker cannot rewrite it without invalidating the signature. (payload
+    // ∈ myelin SIGNABLE_FIELDS; correlation_id is deliberately NOT.)
+    const canonical = new TextDecoder().decode(
+      canonicalizeForSigning(env as unknown as Parameters<typeof canonicalizeForSigning>[0]),
+    );
+    expect(canonical).toContain(`"request_id":"${REQUEST_ENVELOPE_ID}"`);
+    // Guard the asymmetry the fix relies on: correlation_id stays OUT of the
+    // signed bytes (that exclusion is exactly why the SIGNED request_id is needed).
+    expect(canonical).not.toContain("correlation_id");
   });
 
   test("each invocation returns a fresh UUID id", () => {

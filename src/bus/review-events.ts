@@ -269,6 +269,13 @@ export type ReviewVerdictKind =
  * `nats-review-io.ts:ReviewCompletedPayload` is preserved so workflow-side
  * consumers (the existing `runReviewCycle` ReviewCycleIO) don't need
  * behavioural changes — only the subject and the `correlation_id` are new.
+ *
+ * **compass#95 (replay-fix) — emitted `request_id`.** The wire payload
+ * additionally carries `request_id` (the request envelope's id), stamped by
+ * {@link createReviewVerdictEvent} from `opts.correlationId`. It is a
+ * SIGNED request-binding pilot asserts against to defeat replay-rebind (see
+ * the builder). It is NOT a caller input on this interface — the builder is
+ * the single source so it can never drift from the top-level `correlation_id`.
  */
 export interface ReviewVerdictPayload {
   /** Owner/repo string, echoed from the request envelope. */
@@ -398,6 +405,18 @@ export function createReviewVerdictEvent(
     sovereignty: defaultReviewSovereignty(opts.source, opts.classification),
     correlationId: opts.correlationId,
     payload: {
+      // compass#95 (replay-fix) — SIGNED request binding. The top-level
+      // `correlation_id` is the verdict↔request binding pilot filters on, but
+      // myelin's canonical signing set EXCLUDES `correlation_id`
+      // (`identity/canonicalize.ts` — "mutable without invalidating signature").
+      // So a genuinely-signed verdict could be replayed with only its
+      // `correlation_id` rewritten and still verify (pilot#178 adversarial
+      // finding). Stamping the request id INTO the payload — which IS covered by
+      // the signature — gives pilot a cryptographically-bound field to assert
+      // against (`payload.request_id === awaited correlationId`), closing the
+      // replay-rebind. Sourced from `opts.correlationId` (the request envelope's
+      // id) so it can never drift from the top-level correlation_id.
+      request_id: opts.correlationId,
       repo: opts.payload.repo,
       pr: opts.payload.pr,
       reviewer: opts.payload.reviewer,
