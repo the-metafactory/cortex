@@ -106,7 +106,7 @@ describe("fetchOwnAdmissionRows", () => {
     let gotHeader = "";
     const fetchImpl: FetchLike = async (url, init) => {
       gotUrl = url;
-      gotHeader = (init?.headers?.["x-pop-signed"] as string) ?? "";
+      gotHeader = init?.headers?.["x-pop-signed"] ?? "";
       return { ok: true, status: 200, json: async () => [row({ request_id: "r-1" })] };
     };
     const res = await fetchOwnAdmissionRows({
