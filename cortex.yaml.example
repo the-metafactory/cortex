@@ -320,8 +320,8 @@ policy:
   #         url: nats://research:4222
   #         credsPath: ~/.config/cortex/creds/research.creds
   #       peers:
-  #         - principal_id: jcfischer
-  #           stack_id: jcfischer/sage-host
+  #         - principal_id: peer-principal              # <REPLACE_ME>
+  #           stack_id: peer-principal/peer-stack       # <REPLACE_ME> ({principal}/{slug})
   #           principal_pubkey: U...   # peer stack NKey public key (56 chars)
   #       accept_subjects:
   #         - federated.research-collab.>

@@ -21,7 +21,13 @@ import type { ReviewFlavor, ReviewRequestPayload } from "../bus/review-events";
  * This SUPERSEDES compass#89's `lensForFlavor` (which named a primary *lens*):
  * F3 promotes the directive from "run lens X" to "invoke workflow X", so the
  * reviewer runs the actual CodeReview skill workflow rather than a prose gesture
- * at a lens. Kept exhaustive over `ReviewFlavor` so a new flavor forces a choice.
+ * at a lens.
+ *
+ * GENUINELY exhaustive over `ReviewFlavor | undefined`: every flavor (and the
+ * unstamped `undefined`) is an EXPLICIT case, and the `default` branch pins
+ * `flavor` to `never`. Adding a 12th flavor to `REVIEW_FLAVORS` without a case
+ * here stops compiling (the `never` assignment fails) — the compiler forces the
+ * choice rather than letting a new flavor silently fall through to FullReview.
  */
 export function workflowForFlavor(flavor: ReviewFlavor | undefined): string {
   switch (flavor) {
@@ -31,10 +37,26 @@ export function workflowForFlavor(flavor: ReviewFlavor | undefined): string {
       return "HardeningReview";
     case "skill-quality":
       return "SkillReview";
-    default:
-      // generic / typescript / python / rust / go / sql / docs /
-      // confidentiality / undefined — full-coverage review.
+    // Full-coverage review — the language/generic/docs/confidentiality flavors
+    // carry their emphasis as a lens INSIDE FullReview, not a distinct workflow;
+    // `confidentiality` runs FullReview because the always-on §4 L3 exposure
+    // block already makes its lens primary. `undefined` = legacy/unstamped.
+    case undefined:
+    case "generic":
+    case "typescript":
+    case "python":
+    case "rust":
+    case "go":
+    case "sql":
+    case "docs":
+    case "confidentiality":
       return "FullReview";
+    default: {
+      // Compile-time exhaustiveness guard (repo idiom, cf. src/renderers/index.ts):
+      // if `flavor` is not `never` here, a REVIEW_FLAVORS entry lacks a case above.
+      const _exhaustive: never = flavor;
+      throw new Error(`unreachable review flavor: ${String(_exhaustive)}`);
+    }
   }
 }
 
