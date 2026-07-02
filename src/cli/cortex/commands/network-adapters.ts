@@ -55,6 +55,7 @@ import {
   type ServicePlatform,
 } from "../../../common/nats/nats-service-manager";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
+import { NetworkCache } from "../../../common/registry/network-cache";
 import {
   findCortexDaemonDescriptor,
   type DaemonLocatorIO,
@@ -76,6 +77,7 @@ import type {
 } from "../../../common/types/cortex-config";
 
 import type {
+  CachedNetworkPort,
   ConfigStorePort,
   DaemonPort,
   LeafFilePort,
@@ -1190,6 +1192,44 @@ export function buildLeafStatePort(cfg: LivePortsConfig): LeafStatePort {
 }
 
 // =============================================================================
+// Cached-network port — C-850, on-disk network-cache descriptors for status.
+// =============================================================================
+
+/**
+ * C-850 — read the last-known-good network descriptor cache
+ * (`~/.config/cortex/network-cache/*.json`, the SAME dir the join writes after a
+ * DD-9-verified fetch) so `cortex network status` can surface REGISTERED
+ * networks (descriptor cached, not joined by this stack). Read-only: it only
+ * ever `list()`s. Membership is read from the cached ROSTER (the verified
+ * per-peer list) when present, falling back to the descriptor's lightweight
+ * `members[]`. A missing/corrupt cache degrades to `[]` inside {@link NetworkCache.list}.
+ */
+export function buildCachedNetworkPort(): CachedNetworkPort {
+  // The SAME `~/.config/cortex/network-cache/` the registry client writes to
+  // (DD-10), so status reads exactly what join cached. Resolve via `expandTilde`
+  // (which honours `$HOME`) rather than letting NetworkCache default to
+  // `os.homedir()` — the rest of the CLI resolves config paths through
+  // expandTilde, and $HOME-honouring is what keeps the read hermetic under the
+  // tests' temp-$HOME isolation (os.homedir() would punch through to the real
+  // home and leak the developer's live cache into a config-less status run).
+  const cache = new NetworkCache({
+    cacheDir: expandTilde(join("~", ".config", "cortex", "network-cache")),
+  });
+  return {
+    list() {
+      return cache.list().map((record) => {
+        const rosterPeers = record.roster.members.map((m) => m.principal_id);
+        // Prefer the verified roster's principal ids; fall back to the
+        // descriptor's lightweight `members[]` if the roster is empty.
+        const peers =
+          rosterPeers.length > 0 ? rosterPeers : record.descriptor.members;
+        return { networkId: record.descriptor.network_id, peers };
+      });
+    },
+  };
+}
+
+// =============================================================================
 // Bundle builders
 // =============================================================================
 
@@ -1204,6 +1244,10 @@ function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
     // C-797 — always present now (defaults to the local monitor); status reads
     // the authoritative leafz view instead of falling back to link:unknown.
     leafState: buildLeafStatePort(cfg),
+    // C-850 — always wire the cached-descriptor enumerator so `status` surfaces
+    // REGISTERED networks (descriptor cached, not joined). Read-only; a missing
+    // cache dir degrades to no registered rows.
+    cachedNetworks: buildCachedNetworkPort(),
     // G1c (#1117, ADR-0013 Model B) — wire the local-side `federated.>`
     // export/import by shelling to `arc nats add-federation-export`. The port
     // is always wired; step (b.4) in joinNetwork uses it only when the bus is

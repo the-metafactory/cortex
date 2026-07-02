@@ -174,6 +174,20 @@ export interface StatusResult {
   reason?: string;
 }
 
+/**
+ * C-850 — a network's lifecycle stage from THIS stack's vantage point:
+ *   - `registered`   — descriptor cached/registry-known, NOT in this stack's config.
+ *   - `joined`       — in config, but the leaf is not currently established
+ *                      (state unknown / connecting — no positive down signal).
+ *   - `live`         — in config AND the leaf link is `established` (up).
+ *   - `disconnected` — in config (or cached) but the leaf is reported `down`/stale.
+ */
+export type NetworkLifecycleStatus =
+  | "registered"
+  | "joined"
+  | "live"
+  | "disconnected";
+
 export interface StatusNetworkRow {
   networkId: string;
   leafNode: string;
@@ -181,6 +195,8 @@ export interface StatusNetworkRow {
   acceptSubjects: string[];
   maxHop: number;
   link: LeafLinkState;
+  /** C-850 — lifecycle stage (JSON `items[].status` + human output). */
+  status: NetworkLifecycleStatus;
 }
 
 // =============================================================================
@@ -986,9 +1002,44 @@ export async function leaveNetwork(
 // =============================================================================
 
 /**
- * Report joined networks: leaf link state (from the optional {@link LeafStatePort},
- * "unknown" when none wired), peers, accept-subjects, and counters. Read-only;
- * never restarts or mutates anything.
+ * C-850 — map a config-joined network's leaf link state onto its lifecycle
+ * stage. The leaf telemetry decides live-vs-not:
+ *   - `established` → `live`         (up).
+ *   - `down`        → `disconnected` (a positive down/stale signal).
+ *   - anything else (`connecting` / `unknown`) → `joined` — in config, but not
+ *     established and NOT known-down. We only claim `disconnected` on a positive
+ *     down signal; absence of telemetry (unreachable monitor) is "not up",
+ *     i.e. `joined`, not a false "disconnected".
+ */
+function lifecycleForConfigNetwork(link: LeafLinkState): NetworkLifecycleStatus {
+  switch (link.state) {
+    case "established":
+      return "live";
+    case "down":
+      return "disconnected";
+    default:
+      return "joined";
+  }
+}
+
+/**
+ * Report the full network lifecycle (C-850): the UNION of {config-joined
+ * networks, cached descriptors, live leaf links}, each row labelled
+ * `registered | joined | live | disconnected`.
+ *
+ * Previously this reported ONLY networks that were BOTH joined in config AND had
+ * a live leaf, so a registered-but-not-joined network (or a joined one with its
+ * leaf down) was invisible — the false "isn't set up" #850 symptom.
+ *
+ * Merge/dedup rule: keyed by network id, the CONFIG row WINS on conflict (it
+ * carries the stack-local leaf-node / accept-subjects / max-hop the cache lacks)
+ * and its leaf link state decides `live` vs `joined`/`disconnected`. A cached
+ * descriptor that is NOT in config becomes a `registered` row. No duplicate rows
+ * for one network id.
+ *
+ * Read-only; never restarts or mutates anything. The leaf-state and
+ * cached-descriptor ports are both optional — absent → link state "unknown" /
+ * no registered rows respectively (graceful degrade).
  */
 export async function networkStatus(ports: NetworkPorts): Promise<StatusResult> {
   const networks = ports.configStore.readNetworks();
@@ -996,20 +1047,51 @@ export async function networkStatus(ports: NetworkPorts): Promise<StatusResult> 
     ? await ports.leafState.linkStates()
     : {};
 
-  const rows: StatusNetworkRow[] = networks.map((n) => ({
-    networkId: n.id,
-    leafNode: n.leaf_node,
-    peers: n.peers.map((p) => p.principal_id),
-    acceptSubjects: n.accept_subjects,
-    maxHop: n.max_hop,
+  const configRows: StatusNetworkRow[] = networks.map((n) => {
     // C-797 — `/leafz` keys each connection by the leaf-node (remote) name, which
     // is NOT necessarily the network id (two networks may share one `leaf_node`,
     // or it may be named independently). Join on `leaf_node` first so a connected
     // leaf reports `established` (up); fall back to the network-id key for the
     // common case where they coincide, then to "unknown" when leafz has no row
     // (monitor genuinely unreachable).
-    link: linkStates[n.leaf_node] ?? linkStates[n.id] ?? { state: "unknown" },
-  }));
+    const link = linkStates[n.leaf_node] ?? linkStates[n.id] ?? { state: "unknown" };
+    return {
+      networkId: n.id,
+      leafNode: n.leaf_node,
+      peers: n.peers.map((p) => p.principal_id),
+      acceptSubjects: n.accept_subjects,
+      maxHop: n.max_hop,
+      link,
+      status: lifecycleForConfigNetwork(link),
+    };
+  });
 
-  return { ok: true, networks: rows };
+  // Config wins on conflict — a cached descriptor for a network already joined
+  // in config is DROPPED (the config row already covers it, with richer + live
+  // state). Track joined ids so the cache merge below skips them.
+  const joinedIds = new Set(configRows.map((r) => r.networkId));
+
+  // C-850 — cached (REGISTERED) networks not present in config. Each becomes a
+  // `registered` row: it has no stack-local leaf, so leaf-node defaults to the
+  // network id, accept-subjects are empty, max-hop 0, and the link is "unknown"
+  // (no leaf remote to have telemetry for).
+  const cached = ports.cachedNetworks ? ports.cachedNetworks.list() : [];
+  const registeredRows: StatusNetworkRow[] = [];
+  const seenRegistered = new Set<string>();
+  for (const c of cached) {
+    if (joinedIds.has(c.networkId)) continue; // config wins
+    if (seenRegistered.has(c.networkId)) continue; // dedup duplicate cache entries
+    seenRegistered.add(c.networkId);
+    registeredRows.push({
+      networkId: c.networkId,
+      leafNode: c.networkId,
+      peers: c.peers,
+      acceptSubjects: [],
+      maxHop: 0,
+      link: { state: "unknown" },
+      status: "registered",
+    });
+  }
+
+  return { ok: true, networks: [...configRows, ...registeredRows] };
 }

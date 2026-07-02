@@ -299,17 +299,25 @@ describe("status", () => {
     expect(res.stderr).toContain("--principal is required");
   });
 
-  test("reports 'no networks joined' when the stack config is absent", async () => {
+  test("reports 'no networks registered or joined' when config AND cache are absent", async () => {
     // Point at a principal whose stacks/<slug>.yaml does not exist under the
     // home config dir. Using a unique slug guarantees absence.
+    // C-850 — status now also reads the global network-cache; a temp $HOME keeps
+    // BOTH the config read AND the cache read hermetic (else the developer's real
+    // ~/.config/cortex/network-cache leaks registered rows into this assertion).
+    const home = mkdtempSync(join(tmpdir(), "s4-empty-status-"));
+    tmpDirs.push(home);
+    mkdirSync(join(home, ".config", "cortex"), { recursive: true });
     const uniqueSlug = `s4test${Date.now().toString()}`;
-    const res = await dispatchNetwork([
-      "status",
-      "--principal", "andreas",
-      "--stack", `andreas/${uniqueSlug}`,
-    ]);
+    const res = await withHome(home, () =>
+      dispatchNetwork([
+        "status",
+        "--principal", "andreas",
+        "--stack", `andreas/${uniqueSlug}`,
+      ]),
+    );
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain("no networks joined");
+    expect(res.stdout).toContain("no networks registered or joined");
   });
 
   test("--json emits an envelope", async () => {
@@ -413,9 +421,11 @@ describe("#814 — status resolves the named config-split stack's config", () =>
     expect(res.stdout).toContain("metafactory-community");
   });
 
-  test("monolith on the default path is unchanged — absent config reports 'no networks joined'", async () => {
+  test("monolith on the default path is unchanged — absent config reports 'no networks registered or joined'", async () => {
     // A home with NO config-split dir and no monolith for the slug: the resolver
-    // returns <home>/.config/cortex/cortex.<slug>.yaml (absent) → empty read.
+    // returns <home>/.config/cortex/cortex.<slug>.yaml (absent) → empty read. The
+    // temp $HOME also isolates the C-850 cache read (no network-cache dir → no
+    // registered rows).
     const home = mkdtempSync(join(tmpdir(), "c814-mono-"));
     tmpDirs.push(home);
     mkdirSync(join(home, ".config", "cortex"), { recursive: true });
@@ -429,7 +439,7 @@ describe("#814 — status resolves the named config-split stack's config", () =>
     );
 
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain("no networks joined");
+    expect(res.stdout).toContain("no networks registered or joined");
   });
 
   test("#814 review (MAJOR) — monolith default-stack: no --stack resolves cortex.yaml (meta-factory), NOT cortex.default.yaml", async () => {

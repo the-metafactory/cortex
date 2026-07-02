@@ -28,6 +28,8 @@ import {
   type JoiningStack,
 } from "../network-lib";
 import type {
+  CachedNetworkPort,
+  CachedNetworkSummary,
   ConfigStorePort,
   DaemonPort,
   LeafFilePort,
@@ -160,6 +162,12 @@ function makeFakes(opts: {
   withoutNatsServer?: boolean;
   initialNetworks?: PolicyFederatedNetwork[];
   leafState?: LeafStatePort;
+  /**
+   * C-850 — cached (REGISTERED) network descriptors the status merge enumerates.
+   * When present, {@link makeFakes} wires a `cachedNetworks` port that returns
+   * this list; absent → no port (status reports config-joined networks only).
+   */
+  cachedNetworks?: CachedNetworkSummary[];
   /** #794 — make the stack's nats config UNABLE to bind the leaf account. */
   canBind?: boolean;
   /**
@@ -468,9 +476,24 @@ function makeFakes(opts: {
       daemon,
       ...(opts.withoutNatsServer === true ? {} : { natsServer }),
       leafState: opts.leafState,
+      // C-850 — wire the cached-descriptor enumerator only when the test supplies
+      // a list, so existing status tests (no `cachedNetworks`) keep the pre-C-850
+      // config-only behaviour (absent port → no registered rows).
+      ...(opts.cachedNetworks !== undefined
+        ? { cachedNetworks: makeCachedNetworkPort(opts.cachedNetworks) }
+        : {}),
     },
     rec,
     storeRef,
+  };
+}
+
+/** C-850 — a fake {@link CachedNetworkPort} over a fixed summary list. */
+function makeCachedNetworkPort(list: CachedNetworkSummary[]): CachedNetworkPort {
+  return {
+    list() {
+      return list;
+    },
   };
 }
 
@@ -1796,6 +1819,200 @@ describe("status", () => {
     });
     const res = await networkStatus(ports);
     expect(res.networks[0]!.link.state).toBe("unknown");
+  });
+});
+
+// =============================================================================
+// C-850 — network status reports the FULL lifecycle: the union of {config-
+// joined networks, cached descriptors, live leaf links}, each labelled
+// registered | joined | live | disconnected.
+// =============================================================================
+
+describe("C-850 network lifecycle status", () => {
+  function joinedNetwork(id: string, leafNode?: string): PolicyFederatedNetwork {
+    return {
+      id,
+      leaf_node: leafNode ?? id,
+      peers: [{ principal_id: "jc", stack_id: "jc/sage-host" }],
+      accept_subjects: [`federated.andreas.meta-factory.>`],
+      deny_subjects: [],
+      announce_capabilities: [],
+      max_hop: 1,
+    };
+  }
+
+  const rowFor = (
+    res: Awaited<ReturnType<typeof networkStatus>>,
+    id: string,
+  ) => res.networks.find((r) => r.networkId === id);
+
+  test("live — in config AND leaf established", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "established", inMsgs: 9 } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(1);
+    expect(res.networks[0]!.status).toBe("live");
+    expect(res.networks[0]!.link.state).toBe("established");
+  });
+
+  test("joined — in config, leaf state unknown (no positive down signal)", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return {}; // monitor unreachable / no leaf row
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks[0]!.status).toBe("joined");
+  });
+
+  test("joined — in config, leaf 'connecting' (coming up, not yet established)", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "connecting" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks[0]!.status).toBe("joined");
+  });
+
+  test("disconnected — in config but leaf reported down", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "down" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks[0]!.status).toBe("disconnected");
+  });
+
+  test("registered — cached descriptor NOT in this stack's config", async () => {
+    const { ports } = makeFakes({
+      initialNetworks: [],
+      cachedNetworks: [{ networkId: "metafactory-community", peers: ["andreas", "jc"] }],
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(1);
+    const row = res.networks[0]!;
+    expect(row.networkId).toBe("metafactory-community");
+    expect(row.status).toBe("registered");
+    // A registered network has no stack-local leaf → defaults.
+    expect(row.leafNode).toBe("metafactory-community");
+    expect(row.peers).toEqual(["andreas", "jc"]);
+    expect(row.acceptSubjects).toEqual([]);
+    expect(row.maxHop).toBe(0);
+    expect(row.link.state).toBe("unknown");
+  });
+
+  test("union — cached (registered) + config (live) surface as SEPARATE rows", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "established" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      cachedNetworks: [{ networkId: "metafactory-community", peers: ["andreas", "jc"] }],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(2);
+    expect(rowFor(res, "metafactory")!.status).toBe("live");
+    expect(rowFor(res, "metafactory-community")!.status).toBe("registered");
+  });
+
+  test("dedup — a cached network ALSO joined in config yields ONE row; config wins", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "established" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      // Same id present in BOTH config and cache — must NOT double.
+      cachedNetworks: [{ networkId: "metafactory", peers: ["stale-cache-peer"] }],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(1);
+    const row = res.networks[0]!;
+    // Config row wins: its live leaf state + its (real) peers, NOT the cache's.
+    expect(row.status).toBe("live");
+    expect(row.peers).toEqual(["jc"]);
+    expect(row.acceptSubjects).toEqual(["federated.andreas.meta-factory.>"]);
+  });
+
+  test("dedup — duplicate cache entries for one id yield ONE registered row", async () => {
+    const { ports } = makeFakes({
+      initialNetworks: [],
+      cachedNetworks: [
+        { networkId: "metafactory-community", peers: ["andreas"] },
+        { networkId: "metafactory-community", peers: ["andreas", "jc"] },
+      ],
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(1);
+    expect(res.networks[0]!.status).toBe("registered");
+    // First entry wins the dedup.
+    expect(res.networks[0]!.peers).toEqual(["andreas"]);
+  });
+
+  // The #850 real case: metafactory-community's descriptor is cached (roster
+  // andreas+jc) and its leaf is disconnected/stale.
+  test("#850 metafactory-community — cached + NOT joined → registered (was omitted)", async () => {
+    const { ports } = makeFakes({
+      initialNetworks: [],
+      cachedNetworks: [{ networkId: "metafactory-community", peers: ["andreas", "jc"] }],
+    });
+    const res = await networkStatus(ports);
+    expect(rowFor(res, "metafactory-community")!.status).toBe("registered");
+  });
+
+  test("#850 metafactory-community — joined but leaf down → disconnected", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { "metafactory-community": { state: "down" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory-community")],
+      cachedNetworks: [{ networkId: "metafactory-community", peers: ["andreas", "jc"] }],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(1);
+    expect(res.networks[0]!.status).toBe("disconnected");
+  });
+
+  test("back-compat — no cachedNetworks port → config-joined rows only (no registered rows)", async () => {
+    const { ports } = makeFakes({ initialNetworks: [joinedNetwork("metafactory")] });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(1);
+    expect(res.networks[0]!.status).toBe("joined");
+  });
+
+  test("empty — no config networks AND no cached descriptors → zero rows", async () => {
+    const { ports } = makeFakes({ initialNetworks: [], cachedNetworks: [] });
+    const res = await networkStatus(ports);
+    expect(res.networks.length).toBe(0);
   });
 });
 

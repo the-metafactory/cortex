@@ -87,4 +87,47 @@ describe("NetworkCache", () => {
     );
     expect(cache.load("iaw")).toBeUndefined();
   });
+
+  // C-850 — list() enumerates every cached record for `cortex network status`.
+  describe("list", () => {
+    test("returns [] when the cache dir does not exist", () => {
+      const absent = new NetworkCache({
+        cacheDir: join(tmp, "does-not-exist"),
+        logError: noopLog,
+      });
+      expect(absent.list()).toEqual([]);
+    });
+
+    test("returns [] when the cache dir is empty", () => {
+      expect(cache.list()).toEqual([]);
+    });
+
+    test("enumerates every valid cached record", () => {
+      cache.store("iaw", descriptor, roster);
+      cache.store(
+        "metafactory-community",
+        { ...descriptor, network_id: "metafactory-community" },
+        { ...roster, network_id: "metafactory-community" },
+      );
+      const ids = cache.list().map((r) => r.descriptor.network_id).sort();
+      expect(ids).toEqual(["iaw", "metafactory-community"]);
+    });
+
+    test("skips corrupt / non-JSON files but returns the valid ones", () => {
+      cache.store("iaw", descriptor, roster);
+      writeFileSync(join(tmp, "broken.json"), "{ not valid json", {
+        encoding: "utf8",
+      });
+      const ids = cache.list().map((r) => r.descriptor.network_id);
+      expect(ids).toEqual(["iaw"]);
+    });
+
+    test("ignores non-.json files in the cache dir", () => {
+      cache.store("iaw", descriptor, roster);
+      writeFileSync(join(tmp, "README.txt"), "not a cache file", {
+        encoding: "utf8",
+      });
+      expect(cache.list().length).toBe(1);
+    });
+  });
 });

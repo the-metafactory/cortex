@@ -366,6 +366,40 @@ export interface LeafStatePort {
   linkStates(): Promise<Record<string, LeafLinkState>>;
 }
 
+/**
+ * C-850 — read-only enumerator of last-known-good CACHED network descriptors
+ * (`~/.config/cortex/network-cache/*.json`, written by S1 after a DD-9-verified
+ * fetch). `networkStatus` merges these with the config-joined networks so a
+ * network that is REGISTERED (its descriptor is cached) but not joined by THIS
+ * stack — or joined with its leaf down — is surfaced with a lifecycle status
+ * instead of being invisible (the #850 `metafactory-community` symptom).
+ *
+ * Optional on {@link NetworkPorts} (mirrors {@link LeafStatePort}): absent →
+ * `status` reports config-joined networks only (the pre-C-850 behaviour). The
+ * live adapter reads the on-disk cache dir; tests inject a fake list.
+ */
+export interface CachedNetworkPort {
+  /**
+   * Every cached network, narrowed to the fields a `registered` status row
+   * renders. READ-ONLY — never writes or mutates the cache. Degrades to `[]`
+   * when the cache dir is absent/unreadable (never throws).
+   */
+  list(): CachedNetworkSummary[];
+}
+
+/**
+ * C-850 — one cached network descriptor, narrowed to what a `registered` row
+ * surfaces. A registered network is not in this stack's config, so it has no
+ * stack-local leaf-node / accept-subjects / max-hop; `networkStatus` fills
+ * those with defaults and reads membership from here.
+ */
+export interface CachedNetworkSummary {
+  /** The cached descriptor's `network_id`. */
+  networkId: string;
+  /** Known member principal ids (from the cached roster / descriptor members). */
+  peers: string[];
+}
+
 /** One network's leaf link state for `status`. */
 export interface LeafLinkState {
   /** ESTABLISHED / connecting / down / unknown. */
@@ -431,6 +465,13 @@ export interface NetworkPorts {
   natsServer?: NatsServerPort;
   /** Optional — status link telemetry. Absent → link state "unknown". */
   leafState?: LeafStatePort;
+  /**
+   * C-850 — optional cached-descriptor enumerator for `status`. Absent →
+   * `status` reports config-joined networks only (pre-C-850). Present →
+   * `networkStatus` merges cached (REGISTERED) networks with the config-joined
+   * set so registered-but-not-joined networks are no longer invisible.
+   */
+  cachedNetworks?: CachedNetworkPort;
   /**
    * G1c (#1117, ADR-0013 Model B) — federation-wiring seam. Optional for
    * backwards compatibility: when absent the wiring step is skipped (the

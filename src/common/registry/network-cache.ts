@@ -21,7 +21,7 @@
  * return — a missing/corrupt cache file degrades to "no cache", never a throw.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -165,6 +165,46 @@ export class NetworkCache {
       return undefined;
     }
     return parsed;
+  }
+
+  /**
+   * C-850 — enumerate EVERY cached network record under the cache dir. Reads
+   * each `*.json` through the SAME shape/version gate as {@link load} (so a
+   * corrupt / foreign / stale-schema file is skipped with a log line, never
+   * served), and returns the survivors. NEVER throws — a missing cache dir
+   * (nothing ever cached) degrades to `[]`. Read-only: `cortex network status`
+   * uses this to surface REGISTERED networks (descriptor cached but not joined
+   * by this stack) that the config-only view omits.
+   */
+  list(): CachedNetwork[] {
+    let entries: string[];
+    try {
+      entries = readdirSync(this.cacheDir);
+    } catch (err) {
+      // ENOENT is the common, expected case (no cache dir yet — nothing has
+      // ever been cached). Any other error is logged at the same fidelity as
+      // load()'s read miss, but still degrades to "no cached networks".
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        this.logError(
+          `list() readdir failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return [];
+    }
+
+    const out: CachedNetwork[] = [];
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      // Filenames are `${sanitized-network-id}.json` (see pathFor). Network ids
+      // are letter-prefixed lowercase-alphanumeric + hyphen, so the basename IS
+      // the network id; load() re-derives the same path and re-checks that the
+      // cached `network_id` matches, so a mismatched/renamed file is rejected.
+      const networkId = entry.slice(0, -".json".length);
+      const record = this.load(networkId);
+      if (record !== undefined) out.push(record);
+    }
+    return out;
   }
 
   /** Absolute path to the cache file for `networkId`. */

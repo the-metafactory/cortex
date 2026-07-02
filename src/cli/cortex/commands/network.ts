@@ -1061,11 +1061,16 @@ async function runStatus(
     return ok(renderJson(envelopeOk(res.networks)));
   }
   if (res.networks.length === 0) {
-    return ok("cortex network status: no networks joined\n");
+    // C-850 — nothing joined AND nothing cached/registered.
+    return ok("cortex network status: no networks registered or joined\n");
   }
   const lines = ["cortex network status:", ""];
   for (const n of res.networks) {
-    lines.push(`  ${n.networkId}  [leaf:${n.leafNode}]  link:${n.link.state}`);
+    // C-850 — lead each row with the lifecycle stage (registered/joined/live/
+    // disconnected), then the leaf-node + raw leaf telemetry.
+    lines.push(
+      `  ${n.networkId}  [${n.status}]  [leaf:${n.leafNode}]  link:${n.link.state}`,
+    );
     lines.push(`    peers:    ${n.peers.length > 0 ? n.peers.join(", ") : "(none)"}`);
     lines.push(`    accept:   ${n.acceptSubjects.join(", ")}`);
     lines.push(`    max_hop:  ${n.maxHop.toString()}`);
