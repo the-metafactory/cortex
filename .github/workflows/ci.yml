@@ -141,3 +141,39 @@ jobs:
 
       - name: bun test
         run: bun test
+
+  # ──────────────────────────────────────────────────────────────────
+  # Shippable-config hygiene gate — L2 of the confidentiality program
+  # (design doc §4 L2, compass#81/#87). A DETERMINISTIC whole-tree check
+  # that FAILS if deployment-specific content lands in a shippable path:
+  # a live platform id (snowflake) or internal-domain email in an agent
+  # fragment (agents.d/*.yaml, personas/*.md, arc-manifest*.yaml), a real
+  # (non-placeholder) identity in seed/migration SQL, a presence-bearing
+  # fragment not declared `# audience: generic`, or an unparseable YAML
+  # fragment (fail-closed). Output is MASKED — rule id + file:line + a
+  # shape descriptor, never the matched literal — so the gate never
+  # re-leaks what it catches. This is the structural complement to the
+  # L1 confidentiality-gate caller (ci/conf-gate-caller); it closes the
+  # root-cause class of the cortex#1312 incident (class 9: deployment
+  # fragment in a shippable path).
+  #
+  # Unlike the L1 gate (warn-only burn-in), this is a BLOCKING gate from
+  # day 1 — it verified green on the whole tree at authoring time, so it
+  # can only fail on content a PR newly introduces (design doc §4 L2
+  # "zero-entry ratchet"). Enrolling it in the protect-main required
+  # checks alongside the existing contexts is a held ops step.
+  # ──────────────────────────────────────────────────────────────────
+  shippable-hygiene:
+    name: Shippable-config hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: check-shippable-hygiene (whole-tree)
+        run: bun scripts/check-shippable-hygiene.ts

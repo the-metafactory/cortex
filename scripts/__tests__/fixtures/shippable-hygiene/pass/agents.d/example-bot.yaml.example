@@ -1,0 +1,17 @@
+# PASSING FIXTURE (.example template) for check-shippable-hygiene.
+#
+# `.example` files are templates and are exempt from the fragment rule (design
+# doc §4 L2). This one uses zeroed sentinel ids + a <REPLACE_ME> token, the
+# convention operators copy from. (L1's tier-2 scanner still covers .example
+# content as a backstop.)
+id: example-bot
+displayName: Example Bot
+trust: [luna]
+
+presence:
+  discord:
+    enabled: true
+    token: <REPLACE_ME>
+    guildId: "000000000000000000"
+    agentChannelId: "000000000000000000"
+    logChannelId: "000000000000000000"

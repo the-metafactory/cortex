@@ -1,0 +1,24 @@
+# audience: generic
+#
+# PASSING FIXTURE for check-shippable-hygiene (design doc §4 L2). A compliant,
+# pier-shaped generic fragment: the `# audience: generic` marker plus __ENV__
+# placeholders for every presence/platform id and the token. Nothing here is a
+# live deployment identifier, so the hygiene gate passes it.
+id: generic-bot
+displayName: Generic Bot
+trust: [luna]
+
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - chat
+
+presence:
+  discord:
+    enabled: true
+    token: __GENERIC_BOT_TOKEN__
+    guildId: __GENERIC_BOT_GUILD_ID__
+    agentChannelId: __GENERIC_BOT_AGENT_CHANNEL_ID__
+    logChannelId: __GENERIC_BOT_LOG_CHANNEL_ID__
+    dmOwner: false
