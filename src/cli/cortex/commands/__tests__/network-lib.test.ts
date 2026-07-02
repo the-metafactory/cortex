@@ -1481,6 +1481,96 @@ describe("#1220 accept_subjects — join persists own-scope only", () => {
 });
 
 // =============================================================================
+// cortex#1220 review blocker — join ENABLES the reconciler on a fresh join and
+// PRESERVES an operator's explicit choice on a re-join. Without this, narrowing
+// persisted accept_subjects to own-scope (above) admits ZERO peer presence,
+// because the reconciler that re-derives own ∪ peer in-memory is per-network
+// opt-in, default OFF — a silent in=0 regression.
+// =============================================================================
+
+describe("#1220 reconcile — join enables + preserves so peer presence is admitted", () => {
+  test("FRESH join → writes reconcile.enabled=true (reconciler is load-bearing post-#1220)", async () => {
+    // No initial networks — first join. The written entry must opt this network
+    // into the reconciler, else own-scope-only accept_subjects admit no peers.
+    const { ports, storeRef } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.reconcile).toBeDefined();
+    expect(net.reconcile!.enabled).toBe(true);
+    // Fresh enable is not an operator override, so no disabled-WARN.
+    expect((res.warnings ?? []).some((w) => w.includes("reconcile.enabled=false"))).toBe(false);
+  });
+
+  test("legacy re-join (prior entry has NO reconcile block) → self-heals to enabled=true", async () => {
+    // handPinnedNetwork carries no reconcile block (a pre-this-PR entry). A re-join
+    // upgrades it to enabled=true — the desired heal for existing deployments
+    // stuck in silent in=0. This is NOT overriding an explicit choice (none exists).
+    const { ports, storeRef } = makeFakes({
+      initialNetworks: [handPinnedNetwork("metafactory")],
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.reconcile!.enabled).toBe(true);
+  });
+
+  test("RE-join PRESERVES an explicit reconcile.enabled=false (never forced true) + loud WARN", async () => {
+    // An operator deliberately disabled the reconciler for this network. A re-join
+    // must NOT silently re-enable it — but MUST warn that peer presence won't be
+    // admitted while it stays off (the silent in=0 mode, now announced).
+    const disabled: PolicyFederatedNetwork = {
+      ...handPinnedNetwork("metafactory"),
+      reconcile: { enabled: false, interval_ms: 60000 },
+    };
+    const { ports, storeRef } = makeFakes({ initialNetworks: [disabled] });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    // Preserved verbatim — the explicit false SURVIVES the re-join.
+    expect(net.reconcile!.enabled).toBe(false);
+    // Loud, principal-visible WARN: both the warnings array and the step log.
+    expect(res.warnings).toBeDefined();
+    expect(res.warnings!.some((w) => w.includes("reconcile.enabled=false PRESERVED"))).toBe(true);
+    expect(
+      res.steps.some((s) => s.startsWith("WARN:") && s.includes("will NOT admit peer presence")),
+    ).toBe(true);
+  });
+
+  test("RE-join PRESERVES an explicit reconcile.enabled=true (no disabled-WARN)", async () => {
+    // A network already opted in stays opted in, verbatim, and does not trip the
+    // disabled-WARN. Also pins a non-default interval to prove verbatim carry.
+    const enabled: PolicyFederatedNetwork = {
+      ...handPinnedNetwork("metafactory"),
+      reconcile: { enabled: true, interval_ms: 30000 },
+    };
+    const { ports, storeRef } = makeFakes({ initialNetworks: [enabled] });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.reconcile).toEqual({ enabled: true, interval_ms: 30000 });
+    expect((res.warnings ?? []).some((w) => w.includes("reconcile.enabled=false"))).toBe(false);
+  });
+
+  test("enabling reconcile keeps the write boot-valid — own-scope accept_subjects unchanged", async () => {
+    // The reconcile field is orthogonal to the accept-list scope guard: adding it
+    // must not perturb the own-scope-only accept_subjects the validate-before-write
+    // gate requires (#1220). Fresh join → own-scope only AND reconcile enabled.
+    const { ports, storeRef } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
+    expect(net.reconcile!.enabled).toBe(true);
+  });
+});
+
+// =============================================================================
 // leave
 // =============================================================================
 

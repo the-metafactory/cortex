@@ -36,10 +36,12 @@
 import type {
   PolicyFederatedNetwork,
   PolicyFederatedPeer,
+  PolicyFederatedReconcile,
 } from "../../../common/types/cortex-config";
 import {
   isFederatedSubjectInOwnScope,
   ownFederatedSubjectScopePrefix,
+  PolicyFederatedReconcileSchema,
 } from "../../../common/types/cortex-config";
 import type { NetworkRosterResult } from "../../../common/registry/types";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
@@ -521,12 +523,50 @@ export async function joinNetwork(
     stack: stack.stackSlug,
   });
 
+  // (d.0) cortex#1220 review blocker — enable / preserve the per-network
+  // reconciler. Now that (d) narrows persisted `accept_subjects[]` to own-scope,
+  // PEER presence is admitted ONLY by the federation-reconciler re-deriving the
+  // own ∪ peer accept-list IN-MEMORY (see the comment above). But the reconciler
+  // is per-network opt-in, default OFF (`federation-reconciler.ts` —
+  // `if (network.reconcile?.enabled !== true) continue;`): an entry with no
+  // `reconcile` block boots clean yet admits ZERO peer presence (the silent in=0
+  // symptom), converting #1220's loud boot-refusal into a silent no-peers one. So:
+  //   • FRESH join (no prior reconcile block) ⇒ enable it — the post-#1220 model
+  //     makes the reconciler load-bearing for peer presence, and our live stacks
+  //     already run it.
+  //   • RE-join (a reconcile block already exists) ⇒ PRESERVE it verbatim, exactly
+  //     as `announce_capabilities` is preserved below. An operator's explicit
+  //     `reconcile.enabled: false` MUST survive a re-join (never forced back to
+  //     true) — but we WARN loudly that peer presence will not be admitted while
+  //     it stays off, so the silent-in=0 mode is at least announced.
+  let reconcile: PolicyFederatedReconcile;
+  if (priorEntry?.reconcile !== undefined) {
+    reconcile = priorEntry.reconcile;
+    if (!reconcile.enabled) {
+      const warn =
+        `network "${networkId}" re-joined with reconcile.enabled=false PRESERVED — the federation ` +
+        `reconciler will NOT admit peer presence on this network, so roster peers will not appear ` +
+        `(silent in=0). This PR persists own-scope accept_subjects only and relies on the reconciler ` +
+        `to add peer presence in-memory. Set policy.federated.networks["${networkId}"].reconcile.enabled=true ` +
+        `to admit peers.`;
+      warnings.push(warn);
+      steps.push(`WARN: ${warn}`);
+    }
+  } else {
+    // Parse through the schema so the written block carries the canonical shape
+    // (enabled:true + the schema-default interval); avoids hand-hardcoding.
+    reconcile = PolicyFederatedReconcileSchema.parse({ enabled: true });
+  }
+
   const entry: PolicyFederatedNetwork = {
     id: networkId,
     leaf_node: stack.leafNode ?? networkId,
     peers,
     accept_subjects: acceptSubjects,
     deny_subjects: [],
+    // cortex#1220 review blocker — enabled on fresh join, preserved on re-join
+    // (incl. an explicit enabled:false, with a loud WARN). See (d.0) above.
+    reconcile,
     // #762 — PRESERVE the hand-authored announce_capabilities for this network.
     // `deriveJoinInputs` sources the caps the join announces INTO the roster from
     // exactly this config block, so blanking it to [] here would make a re-join
