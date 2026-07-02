@@ -16,8 +16,14 @@
  *   - `presence.discord.token`
  *   - `presence.mattermost.apiToken`
  *   - `presence.slack.botToken`, `presence.slack.appToken`
+ *   - compass#84 (L2): `presence.discord.{guildId, agentChannelId,
+ *     logChannelId, worklogChannelId}` — the surface ID fields. A live
+ *     guild/channel snowflake in a SHIPPABLE fragment (Pier ships to the public
+ *     arc package, and one of its channels is a PRIVATE back-office channel) is
+ *     deployment config, not template content; it resolves from the daemon env
+ *     the same way the token does, with the same fail-SOFT degradation.
  *   - the gateway-binding mirror of the same fields under a `surfaces.yaml`
- *     binding map (`surfaces.{discord,slack,mattermost}[].binding.<token>`),
+ *     binding map (`surfaces.{discord,slack,mattermost}[].binding.<field>`),
  *     which the surface gateway consumes via a SEPARATELY-captured `Surfaces`
  *     object that bypasses the raw-config walk (cortex#1209 review — the
  *     `CORTEX_GATEWAY=1` path was leaking the literal placeholder to
@@ -92,6 +98,33 @@ export const ENV_PLACEHOLDER_PATTERN = /^__([A-Z0-9_]+)__$/;
  * {@link SurfaceTokenWarning} so the boot path can name the surface.
  */
 export type SurfacePlatform = "discord" | "mattermost" | "slack";
+
+/**
+ * compass#84 (L2) — the Discord presence ID fields that may carry an `__ENV__`
+ * placeholder resolved at load, symmetric to the surface *token* fields.
+ *
+ * A live guild/channel snowflake in a SHIPPABLE fragment is deployment config,
+ * not template content: it differs between two principals' deployments, and one
+ * of Pier's channels is a PRIVATE back-office channel. Shipping the fragment
+ * with `__PIER_GUILD_ID__` / `__PIER_AGENT_CHANNEL_ID__` / `__PIER_LOG_CHANNEL_ID__`
+ * keeps the literal ID out of the public repo and resolves it from the daemon
+ * environment at load — identical mechanism to the token, identical fail-SOFT
+ * degradation (surface disabled + `SurfaceTokenWarning`, never a boot crash).
+ *
+ * `worklogChannelId` is optional in the schema; absent ⇒ no-op. The schema
+ * (`z.coerce.string().min(1)`) imposes no digit/regex constraint, so the inert
+ * scrub sentinel ({@link disabledSentinel}) satisfies it the same way the token
+ * sentinels satisfy their fields.
+ */
+export const DISCORD_ID_FIELDS = [
+  "guildId",
+  "agentChannelId",
+  "logChannelId",
+  "worklogChannelId",
+] as const;
+
+/** Membership test used by {@link disabledSentinel} to pick an ID-shaped scrub. */
+const ID_FIELD_SET: ReadonlySet<string> = new Set(DISCORD_ID_FIELDS);
 
 /**
  * Structured record of a surface disabled by cortex#1217 fail-soft degradation.
@@ -201,6 +234,11 @@ function resolveScalarSoft(value: unknown): SoftResolve {
 function disabledSentinel(platform: SurfacePlatform, field: string, envVar: string): string {
   if (platform === "slack" && field === "botToken") return `xoxb-DISABLED-${envVar}`;
   if (platform === "slack" && field === "appToken") return `xapp-DISABLED-${envVar}`;
+  // compass#84 (L2) — an ID field (guildId/channelId) scrubs to a plainly-inert,
+  // non-numeric marker: it can never be mistaken for a real snowflake, embeds the
+  // env var for debuggability, satisfies `.min(1)`, and is not an `__ENV__`
+  // placeholder (so the belt-and-suspenders assert never re-fires on it).
+  if (ID_FIELD_SET.has(field)) return `DISABLED-MISSING-ID-${envVar}`;
   return `DISABLED-MISSING-SECRET-${envVar}`;
 }
 
@@ -278,6 +316,20 @@ export function resolveAgentPresenceTokens(
       `${pathPrefix}.presence.discord.token`,
       warnings,
     );
+    // compass#84 (L2) — resolve the ID placeholder fields on the same block. A
+    // missing ID env var is as disqualifying as a missing token: it disables the
+    // one surface (+ scrubs + warns), never the stack. `softResolvePresenceField`
+    // no-ops on any field absent from the block (worklogChannelId is optional).
+    for (const idField of DISCORD_ID_FIELDS) {
+      softResolvePresenceField(
+        discord,
+        idField,
+        "discord",
+        agent,
+        `${pathPrefix}.presence.discord.${idField}`,
+        warnings,
+      );
+    }
   }
 
   const mattermost = presence.mattermost;
@@ -339,15 +391,19 @@ export function resolveSurfaceTokensInRawConfig(
 }
 
 /**
- * The secret token field(s) under each platform's `surfaces[].binding`. Mirror
- * of the `presence.{platform}` token fields above — the surfaces.yaml binding
- * map carries the SAME credentials in a `binding` sub-object.
+ * The placeholder-resolvable field(s) under each platform's `surfaces[].binding`.
+ * Mirror of the `presence.{platform}` fields above — the surfaces.yaml binding
+ * map carries the SAME credentials (and, post-compass#84, the SAME Discord ID
+ * fields) in a `binding` sub-object. A missing env var on ANY of these drops the
+ * whole binding entry (the gateway has no per-binding `enabled` flag), so the
+ * gateway never builds an adapter from an unresolvable binding.
  */
-const SURFACE_BINDING_TOKEN_FIELDS: { platform: SurfacePlatform; fields: readonly string[] }[] = [
-  { platform: "discord", fields: ["token"] },
-  { platform: "slack", fields: ["botToken", "appToken"] },
-  { platform: "mattermost", fields: ["apiToken"] },
-];
+const SURFACE_BINDING_PLACEHOLDER_FIELDS: { platform: SurfacePlatform; fields: readonly string[] }[] =
+  [
+    { platform: "discord", fields: ["token", "guildId", "agentChannelId", "logChannelId"] },
+    { platform: "slack", fields: ["botToken", "appToken"] },
+    { platform: "mattermost", fields: ["apiToken"] },
+  ];
 
 /**
  * cortex#1209 review (MAJOR) + cortex#1217 — resolve `__ENV__` placeholders in
@@ -373,7 +429,7 @@ export function resolveSurfaceBindingTokens(
   surfaces: Surfaces,
   warnings?: SurfaceTokenWarning[],
 ): void {
-  for (const { platform, fields } of SURFACE_BINDING_TOKEN_FIELDS) {
+  for (const { platform, fields } of SURFACE_BINDING_PLACEHOLDER_FIELDS) {
     const entries = surfaces[platform];
     if (!Array.isArray(entries)) continue;
 

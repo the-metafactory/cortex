@@ -55,6 +55,11 @@ const TOUCHED = [
   "SLACK_APP",
   "GW_DISCORD_TOKEN",
   "WS_ONLY_TOKEN",
+  // compass#84 (L2) — surface ID placeholder env vars.
+  "PIER_GUILD_ID",
+  "PIER_AGENT_CHANNEL_ID",
+  "PIER_LOG_CHANNEL_ID",
+  "GW_GUILD_ID",
 ];
 const saved: Record<string, string | undefined> = {};
 
@@ -212,6 +217,178 @@ describe("resolveAgentPresenceTokens — fail SOFT on unset env (cortex#1217)", 
     expect((agent.presence as any).mattermost.apiToken).toBe("mm-real");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.platform).toBe("discord");
+  });
+});
+
+// ===========================================================================
+// compass#84 (L2) — surface ID placeholder fields (guildId / agentChannelId /
+// logChannelId). Symmetric to the surface *token* fields: a live guild/channel
+// snowflake in a SHIPPABLE fragment (Pier ships to the public arc package) is
+// deployment config, not template content. Shipping it as `__PIER_GUILD_ID__`
+// keeps the literal ID out of the repo and resolves it from the daemon env at
+// load — failing SOFT (surface disabled + WARN, never a crash) when unset.
+// ===========================================================================
+describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)", () => {
+  test("resolves guildId/agentChannelId/logChannelId placeholders from env", () => {
+    process.env.PIER_GUILD_ID = "000000000000000001";
+    process.env.PIER_AGENT_CHANNEL_ID = "000000000000000002";
+    process.env.PIER_LOG_CHANNEL_ID = "000000000000000003";
+    const agent: Record<string, unknown> = {
+      id: "pier",
+      presence: {
+        discord: {
+          enabled: true,
+          token: "inline-token",
+          guildId: "__PIER_GUILD_ID__",
+          agentChannelId: "__PIER_AGENT_CHANNEL_ID__",
+          logChannelId: "__PIER_LOG_CHANNEL_ID__",
+        },
+      },
+    };
+    resolveAgentPresenceTokens(agent, "agents.d/pier.yaml");
+    const discord = (agent.presence as any).discord;
+    expect(discord.guildId).toBe("000000000000000001");
+    expect(discord.agentChannelId).toBe("000000000000000002");
+    expect(discord.logChannelId).toBe("000000000000000003");
+    // all resolvable ⇒ surface stays enabled
+    expect(discord.enabled).toBe(true);
+  });
+
+  test("inline (non-placeholder) IDs pass through byte-identical", () => {
+    const agent: Record<string, unknown> = {
+      id: "luna",
+      presence: {
+        discord: {
+          enabled: true,
+          token: "inline-token",
+          guildId: "123456789012345678",
+          agentChannelId: "223456789012345678",
+          logChannelId: "323456789012345678",
+        },
+      },
+    };
+    resolveAgentPresenceTokens(agent, "agents[0]");
+    const discord = (agent.presence as any).discord;
+    expect(discord.guildId).toBe("123456789012345678");
+    expect(discord.agentChannelId).toBe("223456789012345678");
+    expect(discord.enabled).toBe(true);
+  });
+
+  test("unset ID env → surface DISABLED, literal scrubbed (not a placeholder), WARN collected", () => {
+    delete process.env.PIER_GUILD_ID;
+    const agent: Record<string, unknown> = {
+      id: "pier",
+      presence: {
+        discord: { enabled: true, token: "inline-token", guildId: "__PIER_GUILD_ID__" },
+      },
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    expect(() => resolveAgentPresenceTokens(agent, "agents.d/pier.yaml", warnings)).not.toThrow();
+    const discord = (agent.presence as any).discord;
+    // surface disabled — a missing ID is as disqualifying as a missing token
+    expect(discord.enabled).toBe(false);
+    // the literal placeholder must NOT survive, and the scrub must NOT itself
+    // look like a placeholder (or a downstream resolve pass / the assert trips)
+    expect(discord.guildId).not.toBe("__PIER_GUILD_ID__");
+    expect(ENV_PLACEHOLDER_PATTERN.test(discord.guildId)).toBe(false);
+    // scrub is a non-empty string ⇒ still satisfies the `.min(1)` schema
+    expect(discord.guildId.length).toBeGreaterThan(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      agent: "pier",
+      platform: "discord",
+      envVar: "PIER_GUILD_ID",
+      fieldPath: "agents.d/pier.yaml.presence.discord.guildId",
+    });
+  });
+
+  test("a resolvable token but an unset ID env still disables the surface", () => {
+    process.env.PIER_BOT_TOKEN = "real-token";
+    delete process.env.PIER_LOG_CHANNEL_ID;
+    const agent: Record<string, unknown> = {
+      id: "pier",
+      presence: {
+        discord: {
+          enabled: true,
+          token: "__PIER_BOT_TOKEN__",
+          guildId: "123456789012345678",
+          logChannelId: "__PIER_LOG_CHANNEL_ID__",
+        },
+      },
+    };
+    const warnings: SurfaceTokenWarning[] = [];
+    resolveAgentPresenceTokens(agent, "agents.d/pier.yaml", warnings);
+    const discord = (agent.presence as any).discord;
+    // token resolved fine, but the missing channel ID disables the surface
+    expect(discord.token).toBe("real-token");
+    expect(discord.enabled).toBe(false);
+    expect(warnings.map((w) => w.envVar)).toContain("PIER_LOG_CHANNEL_ID");
+  });
+
+  test("optional worklogChannelId placeholder resolves when set; absent → no-op", () => {
+    process.env.PIER_LOG_CHANNEL_ID = "000000000000000009";
+    const agent: Record<string, unknown> = {
+      id: "pier",
+      presence: {
+        discord: { enabled: true, token: "inline", guildId: "1", worklogChannelId: "__PIER_LOG_CHANNEL_ID__" },
+      },
+    };
+    expect(() => resolveAgentPresenceTokens(agent, "agents[0]")).not.toThrow();
+    expect((agent.presence as any).discord.worklogChannelId).toBe("000000000000000009");
+    // a fragment with no worklogChannelId key at all must not choke
+    const bare: Record<string, unknown> = {
+      id: "x",
+      presence: { discord: { enabled: true, token: "inline", guildId: "1" } },
+    };
+    expect(() => resolveAgentPresenceTokens(bare, "agents[0]")).not.toThrow();
+    expect((bare.presence as any).discord.enabled).toBe(true);
+  });
+});
+
+describe("resolveSurfaceBindingTokens — ID placeholders (compass#84 L2)", () => {
+  test("resolves a binding.guildId placeholder from env", () => {
+    process.env.GW_GUILD_ID = "000000000000000010";
+    const surfaces = {
+      discord: [
+        {
+          agent: "pier",
+          binding: {
+            token: "inline-token",
+            guildId: "__GW_GUILD_ID__",
+            agentChannelId: "222",
+            logChannelId: "333",
+          },
+        },
+      ],
+    } as unknown as Surfaces;
+    resolveSurfaceBindingTokens(surfaces);
+    expect((surfaces.discord as any)[0].binding.guildId).toBe("000000000000000010");
+  });
+
+  test("fail SOFT: unset binding.guildId env → the binding ENTRY is dropped", () => {
+    delete process.env.GW_GUILD_ID;
+    const surfaces = {
+      discord: [
+        {
+          agent: "pier",
+          binding: {
+            token: "inline-token",
+            guildId: "__GW_GUILD_ID__",
+            agentChannelId: "222",
+            logChannelId: "333",
+          },
+        },
+      ],
+    } as unknown as Surfaces;
+    const warnings: SurfaceTokenWarning[] = [];
+    expect(() => resolveSurfaceBindingTokens(surfaces, warnings)).not.toThrow();
+    expect(surfaces.discord).toHaveLength(0);
+    expect(warnings[0]).toMatchObject({
+      agent: "pier",
+      platform: "discord",
+      envVar: "GW_GUILD_ID",
+      fieldPath: "surfaces.discord[0].binding.guildId",
+    });
   });
 });
 
@@ -799,5 +976,79 @@ agents:
     expect(vegaInstance?.enabled).toBe(false);
     expect(surfaceInstanceEnabled(vegaInstance ?? { enabled: true })).toBe(false);
     expect(ENV_PLACEHOLDER_PATTERN.test(vegaInstance?.token ?? "")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// compass#84 (L2) — `.example` template fragments stay INVISIBLE to the loader.
+//
+// The structural-hygiene convention is that a shippable path holds either a
+// `.example` template (zeroed IDs / `__ENV__` placeholders / `<REPLACE_ME>`) or
+// a generic fragment. `loadAgentsDirectory` filters to `*.yaml`/`*.yml`, so a
+// `pier.yaml.example` is never loaded — its zeroed/placeholder content can never
+// disable a live surface or serialize into test/boot output. This regression
+// pins that invariant: if a future refactor of `listYamlFiles` widened the
+// filter to include `.example`, this test fails loudly.
+// ===========================================================================
+describe("loadAgentsDirectory — `.example` fragments are invisible (compass#84 L2)", () => {
+  let dir: string;
+  let agentsDir: string;
+  let personaPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "c84-example-"));
+    agentsDir = join(dir, "agents.d");
+    mkdirSync(agentsDir, { recursive: true });
+    personaPath = join(dir, "persona.md");
+    writeFileSync(personaPath, "# persona\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("a *.yaml.example template is not loaded; a sibling *.yaml is", () => {
+    // A real, loadable fragment.
+    writeFileSync(
+      join(agentsDir, "real.yaml"),
+      `
+id: real
+displayName: Real
+persona: ${personaPath}
+trust: []
+presence:
+  discord:
+    enabled: true
+    token: inline-token
+    guildId: "000000000000000000"
+    agentChannelId: "000000000000000000"
+    logChannelId: "000000000000000000"
+`,
+    );
+    // A `.example` template carrying `__ENV__` placeholders + zeroed IDs. If the
+    // loader ever picked this up, the unresolved `__EXAMPLE_*__` placeholders
+    // would (post-compass#84) DISABLE a surface / emit warnings — so a green
+    // assertion here also proves the template never reached the resolver.
+    writeFileSync(
+      join(agentsDir, "pier.yaml.example"),
+      `
+id: pier
+displayName: Pier
+persona: ${personaPath}
+trust: []
+presence:
+  discord:
+    enabled: true
+    token: __EXAMPLE_BOT_TOKEN__
+    guildId: __EXAMPLE_GUILD_ID__
+    agentChannelId: __EXAMPLE_AGENT_CHANNEL_ID__
+    logChannelId: __EXAMPLE_LOG_CHANNEL_ID__
+`,
+    );
+
+    const warnings: SurfaceTokenWarning[] = [];
+    const agents = loadAgentsDirectory(agentsDir, warnings);
+
+    // Only the real fragment loads; the `.example` is invisible.
+    expect(agents.map((a) => a.id)).toEqual(["real"]);
+    // The `.example` placeholders never reached the resolver ⇒ no disabled-surface warnings.
+    expect(warnings).toHaveLength(0);
   });
 });
