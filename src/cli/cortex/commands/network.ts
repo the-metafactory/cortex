@@ -381,14 +381,13 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     // Grants + seals NOTHING (rejection has no roster row to make connectable),
     // so it omits admit's Discord flags AND the --hub-config/--roster-only seal
     // controls. Dry-run by DEFAULT: prints the claim it WOULD post; --apply
-    // executes. Like admit, --network is absent — the row's network_id is set at
-    // register time and the registry acts on the stored value.
+    // executes. The row's network_id is fixed at register time; the registry
+    // authorises and acts on that stored value, so there is no network selector.
     reject: {
       positionals: ["request-id?"],
       flags: {
         "--admin-seed": "value",
         "--registry-url": "value",
-        "--network": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -2183,8 +2182,9 @@ async function runAdmit(
  *
  * Dry-run by default (safe posture). Pass --apply to execute.
  *
- * --network is intentionally absent: like admit, the request's network_id is
- * stored at register time and the registry acts on whatever it recorded.
+ * There is no network selector: the request's network_id is fixed at register
+ * time and the registry authorises + acts on whatever it recorded — the reject
+ * is scoped by that stored value, never by anything the caller passes.
  */
 async function runReject(
   requestId: string,
