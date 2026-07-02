@@ -13,6 +13,37 @@
  * (`design-pilot-restructure.md` §4.1), since pilot is the other producer of
  * `tasks.code-review.<flavor>`. Adding a flavor edits this file AND requires the
  * matching pilot-side update (sage cortex#1185 review).
+ *
+ * ## Authoritative catalog — flavor → CodeReview workflow / primary lens
+ *
+ * This table is the SINGLE source the other review files render against:
+ * `cortex.yaml.example`'s `code-review.<flavor>` capability catalog (every id
+ * MUST be a row here — enforced by `review-flavors-catalog.test.ts`), the
+ * `workflowForFlavor` map in `src/runner/review-prompt.ts` (the contractual
+ * skill/workflow invocation, compass#96 F3), and the arc-skill-code-review
+ * `SKILL.md` routing table (Round-2 skill PR).
+ *
+ * | flavor            | CodeReview workflow | primary lens emphasis                    |
+ * |-------------------|---------------------|------------------------------------------|
+ * | `generic`         | FullReview          | all lenses, no language specialisation   |
+ * | `typescript`      | FullReview          | Correctness/Types (TypeScript idioms)    |
+ * | `python`          | FullReview          | Correctness/Types (Python idioms)        |
+ * | `rust`            | FullReview          | Correctness/Types (Rust idioms)          |
+ * | `go`              | FullReview          | Correctness/Types (Go idioms)            |
+ * | `sql`             | FullReview          | Correctness (queries, migrations)        |
+ * | `docs`            | FullReview          | Documentation (specs, design docs)       |
+ * | `security`        | SecurityReview      | Security (auth, secrets, OWASP)          |
+ * | `confidentiality` | FullReview          | Confidentiality (always-on §4 L3 block)  |
+ * | `hardening`       | HardeningReview     | Hardening (defensive boundaries)         |
+ * | `skill-quality`   | SkillReview         | Skill quality (AGENTSKILLS.io structure) |
+ *
+ * `security`, `hardening`, and `skill-quality` name a DEDICATED workflow; every
+ * other flavor runs FullReview with its primary-lens emphasis (a `confidentiality`
+ * request runs FullReview because the Confidentiality lens is already always-on
+ * for every review — compass#96 F3 decision, no separate ConfidentialityReview
+ * workflow). `architecture` / `performance` / `ecosystem-compliance` are LENSES
+ * inside FullReview, NOT standalone flavors — they are deliberately absent from
+ * this catalog (a `code-review.architecture` capability is a phantom).
  */
 export const REVIEW_FLAVORS = [
   "generic",
@@ -30,6 +61,13 @@ export const REVIEW_FLAVORS = [
   // *exposure* instruction is always-on for EVERY flavor in `buildReviewPrompt`;
   // this flavor additionally makes it requestable as the primary lens.
   "confidentiality",
+  // compass#96 F16 (WIDEN) — the two flavors whose CodeReview workflows already
+  // ship (HardeningReview, SkillReview) but were not bus-reachable as flavors.
+  // Adding them makes the `code-review.hardening` / `code-review.skill-quality`
+  // capabilities in `cortex.yaml.example` resolve (no phantom) and the catalog
+  // table above truthful. Kept in lockstep with pilot's KNOWN_SPECIALIZATIONS.
+  "hardening",
+  "skill-quality",
 ] as const;
 
 export type ReviewFlavor = (typeof REVIEW_FLAVORS)[number];

@@ -113,4 +113,13 @@ describe("buildReviewSessionOpts — bus-side review-consumer CC opts", () => {
     const opts = buildReviewSessionOpts(configWith({}), agent());
     expect("bashAllowlist" in opts).toBe(false);
   });
+
+  test("pins allowedSkills to exactly ['code-review'] (compass#96 F3)", () => {
+    // The review prompt now contractually names a CodeReview workflow to
+    // invoke; without this pin cc-session's Skill Guard would deny the Skill
+    // tool and the reviewer could not run the workflow. Grant is exactly the
+    // one skill the review path needs — never wider.
+    const opts = buildReviewSessionOpts(configWith({}), agent());
+    expect(opts.allowedSkills).toEqual(["code-review"]);
+  });
 });

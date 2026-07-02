@@ -4,8 +4,13 @@
  * **CC bridge for the capability-dispatch review consumer.** Translates a
  * single parsed `ReviewRequestPayload` into either a `review.verdict.<kind>`
  * envelope (success) or a `dispatch.task.failed` envelope (failure), by
- * running the CodeReview skill inside a Claude Code session and parsing the
- * structured verdict block the skill emits at the end of its output.
+ * spawning a Claude Code session and parsing the structured verdict block it
+ * emits at the end of its output. This module passes the `prompt` +
+ * `sessionOpts` through verbatim; it does not itself name a skill. Per
+ * compass#96 F3 the review PROMPT (`buildReviewPrompt`) contractually names the
+ * CodeReview workflow to invoke (`workflowForFlavor`), and the session OPTS
+ * (`buildReviewSessionOpts`) pin `allowedSkills: ['code-review']` so that Skill
+ * invocation resolves — the skill contract lives at those two seams, not here.
  *
  * Anchors:
  *   - `docs/design-capability-dispatch-review-consumer.md` §4.5 — skill

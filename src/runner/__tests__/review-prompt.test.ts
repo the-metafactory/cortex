@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { buildReviewPrompt } from "../review-prompt";
+import { buildReviewPrompt, workflowForFlavor } from "../review-prompt";
 import type { ReviewRequestPayload } from "../../bus/review-events";
 
 function payload(over: Partial<ReviewRequestPayload> = {}): ReviewRequestPayload {
@@ -94,46 +94,74 @@ describe("buildReviewPrompt (cortex#911)", () => {
   });
 });
 
-describe("buildReviewPrompt — flavor → primary lens (compass#89 drift-1)", () => {
-  // THE load-bearing regression test. Before the fix, the flavor never reached
-  // the prompt, so `code-review.security` and `code-review.typescript` produced
-  // a BYTE-IDENTICAL prompt (the flavor-inert SEV-1). If this ever passes again
-  // by being equal, drift-1 has reopened.
+describe("workflowForFlavor — flavor → CodeReview workflow (compass#96 F3)", () => {
+  test("security → SecurityReview", () => {
+    expect(workflowForFlavor("security")).toBe("SecurityReview");
+  });
+  test("hardening → HardeningReview", () => {
+    expect(workflowForFlavor("hardening")).toBe("HardeningReview");
+  });
+  test("skill-quality → SkillReview", () => {
+    expect(workflowForFlavor("skill-quality")).toBe("SkillReview");
+  });
+  test("confidentiality → FullReview (F3 decision: no separate ConfidentialityReview)", () => {
+    // The always-on §4 L3 exposure block already makes the Confidentiality lens
+    // primary on every review, so the confidentiality flavor runs FullReview.
+    expect(workflowForFlavor("confidentiality")).toBe("FullReview");
+  });
+  test("language flavors → FullReview", () => {
+    for (const f of ["generic", "typescript", "python", "rust", "go", "sql", "docs"] as const) {
+      expect(workflowForFlavor(f)).toBe("FullReview");
+    }
+  });
+  test("an unstamped flavor (undefined) → FullReview", () => {
+    expect(workflowForFlavor(undefined)).toBe("FullReview");
+  });
+});
+
+describe("buildReviewPrompt — contractual workflow invocation (compass#96 F3)", () => {
+  test("emits the CONTRACTUAL 'Invoke the CodeReview skill' directive", () => {
+    const p = buildReviewPrompt(payload({ flavor: "security" }));
+    expect(p).toContain("Invoke the CodeReview skill");
+  });
+
+  test("security names the SecurityReview workflow in the directive", () => {
+    const p = buildReviewPrompt(payload({ flavor: "security" }));
+    expect(p).toContain("**SecurityReview** workflow");
+  });
+
+  test("hardening names the HardeningReview workflow", () => {
+    const p = buildReviewPrompt(payload({ flavor: "hardening" }));
+    expect(p).toContain("**HardeningReview** workflow");
+  });
+
+  test("skill-quality names the SkillReview workflow", () => {
+    const p = buildReviewPrompt(payload({ flavor: "skill-quality" }));
+    expect(p).toContain("**SkillReview** workflow");
+  });
+
+  test("a language flavor names the FullReview workflow", () => {
+    const p = buildReviewPrompt(payload({ flavor: "typescript" }));
+    expect(p).toContain("**FullReview** workflow");
+  });
+
+  test("an unstamped payload (no flavor) names the FullReview workflow", () => {
+    const p = buildReviewPrompt(payload());
+    expect(p).toContain("**FullReview** workflow");
+  });
+
+  test("confidentiality names the FullReview workflow (F3 decision)", () => {
+    const p = buildReviewPrompt(payload({ flavor: "confidentiality" }));
+    expect(p).toContain("**FullReview** workflow");
+  });
+
+  // THE load-bearing drift-1 regression (compass#89, preserved through F3):
+  // a flavor that names a DEDICATED workflow must not produce the same prompt
+  // as a language flavor. If these are ever byte-equal, flavor routing is inert.
   test("security-flavor prompt !== typescript-flavor prompt", () => {
     const security = buildReviewPrompt(payload({ flavor: "security" }));
     const typescript = buildReviewPrompt(payload({ flavor: "typescript" }));
     expect(security).not.toBe(typescript);
-  });
-
-  test("security selects the Security lens as the primary lens", () => {
-    const p = buildReviewPrompt(payload({ flavor: "security" }));
-    expect(p).toContain("**Security** lens as the primary lens");
-  });
-
-  test("confidentiality selects the Confidentiality lens as the primary lens", () => {
-    const p = buildReviewPrompt(payload({ flavor: "confidentiality" }));
-    expect(p).toContain("**Confidentiality** lens as the primary lens");
-  });
-
-  test("an unmapped flavor falls back to the FullReview primary lens", () => {
-    const p = buildReviewPrompt(payload({ flavor: "typescript" }));
-    expect(p).toContain("**FullReview** lens as the primary lens");
-  });
-
-  test("an unstamped payload (no flavor) falls back to FullReview", () => {
-    const p = buildReviewPrompt(payload());
-    expect(p).toContain("**FullReview** lens as the primary lens");
-  });
-
-  test("confidentiality primary directive differs from the always-on exposure mention", () => {
-    // The confidentiality flavor names Confidentiality as the PRIMARY lens, and
-    // the always-on exposure block ALSO mentions the Confidentiality lens for
-    // every flavor. They must be distinct strings so the primary-lens signal is
-    // not merely the ever-present exposure mention.
-    const conf = buildReviewPrompt(payload({ flavor: "confidentiality" }));
-    const ts = buildReviewPrompt(payload({ flavor: "typescript" }));
-    expect(conf).toContain("**Confidentiality** lens as the primary lens");
-    expect(ts).not.toContain("**Confidentiality** lens as the primary lens");
   });
 });
 

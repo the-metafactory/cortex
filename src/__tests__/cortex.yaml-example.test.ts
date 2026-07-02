@@ -37,13 +37,14 @@ describe("cortex.yaml.example — first-install starter config (cortex#314)", ()
     expect(parsed.agents.length).toBeGreaterThan(0);
   });
 
-  test("declares the 8 code-review.* capability flavors echo provides", () => {
-    // The capability-dispatch design has 8 canonical code-review flavors
-    // that arc-skill-code-review v0.4.0 ships with. The example MUST
-    // declare all 8 in the top-level catalog (and reference all 8 from
-    // the echo agent's runtime.capabilities[]) so a fresh principal
-    // copying the file does not have to know the flavor list to wire
-    // capability-dispatch end-to-end.
+  test("declares the 11 canonical code-review.* capability flavors echo provides", () => {
+    // compass#96 F16 — the canonical review-flavor catalog is the 11 flavors
+    // in REVIEW_FLAVORS (`src/common/types/review-flavors.ts`). The example MUST
+    // declare all 11 in the top-level catalog (and reference all 11 from the
+    // echo agent's runtime.capabilities[]) so a fresh principal copying the file
+    // does not have to know the flavor list to wire capability-dispatch
+    // end-to-end. `architecture` / `performance` / `ecosystem-compliance` are
+    // LENSES inside FullReview, not flavors — they must be ABSENT.
     const examplePath = join(import.meta.dir, "..", "..", "cortex.yaml.example");
     const raw = readFileSync(examplePath, "utf-8");
     const yamlObj: unknown = parseYaml(raw);
@@ -51,17 +52,30 @@ describe("cortex.yaml.example — first-install starter config (cortex#314)", ()
 
     const catalogIds = new Set(parsed.capabilities.map((c) => c.id));
     const expected = [
+      "code-review.generic",
       "code-review.typescript",
-      "code-review.documentation",
+      "code-review.python",
+      "code-review.rust",
+      "code-review.go",
+      "code-review.sql",
+      "code-review.docs",
       "code-review.security",
-      "code-review.architecture",
-      "code-review.performance",
-      "code-review.ecosystem-compliance",
+      "code-review.confidentiality",
       "code-review.hardening",
       "code-review.skill-quality",
     ];
     for (const id of expected) {
       expect(catalogIds.has(id)).toBe(true);
+    }
+
+    // The dropped ids (lenses, not flavors) must NOT reappear.
+    for (const phantom of [
+      "code-review.documentation",
+      "code-review.architecture",
+      "code-review.performance",
+      "code-review.ecosystem-compliance",
+    ]) {
+      expect(catalogIds.has(phantom)).toBe(false);
     }
 
     const echo = parsed.agents.find((a) => a.id === "echo");

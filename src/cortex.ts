@@ -359,6 +359,12 @@ export { pidFileFor };
  * spawned CC sees only globally-configured MCP tools and politely
  * refuses with "I don't have access to GitHub CLI tools".
  *
+ * compass#96 F3 — also pins `allowedSkills: ['code-review']` so the
+ * contractual "Invoke the CodeReview skill — {Workflow} workflow"
+ * directive that `buildReviewPrompt` now emits can actually resolve the
+ * Skill tool (cc-session strips any `Skill` deny + registers the Skill
+ * Guard hook that pins the grant list, cortex#710).
+ *
  * `asyncTimeoutMs` matches the Discord path's choice (review work
  * is async). `bashAllowlist` is propagated when present; the runtime
  * gate at `src/runner/hooks/bash-guard.hook.ts:218` currently
@@ -383,6 +389,14 @@ export function buildReviewSessionOpts(
     allowedDirs: config.claude.allowedDirs,
     timeoutMs: config.claude.asyncTimeoutMs,
     cwd: process.cwd(),
+    // compass#96 F3 — pin the CodeReview skill for the review session. The
+    // prompt (`buildReviewPrompt`) now contractually names a CodeReview
+    // workflow (`workflowForFlavor`), so the reviewer must be able to invoke
+    // the Skill tool for `code-review`. cc-session honours `allowedSkills` by
+    // stripping any `Skill` deny + registering the Skill Guard hook that pins
+    // the grant list (cortex#710). Grant exactly the one skill the review path
+    // needs — nothing wider.
+    allowedSkills: ["code-review"],
     ...(config.claude.bashAllowlist !== undefined && {
       bashAllowlist: config.claude.bashAllowlist,
     }),

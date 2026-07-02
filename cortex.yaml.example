@@ -160,28 +160,41 @@ stack:
 # and `provided_by[]` (≥1 declared agent id). Optional fields are `tags`,
 # `rate`, `cost` — see `src/common/types/capability.ts` for the full grammar.
 #
-# The 8 code-review.* flavors below match the arc-skill-code-review skill
-# pack shipped with Echo. Pilot's `pilot request-review --capability X`
-# requests resolve against this catalog, so every `--capability X` value
-# a principal might invoke must have a matching entry here.
+# The 11 code-review.* flavors below are the canonical review-flavor catalog
+# (the single source is `src/common/types/review-flavors.ts` REVIEW_FLAVORS —
+# every id here MUST resolve via `reviewFlavorOfCapability`, enforced by
+# `src/__tests__/review-flavors-catalog.test.ts`). Pilot's `pilot request-review
+# --capability X` requests resolve against this catalog, so every `--capability X`
+# value a principal might invoke must have a matching entry here. NOTE:
+# `architecture` / `performance` / `ecosystem-compliance` are LENSES inside
+# FullReview, not standalone flavors — they are intentionally absent.
 capabilities:
+  - id: code-review.generic
+    description: General-purpose code review (all lenses, no language specialisation)
+    provided_by: [echo]
   - id: code-review.typescript
     description: TypeScript code review (correctness, types, idioms)
     provided_by: [echo]
-  - id: code-review.documentation
+  - id: code-review.python
+    description: Python code review (correctness, types, idioms)
+    provided_by: [echo]
+  - id: code-review.rust
+    description: Rust code review (correctness, ownership, idioms)
+    provided_by: [echo]
+  - id: code-review.go
+    description: Go code review (correctness, concurrency, idioms)
+    provided_by: [echo]
+  - id: code-review.sql
+    description: SQL code review (queries, schema, migrations)
+    provided_by: [echo]
+  - id: code-review.docs
     description: Documentation review (markdown specs, design docs, READMEs)
     provided_by: [echo]
   - id: code-review.security
     description: Security review (auth, secrets, OWASP, defensive coding)
     provided_by: [echo]
-  - id: code-review.architecture
-    description: Architecture review (layering, dependencies, design fit)
-    provided_by: [echo]
-  - id: code-review.performance
-    description: Performance review (algorithmic complexity, hot paths, allocations)
-    provided_by: [echo]
-  - id: code-review.ecosystem-compliance
-    description: Ecosystem compliance review (CLAUDE.md, SOP adherence, conventions)
+  - id: code-review.confidentiality
+    description: Confidentiality review (real orgs/people/identities exposed in shippable paths)
     provided_by: [echo]
   - id: code-review.hardening
     description: Hardening review (defensive boundaries, failure handling, error paths)
@@ -346,12 +359,15 @@ agents:
       # genuinely should NOT provide that capability; otherwise keep
       # both surfaces in sync.
       capabilities:
+        - code-review.generic
         - code-review.typescript
-        - code-review.documentation
+        - code-review.python
+        - code-review.rust
+        - code-review.go
+        - code-review.sql
+        - code-review.docs
         - code-review.security
-        - code-review.architecture
-        - code-review.performance
-        - code-review.ecosystem-compliance
+        - code-review.confidentiality
         - code-review.hardening
         - code-review.skill-quality
     presence:
