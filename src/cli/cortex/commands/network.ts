@@ -136,6 +136,7 @@ import {
   type SecretAction,
   type DeliveryMode,
   type SecretInputs,
+  type SecretReport,
 } from "./network-secret-lib";
 import type { NetworkSecretPorts } from "./network-secret-ports";
 import {
@@ -362,6 +363,16 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--list-pending": "bool",
         "--status": "value",
         "--network": "value",
+        // C-1316 — admit-and-seal. After the roster admission commits, admit ALSO
+        // mints + seals + delivers the per-member leaf PSK (the `secret add-member`
+        // motion), so an admitted peer is CONNECTABLE, not just rostered. The seal
+        // runs the hub-local nats-server config through the same reload path as
+        // `cortex network secret`, so it needs to know which hub config to edit.
+        "--hub-config": "value",
+        // Opt-out: commit the roster row ONLY, skip the seal (the rare
+        // admit-without-seal case, or a fully-separable deployment where the
+        // hub-admin ≠ the registry-admin and sealing is a genuinely separate step).
+        "--roster-only": "bool",
       },
     },
     // G1d / T1 (cortex#1139, ADR-0013) — one-command sovereign account-topology
@@ -1872,6 +1883,10 @@ async function runAdmit(
   requestId: string,
   flags: FlagMap,
   json: boolean,
+  // C-1316 — the SAME injectable secret-ports factory `runSecret` uses, so the
+  // folded-in seal is testable with fake hub/registry/crypto ports. Production
+  // omits it → the live adapters (`buildLiveSecretPorts`).
+  secretPortsFactory: SecretPortsFactory = DEFAULT_SECRET_PORTS_FACTORY,
 ): Promise<ExitResult> {
   // C-1314 — DISCOVERY mode. `--list-pending` is a read-only query for the
   // admission queue (no request-id positional, no --apply). Route it before the
@@ -1932,6 +1947,11 @@ async function runAdmit(
   // 1. Fetch the PENDING admission request (admin-signed GET)
   let requestPrincipalId: string;
   let requestStatus: string;
+  // C-1316 — the just-admitted member's seal target. `peer_pubkey` is the
+  // ed25519 pubkey the leaf PSK is sealed to; `network_id` scopes the seal
+  // (null for legacy network-less rows — then the seal can't run).
+  let requestPeerPubkey: string;
+  let requestNetworkId: string | null;
   try {
     const readHeader = await buildAdmissionReadHeader(material);
     const getUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}`;
@@ -1949,9 +1969,17 @@ async function runAdmit(
       const body = await getResp.text();
       return opError("admit", `registry GET failed (HTTP ${getResp.status.toString()}): ${body}`, json);
     }
-    const req = (await getResp.json()) as { request_id: string; principal_id: string; status: string };
+    const req = (await getResp.json()) as {
+      request_id: string;
+      principal_id: string;
+      status: string;
+      peer_pubkey: string;
+      network_id: string | null;
+    };
     requestPrincipalId = req.principal_id;
     requestStatus = req.status;
+    requestPeerPubkey = req.peer_pubkey;
+    requestNetworkId = req.network_id;
   } catch (err) {
     return opError("admit", `failed to fetch request from registry: ${err instanceof Error ? err.message : String(err)}`, json);
   }
@@ -1982,6 +2010,38 @@ async function runAdmit(
     }
   } catch (err) {
     return opError("admit", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // 2b. C-1316 — admit-and-seal. The roster row is now ADMITTED; an admitted-but-
+  // unsealed peer is INERT (on the roster, but its leaf can't connect — no
+  // transport PSK). Under the metafactory Q5 collapse the admit signer
+  // (registry-admin) IS the hub-admin, so the SAME --admin-seed mints + seals +
+  // delivers the per-member leaf PSK in one concierge act. We reuse the EXISTING
+  // `secret add-member` flow (`sealAdmittedMember` → `runNetworkSecret`) — no
+  // sealing is reimplemented here. The admission is ALREADY committed, so the
+  // seal NEVER fails the admit: any problem (hub-admin ≠ registry-admin → registry
+  // refuses the delivery; hub config not local → readConf fails; legacy
+  // network-less row) degrades to a fallback that tells the admin to seal
+  // explicitly. Opt out entirely with --roster-only.
+  let sealOutcome: AdmitSealOutcome;
+  if (flags["--roster-only"] === true) {
+    const net = requestNetworkId ?? "<network>";
+    sealOutcome = {
+      status: "skipped",
+      steps: [],
+      reason: "--roster-only: committed the roster row only, no seal",
+      fallbackCmd: `cortex network secret add-member ${net} ${requestPeerPubkey} --admin-seed ${seedRes.value} --apply`,
+    };
+  } else {
+    sealOutcome = await sealAdmittedMember({
+      networkId: requestNetworkId,
+      memberPubkey: requestPeerPubkey,
+      registryUrl,
+      hubConfigPath: optionalValueFlag(flags, "--hub-config") ?? DEFAULT_HUB_CONFIG_PATH,
+      material,
+      secretPortsFactory,
+      adminSeedPath: seedRes.value,
+    });
   }
 
   // 3. Assign Discord role (O-5) — when --discord-member is given
@@ -2041,8 +2101,13 @@ async function runAdmit(
       request_id: requestId,
       principal_id: requestPrincipalId,
       admin_fingerprint: material.fingerprint,
+      // C-1316 — make the peer's connectability machine-readable.
+      seal_status: sealOutcome.status,
+      connectable: sealOutcome.status === "sealed" ? "true" : "false",
       ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
     };
+    if (sealOutcome.reason) data.seal_reason = sealOutcome.reason;
+    if (sealOutcome.fallbackCmd) data.seal_fallback = sealOutcome.fallbackCmd;
     if (discordWarning) data.discord_warning = discordWarning;
     return ok(renderJson(envelopeOk([], data)));
   }
@@ -2052,6 +2117,18 @@ async function runAdmit(
     `  principal:   ${requestPrincipalId}`,
     `  admin:       ${material.fingerprint}`,
   ];
+  // C-1316 — the seal transcript: state plainly whether the peer is CONNECTABLE.
+  if (sealOutcome.status === "sealed") {
+    lines.push(`  seal:        delivered — peer is now CONNECTABLE`);
+    for (const s of sealOutcome.steps) lines.push(`    ${s}`);
+  } else if (sealOutcome.status === "skipped") {
+    lines.push(`  seal:        skipped — ${sealOutcome.reason ?? "no seal"} (peer is ADMITTED but INERT)`);
+    if (sealOutcome.fallbackCmd) lines.push(`               to seal: ${sealOutcome.fallbackCmd}`);
+  } else {
+    lines.push(`  seal:        NOT delivered — peer is ADMITTED but INERT`);
+    lines.push(`               reason: ${sealOutcome.reason ?? "seal failed"}`);
+    if (sealOutcome.fallbackCmd) lines.push(`               to seal: ${sealOutcome.fallbackCmd}`);
+  }
   if (discordMember !== undefined) {
     if (discordStatus === "assigned") {
       lines.push(`  discord:     role "${discordRole}" assigned to member ${discordMember}`);
@@ -2061,6 +2138,97 @@ async function runAdmit(
   }
   lines.push("");
   return ok(lines.join("\n"));
+}
+
+// =============================================================================
+// C-1316 — admit-and-seal: fold the sealed leaf-secret delivery into admit
+// =============================================================================
+
+/** The outcome of the seal step folded into a successful admit. */
+type AdmitSealStatus = "sealed" | "skipped" | "fallback";
+interface AdmitSealOutcome {
+  /** sealed = delivered (connectable); skipped = deliberately not run
+   *  (--roster-only); fallback = tried/skipped but couldn't seal (still inert). */
+  status: AdmitSealStatus;
+  /** Human transcript lines from the seal — NEVER carry a secret. */
+  steps: string[];
+  /** Why the seal was skipped or fell back. */
+  reason?: string;
+  /** The explicit `secret add-member` command to seal after the fact. */
+  fallbackCmd?: string;
+}
+
+/**
+ * Seal + deliver the per-member leaf PSK for a just-admitted member by reusing
+ * the EXISTING `secret add-member` orchestration (`runNetworkSecret`) — nothing
+ * about sealing is reimplemented here.
+ *
+ * The caller has ALREADY committed the admission, so this NEVER throws and NEVER
+ * fails the admit: every failure mode returns a `fallback` outcome that surfaces
+ * the explicit `secret add-member` command instead. Failure modes it degrades on:
+ *   - the admission row is network-less (legacy `network_id = null`) — nothing to
+ *     bind a leaf PSK to;
+ *   - the hub config isn't local / readable (a fully-separable deployment where
+ *     the hub isn't on this host) — `readConf` rejects before any mutation;
+ *   - the admit signer isn't the hub-admin (registry-admin ≠ hub-admin) — the
+ *     registry refuses the sealed-secret delivery.
+ */
+async function sealAdmittedMember(args: {
+  networkId: string | null;
+  memberPubkey: string;
+  registryUrl: string;
+  hubConfigPath: string;
+  material: StackIdentityMaterial;
+  secretPortsFactory: SecretPortsFactory;
+  adminSeedPath: string;
+}): Promise<AdmitSealOutcome> {
+  const { networkId, memberPubkey, registryUrl, hubConfigPath, material, secretPortsFactory, adminSeedPath } = args;
+
+  // A network-less admission row (legacy null network_id) can't be sealed — the
+  // leaf PSK is network-scoped, and `secret add-member` needs a real network id.
+  if (networkId === null || networkId === "") {
+    return {
+      status: "fallback",
+      steps: [],
+      reason:
+        "the admission row has no network_id (legacy / network-less request) — a leaf secret is network-scoped, so it can't be sealed automatically",
+      fallbackCmd: `cortex network secret add-member <network> ${memberPubkey} --admin-seed ${adminSeedPath} --apply`,
+    };
+  }
+
+  const fallbackCmd = `cortex network secret add-member ${networkId} ${memberPubkey} --admin-seed ${adminSeedPath} --apply`;
+
+  const ports = secretPortsFactory({ hubConfigPath, registryUrl, material });
+  const inputs: SecretInputs = {
+    action: "add-member",
+    networkId,
+    memberPubkey,
+    deliver: "sealed",
+    apply: true,
+  };
+
+  let report: SecretReport;
+  try {
+    report = await runNetworkSecret(inputs, ports);
+  } catch (err) {
+    return {
+      status: "fallback",
+      steps: [],
+      reason: `seal could not run: ${err instanceof Error ? err.message : String(err)}`,
+      fallbackCmd,
+    };
+  }
+
+  if (!report.ok) {
+    return {
+      status: "fallback",
+      steps: report.steps,
+      reason: report.reason ?? "seal failed",
+      fallbackCmd,
+    };
+  }
+
+  return { status: "sealed", steps: report.steps };
 }
 
 // =============================================================================
@@ -2714,7 +2882,7 @@ export async function dispatchNetwork(
     case "ping":
       return runPing(parsed.positionals.peer ?? "", parsed.flags, json, load, pingBusFactory);
     case "admit":
-      return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json);
+      return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory);
     case "provision":
       return runProvision(parsed.positionals.stack ?? "", parsed.flags, json, load, provisionPortsFactory);
     case "make-live":
@@ -2744,9 +2912,9 @@ Usage:
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
   cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--network-admins <csv>] [--registry-url <url>] [--apply]
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
-  cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>]
-                        [--discord-member <id>] [--discord-guild <id>] [--discord-server <profile>]
-                        [--discord-role <name>] [--apply] [--dry-run] [--json]
+  cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>] [--hub-config <p>]
+                        [--roster-only] [--discord-member <id>] [--discord-guild <id>]
+                        [--discord-server <profile>] [--discord-role <name>] [--apply] [--dry-run] [--json]
   cortex network admit  --list-pending [--status <PENDING|ADMITTED|REJECTED>] [--network <id>]
                         --admin-seed <path> [--registry-url <url>] [--json]
   cortex network provision <stack> [--config <p>] [--principal <id>] [--seed-path <p>]
@@ -2838,6 +3006,14 @@ Subcommands:
           Mints nothing (no arc nats add-bot call — Model-A retired). Optionally
           assigns the Discord community-fleet role (O-5) via --discord-member.
           DRY-RUN by default; pass --apply to execute.
+          ADMIT-AND-SEAL (C-1316): on --apply, admit ALSO mints + seals + delivers
+          the per-member leaf PSK (the \`secret add-member\` motion) so the peer is
+          CONNECTABLE, not just rostered — no ADMITTED-but-inert peers. Reuses the
+          hub-local nats config at --hub-config (default ~/.config/nats/local.conf).
+          The seal NEVER fails a committed admit: if it can't run (hub-admin ≠
+          registry-admin, or the hub config isn't local) it surfaces a fallback
+          telling you to run \`cortex network secret add-member\`. Pass --roster-only
+          to commit the roster row ONLY and skip the seal.
           --list-pending (C-1314): DISCOVERY mode — admin-signs a read and lists
           the admission queue (request-id · principal · network · peer · status ·
           created) so you can find the id to admit. Read-only (no --apply).

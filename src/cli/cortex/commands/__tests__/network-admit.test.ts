@@ -24,7 +24,9 @@ import {
   dispatchNetwork,
   __setDiscordAdmitClientForTests,
   type DiscordAdmitClient,
+  type SecretPortsFactory,
 } from "../network";
+import type { NetworkSecretPorts } from "../network-secret-ports";
 import { dispatchProvisionStack } from "../provision-stack";
 
 /** Type-safe mock-fetch helper */
@@ -469,6 +471,176 @@ describe("cortex network admit — Discord O-5 role", () => {
     ]);
 
     expect(capturedRoleName).toBe("sovereign-member");
+  });
+});
+
+// =============================================================================
+// C-1316 — admit-and-seal (fold the leaf-secret seal into admit)
+// =============================================================================
+
+interface SealCalls {
+  reads: number;
+  writes: number;
+  reloads: number;
+  posted: string[];
+  minted: string[];
+}
+
+/**
+ * A recording fake secret-ports factory injected into `dispatchNetwork` so the
+ * seal folded into admit is exercised without touching the live hub / registry.
+ * `admitted` is what `findAdmittedRow` returns (undefined ⇒ the seal lib fails
+ * with "no ADMITTED row"); `readThrows` simulates a non-local / unreadable hub.
+ */
+function fakeSealFactory(
+  opts: { admitted?: { request_id: string; principal_id: string }; readThrows?: boolean } = {},
+): { factory: SecretPortsFactory; calls: SealCalls } {
+  const calls: SealCalls = { reads: 0, writes: 0, reloads: 0, posted: [], minted: [] };
+  const ports: NetworkSecretPorts = {
+    hub: {
+      confPath: "/fake/hub.conf",
+      readConf: async () => {
+        calls.reads += 1;
+        if (opts.readThrows) throw new Error("hub config not found at /fake/hub.conf (set --hub-config)");
+        return "leafnodes {\n  listen: 0.0.0.0:7422\n}\n";
+      },
+      writeConf: async () => { calls.writes += 1; },
+      reload: async () => { calls.reloads += 1; },
+    },
+    admission: { findAdmittedRow: async () => opts.admitted },
+    delivery: {
+      postSealedSecret: async (requestId: string) => { calls.posted.push(requestId); },
+      revoke: async () => {},
+    },
+    crypto: {
+      mintPsk: () => { const p = "PSK-secret-x"; calls.minted.push(p); return p; },
+      seal: async (plaintext: string, pubkey: string) => `SEALED(${pubkey.slice(0, 4)}:${plaintext})`,
+    },
+  };
+  return { factory: () => ports, calls };
+}
+
+/** Mock fetch that serves the admit GET (PENDING req) + POST /admit (ADMITTED). */
+function mockAdmitFetch(req: unknown): void {
+  setMockFetch(async (input) => {
+    const url = urlOf(input);
+    if (url.includes("/admit")) {
+      return new Response(JSON.stringify({ status: "ADMITTED" }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify(req), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  });
+}
+
+describe("cortex network admit — admit-and-seal (C-1316)", () => {
+  test("--apply seals the just-admitted member → connectable; hub written + reloaded + blob posted", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; connectable: string } };
+    expect(env.data.seal_status).toBe("sealed");
+    expect(env.data.connectable).toBe("true");
+    expect(calls.writes).toBe(1);
+    expect(calls.reloads).toBe(1);
+    expect(calls.posted).toEqual(["req-abc-123"]);
+  });
+
+  test("--apply human output states CONNECTABLE and never leaks the PSK", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("CONNECTABLE");
+    expect(res.stdout).not.toContain(calls.minted[0]!);
+  });
+
+  test("--roster-only skips the seal → peer INERT, no hub mutation, fallback surfaced", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--roster-only", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; connectable: string; seal_fallback: string } };
+    expect(env.data.seal_status).toBe("skipped");
+    expect(env.data.connectable).toBe("false");
+    expect(env.data.seal_fallback).toContain("secret add-member");
+    expect(calls.reads).toBe(0);
+    expect(calls.writes).toBe(0);
+    expect(calls.posted.length).toBe(0);
+  });
+
+  test("seal failure (no ADMITTED row) NEVER fails the committed admit → exit 0 + fallback", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory } = fakeSealFactory({ admitted: undefined });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; connectable: string; seal_fallback: string } };
+    expect(env.data.seal_status).toBe("fallback");
+    expect(env.data.connectable).toBe("false");
+    expect(env.data.seal_fallback).toContain("secret add-member");
+  });
+
+  test("non-local / unreadable hub config → fallback, admit still exit 0", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" }, readThrows: true });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; seal_reason: string } };
+    expect(env.data.seal_status).toBe("fallback");
+    expect(env.data.seal_reason).toContain("hub config");
+    // The seal aborted at readConf, before any hub write/reload.
+    expect(calls.writes).toBe(0);
+    expect(calls.reloads).toBe(0);
+  });
+
+  test("network-less admission row (null network_id) → fallback, seal ports never touched", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch({ ...pendingRequest(), network_id: null });
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; seal_fallback: string } };
+    expect(env.data.seal_status).toBe("fallback");
+    expect(env.data.seal_fallback).toContain("<network>");
+    expect(calls.reads).toBe(0);
   });
 });
 
