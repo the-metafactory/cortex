@@ -74,7 +74,9 @@ export interface SubcommandSpec<SubcommandName extends string> {
 }
 
 export interface SubcommandRule {
-  /** Ordered list of named required positionals AFTER the subcommand name. */
+  /** Ordered list of named positionals AFTER the subcommand name. Required by
+   *  default; a trailing `?` on a name marks that positional OPTIONAL (captured
+   *  under the bare name, e.g. `"request-id?"` → `positionals["request-id"]`). */
   positionals?: string[];
   /** Per-subcommand flag allowlist (in addition to universal flags). */
   flags?: Record<string, FlagKind>;
@@ -206,14 +208,20 @@ export function parseSubcommandArgs<S extends string>(
         `unexpected extra positional argument: "${arg}"`,
       );
     }
-    out.positionals[declared[nameIdx] ?? ""] = arg;
+    // A positional name may carry a trailing `?` to mark it OPTIONAL; the
+    // captured value is stored under the bare name (without the `?`).
+    out.positionals[(declared[nameIdx] ?? "").replace(/\?$/, "")] = arg;
     i++;
   }
 
   // Required-positionals check: every declared positional must be present.
-  // Skip for help / unknown subcommands — caller renders usage.
+  // A trailing `?` marks a positional OPTIONAL — skip the presence check for it
+  // (backward-compatible: no existing positional name uses `?`). Skip entirely
+  // for help / unknown subcommands — caller renders usage.
   if (activeRule) {
-    for (const name of activeRule.positionals ?? []) {
+    for (const rawName of activeRule.positionals ?? []) {
+      if (rawName.endsWith("?")) continue; // optional positional
+      const name = rawName;
       if (!(name in out.positionals)) {
         // Pass `out.rawSubcommand` so callers don't have to re-scan argv
         // (Echo cortex#66 round-1 warning — naive re-scan dropped flag-

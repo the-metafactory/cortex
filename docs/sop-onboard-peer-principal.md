@@ -146,18 +146,26 @@ cortex provision-stack register <principal> \
 **Hub side (the network admin admits the request):**
 
 ```bash
-# List pending requests
+# List pending requests (C-1314) — admin-signs the query, prints the queue
+# (request-id · principal · network · peer · status · created) so you can copy
+# the request-id. --status defaults to PENDING; --network filters client-side.
 cortex network admit --list-pending \
   --registry-url https://network.meta-factory.ai \
   --admin-seed ~/.config/nats/admin.nk
 
-# Admit (approves roster membership; mints nothing)
+# Admit (approves roster membership; mints nothing). The network_id is read from
+# the stored request (set at register time) — there is no --network flag here.
 cortex network admit <request-id> \
-  --network <network> \
   --registry-url https://network.meta-factory.ai \
   --admin-seed ~/.config/nats/admin.nk \
   --apply
 ```
+
+> **Read-scoping caveat (ADR-0020 fast-follow):** admin *reads* — including
+> `--list-pending` — are **global-admin-only** today; a per-network admin gets a
+> readable `403 admin_not_authorized` even for their own network. Use a global-
+> admin seed (or the MC admission queue / Pier) until per-network read-scoping
+> lands.
 
 **Step 5b — Receive the leaf shared secret (sealed, automatic)**
 

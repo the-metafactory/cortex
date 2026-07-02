@@ -336,7 +336,10 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     // Tracking issue: cortex#1145 — thread network_id from register through
     // the admission gate so the stored row is always network-scoped.
     admit: {
-      positionals: ["request-id"],
+      // C-1314 — request-id is OPTIONAL (trailing `?`): the discovery mode
+      // `admit --list-pending` takes no request-id. The admit-a-request path
+      // still validates its presence in runAdmit.
+      positionals: ["request-id?"],
       flags: {
         "--admin-seed": "value",
         "--registry-url": "value",
@@ -346,6 +349,15 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--discord-role": "value",
         "--apply": "bool",
         "--dry-run": "bool",
+        // C-1314 — DISCOVERY mode. `cortex network admit --list-pending` admin-
+        // signs a read (`x-admin-signed`) and GETs
+        // `/admission-requests?status=<status>`, printing the queue so an admin
+        // can find the request-id to admit. Read-only (no --apply; no request-id
+        // positional). `--status` defaults to PENDING; `--network` filters the
+        // returned rows client-side (the endpoint lists all networks at once).
+        "--list-pending": "bool",
+        "--status": "value",
+        "--network": "value",
       },
     },
     // G1d / T1 (cortex#1139, ADR-0013) — one-command sovereign account-topology
@@ -1543,6 +1555,170 @@ async function buildAdmissionDecisionBody(
   return { claim, signature };
 }
 
+// =============================================================================
+// C-1314 — `cortex network admit --list-pending` (admission-queue discovery)
+// =============================================================================
+
+/** Admission-request statuses the registry list endpoint accepts. */
+const LIST_STATUSES = ["PENDING", "ADMITTED", "REJECTED"] as const;
+
+/** The subset of an `AdmissionRequest` row this CLI renders (matches the
+ *  registry `GET /admission-requests` response, `types.ts` AdmissionRequest). */
+interface AdmissionListRow {
+  request_id: string;
+  principal_id: string;
+  peer_pubkey: string;
+  network_id: string | null;
+  status: string;
+  created_at: string;
+}
+
+/** Render the discovery table (human path). Peer pubkey is truncated to a
+ *  fingerprint for width; the full value rides the --json output. */
+function renderPendingTable(
+  rows: AdmissionListRow[],
+  status: string,
+  networkFilter: string | undefined,
+  registryUrl: string,
+): string {
+  const scope = networkFilter !== undefined ? ` on network "${networkFilter}"` : "";
+  const header =
+    `cortex network admit --list-pending — ${rows.length.toString()} ${status} request(s)${scope} ` +
+    `(registry: ${registryUrl})`;
+  if (rows.length === 0) {
+    return `${header}\n  (none) — nothing to ${status === "PENDING" ? "admit" : "show"}.\n`;
+  }
+  const cells = rows.map((r) => ({
+    id: r.request_id,
+    principal: r.principal_id,
+    network: r.network_id ?? "(none)",
+    peer: `${r.peer_pubkey.slice(0, 12)}…`,
+    status: r.status,
+    created: r.created_at,
+  }));
+  const w = {
+    id: Math.max("REQUEST-ID".length, ...cells.map((c) => c.id.length)),
+    principal: Math.max("PRINCIPAL".length, ...cells.map((c) => c.principal.length)),
+    network: Math.max("NETWORK".length, ...cells.map((c) => c.network.length)),
+    peer: Math.max("PEER_PUBKEY".length, ...cells.map((c) => c.peer.length)),
+    status: Math.max("STATUS".length, ...cells.map((c) => c.status.length)),
+  };
+  const row = (id: string, principal: string, network: string, peer: string, st: string, created: string): string =>
+    `  ${id.padEnd(w.id)}  ${principal.padEnd(w.principal)}  ${network.padEnd(w.network)}  ${peer.padEnd(w.peer)}  ${st.padEnd(w.status)}  ${created}`;
+  const lines = [header, "", row("REQUEST-ID", "PRINCIPAL", "NETWORK", "PEER_PUBKEY", "STATUS", "CREATED")];
+  for (const c of cells) lines.push(row(c.id, c.principal, c.network, c.peer, c.status, c.created));
+  lines.push("", `To admit: cortex network admit <request-id> --admin-seed <path> --apply`, "");
+  return lines.join("\n");
+}
+
+/**
+ * `cortex network admit --list-pending [--status <s>] [--network <id>] --admin-seed <path> [--registry-url <url>] [--json]`
+ *
+ * C-1314 — the admission-queue DISCOVERY surface. An admin can't otherwise find
+ * a request-id from the CLI (the alternatives were the MC Pier queue or a
+ * hand-signed GET). Admin-signs a read claim into the `x-admin-signed` header
+ * (reuses {@link buildAdmissionReadHeader} — no nonce, reads are idempotent) and
+ * GETs `/admission-requests?status=<status>`, mirroring the admit apply-path
+ * read + `findAdmittedRow`. Read-only: no --apply, no request-id positional.
+ *
+ * ADR-0020 read-scoping limitation: admin READS are GLOBAL-admin-only today
+ * (the registry list route gates on `parseAdminPubkeys` — the global allowlist —
+ * NOT the target network's per-network admins). So a PER-NETWORK admin gets a
+ * 403 here even for their own network; we surface that readably (never a silent
+ * empty table) and point at the fast-follow. `--network` is a CLIENT-side filter
+ * (the endpoint returns every network's rows at once).
+ */
+async function runListPending(flags: FlagMap, json: boolean): Promise<ExitResult> {
+  // --admin-seed required: the list is admin-signed (no anonymous read).
+  const seedRes = requireValueFlag(flags, "--admin-seed");
+  if (!seedRes.ok) {
+    return usageError(
+      "admit",
+      `${seedRes.reason} — --list-pending admin-signs the query, so pass --admin-seed <path>`,
+      json,
+    );
+  }
+
+  // --status defaults to PENDING (the discovery case); validate the enum.
+  const statusRaw = optionalValueFlag(flags, "--status") ?? "PENDING";
+  const status = statusRaw.toUpperCase();
+  if (!(LIST_STATUSES as readonly string[]).includes(status)) {
+    return usageError("admit", `--status "${statusRaw}" must be one of ${LIST_STATUSES.join(", ")}`, json);
+  }
+
+  // --network is a CLIENT-side filter over the (all-networks) response.
+  const networkFilter = optionalValueFlag(flags, "--network");
+  if (networkFilter !== undefined && !NETWORK_ID_RE.test(networkFilter)) {
+    return usageError(
+      "admit",
+      `--network "${networkFilter}" must be lowercase alphanumeric + hyphen, letter-prefixed`,
+      json,
+    );
+  }
+
+  const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_ADMIT_REGISTRY_URL;
+
+  const matRes = await adminMaterialFromSeedFile(seedRes.value);
+  if (!matRes.ok) return opError("admit", matRes.reason, json);
+  const material = matRes.material;
+
+  let rows: AdmissionListRow[];
+  try {
+    const readHeader = await buildAdmissionReadHeader(material);
+    const getUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests?status=${encodeURIComponent(status)}`;
+    const resp = await globalThis.fetch(getUrl, {
+      method: "GET",
+      headers: { "Content-Type": "application/json", "x-admin-signed": readHeader },
+    });
+    if (resp.status === 403) {
+      // ADR-0020 read-scoping: reads are global-admin-only. A per-network admin
+      // lands here even for their own network — surface it readably rather than
+      // as a silent empty table.
+      const body = await resp.text();
+      return opError(
+        "admit",
+        `registry refused the list (HTTP 403 admin_not_authorized): admission reads are ` +
+          `GLOBAL-admin-only today, so a per-network admin cannot list PENDING requests` +
+          `${networkFilter !== undefined ? ` for "${networkFilter}"` : ""} from the CLI yet. ` +
+          `Per-network read-scoping is the ADR-0020 fast-follow; until then use a global-admin ` +
+          `seed or the MC admission queue (Pier). Registry said: ${body}`,
+        json,
+      );
+    }
+    if (!resp.ok) {
+      const body = await resp.text();
+      return opError("admit", `registry list failed (HTTP ${resp.status.toString()}): ${body}`, json);
+    }
+    rows = (await resp.json()) as AdmissionListRow[];
+  } catch (err) {
+    return opError(
+      "admit",
+      `failed to list admission requests from registry: ${err instanceof Error ? err.message : String(err)}`,
+      json,
+    );
+  }
+
+  const filtered =
+    networkFilter !== undefined ? rows.filter((r) => r.network_id === networkFilter) : rows;
+
+  if (json) {
+    return ok(
+      renderJson(
+        envelopeOk(filtered, {
+          subcommand: "admit",
+          mode: "list-pending",
+          status,
+          ...(networkFilter !== undefined && { network: networkFilter }),
+          registry_url: registryUrl,
+          admin_fingerprint: material.fingerprint,
+          count: filtered.length.toString(),
+        }),
+      ),
+    );
+  }
+  return ok(renderPendingTable(filtered, status, networkFilter, registryUrl));
+}
+
 /**
  * `cortex network admit <request-id> --admin-seed <path> [--apply]`
  *
@@ -1561,8 +1737,16 @@ async function runAdmit(
   flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
+  // C-1314 — DISCOVERY mode. `--list-pending` is a read-only query for the
+  // admission queue (no request-id positional, no --apply). Route it before the
+  // request-id gate so `cortex network admit --list-pending` doesn't trip the
+  // "missing request-id" usage error.
+  if (flags["--list-pending"] === true) {
+    return runListPending(flags, json);
+  }
+
   if (!requestId) {
-    return usageError("admit", "missing request-id (usage: cortex network admit <request-id> --network <id> --admin-seed <path>)", json);
+    return usageError("admit", "missing request-id (usage: cortex network admit <request-id> --admin-seed <path>; discover ids with `cortex network admit --list-pending --admin-seed <path>`)", json);
   }
 
   const seedRes = requireValueFlag(flags, "--admin-seed");
@@ -2423,9 +2607,11 @@ Usage:
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
   cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--network-admins <csv>] [--registry-url <url>] [--apply]
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
-  cortex network admit  <request-id> --admin-seed <path> [--network <id>] [--registry-url <url>]
+  cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>]
                         [--discord-member <id>] [--discord-guild <id>] [--discord-server <profile>]
                         [--discord-role <name>] [--apply] [--dry-run] [--json]
+  cortex network admit  --list-pending [--status <PENDING|ADMITTED|REJECTED>] [--network <id>]
+                        --admin-seed <path> [--registry-url <url>] [--json]
   cortex network provision <stack> [--config <p>] [--principal <id>] [--seed-path <p>]
                         [--creds <p>] [--force] [--apply] [--dry-run] [--json]
   cortex network make-live <stack> [--config <p>] [--principal <id>] [--nats-config <p>]
@@ -2515,6 +2701,14 @@ Subcommands:
           Mints nothing (no arc nats add-bot call — Model-A retired). Optionally
           assigns the Discord community-fleet role (O-5) via --discord-member.
           DRY-RUN by default; pass --apply to execute.
+          --list-pending (C-1314): DISCOVERY mode — admin-signs a read and lists
+          the admission queue (request-id · principal · network · peer · status ·
+          created) so you can find the id to admit. Read-only (no --apply).
+          --status defaults to PENDING; --network filters the rows client-side.
+          NOTE (ADR-0020 read-scoping): admin READS are GLOBAL-admin-only today,
+          so a per-network admin gets a readable 403 here even for their own
+          network (per-network read-scoping is the fast-follow). Use a global-
+          admin seed or the MC admission queue until then.
 
   join public   (S5, #739) Opt into the PUBLIC scope — the open square of the
           Internet of Agentic Work. Announces --capabilities to the registry

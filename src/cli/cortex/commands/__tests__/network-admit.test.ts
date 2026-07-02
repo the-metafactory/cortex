@@ -476,6 +476,162 @@ describe("cortex network admit — Discord O-5 role", () => {
 // Signature verification — decision vocabulary
 // =============================================================================
 
+// =============================================================================
+// C-1314 — `cortex network admit --list-pending` (admission-queue discovery)
+// =============================================================================
+describe("cortex network admit --list-pending (C-1314)", () => {
+  /** A list row as the registry `GET /admission-requests` returns it. */
+  function row(overrides: Partial<{ request_id: string; principal_id: string; network_id: string | null; status: string }> = {}) {
+    return {
+      request_id: overrides.request_id ?? "req-abc-123",
+      principal_id: overrides.principal_id ?? "peer-principal",
+      peer_pubkey: "A" + "B".repeat(43), // 44-char base64-ish
+      requested_scope: "federated.peer-principal.>",
+      network_id: overrides.network_id === undefined ? "metafactory-community" : overrides.network_id,
+      status: overrides.status ?? "PENDING",
+      created_at: "2026-06-18T00:00:00.000Z",
+      updated_at: "2026-06-18T00:00:00.000Z",
+      granted_by: null,
+    };
+  }
+
+  test("usage error without --admin-seed (exit 2)", async () => {
+    let fetchCalled = false;
+    setMockFetch(async () => {
+      fetchCalled = true;
+      return new Response("[]", { status: 200 });
+    });
+    const res = await dispatchNetwork(["admit", "--list-pending"]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("--admin-seed");
+    expect(fetchCalled).toBe(false); // never hit the network on a usage error
+  });
+
+  test("renders a table from the mocked list response; admin-signs GET ?status=PENDING", async () => {
+    const { seedPath } = await mintAdminSeed();
+    let gotUrl = "";
+    let gotAdminHeader = "";
+    setMockFetch(async (input, init) => {
+      gotUrl = urlOf(input);
+      const hdrs = new Headers(init?.headers);
+      gotAdminHeader = hdrs.get("x-admin-signed") ?? "";
+      return new Response(
+        JSON.stringify([
+          row({ request_id: "req-111", principal_id: "chuvala" }),
+          row({ request_id: "req-222", principal_id: "jc", network_id: "metafactory" }),
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const res = await dispatchNetwork([
+      "admit", "--list-pending",
+      "--admin-seed", seedPath,
+      "--registry-url", "http://registry.test",
+    ]);
+
+    expect(res.exitCode).toBe(0);
+    // Hit the LIST endpoint (not the single-request GET) with the signed header.
+    expect(gotUrl).toContain("/admission-requests?status=PENDING");
+    expect(gotAdminHeader.length).toBeGreaterThan(0);
+    const signed = JSON.parse(gotAdminHeader) as { claim: { admin_pubkey: string }; signature: string };
+    expect(signed.signature.length).toBeGreaterThan(0);
+    // Table carries both rows + their principals + networks + status.
+    expect(res.stdout).toContain("req-111");
+    expect(res.stdout).toContain("chuvala");
+    expect(res.stdout).toContain("req-222");
+    expect(res.stdout).toContain("metafactory");
+    expect(res.stdout).toContain("PENDING");
+    expect(res.stdout).toContain("2 PENDING request(s)");
+  });
+
+  test("--json emits the rows as items + count/status metadata", async () => {
+    const { seedPath } = await mintAdminSeed();
+    setMockFetch(async () =>
+      new Response(JSON.stringify([row({ request_id: "req-json-1" })]), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const res = await dispatchNetwork([
+      "admit", "--list-pending",
+      "--admin-seed", seedPath,
+      "--json",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as {
+      status: string;
+      items: { request_id: string }[];
+      data: { mode: string; status: string; count: string };
+    };
+    expect(env.status).toBe("ok");
+    expect(env.data.mode).toBe("list-pending");
+    expect(env.data.status).toBe("PENDING");
+    expect(env.data.count).toBe("1");
+    expect(env.items[0]!.request_id).toBe("req-json-1");
+  });
+
+  test("--network filters the returned rows client-side", async () => {
+    const { seedPath } = await mintAdminSeed();
+    setMockFetch(async () =>
+      new Response(
+        JSON.stringify([
+          row({ request_id: "req-a", network_id: "metafactory" }),
+          row({ request_id: "req-b", network_id: "research-collab" }),
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const res = await dispatchNetwork([
+      "admit", "--list-pending",
+      "--admin-seed", seedPath,
+      "--network", "research-collab",
+      "--json",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { items: { request_id: string }[]; data: { count: string; network: string } };
+    expect(env.data.network).toBe("research-collab");
+    expect(env.data.count).toBe("1");
+    expect(env.items.map((r) => r.request_id)).toEqual(["req-b"]);
+  });
+
+  test("403 from the registry is surfaced readably (ADR-0020 read-scoping), exit 1", async () => {
+    const { seedPath } = await mintAdminSeed();
+    setMockFetch(async () =>
+      new Response(JSON.stringify({ error: "admin_not_authorized" }), {
+        status: 403, headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const res = await dispatchNetwork([
+      "admit", "--list-pending",
+      "--admin-seed", seedPath,
+      "--network", "research-collab",
+    ]);
+    expect(res.exitCode).toBe(1);
+    // Readable, not a silent empty table.
+    expect(res.stderr).toContain("403");
+    expect(res.stderr).toMatch(/GLOBAL-admin-only/i);
+    expect(res.stderr).toContain("ADR-0020");
+    expect(res.stderr).toContain("research-collab");
+  });
+
+  test("invalid --status is a usage error (exit 2)", async () => {
+    const { seedPath } = await mintAdminSeed();
+    let fetchCalled = false;
+    setMockFetch(async () => {
+      fetchCalled = true;
+      return new Response("[]", { status: 200 });
+    });
+    const res = await dispatchNetwork([
+      "admit", "--list-pending",
+      "--admin-seed", seedPath,
+      "--status", "BOGUS",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("--status");
+    expect(fetchCalled).toBe(false);
+  });
+});
+
 describe("cortex network admit — signed claim shape", () => {
   test("claim carries decision=admit (NOT grant)", async () => {
     const { seedPath } = await mintAdminSeed();
