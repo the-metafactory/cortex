@@ -125,7 +125,19 @@ export const LOCKED_REVIEW_BASH_ALLOWLIST: {
     //      endpoint of SOME repo; a bare `gh api`, `gh api user`, or
     //      `gh api repos/o/r/actions/secrets` (no `/contents/` segment) never
     //      matches, so secrets/actions/user endpoints stay denied.
-    { pattern: "^gh api repos/[^ ]+/contents/[^ ]+( |$)" },
+    //      END-ANCHORED (adversarial review finding, cortex#1420): `gh api` is
+    //      method-polymorphic and the `/contents/` endpoint supports PUT (write)
+    //      and DELETE. A start-anchored-only pattern let
+    //      `gh api repos/o/r/contents/x --method PUT -f content=<base64>` or
+    //      `-X DELETE` through — a file write/delete primitive for an untrusted
+    //      reviewer, and `rejectsChaining` does not catch it (no metacharacters).
+    //      The pattern now permits ONLY the bare read form, optionally followed
+    //      by the raw-media `-H` header the F6 fetch actually uses — nothing
+    //      else (`--method`, `-X`, `-f`, `--field`, or any trailing arg) matches.
+    {
+      pattern:
+        '^gh api repos/[^ ]+/contents/[^ ]+( -H "Accept: application/vnd\\.github\\.raw")?$',
+    },
     //   2. `gh repo view <repo> --json visibility` — the #89/#96 exposure check
     //      (public-vs-private, fail-closed). Anchored to `--json visibility` so it
     //      cannot widen to `gh repo delete/clone` or arbitrary `--json` field sets.

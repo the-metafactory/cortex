@@ -142,6 +142,22 @@ describe("LOCKED_REVIEW_BASH_ALLOWLIST — read-only gh api/repo for grounding +
     ).toBe(true);
   });
 
+  test("PERMITS the bare read form with no trailing args", () => {
+    expect(permits("gh api repos/o/r/contents/CONTEXT.md")).toBe(true);
+  });
+
+  test("DENIES the contents write/delete primitive (cortex#1420 BLOCK — gh api is method-polymorphic)", () => {
+    // `gh api` has no verb of its own — the HTTP method comes from `--method`/`-X`,
+    // and `/contents/<path>` is a write/delete-capable GitHub endpoint. A
+    // start-anchored-only pattern let these through; the fix end-anchors the
+    // pattern to the one documented read shape.
+    expect(
+      permits("gh api repos/o/r/contents/x --method PUT -f message=m -f content=YQ=="),
+    ).toBe(false);
+    expect(permits("gh api repos/o/r/contents/x -X DELETE -f message=m -f sha=abc")).toBe(false);
+    expect(permits("gh api repos/o/r/contents/x -f a=b")).toBe(false);
+  });
+
   test("PERMITS the #89/#96 exposure check (was DENIED under lockdown before C2)", () => {
     expect(permits("gh repo view the-metafactory/cortex --json visibility")).toBe(true);
     expect(permits("gh repo view o/r --json visibility")).toBe(true);
