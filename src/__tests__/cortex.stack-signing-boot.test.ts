@@ -110,7 +110,7 @@ function withCapturedConsoleLog<T>(fn: () => Promise<T>): Promise<{ result: T; l
 describe("startCortex — stack-signing boot warning (cortex#324)", () => {
   // Isolate from the principal's real ~/.config/cortex/agents.d/. startCortex
   // falls back to that dir when `agentsDir` is omitted, which leaked installed
-  // fragments (e.g. an amt-facilitator agent trusting `luna`) into these tests
+  // fragments (e.g. an acme-facilitator agent trusting `luna`) into these tests
   // and tripped trust-closure validation locally while passing in CI. Point the
   // registry assembly at an empty dir so boot sees only the in-memory config.
   const emptyAgentsDir = mkdtempSync(join(tmpdir(), "cortex-stack-signing-empty-agents-"));

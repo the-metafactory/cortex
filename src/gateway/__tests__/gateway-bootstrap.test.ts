@@ -512,15 +512,15 @@ describe("maybeCreateSurfaceGateway — error propagation", () => {
 // never started. This block pins the corrected path.
 // =============================================================================
 
-/** Web-only surfaces — one binding, instanceId "amt". */
+/** Web-only surfaces — one binding, instanceId "acme". */
 const WEB_SURFACES: Surfaces = {
   web: [
     {
       agent: "pylon",
-      stack: "andreas/amt",
+      stack: "andreas/acme",
       binding: {
         host: "127.0.0.1",
-        instanceId: "amt",
+        instanceId: "acme",
         port: 8090,
         broadcastUrl: "http://localhost:9090/broadcast",
         transport: "ws",

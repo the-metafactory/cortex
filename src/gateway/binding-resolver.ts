@@ -136,7 +136,7 @@ export interface GatewayBindingIndex {
   discord: Map<string, IndexEntry>;
   /** Slack: keyed by `binding.workspaceId` */
   slack: Map<string, IndexEntry>;
-  /** Web: keyed by the adapter instanceId stamped on InboundMessage (e.g. `web:amt`). */
+  /** Web: keyed by the adapter instanceId stamped on InboundMessage (e.g. `web:acme`). */
   web: Map<string, IndexEntry>;
   /**
    * Mattermost single-binding fallback.

@@ -130,7 +130,7 @@ features:
       Any web app becomes a cortex-backed bot by POSTing to POST /message and
       receiving responses via a configurable broadcastUrl. Includes WebBindingSchema
       + WebSurfaceBindingSchema types, gateway-adapter factory wiring, and a full
-      45-test suite. Completely AMT-agnostic — a second tenant binds with its own
+      45-test suite. Completely tenant-agnostic — a second tenant binds with its own
       instanceId + broadcastUrl + agent, zero adapter-code changes.
 
   I-100:
