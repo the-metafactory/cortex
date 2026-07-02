@@ -188,16 +188,20 @@ export interface ReviewRequestPayload {
    */
   forge?: "github" | "gitlab";
   /**
-   * The `<flavor>` of the `tasks.code-review.<flavor>` subject this request
-   * arrived on — the routing authority for the review's PRIMARY lens
-   * (compass#89, drift-1 fix). NOT carried on the wire by the publisher:
-   * cortex STAMPS it from the subject suffix in the review consumer right
-   * after `parseReviewRequestPayload` (`review-consumer.ts`), so it threads
-   * into every prompt builder (`buildReviewPrompt`, the CO-7
-   * `buildUntrustedReviewPrompt`, `sage-runner`) with zero signature changes.
-   * OPTIONAL for wire back-compat: undefined ⇒ the default (FullReview) lens.
-   * Before this field, `code-review.security` and `code-review.typescript`
-   * produced a BYTE-IDENTICAL prompt — the flavor-inert SEV-1 this closes.
+   * The review `<flavor>` for this request — the routing key for the review's
+   * PRIMARY lens (compass#89, drift-1 fix). Derived from `envelope.type`
+   * (`tasks.code-review.<flavor>`), which ∈ myelin `SIGNABLE_FIELDS`, so it is
+   * signature-covered → tamper-evident under `signing: enforce` (a downgraded
+   * flavor rewrites a signed field and fails chain verification). NOT carried
+   * on the wire as a payload field: cortex STAMPS it from the signed
+   * `envelope.type` in the review consumer (via `extractFlavor` — the signed
+   * type, NEVER the unsigned NATS subject) right after
+   * `parseReviewRequestPayload`, so it threads into every prompt builder
+   * (`buildReviewPrompt`, the CO-7 `buildUntrustedReviewPrompt`, `sage-runner`)
+   * with zero signature changes. OPTIONAL for wire back-compat: undefined ⇒ the
+   * default (FullReview) lens. Before this field, `code-review.security` and
+   * `code-review.typescript` produced a BYTE-IDENTICAL prompt — the
+   * flavor-inert SEV-1 this closes.
    */
   flavor?: ReviewFlavor;
 }
