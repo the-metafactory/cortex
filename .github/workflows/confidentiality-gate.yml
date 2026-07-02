@@ -70,7 +70,7 @@ jobs:
   # Tiers 1 (gitleaks) + 2 (public shape patterns) + 3 (org-secret hashed
   # denylist). mode=auto maps pull_request→diff, push→tree, schedule→history.
   gate:
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@5855a21e79f79ddd4b2506c920e2044ba0268d22
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@8ed0ab26f804aa98f74dcdcaf86917e09459f874
     permissions:
       contents: read
     with:
@@ -78,14 +78,25 @@ jobs:
       # is the engine's immutability anchor. `github.job_workflow_sha` resolves EMPTY
       # on cross-repo caller runs, so the gate cannot derive the engine SHA itself and
       # needs this explicit pin (metafactory-actions fix: engine_sha input).
-      engine_sha: 5855a21e79f79ddd4b2506c920e2044ba0268d22
+      engine_sha: 8ed0ab26f804aa98f74dcdcaf86917e09459f874
+      # Burn-in posture (design doc §4 L1). cortex has no MF_CONFIDENTIALITY_DENYLIST
+      # configured yet, so on the TRUSTED same-repo path we explicitly opt OUT of the
+      # fail-closed-on-absent-denylist behavior and DEGRADE to tiers 1+2 (gitleaks +
+      # shape patterns) + a warning. The reusable's default is `true` (fail closed);
+      # this `false` is a deliberate, greppable BURN-IN-ONLY opt-out. FLIP TO ENFORCE
+      # (held ops step, principal only): set this `true` (or remove the line) AND
+      # populate the denylist secret together — that is when tier 3 turns on and an
+      # absent/empty denylist fails closed again.
+      require_denylist: false
     secrets:
       # Pass ONLY these two — NEVER `secrets: inherit`. The denylist org secret
       # has "selected public repos" visibility; it is currently PLACEHOLDER-EMPTY
       # (real terms are the principal's to add — engagement-open ritual, design
       # doc §8), so tier 3 is inert on cortex until then. Tiers 1+2 still gate.
-      # On a same-repo run the reusable gate FAILS CLOSED if this secret is
-      # absent/empty (it must be configured for cortex); fork PRs run degraded.
+      # During burn-in (`require_denylist: false` above) an absent/empty denylist
+      # DEGRADES to tiers 1+2 + a warning — it does NOT fail closed. At the enforce
+      # flip a same-repo run FAILS CLOSED on an absent/empty denylist; fork PRs
+      # always run degraded.
       MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
       CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}
 
@@ -95,7 +106,7 @@ jobs:
   # public issue. This is the "push-alert stub" of design doc §6 PR 4.
   alert:
     if: ${{ github.event_name == 'push' }}
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@5855a21e79f79ddd4b2506c920e2044ba0268d22
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@8ed0ab26f804aa98f74dcdcaf86917e09459f874
     permissions:
       contents: read
       issues: write
