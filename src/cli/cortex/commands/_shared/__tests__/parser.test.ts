@@ -208,7 +208,7 @@ describe("parseSubcommandArgs — optional positional (trailing `?`)", () => {
 
   test("required-then-optional: required present + optional absent → ok", () => {
     const r = parseSubcommandArgs(optSpec, ["mixed", "go"]);
-    expect(r.positionals["action"]).toBe("go");
+    expect(r.positionals.action).toBe("go");
     expect(r.positionals["request-id"]).toBeUndefined();
   });
 
