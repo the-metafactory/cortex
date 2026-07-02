@@ -23,15 +23,40 @@
 // =============================================================================
 
 /**
- * Deterministic JSON: object keys sorted recursively, no whitespace.
- * Arrays preserve their order. Throws on cycles (JSON.stringify behaviour).
+ * Hard cap on nesting depth. #832 — the register route now canonicalizes the
+ * claim AS RECEIVED (unauthenticated, attacker-controlled: verify runs before
+ * the signature is proven), so this recursion can be driven by hostile input.
+ * A legitimate registration claim nests ~3 levels deep (claim → stacks[] →
+ * metadata map); 64 is far beyond any real claim yet shallow enough that a
+ * deeply-nested body cannot exhaust the stack. Over-depth throws
+ * `CanonicalDepthError`, which the verify path catches and fails closed (401) —
+ * a hostile payload can never reach a legit signature anyway. The client-side
+ * mirror carries the identical guard so both stay byte-compatible.
  */
-export function canonicalJSON(value: unknown): string {
+export const MAX_CANONICAL_DEPTH = 64;
+
+/** Thrown by {@link canonicalJSON} when nesting exceeds {@link MAX_CANONICAL_DEPTH}. */
+export class CanonicalDepthError extends Error {
+  constructor() {
+    super(`canonical JSON nesting exceeded ${MAX_CANONICAL_DEPTH} levels`);
+    this.name = "CanonicalDepthError";
+  }
+}
+
+/**
+ * Deterministic JSON: object keys sorted recursively, no whitespace.
+ * Arrays preserve their order. Throws on cycles (JSON.stringify behaviour)
+ * and on nesting deeper than {@link MAX_CANONICAL_DEPTH} (#832 DoS guard).
+ */
+export function canonicalJSON(value: unknown, depth = 0): string {
+  if (depth > MAX_CANONICAL_DEPTH) {
+    throw new CanonicalDepthError();
+  }
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return "[" + value.map((v) => canonicalJSON(v)).join(",") + "]";
+    return "[" + value.map((v) => canonicalJSON(v, depth + 1)).join(",") + "]";
   }
   const obj = value as Record<string, unknown>;
   // Mirror JSON.stringify's handling of `undefined`: skip object keys
@@ -43,7 +68,7 @@ export function canonicalJSON(value: unknown): string {
   const keys = Object.keys(obj)
     .filter((k) => obj[k] !== undefined)
     .sort();
-  const parts = keys.map((k) => JSON.stringify(k) + ":" + canonicalJSON(obj[k]));
+  const parts = keys.map((k) => JSON.stringify(k) + ":" + canonicalJSON(obj[k], depth + 1));
   return "{" + parts.join(",") + "}";
 }
 

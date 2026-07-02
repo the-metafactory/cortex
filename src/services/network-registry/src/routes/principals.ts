@@ -119,13 +119,42 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
     // previous key to sign a transition claim — out of scope for v1,
     // tracked as a follow-up.
     //
+    // #832 — verify the signature over the claim AS RECEIVED ON THE WIRE
+    // (`signed.claim`), NOT over the server's validated *reconstruction*
+    // (`claim`). The reconstruction (validate.ts) rebuilds the claim from a
+    // fixed whitelist of known fields; verifying against it means ANY
+    // validly-signed field the reconstruction does not (yet) echo silently
+    // changes the canonical bytes and 401s a legitimate register. That is
+    // exactly the #825→#832 regression: the client began signing
+    // `expected_updated_at` into the CAS-bearing add-stack claim, and a
+    // registry whose reconstruction dropped that field rejected every such
+    // register with `signature_invalid` — a canonicalization drift between
+    // what the client SIGNED and what the server VERIFIED. The signed
+    // contract is "the principal signs canonicalJSON(claim); the registry
+    // verifies the SAME bytes", so the one canonical form is the received
+    // claim. Structural validation already ran above (malformed → 400), and
+    // STORAGE still uses the whitelisted `claim` — so an unknown/forward
+    // field is signed-but-ignored, never persisted. Tamper resistance is
+    // unchanged: mutating any field after signing changes these very bytes,
+    // so the signature (over the original) still fails closed (401).
+    //
     // #695 — verify the signature BEFORE recording the nonce. The nonce
     // cache is durable (D1, #694), so an unsigned/bad-signature POST that
     // recorded its nonce first would permanently burn that nonce row
     // without ever proving authenticity. A replay is only meaningful for
     // an authentic (validly-signed) claim, so we shed bad-sig POSTs with
     // 401 here and only consume a nonce on the authentic path below.
-    const message = new TextEncoder().encode(canonicalJSON(claim));
+    let canonical: string;
+    try {
+      canonical = canonicalJSON(signed.claim);
+    } catch (_err) {
+      // #832 — canonicalJSON throws CanonicalDepthError on a pathologically
+      // deep (hostile) claim. Fail closed: an over-depth payload can never
+      // match a legitimate signature, so treat it as a bad signature (401)
+      // rather than surfacing a 500.
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+    const message = new TextEncoder().encode(canonical);
     const valid = await verifyEd25519(claim.principal_pubkey, signed.signature, message);
     if (!valid) {
       return c.json({ error: "signature_invalid" }, 401);
