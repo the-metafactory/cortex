@@ -45,7 +45,6 @@ import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_share
 import {
   assertAligned,
   discoverStacks,
-  parseLeafIncludeFiles,
   readJoinedNetworkIds,
   renderScaffold,
   resolveStackArtifacts,
@@ -421,6 +420,17 @@ interface TeardownAction {
 }
 
 /**
+ * A per-artifact teardown failure recorded during --apply. #1384 review (MAJOR)
+ * — kept structurally (not just as human `steps` prose) so `--json` can surface
+ * it and the exit code can go non-zero on a partial teardown.
+ */
+interface TeardownFailure {
+  label: string;
+  path: string;
+  error: string;
+}
+
+/**
  * Best-effort unload of a launchd plist before removing it (macOS). An
  * already-unloaded / never-loaded service makes `launchctl unload` exit
  * non-zero — non-fatal (we are tearing down), so we swallow it and continue.
@@ -508,16 +518,23 @@ function runDelete(
 
   // --- build the ordered teardown plan -------------------------------------
   // Order matters: stop services (b) before removing the config/nats files they
-  // load (c), and retire the seed last (d). Leaf includes are resolved from the
-  // conf's `include` directives so we remove exactly THIS stack's includes.
+  // load (c), and retire the seed last (d).
+  //
+  // #1384 review (MAJOR) — we deliberately DO NOT remove the leaf-include files
+  // (`leafnodes-<network>.conf`). Those are NETWORK-keyed and live in the SHARED
+  // natsDir: two stacks on the same network reference the SAME file, and
+  // `cortex network leave` already owns + removes it (network-lib.ts). Removing
+  // it here is redundant in the happy path (a cleanly-left stack — which the
+  // joined-network refusal gate above guarantees — holds no leaf refs) and
+  // DESTRUCTIVE in a partial-leave state: it could delete a leaf conf a live
+  // SIBLING stack still includes, breaking the sibling's federation. We remove
+  // only THIS stack's OWN rendered nats config (`<natsDir>/<slug>.conf`).
   const stamp = retireStamp();
-  const leafIncludes = parseLeafIncludeFiles(art.natsConf);
   const actions: TeardownAction[] = [
     { label: "cortex daemon plist", path: art.daemonPlist, exists: existsSync(art.daemonPlist), op: "unload+remove" },
     { label: "nats-server plist", path: art.natsPlist, exists: existsSync(art.natsPlist), op: "unload+remove" },
     { label: "config-split stack dir (incl. pointer)", path: art.configStackDir, exists: existsSync(art.configStackDir), op: "remove-dir" },
     { label: "rendered nats config", path: art.natsConf, exists: existsSync(art.natsConf), op: "remove-file" },
-    ...leafIncludes.map((p): TeardownAction => ({ label: "leaf include", path: p, exists: existsSync(p), op: "remove-file" })),
     purgeSeeds
       ? { label: "signing seed (PURGE)", path: art.seed, exists: existsSync(art.seed), op: "purge-seed" }
       : { label: "signing seed (retire)", path: art.seed, exists: existsSync(art.seed), op: "retire-seed", retireTo: retiredSeedPath(art.seed, stamp) },
@@ -525,11 +542,16 @@ function runDelete(
 
   // --- dry-run (DEFAULT): print the plan, touch NOTHING --------------------
   if (!applyRes.apply) {
-    return renderTeardownPlan(slug, roots, actions, purgeSeeds, false, [], json);
+    return renderTeardownPlan(slug, roots, actions, purgeSeeds, false, [], [], json);
   }
 
   // --- apply: execute in order, continuing past missing pieces -------------
+  // #1384 review (MAJOR) — collect per-artifact failures STRUCTURALLY (not just
+  // as human `steps` prose) so the --json envelope can surface them and the exit
+  // code can go non-zero. A scripted `--json --apply` consumer must be able to
+  // detect a partial teardown, not see applied:true + exit 0 on an EACCES.
   const steps: string[] = [];
+  const failures: TeardownFailure[] = [];
   for (const a of actions) {
     if (!a.exists) {
       steps.push(`  skip (absent): ${a.label} — ${a.path}`);
@@ -554,23 +576,32 @@ function runDelete(
           rmSync(a.path, { force: true });
           steps.push(`  PURGED ${a.label}: ${a.path} (key material destroyed)`);
           break;
-        case "retire-seed":
+        case "retire-seed": {
           // Retire, don't destroy: rename the seed aside so key destruction is a
-          // separate conscious act (--purge-seeds).
-          renameSync(a.path, a.retireTo!);
-          steps.push(`  retired ${a.label}: ${a.path} → ${a.retireTo!} (NOT deleted; --purge-seeds to wipe)`);
+          // separate conscious act (--purge-seeds). retireTo is always set when
+          // the action is built (see the plan above); guard rather than assert
+          // non-null (lint: no-non-null-assertion).
+          const retireTo = a.retireTo;
+          if (retireTo === undefined) throw new Error(`retire-seed action missing retireTo: ${a.path}`);
+          renameSync(a.path, retireTo);
+          steps.push(`  retired ${a.label}: ${a.path} → ${retireTo} (NOT deleted; --purge-seeds to wipe)`);
           break;
+        }
       }
     } catch (err) {
       // Continue past a per-artifact failure (idempotent teardown) but record it
-      // so the operator can finish by hand. Never a silent swallow.
+      // so the principal can finish by hand. Never a silent swallow — the failure
+      // is captured both in human `steps` AND structurally in `failures` (below)
+      // so the --json path can surface it and the exit code can go non-zero.
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push({ label: a.label, path: a.path, error: message });
       steps.push(
-        `  ⚠ ${a.label} teardown failed (continuing): ${a.path} — ${err instanceof Error ? err.message : String(err)}`,
+        `  ⚠ ${a.label} teardown failed (continuing): ${a.path} — ${message}`,
       );
     }
   }
 
-  return renderTeardownPlan(slug, roots, actions, purgeSeeds, true, steps, json);
+  return renderTeardownPlan(slug, roots, actions, purgeSeeds, true, steps, failures, json);
 }
 
 function renderTeardownPlan(
@@ -580,33 +611,46 @@ function renderTeardownPlan(
   purgeSeeds: boolean,
   applied: boolean,
   steps: string[],
+  failures: TeardownFailure[],
   json: boolean,
 ): ExitResult {
   const present = actions.filter((a) => a.exists);
+  // #1384 review (MAJOR) — a partial teardown (one or more artifact removals
+  // failed under --apply) is NOT a success. Exit non-zero so a scripted consumer
+  // can detect it, in BOTH --json and human modes.
+  const failedByPath = new Map(failures.map((f) => [f.path, f.error]));
+  const exitCode = failures.length > 0 ? 1 : 0;
 
   if (json) {
-    return ok(
-      renderJson(
-        envelopeOk(
-          actions.map((a) => ({
-            label: a.label,
-            path: a.path,
-            op: a.op,
-            present: a.exists ? "true" : "false",
-            ...(a.retireTo !== undefined && { retire_to: a.retireTo }),
-          })),
-          {
-            slug,
-            config_dir: roots.configDir,
-            nats_dir: roots.natsDir,
-            launch_agents_dir: roots.launchAgentsDir,
-            purge_seeds: purgeSeeds ? "true" : "false",
-            present_count: present.length.toString(),
-            applied: applied ? "true" : "false",
-          },
-        ),
-      ),
+    const envelope = envelopeOk(
+      actions.map((a) => {
+        const failure = failedByPath.get(a.path);
+        return {
+          label: a.label,
+          path: a.path,
+          op: a.op,
+          present: a.exists ? "true" : "false",
+          ...(a.retireTo !== undefined && { retire_to: a.retireTo }),
+          // Per-action outcome (only meaningful under --apply). A consumer can
+          // gate on `failed` per artifact; `failed_count` (in data) is the
+          // aggregate, and the process exit code mirrors it.
+          ...(failure !== undefined && { failed: "true", failed_reason: failure }),
+        };
+      }),
+      {
+        slug,
+        config_dir: roots.configDir,
+        nats_dir: roots.natsDir,
+        launch_agents_dir: roots.launchAgentsDir,
+        purge_seeds: purgeSeeds ? "true" : "false",
+        present_count: present.length.toString(),
+        applied: applied ? "true" : "false",
+        failed_count: failures.length.toString(),
+      },
     );
+    // status stays "ok" (the teardown ran + the plan is preserved in items), but
+    // the exit code signals the partial failure — the machine-readable handshake.
+    return { exitCode, stdout: renderJson(envelope), stderr: "" };
   }
 
   const lines: string[] = [];
@@ -633,11 +677,17 @@ function renderTeardownPlan(
   if (!applied) {
     lines.push("Slice 2 (registry deregistration) is a separate follow-up (#1351) — this teardown is LOCAL only.");
     lines.push(`Re-run with --apply --confirm ${slug} to execute.`);
+  } else if (failures.length > 0) {
+    // #1384 review (MAJOR) — surface the partial failure loudly + exit non-zero.
+    lines.push(
+      `PARTIAL teardown: ${failures.length.toString()} artifact(s) could NOT be removed (see ⚠ above) — ` +
+        `finish by hand or fix permissions and re-run. Registry-side deregistration (Slice 2, #1351) not performed.`,
+    );
   } else {
     lines.push("Local teardown complete. Registry-side deregistration (Slice 2, #1351) is a separate step — not performed here.");
   }
   lines.push("");
-  return ok(lines.join("\n"));
+  return { exitCode, stdout: lines.join("\n"), stderr: "" };
 }
 
 // =============================================================================
@@ -777,9 +827,15 @@ Subcommands:
           monoliths) with their stack.id and an aligned/DRIFT flag.
   delete  Tear down a stack's LOCAL artifacts (C-1351 Slice 1): refuse if still
           joined to any network (leave first), stop+unload the daemon + nats
-          plists, remove the config-split dir (incl. its pointer) + rendered
-          nats conf + leaf includes, and RETIRE (rename, not delete) the signing
-          seed. Registry-side deregistration is Slice 2 (a separate follow-up).
+          plists, remove the config-split dir (incl. its pointer) + this stack's
+          OWN rendered nats conf, and RETIRE (rename, not delete) the signing
+          seed. Shared network-keyed leaf files (leafnodes-<net>.conf) are NOT
+          touched — 'cortex network leave' owns those. Registry-side
+          deregistration is Slice 2 (a separate follow-up).
+          Slice-1 limitation: seed + nats-conf are resolved by SLUG CONVENTION
+          (<nats-dir>/<slug>.conf, conventional seed path), NOT the stack's
+          recorded stack.nkey_seed_path — a stack whose seed lives at a
+          non-default path is only partially torn down (finish by hand).
 
 Safety:
   create + delete default to DRY-RUN (print the plan, touch nothing). Pass

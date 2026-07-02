@@ -2,9 +2,11 @@
  * C-1351 Slice 1 — `cortex stack delete` (local teardown) CLI tests.
  *
  * Covers: the DEFAULT-safe dry-run plan (touches nothing), the --apply teardown
- * (config dir + nats conf + leaf includes removed, seed RETIRED not deleted),
- * idempotency (2nd run is a clean no-op), the joined-network refusal (fail-
- * closed, both modes), the --confirm destructive-action gate, and --purge-seeds.
+ * (config dir + this stack's OWN nats conf removed, shared network-keyed leaf
+ * files PRESERVED per #1384, seed RETIRED not deleted), idempotency (2nd run is
+ * a clean no-op), the joined-network refusal (fail-closed, both modes), the
+ * --confirm destructive-action gate, --purge-seeds, and the per-artifact
+ * failure branch (continue + record + non-zero exit, #1384).
  *
  * NEVER touches the real home — every test points --config-dir / --nats-dir /
  * --launch-agents-dir at fresh tmp dirs, and never creates a plist (so the
@@ -130,7 +132,7 @@ describe("delete — dry-run (default)", () => {
 // =============================================================================
 
 describe("delete — apply", () => {
-  test("--apply --confirm tears down config + nats conf + leaf include; seed RETIRED not deleted", async () => {
+  test("--apply --confirm tears down config + OWN nats conf; PRESERVES shared leaf file; seed RETIRED (#1384)", async () => {
     const roots = freshRoots();
     seedSplitStack(roots.configDir, "research");
     seedNatsMaterial(roots.natsDir, "research", { leafNetwork: "metafactory" });
@@ -139,10 +141,13 @@ describe("delete — apply", () => {
 
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("torn down");
-    // Config dir (incl. pointer) + nats conf + leaf include gone.
+    // Config dir (incl. pointer) + this stack's OWN rendered nats conf gone.
     expect(existsSync(join(roots.configDir, "research"))).toBe(false);
     expect(existsSync(join(roots.natsDir, "research.conf"))).toBe(false);
-    expect(existsSync(join(roots.natsDir, "leafnodes-metafactory.conf"))).toBe(false);
+    // #1384 (MAJOR) — the shared, network-keyed leaf file is PRESERVED: it is
+    // owned by `cortex network leave`, and a live sibling stack on the same
+    // network may still include it. Deleting it here would break the sibling.
+    expect(existsSync(join(roots.natsDir, "leafnodes-metafactory.conf"))).toBe(true);
     // Seed RETIRED (renamed), not deleted.
     expect(existsSync(join(roots.natsDir, "cortex-research.nk"))).toBe(false);
     const retired = readdirSync(roots.natsDir).filter((f) => f.startsWith("cortex-research.nk.retired-"));
@@ -235,5 +240,60 @@ describe("delete — --confirm gate", () => {
     const res = await dispatchStack(delArgs("Bad Slug", roots));
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain("must be lowercase");
+  });
+});
+
+describe("delete — apply, per-artifact failure branch (#1384)", () => {
+  // Force ONE artifact removal to fail deterministically + hermetically: seed the
+  // rendered nats conf as a NON-EMPTY DIRECTORY where a file is expected, so the
+  // `remove-file` op (`rmSync(path, { force: true })`, no `recursive`) throws.
+  // The other artifacts remove cleanly — proving the loop CONTINUES past failure.
+  function seedWithUnremovableConf(roots: {
+    configDir: string;
+    natsDir: string;
+    launchAgentsDir: string;
+  }): void {
+    seedSplitStack(roots.configDir, "research");
+    writeFileSync(join(roots.natsDir, "cortex-research.nk"), "SU_FAKE_SEED\n");
+    const confAsDir = join(roots.natsDir, "research.conf");
+    mkdirSync(confAsDir, { recursive: true });
+    writeFileSync(join(confAsDir, "blocker"), "x\n"); // non-empty → non-recursive rm throws
+  }
+
+  test("--json: records the failure, continues, exits NON-ZERO with per-action failed flag + failed_count", async () => {
+    const roots = freshRoots();
+    seedWithUnremovableConf(roots);
+
+    const res = await dispatchStack(delArgs("research", roots, ["--apply", "--confirm", "research", "--json"]));
+
+    // Partial teardown is NOT a success — the exit code is the machine signal.
+    expect(res.exitCode).toBe(1);
+    const env = JSON.parse(res.stdout) as {
+      status: string;
+      items: { label: string; path: string; failed?: string; failed_reason?: string }[];
+      data: Record<string, string>;
+    };
+    expect(env.data.applied).toBe("true");
+    expect(env.data.failed_count).toBe("1");
+    const failed = env.items.find((i) => i.failed === "true");
+    expect(failed).toBeDefined();
+    expect(failed!.label).toBe("rendered nats config");
+    expect(typeof failed!.failed_reason).toBe("string");
+    // The loop CONTINUED: the config-split dir was still removed and the seed
+    // still retired despite the earlier per-artifact failure.
+    expect(existsSync(join(roots.configDir, "research"))).toBe(false);
+    const retired = readdirSync(roots.natsDir).filter((f) => f.startsWith("cortex-research.nk.retired-"));
+    expect(retired.length).toBe(1);
+  });
+
+  test("human mode: surfaces the ⚠ failure + PARTIAL banner, exits NON-ZERO", async () => {
+    const roots = freshRoots();
+    seedWithUnremovableConf(roots);
+
+    const res = await dispatchStack(delArgs("research", roots, ["--apply", "--confirm", "research"]));
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toMatch(/⚠ rendered nats config teardown failed \(continuing\)/);
+    expect(res.stdout).toMatch(/PARTIAL teardown/);
   });
 });
