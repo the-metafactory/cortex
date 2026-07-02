@@ -23,7 +23,7 @@ import {
   type DiscordCliConfig,
 } from "../discord-roles";
 
-const GUILD = "1505549701674700991";
+const GUILD = "555666777888999000";
 const USER = "123456789012345678";
 const ROLE_ID = "999000111222333444";
 const BOT_TOKEN = "Bot.secret-token-must-not-appear-in-errors";

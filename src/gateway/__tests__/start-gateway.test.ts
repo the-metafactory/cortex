@@ -281,7 +281,7 @@ describe("startGatewayIfEnabled — flag on", () => {
           stack: "jc/default",
           binding: {
             token: "tok-juniper",
-            guildId: "1505549701674700991",
+            guildId: "555666777888999000",
             agentChannelId: "1513296336739635322",
             logChannelId: "1513296336739635322",
           },

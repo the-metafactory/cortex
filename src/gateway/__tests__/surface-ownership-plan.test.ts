@@ -145,7 +145,7 @@ describe("planSurfaceOwnership", () => {
             stack: "jc/default",
             binding: {
               token: "discord-token",
-              guildId: "1505549701674700991",
+              guildId: "555666777888999000",
               agentChannelId: "1513296336739635322",
               logChannelId: "1513296336739635322",
             },
@@ -181,7 +181,7 @@ describe("planSurfaceOwnership", () => {
             stack: "jc/research",
             binding: {
               token: "discord-token",
-              guildId: "1505549701674700991",
+              guildId: "555666777888999000",
               agentChannelId: "1513296336739635322",
               logChannelId: "1513296336739635322",
             },
@@ -194,7 +194,7 @@ describe("planSurfaceOwnership", () => {
 
     expect(plan.gatewayAdapterInstanceIds).toEqual([
       "discord:1487023327791808592",
-      "discord:1505549701674700991",
+      "discord:555666777888999000",
     ]);
     expect(plan.outboundPrincipalStacks).toEqual([
       { principal: "jc", stack: "default" },

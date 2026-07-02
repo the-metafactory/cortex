@@ -176,7 +176,7 @@ const SAME_TOKEN_DISCORD_SURFACES: Surfaces = {
       stack: "jc/default",
       binding: {
         token: "tok-juniper",
-        guildId: "1505549701674700991",
+        guildId: "555666777888999000",
         agentChannelId: "1513296336739635322",
         logChannelId: "1513296336739635322",
       },
@@ -201,7 +201,7 @@ const SAME_TOKEN_DIFFERENT_STACKS_DISCORD_SURFACES: Surfaces = {
       stack: "jc/research",
       binding: {
         token: "tok-juniper",
-        guildId: "1505549701674700991",
+        guildId: "555666777888999000",
         agentChannelId: "1513296336739635322",
         logChannelId: "1513296336739635322",
       },
@@ -308,14 +308,14 @@ describe("buildGatewayAdapters", () => {
     expect(calls[0]?.instanceId).toMatch(/^discord:token:[0-9a-f]{12}$/);
     expect(calls[0]?.allowedGuildIds).toEqual([
       "1487023327791808592",
-      "1505549701674700991",
+      "555666777888999000",
     ]);
     expect(calls[0]?.presenceByGuildId).toEqual({
       "1487023327791808592": {
         agentChannelId: "1487023328324616266",
         logChannelId: "1487023328324616266",
       },
-      "1505549701674700991": {
+      "555666777888999000": {
         agentChannelId: "1513296336739635322",
         logChannelId: "1513296336739635322",
       },
@@ -332,11 +332,11 @@ describe("buildGatewayAdapters", () => {
     expect(adapters.length).toBe(2);
     expect(calls.map((call) => call.instanceId)).toEqual([
       "discord:1487023327791808592",
-      "discord:1505549701674700991",
+      "discord:555666777888999000",
     ]);
     expect(calls.map((call) => call.allowedGuildIds)).toEqual([
       ["1487023327791808592"],
-      ["1505549701674700991"],
+      ["555666777888999000"],
     ]);
   });
 
