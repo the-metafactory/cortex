@@ -3,9 +3,10 @@
  * PENDING admission requests awaiting Tier-2 grant (ADR-0015 / ADR-0018;
  * CONTEXT.md §172).
  *
- * READ-ONLY. This slice surfaces who has requested to join which network so the
- * network admin can SEE the queue; the grant/reject ACTION is MC-B2 (#1276) and
- * lands as buttons here later. No action affordances in B1.
+ * Surfaces who has requested to join which network so the network admin can SEE
+ * the queue, and — since MC-B2 (#1279) — ACT on it: the Tier-2 grant/reject
+ * affordance is embedded below as {@link PierDecideForm} (request-id-driven,
+ * CF-Access + typed-confirm gated, local-daemon-signed).
  *
  * ## Posture (the trust boundary, enforced in the pure adapter)
  *
@@ -53,7 +54,7 @@ export function PierQueue({ networks, decideFetch, onDecided }: PierQueueProps) 
       </h3>
       <p className="dim pier-queue-subtitle">
         Principals awaiting <strong>Tier-2 grant</strong> to join a network you
-        administer. Read-only — review here; grant or reject from the registry.
+        administer. Review here, then grant or reject below.
       </p>
 
       {queue.totalPending === 0 ? (

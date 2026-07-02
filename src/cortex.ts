@@ -5873,10 +5873,15 @@ export async function startCortex(
                 material: decisionMaterial,
               });
               // Audit trail (no secrets): who decided what, and the outcome.
+              // Deliberately does NOT log the client-supplied `network_id`: the
+              // registry authorizes off the request's STORED network, never the
+              // wire selector, so echoing a caller-chosen value could mislead a
+              // forensic reader (review nit adv-N2/rev-N2). request_id is the
+              // stable, registry-authoritative key.
               const auditOutcome = res.ok ? res.status : `refused(${res.reason})`;
               console.log(
                 `cortex: MC-B2 admission ${input.decision} — request=${input.requestId} ` +
-                  `network=${input.networkId} principal=${input.principal} -> ${auditOutcome}`,
+                  `principal=${input.principal} -> ${auditOutcome}`,
               );
               return res.ok
                 ? { ok: true, status: res.status, requestId: res.requestId }
