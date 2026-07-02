@@ -23,7 +23,7 @@ import {
   retryAfterSeconds,
   TOO_MANY_REQUESTS_BODY,
 } from "../rate-limit";
-import type { PrincipalRecord, SignedAssertion } from "../types";
+import type { AdmissionRequest, PrincipalRecord, SignedAssertion } from "../types";
 import {
   isValidPrincipalId,
   validateRegistrationClaim,
@@ -258,6 +258,15 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
       stacksWithPubkeys[0]?.stack_pubkey ?? claim.principal_pubkey;
     const requestedScope = `federated.${principalId}.>`;
     let admissionRequestFailed = false;
+    // C-1398 (#1398) — capture the admission row upsertPending returns so the
+    // register response can ECHO its `request_id` (+ status). Previously this
+    // return was discarded and a client (#1315) had to do a SECOND, PoP-signed
+    // `GET /admission-requests/mine` round-trip just to learn the id of the
+    // request it had just created. Echoing it here removes that round-trip and
+    // works even when the `/mine` read is unavailable. `undefined` iff the
+    // upsert threw below (the `admission_request: "failed"` path) — in which
+    // case there is no row and nothing to echo.
+    let admissionRequest: AdmissionRequest | undefined;
     try {
       const issuanceStore = getIssuanceStore(c.env);
       // ADR-0018 Gap-A — stamp the target network the joiner named (signed into
@@ -265,7 +274,7 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
       // key `(principal_id, peer_pubkey, network_id)`, so the same stack can
       // request admission to two networks. A network-less register (no
       // `network_id` in the claim) creates a network-less PENDING row.
-      await issuanceStore.upsertPending(
+      admissionRequest = await issuanceStore.upsertPending(
         principalId,
         peerPubkey,
         requestedScope,
@@ -311,7 +320,28 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
         201,
       );
     }
-    return c.json(assertion, 201);
+    // C-1398 (#1398) — success. ECHO the admission `request_id` (+ status) so a
+    // client (#1315) can read the id of the admission request it just created
+    // directly off THIS response, with no follow-up `GET /admission-requests/mine`
+    // round-trip. Additive + back-compat: the signed `payload`/`issued_at`/
+    // `registry`/`signature` fields are unchanged, so a client that ignores the
+    // extra fields (or an older registry that never emits them) keeps working.
+    // `request_id` mirrors the `/mine` (AdmissionRequest) field name + format
+    // EXACTLY — the same opaque hex id an admin admits. `admission_status`
+    // carries the raw `AdmissionRequest.status` ("PENDING" on a fresh register;
+    // the EXISTING status when a re-register returns an already-decided row).
+    // `admissionRequest` is only undefined on the failed-upsert path handled
+    // above, so on this path it is always present; the guard is belt-and-braces.
+    return c.json(
+      {
+        ...assertion,
+        ...(admissionRequest !== undefined && {
+          request_id: admissionRequest.request_id,
+          admission_status: admissionRequest.status,
+        }),
+      },
+      201,
+    );
   });
 
   app.get("/principals/:principal_id", async (c) => {

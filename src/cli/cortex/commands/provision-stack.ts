@@ -428,34 +428,54 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
     admission_request: reg.admission,
   };
 
-  // C-1315 — surface the admission request-id + sealed-delivery state the admin
-  // needs. The register RESPONSE does not carry the request_id (the registry
-  // route returns only the signed principal assertion), so we do a PoP-signed
-  // `/admission-requests/mine` read here for the just-registered network.
-  // Best-effort: a read failure NEVER fails a successful registration — we note
-  // the lookup was unavailable and point at the discovery command.
+  // C-1315 / C-1398 — surface the admission request-id + sealed-delivery state
+  // the admin needs. C-1398 (#1398): the register RESPONSE now ECHOES the
+  // request_id (+ status), so when it is present we read it DIRECTLY off the
+  // register result — no second PoP-signed `/admission-requests/mine`
+  // round-trip. On a fresh register the row is always PENDING with no sealed
+  // secret yet, so the echo carries everything the admin needs (the id to
+  // admit); richer sealed-delivery state is surfaced later by
+  // `cortex network join` / `cortex network status`. The `/mine` probe stays
+  // as the FALLBACK for an older registry that predates the echo.
   const humanLines: string[] = [];
   if (networkRes.networkId !== undefined) {
-    const probe = await resolveOwnAdmissionState(
-      { registryUrl: urlRes.value, principalId: ctx.principalId, material: matRes.material },
-      networkRes.networkId,
-    );
-    if (probe.ok) {
-      const s = probe.state;
-      data.network_id = networkRes.networkId;
-      data.admission_status = admissionStatusLabel(s.state);
-      data.sealed_secret = s.hasSealedSecret ? "present" : "missing";
-      if (s.requestId !== undefined) {
-        data.request_id = s.requestId;
-        data.next_for_admin = nextForAdmin(networkRes.networkId, s);
-      }
-      humanLines.push(...registerStateLines(networkRes.networkId, s));
-    } else {
-      data.admission_lookup = `unavailable: ${probe.reason}`;
+    data.network_id = networkRes.networkId;
+    if (reg.requestId !== undefined) {
+      // C-1398 — echoed by the register response; no round-trip needed.
+      data.request_id = reg.requestId;
+      data.admission_status = reg.admissionStatus ?? "PENDING";
+      data.next_for_admin = `cortex network admit ${reg.requestId} --apply`;
       humanLines.push(
-        `  admission: could not read the request-id from the registry (${probe.reason}).`,
-        `  Discover it later with (admin): cortex network admit --list-pending --admin-seed <path>.`,
+        `  network: ${networkRes.networkId}`,
+        `  request-id: ${reg.requestId}   (give this to a network admin)`,
+        `  admission: ${data.admission_status}`,
+        `  next (admin): ${data.next_for_admin}`,
       );
+    } else {
+      // Fallback: older registry that does not echo the request_id — do the
+      // PoP-signed `/admission-requests/mine` read to discover it. Best-effort:
+      // a read failure NEVER fails a successful registration — we note the
+      // lookup was unavailable and point at the discovery command.
+      const probe = await resolveOwnAdmissionState(
+        { registryUrl: urlRes.value, principalId: ctx.principalId, material: matRes.material },
+        networkRes.networkId,
+      );
+      if (probe.ok) {
+        const s = probe.state;
+        data.admission_status = admissionStatusLabel(s.state);
+        data.sealed_secret = s.hasSealedSecret ? "present" : "missing";
+        if (s.requestId !== undefined) {
+          data.request_id = s.requestId;
+          data.next_for_admin = nextForAdmin(networkRes.networkId, s);
+        }
+        humanLines.push(...registerStateLines(networkRes.networkId, s));
+      } else {
+        data.admission_lookup = `unavailable: ${probe.reason}`;
+        humanLines.push(
+          `  admission: could not read the request-id from the registry (${probe.reason}).`,
+          `  Discover it later with (admin): cortex network admit --list-pending --admin-seed <path>.`,
+        );
+      }
     }
   }
 
@@ -523,7 +543,19 @@ function registerStateLines(networkId: string, s: OwnAdmissionState): string[] {
  */
 type DoRegisterResult =
   | { ok: false; reason: string }
-  | { ok: true; note: string; admission: "ok" | "failed"; warning?: string };
+  | {
+      ok: true;
+      note: string;
+      admission: "ok" | "failed";
+      warning?: string;
+      // C-1398 (#1398) — the admission `request_id` + status ECHOED by the
+      // register response, so the caller can print the id WITHOUT the
+      // second PoP-signed `GET /admission-requests/mine` round-trip. Absent
+      // when talking to an older registry that predates the echo (the caller
+      // falls back to the `/mine` probe, which stays as the compatibility path).
+      requestId?: string;
+      admissionStatus?: string;
+    };
 
 /**
  * C-1269 — read the registry register-response for the non-fatal
@@ -540,6 +572,23 @@ function readAdmissionState(response: unknown): { failed: boolean; warning?: str
     }
   }
   return { failed: false };
+}
+
+/**
+ * C-1398 (#1398) — read the admission `request_id` (+ status) the register
+ * response now ECHOES, so the caller can surface the id WITHOUT the second
+ * PoP-signed `GET /admission-requests/mine` round-trip. Additive + back-compat:
+ * an older registry that predates the echo omits these fields, so both come
+ * back `undefined` and the caller falls back to the `/mine` probe. Mirrors the
+ * `readAdmissionState` shape (defensive `typeof` guards — the body is `unknown`).
+ */
+function readEchoedRequestId(response: unknown): { requestId?: string; admissionStatus?: string } {
+  if (typeof response !== "object" || response === null) return {};
+  const r = response as Record<string, unknown>;
+  return {
+    ...(typeof r.request_id === "string" && { requestId: r.request_id }),
+    ...(typeof r.admission_status === "string" && { admissionStatus: r.admission_status }),
+  };
 }
 
 /**
@@ -704,6 +753,9 @@ async function doRegister(
   // grants the request. Always surface this so the principal knows to expect
   // the admin-grant step before the stack can join the federation.
   const noteBase = `registration recorded; awaiting admin grant — your credential will be issued on approval (HTTP ${attempt.status.toString()}, registry: ${registryUrl})`;
+  // C-1398 — pull the echoed admission id off the (final) register response so
+  // the caller can print it without a `/mine` round-trip.
+  const echoed = readEchoedRequestId(attempt.response);
   return {
     ok: true,
     note:
@@ -712,6 +764,8 @@ async function doRegister(
         : noteBase,
     admission: admission.failed ? "failed" : "ok",
     ...(admission.warning !== undefined && { warning: admission.warning }),
+    ...(echoed.requestId !== undefined && { requestId: echoed.requestId }),
+    ...(echoed.admissionStatus !== undefined && { admissionStatus: echoed.admissionStatus }),
   };
 }
 

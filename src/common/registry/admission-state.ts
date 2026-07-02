@@ -7,8 +7,11 @@
  * This is the shared primitive behind two onboarding handles the CLI was
  * missing:
  *   - `provision-stack register --network <net>` prints the `request_id` the admin
- *     needs (the register response itself does not carry it — the registry route
- *     returns only the signed principal assertion), and
+ *     needs. As of C-1398 (#1398) the register response ECHOES `request_id` (+
+ *     `admission_status`), so the register path reads it DIRECTLY off that
+ *     response and this `/mine` read is now the FALLBACK for an older registry
+ *     that predates the echo (and still the path that surfaces sealed-secret
+ *     delivery state), and
  *   - `cortex network join` reports the REAL admission/sealed state (PENDING /
  *     admitted-but-unsealed / revoked) instead of falling through to the
  *     misleading legacy `.creds not found (#821)` preflight.
