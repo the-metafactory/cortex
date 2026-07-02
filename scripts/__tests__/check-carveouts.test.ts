@@ -14,9 +14,19 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
+import {
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  copyFileSync,
+  rmSync,
+} from "fs";
+import { tmpdir } from "os";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const GATE = join(REPO_ROOT, "scripts", "check-carveouts.sh");
+const GEN = join(REPO_ROOT, "scripts", "gen-vocab-ratchet.ts");
+const MANIFEST = join(REPO_ROOT, "scripts", "vocab-ratchet.json");
 const FIXTURES = join(REPO_ROOT, "src", "__tests__", "fixtures", "vocab-ratchet");
 
 // Runtime-built deprecated token — never a literal in this file.
@@ -59,4 +69,49 @@ describe("check-carveouts vocab ratchet (F18)", () => {
     },
     30_000,
   );
+});
+
+describe("vocab-ratchet manifest (F17)", () => {
+  test("generator reproduces the committed manifest (drift guard)", () => {
+    // `--check` re-derives terms from CONTEXT.md + embedded carve-outs and diffs
+    // against the committed JSON. It ALSO re-runs generation-time validation
+    // (throws if a ratchet-enforced alias is not a CONTEXT.md-deprecated term),
+    // so a green --check proves both no-drift AND manifest-validates-CONTEXT.md.
+    const res = spawnSync("bun", [GEN, "--check"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    expect(`${res.stdout}${res.stderr}`).toContain("OK");
+    expect(res.status).toBe(0);
+  });
+
+  test("every ratchet-enforced alias is a deprecated term in CONTEXT.md", () => {
+    const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as {
+      terms: { ratchetEnforced: string[] }[];
+    };
+    const context = readFileSync(join(REPO_ROOT, "CONTEXT.md"), "utf8").toLowerCase();
+    const enforced = manifest.terms.flatMap((t) => t.ratchetEnforced);
+    expect(enforced.length).toBeGreaterThan(0);
+    for (const alias of enforced) {
+      expect(context.includes(alias.toLowerCase())).toBe(true);
+    }
+  });
+
+  test("gate fails closed (exit 2) when the manifest is absent", () => {
+    // Copy the gate into a throwaway tree with NO manifest: the gate must refuse
+    // to run rather than pass vacuously on zero patterns.
+    const dir = mkdtempSync(join(tmpdir(), "vocab-ratchet-"));
+    try {
+      mkdirSync(join(dir, "scripts"));
+      copyFileSync(GATE, join(dir, "scripts", "check-carveouts.sh"));
+      const res = spawnSync("bash", [join(dir, "scripts", "check-carveouts.sh")], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      expect(res.status).toBe(2);
+      expect(`${res.stdout}${res.stderr}`).toContain("manifest not found");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
