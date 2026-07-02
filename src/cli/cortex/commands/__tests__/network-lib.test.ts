@@ -1482,7 +1482,7 @@ describe("#1220 accept_subjects — join persists own-scope only", () => {
 
 // =============================================================================
 // cortex#1220 review blocker — join ENABLES the reconciler on a fresh join and
-// PRESERVES an operator's explicit choice on a re-join. Without this, narrowing
+// PRESERVES a principal's explicit choice on a re-join. Without this, narrowing
 // persisted accept_subjects to own-scope (above) admits ZERO peer presence,
 // because the reconciler that re-derives own ∪ peer in-memory is per-network
 // opt-in, default OFF — a silent in=0 regression.
@@ -1499,7 +1499,7 @@ describe("#1220 reconcile — join enables + preserves so peer presence is admit
     const net = storeRef.networks.find((n) => n.id === "metafactory")!;
     expect(net.reconcile).toBeDefined();
     expect(net.reconcile!.enabled).toBe(true);
-    // Fresh enable is not an operator override, so no disabled-WARN.
+    // Fresh enable is not a principal override, so no disabled-WARN.
     expect((res.warnings ?? []).some((w) => w.includes("reconcile.enabled=false"))).toBe(false);
   });
 
@@ -1518,7 +1518,7 @@ describe("#1220 reconcile — join enables + preserves so peer presence is admit
   });
 
   test("RE-join PRESERVES an explicit reconcile.enabled=false (never forced true) + loud WARN", async () => {
-    // An operator deliberately disabled the reconciler for this network. A re-join
+    // A principal deliberately disabled the reconciler for this network. A re-join
     // must NOT silently re-enable it — but MUST warn that peer presence won't be
     // admitted while it stays off (the silent in=0 mode, now announced).
     const disabled: PolicyFederatedNetwork = {

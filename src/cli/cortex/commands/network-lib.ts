@@ -535,7 +535,7 @@ export async function joinNetwork(
   //     makes the reconciler load-bearing for peer presence, and our live stacks
   //     already run it.
   //   • RE-join (a reconcile block already exists) ⇒ PRESERVE it verbatim, exactly
-  //     as `announce_capabilities` is preserved below. An operator's explicit
+  //     as `announce_capabilities` is preserved below. A principal's explicit
   //     `reconcile.enabled: false` MUST survive a re-join (never forced back to
   //     true) — but we WARN loudly that peer presence will not be admitted while
   //     it stays off, so the silent-in=0 mode is at least announced.
