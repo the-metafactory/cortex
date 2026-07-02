@@ -70,9 +70,15 @@ jobs:
   # Tiers 1 (gitleaks) + 2 (public shape patterns) + 3 (org-secret hashed
   # denylist). mode=auto maps pull_request→diff, push→tree, schedule→history.
   gate:
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@51b48101d8014a97cfcf72c0840399b1acb871e3
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@5855a21e79f79ddd4b2506c920e2044ba0268d22
     permissions:
       contents: read
+    with:
+      # REQUIRED. Same 40-hex SHA the reusable is pinned at in `uses:@` above — this
+      # is the engine's immutability anchor. `github.job_workflow_sha` resolves EMPTY
+      # on cross-repo caller runs, so the gate cannot derive the engine SHA itself and
+      # needs this explicit pin (metafactory-actions fix: engine_sha input).
+      engine_sha: 5855a21e79f79ddd4b2506c920e2044ba0268d22
     secrets:
       # Pass ONLY these two — NEVER `secrets: inherit`. The denylist org secret
       # has "selected public repos" visibility; it is currently PLACEHOLDER-EMPTY
@@ -89,7 +95,7 @@ jobs:
   # public issue. This is the "push-alert stub" of design doc §6 PR 4.
   alert:
     if: ${{ github.event_name == 'push' }}
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@51b48101d8014a97cfcf72c0840399b1acb871e3
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@5855a21e79f79ddd4b2506c920e2044ba0268d22
     permissions:
       contents: read
       issues: write
