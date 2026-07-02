@@ -266,6 +266,16 @@ async function runGenerate(ctx: HandlerCtx): Promise<ExitResult> {
       networkRes.networkId,
     );
     if (!reg.ok) return opError(reg.reason, ctx.json, { fingerprint: material.fingerprint });
+    // C-1269 — same loud-fail contract as the standalone register path.
+    if (reg.admission === "failed") {
+      return admissionFailedResult(ctx, {
+        reg,
+        networkId: networkRes.networkId,
+        seedPath,
+        registryUrl: urlRes.value,
+        stackId: stackIdRes.stackId,
+      });
+    }
     registerNote = reg.note;
   }
 
@@ -386,11 +396,25 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
   );
   if (!reg.ok) return opError(reg.reason, ctx.json, { fingerprint: matRes.material.fingerprint });
 
+  // C-1269 — a 2xx registration whose admission request never landed (even
+  // after the retry) is NOT a success: fail loud + actionable, never silent.
+  if (reg.admission === "failed") {
+    return admissionFailedResult(ctx, {
+      reg,
+      networkId: networkRes.networkId,
+      seedPath: seedPathFlag.value,
+      registryUrl: urlRes.value,
+      stackId: stackIdRes.stackId,
+    });
+  }
+
   const data: Record<string, string> = {
     principal_id: ctx.principalId,
     stack_id: stackIdRes.stackId,
     fingerprint: matRes.material.fingerprint,
     registered: reg.note,
+    // C-1269 — surface the admission state so scripting consumers can gate on it.
+    admission_request: reg.admission,
   };
   if (ctx.json) return ok(renderJson(envelopeOk([], data)));
   return ok(
@@ -398,7 +422,55 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
   );
 }
 
-/** Shared register flow — build claim + POST. Returns a log-safe note. */
+/**
+ * Outcome of a register POST, from the CLIENT's point of view. C-1269 —
+ * `admission` is the load-bearing addition: a registration can succeed at the
+ * HTTP layer (2xx, `ok: true`) yet carry `admission_request: "failed"` in its
+ * body, meaning the principal record committed but the PENDING admission row
+ * did NOT (registry `principals.ts` §O-4a.1). The caller MUST NOT report a bare
+ * success in that case — there is nothing for the network admin to admit. This
+ * is the first external-walker regression #1262 (chuvala had a `principals` row
+ * but no PENDING `admission_requests` row, so there was nothing to admit).
+ */
+type DoRegisterResult =
+  | { ok: false; reason: string }
+  | { ok: true; note: string; admission: "ok" | "failed"; warning?: string };
+
+/**
+ * C-1269 — read the registry register-response for the non-fatal
+ * `admission_request: "failed"` flag the registry adds (server-side
+ * `principals.ts` lines 268-284) when the PENDING admission upsert fails but
+ * the principal record commits. Additive + back-compat: a response without the
+ * field (the normal success shape, or an older registry) reads as landed.
+ */
+function readAdmissionState(response: unknown): { failed: boolean; warning?: string } {
+  if (typeof response === "object" && response !== null && "admission_request" in response) {
+    const r = response as Record<string, unknown>;
+    if (r.admission_request === "failed") {
+      return { failed: true, ...(typeof r.warning === "string" && { warning: r.warning }) };
+    }
+  }
+  return { failed: false };
+}
+
+/**
+ * Shared register flow — build claim + POST, detect a failed admission-request
+ * raise, and retry ONCE. Returns a log-safe note plus the admission state.
+ *
+ * C-1269 idempotency (VERIFIED against the registry route + store, not assumed):
+ *   - `upsertPending` is `INSERT ... ON CONFLICT(principal_id, peer_pubkey,
+ *     COALESCE(network_id,'')) DO NOTHING` (store.ts D1IssuanceRequestStore) —
+ *     idempotent per the ADR-0018 Gap-A triple; a re-register never duplicates
+ *     the PENDING row.
+ *   - `putPrincipal` on a FIRST register carries no `expected_updated_at`, so it
+ *     is an UNCONDITIONAL upsert — a bare re-register is fully idempotent (this
+ *     is the #1262 external-walker path). On the ADD-STACK path the claim DOES
+ *     carry a CAS token (`expected_updated_at`), so a re-POST of the SAME body
+ *     would 409 `stale_record` (the first attempt already bumped `updated_at`).
+ *   Therefore the retry REBUILDS the claim (`attemptRegister` re-runs
+ *   `resolveMergedStacks`, which re-reads the current `updated_at`), making the
+ *   retry correct on BOTH paths rather than a blind re-POST of a stale body.
+ */
 async function doRegister(
   principalId: string,
   material: StackIdentityMaterial,
@@ -407,101 +479,183 @@ async function doRegister(
   rootMaterial?: StackIdentityMaterial,
   registryPubkey?: string,
   networkId?: string,
-): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
-  // C-787 — build the COMPLETE intended `stacks[]`. The register route does a
-  // FULL-OVERWRITE upsert of the `stacks` column with no read-merge, so a claim
-  // that carries only the new stack DROPS every stack already on record — the
-  // exact federation #787 exists to preserve (PR #790 data-loss blocker). On
-  // the add-stack path we therefore FETCH the principal's existing stacks and
-  // merge the new one in, so the root re-attests the full set and the route's
-  // overwrite becomes correct. C-791 — the merge-read is signature-verified
-  // against `registryPubkey` (fail closed on the add-stack path when absent).
+): Promise<DoRegisterResult> {
   const isAddStack = rootMaterial !== undefined;
 
-  const stacksRes = await resolveMergedStacks({
-    principalId,
-    stackId,
-    stackPubkey: material.pubkeyB64,
-    registryUrl,
-    ...(registryPubkey !== undefined && { registryPubkey }),
-    isAddStack,
-  });
-  if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
-
-  // C-819 — merge-preserve CAPABILITIES, mirroring the stacks merge above. The
-  // register route does the SAME full-overwrite upsert on the `capabilities`
-  // column (store.ts: `capabilities = excluded.capabilities`), so a claim that
-  // carries no caps zeroes the principal's existing set — silently evicting
-  // them from every network roster (membership is implicit via
-  // `capability.networks[]`). `provision-stack register` announces NO new caps
-  // (it provisions a stack IDENTITY, not a network membership — that is what
-  // `cortex network join` is for), so its `announce` is empty: on the add-stack
-  // path the fetch+verify+union therefore PRESERVES the principal's existing
-  // caps unchanged (empty ∪ existing = existing), and on a first register there
-  // is nothing on record to preserve. `mergeExisting: isAddStack` keeps this
-  // consistent with the stacks merge (and shares the C-791 fail-closed verified
-  // read): merge only when adding to an already-registered principal (C-820
-  // renamed the field from `isAddStack`; here the merge IS gated on add-stack —
-  // provision-stack only preserves caps, it never re-announces network tags, so
-  // unlike the federated join it has no reason to fetch+merge on a first
-  // register). A register that genuinely intends to SHRINK caps is out of scope
-  // for this command — it never announces caps at all.
-  const capsRes = await resolveMergedCapabilities({
-    principalId,
-    registryUrl,
-    ...(registryPubkey !== undefined && { registryPubkey }),
-    announce: [],
-    mergeExisting: isAddStack,
-  });
-  if (!capsRes.ok) return { ok: false, reason: capsRes.reason };
-
-  let body: SignedRegistrationBody;
-  try {
-    body = await buildRegistrationClaim({
+  // One full build-claim + POST cycle. C-1269 — factored into a closure so the
+  // retry REBUILDS the claim (re-reading the CAS token via resolveMergedStacks)
+  // rather than blind-reposting a now-stale body. Returns the registry result
+  // triple on a 2xx, or a client-side error reason.
+  async function attemptRegister(): Promise<
+    { ok: false; reason: string } | { ok: true; status: number; response: unknown }
+  > {
+    // C-787 — build the COMPLETE intended `stacks[]`. The register route does a
+    // FULL-OVERWRITE upsert of the `stacks` column with no read-merge, so a claim
+    // that carries only the new stack DROPS every stack already on record — the
+    // exact federation #787 exists to preserve (PR #790 data-loss blocker). On
+    // the add-stack path we therefore FETCH the principal's existing stacks and
+    // merge the new one in, so the root re-attests the full set and the route's
+    // overwrite becomes correct. C-791 — the merge-read is signature-verified
+    // against `registryPubkey` (fail closed on the add-stack path when absent).
+    const stacksRes = await resolveMergedStacks({
       principalId,
-      material,
-      // C-787 — on the add-stack path the root signs; the new stack carries
-      // its own pubkey. On the first-register path rootMaterial is undefined
-      // and `material` both declares + signs (pre-C-787 behaviour).
-      ...(rootMaterial !== undefined && { rootMaterial }),
-      stacks: stacksRes.stacks,
-      // C-819 — re-attest the merged (preserved) capability set so the route's
-      // full-overwrite writes the complete set instead of clobbering to empty.
-      capabilities: capsRes.capabilities,
-      // #825 — CAS token: the updated_at the merge read. The route rejects
-      // (409 stale_record) if a concurrent host changed the row since.
-      ...(stacksRes.existingUpdatedAt !== undefined && { expectedUpdatedAt: stacksRes.existingUpdatedAt }),
-      // ADR-0018 Gap-A — pin the PENDING admission request to the target network.
-      ...(networkId !== undefined && { networkId }),
+      stackId,
+      stackPubkey: material.pubkeyB64,
+      registryUrl,
+      ...(registryPubkey !== undefined && { registryPubkey }),
+      isAddStack,
     });
-  } catch (err) {
-    return { ok: false, reason: `failed to build registration claim: ${err instanceof Error ? err.message : String(err)}` };
+    if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
+
+    // C-819 — merge-preserve CAPABILITIES, mirroring the stacks merge above. The
+    // register route does the SAME full-overwrite upsert on the `capabilities`
+    // column (store.ts: `capabilities = excluded.capabilities`), so a claim that
+    // carries no caps zeroes the principal's existing set — silently evicting
+    // them from every network roster (membership is implicit via
+    // `capability.networks[]`). `provision-stack register` announces NO new caps
+    // (it provisions a stack IDENTITY, not a network membership — that is what
+    // `cortex network join` is for), so its `announce` is empty: on the add-stack
+    // path the fetch+verify+union therefore PRESERVES the principal's existing
+    // caps unchanged (empty ∪ existing = existing), and on a first register there
+    // is nothing on record to preserve. `mergeExisting: isAddStack` keeps this
+    // consistent with the stacks merge (and shares the C-791 fail-closed verified
+    // read): merge only when adding to an already-registered principal (C-820
+    // renamed the field from `isAddStack`; here the merge IS gated on add-stack —
+    // provision-stack only preserves caps, it never re-announces network tags, so
+    // unlike the federated join it has no reason to fetch+merge on a first
+    // register). A register that genuinely intends to SHRINK caps is out of scope
+    // for this command — it never announces caps at all.
+    const capsRes = await resolveMergedCapabilities({
+      principalId,
+      registryUrl,
+      ...(registryPubkey !== undefined && { registryPubkey }),
+      announce: [],
+      mergeExisting: isAddStack,
+    });
+    if (!capsRes.ok) return { ok: false, reason: capsRes.reason };
+
+    let body: SignedRegistrationBody;
+    try {
+      body = await buildRegistrationClaim({
+        principalId,
+        material,
+        // C-787 — on the add-stack path the root signs; the new stack carries
+        // its own pubkey. On the first-register path rootMaterial is undefined
+        // and `material` both declares + signs (pre-C-787 behaviour).
+        ...(rootMaterial !== undefined && { rootMaterial }),
+        stacks: stacksRes.stacks,
+        // C-819 — re-attest the merged (preserved) capability set so the route's
+        // full-overwrite writes the complete set instead of clobbering to empty.
+        capabilities: capsRes.capabilities,
+        // #825 — CAS token: the updated_at the merge read. The route rejects
+        // (409 stale_record) if a concurrent host changed the row since.
+        ...(stacksRes.existingUpdatedAt !== undefined && { expectedUpdatedAt: stacksRes.existingUpdatedAt }),
+        // ADR-0018 Gap-A — pin the PENDING admission request to the target network.
+        ...(networkId !== undefined && { networkId }),
+      });
+    } catch (err) {
+      return { ok: false, reason: `failed to build registration claim: ${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    let result: Awaited<ReturnType<typeof registerStackIdentity>>;
+    try {
+      result = await registerStackIdentity({ registryUrl, principalId, body });
+    } catch (err) {
+      return { ok: false, reason: `registry POST failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!result.ok) {
+      const detail =
+        typeof result.response === "object" && result.response !== null
+          ? JSON.stringify(result.response)
+          : String(result.response);
+      return {
+        ok: false,
+        reason: `registry rejected registration (HTTP ${result.status.toString()}): ${detail}`,
+      };
+    }
+    return { ok: true, status: result.status, response: result.response };
   }
 
-  let result: Awaited<ReturnType<typeof registerStackIdentity>>;
-  try {
-    result = await registerStackIdentity({ registryUrl, principalId, body });
-  } catch (err) {
-    return { ok: false, reason: `registry POST failed: ${err instanceof Error ? err.message : String(err)}` };
+  let attempt = await attemptRegister();
+  if (!attempt.ok) return { ok: false, reason: attempt.reason };
+
+  // C-1269 — the registration is 2xx, but the response may still carry
+  // `admission_request: "failed"` (principal committed, PENDING row did not).
+  // Retry the raise ONCE — a rebuilt re-register is idempotent (see doRegister
+  // header: upsertPending ON CONFLICT DO NOTHING; putPrincipal unconditional on
+  // first register, CAS-refreshed on the rebuilt add-stack retry).
+  const netLabel = networkId !== undefined ? `network "${networkId}"` : "the (network-less) registration";
+  let admission = readAdmissionState(attempt.response);
+  let retried = false;
+  if (admission.failed) {
+    retried = true;
+    const retry = await attemptRegister();
+    if (!retry.ok) {
+      return {
+        ok: false,
+        reason:
+          `registration succeeded but the PENDING admission request for ${netLabel} did NOT land` +
+          `${admission.warning !== undefined ? ` (registry: ${admission.warning})` : ""}; ` +
+          `the automatic retry also failed: ${retry.reason}`,
+      };
+    }
+    attempt = retry;
+    admission = readAdmissionState(retry.response);
   }
-  if (!result.ok) {
-    const detail =
-      typeof result.response === "object" && result.response !== null
-        ? JSON.stringify(result.response)
-        : String(result.response);
-    return {
-      ok: false,
-      reason: `registry rejected registration (HTTP ${result.status.toString()}): ${detail}`,
-    };
-  }
+
   // O-4a.2 — a successful registration (2xx) triggers an issuance request that
   // starts PENDING. The leaf credential package is issued only after an admin
   // grants the request. Always surface this so the principal knows to expect
   // the admin-grant step before the stack can join the federation.
+  const noteBase = `registration recorded; awaiting admin grant — your credential will be issued on approval (HTTP ${attempt.status.toString()}, registry: ${registryUrl})`;
   return {
     ok: true,
-    note: `registration recorded; awaiting admin grant — your credential will be issued on approval (HTTP ${result.status.toString()}, registry: ${registryUrl})`,
+    note:
+      retried && !admission.failed
+        ? `${noteBase} [admission request landed on automatic retry]`
+        : noteBase,
+    admission: admission.failed ? "failed" : "ok",
+    ...(admission.warning !== undefined && { warning: admission.warning }),
   };
+}
+
+/**
+ * C-1269 — build the loud, actionable exit-1 result for a registration that
+ * succeeded at the HTTP layer but whose PENDING admission request did NOT land
+ * even after the automatic retry. NEVER a silent success: the stack is
+ * registered but there is nothing for the network admin to admit, so the
+ * operator must re-register (the upsert is idempotent). Names the network, the
+ * registry warning, and the exact manual re-register command.
+ */
+function admissionFailedResult(
+  ctx: HandlerCtx,
+  args: {
+    reg: Extract<DoRegisterResult, { ok: true }>;
+    networkId: string | undefined;
+    seedPath: string;
+    registryUrl: string;
+    stackId: string;
+  },
+): ExitResult {
+  const netLabel = args.networkId !== undefined ? `network "${args.networkId}"` : "the (network-less) registration";
+  const fallbackCmd =
+    `cortex provision-stack register ${ctx.principalId} ` +
+    `--seed-path ${args.seedPath} --registry-url ${args.registryUrl}` +
+    (args.stackId !== `${ctx.principalId}/default` ? ` --stack-id ${args.stackId}` : "") +
+    (args.networkId !== undefined ? ` --network ${args.networkId}` : "");
+  const reason =
+    `registration for ${ctx.principalId} landed, but the PENDING admission request for ${netLabel} did NOT ` +
+    `(the automatic retry also failed). Your stack IS registered, but there is nothing for the network admin ` +
+    `to admit yet` +
+    (args.reg.warning !== undefined ? ` — registry warning: ${args.reg.warning}` : "") +
+    `. Re-register to retry (the admission upsert is idempotent): ${fallbackCmd}`;
+  const context: Record<string, string> = {
+    admission_request: "failed",
+    ...(args.networkId !== undefined && { network: args.networkId }),
+    ...(args.reg.warning !== undefined && { warning: args.reg.warning }),
+    manual_fallback: fallbackCmd,
+  };
+  return opError(reason, ctx.json, context);
 }
 
 // =============================================================================

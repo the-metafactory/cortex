@@ -597,3 +597,138 @@ describe("cortex provision-stack register — C-787 add-stack (no data loss)", (
     }
   });
 });
+
+// =============================================================================
+// C-1269 — register DETECTS `admission_request: "failed"`, retries ONCE, and
+// fails loud (never a silent success). These mock the registry HTTP responses
+// directly so the admission flag can be controlled per-attempt — the first
+// external walker (#1262) ended up registered with NO PENDING admission row and
+// nothing to admit, precisely because the client ignored this signal.
+// =============================================================================
+describe("cortex provision-stack register — C-1269 admission-request detection", () => {
+  /**
+   * Queue registry responses; each POST /register pops the next (last repeats).
+   * The first-register path makes exactly ONE POST per attempt (no GET, since
+   * it is not an add-stack), so `posts()` counts retry attempts directly.
+   */
+  function mockRegistry(responses: Array<{ status: number; body: unknown }>): {
+    fetch: typeof globalThis.fetch;
+    posts: () => number;
+  } {
+    let i = 0;
+    let posts = 0;
+    const fn = ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      if (req.method === "POST") {
+        const r = responses[Math.min(i, responses.length - 1)]!;
+        i += 1;
+        posts += 1;
+        return Promise.resolve(
+          new Response(JSON.stringify(r.body), {
+            status: r.status,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      // The first-register path issues no GET; anything else is a test bug.
+      return Promise.resolve(new Response(JSON.stringify({ error: "unexpected_get" }), { status: 500 }));
+    }) as typeof globalThis.fetch;
+    return { fetch: fn, posts: () => posts };
+  }
+
+  const ASSERTION = { payload: { principal_id: "andreas" }, issued_at: "t", registry: "R", signature: "sig" };
+  const FAILED_WARNING =
+    "registered, but the PENDING admission request could not be created; re-register to retry (the upsert is idempotent)";
+  const failedBody = { ...ASSERTION, admission_request: "failed", warning: FAILED_WARNING };
+
+  async function withFetch<T>(f: typeof globalThis.fetch, run: () => Promise<T>): Promise<T> {
+    const real = globalThis.fetch;
+    globalThis.fetch = f;
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = real;
+    }
+  }
+
+  test("(a) clean register — PENDING landed → exit 0, admission_request=ok, single POST", async () => {
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const mock = mockRegistry([{ status: 201, body: ASSERTION }]);
+    const res = await withFetch(mock.fetch, () =>
+      dispatchProvisionStack([
+        "register", "andreas", "--seed-path", seedPath,
+        "--registry-url", "http://registry.test", "--json",
+      ]),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(mock.posts()).toBe(1); // no retry on a clean register
+    const out = JSON.parse(res.stdout) as { status: string; data: Record<string, string> };
+    expect(out.status).toBe("ok");
+    expect(out.data.admission_request).toBe("ok");
+    expect(out.data.registered).not.toContain("automatic retry");
+  });
+
+  test("(b) admission failed then retry OK → exit 0, retried once, admission_request=ok", async () => {
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const mock = mockRegistry([
+      { status: 201, body: failedBody },   // first attempt: admission did not land
+      { status: 201, body: ASSERTION },    // retry: clean
+    ]);
+    const res = await withFetch(mock.fetch, () =>
+      dispatchProvisionStack([
+        "register", "andreas", "--seed-path", seedPath,
+        "--registry-url", "http://registry.test", "--network", "research-collab", "--json",
+      ]),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(mock.posts()).toBe(2); // retried exactly once
+    const out = JSON.parse(res.stdout) as { status: string; data: Record<string, string> };
+    expect(out.status).toBe("ok");
+    expect(out.data.admission_request).toBe("ok");
+    expect(out.data.registered).toContain("landed on automatic retry");
+  });
+
+  test("(c) admission failed then retry STILL failed → exit 1, actionable, retried once", async () => {
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const mock = mockRegistry([{ status: 201, body: failedBody }]); // every attempt fails admission
+    const res = await withFetch(mock.fetch, () =>
+      dispatchProvisionStack([
+        "register", "andreas", "--seed-path", seedPath,
+        "--registry-url", "http://registry.test", "--network", "research-collab",
+      ]),
+    );
+    expect(res.exitCode).toBe(1); // NON-ZERO — never a silent success
+    expect(mock.posts()).toBe(2); // one initial + one retry
+    // Actionable: names the network, the warning, and the manual re-register fallback.
+    expect(res.stderr).toContain("research-collab");
+    expect(res.stderr).toContain(FAILED_WARNING);
+    expect(res.stderr).toMatch(/re-register/i);
+    expect(res.stderr).toContain("cortex provision-stack register andreas");
+    expect(res.stderr).toContain("--network research-collab");
+  });
+
+  test("(c-json) failed-after-retry with --json → error envelope carries admission context", async () => {
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const mock = mockRegistry([{ status: 201, body: failedBody }]);
+    const res = await withFetch(mock.fetch, () =>
+      dispatchProvisionStack([
+        "register", "andreas", "--seed-path", seedPath,
+        "--registry-url", "http://registry.test", "--network", "research-collab", "--json",
+      ]),
+    );
+    expect(res.exitCode).toBe(1);
+    const env = JSON.parse(res.stderr) as {
+      status: string;
+      error: { reason: string; context: Record<string, string> };
+    };
+    expect(env.status).toBe("error");
+    expect(env.error.context.admission_request).toBe("failed");
+    expect(env.error.context.network).toBe("research-collab");
+    expect(env.error.context.warning).toBe(FAILED_WARNING);
+    expect(env.error.context.manual_fallback).toContain("cortex provision-stack register andreas");
+  });
+});
