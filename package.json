@@ -20,6 +20,9 @@
   "scripts": {
     "build:dashboard": "bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting",
     "watch:dashboard": "bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting --watch",
+    "deploy:dashboard": "bun run build:dashboard && bun scripts/scan-deploy-surface.ts dashboard --advisory && bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard",
+    "deploy:worker": "bun scripts/scan-deploy-surface.ts worker && bun --cwd src/surface/mc/worker run deploy",
+    "db:migrate:safe": "bun scripts/scan-deploy-surface.ts d1 --advisory && bun --cwd src/surface/mc/worker run db:migrate",
     "lint": "eslint .",
     "lint:errors": "eslint --quiet .",
     "lint:fix": "eslint --fix ."
