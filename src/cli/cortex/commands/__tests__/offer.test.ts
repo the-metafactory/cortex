@@ -61,6 +61,8 @@ import {
   dispatchOffer,
 } from "../offer";
 import type { Offering } from "../../../../common/types/offering";
+import { composeRawConfig } from "../../../../common/config/loader";
+import { CortexConfigSchema } from "../../../../common/types/cortex-config";
 
 type Rec = Record<string, unknown>;
 
@@ -399,15 +401,17 @@ describe("reconcileLayer", () => {
 // ===========================================================================
 
 describe("mergeOfferAcceptSubjects", () => {
-  test("preserves non-offer rows (OWN `.>`, peer `.agent.>`), appends capability rows", () => {
+  test("preserves the OWN `.>` row, DROPS the peer `.agent.>` subtree (#1362), appends capability rows", () => {
+    // #1362: a persisted peer PRESENCE subtree is out of own scope and fails the
+    // boot validator, so the offer writer no longer preserves it — the reconciler
+    // re-admits peer presence in-memory (same model as `network join` post-#1361).
     const prior = [
       "federated.andreas.work.>",
-      "federated.jc.sage-host.agent.>",
+      "federated.jc.sage-host.agent.>", // peer subtree — DROPPED, not persisted
     ];
     const caps = ["federated.andreas.work.tasks.code-review.typescript.>"];
     expect(mergeOfferAcceptSubjects(prior, caps, "andreas", "work")).toEqual([
       "federated.andreas.work.>",
-      "federated.jc.sage-host.agent.>",
       "federated.andreas.work.tasks.code-review.typescript.>",
     ]);
   });
@@ -431,18 +435,20 @@ describe("mergeOfferAcceptSubjects", () => {
     expect(mergeOfferAcceptSubjects([cap], [cap], "andreas", "work")).toEqual([cap]);
   });
 
-  test("empty caps + only presence rows → presence rows survive, no dispatch rows", () => {
+  test("empty caps + own `.>` + peer presence → own `.>` survives, peer `.agent.>` DROPPED (#1362)", () => {
     const prior = ["federated.andreas.work.>", "federated.jc.sage-host.agent.>"];
-    expect(mergeOfferAcceptSubjects(prior, [], "andreas", "work")).toEqual(prior);
+    expect(mergeOfferAcceptSubjects(prior, [], "andreas", "work")).toEqual([
+      "federated.andreas.work.>",
+    ]);
   });
 
-  test("a DIFFERENT principal's `…tasks.` row is NOT offer-owned → preserved", () => {
-    // Defensive: the own-prefix is identity-scoped. A peer's tasks row (should
-    // never appear, but if it does) is not this writer's to regenerate.
+  test("a DIFFERENT principal's `…tasks.` row is out of own scope → DROPPED (#1362)", () => {
+    // The own-prefix is identity-scoped, so a peer's tasks row is not offer-owned;
+    // and #1362 additionally drops it because it is out of THIS stack's own
+    // federated scope (a persisted peer subtree fails the boot validator).
     const prior = ["federated.jc.sage-host.tasks.code-review.>"];
     const caps = ["federated.andreas.work.tasks.chat.>"];
     expect(mergeOfferAcceptSubjects(prior, caps, "andreas", "work")).toEqual([
-      "federated.jc.sage-host.tasks.code-review.>",
       "federated.andreas.work.tasks.chat.>",
     ]);
   });
@@ -453,16 +459,18 @@ describe("mergeOfferAcceptSubjects", () => {
 // (cortex#1097, umbrella #1084 P2.1; least-privilege per #1105)
 //
 // `policy.federated.networks[].accept_subjects` has TWO writers:
-//   - the PRESENCE path (`network join` / reconciler, via `deriveAcceptSubjects`)
-//     writes the OWN `.>` subtree ∪ each roster peer's `.agent.>` presence subtree.
+//   - the PRESENCE path (`network join`, post-#1361) persists the OWN `.>`
+//     subtree ONLY; peer `.agent.>` presence subtrees are re-derived by the
+//     reconciler IN-MEMORY (never persisted — they fail the boot validator).
 //   - this offer-mode DISPATCH writer regenerates the capability-dispatch rows
 //     `federated.{me}.{stack}.tasks.{cap}.>` from the offerings.
-// They share ONE array. The offer writer must own ONLY its own-identity
-// `…tasks.*.>` dispatch rows and PRESERVE everything else, or an `offer --apply`
-// silently clobbers the peer presence subtrees and regresses P2/#1105.
+// They share ONE array. The offer writer regenerates ONLY its own-identity
+// `…tasks.*.>` dispatch rows and PRESERVES every other OWN-SCOPE row (the OWN
+// `.>` subtree, own hand-pins); it DROPS any out-of-own-scope row (a stale peer
+// subtree) so the persisted config stays boot-valid (#1362).
 // ===========================================================================
 
-describe("reconcileLayer — preserves presence-wiring accept-subjects (#1097)", () => {
+describe("reconcileLayer — persists own-scope accept-subjects, drops peer subtrees (#1362)", () => {
   const OWN_SUBTREE = "federated.andreas.work.>";
   const PEER_PRESENCE_JC = "federated.jc.sage-host.agent.>";
   const PEER_PRESENCE_KZ = "federated.kz.research.agent.>";
@@ -493,16 +501,17 @@ describe("reconcileLayer — preserves presence-wiring accept-subjects (#1097)",
     },
   });
 
-  test("adding a federated offering PRESERVES the OWN `.>` + peer `.agent.>` presence rows", () => {
+  test("adding a federated offering keeps the OWN `.>`, DROPS peer `.agent.>` presence rows (#1362)", () => {
     const { layer } = reconcileLayer(layerWithPresence(), [OFFER_FED_NET]);
     const net = ((layer.policy as Rec).federated as Rec).networks as Rec[];
     const accept = net[0]?.accept_subjects as string[];
-    // Presence-wiring rows survive untouched.
+    // The OWN subtree survives; the capability-dispatch row is added.
     expect(accept).toContain(OWN_SUBTREE);
-    expect(accept).toContain(PEER_PRESENCE_JC);
-    expect(accept).toContain(PEER_PRESENCE_KZ);
-    // The capability-dispatch row is added alongside them.
     expect(accept).toContain(CAP_DISPATCH);
+    // #1362: stale peer PRESENCE subtrees are NOT persisted (reconciler re-admits
+    // them in-memory) — so the persisted accept-list stays own-scope + boot-valid.
+    expect(accept).not.toContain(PEER_PRESENCE_JC);
+    expect(accept).not.toContain(PEER_PRESENCE_KZ);
   });
 
   test("the offer writer never widens to a peer's FULL `.>` subtree (least-privilege #1105)", () => {
@@ -514,8 +523,8 @@ describe("reconcileLayer — preserves presence-wiring accept-subjects (#1097)",
     expect(accept).not.toContain("federated.kz.research.>");
   });
 
-  test("revoking the last federated offering drops the stale capability row but KEEPS presence rows", () => {
-    // Seed: presence rows + a stale capability-dispatch row, plus the offering.
+  test("revoking the last federated offering drops the stale capability row AND stale peer rows, keeps OWN `.>` (#1362)", () => {
+    // Seed: own `.>` + peer presence rows + a stale capability-dispatch row, plus the offering.
     const seeded = layerWithPresence([CAP_DISPATCH]);
     (seeded.policy as Rec).offerings = [OFFER_FED_NET];
     const { layer } = reconcileLayer(seeded, []); // all offerings revoked
@@ -523,10 +532,11 @@ describe("reconcileLayer — preserves presence-wiring accept-subjects (#1097)",
     const accept = net[0]?.accept_subjects as string[];
     // The offer writer's own stale dispatch row is gone…
     expect(accept).not.toContain(CAP_DISPATCH);
-    // …but the presence-wiring rows it does NOT own are preserved.
+    // …the OWN subtree survives…
     expect(accept).toContain(OWN_SUBTREE);
-    expect(accept).toContain(PEER_PRESENCE_JC);
-    expect(accept).toContain(PEER_PRESENCE_KZ);
+    // …and #1362: stale peer PRESENCE rows are no longer persisted either.
+    expect(accept).not.toContain(PEER_PRESENCE_JC);
+    expect(accept).not.toContain(PEER_PRESENCE_KZ);
   });
 
   test("regenerating is idempotent — re-running with the same offering does not duplicate rows", () => {
@@ -701,6 +711,60 @@ describe("dispatchOffer — CLI", () => {
     expect(backups.length).toBe(1);
     // The registry-push deferral is surfaced.
     expect(r.stdout).toContain("provision-stack register");
+  });
+
+  test("set federated --apply on a PEERED stack with a stale peer subtree → own-scope only + boot-valid (#1362)", async () => {
+    // Seed the exact #1220/#1362 hazard: a network already joined with roster
+    // peers whose accept_subjects still carry a peer PRESENCE subtree (as a
+    // pre-#1361 `network join` would have written). Pre-fix, offer PRESERVED that
+    // peer row → the composed config failed CortexConfigSchema and offer refused
+    // (loud-but-confusing). Post-#1362 offer drops it → own-scope, boot-valid.
+    const dir = makeSplitDir({
+      work: stackLayer({
+        policy: {
+          federated: {
+            networks: [
+              {
+                id: "metafactory-net",
+                leaf_node: "leaf",
+                max_hop: 1,
+                peers: [{ principal_id: "jc", stack_id: "jc/sage-host", principal_pubkey: "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+                accept_subjects: [
+                  "federated.andreas.work.>",
+                  "federated.jc.sage-host.agent.>", // stale peer PRESENCE subtree
+                ],
+                announce_capabilities: [],
+              },
+            ],
+            registry: { url: "https://registry.example" },
+          },
+        },
+      }),
+    });
+
+    const r = await run([
+      "code-review.typescript", "--scope", "federated", "--network", "metafactory-net",
+      "--config", dir, "--apply",
+    ]);
+    // Offer no longer refuses on the stale peer row — it self-heals.
+    expect(r.code).toBe(0);
+
+    const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
+    const net = ((written.policy as Rec).federated as Rec).networks as Rec[];
+    const accept = net[0]?.accept_subjects as string[];
+    // Own-scope ONLY: the own `.>` subtree survives, the capability-dispatch row
+    // is added, and the stale peer PRESENCE subtree is NOT persisted.
+    expect(accept).toContain("federated.andreas.work.>");
+    expect(accept).toContain("federated.andreas.work.tasks.code-review.typescript.>");
+    expect(accept).not.toContain("federated.jc.sage-host.agent.>");
+    expect(accept.every((s) => s.startsWith("federated.andreas.work."))).toBe(true);
+
+    // The WRITTEN config is boot-valid — compose it exactly as the daemon does
+    // (offer's own composePath) and validate against CortexConfigSchema.
+    const target = resolveTarget(dir, undefined);
+    const composed = composeRawConfig(target.composePath);
+    const parsed = CortexConfigSchema.safeParse(composed);
+    expect(parsed.success).toBe(true);
   });
 
   test("set federated with no accept → exit 2 (usage)", async () => {

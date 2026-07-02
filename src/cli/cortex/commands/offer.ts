@@ -93,7 +93,7 @@ import {
   resolveOffering,
   superRefineOfferings,
 } from "../../../common/types/offering";
-import { CortexConfigSchema } from "../../../common/types/cortex-config";
+import { CortexConfigSchema, isFederatedSubjectInOwnScope } from "../../../common/types/cortex-config";
 import { deriveStackId } from "../../../common/types/stack";
 
 import { CliArgsError } from "./_shared/arg-error";
@@ -225,10 +225,11 @@ function ownDispatchPrefix(principal: string, stack: string): string {
  * `policy.federated.networks[].accept_subjects` has TWO independent writers that
  * share ONE array:
  *
- *   - the **presence** path (`cortex network join` / the P3 reconciler, via
- *     `deriveAcceptSubjects`, #1087/#1105) writes the OWN `.>` subtree ∪ each
- *     roster peer's PRESENCE-only `.agent.>` subtree (source-addressed presence
- *     FROM peers, ADR-0007).
+ *   - the **presence** path (`cortex network join`, #1087/#1105). Post-#1361 it
+ *     PERSISTS the OWN `.>` subtree ONLY; each roster peer's PRESENCE-only
+ *     `.agent.>` subtree (source-addressed presence FROM peers, ADR-0007) is
+ *     re-derived by the federation reconciler IN-MEMORY at runtime, never written
+ *     to disk (persisting a peer subtree fails the boot validator, #1220/#1361).
  *   - this **offer-mode dispatch** writer regenerates the capability rows
  *     `federated.{me}.{stack}.tasks.{cap}.>` (receiver-addressed dispatch TO me).
  *
@@ -243,15 +244,30 @@ function ownDispatchPrefix(principal: string, stack: string): string {
  *
  * The merge rule is least-privilege on BOTH sides: the offer writer owns ONLY the
  * own-identity `…tasks.` dispatch rows (it regenerates exactly those, dropping a
- * capability that's no longer offered), and preserves every other row verbatim —
- * the OWN `.>` subtree and the peer `.agent.>` presence subtrees the presence
- * writer owns. It never invents a peer subtree (it has no roster) and never
- * widens to `.>`.
+ * capability that's no longer offered), and preserves every OTHER **own-scope**
+ * row verbatim — the OWN `.>` subtree and any own-scope hand-pin. It never
+ * invents a peer subtree (it has no roster) and never widens to `.>`.
  *
- * Order: preserved (non-offer) rows first in their original order, then the
- * regenerated capability-dispatch rows (sorted, as `projectFederationConfig`
- * already emits them). De-duped — a capability row that also appears in the
- * preserved set (a hand-pin) is not duplicated.
+ * ## cortex#1362 — own-scope ONLY persisted (aligns with the #1220/#1361 join fix)
+ *
+ * A persisted PEER PRESENCE subtree (`federated.{peer}.{stack}.agent.>`) is OUT
+ * of the receiving stack's own federated scope and FAILS the boot config
+ * validator (ADR-0001, `CortexConfigSchema` subject-scope superRefine) — the
+ * exact #1220 boot-invalid state, reachable via the offer verb because the old
+ * preserve-merge kept a peer subtree a pre-#1361 `join` had written. So the
+ * preserve step now DROPS any row that is not in this stack's own federated
+ * scope (reusing `isFederatedSubjectInOwnScope`, the single predicate the boot
+ * validator itself uses — #1361). Peer PRESENCE is NOT lost: the federation
+ * reconciler re-derives the full own ∪ peer accept-list IN-MEMORY at runtime
+ * (never persisted), exactly as it does for `network join` post-#1361. The
+ * persisted projection therefore stays boot-valid (own-scope only) and offer's
+ * guarded validate-before-write no longer refuses on a peered stack carrying a
+ * stale peer row — it self-heals by not persisting it.
+ *
+ * Order: preserved (non-offer, own-scope) rows first in their original order,
+ * then the regenerated capability-dispatch rows (sorted, as
+ * `projectFederationConfig` already emits them). De-duped — a capability row
+ * that also appears in the preserved set (a hand-pin) is not duplicated.
  *
  * PURE.
  */
@@ -262,10 +278,16 @@ export function mergeOfferAcceptSubjects(
   stack: string,
 ): string[] {
   const ownPrefix = ownDispatchPrefix(principal, stack);
-  // Preserve every prior row that the offer writer does NOT own (the OWN `.>`
-  // subtree, peer `.agent.>` presence rows, any hand-pin) — i.e. anything that
-  // is not one of THIS stack's own-identity `…tasks.*.>` dispatch rows.
-  const preserved = priorAccept.filter((s) => !s.startsWith(ownPrefix));
+  // Preserve every prior row that (a) the offer writer does NOT own (i.e. not one
+  // of THIS stack's own-identity `…tasks.*.>` dispatch rows, which are
+  // regenerated below) AND (b) is within this stack's OWN federated scope
+  // (#1362). Condition (b) DROPS peer `.agent.>` presence subtrees — they are no
+  // longer persisted (they fail the boot validator); the reconciler admits peer
+  // presence in-memory at runtime. This keeps the persisted accept-list own-scope
+  // and boot-valid, mirroring the `network join` fix (#1361).
+  const preserved = priorAccept.filter(
+    (s) => !s.startsWith(ownPrefix) && isFederatedSubjectInOwnScope(s, principal, stack),
+  );
 
   const seen = new Set<string>(preserved);
   const out = [...preserved];
