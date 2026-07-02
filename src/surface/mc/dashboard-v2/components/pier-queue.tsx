@@ -21,14 +21,23 @@
  */
 
 import type { NetworkMembershipDTO } from "../hooks/use-networks";
-import { selectPierQueue } from "../lib/pier-queue-adapter";
+import { isAdminPosture, selectPierQueue } from "../lib/pier-queue-adapter";
+import { PierDecideForm } from "./pier-decide";
+import type { FetchLike } from "../lib/pier-decide-lib";
 
 export interface PierQueueProps {
   networks: readonly NetworkMembershipDTO[];
+  /** Injected transport for the decide action (tests). Production omits → `fetch`. */
+  decideFetch?: FetchLike;
+  /** Called after a successful admit/reject (e.g. to refetch the networks view). */
+  onDecided?: () => void;
 }
 
-export function PierQueue({ networks }: PierQueueProps) {
+export function PierQueue({ networks, decideFetch, onDecided }: PierQueueProps) {
   const queue = selectPierQueue(networks);
+  // MC-B2 — the decision action targets networks the principal ADMINS
+  // (complete-scope), the SAME trust gate the queue itself uses.
+  const adminNetworks = networks.filter(isAdminPosture).map((n) => n.network_id);
 
   // The admin queue only exists for someone who admins a network. Admin
   // nothing → render nothing (keep a pure-member / non-federated stack
@@ -97,6 +106,14 @@ export function PierQueue({ networks }: PierQueueProps) {
           requests are visible only to a network&rsquo;s admin.
         </p>
       ) : null}
+
+      {/* MC-B2 — the Tier-2 grant/reject action (request-id-driven, typed-confirm,
+          local-daemon-signed). Only shown when the principal admins ≥1 network. */}
+      <PierDecideForm
+        adminNetworks={adminNetworks}
+        {...(decideFetch ? { fetchImpl: decideFetch } : {})}
+        {...(onDecided ? { onDecided } : {})}
+      />
     </section>
   );
 }

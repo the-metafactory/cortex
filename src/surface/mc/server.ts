@@ -41,6 +41,11 @@ import {
 import { handleListGitLinks } from "./api/git-links";
 import { handleListAgents, type AgentPresenceView } from "./api/agents";
 import { handleListNetworks, type NetworksView } from "./api/networks";
+import {
+  handleAdmissionDecision,
+  CF_ACCESS_EMAIL_HEADER,
+  type AdmissionDecider,
+} from "./api/networks-admission";
 import type {
   LocalAggregationContext,
   LocalAggregationProvider,
@@ -192,6 +197,16 @@ export interface StartServerOptions {
    */
   networks?: () => NetworksView | null;
   /**
+   * MC-B2 (cortex#1279) — lazy accessor for the admission-decision signer: the
+   * mutating Tier-2 admit/reject action (`POST /api/networks/admission-decision`).
+   * A GETTER like `networks` because the stack identity material + registry
+   * client boot AFTER the embed in `cortex.ts`; resolved per request. Returns
+   * `null` ⇒ no federation/registry/signing identity → the route 503s honestly.
+   * The signer runs LOCALLY (the daemon holds the stack seed); the CF worker
+   * never wires this.
+   */
+  admissionDecider?: () => AdmissionDecider | null;
+  /**
    * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
    * `/api/observability/*` routes proxy to it server-side. Loopback-enforced
    * at config-parse time; the proxy re-checks at the request boundary.
@@ -284,6 +299,9 @@ export function startServer(
         // MC-A1 — resolve the networks view lazily too (registry/presence boot
         // after the server). null ⇒ the route serves an empty list.
         const networks = options.networks?.() ?? null;
+        // MC-B2 — resolve the admission-decision signer lazily too (stack
+        // identity + registry client boot after the server). null ⇒ 503.
+        const admissionDecider = options.admissionDecider?.() ?? null;
         return handleApi(
           req,
           url,
@@ -292,6 +310,7 @@ export function startServer(
           agentPresence,
           localAggregation,
           networks,
+          admissionDecider,
         );
       }
 
@@ -448,7 +467,8 @@ async function handleApi(
   deps: ApiDeps | null,
   agentPresence: AgentPresenceView | null,
   localAggregation: LocalAggregationContext | null,
-  networks: NetworksView | null = null
+  networks: NetworksView | null = null,
+  admissionDecider: AdmissionDecider | null = null
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -667,6 +687,23 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListNetworks(networks, agentPresence);
+  }
+
+  // MC-B2 (cortex#1279) — POST /api/networks/admission-decision — the mutating
+  // Tier-2 admit/reject action from the glass. Two gates (both required): the
+  // CF-Access principal identity header + a typed-confirm echo of the request_id.
+  // The decision is signed LOCALLY by the daemon with the stack seed (the CF
+  // worker never wires `admissionDecider`, so this route 503s there — the seed
+  // stays local). The loopback bind (SEV-2, above) is the boundary the identity
+  // gate composes on top of.
+  if (pathname === "/api/networks/admission-decision") {
+    if (req.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+    const principal = req.headers.get(CF_ACCESS_EMAIL_HEADER) ?? undefined;
+    const body = await parseJsonBody(req);
+    if (body.error) return body.error;
+    return handleAdmissionDecision(admissionDecider, principal, body.value);
   }
 
   // F-17 — principal-driven GitHub iteration import.

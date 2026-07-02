@@ -24,6 +24,7 @@ import type { Config } from "./types";
 import type { WsClientRegistry } from "./ws/client-registry";
 import type { AgentPresenceView } from "./api/agents";
 import type { NetworksView } from "./api/networks";
+import type { AdmissionDecider } from "./api/networks-admission";
 import type { LocalAggregationProvider } from "./local-aggregation/sibling-db-reader";
 
 export interface MissionControlHandle {
@@ -95,6 +96,14 @@ export interface StartMissionControlOptions {
    * client + presence registry boot AFTER the embed. Omitted → empty list.
    */
   networks?: () => NetworksView | null;
+  /**
+   * MC-B2 (cortex#1279) — lazy accessor for the admission-decision signer,
+   * forwarded verbatim to `startServer` so `POST /api/networks/admission-decision`
+   * can sign a Tier-2 admit/reject LOCALLY with the stack seed. A GETTER (like
+   * `networks`) because the stack identity + registry client boot AFTER the
+   * embed. Omitted → the route 503s honestly.
+   */
+  admissionDecider?: () => AdmissionDecider | null;
   /**
    * P-14 U0.1 — Tier-3 sideband base URL (`config.mc.sideband`). Loopback-
    * enforced at config-parse time; forwarded verbatim to `startServer`, which
@@ -179,6 +188,7 @@ export async function startMissionControl(
       processManager,
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
       ...(opts.networks ? { networks: opts.networks } : {}),
+      ...(opts.admissionDecider ? { admissionDecider: opts.admissionDecider } : {}),
       ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
     });

@@ -179,6 +179,10 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 import type { NetworksView } from "./surface/mc/api/networks";
+import type {
+  AdmissionDecider,
+  AdmissionDecisionResult,
+} from "./surface/mc/api/networks-admission";
 import {
   resolveAdmittedRoster,
   type AdmissionRowsProvider,
@@ -187,6 +191,9 @@ import {
 // MC-A2 (cortex#1276) — the LIVE member-posture admission-rows provider +
 // per-principal acceptance resolution (the second trust layer).
 import { createMemberRosterAdmissionProvider } from "./bus/agent-network/admission-rows-member-provider";
+// MC-B2 (cortex#1279) — the WRITE sibling: sign a Tier-2 admit/reject decision
+// with the stack seed and POST it to the registry (local-daemon-signed).
+import { postAdmissionDecision } from "./bus/agent-network/admission-decision";
 import {
   summarizeAcceptancePolicy,
   resolvePeerAcceptance,
@@ -5257,6 +5264,12 @@ export async function startCortex(
   // `resolvedPolicy` is known); `null` until then ⇒ the route serves an empty
   // list. The MC server resolves it per request.
   let networksViewForApi: NetworksView | null = null;
+  // MC-B2 (cortex#1279) — the admission-decision signer for the mutating
+  // `POST /api/networks/admission-decision` action. Assigned in the federation
+  // block below alongside `networksViewForApi` (it reuses the SAME stack
+  // identity material + resolved registry). `null` until then ⇒ the route 503s.
+  // Signs LOCALLY with the stack seed; never wired in the CF worker.
+  let admissionDeciderForApi: AdmissionDecider | null = null;
   // #1008/#989 — discovered LOCAL sibling stacks, used by BOTH the DB-read
   // pane-of-glass aggregation (the embed's `localAggregation` getter, below, for
   // session trees) AND the #989 bus sibling-presence aggregator (later, for
@@ -5334,6 +5347,11 @@ export async function startCortex(
         // MC-A1 (cortex#1275) — networks view (lazy; assigned in the federation
         // block once `resolvedPolicy` is known). null ⇒ empty `/api/networks`.
         networks: () => networksViewForApi,
+        // MC-B2 (cortex#1279) — the local-daemon admission-decision signer
+        // (lazy; assigned in the federation block once the stack identity +
+        // registry are resolved). null ⇒ `POST /api/networks/admission-decision`
+        // 503s honestly.
+        admissionDecider: () => admissionDeciderForApi,
         // #1008 — DB-read pane-of-glass aggregation. The getter returns a context
         // only when discovery produced a resolve-opts (dbRead on); otherwise null
         // ⇒ single-db feeds. Lazy so the roster can be (re)read consistently.
@@ -5834,6 +5852,42 @@ export async function startCortex(
             `as first-class trust groups (admission roster: ${live ? "LIVE member-read (A2)" : "not_configured — self-only"}; ` +
             "per-principal acceptance from offerings)",
         );
+
+        // MC-B2 (cortex#1279) — the WRITE sibling of the member-roster read:
+        // sign a Tier-2 admit/reject with the SAME `stackMaterial` and POST it to
+        // the registry. Unlike the read (which needs a pinned pubkey for the DD-9
+        // assertion verify), the write needs only the registry URL + the stack
+        // seed — the registry authorizes on the signing pubkey (global or
+        // per-network admin). Live iff we hold the stack seed AND a registry URL.
+        // Runs LOCALLY (this daemon holds the seed); the CF worker never reaches
+        // this code. null ⇒ `POST /api/networks/admission-decision` 503s.
+        if (stackMaterial !== undefined && resolvedRegistry !== undefined) {
+          const decisionRegistryUrl = resolvedRegistry.url;
+          const decisionMaterial = stackMaterial;
+          admissionDeciderForApi = {
+            decide: async (input): Promise<AdmissionDecisionResult> => {
+              const res = await postAdmissionDecision({
+                registryUrl: decisionRegistryUrl,
+                requestId: input.requestId,
+                decision: input.decision,
+                material: decisionMaterial,
+              });
+              // Audit trail (no secrets): who decided what, and the outcome.
+              const auditOutcome = res.ok ? res.status : `refused(${res.reason})`;
+              console.log(
+                `cortex: MC-B2 admission ${input.decision} — request=${input.requestId} ` +
+                  `network=${input.networkId} principal=${input.principal} -> ${auditOutcome}`,
+              );
+              return res.ok
+                ? { ok: true, status: res.status, requestId: res.requestId }
+                : { ok: false, reason: res.reason, detail: res.detail };
+            },
+          };
+          console.log(
+            "cortex: MC /api/networks/admission-decision wired — LIVE local-daemon-signed " +
+              "Tier-2 admit/reject (stack-seed-signed; CF-Access + typed-confirm gated at the surface)",
+          );
+        }
       }
 
       // P-14 U3.3 (#937) — the trust-verified federated OBSERVABILITY fold, the
