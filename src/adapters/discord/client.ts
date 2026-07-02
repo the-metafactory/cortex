@@ -119,7 +119,15 @@ export function createDiscordClient(
     console.log(`  Guild: ${info.guildId}`);
   });
 
-  client.on("shardReady", (shardId) => {
+  // Shared connected-bookkeeping for shardReady (fresh IDENTIFY) and
+  // shardResume (gateway session RESUME after a drop). Discord routinely
+  // cycles gateway connections, and a successful RESUME emits shardResume
+  // with NO shardReady — so a resume-only recovery must refresh the same
+  // health state. Without this, `lastConnectedAt` (stamped only on READY)
+  // goes stale across resumed sessions and the shardReconnecting log reads
+  // like an hours-long outage ("last connected: 36336s ago") while the
+  // shard is actually connected and delivering events.
+  const markShardConnected = (shardId: number, via: string) => {
     health.currentlyConnected = true;
     health.lastConnectedAt = new Date();
     clearDegradedTimer();
@@ -140,10 +148,18 @@ export function createDiscordClient(
     health.degraded = false;
     health.degradedSince = null;
     if (!wasDegraded) {
-      // Normal reconnect within threshold — emit the routine ready log. When
-      // we crossed the degraded threshold, RECOVERED above already conveys it.
-      console.log(`${tag}: shard ${shardId} ready (reconnects so far: ${health.reconnectCount})`);
+      // Normal (re)connect within threshold — emit the routine log. When we
+      // crossed the degraded threshold, RECOVERED above already conveys it.
+      console.log(`${tag}: shard ${shardId} ${via} (reconnects so far: ${health.reconnectCount})`);
     }
+  };
+
+  client.on("shardReady", (shardId) => {
+    markShardConnected(shardId, "ready");
+  });
+
+  client.on("shardResume", (shardId, replayedEvents) => {
+    markShardConnected(shardId, `resumed, ${replayedEvents} events replayed`);
   });
 
   client.on("shardDisconnect", (closeEvent, shardId) => {

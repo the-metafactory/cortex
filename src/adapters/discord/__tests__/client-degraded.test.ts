@@ -219,3 +219,69 @@ describe("createDiscordClient degraded timer", () => {
     client.destroy();
   });
 });
+
+// A successful gateway RESUME emits shardResume with NO shardReady. Discord
+// cycles gateway sessions routinely, so resume-only recoveries are the common
+// path — the health tracker must treat them exactly like shardReady, or
+// `lastConnectedAt` (stamped only on READY) goes stale across resumed
+// sessions and the shardReconnecting log reads like an hours-long outage
+// while the shard is actually connected and delivering events.
+describe("createDiscordClient shardResume health", () => {
+  test("shardResume refreshes lastConnectedAt and connected state", async () => {
+    const { client, health } = setupClient({ degradedThresholdMs: 100 });
+    (client as any).emit("shardReady", 0);
+    const readyAt = health.lastConnectedAt;
+    expect(readyAt).toBeInstanceOf(Date);
+    await new Promise((r) => setTimeout(r, 15));
+    (client as any).emit("shardDisconnect", { code: 1006 } as any, 0);
+    expect(health.currentlyConnected).toBe(false);
+    (client as any).emit("shardResume", 0, 3);
+    expect(health.currentlyConnected).toBe(true);
+    expect(health.lastConnectedAt).toBeInstanceOf(Date);
+    expect(health.lastConnectedAt!.getTime()).toBeGreaterThan(readyAt!.getTime());
+    client.removeAllListeners();
+    client.destroy();
+  });
+
+  test("shardResume before threshold cancels the degraded timer", async () => {
+    const { client, health, onDegraded } = setupClient({ degradedThresholdMs: 50 });
+    (client as any).emit("shardDisconnect", { code: 1006 } as any, 0);
+    (client as any).emit("shardResume", 0, 0);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(health.degraded).toBe(false);
+    expect(onDegraded).not.toHaveBeenCalled();
+    client.removeAllListeners();
+    client.destroy();
+  });
+
+  test("shardResume after degraded fires onRecovered and clears state (parity with shardReady)", async () => {
+    const { client, health, onRecovered } = setupClient({ degradedThresholdMs: 20 });
+    (client as any).emit("shardDisconnect", { code: 1006 } as any, 0);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(health.degraded).toBe(true);
+    (client as any).emit("shardResume", 0, 12);
+    expect(health.degraded).toBe(false);
+    expect(health.degradedSince).toBeNull();
+    expect(health.currentlyConnected).toBe(true);
+    expect(onRecovered).toHaveBeenCalledTimes(1);
+    client.removeAllListeners();
+    client.destroy();
+  });
+
+  test("routine ready log line is unchanged; resume gets its own line", () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...args) => { lines.push(args.join(" ")); };
+    try {
+      const { client } = setupClient();
+      (client as any).emit("shardReady", 0);
+      (client as any).emit("shardResume", 0, 7);
+      expect(lines).toContain("discord-test: shard 0 ready (reconnects so far: 0)");
+      expect(lines).toContain("discord-test: shard 0 resumed, 7 events replayed (reconnects so far: 0)");
+      client.removeAllListeners();
+      client.destroy();
+    } finally {
+      console.log = log;
+    }
+  });
+});
