@@ -811,7 +811,27 @@ describe("cortex#327 — signature verification gate", () => {
 describe("cortex#331 Phase 1 — pi-dev substrate dispatch (factory wired into ReviewConsumer)", () => {
   let runtime: BusRuntime;
   let consumer: ReviewConsumer;
-  const stdoutMarkdown = "## sage review\n\nblockers=0 majors=0 nits=0 — looks good";
+  // Post-compass#99 F11 a `review.verdict.*` requires a well-formed
+  // `--emit-verdict-block` block (block-less stdout returns a prose
+  // `completed`, no synthetic verdict). sage#83 emits this block in
+  // production, so the round-trip fixture carries one (verdict=commented).
+  const stdoutMarkdown =
+    "## sage review\n\nblockers=0 majors=0 nits=0 — looks good\n\n```json\n" +
+    JSON.stringify(
+      {
+        verdict: "commented",
+        summary: "blockers=0 majors=0 nits=0 — looks good",
+        github_review_id: 0,
+        github_review_url: "",
+        submitted_at: "2026-07-02T00:00:00Z",
+        commit_id: "",
+        findings: { blockers: 0, majors: 0, nits: 0 },
+        inline_comments: 0,
+      },
+      null,
+      2,
+    ) +
+    "\n```";
 
   beforeAll(async () => {
     runtime = createBusRuntime();

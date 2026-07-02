@@ -20,8 +20,10 @@
  *       env, else `pi`)
  *     → parses the structured verdict block from sage's stdout (cortex#888) →
  *       builds a `review.verdict.{approved|changes-requested|commented}` envelope
- *       (falls back to exit-code mapping when no block is present)
- *     → cortex publishes the verdict back to the bus → pilot's `--wait` catches it
+ *       from that block, or — when no well-formed block is present — returns a
+ *       prose `completed` result (compass#99 F11; NO synthetic exit-code verdict)
+ *     → cortex publishes the verdict (or a plain `dispatch.task.completed`) back
+ *       to the bus → pilot's `--wait` catches the verdict
  *
  * **What this module is.** A `ReviewPipelineRunner` factory with the same
  * signature `runReviewPipeline` exposes (`src/runner/review-pipeline.ts`), so it
@@ -50,12 +52,17 @@
  *
  * **Failure shape.** Mirrors `runReviewPipeline`'s contract:
  *
- *   | Outcome                          | result.kind | reason.kind |
- *   |----------------------------------|-------------|-------------|
- *   | sage exit 0                      | `verdict`   | (none)      |
- *   | sage exit != 0                   | `failed`    | `cant_do`   |
- *   | sage binary not found            | `failed`    | `cant_do`   |
- *   | spawn throw (env / sandbox bug)  | `failed`    | `cant_do`   |
+ *   | Outcome                              | result.kind | reason.kind |
+ *   |--------------------------------------|-------------|-------------|
+ *   | sage exit 0/1 + well-formed block    | `verdict`   | (none)      |
+ *   | sage exit 0/1 + missing/bad block    | `completed` | (none)      |
+ *   | sage exit >=2 (or killed)            | `failed`    | `cant_do`   |
+ *   | sage binary not found                | `failed`    | `cant_do`   |
+ *   | spawn throw (env / sandbox bug)      | `failed`    | `cant_do`   |
+ *
+ * The `completed` row is the compass#99 F11 fail-closed path: a missing or
+ * malformed `--emit-verdict-block` yields the raw sage markdown as a prose
+ * completion, NEVER a synthetic exit-code verdict.
  *
  * Phase 1 maps every non-happy outcome to `cant_do` because we don't yet
  * distinguish substrate-transient (`not_now`) from skill-permanent
@@ -254,11 +261,12 @@ export function makeSageReviewRunner(
     const substrate = opts.model ?? process.env.SAGE_SUBSTRATE ?? "pi";
     // cortex#888 — ask sage to append the structured verdict block as the
     // terminal stdout artefact (sage#83 `--emit-verdict-block`). We parse it
-    // below to recover the REAL decision (`approved` is invisible to the
-    // exit-code-only fallback) + findings counts. Older sage builds that
+    // below to recover the REAL decision (`approved` is invisible to an
+    // exit-code-only read) + findings counts. Older sage builds that
     // don't know the flag would error on it — but the flag shipped in
     // lockstep (sage#83) and the bundled sage is pinned, so this is safe;
-    // if the block is absent for any reason we fall back to exit-code mapping.
+    // if the block is absent/malformed we return a prose completion
+    // (compass#99 F11 — no synthetic verdict), never an exit-code decision.
     const argv = [sageBin, "review", prRef, "--substrate", substrate, "--emit-verdict-block"];
     // Propagate the dispatch's `--post` intent. `sage dispatch --post`
     // stamps `payload.post: true` (sage#8) and the review-consumer carries
@@ -328,28 +336,40 @@ export function makeSageReviewRunner(
 
     // cortex#888 (Phase 2) — recover the real verdict from sage's structured
     // block. sage emits it as the terminal ```json fence under
-    // `--emit-verdict-block` (sage#83). The block carries the true decision
-    // (incl. `approved`, invisible to the exit code) + findings counts +
-    // commit_id. A present, well-formed block wins; anything else
-    // (older sage, malformed JSON, missing block) falls back to the
-    // exit-code mapping below so a parse hiccup never drops a valid review.
+    // `--emit-verdict-block` (sage#83). A present, well-formed block carries
+    // the true decision (incl. `approved`, invisible to the exit code) +
+    // findings counts + commit_id, and is the ONLY thing that yields a
+    // `review.verdict.*`.
     const rawBlock = extractVerdictBlock(stdout);
     if (rawBlock !== null) {
       const parsed = parseVerdictBlock(rawBlock);
       if (parsed.ok) {
         return verdict(pipeline, correlationId, stdout, parsed.value.verdict, parsed.value);
       }
-      // Block present but malformed — log + fall through to exit-code mapping.
+      // Block present but malformed — log and fall through to the
+      // prose-completion path below. We deliberately do NOT synthesise a
+      // verdict from the exit code (compass#99 F11): a malformed block means we
+      // cannot recover the real decision, so fabricating one would risk a wrong
+      // merge signal.
       console.error(
-        `[sage] verdict block malformed (${parsed.detail}); falling back to exit-code mapping`,
+        `[sage] verdict block malformed (${parsed.detail}); ` +
+          `returning prose completion (no synthetic verdict)`,
       );
     }
 
-    // Fallback: exit 1 ⇒ changes-requested; exit 0 ⇒ commented (sage can't
-    // distinguish approved from commented via exit code alone).
-    const decision: ReviewVerdictKind =
-      exitCode === 1 ? "changes-requested" : "commented";
-    return verdict(pipeline, correlationId, stdout, decision);
+    // compass#99 F11 (drift-8; align cortex#503) — FAIL CLOSED on a
+    // missing/malformed verdict block: return the prose-completion variant, NOT
+    // a synthetic `review.verdict.*` derived from the exit code. The dropped
+    // fallback (exit 1 ⇒ changes-requested, exit 0 ⇒ commented) could NEVER
+    // represent `approved` and manufactured a decision no reviewer stood behind
+    // — a real merge-stall / false-signal risk. `--emit-verdict-block` shipped
+    // in lockstep (sage#83) and the sage binary is pinned, so a well-formed
+    // block is the norm; when it is absent we hand the raw sage markdown back
+    // as `presentation` — the SAME third `ReviewPipelineResult` the CC path
+    // returns (review-pipeline.ts) — and the consumer publishes a plain
+    // `dispatch.task.completed`, never a verdict. pilot's `--wait` keys on
+    // `review.verdict.*`, so no fabricated decision can reach it.
+    return { kind: "completed", presentation: stdout.trim() };
   };
 }
 
@@ -383,6 +403,11 @@ function defaultWhich(cmd: string): string | undefined {
  * for any non-happy substrate outcome. Phase 1 collapses every failure
  * to `cant_do` (see module docblock). Phase 2 splits substrate-transient
  * from skill-permanent.
+ *
+ * compass#99 F12 — `pipeline.classification` + `pipeline.responseRouting` are
+ * threaded onto the failed terminal too, so a federated review's error routes
+ * back to the requester with federated sovereignty + echoed routing,
+ * wire-identically to the CC path (review-pipeline.ts).
  */
 function failed(
   pipeline: ReviewPipelineOpts,
@@ -400,6 +425,17 @@ function failed(
     failedAt: new Date(),
     errorSummary,
     reason: { kind: "cant_do", detail: errorSummary },
+    // compass#99 F12 (wire-2) — a federated review's failed terminal routes
+    // back to the federated requester, so it must declare federated sovereignty
+    // + echo the response routing, wire-identically to the CC path
+    // (review-pipeline.ts). Default undefined ⇒ `local` + no routing (unchanged
+    // local-consumer behaviour).
+    ...(pipeline.classification !== undefined && {
+      classification: pipeline.classification,
+    }),
+    ...(pipeline.responseRouting !== undefined && {
+      responseRouting: pipeline.responseRouting,
+    }),
   });
   return { kind: "failed", envelope };
 }
@@ -408,13 +444,18 @@ function failed(
  * Build a `review.verdict.{decision}` envelope carrying sage's markdown
  * stdout as `payload.summary`.
  *
- * When `block` is supplied (cortex#888 — sage emitted a well-formed
- * `--emit-verdict-block` artefact), the structured fields (findings counts,
- * github review id/url, commit_id, submitted_at, inline_comments) come from
- * it. Without a block (fallback path: older sage, malformed JSON), those
- * fields surface as zeros / empty strings — pilot still sees a well-formed
- * envelope and principals can grep the markdown summary for the values.
- * `reviewer` stays `sage` (the substrate doing the review).
+ * The `block` argument (cortex#888 — sage's well-formed `--emit-verdict-block`
+ * artefact) supplies the structured fields (findings counts, github review
+ * id/url, commit_id, submitted_at, inline_comments). Post-compass#99 F11 the
+ * runner only reaches this helper WITH a well-formed block (a missing/malformed
+ * block returns a prose `completed` result upstream, not a verdict), so the
+ * `block?`-absent defaults below are defensive-only; when they do apply the
+ * fields surface as zeros / empty strings. `reviewer` stays `sage` (the
+ * substrate doing the review).
+ *
+ * compass#99 F12 — `pipeline.classification` + `pipeline.responseRouting` are
+ * threaded onto the verdict envelope so a federated review's terminal is
+ * wire-identical to the CC path (review-pipeline.ts).
  */
 function verdict(
   pipeline: ReviewPipelineOpts,
@@ -429,6 +470,20 @@ function verdict(
     source,
     kind: decision,
     correlationId,
+    // compass#99 F12 (wire-2) — federated sage verdicts declare federated
+    // sovereignty so the emitted envelope matches the `federated.*` subject the
+    // consumer routes it on (federation-wire-protocol SOP check 5: terminals
+    // mirror the inbound scope). Wire-identical to the CC path
+    // (review-pipeline.ts). Default undefined ⇒ `local` (unchanged).
+    ...(pipeline.classification !== undefined && {
+      classification: pipeline.classification,
+    }),
+    // compass#99 F12 — echo the inbound response routing onto the verdict (the
+    // primary reply) so the review sink renders it to the originating thread,
+    // exactly as the CC path does.
+    ...(pipeline.responseRouting !== undefined && {
+      responseRouting: pipeline.responseRouting,
+    }),
     payload: {
       repo: payload.repo,
       pr: payload.pr,

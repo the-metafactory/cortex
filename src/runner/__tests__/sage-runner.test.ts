@@ -119,6 +119,51 @@ const whichSuccess: SageWhichFn = (cmd) =>
 const whichMissing: SageWhichFn = () => undefined;
 
 // ---------------------------------------------------------------------------
+// Verdict-block fixtures (cortex#888) — shared by the block-recovery tests and
+// the compass#99 F11/F12 tests. A well-formed block is the ONLY thing that
+// yields a `review.verdict.*` post-F11; block-less / malformed stdout returns
+// the prose-completion variant (no synthetic exit-code verdict).
+// ---------------------------------------------------------------------------
+
+function withBlock(body: string, block: Record<string, unknown>): string {
+  return `${body}\n\n\`\`\`json\n${JSON.stringify(block, null, 2)}\n\`\`\``;
+}
+
+const SAMPLE_BLOCK = {
+  verdict: "approved",
+  summary: "No findings. Sage approves.",
+  github_review_id: 999,
+  github_review_url: "https://github.com/o/r/pull/1#pullrequestreview-999",
+  submitted_at: "2026-06-10T09:11:36Z",
+  commit_id: "abc1234deadbeef",
+  findings: { blockers: 0, majors: 0, nits: 0 },
+  inline_comments: 0,
+};
+
+/**
+ * compass#99 F12 — a logical response-routing block (review-path shape). The
+ * runner echoes it verbatim onto BOTH terminal envelopes (verdict + failed),
+ * exactly as the CC path does (review-pipeline.ts).
+ */
+const FED_ROUTING = {
+  surface: "discord",
+  channel: "cortex",
+  thread: "cortex/pr/331",
+};
+
+/**
+ * Build ReviewPipelineOpts carrying a federated classification + response
+ * routing — the shape the FEDERATED review consumer hands the runner.
+ */
+function makeFederatedPipelineOpts(): ReviewPipelineOpts {
+  return {
+    ...makePipelineOpts(),
+    classification: "federated",
+    responseRouting: FED_ROUTING,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -134,7 +179,14 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
     const prior = process.env.SAGE_SUBSTRATE;
     delete process.env.SAGE_SUBSTRATE;
     try {
-      const stdout = "## review body\n\nverdict: commented";
+      // Post-compass#99 F11 the ONLY thing that yields a `review.verdict.*` is
+      // a well-formed `--emit-verdict-block` block (sage#83) — block-less
+      // stdout returns the prose-completion variant. The canonical happy path
+      // therefore carries a block; summary still echoes the FULL stdout.
+      const stdout = withBlock("## review body", {
+        ...SAMPLE_BLOCK,
+        verdict: "commented",
+      });
       const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
       const runner = makeSageReviewRunner({
         spawn: spawn.fn,
@@ -325,7 +377,9 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
         which: whichSuccess,
       });
       const result = await runner(makePipelineOpts());
-      expect(result.kind).toBe("verdict");
+      // This test pins the argv `--substrate` override; the block-less stdout
+      // yields a prose completion post-F11 (no synthetic verdict).
+      expect(result.kind).toBe("completed");
       expect(spawn.calls.length).toBe(1);
       expect(spawn.calls[0]!.slice(-3)).toEqual(["--substrate", "claude", "--emit-verdict-block"]);
     } finally {
@@ -357,7 +411,12 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
   // real failure. Before this fix any non-zero exit collapsed to
   // `dispatch.task.failed`, discarding the review markdown on stdout.
 
-  test("cortex#409 — sage exit 1 → changes-requested verdict (not failed), summary=stdout", async () => {
+  test("cortex#409 — sage exit 1 (block-less) → prose completion, NOT failed (exit 1 is a valid outcome)", async () => {
+    // cortex#409's invariant: exit 1 is a VALID review outcome (CI-gate
+    // convention), never an error — the review markdown on stdout is not
+    // discarded. Post-compass#99 F11 a block-less exit-1 run yields the
+    // prose-completion variant (presentation=stdout) rather than a synthetic
+    // `changes-requested` verdict. Still NOT `failed` — that's what #409 pins.
     const prior = process.env.SAGE_SUBSTRATE;
     delete process.env.SAGE_SUBSTRATE;
     try {
@@ -372,14 +431,10 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
       const opts = makePipelineOpts();
       const result = await runner(opts);
 
-      expect(result.kind).toBe("verdict");
-      if (result.kind !== "verdict") return;
-      const envelope: Envelope = result.envelope;
-      expect(envelope.type).toBe("review.verdict.changes-requested");
-      expect(envelope.correlation_id).toBe(opts.requestEnvelope.id);
-      const payload = envelope.payload as { verdict: string; summary: string };
-      expect(payload.verdict).toBe("changes-requested");
-      expect(payload.summary).toBe(stdout);
+      // Not failed (the #409 invariant), and not a synthetic verdict (F11).
+      expect(result.kind).toBe("completed");
+      if (result.kind !== "completed") return;
+      expect(result.presentation).toBe(stdout.trim());
     } finally {
       if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
     }
@@ -493,27 +548,10 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
   // ---------------------------------------------------------------------
   // sage appends a fenced ```json verdict block under --emit-verdict-block
   // (sage#83). The runner parses it to recover the REAL decision (incl.
-  // `approved`, which the exit-code-only fallback cannot express) and the
-  // findings counts. A missing / malformed block falls back to exit-code
-  // mapping so a parse hiccup never drops an otherwise-valid review.
-
-  function withBlock(
-    body: string,
-    block: Record<string, unknown>,
-  ): string {
-    return `${body}\n\n\`\`\`json\n${JSON.stringify(block, null, 2)}\n\`\`\``;
-  }
-
-  const SAMPLE_BLOCK = {
-    verdict: "approved",
-    summary: "No findings. Sage approves.",
-    github_review_id: 999,
-    github_review_url: "https://github.com/o/r/pull/1#pullrequestreview-999",
-    submitted_at: "2026-06-10T09:11:36Z",
-    commit_id: "abc1234deadbeef",
-    findings: { blockers: 0, majors: 0, nits: 0 },
-    inline_comments: 0,
-  };
+  // `approved`, which the exit-code-only path cannot express) and the
+  // findings counts. A missing / malformed block now yields the
+  // prose-completion variant (compass#99 F11), NOT a synthetic verdict.
+  // (`withBlock` + `SAMPLE_BLOCK` fixtures live at the top of this file.)
 
   test("cortex#888 — exit 0 + block verdict=approved → review.verdict.approved (recovers approved)", async () => {
     const stdout = withBlock("## Sage code review — approved", SAMPLE_BLOCK);
@@ -580,29 +618,55 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
     expect(result.envelope.type).toBe("review.verdict.changes-requested");
   });
 
-  test("cortex#888 — malformed block falls back to exit-code mapping (exit 0 → commented)", async () => {
-    const stdout = "## Sage code review — commented\n\n```json\n{ not valid json\n```";
+  // compass#99 F11 — FAIL CLOSED on a missing/malformed verdict block
+  // ---------------------------------------------------------------------
+  // drift-8 / align cortex#503. The old exit-code fallback (exit 1 ⇒
+  // changes-requested, exit 0 ⇒ commented) could NEVER represent `approved`
+  // and manufactured a verdict no reviewer stood behind — a real merge-stall /
+  // false-signal risk. It is DROPPED: a missing OR malformed block now returns
+  // the `{ kind: "completed", presentation }` variant (the same third
+  // ReviewPipelineResult the CC path returns), NEVER a synthetic
+  // `review.verdict.*`. pilot's `--wait` keys on `review.verdict.*`, so no
+  // fabricated decision can reach it.
+
+  test("compass#99 F11 — MISSING verdict block (exit 0) → prose completion, NEVER a synthetic verdict", async () => {
+    const stdout = "## Sage code review — commented\n\n(no json block)";
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
     const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const result = await runner(makePipelineOpts());
 
-    expect(result.kind).toBe("verdict");
-    if (result.kind !== "verdict") return;
-    expect(result.envelope.type).toBe("review.verdict.commented");
-    // Fallback path → placeholder structured fields.
-    const payload = result.envelope.payload as { github_review_id: number };
-    expect(payload.github_review_id).toBe(0);
+    // Prose completion — NOT a verdict, NOT a failure.
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    expect(result.presentation).toBe(stdout.trim());
+    // Structurally, a `completed` result carries NO envelope — so there is no
+    // `review.verdict.*` and no synthetic verdict on the wire at all.
+    expect("envelope" in result).toBe(false);
   });
 
-  test("cortex#888 — no block (older sage) falls back to exit-code mapping (exit 1 → changes-requested)", async () => {
+  test("compass#99 F11 — MISSING verdict block (exit 1) → prose completion (exit code no longer synthesises changes-requested)", async () => {
     const stdout = "## Sage code review — changes-requested\n\n(no json block)";
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 1));
     const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const result = await runner(makePipelineOpts());
 
-    expect(result.kind).toBe("verdict");
-    if (result.kind !== "verdict") return;
-    expect(result.envelope.type).toBe("review.verdict.changes-requested");
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    expect(result.presentation).toBe(stdout.trim());
+  });
+
+  test("compass#99 F11 — MALFORMED verdict block (exit 0) → prose completion, NOT a synthetic verdict", async () => {
+    const stdout = "## Sage code review — commented\n\n```json\n{ not valid json\n```";
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
+    const result = await runner(makePipelineOpts());
+
+    // A malformed block means we cannot recover the real decision — we do NOT
+    // fabricate one from the exit code; we hand back the raw sage markdown.
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    expect(result.presentation).toBe(stdout.trim());
+    expect("envelope" in result).toBe(false);
   });
 
   // compass#89 (§4 L3) — confidentiality flavor is a PRE-SPAWN cant_do
@@ -653,13 +717,92 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
         payload: { ...base.payload, flavor: "security" },
       };
       const result = await runner(opts);
-      expect(result.kind).toBe("verdict");
-      // The guard did NOT fire — sage spawned. And (deferred to #99) no
-      // `--lens` flag is threaded yet, so the argv is the unchanged shape.
+      // The guard did NOT fire — sage spawned (evidenced by the single spawn
+      // call + argv below). The block-less stdout yields a prose completion
+      // post-F11; the point of this test is that a non-confidentiality flavor
+      // is NOT refused, not the result shape.
+      expect(result.kind).toBe("completed");
+      // And (deferred to #99 F13) no `--lens` flag is threaded yet, so the
+      // argv is the unchanged shape.
       expect(spawn.calls.length).toBe(1);
       expect(spawn.calls[0]).not.toContain("--lens");
     } finally {
       if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
     }
+  });
+
+  // compass#99 F12 — stamp classification + response_routing on terminals
+  // ---------------------------------------------------------------------
+  // wire-2. The sage terminal envelopes (verdict + failed) MUST be
+  // wire-IDENTICAL to the CC path (review-pipeline.ts:498/502 + :557/561): a
+  // FEDERATED review stamps `classification: "federated"` (so the emitted
+  // envelope's sovereignty matches the `federated.*` subject the consumer
+  // routes it on — federation-wire-protocol SOP check 5) and ECHOES the
+  // inbound `response_routing` so the review sink renders to the originating
+  // thread. Absent ⇒ `local` + no routing (unchanged local-consumer path).
+  // These assertions MIRROR the CC-path ones so the two engines can't re-drift.
+
+  test("compass#99 F12 — federated VERDICT carries classification=federated + echoed response_routing", async () => {
+    const stdout = withBlock("## Sage code review — approved", SAMPLE_BLOCK);
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
+
+    const result = await runner(makeFederatedPipelineOpts());
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    const envelope: Envelope = result.envelope;
+    // Sovereignty mirrors the inbound federated scope (SOP check 5).
+    expect(envelope.sovereignty.classification).toBe("federated");
+    // Response routing echoed verbatim onto the primary reply (the verdict).
+    const payload = envelope.payload as { response_routing?: unknown };
+    expect(payload.response_routing).toEqual(FED_ROUTING);
+  });
+
+  test("compass#99 F12 — LOCAL verdict defaults classification=local + omits response_routing", async () => {
+    // Parametric counterpart: the local review-consumer path passes neither
+    // field, so the verdict stays local and carries NO routing — identical to
+    // the pre-F12 behaviour, proving F12 is additive.
+    const stdout = withBlock("## Sage code review — approved", SAMPLE_BLOCK);
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
+
+    const result = await runner(makePipelineOpts());
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    const envelope: Envelope = result.envelope;
+    expect(envelope.sovereignty.classification).toBe("local");
+    expect("response_routing" in (envelope.payload as object)).toBe(false);
+  });
+
+  test("compass#99 F12 — federated FAILED terminal carries classification=federated + echoed response_routing", async () => {
+    // The other terminal the runner emits. A real error (exit ≥2) routes back
+    // to the federated requester, so its sovereignty + routing must match too.
+    const spawn = makeRecordingSpawn(makeSpawnResult("", "sage: boom", 2));
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
+
+    const result = await runner(makeFederatedPipelineOpts());
+
+    expect(result.kind).toBe("failed");
+    if (result.kind !== "failed") return;
+    const envelope: Envelope = result.envelope;
+    expect(envelope.type).toBe("dispatch.task.failed");
+    expect(envelope.sovereignty.classification).toBe("federated");
+    const payload = envelope.payload as { response_routing?: unknown };
+    expect(payload.response_routing).toEqual(FED_ROUTING);
+  });
+
+  test("compass#99 F12 — LOCAL failed terminal defaults classification=local + omits response_routing", async () => {
+    const spawn = makeRecordingSpawn(makeSpawnResult("", "sage: boom", 2));
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
+
+    const result = await runner(makePipelineOpts());
+
+    expect(result.kind).toBe("failed");
+    if (result.kind !== "failed") return;
+    const envelope: Envelope = result.envelope;
+    expect(envelope.sovereignty.classification).toBe("local");
+    expect("response_routing" in (envelope.payload as object)).toBe(false);
   });
 });
