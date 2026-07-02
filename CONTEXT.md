@@ -92,6 +92,10 @@ _Avoid_: message (too loose — say envelope for the wrapper, payload for the co
 The inner content body of an **envelope** — the domain data, distinct from the envelope's routing/trust metadata.
 _Avoid_: message, body, data
 
+**`request_id`** (signed verdict→request binding):
+The dispatch's `correlation_id` value, additionally stamped INTO the **signed** `payload` of a `review.verdict.*` envelope. myelin signs the `payload` but deliberately **excludes** the top-level `correlation_id` (mutable routing metadata), so the binding must live in the payload: it cryptographically ties a verdict to the specific request it answers. The verdict consumer (pilot's `--wait`) asserts `payload.request_id` equals the awaited request's id before honoring a verdict — defeating **replay-rebind**, where a genuine signed verdict is replayed against a different pending request by rewriting the unsigned `correlation_id` (compass#95 / cortex#1366).
+_Avoid_: conflating with the top-level **`correlation_id`** (unsigned routing metadata that groups one dispatch; `request_id` is its signed, in-payload counterpart, used solely for verdict-to-request binding).
+
 **Capability**:
 A declared, bus-routable ability — e.g. `code-review.typescript`, `chat`, `release`, `security-scan`. An **assistant** declares the capabilities it offers; the `tasks.{capability}.{subcapability}` **subject** routes on it (for Offer mode); for Direct/Delegate mode the capability appears as the trailing segment after `tasks.@{assistant}` (e.g. `tasks.@luna.chat`). An **agent**'s JetStream consumer filters by capability. A capability may be *fulfilled by* a soma skill, but the capability is the wire-facing ability, not the implementation.
 
