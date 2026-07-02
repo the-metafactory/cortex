@@ -1,0 +1,37 @@
+# Confidentiality gate allowlist — cortex (design doc §4 L1, umbrella compass#81).
+#
+# EMPTY SEED. Committed empty on purpose: cortex's tree is clean today and the
+# zero-entry ratchet is the stance (design doc §4 L2 "zero-entry ratchet").
+#
+# What this file is FOR:
+#   Narrow, principal-sanctioned carve-outs for TIER-2 public-shape false
+#   positives ONLY — e.g. a documented example ID, a sanctioned identifier in
+#   THIRD-PARTY-NOTICES.md. It is loaded by the L1 gate from the PR's BASE_SHA,
+#   never the PR head — so a violation cannot exempt itself in the same PR that
+#   introduces it (design doc §4 L1: "Allowlist is loaded from BASE_SHA").
+#
+# What this file is NOT for:
+#   - Denylist (tier-3) findings are NEVER allowlistable here. A denylist false
+#     positive is resolved ONLY via an `allow:` line in the PRIVATE compass
+#     denylist — never by echoing a term into this public file (design doc §4
+#     L1/L5: "denylist findings are never allowlistable via the committed
+#     `.confidentiality-allow`").
+#   - Real client/engagement identifiers. If the gate flags something real, the
+#     fix is to REMOVE the content, not to allowlist it.
+#
+# Discipline:
+#   - This file + `.github/workflows/**` are CODEOWNERS-protected; additions
+#     require code-owner review and MUST NOT land in the same PR as the violation
+#     they exempt.
+#   - Justification strings are PUBLIC — keep them engagement-neutral (a shape
+#     description + a link), never a client-identifying reason.
+#
+# Schema (when populated):
+#   allow:
+#     - rule: <tier-2 rule id, e.g. platform-id | internal-email | compliance-code>
+#       path: <glob the carve-out applies to>          # optional
+#       match: <exact public-safe literal, e.g. an all-zero placeholder id>  # optional
+#       reason: <engagement-neutral justification>
+#       added_by: <github-handle>
+version: 1
+allow: []

@@ -4,3 +4,17 @@
 # is auto-assigned to review the other's contributions, satisfying
 # the required-approval rule on main.
 * @jcfischer @mellanon
+
+# ── Confidentiality-control surface (design doc §4 L1/L2, compass#81) ──
+# Explicit ownership of the security-sensitive gate wiring + allowlists. The
+# catch-all above already covers these; these entries make the requirement
+# self-documenting and keep protection intact if `*` is ever narrowed. A
+# floating ref, a dropped secret, or a self-exempting allowlist edit here is a
+# security regression, so both principals own these paths (CODEOWNERS' last
+# matching pattern wins).
+/.github/workflows/confidentiality-gate.yml   @jcfischer @mellanon
+/.github/workflows/confidentiality*.yml       @jcfischer @mellanon
+/.confidentiality-allow.yaml                  @jcfischer @mellanon
+# L2 shippable-hygiene gate + its allowlist (land in PR 5; protected from day 1).
+/scripts/check-shippable-hygiene.ts           @jcfischer @mellanon
+/shippable-hygiene-allowlist.txt              @jcfischer @mellanon
