@@ -468,6 +468,13 @@ export async function runReviewPipeline(
       nits: parsed.value.findings.nits,
     },
     inline_comments: parsed.value.inline_comments,
+    // compass#89 (§4 L3) — carry the confidentiality-lens-ran evidence onto the
+    // verdict envelope so the autonomous loop can distinguish a clean lens run
+    // from a silent skip. Conditional spread: absent when the reviewer didn't
+    // emit it (older reviewers / sage), so the wire stays back-compatible.
+    ...(parsed.value.confidentiality_lens_ran !== undefined && {
+      confidentiality_lens_ran: parsed.value.confidentiality_lens_ran,
+    }),
     // cortex#503 — stamp the deterministic presentation markdown computed
     // by cortex from the structured fields. Zero LLM tokens: the reviewing
     // agent only authored `summary`; the heading/emoji/counts/link line are

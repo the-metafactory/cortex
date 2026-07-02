@@ -21,6 +21,15 @@ export interface VerdictBlock {
   commit_id: string;
   findings: { blockers: number; majors: number; nits: number };
   inline_comments: number;
+  /**
+   * compass#89 (§4 L3) — OPTIONAL machine-checkable evidence that the
+   * Confidentiality lens ran. Present only when the emitting reviewer set it
+   * (new CC reviews via `buildReviewPrompt` do; older reviewers and the sage
+   * engine do not). Absent ⇒ "lens-ran unknown", validated only when present:
+   * REQUIRED here would fail-closed every verdict block emitted before this
+   * field existed.
+   */
+  confidentiality_lens_ran?: boolean;
 }
 
 export type ParseResult<T> =
@@ -108,6 +117,15 @@ export function parseVerdictBlock(raw: string): ParseResult<VerdictBlock> {
   if (typeof obj.inline_comments !== "number" || !Number.isInteger(obj.inline_comments)) {
     return { ok: false, detail: "inline_comments must be an integer" };
   }
+  // compass#89 — OPTIONAL confidentiality-lens-ran evidence: validate the type
+  // ONLY when present. A missing field is legal (older reviewers / sage) and
+  // maps to `undefined`; a present-but-wrong-typed field is a contract error.
+  if (
+    obj.confidentiality_lens_ran !== undefined &&
+    typeof obj.confidentiality_lens_ran !== "boolean"
+  ) {
+    return { ok: false, detail: "confidentiality_lens_ran must be a boolean when present" };
+  }
   if (
     typeof obj.findings !== "object" ||
     obj.findings === null ||
@@ -141,6 +159,11 @@ export function parseVerdictBlock(raw: string): ParseResult<VerdictBlock> {
         nits: findings.nits,
       },
       inline_comments: obj.inline_comments,
+      // Only carry the field when the reviewer emitted it — an absent field
+      // stays absent (undefined), never coerced to `false`.
+      ...(obj.confidentiality_lens_ran !== undefined && {
+        confidentiality_lens_ran: obj.confidentiality_lens_ran,
+      }),
     },
   };
 }

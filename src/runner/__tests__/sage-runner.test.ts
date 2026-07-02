@@ -604,4 +604,62 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
     if (result.kind !== "verdict") return;
     expect(result.envelope.type).toBe("review.verdict.changes-requested");
   });
+
+  // compass#89 (§4 L3) — confidentiality flavor is a PRE-SPAWN cant_do
+  // ---------------------------------------------------------------------
+  // The sage engine has no confidentiality lens, so a
+  // `code-review.confidentiality` request must fail with `cant_do` BEFORE any
+  // subprocess runs — never silently run a generic pass and return a verdict
+  // that never looked for disclosure. This is the runtime guard for the
+  // generic-claim path; `--lens` threading for other flavors is deferred to
+  // compass#99.
+
+  test("compass#89 — payload.flavor=confidentiality → cant_do PRE-SPAWN (spawn never runs)", async () => {
+    const spawnThatMustNotRun: SageSpawnFn = () => {
+      throw new Error("sage-runner test: spawn must not run for a confidentiality request");
+    };
+    const runner = makeSageReviewRunner({
+      spawn: spawnThatMustNotRun,
+      which: whichSuccess, // binary resolvable — proves the refusal is flavor-driven, not missing-binary
+    });
+    const base = makePipelineOpts();
+    const opts: ReviewPipelineOpts = {
+      ...base,
+      payload: { ...base.payload, flavor: "confidentiality" },
+    };
+
+    // Must NOT throw — the consumer assumes a non-throwing pipeline runner.
+    const result = await runner(opts);
+
+    expect(result.kind).toBe("failed");
+    if (result.kind !== "failed") return;
+    const envelope: Envelope = result.envelope;
+    expect(envelope.type).toBe("dispatch.task.failed");
+    expect(envelope.correlation_id).toBe(opts.requestEnvelope.id);
+    const reason = (envelope.payload as { reason: { kind: string; detail: string } }).reason;
+    expect(reason.kind).toBe("cant_do");
+    expect(reason.detail).toContain("no confidentiality lens");
+  });
+
+  test("compass#89 — a non-confidentiality flavor still spawns sage (guard is confidentiality-only)", async () => {
+    const prior = process.env.SAGE_SUBSTRATE;
+    delete process.env.SAGE_SUBSTRATE;
+    try {
+      const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
+      const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
+      const base = makePipelineOpts();
+      const opts: ReviewPipelineOpts = {
+        ...base,
+        payload: { ...base.payload, flavor: "security" },
+      };
+      const result = await runner(opts);
+      expect(result.kind).toBe("verdict");
+      // The guard did NOT fire — sage spawned. And (deferred to #99) no
+      // `--lens` flag is threaded yet, so the argv is the unchanged shape.
+      expect(spawn.calls.length).toBe(1);
+      expect(spawn.calls[0]).not.toContain("--lens");
+    } finally {
+      if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
+    }
+  });
 });

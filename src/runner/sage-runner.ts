@@ -206,6 +206,26 @@ export function makeSageReviewRunner(
     // `Envelope.payload` is `unknown` so we narrow once here.
     const payload = pipeline.payload;
 
+    // compass#89 (§4 L3): the sage engine has NO confidentiality lens
+    // (zero-hit grep in its lens registry — see audit F8/compass#99). A
+    // `code-review.confidentiality` request must therefore fail PRE-SPAWN with
+    // `cant_do` rather than silently running sage's generic CodeQuality pass and
+    // returning a verdict that never looked for disclosure — the runtime guard
+    // for the generic-claim path (a boot-time capability guard covers the
+    // declared-capability path). Threading `--lens <flavor>` for the OTHER
+    // flavors is deferred to compass#99 (sage is an external pinned binary; an
+    // unconditional lens flag can break older builds), so the assistant-engine
+    // prompt (`buildReviewPrompt`) remains the live drift-1 fix.
+    if (payload.flavor === "confidentiality") {
+      return failed(
+        pipeline,
+        correlationId,
+        startedAt,
+        "sage engine has no confidentiality lens (compass#89/#99); " +
+          "route code-review.confidentiality to an assistant-engine reviewer",
+      );
+    }
+
     // Resolve the sage binary. Priority: explicit > env > $PATH.
     const sageBin =
       explicitBin ?? process.env.SAGE_BIN ?? which("sage") ?? undefined;

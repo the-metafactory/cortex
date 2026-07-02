@@ -23,6 +23,13 @@ export const REVIEW_FLAVORS = [
   "sql",
   "docs",
   "security",
+  // Cross-cutting lens, orthogonal to language — a `code-review.confidentiality`
+  // request selects the Confidentiality lens as the PRIMARY lens (compass#89 /
+  // design-software-factory-confidentiality.md §4 L3). Kept in lockstep with
+  // pilot's `KNOWN_SPECIALIZATIONS.CONFIDENTIALITY`. NOTE: the confidentiality
+  // *exposure* instruction is always-on for EVERY flavor in `buildReviewPrompt`;
+  // this flavor additionally makes it requestable as the primary lens.
+  "confidentiality",
 ] as const;
 
 export type ReviewFlavor = (typeof REVIEW_FLAVORS)[number];

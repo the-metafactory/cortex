@@ -78,6 +78,7 @@ import type { MyelinSubscriber } from "./myelin/subscriber";
 import type { AckDecision } from "./myelin/subscriber";
 import {
   createReviewTaskFailedEvent,
+  isReviewFlavor,
   type DispatchTaskFailedReason,
   type ReviewEventSource,
   type ReviewRequestPayload,
@@ -733,6 +734,21 @@ export class ReviewConsumer {
         requester,
       );
       return { kind: "term", reason: "payload validation failed" };
+    }
+
+    // 2.4. drift-1 fix (compass#89): stamp the subject-derived <flavor> onto the
+    //       payload. The subject suffix is the routing AUTHORITY; the wire
+    //       payload never carries flavor. This one assignment threads flavor
+    //       into EVERY prompt builder (`buildReviewPrompt`, the CO-7
+    //       `buildUntrustedReviewPrompt`, `sage-runner`) with zero signature
+    //       changes — they all already receive `payload`. Without it,
+    //       `code-review.security` and `code-review.typescript` produced a
+    //       byte-identical prompt (the flavor-inert SEV-1). We narrow through
+    //       `isReviewFlavor` so an unknown/off-vocabulary suffix is left
+    //       unstamped (→ default FullReview lens) rather than widening the
+    //       payload type to a bare string.
+    if (isReviewFlavor(flavor)) {
+      payload.flavor = flavor;
     }
 
     // 2.5. Signature-chain verification gate (cortex#327). Runs after the
