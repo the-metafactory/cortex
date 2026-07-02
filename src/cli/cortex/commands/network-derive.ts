@@ -50,7 +50,39 @@ import { resolveRegistryAnchor } from "./default-registry";
 
 /** The five join inputs `cortex network join` previously demanded as flags. */
 export interface DerivedJoinInputs {
+  /**
+   * Flag-honouring principal LOCATOR: `--principal` wins, else `principal.id`.
+   * Feeds the write-path target (`portsConfigFromInputs` → `stackId` /
+   * `provision-stack register`), which per ADR-0004 DA-5 follows the flag — NOT
+   * the federation-identity authority. See {@link bootPrincipal}.
+   */
   principal: string;
+  /**
+   * C-1436 — the boot-authoritative own-scope principal segment: `cfg.principal.id`,
+   * the EXACT value the daemon boot validator pins the federated subject scope to
+   * (`CortexConfigSchema` federated subject-scope superRefine → `config.principal.id`,
+   * cortex-config.ts) AND the value the runtime stamps onto the wire
+   * (`resolvePrincipalId(options.principal)` → the `federated.{principal}.{stack}.>`
+   * inbound subscription + `envelope.source` seg[0] on emit). So the join own-scope
+   * guard and boot can never split on a config whose `--principal` locator (or a
+   * `stack.id` principal-half) differs from `principal.id`.
+   *
+   * NOTE — this is `cfg.principal.id` DIRECTLY, deliberately NOT
+   * `deriveStackId(cfg).principal` (the mirror of the C-1364 stack axis does NOT
+   * carry over here). On the documented `deriveStackId` override path
+   * (`principal.id: andreas` running `stack.id: jcfischer/sage-host`)
+   * `deriveStackId().principal` is `jcfischer` while the runtime still subscribes
+   * `federated.andreas.…`; validating the guard against `jcfischer` would force a
+   * prefix that never matches boot — the very split this fixes. Boot pins to
+   * `config.principal.id` for exactly this reason (see the cortex-config.ts
+   * federated subject-scope superRefine rationale comment). Unlike {@link principal}
+   * it is flag-INDEPENDENT — `--principal` retargets the write-path locator but must
+   * NOT move the federation identity boot enforces.
+   * The join own-scope guard (`ownAcceptSubjects` / `ownFederatedSubjectScopePrefix`
+   * / `isFederatedSubjectInOwnScope` in `network-lib.ts`) MUST build its
+   * `federated.{principal}.` scope from THIS, never from {@link principal}.
+   */
+  bootPrincipal: string;
   /**
    * `{principal}/{slug}` canonical stack id — flag-honouring. `--stack` wins,
    * else `stack.id`, else `{principal}/default` (see {@link resolveStack}). This
@@ -370,13 +402,29 @@ export function deriveJoinInputs(
 ): DeriveResult<DerivedJoinInputs> {
   const cfg = load(configPath);
 
-  // principal — flag wins, else principal.id.
+  // principal (LOCATOR) — flag wins, else principal.id. Feeds the write-path
+  // target per ADR-0004 DA-5.
   const principal = overrides.principal ?? cfg.principal?.id;
   if (principal === undefined || principal === "") {
     return fail(
       "cannot resolve principal — pass --principal or set `principal.id` in cortex.yaml",
     );
   }
+
+  // C-1436 — the boot-authoritative own-scope principal segment. Pinned to
+  // `cfg.principal.id` DIRECTLY — the EXACT value the daemon boot validator uses
+  // (`CortexConfigSchema` federated subject-scope superRefine → `config.principal.id`)
+  // and the runtime stamps onto the wire (`federated.{principal}.{stack}.>` +
+  // `envelope.source` seg[0]). Deliberately NOT `deriveStackId(cfg).principal`:
+  // on the documented override path (`principal.id: andreas` running
+  // `stack.id: jcfischer/sage-host`) that would be `jcfischer` while the runtime
+  // subscribes `federated.andreas.…` — re-splitting the guard against boot. And
+  // deliberately flag-INDEPENDENT: `--principal` retargets the write-path locator
+  // (DA-5) but must never move the federation identity boot enforces. Falls back
+  // to the resolved `principal` only when the config declares no `principal.id`
+  // (the config-less / fully-flagged back-compat path, where no boot validator
+  // runs to split against).
+  const bootPrincipal = cfg.principal?.id ?? principal;
 
   const stack = resolveStack(principal, overrides.stack, cfg);
 
@@ -501,6 +549,7 @@ export function deriveJoinInputs(
     ok: true,
     inputs: {
       principal,
+      bootPrincipal,
       stack,
       bootStackSlug,
       seedPath,

@@ -892,7 +892,20 @@ async function runJoin(
   const resolvedLeafUser = inputs.leafUser ?? autoSecret?.leafUser;
 
   const stack: JoiningStack = {
-    principalId: inputs.principal,
+    // C-1436 — the own-scope federation identity's PRINCIPAL segment MUST derive
+    // from `config.principal.id` (via `inputs.bootPrincipal`), the SAME single
+    // authority the daemon boot validator pins to (`CortexConfigSchema` federated
+    // subject-scope superRefine → `config.principal.id`) and the runtime stamps
+    // onto the wire. `inputs.principal` is the flag/locator-honouring principal and
+    // stays the write-path target per ADR-0004 DA-5 — but a `--principal` override
+    // (or a `stack.id` principal-half) that differs from `principal.id` would make
+    // the guard validate `federated.{flag}.` while boot enforces `federated.{config}.`,
+    // letting a config pass the join own-scope guard yet fail daemon boot (or be
+    // falsely refused). NOTE — deliberately NOT `deriveStackId().principal` (the
+    // C-1364 stack-axis pattern does not carry over): on the override path that
+    // returns the `stack.id` principal-half, which is NOT the wire principal. Pin
+    // the guard to `bootPrincipal` so guard + boot can never split. See cortex#1436.
+    principalId: inputs.bootPrincipal,
     // C-1364 — the own-scope federation identity MUST derive from `stack.id` via
     // `deriveStackId` (ADR-0004), the SAME single authority the daemon boot
     // validator uses (`CortexConfigSchema` federated subject-scope superRefine).

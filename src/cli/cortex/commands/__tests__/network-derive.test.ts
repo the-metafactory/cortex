@@ -83,6 +83,9 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
     expect(res.ok).toBe(true);
     expect(res.inputs).toEqual({
       principal: "andreas",
+      // C-1436 — boot-authoritative principal from config.principal.id (born-aligned
+      // here: equals the locator `principal`). cfg.principal.id.
+      bootPrincipal: "andreas",
       stack: "andreas/meta-factory",
       // C-1364 — boot-authoritative slug from stack.id (born-aligned here: equals
       // the `stack` id's trailing segment). deriveStackId(FULL).stack.
@@ -253,6 +256,13 @@ describe("deriveJoinInputs — flag overrides win", () => {
     expect(res.ok).toBe(true);
     expect(res.inputs).toEqual({
       principal: "override-p",
+      // C-1436 — the `--principal` flag moves the LOCATOR/write-path principal
+      // ("override-p"), but `bootPrincipal` stays the config's `principal.id`
+      // ("andreas" from FULL). A flag override CANNOT move the federation identity
+      // the daemon boot validator enforces (`config.principal.id`) — this is the
+      // principal-axis drift the fix pins shut: guard scope derives from
+      // bootPrincipal, never the flag/locator `principal`.
+      bootPrincipal: "andreas",
       stack: "override-p/other",
       // C-1364 — the `--stack` flag moves the LOCATOR/write-path id ("other"),
       // but `bootStackSlug` stays the config's stack.id trailing segment
@@ -1012,5 +1022,279 @@ describe("C-1364 — join own-scope identity converges with boot on deriveStackI
     expect(inputs.bootStackSlug).toBe("meta-factory");
     expect(inputs.stack.split("/")[1]).toBe("meta-factory");
     expect(inputs.bootStackSlug).toBe(deriveStackId(FULL).stack);
+  });
+});
+
+// =============================================================================
+// C-1436 — the PRINCIPAL-axis mirror of C-1364. The join own-scope guard and the
+// daemon boot validator MUST derive the own-scope PRINCIPAL segment from ONE
+// authority. But — unlike the stack axis — that authority is `config.principal.id`
+// DIRECTLY, deliberately NOT `deriveStackId(config).principal`.
+//
+// Latent drift: the join own-scope guard built `federated.{me}.{stack}.`'s
+// principal segment from the flag/locator-honouring `inputs.principal`
+// (`--principal` wins), while the boot validator (`CortexConfigSchema` federated
+// subject-scope superRefine) pins it to `config.principal.id` — the value the
+// runtime stamps onto the wire (`resolvePrincipalId` → the
+// `federated.{principal}.{stack}.>` subscription + `envelope.source` seg[0]).
+// For a config where the locator principal (`--principal`) OR a `stack.id`
+// principal-half differs from `principal.id`, guard and boot DISAGREE — the join
+// persists an accept-list the daemon refuses to boot against, or a valid one is
+// falsely refused. The fix threads `bootPrincipal = cfg.principal.id` and pins
+// the guard to it.
+//
+// WHY NOT `deriveStackId(config).principal` (the C-1364 stack pattern): on the
+// documented override path (`principal.id: andreas` running
+// `stack.id: jcfischer/sage-host`) `deriveStackId().principal` is `jcfischer`,
+// while the runtime still subscribes `federated.andreas.…`. Converging onto it
+// would re-open the very split — so the boot validator pins to `config.principal.id`
+// and this fix converges the guard onto the SAME source. Fixture 2 below is the
+// case that proves this target choice.
+// =============================================================================
+
+describe("C-1436 — join own-scope principal converges with boot on config.principal.id", () => {
+  // Build a raw cortex config the DAEMON BOOTS from, parameterised on the
+  // principal.id / stack.id / accept-list, so parsing it through CortexConfigSchema
+  // runs the REAL subject-scope superRefine (the boot verdict).
+  function bootConfig(
+    principalId: string,
+    stackId: string,
+    accept: string[],
+  ): Record<string, unknown> {
+    return {
+      principal: { id: principalId },
+      agents: [
+        {
+          id: "luna",
+          displayName: "Luna",
+          persona: "./personas/luna.md",
+          presence: {
+            discord: {
+              token: "DISCORD_TOKEN",
+              guildId: "111111111111111111",
+              agentChannelId: "222222222222222222",
+              logChannelId: "333333333333333333",
+            },
+          },
+        },
+      ],
+      renderers: [],
+      claude: { model: "claude-opus-4-5", apiKey: "env:ANTHROPIC_API_KEY" },
+      stack: { id: stackId },
+      policy: {
+        federated: {
+          networks: [
+            {
+              id: "metafactory",
+              leaf_node: "leaf",
+              peers: [],
+              accept_subjects: accept,
+              deny_subjects: [],
+              announce_capabilities: [],
+              max_hop: 1,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fixture 1 — the headline #1436 case: `--principal` drift. Config principal.id
+  // is "andreas" (born-aligned stack andreas/work), joined with `--principal
+  // other-p`. The flag moves the locator; boot still enforces "andreas".
+  // ---------------------------------------------------------------------------
+  const FLAG_DRIFT = loaded({
+    principal: { id: "andreas" },
+    stack: {
+      id: "andreas/work",
+      nkey_seed_path: "~/seed.nk",
+      nats_infra: {
+        config_path: "~/local.conf",
+        plist_path: "~/nats.plist",
+        account: "A" + "B".repeat(55),
+      },
+    },
+    policy: {
+      principals: [],
+      roles: [],
+      federated: {
+        networks: [],
+        registry: { url: DEFAULT_REGISTRY.url, pubkey: DEFAULT_REGISTRY.pubkey },
+      },
+    },
+  });
+
+  test("bootPrincipal tracks config.principal.id, NOT the --principal flag → guard + boot prefixes are identical", () => {
+    const res = deriveJoinInputs(
+      "metafactory",
+      { principal: "other-p" },
+      "/cfg",
+      reader(FLAG_DRIFT),
+      "darwin",
+    );
+    expect(res.ok).toBe(true);
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+
+    // The flag moved the LOCATOR / write-path principal (DA-5) ...
+    expect(inputs.principal).toBe("other-p");
+    // ... but the boot-authoritative own-scope principal stays config.principal.id.
+    expect(inputs.bootPrincipal).toBe("andreas");
+    // Stack axis is born-aligned here, so it contributes no drift of its own.
+    expect(inputs.bootStackSlug).toBe("work");
+
+    // BOOT derives its prefix EXACTLY as the superRefine does:
+    // ownFederatedSubjectScopePrefix(config.principal.id, deriveStackId(config).stack).
+    const bootPrefix = ownFederatedSubjectScopePrefix("andreas", deriveStackId(FLAG_DRIFT).stack);
+    // The JOIN GUARD now derives from bootPrincipal — must be identical (no split).
+    const guardPrefix = ownFederatedSubjectScopePrefix(inputs.bootPrincipal, inputs.bootStackSlug);
+    expect(guardPrefix).toBe(bootPrefix);
+    expect(guardPrefix).toBe("federated.andreas.work.");
+
+    // Regression witness: the PRE-FIX derivation (the flag/locator principal off
+    // inputs.principal) WOULD have produced a different prefix — the split this closes.
+    expect(ownFederatedSubjectScopePrefix(inputs.principal, inputs.bootStackSlug)).not.toBe(bootPrefix);
+    expect(ownFederatedSubjectScopePrefix(inputs.principal, inputs.bootStackSlug)).toBe(
+      "federated.other-p.work.",
+    );
+  });
+
+  test("Fixture 1 split-verdict: accept-list from bootPrincipal PASSES boot; the pre-fix flag-principal list is REFUSED", () => {
+    const res = deriveJoinInputs(
+      "metafactory",
+      { principal: "other-p" },
+      "/cfg",
+      reader(FLAG_DRIFT),
+      "darwin",
+    );
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+
+    // What the fixed join own-scope guard builds + persists: the own-scope
+    // accept-list from bootPrincipal ("andreas") + bootStackSlug ("work").
+    const acceptFromBoot = ownAcceptSubjects({
+      principal: inputs.bootPrincipal,
+      stack: inputs.bootStackSlug,
+    });
+    expect(acceptFromBoot.every((s) => s.startsWith("federated.andreas.work."))).toBe(true);
+
+    // The PRE-FIX path built the accept-list from the flag/locator principal ("other-p").
+    const acceptFromFlag = ownAcceptSubjects({
+      principal: inputs.principal,
+      stack: inputs.bootStackSlug,
+    });
+
+    // AGREEMENT: the daemon boot validator ACCEPTS exactly what the fixed join
+    // writes (boot pins principal to config.principal.id = "andreas") ...
+    expect(() =>
+      CortexConfigSchema.parse(bootConfig("andreas", "andreas/work", acceptFromBoot)),
+    ).not.toThrow();
+    // ... and REFUSES the pre-fix flag-principal list — the latent split closed.
+    expect(() =>
+      CortexConfigSchema.parse(bootConfig("andreas", "andreas/work", acceptFromFlag)),
+    ).toThrow();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Fixture 2 — the OVERRIDE PATH, the case that PROVES the target choice. Config
+  // principal.id is "andreas" but stack.id is "jcfischer/sage-host" (principal-half
+  // "jcfischer" ≠ principal.id). No flags. deriveStackId(cfg).principal is
+  // "jcfischer" — using THAT for the guard would re-split against boot, which pins
+  // to config.principal.id = "andreas". bootPrincipal = config.principal.id gets
+  // it right.
+  // ---------------------------------------------------------------------------
+  const OVERRIDE_PATH = loaded({
+    principal: { id: "andreas" },
+    stack: {
+      id: "jcfischer/sage-host",
+      nkey_seed_path: "~/seed.nk",
+      nats_infra: {
+        config_path: "~/local.conf",
+        plist_path: "~/nats.plist",
+        account: "A" + "B".repeat(55),
+      },
+    },
+    policy: {
+      principals: [],
+      roles: [],
+      federated: {
+        networks: [],
+        registry: { url: DEFAULT_REGISTRY.url, pubkey: DEFAULT_REGISTRY.pubkey },
+      },
+    },
+  });
+
+  test("override path: bootPrincipal is config.principal.id, NOT deriveStackId().principal → matches boot", () => {
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(OVERRIDE_PATH), "darwin");
+    expect(res.ok).toBe(true);
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+
+    // deriveStackId splits the stack.id principal-half OFF ("jcfischer") — the
+    // WRONG authority for the wire principal.
+    expect(deriveStackId(OVERRIDE_PATH).principal).toBe("jcfischer");
+    // The fix pins bootPrincipal to config.principal.id — the wire principal.
+    expect(inputs.bootPrincipal).toBe("andreas");
+    expect(inputs.bootStackSlug).toBe("sage-host");
+
+    // BOOT's authority: ownFederatedSubjectScopePrefix(config.principal.id, deriveStackId.stack).
+    const bootPrefix = ownFederatedSubjectScopePrefix("andreas", deriveStackId(OVERRIDE_PATH).stack);
+    expect(bootPrefix).toBe("federated.andreas.sage-host.");
+    // The fixed guard (bootPrincipal) matches boot ...
+    expect(ownFederatedSubjectScopePrefix(inputs.bootPrincipal, inputs.bootStackSlug)).toBe(bootPrefix);
+    // ... while the team-lead's ORIGINAL target (deriveStackId().principal) would NOT —
+    // this is exactly why the principal axis must NOT mirror the stack axis.
+    expect(
+      ownFederatedSubjectScopePrefix(deriveStackId(OVERRIDE_PATH).principal, inputs.bootStackSlug),
+    ).not.toBe(bootPrefix);
+    expect(
+      ownFederatedSubjectScopePrefix(deriveStackId(OVERRIDE_PATH).principal, inputs.bootStackSlug),
+    ).toBe("federated.jcfischer.sage-host.");
+  });
+
+  test("Fixture 2 split-verdict: accept-list from config.principal.id PASSES boot; the deriveStackId-principal list is REFUSED", () => {
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(OVERRIDE_PATH), "darwin");
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+
+    // The fixed guard's own-scope accept-list (bootPrincipal = config.principal.id).
+    const acceptFromBoot = ownAcceptSubjects({
+      principal: inputs.bootPrincipal,
+      stack: inputs.bootStackSlug,
+    });
+    expect(acceptFromBoot.every((s) => s.startsWith("federated.andreas.sage-host."))).toBe(true);
+
+    // The list the team-lead's original (deriveStackId().principal = "jcfischer") target would build.
+    const acceptFromDeriveStackId = ownAcceptSubjects({
+      principal: deriveStackId(OVERRIDE_PATH).principal,
+      stack: inputs.bootStackSlug,
+    });
+
+    // AGREEMENT: boot (which pins principal to config.principal.id = "andreas")
+    // ACCEPTS exactly what the fixed join writes ...
+    expect(() =>
+      CortexConfigSchema.parse(bootConfig("andreas", "jcfischer/sage-host", acceptFromBoot)),
+    ).not.toThrow();
+    // ... and REFUSES the deriveStackId-principal list — proving `config.principal.id`
+    // is the correct authority and `deriveStackId().principal` would have re-split.
+    expect(() =>
+      CortexConfigSchema.parse(bootConfig("andreas", "jcfischer/sage-host", acceptFromDeriveStackId)),
+    ).toThrow();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Born-aligned — the common case, unchanged.
+  // ---------------------------------------------------------------------------
+  test("BORN-ALIGNED principal (no drift) is unchanged: bootPrincipal == the flag/locator principal", () => {
+    // FULL is born-aligned (principal.id andreas, stack.id andreas/meta-factory);
+    // no --principal override.
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL), "darwin");
+    const inputs = res.inputs;
+    if (inputs === undefined) throw new Error("expected inputs");
+    // The locator and the boot authority coincide — exact pre-fix behaviour.
+    expect(inputs.bootPrincipal).toBe("andreas");
+    expect(inputs.principal).toBe("andreas");
+    expect(inputs.bootPrincipal).toBe(deriveStackId(FULL).principal);
   });
 });
