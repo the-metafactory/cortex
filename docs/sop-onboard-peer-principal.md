@@ -159,7 +159,19 @@ cortex network admit <request-id> \
   --registry-url https://network.meta-factory.ai \
   --admin-seed ~/.config/nats/admin.nk \
   --apply
+
+# ...OR deny it (C-1348). The mirror of admit — signs a decision:"reject" claim,
+# moves the PENDING row to REJECTED. Grants + seals nothing (no roster row, no
+# leaf PSK). Same admin gate as admit; dry-run by default, --apply to execute.
+cortex network reject <request-id> \
+  --registry-url https://network.meta-factory.ai \
+  --admin-seed ~/.config/nats/admin.nk \
+  --apply
 ```
+
+Saying **no** is as easy as saying **yes**: `reject` is the deliberate denial of a
+PENDING request. An already-decided (non-PENDING) request surfaces a clear
+"already ADMITTED/REJECTED/REVOKED" error rather than silently no-op'ing.
 
 > **Read-scoping caveat (ADR-0020 fast-follow):** admin *reads* — including
 > `--list-pending` — are **global-admin-only** today; a per-network admin gets a

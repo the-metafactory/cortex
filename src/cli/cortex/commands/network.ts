@@ -161,7 +161,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "admit" | "provision" | "make-live" | "secret";
+type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "admit" | "reject" | "provision" | "make-live" | "secret";
 
 /**
  * Default registry URL when neither --registry-url nor config provides one.
@@ -373,6 +373,24 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         // admit-without-seal case, or a fully-separable deployment where the
         // hub-admin ≠ the registry-admin and sealing is a genuinely separate step).
         "--roster-only": "bool",
+      },
+    },
+    // C-1348 (ADR-0015) — the admission DENIAL verb, the mirror of `admit`.
+    // Signs an admission decision claim carrying decision:"reject" → POSTs to
+    // `/admission-requests/:id/reject` → the PENDING row moves to REJECTED.
+    // Grants + seals NOTHING (rejection has no roster row to make connectable),
+    // so it omits admit's Discord flags AND the --hub-config/--roster-only seal
+    // controls. Dry-run by DEFAULT: prints the claim it WOULD post; --apply
+    // executes. Like admit, --network is absent — the row's network_id is set at
+    // register time and the registry acts on the stored value.
+    reject: {
+      positionals: ["request-id?"],
+      flags: {
+        "--admin-seed": "value",
+        "--registry-url": "value",
+        "--network": "value",
+        "--apply": "bool",
+        "--dry-run": "bool",
       },
     },
     // G1d / T1 (cortex#1139, ADR-0013) — one-command sovereign account-topology
@@ -1682,17 +1700,26 @@ async function buildAdmissionReadHeader(
 }
 
 /**
- * Build the admin-signed admission decision body (ADR-0015: decision "admit",
- * no leaf_package — admits to roster only, mints nothing).
+ * The two roster-decision verbs the registry's shared `handleDecision` accepts
+ * (`admit` | `reject`, `types.ts` AdmissionDecision). Both mint nothing — admit
+ * moves PENDING→ADMITTED, reject moves PENDING→REJECTED. `revoke` is a distinct
+ * post-admission motion, not a PENDING decision, so it is NOT in this union.
+ */
+type AdmissionDecision = "admit" | "reject";
+
+/**
+ * Build the admin-signed admission decision body (ADR-0015: `decision` selects
+ * admit vs reject; no leaf_package — decides the roster row only, mints nothing).
  */
 async function buildAdmissionDecisionBody(
   requestId: string,
   material: StackIdentityMaterial,
+  decision: AdmissionDecision,
   opts: { issuedAt?: string; nonce?: string } = {},
-): Promise<{ claim: { request_id: string; decision: "admit"; admin_pubkey: string; issued_at: string; nonce: string }; signature: string }> {
+): Promise<{ claim: { request_id: string; decision: AdmissionDecision; admin_pubkey: string; issued_at: string; nonce: string }; signature: string }> {
   const claim = {
     request_id: requestId,
-    decision: "admit" as const,
+    decision,
     admin_pubkey: material.pubkeyB64,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
@@ -1990,9 +2017,9 @@ async function runAdmit(
   }
 
   // 2. Build + POST the signed admission decision
-  let decisionBody: { claim: { request_id: string; decision: "admit"; admin_pubkey: string; issued_at: string; nonce: string }; signature: string };
+  let decisionBody: { claim: { request_id: string; decision: AdmissionDecision; admin_pubkey: string; issued_at: string; nonce: string }; signature: string };
   try {
-    decisionBody = await buildAdmissionDecisionBody(requestId, material);
+    decisionBody = await buildAdmissionDecisionBody(requestId, material, "admit");
   } catch (err) {
     return opError("admit", `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`, json);
   }
@@ -2141,6 +2168,177 @@ async function runAdmit(
 }
 
 // =============================================================================
+// C-1348 — `cortex network reject <request-id>` (admission DENIAL)
+// =============================================================================
+
+/**
+ * `cortex network reject <request-id> --admin-seed <path> [--apply]`
+ *
+ * ADR-0015's admission-denial verb — the exact mirror of {@link runAdmit},
+ * except the signed decision claim carries `decision: "reject"` and it POSTs to
+ * `/admission-requests/:id/reject`. The registry's shared `handleDecision` moves
+ * the PENDING row to REJECTED. Grants + seals NOTHING (a rejected request has no
+ * roster row to make connectable), so — unlike admit — there is no seal step and
+ * no Discord role assignment.
+ *
+ * Dry-run by default (safe posture). Pass --apply to execute.
+ *
+ * --network is intentionally absent: like admit, the request's network_id is
+ * stored at register time and the registry acts on whatever it recorded.
+ */
+async function runReject(
+  requestId: string,
+  flags: FlagMap,
+  json: boolean,
+): Promise<ExitResult> {
+  if (!requestId) {
+    return usageError("reject", "missing request-id (usage: cortex network reject <request-id> --admin-seed <path>; discover ids with `cortex network admit --list-pending --admin-seed <path>`)", json);
+  }
+
+  const seedRes = requireValueFlag(flags, "--admin-seed");
+  if (!seedRes.ok) return usageError("reject", seedRes.reason, json);
+
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("reject", applyRes.reason, json);
+
+  const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_ADMIT_REGISTRY_URL;
+
+  // Load + chmod-600-gate the admin seed
+  const matRes = await adminMaterialFromSeedFile(seedRes.value);
+  if (!matRes.ok) return opError("reject", matRes.reason, json);
+  const material = matRes.material;
+
+  // DRY-RUN (default): print the plan, touch nothing
+  if (!applyRes.apply) {
+    if (json) {
+      return ok(
+        renderJson(
+          envelopeOk([], {
+            subcommand: "reject",
+            request_id: requestId,
+            decision: "reject",
+            registry_url: registryUrl,
+            admin_fingerprint: material.fingerprint,
+            applied: "false",
+          }),
+        ),
+      );
+    }
+    const lines = [
+      `cortex network reject ${requestId}: dry-run (no registry write; pass --apply to execute)`,
+      `  decision:          reject`,
+      `  registry:          ${registryUrl}`,
+      `  admin_fingerprint: ${material.fingerprint}`,
+      ``,
+    ];
+    return ok(lines.join("\n"));
+  }
+
+  // APPLY path
+  //
+  // Unlike admit, reject does NOT do an admin-signed GET pre-check first. Admit
+  // reads the row because it needs the peer_pubkey + network_id to SEAL; reject
+  // seals nothing, so it needs no read. Crucially, the admin READ gate is
+  // GLOBAL-admin-only today (ADR-0020 read-scoping — see runListPending), so a
+  // GET pre-check would 403 a PER-NETWORK admin BEFORE the POST that would in
+  // fact authorise them (handleDecision authorises global OR per-network admins).
+  // We therefore POST directly and let the registry be the single authority:
+  // its 200 body carries the decided row (principal_id/status) for the summary,
+  // and its own 409/403/404 map to clear, actionable CLI errors.
+
+  // 1. Build the signed admission decision (decision: reject)
+  let decisionBody: { claim: { request_id: string; decision: AdmissionDecision; admin_pubkey: string; issued_at: string; nonce: string }; signature: string };
+  try {
+    decisionBody = await buildAdmissionDecisionBody(requestId, material, "reject");
+  } catch (err) {
+    return opError("reject", `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // 2. POST it to /admission-requests/:id/reject
+  let decidedPrincipalId = "";
+  try {
+    const postUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}/reject`;
+    const postResp = await globalThis.fetch(postUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(decisionBody),
+    });
+    if (!postResp.ok) {
+      const respBody = await postResp.text();
+      // Non-PENDING row → the registry's 409 already_decided. Surface the actual
+      // current status (ADMITTED/REJECTED/REVOKED) readably rather than raw JSON.
+      if (postResp.status === 409 && respBody.includes("already_decided")) {
+        const current = extractCurrentStatus(respBody);
+        const was = current !== undefined ? ` (already ${current})` : "";
+        return opError("reject", `request "${requestId}" is already decided${was} — cannot reject an already-decided request`, json);
+      }
+      if (postResp.status === 404) {
+        return opError("reject", `request-id "${requestId}" not found in registry (HTTP 404)`, json);
+      }
+      // 403 admin_not_authorized — e.g. a per-network admin rejecting a request
+      // that belongs to a DIFFERENT network (their key isn't on that network's
+      // admin allowlist and isn't a global admin). Surface it actionably.
+      if (postResp.status === 403) {
+        return opError("reject", `not authorised to reject request "${requestId}" — the admin key (${material.fingerprint}) is neither a global admin nor an admin of this request's network (HTTP 403)`, json);
+      }
+      return opError("reject", `registry rejected the decision (HTTP ${postResp.status.toString()}): ${respBody}`, json);
+    }
+    // 200 → the decided row. Pull principal_id for the summary (best-effort):
+    // if the body isn't the expected JSON (shouldn't happen on 200), the summary
+    // just omits the principal line — the rejection itself already committed, so
+    // decidedPrincipalId stays "" and we never fail a committed decision on it.
+    try {
+      const row = (await postResp.json()) as { principal_id?: string };
+      decidedPrincipalId = row.principal_id ?? "";
+    } catch (_err) {
+      // Intentionally ignored — see above; decidedPrincipalId remains "".
+    }
+  } catch (err) {
+    return opError("reject", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // 3. Output summary — no seal, no Discord (rejection grants nothing).
+  if (json) {
+    return ok(
+      renderJson(
+        envelopeOk([], {
+          subcommand: "reject",
+          applied: "true",
+          request_id: requestId,
+          decision: "reject",
+          ...(decidedPrincipalId ? { principal_id: decidedPrincipalId } : {}),
+          admin_fingerprint: material.fingerprint,
+        }),
+      ),
+    );
+  }
+
+  const lines: string[] = [
+    `cortex network reject ${requestId}: rejected`,
+    ...(decidedPrincipalId ? [`  principal:   ${decidedPrincipalId}`] : []),
+    `  admin:       ${material.fingerprint}`,
+    ``,
+  ];
+  return ok(lines.join("\n"));
+}
+
+/**
+ * Pull the current status out of the registry's `already_decided` 409 body.
+ * The route returns `{ error, details, current: <AdmissionRequest> }`; we read
+ * `current.status` (falling back to undefined so the caller degrades to a
+ * generic "already decided" line rather than crashing on an unexpected shape).
+ */
+function extractCurrentStatus(respBody: string): string | undefined {
+  try {
+    const parsed = JSON.parse(respBody) as { current?: { status?: string } };
+    const status = parsed.current?.status;
+    return typeof status === "string" ? status : undefined;
+  } catch (_err) {
+    return undefined;
+  }
+}
+
+// =============================================================================
 // C-1316 — admit-and-seal: fold the sealed leaf-secret delivery into admit
 // =============================================================================
 
@@ -2198,7 +2396,6 @@ async function sealAdmittedMember(args: {
 
   const fallbackCmd = `cortex network secret add-member ${networkId} ${memberPubkey} --admin-seed ${adminSeedPath} --apply`;
 
-  const ports = secretPortsFactory({ hubConfigPath, registryUrl, material });
   const inputs: SecretInputs = {
     action: "add-member",
     networkId,
@@ -2209,6 +2406,11 @@ async function sealAdmittedMember(args: {
 
   let report: SecretReport;
   try {
+    // #1316 nit (PR #1412): construct the ports factory INSIDE the try so the
+    // "seal NEVER throws / NEVER fails the admit" invariant is structural — a
+    // throwing factory (bad hub config, unreadable seed) degrades to `fallback`
+    // like every other seal failure instead of escaping past the committed admit.
+    const ports = secretPortsFactory({ hubConfigPath, registryUrl, material });
     report = await runNetworkSecret(inputs, ports);
   } catch (err) {
     return {
@@ -2883,6 +3085,8 @@ export async function dispatchNetwork(
       return runPing(parsed.positionals.peer ?? "", parsed.flags, json, load, pingBusFactory);
     case "admit":
       return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory);
+    case "reject":
+      return runReject(parsed.positionals["request-id"] ?? "", parsed.flags, json);
     case "provision":
       return runProvision(parsed.positionals.stack ?? "", parsed.flags, json, load, provisionPortsFactory);
     case "make-live":
@@ -2917,6 +3121,7 @@ Usage:
                         [--discord-server <profile>] [--discord-role <name>] [--apply] [--dry-run] [--json]
   cortex network admit  --list-pending [--status <PENDING|ADMITTED|REJECTED>] [--network <id>]
                         --admin-seed <path> [--registry-url <url>] [--json]
+  cortex network reject <request-id> --admin-seed <path> [--registry-url <url>] [--apply] [--dry-run] [--json]
   cortex network provision <stack> [--config <p>] [--principal <id>] [--seed-path <p>]
                         [--creds <p>] [--force] [--apply] [--dry-run] [--json]
   cortex network make-live <stack> [--config <p>] [--principal <id>] [--nats-config <p>]
@@ -3022,6 +3227,17 @@ Subcommands:
           so a per-network admin gets a readable 403 here even for their own
           network (per-network read-scoping is the fast-follow). Use a global-
           admin seed or the MC admission queue until then.
+  reject  (C-1348, ADR-0015) The admission DENIAL verb — the mirror of admit.
+          Verifies the admin seed (chmod-600 gated), builds a signed admission
+          decision claim (decision: "reject"), and POSTs it to
+          /admission-requests/:id/reject. The PENDING request moves to REJECTED.
+          Grants + seals NOTHING (a denied request has no roster row), so there
+          is no seal step and no Discord role — the admit-only flags are absent.
+          Same admin gate as admit (global OR per-network admin, ADR-0020): a
+          per-network admin may reject requests for THEIR OWN network only; a
+          non-authorised key gets a readable 403. An already-decided (non-PENDING)
+          request surfaces a clear "already ADMITTED/REJECTED/REVOKED" error.
+          DRY-RUN by default; pass --apply to execute.
 
   join public   (S5, #739) Opt into the PUBLIC scope — the open square of the
           Internet of Agentic Work. Announces --capabilities to the registry

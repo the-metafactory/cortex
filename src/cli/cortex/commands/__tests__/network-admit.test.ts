@@ -570,6 +570,29 @@ describe("cortex network admit — admit-and-seal (C-1316)", () => {
     expect(res.stdout).not.toContain(calls.minted[0]!);
   });
 
+  test("--apply --json output never leaks the PSK (#1316 nit — machine path)", async () => {
+    // The human-path test above proves the transcript is clean; the --json
+    // envelope is a SEPARATE surface (seal_status/connectable/seal_reason/
+    // seal_fallback) that a caller might log or forward, so assert the minted
+    // per-member PSK never rides it either.
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    // The PSK WAS minted (the seal ran)…
+    expect(calls.minted.length).toBe(1);
+    // …but it never appears anywhere in the machine-readable envelope.
+    expect(res.stdout).not.toContain(calls.minted[0]!);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string } };
+    expect(env.data.seal_status).toBe("sealed");
+  });
+
   test("--roster-only skips the seal → peer INERT, no hub mutation, fallback surfaced", async () => {
     const { seedPath } = await mintAdminSeed();
     mockAdmitFetch(pendingRequest());
