@@ -16,7 +16,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { dispatchNetwork } from "../network";
+import { dispatchNetwork, joinBlockerMessage } from "../network";
+import type { OwnAdmissionState } from "../../../../common/registry/admission-state";
 import type { LoadedConfig } from "../../../../common/config/loader";
 import type { AgentConfig } from "../../../../common/types/config";
 
@@ -610,5 +611,61 @@ describe("leave public", () => {
     ], EMPTY_READER);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("nothing to do");
+  });
+});
+
+// =============================================================================
+// C-1315 — joinBlockerMessage: the actionable admission-state message that
+// REPLACES the misleading legacy `.creds not found (#821)` preflight on a
+// Model-B join with no resolved leaf secret.
+// =============================================================================
+
+describe("joinBlockerMessage (C-1315)", () => {
+  const NET = "metafactory";
+  function st(over: Partial<OwnAdmissionState>): OwnAdmissionState {
+    return {
+      state: over.state ?? "pending",
+      networkId: NET,
+      hasSealedSecret: over.hasSealedSecret ?? false,
+      peerPubkey: over.peerPubkey ?? "PUBKEY==",
+      ...(over.requestId !== undefined && { requestId: over.requestId }),
+    };
+  }
+
+  test("no-row → 'register first', names the network, NOT a .creds fix", () => {
+    const m = joinBlockerMessage(NET, st({ state: "no-row" }));
+    expect(m).toContain("no admission request exists");
+    expect(m).toContain(NET);
+    expect(m).toContain("register");
+    expect(m).toContain(".creds file is NOT the fix");
+  });
+
+  test("pending → surfaces the request-id + admit command", () => {
+    const m = joinBlockerMessage(NET, st({ state: "pending", requestId: "req-9" }));
+    expect(m).toContain("PENDING");
+    expect(m).toContain("req-9");
+    expect(m).toContain("cortex network admit req-9 --apply");
+  });
+
+  test("admitted-unsealed → tells the admin to seal (add-member <net> <pubkey>)", () => {
+    const m = joinBlockerMessage(NET, st({ state: "admitted-unsealed", requestId: "r", peerPubkey: "PK==" }));
+    expect(m).toContain("ADMITTED");
+    expect(m).toContain("cortex network secret add-member metafactory PK== --apply");
+    expect(m).toContain("auto-fetches");
+  });
+
+  test("admitted-sealed (open failed) → wrong-pubkey / re-seal guidance", () => {
+    const m = joinBlockerMessage(NET, st({ state: "admitted-sealed", hasSealedSecret: true, peerPubkey: "PK==" }));
+    expect(m).toContain("could not open it");
+    expect(m).toContain("PK==");
+  });
+
+  test("revoked / rejected → their own messages", () => {
+    expect(joinBlockerMessage(NET, st({ state: "revoked", requestId: "r" }))).toContain("REVOKED");
+    expect(joinBlockerMessage(NET, st({ state: "rejected", requestId: "r" }))).toContain("REJECTED");
+  });
+
+  test("unknown status → undefined (keep the original error)", () => {
+    expect(joinBlockerMessage(NET, st({ state: "unknown" }))).toBeUndefined();
   });
 });

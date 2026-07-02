@@ -52,6 +52,10 @@ import { readFile } from "fs/promises";
 import { expandTilde } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import {
+  resolveOwnAdmissionState,
+  type OwnAdmissionState,
+} from "../../../common/registry/admission-state";
+import {
   generateStackIdentity,
   materialFromSeedString,
   buildRegistrationClaim,
@@ -423,10 +427,88 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
     // C-1269 — surface the admission state so scripting consumers can gate on it.
     admission_request: reg.admission,
   };
+
+  // C-1315 — surface the admission request-id + sealed-delivery state the admin
+  // needs. The register RESPONSE does not carry the request_id (the registry
+  // route returns only the signed principal assertion), so we do a PoP-signed
+  // `/admission-requests/mine` read here for the just-registered network.
+  // Best-effort: a read failure NEVER fails a successful registration — we note
+  // the lookup was unavailable and point at the discovery command.
+  const humanLines: string[] = [];
+  if (networkRes.networkId !== undefined) {
+    const probe = await resolveOwnAdmissionState(
+      { registryUrl: urlRes.value, principalId: ctx.principalId, material: matRes.material },
+      networkRes.networkId,
+    );
+    if (probe.ok) {
+      const s = probe.state;
+      data.network_id = networkRes.networkId;
+      data.admission_status = admissionStatusLabel(s.state);
+      data.sealed_secret = s.hasSealedSecret ? "present" : "missing";
+      if (s.requestId !== undefined) {
+        data.request_id = s.requestId;
+        data.next_for_admin = nextForAdmin(networkRes.networkId, s);
+      }
+      humanLines.push(...registerStateLines(networkRes.networkId, s));
+    } else {
+      data.admission_lookup = `unavailable: ${probe.reason}`;
+      humanLines.push(
+        `  admission: could not read the request-id from the registry (${probe.reason}).`,
+        `  Discover it later with (admin): cortex network admit --list-pending --admin-seed <path>.`,
+      );
+    }
+  }
+
   if (ctx.json) return ok(renderJson(envelopeOk([], data)));
-  return ok(
-    `cortex provision-stack: ${reg.note}\n  principal: ${ctx.principalId}\n  stack: ${stackIdRes.stackId}\n  fingerprint: ${matRes.material.fingerprint}\n`,
-  );
+  const base = `cortex provision-stack: ${reg.note}\n  principal: ${ctx.principalId}\n  stack: ${stackIdRes.stackId}\n  fingerprint: ${matRes.material.fingerprint}\n`;
+  return ok(humanLines.length > 0 ? `${base}${humanLines.join("\n")}\n` : base);
+}
+
+/** Human label for a C-1315 admission state. */
+function admissionStatusLabel(state: OwnAdmissionState["state"]): string {
+  switch (state) {
+    case "no-row":
+      return "NONE";
+    case "pending":
+      return "PENDING";
+    case "admitted-unsealed":
+      return "ADMITTED (sealed secret not yet delivered)";
+    case "admitted-sealed":
+      return "ADMITTED (sealed secret delivered)";
+    case "revoked":
+      return "REVOKED";
+    case "rejected":
+      return "REJECTED";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+/** The admin's next command(s) to move this request forward (C-1315). */
+function nextForAdmin(networkId: string, s: OwnAdmissionState): string {
+  const admit = s.requestId !== undefined ? `cortex network admit ${s.requestId} --apply` : "";
+  const seal = `cortex network secret add-member ${networkId} ${s.peerPubkey} --apply`;
+  switch (s.state) {
+    case "pending":
+      return admit !== "" ? `${admit} && ${seal}` : seal;
+    case "admitted-unsealed":
+      return seal;
+    default:
+      return admit !== "" ? admit : seal;
+  }
+}
+
+/** Human-readable register-time admission lines (C-1315). */
+function registerStateLines(networkId: string, s: OwnAdmissionState): string[] {
+  const lines: string[] = [`  network: ${networkId}`];
+  if (s.requestId !== undefined) {
+    lines.push(`  request-id: ${s.requestId}   (give this to a network admin)`);
+  }
+  lines.push(`  admission: ${admissionStatusLabel(s.state)}`);
+  if (s.state === "pending" || s.state === "admitted-unsealed") {
+    lines.push(`  next (admin): ${nextForAdmin(networkId, s)}`);
+  }
+  return lines;
 }
 
 /**

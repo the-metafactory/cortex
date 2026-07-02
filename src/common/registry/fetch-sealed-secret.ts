@@ -22,24 +22,13 @@
  * config/flag/oob behaviour rather than aborting.
  */
 
-import { canonicalJSON } from "./signing";
 import { openSealed } from "../crypto/seal-to-principal";
 import { decodeLeafSecretEnvelope } from "./sealed-leaf-secret";
 import {
-  signClaimWithSeed,
   rawEd25519SeedFromNkeySeed,
   type StackIdentityMaterial,
 } from "../../bus/stack-provisioning";
-
-/** The minimal admission-row shape the member PoP-read returns. */
-interface AdmissionMineRow {
-  request_id: string;
-  principal_id: string;
-  peer_pubkey: string;
-  network_id: string | null;
-  status: string;
-  sealed_secret: string | null;
-}
+import { fetchOwnAdmissionRows } from "./admission-state";
 
 /** Injectable fetch (defaults to `globalThis.fetch`) so tests stay hermetic. */
 export type FetchLike = (
@@ -74,46 +63,18 @@ export type FetchSealedLeafSecretResult =
 export async function fetchSealedLeafSecret(
   input: FetchSealedLeafSecretInput,
 ): Promise<FetchSealedLeafSecretResult> {
-  const fetchImpl: FetchLike = input.fetchImpl ?? globalThis.fetch;
-  const now = input.now ?? (() => new Date());
-
-  // 1. Sign the PoP read claim with the member's own key.
-  const claim = {
-    principal_id: input.principalId,
-    peer_pubkey: input.material.pubkeyB64,
-    issued_at: now().toISOString(),
-  };
-  let header: string;
-  try {
-    const sig = await signClaimWithSeed(
-      input.material.seed,
-      new TextEncoder().encode(canonicalJSON(claim)),
-    );
-    header = JSON.stringify({ claim, signature: sig });
-  } catch (err) {
-    return { ok: false, reason: `failed to sign PoP read claim: ${errText(err)}` };
-  }
-
-  // 2. GET /admission-requests/mine.
-  let rows: AdmissionMineRow[];
-  try {
-    const url = `${input.registryUrl.replace(/\/+$/, "")}/admission-requests/mine`;
-    const resp = await fetchImpl(url, {
-      method: "GET",
-      headers: { "Content-Type": "application/json", "x-pop-signed": header },
-    });
-    if (!resp.ok) {
-      return { ok: false, reason: `registry mine-read failed (HTTP ${resp.status.toString()})` };
-    }
-    rows = (await resp.json()) as AdmissionMineRow[];
-  } catch (err) {
-    return { ok: false, reason: `registry mine-read errored: ${errText(err)}` };
-  }
+  // 1-2. PoP-sign + GET /admission-requests/mine (shared read — C-1315).
+  const readRes = await fetchOwnAdmissionRows({
+    registryUrl: input.registryUrl,
+    principalId: input.principalId,
+    material: input.material,
+    ...(input.fetchImpl !== undefined && { fetchImpl: input.fetchImpl }),
+    ...(input.now !== undefined && { now: input.now }),
+  });
+  if (!readRes.ok) return { ok: false, reason: readRes.reason };
+  const rows = readRes.rows;
 
   // 3. Select the ADMITTED row for this network carrying a sealed blob.
-  if (!Array.isArray(rows)) {
-    return { ok: false, reason: "registry mine-read returned a non-array body" };
-  }
   const row = rows.find(
     (r) => r.network_id === input.networkId && r.status === "ADMITTED" && typeof r.sealed_secret === "string" && r.sealed_secret.length > 0,
   );

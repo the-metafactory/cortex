@@ -211,6 +211,76 @@ describe("cortex provision-stack register (TC-1b #632)", () => {
     }
   });
 
+  test("[6c] register --network surfaces the admission request_id + PENDING state (C-1315)", async () => {
+    const env = await configuredEnv();
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+    try {
+      const res = await dispatchProvisionStack([
+        "register",
+        "andreas",
+        "--seed-path",
+        seedPath,
+        "--registry-url",
+        "http://registry.test",
+        "--network",
+        "metafactory",
+        "--json",
+      ]);
+      expect(res.exitCode).toBe(0);
+      const out = JSON.parse(res.stdout) as { data: Record<string, string> };
+      // C-1315 — the register response itself carries no request_id; the CLI
+      // does a PoP `/admission-requests/mine` read to surface it.
+      expect(out.data.network_id).toBe("metafactory");
+      expect(out.data.admission_status).toBe("PENDING");
+      expect(out.data.sealed_secret).toBe("missing");
+      expect(typeof out.data.request_id).toBe("string");
+      expect(out.data.request_id!.length).toBeGreaterThan(0);
+      expect(out.data.next_for_admin).toContain("cortex network admit");
+      expect(out.data.next_for_admin).toContain("secret add-member metafactory");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("[6d] register --network human output prints the request-id + next-for-admin (C-1315)", async () => {
+    const env = await configuredEnv();
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "jc", "--seed-path", seedPath]);
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+    try {
+      const res = await dispatchProvisionStack([
+        "register",
+        "jc",
+        "--seed-path",
+        seedPath,
+        "--registry-url",
+        "http://registry.test",
+        "--network",
+        "metafactory",
+      ]);
+      expect(res.exitCode).toBe(0);
+      expect(res.stdout).toContain("request-id:");
+      expect(res.stdout).toContain("admission: PENDING");
+      expect(res.stdout).toContain("next (admin):");
+      // The seed never leaks into human output.
+      expect(res.stdout).not.toContain(seedOnDisk(seedPath));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("[6b] register surfaces a registry rejection as exit 1", async () => {
     // Unconfigured registry → 503 registry_unconfigured.
     const env: Env = { ENVIRONMENT: "test" };

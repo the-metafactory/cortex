@@ -144,6 +144,10 @@ import {
 } from "./network-secret-adapters";
 import { fetchSealedLeafSecret } from "../../../common/registry/fetch-sealed-secret";
 import {
+  resolveOwnAdmissionState,
+  type OwnAdmissionState,
+} from "../../../common/registry/admission-state";
+import {
   createLiveProbeBus,
   type LiveProbeBus,
 } from "./network-ping-adapters";
@@ -631,6 +635,84 @@ async function maybeAutoFetchLeafSecret(
   return { leafSecret: res.leafPsk, leafUser: res.leafUser };
 }
 
+/**
+ * C-1315 — turn a classified admission state into the actionable message a
+ * Model-B joiner needs, REPLACING the misleading legacy `.creds not found (#821)`
+ * preflight. Returns `undefined` for states we can't explain (keep the original
+ * error). Every message states plainly that a legacy `.creds` file is NOT the fix.
+ */
+export function joinBlockerMessage(networkId: string, s: OwnAdmissionState): string | undefined {
+  const seal = `cortex network secret add-member ${networkId} ${s.peerPubkey} --apply`;
+  switch (s.state) {
+    case "no-row":
+      return (
+        `no admission request exists for network "${networkId}" — register first with ` +
+        `\`cortex provision-stack register <principal> --network ${networkId} --registry-url <url> --seed-path <seed>\`, ` +
+        `then have an admin admit + seal. (This is a Model-B secret-auth join; a legacy .creds file is NOT the fix.)`
+      );
+    case "pending":
+      return (
+        `admission request ${s.requestId ?? "(unknown)"} for "${networkId}" is PENDING — give this request-id to a ` +
+        `network admin to admit (\`cortex network admit ${s.requestId ?? "<id>"} --apply\`), then re-run join. ` +
+        `No sealed leaf secret has been delivered yet; a legacy .creds file is NOT the fix.`
+      );
+    case "admitted-unsealed":
+      return (
+        `admission request ${s.requestId ?? "(unknown)"} for "${networkId}" is ADMITTED, but the sealed leaf secret ` +
+        `has not been delivered — ask an admin to run \`${seal}\`. \`cortex network join\` then auto-fetches + ` +
+        `unseals it (you never handle a raw secret). A legacy .creds file is NOT the fix.`
+      );
+    case "admitted-sealed":
+      return (
+        `admission request ${s.requestId ?? "(unknown)"} for "${networkId}" is ADMITTED and a sealed leaf secret ` +
+        `EXISTS, but this stack could not open it — it is likely sealed to a different pubkey or corrupted. Verify ` +
+        `this stack's registered pubkey (${s.peerPubkey}) matches what the admin sealed to, or ask them to re-seal: \`${seal}\`.`
+      );
+    case "revoked":
+      return (
+        `admission for "${networkId}" was REVOKED (request ${s.requestId ?? "(unknown)"}) — membership was withdrawn. ` +
+        `Re-register or contact a network admin. A legacy .creds file is NOT the fix.`
+      );
+    case "rejected":
+      return (
+        `admission request ${s.requestId ?? "(unknown)"} for "${networkId}" was REJECTED by a network admin. ` +
+        `Contact them or re-register. A legacy .creds file is NOT the fix.`
+      );
+    default:
+      return undefined; // unknown status — keep the original error
+  }
+}
+
+/**
+ * C-1315 — when a join fails the Model-B creds preflight (#821) with no resolved
+ * leaf secret, probe the joiner's OWN admission row (PoP `/mine` read) and return
+ * the actionable state message. Best-effort: any inability to probe (no seed on
+ * disk, unreadable seed, registry unreachable) returns `undefined` so the caller
+ * keeps the original error rather than inventing a misleading one.
+ */
+async function classifyModelBJoinBlocker(
+  networkId: string,
+  inputs: { seedPath: string; registryUrl: string; principal: string },
+): Promise<string | undefined> {
+  const seedExpanded = expandTilde(inputs.seedPath);
+  if (!existsSync(seedExpanded)) return undefined;
+  let material;
+  try {
+    enforceChmod600(seedExpanded);
+    const seed = await readFile(seedExpanded, "utf-8");
+    material = materialFromSeedString(seed);
+  } catch (_err) {
+    // Can't load the stack identity → can't probe; keep the original error. Safe.
+    return undefined;
+  }
+  const probe = await resolveOwnAdmissionState(
+    { registryUrl: inputs.registryUrl, principalId: inputs.principal, material },
+    networkId,
+  );
+  if (!probe.ok) return undefined; // registry unreachable/not configured → keep original
+  return joinBlockerMessage(networkId, probe.state);
+}
+
 async function runJoin(
   networkId: string,
   flags: FlagMap,
@@ -776,7 +858,30 @@ async function runJoin(
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
   const res = await joinNetwork(networkId, stack, ports);
-  const flow = renderFlowResult("join", networkId, res.ok, res.reason, res.steps, applyRes.apply, json, {
+
+  // C-1315 — when the join fails the Model-B creds preflight (#821) and no leaf
+  // secret was resolved (flag/config/auto-fetch), the REAL blocker is almost
+  // always an admission-state gap (not yet admitted / sealed delivery missing /
+  // revoked), NOT a missing legacy .creds file. Probe the joiner's own admission
+  // row and REPLACE the misleading message with the actionable state. Only fires
+  // on the secret-auth (Model-B) no-secret path; an explicit --creds / --leaf-
+  // secret join, or a registry we can't reach, keeps the original #821 error.
+  let effectiveReason = res.reason;
+  if (
+    !res.ok &&
+    resolvedLeafSecret === undefined &&
+    typeof res.reason === "string" &&
+    res.reason.includes("cortex#821")
+  ) {
+    const actionable = await classifyModelBJoinBlocker(networkId, {
+      seedPath: inputs.seedPath,
+      registryUrl: inputs.registryUrl,
+      principal: inputs.principal,
+    });
+    if (actionable !== undefined) effectiveReason = actionable;
+  }
+
+  const flow = renderFlowResult("join", networkId, res.ok, effectiveReason, res.steps, applyRes.apply, json, {
     used_cache: res.usedCache === true ? "true" : "false",
     peers: (res.resolvedPeers ?? []).join(","),
   });
