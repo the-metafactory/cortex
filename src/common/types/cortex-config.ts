@@ -50,6 +50,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { OfferingSchema, superRefineOfferings } from "./offering";
+import { AdmissionPolicySchema } from "./admission";
 import { CAPABILITY_ID_REGEX } from "./capability";
 import { checkPublicOfferingBackendGate } from "./public-offering-backend-gate";
 import { StackConfigSchema, deriveStackId } from "./stack";
@@ -2374,6 +2375,21 @@ export const PolicySchema = z.object({
    * default — is the single source of the default-deny semantics.
    */
   offerings: z.array(OfferingSchema).optional(),
+  /**
+   * R26 P1 (cortex#1371) — the substrate ADMISSION block: KV-arbitrated rate
+   * limiting at the spawn gate (design `docs/design-substrate-rate-limiting.md`
+   * §4.1; myelin `specs/admission.md`). Tier 1 (`stack`) is the global spawn
+   * ceiling; tier 2 resolves `principals[id]` > `roles` (most permissive) >
+   * `defaults`, field by field; `anonymous` is the open-onboarding floor,
+   * clamped to the built-in 2/min · 1-in-flight ceiling.
+   *
+   * **`.optional()`, deliberately no default** — mirrors `federated`/`public`/
+   * `offerings`: an ABSENT block means the AdmissionGate is never constructed
+   * and behaviour is byte-identical to a pre-R26 build (the CO-4
+   * provably-inert-until-configured rule, `gate-floor.ts:29-37`). Cross-refs
+   * (role keys, principal ids) are checked in the superRefine below.
+   */
+  admission: AdmissionPolicySchema.optional(),
   // v2.0.0 cutover (cortex#297) — `parallel_mode_enabled` retired with
   // the parallel-mode plumbing in adapters. PolicyEngine is the sole
   // authorisation gate; legacy role-resolver is gone.
@@ -2607,6 +2623,45 @@ export const PolicySchema = z.object({
           }
         }
       });
+    });
+  }
+
+  // R26 P1 (cortex#1371) — admission cross-refs. Same per-offender path
+  // pattern as the principal/role rules above: every admission.roles key must
+  // be a declared role, every admission.principals[].id a declared principal
+  // (and unique within the admission block) — a dangling override would
+  // silently never apply, which reads as "limited" while limiting nothing.
+  if (policy.admission !== undefined) {
+    const knownRoleIds = new Set(policy.roles.map((r) => r.id));
+    for (const roleId of Object.keys(policy.admission.roles ?? {})) {
+      if (!knownRoleIds.has(roleId)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `admission.roles key "${roleId}" references undeclared role — declare it in policy.roles[]`,
+          path: ["admission", "roles", roleId],
+        });
+      }
+    }
+    const knownPrincipalIds = new Set(policy.principals.map((p) => p.id));
+    const seenAdmissionPrincipal = new Map<string, number>();
+    (policy.admission.principals ?? []).forEach((entry, i) => {
+      if (!knownPrincipalIds.has(entry.id)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `admission.principals[${i}].id "${entry.id}" references undeclared principal — declare it in policy.principals[]`,
+          path: ["admission", "principals", i, "id"],
+        });
+      }
+      const dupAt = seenAdmissionPrincipal.get(entry.id);
+      if (dupAt !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: `admission.principals[${i}].id "${entry.id}" already declared at admission.principals[${dupAt}]`,
+          path: ["admission", "principals", i, "id"],
+        });
+      } else {
+        seenAdmissionPrincipal.set(entry.id, i);
+      }
     });
   }
 

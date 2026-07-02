@@ -65,6 +65,13 @@ import { DID_RE } from "@the-metafactory/myelin/identity";
 import { createSurfaceRouter, type SurfaceRouter } from "./bus/surface-router";
 import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
+// R26 P1 (cortex#1371) — the substrate admission gate + its loud degrade event.
+import { createSystemAdmissionDegradedEvent } from "./bus/system-events";
+import {
+  AdmissionGate,
+  admissionBucketName,
+  provisionAdmissionKv,
+} from "./bus/admission";
 import {
   publishCapabilityRegistry,
   buildCapabilityRegisteredEnvelope,
@@ -4375,6 +4382,84 @@ export async function startCortex(
   // Per-agent listeners; `start()`/`stop()`-ed as a set (mirrors how
   // `reviewConsumers` / `brainConsumers` are tracked + drained).
   const dispatchListeners: DispatchListener[] = [];
+  // R26 P1 (cortex#1371) — the substrate ADMISSION GATE (design
+  // `docs/design-substrate-rate-limiting.md` Design B; contract myelin
+  // `specs/admission.md`). Constructed ONLY when the principal declared a
+  // `policy.admission` block — absent block ⇒ `admissionGate` stays
+  // `undefined`, the listeners below receive no gate, and behaviour is
+  // byte-identical to a pre-R26 build (the CO-4 inertness rule,
+  // `gate-floor.ts:29-37`): no KV bucket provisioned, no admission reads,
+  // no new envelopes.
+  //
+  // State lives in the per-(principal, stack) NATS-KV bucket
+  // `admission_{principal}_{stack}` — provisioned idempotently here
+  // (mirroring the review-stream provisioning above) and arbitrated by CAS,
+  // so admission counters are EXACT across N cortex nodes. Provisioning
+  // failure is NON-FATAL: the gate starts in its designed DEGRADED posture
+  // (node-local approximate buckets + loud `system.admission.degraded`
+  // event; anonymous dispatches fail closed) rather than blocking boot.
+  let admissionGate: AdmissionGate | undefined;
+  if (resolvedPolicy?.admission !== undefined) {
+    const admissionBucket = admissionBucketName(principalId, derivedStack.stack);
+    let admissionJsm: import("./bus/jetstream/types").ProvisionJsm | null = null;
+    if (runtime.jetstreamManager !== undefined) {
+      try {
+        admissionJsm = await runtime.jetstreamManager();
+      } catch (err) {
+        process.stderr.write(
+          `cortex: jetstreamManager() resolution failed for admission provisioning — ` +
+            `continuing to KV open: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+    const provisionedAdmission = await provisionAdmissionKv({
+      jsm: admissionJsm,
+      openKv: async (bucket) =>
+        runtime.kvBucket !== undefined ? await runtime.kvBucket(bucket) : null,
+      bucket: admissionBucket,
+      log: console,
+    });
+    // Tier-2 resolution input: principal id → declared role ids. Built once
+    // from the SAME parsed policy the engine uses, so admission roles can't
+    // drift from authorisation roles.
+    const admissionPrincipalRoles = new Map<string, readonly string[]>(
+      resolvedPolicy.principals.map((p) => [p.id, p.role]),
+    );
+    admissionGate = new AdmissionGate({
+      config: resolvedPolicy.admission,
+      kv: provisionedAdmission.kv,
+      principalRoles: admissionPrincipalRoles,
+      // Design §4.4 — degrade transitions MUST be loud: a `system.admission.
+      // degraded` envelope per transition (the gate also writes stderr).
+      // Fire-and-forget with a logged rejection — the transition event must
+      // never block or fail an admission decision (no-empty-catch rule).
+      onDegradeTransition: (mode, detail) => {
+        void runtime
+          .publish(
+            createSystemAdmissionDegradedEvent({
+              source: systemEventSource,
+              mode,
+              detail,
+              bucket: admissionBucket,
+            }),
+          )
+          .catch((err: unknown) => {
+            process.stderr.write(
+              `cortex: system.admission.degraded publish failed (mode=${mode}): ` +
+                `${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          });
+      },
+    });
+    console.log(
+      `cortex: admission gate ENABLED — bucket=${admissionBucket} ` +
+        `(${provisionedAdmission.outcome}), tiers=stack+principal, ` +
+        `stack=${resolvedPolicy.admission.stack !== undefined ? "configured" : "unset"}, ` +
+        `defaults=${resolvedPolicy.admission.defaults !== undefined ? "configured" : "unset"}, ` +
+        `anonymous=built-in-ceiling${resolvedPolicy.admission.anonymous !== undefined ? "+config" : ""}`,
+    );
+  }
+
   // Shared options every listener carries — only `receivingAgentId` + the
   // scoped `subjects` differ per agent. Built once so the per-agent wiring
   // can't drift between listeners.
@@ -4428,6 +4513,10 @@ export async function startCortex(
     ...(config.claude.bashAllowlist !== undefined && {
       bashAllowlist: config.claude.bashAllowlist,
     }),
+    // R26 P1 (cortex#1371) — admission gate. Spread-guarded like the other
+    // optional fields: an unconfigured stack passes NO gate and the listener's
+    // admission stage is skipped entirely (CO-4 inertness).
+    ...(admissionGate !== undefined && { admissionGate }),
   };
   if (chatAgents.length >= 2) {
     // Multi-agent: each chat-capable agent gets its OWN listener on its OWN

@@ -237,6 +237,43 @@ policy:
         - tool.glob
         - tool.grep
   # ---------------------------------------------------------------------------
+  # admission — optional substrate rate limiting at the spawn gate (R26 P1)
+  # ---------------------------------------------------------------------------
+  # KV-arbitrated (NATS-KV / JetStream) token buckets + in-flight caps keyed on
+  # the envelope-resolved requester principal — exact across N cortex nodes.
+  # Design: docs/design-substrate-rate-limiting.md; contract:
+  # myelin/specs/admission.md. ABSENT block ⇒ the limiter is fully inert
+  # (byte-identical behaviour — no KV bucket, no checks, no new envelopes).
+  #
+  # Refusals are TRANSIENT: the requester gets a terminal dispatch.task.failed
+  # { kind: "not_now", retry_after_ms } ("busy — try again in ~Ns"), never a
+  # permanent deny. The anonymous open-onboarding principal (did:mf:public) is
+  # always clamped to a built-in ceiling of 2/min, 1 in-flight — config below
+  # can tighten it, never raise it. If the KV store errors, named principals
+  # degrade to node-local approximate buckets (a loud
+  # system.admission.degraded envelope fires); anonymous fails closed.
+  #
+  # admission:
+  #   stack:                    # tier 1 — global spawn ceiling (every dispatch)
+  #     max_concurrent: 8
+  #     per_minute: 30
+  #   defaults:                 # tier 2 — every principal unless overridden
+  #     per_minute: 6
+  #     per_hour: 60
+  #     max_concurrent: 3
+  #   roles:                    # role overrides (most permissive wins across
+  #     principal:              # a principal's roles — capability-union rule)
+  #       per_minute: 20
+  #       max_concurrent: 6
+  #   principals:               # per-principal override (most specific wins,
+  #     - id: amt-surface       # field by field); id must be declared above
+  #       per_minute: 12
+  #       max_concurrent: 2
+  #   anonymous:                # the open-onboarding floor (clamped to the
+  #     per_minute: 2           # built-in 2/min · 1-in-flight ceiling)
+  #     max_concurrent: 1
+
+  # ---------------------------------------------------------------------------
   # federated — optional cross-stack federation (Phase D + F-3)
   # ---------------------------------------------------------------------------
   # Each network is a trust closure with its own peers[], accept/deny subject

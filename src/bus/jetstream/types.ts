@@ -41,3 +41,32 @@ export interface ProvisionJsm {
     delete(stream: string, durable: string): Promise<boolean>;
   };
 }
+
+/**
+ * R26 P1 (cortex#1371) — one entry read from a {@link ProvisionKv} bucket.
+ * Mirror of nats.js's `KvEntry` minus everything the admission gate doesn't
+ * touch. `operation` matters: a `DEL`/`PURGE` tombstone is still returned by
+ * `get()` with a live revision — consumers MUST treat it as "absent value"
+ * while still CAS-ing against its revision.
+ */
+export interface ProvisionKvEntry {
+  value: Uint8Array;
+  revision: number;
+  operation: "PUT" | "DEL" | "PURGE";
+}
+
+/**
+ * Narrow NATS-KV surface — the subset of nats.js's `KV` view the admission
+ * gate uses (myelin `specs/admission.md` §5: get → create-if-absent →
+ * CAS-update on revision). Same neutral-module rationale as
+ * {@link ProvisionJsm}: the MyelinRuntime exposes a `kvBucket()` capability
+ * returning this shape, tests stub it in-memory, and the runtime stays
+ * decoupled from nats.js's full materialized-views surface.
+ */
+export interface ProvisionKv {
+  get(key: string): Promise<ProvisionKvEntry | null>;
+  /** Create-if-absent — rejects when the key already exists (CAS on absence). */
+  create(key: string, value: Uint8Array): Promise<number>;
+  /** Compare-and-swap update — rejects unless `revision` is the live revision. */
+  update(key: string, value: Uint8Array, revision: number): Promise<number>;
+}

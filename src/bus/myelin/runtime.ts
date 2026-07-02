@@ -256,6 +256,21 @@ export interface MyelinRuntime {
    * are cached.
    */
   jetstreamManager?(): Promise<import("../jetstream/types").ProvisionJsm | null>;
+  /**
+   * R26 P1 (cortex#1371) — resolve a narrow NATS-KV capability against the
+   * PRIMARY link (same single-link rationale as `jetstreamManager`), or
+   * `null` when the runtime is disabled. Opens (creating if absent —
+   * nats.js's `views.kv` is create-or-bind) the named KV bucket and returns
+   * the narrow `ProvisionKv` surface the admission gate consumes
+   * (get / create / CAS-update). Boot-path only today (the admission
+   * provisioning call) — no per-call caching; callers hold the returned
+   * handle for the process lifetime.
+   *
+   * OPTIONAL on the interface for the same additivity reason as
+   * `jetstreamManager` — existing fake-runtime test stubs keep their shapes;
+   * callers MUST treat an undefined property as a `null` return.
+   */
+  kvBucket?(name: string): Promise<import("../jetstream/types").ProvisionKv | null>;
   /** Best-effort shutdown — drains subscribers, closes the link. */
   stop(): Promise<void>;
 }
@@ -633,6 +648,11 @@ export async function startMyelinRuntime(
   // eslint-disable-next-line @typescript-eslint/require-await
   const jetstreamManagerDisabled = async (): Promise<null> => null;
 
+  // R26 P1 (cortex#1371) — disabled KV helper mirrors `jetstreamManagerDisabled`:
+  // null means "no link, no bucket" and the admission boot path degrades.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  const kvBucketDisabled = async (): Promise<null> => null;
+
   if (!config.nats?.url) {
     return {
       enabled: false,
@@ -641,6 +661,7 @@ export async function startMyelinRuntime(
       subscribePull: subscribePullDisabled,
       subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
+      kvBucket: kvBucketDisabled,
       stop: stopDisabled,
     };
   }
@@ -814,6 +835,7 @@ export async function startMyelinRuntime(
       subscribePull: subscribePullDisabled,
       subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
+      kvBucket: kvBucketDisabled,
       stop: stopDisabled,
     };
   }
@@ -1391,6 +1413,7 @@ export async function startMyelinRuntime(
       subscribePull: subscribePullDisabled,
       subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
+      kvBucket: kvBucketDisabled,
       stop: stopDisabled,
     };
   }
@@ -1906,6 +1929,17 @@ export async function startMyelinRuntime(
     return primary.jsmCache;
   };
 
+  // R26 P1 (cortex#1371) — narrow KV capability, PRIMARY-link-bound like the
+  // JSM above (no per-network KV). `views.kv` creates the bucket when absent
+  // (history=1: only the latest revision of an admission counter matters) and
+  // binds otherwise — idempotent, matching the provisioning helpers' contract.
+  // nats.js's `KV` satisfies the narrow `ProvisionKv` shape structurally.
+  const kvBucketEnabled = async (
+    name: string,
+  ): Promise<import("nats").KV> => {
+    return primaryLink.raw.jetstream().views.kv(name, { history: 1 });
+  };
+
   return {
     enabled: true,
     onEnvelope,
@@ -1914,6 +1948,7 @@ export async function startMyelinRuntime(
     subscribePull: subscribePullEnabled,
     subscribe: subscribePushEnabled,
     jetstreamManager: jetstreamManagerEnabled,
+    kvBucket: kvBucketEnabled,
     stop: async () => {
       if (stopped) return;
       stopped = true;

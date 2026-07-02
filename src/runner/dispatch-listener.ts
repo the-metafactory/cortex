@@ -91,6 +91,7 @@ import type {
 import {
   createSystemAccessAllowedEvent,
   createSystemAccessDeniedEvent,
+  createSystemAdmissionThrottledEvent,
   createSystemDispatchStageEvent,
   type SystemDispatchStage,
   type SystemDispatchStageOutcome,
@@ -101,6 +102,10 @@ import type {
 } from "../common/substrates/types";
 import type { PolicyEngine } from "../common/policy/engine";
 import { extractAgentIdFromDid } from "../common/policy/did";
+// R26 P1 (cortex#1371) — the substrate admission gate (KV-arbitrated rate
+// limiting) + the anonymous public principal id it fails closed for.
+import type { AdmissionGate, AdmissionLease } from "../bus/admission";
+import { PUBLIC_PRINCIPAL_ID } from "../common/policy/factory";
 import { isUuid } from "../common/types/uuid";
 // M3 (cortex#1241, ADR-0019) — verify-then-decrypt the sealed dispatch payload.
 import { readMarker, NetworkKeyring } from "../common/crypto/payload-encryption";
@@ -524,6 +529,19 @@ export interface DispatchListenerOptions {
    * plumbing is complete and a future config knob is a one-line wire-up.
    */
   bashGuardDisabled?: boolean;
+  /**
+   * R26 P1 (cortex#1371) — the substrate ADMISSION GATE (design
+   * `docs/design-substrate-rate-limiting.md` Design B; myelin
+   * `specs/admission.md`). When supplied, every policy-ALLOWED dispatch is
+   * admission-checked (KV-arbitrated token bucket + in-flight lease, keyed on
+   * the envelope-resolved requester principal) BEFORE the harness is
+   * constructed; a refusal emits `system.admission.throttled` plus a terminal
+   * `dispatch.task.failed { kind: "not_now", retry_after_ms }` and never
+   * spawns. `cortex.ts` supplies this ONLY when `policy.admission` is
+   * configured — `undefined` (the default) is the CO-4 inert posture:
+   * byte-identical behaviour, zero admission reads.
+   */
+  admissionGate?: AdmissionGate;
 }
 
 export interface DispatchListener {
@@ -792,6 +810,7 @@ export function createDispatchListener(
     resolveFederatedPeer,
     bashAllowlist,
     bashGuardDisabled,
+    admissionGate,
     adapterId = "runner-dispatch-listener",
   } = opts;
   // v2.0.2 default: structural trust + ed25519 crypto verification.
@@ -873,6 +892,7 @@ export function createDispatchListener(
         traceDispatch,
         bashAllowlist,
         bashGuardDisabled,
+        admissionGate,
       });
     } catch (err) {
       process.stderr.write(
@@ -1339,6 +1359,12 @@ interface DispatchHandlerContext {
    * (no config knob); injected onto `DispatchRequest.runtime` when set.
    */
   bashGuardDisabled: boolean | undefined;
+  /**
+   * R26 P1 (cortex#1371) — admission gate. `undefined` ⇒ `policy.admission`
+   * is not configured ⇒ the admission stage is skipped entirely (CO-4
+   * inertness). See {@link DispatchListenerOptions.admissionGate}.
+   */
+  admissionGate: AdmissionGate | undefined;
 }
 
 async function handleDispatchEnvelope(
@@ -1366,6 +1392,7 @@ async function handleDispatchEnvelope(
     traceDispatch,
     bashAllowlist,
     bashGuardDisabled,
+    admissionGate,
   } = ctx;
   // cortex#492 — pre-parse trace context from CLEARTEXT METADATA ONLY. M3
   // (cortex#1241, ADR-0019) reorder: NOTHING reads the payload before
@@ -1743,6 +1770,12 @@ async function handleDispatchEnvelope(
   // leave it `undefined` so the engine skips the federation branch.
   const sourceNetwork = extractSourceNetwork(envelope, subject, federatedNetworksById);
   let gatedPrincipal: Principal | undefined;
+  // R26 P1 (cortex#1371) — in-flight admission lease, acquired by the
+  // admission gate below (only when `max_concurrent` tiers are configured)
+  // and released in the `finally` around the harness drain: the harness
+  // guarantees at least one terminal lifecycle envelope per dispatch, so the
+  // drain loop's end IS the dispatch's end.
+  let admissionLease: AdmissionLease | undefined;
   if (policyEngine === undefined) {
     // v2.0.1 (cortex#311): fail-closed when policy engine is unavailable.
     // In v2.0.0+ this only happens when principal declared empty
@@ -1910,6 +1943,101 @@ async function handleDispatchEnvelope(
       decision.capability,
     );
     gatedPrincipal = decision.principal;
+
+    // R26 P1 (cortex#1371) — ADMISSION GATE (enforcement point 1, design
+    // §4.2). Runs AFTER the policy allow and BEFORE harness construction:
+    // permanent refusals (policy) come before transient ones (rate) — the
+    // gate floor's ordering rule (`gate-floor.ts:195-202`) — and admission
+    // KV I/O stays off the path of requests that were going to be denied
+    // anyway. Keyed on the SAME principal the policy gate resolved
+    // (`decision.principalId` ← `originator.identity` → `signed_by[0]`), so
+    // admission and authorization can never key on divergent identities
+    // (myelin `specs/admission.md` §1). `admissionGate` is `undefined` when
+    // `policy.admission` is absent — this whole stage is then skipped
+    // (CO-4 inertness: byte-identical behaviour, zero admission reads).
+    if (admissionGate !== undefined) {
+      const admission = await admissionGate.check({
+        principalId: decision.principalId,
+        anonymous: decision.principalId === PUBLIC_PRINCIPAL_ID,
+        leaseId: payload.task_id,
+      });
+      if (!admission.admit) {
+        const retryAfterMs = admission.retry_after_ms;
+        trace(
+          traceDispatch,
+          runtime,
+          source,
+          "admission-checked",
+          "fail",
+          traceCtx,
+          `${admission.reason} tier=${admission.tier}${admission.window !== undefined ? ` window=${admission.window}` : ""}${admission.degraded ? " degraded" : ""}`,
+        );
+        process.stderr.write(
+          `[runner/dispatch-listener] admission throttled envelope ` +
+            `${envelope.id} (correlation_id=${envelope.correlation_id ?? "<none>"} ` +
+            `task_id=${payload.task_id} principal=${decision.principalId}): ` +
+            `${admission.reason} tier=${admission.tier} key=${admission.key}` +
+            (admission.window !== undefined ? ` window=${admission.window}` : "") +
+            `${admission.limit !== undefined ? ` limit=${admission.limit}` : ""} ` +
+            `retry_after_ms=${retryAfterMs}${admission.degraded ? " (degraded)" : ""}\n`,
+        );
+        // Audit leg — `system.admission.throttled`, the transient sibling of
+        // `system.access.denied` (design §4.4). Same audit-common fields so
+        // consumers join both streams on correlation/envelope keys.
+        const throttled = createSystemAdmissionThrottledEvent({
+          ...auditCommon,
+          reason: {
+            kind: admission.reason,
+            tier: admission.tier,
+            key: admission.key,
+            ...(admission.window !== undefined && { window: admission.window }),
+            ...(admission.limit !== undefined && { limit: admission.limit }),
+            ...(admission.observed !== undefined && {
+              observed: admission.observed,
+            }),
+            retry_after_ms: retryAfterMs,
+            degraded: admission.degraded,
+          },
+        });
+        await runtime.publish(throttled);
+        // Lifecycle leg — TERMINAL `not_now` on the dispatch's correlation id
+        // (Q6 sign-off): interactive surfaces render `errorSummary` (the
+        // friendly string); the structured taxonomy rides `reason.detail` +
+        // `retry_after_ms`. NEVER `term` semantics — rate exhaustion is
+        // transient by definition.
+        const retrySeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+        const now = new Date();
+        const failed = createDispatchTaskFailedEvent({
+          source,
+          taskId: payload.task_id,
+          agentId: payload.agent_id,
+          startedAt: now,
+          failedAt: now,
+          errorSummary: `busy — try again in ~${retrySeconds}s`,
+          reason: {
+            kind: "not_now",
+            detail:
+              `admission: ${admission.reason === "concurrency" ? "concurrency limit" : admission.reason === "rate" ? "rate limit" : "admission store unavailable"} ` +
+              `(principal=${decision.principalId}, tier=${admission.tier}` +
+              (admission.window !== undefined ? `, window=${admission.window}` : "") +
+              `${admission.limit !== undefined ? `, limit=${admission.limit}` : ""})`,
+            retry_after_ms: retryAfterMs,
+          },
+        });
+        await runtime.publish(failed);
+        return;
+      }
+      admissionLease = admission.lease;
+      trace(
+        traceDispatch,
+        runtime,
+        source,
+        "admission-checked",
+        "pass",
+        traceCtx,
+        admission.degraded ? "degraded-local" : undefined,
+      );
+    }
   }
 
   // Per-dispatch harness — see fn-doc above for rationale. `source` is
@@ -1988,15 +2116,25 @@ async function handleDispatchEnvelope(
   // envelope passes through verbatim, exactly as before this change.
   const responseRouting = payload.response_routing;
   let firstYield = true;
-  for await (const env of harness.dispatch(req)) {
-    if (firstYield) {
-      firstYield = false;
-      // The harness produced its first lifecycle envelope — the session
-      // is actually running. Closes the trace: a dispatch that reaches
-      // `started` got all the way through to a live CC session.
-      trace(traceDispatch, runtime, source, "started", "info", traceCtx);
+  try {
+    for await (const env of harness.dispatch(req)) {
+      if (firstYield) {
+        firstYield = false;
+        // The harness produced its first lifecycle envelope — the session
+        // is actually running. Closes the trace: a dispatch that reaches
+        // `started` got all the way through to a live CC session.
+        trace(traceDispatch, runtime, source, "started", "info", traceCtx);
+      }
+      await runtime.publish(echoResponseRouting(env, responseRouting));
     }
-    await runtime.publish(echoResponseRouting(env, responseRouting));
+  } finally {
+    // R26 P1 (cortex#1371) — release the in-flight admission lease when the
+    // dispatch terminates (the harness guarantees a terminal envelope, and a
+    // throw lands here too). `release` is idempotent and never throws — a
+    // failed release is logged gate-side and the lease TTL self-heals.
+    if (admissionLease !== undefined && admissionGate !== undefined) {
+      await admissionGate.release(admissionLease);
+    }
   }
 }
 

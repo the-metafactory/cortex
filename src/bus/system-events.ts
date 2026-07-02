@@ -1044,6 +1044,116 @@ export function createSystemAccessDeniedEvent(
 }
 
 // ---------------------------------------------------------------------------
+// system.admission.throttled / system.admission.degraded — R26 P1 (cortex#1371)
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured reason payload on `system.admission.throttled` envelopes.
+ * Mirrors the AdmissionGate's refusal shape (myelin `specs/admission.md` §9):
+ * which tier/key refused, on what dimension, at what limit, and the retry
+ * hint the requester was given. `degraded` flags decisions taken on the
+ * node-local fallback (design §4.3) so audit consumers can distinguish exact
+ * refusals from approximate ones.
+ */
+export interface SystemAdmissionThrottledReason {
+  /** Refusal dimension — `"rate"` | `"concurrency"` | `"store_error"`. */
+  kind: string;
+  /** Tier that refused — `"stack"` | `"principal"` (3–4 reserved). */
+  tier: string;
+  /** The KV key that refused (myelin admission spec §3 grammar). */
+  key: string;
+  /** Refusing rate window (`per_minute`|`per_hour`|`per_day`) — rate only. */
+  window?: string;
+  limit?: number;
+  observed?: number;
+  /** Backpressure hint forwarded to the requester (`not_now` taxonomy). */
+  retry_after_ms: number;
+  /** True when decided on the degraded node-local fallback. */
+  degraded: boolean;
+  [k: string]: unknown;
+}
+
+/**
+ * Options for `createSystemAdmissionThrottledEvent`. Extends the same common
+ * audit shape as `system.access.allowed`/`denied` — an admission refusal is
+ * an access decision, just a TRANSIENT one — so consumers join it on the
+ * same correlation/envelope keys they already use for the deny stream.
+ */
+export interface SystemAdmissionThrottledOpts extends SystemAccessCommonOpts {
+  reason: SystemAdmissionThrottledReason;
+}
+
+/**
+ * Construct a `system.admission.throttled` envelope (R26 P1, design §4.4) —
+ * the audit sibling of `system.access.denied` for the transient admission
+ * gate. Emitted by every enforcement point that refuses a dispatch on rate /
+ * concurrency / store-posture grounds; the paired TERMINAL lifecycle event is
+ * the `dispatch.task.failed { kind: "not_now" }` the enforcement point also
+ * publishes (an admission refusal never `term`s — it defers).
+ *
+ * Subject convention: `local.{principal}.system.admission.throttled` —
+ * surfaces subscribe to `system.admission.>` for the throttle stream, or
+ * join with `system.access.>` on `correlation_id`.
+ */
+export function createSystemAdmissionThrottledEvent(
+  opts: SystemAdmissionThrottledOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.admission.throttled",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.correlationId,
+    payload: {
+      principal_id: opts.principalId,
+      capability: opts.capability,
+      reason: opts.reason,
+      intent_sovereignty: opts.sovereignty,
+      envelope_id: opts.envelopeId,
+      envelope_subject: opts.envelopeSubject,
+      signed_by: opts.signedBy,
+    },
+  });
+}
+
+/** Options for `createSystemAdmissionDegradedEvent`. */
+export interface SystemAdmissionDegradedOpts {
+  source: SystemEventSource;
+  /**
+   * Posture transition: `"degraded-local"` = the KV admission store errored
+   * and named principals now ride node-local approximate buckets (anonymous
+   * fails closed); `"recovered"` = the store is reachable again and the
+   * local fallback state was discarded.
+   */
+  mode: "degraded-local" | "recovered";
+  /** Human-facing detail (the triggering error / recovery note). */
+  detail: string;
+  /** The admission KV bucket concerned (`admission_{principal}_{stack}`). */
+  bucket?: string;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.admission.degraded` envelope (R26 P1, design §4.4:
+ * degraded-mode transitions MUST be loud — never silent, the R6 lesson).
+ * Emitted once per posture TRANSITION (into and out of degraded), not per
+ * request; the per-request `degraded: true` flag rides the throttle events.
+ */
+export function createSystemAdmissionDegradedEvent(
+  opts: SystemAdmissionDegradedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.admission.degraded",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      mode: opts.mode,
+      detail: opts.detail,
+      ...(opts.bucket !== undefined && { bucket: opts.bucket }),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // system.access.denied — IAW Phase D.2 federation-router variant
 // ---------------------------------------------------------------------------
 
@@ -1379,6 +1489,12 @@ export type SystemDispatchStage =
   // field is parsed. A successful decrypt is silent (flows on to `parsed`).
   | "payload-decrypt-rejected"
   | "policy-decision"
+  // R26 P1 (cortex#1371) — the admission gate (KV-arbitrated rate limiting)
+  // between the policy allow and harness construction. `pass` = admitted;
+  // `fail` = throttled (`not_now` terminal emitted, no spawn). Only emitted
+  // when `policy.admission` is configured — absent config skips the stage
+  // entirely (CO-4 inertness).
+  | "admission-checked"
   | "session-spawning"
   | "started";
 
