@@ -698,8 +698,10 @@ export function joinBlockerMessage(networkId: string, s: OwnAdmissionState): str
       );
     case "revoked":
       return (
-        `admission for "${networkId}" was REVOKED (request ${s.requestId ?? "(unknown)"}) — membership was withdrawn. ` +
-        `Re-register or contact a network admin. A legacy .creds file is NOT the fix.`
+        `admission for "${networkId}" was REVOKED (request ${s.requestId ?? "(unknown)"}` +
+        `${s.updatedAt !== undefined ? ` on ${s.updatedAt}` : ""}) — membership was withdrawn. ` +
+        `Run \`cortex network leave ${networkId} --apply\` to clean up the dead leaf, then re-register or ` +
+        `contact a network admin to re-join. A legacy .creds file is NOT the fix.`
       );
     case "rejected":
       return (
@@ -1040,6 +1042,7 @@ async function runLeave(
 async function runStatus(
   flags: FlagMap,
   json: boolean,
+  load: ConfigReader,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
   if (!principalRes.ok) return usageError("status", principalRes.reason, json);
@@ -1062,8 +1065,26 @@ async function runStatus(
       : flags;
 
   const cfg = portsConfig("", principalRes.value, slugRes.slug, statusFlags);
+
+  // C-1350 (Slice 2) — resolve the registry-url + signing-seed the member `/mine`
+  // admission read needs, the SAME precedence join/leave use (flag → config →
+  // the compiled-in default registry / stack seed convention). Best-effort: an
+  // unreadable config is NOT fatal for a read-only status — the admission port
+  // simply reports `unavailable` when it can't sign the read.
+  const admissionCoords = resolveStatusAdmissionCoords(
+    statusFlags,
+    principalRes.value,
+    slugRes.slug,
+    load,
+  );
+  const cfgWithAdmission: LivePortsConfig = {
+    ...cfg,
+    ...(admissionCoords.registryUrl !== undefined && { registryUrl: admissionCoords.registryUrl }),
+    ...(admissionCoords.seedPath !== undefined && { seedPath: admissionCoords.seedPath }),
+  };
+
   // status is read-only — live ports, but it only ever reads.
-  const ports: NetworkPorts = buildLivePorts(cfg);
+  const ports: NetworkPorts = buildLivePorts(cfgWithAdmission);
 
   const res = await networkStatus(ports);
   if (json) {
@@ -1086,9 +1107,63 @@ async function runStatus(
     if (n.link.inMsgs !== undefined || n.link.outMsgs !== undefined) {
       lines.push(`    counters: in=${(n.link.inMsgs ?? 0).toString()} out=${(n.link.outMsgs ?? 0).toString()}`);
     }
+    // C-1350 (Slice 2) — a REVOKED member sees an explicit message naming the
+    // network + the cleanup command, instead of the silent dead-leaf mystery.
+    // An unavailable lookup surfaces a non-fatal hint (matches #1315 posture);
+    // an admitted/live row carries no admission field, so nothing is added.
+    if (n.admission?.revoked === true) {
+      const when = n.admission.revokedAt !== undefined ? ` on ${n.admission.revokedAt}` : "";
+      lines.push(
+        `    ⚠ REVOKED — you were removed from "${n.networkId}"${when}. ` +
+          `Run \`cortex network leave ${n.networkId} --apply\` to clean up the dead leaf.`,
+      );
+    } else if (n.admission?.lookup === "unavailable") {
+      lines.push(`    admission_lookup: unavailable`);
+    }
     lines.push("");
   }
   return ok(lines.join("\n"));
+}
+
+/**
+ * C-1350 (Slice 2) — resolve the registry-url + signing-seed the status
+ * admission `/mine` read needs, mirroring join/leave precedence: flag →
+ * `policy.federated.registry` / `stack.nkey_seed_path` → the compiled-in default
+ * registry. Read-only + best-effort — a config that fails to load returns only
+ * what the flags gave (the port then reports `unavailable`), never throwing so a
+ * status read cannot fail on the admission lookup.
+ */
+function resolveStatusAdmissionCoords(
+  flags: FlagMap,
+  principal: string,
+  slug: string,
+  load: ConfigReader,
+): { registryUrl?: string; seedPath?: string } {
+  const flagRegistry = optionalValueFlag(flags, "--registry-url");
+  const flagSeed = optionalValueFlag(flags, "--seed-path");
+
+  let cfg: LoadedConfig | undefined;
+  try {
+    cfg = load(resolveStatusConfigPath(slug));
+  } catch (_err) {
+    // Read-only status must not fail because the config couldn't be loaded; fall
+    // back to flags + the default registry. The admission port reports
+    // `unavailable` when it still can't resolve a seed. Safe to ignore.
+    cfg = undefined;
+  }
+
+  const registryUrl =
+    flagRegistry ?? cfg?.policy?.federated?.registry?.url ?? DEFAULT_REGISTRY_URL;
+  const seedPath =
+    flagSeed ?? cfg?.stack?.nkey_seed_path ?? `~/.config/nats/${principal}-${slug}.seed`;
+
+  // Both always resolve to a string (flag → config → the non-empty default), but
+  // a flag could be an empty string — omit an empty value so the port falls back
+  // to reporting `unavailable` rather than signing a read with a blank url/seed.
+  return {
+    ...(registryUrl !== "" && { registryUrl }),
+    ...(seedPath !== "" && { seedPath }),
+  };
 }
 
 // =============================================================================
@@ -3092,7 +3167,7 @@ export async function dispatchNetwork(
     case "leave":
       return runLeave(parsed.positionals.network ?? "", parsed.flags, json, load);
     case "status":
-      return runStatus(parsed.flags, json);
+      return runStatus(parsed.flags, json, load);
     case "create":
       return runCreate(parsed.positionals.network ?? "", parsed.flags, json);
     case "ping":

@@ -77,6 +77,7 @@ import type {
 } from "../../../common/types/cortex-config";
 
 import type {
+  AdmissionStatePort,
   CachedNetworkPort,
   ConfigStorePort,
   DaemonPort,
@@ -88,6 +89,10 @@ import type {
   PlistPort,
   RenderLeafInputs,
 } from "./network-ports";
+import {
+  resolveOwnAdmissionState,
+  type ResolveOwnAdmissionStateResult,
+} from "../../../common/registry/admission-state";
 import { buildFederationWiringAdapter } from "./network-federation-wiring";
 import type {
   PublicPolicyPort,
@@ -1230,6 +1235,73 @@ export function buildCachedNetworkPort(): CachedNetworkPort {
 }
 
 // =============================================================================
+// Admission-state port — C-1350 (Slice 2), member-side `/mine` read for status.
+// =============================================================================
+
+/**
+ * C-1350 (Slice 2) — override the member `/mine` admission resolver in tests so a
+ * CLI `status` test can stub a REVOKED row without a live registry. Production
+ * leaves this `null` → the real {@link resolveOwnAdmissionState} PoP read.
+ */
+type AdmissionResolver = (
+  networkId: string,
+  inputs: { registryUrl: string; principalId: string; material: StackIdentityMaterial },
+) => Promise<ResolveOwnAdmissionStateResult>;
+let admissionResolverOverride: AdmissionResolver | null = null;
+
+/** Test seam — inject a fake admission resolver (or `null` to restore live). */
+export function __setAdmissionResolverForTests(f: AdmissionResolver | null): void {
+  admissionResolverOverride = f;
+}
+
+/**
+ * C-1350 (Slice 2) — the live member-side admission-state resolver for `status`.
+ * PoP-signs `GET /admission-requests/mine` with the stack's OWN seed and
+ * classifies the row for `networkId`. Best-effort + non-fatal: a missing
+ * registry URL / seed path / unreadable seed becomes a typed `{ ok: false,
+ * reason }` so `status` degrades to `admission_lookup: unavailable` rather than
+ * failing. NEVER throws.
+ */
+export function buildAdmissionStatePort(cfg: LivePortsConfig): AdmissionStatePort {
+  return {
+    async resolve(networkId): Promise<ResolveOwnAdmissionStateResult> {
+      const registryUrl = cfg.registryUrl;
+      if (registryUrl === undefined || registryUrl === "") {
+        return { ok: false, reason: "no registry url configured for admission lookup" };
+      }
+      if (cfg.seedPath === undefined || cfg.seedPath === "") {
+        return { ok: false, reason: "no signing seed configured for admission lookup" };
+      }
+      const matRes = loadSeedMaterial(cfg.seedPath, "--seed-path");
+      if (!matRes.ok) return { ok: false, reason: matRes.reason };
+
+      const resolver = admissionResolverOverride ?? liveResolveOwnAdmissionState;
+      try {
+        return await resolver(networkId, {
+          registryUrl,
+          principalId: cfg.principalId,
+          material: matRes.material,
+        });
+      } catch (err) {
+        // resolveOwnAdmissionState is soft-closed, but guard the seam anyway so a
+        // faulty injected resolver can never break a read-only `status`.
+        return {
+          ok: false,
+          reason: `admission lookup errored: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    },
+  };
+}
+
+/** The production resolver — thin wrapper matching the {@link AdmissionResolver} shape. */
+const liveResolveOwnAdmissionState: AdmissionResolver = (networkId, inputs) =>
+  resolveOwnAdmissionState(
+    { registryUrl: inputs.registryUrl, principalId: inputs.principalId, material: inputs.material },
+    networkId,
+  );
+
+// =============================================================================
 // Bundle builders
 // =============================================================================
 
@@ -1248,6 +1320,11 @@ function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
     // REGISTERED networks (descriptor cached, not joined). Read-only; a missing
     // cache dir degrades to no registered rows.
     cachedNetworks: buildCachedNetworkPort(),
+    // C-1350 (Slice 2) — always wire the member-side admission resolver so
+    // `status` can tell a REVOKED member to clean up. Read-only + best-effort:
+    // absent registry-url / seed → the port returns `unavailable` (never throws),
+    // and only `networkStatus` reads it, so join/leave are unaffected.
+    admission: buildAdmissionStatePort(cfg),
     // G1c (#1117, ADR-0013 Model B) — wire the local-side `federated.>`
     // export/import by shelling to `arc nats add-federation-export`. The port
     // is always wired; step (b.4) in joinNetwork uses it only when the bus is

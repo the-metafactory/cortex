@@ -48,6 +48,14 @@ export interface AdmissionMineRow {
   network_id: string | null;
   status: string;
   sealed_secret: string | null;
+  /**
+   * C-1350 (Slice 2) — ISO-8601 UTC of the row's last transition. On a REVOKED
+   * row this IS the revoked-at date (`revokeAdmission` stamps `updated_at` = now
+   * on the ADMITTED→REVOKED transition). OPTIONAL on the wire: an older registry
+   * (or a store that omits it) leaves it undefined, so consumers treat it as a
+   * best-effort hint, never a hard dependency.
+   */
+  updated_at?: string;
 }
 
 /** Injectable fetch (defaults to `globalThis.fetch`) so callers/tests stay hermetic. */
@@ -150,6 +158,13 @@ export interface OwnAdmissionState {
   hasSealedSecret: boolean;
   /** The registered stack pubkey (the admin needs it for `secret add-member`). */
   peerPubkey: string;
+  /**
+   * C-1350 (Slice 2) — the row's last-transition timestamp (`updated_at`), when
+   * the row carries one. For a `revoked` state this is the revoked-at date the
+   * member-facing "you were REVOKED … on <date>" message prints. Undefined for
+   * `no-row` and for an older registry that omits `updated_at`.
+   */
+  updatedAt?: string;
 }
 
 /** True when a row carries a non-empty sealed leaf-secret blob. */
@@ -172,7 +187,17 @@ export function classifyOwnAdmissionRows(
     return { state: "no-row", networkId, hasSealedSecret: false, peerPubkey };
   }
   const hasSealedSecret = rowHasSealedSecret(row);
-  const base = { networkId, requestId: row.request_id, hasSealedSecret, peerPubkey };
+  const base = {
+    networkId,
+    requestId: row.request_id,
+    hasSealedSecret,
+    peerPubkey,
+    // C-1350 — carry the row's last-transition date through (best-effort; an
+    // older registry omits it). On a REVOKED row this is the revoked-at date.
+    ...(typeof row.updated_at === "string" && row.updated_at.length > 0
+      ? { updatedAt: row.updated_at }
+      : {}),
+  };
   switch (row.status) {
     case "PENDING":
       return { ...base, state: "pending" };

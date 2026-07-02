@@ -55,6 +55,7 @@ import {
   brandVerified,
   type NetworkPorts,
   type LeafLinkState,
+  type AdmissionStatePort,
 } from "./network-ports";
 
 // =============================================================================
@@ -197,6 +198,34 @@ export interface StatusNetworkRow {
   link: LeafLinkState;
   /** C-850 — lifecycle stage (JSON `items[].status` + human output). */
   status: NetworkLifecycleStatus;
+  /**
+   * C-1350 (Slice 2) — the member's OWN admission-row state for this network,
+   * from the PoP `/mine` read. Present ONLY when the {@link NetworkPorts.admission}
+   * port is wired AND (the row is REVOKED, or the lookup could not be completed).
+   * A live/admitted row leaves this UNDEFINED so an ordinary status row is
+   * byte-for-byte unchanged (no false REVOKED). Rides the JSON `items[]` so a
+   * revoked member's tooling sees `admission.revoked === true`.
+   */
+  admission?: AdmissionStatusInfo;
+}
+
+/**
+ * C-1350 (Slice 2) — the member-side admission summary attached to a status row.
+ * Populated only when meaningful (REVOKED, or the lookup was unavailable).
+ */
+export interface AdmissionStatusInfo {
+  /** True when this stack's own admission row for the network is REVOKED. */
+  revoked: boolean;
+  /** ISO-8601 UTC the row was revoked (`updated_at`), when the registry supplied it. */
+  revokedAt?: string;
+  /** The admission request id, when known — echoed for the admin/audit trail. */
+  requestId?: string;
+  /**
+   * `"ok"` when the `/mine` read succeeded; `"unavailable"` when it failed
+   * (registry unreachable / no seed / not configured). `unavailable` is the
+   * best-effort, non-fatal signal — `status` never fails on it.
+   */
+  lookup: "ok" | "unavailable";
 }
 
 // =============================================================================
@@ -1093,5 +1122,50 @@ export async function networkStatus(ports: NetworkPorts): Promise<StatusResult> 
     });
   }
 
-  return { ok: true, networks: [...configRows, ...registeredRows] };
+  const rows = [...configRows, ...registeredRows];
+
+  // C-1350 (Slice 2) — when the admission port is wired, check each network's
+  // OWN admission row (member PoP `/mine` read) and attach a revoked/unavailable
+  // summary. This is the member-side half of `secret revoke-member`: a revoked
+  // member sees an explicit REVOKED message + cleanup command instead of a dead
+  // leaf-include mystery. Best-effort + non-fatal — a read failure attaches an
+  // `admission_lookup: unavailable` hint and NEVER fails `status`. An admitted /
+  // live row gets NO admission field (output stays unchanged; no false REVOKED).
+  const admission = ports.admission;
+  if (admission !== undefined) {
+    await Promise.all(
+      rows.map(async (row) => {
+        const info = await resolveAdmissionInfo(admission, row.networkId);
+        if (info !== undefined) row.admission = info;
+      }),
+    );
+  }
+
+  return { ok: true, networks: rows };
+}
+
+/**
+ * C-1350 (Slice 2) — resolve the member-side admission summary for ONE network,
+ * or `undefined` when there is nothing to surface (admitted / pending / no row).
+ * Best-effort: a `/mine` read failure becomes `{ revoked: false, lookup:
+ * "unavailable" }` rather than throwing. Only a REVOKED row (or a failed lookup)
+ * produces a summary — everything else returns `undefined` so an ordinary status
+ * row is unchanged.
+ */
+async function resolveAdmissionInfo(
+  admission: AdmissionStatePort,
+  networkId: string,
+): Promise<AdmissionStatusInfo | undefined> {
+  const res = await admission.resolve(networkId);
+  if (!res.ok) {
+    // Non-fatal — surface the lookup gap, keep the row (match #1315 posture).
+    return { revoked: false, lookup: "unavailable" };
+  }
+  if (res.state.state !== "revoked") return undefined;
+  return {
+    revoked: true,
+    lookup: "ok",
+    ...(res.state.updatedAt !== undefined && { revokedAt: res.state.updatedAt }),
+    ...(res.state.requestId !== undefined && { requestId: res.state.requestId }),
+  };
 }

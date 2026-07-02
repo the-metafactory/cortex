@@ -671,7 +671,10 @@ describe("joinBlockerMessage (C-1315)", () => {
   });
 
   test("revoked / rejected → their own messages", () => {
-    expect(joinBlockerMessage(NET, st({ state: "revoked", requestId: "r" }))).toContain("REVOKED");
+    const revoked = joinBlockerMessage(NET, st({ state: "revoked", requestId: "r" }));
+    expect(revoked).toContain("REVOKED");
+    // C-1350 (Slice 2) — the join error path also names the cleanup command.
+    expect(revoked).toContain("cortex network leave metafactory --apply");
     expect(joinBlockerMessage(NET, st({ state: "rejected", requestId: "r" }))).toContain("REJECTED");
   });
 

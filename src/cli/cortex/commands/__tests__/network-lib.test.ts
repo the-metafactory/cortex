@@ -28,6 +28,7 @@ import {
   type JoiningStack,
 } from "../network-lib";
 import type {
+  AdmissionStatePort,
   CachedNetworkPort,
   CachedNetworkSummary,
   ConfigStorePort,
@@ -40,6 +41,7 @@ import type {
   PlistPort,
   RenderLeafInputs,
 } from "../network-ports";
+import type { ResolveOwnAdmissionStateResult } from "../../../../common/registry/admission-state";
 import type {
   NetworkDescriptor,
   NetworkRosterResult,
@@ -168,6 +170,13 @@ function makeFakes(opts: {
    * this list; absent → no port (status reports config-joined networks only).
    */
   cachedNetworks?: CachedNetworkSummary[];
+  /**
+   * C-1350 (Slice 2) — member-side admission resolver for `status`. Keyed by
+   * network id → the classified `/mine` result the fake port returns. When
+   * present, {@link makeFakes} wires an {@link AdmissionStatePort}; absent → no
+   * port (status attaches no admission field — the pre-C-1350 behaviour).
+   */
+  admission?: Record<string, ResolveOwnAdmissionStateResult>;
   /** #794 — make the stack's nats config UNABLE to bind the leaf account. */
   canBind?: boolean;
   /**
@@ -482,6 +491,11 @@ function makeFakes(opts: {
       ...(opts.cachedNetworks !== undefined
         ? { cachedNetworks: makeCachedNetworkPort(opts.cachedNetworks) }
         : {}),
+      // C-1350 (Slice 2) — wire the fake admission resolver only when a test
+      // supplies one, so pre-C-1350 status tests attach no admission field.
+      ...(opts.admission !== undefined
+        ? { admission: makeAdmissionStatePort(opts.admission) }
+        : {}),
     },
     rec,
     storeRef,
@@ -493,6 +507,23 @@ function makeCachedNetworkPort(list: CachedNetworkSummary[]): CachedNetworkPort 
   return {
     list() {
       return list;
+    },
+  };
+}
+
+/**
+ * C-1350 (Slice 2) — a fake {@link AdmissionStatePort} over a fixed network→result
+ * map. An unmapped network resolves `{ ok: false }` (models the registry
+ * unreachable / not-configured path → the `unavailable` best-effort hint).
+ */
+function makeAdmissionStatePort(
+  byNetwork: Record<string, ResolveOwnAdmissionStateResult>,
+): AdmissionStatePort {
+  return {
+    resolve(networkId): Promise<ResolveOwnAdmissionStateResult> {
+      return Promise.resolve(
+        byNetwork[networkId] ?? { ok: false, reason: "no stubbed admission result" },
+      );
     },
   };
 }
@@ -1819,6 +1850,115 @@ describe("status", () => {
     });
     const res = await networkStatus(ports);
     expect(res.networks[0]!.link.state).toBe("unknown");
+  });
+
+  // ===========================================================================
+  // C-1350 (Slice 2) — revoke tells the member.
+  // ===========================================================================
+  describe("C-1350: admission-state surfacing", () => {
+    test("a REVOKED own-row surfaces revoked + the cleanup command's network + date", async () => {
+      const { ports } = makeFakes({
+        initialNetworks: [joinedNetwork("metafactory")],
+        admission: {
+          metafactory: {
+            ok: true,
+            state: {
+              state: "revoked",
+              networkId: "metafactory",
+              requestId: "req-abc",
+              hasSealedSecret: false,
+              peerPubkey: "PUB",
+              updatedAt: "2026-07-01T12:00:00.000Z",
+            },
+          },
+        },
+      });
+      const res = await networkStatus(ports);
+      const row = res.networks[0]!;
+      expect(row.admission).toBeDefined();
+      expect(row.admission!.revoked).toBe(true);
+      expect(row.admission!.lookup).toBe("ok");
+      expect(row.admission!.revokedAt).toBe("2026-07-01T12:00:00.000Z");
+      expect(row.admission!.requestId).toBe("req-abc");
+      // The network id the cleanup command needs rides the row.
+      expect(row.networkId).toBe("metafactory");
+    });
+
+    test("an ADMITTED/live own-row attaches NO admission field (no false REVOKED)", async () => {
+      const leafState: LeafStatePort = {
+        async linkStates() {
+          return { metafactory: { state: "established" } };
+        },
+      };
+      const { ports } = makeFakes({
+        initialNetworks: [joinedNetwork("metafactory")],
+        leafState,
+        admission: {
+          metafactory: {
+            ok: true,
+            state: {
+              state: "admitted-sealed",
+              networkId: "metafactory",
+              requestId: "req-ok",
+              hasSealedSecret: true,
+              peerPubkey: "PUB",
+              updatedAt: "2026-07-01T12:00:00.000Z",
+            },
+          },
+        },
+      });
+      const res = await networkStatus(ports);
+      const row = res.networks[0]!;
+      expect(row.link.state).toBe("established");
+      // No admission field at all — an ordinary live row is unchanged.
+      expect(row.admission).toBeUndefined();
+    });
+
+    test("a failed /mine read degrades to admission_lookup unavailable (non-fatal)", async () => {
+      const { ports } = makeFakes({
+        initialNetworks: [joinedNetwork("metafactory")],
+        admission: {
+          metafactory: { ok: false, reason: "registry unreachable" },
+        },
+      });
+      const res = await networkStatus(ports);
+      // status still succeeds — the read is best-effort.
+      expect(res.ok).toBe(true);
+      const row = res.networks[0]!;
+      expect(row.admission).toBeDefined();
+      expect(row.admission!.revoked).toBe(false);
+      expect(row.admission!.lookup).toBe("unavailable");
+    });
+
+    test("no admission port wired → no admission field (pre-C-1350 unchanged)", async () => {
+      const { ports } = makeFakes({ initialNetworks: [joinedNetwork("metafactory")] });
+      const res = await networkStatus(ports);
+      expect(res.networks[0]!.admission).toBeUndefined();
+    });
+
+    test("a REVOKED row with no revoked-at date still surfaces revoked (older registry)", async () => {
+      const { ports } = makeFakes({
+        initialNetworks: [joinedNetwork("metafactory")],
+        admission: {
+          metafactory: {
+            ok: true,
+            state: {
+              state: "revoked",
+              networkId: "metafactory",
+              requestId: "req-nodate",
+              hasSealedSecret: false,
+              peerPubkey: "PUB",
+              // updatedAt omitted — an older registry that doesn't echo it.
+            },
+          },
+        },
+      });
+      const res = await networkStatus(ports);
+      const row = res.networks[0]!;
+      expect(row.admission!.revoked).toBe(true);
+      expect(row.admission!.revokedAt).toBeUndefined();
+      expect(row.admission!.requestId).toBe("req-nodate");
+    });
   });
 });
 

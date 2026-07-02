@@ -30,6 +30,7 @@ import type {
   NetworkDescriptor,
   NetworkRosterResult,
 } from "../../../common/registry/types";
+import type { ResolveOwnAdmissionStateResult } from "../../../common/registry/admission-state";
 import type { NetworkFetchResult } from "../../../common/registry/network-client";
 import type {
   AccountBindCheck,
@@ -400,6 +401,28 @@ export interface CachedNetworkSummary {
   peers: string[];
 }
 
+/**
+ * C-1350 (Slice 2) — read-only member-side admission-state resolver for
+ * `status`. Wraps the PoP `GET /admission-requests/mine` read
+ * ({@link resolveOwnAdmissionState}) so `networkStatus` can tell a member their
+ * OWN admission row for a network was REVOKED — the member-side half of
+ * `secret revoke-member` (which already flips the registry row) — instead of the
+ * silent dead-leaf-include / leaf-auth mystery.
+ *
+ * Optional on {@link NetworkPorts} (mirrors {@link LeafStatePort} /
+ * {@link CachedNetworkPort}): absent → `status` reports no admission state (the
+ * pre-C-1350 behaviour). Every failure is a typed `{ ok: false, reason }` (never
+ * throws) so a `/mine` read error degrades `status` to an `admission_lookup:
+ * unavailable` hint rather than breaking the read (best-effort, per #1315).
+ */
+export interface AdmissionStatePort {
+  /**
+   * Resolve THIS stack's own admission state for `networkId` via the member
+   * PoP `/mine` read. Never throws — a read failure is `{ ok: false, reason }`.
+   */
+  resolve(networkId: string): Promise<ResolveOwnAdmissionStateResult>;
+}
+
 /** One network's leaf link state for `status`. */
 export interface LeafLinkState {
   /** ESTABLISHED / connecting / down / unknown. */
@@ -472,6 +495,15 @@ export interface NetworkPorts {
    * set so registered-but-not-joined networks are no longer invisible.
    */
   cachedNetworks?: CachedNetworkPort;
+  /**
+   * C-1350 (Slice 2) — optional member-side admission-state resolver for
+   * `status`. Absent → `status` reports no admission state (pre-C-1350). Present
+   * → `networkStatus` checks each network's own admission row and, when REVOKED,
+   * surfaces the "you were REVOKED … run `cortex network leave <net> --apply`"
+   * cleanup message. Best-effort + non-fatal (a `/mine` read failure degrades to
+   * an `admission_lookup: unavailable` hint, never breaks `status`).
+   */
+  admission?: AdmissionStatePort;
   /**
    * G1c (#1117, ADR-0013 Model B) — federation-wiring seam. Optional for
    * backwards compatibility: when absent the wiring step is skipped (the

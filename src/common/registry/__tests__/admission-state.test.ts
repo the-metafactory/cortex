@@ -35,6 +35,7 @@ function row(over: Partial<AdmissionMineRow> = {}): AdmissionMineRow {
     network_id: over.network_id === undefined ? "metafactory" : over.network_id,
     status: over.status ?? "PENDING",
     sealed_secret: over.sealed_secret === undefined ? null : over.sealed_secret,
+    ...(over.updated_at !== undefined && { updated_at: over.updated_at }),
   };
 }
 
@@ -82,6 +83,24 @@ describe("classifyOwnAdmissionRows", () => {
     expect(classifyOwnAdmissionRows([row({ status: "REVOKED" })], "metafactory", PUB).state).toBe("revoked");
     expect(classifyOwnAdmissionRows([row({ status: "REJECTED" })], "metafactory", PUB).state).toBe("rejected");
     expect(classifyOwnAdmissionRows([row({ status: "WEIRD" })], "metafactory", PUB).state).toBe("unknown");
+  });
+
+  // C-1350 (Slice 2) — the row's updated_at is threaded through as updatedAt so a
+  // REVOKED member can be told WHEN they were removed.
+  test("REVOKED row carries updated_at through as updatedAt (the revoked-at date)", () => {
+    const s = classifyOwnAdmissionRows(
+      [row({ status: "REVOKED", updated_at: "2026-07-01T09:30:00.000Z" })],
+      "metafactory",
+      PUB,
+    );
+    expect(s.state).toBe("revoked");
+    expect(s.updatedAt).toBe("2026-07-01T09:30:00.000Z");
+  });
+
+  test("a row with no updated_at leaves updatedAt undefined (older registry)", () => {
+    const s = classifyOwnAdmissionRows([row({ status: "REVOKED" })], "metafactory", PUB);
+    expect(s.state).toBe("revoked");
+    expect(s.updatedAt).toBeUndefined();
   });
 
   test("selects the row matching THIS network among several", () => {
