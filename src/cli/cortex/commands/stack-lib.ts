@@ -22,7 +22,8 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { parse as parseYaml } from "yaml";
 import { DEFAULT_STREAM_MAX_BYTES } from "../../../common/types/cortex-config";
 
 // =============================================================================
@@ -178,6 +179,135 @@ function buildDiscovered(
     configPath,
     ...(stackId !== undefined && { aligned: stackIdTrailingSlug(stackId) === slugLocator }),
   };
+}
+
+// =============================================================================
+// Teardown (C-1351 Slice 1 — `cortex stack delete`, local teardown)
+// =============================================================================
+//
+// The DEATH story that complements `create` (the birth story). Pure path
+// resolution + read-only inspection live here; the effectful teardown (plist
+// unload, fs removal, seed retire) lives in `stack.ts` — mirroring the
+// create-side lib/command split so this module stays trivially testable.
+//
+// SCOPE (Slice 1): local artifacts ONLY. Registry-side deregistration
+// (`provision-stack retire`) is Slice 2 — deferred (depends on #832 + a
+// tombstone-vs-delete design call). Nothing here touches the registry or the
+// bus; the joined-network read below is READ-ONLY.
+
+/** The three filesystem roots teardown spans. Overridable (tests point them at
+ *  tmp dirs; a principal with non-standard paths can override too). */
+export interface TeardownRoots {
+  /** Cortex config dir (`~/.config/cortex`). Holds the config-split stack dir. */
+  configDir: string;
+  /** NATS material dir (`~/.config/nats`). Holds the rendered `<slug>.conf`,
+   *  leaf includes, and the signing seed. */
+  natsDir: string;
+  /** launchd LaunchAgents dir (`~/Library/LaunchAgents`) — the daemon + nats
+   *  plists. On Linux this is the systemd user-unit dir; the caller decides. */
+  launchAgentsDir: string;
+}
+
+/** Resolved absolute paths of every local artifact a stack owns. Pure — computed
+ *  from the slug + roots by CONVENTION (the same paths `stack create` /
+ *  sop-stack-onboarding.md Step 2/4 write), so teardown finds them without a
+ *  config parse. Existence is checked by the caller (missing pieces are skipped
+ *  — teardown is idempotent). */
+export interface StackArtifacts {
+  /** The config-split stack dir (`<configDir>/<slug>/`) — contains system/,
+   *  surfaces/, stacks/<slug>.yaml, personas/, and the `<slug>.yaml` pointer, so
+   *  removing this dir removes the pointer with it. */
+  configStackDir: string;
+  /** The policy-bearing file (`<configStackDir>/stacks/<slug>.yaml`) — where
+   *  `policy.federated.networks[]` lives under the split layout (mirrors
+   *  `network-adapters.ts` `stackConfigPath`). Read-only here (the joined gate). */
+  policyConfigFile: string;
+  /** Rendered nats-server config (`<natsDir>/<slug>.conf`, sop Step 2). */
+  natsConf: string;
+  /** The stack's signing seed (`<natsDir>/cortex-<slug>.nk`). RETIRED (renamed),
+   *  never deleted, unless `--purge-seeds` (key destruction is a conscious act). */
+  seed: string;
+  /** Cortex daemon plist (`ai.meta-factory.cortex.<slug>.plist`, sop Step 4). */
+  daemonPlist: string;
+  /** Dedicated nats-server plist (`ai.meta-factory.nats.<slug>.plist`, sop Step 2). */
+  natsPlist: string;
+}
+
+export function resolveStackArtifacts(roots: TeardownRoots, slug: string): StackArtifacts {
+  const configStackDir = join(roots.configDir, slug);
+  return {
+    configStackDir,
+    policyConfigFile: join(configStackDir, "stacks", `${slug}.yaml`),
+    natsConf: join(roots.natsDir, `${slug}.conf`),
+    seed: join(roots.natsDir, `cortex-${slug}.nk`),
+    daemonPlist: join(roots.launchAgentsDir, `ai.meta-factory.cortex.${slug}.plist`),
+    natsPlist: join(roots.launchAgentsDir, `ai.meta-factory.nats.${slug}.plist`),
+  };
+}
+
+/**
+ * READ-ONLY: the network ids this stack is currently joined to
+ * (`policy.federated.networks[].id`), read from its policy-bearing config file.
+ * Mirrors `network-adapters.ts` `ConfigStorePort.readNetworks` byte-for-byte
+ * (`raw?.policy?.federated?.networks ?? []`) so the delete gate reads exactly
+ * what `network join`/`leave` wrote. Empty when the file is absent/unparseable
+ * (a stack with no config can't be joined). NEVER mutates.
+ *
+ * This is the ONLY point teardown inspects federated state, and it is read-only
+ * — the network.ts / network-lib.ts lane is untouched (C-1351 stays out of it).
+ */
+export function readJoinedNetworkIds(policyConfigFile: string): string[] {
+  if (!existsSync(policyConfigFile)) return [];
+  let raw: { policy?: { federated?: { networks?: { id?: string }[] } } } | null;
+  try {
+    raw = parseYaml(readFileSync(policyConfigFile, "utf-8")) as typeof raw;
+  } catch (_err) {
+    // Unparseable config carries no resolvable join state — treat as not-joined
+    // (a broken config can't be a live roster member). Safe to ignore.
+    return [];
+  }
+  const networks = raw?.policy?.federated?.networks ?? [];
+  return networks
+    .map((n) => n.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
+ * The leaf-include files a stack's rendered nats config references — the
+ * `include "leafnodes-<network>.conf"` directives `network join` wrote
+ * (`leaf-remote-renderer.ts` #754). Returned as absolute paths in the conf's own
+ * dir so teardown removes exactly the includes THIS stack's conf pulls in (never
+ * another stack's). Empty when the conf is absent/unreadable. Read-only.
+ */
+export function parseLeafIncludeFiles(natsConfPath: string): string[] {
+  if (!existsSync(natsConfPath)) return [];
+  let text: string;
+  try {
+    text = readFileSync(natsConfPath, "utf-8");
+  } catch (_err) {
+    // Unreadable conf → no includes to resolve; the conf itself is still removed
+    // by the caller. Safe to ignore.
+    return [];
+  }
+  const dir = dirname(natsConfPath);
+  const out: string[] = [];
+  const re = /^\s*include\s+"(leafnodes-[^"]+\.conf)"/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const file = m[1];
+    if (file !== undefined) out.push(join(dir, file));
+  }
+  return out;
+}
+
+/**
+ * The retire target for a signing seed: `<seed>.retired-<stamp>`. Renaming
+ * (not deleting) the seed is the default — destroying key material is a separate
+ * conscious act (`--purge-seeds`). `stamp` is supplied by the caller (a
+ * filesystem-safe timestamp) so this stays pure/deterministic in tests.
+ */
+export function retiredSeedPath(seedPath: string, stamp: string): string {
+  return `${seedPath}.retired-${stamp}`;
 }
 
 // =============================================================================

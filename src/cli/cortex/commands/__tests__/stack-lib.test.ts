@@ -16,6 +16,10 @@ import {
   discoverStacks,
   assertAligned,
   renderScaffold,
+  resolveStackArtifacts,
+  readJoinedNetworkIds,
+  parseLeafIncludeFiles,
+  retiredSeedPath,
   type ScaffoldInputs,
 } from "../stack-lib";
 
@@ -160,5 +164,81 @@ describe("renderScaffold", () => {
     const all = files.map((f) => f.contents).join("\n");
     // No SU… seed ever appears in scaffolded output.
     expect(all).not.toMatch(/\bSU[A-Z0-9]{20,}/);
+  });
+});
+
+// =============================================================================
+// C-1351 Slice 1 — teardown pure helpers
+// =============================================================================
+
+describe("resolveStackArtifacts", () => {
+  test("computes the conventional local artifact paths for a slug", () => {
+    const art = resolveStackArtifacts(
+      { configDir: "/cfg/cortex", natsDir: "/cfg/nats", launchAgentsDir: "/la" },
+      "research",
+    );
+    expect(art.configStackDir).toBe("/cfg/cortex/research");
+    expect(art.policyConfigFile).toBe("/cfg/cortex/research/stacks/research.yaml");
+    expect(art.natsConf).toBe("/cfg/nats/research.conf");
+    expect(art.seed).toBe("/cfg/nats/cortex-research.nk");
+    expect(art.daemonPlist).toBe("/la/ai.meta-factory.cortex.research.plist");
+    expect(art.natsPlist).toBe("/la/ai.meta-factory.nats.research.plist");
+  });
+});
+
+describe("readJoinedNetworkIds", () => {
+  test("empty for an absent file", () => {
+    expect(readJoinedNetworkIds(join(freshDir(), "nope.yaml"))).toEqual([]);
+  });
+
+  test("empty when no policy.federated.networks block", () => {
+    const dir = freshDir();
+    const f = join(dir, "s.yaml");
+    writeFileSync(f, "principal:\n  id: andreas\nstack:\n  id: andreas/research\n");
+    expect(readJoinedNetworkIds(f)).toEqual([]);
+  });
+
+  test("returns the joined network ids (mirrors readNetworks read path)", () => {
+    const dir = freshDir();
+    const f = join(dir, "s.yaml");
+    writeFileSync(
+      f,
+      "policy:\n  federated:\n    networks:\n      - id: metafactory\n        leaf_node: metafactory\n      - id: othernet\n        leaf_node: othernet\n",
+    );
+    expect(readJoinedNetworkIds(f)).toEqual(["metafactory", "othernet"]);
+  });
+});
+
+describe("parseLeafIncludeFiles", () => {
+  test("empty for an absent conf", () => {
+    expect(parseLeafIncludeFiles(join(freshDir(), "none.conf"))).toEqual([]);
+  });
+
+  test("resolves each `include \"leafnodes-*.conf\"` to an absolute path in the conf dir", () => {
+    const dir = freshDir();
+    const conf = join(dir, "research.conf");
+    writeFileSync(
+      conf,
+      'port: 4222\ninclude "leafnodes-metafactory.conf"\ninclude "leafnodes-othernet.conf"\n',
+    );
+    expect(parseLeafIncludeFiles(conf)).toEqual([
+      join(dir, "leafnodes-metafactory.conf"),
+      join(dir, "leafnodes-othernet.conf"),
+    ]);
+  });
+
+  test("ignores non-leaf includes", () => {
+    const dir = freshDir();
+    const conf = join(dir, "research.conf");
+    writeFileSync(conf, 'include "resolver.conf"\ninclude "leafnodes-net.conf"\n');
+    expect(parseLeafIncludeFiles(conf)).toEqual([join(dir, "leafnodes-net.conf")]);
+  });
+});
+
+describe("retiredSeedPath", () => {
+  test("appends .retired-<stamp> (retire, not destroy)", () => {
+    expect(retiredSeedPath("/nats/cortex-research.nk", "2026-07-02T00-00-00-000Z")).toBe(
+      "/nats/cortex-research.nk.retired-2026-07-02T00-00-00-000Z",
+    );
   });
 });
