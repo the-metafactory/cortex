@@ -25,6 +25,13 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, symlinkSync } from "fs";
+// Hermetic agents.d/ (R26 P1 PR hygiene, cortex#1371): every `startCortex`
+// boot in this file points `agentsDir` at an EMPTY tmp dir. Without it the
+// boot path falls back to the principal's LIVE `~/.config/cortex/agents.d/`
+// (the documented production fallback), and whatever fragments live there
+// (e.g. an agent whose `trust:` names an id not in the test config) crash
+// registry assembly — the whole suite then fails on machine state, not code.
+const HERMETIC_AGENTS_DIR = mkdtempSync(join(tmpdir(), "cortex-test-agents-hermetic-"));
 import { join, basename } from "path";
 import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
@@ -117,6 +124,7 @@ describe("startCortex — construction", () => {
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -140,6 +148,7 @@ describe("startCortex — construction", () => {
     });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -161,6 +170,7 @@ describe("startCortex — construction", () => {
     const handle = await startCortex(config, {
       stack: { id: "test-op/research" },
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -187,6 +197,7 @@ describe("startCortex — wire-up", () => {
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -222,6 +233,7 @@ describe("startCortex — wire-up", () => {
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -298,6 +310,7 @@ describe("startCortex — wire-up", () => {
     });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -329,6 +342,7 @@ describe("startCortex — wire-up", () => {
     try {
       await startCortex(noPrincipal, {
         disableConfigWatcher: true,
+        agentsDir: HERMETIC_AGENTS_DIR,
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
@@ -366,6 +380,7 @@ describe("startCortex — wire-up", () => {
     });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -405,6 +420,7 @@ describe("startCortex — wire-up", () => {
     });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -431,6 +447,7 @@ describe("startCortex — shutdown", () => {
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -446,6 +463,7 @@ describe("startCortex — shutdown", () => {
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -485,6 +503,7 @@ describe("startCortex — shutdown", () => {
     try {
       handle = await startCortex(minimalConfig(), {
         disableConfigWatcher: true,
+        agentsDir: HERMETIC_AGENTS_DIR,
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
@@ -529,6 +548,7 @@ describe("startCortex — error surface", () => {
     const config = minimalConfig({ networks: [] });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -545,6 +565,7 @@ describe("startCortex — error surface", () => {
     });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+      agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },

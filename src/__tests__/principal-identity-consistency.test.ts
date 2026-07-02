@@ -60,6 +60,14 @@
 import { describe, expect, test } from "bun:test";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import { startCortex } from "../cortex";
+// Hermetic agents.d/ (R26 P1 PR hygiene, cortex#1371) — see cortex.test.ts:
+// without an explicit `agentsDir` these boots read the principal's LIVE
+// `~/.config/cortex/agents.d/` and fail on machine state, not code.
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const HERMETIC_AGENTS_DIR = mkdtempSync(join(tmpdir(), "cortex-identity-agents-hermetic-"));
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type {
   EnvelopeHandler,
@@ -131,6 +139,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
 
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+    agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -232,6 +241,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
 
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+    agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -277,6 +287,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
 
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
+    agentsDir: HERMETIC_AGENTS_DIR,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -309,6 +320,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     try {
       await startCortex(config, {
         disableConfigWatcher: true,
+    agentsDir: HERMETIC_AGENTS_DIR,
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
@@ -342,6 +354,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     try {
       await startCortex(config, {
         disableConfigWatcher: true,
+    agentsDir: HERMETIC_AGENTS_DIR,
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,

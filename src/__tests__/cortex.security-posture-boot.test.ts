@@ -116,11 +116,18 @@ function withCapturedConsoleLog<T>(
     });
 }
 
+// Hermetic agents.d/ (R26 P1 PR hygiene, cortex#1371): point every boot at an
+// EMPTY tmp agents dir so the suite never falls back to the principal's LIVE
+// `~/.config/cortex/agents.d/` — a live fragment whose `trust:` names an id
+// unknown to the test config crashes registry assembly (machine-state flake).
+const HERMETIC_AGENTS_DIR = mkdtempSync(join(tmpdir(), "cortex-posture-agents-hermetic-"));
+
 const COMMON_OPTS = {
   disableConfigWatcher: true,
   disableDashboard: true,
   disableOutboundPoller: true,
   principal: { id: "test-op" },
+  agentsDir: HERMETIC_AGENTS_DIR,
 } as const;
 
 // ---------------------------------------------------------------------------
