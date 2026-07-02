@@ -39,6 +39,26 @@
 
 ---
 
+## How it could develop *(brainstorm — directions, not commitments)*
+
+> Everything in this section is exploratory. The vision above is stable; these are the ways the model *wants* to grow when you follow its own logic. Each direction would need its own design pass before it becomes real, and none is promised.
+
+**Tokens are the new oil.** *"Data is the new oil"* described the last era; in agentic work the scarce input is inference. Tokens are the fuel the swarms burn — whoever has fuel can turn intent into built things. But the metaphor improves on its original: this oil is perishable (capacity you don't burn tonight is gone by morning), it needs no refining, and — the part that matters — **it can be given.** The interesting question isn't who owns the fuel; it's how a network of people who trust each other routes it.
+
+**A cooperative, not a marketplace.** Step back and the classical shape is visible — supply (Principals and the Assistants they bring, offering Capabilities), demand (the work), fuel (the tokens) — but the point is not a marketplace where people compete for monetary value. It is a **cooperative**: members pool fuel and direct it at what they want to exist. The layering keeps that honest, the same move the rest of the system makes: **economics belongs to the Envelope; standing belongs to people.** Tokens meter machine effort — scarce, fungible, honestly priceable. Trust meters human standing — earned by being seen, never reduced to a score. The cooperative prices the fuel; it never prices the person. And there is no new currency to invent: the token that pays for inference *is* the unit of account, which sidesteps speculation (perishable capacity, nothing to hoard or pump), price discovery (set upstream by the model providers; the Network only allocates), and financialisation (donated fuel is a gift between people who trust each other, not a payment between strangers).
+
+**Back a person.** Sweden once decided every household should be able to afford a computer, and a generation of kids got [a window](https://andreas.aastroem.nz/blog/country-that-gave-me-a-window/) that, a quarter-century later, reads as national strategy. Tokens make the same bet possible here, person to person: **donate fuel to someone who can't afford it** — a student, a kid in a bedroom, a contributor whose curiosity has outrun their means — and their swarm runs like anyone else's. The Network can make that a mechanism rather than a favour: contributions routed, credited, and settled like any other work, so backing a person is as easy as dispatching to one. *Who's going to bet on the kids this time?* A cooperative like this could.
+
+**Fund what you want built.** The same mechanism, pointed at work instead of people. A Network could hold a **Commons Pool** its members contribute to — *"my Stack donates this much capacity to shared work while I sleep"* — and the pool fuels what the members choose to exist: open-source projects first; longer term, the fuller form — *"I want this thing built"* — where you donate the tokens that get it built. Every draw settles against the signed Session receipt, so contribution and spend both trace back to accountable people. Fuel becomes a **first-class contribution** alongside code, review, and ideas — a way in for someone whose available time or familiarity hasn't caught up with their enthusiasm yet. And because contributions are credited visibly, the pool is also a trust engine: being seen to give is how trust grows.
+
+**The sun-following cooperative.** The always-on framing gains a resource layer. Presence is human and circadian; capacity is the swarm's and constant — so one side of the world's idle overnight capacity can fuel the other side's daytime work. The timezone spread stops being a coordination cost and becomes the cooperative's balancing mechanism.
+
+**Mission Control shows the flows.** If fuel moves through the Network, the cockpit is where it becomes legible: the flow of tokens between people, projects, and Networks; a capacity map showing whose swarm has lendable headroom right now; a board of work the pool could fund; the Commons Pool ledger with contributions credited by name; and budget-versus-burn per project — which doubles as the guardrail, because a runaway swarm is visible as burn without delivery. All of it aggregate-level: flows and balances may cross Network boundaries; the interiors of Sessions never do.
+
+**What keeps it honest.** Settlement rides the signature chain the system already has — who asked, who worked, what it cost — verifiable, not assumed. Budgets are hard ceilings set by humans. Contribution is opt-in, capped, and revocable: your capacity stays yours. Matching starts simple — first to claim it, inside the trust group. No auctions, no bidding wars, no numeric reputation scores: the durable thing is the relationship, and a mechanism that eats it has failed. Trust groups first; the open mesh only once accounting can be verified between strangers.
+
+---
+
 ## Where we are today *(the current incarnation — expected to change)*
 
 The ideas above are deliberately independent of any implementation. Today we are realising them as a layered stack, built in the open and coordinated by people on Discord:
@@ -67,6 +87,7 @@ Mechanically: every **Envelope** is signed by the **Stack** that emitted it, and
 - **Envelope** — a single signed message on the bus.
 - **Capability** — what an Assistant offers to do.
 - **Scope** — *local* / *federated* / *public*: expressed intent for how far an Envelope may travel.
+- **Commons Pool** — *(exploratory — see "How it could develop")* a Network-held budget of contributed capacity that funds shared work; every draw settles against a signed Session receipt.
 - **Mission Control** — the cockpit; the one surface where the whole system becomes legible and governable.
 
 ---
