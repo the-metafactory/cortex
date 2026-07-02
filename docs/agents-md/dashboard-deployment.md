@@ -58,8 +58,9 @@ in `metafactory-actions`' `public-patterns.yaml` — out of scope for this repo.
 **Why `db:migrate:safe` is advisory.** Sequencing constraint from the design
 doc: this PR must not brick the canonical `db:migrate` command if the scan
 trips block-tier on `schema.sql` / `migrations/*.sql`. `migrations/0002_seed_data.sql`
-was verified clean (placeholder `operator@example.com`, cortex#1344) at
-authoring time — advisory mode is a safety margin against a future regression,
+was verified clean (its only seeded identity is a documented placeholder,
+cortex#1344) at authoring time — advisory mode is a safety margin against a
+future regression,
 not evidence of a known finding today.
 
 **Why `deploy:worker` is blocking.** The worker ships unbundled first-party

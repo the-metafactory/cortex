@@ -195,6 +195,20 @@ export function main(argv: string[]): number {
     return 2;
   }
 
+  // Resolve the file set BEFORE touching the engine. An empty surface (nothing
+  // built yet) is trivially clean — there is no content to scan, so the engine
+  // is irrelevant and we must not fail-closed on its absence. This also keeps
+  // the "nothing built yet" developer path green in CI, where the installed
+  // engine is not present (the engine fail-closed check below only fires when
+  // there is actually something to scan).
+  const files = resolveSurfaceFiles(surfaceArg, root);
+  if (files.length === 0) {
+    process.stdout.write(
+      `scan-deploy-surface: ${surfaceArg} — no files to scan (build output missing? run the build step first) — treating as clean.\n`,
+    );
+    return 0;
+  }
+
   if (!existsSync(enginePath)) {
     const msg = `scan-deploy-surface: confidentiality-scan engine not found at ${enginePath} — fail-closed (install/refresh via arc upgrade compass).`;
     if (advisory) {
@@ -203,14 +217,6 @@ export function main(argv: string[]): number {
     }
     process.stderr.write(`${msg}\n`);
     return 3;
-  }
-
-  const files = resolveSurfaceFiles(surfaceArg, root);
-  if (files.length === 0) {
-    process.stdout.write(
-      `scan-deploy-surface: ${surfaceArg} — no files to scan (build output missing? run the build step first) — treating as clean.\n`,
-    );
-    return 0;
   }
 
   const codes: number[] = [];
