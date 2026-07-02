@@ -440,22 +440,37 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
   const humanLines: string[] = [];
   if (networkRes.networkId !== undefined) {
     data.network_id = networkRes.networkId;
-    if (reg.requestId !== undefined) {
-      // C-1398 — echoed by the register response; no round-trip needed.
+    if (reg.requestId !== undefined && reg.admissionStatus === "PENDING") {
+      // C-1398 — fast-path: the register response ECHOED the request_id and a
+      // PENDING status, so we surface it WITHOUT the `/mine` round-trip. #1398
+      // is "avoid the round-trip", NOT "change the output contract": we
+      // SYNTHESISE the SAME `OwnAdmissionState` the `/mine` path would have
+      // produced for a just-created PENDING row and reuse the SAME helpers, so
+      // the output is byte-identical — the ONLY behavioural change is no
+      // network call. A fresh PENDING register carries no sealed secret
+      // (`hasSealedSecret: false`), and the peer pubkey is the just-registered
+      // stack's own key — EXACTLY what the `/mine` path derived
+      // (`classifyOwnAdmissionRows(..., material.pubkeyB64)`). Any non-PENDING
+      // echoed status falls through to the `/mine` probe below, which reads the
+      // REAL sealed-delivery state (the echo does not convey it).
+      const s: OwnAdmissionState = {
+        networkId: networkRes.networkId,
+        state: "pending",
+        requestId: reg.requestId,
+        hasSealedSecret: false,
+        peerPubkey: matRes.material.pubkeyB64,
+      };
+      data.admission_status = admissionStatusLabel(s.state);
+      data.sealed_secret = s.hasSealedSecret ? "present" : "missing";
       data.request_id = reg.requestId;
-      data.admission_status = reg.admissionStatus ?? "PENDING";
-      data.next_for_admin = `cortex network admit ${reg.requestId} --apply`;
-      humanLines.push(
-        `  network: ${networkRes.networkId}`,
-        `  request-id: ${reg.requestId}   (give this to a network admin)`,
-        `  admission: ${data.admission_status}`,
-        `  next (admin): ${data.next_for_admin}`,
-      );
+      data.next_for_admin = nextForAdmin(networkRes.networkId, s);
+      humanLines.push(...registerStateLines(networkRes.networkId, s));
     } else {
-      // Fallback: older registry that does not echo the request_id — do the
-      // PoP-signed `/admission-requests/mine` read to discover it. Best-effort:
-      // a read failure NEVER fails a successful registration — we note the
-      // lookup was unavailable and point at the discovery command.
+      // Fallback: an older registry that does not echo the request_id, OR an
+      // already-decided echoed status whose sealed-delivery state must be read
+      // from `/mine`. PoP-signed `/admission-requests/mine` read to discover
+      // it. Best-effort: a read failure NEVER fails a successful registration —
+      // we note the lookup was unavailable and point at the discovery command.
       const probe = await resolveOwnAdmissionState(
         { registryUrl: urlRes.value, principalId: ctx.principalId, material: matRes.material },
         networkRes.networkId,

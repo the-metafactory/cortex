@@ -235,8 +235,12 @@ describe("cortex provision-stack register (TC-1b #632)", () => {
       ]);
       expect(res.exitCode).toBe(0);
       const out = JSON.parse(res.stdout) as { data: Record<string, string> };
-      // C-1315 — the register response itself carries no request_id; the CLI
-      // does a PoP `/admission-requests/mine` read to surface it.
+      // C-1398 (#1398) — the register response now ECHOES the request_id (+
+      // PENDING status), so the CLI surfaces it WITHOUT the `/mine` round-trip.
+      // The output contract is UNCHANGED from the old `/mine` path (the echo
+      // path synthesises the SAME OwnAdmissionState and reuses the SAME
+      // helpers): a fresh PENDING register still reports sealed_secret "missing"
+      // and the full admit + secret-add-member next-step.
       expect(out.data.network_id).toBe("metafactory");
       expect(out.data.admission_status).toBe("PENDING");
       expect(out.data.sealed_secret).toBe("missing");
