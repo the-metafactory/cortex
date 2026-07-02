@@ -611,7 +611,7 @@ describe("cortex provision-stack register — C-1269 admission-request detection
    * The first-register path makes exactly ONE POST per attempt (no GET, since
    * it is not an add-stack), so `posts()` counts retry attempts directly.
    */
-  function mockRegistry(responses: Array<{ status: number; body: unknown }>): {
+  function mockRegistry(responses: { status: number; body: unknown }[]): {
     fetch: typeof globalThis.fetch;
     posts: () => number;
   } {
@@ -730,5 +730,149 @@ describe("cortex provision-stack register — C-1269 admission-request detection
     expect(env.error.context.network).toBe("research-collab");
     expect(env.error.context.warning).toBe(FAILED_WARNING);
     expect(env.error.context.manual_fallback).toContain("cortex provision-stack register andreas");
+  });
+
+  test("(d) admission failed then retry POST itself errors → exit 1, SAME actionable fallback (#1377)", async () => {
+    // #1377 review nit — when the RETRY POST fails at the transport/registry
+    // layer (not "2xx but admission failed"), the exit must still be non-zero
+    // AND carry the SAME actionable manual-fallback command, not a bare reason
+    // that omits it. The retry's error is folded into the surfaced warning.
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const mock = mockRegistry([
+      { status: 201, body: failedBody },                  // attempt 1: 2xx but admission failed
+      { status: 500, body: { error: "registry_down" } },  // retry: registry/transport error
+    ]);
+    const res = await withFetch(mock.fetch, () =>
+      dispatchProvisionStack([
+        "register", "andreas", "--seed-path", seedPath,
+        "--registry-url", "http://registry.test", "--network", "research-collab",
+      ]),
+    );
+    expect(res.exitCode).toBe(1); // NON-ZERO — never a silent success
+    expect(mock.posts()).toBe(2); // one initial + one retry
+    // Same actionable surface as path (c): network + manual re-register fallback.
+    expect(res.stderr).toContain("research-collab");
+    expect(res.stderr).toMatch(/re-register/i);
+    expect(res.stderr).toContain("cortex provision-stack register andreas");
+    // The retry's transport error is folded into the warning.
+    expect(res.stderr).toMatch(/automatic retry also failed/i);
+  });
+
+  test("(e) generate --register --json surfaces admission_request (parity with register, #1377)", async () => {
+    // #1377 review major — the generate --register success --json path must
+    // carry admission_request too, matching the standalone register contract.
+    const seedPath = join(freshDir(), "stack.nk");
+    const mock = mockRegistry([{ status: 201, body: ASSERTION }]);
+    const res = await withFetch(mock.fetch, () =>
+      dispatchProvisionStack([
+        "generate", "andreas", "--seed-path", seedPath,
+        "--register", "--registry-url", "http://registry.test", "--json",
+      ]),
+    );
+    expect(res.exitCode).toBe(0);
+    const out = JSON.parse(res.stdout) as { status: string; data: Record<string, string> };
+    expect(out.status).toBe("ok");
+    expect(out.data.admission_request).toBe("ok");
+  });
+});
+
+// =============================================================================
+// C-1269 (#1377 review) — the SUBTLEST guarantee: on the ADD-STACK path the
+// retry must REBUILD the claim (fresh signature-verified merge-read → fresh
+// `expected_updated_at` CAS token), NOT blind re-POST attempt-1's now-stale
+// body. Attempt 1 already bumped `updated_at`, so a blind re-POST would 409
+// `stale_record`. This exercises the real in-memory registry (not a canned
+// mock) so the CAS is genuinely enforced: exit 0 is proof the retry rebuilt.
+// =============================================================================
+describe("cortex provision-stack register — C-1269 add-stack CAS-rebuild-on-retry (#1377)", () => {
+  async function configuredEnv(): Promise<{ env: Env; registryPubkey: string }> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    const adminKey = await makePrincipalKey();
+    return {
+      env: {
+        REGISTRY_SIGNING_KEY: reg.signingKey,
+        REGISTRY_PUBLIC_KEY: reg.publicKey,
+        REGISTRY_ADMIN_PUBKEYS: adminKey.publicKeyB64,
+        ENVIRONMENT: "test",
+      },
+      registryPubkey: reg.publicKey,
+    };
+  }
+
+  test("add-stack retry REBUILDS with a fresh CAS token → 2xx instead of 409 stale_record", async () => {
+    const { env, registryPubkey } = await configuredEnv();
+    const dir = freshDir();
+    const rootSeed = join(dir, "meta-factory.nk"); // principal ROOT (first stack)
+    const communitySeed = join(dir, "community.nk"); // the joining stack's key
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", rootSeed]);
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", communitySeed]);
+
+    const realFetch = globalThis.fetch;
+    let registerPosts = 0;
+    let mergeReadGets = 0;
+    let injectFailedOnNextPost = false;
+    // Route the CLI fetch at the real registry, but on the FIRST add-stack POST
+    // rewrite the (real, state-changing) 2xx response body to carry
+    // `admission_request: "failed"`. The principal record still commits +
+    // `updated_at` still bumps — so a blind re-POST of attempt-1's stale CAS
+    // token would 409. Only a genuine rebuild (fresh merge-read) yields 2xx.
+    globalThis.fetch = (async (input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      const url = new URL(req.url);
+      if (req.method === "GET" && url.pathname.startsWith("/principals/")) mergeReadGets += 1;
+      const res = await registryApp.fetch(req, env);
+      if (req.method === "POST") {
+        registerPosts += 1;
+        if (injectFailedOnNextPost && res.ok) {
+          injectFailedOnNextPost = false;
+          const body = (await res.clone().json()) as Record<string, unknown>;
+          return new Response(
+            JSON.stringify({ ...body, admission_request: "failed", warning: "injected: PENDING upsert failed" }),
+            { status: res.status, headers: { "Content-Type": "application/json" } },
+          );
+        }
+      }
+      return res;
+    }) as typeof globalThis.fetch;
+
+    try {
+      // 1. First registration — clean (establishes the root + andreas/meta-factory).
+      const first = await dispatchProvisionStack([
+        "register", "andreas", "--seed-path", rootSeed,
+        "--stack-id", "andreas/meta-factory", "--registry-url", "http://registry.test",
+      ]);
+      expect(first.exitCode).toBe(0);
+
+      // 2. Add-stack — inject an admission failure on the first add-stack POST so
+      //    the client MUST retry. Attempt 1 bumps updated_at; the retry must
+      //    re-read it or the registry 409s.
+      const postsBefore = registerPosts;
+      const getsBefore = mergeReadGets;
+      injectFailedOnNextPost = true;
+      const add = await dispatchProvisionStack([
+        "register", "andreas", "--seed-path", communitySeed,
+        "--stack-id", "andreas/community", "--principal-seed", rootSeed,
+        "--registry-url", "http://registry.test", "--registry-pubkey", registryPubkey,
+      ]);
+
+      // Exit 0 is the proof: a blind re-POST of the stale token would 409 →
+      // exit 1. Success means the retry rebuilt with the fresh CAS token.
+      expect(add.exitCode).toBe(0);
+      expect(registerPosts - postsBefore).toBe(2); // one initial + exactly one retry
+      // Each add-stack attempt re-issued its own signature-verified merge-read.
+      expect(mergeReadGets - getsBefore).toBeGreaterThanOrEqual(2);
+
+      // Registry ended consistent — both stacks survive (no data loss on retry).
+      const getRes = await registryApp.fetch(new Request("http://registry.test/principals/andreas"), env);
+      const json = (await getRes.json()) as { payload: { stacks: { stack_id: string }[] } };
+      expect(json.payload.stacks.map((s) => s.stack_id).sort()).toEqual([
+        "andreas/community",
+        "andreas/meta-factory",
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

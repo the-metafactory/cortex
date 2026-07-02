@@ -249,6 +249,10 @@ async function runGenerate(ctx: HandlerCtx): Promise<ExitResult> {
 
   // Optional registration (opt-in — never silent).
   let registerNote: string | undefined;
+  // C-1269 (#1377 review) — mirror runRegister: surface the admission state on
+  // the `generate --register` path too, so `--json` consumers can gate on it
+  // regardless of which entry point registered.
+  let registerAdmission: string | undefined;
   if (ctx.flags["--register"] === true) {
     const urlRes = requireValueFlag(ctx.flags, "--registry-url");
     if (!urlRes.ok) {
@@ -277,6 +281,7 @@ async function runGenerate(ctx: HandlerCtx): Promise<ExitResult> {
       });
     }
     registerNote = reg.note;
+    registerAdmission = reg.admission;
   }
 
   // SECRETS: only the pubkey + fingerprint are surfaced; the seed is on disk.
@@ -289,6 +294,8 @@ async function runGenerate(ctx: HandlerCtx): Promise<ExitResult> {
     seed_path: seedPath,
     seed_mode: "600",
     ...(registerNote !== undefined && { registered: registerNote }),
+    // C-1269 (#1377 review) — parity with runRegister's --json envelope.
+    ...(registerAdmission !== undefined && { admission_request: registerAdmission }),
   };
   if (ctx.json) {
     return ok(renderJson(envelopeOk([], data)));
@@ -584,23 +591,30 @@ async function doRegister(
   // Retry the raise ONCE — a rebuilt re-register is idempotent (see doRegister
   // header: upsertPending ON CONFLICT DO NOTHING; putPrincipal unconditional on
   // first register, CAS-refreshed on the rebuilt add-stack retry).
-  const netLabel = networkId !== undefined ? `network "${networkId}"` : "the (network-less) registration";
   let admission = readAdmissionState(attempt.response);
   let retried = false;
   if (admission.failed) {
     retried = true;
     const retry = await attemptRegister();
     if (!retry.ok) {
-      return {
-        ok: false,
-        reason:
-          `registration succeeded but the PENDING admission request for ${netLabel} did NOT land` +
-          `${admission.warning !== undefined ? ` (registry: ${admission.warning})` : ""}; ` +
+      // C-1269 (#1377 review) — attempt 1 was a 2xx (the principal record
+      // landed) but its PENDING admission row did NOT, and the automatic retry
+      // could not even reach a 2xx. This is still a registered-but-unadmittable
+      // stack, so keep `admission = failed` (fold the retry's transport error
+      // into the warning) and fall through to the SAME loud, actionable
+      // `admissionFailedResult` the retry-still-failed path uses — including the
+      // manual re-register fallback command — rather than returning a bare
+      // `ok:false` reason that omits it.
+      admission = {
+        failed: true,
+        warning:
+          `${admission.warning ?? "the PENDING admission request did not land"}; ` +
           `the automatic retry also failed: ${retry.reason}`,
       };
+    } else {
+      attempt = retry;
+      admission = readAdmissionState(retry.response);
     }
-    attempt = retry;
-    admission = readAdmissionState(retry.response);
   }
 
   // O-4a.2 — a successful registration (2xx) triggers an issuance request that
@@ -624,7 +638,7 @@ async function doRegister(
  * succeeded at the HTTP layer but whose PENDING admission request did NOT land
  * even after the automatic retry. NEVER a silent success: the stack is
  * registered but there is nothing for the network admin to admit, so the
- * operator must re-register (the upsert is idempotent). Names the network, the
+ * principal must re-register (the upsert is idempotent). Names the network, the
  * registry warning, and the exact manual re-register command.
  */
 function admissionFailedResult(
