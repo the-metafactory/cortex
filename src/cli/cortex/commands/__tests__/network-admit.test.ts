@@ -570,6 +570,20 @@ describe("cortex network admit --list-pending (C-1314)", () => {
     expect(env.items[0]!.request_id).toBe("req-json-1");
   });
 
+  test("empty queue renders the (none) line, not a bare header (exit 0)", async () => {
+    const { seedPath } = await mintAdminSeed();
+    setMockFetch(async () =>
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const res = await dispatchNetwork([
+      "admit", "--list-pending",
+      "--admin-seed", seedPath,
+    ]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("0 PENDING request(s)");
+    expect(res.stdout).toContain("(none)");
+  });
+
   test("--network filters the returned rows client-side", async () => {
     const { seedPath } = await mintAdminSeed();
     setMockFetch(async () =>

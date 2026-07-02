@@ -171,6 +171,52 @@ describe("parseSubcommandArgs — positionals", () => {
   });
 });
 
+// C-1314 (#1388) — a trailing `?` on a declared positional name marks it
+// OPTIONAL: the value is captured under the BARE name, and its absence is NOT a
+// MissingPositionalError. This is the cross-cutting primitive `cortex network
+// admit` relies on (`positionals: ["request-id?"]`), so it is pinned directly at
+// the parser layer here — not only indirectly through the admit CLI tests.
+describe("parseSubcommandArgs — optional positional (trailing `?`)", () => {
+  // `admit` mirrors the real network SPEC: one OPTIONAL positional. `mixed`
+  // proves a REQUIRED positional followed by an OPTIONAL one behaves correctly.
+  const optSpec: SubcommandSpec<"admit" | "mixed"> = {
+    cliName: "opt-cli",
+    subcommands: {
+      admit: { positionals: ["request-id?"], flags: { "--list-pending": "bool" } },
+      mixed: { positionals: ["action", "request-id?"] },
+    },
+    universal: { "--help": "bool", "-h": "bool", "--json": "bool" },
+  };
+
+  test("present → captured under the BARE name (without the `?`)", () => {
+    const r = parseSubcommandArgs(optSpec, ["admit", "req-abc-123"]);
+    expect(r.subcommand).toBe("admit");
+    expect(r.positionals["request-id"]).toBe("req-abc-123");
+    // never keyed under the raw `request-id?` name
+    expect(r.positionals["request-id?"]).toBeUndefined();
+  });
+
+  test("absent → NO MissingPositionalError (optional), subcommand still parses", () => {
+    let r!: ReturnType<typeof parseSubcommandArgs<"admit" | "mixed">>;
+    expect(() => {
+      r = parseSubcommandArgs(optSpec, ["admit", "--list-pending"]);
+    }).not.toThrow();
+    expect(r.subcommand).toBe("admit");
+    expect(r.positionals["request-id"]).toBeUndefined();
+    expect(r.flags["--list-pending"]).toBe(true);
+  });
+
+  test("required-then-optional: required present + optional absent → ok", () => {
+    const r = parseSubcommandArgs(optSpec, ["mixed", "go"]);
+    expect(r.positionals["action"]).toBe("go");
+    expect(r.positionals["request-id"]).toBeUndefined();
+  });
+
+  test("required-then-optional: the REQUIRED one still throws when absent", () => {
+    expect(() => parseSubcommandArgs(optSpec, ["mixed"])).toThrow(MissingPositionalError);
+  });
+});
+
 describe("parseSubcommandArgs — flag order independence", () => {
   test("flags before subcommand still resolve to that subcommand's allowlist", () => {
     // --creds-dir BEFORE 'list' should still parse cleanly: the first pass
