@@ -30,13 +30,13 @@ Background is a radial-gradient "atmosphere"; nodes are radial-gradient glows; p
 
 ## Anatomy (what's on the glass)
 
-- **Command bar (64px):** ◎ MISSION CONTROL · `PRINCIPAL <name>` · `ALT` you-are-here **breadcrumb** (`NETWORK·OF·NETWORKS / Meridian / aria·atlas`) · right-aligned **posture pill** (`OPERATOR` / `MEMBER`).
+- **Command bar (64px):** ◎ MISSION CONTROL · `PRINCIPAL <name>` · `ALT` you-are-here **breadcrumb** (`NETWORK·OF·NETWORKS / Meridian / aria·atlas`) · right-aligned **posture pill** (`ADMIN` / `MEMBER`).
 - **Altitude rail (left):** vertical selector — **NETWORKS (10k ft) → NETWORK → STACK → ASSISTANT → SESSION** — the primary navigation gesture; current level lit.
-- **Constellation canvas (main):** the network as a glowing graph. A **network header** (`MERIDIAN · YOU OPERATE · 2 STACKS · K7`). **Nodes** = stacks/assistants (radial glow, capability label e.g. `code-review`, state e.g. `⚠ rate-limited`, the `● YOU ARE HERE` anchor). **Edges** = bus relationships; **federated edges** dashed + flowing, labelled `● federated · admitted peer · K7`.
+- **Constellation canvas (main):** the network as a glowing graph. A **network header** (`MERIDIAN · YOU ADMINISTER · 2 STACKS · K7`). **Nodes** = stacks/assistants (radial glow, capability label e.g. `code-review`, state e.g. `⚠ rate-limited`, the `● YOU ARE HERE` anchor). **Edges** = bus relationships; **federated edges** dashed + flowing, labelled `● federated · admitted peer · K7`.
 
 ## The two postures (first-class, per the mockup's `posture` prop)
 
-- **OPERATOR** (a network you own): the network header reads `YOU OPERATE`; admin affordances present (roster, Pier queue, grant, rotate). 
+- **ADMIN** (a network you own): the network header reads `YOU ADMINISTER`; admin affordances present (roster, Pier queue, grant, rotate). 
 - **MEMBER** (a network you joined): your slice + admitted peers; no admin affordances.
 The posture pill in the command bar + the posture conditional (admin/member) drive which chrome appears.
 

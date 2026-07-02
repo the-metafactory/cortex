@@ -1,0 +1,9 @@
+Vocab-ratchet regression fixture (compass#98 F18) — the gate MUST flag this file.
+SCREAMING_SNAKE forms the pre-F18 recall was blind to. Kept as a .txt so the
+whole-tree scan (which globs only code/doc extensions) never sees it, leaving the
+tree green while this stays catchable when the gate is pointed at it explicitly.
+Each line below is an ungated principal-vocabulary violation:
+OPERATOR_ID = "andreas"
+OPERATOR_PUBKEY = "..."
+HOME_OPERATOR = "andreas"
+const OPERATOR = resolvePrincipal();

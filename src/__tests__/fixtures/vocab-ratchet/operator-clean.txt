@@ -1,0 +1,6 @@
+Vocab-ratchet clean fixture (compass#98 F18) — the gate MUST pass (exit 0).
+The canonical vocabulary carries no deprecated term, so the gate reports PASS
+when pointed at this file.
+PRINCIPAL_ID = "andreas"
+PRINCIPAL_PUBKEY = "..."
+const principal = resolvePrincipal();

@@ -84,7 +84,17 @@ CHECK_PERSONA=0
 # legitimate non-principal senses (NSC operatorAccount, policy authz-role literal,
 # R7-gated operatorDiscordId, EventBridge comparison operator). Verified no
 # `cooperat*` false-friends in the tree.
-PAT_OPERATOR='[Oo]perator'
+#
+# F18 (compass#98) — added the all-caps `OPERATOR` alternate so the recall also
+# catches SCREAMING_SNAKE operator forms the `[Oo]perator` recall was BLIND to:
+# `OPERATOR_ID`, `OPERATOR_PUBKEY`, `HOME_OPERATOR`, etc. (env-var / constant /
+# SQL-column casing). We add a specific alternate rather than switching the whole
+# grep to `-i`: `-i` over-broadens past the carve-out line-filter tuning (it would
+# also match mixed-case noise like `OpErAtor` and defeat the case-sensitive
+# carve-outs). The legitimate all-caps survivors (NSC `OPERATOR_MODE*` constants,
+# the `GROVE_OPERATOR` env tier, fake test-fixture IDs, the policy-role
+# `OPERATOR_POLICY` fixture) are carved by the path/line allowlist below.
+PAT_OPERATOR='[Oo]perator|OPERATOR'
 PAT_BOTCONFIG='\bBotConfig(Schema)?\b'
 PAT_BROADCAST_EMIT='distribution_mode[[:space:]]*[:=][[:space:]]*["'"'"']broadcast'
 PAT_PERSONA='\bpersona\b'
@@ -298,6 +308,33 @@ ALLOWLIST_PATHS=(
   'docs/design-internet-of-agentic-work.md'
   'docs/plan-internet-of-agentic-work.md'
   'src/__tests__/iaw-phase-d-integration.test.ts'
+  # ── F18 (compass#98): all-caps NSC operator-mode survivors newly visible under
+  #    the widened `[Oo]perator|OPERATOR` recall. Every "OPERATOR" in these is the
+  #    NSC account-tree / operator-mode sense (OPERATOR_MODE_MARKER, OPERATOR_JWT,
+  #    OPERATOR_WITH_ACCOUNT, FAKE_OPERATOR JWT fixtures, ...-OPERATOR-MODE conf
+  #    labels), never the principal. Same class as the already-allowlisted
+  #    leaf-remote-renderer.test.ts / network-provision-* / operator-provisioning
+  #    NSC cluster above. Class: NSC. RETIRE: never (NSC operator is the permanent
+  #    qualified survivor, CONTEXT.md → NSC operator).
+  'src/common/nats/leaf-remote-renderer.ts'
+  'src/common/nats/__tests__/nats-config-bind-account.test.ts'
+  'src/common/nats/__tests__/operator-mode-conversion.test.ts'
+  'src/cli/cortex/commands/__tests__/network-adapters.test.ts'
+  'src/cli/cortex/commands/__tests__/network-lib.test.ts'
+  # ── F18 (compass#98): R9 env-migration guard test — asserts the v3.0.0-REMOVED
+  #    `CORTEX_OPERATOR*` env fallback stays removed. Every all-caps `CORTEX_OPERATOR`
+  #    here is a HISTORICAL reference to the renamed-away env var (R9: CORTEX_OPERATOR
+  #    → CORTEX_PRINCIPAL), never a live principal token. Its source (principal-env.ts)
+  #    is already path-allowlisted; the sibling `hooks/__tests__/` allowlist entry does
+  #    not reach this `hooks/lib/__tests__/` path. Class: env-tier / HISTORICAL guard.
+  'src/taps/cc-events/hooks/lib/__tests__/principal-env.test.ts'
+  # ── F18 (compass#98): posture-rename GUARD test — pins that the MC posture pill
+  #    renders ADMIN/MEMBER and NEVER "OPERATOR" (the operator→admin network-posture
+  #    rename, CONTEXT.md §"Network posture (admin vs member)"). The literal
+  #    "OPERATOR" appears only inside `not.toContain("OPERATOR")` assertions + the
+  #    test name — the guard IS the vocabulary check. Same class as the
+  #    principal-identity-consistency.test.ts HISTORICAL-guard carve-out above.
+  'src/surface/mc/dashboard-v2/__tests__/mc-shell.test.tsx'
 )
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -520,6 +557,23 @@ CARVEOUT_LINE_PATTERNS=(
   # 'design-dm-operator-channel' filename citation above.
   '[Oo]perator-driven dev-loop'
   'design-operator-driven-dev-loop'
+  # ── F18 (compass#98): all-caps line carve-outs newly needed under the widened
+  #    `[Oo]perator|OPERATOR` recall. ────────────────────────────────────────────
+  # `UOPERATOR` — the fake Slack user-ID fixture for the MC-authz-role operator
+  # user in slack-adapter.test.ts (Slack IDs are `U…`). A made-up test ID that
+  # embeds the AUTHZ-ROLE `operator` (the `isOperator(` adapter check, already
+  # carved above), never a live principal. Cannot mask a real principal token —
+  # no principal is spelled `UOPERATOR`. Class: AUTHZ-ROLE test-fixture.
+  'UOPERATOR'
+  # `CHANNEL_ID/OPERATOR_ID` — the JC-owned standalone SOC-demo env-var list in
+  # docs/plan-bot-packs-completion.md §W-5 (`MATTERMOST_URL/BOT_TOKEN/CHANNEL_ID/
+  # OPERATOR_ID`). The demo lives OUTSIDE this repo (no `examples/soc-demo/`), so
+  # the token names an external artifact's env var, discussed as prose — same
+  # class as the IAW plan-doc "code-identifier mentions" path carve-outs. Scoped
+  # to the exact `CHANNEL_ID/OPERATOR_ID` list form so it cannot mask a bare
+  # `OPERATOR_ID` violation (e.g. the ratchet fixture) elsewhere. FLAGGED for
+  # follow-up: confirm the demo adopts canonical PRINCIPAL_ID vocab.
+  'CHANNEL_ID/OPERATOR_ID'
 )
 
 usage() {
