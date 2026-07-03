@@ -201,6 +201,57 @@ describe("join dry-run safety", () => {
 });
 
 // =============================================================================
+// cortex#1485 — `join --guided` fail-closed leaf-up gate
+// =============================================================================
+
+describe("#1485 — join --guided guard", () => {
+  test("--guided refuses the leaf-up step when the hub-authorize leg is unconfirmed (exit 1)", async () => {
+    const dir = freshDir();
+    // A fully-flagged join whose admission read cannot succeed (no seed file /
+    // unreachable registry) ⇒ seal leg NOT done; the hub-authorize leg is the
+    // documented stub (always undefined). So the guard MUST refuse the leaf-up
+    // step, fail-closed, before any join mutation is attempted.
+    const res = await dispatchNetwork([
+      "join", "metafactory",
+      "--guided",
+      "--principal", "andreas",
+      "--registry-url", "http://127.0.0.1:0", // unreachable by construction
+      "--seed-path", join(dir, "seed.nk"), // missing → admission read fails
+      "--creds", join(dir, "andreas.creds"),
+      "--account", "A" + "B".repeat(55),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+    ], EMPTY_READER);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("cannot bring the leaf up");
+    // The refusal names the outstanding leg (seal here — it gates hub-authorize).
+    expect(res.stderr).toContain("seal");
+    // And nothing was written to disk (the guard fired before any mutation).
+    expect(existsSync(join(dir, "local.conf"))).toBe(false);
+    expect(existsSync(join(dir, "nats.plist"))).toBe(false);
+  });
+
+  test("WITHOUT --guided the same join proceeds past the gate (fails later on register, exit 1) — proving the gate is opt-in", async () => {
+    const dir = freshDir();
+    const res = await dispatchNetwork([
+      "join", "metafactory",
+      "--principal", "andreas",
+      "--registry-url", "http://127.0.0.1:0",
+      "--seed-path", join(dir, "seed.nk"),
+      "--creds", join(dir, "andreas.creds"),
+      "--account", "A" + "B".repeat(55),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+    ], EMPTY_READER);
+    expect(res.exitCode).toBe(1);
+    // The failure is NOT the guided-gate refusal — it's the downstream register
+    // failure (dry-run banner present), confirming the gate did not fire.
+    expect(res.stderr).not.toContain("cannot bring the leaf up");
+    expect(res.stderr).toContain("dry-run");
+  });
+});
+
+// =============================================================================
 // cortex#1228 — TOFU is never silent for a custom registry; pinned ⇒ no warning
 // =============================================================================
 

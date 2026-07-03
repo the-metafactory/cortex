@@ -105,6 +105,7 @@ import {
   buildDryRunPorts,
   buildLivePublicPorts,
   buildDryRunPublicPorts,
+  buildAdmissionStatePort,
   type LivePortsConfig,
 } from "./network-adapters";
 import {
@@ -178,6 +179,18 @@ import {
   buildMonitorPort,
 } from "./network-doctor-adapters";
 import type { NetworkDoctorPorts } from "./network-doctor-ports";
+import {
+  deriveHandoffState,
+  guardLeafUp,
+  runHandoffStatus,
+  type HandoffLeg,
+  type HandoffReport,
+} from "./network-handoff-lib";
+import type { NetworkHandoffPorts } from "./network-handoff-ports";
+import {
+  buildLiveHandoffPorts,
+  buildStubHubAuthPort,
+} from "./network-handoff-adapters";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -185,7 +198,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "doctor" | "admit" | "reject" | "provision" | "make-live" | "secret";
+type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "doctor" | "admit" | "reject" | "provision" | "make-live" | "secret" | "handoff";
 
 /**
  * Default registry URL when neither --registry-url nor config provides one.
@@ -276,6 +289,14 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         // on `join public`; ignored on a federated join.
         "--capabilities": "value",
         "--allow": "value",
+        // cortex#1485 (epic #1479, join-6) — opt-in guided-join. When set, the
+        // leaf-up step is GATED on the 3-leg handoff state: it refuses (fails
+        // closed) unless the seal + hub-authorize legs are confirmed, instead of
+        // storming the hub with an unauthorized leaf. OPT-IN, never the default:
+        // the hub-authorize leg is a documented stub (always undefined ⇒
+        // fail-closed) until a hub-owner-side `hub_authorized_at` registry marker
+        // exists, so defaulting it would block EVERY join today.
+        "--guided": "bool",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -532,6 +553,28 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         // cortex#1481 — the hub's OWN federation account nkey-U, when the admin
         // already knows it. Rides the hub-owner artifact's `account:` field.
         "--hub-account": "value",
+      },
+    },
+    // cortex#1485 (epic #1479, join-6) — the guided-join handoff STATE. A join is
+    // a 3-leg handoff across ≤3 people/machines: seal (admin) → hub-authorize
+    // (hub owner) → leaf-up (member). `cortex network handoff status <member>
+    // --network <net>` shows, for that member, each leg's state (done | pending |
+    // blocked), the outstanding next leg, and WHOSE job it is. `action` is the
+    // verb (`status`); `member` is who the report is about. Read-only.
+    handoff: {
+      positionals: ["action", "member"],
+      flags: {
+        // The network whose handoff is being reported (required — a handoff is
+        // always network-scoped).
+        "--network": "value",
+        // Mirrors doctor/status: locate the LOCAL stack's config + admission
+        // read + leaf monitor for the seal/leaf-up leg signals.
+        "--config": "value",
+        "--principal": "value",
+        "--stack": "value",
+        "--monitor-url": "value",
+        "--registry-url": "value",
+        "--seed-path": "value",
       },
     },
   },
@@ -1036,6 +1079,31 @@ async function runJoin(
   };
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
+
+  // cortex#1485 (epic #1479, join-6) — OPT-IN guided-join gate. When `--guided`
+  // is set, the leaf-up step is refused (fail-closed) unless the 3-leg handoff
+  // (seal → hub-authorize → leaf-up) has its seal + hub-authorize legs
+  // confirmed — so a member never storms the hub with an unauthorized leaf
+  // (the metafactory-community Authorization-Violation window). This is opt-in,
+  // NOT the default: the hub-authorize leg is a documented stub (always
+  // undefined ⇒ fail-closed) until a hub-owner-side `hub_authorized_at` registry
+  // marker exists, so defaulting it would block every join today. See
+  // `network-handoff-adapters.ts` `buildStubHubAuthPort`.
+  if (flags["--guided"] === true) {
+    const admission = buildAdmissionStatePort(cfg);
+    const hubAuth = buildStubHubAuthPort();
+    const admissionRes = await admission.resolve(networkId);
+    const sealed = admissionRes.ok && admissionRes.state.hasSealedSecret;
+    const hubRes = await hubAuth.resolveHubAuthorized(networkId, inputs.principal);
+    // leafUp:false — we are ABOUT to bring it up; the guard depends only on
+    // seal + hub-authorize.
+    const state = deriveHandoffState({ sealed, hubAuthorized: hubRes.confirmed, leafUp: false });
+    const guard = guardLeafUp(state, networkId);
+    if (!guard.allowed) {
+      return opError("join", guard.message, json);
+    }
+  }
+
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
   const res = await joinNetwork(networkId, stack, ports);
@@ -1626,6 +1694,145 @@ function renderDoctorResult(
   return res.exitCode === 0
     ? { exitCode: 0, stdout: body, stderr: "" }
     : { exitCode: res.exitCode, stdout: "", stderr: body };
+}
+
+// =============================================================================
+// cortex#1485 (epic #1479, join-6) — `cortex network handoff status`
+// =============================================================================
+
+/**
+ * Factory for the handoff ports bundle. Production builds the live
+ * admission-read + documented-stub hub-auth + config + monitor adapters from
+ * the resolved {@link LivePortsConfig} + the composed networks; tests inject a
+ * fake. Read-only — no `stop()` needed (unlike doctor, handoff opens no probe
+ * bus).
+ */
+export type HandoffPortsFactory = (
+  cfg: LivePortsConfig,
+  networks: import("../../../common/types/cortex-config").PolicyFederatedNetwork[],
+) => NetworkHandoffPorts;
+
+/** The production factory — reuses the live admission + doctor config/monitor
+ *  adapters + the documented hub-authorize stub. */
+const DEFAULT_HANDOFF_PORTS_FACTORY: HandoffPortsFactory = (cfg, networks) =>
+  buildLiveHandoffPorts(cfg, networks);
+
+async function runHandoff(
+  action: string,
+  member: string,
+  flags: FlagMap,
+  json: boolean,
+  load: ConfigReader,
+  handoffPortsFactory: HandoffPortsFactory,
+): Promise<ExitResult> {
+  if (action !== "status") {
+    return usageError("handoff", `unknown action "${action}" — the only handoff action is "status"`, json);
+  }
+  const networkRes = requireValueFlag(flags, "--network");
+  if (!networkRes.ok) return usageError("handoff", networkRes.reason, json);
+  const networkId = networkRes.value;
+  if (!NETWORK_ID_RE.test(networkId)) {
+    return usageError("handoff", `--network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+  if (!PRINCIPAL_ID_RE.test(member)) {
+    return usageError("handoff", `member "${member}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+
+  const principalRes = requireValueFlag(flags, "--principal");
+  if (!principalRes.ok) return usageError("handoff", principalRes.reason, json);
+  const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
+  if (!slugRes.ok) return usageError("handoff", slugRes.reason, json);
+
+  // Mirror doctor/status: an explicit --config wins; else resolve the NAMED
+  // stack's config layout-aware, so the seal/leaf-up leg reads reflect what the
+  // daemon actually loads.
+  const handoffFlags: FlagMap =
+    optionalValueFlag(flags, "--config") === undefined
+      ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }
+      : flags;
+
+  let cfg: LoadedConfig;
+  try {
+    cfg = load(cortexConfigPathFromFlags(handoffFlags));
+  } catch (err) {
+    return opError("handoff", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // The seal leg's `/mine` admission read needs a registry-url + signing seed —
+  // resolved the SAME best-effort way `status` does (C-1350).
+  const admissionCoords = resolveStatusAdmissionCoords(
+    handoffFlags,
+    principalRes.value,
+    slugRes.slug,
+    load,
+  );
+  const livePortsCfg: LivePortsConfig = {
+    ...portsConfig(networkId, principalRes.value, slugRes.slug, handoffFlags),
+    ...(admissionCoords.registryUrl !== undefined && { registryUrl: admissionCoords.registryUrl }),
+    ...(admissionCoords.seedPath !== undefined && { seedPath: admissionCoords.seedPath }),
+  };
+
+  const ports = handoffPortsFactory(livePortsCfg, cfg.policy?.federated?.networks ?? []);
+  const report = await runHandoffStatus(ports, {
+    networkId,
+    member,
+    selfPrincipal: principalRes.value,
+  });
+  return renderHandoffReport(report, json);
+}
+
+/** Render a {@link HandoffReport} — a human per-leg table or a `--json` envelope. */
+function renderHandoffReport(report: HandoffReport, json: boolean): ExitResult {
+  const { state } = report;
+  if (json) {
+    const env = envelopeOk(
+      state.legs.map((l) => ({
+        id: l.id,
+        title: l.title,
+        status: l.status,
+        owner: l.owner,
+        detail: l.detail,
+      })),
+      {
+        network: report.networkId,
+        member: report.member,
+        ...(state.nextLeg !== undefined && { next_leg: state.nextLeg }),
+        ...(state.nextOwner !== undefined && { next_owner: state.nextOwner }),
+        can_bring_leaf_up: state.canBringLeafUp ? "true" : "false",
+        ...(report.notes.length > 0 && { notes: report.notes.join(" | ") }),
+      },
+    );
+    return { exitCode: 0, stdout: renderJson(env), stderr: "" };
+  }
+
+  const icon = (status: HandoffLeg["status"]): string => {
+    switch (status) {
+      case "done":
+        return "✓";
+      case "pending":
+        return "…";
+      case "blocked":
+        return "·";
+    }
+  };
+  const lines: string[] = [
+    `cortex network handoff status ${report.member} (network "${report.networkId}"):`,
+    "",
+  ];
+  for (const l of state.legs) {
+    lines.push(`  ${icon(l.status)} ${l.id} [${l.status}] (owner: ${l.owner}) — ${l.detail}`);
+  }
+  lines.push("");
+  if (state.nextLeg !== undefined) {
+    lines.push(`outstanding: ${state.nextLeg} (owner: ${state.nextOwner ?? "?"})`);
+  } else {
+    lines.push("outstanding: none — all legs done");
+  }
+  lines.push(`can bring leaf up: ${state.canBringLeafUp ? "yes" : "no"}`);
+  for (const note of report.notes) {
+    lines.push(`  note: ${note}`);
+  }
+  return ok(lines.join("\n") + "\n");
 }
 
 // =============================================================================
@@ -3920,6 +4127,9 @@ export async function dispatchNetwork(
   // fake config/monitor/probe-bus ports without touching fs or NATS.
   // Production omits it → the live adapters.
   doctorPortsFactory: DoctorPortsFactory = DEFAULT_DOCTOR_PORTS_FACTORY,
+  // cortex#1485 — injectable handoff-ports factory so `handoff` CLI tests drive
+  // fake admission/hub-auth/config/monitor ports. Production omits → live.
+  handoffPortsFactory: HandoffPortsFactory = DEFAULT_HANDOFF_PORTS_FACTORY,
 ): Promise<ExitResult> {
   let parsed;
   try {
@@ -3957,6 +4167,15 @@ export async function dispatchNetwork(
       return runPing(parsed.positionals.peer ?? "", parsed.flags, json, load, pingBusFactory);
     case "doctor":
       return runDoctor(parsed.positionals.network ?? "", parsed.flags, json, load, doctorPortsFactory);
+    case "handoff":
+      return runHandoff(
+        parsed.positionals.action ?? "",
+        parsed.positionals.member ?? "",
+        parsed.flags,
+        json,
+        load,
+        handoffPortsFactory,
+      );
     case "admit":
       return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory);
     case "reject":
@@ -3993,6 +4212,7 @@ Usage:
   cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--network-admins <csv>] [--registry-url <url>] [--apply]
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
   cortex network doctor <network> [--principal <id>] [--stack <id>] [--config <p>] [--monitor-url <url>] [--json]
+  cortex network handoff status <member> --network <net> [--principal <id>] [--stack <id>] [--config <p>] [--json]
   cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>] [--hub-config <p>]
                         [--roster-only] [--seal-only] [--hub-account <A…>] [--discord-member <id>]
                         [--discord-guild <id>] [--discord-server <profile>] [--discord-role <name>]
@@ -4051,6 +4271,21 @@ Subcommands:
           on the local bus degrades leaf checks to warn/skip, never fail (the
           absent-monitor-is-inconclusive rule). Exit codes: 0 healthy /
           1 degraded / 2 broken.
+  handoff (cortex#1485, epic #1479) Model a network join as the 3-leg handoff it
+          actually is — seal (admin) → hub-authorize (hub owner) → leaf-up
+          (member) — as STATE. \`handoff status <member> --network <net>\` shows,
+          for that member, each leg's state (done | pending | blocked), the
+          outstanding next leg, and WHOSE job it is (admin / hub-owner / member),
+          so nobody has to guess what's outstanding or whose turn it is. The seal
+          leg reads the member's own ADMITTED admission row (sealed leaf secret
+          present); the leaf-up leg reuses doctor's /leafz leaf-established
+          lookup. The hub-authorize leg is a DOCUMENTED STUB (always "pending —
+          cannot confirm from the member side"): the member has no hub-side
+          visibility and the registry row carries no hub-owner authorization
+          marker yet — confirming it needs a hub-owner-side \`hub_authorized_at\`
+          registry field (follow-up), so it is treated fail-closed (NOT done).
+          Read-only. The enforcement counterpart is \`join --guided\`, which
+          refuses to bring the leaf up until seal + hub-authorize are confirmed.
   status  Show joined networks, peers, accept-subjects, leaf link state + counters.
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.
@@ -4208,6 +4443,11 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
   --allow <csv>           (join public) Comma-separated INBOUND allowlist of public
                           sender principals. Empty (default) = inbound DISABLED (OQ1
                           safe). Non-empty = inbound enabled, gated to these ids only.
+  --guided                (join, #1485) OPT-IN guided join: refuse to bring the leaf
+                          up (fail-closed) until the 3-leg handoff's seal + hub-authorize
+                          legs are confirmed, instead of storming the hub. Off by default
+                          (hub-authorize is a documented stub today — see 'handoff').
+  --network <net>         (handoff) the network whose handoff to report (required).
   --monitor-url <url>     (status) nats-server monitor base URL for leaf telemetry.
   --hub <tls-url>         (create) the hub's leaf-node dial URL (e.g. tls://hub.meta-factory.ai:7422).
   --leaf-port <port>      (create) the hub's leaf-node listen port (integer 1..65535).

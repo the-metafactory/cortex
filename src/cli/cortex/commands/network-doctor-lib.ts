@@ -446,6 +446,23 @@ function findEstablishedLeaf(
     : undefined;
 }
 
+/**
+ * cortex#1485 — the pure BOOLEAN form of the leaf-established leg, for reuse by
+ * `cortex network handoff`'s leaf-up leg. `true` iff `/leafz` shows an
+ * established leaf attributable to this network (a name/account match, or the
+ * lone-leaf fallback on a single-leaf bus — the SAME attribution
+ * {@link findEstablishedLeaf} applies for `doctor`'s leaf-established check).
+ * `undefined` leafz (no monitor data) ⇒ `false` (not established). Pure — no
+ * I/O; the caller supplies the `/leafz` snapshot.
+ */
+export function isLeafEstablished(
+  leafz: LeafzResponse | undefined,
+  network: PolicyFederatedNetwork,
+): boolean {
+  if (leafz === undefined) return false;
+  return findEstablishedLeaf(leafz, network.leaf_node) !== undefined;
+}
+
 function checkLeafEstablished(
   leafz: LeafzResponse | undefined,
   network: PolicyFederatedNetwork,
