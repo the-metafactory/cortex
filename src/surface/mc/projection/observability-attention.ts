@@ -14,8 +14,8 @@
  *   - `system.signal.collector.recovered`          → RESOLVE it
  *   - `system.transport.backend.unreachable`       → OPEN  att:adapter:transport:{id}
  *   - `system.transport.backend.reachable`         → RESOLVE it
- *   - `system.transport.leaf_disconnect`           → OPEN  att:adapter:transport:{id}
- *   - `system.transport.leaf_connect`              → RESOLVE it
+ *   - `system.transport.leaf-disconnect`           → OPEN  att:adapter:transport:{id}
+ *   - `system.transport.leaf-connect`              → RESOLVE it
  *
  * The origin id keys the item: `collector_id` (collector family) or `backend` /
  * `leaf` / `node` (transport family), falling back to the family name so a
@@ -63,9 +63,9 @@ function classify(type: string): Mapping | null {
       return { opens: true, ns: "transport", idKeys: ["backend", "backend_id", "id"] };
     case "system.transport.backend.reachable":
       return { opens: false, ns: "transport", idKeys: ["backend", "backend_id", "id"] };
-    case "system.transport.leaf_disconnect":
+    case "system.transport.leaf-disconnect":
       return { opens: true, ns: "transport", idKeys: ["leaf", "node", "peer", "id"] };
-    case "system.transport.leaf_connect":
+    case "system.transport.leaf-connect":
       return { opens: false, ns: "transport", idKeys: ["leaf", "node", "peer", "id"] };
     default:
       return null;

@@ -159,7 +159,7 @@ async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-const TRANSPORT_TYPE = "system.transport.leaf_connect";
+const TRANSPORT_TYPE = "system.transport.leaf-connect";
 const TRANSPORT_SUBJECT = "federated.joel.research.system.transport.leaf_connect";
 
 // ===========================================================================

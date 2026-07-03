@@ -91,7 +91,7 @@ describe("familyForType — four-family routing", () => {
 
   it("routes federation and transport", () => {
     expect(familyForType("system.federation.peer.added")).toBe("federation");
-    expect(familyForType("system.transport.leaf_disconnect")).toBe("transport");
+    expect(familyForType("system.transport.leaf-disconnect")).toBe("transport");
   });
 
   it("returns null for an unrelated type", () => {
@@ -125,7 +125,7 @@ describe("projectObservability — projection rows", () => {
     expect(projectObservability(db, envelope("system.signal.received", { summary: "ok" }), fakeRegistry)).toBe("signal");
     expect(projectObservability(db, envelope("system.signal.collector.degraded", { collector_id: "relay-1" }), fakeRegistry)).toBe("collector");
     expect(projectObservability(db, envelope("system.federation.peer.added", { peer: "jc" }), fakeRegistry)).toBe("federation");
-    expect(projectObservability(db, envelope("system.transport.leaf_connect", { leaf: "leaf-a" }), fakeRegistry)).toBe("transport");
+    expect(projectObservability(db, envelope("system.transport.leaf-connect", { leaf: "leaf-a" }), fakeRegistry)).toBe("transport");
 
     const counts = countObservabilityByFamily(db);
     expect(counts).toEqual({ signal: 1, collector: 1, federation: 1, transport: 1 });
@@ -172,7 +172,7 @@ describe("projectForeignObservability — origin-badged peer rows (U3.3)", () =>
   it("writes a FOREIGN-origin row + broadcasts, never local", () => {
     const fam = projectForeignObservability(
       db,
-      envelope("system.transport.leaf_connect", { leaf: "leaf-a" }),
+      envelope("system.transport.leaf-connect", { leaf: "leaf-a" }),
       "joel/research",
       fakeRegistry,
     );
@@ -187,7 +187,7 @@ describe("projectForeignObservability — origin-badged peer rows (U3.3)", () =>
     // local. As a foreign row it must NOT — no attention broadcast, no item.
     projectForeignObservability(
       db,
-      envelope("system.transport.leaf_disconnect", { leaf: "leaf-a" }),
+      envelope("system.transport.leaf-disconnect", { leaf: "leaf-a" }),
       "joel/research",
       fakeRegistry,
     );
@@ -198,7 +198,7 @@ describe("projectForeignObservability — origin-badged peer rows (U3.3)", () =>
 
   it("a LOCAL transport health signal STILL opens an attention item (regression guard)", () => {
     // Contrast: the same disconnect via the LOCAL path opens the att:adapter: item.
-    projectObservability(db, envelope("system.transport.leaf_disconnect", { leaf: "leaf-a" }), fakeRegistry);
+    projectObservability(db, envelope("system.transport.leaf-disconnect", { leaf: "leaf-a" }), fakeRegistry);
     expect(broadcasts.some((m) => m.type === "mc.projection" && m.family === "attention")).toBe(true);
   });
 });
@@ -238,7 +238,7 @@ describe("produceObservabilityAttention — att:adapter: open/resolve", () => {
     expect(attentionRow(db, backend!.itemId)?.status).toBe("open");
 
     const leaf = produceObservabilityAttention(db, {
-      type: "system.transport.leaf_disconnect",
+      type: "system.transport.leaf-disconnect",
       payload: { leaf: "leaf-a" },
     });
     expect(leaf).toMatchObject({ action: "opened" });

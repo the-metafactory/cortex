@@ -19,10 +19,10 @@ import {
 
 describe("evaluateObservabilityCuration — ALLOW-list (the folded classes)", () => {
   test.each([
-    "system.transport.leaf_connect",
-    "system.transport.leaf_disconnect",
-    "system.transport.liveness_drift",
-    "system.transport.roster_snapshot",
+    "system.transport.leaf-connect",
+    "system.transport.leaf-disconnect",
+    "system.transport.liveness-drift",
+    "system.transport.roster-snapshot",
     "system.transport.backend.reachable",
     "system.federation.peer.added",
     "system.federation.peer.removed",

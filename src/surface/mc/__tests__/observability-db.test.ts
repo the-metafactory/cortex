@@ -58,7 +58,7 @@ describe("observability_events storage", () => {
   it("lists by family, newest first, and overall", () => {
     insertObservabilityEvent(db, { envelopeId: "a", family: "signal", type: "system.signal.received", payload: {}, timestamp: "2026-06-01T00:00:00.000Z" });
     insertObservabilityEvent(db, { envelopeId: "b", family: "signal", type: "system.signal.dropped", payload: {}, timestamp: "2026-06-02T00:00:00.000Z" });
-    insertObservabilityEvent(db, { envelopeId: "c", family: "transport", type: "system.transport.leaf_connect", payload: {}, timestamp: "2026-06-03T00:00:00.000Z" });
+    insertObservabilityEvent(db, { envelopeId: "c", family: "transport", type: "system.transport.leaf-connect", payload: {}, timestamp: "2026-06-03T00:00:00.000Z" });
 
     const sig = listObservabilityEvents(db, 10, "signal");
     expect(sig.map((r) => r.envelopeId)).toEqual(["b", "a"]); // newest first
@@ -101,7 +101,7 @@ describe("pruneOldObservability — age-based retention", () => {
 
   it("pruneRetention reports prunedObservability in its summary", () => {
     const old = new Date(Date.now() - OBSERVABILITY_RETENTION_MS - 60_000).toISOString();
-    insertObservabilityEvent(db, { envelopeId: "old", family: "transport", type: "system.transport.leaf_disconnect", payload: {}, timestamp: old });
+    insertObservabilityEvent(db, { envelopeId: "old", family: "transport", type: "system.transport.leaf-disconnect", payload: {}, timestamp: old });
     const summary = pruneRetention(db);
     expect(summary.ok).toBe(true);
     expect(summary.prunedObservability).toBe(1);
@@ -119,19 +119,19 @@ describe("listTransportRosterEvents (P-14 U2.3) — payload-bearing transport re
       payload: { n: 1 }, timestamp: "2026-06-01T00:00:00.000Z",
     });
     insertObservabilityEvent(db, {
-      envelopeId: "t1", family: "transport", type: "system.transport.liveness_drift",
+      envelopeId: "t1", family: "transport", type: "system.transport.liveness-drift",
       payload: { action: "liveness_drift", network: "net", attributes: { peer: "jc/default", to: "connected" } },
       timestamp: "2026-06-02T00:00:00.000Z",
     });
     insertObservabilityEvent(db, {
-      envelopeId: "t2", family: "transport", type: "system.transport.leaf_connect",
+      envelopeId: "t2", family: "transport", type: "system.transport.leaf-connect",
       payload: { action: "leaf_connect", network: "net", leaf: { principal: "jc", stack: "default", network: "net", rtt_ms: 8.4 } },
       timestamp: "2026-06-03T00:00:00.000Z",
     });
 
     const rows = listTransportRosterEvents(db, 50);
     expect(rows.length).toBe(2); // signal row excluded
-    expect(rows[0]!.type).toBe("system.transport.leaf_connect"); // newest first
+    expect(rows[0]!.type).toBe("system.transport.leaf-connect"); // newest first
     // The payload round-trips back to an object (NOT stripped like the tab read).
     expect((rows[0]!.payload.leaf as Record<string, unknown>).rtt_ms).toBe(8.4);
     expect((rows[1]!.payload.attributes as Record<string, unknown>).to).toBe("connected");
@@ -142,7 +142,7 @@ describe("listTransportRosterEvents (P-14 U2.3) — payload-bearing transport re
     // so write a raw bad value to exercise the parse guard).
     db.query(
       `INSERT INTO observability_events (id, envelope_id, family, type, payload, timestamp)
-       VALUES (?, ?, 'transport', 'system.transport.roster_snapshot', '{not json', datetime('now'))`,
+       VALUES (?, ?, 'transport', 'system.transport.roster-snapshot', '{not json', datetime('now'))`,
     ).run(crypto.randomUUID(), "poison");
     const rows = listTransportRosterEvents(db, 10);
     expect(rows.length).toBe(1);
@@ -162,7 +162,7 @@ describe("observability origin badge (P-14 U3.3)", () => {
 
   it("defaults a row's origin to local when no origin is supplied (U2.1 contract)", () => {
     insertObservabilityEvent(db, {
-      envelopeId: "local-1", family: "transport", type: "system.transport.leaf_connect", payload: {},
+      envelopeId: "local-1", family: "transport", type: "system.transport.leaf-connect", payload: {},
     });
     expect(listObservabilityEvents(db, 10, "transport")[0]?.origin).toBe("local");
     expect(listTransportRosterEvents(db, 10)[0]?.origin).toBe("local");
@@ -172,7 +172,7 @@ describe("observability origin badge (P-14 U3.3)", () => {
     insertObservabilityEvent(db, {
       envelopeId: "fed-1",
       family: "transport",
-      type: "system.transport.liveness_drift",
+      type: "system.transport.liveness-drift",
       payload: { action: "liveness_drift", network: "net", attributes: { peer: "joel/research", to: "connected" } },
       origin: { kind: "foreign", peer: "joel/research" },
     });
@@ -187,18 +187,18 @@ describe("observability origin badge (P-14 U3.3)", () => {
     // origin_peer; an inconsistent row must not surface an un-attributed foreign.
     db.query(
       `INSERT INTO observability_events (id, envelope_id, family, type, payload, origin_kind, origin_peer, timestamp)
-       VALUES (?, ?, 'transport', 'system.transport.leaf_connect', '{}', 'foreign', NULL, datetime('now'))`,
+       VALUES (?, ?, 'transport', 'system.transport.leaf-connect', '{}', 'foreign', NULL, datetime('now'))`,
     ).run(crypto.randomUUID(), "broken-foreign");
     expect(listObservabilityEvents(db, 10, "transport")[0]?.origin).toBe("local");
   });
 
   it("local and foreign rows coexist, each carrying its own badge", () => {
     insertObservabilityEvent(db, {
-      envelopeId: "loc", family: "transport", type: "system.transport.leaf_connect",
+      envelopeId: "loc", family: "transport", type: "system.transport.leaf-connect",
       payload: {}, origin: "local", timestamp: "2026-06-01T00:00:00.000Z",
     });
     insertObservabilityEvent(db, {
-      envelopeId: "fed", family: "transport", type: "system.transport.leaf_connect",
+      envelopeId: "fed", family: "transport", type: "system.transport.leaf-connect",
       payload: {}, origin: { kind: "foreign", peer: "joel/research" }, timestamp: "2026-06-02T00:00:00.000Z",
     });
     const rows = listTransportRosterEvents(db, 10);

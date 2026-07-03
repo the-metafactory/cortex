@@ -18,10 +18,10 @@
  *
  *   | signal envelope `type`                | overlay verdict it asserts                |
  *   |---------------------------------------|-------------------------------------------|
- *   | `system.transport.liveness_drift`     | `payload.attributes.to` (the drift target)|
- *   | `system.transport.leaf_connect`       | `connected` (a leaf appeared)             |
- *   | `system.transport.leaf_disconnect`    | `registered-absent` (a leaf vanished)     |
- *   | `system.transport.roster_snapshot`    | each `leaves[]` entry → `connected`        |
+ *   | `system.transport.liveness-drift`     | `payload.attributes.to` (the drift target)|
+ *   | `system.transport.leaf-connect`       | `connected` (a leaf appeared)             |
+ *   | `system.transport.leaf-disconnect`    | `registered-absent` (a leaf vanished)     |
+ *   | `system.transport.roster-snapshot`    | each `leaves[]` entry → `connected`        |
  *
  * `liveness_drift` is authoritative for a peer (it's signal's reconciled verdict,
  * including the `unregistered-present` anomaly + `registered-absent` that the
@@ -160,7 +160,7 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
   const origin = row.origin;
 
   switch (row.type) {
-    case "system.transport.liveness_drift": {
+    case "system.transport.liveness-drift": {
       // Authoritative: signal's reconciled verdict. The peer + verdict ride
       // `attributes` (reconciler: { peer, principal, stack, from, to }).
       const attrs = asRecord(payload.attributes);
@@ -198,14 +198,14 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
         },
       ];
     }
-    case "system.transport.leaf_connect":
-    case "system.transport.leaf_disconnect": {
+    case "system.transport.leaf-connect":
+    case "system.transport.leaf-disconnect": {
       const leaf = asRecord(payload.leaf);
       const principal = asString(leaf.principal);
       const stack = asString(leaf.stack);
       const key = peerKey(principal, stack);
       if (key === null || principal === null || stack === null) return [];
-      const connect = row.type === "system.transport.leaf_connect";
+      const connect = row.type === "system.transport.leaf-connect";
       const live = leafLiveness(leaf);
       return [
         {
@@ -223,7 +223,7 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
         },
       ];
     }
-    case "system.transport.roster_snapshot": {
+    case "system.transport.roster-snapshot": {
       const leaves = Array.isArray(payload.leaves) ? payload.leaves : [];
       const out: Candidate[] = [];
       for (const raw of leaves) {

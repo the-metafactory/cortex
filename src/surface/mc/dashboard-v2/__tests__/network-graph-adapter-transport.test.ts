@@ -56,7 +56,7 @@ function foreignTile(
 function driftRow(principal: string, stack: string, to: string): TransportRosterEventRow {
   return {
     id: crypto.randomUUID(),
-    type: "system.transport.liveness_drift",
+    type: "system.transport.liveness-drift",
     stackId: "net",
     timestamp: "2026-06-12T00:00:00.000Z",
     payload: {
@@ -73,7 +73,7 @@ function driftRow(principal: string, stack: string, to: string): TransportRoster
 function connectRow(principal: string, stack: string, rtt: number): TransportRosterEventRow {
   return {
     id: crypto.randomUUID(),
-    type: "system.transport.leaf_connect",
+    type: "system.transport.leaf-connect",
     stackId: "net",
     timestamp: "2026-06-12T00:00:00.000Z",
     payload: {

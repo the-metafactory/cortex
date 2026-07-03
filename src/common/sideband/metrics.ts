@@ -12,11 +12,13 @@
  *   - `SearchResponse`              → {@link SearchResponse}
  *   - `SidebandLogRecord`           → {@link SidebandLogRecord}
  *
- * Signal's `cortex-sideband.md` is a P-9-era doc that predates the v2 reads
- * (U4.1 added `/metrics/summary` + `/search` to the SERVER under signal#127/#147
- * but the markdown spec wasn't refreshed); the contract source-of-truth for
- * these two endpoints is signal's `types.ts` + `server.ts`, which this module
- * mirrors. The `SidebandError` envelope is shared verbatim with the P-9 reads
+ * Signal's `docs/contract/cortex-sideband.md` documents both v2 reads since
+ * signal#152 (merged 2026-06-16): §2.5 `GET /metrics/summary` and §2.6
+ * `GET /search`. That doc + signal's `src/lib/sideband/types.ts` are the
+ * contract source-of-truth for these two endpoints; this module mirrors the
+ * `types.ts` shapes (the type-pin source) and is enforced at compile time
+ * against captured signal fixtures. The `SidebandError` envelope is shared
+ * verbatim with the P-9 reads
  * (see `proxy.ts`), so a v2 failure renders through the SAME honest
  * "interior capture not available" + `deep_link` affordance.
  *

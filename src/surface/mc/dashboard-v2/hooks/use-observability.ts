@@ -13,7 +13,7 @@
  * boot fetch retries on the next open rather than wedging the tab.
  *
  * Live-oracle path: stopping the relay / a leaf publishes
- * `system.signal.collector.degraded` / `system.transport.leaf_disconnect`, the
+ * `system.signal.collector.degraded` / `system.transport.leaf-disconnect`, the
  * renderer projects them (+ opens an `att:adapter:` attention item) and broadcasts
  * the `observability` family — which lands here within one poll's debounce.
  */

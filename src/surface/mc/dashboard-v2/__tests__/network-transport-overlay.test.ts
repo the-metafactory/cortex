@@ -47,7 +47,7 @@ function drift(
   over: Partial<TransportRosterEventRow> = {},
 ): TransportRosterEventRow {
   return row({
-    type: "system.transport.liveness_drift",
+    type: "system.transport.liveness-drift",
     payload: {
       action: "liveness_drift",
       network: NET,
@@ -66,7 +66,7 @@ function leafConnect(
   over: Partial<TransportRosterEventRow> = {},
 ): TransportRosterEventRow {
   return row({
-    type: "system.transport.leaf_connect",
+    type: "system.transport.leaf-connect",
     payload: {
       action: "leaf_connect",
       network: NET,
@@ -83,7 +83,7 @@ function leafDisconnect(
   over: Partial<TransportRosterEventRow> = {},
 ): TransportRosterEventRow {
   return row({
-    type: "system.transport.leaf_disconnect",
+    type: "system.transport.leaf-disconnect",
     payload: {
       action: "leaf_disconnect",
       network: NET,
@@ -180,7 +180,7 @@ describe("buildTransportOverlay — fold (U2.3)", () => {
     const o = buildTransportOverlay([
       drift("jc", "default", "registered-absent", { timestamp: "2026-06-12T00:00:03.000Z" }),
       row({
-        type: "system.transport.roster_snapshot",
+        type: "system.transport.roster-snapshot",
         timestamp: "2026-06-12T00:00:02.000Z",
         payload: { action: "roster_snapshot", network: NET, leaves: [] },
       }),
@@ -226,7 +226,7 @@ describe("buildTransportOverlay — fold (U2.3)", () => {
   it("folds a roster_snapshot's leaves into connected verdicts with RTT", () => {
     const o = buildTransportOverlay([
       row({
-        type: "system.transport.roster_snapshot",
+        type: "system.transport.roster-snapshot",
         payload: {
           action: "roster_snapshot",
           network: NET,
@@ -246,7 +246,7 @@ describe("buildTransportOverlay — fold (U2.3)", () => {
   it("a leaf_disconnect seeds registered-absent (a leaf vanished)", () => {
     const o = buildTransportOverlay([
       row({
-        type: "system.transport.leaf_disconnect",
+        type: "system.transport.leaf-disconnect",
         payload: {
           action: "leaf_disconnect",
           network: NET,
@@ -261,8 +261,8 @@ describe("buildTransportOverlay — fold (U2.3)", () => {
 
   it("skips unreadable rows (poison payload / unknown type) without throwing", () => {
     const o = buildTransportOverlay([
-      row({ type: "system.transport.liveness_drift", payload: {} }), // no attributes
-      row({ type: "system.transport.something_else", payload: { foo: 1 } }),
+      row({ type: "system.transport.liveness-drift", payload: {} }), // no attributes
+      row({ type: "system.transport.something-else", payload: { foo: 1 } }),
       drift("jc", "default", "connected"),
     ]);
     expect(o.byKey.size).toBe(1);
