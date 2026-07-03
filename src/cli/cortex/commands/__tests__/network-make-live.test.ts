@@ -55,6 +55,15 @@ function makeInputs(state: MakeLiveState, over?: Partial<MakeLiveInputs>): MakeL
 /** Spy ports recording every effectful call in order. */
 function makePorts(over?: {
   resolverHas?: boolean;
+  /**
+   * cortex#1480 (join-1, epic #1479) — a per-pubkey override for
+   * `hasAccount`, so a test can distinguish "AGENTS already preloaded" from
+   * "FED already preloaded" (the fake otherwise answers the SAME `resolverHas`
+   * boolean regardless of which pubkey was queried). Undefined ⇒ falls back
+   * to the legacy `resolverHas`-for-everything behaviour every existing test
+   * above depends on.
+   */
+  hasAccountFor?: (accountPubkey: string) => boolean;
   /** M3 — resolver_preload block present (operator-mode bus). Default true. */
   hasResolverPreload?: boolean;
   /** Whether the append actually mutates (changed). Default true. */
@@ -114,7 +123,10 @@ function makePorts(over?: {
       },
     },
     resolver: {
-      hasAccount: () => over?.resolverHas ?? false,
+      hasAccount: (_natsConfigPath, accountPubkey) =>
+        over?.hasAccountFor !== undefined
+          ? over.hasAccountFor(accountPubkey)
+          : (over?.resolverHas ?? false),
       hasResolverPreload: () => over?.hasResolverPreload ?? true,
       appendAccount: ({ accountPubkey }) => {
         calls.push(`resolver-append:${accountPubkey}`);
@@ -350,6 +362,70 @@ describe("makeLiveStack — apply", () => {
     expect(res.reason).toContain("no operator-mode JWTs");
     expect(res.reason).toContain("provision");
     expect(calls).toEqual([]);
+  });
+
+  // cortex#1480 (join-1, epic #1479) — bootstrap must ALSO fire when
+  // resolver_preload already EXISTS but is missing the FED (or SYS) account
+  // the package carries, not only when the block is wholly absent. This is
+  // the real "does not define account <FED>" gap: a bus bootstrapped before
+  // FED existed (or hand-converted carrying only AGENTS) kept
+  // `hasResolverPreload` true forever, so the OLD `!hasResolverPreload`-only
+  // gate never revisited it and FED was never preloaded. ─────────────────────
+  test("cortex#1480: resolver_preload EXISTS (AGENTS only) but package's FED account is missing → bootstrap STILL fires", async () => {
+    const { ports, calls } = makePorts({
+      hasResolverPreload: true, // the block already exists (e.g. AGENTS-only, from a prior make-live)
+      hasAccountFor: (pubkey) => pubkey === AGENTS_PUB, // FED (FAKE_PKG.account) is NOT yet present
+    });
+    const res = await makeLiveStack(
+      makeInputs({ credsFileExists: true, resolverHasAccount: true }, { operatorModePackage: FAKE_PKG }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    expect(res.applied).toBe(true);
+    // The bootstrap/ensure step fires DESPITE hasResolverPreload:true, because
+    // the package's FED account was not yet present.
+    expect(calls[0]).toBe("bootstrap:~/.config/nats/local.conf");
+    expect(res.steps.join("\n")).toContain("operator-mode bootstrap");
+  });
+
+  test("cortex#1480: resolver_preload EXISTS and already carries FED + AGENTS (+ no SYS in package) → bootstrap is a no-op", async () => {
+    const { ports, calls } = makePorts({
+      hasResolverPreload: true,
+      hasAccountFor: () => true, // both FED and AGENTS already present
+    });
+    const res = await makeLiveStack(
+      makeInputs({ credsFileExists: true, resolverHasAccount: true }, { operatorModePackage: FAKE_PKG }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    // Fully converged: no bootstrap call, no append, no restart, nothing minted.
+    expect(calls).toEqual([]);
+    expect(res.steps.join("\n")).not.toContain("operator-mode bootstrap");
+  });
+
+  test("cortex#1480: resolver_preload EXISTS with FED present but the package's SYS account is missing → bootstrap STILL fires", async () => {
+    const PKG_WITH_SYS = { ...FAKE_PKG, systemAccount: "A" + "Y".repeat(55), systemAccountJwt: "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJTWVMifQ.sig" };
+    const { ports, calls } = makePorts({
+      hasResolverPreload: true,
+      hasAccountFor: (pubkey) => pubkey === FAKE_PKG.account || pubkey === AGENTS_PUB, // SYS absent
+    });
+    const res = await makeLiveStack(
+      makeInputs({ credsFileExists: true, resolverHasAccount: true }, { operatorModePackage: PKG_WITH_SYS }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls[0]).toBe("bootstrap:~/.config/nats/local.conf");
+  });
+
+  test("cortex#1480: no operatorModePackage + resolver_preload already exists → unaffected (no bootstrap, matches pre-#1480 behaviour)", async () => {
+    const { ports, calls } = makePorts({ hasResolverPreload: true, resolverHas: true });
+    const res = await makeLiveStack(
+      makeInputs({ credsFileExists: true, resolverHasAccount: true }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls).toEqual([]);
+    expect(res.steps.join("\n")).not.toContain("operator-mode bootstrap");
   });
 
   // BLOCK 3 — pubkey drift cross-check ─────────────────────────────────────────

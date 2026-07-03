@@ -128,12 +128,22 @@ export interface ResolverPreloadPort {
    * has NO `resolver_preload` yet (the local-only path: a never-federates stack
    * never runs `join`, so nothing else renders the operator-mode blocks). Renders
    * `operator:` + optional `system_account:` + `resolver: MEMORY` +
-   * `resolver_preload { <federation account> }` via `renderOperatorModeBlocks`,
-   * KEEPING the bus's own `server_name`/`listen`/`http`/`jetstream.domain`, and
-   * backing up the config first. Idempotent: `changed:false` when the bus is
-   * already operator-mode under the SAME operator. Refuses (ok:false) on a
-   * malformed package OR a bus already operator-mode under a DIFFERENT operator
-   * (never clobber). The subsequent `appendAccount` then adds the agents account.
+   * `resolver_preload { <federation account> [, <system account>] }` via
+   * `renderOperatorModeBlocks`, KEEPING the bus's own
+   * `server_name`/`listen`/`http`/`jetstream.domain`, and backing up the config
+   * first. The subsequent `appendAccount` then adds the agents account.
+   *
+   * cortex#1480 (join-1, epic #1479) — the orchestrator ALSO calls this when
+   * resolver_preload already EXISTS but is missing the federation (and/or
+   * system) account the package carries — the exact "does not define account
+   * <FED>" gap a bus bootstrapped before FED existed (or hand-converted
+   * carrying only the agents account) fell into forever under the old
+   * block-presence-only gate. `renderOperatorModeBlocks` handles both shapes:
+   * idempotent `changed:false` when the bus is ALREADY operator-mode under the
+   * SAME operator with every package account already preloaded; ENSURES any
+   * missing package account into the existing block (`changed:true`) when some
+   * are absent; refuses (ok:false) on a malformed package OR a bus already
+   * operator-mode under a DIFFERENT operator (never clobber).
    *
    * cortex#1265 (PR8) — when the target config does NOT exist yet (a truly
    * from-scratch stack), `baseIdentity` (when supplied) lets the adapter SYNTHESISE
@@ -447,7 +457,27 @@ export async function makeLiveStack(
   //   - operator-mode JWTs in config (provision populated them) ⇒ BOOTSTRAP an
   //     initial operator-mode skeleton (cortex#1265 local-only path).
   //   - no JWTs ⇒ the #794 refusal stands — nothing to render with.
-  const bootstrapNeeded = !ports.resolver.hasResolverPreload(inputs.natsConfigPath);
+  //
+  // cortex#1480 (join-1, epic #1479) — bootstrap must ALSO fire when
+  // resolver_preload already EXISTS but is missing an account THIS package
+  // carries (FED and/or SYS), not only when the block is wholly absent. A bus
+  // bootstrapped before its FED account existed (or hand-converted carrying
+  // only the AGENTS account) keeps `hasResolverPreload` true forever, so the
+  // old `!hasResolverPreload`-only gate never revisited it and FED was never
+  // preloaded — the "does not define account <FED>" fail-closed that blocked
+  // the metafactory-community bring-up. `hasAccount` is the SAME generic
+  // per-pubkey presence probe the always-run AGENTS append (step 1 below)
+  // already uses; reusing it here keeps the two checks from drifting.
+  const resolverBlockPresent = ports.resolver.hasResolverPreload(inputs.natsConfigPath);
+  const opPkg = inputs.operatorModePackage;
+  const fedAlreadyPreloaded =
+    opPkg === undefined || ports.resolver.hasAccount(inputs.natsConfigPath, opPkg.account);
+  const sysAlreadyPreloaded =
+    opPkg?.systemAccount === undefined ||
+    opPkg.systemAccount.length === 0 ||
+    ports.resolver.hasAccount(inputs.natsConfigPath, opPkg.systemAccount);
+  const bootstrapNeeded =
+    !resolverBlockPresent || (opPkg !== undefined && (!fedAlreadyPreloaded || !sysAlreadyPreloaded));
   if (bootstrapNeeded && inputs.operatorModePackage === undefined) {
     return {
       ok: false,
@@ -470,7 +500,9 @@ export async function makeLiveStack(
         {
           step: "operator-mode bootstrap",
           status: "wire",
-          detail: `render operator + resolver_preload (federation account) → ${inputs.natsConfigPath}`,
+          detail:
+            `ensure operator + resolver_preload carries the federation account (+ system, if any) → ` +
+            inputs.natsConfigPath,
         },
         ...corePlan,
       ]
@@ -564,8 +596,8 @@ export async function makeLiveStack(
     resolverChanged = boot.changed;
     steps.push(
       boot.changed
-        ? `operator-mode bootstrap: rendered operator + resolver_preload (federation account) into ${inputs.natsConfigPath}`
-        : `operator-mode bootstrap: bus already operator-mode (no-op)`,
+        ? `operator-mode bootstrap: ensured operator + resolver_preload carries the federation/system account(s) in ${inputs.natsConfigPath}`
+        : `operator-mode bootstrap: bus already operator-mode with all required accounts (no-op)`,
     );
   }
 

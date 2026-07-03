@@ -53,6 +53,7 @@ export const DEFAULT_LEAFZ_TIMEOUT_MS = DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
  *
  * The brace-matched scan mirrors `insertIntoResolverPreload` (this same
  * codebase's existing resolver_preload-block locator, in
+ * `common/nats/leaf-remote-renderer.ts` as of cortex#1480 — previously
  * `network-make-live-adapters.ts`) — same block-opening regex, same
  * depth-counted brace walk — but EXTRACTS the block instead of inserting
  * into it.

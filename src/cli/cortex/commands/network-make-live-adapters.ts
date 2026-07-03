@@ -22,7 +22,14 @@ import {
   renderBaseIsolatedConfig,
   natsConfigMonitorUrl,
   natsConfigClientListen,
+  insertIntoResolverPreload,
 } from "../../../common/nats/leaf-remote-renderer";
+
+// cortex#1480 — `insertIntoResolverPreload` now lives in leaf-remote-renderer.ts
+// (the PURE module) so `renderOperatorModeBlocks` can reuse it too. Re-exported
+// here under its original name so existing importers of this adapters module
+// (e.g. network-make-live.test.ts) are unaffected.
+export { insertIntoResolverPreload };
 import { probeHealthzMonitor } from "../../../common/nats/healthz-probe";
 import {
   selectNatsServiceManager,
@@ -181,32 +188,6 @@ export function buildAccountExportAdapter(runner: ArcRunner = defaultArcRunner):
 // =============================================================================
 // resolver_preload adapter — append an account block to the nats config
 // =============================================================================
-
-/**
- * Insert `insertion` immediately before the closing brace of the
- * `resolver_preload { … }` block in `text`. Uses a brace-matched scan so a
- * nested object inside the block can't confuse the close detection. Returns the
- * new text, or null when no resolver_preload block is found.
- */
-export function insertIntoResolverPreload(text: string, insertion: string): string | null {
-  const key = /resolver_preload\s*[:=]?\s*\{/.exec(text);
-  if (key === null) return null;
-  const open = key.index + key[0].length - 1; // index of the `{`
-  let depth = 0;
-  for (let i = open; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        // Insert before this closing brace (which sits at column 0 of its line).
-        const lineStart = text.lastIndexOf("\n", i) + 1;
-        return text.slice(0, lineStart) + insertion + text.slice(lineStart);
-      }
-    }
-  }
-  return null; // unbalanced braces — refuse to edit
-}
 
 /** Live {@link ResolverPreloadPort}. Edits the nats config on disk in place. */
 export function buildResolverPreloadAdapter(): ResolverPreloadPort {

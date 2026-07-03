@@ -21,6 +21,7 @@ import { describe, expect, test } from "bun:test";
 import type { NetworkDescriptor } from "../../registry/types";
 import {
   natsConfigHasAccountTree,
+  natsConfigCanBindAccount,
   natsConfigMonitorUrl,
   natsConfigClientListen,
   leafIncludeFileName,
@@ -33,6 +34,7 @@ import {
   parseLoopbackListen,
   type LeafRemote,
   type StackLeafBinding,
+  type OperatorModeLeafPackage,
 } from "../leaf-remote-renderer";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -136,6 +138,86 @@ describe("renderLeafRemote", () => {
     expect(() => renderLeafRemote(DESCRIPTOR, wrongPrefix)).toThrow();
     expect(() => renderLeafRemote(DESCRIPTOR, tooShort)).toThrow();
     expect(() => renderLeafRemote(DESCRIPTOR, breakout)).toThrow();
+  });
+});
+
+// =============================================================================
+// cortex#1480 (join-1, epic #1479) — the leaf binds the FED account, and the
+// FED account is genuinely present (bindable) in the rendered
+// resolver_preload. This is the end-to-end pure composition of the two
+// renderers `cortex network join` runs back to back: convert the bus
+// (renderOperatorModeBlocks), then render the leaf against it
+// (renderLeafRemote) — the exact invariant whose violation is the real
+// "does not define account <FED>" fail-closed.
+// =============================================================================
+
+describe("cortex#1480 — the leaf binds FED, and FED is present in the rendered resolver_preload", () => {
+  const OPERATOR_JWT =
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_OPERATOR_JWT_BODY.sig";
+  const FED_ACCOUNT = "A" + "F".repeat(55);
+  const FED_ACCOUNT_JWT =
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_FED_JWT_BODY.sig";
+  const AGENTS_ACCOUNT = "A" + "G".repeat(55);
+  const AGENTS_ACCOUNT_JWT =
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_AGENTS_JWT_BODY.sig";
+  const SYS_ACCOUNT = "A" + "S".repeat(55);
+  const SYS_ACCOUNT_JWT =
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_SYS_JWT_BODY.sig";
+
+  const ANON_CONF = [
+    "server_name: community-andreas",
+    "listen: 127.0.0.1:4224",
+    "jetstream { store_dir: /Users/andreas/.config/nats/community-jetstream }",
+    "",
+  ].join("\n");
+
+  const PKG: OperatorModeLeafPackage = {
+    operatorJwt: OPERATOR_JWT,
+    account: FED_ACCOUNT,
+    accountJwt: FED_ACCOUNT_JWT,
+    agentsAccount: AGENTS_ACCOUNT,
+    agentsAccountJwt: AGENTS_ACCOUNT_JWT,
+    systemAccount: SYS_ACCOUNT,
+    systemAccountJwt: SYS_ACCOUNT_JWT,
+  };
+
+  test("the converted config's resolver_preload carries FED, AGENTS, and SYS — the leaf's bind target is present", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, PKG);
+    expect(result.status).toBe("converted");
+    if (result.status !== "converted") throw new Error("expected converted");
+
+    // ACCEPTANCE KEYSTONE — the FED account the leaf will bind is genuinely
+    // resolvable against the converted config (not merely text-present).
+    expect(natsConfigCanBindAccount(result.conf, FED_ACCOUNT).canBind).toBe(true);
+    expect(natsConfigCanBindAccount(result.conf, AGENTS_ACCOUNT).canBind).toBe(true);
+    expect(natsConfigCanBindAccount(result.conf, SYS_ACCOUNT).canBind).toBe(true);
+
+    // The leaf remote binds the FED account key — never AGENTS, never SYS.
+    const binding: StackLeafBinding = {
+      credentials: "/Users/andreas/.config/nats/andreas.creds",
+      account: FED_ACCOUNT,
+    };
+    const remote = renderLeafRemote(DESCRIPTOR, binding);
+    expect(remote.account).toBe(FED_ACCOUNT);
+    expect(remote.account).not.toBe(AGENTS_ACCOUNT);
+    expect(remote.account).not.toBe(SYS_ACCOUNT);
+
+    // And #799's own pre-flight bind-mode resolver agrees the converted
+    // config can bind THIS leaf's account (the check `cortex network join`
+    // runs immediately before rendering the leaf).
+    const bindMode = resolveLeafBindMode(result.conf, FED_ACCOUNT, true);
+    expect(bindMode.mode).toBe("operator-account");
+  });
+
+  test("re-resolving the leaf remote's include file renders `account: <FED pubkey>`, matching resolver_preload's key", () => {
+    const converted = renderOperatorModeBlocks(ANON_CONF, PKG);
+    if (converted.status !== "converted") throw new Error("expected converted");
+    const includeFile = renderLeafIncludeFile(DESCRIPTOR, {
+      credentials: "/Users/andreas/.config/nats/andreas.creds",
+      account: FED_ACCOUNT,
+    });
+    expect(includeFile).toContain(`account: ${FED_ACCOUNT}`);
+    expect(natsConfigCanBindAccount(converted.conf, FED_ACCOUNT).canBind).toBe(true);
   });
 });
 
