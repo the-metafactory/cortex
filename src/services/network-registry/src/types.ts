@@ -51,6 +51,23 @@ export interface StackIdentity {
    * `tier`, etc. — but those are advisory, not enforced here.
    */
   metadata?: Record<string, string>;
+  /**
+   * C-1351 Slice 2 (#1351) — decommission TOMBSTONE. ISO-8601 UTC timestamp
+   * stamped by `POST /principals/:id/stacks/retire` when this stack is retired.
+   *
+   * A retired stack is a DIRECTORY tombstone: the entry STAYS in the record
+   * (history is preserved and `GET /principals/:id` still returns it), but every
+   * consumer that treats `stacks[]` as the LIVE set MUST filter
+   * `retired_at === undefined`. In particular a retired stack's `stack_pubkey`
+   * is no longer served as an active verification key (`resolve-pubkey.ts`
+   * falls back to the root, so an envelope from the retired stack fails to
+   * verify). `undefined`/absent means the stack is live.
+   *
+   * No migration: stacks live inside the `principals.stacks` JSON column, so a
+   * new optional field is a pure additive shape change — a pre-1351 record
+   * simply carries no `retired_at` on any entry (⇒ all live).
+   */
+  retired_at?: string;
 }
 
 /**
@@ -594,6 +611,55 @@ export interface AdmissionDepartClaim {
 /** On-wire envelope for a member self-depart. */
 export interface SignedAdmissionDepart {
   claim: AdmissionDepartClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+/**
+ * C-1351 Slice 2 (#1351) — the ROOT-KEY-signed claim carried by
+ * `POST /principals/:principal_id/stacks/retire`.
+ *
+ * The DIRECTORY-level decommission tombstone: it retires a stack from a
+ * principal's `stacks[]` (excluding it from active resolution while preserving
+ * history). Deliberately a DEDICATED route, NOT a register-overwrite — the
+ * register route has a load-bearing side effect (it upserts a PENDING admission
+ * row), and a deregistration must never touch admission state.
+ *
+ * Authority = the PRINCIPAL ROOT KEY, exactly like the add-stack path (#791):
+ * the route resolves the verification key SERVER-SIDE from the STORED record's
+ * `principal_pubkey` (never a pubkey in the claim) and verifies the signature
+ * over `canonicalJSON(claim)` against it. A claim signed by a mere stack key —
+ * even the retiring stack's own key — fails (401). This is the same root-only
+ * authorization model the registry uses for adding a stack: only the holder of
+ * the principal root seed can mutate the stack roster.
+ *
+ * The claim carries NO pubkey — the server resolves it from the record — so a
+ * MITM cannot substitute a key it controls (there is nothing on the wire to
+ * substitute; tampering any field breaks the signature over the root key).
+ */
+export interface StackRetireClaim {
+  /** Must equal the URL path parameter. Echoed for canonicalisation. */
+  principal_id: string;
+  /** `{principal_id}/{stack_slug}` — the stack to retire. 404 if not present. */
+  stack_id: string;
+  /**
+   * #825 CAS token — the `updated_at` of the record this claim was computed
+   * from (the client's verified pinned read). The route compare-and-sets on it:
+   * a mismatch means the record changed since the read → 409 `stale_record`.
+   * REQUIRED (every stored principal carries an `updated_at`, and the CLI reads
+   * it via a pinned verified fetch before signing). Part of the SIGNED canonical
+   * claim — a MITM cannot strip or forge it.
+   */
+  expected_updated_at: string;
+  /** ISO-8601 UTC timestamp at which the principal root signed this claim. */
+  issued_at: string;
+  /** Random nonce to prevent replay (state-transitioning write). */
+  nonce: string;
+}
+
+/** On-wire envelope for a stack retire. */
+export interface SignedStackRetire {
+  claim: StackRetireClaim;
   /** Base64 Ed25519 signature over canonical-JSON(claim). */
   signature: string;
 }

@@ -28,6 +28,8 @@ import {
   isValidPrincipalId,
   validateRegistrationClaim,
   validateSignedRegistration,
+  validateSignedStackRetire,
+  validateStackRetireClaim,
 } from "../validate";
 
 /** Maximum clock skew accepted between principal's `issued_at` and registry now. */
@@ -342,6 +344,194 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
       },
       201,
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // POST /principals/:principal_id/stacks/retire — C-1351 Slice 2 (#1351)
+  //
+  // ROOT-KEY-signed DIRECTORY deregistration: tombstone a stack in the
+  // principal's `stacks[]` (stamp `retired_at`, exclude from active resolution,
+  // preserve history). A DEDICATED route, NOT a register-overwrite — the
+  // register route upserts a PENDING admission row as a side effect, and a
+  // deregistration must never touch admission state.
+  //
+  // Authority = the PRINCIPAL ROOT KEY. The verification key is resolved
+  // SERVER-SIDE from the STORED record's `principal_pubkey` (the claim carries
+  // no pubkey to trust); a claim signed by a mere stack key — even the retiring
+  // stack's own — fails 401. Same root-only model as the add-stack path (#791).
+  //
+  // Gate order (fail-closed, mirrors register + depart):
+  //   503 unconfigured (mutation surface returns a signed receipt) → 400 path
+  //   grammar → 429 rate-limit → 400 body/envelope/claim → 400 clock-skew →
+  //   404 principal_not_found (needed for the verify key) → 401 sig-over-wire
+  //   (guarded canonicaliser throw → 401, never 500) → 409 nonce replay
+  //   (#695: only after the authentic path) → 404 stack_not_found →
+  //   200 idempotent (already retired) → 409 ADMITTED-gate (live membership) →
+  //   409 stale_record (CAS) → 200 retired.
+  // ---------------------------------------------------------------------------
+
+  app.post("/principals/:principal_id/stacks/retire", async (c) => {
+    // Mutation surface: refuse if we cannot produce a signed receipt (mirrors
+    // register — the response is a SignedAssertion of the updated record).
+    if (!c.env.REGISTRY_SIGNING_KEY || !getRegistryPublicKey(c.env)) {
+      return c.json(
+        {
+          error: "registry_unconfigured",
+          details:
+            "REGISTRY_SIGNING_KEY not provisioned; cannot accept a retire without producing a signed receipt",
+        },
+        503,
+      );
+    }
+
+    const principalId = c.req.param("principal_id");
+    if (!isValidPrincipalId(principalId)) {
+      return c.json({ error: "invalid principal_id in path" }, 400);
+    }
+
+    // Rate-limit BEFORE the expensive Ed25519 verify (register/write bucket).
+    const allowed = await checkRateLimit(c.env, "register", clientKey(c.req.raw, principalId));
+    if (!allowed) {
+      return c.json(TOO_MANY_REQUESTS_BODY, 429, {
+        "Retry-After": String(retryAfterSeconds("register")),
+      });
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (_err) {
+      return c.json({ error: "body must be valid JSON" }, 400);
+    }
+
+    const envelopeCheck = validateSignedStackRetire(body);
+    if (!envelopeCheck.ok) {
+      return c.json({ error: "validation_failed", details: envelopeCheck.errors }, 400);
+    }
+    const { signed } = envelopeCheck;
+
+    const claimCheck = validateStackRetireClaim(signed.claim, principalId);
+    if (!claimCheck.ok) {
+      return c.json({ error: "validation_failed", details: claimCheck.errors }, 400);
+    }
+    const { claim } = claimCheck;
+
+    // Clock-skew — bound a captured token's lifetime.
+    const issued = Date.parse(claim.issued_at);
+    const now = Date.now();
+    if (Math.abs(now - issued) > CLOCK_SKEW_MS) {
+      return c.json(
+        { error: "issued_at out of skew window", details: { skew_ms: now - issued, max_ms: CLOCK_SKEW_MS } },
+        400,
+      );
+    }
+
+    // Load the STORED record FIRST — it is the source of the verification key
+    // (root-key authz: verify against the record's `principal_pubkey`, never a
+    // pubkey on the wire). Absent ⇒ 404: there is no principal to retire a stack
+    // from, and no key to verify against.
+    const store = getStore(c.env);
+    const record = await store.getPrincipal(principalId);
+    if (!record) {
+      return c.json({ error: "not_found" }, 404);
+    }
+
+    // Signature verification FIRST (before recording the nonce, #695). Verify
+    // over the WIRE claim (canonicalJSON(signed.claim), the #1414 norm) against
+    // the STORED root pubkey. Fail closed (401) if the shared guarded
+    // canonicaliser throws on an over-deep/over-wide hostile body (#832/#1418) —
+    // it can never match a real signature anyway.
+    let message: Uint8Array<ArrayBuffer>;
+    try {
+      message = new TextEncoder().encode(canonicalJSON(signed.claim)) as Uint8Array<ArrayBuffer>;
+    } catch (_err) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+    const valid = await verifyEd25519(record.principal_pubkey, signed.signature, message);
+    if (!valid) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+
+    // Replay check — only on the authentic path (#695 posture).
+    const nonceCache = getNonceCache(c.env);
+    const fresh = await nonceCache.recordIfFresh(claim.nonce, now);
+    if (!fresh) {
+      return c.json({ error: "nonce_replayed" }, 409);
+    }
+
+    // Locate the stack. 404 if the principal has no such stack_id.
+    const idx = record.stacks.findIndex((s) => s.stack_id === claim.stack_id);
+    if (idx < 0) {
+      return c.json({ error: "stack_not_found", details: `principal ${principalId} has no stack ${claim.stack_id}` }, 404);
+    }
+    const target = record.stacks[idx]!;
+
+    // Idempotent: an already-retired stack returns 200 with the CURRENT record
+    // and does NOT bump `updated_at` (no CAS enforced — the desired end-state
+    // already holds).
+    if (target.retired_at !== undefined) {
+      const assertion = await signAssertion(c.env, record);
+      return c.json(assertion, 200);
+    }
+
+    // ADMITTED-gate — a stack with a LIVE (ADMITTED) network membership cannot be
+    // retired: revoke (admin) or depart (member) first. DEPARTED/REVOKED/
+    // REJECTED/PENDING rows do NOT block. Keyed off the retiring stack's OWN
+    // `stack_pubkey` (the `peer_pubkey` its admission rows carry). A stack that
+    // omitted its pubkey pre-C-787 inherited the root; fall back to the root
+    // pubkey so the gate still queries the correct admission key.
+    const stackPubkey = target.stack_pubkey ?? record.principal_pubkey;
+    const issuanceStore = getIssuanceStore(c.env);
+    const admissionRows = await issuanceStore.listIssuanceRequestsByPeer(stackPubkey);
+    const liveNetworks = admissionRows
+      .filter((r) => r.status === "ADMITTED")
+      .map((r) => r.network_id ?? "(network-less)");
+    if (liveNetworks.length > 0) {
+      const nets = liveNetworks.join(", ");
+      return c.json(
+        {
+          error: "stack_has_live_membership",
+          details:
+            `cannot retire: stack has live ADMITTED membership in ${nets} — ` +
+            `revoke (admin: secret revoke-member) or depart (member: network leave --apply) first`,
+          networks: liveNetworks,
+        },
+        409,
+      );
+    }
+
+    // Stamp the tombstone on the target entry, preserving every other entry
+    // verbatim, and CAS-write the full record (#825). A concurrent mutation
+    // since the client's read leaves `updated_at` mismatched → 409 stale_record.
+    const newStacks = record.stacks.map((s, i) =>
+      i === idx ? { ...s, retired_at: new Date().toISOString() } : s,
+    );
+    let updated: PrincipalRecord;
+    try {
+      updated = await store.putPrincipal(
+        principalId,
+        record.principal_pubkey,
+        newStacks,
+        record.capabilities,
+        claim.expected_updated_at,
+      );
+    } catch (err) {
+      if (err instanceof StaleRecordError) {
+        return c.json(
+          {
+            error: "stale_record",
+            details:
+              "the principal record changed since your read; re-read, re-sign, and retry",
+            current_updated_at: err.current?.updated_at ?? null,
+          },
+          409,
+        );
+      }
+      throw err;
+    }
+
+    const assertion = await signAssertion(c.env, updated);
+    return c.json(assertion, 200);
   });
 
   app.get("/principals/:principal_id", async (c) => {

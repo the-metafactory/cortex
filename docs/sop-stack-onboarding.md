@@ -360,3 +360,44 @@ Each peer principal (e.g. JC) does their own B0 (a leaf cert on the hub) + B3 on
 ### Confidentiality note
 
 Payload encryption **ships as of v5.27.0** ([ADR-0019](./adr/0019-federated-payload-encryption.md)): a network is a trust group, and all `federated.>` payloads (Direct/Delegate/Offer) are sealed with one per-network key `K`. It is **opt-in per network** — until you set `policy.federated.networks[].encryption: enabled` + `payload_key` (and the config file is `chmod 600`), payloads still cross `federated.` cleartext-over-TLS. For a public-facing community stack, **go private** (see [`sop-onboard-peer-principal.md` §Step 8 — Go private](./sop-onboard-peer-principal.md)) **and** keep the dispatch scope tight (principal-only, least-privilege allowlist from Part 1).
+
+## Part 3 — Decommission a stack (retire the death story)
+
+Standing a stack up has a birth story (`cortex stack create`); tearing one down has a **two-step death story**: LOCAL teardown, then REGISTRY deregistration. Do them in that order.
+
+### Step 1 — Local teardown (`cortex stack delete`, Slice 1 #1351)
+
+```bash
+# Dry-run first (DEFAULT — prints the full teardown plan, touches nothing):
+cortex stack delete <slug>
+
+# Execute (requires the literal slug after --confirm — never a glob):
+cortex stack delete <slug> --apply --confirm <slug>
+```
+
+`stack delete` refuses while the stack is still **joined to any network** (`policy.federated.networks[]` non-empty) — run `cortex network leave <net> --apply` first, so a live roster membership is never orphaned. On `--apply` it stops + unloads the daemon/nats units, removes the config-split dir + pointer + this stack's rendered nats conf, and **retires** the signing seed to `<seed>.retired-<timestamp>` (it is NOT deleted — key destruction is a separate conscious act; add `--purge-seeds` for the full wipe). Its completion output points you at Step 2.
+
+### Step 2 — Registry deregistration (`cortex provision-stack retire`, Slice 2 #1351)
+
+Local teardown removes the stack's *presence*; the registry still lists it in the principal's `stacks[]`. Retire it — a **tombstone** (the entry stays for history but is excluded from active resolution and its key stops verifying):
+
+```bash
+# Dry-run first (DEFAULT — prints the plan + surviving active stacks, touches nothing):
+cortex provision-stack retire <principal> --stack-id <principal>/<slug> \
+  --principal-seed ~/.config/nats/cortex.nk \
+  --registry-url <registry-url> --registry-pubkey <pinned-b64>
+
+# Execute:
+cortex provision-stack retire <principal> --stack-id <principal>/<slug> \
+  --principal-seed ~/.config/nats/cortex.nk \
+  --registry-url <registry-url> --registry-pubkey <pinned-b64> --apply
+```
+
+Rules (all fail-closed):
+
+- **Root-signed, not stack-signed.** The retire is authorized by the principal **root** seed (`--principal-seed`) — the same root-only authority adding a stack uses (#791). There is **no `--seed-path`**: the retiring stack's own key signs nothing. The registry verifies the claim against the **stored** record's `principal_pubkey`; a wrong seed is a 401.
+- **Pinned verified read.** `--registry-pubkey` is REQUIRED — the CAS-token read of the current record is signature-verified against it before the retire is signed (never retire off an unverifiable read).
+- **Live-membership refusal.** A stack with a live **ADMITTED** network membership is refused (`409`) — **revoke** it (admin: `cortex network secret revoke-member`) or **depart** it (member: `cortex network leave --apply`) first. `DEPARTED`/`REVOKED`/`REJECTED`/`PENDING` do not block.
+- **Idempotent + last-stack-safe.** Re-retiring an already-retired stack is a `200` no-op. Retiring the last stack is allowed — a dormant, all-retired principal is a valid state (the record is preserved; full record deletion stays a global-admin manual op).
+
+The stack stays on record as a tombstone: `GET /principals/:id` still returns it (with `retired_at`), but every consumer that treats `stacks[]` as the live set filters it out, and its `stack_pubkey` is no longer served as a verification key.

@@ -115,6 +115,8 @@ export interface RegistrationClaimShape {
     stack_pubkey?: string;
     display_name?: string;
     metadata?: Record<string, string>;
+    /** C-1351 — decommission tombstone (ISO-8601); preserved through the merge. */
+    retired_at?: string;
   }[];
   capabilities: { id: string; description?: string; networks?: string[] }[];
   /** #825 — optimistic-concurrency CAS token (record `updated_at` the merge read). */
@@ -416,7 +418,7 @@ export interface BuildRegistrationClaimOptions {
    * C-787 — a `stack_pubkey` may be set per stack. When omitted on the
    * add-stack path, the joining stack inherits `material.pubkeyB64`.
    */
-  readonly stacks: { stack_id: string; display_name?: string; stack_pubkey?: string }[];
+  readonly stacks: { stack_id: string; display_name?: string; stack_pubkey?: string; retired_at?: string }[];
   /** Capabilities to advertise (optional). */
   readonly capabilities?: { id: string; description?: string; networks?: string[] }[];
   /**
@@ -657,6 +659,105 @@ export async function postNetworkCreate(
 }
 
 // =============================================================================
+// C-1351 Slice 2 (#1351) — root-signed stack-retire (deregistration) claim
+// =============================================================================
+
+/**
+ * Mirror of the network-registry `StackRetireClaim` wire shape
+ * (`src/services/network-registry/src/types.ts`). Reproduced (not imported)
+ * because the registry is a separately-bundled CF Worker excluded from the root
+ * tsconfig. MUST stay field-compatible with the route validator — pinned by the
+ * round-trip test.
+ */
+export interface StackRetireClaimShape {
+  principal_id: string;
+  stack_id: string;
+  /** #825 CAS token — the record `updated_at` the client's verified read saw. */
+  expected_updated_at: string;
+  issued_at: string;
+  nonce: string;
+}
+
+/** A stack-retire claim + detached signature, ready to POST. */
+export interface SignedStackRetireBody {
+  readonly claim: StackRetireClaimShape;
+  /** Base64 ed25519 signature over `canonicalJSON(claim)`. */
+  readonly signature: string;
+}
+
+export interface BuildStackRetireClaimOptions {
+  readonly principalId: string;
+  /** `{principalId}/{slug}` — the stack to retire. */
+  readonly stackId: string;
+  /**
+   * The principal ROOT material (the FIRST stack's seed) — the authority the
+   * registry verifies against (the STORED record's `principal_pubkey`). Retire
+   * is root-only, exactly like add-stack (#791): a mere stack key signs nothing.
+   */
+  readonly rootMaterial: StackIdentityMaterial;
+  /** #825 CAS token from the client's verified pinned read of the record. */
+  readonly expectedUpdatedAt: string;
+  /** Override issued-at (tests / skew checks). Defaults to now. @internal */
+  readonly issuedAt?: string;
+  /** Override nonce (tests). Defaults to a fresh random hex. @internal */
+  readonly nonce?: string;
+}
+
+/**
+ * Build a signed stack-retire body (#1351) proving possession of the principal
+ * ROOT key. Reuses the EXACT key + signing path as {@link buildRegistrationClaim}
+ * — the root nkey seed signs `canonicalJSON(claim)`, so the registry's
+ * `verifyEd25519(<stored principal_pubkey>, …)` succeeds and a tampered/forged
+ * claim (or one signed by a stack key) is rejected. Does NOT POST — returns the
+ * body for the caller to send/print.
+ */
+export async function buildStackRetireClaim(
+  opts: BuildStackRetireClaimOptions,
+): Promise<SignedStackRetireBody> {
+  const claim: StackRetireClaimShape = {
+    principal_id: opts.principalId,
+    stack_id: opts.stackId,
+    expected_updated_at: opts.expectedUpdatedAt,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+    nonce: opts.nonce ?? randomNonce(),
+  };
+  // Re-derive the ROOT KeyPair from its in-memory seed and sign over the SAME
+  // canonical-JSON the registry route reconstructs and verifies.
+  const kp = fromSeed(new TextEncoder().encode(opts.rootMaterial.seed.trim()));
+  const message = new TextEncoder().encode(canonicalJSON(claim));
+  const signature = await signWithNKey(kp, message);
+  return { claim, signature };
+}
+
+export interface RetireStackOptions {
+  /** Registry base URL (no trailing slash needed). */
+  readonly registryUrl: string;
+  /** The principal id (becomes the `:principal_id` path segment). */
+  readonly principalId: string;
+  /** The signed body from {@link buildStackRetireClaim}. */
+  readonly body: SignedStackRetireBody;
+  /** Injected fetch (tests). Defaults to global fetch. @internal */
+  readonly fetchImpl?: typeof globalThis.fetch;
+  /** Request timeout (ms). Default 10s. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * POST the signed retire to `POST /principals/{principalId}/stacks/retire`
+ * (#1351). Like {@link registerStackIdentity}, this is opt-in network I/O —
+ * never a side effect of building the claim. Returns the same
+ * `{ ok, status, response }` triple so a caller can surface the registry's error
+ * JSON verbatim (stale_record / stack_has_live_membership / signature_invalid).
+ */
+export async function retireStackIdentity(
+  opts: RetireStackOptions,
+): Promise<RegisterStackIdentityResult> {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const url = `${opts.registryUrl.replace(/\/+$/, "")}/principals/${encodeURIComponent(opts.principalId)}/stacks/retire`;
+  return postSigned(fetchImpl, url, opts.body, opts.timeoutMs);
+}
+
+// =============================================================================
 // C-787 — fetch existing stacks (read side of the add-stack fetch+merge)
 // =============================================================================
 
@@ -667,6 +768,11 @@ export interface StackEntryShape {
   readonly stack_pubkey?: string;
   readonly display_name?: string;
   readonly metadata?: Record<string, string>;
+  /**
+   * C-1351 — decommission tombstone (ISO-8601). Present on a RETIRED stack. The
+   * add-stack merge MUST preserve it (never drop or resurrect a retired stack).
+   */
+  readonly retired_at?: string;
 }
 
 /** One element of a principal's registered `capabilities[]`. */
@@ -855,6 +961,12 @@ export interface ClaimStack {
   stack_pubkey?: string;
   display_name?: string;
   metadata?: Record<string, string>;
+  /**
+   * C-1351 — decommission tombstone (ISO-8601). Carried through the add-stack
+   * merge so a re-register re-attests (and the full-overwrite route preserves) a
+   * retired stack instead of resurrecting it.
+   */
+  retired_at?: string;
 }
 
 export interface ResolveMergedStacksOptions {
@@ -940,16 +1052,22 @@ export async function resolveMergedStacks(
     return { ok: true, stacks: [newStack] };
   }
 
-  // present — merge: replace-by-stack_id if present, else append.
+  // present — merge: replace-by-stack_id if present, else append. C-1351 — carry
+  // each existing entry's `retired_at` through so a RETIRED stack SURVIVES the
+  // full-overwrite re-attestation (never dropped, never resurrected).
   const merged: ClaimStack[] = existing.stacks.map((s: StackEntryShape) => ({
     stack_id: s.stack_id,
     ...(s.stack_pubkey !== undefined && { stack_pubkey: s.stack_pubkey }),
     ...(s.display_name !== undefined && { display_name: s.display_name }),
     ...(s.metadata !== undefined && { metadata: s.metadata }),
+    ...(s.retired_at !== undefined && { retired_at: s.retired_at }),
   }));
   const idx = merged.findIndex((s) => s.stack_id === opts.stackId);
   if (idx >= 0) {
-    // Re-keying an existing stack: keep position, swap in the new pubkey.
+    // Re-keying an existing stack: keep position + preserve a retired tombstone,
+    // swap in the new pubkey. (Re-adding a retired stack_id keeps it retired —
+    // the register route does not resurrect it; a deliberate resurrection would
+    // be a separate, out-of-scope operation.)
     merged[idx] = { ...merged[idx], stack_id: opts.stackId, stack_pubkey: opts.stackPubkey };
   } else {
     merged.push(newStack);

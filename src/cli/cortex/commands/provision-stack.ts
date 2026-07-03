@@ -62,8 +62,12 @@ import {
   registerStackIdentity,
   resolveMergedStacks,
   resolveMergedCapabilities,
+  buildStackRetireClaim,
+  retireStackIdentity,
+  fetchExistingStacks,
   type StackIdentityMaterial,
   type SignedRegistrationBody,
+  type StackEntryShape,
 } from "../../../bus/stack-provisioning";
 
 import { CliArgsError } from "./_shared/arg-error";
@@ -77,7 +81,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type ProvisionSubcommand = "generate" | "claim" | "register";
+type ProvisionSubcommand = "generate" | "claim" | "register" | "retire";
 
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 const STACK_ID_RE = /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/;
@@ -103,6 +107,24 @@ const SPEC: SubcommandSpec<ProvisionSubcommand> = {
     claim: {
       positionals: ["principal-id"],
       flags: { "--seed-path": "value", "--stack-id": "value" },
+    },
+    retire: {
+      positionals: ["principal-id"],
+      flags: {
+        // The stack to retire ({principal}/{slug}). REQUIRED (no default — a
+        // destructive op must never glob or fall back to `/default`).
+        "--stack-id": "value",
+        "--registry-url": "value",
+        // #791 — the principal ROOT seed signs the retire claim (root-only
+        // authority, same as add-stack). NO --seed-path: the retiring stack's
+        // key signs nothing.
+        "--principal-seed": "value",
+        // #791 — pinned registry pubkey. REQUIRED: the CAS-token read of the
+        // current record is signature-verified against it (fail closed).
+        "--registry-pubkey": "value",
+        // Dry-run is the DEFAULT; --apply mutates the live registry.
+        "--apply": "bool",
+      },
     },
     register: {
       positionals: ["principal-id"],
@@ -824,6 +846,180 @@ function admissionFailedResult(
 }
 
 // =============================================================================
+// C-1351 Slice 2 (#1351) — retire (registry deregistration) handler
+// =============================================================================
+
+/** The retiring stack must be named explicitly — no `/default` fallback. */
+function requireExplicitStackId(
+  principalId: string,
+  stackIdFlag: string | true | string[] | undefined,
+): { ok: true; stackId: string } | { ok: false; reason: string } {
+  if (stackIdFlag === undefined) {
+    return { ok: false, reason: "--stack-id is required for retire (name the stack explicitly; no default)" };
+  }
+  return resolveStackId(principalId, stackIdFlag);
+}
+
+/**
+ * `cortex provision-stack retire <principal> --stack-id <p>/<slug>
+ *  --principal-seed <root> --registry-url <u> --registry-pubkey <pin> [--apply]`
+ *
+ * Root-signed DIRECTORY deregistration (tombstone). Same fail-closed machinery
+ * as add-stack (#791): a pinned, signature-VERIFIED fetch supplies the CAS token
+ * + confirms the stack, the ROOT seed signs the claim, and NO --seed-path is
+ * taken (the retiring stack's key signs nothing). Dry-run is the DEFAULT;
+ * --apply mutates the live registry.
+ */
+async function runRetire(ctx: HandlerCtx): Promise<ExitResult> {
+  const stackIdRes = requireExplicitStackId(ctx.principalId, ctx.flags["--stack-id"]);
+  if (!stackIdRes.ok) return usageError("retire", stackIdRes.reason, ctx.json);
+  const urlRes = requireValueFlag(ctx.flags, "--registry-url");
+  if (!urlRes.ok) return usageError("retire", urlRes.reason, ctx.json);
+  const pubkeyRes = requireValueFlag(ctx.flags, "--registry-pubkey");
+  if (!pubkeyRes.ok) {
+    return usageError(
+      "retire",
+      `${pubkeyRes.reason} (the CAS-token read is signature-verified against it — fail closed)`,
+      ctx.json,
+    );
+  }
+  const seedRes = requireValueFlag(ctx.flags, "--principal-seed");
+  if (!seedRes.ok) {
+    return usageError("retire", `${seedRes.reason} (the principal ROOT seed signs the retire — root-only authority)`, ctx.json);
+  }
+  const rootRes = await materialFromSeedFile(seedRes.value);
+  if (!rootRes.ok) return opError(`--principal-seed: ${rootRes.reason}`, ctx.json);
+
+  const apply = ctx.flags["--apply"] === true;
+  const stackId = stackIdRes.stackId;
+
+  // Pinned, signature-verified read of the current record — supplies the CAS
+  // token (updated_at) AND confirms the stack. Fail closed on any non-present
+  // outcome (never sign a retire off an unverifiable / absent read).
+  const existing = await fetchExistingStacks({
+    registryUrl: urlRes.value,
+    principalId: ctx.principalId,
+    registryPubkey: pubkeyRes.value,
+  });
+  if (existing.kind === "error") {
+    return opError(`could not read the principal record (verified fetch failed): ${existing.reason}`, ctx.json);
+  }
+  if (existing.kind === "absent") {
+    return opError(`principal ${ctx.principalId} is not registered — nothing to retire`, ctx.json);
+  }
+  if (existing.updated_at === undefined) {
+    return opError("registry record carried no updated_at — cannot compute the CAS token; aborting", ctx.json);
+  }
+  const target = existing.stacks.find((s: StackEntryShape) => s.stack_id === stackId);
+  if (target === undefined) {
+    return opError(
+      `principal ${ctx.principalId} has no stack "${stackId}" (registered: ${existing.stacks.map((s) => s.stack_id).join(", ") || "none"})`,
+      ctx.json,
+    );
+  }
+  const alreadyRetired = target.retired_at !== undefined;
+  // The active set AFTER this retire (exclude the target + any already-retired).
+  const survivingActive = existing.stacks
+    .filter((s) => s.stack_id !== stackId && s.retired_at === undefined)
+    .map((s) => s.stack_id);
+
+  if (!apply) {
+    const data: Record<string, string> = {
+      mode: "dry-run",
+      principal_id: ctx.principalId,
+      stack_id: stackId,
+      already_retired: String(alreadyRetired),
+      expected_updated_at: existing.updated_at,
+      surviving_active: survivingActive.join(",") || "(none — dormant principal)",
+    };
+    if (ctx.json) return ok(renderJson(envelopeOk([], data)));
+    const lines = [
+      `cortex provision-stack retire — DRY RUN (no changes; pass --apply to mutate)`,
+      `  principal:         ${ctx.principalId}`,
+      `  stack to retire:   ${stackId}${alreadyRetired ? "   (ALREADY retired — apply would be an idempotent no-op)" : ""}`,
+      `  registry:          ${urlRes.value}`,
+      `  CAS (updated_at):  ${existing.updated_at}`,
+      `  surviving active:  ${survivingActive.join(", ") || "(none — dormant principal, allowed)"}`,
+      ``,
+      `The stack stays on record as a tombstone (history preserved); it is excluded`,
+      `from active resolution and its key stops verifying. Re-run with --apply to execute.`,
+      ``,
+    ];
+    return ok(lines.join("\n"));
+  }
+
+  // --apply — build the root-signed claim and POST it.
+  let body;
+  try {
+    body = await buildStackRetireClaim({
+      principalId: ctx.principalId,
+      stackId,
+      rootMaterial: rootRes.material,
+      expectedUpdatedAt: existing.updated_at,
+    });
+  } catch (err) {
+    return opError(`failed to build retire claim: ${err instanceof Error ? err.message : String(err)}`, ctx.json);
+  }
+
+  let result: Awaited<ReturnType<typeof retireStackIdentity>>;
+  try {
+    result = await retireStackIdentity({ registryUrl: urlRes.value, principalId: ctx.principalId, body });
+  } catch (err) {
+    return opError(`retire POST failed: ${err instanceof Error ? err.message : String(err)}`, ctx.json);
+  }
+  if (!result.ok) {
+    const detail =
+      typeof result.response === "object" && result.response !== null
+        ? JSON.stringify(result.response)
+        : String(result.response);
+    return opError(`registry rejected retire (HTTP ${result.status.toString()}): ${detail}`, ctx.json);
+  }
+
+  // Success — read the retired_at the registry stamped + the surviving active set
+  // off the returned SignedAssertion<PrincipalRecord>.
+  const retiredAt = readRetiredAt(result.response, stackId);
+  const data: Record<string, string> = {
+    mode: "applied",
+    principal_id: ctx.principalId,
+    stack_id: stackId,
+    ...(retiredAt !== undefined && { retired_at: retiredAt }),
+    surviving_active: survivingActive.join(",") || "(none — dormant principal)",
+  };
+  if (ctx.json) return ok(renderJson(envelopeOk([], data)));
+  const lines = [
+    `cortex provision-stack retire — APPLIED (HTTP ${result.status.toString()})`,
+    `  principal:        ${ctx.principalId}`,
+    `  retired stack:    ${stackId}`,
+    ...(retiredAt !== undefined ? [`  retired_at:       ${retiredAt}`] : []),
+    `  surviving active: ${survivingActive.join(", ") || "(none — dormant principal)"}`,
+    ``,
+    `The stack is now a tombstone: excluded from active resolution, history preserved.`,
+    ``,
+  ];
+  return ok(lines.join("\n"));
+}
+
+/** Pull the retired_at the registry stamped for `stackId` out of the response. */
+function readRetiredAt(response: unknown, stackId: string): string | undefined {
+  if (typeof response !== "object" || response === null) return undefined;
+  const payload = (response as { payload?: unknown }).payload;
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const stacks = (payload as { stacks?: unknown }).stacks;
+  if (!Array.isArray(stacks)) return undefined;
+  for (const s of stacks) {
+    if (
+      typeof s === "object" &&
+      s !== null &&
+      (s as { stack_id?: unknown }).stack_id === stackId &&
+      typeof (s as { retired_at?: unknown }).retired_at === "string"
+    ) {
+      return (s as { retired_at: string }).retired_at;
+    }
+  }
+  return undefined;
+}
+
+// =============================================================================
 // Result builders
 // =============================================================================
 
@@ -890,6 +1086,8 @@ export async function dispatchProvisionStack(argv: string[]): Promise<ExitResult
       return runClaim(ctx);
     case "register":
       return runRegister(ctx);
+    case "retire":
+      return runRetire(ctx);
   }
 }
 
@@ -904,6 +1102,7 @@ Usage:
   cortex provision-stack generate <principal-id> --seed-path <path> [--stack-id <id>] [--force] [--register --registry-url <url> [--network <id>]] [--json]
   cortex provision-stack claim    <principal-id> --seed-path <path> [--stack-id <id>] [--json]
   cortex provision-stack register <principal-id> --seed-path <path> --registry-url <url> [--network <id>] [--stack-id <id>] [--principal-seed <root-path> --registry-pubkey <b64>] [--json]
+  cortex provision-stack retire   <principal-id> --stack-id <p>/<slug> --principal-seed <root-path> --registry-url <url> --registry-pubkey <b64> [--apply] [--json]
 
 Subcommands:
   generate   Generate a fresh NKey signing identity; write seed chmod 600
@@ -913,6 +1112,11 @@ Subcommands:
   claim      Print a signed registration body for an existing seed WITHOUT
              posting (air-gapped / review-before-post).
   register   Build the claim from an existing seed and POST it to the registry.
+  retire     Deregister (tombstone) a stack from the principal's registry record
+             — root-signed, CAS-guarded, refused while the stack has a live
+             ADMITTED membership. Dry-run by DEFAULT; --apply mutates. The stack
+             stays on record as a tombstone (history preserved) but is excluded
+             from active resolution and its key stops verifying.
 
 Flags:
   --seed-path <path>     Path to the stack signing seed (matches stack.nkey_seed_path).
@@ -927,13 +1131,21 @@ Flags:
                          stack's seed) for adding a SECOND+ stack. The add-stack
                          claim is then root-signed; --seed-path is the new
                          stack's own key.
-  --registry-pubkey <b64> (register, #791) Pinned registry pubkey. REQUIRED with
-                         --principal-seed: the merge-read of the principal's
-                         existing stacks is signature-verified against it before
-                         the destructive full-overwrite re-attestation (fails
-                         closed if absent — guards against a compromised registry
-                         silently dropping a stack).
+  --registry-pubkey <b64> (register/retire, #791) Pinned registry pubkey.
+                         REQUIRED with --principal-seed (register) and always for
+                         retire: the verified read is signature-checked against it
+                         before it drives a destructive write (fails closed if
+                         absent — guards against a compromised registry).
+  --apply                (retire only) Execute the deregistration. WITHOUT it,
+                         retire is a DRY RUN that prints the plan and touches
+                         nothing.
   --json                 Emit a { status, items, data, error } envelope.
+
+Retire authority: the retire claim is signed by the principal ROOT seed
+(--principal-seed), NOT the retiring stack's key (there is no --seed-path). The
+registry verifies it against the STORED record's principal_pubkey — root-only,
+exactly like adding a stack (#791). A stack with a live ADMITTED membership is
+refused (revoke or depart it first).
 
 Secrets: the NKey SEED is written to disk + held in memory to sign the claim;
 it is NEVER printed or logged. Output carries the pubkey + fingerprint only.

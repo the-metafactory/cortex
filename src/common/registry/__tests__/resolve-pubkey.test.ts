@@ -162,7 +162,7 @@ const STACK_PUBKEY = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
 function makePerStackPayload(
   principalId: string,
   rootPubkey: string,
-  stacks: { stack_id: string; stack_pubkey?: string }[],
+  stacks: { stack_id: string; stack_pubkey?: string; retired_at?: string }[],
 ): PrincipalPayload {
   return {
     principal_id: principalId,
@@ -311,6 +311,41 @@ describe("PrincipalPubkeyResolver — C-787 per-stack resolution", () => {
     });
     const res = await resolver.resolve("andreas", "andreas/laptop");
     expect(res.status === "resolved" && res.principalPubkey).toBe(PEER_PUBKEY);
+  });
+
+  test("C-1351 — a RETIRED stack's key is NOT served for verification (falls back to root)", async () => {
+    const reg = await generateKeypair();
+    const baseUrl = track(
+      startStub({
+        principal: async (id) =>
+          json(
+            await signAssertion(
+              reg.privateKey,
+              reg.publicKeyB64,
+              makePerStackPayload(id, PEER_PUBKEY, [
+                // A retired stack carrying its OWN distinct key. Because it is
+                // retired, resolve must NOT return STACK_PUBKEY — it falls back to
+                // the root, so a federated envelope signed by the retired stack's
+                // own key can no longer verify (the active-resolution filter).
+                { stack_id: `${id}/community`, stack_pubkey: STACK_PUBKEY, retired_at: new Date().toISOString() },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const resolver = new PrincipalPubkeyResolver({
+      enabled: true,
+      baseUrl,
+      registryPubkey: reg.publicKeyB64,
+      logError: () => {},
+    });
+    const res = await resolver.resolve("andreas", "andreas/community");
+    expect(res.status).toBe("resolved");
+    if (res.status === "resolved") {
+      // The retired stack's OWN key (STACK_PUBKEY) is refused; root is served.
+      expect(res.principalPubkey).toBe(PEER_PUBKEY);
+      expect(res.principalPubkey).not.toBe(STACK_PUBKEY);
+    }
   });
 });
 

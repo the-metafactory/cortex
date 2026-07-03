@@ -674,9 +674,16 @@ function renderTeardownPlan(
     for (const s of steps) lines.push(s);
     lines.push("");
   }
+  // C-1351 Slice 2 — the registry-side deregistration verb the principal runs
+  // AFTER local teardown to tombstone the stack in the principal's registry
+  // record (root-signed, dry-run by default).
+  const retireHint =
+    `cortex provision-stack retire <principal> --stack-id <principal>/${slug} ` +
+    `--principal-seed <root-seed> --registry-url <url> --registry-pubkey <pin> --apply`;
   if (!applied) {
-    lines.push("Slice 2 (registry deregistration) is a separate follow-up (#1351) — this teardown is LOCAL only.");
-    lines.push(`Re-run with --apply --confirm ${slug} to execute.`);
+    lines.push("Registry-side deregistration (Slice 2, #1351) is a SEPARATE step — this teardown is LOCAL only.");
+    lines.push(`Re-run with --apply --confirm ${slug} to execute the local teardown, then deregister:`);
+    lines.push(`  ${retireHint}`);
   } else if (failures.length > 0) {
     // #1384 review (MAJOR) — surface the partial failure loudly + exit non-zero.
     lines.push(
@@ -684,7 +691,8 @@ function renderTeardownPlan(
         `finish by hand or fix permissions and re-run. Registry-side deregistration (Slice 2, #1351) not performed.`,
     );
   } else {
-    lines.push("Local teardown complete. Registry-side deregistration (Slice 2, #1351) is a separate step — not performed here.");
+    lines.push("Local teardown complete. Now deregister the stack from the registry (Slice 2, #1351):");
+    lines.push(`  ${retireHint}`);
   }
   lines.push("");
   return { exitCode, stdout: lines.join("\n"), stderr: "" };

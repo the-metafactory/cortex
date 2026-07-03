@@ -32,7 +32,9 @@ import type {
   SignedNetworkRosterMemberRead,
   SignedRegistration,
   SignedSealedSecretWrite,
+  SignedStackRetire,
   StackIdentity,
+  StackRetireClaim,
 } from "./types";
 
 // =============================================================================
@@ -232,6 +234,21 @@ export function validateRegistrationClaim(
           }
         }
       }
+      // C-1351 — retired_at is OPTIONAL and free-form ISO-8601. It rides through
+      // a re-register (add-stack merge) so a retired tombstone SURVIVES rather
+      // than being resurrected: the client re-attests the full stacks[] including
+      // the retired entry, and this reconstruction PRESERVES it into storage. A
+      // register that omits it (the common live case) leaves the stack live.
+      if (
+        sObj.retired_at !== undefined &&
+        (typeof sObj.retired_at !== "string" || Number.isNaN(Date.parse(sObj.retired_at)))
+      ) {
+        errors.push({
+          field: `stacks[${i.toString()}].retired_at`,
+          message: "must be an ISO-8601 timestamp if provided",
+        });
+        return;
+      }
       // Build the canonical stack record. Only include optional keys
       // when they are actually defined — `canonicalJSON` is structural
       // and treats `metadata: undefined` as different from "no metadata".
@@ -247,6 +264,12 @@ export function validateRegistrationClaim(
       }
       if (sObj.metadata !== undefined) {
         stackRecord.metadata = sObj.metadata as Record<string, string>;
+      }
+      // C-1351 — carry the tombstone through the whitelist reconstruction so a
+      // re-register (full-overwrite upsert) PRESERVES a retired stack in storage
+      // instead of silently resurrecting it (the merge-preserves-retired contract).
+      if (typeof sObj.retired_at === "string") {
+        stackRecord.retired_at = sObj.retired_at;
       }
       stacks.push(stackRecord);
     });
@@ -1048,6 +1071,105 @@ export function validateAdmissionDepartClaim(
       request_id: c.request_id as string,
       principal_id: c.principal_id as string,
       peer_pubkey: c.peer_pubkey as string,
+      issued_at: c.issued_at as string,
+      nonce: c.nonce as string,
+    },
+  };
+}
+
+// =============================================================================
+// C-1351 Slice 2 (#1351) — stack-retire (root-signed deregistration) validators
+// =============================================================================
+
+/**
+ * Validate the `POST /principals/:id/stacks/retire` envelope
+ * ({ claim: StackRetireClaim, signature }). Structural only; the route verifies
+ * the signature over the WIRE claim (`canonicalJSON(signed.claim)`, the #1414
+ * verify-over-wire norm) against the STORED record's `principal_pubkey`
+ * (root-key authz — the claim carries no pubkey to trust).
+ */
+export function validateSignedStackRetire(
+  body: unknown,
+): { ok: true; signed: SignedStackRetire } | { ok: false; errors: ValidationError[] } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.signature !== "string" || b.signature.length === 0) {
+    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
+  }
+  if (!BASE64_RE.test(b.signature)) {
+    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
+  }
+  if (typeof b.claim !== "object" || b.claim === null || Array.isArray(b.claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be a non-array object" }] };
+  }
+  return {
+    ok: true,
+    signed: { claim: b.claim as StackRetireClaim, signature: b.signature },
+  };
+}
+
+/**
+ * Validate the `StackRetireClaim` payload before crypto verification.
+ * Cross-field rules (forged-attribution guards, mirroring the register claim):
+ *   - claim.principal_id MUST equal the URL path parameter.
+ *   - claim.stack_id MUST be a well-formed `{principal_id}/{slug}` prefixed by
+ *     the principal_id (a claim cannot retire a stack under another principal).
+ *   - expected_updated_at (CAS token) is REQUIRED and non-empty.
+ */
+export function validateStackRetireClaim(
+  claim: unknown,
+  expectedPrincipalId: string,
+): { ok: true; claim: StackRetireClaim } | { ok: false; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+
+  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be an object" }] };
+  }
+  const c = claim as Record<string, unknown>;
+
+  if (typeof c.principal_id !== "string" || !isValidPrincipalId(c.principal_id)) {
+    errors.push({ field: "principal_id", message: "must be a valid principal id" });
+  } else if (c.principal_id !== expectedPrincipalId) {
+    errors.push({
+      field: "principal_id",
+      message: `body principal_id "${c.principal_id}" does not match path "${expectedPrincipalId}"`,
+    });
+  }
+
+  if (typeof c.stack_id !== "string" || !isValidStackId(c.stack_id)) {
+    errors.push({ field: "stack_id", message: "must be {principal_id}/{stack_slug}, both letter-prefixed" });
+  } else {
+    const prefix = c.stack_id.split("/")[0] ?? "";
+    if (typeof c.principal_id === "string" && prefix !== c.principal_id) {
+      errors.push({
+        field: "stack_id",
+        message: `stack_id prefix "${prefix}" must match principal_id "${c.principal_id}"`,
+      });
+    }
+  }
+
+  if (typeof c.expected_updated_at !== "string" || c.expected_updated_at.length === 0) {
+    errors.push({ field: "expected_updated_at", message: "must be a non-empty string (CAS token)" });
+  }
+
+  if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
+    errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
+  }
+
+  if (typeof c.nonce !== "string" || c.nonce.length < 8 || c.nonce.length > 128) {
+    errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    claim: {
+      principal_id: c.principal_id as string,
+      stack_id: c.stack_id as string,
+      expected_updated_at: c.expected_updated_at as string,
       issued_at: c.issued_at as string,
       nonce: c.nonce as string,
     },

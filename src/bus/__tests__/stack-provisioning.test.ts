@@ -31,8 +31,11 @@ import {
   materialFromSeedString,
   buildRegistrationClaim,
   fetchExistingStacks,
+  resolveMergedStacks,
   resolveMergedCapabilities,
   resolveCapabilitiesAfterLeave,
+  buildStackRetireClaim,
+  retireStackIdentity,
   fingerprintOf,
 } from "../stack-provisioning";
 import { nkeyToBase64Pubkey } from "../verify-signed-by-chain";
@@ -976,5 +979,173 @@ describe("C-820 — capability networks[] union on join + set-difference on leav
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.reason).toMatch(/connection refused/);
+  });
+});
+
+// =============================================================================
+// C-1351 Slice 2 (#1351) — retire round-trip + merge-preserves-retired
+// =============================================================================
+
+describe("C-1351 — provision-stack retire round-trip + merge preserves a retired tombstone", () => {
+  async function configuredEnv(): Promise<{ env: Env; registryPubkey: string }> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    return {
+      env: {
+        REGISTRY_SIGNING_KEY: reg.signingKey,
+        REGISTRY_PUBLIC_KEY: reg.publicKey,
+        ENVIRONMENT: "test",
+      },
+      registryPubkey: reg.publicKey,
+    };
+  }
+
+  function registryFetch(env: Env): typeof globalThis.fetch {
+    return ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+  }
+
+  async function updatedAt(env: Env, principalId: string): Promise<string> {
+    const res = await registryApp.fetch(
+      new Request(`http://registry.test/principals/${principalId}`),
+      env,
+    );
+    const body = (await res.json()) as { payload: { updated_at: string } };
+    return body.payload.updated_at;
+  }
+
+  test("retire POST tombstones the stack; a later add-stack merge PRESERVES retired_at", async () => {
+    const { env, registryPubkey } = await configuredEnv();
+    const fetchImpl = registryFetch(env);
+
+    // Seed andreas with two stacks, both signed by the root.
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "root.nk") });
+    const community = generateStackIdentity({ seedPath: join(freshDir(), "community.nk") });
+    const reg = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: root,
+      stacks: [
+        { stack_id: "andreas/meta-factory", stack_pubkey: root.pubkeyB64 },
+        { stack_id: "andreas/community", stack_pubkey: community.pubkeyB64 },
+      ],
+    });
+    expect(
+      (await registryApp.fetch(
+        new Request("http://registry.test/principals/andreas/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(reg),
+        }),
+        env,
+      )).status,
+    ).toBe(201);
+
+    // Retire andreas/community — root-signed, CAS on the current updated_at.
+    const cas = await updatedAt(env, "andreas");
+    const retireBody = await buildStackRetireClaim({
+      principalId: "andreas",
+      stackId: "andreas/community",
+      rootMaterial: root,
+      expectedUpdatedAt: cas,
+    });
+    const retireRes = await retireStackIdentity({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      body: retireBody,
+      fetchImpl,
+    });
+    expect(retireRes.ok).toBe(true);
+    expect(retireRes.status).toBe(200);
+
+    // Verify the tombstone via a verified read.
+    const afterRetire = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      registryPubkey,
+      fetchImpl,
+    });
+    expect(afterRetire.kind).toBe("present");
+    if (afterRetire.kind !== "present") return;
+    const retiredEntry = afterRetire.stacks.find((s) => s.stack_id === "andreas/community");
+    expect(retiredEntry?.retired_at).toBeDefined();
+
+    // Now add a NEW stack via resolveMergedStacks — the merged set MUST carry the
+    // retired community entry (with its retired_at) through, not drop/resurrect it.
+    const laptop = generateStackIdentity({ seedPath: join(freshDir(), "laptop.nk") });
+    const merged = await resolveMergedStacks({
+      principalId: "andreas",
+      stackId: "andreas/laptop",
+      stackPubkey: laptop.pubkeyB64,
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      isAddStack: true,
+      fetchImpl,
+    });
+    expect(merged.ok).toBe(true);
+    if (!merged.ok) return;
+    const mergedCommunity = merged.stacks.find((s) => s.stack_id === "andreas/community");
+    expect(mergedCommunity?.retired_at).toBe(retiredEntry!.retired_at);
+    // The new stack is present + active; meta-factory stayed active.
+    expect(merged.stacks.find((s) => s.stack_id === "andreas/laptop")?.retired_at).toBeUndefined();
+    expect(merged.stacks.find((s) => s.stack_id === "andreas/meta-factory")?.retired_at).toBeUndefined();
+  });
+
+  test("retire refused (409) when the stack has a live ADMITTED membership", async () => {
+    const { env } = await configuredEnv();
+    const fetchImpl = registryFetch(env);
+    const admin = await makePrincipalKey();
+    const envWithAdmin: Env = { ...env, REGISTRY_ADMIN_PUBKEYS: admin.publicKeyB64 };
+    const adminFetch = registryFetch(envWithAdmin);
+
+    // Register + admit so andreas/default holds a live ADMITTED row.
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "root.nk") });
+    const reg = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: root,
+      stacks: [{ stack_id: "andreas/default", stack_pubkey: root.pubkeyB64 }],
+      networkId: "metafactory",
+    });
+    await registryApp.fetch(
+      new Request("http://registry.test/principals/andreas/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reg),
+      }),
+      envWithAdmin,
+    );
+    const read = await makeSignedAdminRead(admin);
+    const listRes = await adminFetch(
+      new Request("http://registry.test/admission-requests?status=PENDING", {
+        headers: { "x-admin-signed": JSON.stringify(read) },
+      }),
+    );
+    const list = (await listRes.json()) as AdmissionRequest[];
+    const decision = await makeSignedAdminDecision(list[0]!.request_id, "admit", admin);
+    await adminFetch(
+      new Request(`http://registry.test/admission-requests/${list[0]!.request_id}/admit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(decision),
+      }),
+    );
+
+    const casRes = await adminFetch(new Request("http://registry.test/principals/andreas"));
+    const cas = ((await casRes.json()) as { payload: { updated_at: string } }).payload.updated_at;
+    const retireBody = await buildStackRetireClaim({
+      principalId: "andreas",
+      stackId: "andreas/default",
+      rootMaterial: root,
+      expectedUpdatedAt: cas,
+    });
+    const retireRes = await retireStackIdentity({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      body: retireBody,
+      fetchImpl,
+    });
+    expect(retireRes.ok).toBe(false);
+    expect(retireRes.status).toBe(409);
   });
 });

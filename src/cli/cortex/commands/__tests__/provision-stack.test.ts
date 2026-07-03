@@ -950,3 +950,128 @@ describe("cortex provision-stack register — C-1269 add-stack CAS-rebuild-on-re
     }
   });
 });
+
+describe("cortex provision-stack retire (C-1351 Slice 2 #1351)", () => {
+  async function configuredEnv(): Promise<{ env: Env; registryPubkey: string }> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    return {
+      env: {
+        REGISTRY_SIGNING_KEY: reg.signingKey,
+        REGISTRY_PUBLIC_KEY: reg.publicKey,
+        ENVIRONMENT: "test",
+      },
+      registryPubkey: reg.publicKey,
+    };
+  }
+
+  function patchFetch(env: Env): () => void {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+    return () => {
+      globalThis.fetch = realFetch;
+    };
+  }
+
+  /** Register a single-stack principal via the CLI so the record exists. */
+  async function seed(env: Env, principalId: string, seedPath: string, stackId: string): Promise<void> {
+    await dispatchProvisionStack(["generate", principalId, "--seed-path", seedPath, "--stack-id", stackId]);
+    const restore = patchFetch(env);
+    try {
+      const res = await dispatchProvisionStack([
+        "register", principalId, "--seed-path", seedPath, "--stack-id", stackId, "--registry-url", "http://registry.test",
+      ]);
+      expect(res.exitCode).toBe(0);
+    } finally {
+      restore();
+    }
+  }
+
+  async function getRetiredAt(env: Env, principalId: string, stackId: string): Promise<string | undefined> {
+    const res = await registryApp.fetch(new Request(`http://registry.test/principals/${principalId}`), env);
+    const body = (await res.json()) as { payload: { stacks: { stack_id: string; retired_at?: string }[] } };
+    return body.payload.stacks.find((s) => s.stack_id === stackId)?.retired_at;
+  }
+
+  test("dry-run (default) prints a plan and MUTATES NOTHING", async () => {
+    const { env, registryPubkey } = await configuredEnv();
+    const seedPath = join(freshDir(), "root.nk");
+    await seed(env, "andreas", seedPath, "andreas/laptop");
+    const restore = patchFetch(env);
+    try {
+      const res = await dispatchProvisionStack([
+        "retire", "andreas", "--stack-id", "andreas/laptop",
+        "--principal-seed", seedPath, "--registry-url", "http://registry.test", "--registry-pubkey", registryPubkey,
+      ]);
+      expect(res.exitCode).toBe(0);
+      expect(res.stdout).toContain("DRY RUN");
+      // No --apply → the stack is NOT retired.
+      expect(await getRetiredAt(env, "andreas", "andreas/laptop")).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("--apply retires the stack (happy path) and stamps retired_at", async () => {
+    const { env, registryPubkey } = await configuredEnv();
+    const seedPath = join(freshDir(), "root.nk");
+    await seed(env, "andreas", seedPath, "andreas/laptop");
+    const restore = patchFetch(env);
+    try {
+      const res = await dispatchProvisionStack([
+        "retire", "andreas", "--stack-id", "andreas/laptop",
+        "--principal-seed", seedPath, "--registry-url", "http://registry.test", "--registry-pubkey", registryPubkey,
+        "--apply", "--json",
+      ]);
+      expect(res.exitCode).toBe(0);
+      const out = JSON.parse(res.stdout) as { status: string; data: Record<string, string> };
+      expect(out.status).toBe("ok");
+      expect(out.data.mode).toBe("applied");
+      expect(typeof out.data.retired_at).toBe("string");
+      // The seed never leaks.
+      expect(res.stdout).not.toContain(seedOnDisk(seedPath));
+      // Persisted.
+      expect(await getRetiredAt(env, "andreas", "andreas/laptop")).toBeDefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("wrong seed (not the principal root) → registry 401 → exit 1", async () => {
+    const { env, registryPubkey } = await configuredEnv();
+    const seedPath = join(freshDir(), "root.nk");
+    await seed(env, "andreas", seedPath, "andreas/laptop");
+    // A DIFFERENT seed — not the root that registered andreas.
+    const wrongSeed = join(freshDir(), "wrong.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", wrongSeed, "--stack-id", "andreas/laptop"]);
+    const restore = patchFetch(env);
+    try {
+      const res = await dispatchProvisionStack([
+        "retire", "andreas", "--stack-id", "andreas/laptop",
+        "--principal-seed", wrongSeed, "--registry-url", "http://registry.test", "--registry-pubkey", registryPubkey,
+        "--apply",
+      ]);
+      expect(res.exitCode).toBe(1);
+      expect(res.stderr).toMatch(/401|signature_invalid/);
+      // Untouched.
+      expect(await getRetiredAt(env, "andreas", "andreas/laptop")).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("--stack-id is required (no default glob) → usage error exit 2", async () => {
+    const { registryPubkey } = await configuredEnv();
+    const seedPath = join(freshDir(), "root.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const res = await dispatchProvisionStack([
+      "retire", "andreas",
+      "--principal-seed", seedPath, "--registry-url", "http://registry.test", "--registry-pubkey", registryPubkey,
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toMatch(/--stack-id is required/);
+  });
+});
