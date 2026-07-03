@@ -56,15 +56,27 @@ export const DEFAULT_LEAFZ_TIMEOUT_MS = DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
  * `network-make-live-adapters.ts`) — same block-opening regex, same
  * depth-counted brace walk — but EXTRACTS the block instead of inserting
  * into it.
+ *
+ * Cheap-guard limitation (Sage review, nit 5): before the walk we blank out
+ * FULL-LINE `//` comments (see {@link blankFullLineComments}) so a stray
+ * `{`/`}` in a comment line can't unbalance the scan. We deliberately do NOT
+ * attempt to skip braces inside QUOTED strings — resolver_preload entries are
+ * `<pubkey>: <JWT>` pairs whose values (base32 nkeys, `eyJ…` JWTs) never
+ * contain braces, so a brace inside a quoted value doesn't occur in practice;
+ * a full string-tokenizer would balloon scope for a case NATS configs don't
+ * produce.
  */
 export function resolverPreloadHasAccountKey(text: string, accountPubkey: string): boolean | undefined {
-  const key = /resolver_preload\s*[:=]?\s*\{/.exec(text);
+  // Index-preserving: comment chars become spaces (same length), so every
+  // offset below still lines up with the original `text`.
+  const scanned = blankFullLineComments(text);
+  const key = /resolver_preload\s*[:=]?\s*\{/.exec(scanned);
   if (key === null) return undefined;
   const open = key.index + key[0].length - 1; // index of the `{`
   let depth = 0;
   let close = -1;
-  for (let i = open; i < text.length; i++) {
-    const ch = text[i];
+  for (let i = open; i < scanned.length; i++) {
+    const ch = scanned[i];
     if (ch === "{") depth++;
     else if (ch === "}") {
       depth--;
@@ -75,9 +87,24 @@ export function resolverPreloadHasAccountKey(text: string, accountPubkey: string
     }
   }
   if (close === -1) return undefined; // unbalanced braces — can't determine
-  const block = text.slice(open + 1, close);
+  const block = scanned.slice(open + 1, close);
   const escaped = accountPubkey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[\\s{,])${escaped}\\s*:`).test(block);
+}
+
+/**
+ * Replace the `//…`-to-end-of-line portion of any FULL-LINE comment (a line
+ * whose first non-whitespace is `//`) with spaces of the SAME length, so
+ * character offsets are preserved for the brace walk. Only full-line comments
+ * are blanked — an inline `//` (which in a real config only ever follows a
+ * value, e.g. `tls://host` is NOT line-leading) is left alone, so we never
+ * mangle a `tls://` scheme or a value's own `//`.
+ */
+function blankFullLineComments(text: string): string {
+  return text.replace(
+    /^([ \t]*)\/\/[^\n]*/gm,
+    (match, indent: string) => indent + " ".repeat(match.length - indent.length),
+  );
 }
 
 /** Inputs {@link buildDoctorConfigPort} needs — a subset of {@link LivePortsConfig}. */

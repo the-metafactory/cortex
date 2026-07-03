@@ -87,6 +87,26 @@ const CRITICAL_CHECK_IDS = new Set(["config-network", "leaf-established"]);
 /** Default per-probe echo wait budget (ms) for the peer-reachable leg. */
 export const DEFAULT_DOCTOR_PROBE_TIMEOUT_MS = 6000;
 
+/**
+ * cortex#1482 — id + title for the three representation-pair legs, in ONE
+ * place so the check bodies and the config-network-failed skip path can never
+ * drift apart (Sage review, nit 4).
+ */
+const PAIR_LEGS = {
+  registeredVsFedAccount: {
+    id: "registered-vs-fed-account",
+    title: "registered pubkey vs FED account (Pair 1)",
+  },
+  resolverPreloadAccount: {
+    id: "resolver-preload-account",
+    title: "leaf account preloaded on this bus (Pair 2)",
+  },
+  sealedSecretHubAuthorized: {
+    id: "sealed-secret-hub-authorized",
+    title: "registry sealed-secret ⟷ hub authorization (Pair 3)",
+  },
+} as const;
+
 export interface DoctorOptions {
   /** The already-loaded LOCAL stack config — the #753 seam. Supplies
    *  principal/stack/assistant for deriving each peer-reachable probe's
@@ -211,16 +231,26 @@ function checkConfigNetwork(
  * leaf-account, ADR-0018.
  * Divergence is the EXPECTED, healthy state, so this leg NEVER fails; the
  * worst outcome is `warn` (can't determine one side yet, or — a real red
- * flag — the two decode to the SAME key material, which would mean the
- * account was provisioned by reusing the registered identity key).
+ * flag — the two are the SAME key material, which would mean the account was
+ * provisioned by reusing the registered identity key).
+ *
+ * Representation handling (what this leg ACTUALLY does — no conversion):
+ *   - DISPLAY: each key is shown AS-STORED, via a 12-char prefix
+ *     ({@link shortKey}). Whatever encoding the config carries (the
+ *     registered pubkey is typically base64; the FED account a `U…`/`A…`
+ *     nkey) is what you see — this leg does NOT convert base64↔nkey for
+ *     display.
+ *   - COMPARISON: {@link samePubkey} decodes BOTH sides to their raw 32
+ *     ed25519 bytes and compares those, so it is representation- AND
+ *     role-agnostic — a base64 pubkey and an nkey of the same underlying key
+ *     compare EQUAL without either being re-encoded here.
  */
 function checkRegisteredVsFedAccount(
   config: DoctorConfigPort,
   networkId: string,
   registeredPubkey: string | undefined,
 ): DoctorCheck {
-  const id = "registered-vs-fed-account";
-  const title = "registered pubkey vs FED account (Pair 1)";
+  const { id, title } = PAIR_LEGS.registeredVsFedAccount;
 
   if (registeredPubkey === undefined) {
     return skipCheck(
@@ -276,8 +306,7 @@ function checkResolverPreloadAccount(
   config: DoctorConfigPort,
   fedAccount: string | undefined,
 ): DoctorCheck {
-  const id = "resolver-preload-account";
-  const title = "leaf account preloaded on this bus (Pair 2)";
+  const { id, title } = PAIR_LEGS.resolverPreloadAccount;
 
   if (fedAccount === undefined) {
     return skipCheck(
@@ -336,8 +365,8 @@ function checkResolverPreloadAccount(
  */
 function checkSealedSecretHubAuthorized(): DoctorCheck {
   return skipCheck(
-    "sealed-secret-hub-authorized",
-    "registry sealed-secret ⟷ hub authorization (Pair 3)",
+    PAIR_LEGS.sealedSecretHubAuthorized.id,
+    PAIR_LEGS.sealedSecretHubAuthorized.title,
     "not implemented from the member side — the registry holds only an opaque ciphertext sealed to the " +
       "member's own pubkey (ADR-0018 Q1), so there is no plaintext PSK here to compare against the hub's " +
       "authorization users. Verifying this pair needs HUB-SIDE visibility (the hub owner decrypting + " +
@@ -630,16 +659,16 @@ export async function runDoctorChecks(
   if (configResult.result.status !== "pass" || network === undefined) {
     checks.push(
       skipCheck(
-        "registered-vs-fed-account",
-        "registered pubkey vs FED account (Pair 1)",
+        PAIR_LEGS.registeredVsFedAccount.id,
+        PAIR_LEGS.registeredVsFedAccount.title,
         "skipped — network not configured (see config-network)",
         "member",
       ),
     );
     checks.push(
       skipCheck(
-        "resolver-preload-account",
-        "leaf account preloaded on this bus (Pair 2)",
+        PAIR_LEGS.resolverPreloadAccount.id,
+        PAIR_LEGS.resolverPreloadAccount.title,
         "skipped — network not configured (see config-network)",
         "member",
       ),

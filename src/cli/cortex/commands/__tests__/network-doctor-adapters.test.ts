@@ -68,4 +68,32 @@ describe("resolverPreloadHasAccountKey", () => {
     const text = "resolver_preload {\n  ACCOUNT_A: eyJhbGciOiJ...\n}\n";
     expect(resolverPreloadHasAccountKey(text, "ACCOUNT_A")).toBe(true);
   });
+
+  test("an UNBALANCED brace in a full-line comment does NOT unbalance the scan (cheap-guard, Sage nit 5)", () => {
+    const text = [
+      "resolver_preload: {",
+      "  // TODO: rebalance this someday { and never close it",
+      "  ACCOUNT_A: eyJhbGciOiJ...",
+      "}",
+      "leafnodes { remotes: [] }",
+    ].join("\n");
+    // Without the full-line-comment guard, the lone `{` in the comment would
+    // push depth to 2 and the block would run past its real close.
+    expect(resolverPreloadHasAccountKey(text, "ACCOUNT_A")).toBe(true);
+    expect(resolverPreloadHasAccountKey(text, "ACCOUNT_OTHER")).toBe(false);
+  });
+
+  test("an inline `tls://` after a value is NOT treated as a comment (guard only blanks LINE-LEADING //)", () => {
+    const text = [
+      "leafnodes {",
+      '  remotes: [ { url: "tls://hub:7422", account: "ACCOUNT_A" } ]',
+      "}",
+      "resolver_preload: {",
+      "  ACCOUNT_A: eyJhbGciOiJ...",
+      "}",
+    ].join("\n");
+    // The `tls://` mid-line must not be blanked (it isn't line-leading), and
+    // the leaf remote's account: line must still not false-positive.
+    expect(resolverPreloadHasAccountKey(text, "ACCOUNT_A")).toBe(true);
+  });
 });

@@ -12,7 +12,6 @@ import { createAccount, createUser } from "@nats-io/nkeys";
 
 import {
   detectPubkey,
-  describePubkeyRepresentation,
   looksLikeNkeyRole,
   samePubkey,
   toBase64Pubkey,
@@ -163,18 +162,5 @@ describe("looksLikeNkeyRole — grammar-only hint (tolerates a bad checksum)", (
   test("false for the wrong role or non-nkey input", () => {
     expect(looksLikeNkeyRole(createUser().getPublicKey(), "account")).toBe(false);
     expect(looksLikeNkeyRole("not-a-pubkey", "account")).toBe(false);
-  });
-});
-
-describe("describePubkeyRepresentation", () => {
-  test("labels each representation distinctly", () => {
-    expect(describePubkeyRepresentation(createAccount().getPublicKey())).toContain("FED account");
-    expect(describePubkeyRepresentation(createUser().getPublicKey())).toContain("registered/PoP");
-    const b64 = Buffer.from(new Uint8Array(32).fill(5)).toString("base64");
-    expect(describePubkeyRepresentation(b64)).toContain("base64");
-  });
-
-  test("undefined for garbage", () => {
-    expect(describePubkeyRepresentation("not-a-pubkey")).toBeUndefined();
   });
 });

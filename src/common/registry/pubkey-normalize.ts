@@ -31,6 +31,15 @@
  */
 
 import { Prefix } from "@nats-io/nkeys";
+// Deep import of the internal `Codec` (base32 + CRC16 + prefix-byte codec):
+// the package's PUBLIC API (`@nats-io/nkeys` mod) exposes keypair factories
+// (`createUser`, `fromPublic`, …) but NOT a raw pubkey→bytes decode / bytes→
+// pubkey encode, which this module needs for role-aware conversion + raw-byte
+// equality. This is a CONSCIOUS choice, not an accident, and it matches the
+// established repo pattern — `registry/encoding.ts` (the DD-8 bridge) and
+// `nats/leaf-remote-renderer.ts` already import `Codec` from the same subpath.
+// If a future @nats-io/nkeys promotes a public decode/encode, migrate all
+// three call sites together.
 import { Codec } from "@nats-io/nkeys/lib/codec";
 
 /**
@@ -50,6 +59,13 @@ const ROLE_PREFIX: Record<PubkeyRole, Prefix> = {
 
 /** The single letter each role's nkey encoding starts with. */
 const ROLE_LETTER: Record<PubkeyRole, string> = { account: "A", user: "U" };
+
+/** Per-role grammar-only shape regex, hoisted to module scope so
+ *  {@link looksLikeNkeyRole} never recompiles it per call. */
+const ROLE_NKEY_SHAPE: Record<PubkeyRole, RegExp> = {
+  account: /^A[A-Z2-7]{55}$/,
+  user: /^U[A-Z2-7]{55}$/,
+};
 
 /**
  * Union NKey-public GRAMMAR for the two roles this module covers: a single
@@ -206,20 +222,5 @@ export function samePubkey(a: string, b: string): boolean {
  * USING the decoded bytes), use {@link detectPubkey} instead.
  */
 export function looksLikeNkeyRole(value: string, role: PubkeyRole): boolean {
-  return new RegExp(`^${ROLE_LETTER[role]}[A-Z2-7]{55}$`).test(value.trim());
-}
-
-/**
- * Human-readable label for `value`'s detected representation, for error/
- * explanation messages. `undefined` when `value` isn't a recognizable
- * pubkey (checksum-verified for the nkey case — see {@link looksLikeNkeyRole}
- * for a grammar-only hint that tolerates a bad checksum).
- */
-export function describePubkeyRepresentation(value: string): string | undefined {
-  const detected = detectPubkey(value);
-  if (detected === undefined) return undefined;
-  if (detected.encoding === "base64") return "a base64 pubkey";
-  return detected.role === "account"
-    ? "a FED account nkey (A…)"
-    : "a registered/PoP user nkey (U…)";
+  return ROLE_NKEY_SHAPE[role].test(value.trim());
 }
