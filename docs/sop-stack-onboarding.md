@@ -27,7 +27,7 @@ A **stack** is one cortex deployment under a **principal** — its own signing i
 
 | Need | Why | How |
 |---|---|---|
-| **Bot is a member of the target guild** | the daemon can't join a guild for you | invite the assistant's Discord bot to the guild (Developer Portal OAuth URL, `scope=bot`, least-privilege perms). One bot can serve N guilds — the **C-704 guild filter** isolates each stack by `guildId`. |
+| **Bot is a member of the target guild** | the daemon can't join a guild for you | invite the assistant's Discord bot with an OAuth2 URL that carries **both** `scope=bot` **and** `permissions=<int>`, e.g. `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=68608`. ⚠️ The Developer Portal's **App → Installation → "Install Link"** is NOT this — it installs the *application* only and adds **no bot user**, so the bot never appears under Server Settings → Integrations and never answers (cortex#1453, reported by vpzed). One bot can serve N guilds — the **C-704 guild filter** isolates each stack by `guildId`. |
 | **Message Content intent ON** | the bot must read message content | Developer Portal → the bot's application → enable. (Already on if the bot reads any other guild.) |
 | **guildId + a channel id** | binding + the nominal agent/log channel | from the Discord client (Developer Mode → copy id) or `GET /guilds/{id}/channels` with the bot token. |
 | **A free local NATS port** | the isolated bus | meta-factory `:4222`, halden `:4223`, community `:4224` → use the next free pair (data + monitor `:82xx`). |
@@ -192,6 +192,7 @@ A healthy boot shows `Stack: <principal>/<slug>`, `connected to nats://…:<port
 
 ## Gotchas
 
+- **"Install Link" ≠ bot invite (cortex#1453):** the Developer Portal's App → Installation → "Install Link" adds the *application* but **no bot user** — the bot is absent from Server Settings → Integrations and silently never answers an @mention. Re-invite with an OAuth2 URL that includes `&scope=bot&permissions=<int>` (`68608` = View Channels + Send Messages + Send in Threads/Posts + Create Public Threads + Embed Links + Attach Files + Add Reactions + Read Message History). See the Prerequisites row above.
 - **One bot, many guilds (C-704):** reuse the assistant's bot token bound to a *different* `guildId` per stack; the guild filter makes each daemon act only on its bound guild. Running the same token in N processes = N gateway sessions (fine at low volume).
 - **gh auto-approve:** `claude.bashAllowlist` propagates to dispatched sessions (`cortex.ts` → `CORTEX_BASH_GUARD`); the bash-guard **auto-approves** matching commands (cortex#778) so async dispatch never stalls on an unanswerable prompt. Restrict reach with `bashAllowlist.repos` (a `gh` command targeting any other repo is denied; repo-less `gh` passes).
 - **Guild = restricted profile:** a guild @mention resolves to the DEFAULT (non-DM) profile **even for the principal** — so `bashAllowlist` gates *every* command. Size the allowlist for the work the stack must do.
