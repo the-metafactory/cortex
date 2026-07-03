@@ -50,7 +50,12 @@ function loadedConfig(peers: { principal_id: string; stack_id: string }[]): Load
     config: { nats: { url: "nats://127.0.0.1:4222" } } as unknown as AgentConfig,
     inlineAgents: [{ id: "luna" } as unknown as LoadedConfig["inlineAgents"][number]],
     principal: { id: "andreas" },
-    stack: { id: "andreas/community" },
+    // cortex#1482 — a registered/PoP pubkey fixture for the Pair 1 leg. A
+    // plain placeholder (not a real nkey) is fine: the leg only compares it
+    // against the (also-fake) FED account fixture via `samePubkey`, which
+    // returns `false` for anything that isn't a genuinely decodable pubkey —
+    // exactly what we want for two UNRELATED-looking fixture strings.
+    stack: { id: "andreas/community", nkey_pub: "REGISTERED_PUBKEY_FIXTURE" },
     policy: {
       federated: {
         networks: [
@@ -80,10 +85,15 @@ function network(overrides: Partial<PolicyFederatedNetwork> = {}): PolicyFederat
 function fakeConfigPort(
   networks: PolicyFederatedNetwork[],
   expectedAccount?: string,
+  // cortex#1482 (Pair 2) — `undefined` = "cannot determine" (no
+  // resolver_preload block / no local nats config, the (c) no-monitor-style
+  // default); tests that care about the leg override it explicitly.
+  resolverPreloadHasAccount?: (accountPubkey: string) => boolean | undefined,
 ): DoctorConfigPort {
   return {
     readNetworks: () => ({ networks }),
     expectedFedAccount: () => expectedAccount,
+    resolverPreloadHasAccount: resolverPreloadHasAccount ?? (() => undefined),
   };
 }
 
@@ -158,7 +168,7 @@ const ESTABLISHED_LEAFZ: LeafzResponse = {
 describe("runDoctorChecks — (a) all-green", () => {
   test("every leg passes, verdict healthy, exit 0", async () => {
     const ports: NetworkDoctorPorts = {
-      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
       monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
       probe: fakeProbe((f) => echoReply(f, 41)),
     };
@@ -170,8 +180,13 @@ describe("runDoctorChecks — (a) all-green", () => {
     expect(res.verdict).toBe("healthy");
     expect(res.exitCode).toBe(0);
     expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.healthy);
-    expect(res.checks).toHaveLength(5);
+    // 5 pre-#1482 legs + registered-vs-fed-account + resolver-preload-account
+    // + the sealed-secret-hub-authorized stub (always present, always skip).
+    expect(res.checks).toHaveLength(8);
     expect(findCheck(res.checks, "config-network").status).toBe("pass");
+    expect(findCheck(res.checks, "registered-vs-fed-account").status).toBe("pass");
+    expect(findCheck(res.checks, "resolver-preload-account").status).toBe("pass");
+    expect(findCheck(res.checks, "sealed-secret-hub-authorized").status).toBe("skip");
     expect(findCheck(res.checks, "monitor-reachable").status).toBe("pass");
     expect(findCheck(res.checks, "leaf-established").status).toBe("pass");
     expect(findCheck(res.checks, "leaf-account-bound").status).toBe("pass");
@@ -179,6 +194,8 @@ describe("runDoctorChecks — (a) all-green", () => {
     expect(peerCheck.status).toBe("pass");
     expect(peerCheck.owner).toBe("peer");
     expect(peerCheck.detail).toContain("rtt=41ms");
+    // A skip'd leg (Pair 3) is a valid outcome, not a broken/degraded verdict.
+    expect(res.verdict).not.toBe("broken");
     // Every check carries a responsible owner.
     for (const c of res.checks) {
       expect(["member", "hub-owner", "admin", "peer"]).toContain(c.owner);
@@ -434,5 +451,174 @@ describe("runDoctorChecks — leaf-account-bound", () => {
     const accountCheck = findCheck(res.checks, "leaf-account-bound");
     expect(accountCheck.status).toBe("warn");
     expect(accountCheck.detail).toContain("ACCOUNT_A");
+  });
+});
+
+// ===========================================================================
+// cortex#1482 (epic #1479, join-3) — the three representation-pairs.
+// ===========================================================================
+
+describe("runDoctorChecks — registered-vs-fed-account (Pair 1, informational)", () => {
+  test("a LEGITIMATE divergence (different keys) is a pass, never a fail", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const c = findCheck(res.checks, "registered-vs-fed-account");
+    expect(c.status).toBe("pass");
+    expect(c.detail).toContain("ADR-0018");
+    expect(res.verdict).not.toBe("broken");
+  });
+
+  test("no stack.nkey_pub configured → skip (not a failure)", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const cfg = loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]);
+    const res = await runDoctorChecks(ports, { cfg: { ...cfg, stack: { id: cfg.stack!.id } }, networkId: "metafactory-community" });
+    const c = findCheck(res.checks, "registered-vs-fed-account");
+    expect(c.status).toBe("skip");
+  });
+
+  test("FED account not yet derivable → warn (not fail) — never joined yet", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], undefined),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const c = findCheck(res.checks, "registered-vs-fed-account");
+    expect(c.status).toBe("warn");
+    expect(res.verdict).not.toBe("broken");
+  });
+
+  test("registered pubkey and FED account decoding to the SAME key material → warn, flagged as suspicious (still never fail)", async () => {
+    // A REAL (decodable) base64 pubkey on BOTH sides — samePubkey only fires
+    // on genuinely-decodable, byte-identical keys, not on two fixture
+    // strings that merely happen to be textually equal but decode to
+    // nothing (see the "LEGITIMATE divergence" test above, which uses
+    // non-decodable fixtures deliberately).
+    const sameKeyB64 = Buffer.from(new Uint8Array(32).fill(4)).toString("base64");
+    const cfg = loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]);
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], sameKeyB64),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: { ...cfg, stack: { id: cfg.stack!.id, nkey_pub: sameKeyB64 } },
+      networkId: "metafactory-community",
+    });
+    const c = findCheck(res.checks, "registered-vs-fed-account");
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("SAME key material");
+    expect(c.owner).toBe("admin");
+  });
+
+  test("skipped entirely when config-network fails (network not configured)", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([]),
+      monitor: fakeMonitorPort({ configured: true }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "registered-vs-fed-account").status).toBe("skip");
+    expect(findCheck(res.checks, "resolver-preload-account").status).toBe("skip");
+    expect(findCheck(res.checks, "sealed-secret-hub-authorized").status).toBe("skip");
+  });
+});
+
+describe("runDoctorChecks — resolver-preload-account (Pair 2)", () => {
+  test("a REAL mismatch (account not in resolver_preload) FAILS — the boot/auth failure this leg catches early", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", () => false),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const c = findCheck(res.checks, "resolver-preload-account");
+    expect(c.status).toBe("fail");
+    expect(c.detail).toContain("ACCOUNT_A");
+    expect(c.fix).toContain("resolver_preload");
+    expect(c.fix).toContain("restart");
+    // A real Pair 2 mismatch DOES flip the verdict — it's a real boot/auth bug.
+    expect(res.verdict).not.toBe("healthy");
+  });
+
+  test("account IS preloaded → pass", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "resolver-preload-account").status).toBe("pass");
+  });
+
+  test("cannot determine (no local nats config / no resolver_preload block at all) → warn, not fail", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", () => undefined),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const c = findCheck(res.checks, "resolver-preload-account");
+    expect(c.status).toBe("warn");
+    expect(res.verdict).not.toBe("broken");
+  });
+
+  test("no FED account derivable yet → skip", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], undefined, () => true),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "resolver-preload-account").status).toBe("skip");
+  });
+});
+
+describe("runDoctorChecks — sealed-secret-hub-authorized (Pair 3, documented stub)", () => {
+  test("ALWAYS skip, owner hub-owner, detail documents the follow-up — never fabricates a pass/fail it can't back", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 10)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const c = findCheck(res.checks, "sealed-secret-hub-authorized");
+    expect(c.status).toBe("skip");
+    expect(c.owner).toBe("hub-owner");
+    expect(c.detail).toContain("opaque ciphertext");
+    // A skip never blocks a healthy verdict.
+    expect(res.verdict).toBe("healthy");
   });
 });

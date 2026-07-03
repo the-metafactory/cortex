@@ -26,6 +26,7 @@
  */
 
 import { encodeLeafSecretEnvelope } from "../../../common/registry/sealed-leaf-secret";
+import { looksLikeNkeyRole, toBase64Pubkey } from "../../../common/registry/pubkey-normalize";
 import { pskFingerprint } from "../../../common/nats/leaf-psk";
 import {
   upsertHubLeafUser,
@@ -337,23 +338,30 @@ async function addOrRotate(
 ): Promise<SecretReport> {
   const action: SecretAction = rotate ? "rotate" : "add-member";
   const steps: string[] = [];
+  // cortex#1482 (Pair 1) — normalize whatever encoding the caller passed
+  // (base64, or an nkey of EITHER role) to base64 for the lookup/seal below;
+  // fall back to the raw value when it isn't recognizable so an already-
+  // malformed input fails exactly as it did before this change. The RAW
+  // `inputs.memberPubkey` is kept separately (never overwritten) so
+  // `noAdmittedRowMessage` can still inspect what the caller actually typed.
+  const memberPubkeyB64 = toBase64Pubkey(inputs.memberPubkey) ?? inputs.memberPubkey;
   const data: Record<string, string> = {
     action,
     network: inputs.networkId,
-    member_fingerprint: inputs.memberPubkey.slice(0, 12),
+    member_fingerprint: memberPubkeyB64.slice(0, 12),
     deliver: inputs.deliver,
   };
 
   // 1. Resolve the ADMITTED admission row (read-only — safe in dry-run too).
-  const row = await ports.admission.findAdmittedRow(inputs.networkId, inputs.memberPubkey);
+  const row = await ports.admission.findAdmittedRow(inputs.networkId, memberPubkeyB64);
   if (!row) {
-    return fail(action, inputs, steps, data, `no ADMITTED admission row for that member on network "${inputs.networkId}" — admit them first (cortex network admit)`);
+    return fail(action, inputs, steps, data, noAdmittedRowMessage(inputs.networkId, inputs.memberPubkey, "admit them first (cortex network admit)"));
   }
   const leafUser = inputs.leafUserOverride ?? row.principal_id;
   data.request_id = row.request_id;
   data.leaf_user = leafUser;
 
-  steps.push(`member:     ${inputs.memberPubkey.slice(0, 12)}… (request ${row.request_id})`);
+  steps.push(`member:     ${memberPubkeyB64.slice(0, 12)}… (request ${row.request_id})`);
   steps.push(`leaf user:  ${leafUser}`);
   steps.push(`deliver:    ${inputs.deliver}`);
 
@@ -495,7 +503,7 @@ async function addOrRotate(
         payload_key_kid: payloadKeyKid,
       }),
     });
-    sealed = await ports.crypto.seal(envelope, inputs.memberPubkey);
+    sealed = await ports.crypto.seal(envelope, memberPubkeyB64);
   } catch (err) {
     return fail(action, inputs, steps, data, `failed to seal the secret to the member pubkey: ${errText(err)}`);
   }
@@ -542,20 +550,22 @@ async function revokeMember(
 ): Promise<SecretReport> {
   const action: SecretAction = "revoke-member";
   const steps: string[] = [];
+  // cortex#1482 (Pair 1) — SAME normalize-then-fall-back-to-raw as addOrRotate.
+  const memberPubkeyB64 = toBase64Pubkey(inputs.memberPubkey) ?? inputs.memberPubkey;
   const data: Record<string, string> = {
     action,
     network: inputs.networkId,
-    member_fingerprint: inputs.memberPubkey.slice(0, 12),
+    member_fingerprint: memberPubkeyB64.slice(0, 12),
   };
 
-  const row = await ports.admission.findAdmittedRow(inputs.networkId, inputs.memberPubkey);
+  const row = await ports.admission.findAdmittedRow(inputs.networkId, memberPubkeyB64);
   if (!row) {
-    return fail(action, inputs, steps, data, `no ADMITTED admission row for that member on network "${inputs.networkId}" — nothing to revoke`);
+    return fail(action, inputs, steps, data, noAdmittedRowMessage(inputs.networkId, inputs.memberPubkey, "nothing to revoke"));
   }
   const leafUser = inputs.leafUserOverride ?? row.principal_id;
   data.request_id = row.request_id;
   data.leaf_user = leafUser;
-  steps.push(`member:     ${inputs.memberPubkey.slice(0, 12)}… (request ${row.request_id})`);
+  steps.push(`member:     ${memberPubkeyB64.slice(0, 12)}… (request ${row.request_id})`);
   steps.push(`leaf user:  ${leafUser}`);
 
   if (!inputs.apply) {
@@ -607,6 +617,35 @@ function fail(action: SecretAction, inputs: SecretInputs, steps: string[], data:
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// ===========================================================================
+// cortex#1482 (epic #1479, join-3) — Pair 1 reconciliation: registered/PoP
+// pubkey ⟷ FED account. These CAN legitimately differ (seal-target ≠
+// leaf-account, ADR-0018): a member's admission row is keyed to their
+// REGISTERED/PoP pubkey (a user-role identity key), while their leaf binds a
+// SEPARATE FED account (an account-role key). Passing the account key where
+// the admission lookup expects the registered pubkey used to fail with a
+// bare "no ADMITTED row" — {@link noAdmittedRowMessage} builds the loud,
+// plain explanation instead, but ONLY when the RAW value the caller typed is
+// shaped like the other representation (an nkey-account, `A…`). A value
+// that's already base64 or an nkey-user (the CORRECT shape) that simply
+// isn't admitted gets the bare message unchanged — base64 carries no role
+// annotation, so we cannot honestly claim a representation mismatch for it,
+// and "not admitted yet" is a real, distinct failure the explanation must
+// not paper over.
+// ===========================================================================
+
+function noAdmittedRowMessage(networkId: string, rawMemberPubkey: string, tail: string): string {
+  const bare = `no ADMITTED admission row for that member on network "${networkId}" — ${tail}`;
+  if (!looksLikeNkeyRole(rawMemberPubkey, "account")) return bare;
+  return (
+    `${bare}. "${rawMemberPubkey.slice(0, 12)}…" looks like a FED account nkey (A…), but admission ` +
+    `rows are keyed to the member's REGISTERED/PoP pubkey — a different key, not the hub's federation ` +
+    `account. These can legitimately differ (seal-target ≠ leaf-account, ADR-0018): pass the member's ` +
+    `registered/PoP pubkey here instead (base64 or a U… nkey — either encoding works). If you meant to ` +
+    `bind the HUB's own federation account, that's --hub-account, not the member pubkey.`
+  );
 }
 
 // ===========================================================================

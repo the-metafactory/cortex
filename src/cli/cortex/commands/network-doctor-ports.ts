@@ -46,6 +46,19 @@ export interface DoctorConfigPort {
    * in that case rather than failing. Never throws.
    */
   expectedFedAccount(networkId: string): string | undefined;
+  /**
+   * cortex#1482 (epic #1479, join-3, Pair 2) — best-effort: does the bus's
+   * OWN nats-server config (the SAME file the `natsConfigPath` adapter input
+   * points at) declare `accountPubkey` as a `resolver_preload { … }` KEY? A
+   * leaf remote binds an account that MUST be preloaded on this bus, or the
+   * bus can't authenticate the leaf at boot — this catches the mismatch
+   * statically, before it becomes a boot/auth failure. `undefined` when it
+   * cannot be determined (no natsConfigPath, file missing, or the config
+   * carries NO `resolver_preload { … }` block at all — e.g. a
+   * non-operator-mode / hard-isolated bus, where the question doesn't
+   * apply). Never throws.
+   */
+  resolverPreloadHasAccount(accountPubkey: string): boolean | undefined;
 }
 
 // =============================================================================

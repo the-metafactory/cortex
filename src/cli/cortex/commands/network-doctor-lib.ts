@@ -17,15 +17,30 @@
  * timeout and re-mapped to a DoctorCheck).
  *
  * Later checks `skip` when a hard prerequisite failed (spec's check matrix):
- *   1. config-network      — the network is configured, has peers + accept_subjects
- *   2. monitor-reachable   — the local nats-server HTTP monitor answers `/leafz`
- *   3. leaf-established    — `/leafz` shows an established leaf for this network
- *   4. leaf-account-bound  — the established leaf's account matches config (best-effort)
- *   5. peer-reachable:<p>  — one check per configured peer, a real echo round-trip
+ *   1. config-network              — the network is configured, has peers + accept_subjects
+ *   2. registered-vs-fed-account   — cortex#1482 Pair 1 (informational — legit divergence, never fails)
+ *   3. resolver-preload-account    — cortex#1482 Pair 2 (fails on a real preload mismatch)
+ *   4. sealed-secret-hub-authorized — cortex#1482 Pair 3 (documented stub — always skip)
+ *   5. monitor-reachable           — the local nats-server HTTP monitor answers `/leafz`
+ *   6. leaf-established            — `/leafz` shows an established leaf for this network
+ *   7. leaf-account-bound          — the established leaf's account matches config (best-effort)
+ *   8. peer-reachable:<p>          — one check per configured peer, a real echo round-trip
+ *
+ * Legs 2-4 (cortex#1482, epic #1479, join-3) surface the THREE representation
+ * pairs that nothing checked before: (1) registered/PoP pubkey ⟷ FED account
+ * (these can LEGITIMATELY differ — seal-target ≠ leaf-account, ADR-0018 — so
+ * this leg is informational, never a `fail`); (2) local `resolver_preload`
+ * accounts ⟷ leaf remote `account:` (a REAL mismatch here is a boot/auth
+ * failure waiting to happen — this leg DOES fail); (3) registry sealed-secret
+ * ⟷ hub authorization (needs hub-side visibility this command doesn't have —
+ * a documented stub, not a fabricated check). They are STATIC/config-only
+ * (no live NATS needed), so they run right after config-network and degrade
+ * gracefully (warn/skip) rather than block downstream legs.
  */
 
 import type { LoadedConfig } from "../../../common/config/loader";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
+import { samePubkey } from "../../../common/registry/pubkey-normalize";
 import {
   derivePingInputs,
   pingPeer,
@@ -115,6 +130,13 @@ function stackSlugFromStackId(stackId: string): string {
   return parts.length === 2 ? (parts[1] ?? stackId) : stackId;
 }
 
+/** Truncate a pubkey for display in a check detail (never the full key —
+ *  these legs deal in PUBLIC keys, so truncation is for READABILITY, not
+ *  secrecy). */
+function shortKey(pubkey: string): string {
+  return `${pubkey.slice(0, 12)}…`;
+}
+
 // ---------------------------------------------------------------------------
 // Leg 1 — config-network
 // ---------------------------------------------------------------------------
@@ -176,6 +198,152 @@ function checkConfigNetwork(
     ),
     network,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Leg 1.5 — registered-vs-fed-account (cortex#1482, Pair 1 — informational)
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#1482 Pair 1 — surface the stack's registered/PoP pubkey ALONGSIDE
+ * this network's FED account so whoever runs `cortex network doctor` can see,
+ * at a glance, that they are (correctly) two DIFFERENT keys — seal-target ≠
+ * leaf-account, ADR-0018.
+ * Divergence is the EXPECTED, healthy state, so this leg NEVER fails; the
+ * worst outcome is `warn` (can't determine one side yet, or — a real red
+ * flag — the two decode to the SAME key material, which would mean the
+ * account was provisioned by reusing the registered identity key).
+ */
+function checkRegisteredVsFedAccount(
+  config: DoctorConfigPort,
+  networkId: string,
+  registeredPubkey: string | undefined,
+): DoctorCheck {
+  const id = "registered-vs-fed-account";
+  const title = "registered pubkey vs FED account (Pair 1)";
+
+  if (registeredPubkey === undefined) {
+    return skipCheck(
+      id,
+      title,
+      "skipped — no registered/PoP pubkey on this stack's config (stack.nkey_pub)",
+      "member",
+    );
+  }
+  const fedAccount = config.expectedFedAccount(networkId);
+  if (fedAccount === undefined) {
+    return check(
+      id,
+      title,
+      "warn",
+      `registered pubkey ${shortKey(registeredPubkey)} — FED account not derivable yet (no rendered leaf include; join first)`,
+      "member",
+    );
+  }
+  if (samePubkey(registeredPubkey, fedAccount)) {
+    return check(
+      id,
+      title,
+      "warn",
+      `registered pubkey and FED account decode to the SAME key material (${shortKey(registeredPubkey)}) — ` +
+        `these should be TWO DIFFERENT keys (seal-target ≠ leaf-account, ADR-0018); double-check the account ` +
+        `wasn't provisioned by reusing the registered identity key`,
+      "admin",
+      "provision a DEDICATED federation account for this stack rather than reusing the registered identity key",
+    );
+  }
+  return check(
+    id,
+    title,
+    "pass",
+    `registered pubkey ${shortKey(registeredPubkey)} and FED account ${shortKey(fedAccount)} are different keys, as expected (seal-target ≠ leaf-account, ADR-0018)`,
+    "member",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Leg 1.6 — resolver-preload-account (cortex#1482, Pair 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#1482 Pair 2 — the leaf remote binds an account that MUST be present
+ * in this bus's OWN `resolver_preload { … }`, or the bus can't authenticate
+ * the leaf at boot. Unlike Pair 1, a real mismatch here IS a failure — it is
+ * exactly the class of bug that otherwise only surfaces as a cryptic
+ * Authorization Violation at boot/reload time.
+ */
+function checkResolverPreloadAccount(
+  config: DoctorConfigPort,
+  fedAccount: string | undefined,
+): DoctorCheck {
+  const id = "resolver-preload-account";
+  const title = "leaf account preloaded on this bus (Pair 2)";
+
+  if (fedAccount === undefined) {
+    return skipCheck(
+      id,
+      title,
+      "skipped — no FED account derivable for this network yet (see registered-vs-fed-account / join first)",
+      "member",
+    );
+  }
+  const present = config.resolverPreloadHasAccount(fedAccount);
+  if (present === undefined) {
+    return check(
+      id,
+      title,
+      "warn",
+      `could not read this bus's resolver_preload (no local nats config found, or the bus declares no ` +
+        `resolver_preload block at all — expected for a non-operator-mode bus) — cannot verify account ` +
+        `${shortKey(fedAccount)} is preloaded`,
+      "member",
+    );
+  }
+  if (!present) {
+    return check(
+      id,
+      title,
+      "fail",
+      `leaf remote binds account ${shortKey(fedAccount)} but this bus's resolver_preload does NOT declare ` +
+        `it — the bus cannot authenticate this leaf (boot/auth failure)`,
+      "member",
+      `add account "${fedAccount}" to this bus's resolver_preload (arc nats export-account / cortex network ` +
+        `make-live) and restart the bus — a SIGHUP reload does not pick up resolver_preload changes`,
+    );
+  }
+  return check(id, title, "pass", `account ${shortKey(fedAccount)} is preloaded on this bus`, "member");
+}
+
+// ---------------------------------------------------------------------------
+// Leg 1.7 — sealed-secret-hub-authorized (cortex#1482, Pair 3 — stub)
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#1482 Pair 3 — is the sealed leaf PSK on the registry's admission row
+ * ACTUALLY authorized (an `authorization` user) on the hub? This is a
+ * genuinely hub-side question this command cannot answer from the joining
+ * member's own machine: the registry carries only an OPAQUE ciphertext
+ * sealed to the member's pubkey (ADR-0018 Q1) — nobody but the member can
+ * decrypt it, so there is no PSK to fingerprint-compare against the hub's
+ * `authorization` entries from here, even on a local hub. A "does the hub
+ * declare AN authorization user for this member" check would prove nothing
+ * about whether the SEALED SECRET matches it, so implementing that partial
+ * signal would be actively misleading (an outdated PSK still hits `pass`).
+ * Rather than fabricate a check this command can't back, this leg documents
+ * the gap: always `skip`, owner `hub-owner` (only they can verify it — e.g.
+ * fingerprint-comparing the decrypted PSK against the hub's live
+ * `authorization` users), with a fix pointing at the follow-up.
+ */
+function checkSealedSecretHubAuthorized(): DoctorCheck {
+  return skipCheck(
+    "sealed-secret-hub-authorized",
+    "registry sealed-secret ⟷ hub authorization (Pair 3)",
+    "not implemented from the member side — the registry holds only an opaque ciphertext sealed to the " +
+      "member's own pubkey (ADR-0018 Q1), so there is no plaintext PSK here to compare against the hub's " +
+      "authorization users. Verifying this pair needs HUB-SIDE visibility (the hub owner decrypting + " +
+      "fingerprint-comparing against their own nats config) — tracked as a follow-up, not fabricated here.",
+    "hub-owner",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +629,23 @@ export async function runDoctorChecks(
   const network = configResult.network;
   if (configResult.result.status !== "pass" || network === undefined) {
     checks.push(
+      skipCheck(
+        "registered-vs-fed-account",
+        "registered pubkey vs FED account (Pair 1)",
+        "skipped — network not configured (see config-network)",
+        "member",
+      ),
+    );
+    checks.push(
+      skipCheck(
+        "resolver-preload-account",
+        "leaf account preloaded on this bus (Pair 2)",
+        "skipped — network not configured (see config-network)",
+        "member",
+      ),
+    );
+    checks.push(checkSealedSecretHubAuthorized());
+    checks.push(
       skipCheck("monitor-reachable", "local NATS monitor reachable", "skipped — network not configured (see config-network)", "member"),
     );
     checks.push(
@@ -472,6 +657,15 @@ export async function runDoctorChecks(
     const verdict = aggregateVerdict(checks);
     return { checks, verdict, exitCode: DOCTOR_EXIT_CODE[verdict] };
   }
+
+  // 1.5-1.7. cortex#1482 — the three representation-pairs. Purely
+  // static/config-based (no live NATS), so they run right after
+  // config-network and don't gate anything downstream.
+  const registeredPubkey = opts.cfg.stack?.nkey_pub;
+  const fedAccount = ports.config.expectedFedAccount(opts.networkId);
+  checks.push(checkRegisteredVsFedAccount(ports.config, opts.networkId, registeredPubkey));
+  checks.push(checkResolverPreloadAccount(ports.config, fedAccount));
+  checks.push(checkSealedSecretHubAuthorized());
 
   // 2. monitor-reachable
   const monitorResult = await checkMonitorReachable(ports);

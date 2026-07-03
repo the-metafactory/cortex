@@ -73,6 +73,7 @@ function fakeDoctorFactory(): {
         ],
       }),
       expectedFedAccount: () => "ACCOUNT_A",
+      resolverPreloadHasAccount: () => true,
     },
     monitor: {
       resolve: () => ({ url: "http://127.0.0.1:8222", configured: true }),
@@ -186,6 +187,7 @@ describe("cortex network doctor — degraded/broken exit codes", () => {
       config: {
         readNetworks: () => ({ networks: [] }), // network not configured ⇒ broken
         expectedFedAccount: () => undefined,
+        resolverPreloadHasAccount: () => undefined,
       },
       monitor: {
         resolve: () => ({ url: "http://127.0.0.1:8222", configured: true }),

@@ -131,7 +131,13 @@ import {
 } from "./network-make-live-lib";
 import { buildLiveMakeLivePorts, buildResolverPreloadAdapter } from "./network-make-live-adapters";
 import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/nats/leaf-remote-renderer";
-import { parseLoopbackListen, isNkeyAccountPubkey } from "../../../common/nats/leaf-remote-renderer";
+import { parseLoopbackListen } from "../../../common/nats/leaf-remote-renderer";
+import {
+  detectPubkey,
+  looksLikeNkeyRole,
+  samePubkey,
+  toNkeyPubkey,
+} from "../../../common/registry/pubkey-normalize";
 import {
   runNetworkSecret,
   runNetworkKeyRotation,
@@ -2350,6 +2356,42 @@ async function runListPending(flags: FlagMap, json: boolean): Promise<ExitResult
   return ok(renderPendingTable(filtered, status, networkFilter, registryUrl));
 }
 
+// =============================================================================
+// cortex#1482 (epic #1479, join-3) — shared `--hub-account` boundary.
+// =============================================================================
+
+/**
+ * Validate + normalize a `--hub-account` flag value to the canonical
+ * nkey-account form. Accepts EITHER an nkey-U account key (`A…`) or its
+ * base64 form (auto-converts); REFUSES a value that looks like the member's
+ * own registered/PoP USER key (`U…`) with a plain explanation (seal-target ≠
+ * leaf-account, ADR-0018) rather than a bare grammar error. `raw === undefined`
+ * (nothing passed) is not an error — the caller's `hubAccount` stays
+ * `undefined` (omit ⇒ the printed artifact tells the hub owner to add the
+ * account themselves). Shared by `admit --hub-account` and
+ * `secret … --hub-account` — the SAME boundary, validated once.
+ */
+function normalizeHubAccountFlag(
+  raw: string | undefined,
+): { ok: true; value?: string } | { ok: false; reason: string } {
+  if (raw === undefined) return { ok: true };
+  const normalized = toNkeyPubkey(raw, "account");
+  if (normalized !== undefined) return { ok: true, value: normalized };
+  if (looksLikeNkeyRole(raw, "user")) {
+    return {
+      ok: false,
+      reason:
+        `--hub-account "${raw}" looks like a registered/PoP user nkey (U…) — that's the MEMBER's identity ` +
+        `key, not the hub's federation account. These are different keys (seal-target ≠ leaf-account, ` +
+        `ADR-0018); pass the hub's OWN account nkey (A…) or its base64 form instead.`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `--hub-account "${raw}" is not a valid federation-account pubkey (expected an nkey-U account key "A…" (56 chars) or its base64 form (44 chars))`,
+  };
+}
+
 /**
  * `cortex network admit <request-id> --admin-seed <path> [--apply]`
  *
@@ -2396,14 +2438,17 @@ async function runAdmit(
   const discordGuild = optionalValueFlag(flags, "--discord-guild");
   const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
   // cortex#1481 (Sage review, Important 1) — validate --hub-account with the
-  // SAME nkey-U guard the `secret` path enforces (isNkeyAccountPubkey), and
-  // validate it HERE — before the admission is committed — so a malformed
-  // account fails fast (exit 2) rather than silently riding into the printed
-  // hub-owner artifact the hub owner pastes into a live nats-server config.
-  const admitHubAccount = optionalValueFlag(flags, "--hub-account");
-  if (admitHubAccount !== undefined && !isNkeyAccountPubkey(admitHubAccount)) {
-    return usageError("admit", `--hub-account "${admitHubAccount}" is not a valid nkey-U account public key (expected A + 55 base32 chars)`, json);
+  // SAME guard the `secret` path enforces, and validate it HERE — before the
+  // admission is committed — so a malformed account fails fast (exit 2)
+  // rather than silently riding into the printed hub-owner artifact the hub
+  // owner pastes into a live nats-server config. cortex#1482 — normalizes
+  // either encoding (nkey-U or base64) and explains a registered-vs-account
+  // role mismatch instead of a bare grammar error (ADR-0018).
+  const admitHubAccountRes = normalizeHubAccountFlag(optionalValueFlag(flags, "--hub-account"));
+  if (!admitHubAccountRes.ok) {
+    return usageError("admit", admitHubAccountRes.reason, json);
   }
+  const admitHubAccount = admitHubAccountRes.value;
 
   // Load + chmod-600-gate the admin seed
   const matRes = await adminMaterialFromSeedFile(seedRes.value);
@@ -3090,8 +3135,17 @@ async function runSecret(
   if (member === "") {
     return usageError("secret", `action "${action}" requires a member pubkey (usage: cortex network secret ${action} <network> <member-pubkey>)`, json);
   }
-  if (!MEMBER_PUBKEY_RE.test(member)) {
-    return usageError("secret", `member "${member}" must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)`, json);
+  // cortex#1482 — accept EITHER encoding (base64 OR an nkey-U, either role);
+  // the RAW string rides through unchanged into SecretInputs.memberPubkey —
+  // network-secret-lib.ts normalizes it for the actual lookup/seal and, on a
+  // miss, uses this same raw value to explain a registered-vs-account
+  // representation mismatch (ADR-0018) instead of a bare grammar error.
+  if (detectPubkey(member) === undefined) {
+    return usageError(
+      "secret",
+      `member "${member}" must be a 32-byte Ed25519 pubkey — base64 (44 chars) or an NKey public key (A…/U… + 55 base32 chars)`,
+      json,
+    );
   }
 
   // 3. Resolve delivery mode (add-member / rotate only — rotate is always sealed).
@@ -3121,10 +3175,23 @@ async function runSecret(
   const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
   // cortex#1481 — add-member/rotate only: force the seal-only path (never write
   // the local hub) + the hub's own account nkey-U, when the admin knows it.
+  // cortex#1482 — normalize either encoding (nkey-U or base64) and explain a
+  // registered-vs-account role mismatch instead of a bare grammar error.
   const sealOnly = flags["--seal-only"] === true;
-  const hubAccountRaw = optionalValueFlag(flags, "--hub-account");
-  if (hubAccountRaw !== undefined && !isNkeyAccountPubkey(hubAccountRaw)) {
-    return usageError("secret", `--hub-account "${hubAccountRaw}" is not a valid nkey-U account public key (expected A + 55 base32 chars)`, json);
+  const hubAccountRes = normalizeHubAccountFlag(optionalValueFlag(flags, "--hub-account"));
+  if (!hubAccountRes.ok) return usageError("secret", hubAccountRes.reason, json);
+  const hubAccount = hubAccountRes.value;
+  // cortex#1482 (Pair 1) — a plausible copy-paste mix-up: the member's OWN
+  // registered/PoP pubkey and the hub's federation account are DIFFERENT
+  // keys by design (seal-target ≠ leaf-account, ADR-0018). Catch it here,
+  // before either value reaches the lookup/artifact.
+  if (hubAccount !== undefined && samePubkey(member, hubAccount)) {
+    return usageError(
+      "secret",
+      `member pubkey and --hub-account resolve to the SAME key — they must be different (the member's ` +
+        `registered/PoP pubkey vs. the hub's federation account; seal-target ≠ leaf-account, ADR-0018)`,
+      json,
+    );
   }
 
   // 4. Load + chmod-600-gate the hub-admin seed.
@@ -3157,7 +3224,7 @@ async function runSecret(
     ...(payloadKey !== undefined && { payloadKey }),
     ...(payloadKeyKid !== undefined && { payloadKeyKid }),
     sealOnly,
-    ...(hubAccountRaw !== undefined && { hubAccount: hubAccountRaw }),
+    ...(hubAccount !== undefined && { hubAccount }),
     apply: applyRes.apply,
   };
 

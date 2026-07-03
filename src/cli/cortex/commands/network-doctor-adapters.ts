@@ -37,6 +37,49 @@ import type {
 /** Bound the `/leafz` probe so a hung monitor cannot stall `doctor` forever. */
 export const DEFAULT_LEAFZ_TIMEOUT_MS = DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
 
+// =============================================================================
+// cortex#1482 (epic #1479, join-3, Pair 2) — resolver_preload account lookup.
+// =============================================================================
+
+/**
+ * True iff `accountPubkey` appears as a top-level KEY inside the
+ * `resolver_preload { … }` block of `text` (not merely anywhere in the file —
+ * a leaf remote's OWN `account: "<pubkey>"` line commonly carries the SAME
+ * account pubkey, so a bare substring search over the whole file would
+ * false-positive even when the account is NOT actually preloaded).
+ * `undefined` when `text` has no `resolver_preload { … }` block at all (can't
+ * determine — e.g. a non-operator-mode / hard-isolated bus, where the
+ * question doesn't apply, or an unbalanced/malformed config).
+ *
+ * The brace-matched scan mirrors `insertIntoResolverPreload` (this same
+ * codebase's existing resolver_preload-block locator, in
+ * `network-make-live-adapters.ts`) — same block-opening regex, same
+ * depth-counted brace walk — but EXTRACTS the block instead of inserting
+ * into it.
+ */
+export function resolverPreloadHasAccountKey(text: string, accountPubkey: string): boolean | undefined {
+  const key = /resolver_preload\s*[:=]?\s*\{/.exec(text);
+  if (key === null) return undefined;
+  const open = key.index + key[0].length - 1; // index of the `{`
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) return undefined; // unbalanced braces — can't determine
+  const block = text.slice(open + 1, close);
+  const escaped = accountPubkey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[\\s{,])${escaped}\\s*:`).test(block);
+}
+
 /** Inputs {@link buildDoctorConfigPort} needs — a subset of {@link LivePortsConfig}. */
 export interface DoctorConfigAdapterConfig {
   /** The COMPOSED `policy.federated.networks[]` from the loaded config — read
@@ -94,6 +137,26 @@ export function buildDoctorConfigPort(cfg: DoctorConfigAdapterConfig): DoctorCon
       // operator-mode-bound. Absent entirely for a `$G`/default-bus remote.
       const m = /^\s*account:\s*(\S+)/m.exec(text);
       return m?.[1];
+    },
+
+    // cortex#1482 (Pair 2) — reads the SAME base nats config `natsConfigPath`
+    // points at (not the per-network leaf-include file `expectedFedAccount`
+    // reads) since `resolver_preload` lives on the bus's OWN config, not the
+    // per-network include.
+    resolverPreloadHasAccount(accountPubkey: string): boolean | undefined {
+      const natsConfigPath = expandTilde(cfg.natsConfigPath ?? "");
+      if (natsConfigPath.length === 0 || !existsSync(natsConfigPath)) return undefined;
+
+      let text: string;
+      try {
+        text = readFileSync(natsConfigPath, "utf-8");
+      } catch (err) {
+        process.stderr.write(
+          `network-doctor-adapters: could not read nats config ${natsConfigPath}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        return undefined;
+      }
+      return resolverPreloadHasAccountKey(text, accountPubkey);
     },
   };
 }

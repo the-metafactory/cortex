@@ -12,6 +12,9 @@
  */
 
 import { describe, test, expect } from "bun:test";
+import { createAccount, createUser } from "@nats-io/nkeys";
+import { nkeyToBase64Pubkey } from "../../../../common/registry/encoding";
+import { toBase64Pubkey } from "../../../../common/registry/pubkey-normalize";
 import {
   runNetworkSecret,
   runNetworkKeyRotation,
@@ -286,6 +289,83 @@ describe("dry-run (default) + guards", () => {
     expect(report.ok).toBe(false);
     expect(r.writes.length).toBe(0);
     expect(r.posted.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// cortex#1482 (epic #1479, join-3) — Pair 1: registered/PoP pubkey ⟷ FED
+// account (seal-target ≠ leaf-account, ADR-0018). NKEY <-> base64
+// auto-convert at the admission lookup + the loud "wrong representation"
+// explanation instead of a bare "no ADMITTED row" error.
+// ===========================================================================
+
+describe("cortex#1482 — Pair 1: registered pubkey ⟷ FED account", () => {
+  test("an nkey-account-shaped member with no ADMITTED row gets the ADR-0018 explanation, not a bare error", async () => {
+    const r = makePorts({ admitted: undefined });
+    // Grammar-valid (A + 55 base32 chars), checksum-invalid — the SAME fixture
+    // style used across the existing --hub-account tests; the explanation is a
+    // grammar-only HINT (looksLikeNkeyRole), so it fires regardless.
+    const fakeAccountNkey = "A" + "D".repeat(55);
+    const report = await runNetworkSecret(inputs({ memberPubkey: fakeAccountNkey, apply: true }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("FED account nkey");
+    expect(report.reason).toContain("seal-target ≠ leaf-account");
+    expect(report.reason).toContain("ADR-0018");
+    expect(report.reason).toContain("--hub-account");
+    // The bare message is still the PREFIX (nothing removed, only appended).
+    expect(report.reason).toContain("no ADMITTED admission row for that member");
+  });
+
+  test("a base64 member with no ADMITTED row gets the BARE message (no representation claim we can't back)", async () => {
+    const r = makePorts({ admitted: undefined });
+    const report = await runNetworkSecret(inputs({ apply: true }), r.ports); // default MEMBER_PUBKEY is base64
+    expect(report.ok).toBe(false);
+    expect(report.reason).not.toContain("FED account nkey");
+    expect(report.reason).toContain("no ADMITTED admission row for that member");
+  });
+
+  test("revoke-member: the SAME explanation fires on the wrong-representation path", async () => {
+    const r = makePorts({ admitted: undefined });
+    const fakeAccountNkey = "A" + "E".repeat(55);
+    const report = await runNetworkSecret(
+      inputs({ action: "revoke-member", memberPubkey: fakeAccountNkey, apply: true }),
+      r.ports,
+    );
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("FED account nkey");
+    expect(report.reason).toContain("nothing to revoke");
+  });
+
+  test("an nkey-user member is auto-converted to base64 for the admission lookup + the seal", async () => {
+    const nkeyU = createUser().getPublicKey();
+    const expectedB64 = nkeyToBase64Pubkey(nkeyU)!;
+    let lookedUpWith: string | undefined;
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const originalFind = r.ports.admission.findAdmittedRow;
+    r.ports.admission.findAdmittedRow = async (networkId: string, memberPubkey: string) => {
+      lookedUpWith = memberPubkey;
+      return originalFind(networkId, memberPubkey);
+    };
+
+    const report = await runNetworkSecret(inputs({ memberPubkey: nkeyU, apply: true }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(lookedUpWith).toBe(expectedB64);
+    // The fingerprint printed in steps/data is derived from the NORMALIZED
+    // (base64) form too, not the raw nkey string.
+    expect(report.data.member_fingerprint).toBe(expectedB64.slice(0, 12));
+  });
+
+  test("an nkey-account member (the WRONG representation) is still converted to base64 for the lookup — the explanation only fires when that lookup MISSES", async () => {
+    // If an admission row genuinely exists keyed to these (unusual) bytes, the
+    // lookup succeeds and no explanation is needed — normalize-then-lookup
+    // never refuses solely because the input LOOKED like an account nkey.
+    const nkeyA = createAccount().getPublicKey();
+    const expectedB64 = toBase64Pubkey(nkeyA)!;
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(inputs({ memberPubkey: nkeyA, apply: true }), r.ports);
+    expect(report.ok).toBe(true);
+    expect(report.data.member_fingerprint).toBe(expectedB64.slice(0, 12));
   });
 });
 
