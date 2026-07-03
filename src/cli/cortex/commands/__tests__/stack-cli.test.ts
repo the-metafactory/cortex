@@ -265,6 +265,39 @@ describe("create --apply", () => {
     expect(existsSync(join(cfg, "demo", "personas", "echo.md"))).toBe(true);
   });
 
+  test("nats.url defaults to 4222 and credsPath ships commented — a fresh stack boots (cortex#1453)", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack(["create", "demo", "--principal", "andreas", "--config-dir", cfg, "--apply"]);
+    expect(res.exitCode).toBe(0);
+    const systemYaml = readFileSync(join(cfg, "demo", "system", "system.yaml"), "utf-8");
+    expect(systemYaml).toContain("url: nats://127.0.0.1:4222");
+    // No ACTIVE credsPath: on a fresh local-only anonymous bus.
+    expect(systemYaml).not.toMatch(/^\s*credsPath:/m);
+  });
+
+  test("honours --nats-url for a bus on a non-default port (cortex#1453)", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas",
+      "--nats-url", "nats://127.0.0.1:4242", "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const systemYaml = readFileSync(join(cfg, "demo", "system", "system.yaml"), "utf-8");
+    expect(systemYaml).toContain("url: nats://127.0.0.1:4242");
+    expect(systemYaml).not.toContain("url: nats://127.0.0.1:4222");
+  });
+
+  test("rejects a malformed --nats-url (cortex#1453)", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas",
+      "--nats-url", "127.0.0.1:4242", "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(2); // usage error (mirrors --principal / --agent validation)
+    expect(res.stderr).toContain("--nats-url");
+    expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+
   test("composed stack is discoverable as itself (round-trip uniqueness)", async () => {
     const cfg = freshDir();
     await dispatchStack(["create", "demo", "--principal", "andreas", "--config-dir", cfg, "--apply"]);

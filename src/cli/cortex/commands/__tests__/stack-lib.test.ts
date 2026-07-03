@@ -127,6 +127,7 @@ describe("renderScaffold", () => {
     agentId: "assistant",
     displayName: "Demo",
     seedPath: "~/.config/nats/cortex-demo.nk",
+    natsUrl: "nats://127.0.0.1:4222",
   };
 
   test("emits the full file set", () => {
@@ -145,18 +146,39 @@ describe("renderScaffold", () => {
     expect(stack?.contents).toContain("assistant");
   });
 
-  test("system/system.yaml seeds the bus/bot credsPath (~/.config/nats/<slug>-bot.creds), distinct from the federation default", () => {
-    // v5.30.2 (C-1265c): a from-scratch stack carries nats.credsPath explicitly,
-    // so `cortex network make-live` needs no --creds flag. The path is the
-    // daemon's OWN bus/bot creds under the agents account. The `-bot` suffix is
-    // load-bearing: it keeps this DISTINCT from provision's federation-user
-    // default `~/.config/nats/<slug>.creds` (different NATS account → must be a
-    // different file, or the second mint clobbers the first).
+  test("system/system.yaml ships nats.credsPath COMMENTED OUT so a fresh local-only stack boots (cortex#1453)", () => {
+    // cortex#1453: a from-scratch stack runs on a hard-isolated ANONYMOUS bus
+    // (SOP Part 1) — no operator mode, no minted bot creds. An ACTIVE credsPath
+    // points at a file that doesn't exist yet, so the runtime logs
+    // "failed to connect — continuing without NATS: ENOENT … demo-bot.creds"
+    // and the whole bus plane goes dark. So the line ships commented; the
+    // documented `-bot` path + suffix stay in the comment as guidance, and
+    // `cortex network make-live` writes it back (it defaults credsPath to the
+    // same path and persists when defaulted, cortex#1265) at federation time.
     const files = renderScaffold(inputs);
     const system = files.find((f) => f.relPath === "system/system.yaml");
-    expect(system?.contents).toContain("credsPath: ~/.config/nats/demo-bot.creds");
-    // The bus path must NOT equal the federation default for the same slug.
+    // The guidance (the -bot path) is present as a COMMENT, not an active key.
+    expect(system?.contents).toContain("# credsPath: ~/.config/nats/demo-bot.creds");
+    // No ACTIVE credsPath: key at the start of a (indented) line — a bare boot
+    // must not dial creds. Matches an uncommented `credsPath:` with only
+    // leading whitespace before it.
+    expect(system?.contents).not.toMatch(/^\s*credsPath:/m);
+    // The documented bus path must NOT equal the federation default for the slug.
     expect(system?.contents).not.toContain("credsPath: ~/.config/nats/demo.creds");
+  });
+
+  test("system/system.yaml nats.url defaults to the 4222 convention (cortex#1453)", () => {
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).toContain("url: nats://127.0.0.1:4222");
+  });
+
+  test("system/system.yaml nats.url honours a non-default natsUrl (cortex#1453)", () => {
+    // The exact scenario in the bug report: a stack whose bus listens on 4242.
+    const files = renderScaffold({ ...inputs, natsUrl: "nats://127.0.0.1:4242" });
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).toContain("url: nats://127.0.0.1:4242");
+    expect(system?.contents).not.toContain("url: nats://127.0.0.1:4222");
   });
 
   test("does NOT inline any signing seed material (key auto-provisioned later)", () => {
