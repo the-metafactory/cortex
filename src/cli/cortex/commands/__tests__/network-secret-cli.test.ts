@@ -178,9 +178,9 @@ describe("cortex network secret add-member", () => {
     expect(res.stdout).toContain("metafactory/k1");
   });
 
-  test("--apply sealed with NO hub K configured → blob carries no payload_key", async () => {
+  test("no hub K CONFIGURED → seals PSK only + an INFO line (not a warning); exit 0", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    // Inject an explicit reader with NO key for the network (hermetic — never the
+    // Config loads fine but the network has no payload_key (hermetic — never the
     // real ~/.config/cortex, which may carry a live metafactory K).
     const loadNoK = ((_path: string) => ({ policy: { federated: { networks: [] } } })) as never;
     const res = await dispatchNetwork(
@@ -190,6 +190,30 @@ describe("cortex network secret add-member", () => {
     expect(res.exitCode).toBe(0);
     expect(calls.posted.length).toBe(1);
     expect(calls.posted[0]!.blob).not.toContain("payload_key");
+    // The INFO line names "no payload_key configured" and is NOT a WARN.
+    expect(res.stdout).toContain("has no payload_key configured");
+    expect(res.stdout).not.toContain("could not load stack config");
+  });
+
+  test("hub config LOAD FAILS → non-fatal: seals PSK only + a DISTINCT WARN (not 'not configured'); exit 0", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    // A reader that THROWS models an unparseable/broken hub stack config.
+    const loadThrows = ((_path: string) => {
+      throw new Error("unexpected token at line 12");
+    }) as never;
+    const res = await dispatchNetwork(
+      argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
+      loadThrows, undefined, undefined, factory,
+    );
+    // NON-FATAL — the PSK still delivered; a config quirk never blocks add-member.
+    expect(res.exitCode).toBe(0);
+    expect(calls.posted.length).toBe(1);
+    expect(calls.posted[0]!.blob).not.toContain("payload_key");
+    // A DISTINCT warning — must NOT masquerade as "not configured" (silent downgrade).
+    expect(res.stdout).toContain("WARN");
+    expect(res.stdout).toContain("could not load stack config");
+    expect(res.stdout).toContain("re-run add-member");
+    expect(res.stdout).not.toContain("has no payload_key configured");
   });
 
   test("--json --apply with hub K → payload_key_kid + fingerprint surfaced, K is not", async () => {

@@ -2765,36 +2765,41 @@ const DEFAULT_SECRET_PORTS_FACTORY: SecretPortsFactory = (cfg) => buildLiveSecre
  * resolved exactly as every sibling network verb does.
  *
  * Returns the base64 K string VERBATIM (the seal carries it opaquely) + the kid
- * (`payload_key_id ?? <net>/k1`). NEVER logs K. A MISSING config or an
- * encryption-off / keyless network → `{ ok: true }` with no key (seal PSK only).
- * A config that EXISTS but fails to parse/validate FAILS (surfaced to the admin)
- * rather than silently downgrading a network that is supposed to be encrypted.
+ * (`payload_key_id ?? <net>/k1`). NEVER logs K. Three NON-FATAL outcomes — sealing
+ * always proceeds, but the "why no K" is never confusable:
+ *   - `"key"`         → the network carries a payload_key: seal it.
+ *   - `"none"`        → config loads, network has NO payload_key (encryption-off /
+ *                       not staged): seal PSK only + an INFO line (SOP Step 8).
+ *   - `"load-failed"` → the config is missing/unparseable: seal PSK only + a
+ *                       DISTINCT WARN line. A load failure MUST NOT masquerade as
+ *                       "not configured" — the admin might have K set and would
+ *                       otherwise get a silent downgrade. Non-fatal so a config
+ *                       quirk never blocks PSK delivery; the WARN says to re-run.
  */
+type HubPayloadKeyResult =
+  | { kind: "key"; payloadKey: string; payloadKeyKid: string }
+  | { kind: "none" }
+  | { kind: "load-failed"; reason: string };
+
 function resolveHubPayloadKey(
   flags: FlagMap,
   networkId: string,
   load: ConfigReader,
-): { ok: true; payloadKey?: string; payloadKeyKid?: string } | { ok: false; reason: string } {
+): HubPayloadKeyResult {
   const path = resolveLocalStackConfigPath(flags);
   let cfg: LoadedConfig;
   try {
     cfg = load(path);
   } catch (err) {
-    return {
-      ok: false,
-      reason:
-        `failed to read the hub stack config ${path} for the network payload key: ` +
-        `${err instanceof Error ? err.message : String(err)} — fix the config, or pass ` +
-        `--config <path> to point at the hub stack's cortex config`,
-    };
+    return { kind: "load-failed", reason: `${path}: ${err instanceof Error ? err.message : String(err)}` };
   }
   const network = cfg.policy?.federated?.networks.find((n) => n.id === networkId);
   if (network?.payload_key === undefined) {
-    // No config, encryption-off network, or a network with no K → seal PSK only.
-    return { ok: true };
+    // Config loaded fine; encryption-off network or a network with no K.
+    return { kind: "none" };
   }
   return {
-    ok: true,
+    kind: "key",
     payloadKey: network.payload_key,
     payloadKeyKid: network.payload_key_id ?? defaultKeyId(networkId),
   };
@@ -2860,17 +2865,26 @@ async function runSecret(
   // 4b. C-1349 Slice 1 — resolve the per-network payload key K from the HUB
   // STACK's own resolved config (design decision #1: hub config ONLY, no mint,
   // no second store). add-member / rotate seal it alongside the PSK so join
-  // installs encryption; revoke-member does not touch K. A genuinely-broken hub
-  // config FAILS the command (never silently downgrade encryption); an ABSENT
-  // config or an encryption-off network → seal PSK only (the lib prints the
-  // SOP-fallback info line). K never reaches this function's output.
+  // installs encryption; revoke-member does not touch K. ALL three outcomes are
+  // NON-FATAL (a config quirk never blocks PSK delivery), but the two no-K cases
+  // are surfaced DISTINCTLY so a load failure never masquerades as "not
+  // configured" (a silent encryption downgrade). K never reaches the output.
   let payloadKey: string | undefined;
   let payloadKeyKid: string | undefined;
+  let payloadKeyAbsentNote: string | undefined;
   if (action !== "revoke-member" && deliver === "sealed") {
     const kRes = resolveHubPayloadKey(flags, networkId, load);
-    if (!kRes.ok) return opError("secret", kRes.reason, json);
-    payloadKey = kRes.payloadKey;
-    payloadKeyKid = kRes.payloadKeyKid;
+    if (kRes.kind === "key") {
+      payloadKey = kRes.payloadKey;
+      payloadKeyKid = kRes.payloadKeyKid;
+    } else if (kRes.kind === "none") {
+      payloadKeyAbsentNote =
+        `network ${networkId} has no payload_key configured — leaf secret sealed without K (see sop-onboard-peer-principal.md Step 8)`;
+    } else {
+      // load-failed — a DISTINCT warning, never confusable with "not configured".
+      payloadKeyAbsentNote =
+        `WARN: could not load stack config (${kRes.reason}) — sealed WITHOUT payload_key; if network ${networkId} uses encryption, re-run add-member once the config is readable`;
+    }
   }
 
   const ports = portsFactory({ hubConfigPath, registryUrl, material: matRes.material });
@@ -2882,6 +2896,7 @@ async function runSecret(
     ...(leafUserOverride !== undefined && { leafUserOverride }),
     ...(payloadKey !== undefined && { payloadKey }),
     ...(payloadKeyKid !== undefined && { payloadKeyKid }),
+    ...(payloadKeyAbsentNote !== undefined && { payloadKeyAbsentNote }),
     apply: applyRes.apply,
   };
 

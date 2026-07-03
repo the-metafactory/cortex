@@ -63,6 +63,16 @@ export interface SecretInputs {
    * joiner installs both. Only meaningful when {@link payloadKey} is set.
    */
   payloadKeyKid?: string;
+  /**
+   * C-1349 Slice 1 — the CLI-supplied line explaining WHY no K is being sealed
+   * (only relevant when {@link payloadKey} is absent). The CLI distinguishes
+   * "config loaded, network not configured for encryption" (an INFO note) from
+   * "config could not be loaded" (a distinct WARN) so a load failure never
+   * masquerades as not-configured. The orchestrator renders it verbatim; when
+   * absent it falls back to a generic no-K info line (e.g. the admit-and-seal
+   * path, which does not read the stack config).
+   */
+  payloadKeyAbsentNote?: string;
   apply: boolean;
 }
 
@@ -146,7 +156,7 @@ async function addOrRotate(
       steps.push(
         payloadKey !== undefined
           ? `would: seal payload key K (kid ${inputs.payloadKeyKid ?? `${inputs.networkId}/k1`}) — join would install encryption`
-          : `would: no payload key configured hub-side for "${inputs.networkId}" — sealing PSK only (SOP Step 8 for manual encryption)`,
+          : `would: ${inputs.payloadKeyAbsentNote ?? `no payload key configured hub-side for "${inputs.networkId}" — sealing PSK only (SOP Step 8 for manual encryption)`}`,
       );
     }
     return plan(action, inputs, steps, data);
@@ -208,8 +218,12 @@ async function addOrRotate(
     data.payload_key_fingerprint = kFp;
     steps.push(`payload key: sealed K (kid ${payloadKeyKid}, fp ${kFp}) — join installs encryption`);
   } else {
+    // The CLI supplies the exact reason (INFO "not configured" vs WARN "config
+    // load failed"); fall back to a generic info line for callers that do not
+    // read the stack config (e.g. the admit-and-seal fold).
     steps.push(
-      `payload key: no payload key configured hub-side for "${inputs.networkId}" — sealing PSK only; the member enables encryption via the manual handoff in sop-onboard-peer-principal.md Step 8`,
+      inputs.payloadKeyAbsentNote ??
+        `payload key: no payload key configured hub-side for "${inputs.networkId}" — sealing PSK only (sop-onboard-peer-principal.md Step 8)`,
     );
   }
 
