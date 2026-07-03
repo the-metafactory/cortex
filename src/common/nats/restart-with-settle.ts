@@ -119,6 +119,15 @@ export function settleFailureReason(attempts: number, reason: string | undefined
 }
 
 /**
+ * The ONE inconclusive-health notice (cortex#1495 v2 nit) — join and make-live
+ * both log this when a restart's liveness probe was INCONCLUSIVE (no reachable
+ * signal, treated as healthy so a good restart is never falsely rolled back).
+ * Extracted so the four prior copies across the two orchestrators can't drift.
+ */
+export const INCONCLUSIVE_HEALTH_NOTICE =
+  "health inconclusive — no monitor configured, treated as healthy per #831";
+
+/**
  * Poll `probe` up to `maxAttempts` times with exponential backoff (capped at
  * `maxDelayMs`), returning as soon as ANY attempt reports healthy. Never
  * throws — {@link HealthProbe} implementations (e.g. `NatsServerPort.isHealthy`)

@@ -49,6 +49,7 @@ import {
   probeHealthWithSettle,
   realClock,
   settleFailureReason,
+  INCONCLUSIVE_HEALTH_NOTICE,
   type ConfigValidationOutcome,
 } from "../../../common/nats/restart-with-settle";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
@@ -878,7 +879,7 @@ export async function joinNetwork(
         ports.leafFile.restoreLeafState(snapshot);
         const recovery = await restartAndProbe();
         rollbackNote = recovery.ok
-          ? `rolled back leaf config + restarted nats-server (bus restored to prior state, ${recovery.inconclusive ? "health inconclusive — no monitor configured, treated as healthy per #831" : "verified healthy"})`
+          ? `rolled back leaf config + restarted nats-server (bus restored to prior state, ${recovery.inconclusive ? INCONCLUSIVE_HEALTH_NOTICE : "verified healthy"})`
           : `rolled back leaf config but the recovery restart did NOT bring the bus back up (${recovery.reason}) — bus may be DOWN, intervene manually`;
       } catch (err) {
         rollbackNote = `rollback FAILED (${err instanceof Error ? err.message : String(err)}) — bus may be DOWN, intervene manually`;
@@ -898,7 +899,7 @@ export async function joinNetwork(
     // inconclusive (#831 no-monitor). Report what actually happened.
     steps.push(
       initial.inconclusive
-        ? "restarted nats-server to load leaf config (health inconclusive — no monitor configured, treated as healthy per #831)"
+        ? `restarted nats-server to load leaf config (${INCONCLUSIVE_HEALTH_NOTICE})`
         : "restarted nats-server to load leaf config (verified healthy)",
     );
   }

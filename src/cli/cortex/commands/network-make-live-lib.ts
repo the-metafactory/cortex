@@ -71,6 +71,7 @@ import {
   probeHealthWithSettle,
   realClock,
   settleFailureReason,
+  INCONCLUSIVE_HEALTH_NOTICE,
   type ClockPort,
   type ConfigValidationOutcome,
   type HealthProbeResult,
@@ -667,6 +668,16 @@ export async function makeLiveStack(
     // errors to typed results), matching the ports-don't-throw convention every
     // other step in makeLiveStack already relies on (mint/export/append). The one
     // guard that IS load-bearing — the rollback restore — is kept below.
+    //
+    // cortex#1495 v2 (suggestion) — this restart→settle-probe→rollback shape
+    // PARALLELS join's `restartAndProbe` in network-lib.ts. They are deliberately
+    // NOT extracted into one helper: the shared CORE already lives in
+    // `probeHealthWithSettle` + `settleFailureReason` + `INCONCLUSIVE_HEALTH_NOTICE`,
+    // and the surrounding orchestration differs materially (join restores LEAF
+    // state + threads warnings/network/usedCache into a JoinResult; make-live
+    // restores the WHOLE nats config into a MakeLiveResult). A further helper would
+    // need callbacks for restart/restore/result-shape and add coupling for little
+    // gain, so the parallel is documented rather than abstracted.
     const restartAndProbe = async (): Promise<
       { ok: true; inconclusive: boolean } | { ok: false; reason: string }
     > => {
@@ -699,7 +710,7 @@ export async function makeLiveStack(
           canary.restore(natsSnapshot);
           const recovery = await restartAndProbe();
           rollbackNote = recovery.ok
-            ? `rolled back nats config + restarted (bus restored to prior state, ${recovery.inconclusive ? "health inconclusive — no monitor configured, treated as healthy per #831" : "verified healthy"})`
+            ? `rolled back nats config + restarted (bus restored to prior state, ${recovery.inconclusive ? INCONCLUSIVE_HEALTH_NOTICE : "verified healthy"})`
             : `rolled back nats config but the recovery restart did NOT bring the bus back up (${recovery.reason}) — bus may be DOWN, intervene manually`;
         } catch (err) {
           rollbackNote = `rollback FAILED (${err instanceof Error ? err.message : String(err)}) — bus may be DOWN, intervene manually`;
@@ -714,7 +725,7 @@ export async function makeLiveStack(
     }
     steps.push(
       `nats-server restarted (loaded ${inputs.agentsAccountName} into MEMORY resolver` +
-        `${canary === undefined ? "" : initial.inconclusive ? ", health inconclusive — no monitor configured, treated as healthy per #831" : ", verified healthy"})`,
+        `${canary === undefined ? "" : initial.inconclusive ? `, ${INCONCLUSIVE_HEALTH_NOTICE}` : ", verified healthy"})`,
     );
   }
 

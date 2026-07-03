@@ -22,6 +22,7 @@ import type { NetworkDescriptor } from "../../registry/types";
 import {
   natsConfigHasAccountTree,
   natsConfigMonitorUrl,
+  natsConfigClientListenPort,
   leafIncludeFileName,
   mergeLeafRemotes,
   renderLeafIncludeFile,
@@ -522,6 +523,45 @@ describe("#821 natsConfigMonitorUrl", () => {
       "",
     ].join("\n");
     expect(natsConfigMonitorUrl(community)).toBe("http://127.0.0.1:8224");
+  });
+});
+
+describe("cortex#1495 v2 natsConfigClientListenPort", () => {
+  test("derives from `listen: 127.0.0.1:4222` (host:port)", () => {
+    expect(natsConfigClientListenPort("listen: 127.0.0.1:4222\n")).toBe(4222);
+  });
+
+  test("derives from `listen: \"0.0.0.0:4299\"` (quoted host:port)", () => {
+    expect(natsConfigClientListenPort('listen: "0.0.0.0:4299"\n')).toBe(4299);
+  });
+
+  test("derives from a bare `listen: 4300` (port only)", () => {
+    expect(natsConfigClientListenPort("listen: 4300\n")).toBe(4300);
+  });
+
+  test("derives from the top-level `port: 4224` directive", () => {
+    expect(natsConfigClientListenPort("port: 4224\nhttp_port: 8224\n")).toBe(4224);
+  });
+
+  test("`listen:` wins over `port:` when both are present", () => {
+    expect(natsConfigClientListenPort("listen: 127.0.0.1:4222\nport: 9999\n")).toBe(4222);
+  });
+
+  test("`http_port` / `monitor_port` never false-match the client `port:` parse", () => {
+    // Only a MONITOR port is declared — no client listen/port → undefined.
+    expect(natsConfigClientListenPort("http_port: 8222\nmonitor_port: 8223\n")).toBeUndefined();
+  });
+
+  test("a COMMENTED-OUT listen/port does NOT count", () => {
+    expect(natsConfigClientListenPort("// listen: 4222\n# port: 4223\n")).toBeUndefined();
+  });
+
+  test("tolerates an inline trailing comment on `listen:`", () => {
+    expect(natsConfigClientListenPort("listen: 127.0.0.1:4222 # client\n")).toBe(4222);
+  });
+
+  test("no listen/port directive → undefined (caller applies the 4222 default)", () => {
+    expect(natsConfigClientListenPort("server_name: work\n")).toBeUndefined();
   });
 });
 

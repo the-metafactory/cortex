@@ -12,11 +12,17 @@
 import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync, mkdirSync, renameSync, rmSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
+import { Socket } from "net";
 
 import { parseDocument } from "yaml";
 
 import { expandTilde } from "../../../common/config/loader";
-import { renderOperatorModeBlocks, renderBaseIsolatedConfig, natsConfigMonitorUrl } from "../../../common/nats/leaf-remote-renderer";
+import {
+  renderOperatorModeBlocks,
+  renderBaseIsolatedConfig,
+  natsConfigMonitorUrl,
+  natsConfigClientListenPort,
+} from "../../../common/nats/leaf-remote-renderer";
 import {
   selectNatsServiceManager,
   currentServicePlatform,
@@ -477,17 +483,63 @@ export function buildMakeLiveConfigWriteAdapter(mutate: boolean): MakeLiveConfig
 
 // cortex#1495 nit 4 — kept LOCAL rather than imported from network-adapters.ts
 // (join's adapter), so make-live's canary adapter doesn't reach across into
-// join's module for a shared default. These mirror network-adapters.ts's
-// DEFAULT_MONITOR_URL / DEFAULT_HEALTH_PROBE_TIMEOUT_MS (the upstream nats
-// loopback monitor + a 5s probe bound); the two are independent by design.
-const MAKELIVE_DEFAULT_MONITOR_URL = "http://127.0.0.1:8222";
+// join's module for a shared default. Mirrors network-adapters.ts's
+// DEFAULT_HEALTH_PROBE_TIMEOUT_MS (a 5s probe bound); the two are independent by
+// design. (cortex#1495 v2: the :8222 monitor DEFAULT was dropped — a bus with no
+// declared monitor now falls back to a TCP client-port probe, not a guessed :8222.)
 const MAKELIVE_HEALTH_PROBE_TIMEOUT_MS = 5000;
+/** NATS default client listen port — the TCP-connect liveness target when a bus declares no monitor. */
+const NATS_DEFAULT_CLIENT_PORT = 4222;
 
-/** Live {@link NatsCanaryPort}. `nats-server -t` gate, snapshot/restore, /healthz probe. */
-export function buildNatsCanaryAdapter(mutate: boolean, healthProbeTimeoutMs?: number): NatsCanaryPort {
+/**
+ * cortex#1495 v2 (important 2) — an injectable bounded TCP-connect probe. A bus
+ * with NO HTTP monitor (the #1476 community class) still has a client listen
+ * port; a successful connect is a REAL liveness signal (the process is up and
+ * accepting), a refused/timed-out connect means the restart left it DOWN → the
+ * orchestrator's auto-rollback fires. Injected so tests script connect-ok /
+ * connect-fail without opening a real socket. Resolves `true` on connect,
+ * `false` on refusal/timeout/error. NEVER rejects.
+ */
+export type TcpConnectProbe = (host: string, port: number, timeoutMs: number) => Promise<boolean>;
+
+/** Real bounded TCP connect (node `net.Socket`); destroyed the moment it settles. */
+const realTcpConnectProbe: TcpConnectProbe = (host, port, timeoutMs) =>
+  new Promise<boolean>((resolve) => {
+    const socket = new Socket();
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => { finish(true); });
+    socket.once("timeout", () => { finish(false); });
+    socket.once("error", () => { finish(false); });
+    socket.connect(port, host);
+  });
+
+/**
+ * Live {@link NatsCanaryPort}. `nats-server -t` gate, snapshot/restore, and a
+ * two-tier post-restart liveness probe: the config's `/healthz` monitor when one
+ * is declared, else a TCP connect to the client listen port (cortex#1495 v2).
+ * `tcpConnect` is injectable so tests exercise the no-monitor path without a real
+ * socket; production uses {@link realTcpConnectProbe}.
+ */
+export function buildNatsCanaryAdapter(
+  mutate: boolean,
+  healthProbeTimeoutMs?: number,
+  tcpConnect: TcpConnectProbe = realTcpConnectProbe,
+): NatsCanaryPort {
   return {
     async validateConfig(natsConfigPath) {
       // #821 MAJOR-1 parity — cheap pre-restart syntax gate. Dry-run is inert.
+      // cortex#1495 v2 (suggestion) — the "invalid config → -t refuses the reload"
+      // contract is exercised at the ORCHESTRATION level with FAKE ports only
+      // (network-make-live.test.ts). It is not asserted against a real nats-server:
+      // that needs the `nats-server` binary in CI (out of scope) and would be flaky.
+      // The `code !== 0 → invalid` mapping below is the single point of trust.
       if (!mutate) return { status: "valid" };
       const abs = expandTilde(natsConfigPath);
       let result: { code: number; stderr: string };
@@ -530,31 +582,52 @@ export function buildNatsCanaryAdapter(mutate: boolean, healthProbeTimeoutMs?: n
       // Atomic write (temp + rename) — a crash mid-rollback must never corrupt
       // the very config it is trying to restore (mirrors network-adapters.ts's
       // O-3 atomicWriteFileSync).
+      // cortex#1495 v2 (important 1) — the nats config is SECRET-bearing (leaf
+      // creds, hub authorization users, payload keys), so the restore write is
+      // created 0600 (mode on the temp + explicit chmod against a permissive
+      // umask), same discipline as the `.bak` sidecar and the leaf-include write.
       const tmp = `${natsConfigPath}.tmp-canary-restore-${process.pid.toString()}`;
-      writeFileSync(tmp, contents, "utf-8");
+      writeFileSync(tmp, contents, { mode: 0o600 });
+      chmodSync(tmp, 0o600);
       renameSync(tmp, natsConfigPath);
     },
     async isHealthy(natsConfigPath) {
       if (!mutate) return { healthy: true };
       const abs = expandTilde(natsConfigPath);
-      // Same precedence as network-adapters.ts's resolveMonitorBase: derive from
-      // the config's own http_port/monitor_port/http; fall back to the upstream
-      // default. #831 parity — no monitor declared ⇒ INCONCLUSIVE (healthy but
-      // flagged so the log doesn't over-claim), a configured-but-down monitor
-      // still reports unhealthy.
-      let configured = false;
-      let base = MAKELIVE_DEFAULT_MONITOR_URL;
-      if (existsSync(abs)) {
-        const derived = natsConfigMonitorUrl(readFileSync(abs, "utf-8"));
-        if (derived !== undefined) {
-          base = derived;
-          configured = true;
-        }
-      }
-      // cortex#1495 important 3 — no monitor ⇒ liveness cannot be CONFIRMED;
-      // healthy (never a false rollback) but flagged INCONCLUSIVE.
-      if (!configured) return { healthy: true, inconclusive: true };
       const timeoutMs = healthProbeTimeoutMs ?? MAKELIVE_HEALTH_PROBE_TIMEOUT_MS;
+      const configText = existsSync(abs) ? readFileSync(abs, "utf-8") : undefined;
+      // Same precedence as network-adapters.ts's resolveMonitorBase: derive the
+      // monitor from the config's own http_port/monitor_port/http.
+      let base: string | undefined;
+      if (configText !== undefined) {
+        const derived = natsConfigMonitorUrl(configText);
+        if (derived !== undefined) base = derived;
+      }
+
+      // cortex#1495 v2 (important 2) — a bus with NO HTTP monitor (the #1476
+      // community bus class: no `http_port`) must NOT read as inconclusive-healthy,
+      // or auto-rollback goes inert on the exact config that motivated this slice.
+      // Fall back to a REAL liveness signal: a bounded TCP connect to the client
+      // listen port (parsed from `listen:`/`port:`, default 4222). Connect ⇒
+      // genuinely healthy (NOT inconclusive); refused/timeout ⇒ unhealthy → the
+      // orchestrator rolls back. RESIDUAL: a listening client port proves the
+      // process is up + accepting, not that JetStream fully recovered — but it
+      // catches the "nats-server crashed on the new config" case the slice targets.
+      if (base === undefined) {
+        if (configText === undefined) {
+          // The client listen addr genuinely can't be resolved (config
+          // absent/unreadable) — disclosed fallback to inconclusive-healthy.
+          return { healthy: true, inconclusive: true };
+        }
+        const port = natsConfigClientListenPort(configText) ?? NATS_DEFAULT_CLIENT_PORT;
+        const connected = await tcpConnect("127.0.0.1", port, timeoutMs);
+        return connected
+          ? { healthy: true }
+          : {
+              healthy: false,
+              reason: `bus client port 127.0.0.1:${port.toString()} not accepting connections after restart (no HTTP monitor to probe; TCP connect failed)`,
+            };
+      }
       try {
         const res = await fetch(`${base.replace(/\/+$/, "")}/healthz`, {
           signal: AbortSignal.timeout(timeoutMs),

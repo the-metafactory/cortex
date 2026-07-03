@@ -1191,6 +1191,38 @@ export function natsConfigMonitorUrl(natsConfigText: string): string | undefined
 }
 
 /**
+ * cortex#1495 v2 (important 2) — parse the nats-server CLIENT listen PORT from a
+ * config, so a bus with NO HTTP monitor can still be liveness-probed by a plain
+ * TCP connect to its client port (the #1476 community bus class: no `http_port`,
+ * so the `/healthz` probe was inconclusive and auto-rollback went inert). Order:
+ *   1. `listen: <host:port | port>` (the explicit client listen directive), then
+ *   2. `port: <n>` (the top-level client-port directive).
+ * Returns the port, or `undefined` when neither is present (the caller then
+ * applies the NATS default 4222, or — if the config is unreadable — falls back to
+ * the inconclusive-healthy disclosure). Comments are stripped first; only a
+ * line-anchored `port` matches, so `http_port`/`monitor_port` never false-hit.
+ */
+export function natsConfigClientListenPort(natsConfigText: string): number | undefined {
+  const text = stripConfigComments(natsConfigText);
+
+  // `listen: <value>` — value may be `host:port` (`0.0.0.0:4222`), a bare port,
+  // or quoted, optionally with an inline trailing comment. Take the trailing port.
+  const listen = /^[ \t]*listen[ \t]*[:=][ \t]*(.+)$/m.exec(text);
+  if (listen?.[1] !== undefined) {
+    const value = stripInlineComment(listen[1]).replace(/["']/g, "").trim();
+    const portMatch = /(?::|^)(\d{1,5})$/.exec(value);
+    if (portMatch?.[1] !== undefined) return Number.parseInt(portMatch[1], 10);
+  }
+
+  // `port: <n>` — the top-level client-port directive (line-anchored so it never
+  // matches `http_port`/`monitor_port`, which start with a different token).
+  const port = /^[ \t]*port[ \t]*[:=][ \t]*(\d{1,5})\b/m.exec(text);
+  if (port?.[1] !== undefined) return Number.parseInt(port[1], 10);
+
+  return undefined;
+}
+
+/**
  * Strip a trailing inline `#` or `//` comment from a single config-line value.
  * `0.0.0.0:8224 # mon` → `0.0.0.0:8224`. Conservative: only cuts at a `#` or
  * `//` that is preceded by whitespace or start-of-string, so a `#`/`//` inside a
