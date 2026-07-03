@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://myelin.metafactory.ai/schemas/envelope/v3",
   "title": "Myelin Envelope",
-  "description": "Universal message envelope for the agentic nervous system. One schema for all signals — sovereignty travels with the message. v3 (vocabulary migration 2026-05, breaking cuts myelin#182 + myelin#183): `signed_by[].principal` → `identity` (myelin#182 — old key dropped from the wire) and `{org}` → `{principal}` with the `source` grammar tightened to the fixed-3 form `{principal}.{stack}.{assistant}` (myelin#183 — legacy 3–5 segment `org.agent.instance` shape no longer accepted; that was the shape the pilot review-loop bug exploited, see CONTEXT.md line 99). v3.0 (vocabulary migration 2026-05, breaking cut myelin#184): `target_principal` → `target_assistant` (R13 — old key dropped from the wire; direct/delegate envelopes carrying it are rejected by `additionalProperties: false`). The schema still accepts the deprecated form for the remaining transition fields (originator `principal`, distribution_mode `broadcast`) so pre-migration / JetStream-replayed envelopes validate; subsequent breaking cuts drop those. v2 stays published for consumers pinned to the transition grammar; v1 stays published for consumers pinned to the pre-migration grammar.",
+  "description": "Universal message envelope for the agentic nervous system. One schema for all signals — sovereignty travels with the message. v3 (vocabulary migration 2026-05, breaking cuts myelin#182 + myelin#183): `signed_by[].principal` → `identity` (myelin#182 — old key dropped from the wire) and `{org}` → `{principal}` with the `source` grammar tightened to the fixed-3 form `{principal}.{stack}.{assistant}` (myelin#183 — legacy 3–5 segment `org.agent.instance` shape no longer accepted; that was the shape the pilot review-loop bug exploited, see CONTEXT.md line 99). R13 breaking cut: `target_principal` → `target_assistant` — the deprecated `target_principal` key is removed from the wire (rejected by `additionalProperties: false`); the `@`-target of a Tasks-Domain subject names an assistant, not a principal (see CONTEXT.md). The schema still accepts the deprecated form for the remaining transition fields (originator, distribution_mode broadcast) so pre-migration / JetStream-replayed envelopes validate; subsequent breaking cuts drop those. v2 stays published for consumers pinned to the transition grammar; v1 stays published for consumers pinned to the pre-migration grammar.",
   "type": "object",
   "required": ["id", "source", "type", "timestamp", "sovereignty", "payload"],
   "properties": {
@@ -27,6 +27,11 @@
       "type": "string",
       "format": "date-time",
       "description": "ISO-8601 timestamp of envelope creation."
+    },
+    "spec_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional wire grammar version (B1 rollout). 3 = current grammar; absent ⇒ legacy pre-field envelope. A SIGNABLE field. Phase 4a: accepted and signed when present, but not yet emitted by createEnvelope (verifiers before emitters)."
     },
     "correlation_id": {
       "type": "string",

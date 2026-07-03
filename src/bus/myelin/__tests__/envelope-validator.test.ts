@@ -612,7 +612,7 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     // no longer dual-reads) ships here per
     // docs/migrations/0002-vocabulary-finish-2026-05.md §R10.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "f5ec8658030e2fc185f123b06d8bf94d9f74cd84",
+      "7c6b71e9e16286d42ba6038d0be3ab30c498da39",
     );
   });
 
