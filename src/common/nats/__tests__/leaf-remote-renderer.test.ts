@@ -21,7 +21,6 @@ import { describe, expect, test } from "bun:test";
 import type { NetworkDescriptor } from "../../registry/types";
 import {
   natsConfigHasAccountTree,
-  natsConfigCanBindAccount,
   natsConfigMonitorUrl,
   natsConfigClientListen,
   leafIncludeFileName,
@@ -143,13 +142,44 @@ describe("renderLeafRemote", () => {
 
 // =============================================================================
 // cortex#1480 (join-1, epic #1479) — the leaf binds the FED account, and the
-// FED account is genuinely present (bindable) in the rendered
-// resolver_preload. This is the end-to-end pure composition of the two
-// renderers `cortex network join` runs back to back: convert the bus
-// (renderOperatorModeBlocks), then render the leaf against it
-// (renderLeafRemote) — the exact invariant whose violation is the real
-// "does not define account <FED>" fail-closed.
+// FED pubkey appears as a literal preload KEY in the rendered resolver_preload.
+// This is the end-to-end pure composition of the two renderers `cortex network
+// join` runs back to back: convert the bus (renderOperatorModeBlocks), then
+// render the leaf against it (renderLeafRemote) — the exact invariant whose
+// violation is the real "does not define account <FED>" fail-closed. With fake
+// JWTs these are text-structure checks, NOT nats-server-verified.
 // =============================================================================
+
+/**
+ * INDEPENDENT structural parse of the rendered `resolver_preload { … }` block:
+ * the account pubkeys that appear as literal `<pubkey>:` KEY lines inside it.
+ * Deliberately does NOT call the production `natsConfigCanBindAccount`, so the
+ * keystone assertion is not circular with the code under test.
+ */
+function preloadKeys(conf: string): string[] {
+  const m = /resolver_preload\s*[:=]?\s*\{/.exec(conf);
+  if (m === null) return [];
+  const open = m.index + m[0].length - 1;
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < conf.length; i++) {
+    if (conf[i] === "{") depth++;
+    else if (conf[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) return [];
+  const keys: string[] = [];
+  for (const line of conf.slice(open + 1, end).split("\n")) {
+    const km = /^\s*(A[A-Z2-7]{55})\s*:/.exec(line);
+    if (km?.[1] !== undefined) keys.push(km[1]);
+  }
+  return keys;
+}
 
 describe("cortex#1480 — the leaf binds FED, and FED is present in the rendered resolver_preload", () => {
   const OPERATOR_JWT =
@@ -186,11 +216,13 @@ describe("cortex#1480 — the leaf binds FED, and FED is present in the rendered
     expect(result.status).toBe("converted");
     if (result.status !== "converted") throw new Error("expected converted");
 
-    // ACCEPTANCE KEYSTONE — the FED account the leaf will bind is genuinely
-    // resolvable against the converted config (not merely text-present).
-    expect(natsConfigCanBindAccount(result.conf, FED_ACCOUNT).canBind).toBe(true);
-    expect(natsConfigCanBindAccount(result.conf, AGENTS_ACCOUNT).canBind).toBe(true);
-    expect(natsConfigCanBindAccount(result.conf, SYS_ACCOUNT).canBind).toBe(true);
+    // ACCEPTANCE KEYSTONE — the FED (+AGENTS +SYS) pubkeys appear as literal
+    // preload KEYs, asserted by an INDEPENDENT structural parse (not the
+    // production predicate). Text-structure-verified, not nats-server-verified.
+    const keys = preloadKeys(result.conf);
+    expect(keys).toContain(FED_ACCOUNT);
+    expect(keys).toContain(AGENTS_ACCOUNT);
+    expect(keys).toContain(SYS_ACCOUNT);
 
     // The leaf remote binds the FED account key — never AGENTS, never SYS.
     const binding: StackLeafBinding = {
@@ -202,9 +234,9 @@ describe("cortex#1480 — the leaf binds FED, and FED is present in the rendered
     expect(remote.account).not.toBe(AGENTS_ACCOUNT);
     expect(remote.account).not.toBe(SYS_ACCOUNT);
 
-    // And #799's own pre-flight bind-mode resolver agrees the converted
-    // config can bind THIS leaf's account (the check `cortex network join`
-    // runs immediately before rendering the leaf).
+    // Integration check (a DIFFERENT function): #799's pre-flight bind-mode
+    // resolver reports operator-account for the converted config — the decision
+    // `cortex network join` makes immediately before rendering the leaf.
     const bindMode = resolveLeafBindMode(result.conf, FED_ACCOUNT, true);
     expect(bindMode.mode).toBe("operator-account");
   });
@@ -216,8 +248,10 @@ describe("cortex#1480 — the leaf binds FED, and FED is present in the rendered
       credentials: "/Users/andreas/.config/nats/andreas.creds",
       account: FED_ACCOUNT,
     });
+    // The leaf's `account:` line and the resolver_preload KEY are the SAME FED
+    // pubkey — asserted structurally on both sides (no production predicate).
     expect(includeFile).toContain(`account: ${FED_ACCOUNT}`);
-    expect(natsConfigCanBindAccount(converted.conf, FED_ACCOUNT).canBind).toBe(true);
+    expect(preloadKeys(converted.conf)).toContain(FED_ACCOUNT);
   });
 });
 

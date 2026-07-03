@@ -880,11 +880,56 @@ export type OperatorModeConversion =
   | { status: "already"; conf: string }
   | { status: "refuse"; reason: string };
 
-/** A marker line so a human reading the converted config knows join wrote it. */
+/** A marker line so a reader of the converted config knows join wrote it. */
 const OPERATOR_MODE_MARKER =
   "// --- operator-mode blocks rendered by cortex network join (O-3, #1053) ---";
 const OPERATOR_MODE_MARKER_END =
   "// --- end operator-mode blocks ---";
+
+/**
+ * cortex#1480 — the shared "an OPTIONAL package account must be well-formed AND
+ * paired with its JWT" validator, used for BOTH the SYS and AGENTS package
+ * accounts (a half-specified account would emit a preload / `system_account`
+ * line the server can't resolve). Absent (undefined/empty) pubkey ⇒ ok (the
+ * account is optional). Extracted so the two rules cannot drift.
+ */
+function validateOptionalPackageAccount(
+  short: "SYS" | "AGENTS",
+  pubkey: string | undefined,
+  jwt: string | undefined,
+): { ok: true } | { ok: false; reason: string } {
+  if (pubkey === undefined || pubkey.length === 0) return { ok: true };
+  const noun = short === "SYS" ? "system account" : "agents account";
+  if (!NKEY_ACCOUNT.test(pubkey)) {
+    return { ok: false, reason: `${noun} ${JSON.stringify(pubkey)} is not an nkey-U account public key` };
+  }
+  if (jwt === undefined || jwt.length === 0 || !JWT_SHAPE.test(jwt)) {
+    return {
+      ok: false,
+      reason:
+        `${short === "SYS" ? "a" : "an"} ${noun} was offered without a valid ${noun} JWT — ` +
+        `\`resolver_preload\` must carry the ${short} account's JWT too.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * cortex#1480 — true iff `natsConfigText` carries a top-level `system_account:`
+ * directive (comments stripped, so a commented-out one does not count).
+ */
+function hasSystemAccountDirective(natsConfigText: string): boolean {
+  return /^[ \t]*system_account[ \t]*[:=]/m.test(stripConfigComments(natsConfigText));
+}
+
+/**
+ * cortex#1480 — append a top-level `system_account: <pubkey>` directive. The
+ * pubkey is a validated nkey-U (emitted bare, matching the from-scratch render).
+ */
+function appendSystemAccountDirective(natsConfigText: string, sysPubkey: string): string {
+  const base = natsConfigText.replace(/\n+$/, "");
+  return `${base}\nsystem_account: ${sysPubkey}\n`;
+}
 
 /**
  * Insert `insertion` immediately before the closing brace of the
@@ -1010,51 +1055,14 @@ export function renderOperatorModeBlocks(
         "issued account's JWT (pass --account-jwt or set stack.nats_infra.account_jwt).",
     };
   }
-  // A SYS account is OPTIONAL, but if one is offered it must be well-formed
-  // AND paired with its JWT (a half-specified SYS account would emit a
-  // `system_account` line with no preload → nats-server can't resolve it).
-  if (systemAccount !== undefined && systemAccount.length > 0) {
-    if (!NKEY_ACCOUNT.test(systemAccount)) {
-      return {
-        status: "refuse",
-        reason: `system account ${JSON.stringify(pkg.systemAccount)} is not an nkey-U account public key`,
-      };
-    }
-    if (
-      systemAccountJwt === undefined ||
-      systemAccountJwt.length === 0 ||
-      !JWT_SHAPE.test(systemAccountJwt)
-    ) {
-      return {
-        status: "refuse",
-        reason:
-          "a system account was offered without a valid system account JWT — " +
-          "`resolver_preload` must carry the SYS account's JWT too.",
-      };
-    }
-  }
-  // cortex#1480 — an AGENTS account is OPTIONAL (mirrors the SYS validation
-  // above): if one is offered it must be well-formed AND paired with its JWT.
-  if (agentsAccount !== undefined && agentsAccount.length > 0) {
-    if (!NKEY_ACCOUNT.test(agentsAccount)) {
-      return {
-        status: "refuse",
-        reason: `agents account ${JSON.stringify(pkg.agentsAccount)} is not an nkey-U account public key`,
-      };
-    }
-    if (
-      agentsAccountJwt === undefined ||
-      agentsAccountJwt.length === 0 ||
-      !JWT_SHAPE.test(agentsAccountJwt)
-    ) {
-      return {
-        status: "refuse",
-        reason:
-          "an agents account was offered without a valid agents account JWT — " +
-          "`resolver_preload` must carry the AGENTS account's JWT too.",
-      };
-    }
-  }
+  // A SYS and an AGENTS account are each OPTIONAL, but if one is offered it must
+  // be well-formed AND paired with its JWT (a half-specified account would emit a
+  // preload / `system_account` line nats-server can't resolve). One shared
+  // validator so the two rules can't drift (cortex#1480).
+  const sysValid = validateOptionalPackageAccount("SYS", systemAccount, systemAccountJwt);
+  if (!sysValid.ok) return { status: "refuse", reason: sysValid.reason };
+  const agentsValid = validateOptionalPackageAccount("AGENTS", agentsAccount, agentsAccountJwt);
+  if (!agentsValid.ok) return { status: "refuse", reason: agentsValid.reason };
 
   // The accounts THIS package wants preloaded — FED always, AGENTS/SYS when
   // the package carries them. Shared by BOTH the "already, ensure missing"
@@ -1082,30 +1090,56 @@ export function renderOperatorModeBlocks(
       // sufficient to call it "already done": a bus bootstrapped before its
       // FED account existed (or hand-converted carrying only AGENTS) is
       // STILL operator-mode under the SAME operator, yet resolver_preload may
-      // be missing one or more of the accounts THIS package carries. Ensure
-      // EVERY wanted account is actually bindable — natsConfigCanBindAccount
-      // is the SAME token-boundary-safe presence check #794 uses, so a
-      // merely-embedded or comment-only mention never counts as "present".
+      // be missing one or more of the accounts THIS package carries. Presence
+      // is checked with natsConfigCanBindAccount — the SAME token-boundary-safe
+      // check #794 uses — so a merely-embedded or comment-only mention never
+      // counts as "present".
       const missing = wantedAccounts.filter(
         (w) => !natsConfigCanBindAccount(currentConf, w.pubkey).canBind,
       );
-      if (missing.length === 0) {
+      // cortex#1480 — an operator-mode config needs BOTH the SYS account
+      // PRELOADED (resolver_preload) AND a top-level `system_account: <SYS>`
+      // directive naming it: the preload lets nats-server RESOLVE the account,
+      // the directive tells it to USE that account as the system account (the
+      // `docs/config-layout/nats-server.conf.example` template documents both as
+      // required together for a JetStream bus). The from-scratch branch (3) below
+      // emits both, so this ensure-branch must match — otherwise a config that
+      // gains its SYS account here would know the account but never treat it as
+      // the system account. Add the directive idempotently: only when the package
+      // carries a SYS and the config has no `system_account:` directive yet
+      // (never clobber an existing one).
+      const sysDirectiveNeeded =
+        systemAccount !== undefined &&
+        systemAccount.length > 0 &&
+        !hasSystemAccountDirective(currentConf);
+      if (missing.length === 0 && !sysDirectiveNeeded) {
         // Byte-stable no-op (the orchestrator may skip the write).
         return { status: "already", conf: currentConf };
       }
-      const insertion = missing
-        .map((w) => `  // ${w.label} account (cortex#1480 ensure)\n  ${w.pubkey}: ${w.jwt}\n`)
-        .join("");
-      const next = insertIntoResolverPreload(currentConf, insertion);
-      if (next === null) {
-        return {
-          status: "refuse",
-          reason:
-            "the nats config is operator-mode under this operator but has no " +
-            "resolver_preload { … } block to add the missing account(s) into " +
-            `(${missing.map((w) => `${w.label} ${w.pubkey}`).join(", ")}) — convert/repair the ` +
-            "bus by hand (docs/sop-stack-onboarding.md §B0.1).",
-        };
+      let next = currentConf;
+      if (missing.length > 0) {
+        // One terse provenance marker for the whole appended run — this writes
+        // into the caller's LIVE nats config, so no per-line commentary.
+        const insertion =
+          "  // added by cortex network join/make-live (cortex#1480)\n" +
+          missing.map((w) => `  ${w.pubkey}: ${w.jwt}\n`).join("");
+        const inserted = insertIntoResolverPreload(next, insertion);
+        if (inserted === null) {
+          return {
+            status: "refuse",
+            reason:
+              "the nats config is operator-mode under this operator but has no " +
+              "resolver_preload { … } block to add the missing account(s) into " +
+              `(${missing.map((w) => `${w.label} ${w.pubkey}`).join(", ")}) — convert/repair the ` +
+              "bus by hand (docs/sop-stack-onboarding.md §B0.1).",
+          };
+        }
+        next = inserted;
+      }
+      if (sysDirectiveNeeded) {
+        // sysDirectiveNeeded ⇒ systemAccount is defined (TS narrows the aliased
+        // const condition), so no non-null assertion is needed.
+        next = appendSystemAccountDirective(next, systemAccount);
       }
       return { status: "converted", conf: next };
     }
