@@ -297,7 +297,7 @@ export interface CapabilityHit {
  * Re-transitions out of a decided state are forbidden (409 already_decided);
  * REVOKED is the one transition OUT of ADMITTED (and is itself terminal).
  */
-export type AdmissionStatus = "PENDING" | "ADMITTED" | "REJECTED" | "REVOKED";
+export type AdmissionStatus = "PENDING" | "ADMITTED" | "REJECTED" | "REVOKED" | "DEPARTED";
 
 /**
  * A persisted admission request — the metadata record that a verified
@@ -550,6 +550,50 @@ export interface AdmissionRevokeClaim {
 /** On-wire envelope for a hub-admin revoke. */
 export interface SignedAdmissionRevoke {
   claim: AdmissionRevokeClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+/**
+ * C-1350 Slice 1 (#1350) — the MEMBER-PoP-signed claim carried by
+ * `POST /admission-requests/{request_id}/depart`.
+ *
+ * Where {@link AdmissionRevokeClaim} is the HUB-ADMIN kicking a member
+ * (involuntary, ADMITTED → REVOKED), this claim is the MEMBER leaving of their
+ * own accord (voluntary, ADMITTED → DEPARTED). The authority model mirrors the
+ * `/mine` member PoP-read, promoted to a WRITE: the signature over
+ * `canonicalJSON(claim)` against `peer_pubkey` IS the authorization — there is
+ * NO admin allowlist on this route. The route additionally enforces
+ * own-row-only: the proven `peer_pubkey` MUST equal the target row's stored
+ * `peer_pubkey`, else 403 (a member can never depart someone else's row). A
+ * `nonce` is bound in (unlike the idempotent `/mine` read) because this is a
+ * state-transitioning write — replay protection per the admit/revoke posture.
+ */
+export interface AdmissionDepartClaim {
+  /** Must equal the URL path parameter. */
+  request_id: string;
+  /**
+   * The departing principal id. Echoed into the signed claim for
+   * canonicalisation/audit; the sole authority is the signature over
+   * `peer_pubkey` + the own-row ownership check (never this field).
+   */
+  principal_id: string;
+  /**
+   * The member's registered Ed25519 pubkey (base64). The claim is signed with
+   * the matching private key, so verifying the signature against this field
+   * proves possession — and the route then requires it to equal the row's
+   * stored `peer_pubkey`.
+   */
+  peer_pubkey: string;
+  /** ISO-8601 UTC timestamp at which the member signed this claim. */
+  issued_at: string;
+  /** Random nonce to prevent replay (state-transitioning write). */
+  nonce: string;
+}
+
+/** On-wire envelope for a member self-depart. */
+export interface SignedAdmissionDepart {
+  claim: AdmissionDepartClaim;
   /** Base64 Ed25519 signature over canonical-JSON(claim). */
   signature: string;
 }

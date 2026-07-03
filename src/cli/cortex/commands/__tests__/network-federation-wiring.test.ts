@@ -138,6 +138,7 @@ function makeMinimalPorts(opts: {
     },
     loadCached() { return undefined; },
     async deregisterFromNetwork() { return { ok: true, note: "ok" }; },
+    async departFromNetwork() { return { ok: true, note: "ok" }; },
   };
 
   const busType = opts.busType ?? "operator-mode";
@@ -327,6 +328,7 @@ describe("G1c — federation-wiring step in joinNetwork (ADR-0013 Model B)", () 
       },
       loadCached() { return undefined; },
       async deregisterFromNetwork() { return { ok: true, note: "ok" }; },
+    async departFromNetwork() { return { ok: true, note: "ok" }; },
     };
 
     const leafFile: LeafFilePort = {

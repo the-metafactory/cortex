@@ -216,10 +216,12 @@ export function makeLeaveNetworkPorts(initial: PolicyFederatedNetwork[]): LeaveP
       return Promise.resolve({ ok: true as const });
     },
   };
-  // Only `deregisterFromNetwork` is called by leave; the join-side registry
-  // methods are never reached, so a partial + cast keeps the fake small.
+  // Only `deregisterFromNetwork` + `departFromNetwork` are called by leave; the
+  // join-side registry methods are never reached, so a partial + cast keeps the
+  // fake small.
   const registry = {
     deregisterFromNetwork: () => Promise.resolve({ ok: true as const, note: "test no-op" }),
+    departFromNetwork: () => Promise.resolve({ ok: true as const, note: "test no-op" }),
   } as unknown as NetworkRegistryPort;
   // Leave calls only removeInclude / remove / list.
   const leafFile = {

@@ -253,6 +253,20 @@ export interface IssuanceRequestStore {
    * (you cannot revoke a member that was never admitted).
    */
   revokeAdmission(requestId: string): Promise<AdmissionRequest | undefined>;
+
+  /**
+   * C-1350 Slice 1 (#1350) — transition an ADMITTED row to DEPARTED (the member
+   * left voluntarily) and CLEAR its sealed blob (a departed member must not
+   * retain a fetchable copy — same hygiene as revoke). Guarded on
+   * `status = 'ADMITTED'`. Returns the updated row; `undefined` when the row is
+   * missing. Already-DEPARTED is idempotent (returns the DEPARTED row); a
+   * PENDING/REJECTED/REVOKED row throws {@link AlreadyDecidedError} (you cannot
+   * depart a row that is not an active admission). Distinct from
+   * {@link revokeAdmission} only in the target status: DEPARTED (voluntary) vs
+   * REVOKED (admin-kicked). Roster needs NO change — `rosterFromAdmissions()`
+   * filters `status='ADMITTED'`, so DEPARTED auto-drops from `members[]`.
+   */
+  departAdmission(requestId: string): Promise<AdmissionRequest | undefined>;
 }
 
 // =============================================================================
@@ -377,6 +391,23 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
     const updated: AdmissionRequest = {
       ...existing,
       status: "REVOKED",
+      sealed_secret: null,
+      updated_at: new Date().toISOString(),
+    };
+    this.requests.set(requestId, updated);
+    return updated;
+  }
+
+  async departAdmission(requestId: string): Promise<AdmissionRequest | undefined> {
+    const existing = this.requests.get(requestId);
+    if (!existing) return undefined;
+    if (existing.status === "DEPARTED") return existing; // idempotent
+    if (existing.status !== "ADMITTED") {
+      throw new AlreadyDecidedError(existing);
+    }
+    const updated: AdmissionRequest = {
+      ...existing,
+      status: "DEPARTED",
       sealed_secret: null,
       updated_at: new Date().toISOString(),
     };
@@ -563,6 +594,36 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       return current;
     }
     return { ...existing, status: "REVOKED", sealed_secret: null, updated_at: now };
+  }
+
+  async departAdmission(requestId: string): Promise<AdmissionRequest | undefined> {
+    const existing = await this.getIssuanceRequest(requestId);
+    if (!existing) return undefined;
+    if (existing.status === "DEPARTED") return existing; // idempotent no-op
+    if (existing.status !== "ADMITTED") {
+      throw new AlreadyDecidedError(existing);
+    }
+    const now = new Date().toISOString();
+    const res = await this.db
+      .prepare(
+        `UPDATE admission_requests
+         SET status = 'DEPARTED', sealed_secret = NULL, updated_at = ?
+         WHERE request_id = ? AND status = 'ADMITTED'`,
+      )
+      .bind(now, requestId)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) {
+      // The `WHERE status = 'ADMITTED'` guard flipped false between our SELECT
+      // and UPDATE — a concurrent transition landed. Re-derive the outcome from
+      // the CURRENT row so we never report a bogus success: an already-DEPARTED
+      // row is the idempotent case (200); anything else (a REVOKE that beat us,
+      // etc.) is a 409 via AlreadyDecidedError; a vanished row is 404.
+      const current = await this.getIssuanceRequest(requestId);
+      if (!current) return undefined;
+      if (current.status === "DEPARTED") return current;
+      throw new AlreadyDecidedError(current);
+    }
+    return { ...existing, status: "DEPARTED", sealed_secret: null, updated_at: now };
   }
 }
 

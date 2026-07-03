@@ -218,6 +218,14 @@ export interface AdmissionStatusInfo {
   revoked: boolean;
   /** ISO-8601 UTC the row was revoked (`updated_at`), when the registry supplied it. */
   revokedAt?: string;
+  /**
+   * C-1350 Slice 1 — true when this stack's own admission row is DEPARTED (the
+   * member left voluntarily). Purely informational — NO warning banner, unlike
+   * `revoked` (which is an involuntary kick the member should act on).
+   */
+  departed?: boolean;
+  /** ISO-8601 UTC the row was departed (`updated_at`), when the registry supplied it. */
+  departedAt?: string;
   /** The admission request id, when known — echoed for the admin/audit trail. */
   requestId?: string;
   /**
@@ -1018,6 +1026,24 @@ export async function leaveNetwork(
   }
   steps.push("restarted stack daemon");
 
+  // C-1350 Slice 1 — AFTER the local teardown succeeds, tell the registry the
+  // member left by transitioning their own ADMITTED row → DEPARTED (member PoP
+  // write). NON-FATAL, exactly like the deregister cap-retag above: a failure is
+  // a warning, the leave still reports `ok` (the local effect — the bus is off
+  // the network — already succeeded). Dry-run leaves return a clean no-op note
+  // (the adapter gates the actual POST on `--apply`).
+  const depart = await ports.registry.departFromNetwork(networkId);
+  if (depart.ok) {
+    steps.push(`registry depart for "${networkId}": ${depart.note}`);
+  } else {
+    const warn =
+      `registry depart for "${networkId}" failed (${depart.reason}) — the LOCAL leave completed, ` +
+      `but the registry admission row was not marked DEPARTED; re-run ` +
+      `\`cortex network leave ${networkId} --apply\` when the registry is reachable.`;
+    warnings.push(warn);
+    steps.push(`WARN: ${warn}`);
+  }
+
   return {
     ok: true,
     steps,
@@ -1160,6 +1186,18 @@ async function resolveAdmissionInfo(
   if (!res.ok) {
     // Non-fatal — surface the lookup gap, keep the row (match #1315 posture).
     return { revoked: false, lookup: "unavailable" };
+  }
+  // C-1350 Slice 1 — a DEPARTED row gets a quiet informational summary (the
+  // member left voluntarily; no warning). A REVOKED row keeps its warning
+  // banner. Everything else returns undefined so an ordinary row is unchanged.
+  if (res.state.state === "departed") {
+    return {
+      revoked: false,
+      departed: true,
+      lookup: "ok",
+      ...(res.state.updatedAt !== undefined && { departedAt: res.state.updatedAt }),
+      ...(res.state.requestId !== undefined && { requestId: res.state.requestId }),
+    };
   }
   if (res.state.state !== "revoked") return undefined;
   return {

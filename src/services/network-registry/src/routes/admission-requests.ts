@@ -55,6 +55,8 @@ import {
   validateSealedSecretClaim,
   validateSignedAdmissionRevoke,
   validateAdmissionRevokeClaim,
+  validateSignedAdmissionDepart,
+  validateAdmissionDepartClaim,
   isValidRequestId,
 } from "../validate";
 import { canonicalJSON, verifyEd25519 } from "../signing";
@@ -502,6 +504,133 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
   });
 
   // ---------------------------------------------------------------------------
+  // POST /admission-requests/:request_id/depart — C-1350 Slice 1 (#1350)
+  //
+  // The MEMBER leaves a network of their OWN accord (voluntary), transitioning
+  // their own ADMITTED row → DEPARTED and clearing its sealed blob. This is the
+  // member-side counterpart to the hub-admin `/revoke` (involuntary kick):
+  // `DEPARTED` keeps "left" separable from "kicked" for the audit + admin queue.
+  //
+  // Authority = MEMBER PROOF-OF-POSSESSION, promoted from the `/mine` read to a
+  // write. There is NO admin allowlist on this route — the signature over
+  // canonicalJSON(claim) against `claim.peer_pubkey` proves the caller holds the
+  // member key, and the OWN-ROW check (`peer_pubkey === row.peer_pubkey`) is the
+  // authz: a member can only depart their own row, never someone else's (403).
+  //
+  // Gate order (fail-closed, mirrors handleDecision): M2 request_id grammar →
+  // M1 rate-limit → JSON parse → envelope+claim validate → clock-skew → sig
+  // verify FIRST (over the wire claim; guarded canonicaliser throw → 401, never
+  // 500) → OWN-ROW ownership (403) → nonce burn (#695: only after the authentic
+  // + authorised path) → transition. Idempotent: re-departing a DEPARTED row →
+  // 200; a non-ADMITTED (PENDING/REJECTED/REVOKED) row → 409.
+  // ---------------------------------------------------------------------------
+
+  app.post("/admission-requests/:request_id/depart", async (c) => {
+    const requestId = c.req.param("request_id") ?? "";
+
+    // M2 — validate request_id path param BEFORE body parse or crypto.
+    if (!isValidRequestId(requestId)) {
+      return c.json({ error: "invalid_request_id" }, 400);
+    }
+
+    // M1 — rate-limit BEFORE the expensive Ed25519 verify (register/write bucket).
+    const allowed = await checkRateLimit(c.env, "register", clientKey(c.req.raw, requestId));
+    if (!allowed) {
+      return c.json(TOO_MANY_REQUESTS_BODY, 429, {
+        "Retry-After": String(retryAfterSeconds("register")),
+      });
+    }
+
+    // Parse + validate envelope, then the claim (binds request_id to the path).
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (_err) {
+      return c.json({ error: "body must be valid JSON" }, 400);
+    }
+    const envelopeCheck = validateSignedAdmissionDepart(body);
+    if (!envelopeCheck.ok) {
+      return c.json({ error: "validation_failed", details: envelopeCheck.errors }, 400);
+    }
+    const claimResult = validateAdmissionDepartClaim(envelopeCheck.signed.claim, requestId);
+    if (!claimResult.ok) {
+      return c.json({ error: "validation_failed", details: claimResult.errors }, 400);
+    }
+    const { claim } = claimResult;
+
+    // Clock-skew — bound a captured token's lifetime.
+    const issued = Date.parse(claim.issued_at);
+    const now = Date.now();
+    if (Math.abs(now - issued) > CLOCK_SKEW_MS) {
+      return c.json(
+        { error: "issued_at out of skew window", details: { skew_ms: now - issued, max_ms: CLOCK_SKEW_MS } },
+        400,
+      );
+    }
+
+    // Signature verification FIRST (before recording the nonce). Verify over the
+    // WIRE claim (canonicalJSON(signed.claim), #1414) — the signature IS the
+    // proof of possession of `claim.peer_pubkey`. Fail closed (401) if the shared
+    // guarded canonicaliser throws on an over-deep/over-wide hostile body
+    // (#832/#1418) — it can never match a real signature anyway.
+    let message: Uint8Array<ArrayBuffer>;
+    try {
+      message = new TextEncoder().encode(canonicalJSON(envelopeCheck.signed.claim)) as Uint8Array<ArrayBuffer>;
+    } catch (_err) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+    const sigValid = await verifyEd25519(claim.peer_pubkey, envelopeCheck.signed.signature, message);
+    if (!sigValid) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+
+    // OWN-ROW authorisation — the proven member key MUST equal the target row's
+    // stored `peer_pubkey`. This ownership check IS the authz (no admin
+    // allowlist). Load the row to compare; a missing row is a 404, a wrong-owner
+    // row is a 403 and is left UNTOUCHED (a member can never depart another's
+    // row). Done BEFORE the nonce burn so a wrong-member probe cannot grief a
+    // legitimate member's nonce or leak beyond existence.
+    const store = getIssuanceStore(c.env);
+    const row = await store.getIssuanceRequest(requestId);
+    if (!row) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    if (row.peer_pubkey !== claim.peer_pubkey) {
+      return c.json({ error: "not_row_owner" }, 403);
+    }
+
+    // Replay check — only on the authentic + authorised path (#695 posture).
+    const nonceCache = getNonceCache(c.env);
+    const fresh = await nonceCache.recordIfFresh(claim.nonce, now);
+    if (!fresh) {
+      return c.json({ error: "nonce_replayed" }, 409);
+    }
+
+    // State transition: ADMITTED → DEPARTED (+ clear sealed blob). Idempotent on
+    // an already-DEPARTED row (200); a non-ADMITTED row is a 409 "already
+    // <STATUS>". `rosterFromAdmissions` filters ADMITTED, so the member drops out
+    // of `members[]` automatically.
+    let updated;
+    try {
+      updated = await store.departAdmission(requestId);
+    } catch (err) {
+      if (err instanceof AlreadyDecidedError) {
+        return c.json(
+          {
+            error: "not_admitted",
+            details: `request ${requestId} is already ${err.request.status}, not ADMITTED — nothing to depart`,
+            current: err.request,
+          },
+          409,
+        );
+      }
+      throw err;
+    }
+    if (!updated) return c.json({ error: "not_found" }, 404);
+    return c.json(updated, 200);
+  });
+
+  // ---------------------------------------------------------------------------
   // GET /admission-requests?status=<status>
   // ---------------------------------------------------------------------------
 
@@ -512,10 +641,15 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     }
 
     const status = c.req.query("status") as AdmissionStatus | undefined;
-    const validStatuses: AdmissionStatus[] = ["PENDING", "ADMITTED", "REJECTED"];
+    // C-1350 — REVOKED + DEPARTED admitted here too so the admin listing
+    // (`admit --list-pending --status DEPARTED|REVOKED`) surfaces
+    // departed-/kicked-but-not-yet-hub-revoked rows. The CLI's LIST_STATUSES
+    // (network.ts) and this server-side gate must stay in lockstep — a status
+    // accepted by one but rejected by the other 400s the list round-trip.
+    const validStatuses: AdmissionStatus[] = ["PENDING", "ADMITTED", "REJECTED", "REVOKED", "DEPARTED"];
     if (!status || !validStatuses.includes(status)) {
       return c.json(
-        { error: "status query param required", details: "must be one of PENDING, ADMITTED, REJECTED" },
+        { error: "status query param required", details: "must be one of PENDING, ADMITTED, REJECTED, REVOKED, DEPARTED" },
         400,
       );
     }

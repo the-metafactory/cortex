@@ -91,6 +91,7 @@ import type {
 } from "./network-ports";
 import {
   resolveOwnAdmissionState,
+  departOwnAdmission,
   type ResolveOwnAdmissionStateResult,
 } from "../../../common/registry/admission-state";
 import { buildFederationWiringAdapter } from "./network-federation-wiring";
@@ -372,7 +373,7 @@ async function registerWithCapabilities(
   return { ok: true, note: `HTTP ${result.status.toString()}` };
 }
 
-function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
+function buildRegistryPort(cfg: LivePortsConfig, mutate: boolean): NetworkRegistryPort {
   const url = cfg.registryUrl ?? "";
   const client = new NetworkRegistryClient({
     url,
@@ -428,9 +429,14 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
     async deregisterFromNetwork(networkId) {
       // C-820 (leave symmetry) — remove ONLY `networkId` from each capability's
       // registry `networks[]` (set-difference), re-attesting the reduced set so
-      // the principal exits this ONE network's roster while staying in the
-      // others. A registry control-plane POST, never a `federated.*` wire
-      // envelope (the network name never goes on the bus). Never throws.
+      // the principal's CAPABILITY FACET for this network is dropped while its
+      // caps stay tagged for the OTHER networks. Post-ADR-0018-Q3 this retag does
+      // NOT itself remove the member from the `members[]` roster — roster
+      // membership is now ADMITTED-admission-sourced (`rosterFromAdmissions`
+      // filters `status='ADMITTED'`), so leaving the roster is the job of the
+      // member self-DEPART (`departFromNetwork` → ADMITTED→DEPARTED), not this
+      // capability retag. A registry control-plane POST, never a `federated.*`
+      // wire envelope (the network name never goes on the bus). Never throws.
       //
       // SKIP cleanly (a `note`, not an error/warning) when the registry can't be
       // signed-to: no registry URL, or no seed to sign the re-attestation. Leave
@@ -457,6 +463,41 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
       // route. `mergeExistingCaps:false` — we already computed the exact intended
       // set (the union-then-subtract), so we must NOT re-union it back in.
       return registerWithCapabilities(cfg, retag.capabilities, true, false);
+    },
+    async departFromNetwork(networkId) {
+      // C-1350 Slice 1 — the member-side self-DEPART. PoP-sign + POST
+      // `/admission-requests/:id/depart`, transitioning the member's own
+      // ADMITTED row → DEPARTED so they drop out of `members[]`. NON-FATAL (the
+      // orchestrator warns and still reports the local leave `ok`).
+      //
+      // DRY-RUN GATE — unlike the cap retag above, this is a real state
+      // transition of the member's admission row, so a dry-run leave (a preview)
+      // must NOT fire it. Return a clean no-op note when not applying.
+      if (!mutate) {
+        return { ok: true, note: "dry-run — registry depart POST skipped (no mutation)" };
+      }
+      // SKIP cleanly when the registry can't be signed-to (no url/seed) — same
+      // posture as the deregister above; a stack with no registry has no row.
+      if (url === "" || cfg.seedPath === undefined || cfg.seedPath === "") {
+        return {
+          ok: true,
+          note: "no registry url/seed configured — skipped registry depart (local leave only)",
+        };
+      }
+      const matRes = loadSeedMaterial(cfg.seedPath, "--seed-path");
+      if (!matRes.ok) return { ok: false, reason: matRes.reason };
+
+      const res = await departOwnAdmission(
+        { registryUrl: url, principalId: cfg.principalId, material: matRes.material },
+        networkId,
+      );
+      if (!res.ok) return { ok: false, reason: res.reason };
+      if (res.outcome === "departed") {
+        return { ok: true, note: `admission row ${res.requestId} marked DEPARTED` };
+      }
+      // not-applicable — no ADMITTED row for this network (already gone / never
+      // admitted / already departed). A clean no-op, not a failure.
+      return { ok: true, note: `no admitted admission row to depart (state: ${res.state})` };
     },
   };
 }
@@ -1307,7 +1348,7 @@ const liveResolveOwnAdmissionState: AdmissionResolver = (networkId, inputs) =>
 
 function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
   return {
-    registry: buildRegistryPort(cfg),
+    registry: buildRegistryPort(cfg, mutate),
     leafFile: buildLeafFilePort(cfg, mutate),
     plist: buildPlistPort(cfg, mutate),
     configStore: buildConfigStorePort(cfg, mutate),

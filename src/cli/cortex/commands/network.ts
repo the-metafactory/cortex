@@ -1130,6 +1130,11 @@ async function runStatus(
         `    ⚠ REVOKED — you were removed from "${n.networkId}"${when}. ` +
           `Run \`cortex network leave ${n.networkId} --apply\` to clean up the dead leaf.`,
       );
+    } else if (n.admission?.departed === true) {
+      // C-1350 Slice 1 — voluntary departure: a QUIET informational line, no
+      // warning banner (the member left on purpose; nothing to act on).
+      const when = n.admission.departedAt !== undefined ? ` ${n.admission.departedAt}` : "";
+      lines.push(`    admission: departed${when}`);
     } else if (n.admission?.lookup === "unavailable") {
       lines.push(`    admission_lookup: unavailable`);
     }
@@ -1834,8 +1839,12 @@ async function buildAdmissionDecisionBody(
 // C-1314 — `cortex network admit --list-pending` (admission-queue discovery)
 // =============================================================================
 
-/** Admission-request statuses the registry list endpoint accepts. */
-const LIST_STATUSES = ["PENDING", "ADMITTED", "REJECTED"] as const;
+/** Admission-request statuses the registry list endpoint accepts. C-1350 adds
+ *  REVOKED + DEPARTED so `admit --list-pending --status DEPARTED` surfaces
+ *  departed-but-not-hub-revoked rows (the admin's cue to run `secret
+ *  revoke-member` and cut the hub `authorization` user). Kept in lockstep with
+ *  the registry-side `validStatuses` gate in routes/admission-requests.ts. */
+const LIST_STATUSES = ["PENDING", "ADMITTED", "REJECTED", "REVOKED", "DEPARTED"] as const;
 
 /** The subset of an `AdmissionRequest` row this CLI renders (matches the
  *  registry `GET /admission-requests` response, `types.ts` AdmissionRequest). */

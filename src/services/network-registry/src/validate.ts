@@ -18,6 +18,7 @@
 
 import type {
   AdmissionDecisionClaim,
+  AdmissionDepartClaim,
   AdmissionReadClaim,
   AdmissionRevokeClaim,
   Capability,
@@ -25,6 +26,7 @@ import type {
   SealedSecretWriteClaim,
   SignedAdmissionDecision,
   SignedAdmissionMineRead,
+  SignedAdmissionDepart,
   SignedAdmissionRead,
   SignedAdmissionRevoke,
   SignedNetworkRosterMemberRead,
@@ -961,6 +963,91 @@ export function validateAdmissionRevokeClaim(
     claim: {
       request_id: c.request_id as string,
       hub_admin_pubkey: c.hub_admin_pubkey as string,
+      issued_at: c.issued_at as string,
+      nonce: c.nonce as string,
+    },
+  };
+}
+
+/**
+ * C-1350 Slice 1 (#1350) — validate the `POST /admission-requests/{id}/depart`
+ * envelope ({ claim: AdmissionDepartClaim, signature }). Structural only; the
+ * route verifies the signature over the WIRE claim (`canonicalJSON(signed.claim)`,
+ * the #1414 verify-over-wire norm) and enforces the own-row ownership gate.
+ */
+export function validateSignedAdmissionDepart(
+  body: unknown,
+): { ok: true; signed: SignedAdmissionDepart } | { ok: false; errors: ValidationError[] } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.signature !== "string" || b.signature.length === 0) {
+    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
+  }
+  if (!BASE64_RE.test(b.signature)) {
+    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
+  }
+  if (typeof b.claim !== "object" || b.claim === null || Array.isArray(b.claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be a non-array object" }] };
+  }
+  return {
+    ok: true,
+    signed: { claim: b.claim as AdmissionDepartClaim, signature: b.signature },
+  };
+}
+
+/**
+ * C-1350 Slice 1 (#1350) — validate the `AdmissionDepartClaim` payload before
+ * crypto verification. Cross-field rule: claim.request_id MUST match the URL
+ * path parameter (a captured depart token for row A cannot be replayed against
+ * row B's path). Mirrors {@link validateAdmissionRevokeClaim} but keyed on the
+ * MEMBER `peer_pubkey` (the PoP authority) + `principal_id`, not a hub-admin key.
+ */
+export function validateAdmissionDepartClaim(
+  claim: unknown,
+  expectedRequestId: string,
+): { ok: true; claim: AdmissionDepartClaim } | { ok: false; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+
+  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be an object" }] };
+  }
+  const c = claim as Record<string, unknown>;
+
+  if (typeof c.request_id !== "string" || c.request_id.length === 0) {
+    errors.push({ field: "request_id", message: "must be a non-empty string" });
+  } else if (c.request_id !== expectedRequestId) {
+    errors.push({
+      field: "request_id",
+      message: `body request_id "${c.request_id}" does not match path "${expectedRequestId}"`,
+    });
+  }
+
+  if (typeof c.principal_id !== "string" || !isValidPrincipalId(c.principal_id)) {
+    errors.push({ field: "principal_id", message: "must be a valid principal id" });
+  }
+
+  if (typeof c.peer_pubkey !== "string" || !isValidPubkey(c.peer_pubkey)) {
+    errors.push({ field: "peer_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
+  }
+
+  if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
+    errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
+  }
+
+  if (typeof c.nonce !== "string" || c.nonce.length < 8 || c.nonce.length > 128) {
+    errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    claim: {
+      request_id: c.request_id as string,
+      principal_id: c.principal_id as string,
+      peer_pubkey: c.peer_pubkey as string,
       issued_at: c.issued_at as string,
       nonce: c.nonce as string,
     },

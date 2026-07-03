@@ -121,6 +121,21 @@ export interface NetworkRegistryPort {
   deregisterFromNetwork(
     networkId: string,
   ): Promise<{ ok: true; note: string } | { ok: false; reason: string }>;
+  /**
+   * C-1350 Slice 1 (#1350) — the member-side self-DEPART: after `leave`'s local
+   * teardown, tell the registry the member left by transitioning their OWN
+   * ADMITTED row → DEPARTED (member PoP write; the signature IS the auth, no
+   * admin key). NON-FATAL like {@link deregisterFromNetwork} — a failure warns
+   * but the local leave still reports `ok`. A clean no-op (a `note`, not an
+   * error) when there is nothing to depart (no admitted row) or the registry
+   * cannot be signed-to (no url/seed). UNLIKE `deregisterFromNetwork`, this is
+   * gated on `--apply`: a dry-run leave returns a no-op note and NEVER mutates
+   * the registry row (departing a member's row is a real state transition, not a
+   * preview-safe read). Never throws.
+   */
+  departFromNetwork(
+    networkId: string,
+  ): Promise<{ ok: true; note: string } | { ok: false; reason: string }>;
 }
 
 /** Inputs to the leaf-include render — the trust boundary in one place. */

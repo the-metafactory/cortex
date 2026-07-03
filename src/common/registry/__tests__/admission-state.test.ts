@@ -14,6 +14,8 @@ import {
   fetchOwnAdmissionRows,
   resolveOwnAdmissionState,
   rowHasSealedSecret,
+  postDepartAdmission,
+  departOwnAdmission,
   type AdmissionMineRow,
   type FetchLike,
 } from "../admission-state";
@@ -79,10 +81,24 @@ describe("classifyOwnAdmissionRows", () => {
     expect(s.state).toBe("admitted-unsealed");
   });
 
-  test("REVOKED / REJECTED / unknown map through", () => {
+  test("REVOKED / REJECTED / DEPARTED / unknown map through", () => {
     expect(classifyOwnAdmissionRows([row({ status: "REVOKED" })], "metafactory", PUB).state).toBe("revoked");
     expect(classifyOwnAdmissionRows([row({ status: "REJECTED" })], "metafactory", PUB).state).toBe("rejected");
+    expect(classifyOwnAdmissionRows([row({ status: "DEPARTED" })], "metafactory", PUB).state).toBe("departed");
     expect(classifyOwnAdmissionRows([row({ status: "WEIRD" })], "metafactory", PUB).state).toBe("unknown");
+  });
+
+  // C-1350 Slice 1 — a DEPARTED row threads updated_at through as the departed-at
+  // date the quiet `admission: departed <date>` status line prints.
+  test("DEPARTED row carries updated_at through as updatedAt (the departed-at date)", () => {
+    const s = classifyOwnAdmissionRows(
+      [row({ status: "DEPARTED", updated_at: "2026-07-03T10:00:00.000Z", request_id: "rD" })],
+      "metafactory",
+      PUB,
+    );
+    expect(s.state).toBe("departed");
+    expect(s.updatedAt).toBe("2026-07-03T10:00:00.000Z");
+    expect(s.requestId).toBe("rD");
   });
 
   // C-1350 (Slice 2) — the row's updated_at is threaded through as updatedAt so a
@@ -203,5 +219,147 @@ describe("resolveOwnAdmissionState", () => {
       "metafactory",
     );
     expect(res.ok).toBe(false);
+  });
+});
+
+// =============================================================================
+// C-1350 Slice 1 — postDepartAdmission (member-PoP write) + departOwnAdmission
+// =============================================================================
+
+describe("postDepartAdmission", () => {
+  test("signs the depart claim + POSTs /admission-requests/:id/depart, returns the row", async () => {
+    const material = realMaterial();
+    let gotUrl = "";
+    let gotMethod = "";
+    let gotBody = "";
+    const fetchImpl: FetchLike = async (url, init) => {
+      gotUrl = url;
+      gotMethod = init?.method ?? "";
+      gotBody = init?.body ?? "";
+      return { ok: true, status: 200, json: async () => row({ request_id: "req-abc", status: "DEPARTED", sealed_secret: null }) };
+    };
+    const res = await postDepartAdmission({
+      registryUrl: "http://registry.test/",
+      principalId: "jc",
+      material,
+      requestId: "req-abc",
+      fetchImpl,
+      now: () => new Date("2026-07-03T00:00:00.000Z"),
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.row.status).toBe("DEPARTED");
+    expect(gotUrl).toBe("http://registry.test/admission-requests/req-abc/depart"); // trailing slash trimmed
+    expect(gotMethod).toBe("POST");
+    // Client signs-what-it-sends: the posted claim carries EXACTLY the fields the
+    // registry AdmissionDepartClaim canonicalises + a signature over them.
+    const body = JSON.parse(gotBody) as { claim: Record<string, unknown>; signature: string };
+    expect(body.claim.request_id).toBe("req-abc");
+    expect(body.claim.principal_id).toBe("jc");
+    expect(body.claim.peer_pubkey).toBe(material.pubkeyB64);
+    expect(typeof body.claim.issued_at).toBe("string");
+    expect(typeof body.claim.nonce).toBe("string");
+    expect((body.claim.nonce as string).length).toBeGreaterThanOrEqual(8);
+    expect(body.signature.length).toBeGreaterThan(0);
+  });
+
+  test("HTTP error → soft ok:false with the status (never throws)", async () => {
+    const material = realMaterial();
+    const fetchImpl: FetchLike = async () => ({ ok: false, status: 409, json: async () => ({}) });
+    const res = await postDepartAdmission({
+      registryUrl: "http://r.test",
+      principalId: "jc",
+      material,
+      requestId: "req-abc",
+      fetchImpl,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("409");
+  });
+
+  test("transport throw → soft ok:false (never throws)", async () => {
+    const material = realMaterial();
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    const res = await postDepartAdmission({
+      registryUrl: "http://r.test",
+      principalId: "jc",
+      material,
+      requestId: "req-abc",
+      fetchImpl,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("errored");
+  });
+});
+
+describe("departOwnAdmission (read → depart if ADMITTED)", () => {
+  /** A fetch that answers the GET /mine read with `rows`, and any POST with `postResp`. */
+  function fetchFor(
+    rows: AdmissionMineRow[],
+    postResp: { ok: boolean; status: number; body?: unknown } = { ok: true, status: 200 },
+  ): FetchLike {
+    return async (_url, init) => {
+      if ((init?.method ?? "GET") === "GET") {
+        return { ok: true, status: 200, json: async () => rows };
+      }
+      return { ok: postResp.ok, status: postResp.status, json: async () => postResp.body ?? {} };
+    };
+  }
+
+  test("an ADMITTED row is departed → outcome 'departed' with the request-id", async () => {
+    const material = realMaterial();
+    const admittedRow = row({ network_id: "metafactory", status: "ADMITTED", request_id: "rX", peer_pubkey: material.pubkeyB64 });
+    const departedRow = { ...admittedRow, status: "DEPARTED", sealed_secret: null };
+    const res = await departOwnAdmission(
+      { registryUrl: "http://r.test", principalId: "jc", material, fetchImpl: fetchFor([admittedRow], { ok: true, status: 200, body: departedRow }) },
+      "metafactory",
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.outcome).toBe("departed");
+      if (res.outcome === "departed") expect(res.requestId).toBe("rX");
+    }
+  });
+
+  test("a PENDING row → outcome 'not-applicable' (no depart POST fired)", async () => {
+    const material = realMaterial();
+    let posted = false;
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if ((init?.method ?? "GET") !== "GET") posted = true;
+      return { ok: true, status: 200, json: async () => [row({ network_id: "metafactory", status: "PENDING" })] };
+    };
+    const res = await departOwnAdmission({ registryUrl: "http://r.test", principalId: "jc", material, fetchImpl }, "metafactory");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.outcome).toBe("not-applicable");
+    expect(posted).toBe(false);
+  });
+
+  test("no row for the network → 'not-applicable'", async () => {
+    const material = realMaterial();
+    const res = await departOwnAdmission(
+      { registryUrl: "http://r.test", principalId: "jc", material, fetchImpl: fetchFor([row({ network_id: "othernet", status: "ADMITTED" })]) },
+      "metafactory",
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.outcome).toBe("not-applicable");
+  });
+
+  test("a /mine read failure → ok:false (non-fatal for the caller)", async () => {
+    const material = realMaterial();
+    const fetchImpl: FetchLike = async () => ({ ok: false, status: 500, json: async () => ({}) });
+    const res = await departOwnAdmission({ registryUrl: "http://r.test", principalId: "jc", material, fetchImpl }, "metafactory");
+    expect(res.ok).toBe(false);
+  });
+
+  test("an ADMITTED row whose depart POST fails → ok:false", async () => {
+    const material = realMaterial();
+    const admittedRow = row({ network_id: "metafactory", status: "ADMITTED", request_id: "rX", peer_pubkey: material.pubkeyB64 });
+    const res = await departOwnAdmission(
+      { registryUrl: "http://r.test", principalId: "jc", material, fetchImpl: fetchFor([admittedRow], { ok: false, status: 503 }) },
+      "metafactory",
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("503");
   });
 });

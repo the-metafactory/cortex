@@ -137,6 +137,8 @@ interface Recorder {
   bindModeChecks: { account: string | undefined; hasCreds: boolean }[];
   /** C-820 — network ids the leave path asked the registry to deregister from. */
   deregistered: string[];
+  /** C-1350 — network ids the leave path asked the registry to depart from. */
+  departed: string[];
   /** #821 — creds-existence paths pre-flighted. */
   credsChecks: string[];
   /** #821 — networks whose leaf state was snapshotted (pre-mutation). */
@@ -157,6 +159,8 @@ function makeFakes(opts: {
   registerOk?: boolean;
   /** C-820 — outcome of the leave-side registry deregister (default: ok). */
   deregisterOk?: boolean;
+  /** C-1350 — outcome of the leave-side registry depart (default: ok). */
+  departOk?: boolean;
   restartOk?: boolean;
   /** #757 — make the nats-server restart fail (default: ok). */
   natsRestartOk?: boolean;
@@ -225,6 +229,7 @@ function makeFakes(opts: {
     bindChecks: [],
     bindModeChecks: [],
     deregistered: [],
+    departed: [],
     credsChecks: [],
     snapshots: [],
     restores: [],
@@ -265,6 +270,12 @@ function makeFakes(opts: {
       return opts.deregisterOk === false
         ? { ok: false, reason: "registry unreachable for retag" }
         : { ok: true, note: "retagged" };
+    },
+    async departFromNetwork(networkId) {
+      rec.departed.push(networkId);
+      return opts.departOk === false
+        ? { ok: false, reason: "registry unreachable for depart" }
+        : { ok: true, note: "admission row marked DEPARTED" };
     },
   };
 
@@ -1726,6 +1737,42 @@ describe("leave", () => {
     expect(rec.deregistered).toEqual(["community"]);
     expect((res.warnings ?? []).some((w) => w.includes("deregister-from-network") && w.includes("community"))).toBe(true);
   });
+
+  test("C-1350 — leave DEPARTs the member's admission row AFTER local teardown (happy path)", async () => {
+    const { ports, rec, storeRef } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory"), joinedNetwork("community")],
+    });
+    const res = await leaveNetwork("community", ports);
+
+    expect(res.ok).toBe(true);
+    // Local teardown happened.
+    expect(storeRef.networks.map((n) => n.id)).toEqual(["metafactory"]);
+    // The registry was asked to depart EXACTLY the left network.
+    expect(rec.departed).toEqual(["community"]);
+    // Depart runs AFTER the daemon restart (teardown-then-notify ordering).
+    const restartIdx = res.steps.findIndex((s) => s.includes("restarted stack daemon"));
+    const departIdx = res.steps.findIndex((s) => s.includes("registry depart"));
+    expect(restartIdx).toBeGreaterThanOrEqual(0);
+    expect(departIdx).toBeGreaterThan(restartIdx);
+    // No warning on the happy path.
+    expect(res.warnings ?? []).toHaveLength(0);
+  });
+
+  test("C-1350 — a registry depart FAILURE is non-fatal: local leave still ok, surfaced as a warning", async () => {
+    const { ports, rec, storeRef } = makeFakes({
+      initialNetworks: [joinedNetwork("community")],
+      departOk: false,
+    });
+    const res = await leaveNetwork("community", ports);
+
+    // The LOCAL leave succeeded despite the registry depart failing.
+    expect(res.ok).toBe(true);
+    expect(storeRef.networks.length).toBe(0);
+    expect(rec.restarts).toBe(1);
+    expect(rec.departed).toEqual(["community"]);
+    // The failure is surfaced as a warning (re-runnable), not a hard failure.
+    expect((res.warnings ?? []).some((w) => w.includes("registry depart") && w.includes("community"))).toBe(true);
+  });
 });
 
 // =============================================================================
@@ -1882,6 +1929,34 @@ describe("status", () => {
       expect(row.admission!.requestId).toBe("req-abc");
       // The network id the cleanup command needs rides the row.
       expect(row.networkId).toBe("metafactory");
+    });
+
+    test("a DEPARTED own-row surfaces a quiet informational departed summary (no warning)", async () => {
+      const { ports } = makeFakes({
+        initialNetworks: [joinedNetwork("metafactory")],
+        admission: {
+          metafactory: {
+            ok: true,
+            state: {
+              state: "departed",
+              networkId: "metafactory",
+              requestId: "req-dep",
+              hasSealedSecret: false,
+              peerPubkey: "PUB",
+              updatedAt: "2026-07-03T10:00:00.000Z",
+            },
+          },
+        },
+      });
+      const res = await networkStatus(ports);
+      const row = res.networks[0]!;
+      expect(row.admission).toBeDefined();
+      // Informational: departed=true, NOT revoked (no warning banner).
+      expect(row.admission!.departed).toBe(true);
+      expect(row.admission!.revoked).toBe(false);
+      expect(row.admission!.lookup).toBe("ok");
+      expect(row.admission!.departedAt).toBe("2026-07-03T10:00:00.000Z");
+      expect(row.admission!.requestId).toBe("req-dep");
     });
 
     test("an ADMITTED/live own-row attaches NO admission field (no false REVOKED)", async () => {

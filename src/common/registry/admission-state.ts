@@ -61,7 +61,7 @@ export interface AdmissionMineRow {
 /** Injectable fetch (defaults to `globalThis.fetch`) so callers/tests stay hermetic. */
 export type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string> },
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 
 export interface FetchOwnAdmissionRowsInput {
@@ -147,6 +147,7 @@ export type AdmissionRowState =
   | "admitted-sealed"
   | "revoked"
   | "rejected"
+  | "departed"
   | "unknown";
 
 export interface OwnAdmissionState {
@@ -207,6 +208,10 @@ export function classifyOwnAdmissionRows(
       return { ...base, state: "revoked" };
     case "REJECTED":
       return { ...base, state: "rejected" };
+    case "DEPARTED":
+      // C-1350 Slice 1 — the member left voluntarily. Informational (no warning
+      // banner): departure is self-initiated, not an involuntary REVOKED kick.
+      return { ...base, state: "departed" };
     default:
       return { ...base, state: "unknown" };
   }
@@ -231,6 +236,114 @@ export async function resolveOwnAdmissionState(
     ok: true,
     state: classifyOwnAdmissionRows(res.rows, networkId, input.material.pubkeyB64),
   };
+}
+
+/**
+ * C-1350 Slice 1 (#1350) — the member-side self-DEPART write. PoP-signs a depart
+ * claim with the stack's OWN seed and POSTs
+ * `/admission-requests/{request_id}/depart`, transitioning the member's own
+ * ADMITTED row → DEPARTED. The signature IS the authorization (member PoP; no
+ * admin key) — the SAME plumbing `fetchOwnAdmissionRows` uses, promoted from a
+ * read to a write with a `nonce` for replay protection.
+ *
+ * Verify-over-wire discipline (client signs-what-it-sends): the claim object
+ * signed here is the EXACT object posted, so `canonicalJSON(claim)` on the
+ * server matches byte-for-byte regardless of key order.
+ *
+ * Never throws — every failure is a typed `{ ok: false, reason }` so the leave
+ * flow can treat it as NON-FATAL (warn, still leave locally).
+ */
+export type PostDepartResult =
+  | { ok: true; row: AdmissionMineRow }
+  | { ok: false; reason: string };
+
+export interface PostDepartInput extends FetchOwnAdmissionRowsInput {
+  /** The admission request id to depart (the member's own ADMITTED row). */
+  requestId: string;
+}
+
+export async function postDepartAdmission(input: PostDepartInput): Promise<PostDepartResult> {
+  const fetchImpl: FetchLike = input.fetchImpl ?? globalThis.fetch;
+  const now = input.now ?? (() => new Date());
+
+  // 1. Sign the depart claim with the stack's own key (signature IS the auth).
+  //    Shape MUST match the registry `AdmissionDepartClaim` exactly.
+  const claim = {
+    request_id: input.requestId,
+    principal_id: input.principalId,
+    peer_pubkey: input.material.pubkeyB64,
+    issued_at: now().toISOString(),
+    nonce: randomDepartNonce(),
+  };
+  let bodyStr: string;
+  try {
+    const sig = await signClaimWithSeed(
+      input.material.seed,
+      new TextEncoder().encode(canonicalJSON(claim)),
+    );
+    bodyStr = JSON.stringify({ claim, signature: sig });
+  } catch (err) {
+    return { ok: false, reason: `failed to sign depart claim: ${errText(err)}` };
+  }
+
+  // 2. POST /admission-requests/:id/depart.
+  try {
+    const base = input.registryUrl.replace(/\/+$/, "");
+    const url = `${base}/admission-requests/${encodeURIComponent(input.requestId)}/depart`;
+    const resp = await fetchImpl(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: bodyStr,
+    });
+    if (!resp.ok) {
+      return { ok: false, reason: `registry depart failed (HTTP ${resp.status.toString()})` };
+    }
+    const row = (await resp.json()) as AdmissionMineRow;
+    return { ok: true, row };
+  } catch (err) {
+    return { ok: false, reason: `registry depart errored: ${errText(err)}` };
+  }
+}
+
+/**
+ * C-1350 Slice 1 — read + classify this stack's admission state for `networkId`,
+ * then DEPART its ADMITTED row if (and only if) there is one. Reused by
+ * `leaveNetwork` so leaving a network also tells the registry "I left". Best
+ * effort — never throws:
+ *   - `departed`        — an ADMITTED row existed and was transitioned.
+ *   - `not-applicable`  — nothing to depart (no row / pending / rejected /
+ *                         already revoked / already departed). A clean no-op.
+ *   - `{ ok: false }`   — the `/mine` read or the depart POST failed.
+ */
+export type DepartOwnAdmissionResult =
+  | { ok: true; outcome: "departed"; requestId: string; row: AdmissionMineRow }
+  | { ok: true; outcome: "not-applicable"; state: AdmissionRowState }
+  | { ok: false; reason: string };
+
+export async function departOwnAdmission(
+  input: FetchOwnAdmissionRowsInput,
+  networkId: string,
+): Promise<DepartOwnAdmissionResult> {
+  const read = await fetchOwnAdmissionRows(input);
+  if (!read.ok) return { ok: false, reason: read.reason };
+
+  const state = classifyOwnAdmissionRows(read.rows, networkId, input.material.pubkeyB64);
+  const isAdmitted = state.state === "admitted-sealed" || state.state === "admitted-unsealed";
+  if (!isAdmitted || state.requestId === undefined) {
+    // No active ADMITTED row for this network — nothing to depart.
+    return { ok: true, outcome: "not-applicable", state: state.state };
+  }
+
+  const posted = await postDepartAdmission({ ...input, requestId: state.requestId });
+  if (!posted.ok) return { ok: false, reason: posted.reason };
+  return { ok: true, outcome: "departed", requestId: state.requestId, row: posted.row };
+}
+
+/** 16-byte hex nonce for the depart write (matches the registry 8..128-char bound). */
+function randomDepartNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Error → message, never echoing secret-bearing inputs. */
