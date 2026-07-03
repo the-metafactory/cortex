@@ -9,34 +9,55 @@
  * two mechanisms don't cover every config-mutating write, and an in-process
  * snapshot does not survive the process exiting. {@link backupConfigFile} is
  * the ONE shared helper so every config write this slice touches gets the
- * SAME timestamped, same-directory, permission-preserving recovery artefact —
- * independent of, and in addition to, any in-memory rollback.
+ * SAME timestamped, same-directory recovery artefact — independent of, and in
+ * addition to, any in-memory rollback.
+ *
+ * cortex#1495 important 2 — the backup carries SECRET-bearing config (leaf
+ * creds, hub authorization users, payload keys). It is created 0600 from the
+ * first byte (write with `mode: 0o600` + an explicit chmod against a permissive
+ * umask), NOT `copyFileSync`-then-`chmod` (which would leave a world-readable
+ * window while the file inherits the default create mode before the narrowing
+ * chmod). The backup is never more permissive than the secret it protects.
  */
 
-import { chmodSync, copyFileSync, existsSync, statSync } from "fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "fs";
 
 /**
- * Write a timestamped `.bak-<label>-<epochMillis>` sidecar of `path` BEFORE a
- * config mutation. No-op (returns `undefined`) when `path` does not exist yet
- * — nothing to back up (a fresh file has no prior state to protect). Mirrors
- * the file's own permission bits onto the backup (relevant for a 0600
- * secret-bearing config) — a best-effort mirror; a failure to chmod the backup
- * is logged but never blocks the backup itself (the backup's CONTENT, already
- * copied, is what matters for recovery).
+ * cortex#1495 nit 3 — a monotonic per-process counter so two backups taken in
+ * the SAME millisecond never collide on the same filename (the pre-fix
+ * `Date.now()`-only name could). Combined with the pid it is unique across
+ * concurrent processes too.
+ */
+let backupSeq = 0;
+
+/**
+ * Write a timestamped `.bak-<label>-<epochMillis>-<pid>-<seq>` sidecar of `path`
+ * BEFORE a config mutation, created 0600 (secret-safe). No-op (returns
+ * `undefined`) when `path` does not exist yet — nothing to back up (a fresh file
+ * has no prior state to protect). NEVER throws: the caller's write must proceed
+ * even if the backup itself failed (a failure is logged and surfaced by the
+ * `undefined` return).
  */
 export function backupConfigFile(path: string, label: string): string | undefined {
   if (!existsSync(path)) return undefined;
-  const backupPath = `${path}.bak-${label}-${Date.now().toString()}`;
-  copyFileSync(path, backupPath);
+  // Unique even for same-millisecond / concurrent-process writes (nit 3).
+  const suffix = `${Date.now().toString()}-${process.pid.toString()}-${(backupSeq++).toString()}`;
+  const backupPath = `${path}.bak-${label}-${suffix}`;
   try {
-    const mode = statSync(path).mode;
-    chmodSync(backupPath, mode & 0o777);
+    // important 2 — create the backup 0600 ATOMICALLY with the write (never
+    // copy-then-chmod). `writeFileSync`'s create mode is masked by the umask, so
+    // chmod back to 0600 to be robust against a permissive umask (mirrors the
+    // leaf-include 0600 discipline in network-adapters.ts).
+    const data = readFileSync(path);
+    writeFileSync(backupPath, data, { mode: 0o600 });
+    chmodSync(backupPath, 0o600);
   } catch (err) {
-    // Best-effort permission mirror — the backup's content is already safe on
-    // disk; a chmod failure here must never abort the caller's write.
+    // Best-effort — the caller's config write must proceed even if the backup
+    // failed. Surface it so the caller knows the recovery artefact is missing.
     process.stderr.write(
-      `config-backup: could not mirror permissions onto ${backupPath}: ${err instanceof Error ? err.message : String(err)}\n`,
+      `config-backup: could not write backup ${backupPath}: ${err instanceof Error ? err.message : String(err)}\n`,
     );
+    return undefined;
   }
   return backupPath;
 }

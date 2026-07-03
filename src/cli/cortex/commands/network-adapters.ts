@@ -1095,32 +1095,34 @@ function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerP
       // #821 MAJOR-1 — cheap pre-restart syntax gate: `nats-server -c <cfg> -t`.
       // Dry-run is inert. The gate is NECESSARY-NOT-SUFFICIENT (a syntax check
       // that does not resolve leaf creds/accounts — it passed for the original
-      // crash), so a non-zero exit is a HARD signal the config is broken, while a
-      // missing `nats-server` binary is SKIPPED (returns ok) rather than blocking
-      // the join on a machine where the test tool isn't installed.
-      if (!mutate) return { ok: true };
+      // crash), so a non-zero exit is a HARD `invalid` signal.
+      //
+      // cortex#1495 BLOCKER — a missing `nats-server` binary (spawn ENOENT) is
+      // `skipped`, NOT `valid`: fail-OPEN'ing here (the pre-fix `ok:true`) would
+      // let a bad config reload onto a live bus on any host without the binary.
+      // The caller warns loudly + proceeds on `skipped`, refuses on `invalid`.
+      if (!mutate) return { status: "valid" };
       const configPath = expandTilde(cfg.natsConfigPath ?? "");
       if (configPath.length === 0) {
         // No config to test — the restart step will surface the real error.
-        return { ok: true };
+        return { status: "valid" };
       }
       let result: { code: number; stderr: string };
       try {
         result = await bunExecRunner(["nats-server", "-c", configPath, "-t"]);
       } catch (err) {
-        // Spawn failure (e.g. binary not on PATH) → SKIP the gate, don't block.
-        process.stderr.write(
-          `network join: skipping nats-server -t gate (could not run nats-server: ${err instanceof Error ? err.message : String(err)})\n`,
-        );
-        return { ok: true };
+        return {
+          status: "skipped",
+          reason: `could not run nats-server -t: ${err instanceof Error ? err.message : String(err)}`,
+        };
       }
       if (result.code !== 0) {
         return {
-          ok: false,
+          status: "invalid",
           reason: `nats-server -c ${configPath} -t exited ${result.code.toString()}: ${result.stderr.trim()}`,
         };
       }
-      return { ok: true };
+      return { status: "valid" };
     },
     async isHealthy() {
       // #821 — probe nats-server's HTTP monitor to confirm it actually came back
@@ -1142,8 +1144,10 @@ function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerP
       // monitor we cannot confirm liveness, but we MUST NOT roll back a join
       // whose policy + peer were already written (the false-FAIL incident: a
       // single-file `local.conf` with no `http_port` ECONNREFUSED `:8222` and
-      // rolled back a good join). Absent monitor → treat as healthy.
-      if (!monitor.configured) return { healthy: true };
+      // rolled back a good join). Absent monitor → treat as healthy, but flag it
+      // INCONCLUSIVE (cortex#1495 important 3) so the caller's step log says
+      // "inconclusive, treated as healthy" rather than "verified healthy".
+      if (!monitor.configured) return { healthy: true, inconclusive: true };
       const base = monitor.url.replace(/\/+$/, "");
       // #821 MAJOR — BOUND the probe. A monitor that accepts the TCP connection
       // but never responds (hung/deadlocked nats-server — exactly the failure the

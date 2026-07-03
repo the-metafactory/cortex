@@ -1426,27 +1426,30 @@ describe("#821 live leaf-file pre-flight + rollback adapters", () => {
     }
   });
 
-  test("MAJOR-1: validateConfig SKIPS (ok) when nats-server is not on PATH (no block)", async () => {
-    // The live adapter shells out to `nats-server -t`; on a host without the
-    // binary it must SKIP the gate (return ok), never block the join. We can't
-    // guarantee nats-server is absent on CI, so assert the result is well-formed
-    // (ok:true when skipped/passed; ok:false only with a -t reason).
+  test("MAJOR-1 / cortex#1495: validateConfig is three-state (valid | invalid | skipped), never a silent fail-open", async () => {
+    // The live adapter shells out to `nats-server -t`. We can't guarantee the
+    // binary's presence on CI, so assert the result is a well-formed three-state
+    // outcome: `valid`/`skipped` when the config is fine or the binary is missing,
+    // `invalid` (with a reason) only on a real -t failure. Crucially there is NO
+    // `ok:true` fail-open path any more — a missing binary is `skipped`, not `valid`.
     const dir = freshDir();
     const conf = join(dir, "local.conf");
     writeFileSync(conf, bareLocalConf(), "utf-8");
     const ports = buildLivePorts(cfgWithConfig(conf));
     const res = await ports.natsServer!.validateConfig();
-    if (!res.ok) {
+    if (res.status === "invalid") {
+      expect(res.reason).toContain("nats-server");
+    } else if (res.status === "skipped") {
       expect(res.reason).toContain("nats-server");
     } else {
-      expect(res.ok).toBe(true);
+      expect(res.status).toBe("valid");
     }
   });
 
-  test("MAJOR-1: dry-run validateConfig is inert (ok, never spawns)", async () => {
+  test("MAJOR-1: dry-run validateConfig is inert (valid, never spawns)", async () => {
     const ports = buildDryRunPorts(cfgWithConfig("/x/local.conf"));
     const res = await ports.natsServer!.validateConfig();
-    expect(res.ok).toBe(true);
+    expect(res.status).toBe("valid");
   });
 
   test("NIT-1: credsExist rejects a directory, a 0-byte file, and a non-creds file", () => {

@@ -180,7 +180,7 @@ function makeMinimalPorts(opts: {
 
   const natsServer: NatsServerPort = {
     async restart() { return { ok: true }; },
-    async validateConfig() { return { ok: true }; },
+    async validateConfig() { return { status: "valid" as const }; },
     async isHealthy() { return { healthy: true }; },
   };
 
@@ -359,7 +359,7 @@ describe("G1c — federation-wiring step in joinNetwork (ADR-0013 Model B)", () 
       daemon: { async restart() { return { ok: true }; } },
       natsServer: {
         async restart() { return { ok: true }; },
-        async validateConfig() { return { ok: true }; },
+        async validateConfig() { return { status: "valid" as const }; },
         async isHealthy() { return { healthy: true }; },
       },
       federationWiring: trackedWiring,

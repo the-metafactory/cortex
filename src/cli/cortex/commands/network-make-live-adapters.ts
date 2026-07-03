@@ -31,7 +31,6 @@ import {
   configArgValue,
   type DaemonLocatorIO,
 } from "./daemon-locator";
-import { DEFAULT_MONITOR_URL, DEFAULT_HEALTH_PROBE_TIMEOUT_MS } from "./network-adapters";
 import type {
   CredsMintPort,
   AccountExportPort,
@@ -476,31 +475,41 @@ export function buildMakeLiveConfigWriteAdapter(mutate: boolean): MakeLiveConfig
 // include — the whole config IS the mutation target here).
 // =============================================================================
 
+// cortex#1495 nit 4 — kept LOCAL rather than imported from network-adapters.ts
+// (join's adapter), so make-live's canary adapter doesn't reach across into
+// join's module for a shared default. These mirror network-adapters.ts's
+// DEFAULT_MONITOR_URL / DEFAULT_HEALTH_PROBE_TIMEOUT_MS (the upstream nats
+// loopback monitor + a 5s probe bound); the two are independent by design.
+const MAKELIVE_DEFAULT_MONITOR_URL = "http://127.0.0.1:8222";
+const MAKELIVE_HEALTH_PROBE_TIMEOUT_MS = 5000;
+
 /** Live {@link NatsCanaryPort}. `nats-server -t` gate, snapshot/restore, /healthz probe. */
 export function buildNatsCanaryAdapter(mutate: boolean, healthProbeTimeoutMs?: number): NatsCanaryPort {
   return {
     async validateConfig(natsConfigPath) {
       // #821 MAJOR-1 parity — cheap pre-restart syntax gate. Dry-run is inert.
-      if (!mutate) return { ok: true };
+      if (!mutate) return { status: "valid" };
       const abs = expandTilde(natsConfigPath);
       let result: { code: number; stderr: string };
       try {
         result = await bunExecRunner(["nats-server", "-c", abs, "-t"]);
       } catch (err) {
-        // Missing binary (ENOENT) → SKIP the gate, don't block make-live on a
-        // machine where the test tool isn't installed (mirrors network-adapters.ts).
-        process.stderr.write(
-          `make-live: skipping nats-server -t gate (could not run nats-server: ${err instanceof Error ? err.message : String(err)})\n`,
-        );
-        return { ok: true };
+        // cortex#1495 BLOCKER — a missing binary (spawn ENOENT) is `skipped`,
+        // NOT `valid`: fail-OPEN here would let a bad config reload onto a live
+        // bus on any host without `nats-server` on PATH. The orchestrator warns
+        // loudly + proceeds on `skipped` rather than silently passing.
+        return {
+          status: "skipped",
+          reason: `could not run nats-server -t: ${err instanceof Error ? err.message : String(err)}`,
+        };
       }
       if (result.code !== 0) {
         return {
-          ok: false,
+          status: "invalid",
           reason: `nats-server -c ${abs} -t exited ${result.code.toString()}: ${result.stderr.trim()}`,
         };
       }
-      return { ok: true };
+      return { status: "valid" };
     },
     snapshot(natsConfigPath) {
       const abs = expandTilde(natsConfigPath);
@@ -530,10 +539,11 @@ export function buildNatsCanaryAdapter(mutate: boolean, healthProbeTimeoutMs?: n
       const abs = expandTilde(natsConfigPath);
       // Same precedence as network-adapters.ts's resolveMonitorBase: derive from
       // the config's own http_port/monitor_port/http; fall back to the upstream
-      // default. #831 parity — no monitor declared ⇒ INCONCLUSIVE (healthy), a
-      // configured-but-down monitor still reports unhealthy.
+      // default. #831 parity — no monitor declared ⇒ INCONCLUSIVE (healthy but
+      // flagged so the log doesn't over-claim), a configured-but-down monitor
+      // still reports unhealthy.
       let configured = false;
-      let base = DEFAULT_MONITOR_URL;
+      let base = MAKELIVE_DEFAULT_MONITOR_URL;
       if (existsSync(abs)) {
         const derived = natsConfigMonitorUrl(readFileSync(abs, "utf-8"));
         if (derived !== undefined) {
@@ -541,8 +551,10 @@ export function buildNatsCanaryAdapter(mutate: boolean, healthProbeTimeoutMs?: n
           configured = true;
         }
       }
-      if (!configured) return { healthy: true };
-      const timeoutMs = healthProbeTimeoutMs ?? DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
+      // cortex#1495 important 3 — no monitor ⇒ liveness cannot be CONFIRMED;
+      // healthy (never a false rollback) but flagged INCONCLUSIVE.
+      if (!configured) return { healthy: true, inconclusive: true };
+      const timeoutMs = healthProbeTimeoutMs ?? MAKELIVE_HEALTH_PROBE_TIMEOUT_MS;
       try {
         const res = await fetch(`${base.replace(/\/+$/, "")}/healthz`, {
           signal: AbortSignal.timeout(timeoutMs),

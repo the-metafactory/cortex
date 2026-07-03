@@ -1,10 +1,16 @@
 /**
- * cortex#1483 (join-4, epic #1479) — the SHARED settle-window health-probe
- * retry/backoff core, used by BOTH `cortex network join` (network-lib.ts) and
- * `cortex network make-live` (network-make-live-lib.ts) after a nats-server
- * restart.
+ * cortex#1483 (join-4, epic #1479) — SHARED nats restart-safety primitives, used
+ * by BOTH `cortex network join` (network-lib.ts) and `cortex network make-live`
+ * (network-make-live-lib.ts) around a nats-server restart:
  *
- * ## The bug this closes
+ *   - {@link probeHealthWithSettle} — the settle-window health-probe retry/backoff.
+ *   - {@link ConfigValidationOutcome} — the three-state `nats-server -t` verdict
+ *     (VALID / INVALID / SKIPPED) so a "could not validate" is never silently
+ *     mistaken for "valid" (cortex#1495 BLOCKER).
+ *   - {@link settleFailureReason} — the ONE settle-failure message string, so the
+ *     join and make-live wordings can never drift (cortex#1495 nit 5).
+ *
+ * ## The bug the settle window closes
  *
  * `join --apply`'s restart called the health probe EXACTLY ONCE, immediately
  * after the restart exec returned. A freshly-restarted nats-server needs a
@@ -38,10 +44,31 @@ export const realClock: ClockPort = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
-export type HealthProbeResult = { healthy: true } | { healthy: false; reason: string };
+/**
+ * A single health-probe outcome. `inconclusive` (cortex#1495 important 3) marks
+ * the #831 no-monitor case: the bus declares no monitor, so liveness cannot be
+ * CONFIRMED — treated as healthy (never a false rollback) but flagged so the
+ * caller's log can say "inconclusive, treated as healthy" instead of the
+ * over-claimed "verified healthy".
+ */
+export type HealthProbeResult =
+  | { healthy: true; inconclusive?: boolean }
+  | { healthy: false; reason: string };
 
 /** A single health check — e.g. `NatsServerPort.isHealthy`. Never throws by contract. */
 export type HealthProbe = () => Promise<HealthProbeResult>;
+
+/**
+ * cortex#1495 BLOCKER — the THREE-state `nats-server -t` verdict. A "could not
+ * validate" (binary missing / spawn failure) MUST NOT be silently treated as
+ * "valid" (fail-open), which would let a BAD config reload onto a live bus on
+ * any host without `nats-server` on PATH. Callers refuse on `invalid`, warn
+ * loudly + proceed on `skipped`, and proceed silently on `valid`.
+ */
+export type ConfigValidationOutcome =
+  | { status: "valid" }
+  | { status: "invalid"; reason: string }
+  | { status: "skipped"; reason: string };
 
 /** Tunables for {@link probeHealthWithSettle}. Every field optional — sane defaults below. */
 export interface SettleWindowOptions {
@@ -70,8 +97,25 @@ export interface SettleResult {
   healthy: boolean;
   /** How many probe attempts ran (1..maxAttempts). */
   attempts: number;
+  /**
+   * cortex#1495 important 3 — set when the winning (healthy) attempt was
+   * INCONCLUSIVE (#831 no-monitor). Lets the caller log "inconclusive, treated
+   * as healthy" rather than "verified healthy".
+   */
+  inconclusive?: boolean;
   /** The LAST failure reason — present iff `!healthy`. */
   reason?: string;
+}
+
+/**
+ * The ONE settle-failure message (cortex#1495 nit 5) — join and make-live both
+ * use it so their post-restart failure wordings can never drift.
+ */
+export function settleFailureReason(attempts: number, reason: string | undefined): string {
+  return (
+    `nats-server did not come back up after restart across ${attempts.toString()} ` +
+    `health check(s) over the settle window (${reason ?? "unknown"})`
+  );
 }
 
 /**
@@ -91,16 +135,22 @@ export async function probeHealthWithSettle(
   const backoffMultiplier = opts.backoffMultiplier ?? DEFAULT_SETTLE_BACKOFF_MULTIPLIER;
   const maxDelayMs = opts.maxDelayMs ?? DEFAULT_SETTLE_MAX_DELAY_MS;
 
-  let delay = initialDelayMs;
+  // cortex#1495 nit 1 — cap the delay ONCE per value (here at assignment), so the
+  // sleep call never needs a second redundant Math.min.
+  let delay = Math.min(initialDelayMs, maxDelayMs);
   let lastReason = "health probe never ran";
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const result = await probe();
     if (result.healthy) {
-      return { healthy: true, attempts: attempt };
+      return {
+        healthy: true,
+        attempts: attempt,
+        ...(result.inconclusive === true && { inconclusive: true }),
+      };
     }
     lastReason = result.reason;
     if (attempt < maxAttempts) {
-      await clock.sleep(Math.min(delay, maxDelayMs));
+      await clock.sleep(delay);
       delay = Math.min(delay * backoffMultiplier, maxDelayMs);
     }
   }

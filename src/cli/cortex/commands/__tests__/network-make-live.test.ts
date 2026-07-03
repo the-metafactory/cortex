@@ -83,8 +83,13 @@ function makePorts(over?: {
    * existing test above depends on).
    */
   withNatsCanary?: boolean;
-  /** cortex#1483 — make the canary's `nats-server -t` gate FAIL. */
+  /** cortex#1483 — make the canary's `nats-server -t` gate report INVALID. */
   canaryValidateFails?: boolean;
+  /**
+   * cortex#1495 BLOCKER — make the canary's `-t` gate report SKIPPED (binary
+   * missing): make-live must WARN loudly + PROCEED (not refuse, not silent pass).
+   */
+  canaryValidateSkips?: boolean;
   /** cortex#1483 — model the INITIAL restart's post-restart health. Default: healthy. */
   canaryNatsHealthy?: boolean;
   /** cortex#1483 — model the RECOVERY restart's post-restart health. Default: healthy. */
@@ -148,9 +153,13 @@ function makePorts(over?: {
           natsCanary: {
             async validateConfig() {
               calls.push("canary-validate");
-              return over.canaryValidateFails === true
-                ? { ok: false, reason: "nats-server -t: parse error" }
-                : { ok: true };
+              if (over.canaryValidateFails === true) {
+                return { status: "invalid", reason: "nats-server -t: parse error" };
+              }
+              if (over.canaryValidateSkips === true) {
+                return { status: "skipped", reason: "could not run nats-server -t: spawn nats-server ENOENT" };
+              }
+              return { status: "valid" };
             },
             snapshot(natsConfigPath) {
               calls.push("canary-snapshot");
@@ -818,23 +827,27 @@ describe("buildNatsCanaryAdapter (live)", () => {
     expect(res.healthy).toBe(true);
   });
 
-  test("dry-run validateConfig is inert (ok, never spawns)", async () => {
+  test("dry-run validateConfig is inert (valid, never spawns)", async () => {
     const adapter = buildNatsCanaryAdapter(false);
     const res = await adapter.validateConfig("/x/local.conf");
-    expect(res.ok).toBe(true);
+    expect(res.status).toBe("valid");
   });
 
-  test("validateConfig is well-formed regardless of whether nats-server is on PATH", async () => {
+  test("cortex#1495 BLOCKER: validateConfig is three-state (valid | invalid | skipped), never a silent fail-open", async () => {
     // Mirrors network-adapters.test.ts's MAJOR-1 pattern: we can't guarantee
-    // nats-server is installed on CI, so assert a well-formed result either way.
+    // nats-server is installed on CI, so assert a well-formed three-state result.
+    // A missing binary MUST be `skipped` (with a reason), NEVER a silent `valid`
+    // — that fail-open is the exact BLOCKER this slice closes.
     const conf = join(dir, "local.conf");
     writeFileSync(conf, "server_name: work\nlisten: 127.0.0.1:4222\n", "utf-8");
     const adapter = buildNatsCanaryAdapter(true);
     const res = await adapter.validateConfig(conf);
-    if (!res.ok) {
+    if (res.status === "invalid") {
+      expect(res.reason).toContain("nats-server");
+    } else if (res.status === "skipped") {
       expect(res.reason).toContain("nats-server");
     } else {
-      expect(res.ok).toBe(true);
+      expect(res.status).toBe("valid");
     }
   });
 });

@@ -226,8 +226,13 @@ function makeFakes(opts: {
    * report failure, never "restored to prior state". Default: healthy.
    */
   recoveryHealthy?: boolean;
-  /** #821 MAJOR-1 — make the pre-restart `nats-server -t` syntax gate FAIL. */
+  /** #821 MAJOR-1 — make the pre-restart `nats-server -t` syntax gate report INVALID. */
   validateConfigFails?: boolean;
+  /**
+   * cortex#1495 BLOCKER — make the `-t` gate report SKIPPED (binary missing):
+   * the join must WARN loudly + PROCEED (not refuse, not silently pass).
+   */
+  validateSkips?: boolean;
   /** #821 item-2 — make natsServer.restart() THROW synchronously (Bun.spawn ENOENT). */
   restartThrows?: boolean;
   /** #821 item-2 — make natsServer.validateConfig() THROW synchronously (spawn ENOENT). */
@@ -475,11 +480,16 @@ function makeFakes(opts: {
       if (opts.validateThrows === true) {
         throw new Error("spawn nats-server ENOENT");
       }
-      // #821 MAJOR-1 — default: the -t syntax gate passes. A test opts into a
-      // -t failure via `validateConfigFails: true`.
-      return opts.validateConfigFails === true
-        ? { ok: false, reason: "nats-server -t: parse error near line 12" }
-        : { ok: true };
+      // #821 MAJOR-1 / cortex#1495 — default: the -t syntax gate passes (`valid`).
+      // A test opts into an INVALID config via `validateConfigFails: true`, or the
+      // three-state SKIPPED (binary missing) via `validateSkips: true`.
+      if (opts.validateConfigFails === true) {
+        return { status: "invalid", reason: "nats-server -t: parse error near line 12" };
+      }
+      if (opts.validateSkips === true) {
+        return { status: "skipped", reason: "could not run nats-server -t: spawn nats-server ENOENT" };
+      }
+      return { status: "valid" };
     },
     async restart() {
       rec.natsRestarts++;
