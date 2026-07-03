@@ -31,7 +31,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync } from "fs";
-import { resolve as resolvePath } from "path";
+import { resolve as resolvePath, join as joinPath } from "path";
+import { hostname as osHostname } from "os";
 
 import { expandTilde } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
@@ -51,6 +52,7 @@ import {
   type StackIdentityMaterial,
 } from "../../../bus/stack-provisioning";
 import { bunExecRunner, type ExecRunner } from "../../../common/nats/nats-service-manager";
+import { NetworkCache } from "../../../common/registry/network-cache";
 import {
   readNetworksFromConfig,
   writeNetworksGuarded,
@@ -61,6 +63,7 @@ import type {
   AdmissionLookupPort,
   SealDeliveryPort,
   SecretCrypto,
+  HubLocalityPort,
   NetworkKeyRotationPorts,
   AdmittedListPort,
   HubKeyStorePort,
@@ -140,6 +143,16 @@ export interface LiveSecretPortsConfig {
   signal?: SignalSender;
   /** Injectable fetch (tests). Production omits → globalThis.fetch. */
   fetchImpl?: typeof globalThis.fetch;
+  /**
+   * cortex#1481 — injectable network-descriptor cache (tests). Production
+   * omits → a {@link NetworkCache} rooted at the SAME `~/.config/cortex/
+   * network-cache/` DD-10 dir `cortex network join` writes (resolved via
+   * `expandTilde` for $HOME-honouring test hermeticity, mirroring
+   * `network-adapters.ts`'s `buildCachedNetworkPort`).
+   */
+  networkCache?: NetworkCache;
+  /** Injectable hostname resolver (tests). Production omits → `os.hostname()`. */
+  hostname?: () => string;
 }
 
 /** Build the full live port bundle. */
@@ -149,6 +162,7 @@ export function buildLiveSecretPorts(cfg: LiveSecretPortsConfig): NetworkSecretP
     admission: buildLiveAdmissionLookupPort(cfg),
     delivery: buildLiveSealDeliveryPort(cfg),
     crypto: buildLiveSecretCrypto(),
+    hubLocality: buildLiveHubLocalityPort(cfg),
   };
 }
 
@@ -361,6 +375,33 @@ function buildLiveSecretCrypto(): SecretCrypto {
   return {
     mintPsk: () => mintLeafPsk(),
     seal: (plaintext, pubkey) => sealToPrincipal(plaintext, pubkey),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// cortex#1481 — HUB LOCALITY: read-only, local-disk-only hub_url resolution.
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#1481 — LIVE {@link HubLocalityPort}: reads the SAME DD-10
+ * `~/.config/cortex/network-cache/<network>.json` last-known-good cache
+ * `cortex network join` writes (read-only, local disk — deliberately never a
+ * live registry round trip; see the port jsdoc for why), + `os.hostname()`.
+ * Both facts are injectable so tests never touch the real home directory or
+ * the real machine hostname.
+ */
+function buildLiveHubLocalityPort(cfg: LiveSecretPortsConfig): HubLocalityPort {
+  const cache =
+    cfg.networkCache ??
+    new NetworkCache({ cacheDir: expandTilde(joinPath("~", ".config", "cortex", "network-cache")) });
+  const getHostname = cfg.hostname ?? osHostname;
+  return {
+    resolveHubUrl(networkId) {
+      return Promise.resolve(cache.load(networkId)?.descriptor.hub_url);
+    },
+    localHostname() {
+      return getHostname();
+    },
   };
 }
 

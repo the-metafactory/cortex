@@ -16,6 +16,8 @@ import {
   runNetworkSecret,
   runNetworkKeyRotation,
   computeNextKid,
+  decideHubLocality,
+  renderHubOwnerArtifact,
   type SecretInputs,
   type KeyRotationInputs,
 } from "../network-secret-lib";
@@ -37,7 +39,18 @@ interface Recorder {
   minted: string[];
 }
 
-function makePorts(opts: { admitted?: { request_id: string; principal_id: string }; startConf?: string } = {}): Recorder {
+function makePorts(opts: {
+  admitted?: { request_id: string; principal_id: string };
+  startConf?: string;
+  // cortex#1481 — hub-locality fakes. Defaults resolve LOCAL (loopback alias)
+  // so every PRE-#1481 test keeps its local-hub-write assumption unchanged.
+  /** Cached hub_url the fake `resolveHubUrl` returns. Default: loopback (LOCAL). */
+  hubUrl?: string;
+  /** true ⇒ resolveHubUrl resolves undefined (no cached descriptor — "can't determine"). */
+  noHubCache?: boolean;
+  /** This machine's fake hostname. Default "localhost" (irrelevant when hubUrl is a loopback alias). */
+  localHostname?: string;
+} = {}): Recorder {
   const hubConf = { text: opts.startConf ?? "leafnodes {\n  listen: 0.0.0.0:7422\n}\n" };
   const writes: string[] = [];
   let reloads = 0;
@@ -45,6 +58,8 @@ function makePorts(opts: { admitted?: { request_id: string; principal_id: string
   const revoked: string[] = [];
   const minted: string[] = [];
   let mintCounter = 0;
+  const hubUrl = opts.noHubCache === true ? undefined : (opts.hubUrl ?? "tls://localhost:7422");
+  const localHostname = opts.localHostname ?? "localhost";
 
   const ports: NetworkSecretPorts = {
     hub: {
@@ -76,6 +91,10 @@ function makePorts(opts: { admitted?: { request_id: string; principal_id: string
         return p;
       },
       seal: async (plaintext: string, pubkey: string) => `SEALED(${pubkey.slice(0, 6)}:${plaintext})`,
+    },
+    hubLocality: {
+      resolveHubUrl: async () => hubUrl,
+      localHostname: () => localHostname,
     },
   };
   return {
@@ -262,6 +281,232 @@ describe("dry-run (default) + guards", () => {
     expect(report.ok).toBe(false);
     expect(r.writes.length).toBe(0);
     expect(r.posted.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// cortex#1481 (epic #1479, join-2) — hub locality: NEVER write a foreign hub.
+//
+// The #1 storm cause: `--hub-config` defaults to the LOCAL nats, so when a
+// network's hub is ANOTHER principal's server, add-member/rotate wrote the
+// leaf authorization onto the wrong machine — the real hub never saw it, and
+// the joiner's leaf Authorization-Violation-storms. These tests prove: (a) an
+// external hub never gets the local write (registry seal still runs, artifact
+// emitted); (b) --seal-only forces the same path even on a local-looking hub;
+// (c) a genuinely local hub still writes exactly as before; (d) an unresolved
+// hub_url (no cached descriptor) is treated as external — fail-safe.
+// ===========================================================================
+
+describe("decideHubLocality (pure)", () => {
+  test("loopback alias → local", () => {
+    expect(decideHubLocality("tls://localhost:7422", "some-other-hostname").kind).toBe("local");
+    expect(decideHubLocality("tls://127.0.0.1:7422", "some-other-hostname").kind).toBe("local");
+    expect(decideHubLocality("tls://[::1]:7422", "some-other-hostname").kind).toBe("local");
+  });
+
+  test("exact case-insensitive hostname match → local", () => {
+    expect(decideHubLocality("tls://Andreas-VM.local:7422", "andreas-vm.local").kind).toBe("local");
+  });
+
+  test("a genuinely different host → external, with a reason (no secret)", () => {
+    const v = decideHubLocality("tls://andreas-vm.example.com:7422", "jc-laptop.local");
+    expect(v.kind).toBe("external");
+    if (v.kind === "external") {
+      expect(v.hubUrl).toBe("tls://andreas-vm.example.com:7422");
+      expect(v.reason).toContain("andreas-vm.example.com");
+      expect(v.reason).toContain("does not match this machine");
+    }
+  });
+
+  test("no cached hub_url at all → external (fail-safe, cannot determine)", () => {
+    const v = decideHubLocality(undefined, "jc-laptop.local");
+    expect(v.kind).toBe("external");
+    if (v.kind === "external") {
+      expect(v.hubUrl).toBeUndefined();
+      expect(v.reason).toContain("no cached network descriptor");
+    }
+  });
+
+  test("an unparseable hub_url → external (fail-safe)", () => {
+    const v = decideHubLocality("not a url at all :::", "jc-laptop.local");
+    expect(v.kind).toBe("external");
+  });
+});
+
+describe("renderHubOwnerArtifact (pure)", () => {
+  test("carries the exact leafnodes{} authorization snippet + the PSK", () => {
+    const lines = renderHubOwnerArtifact({
+      networkId: "metafactory",
+      leafUser: "andreas",
+      psk: "PSK-for-the-hub-owner",
+      hubUrl: "tls://andreas-vm.example.com:7422",
+    }).join("\n");
+    expect(lines).toContain("leafnodes {");
+    expect(lines).toContain("authorization {");
+    expect(lines).toContain('"andreas"');
+    expect(lines).toContain("PSK-for-the-hub-owner");
+    expect(lines).toContain("tls://andreas-vm.example.com:7422");
+    // No account known → the user entry itself carries NO account: field...
+    expect(lines).toContain('{ user: "andreas", password: "PSK-for-the-hub-owner" }');
+    // ...but an advisory note points the hub owner at --hub-account.
+    expect(lines).toContain("--hub-account");
+  });
+
+  test("account-bound when --hub-account is known", () => {
+    const lines = renderHubOwnerArtifact({
+      networkId: "metafactory",
+      leafUser: "andreas",
+      psk: "PSK-x",
+      account: "A" + "B".repeat(55),
+    }).join("\n");
+    expect(lines).toContain(`account: "A${"B".repeat(55)}"`);
+  });
+
+  test("hub_url unknown → says so instead of fabricating one", () => {
+    const lines = renderHubOwnerArtifact({ networkId: "metafactory", leafUser: "andreas", psk: "PSK-x" }).join("\n");
+    expect(lines).toContain("could not be confirmed");
+  });
+});
+
+describe("add-member — hub locality gate (apply)", () => {
+  test("(a) external hub → NO local hub write/reload, artifact emitted, seal still posted", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const report = await runNetworkSecret(inputs({ apply: true }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(report.applied).toBe(true);
+    // The local hub port's write/reload were NEVER called (spy assertion).
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    // The registry seal still ran (machine-independent).
+    expect(r.posted.length).toBe(1);
+    expect(r.posted[0]!.requestId).toBe("req1");
+    // The hub-owner artifact carries the PSK + is distinct from steps/data.
+    expect(report.hubOwnerArtifact).toBeDefined();
+    const artifact = report.hubOwnerArtifact!.join("\n");
+    expect(artifact).toContain(r.minted[0]!);
+    expect(artifact).toContain("tls://andreas-vm.example.com:7422");
+    assertNoSecretLeak(report.steps, report.data, r.minted[0]!);
+    expect(report.data.hub_locality).toBe("external");
+  });
+
+  test("(b) --seal-only on a LOCAL-looking hub → still no write + artifact emitted", async () => {
+    // hubUrl/localHostname default to the SAME loopback alias (would resolve
+    // local without the flag) — --seal-only must override that.
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(inputs({ apply: true, sealOnly: true }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    expect(r.posted.length).toBe(1);
+    expect(report.hubOwnerArtifact).toBeDefined();
+    expect(report.data.hub_locality).toBe("external");
+  });
+
+  test("(c) local hub, no --seal-only → writes exactly as before, no artifact", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(inputs({ apply: true }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(r.writes.length).toBe(1);
+    expect(r.reloads).toBe(1);
+    expect(listHubLeafUsers(r.hubConf.text)).toEqual([{ user: "alice", secret: "PSK-1" }]);
+    expect(report.hubOwnerArtifact).toBeUndefined();
+    expect(report.data.hub_locality).toBe("local");
+  });
+
+  test("(d) no cached descriptor (can't determine locality) → treated as EXTERNAL, fail-safe", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" }, noHubCache: true });
+    const report = await runNetworkSecret(inputs({ apply: true }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    expect(r.posted.length).toBe(1);
+    expect(report.hubOwnerArtifact).toBeDefined();
+    expect(report.data.hub_locality).toBe("external");
+  });
+
+  test("external hub + oob delivery → BOTH surfaced (member handover) AND hubOwnerArtifact (hub handover)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const report = await runNetworkSecret(inputs({ apply: true, deliver: "oob" }), r.ports);
+
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    expect(r.posted.length).toBe(0); // oob never touches the registry
+    expect(report.surfaced).toEqual({ leafUser: "alice", psk: r.minted[0]! });
+    expect(report.hubOwnerArtifact).toBeDefined();
+  });
+
+  test("rotate on an external hub → no local hub write, re-seal still posted, artifact emitted", async () => {
+    const start = 'leafnodes {\n  # >>> cortex-managed leaf authorization (network secret tooling) — do not hand-edit\n  authorization {\n    users: [\n      { user: "alice", password: "PSK-old" }\n    ]\n  }\n  # <<< cortex-managed leaf authorization\n}\n';
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      startConf: start,
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const report = await runNetworkSecret(inputs({ action: "rotate", apply: true }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    // The OLD hub-side entry is untouched (we never wrote it).
+    expect(r.hubConf.text).toContain("PSK-old");
+    expect(r.posted.length).toBe(1);
+    expect(report.hubOwnerArtifact).toBeDefined();
+  });
+
+  test("--hub-account rides the artifact's account: field", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const account = "A" + "C".repeat(55);
+    const report = await runNetworkSecret(inputs({ apply: true, hubAccount: account }), r.ports);
+    expect(report.hubOwnerArtifact!.join("\n")).toContain(`account: "${account}"`);
+  });
+});
+
+describe("add-member — hub locality gate (dry-run)", () => {
+  test("external hub dry-run: plan says SEAL-ONLY + emit artifact, no secret, no mutation", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const report = await runNetworkSecret(inputs({ apply: false }), r.ports);
+    expect(report.applied).toBe(false);
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    expect(r.posted.length).toBe(0);
+    expect(report.steps.join("\n").toLowerCase()).toContain("seal-only");
+    expect(report.steps.join("\n").toLowerCase()).toContain("external");
+    expect(report.data.hub_locality).toBe("external");
+  });
+
+  test("--seal-only dry-run on a local-looking hub: plan still says SEAL-ONLY", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(inputs({ apply: false, sealOnly: true }), r.ports);
+    expect(report.data.hub_locality).toBe("external");
+    expect(report.steps.join("\n").toLowerCase()).toContain("seal-only");
+  });
+
+  test("local hub dry-run: plan is unchanged from pre-#1481 wording", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(inputs({ apply: false }), r.ports);
+    expect(report.data.hub_locality).toBe("local");
+    expect(report.steps.join("\n")).toContain('add hub authorization user "alice"');
   });
 });
 

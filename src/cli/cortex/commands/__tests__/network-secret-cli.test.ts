@@ -42,10 +42,19 @@ interface Calls {
   revoked: string[];
   minted: string[];
 }
-function fakeFactory(opts: { admitted?: { request_id: string; principal_id: string } } = {}): { factory: SecretPortsFactory; calls: Calls; conf: { text: string } } {
+function fakeFactory(opts: {
+  admitted?: { request_id: string; principal_id: string };
+  // cortex#1481 — hub-locality fakes. Defaults resolve LOCAL (loopback alias)
+  // so every PRE-#1481 test keeps its local-hub-write assumption unchanged.
+  hubUrl?: string;
+  noHubCache?: boolean;
+  localHostname?: string;
+} = {}): { factory: SecretPortsFactory; calls: Calls; conf: { text: string } } {
   const calls: Calls = { reads: 0, writes: [], reloads: 0, posted: [], revoked: [], minted: [] };
   const conf = { text: "leafnodes {\n  listen: 0.0.0.0:7422\n}\n" };
   let mintN = 0;
+  const hubUrl = opts.noHubCache === true ? undefined : (opts.hubUrl ?? "tls://localhost:7422");
+  const localHostname = opts.localHostname ?? "localhost";
   const ports: NetworkSecretPorts = {
     hub: {
       confPath: "/fake/hub.conf",
@@ -61,6 +70,10 @@ function fakeFactory(opts: { admitted?: { request_id: string; principal_id: stri
     crypto: {
       mintPsk: () => { const p = `PSK-${++mintN}`; calls.minted.push(p); return p; },
       seal: async (plaintext: string, pubkey: string) => `SEALED(${pubkey.slice(0, 4)}:${plaintext})`,
+    },
+    hubLocality: {
+      resolveHubUrl: async () => hubUrl,
+      localHostname: () => localHostname,
     },
   };
   return { factory: () => ports, calls, conf };
@@ -209,6 +222,107 @@ describe("cortex network secret add-member", () => {
     expect(parsed.data.payload_key_kid).toBe("metafactory/k1");
     expect(parsed.data.payload_key_fingerprint).toBeDefined();
     expect(res.stdout).not.toContain(FAKE_K);
+  });
+});
+
+// =============================================================================
+// cortex#1481 (epic #1479, join-2) — hub locality: NEVER write a foreign hub.
+// =============================================================================
+
+describe("cortex network secret add-member — hub locality (cortex#1481)", () => {
+  test("external hub → no local hub write, artifact printed (human), no secret leak elsewhere", async () => {
+    const { factory, calls } = fakeFactory({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    expect(res.exitCode).toBe(0);
+    expect(calls.writes.length).toBe(0);
+    expect(calls.reloads).toBe(0);
+    expect(calls.posted.length).toBe(1); // registry seal still ran
+    expect(res.stdout).toContain("HUB-OWNER ACTION REQUIRED");
+    expect(res.stdout).toContain(calls.minted[0]!); // the artifact IS the one place it prints
+  });
+
+  test("external hub --json → hub_owner_artifact field carries the snippet + PSK", async () => {
+    const { factory, calls } = fakeFactory({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    expect(res.exitCode).toBe(0);
+    const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
+    expect(parsed.data.hub_owner_artifact).toContain("HUB-OWNER ACTION REQUIRED");
+    expect(parsed.data.hub_owner_artifact).toContain(calls.minted[0]);
+    expect(parsed.data.hub_locality).toBe("external");
+  });
+
+  test("--seal-only forces the artifact path even on a local-looking hub", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--seal-only", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    expect(res.exitCode).toBe(0);
+    expect(calls.writes.length).toBe(0);
+    expect(calls.reloads).toBe(0);
+    expect(calls.posted.length).toBe(1);
+    expect(res.stdout).toContain("HUB-OWNER ACTION REQUIRED");
+  });
+
+  test("local hub, no --seal-only → writes exactly as before, no artifact printed", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    expect(res.exitCode).toBe(0);
+    expect(calls.writes.length).toBe(1);
+    expect(calls.reloads).toBe(1);
+    expect(res.stdout).not.toContain("HUB-OWNER ACTION REQUIRED");
+  });
+
+  test("no cached hub descriptor (can't determine locality) → treated as external, fail-safe", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" }, noHubCache: true });
+    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    expect(res.exitCode).toBe(0);
+    expect(calls.writes.length).toBe(0);
+    expect(calls.reloads).toBe(0);
+    expect(res.stdout).toContain("HUB-OWNER ACTION REQUIRED");
+  });
+
+  test("--hub-account <A…> rides the printed snippet's account: field", async () => {
+    const { factory } = fakeFactory({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const account = "A" + "D".repeat(55);
+    const res = await dispatchNetwork(
+      argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--hub-account", account, "--admin-seed", seedPath),
+      undefined, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(`account: "${account}"`);
+  });
+
+  test("malformed --hub-account → usage error (exit 2)", async () => {
+    const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(
+      argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--hub-account", "not-an-nkey", "--admin-seed", seedPath),
+      undefined, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(2);
+  });
+
+  test("external hub dry-run: plan mentions seal-only + external, no mutation, no secret", async () => {
+    const { factory, calls } = fakeFactory({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("dry-run");
+    expect(res.stdout.toLowerCase()).toContain("seal-only");
+    expect(calls.writes.length).toBe(0);
+    expect(calls.minted.length).toBe(0);
   });
 });
 

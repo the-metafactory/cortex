@@ -493,9 +493,19 @@ interface SealCalls {
  * with "no ADMITTED row"); `readThrows` simulates a non-local / unreadable hub.
  */
 function fakeSealFactory(
-  opts: { admitted?: { request_id: string; principal_id: string }; readThrows?: boolean } = {},
+  opts: {
+    admitted?: { request_id: string; principal_id: string };
+    readThrows?: boolean;
+    // cortex#1481 — hub-locality fakes. Defaults resolve LOCAL (loopback alias)
+    // so every PRE-#1481 test keeps its local-hub-write assumption unchanged.
+    hubUrl?: string;
+    noHubCache?: boolean;
+    localHostname?: string;
+  } = {},
 ): { factory: SecretPortsFactory; calls: SealCalls } {
   const calls: SealCalls = { reads: 0, writes: 0, reloads: 0, posted: [], minted: [] };
+  const hubUrl = opts.noHubCache === true ? undefined : (opts.hubUrl ?? "tls://localhost:7422");
+  const localHostname = opts.localHostname ?? "localhost";
   const ports: NetworkSecretPorts = {
     hub: {
       confPath: "/fake/hub.conf",
@@ -515,6 +525,10 @@ function fakeSealFactory(
     crypto: {
       mintPsk: () => { const p = "PSK-secret-x"; calls.minted.push(p); return p; },
       seal: async (plaintext: string, pubkey: string) => `SEALED(${pubkey.slice(0, 4)}:${plaintext})`,
+    },
+    hubLocality: {
+      resolveHubUrl: async () => hubUrl,
+      localHostname: () => localHostname,
     },
   };
   return { factory: () => ports, calls };
@@ -664,6 +678,137 @@ describe("cortex network admit — admit-and-seal (C-1316)", () => {
     expect(env.data.seal_status).toBe("fallback");
     expect(env.data.seal_fallback).toContain("<network>");
     expect(calls.reads).toBe(0);
+  });
+});
+
+// =============================================================================
+// cortex#1481 (epic #1479, join-2) — admit-and-seal hub locality gate.
+// The #1 storm cause: admit's fold-in seal shares the SAME hub-write seam as
+// `secret add-member` (sealAdmittedMember → runNetworkSecret), so it must
+// share the SAME never-write-a-foreign-hub fix.
+// =============================================================================
+describe("cortex network admit — admit-and-seal hub locality (cortex#1481)", () => {
+  test("external hub → seal_status sealed, NO local hub write, hub_owner_artifact present", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({
+      admitted: { request_id: "req-abc-123", principal_id: "peer-principal" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; connectable: string; hub_owner_artifact?: string } };
+    expect(env.data.seal_status).toBe("sealed");
+    expect(env.data.connectable).toBe("true");
+    // The local hub port's write/reload were NEVER called (spy assertion).
+    expect(calls.writes).toBe(0);
+    expect(calls.reloads).toBe(0);
+    // The registry seal still POSTed (machine-independent).
+    expect(calls.posted).toEqual(["req-abc-123"]);
+    expect(env.data.hub_owner_artifact).toBeDefined();
+    expect(env.data.hub_owner_artifact).toContain(calls.minted[0]);
+  });
+
+  test("external hub — human output prints the hub-owner artifact, still says CONNECTABLE", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({
+      admitted: { request_id: "req-abc-123", principal_id: "peer-principal" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("CONNECTABLE");
+    expect(res.stdout).toContain("HUB-OWNER ACTION REQUIRED");
+    expect(res.stdout).toContain(calls.minted[0]!);
+    expect(calls.writes).toBe(0);
+  });
+
+  test("--seal-only forces the artifact path even when the hub LOOKS local", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--seal-only", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; hub_owner_artifact?: string } };
+    expect(env.data.seal_status).toBe("sealed");
+    expect(calls.writes).toBe(0);
+    expect(calls.reloads).toBe(0);
+    expect(env.data.hub_owner_artifact).toBeDefined();
+  });
+
+  test("local hub, no --seal-only → writes exactly as before (pre-#1481 behaviour), no artifact", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({ admitted: { request_id: "req-abc-123", principal_id: "peer-principal" } });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { seal_status: string; hub_owner_artifact?: string } };
+    expect(env.data.seal_status).toBe("sealed");
+    expect(calls.writes).toBe(1);
+    expect(calls.reloads).toBe(1);
+    expect(env.data.hub_owner_artifact).toBeUndefined();
+  });
+
+  test("no cached hub descriptor (can't determine locality) → treated as external, fail-safe", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory, calls } = fakeSealFactory({
+      admitted: { request_id: "req-abc-123", principal_id: "peer-principal" },
+      noHubCache: true,
+    });
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--json"],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    const env = JSON.parse(res.stdout) as { data: { hub_owner_artifact?: string } };
+    expect(calls.writes).toBe(0);
+    expect(calls.reloads).toBe(0);
+    expect(env.data.hub_owner_artifact).toBeDefined();
+  });
+
+  test("--hub-account rides the printed artifact's account: field", async () => {
+    const { seedPath } = await mintAdminSeed();
+    mockAdmitFetch(pendingRequest());
+    const { factory } = fakeSealFactory({
+      admitted: { request_id: "req-abc-123", principal_id: "peer-principal" },
+      hubUrl: "tls://andreas-vm.example.com:7422",
+      localHostname: "jc-laptop.local",
+    });
+    const account = "A" + "E".repeat(55);
+
+    const res = await dispatchNetwork(
+      ["admit", "req-abc-123", "--admin-seed", seedPath, "--apply", "--hub-account", account],
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(`account: "${account}"`);
   });
 });
 

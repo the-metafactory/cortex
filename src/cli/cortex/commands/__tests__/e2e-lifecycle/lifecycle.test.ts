@@ -38,6 +38,7 @@ import { buildLiveSecretPorts } from "../../network-secret-adapters";
 import { fetchSealedLeafSecret } from "../../../../../common/registry/fetch-sealed-secret";
 import type { NetworkSecretPorts } from "../../network-secret-ports";
 import { leaveNetwork } from "../../network-lib";
+import { NetworkCache } from "../../../../../common/registry/network-cache";
 
 import { deriveAcceptSubjects } from "../../../../../bus/agent-network/accept-subjects";
 import {
@@ -306,6 +307,19 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
   test("step 5: network secret add-member --apply (hub reload STUBBED) → sealed blob on the row", async () => {
     expect(ctx.requestId).toBeDefined();
     ctx.hub = makeRecordingHubPort("");
+    // cortex#1481 — the hub-locality gate compares the network's cached hub_url
+    // against this host; this walkthrough never runs a REAL `network join` (so
+    // nothing is genuinely cached for NETWORK_ID), and the step is explicitly
+    // exercising the LOCAL-hub happy path (the hub-reload port is stubbed, not
+    // absent). Seed a hermetic tmp-dir cache with a loopback hub_url so the gate
+    // resolves LOCAL here, exactly like a real "hub is this machine" deployment —
+    // never touching the developer's real ~/.config/cortex/network-cache/.
+    const networkCache = new NetworkCache({ cacheDir: freshDir("e2e-network-cache-") });
+    networkCache.store(
+      NETWORK_ID,
+      { network_id: NETWORK_ID, hub_url: "tls://localhost:7422", leaf_port: 7422, members: [] },
+      { network_id: NETWORK_ID, members: [] },
+    );
     // Real admission/delivery/crypto ports (against the in-process registry via
     // the routed fetch), with ONLY the hub-reload port swapped for the recorder.
     const live = buildLiveSecretPorts({
@@ -313,6 +327,7 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
       registryUrl: REGISTRY_BASE,
       material: ctx.adminMaterial,
       fetchImpl: globalThis.fetch,
+      networkCache,
     });
     ctx.secretPorts = { ...live, hub: ctx.hub };
 

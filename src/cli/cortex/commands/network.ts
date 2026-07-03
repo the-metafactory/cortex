@@ -131,7 +131,7 @@ import {
 } from "./network-make-live-lib";
 import { buildLiveMakeLivePorts, buildResolverPreloadAdapter } from "./network-make-live-adapters";
 import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/nats/leaf-remote-renderer";
-import { parseLoopbackListen } from "../../../common/nats/leaf-remote-renderer";
+import { parseLoopbackListen, isNkeyAccountPubkey } from "../../../common/nats/leaf-remote-renderer";
 import {
   runNetworkSecret,
   runNetworkKeyRotation,
@@ -407,6 +407,14 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         // admit-without-seal case, or a fully-separable deployment where the
         // hub-admin ≠ the registry-admin and sealing is a genuinely separate step).
         "--roster-only": "bool",
+        // cortex#1481 — force the seal-only path (registry seal + hub-owner
+        // artifact, NEVER a local hub write) even when the auto-detected hub
+        // locality would otherwise call the hub local. Distinct from
+        // --roster-only: the seal (mint + deliver) STILL runs here.
+        "--seal-only": "bool",
+        // cortex#1481 — the hub's OWN federation account nkey-U, when the admin
+        // already knows it. Rides the hub-owner artifact's `account:` field.
+        "--hub-account": "value",
       },
     },
     // C-1348 (ADR-0015) — the admission DENIAL verb, the mirror of `admit`.
@@ -511,6 +519,13 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--discord-role": "value",
         "--apply": "bool",
         "--dry-run": "bool",
+        // cortex#1481 — force the seal-only path (registry seal + hub-owner
+        // artifact, NEVER a local hub write) for add-member/rotate, even when
+        // the auto-detected hub locality would otherwise call the hub local.
+        "--seal-only": "bool",
+        // cortex#1481 — the hub's OWN federation account nkey-U, when the admin
+        // already knows it. Rides the hub-owner artifact's `account:` field.
+        "--hub-account": "value",
       },
     },
   },
@@ -2502,6 +2517,7 @@ async function runAdmit(
       fallbackCmd: `cortex network secret add-member ${net} ${requestPeerPubkey} --admin-seed ${seedRes.value} --apply`,
     };
   } else {
+    const hubAccount = optionalValueFlag(flags, "--hub-account");
     sealOutcome = await sealAdmittedMember({
       networkId: requestNetworkId,
       memberPubkey: requestPeerPubkey,
@@ -2510,6 +2526,10 @@ async function runAdmit(
       material,
       secretPortsFactory,
       adminSeedPath: seedRes.value,
+      // cortex#1481 — --seal-only forces the never-write-a-foreign-hub path even
+      // when the auto-detected locality would otherwise call the hub local.
+      sealOnly: flags["--seal-only"] === true,
+      ...(hubAccount !== undefined && { hubAccount }),
     });
   }
 
@@ -2577,6 +2597,10 @@ async function runAdmit(
     };
     if (sealOutcome.reason) data.seal_reason = sealOutcome.reason;
     if (sealOutcome.fallbackCmd) data.seal_fallback = sealOutcome.fallbackCmd;
+    // cortex#1481 — the hub-owner artifact carries the raw PSK (like the OOB
+    // `surfaced` block) so it rides its OWN explicit key, joined with real
+    // newlines, never folded into a step/reason field.
+    if (sealOutcome.hubOwnerArtifact) data.hub_owner_artifact = sealOutcome.hubOwnerArtifact.join("\n");
     if (discordWarning) data.discord_warning = discordWarning;
     return ok(renderJson(envelopeOk([], data)));
   }
@@ -2590,6 +2614,12 @@ async function runAdmit(
   if (sealOutcome.status === "sealed") {
     lines.push(`  seal:        delivered — peer is now CONNECTABLE`);
     for (const s of sealOutcome.steps) lines.push(`    ${s}`);
+    // cortex#1481 — external hub (or --seal-only): the hub write never
+    // happened, so print the hub-owner artifact explicitly.
+    if (sealOutcome.hubOwnerArtifact) {
+      lines.push("");
+      for (const s of sealOutcome.hubOwnerArtifact) lines.push(`  ${s}`);
+    }
   } else if (sealOutcome.status === "skipped") {
     lines.push(`  seal:        skipped — ${sealOutcome.reason ?? "no seal"} (peer is ADMITTED but INERT)`);
     if (sealOutcome.fallbackCmd) lines.push(`               to seal: ${sealOutcome.fallbackCmd}`);
@@ -2826,6 +2856,14 @@ interface AdmitSealOutcome {
   reason?: string;
   /** The explicit `secret add-member` command to seal after the fact. */
   fallbackCmd?: string;
+  /**
+   * cortex#1481 — present iff the seal's hub turned out to be EXTERNAL (or
+   * --seal-only forced it): the hub-owner artifact `sealAdmittedMember`
+   * forwards verbatim from {@link SecretReport.hubOwnerArtifact}. The caller
+   * prints it explicitly (the one other legitimate place the raw PSK reaches
+   * stdout, alongside the OOB `surfaced` block).
+   */
+  hubOwnerArtifact?: string[];
 }
 
 /**
@@ -2851,8 +2889,23 @@ async function sealAdmittedMember(args: {
   material: StackIdentityMaterial;
   secretPortsFactory: SecretPortsFactory;
   adminSeedPath: string;
+  /** cortex#1481 — force seal-only (never write the local hub) even when the
+   *  auto-detected locality would otherwise call the hub local. */
+  sealOnly?: boolean;
+  /** cortex#1481 — the hub's own federation account nkey-U, when known. */
+  hubAccount?: string;
 }): Promise<AdmitSealOutcome> {
-  const { networkId, memberPubkey, registryUrl, hubConfigPath, material, secretPortsFactory, adminSeedPath } = args;
+  const {
+    networkId,
+    memberPubkey,
+    registryUrl,
+    hubConfigPath,
+    material,
+    secretPortsFactory,
+    adminSeedPath,
+    sealOnly,
+    hubAccount,
+  } = args;
 
   // A network-less admission row (legacy null network_id) can't be sealed — the
   // leaf PSK is network-scoped, and `secret add-member` needs a real network id.
@@ -2874,6 +2927,8 @@ async function sealAdmittedMember(args: {
     memberPubkey,
     deliver: "sealed",
     apply: true,
+    ...(sealOnly !== undefined && { sealOnly }),
+    ...(hubAccount !== undefined && { hubAccount }),
   };
 
   let report: SecretReport;
@@ -2902,7 +2957,11 @@ async function sealAdmittedMember(args: {
     };
   }
 
-  return { status: "sealed", steps: report.steps };
+  return {
+    status: "sealed",
+    steps: report.steps,
+    ...(report.hubOwnerArtifact !== undefined && { hubOwnerArtifact: report.hubOwnerArtifact }),
+  };
 }
 
 // =============================================================================
@@ -3051,6 +3110,13 @@ async function runSecret(
   const discordServer = optionalValueFlag(flags, "--discord-server");
   const discordGuild = optionalValueFlag(flags, "--discord-guild");
   const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
+  // cortex#1481 — add-member/rotate only: force the seal-only path (never write
+  // the local hub) + the hub's own account nkey-U, when the admin knows it.
+  const sealOnly = flags["--seal-only"] === true;
+  const hubAccountRaw = optionalValueFlag(flags, "--hub-account");
+  if (hubAccountRaw !== undefined && !isNkeyAccountPubkey(hubAccountRaw)) {
+    return usageError("secret", `--hub-account "${hubAccountRaw}" is not a valid nkey-U account public key (expected A + 55 base32 chars)`, json);
+  }
 
   // 4. Load + chmod-600-gate the hub-admin seed.
   const matRes = await hubAdminMaterialFromSeedFile(seedRes.value);
@@ -3081,6 +3147,8 @@ async function runSecret(
     ...(leafUserOverride !== undefined && { leafUserOverride }),
     ...(payloadKey !== undefined && { payloadKey }),
     ...(payloadKeyKid !== undefined && { payloadKeyKid }),
+    sealOnly,
+    ...(hubAccountRaw !== undefined && { hubAccount: hubAccountRaw }),
     apply: applyRes.apply,
   };
 
@@ -3149,6 +3217,10 @@ async function runSecret(
       data.oob_leaf_user = report.surfaced.leafUser;
       data.oob_leaf_secret = report.surfaced.psk;
     }
+    // cortex#1481 — the hub-owner artifact carries the raw PSK (like the OOB
+    // block above) so it rides its OWN explicit key, joined with real
+    // newlines, never folded into steps/data's other fields.
+    if (report.hubOwnerArtifact) data.hub_owner_artifact = report.hubOwnerArtifact.join("\n");
     const env = report.ok ? envelopeOk([], data) : envelopeError(report.reason ?? "secret command failed", data);
     return report.ok ? ok(renderJson(env)) : { exitCode: 1, stdout: "", stderr: renderJson(env) };
   }
@@ -3173,6 +3245,12 @@ async function runSecret(
     lines.push("  ── OUT-OF-BAND SECRET (hand this to the member over a secure channel) ──");
     lines.push(`  leaf user:   ${report.surfaced.leafUser}`);
     lines.push(`  leaf secret: ${report.surfaced.psk}`);
+  }
+  // cortex#1481 — external hub (or --seal-only): the hub write never
+  // happened, so print the exact hub-owner snippet explicitly.
+  if (report.hubOwnerArtifact) {
+    lines.push("");
+    for (const s of report.hubOwnerArtifact) lines.push(`  ${s}`);
   }
   lines.push("");
   const body = lines.join("\n");
@@ -3840,8 +3918,9 @@ Usage:
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
   cortex network doctor <network> [--principal <id>] [--stack <id>] [--config <p>] [--monitor-url <url>] [--json]
   cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>] [--hub-config <p>]
-                        [--roster-only] [--discord-member <id>] [--discord-guild <id>]
-                        [--discord-server <profile>] [--discord-role <name>] [--apply] [--dry-run] [--json]
+                        [--roster-only] [--seal-only] [--hub-account <A…>] [--discord-member <id>]
+                        [--discord-guild <id>] [--discord-server <profile>] [--discord-role <name>]
+                        [--apply] [--dry-run] [--json]
   cortex network admit  --list-pending [--status <PENDING|ADMITTED|REJECTED>] [--network <id>]
                         --admin-seed <path> [--registry-url <url>] [--json]
   cortex network reject <request-id> --admin-seed <path> [--registry-url <url>] [--apply] [--dry-run] [--json]
@@ -3851,7 +3930,8 @@ Usage:
                         [--creds <p>] [--force] [--apply] [--dry-run] [--json]
   cortex network secret <add-member|revoke-member|rotate> <network> <member-pubkey>
                         --admin-seed <hub-admin-seed> [--registry-url <url>] [--hub-config <p>]
-                        [--deliver sealed|oob] [--leaf-user <u>] [--apply] [--dry-run] [--json]
+                        [--deliver sealed|oob] [--leaf-user <u>] [--seal-only] [--hub-account <A…>]
+                        [--apply] [--dry-run] [--json]
   cortex network secret rotate-key <network>   (network-wide K rotation — NO member pubkey)
                         --admin-seed <hub-admin-seed> [--config <p>] [--registry-url <url>]
                         [--hub-config <p>] [--apply] [--dry-run] [--json]
@@ -3955,11 +4035,21 @@ Subcommands:
           ADMIT-AND-SEAL (C-1316): on --apply, admit ALSO mints + seals + delivers
           the per-member leaf PSK (the \`secret add-member\` motion) so the peer is
           CONNECTABLE, not just rostered — no ADMITTED-but-inert peers. Reuses the
-          hub-local nats config at --hub-config (default ~/.config/nats/local.conf).
+          hub-local nats config at --hub-config (default ~/.config/nats/local.conf)
+          — but ONLY when that hub is actually LOCAL to this host (cortex#1481):
+          the network's cached hub_url is compared to this machine, and a hub that
+          is NOT this machine is NEVER written (the #1 storm cause — a foreign
+          write leaves the joiner's leaf presenting a PSK the real hub never
+          authorized). An external hub instead gets a registry-only seal + a
+          printed hub-owner artifact (the exact leafnodes{} authorization snippet
+          to hand to whoever runs that hub). Pass --seal-only to force that same
+          seal-only + artifact path even when the hub looks local (never touches
+          --hub-config); --hub-account <A…> names the hub's own federation account
+          nkey-U when you already know it, so the printed snippet is account-bound.
           The seal NEVER fails a committed admit: if it can't run (hub-admin ≠
-          registry-admin, or the hub config isn't local) it surfaces a fallback
+          registry-admin, or the hub config isn't readable) it surfaces a fallback
           telling you to run \`cortex network secret add-member\`. Pass --roster-only
-          to commit the roster row ONLY and skip the seal.
+          to commit the roster row ONLY and skip the seal entirely.
           --list-pending (C-1314): DISCOVERY mode — admin-signs a read and lists
           the admission queue (request-id · principal · network · peer · status ·
           created) so you can find the id to admit. Read-only (no --apply).

@@ -53,6 +53,25 @@ export interface SecretInputs {
   /** Override the hub leaf user (defaults to the member's principal id). */
   leafUserOverride?: string;
   /**
+   * cortex#1481 — force the SEAL-ONLY path (registry seal + hub-owner artifact,
+   * NEVER a local hub write) even when {@link decideHubLocality} would otherwise
+   * call the hub local. The explicit opt-in for "I know this hub isn't mine, or
+   * I don't trust the auto-detection" — add-member/rotate only (revoke-member
+   * still cuts the local hub unconditionally; #1481 scopes the fix to the mint+
+   * write seam that storms).
+   */
+  sealOnly?: boolean;
+  /**
+   * cortex#1481 — the hub's OWN federation account nkey-U (`A…`), when the
+   * caller happens to know it (`--hub-account`). Only meaningful when the hub
+   * turns out to be EXTERNAL (or `sealOnly` is set): it rides the hub-owner
+   * artifact's `account:` field so the printed snippet is account-bound
+   * (operator-mode). Absent ⇒ the artifact omits `account:` and tells the hub
+   * owner to add it themselves (only they have visibility into their own
+   * account tree).
+   */
+  hubAccount?: string;
+  /**
    * C-1349 Slice 1 — the per-network payload key `K` (base64, 32 bytes) read
    * from the HUB STACK's own resolved config (`policy.federated.networks[<net>]
    * .payload_key`) by the CLI. When present (add-member / rotate), it is sealed
@@ -89,6 +108,15 @@ export interface SecretReport {
    * legitimately reaches stdout). Absent for sealed delivery.
    */
   surfaced?: { leafUser: string; psk: string };
+  /**
+   * cortex#1481 — present iff the hub turned out to be EXTERNAL (or `sealOnly`
+   * forced it): the EXACT `leafnodes { authorization { users: [...] } }`
+   * snippet + hand-off note the hub owner must add to THEIR OWN nats-server
+   * config, since the orchestrator refused to write it here. The other
+   * legitimate place the raw PSK reaches the caller (alongside `surfaced`) —
+   * the render caller shows it explicitly, never folds it into `steps`.
+   */
+  hubOwnerArtifact?: string[];
 }
 
 /** Dispatch by action. */
@@ -104,6 +132,161 @@ export async function runNetworkSecret(
     case "revoke-member":
       return revokeMember(inputs, ports);
   }
+}
+
+// ===========================================================================
+// cortex#1481 (epic #1479, join-2) — hub locality: NEVER write a foreign hub.
+//
+// The #1 storm cause: `--hub-config` defaults to the LOCAL nats, so when a
+// network's hub is ANOTHER principal's server, `add-member`/`admit --and-seal`
+// wrote the leaf authorization onto the admin's own laptop — never the real
+// hub — and the joiner's leaf then Authorization-Violation-storms against the
+// real hub (which never saw the PSK). {@link decideHubLocality} is the PURE,
+// fail-safe decision (data in, verdict out — no I/O); {@link
+// renderHubOwnerArtifact} is the PURE artifact the orchestrator emits INSTEAD
+// of the local write when the hub is external. Both are exported for direct
+// unit testing; `addOrRotate` is the only caller in the orchestrator itself.
+// ===========================================================================
+
+/** Loopback aliases considered an UNAMBIGUOUS match for "this host", as
+ *  returned by `new URL(...).hostname` (bracketed IPv6). Compared
+ *  case-insensitively against the parsed hub_url host. */
+const LOCAL_HOST_ALIASES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Parse the host out of a `hub_url` (a full `tls://host:port` URL — DD-12 —
+ * or a bare host; mirrors `resolveLeafUrl` in `leaf-remote-renderer.ts`).
+ * Returns `undefined` on an empty/unparseable value — the caller treats that
+ * as "cannot determine" (fails safe to EXTERNAL).
+ */
+function extractHubHost(hubUrl: string): string | undefined {
+  const raw = hubUrl.trim();
+  if (raw.length === 0) return undefined;
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw);
+  const withScheme = hasScheme ? raw : `tls://${raw}`;
+  try {
+    const parsed = new URL(withScheme);
+    return parsed.hostname.length > 0 ? parsed.hostname : undefined;
+  } catch (_err) {
+    // A malformed hub_url is not this function's concern to report — the
+    // caller (decideHubLocality) turns an undefined host into "cannot
+    // determine" and fails safe to EXTERNAL, which is the correct behavior
+    // for a value we can't parse.
+    return undefined;
+  }
+}
+
+/** The cortex#1481 hub-locality verdict. `hubUrl` rides the EXTERNAL branch
+ *  (when known) so the hub-owner artifact can name the hub. */
+export type HubLocality =
+  | { kind: "local" }
+  | { kind: "external"; hubUrl?: string; reason: string };
+
+/**
+ * cortex#1481 — PURE, fail-safe locality decision. A network's hub counts as
+ * LOCAL only on a CONFIDENT match: a loopback alias, or an EXACT
+ * case-insensitive match against this machine's own hostname. Every other
+ * case — no cached descriptor, an unparseable hub_url, or a genuinely
+ * different host — is EXTERNAL. The asymmetry is deliberate: a false "local"
+ * IS the #1481 storm bug (writes a foreign hub); a false "external" only
+ * costs an extra hand-off step (the hub-owner artifact instead of an
+ * automatic write) — so every ambiguous case resolves to EXTERNAL.
+ */
+export function decideHubLocality(
+  hubUrl: string | undefined,
+  localHostname: string,
+): HubLocality {
+  if (hubUrl === undefined || hubUrl.trim() === "") {
+    return {
+      kind: "external",
+      reason:
+        "no cached network descriptor for this network on this host (never joined/synced here) — cannot confirm the hub is local; treating as EXTERNAL (fail-safe)",
+    };
+  }
+  const host = extractHubHost(hubUrl);
+  if (host === undefined) {
+    return {
+      kind: "external",
+      hubUrl,
+      reason: `could not parse a host from the network's hub_url ${JSON.stringify(hubUrl)} — treating as EXTERNAL (fail-safe)`,
+    };
+  }
+  const lowerHost = host.toLowerCase();
+  const lowerLocal = localHostname.trim().toLowerCase();
+  if (LOCAL_HOST_ALIASES.has(lowerHost) || (lowerLocal.length > 0 && lowerHost === lowerLocal)) {
+    return { kind: "local" };
+  }
+  return {
+    kind: "external",
+    hubUrl,
+    reason:
+      `network hub_url host "${host}" does not match this machine ` +
+      `(${localHostname.trim().length > 0 ? localHostname : "unknown hostname"}) — refusing to write the local nats config`,
+  };
+}
+
+/** Inputs {@link renderHubOwnerArtifact} needs to print the EXACT snippet the
+ *  hub owner adds to THEIR OWN nats-server config. */
+export interface HubOwnerArtifactInputs {
+  networkId: string;
+  /** The hub `authorization` user (the userinfo USER the leaf dials with). */
+  leafUser: string;
+  /** The freshly-minted PSK — the ONE legitimate reason this rides the artifact. */
+  psk: string;
+  /** The network's hub_url, when known (absent ⇒ locality couldn't be confirmed at all). */
+  hubUrl?: string;
+  /**
+   * The hub's OWN federation account nkey-U, when the caller happens to know
+   * it (`--hub-account`). Present ⇒ the snippet is account-bound
+   * (operator-mode). Absent ⇒ the snippet omits `account:` and the artifact
+   * tells the hub owner to add it themselves — only THEY have visibility into
+   * their own account tree.
+   */
+  account?: string;
+}
+
+/**
+ * cortex#1481 — render the EXACT `leafnodes { authorization { users: [...] }
+ * }` snippet the hub owner must add to THEIR OWN nats-server config, plus a
+ * hand-off note. This is what the orchestrator emits INSTEAD OF writing the
+ * local hub when the hub is external (or `--seal-only` forced it). PURE (data
+ * in, text out) — the second legitimate place (alongside
+ * `SecretReport.surfaced`) the raw PSK reaches the caller; the render layer
+ * shows it explicitly, never folds it into `steps`/`data`.
+ */
+export function renderHubOwnerArtifact(inputs: HubOwnerArtifactInputs): string[] {
+  const lines: string[] = [];
+  lines.push("── HUB-OWNER ACTION REQUIRED (this network's hub is NOT this machine) ──");
+  lines.push(
+    inputs.hubUrl !== undefined
+      ? `network:     ${inputs.networkId}  (hub: ${inputs.hubUrl})`
+      : `network:     ${inputs.networkId}  (hub location could not be confirmed from this host)`,
+  );
+  lines.push("Add this to the leafnodes {} block of the HUB's OWN nats-server config:");
+  lines.push("");
+  lines.push("leafnodes {");
+  lines.push("  authorization {");
+  lines.push("    users: [");
+  const accountField = inputs.account !== undefined ? `, account: ${JSON.stringify(inputs.account)}` : "";
+  lines.push(`      { user: ${JSON.stringify(inputs.leafUser)}, password: ${JSON.stringify(inputs.psk)}${accountField} }`);
+  lines.push("    ]");
+  lines.push("  }");
+  lines.push("}");
+  if (inputs.account === undefined) {
+    lines.push("");
+    lines.push(
+      "If that hub's bus is operator-mode, ALSO add an `account: \"<the hub's own federation " +
+        "account nkey-U>\"` field to this user entry — only the hub owner has visibility into " +
+        "their own account tree (pass --hub-account <A…> to this command if you already know it).",
+    );
+  }
+  lines.push("");
+  lines.push(
+    `Hand this snippet to whoever runs network "${inputs.networkId}"'s hub. After they add it, they ` +
+      "must validate (`nats-server -c <hub.conf> -t`) and reload (SIGHUP) their hub nats-server for " +
+      "the new leaf-authorization user to take effect.",
+  );
+  return lines;
 }
 
 /**
@@ -138,10 +321,39 @@ async function addOrRotate(
   steps.push(`leaf user:  ${leafUser}`);
   steps.push(`deliver:    ${inputs.deliver}`);
 
+  // cortex#1481 — resolve hub locality BEFORE any mutation, so both the
+  // dry-run plan and the apply path branch identically. `sealOnly` forces the
+  // EXTERNAL path even when the descriptor would otherwise read as local (the
+  // explicit "never write this hub" override) — but we still resolve the
+  // cached hub_url (a pure local-disk read) so the hub-owner artifact can name
+  // it when known.
+  const cachedHubUrl = await ports.hubLocality.resolveHubUrl(inputs.networkId);
+  const localityDecision = decideHubLocality(cachedHubUrl, ports.hubLocality.localHostname());
+  const locality: HubLocality =
+    inputs.sealOnly === true
+      ? {
+          kind: "external",
+          reason: "--seal-only forced: registry seal + hub-owner artifact only — the local hub is never written",
+          ...(cachedHubUrl !== undefined && { hubUrl: cachedHubUrl }),
+        }
+      : localityDecision;
+  steps.push(
+    locality.kind === "local"
+      ? `hub:        LOCAL (this host) — ${ports.hub.confPath}`
+      : `hub:        EXTERNAL — ${locality.reason}`,
+  );
+  data.hub_locality = locality.kind;
+
   if (!inputs.apply) {
-    steps.push(rotate
-      ? `would: re-mint PSK → REPLACE hub authorization user "${leafUser}" + reload → re-seal + replace sealed blob`
-      : `would: mint PSK → add hub authorization user "${leafUser}" + reload → ${inputs.deliver === "sealed" ? "seal + deliver to the admission row" : "surface PSK for out-of-band handover"}`);
+    if (locality.kind === "local") {
+      steps.push(rotate
+        ? `would: re-mint PSK → REPLACE hub authorization user "${leafUser}" + reload → re-seal + replace sealed blob`
+        : `would: mint PSK → add hub authorization user "${leafUser}" + reload → ${inputs.deliver === "sealed" ? "seal + deliver to the admission row" : "surface PSK for out-of-band handover"}`);
+    } else {
+      steps.push(rotate
+        ? `would: re-mint PSK → SEAL-ONLY (no local hub write — external hub) → re-seal + replace sealed blob → emit hub-owner artifact`
+        : `would: mint PSK → SEAL-ONLY (no local hub write — external hub) → ${inputs.deliver === "sealed" ? "seal + deliver to the admission row" : "surface PSK for out-of-band handover"} → emit hub-owner artifact`);
+    }
     // C-1349 Slice 1 — surface whether the sealed blob will carry the payload key
     // K (kid only, NEVER K). oob never carries K (manual bootstrap path).
     if (inputs.deliver === "sealed") {
@@ -158,33 +370,43 @@ async function addOrRotate(
     return plan(action, inputs, steps, data);
   }
 
-  // 2. Mint the PSK + write the hub authorization user + reload.
+  // 2. Mint the PSK, then EITHER write the hub authorization user + reload
+  //    (LOCAL hub) OR skip that write entirely (EXTERNAL hub / --seal-only —
+  //    cortex#1481: NEVER write a foreign hub's nats config).
   const psk = ports.crypto.mintPsk();
   const fp = await pskFingerprint(psk);
   data.psk_fingerprint = fp;
 
-  let conf: string;
-  try {
-    conf = await ports.hub.readConf();
-  } catch (err) {
-    return fail(action, inputs, steps, data, `failed to read hub config: ${errText(err)}`);
-  }
-  let nextConf: string;
-  try {
-    nextConf = upsertHubLeafUser(conf, leafUser, psk);
-  } catch (err) {
-    if (err instanceof HubAuthConflictError) {
-      return fail(action, inputs, steps, data, err.message);
+  if (locality.kind === "local") {
+    let conf: string;
+    try {
+      conf = await ports.hub.readConf();
+    } catch (err) {
+      return fail(action, inputs, steps, data, `failed to read hub config: ${errText(err)}`);
     }
-    return fail(action, inputs, steps, data, `failed to render hub authorization: ${errText(err)}`);
+    let nextConf: string;
+    try {
+      nextConf = upsertHubLeafUser(conf, leafUser, psk);
+    } catch (err) {
+      if (err instanceof HubAuthConflictError) {
+        return fail(action, inputs, steps, data, err.message);
+      }
+      return fail(action, inputs, steps, data, `failed to render hub authorization: ${errText(err)}`);
+    }
+    try {
+      await ports.hub.writeConf(nextConf);
+      await ports.hub.reload();
+    } catch (err) {
+      return fail(action, inputs, steps, data, `failed to write/reload hub config: ${errText(err)}`);
+    }
+    steps.push(`hub:        ${rotate ? "replaced" : "added"} authorization user "${leafUser}" + reloaded (psk ${fp})`);
+  } else {
+    // cortex#1481 — the #1 storm cause: DO NOT touch ports.hub at all. The
+    // registry seal below still runs (machine-independent); the hub-owner
+    // artifact attached below carries the exact snippet for whoever runs the
+    // real hub.
+    steps.push(`hub:        SKIPPED — no local nats config written (external hub); see the hub-owner artifact below`);
   }
-  try {
-    await ports.hub.writeConf(nextConf);
-    await ports.hub.reload();
-  } catch (err) {
-    return fail(action, inputs, steps, data, `failed to write/reload hub config: ${errText(err)}`);
-  }
-  steps.push(`hub:        ${rotate ? "replaced" : "added"} authorization user "${leafUser}" + reloaded (psk ${fp})`);
 
   // 3. Deliver.
   if (inputs.deliver === "oob") {
@@ -192,6 +414,15 @@ async function addOrRotate(
     const report = plan(action, inputs, steps, data);
     report.applied = true;
     report.surfaced = { leafUser, psk };
+    if (locality.kind === "external") {
+      report.hubOwnerArtifact = renderHubOwnerArtifact({
+        networkId: inputs.networkId,
+        leafUser,
+        psk,
+        ...(locality.hubUrl !== undefined && { hubUrl: locality.hubUrl }),
+        ...(inputs.hubAccount !== undefined && { account: inputs.hubAccount }),
+      });
+    }
     return report;
   }
 
@@ -242,6 +473,15 @@ async function addOrRotate(
 
   const report = plan(action, inputs, steps, data);
   report.applied = true;
+  if (locality.kind === "external") {
+    report.hubOwnerArtifact = renderHubOwnerArtifact({
+      networkId: inputs.networkId,
+      leafUser,
+      psk,
+      ...(locality.hubUrl !== undefined && { hubUrl: locality.hubUrl }),
+      ...(inputs.hubAccount !== undefined && { account: inputs.hubAccount }),
+    });
+  }
   return report;
 }
 

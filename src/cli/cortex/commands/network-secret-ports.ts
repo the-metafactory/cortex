@@ -57,12 +57,45 @@ export interface SecretCrypto {
   seal(plaintext: string, recipientPubkeyB64: string): Promise<string>;
 }
 
+/**
+ * cortex#1481 (epic #1479, join-2) — resolve whether THIS host is the
+ * network's hub, so the orchestrator can REFUSE to write a foreign hub's
+ * authorization onto the WRONG machine. Read-only.
+ *
+ * The #1 storm cause this exists to prevent: `add-member`/`admit --and-seal`
+ * write the minted leaf PSK into `--hub-config` (default: the LOCAL nats).
+ * When the network's actual hub is ANOTHER principal's server, that write
+ * lands on the admin's own laptop — never the real hub — so the joiner's leaf
+ * presents a PSK the real hub never authorized and Authorization-Violation-
+ * storms. (Real incident: the metafactory-community bring-up 2026-07-04 — the
+ * PSK landed on the admin's local nats, never on the hub owner's VM.)
+ */
+export interface HubLocalityPort {
+  /**
+   * The cached network descriptor's `hub_url` for `networkId` — the SAME
+   * `~/.config/cortex/network-cache/<network>.json` DD-10 last-known-good
+   * cache `cortex network join` writes after a verified fetch (S1, #735).
+   * Read-only, LOCAL DISK ONLY — deliberately never a live registry round
+   * trip: the secret-tooling adapters carry no registry-pubkey-pin setup
+   * today, and a live-fetch failure must never block a seal that would
+   * otherwise succeed. `undefined` when nothing is cached for this network on
+   * this host (never joined/synced here) — the pure decision function
+   * ({@link decideHubLocality} in `network-secret-lib.ts`) treats an
+   * unresolved hub_url as "cannot confirm local" and fails safe to EXTERNAL.
+   */
+  resolveHubUrl(networkId: string): Promise<string | undefined>;
+  /** This machine's own hostname (`os.hostname()`). Injectable for tests. */
+  localHostname(): string;
+}
+
 /** The full port bundle the orchestrator depends on. */
 export interface NetworkSecretPorts {
   hub: HubAuthPort;
   admission: AdmissionLookupPort;
   delivery: SealDeliveryPort;
   crypto: SecretCrypto;
+  /** cortex#1481 — the hub-locality read the orchestrator gates the hub write on. */
+  hubLocality: HubLocalityPort;
 }
 
 // ===========================================================================
