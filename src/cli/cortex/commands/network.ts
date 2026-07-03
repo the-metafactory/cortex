@@ -2399,7 +2399,7 @@ async function runAdmit(
   // SAME nkey-U guard the `secret` path enforces (isNkeyAccountPubkey), and
   // validate it HERE — before the admission is committed — so a malformed
   // account fails fast (exit 2) rather than silently riding into the printed
-  // hub-owner artifact the operator pastes into a live nats-server config.
+  // hub-owner artifact the hub owner pastes into a live nats-server config.
   const admitHubAccount = optionalValueFlag(flags, "--hub-account");
   if (admitHubAccount !== undefined && !isNkeyAccountPubkey(admitHubAccount)) {
     return usageError("admit", `--hub-account "${admitHubAccount}" is not a valid nkey-U account public key (expected A + 55 base32 chars)`, json);
