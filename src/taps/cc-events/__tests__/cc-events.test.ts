@@ -214,7 +214,7 @@ describe("createCcEventEnvelope", () => {
       originatorPrincipal: "did:mf:cortex",
     });
     expect(env.originator).toEqual({
-      principal: "did:mf:cortex",
+      identity: "did:mf:cortex",
       attribution: "adapter-resolved",
     });
   });
@@ -356,7 +356,7 @@ describe("createCcEventPublisher", () => {
     for (const call of link.calls) {
       const env = JSON.parse(call.payload);
       expect(env.originator).toEqual({
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         attribution: "adapter-resolved",
       });
     }

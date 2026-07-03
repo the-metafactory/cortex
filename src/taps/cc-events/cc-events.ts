@@ -251,7 +251,7 @@ export function createCcEventEnvelope(
   // level so JSON serialisation picks it up downstream.
   if (opts.originatorPrincipal !== undefined) {
     envelope.originator = {
-      principal: opts.originatorPrincipal,
+      identity: opts.originatorPrincipal,
       attribution: "adapter-resolved",
     };
   }

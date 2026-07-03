@@ -46,7 +46,7 @@
     "@octokit/webhooks-methods": "^6.0.0",
     "@slack/socket-mode": "^2.0.7",
     "@slack/web-api": "^7.16.0",
-    "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#7c6b71e9e16286d42ba6038d0be3ab30c498da39",
+    "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#a69ecd7d760434fd5e2f27b2e3de3b3bcd510be1",
     "@xyflow/react": "^12.10.2",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",

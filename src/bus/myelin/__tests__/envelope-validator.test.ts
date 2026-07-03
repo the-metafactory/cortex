@@ -334,17 +334,17 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
     expect(result.ok).toBe(true);
   });
 
-  test("accepts a broadcast envelope (deprecated alias, R11 back-compat)", () => {
-    // Vocabulary migration 2026-05 — `broadcast` is the deprecated alias
-    // of `offer`. The transition schema still accepts it on read so
-    // JetStream-replayed pre-migration envelopes route through unchanged.
+  test("rejects a broadcast envelope (deprecated alias removed in myelin v0.6.0)", () => {
+    // Vocabulary migration 2026-05 — `broadcast` was the deprecated alias
+    // of `offer`. myelin v0.6.0 removed `broadcast` from the wire entirely,
+    // so the schema no longer accepts it on read.
     const env = {
       ...(validEnvelope as object),
       distribution_mode: "broadcast",
       sovereignty_required: "open",
     };
     const result = validateEnvelope(env);
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
   });
 
   test("rejects a direct envelope missing target_assistant", () => {
@@ -612,7 +612,7 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     // no longer dual-reads) ships here per
     // docs/migrations/0002-vocabulary-finish-2026-05.md §R10.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "7c6b71e9e16286d42ba6038d0be3ab30c498da39",
+      "a69ecd7d760434fd5e2f27b2e3de3b3bcd510be1",
     );
   });
 

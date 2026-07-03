@@ -170,8 +170,8 @@
     },
     "distribution_mode": {
       "type": "string",
-      "enum": ["broadcast", "offer", "direct", "delegate"],
-      "description": "F-021: routing semantics. offer = competing consumers; direct = named recipient; delegate = outcome handoff (multi-step orchestration). R11 (vocabulary migration 2026-05): 'broadcast' renamed to 'offer'. Transition release accepts BOTH; 'broadcast' is deprecated and dropped in the breaking major."
+      "enum": ["offer", "direct", "delegate"],
+      "description": "F-021: routing semantics. offer = competing consumers; direct = named recipient; delegate = outcome handoff (multi-step orchestration). R11 (vocabulary migration 2026-05, breaking cut #180): 'broadcast' was renamed to 'offer' and removed from the wire — envelopes carrying it are rejected."
     },
     "target_assistant": {
       "type": "string",
@@ -180,21 +180,13 @@
     },
     "originator": {
       "type": "object",
-      "description": "myelin#160: policy-level actor identity, separate from the cryptographic signed_by chain. The chain proves WHO signed; originator names WHO the signer claims to be acting on behalf of. Covered by the signature (signer commits to the attribution claim). When absent, the signer is the actor. R2 (vocabulary migration 2026-05): the actor-DID field renamed 'principal'→'identity'; transition release accepts either, rejects both.",
-      "oneOf": [
-        { "required": ["identity", "attribution"] },
-        { "required": ["principal", "attribution"] }
-      ],
+      "description": "myelin#160: policy-level actor identity, separate from the cryptographic signed_by chain. The chain proves WHO signed; originator names WHO the signer claims to be acting on behalf of. Covered by the signature (signer commits to the attribution claim). When absent, the signer is the actor. R2 (vocabulary migration 2026-05, breaking cut): the actor-DID field is 'identity'; the deprecated 'principal' key was removed from the wire and is rejected by `additionalProperties: false`.",
+      "required": ["identity", "attribution"],
       "properties": {
         "identity": {
           "type": "string",
           "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
           "description": "DID of the actor whose capabilities this envelope asserts (R2 — renamed from 'principal')."
-        },
-        "principal": {
-          "type": "string",
-          "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
-          "description": "DEPRECATED (R2) — renamed to 'identity'. Accepted on read through the transition window; an originator carrying BOTH keys is rejected (dual_field_conflict)."
         },
         "attribution": {
           "type": "string",
