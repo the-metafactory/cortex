@@ -2395,6 +2395,15 @@ async function runAdmit(
   const discordServer = optionalValueFlag(flags, "--discord-server");
   const discordGuild = optionalValueFlag(flags, "--discord-guild");
   const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
+  // cortex#1481 (Sage review, Important 1) — validate --hub-account with the
+  // SAME nkey-U guard the `secret` path enforces (isNkeyAccountPubkey), and
+  // validate it HERE — before the admission is committed — so a malformed
+  // account fails fast (exit 2) rather than silently riding into the printed
+  // hub-owner artifact the operator pastes into a live nats-server config.
+  const admitHubAccount = optionalValueFlag(flags, "--hub-account");
+  if (admitHubAccount !== undefined && !isNkeyAccountPubkey(admitHubAccount)) {
+    return usageError("admit", `--hub-account "${admitHubAccount}" is not a valid nkey-U account public key (expected A + 55 base32 chars)`, json);
+  }
 
   // Load + chmod-600-gate the admin seed
   const matRes = await adminMaterialFromSeedFile(seedRes.value);
@@ -2517,7 +2526,6 @@ async function runAdmit(
       fallbackCmd: `cortex network secret add-member ${net} ${requestPeerPubkey} --admin-seed ${seedRes.value} --apply`,
     };
   } else {
-    const hubAccount = optionalValueFlag(flags, "--hub-account");
     sealOutcome = await sealAdmittedMember({
       networkId: requestNetworkId,
       memberPubkey: requestPeerPubkey,
@@ -2529,7 +2537,8 @@ async function runAdmit(
       // cortex#1481 — --seal-only forces the never-write-a-foreign-hub path even
       // when the auto-detected locality would otherwise call the hub local.
       sealOnly: flags["--seal-only"] === true,
-      ...(hubAccount !== undefined && { hubAccount }),
+      // Already nkey-U-validated above (fail-fast before the admission commits).
+      ...(admitHubAccount !== undefined && { hubAccount: admitHubAccount }),
     });
   }
 
@@ -4037,12 +4046,15 @@ Subcommands:
           CONNECTABLE, not just rostered — no ADMITTED-but-inert peers. Reuses the
           hub-local nats config at --hub-config (default ~/.config/nats/local.conf)
           — but ONLY when that hub is actually LOCAL to this host (cortex#1481):
-          the network's cached hub_url is compared to this machine, and a hub that
-          is NOT this machine is NEVER written (the #1 storm cause — a foreign
-          write leaves the joiner's leaf presenting a PSK the real hub never
-          authorized). An external hub instead gets a registry-only seal + a
-          printed hub-owner artifact (the exact leafnodes{} authorization snippet
-          to hand to whoever runs that hub). Pass --seal-only to force that same
+          the network's cached hub_url is counted LOCAL when its host is a loopback
+          alias, exactly matches this machine's hostname, OR resolves (DNS) to one
+          of this machine's own network interfaces (the hub owner's own VM, even
+          when it's cached as an FQDN). A hub that is none of those is NEVER
+          written (the #1 storm cause — a foreign write leaves the joiner's leaf
+          presenting a PSK the real hub never authorized). An external hub instead
+          gets a registry-only seal + a printed hub-owner artifact (the exact
+          leafnodes{} authorization snippet to hand to whoever runs that hub). Pass
+          --seal-only to force that same
           seal-only + artifact path even when the hub looks local (never touches
           --hub-config); --hub-account <A…> names the hub's own federation account
           nkey-U when you already know it, so the printed snippet is account-bound.

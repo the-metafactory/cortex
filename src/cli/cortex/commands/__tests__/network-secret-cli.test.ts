@@ -49,12 +49,14 @@ function fakeFactory(opts: {
   hubUrl?: string;
   noHubCache?: boolean;
   localHostname?: string;
+  hubHostIsLocalInterface?: boolean;
 } = {}): { factory: SecretPortsFactory; calls: Calls; conf: { text: string } } {
   const calls: Calls = { reads: 0, writes: [], reloads: 0, posted: [], revoked: [], minted: [] };
   const conf = { text: "leafnodes {\n  listen: 0.0.0.0:7422\n}\n" };
   let mintN = 0;
   const hubUrl = opts.noHubCache === true ? undefined : (opts.hubUrl ?? "tls://localhost:7422");
   const localHostname = opts.localHostname ?? "localhost";
+  const hubHostIsLocalInterface = opts.hubHostIsLocalInterface ?? false;
   const ports: NetworkSecretPorts = {
     hub: {
       confPath: "/fake/hub.conf",
@@ -74,6 +76,7 @@ function fakeFactory(opts: {
     hubLocality: {
       resolveHubUrl: async () => hubUrl,
       localHostname: () => localHostname,
+      hubHostIsLocalInterface: async () => hubHostIsLocalInterface,
     },
   };
   return { factory: () => ports, calls, conf };

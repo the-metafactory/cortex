@@ -32,7 +32,8 @@
 
 import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
-import { hostname as osHostname } from "os";
+import { hostname as osHostname, networkInterfaces as osNetworkInterfaces } from "os";
+import { lookup as dnsLookup } from "dns/promises";
 
 import { expandTilde } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
@@ -53,6 +54,7 @@ import {
 } from "../../../bus/stack-provisioning";
 import { bunExecRunner, type ExecRunner } from "../../../common/nats/nats-service-manager";
 import { NetworkCache } from "../../../common/registry/network-cache";
+import { extractHubHost } from "./network-secret-lib";
 import {
   readNetworksFromConfig,
   writeNetworksGuarded,
@@ -153,6 +155,18 @@ export interface LiveSecretPortsConfig {
   networkCache?: NetworkCache;
   /** Injectable hostname resolver (tests). Production omits → `os.hostname()`. */
   hostname?: () => string;
+  /**
+   * cortex#1481 (Sage review, Important 2) — injectable DNS resolver: host →
+   * its IP addresses (tests). Production omits → `dns/promises.lookup(host,
+   * {all:true})`. Used by `hubHostIsLocalInterface` to decide whether the hub's
+   * host points at this machine.
+   */
+  resolveHostAddresses?: (host: string) => Promise<string[]>;
+  /**
+   * cortex#1481 — injectable local-interface address lister (tests). Production
+   * omits → `os.networkInterfaces()` flattened to bare addresses.
+   */
+  localInterfaceAddresses?: () => string[];
 }
 
 /** Build the full live port bundle. */
@@ -382,25 +396,63 @@ function buildLiveSecretCrypto(): SecretCrypto {
 // cortex#1481 — HUB LOCALITY: read-only, local-disk-only hub_url resolution.
 // ---------------------------------------------------------------------------
 
+/** Production DNS resolver: host → its IP addresses (v4 + v6). */
+const defaultResolveHostAddresses = async (host: string): Promise<string[]> => {
+  const results = await dnsLookup(host, { all: true });
+  return results.map((r) => r.address);
+};
+
+/** Production local-interface lister: every address on `os.networkInterfaces()`. */
+const defaultLocalInterfaceAddresses = (): string[] => {
+  const out: string[] = [];
+  for (const ifaces of Object.values(osNetworkInterfaces())) {
+    for (const iface of ifaces ?? []) out.push(iface.address);
+  }
+  return out;
+};
+
 /**
  * cortex#1481 — LIVE {@link HubLocalityPort}: reads the SAME DD-10
  * `~/.config/cortex/network-cache/<network>.json` last-known-good cache
  * `cortex network join` writes (read-only, local disk — deliberately never a
- * live registry round trip; see the port jsdoc for why), + `os.hostname()`.
- * Both facts are injectable so tests never touch the real home directory or
- * the real machine hostname.
+ * live registry round trip; see the port jsdoc for why), + `os.hostname()`, +
+ * (Sage review Important 2) a DNS→local-interface probe so a hub owner whose
+ * own hub is cached as an FQDN still gets the local auto-write. Every fact is
+ * injectable so tests never touch the real home dir, hostname, DNS, or NICs.
  */
 function buildLiveHubLocalityPort(cfg: LiveSecretPortsConfig): HubLocalityPort {
   const cache =
     cfg.networkCache ??
     new NetworkCache({ cacheDir: expandTilde(joinPath("~", ".config", "cortex", "network-cache")) });
   const getHostname = cfg.hostname ?? osHostname;
+  const resolveHostAddresses = cfg.resolveHostAddresses ?? defaultResolveHostAddresses;
+  const localInterfaceAddresses = cfg.localInterfaceAddresses ?? defaultLocalInterfaceAddresses;
   return {
     resolveHubUrl(networkId) {
       return Promise.resolve(cache.load(networkId)?.descriptor.hub_url);
     },
     localHostname() {
       return getHostname();
+    },
+    async hubHostIsLocalInterface(hubUrl) {
+      // Parse the SAME host the pure decider matches on (one grammar, no drift).
+      const host = extractHubHost(hubUrl);
+      if (host === undefined) return false;
+      let addresses: string[];
+      try {
+        addresses = await resolveHostAddresses(host);
+      } catch (err) {
+        // FAIL-SAFE: a DNS failure must NEVER throw (the seal proceeds) and must
+        // NEVER be read as "local" (that would risk the foreign-hub write). Log
+        // + treat as NOT local → the caller falls to the EXTERNAL artifact path.
+        process.stderr.write(
+          `cortex network secret: hub host "${host}" DNS lookup failed (${err instanceof Error ? err.message : String(err)}); ` +
+            `treating the hub as NOT local (external) — fail-safe\n`,
+        );
+        return false;
+      }
+      const local = new Set(localInterfaceAddresses());
+      return addresses.some((a) => local.has(a));
     },
   };
 }

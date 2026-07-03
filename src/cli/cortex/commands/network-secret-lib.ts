@@ -157,16 +157,22 @@ const LOCAL_HOST_ALIASES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
  * Parse the host out of a `hub_url` (a full `tls://host:port` URL — DD-12 —
  * or a bare host; mirrors `resolveLeafUrl` in `leaf-remote-renderer.ts`).
  * Returns `undefined` on an empty/unparseable value — the caller treats that
- * as "cannot determine" (fails safe to EXTERNAL).
+ * as "cannot determine" (fails safe to EXTERNAL). Exported so the LIVE adapter
+ * ({@link HubLocalityPort.hubHostIsLocalInterface}) resolves the SAME host this
+ * decider matches on — one grammar, no drift.
  */
-function extractHubHost(hubUrl: string): string | undefined {
+export function extractHubHost(hubUrl: string): string | undefined {
   const raw = hubUrl.trim();
   if (raw.length === 0) return undefined;
   const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw);
   const withScheme = hasScheme ? raw : `tls://${raw}`;
   try {
     const parsed = new URL(withScheme);
-    return parsed.hostname.length > 0 ? parsed.hostname : undefined;
+    // Strip the IPv6 brackets URL keeps on `hostname` (`[::1]` → `::1`) so the
+    // adapter's DNS/interface comparison sees the bare address form.
+    const host = parsed.hostname;
+    if (host.length === 0) return undefined;
+    return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   } catch (_err) {
     // A malformed hub_url is not this function's concern to report — the
     // caller (decideHubLocality) turns an undefined host into "cannot
@@ -183,18 +189,43 @@ export type HubLocality =
   | { kind: "external"; hubUrl?: string; reason: string };
 
 /**
+ * The signals {@link decideHubLocality} weighs. `hubHostIsLocalInterface` is
+ * the load-bearing one for a REAL deployment (Sage review, Important 2): the
+ * hub owner's own machine caches its hub as an FQDN while `os.hostname()`
+ * returns a short name, so neither the loopback-alias nor the exact-hostname
+ * signal fires — the DNS→local-interface resolution (done in the adapter) is
+ * what confirms "this FQDN is one of MY interfaces".
+ */
+export interface HubLocalityDeciderInputs {
+  /** This machine's own hostname (`os.hostname()`). */
+  localHostname: string;
+  /**
+   * True iff the hub_url's host resolves (via DNS) to one of THIS machine's
+   * own network interfaces — computed by the adapter
+   * ({@link HubLocalityPort.hubHostIsLocalInterface}), fail-safe `false` on any
+   * resolution error. The signal that keeps the auto-write path alive for a
+   * hub owner whose hub is cached as an FQDN.
+   */
+  hubHostIsLocalInterface: boolean;
+}
+
+/**
  * cortex#1481 — PURE, fail-safe locality decision. A network's hub counts as
- * LOCAL only on a CONFIDENT match: a loopback alias, or an EXACT
- * case-insensitive match against this machine's own hostname. Every other
- * case — no cached descriptor, an unparseable hub_url, or a genuinely
- * different host — is EXTERNAL. The asymmetry is deliberate: a false "local"
- * IS the #1481 storm bug (writes a foreign hub); a false "external" only
- * costs an extra hand-off step (the hub-owner artifact instead of an
- * automatic write) — so every ambiguous case resolves to EXTERNAL.
+ * LOCAL only on a CONFIDENT signal:
+ *   - the hub_url host is a loopback alias (`localhost`/`127.0.0.1`/`::1`), OR
+ *   - it EXACTLY case-insensitively matches this machine's hostname, OR
+ *   - it resolves (DNS) to one of this machine's OWN network interfaces
+ *     (`hubHostIsLocalInterface` — the real-FQDN-deployment signal, Sage
+ *     review Important 2).
+ * Every other case — no cached descriptor, an unparseable hub_url, or a host
+ * that is none of the above — is EXTERNAL. The asymmetry is deliberate: a
+ * false "local" IS the #1481 storm bug (writes a foreign hub); a false
+ * "external" only costs an extra hand-off step (the hub-owner artifact instead
+ * of an automatic write) — so every ambiguous case resolves to EXTERNAL.
  */
 export function decideHubLocality(
   hubUrl: string | undefined,
-  localHostname: string,
+  inputs: HubLocalityDeciderInputs,
 ): HubLocality {
   if (hubUrl === undefined || hubUrl.trim() === "") {
     return {
@@ -212,16 +243,21 @@ export function decideHubLocality(
     };
   }
   const lowerHost = host.toLowerCase();
-  const lowerLocal = localHostname.trim().toLowerCase();
-  if (LOCAL_HOST_ALIASES.has(lowerHost) || (lowerLocal.length > 0 && lowerHost === lowerLocal)) {
+  const lowerLocal = inputs.localHostname.trim().toLowerCase();
+  if (
+    LOCAL_HOST_ALIASES.has(lowerHost) ||
+    (lowerLocal.length > 0 && lowerHost === lowerLocal) ||
+    inputs.hubHostIsLocalInterface
+  ) {
     return { kind: "local" };
   }
   return {
     kind: "external",
     hubUrl,
     reason:
-      `network hub_url host "${host}" does not match this machine ` +
-      `(${localHostname.trim().length > 0 ? localHostname : "unknown hostname"}) — refusing to write the local nats config`,
+      `network hub_url host "${host}" is neither a loopback alias, this machine's ` +
+      `hostname (${inputs.localHostname.trim().length > 0 ? inputs.localHostname : "unknown hostname"}), ` +
+      `nor a local network interface — refusing to write the local nats config`,
   };
 }
 
@@ -326,9 +362,16 @@ async function addOrRotate(
   // EXTERNAL path even when the descriptor would otherwise read as local (the
   // explicit "never write this hub" override) — but we still resolve the
   // cached hub_url (a pure local-disk read) so the hub-owner artifact can name
-  // it when known.
+  // it when known. The DNS→local-interface probe (Sage review Important 2) only
+  // runs when there is a cached hub_url to probe — the load-bearing signal for
+  // a hub owner whose own hub is cached as an FQDN.
   const cachedHubUrl = await ports.hubLocality.resolveHubUrl(inputs.networkId);
-  const localityDecision = decideHubLocality(cachedHubUrl, ports.hubLocality.localHostname());
+  const hubHostIsLocalInterface =
+    cachedHubUrl !== undefined ? await ports.hubLocality.hubHostIsLocalInterface(cachedHubUrl) : false;
+  const localityDecision = decideHubLocality(cachedHubUrl, {
+    localHostname: ports.hubLocality.localHostname(),
+    hubHostIsLocalInterface,
+  });
   const locality: HubLocality =
     inputs.sealOnly === true
       ? {
@@ -414,15 +457,7 @@ async function addOrRotate(
     const report = plan(action, inputs, steps, data);
     report.applied = true;
     report.surfaced = { leafUser, psk };
-    if (locality.kind === "external") {
-      report.hubOwnerArtifact = renderHubOwnerArtifact({
-        networkId: inputs.networkId,
-        leafUser,
-        psk,
-        ...(locality.hubUrl !== undefined && { hubUrl: locality.hubUrl }),
-        ...(inputs.hubAccount !== undefined && { account: inputs.hubAccount }),
-      });
-    }
+    attachArtifactIfExternal(report, locality, inputs, leafUser, psk);
     return report;
   }
 
@@ -473,16 +508,32 @@ async function addOrRotate(
 
   const report = plan(action, inputs, steps, data);
   report.applied = true;
-  if (locality.kind === "external") {
-    report.hubOwnerArtifact = renderHubOwnerArtifact({
-      networkId: inputs.networkId,
-      leafUser,
-      psk,
-      ...(locality.hubUrl !== undefined && { hubUrl: locality.hubUrl }),
-      ...(inputs.hubAccount !== undefined && { account: inputs.hubAccount }),
-    });
-  }
+  attachArtifactIfExternal(report, locality, inputs, leafUser, psk);
   return report;
+}
+
+/**
+ * cortex#1481 (Sage review, nit) — attach the hub-owner artifact to `report`
+ * IFF the hub is external. Shared by the oob and sealed delivery tails of
+ * {@link addOrRotate} (the block was verbatim in both). The raw PSK riding the
+ * artifact is one of the two legitimate secret-to-caller channels (the other is
+ * `report.surfaced`); the render layer prints it explicitly, never in steps.
+ */
+function attachArtifactIfExternal(
+  report: SecretReport,
+  locality: HubLocality,
+  inputs: SecretInputs,
+  leafUser: string,
+  psk: string,
+): void {
+  if (locality.kind !== "external") return;
+  report.hubOwnerArtifact = renderHubOwnerArtifact({
+    networkId: inputs.networkId,
+    leafUser,
+    psk,
+    ...(locality.hubUrl !== undefined && { hubUrl: locality.hubUrl }),
+    ...(inputs.hubAccount !== undefined && { account: inputs.hubAccount }),
+  });
 }
 
 async function revokeMember(

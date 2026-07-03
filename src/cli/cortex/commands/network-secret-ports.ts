@@ -67,7 +67,7 @@ export interface SecretCrypto {
  * When the network's actual hub is ANOTHER principal's server, that write
  * lands on the admin's own laptop — never the real hub — so the joiner's leaf
  * presents a PSK the real hub never authorized and Authorization-Violation-
- * storms. (Real incident: the metafactory-community bring-up 2026-07-04 — the
+ * storms. (Real incident: the metafactory-community bring-up 2026-07-03 — the
  * PSK landed on the admin's local nats, never on the hub owner's VM.)
  */
 export interface HubLocalityPort {
@@ -86,6 +86,19 @@ export interface HubLocalityPort {
   resolveHubUrl(networkId: string): Promise<string | undefined>;
   /** This machine's own hostname (`os.hostname()`). Injectable for tests. */
   localHostname(): string;
+  /**
+   * cortex#1481 (Sage review, Important 2) — resolve whether `hubUrl`'s host
+   * points at one of THIS machine's own network interfaces. The load-bearing
+   * signal for a REAL deployment: `network join` caches the hub as an FQDN
+   * (e.g. `tls://nats.meta-factory.dev:7422`) while `os.hostname()` returns a
+   * short name (`macjcf`), so a loopback-alias / exact-hostname match alone
+   * calls the hub-owner's OWN VM external and kills the auto-write path. This
+   * resolves the host via DNS and compares against `os.networkInterfaces()`.
+   * FAIL-SAFE: any DNS/resolution error → `false` (→ EXTERNAL), NEVER throws
+   * (logged via `process.stderr.write`). `false` for an unparseable/absent
+   * host too.
+   */
+  hubHostIsLocalInterface(hubUrl: string): Promise<boolean>;
 }
 
 /** The full port bundle the orchestrator depends on. */

@@ -501,11 +501,13 @@ function fakeSealFactory(
     hubUrl?: string;
     noHubCache?: boolean;
     localHostname?: string;
+    hubHostIsLocalInterface?: boolean;
   } = {},
 ): { factory: SecretPortsFactory; calls: SealCalls } {
   const calls: SealCalls = { reads: 0, writes: 0, reloads: 0, posted: [], minted: [] };
   const hubUrl = opts.noHubCache === true ? undefined : (opts.hubUrl ?? "tls://localhost:7422");
   const localHostname = opts.localHostname ?? "localhost";
+  const hubHostIsLocalInterface = opts.hubHostIsLocalInterface ?? false;
   const ports: NetworkSecretPorts = {
     hub: {
       confPath: "/fake/hub.conf",
@@ -529,6 +531,7 @@ function fakeSealFactory(
     hubLocality: {
       resolveHubUrl: async () => hubUrl,
       localHostname: () => localHostname,
+      hubHostIsLocalInterface: async () => hubHostIsLocalInterface,
     },
   };
   return { factory: () => ports, calls };

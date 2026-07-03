@@ -341,4 +341,55 @@ describe("buildLiveHubLocalityPort (via buildLiveSecretPorts)", () => {
     expect(typeof ports.hubLocality.localHostname()).toBe("string");
     expect(ports.hubLocality.localHostname().length).toBeGreaterThan(0);
   });
+
+  // Sage review Important 2 — the DNS→local-interface probe, with injected fake
+  // resolver + interface lister (no real DNS / NIC read).
+  function portsWith(opts: {
+    resolveHostAddresses: (host: string) => Promise<string[]>;
+    localInterfaceAddresses: () => string[];
+  }) {
+    return buildLiveSecretPorts({
+      hubConfigPath: hubConf,
+      registryUrl: "http://127.0.0.1:0",
+      material: material(),
+      networkCache: new NetworkCache({ cacheDir: mkdtempSync(join(tmp, "netcache-iface-")) }),
+      hostname: () => "macjcf",
+      resolveHostAddresses: opts.resolveHostAddresses,
+      localInterfaceAddresses: opts.localInterfaceAddresses,
+    });
+  }
+
+  test("hubHostIsLocalInterface → true when the hub FQDN resolves to a local NIC address", async () => {
+    const ports = portsWith({
+      resolveHostAddresses: async () => ["203.0.113.7", "192.168.1.42"],
+      localInterfaceAddresses: () => ["127.0.0.1", "192.168.1.42", "::1"],
+    });
+    await expect(ports.hubLocality.hubHostIsLocalInterface("tls://nats.meta-factory.dev:7422")).resolves.toBe(true);
+  });
+
+  test("hubHostIsLocalInterface → false when the hub FQDN resolves to a NON-local address", async () => {
+    const ports = portsWith({
+      resolveHostAddresses: async () => ["203.0.113.7"],
+      localInterfaceAddresses: () => ["127.0.0.1", "192.168.1.42"],
+    });
+    await expect(ports.hubLocality.hubHostIsLocalInterface("tls://nats.meta-factory.dev:7422")).resolves.toBe(false);
+  });
+
+  test("hubHostIsLocalInterface → false (fail-safe) when DNS resolution throws, never rethrows", async () => {
+    const ports = portsWith({
+      resolveHostAddresses: async () => { throw new Error("ENOTFOUND (fake)"); },
+      localInterfaceAddresses: () => ["127.0.0.1"],
+    });
+    await expect(ports.hubLocality.hubHostIsLocalInterface("tls://nats.meta-factory.dev:7422")).resolves.toBe(false);
+  });
+
+  test("hubHostIsLocalInterface → false for an unparseable hub_url (never calls the resolver)", async () => {
+    let resolverCalled = false;
+    const ports = portsWith({
+      resolveHostAddresses: async () => { resolverCalled = true; return []; },
+      localInterfaceAddresses: () => ["127.0.0.1"],
+    });
+    await expect(ports.hubLocality.hubHostIsLocalInterface("not a url :::")).resolves.toBe(false);
+    expect(resolverCalled).toBe(false);
+  });
 });

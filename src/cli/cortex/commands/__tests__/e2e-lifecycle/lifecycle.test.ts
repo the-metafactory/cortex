@@ -322,12 +322,17 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
     );
     // Real admission/delivery/crypto ports (against the in-process registry via
     // the routed fetch), with ONLY the hub-reload port swapped for the recorder.
+    // cortex#1481 (Sage Important 2) — the loopback hub_url alias already drives
+    // the LOCAL decision, but inject no-op DNS/interface resolvers so the gate's
+    // interface probe stays fully hermetic (no real DNS lookup of "localhost").
     const live = buildLiveSecretPorts({
       hubConfigPath: "<unused — hub port overridden below>",
       registryUrl: REGISTRY_BASE,
       material: ctx.adminMaterial,
       fetchImpl: globalThis.fetch,
       networkCache,
+      resolveHostAddresses: async () => [],
+      localInterfaceAddresses: () => [],
     });
     ctx.secretPorts = { ...live, hub: ctx.hub };
 
