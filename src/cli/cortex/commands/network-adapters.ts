@@ -56,6 +56,7 @@ import {
 } from "../../../common/nats/nats-service-manager";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import { NetworkCache } from "../../../common/registry/network-cache";
+import { backupConfigFile } from "../../../common/nats/config-backup";
 import {
   findCortexDaemonDescriptor,
   type DaemonLocatorIO,
@@ -546,6 +547,12 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       // (e.g. 022 → 0644) would otherwise leave it world-readable. 0600 is the
       // correct floor even for a creds-path-only leaf (defence in depth).
       const leafPath = join(dir, leafIncludeFileName(inputs.descriptor.network_id));
+      // cortex#1483 (join-4) — a same-directory, timestamped `.bak` sidecar of
+      // whatever was there BEFORE this write (a re-join overwriting a prior
+      // working leaf include). No-op when the file is new. In ADDITION to (not
+      // instead of) the in-process snapshot/restore (#821) — a .bak survives the
+      // process exiting, giving a hand-recovery path even outside a `join` retry.
+      backupConfigFile(leafPath, "join");
       writeFileSync(leafPath, content, { mode: 0o600 });
       chmodSync(leafPath, 0o600);
     },
@@ -566,6 +573,8 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       const next = ensureLeafInclude(current, networkId);
       if (next === current) return; // byte-stable no-op.
       mkdirSync(dirname(configPath), { recursive: true });
+      // cortex#1483 (join-4) — .bak the base config BEFORE the directive write.
+      backupConfigFile(configPath, "join");
       writeFileSync(configPath, next, "utf-8");
     },
     removeInclude(networkId) {
@@ -576,6 +585,8 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       const current = readFileSync(configPath, "utf-8");
       const next = removeLeafInclude(current, networkId);
       if (next === current) return; // no-op.
+      // cortex#1483 (join-4) — .bak the base config BEFORE the directive removal.
+      backupConfigFile(configPath, "leave");
       writeFileSync(configPath, next, "utf-8");
     },
     list() {
@@ -625,6 +636,9 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       // inert — it surfaces the decision in the step log without touching disk.
       if (result.status === "converted" && mutate) {
         mkdirSync(dirname(configPath), { recursive: true });
+        // cortex#1483 (join-4) — .bak whatever was there before the conversion
+        // (a no-op when the config is new — nothing to back up).
+        backupConfigFile(configPath, "join");
         // Security-review MAJOR (#1058) — ATOMIC write (tmp + rename). A
         // non-atomic writeFileSync truncated by a SIGKILL/OOM mid-write would
         // leave corrupt HOCON that crashes nats-server on its next restart →

@@ -53,6 +53,26 @@ import {
   type OperatorModeLeafPackage,
 } from "../../../../common/nats/leaf-remote-renderer";
 import { nkeyToBase64Pubkey } from "../../../../common/registry/encoding";
+import {
+  DEFAULT_SETTLE_MAX_ATTEMPTS,
+  type ClockPort,
+  type SettleWindowOptions,
+} from "../../../../common/nats/restart-with-settle";
+
+/**
+ * cortex#1483 (join-4) — a `ClockPort` whose `sleep` resolves IMMEDIATELY
+ * (no real `setTimeout`), so a multi-attempt settle window never actually
+ * waits in tests. Records every requested delay so a test can assert the
+ * backoff SCHEDULE without ever paying its wall-clock cost.
+ */
+function instantClock(delays: number[] = []): ClockPort {
+  return {
+    sleep: (ms) => {
+      delays.push(ms);
+      return Promise.resolve();
+    },
+  };
+}
 
 // O-3 (cortex#1053) — a public-repo-safe fake leaf package: the operator-mode
 // material `cortex network join` renders to convert an anonymous bus. O-4
@@ -212,6 +232,18 @@ function makeFakes(opts: {
   restartThrows?: boolean;
   /** #821 item-2 — make natsServer.validateConfig() THROW synchronously (spawn ENOENT). */
   validateThrows?: boolean;
+  /**
+   * cortex#1483 (join-4) — model a SLOW-BUT-HEALTHY bus within the INITIAL
+   * restart's settle window: unhealthy on attempts `< N`, healthy from
+   * attempt `N` onward. Takes precedence over `natsHealthy` when set.
+   */
+  natsHealthyAfterAttempt?: number;
+  /** cortex#1483 (join-4) — the same, but for the RECOVERY restart's settle window. */
+  recoveryHealthyAfterAttempt?: number;
+  /** cortex#1483 (join-4) — settle-window tuning threaded onto `ports.settle`. */
+  settle?: SettleWindowOptions;
+  /** cortex#1483 (join-4) — clock threaded onto `ports.clock`. Default: an instant fake (never really sleeps). */
+  clock?: ClockPort;
 }): { ports: NetworkPorts; rec: Recorder; storeRef: { networks: PolicyFederatedNetwork[] } } {
   const rec: Recorder = {
     registered: 0,
@@ -429,6 +461,12 @@ function makeFakes(opts: {
     },
   };
 
+  // cortex#1483 (join-4) — per-restart-phase attempt counter (keyed by
+  // `rec.natsRestarts` at call time), so `natsHealthyAfterAttempt`/
+  // `recoveryHealthyAfterAttempt` can model "healthy starting from the Nth
+  // poll WITHIN this phase" independent of the total probe count.
+  const phaseAttempts: Record<number, number> = {};
+
   const natsServer: NatsServerPort = {
     async validateConfig() {
       rec.validateConfigs++;
@@ -470,12 +508,28 @@ function makeFakes(opts: {
       // #821 — health is modelled PER PROBE so a test can make the FIRST restart
       // come up down (triggering rollback) and the RECOVERY restart ALSO come up
       // down (the BLOCKER case: a recovery that exits 0 but leaves the bus DOWN
-      // must still report failure, never "restored"). The first probe follows the
-      // first restart; the second probe follows the recovery restart.
-      const isRecoveryProbe = rec.healthProbes > 1;
-      const healthy = isRecoveryProbe
-        ? opts.recoveryHealthy ?? true
-        : opts.natsHealthy ?? true;
+      // must still report failure, never "restored").
+      //
+      // cortex#1483 (join-4) — the PHASE (initial vs recovery) is keyed off
+      // `rec.natsRestarts` (how many restart() calls have happened), NOT off
+      // `rec.healthProbes`: the settle window now probes MULTIPLE times WITHIN
+      // a single restart phase, so a probe-count check would flip to "recovery"
+      // mid-way through the initial phase's own retries. `natsRestarts` only
+      // advances on an actual restart() call, so it stays phase-correct
+      // regardless of how many settle attempts run in between.
+      const phase = rec.natsRestarts;
+      const isRecoveryProbe = phase > 1;
+      phaseAttempts[phase] = (phaseAttempts[phase] ?? 0) + 1;
+      const attemptInPhase = phaseAttempts[phase];
+      const healthyAfter = isRecoveryProbe
+        ? opts.recoveryHealthyAfterAttempt
+        : opts.natsHealthyAfterAttempt;
+      const healthy =
+        healthyAfter !== undefined
+          ? attemptInPhase >= healthyAfter
+          : isRecoveryProbe
+            ? opts.recoveryHealthy ?? true
+            : opts.natsHealthy ?? true;
       return healthy
         ? { healthy: true }
         : {
@@ -507,6 +561,13 @@ function makeFakes(opts: {
       ...(opts.admission !== undefined
         ? { admission: makeAdmissionStatePort(opts.admission) }
         : {}),
+      // cortex#1483 (join-4) — settle-window tuning (undefined ⇒
+      // probeHealthWithSettle's own sane defaults). ALWAYS wire an instant
+      // clock so a multi-attempt settle window never actually sleeps in tests
+      // — this is the ONLY thing that keeps a `natsHealthy: false` scenario
+      // (which now polls up to the full settle window) fast.
+      ...(opts.settle !== undefined ? { settle: opts.settle } : {}),
+      clock: opts.clock ?? instantClock(),
     },
     rec,
     storeRef,
@@ -1024,7 +1085,11 @@ describe("join", () => {
       // Rollback ran and the recovery restart was issued + HEALTH-PROBED.
       expect(rec.restores).toEqual(["metafactory"]);
       expect(rec.natsRestarts).toBe(2);
-      expect(rec.healthProbes).toBe(2); // BOTH restarts probed (the fix)
+      // cortex#1483 (join-4) — BOTH restarts are now polled across the FULL
+      // settle window (both phases stay unhealthy the whole time), not probed
+      // once each: DEFAULT_SETTLE_MAX_ATTEMPTS attempts for the initial restart
+      // + DEFAULT_SETTLE_MAX_ATTEMPTS for the recovery restart.
+      expect(rec.healthProbes).toBe(DEFAULT_SETTLE_MAX_ATTEMPTS * 2);
       // It must NOT claim the bus was restored — the recovery is down too.
       expect(res.reason).not.toContain("restored to prior state");
       expect(res.warnings?.some((w) => w.includes("restored to prior state"))).toBe(
@@ -1140,11 +1205,81 @@ describe("join", () => {
       const res = await joinNetwork("metafactory", LOCAL, ports);
 
       expect(res.ok).toBe(false); // the JOIN still failed (the leaf was bad)...
-      expect(rec.healthProbes).toBe(2);
+      // cortex#1483 (join-4) — the initial restart exhausts the FULL settle
+      // window (always unhealthy); the recovery restart is healthy on its
+      // FIRST probe (recoveryHealthy defaults true), so it needs just 1 more.
+      expect(rec.healthProbes).toBe(DEFAULT_SETTLE_MAX_ATTEMPTS + 1);
       // ...but the bus WAS restored — only then may we say so.
       expect(res.warnings?.some((w) => w.includes("restored to prior state"))).toBe(
         true,
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // cortex#1483 (join-4, epic #1479) — the settle-window: retry/backoff before
+  // the health verdict, so a slow-but-healthy bus is never mistaken for a
+  // genuinely down one (the #1476 gap-2 false alarm this slice closes).
+  // ---------------------------------------------------------------------------
+  describe("cortex#1483 settle-window retry/backoff", () => {
+    test("valid config + slow-but-healthy bus (healthy on the 3rd poll) → NO false 'bus DOWN', no rollback", async () => {
+      const { ports, rec } = makeFakes({
+        busType: "operator-mode",
+        natsHealthyAfterAttempt: 3,
+      });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+
+      expect(res.ok).toBe(true);
+      // A single restart — settling to healthy never triggers a rollback.
+      expect(rec.natsRestarts).toBe(1);
+      expect(rec.restores).toEqual([]);
+      expect(rec.healthProbes).toBe(3);
+      expect(res.steps.some((s) => s.includes("verified healthy"))).toBe(true);
+    });
+
+    test("genuinely unhealthy across the WHOLE settle window → auto-rollback (custom small window)", async () => {
+      // A small, explicit settle window keeps this test's expected numbers
+      // self-evident rather than coupled to the production default.
+      const { ports, rec } = makeFakes({
+        busType: "operator-mode",
+        natsHealthy: false,
+        settle: { maxAttempts: 3, initialDelayMs: 1 },
+      });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toContain("3 health check(s)");
+      // Exactly the configured maxAttempts — never more, never less.
+      expect(rec.healthProbes).toBe(3 + 1); // 3 initial (all unhealthy) + 1 recovery (healthy by default)
+      expect(rec.restores).toEqual(["metafactory"]);
+      expect(rec.natsRestarts).toBe(2);
+    });
+
+    test("settle window backoff schedule: exponential delays, capped, one fewer sleep than attempts", async () => {
+      const delays: number[] = [];
+      const { ports } = makeFakes({
+        busType: "operator-mode",
+        natsHealthy: false,
+        recoveryHealthy: false,
+        settle: { maxAttempts: 4, initialDelayMs: 100, backoffMultiplier: 2, maxDelayMs: 250 },
+        clock: instantClock(delays),
+      });
+      await joinNetwork("metafactory", LOCAL, ports);
+
+      // Both restart phases run the SAME 4-attempt window: 3 sleeps each phase
+      // (never sleeps after the LAST attempt) — 100, 200, 250(capped) per phase.
+      expect(delays).toEqual([100, 200, 250, 100, 200, 250]);
+    });
+
+    test("monitor-not-configured (INCONCLUSIVE→healthy, #831) settles on the FIRST attempt — no needless polling", async () => {
+      // The real adapter's #831 rule (an unconfigured monitor reads healthy) is
+      // adapter-level and untouched by this slice; this test locks in that the
+      // settle window respects it: a probe healthy on attempt 1 stops the loop
+      // immediately, never wasting the rest of the window.
+      const { ports, rec } = makeFakes({ busType: "operator-mode" }); // natsHealthy defaults true
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+      expect(res.ok).toBe(true);
+      expect(rec.healthProbes).toBe(1);
     });
   });
 

@@ -9,20 +9,21 @@
  * tree + JWT come from arc (ADR-0013 Model B invariant).
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync, mkdirSync, renameSync, rmSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
 
 import { parseDocument } from "yaml";
 
 import { expandTilde } from "../../../common/config/loader";
-import { renderOperatorModeBlocks, renderBaseIsolatedConfig } from "../../../common/nats/leaf-remote-renderer";
+import { renderOperatorModeBlocks, renderBaseIsolatedConfig, natsConfigMonitorUrl } from "../../../common/nats/leaf-remote-renderer";
 import {
   selectNatsServiceManager,
   currentServicePlatform,
   bunExecRunner,
   type ServicePlatform,
 } from "../../../common/nats/nats-service-manager";
+import { backupConfigFile } from "../../../common/nats/config-backup";
 import {
   findCortexDaemonDescriptor,
   parsePlistProgramArguments,
@@ -30,6 +31,7 @@ import {
   configArgValue,
   type DaemonLocatorIO,
 } from "./daemon-locator";
+import { DEFAULT_MONITOR_URL, DEFAULT_HEALTH_PROBE_TIMEOUT_MS } from "./network-adapters";
 import type {
   CredsMintPort,
   AccountExportPort,
@@ -37,6 +39,8 @@ import type {
   ServiceRestartPort,
   MakeLiveConfigWritePort,
   MakeLivePorts,
+  NatsCanaryPort,
+  NatsConfigSnapshot,
 } from "./network-make-live-lib";
 
 // =============================================================================
@@ -224,8 +228,10 @@ export function buildResolverPreloadAdapter(): ResolverPreloadPort {
         if (next === null) {
           return { ok: false, reason: `could not locate a resolver_preload { … } block in ${abs}` };
         }
-        // Back up before the in-place edit (timestamped — the rollback artefact).
-        copyFileSync(abs, `${abs}.bak-makelive-${Date.now().toString()}`);
+        // cortex#1483 (join-4) — back up before the in-place edit (timestamped —
+        // the rollback artefact), via the ONE shared .bak helper so this and the
+        // bootstrap write below never drift on naming.
+        backupConfigFile(abs, "makelive");
         writeFileSync(abs, next, "utf-8");
         return { ok: true, changed: true };
       } catch (err) {
@@ -285,7 +291,7 @@ export function buildResolverPreloadAdapter(): ResolverPreloadPort {
         // freshly-synthesised config has nothing to back up. Ensure the parent dir
         // exists, then write in place.
         if (fileExists) {
-          copyFileSync(abs, `${abs}.bak-makelive-${Date.now().toString()}`);
+          backupConfigFile(abs, "makelive");
         } else {
           mkdirSync(dirname(abs), { recursive: true });
         }
@@ -461,6 +467,106 @@ export function buildMakeLiveConfigWriteAdapter(mutate: boolean): MakeLiveConfig
   };
 }
 
+// =============================================================================
+// Canary adapter (cortex#1483, join-4) — validate/snapshot/health/rollback
+// around the nats-server restart. Mirrors network-adapters.ts's
+// buildNatsServerPort (validateConfig via `nats-server -t`, isHealthy via the
+// config's own /healthz monitor) + the #821 leaf-state snapshot/restore
+// pattern, adapted to make-live's single nats config file (no per-network leaf
+// include — the whole config IS the mutation target here).
+// =============================================================================
+
+/** Live {@link NatsCanaryPort}. `nats-server -t` gate, snapshot/restore, /healthz probe. */
+export function buildNatsCanaryAdapter(mutate: boolean, healthProbeTimeoutMs?: number): NatsCanaryPort {
+  return {
+    async validateConfig(natsConfigPath) {
+      // #821 MAJOR-1 parity — cheap pre-restart syntax gate. Dry-run is inert.
+      if (!mutate) return { ok: true };
+      const abs = expandTilde(natsConfigPath);
+      let result: { code: number; stderr: string };
+      try {
+        result = await bunExecRunner(["nats-server", "-c", abs, "-t"]);
+      } catch (err) {
+        // Missing binary (ENOENT) → SKIP the gate, don't block make-live on a
+        // machine where the test tool isn't installed (mirrors network-adapters.ts).
+        process.stderr.write(
+          `make-live: skipping nats-server -t gate (could not run nats-server: ${err instanceof Error ? err.message : String(err)})\n`,
+        );
+        return { ok: true };
+      }
+      if (result.code !== 0) {
+        return {
+          ok: false,
+          reason: `nats-server -c ${abs} -t exited ${result.code.toString()}: ${result.stderr.trim()}`,
+        };
+      }
+      return { ok: true };
+    },
+    snapshot(natsConfigPath) {
+      const abs = expandTilde(natsConfigPath);
+      return {
+        natsConfigPath: abs,
+        contents: existsSync(abs) ? readFileSync(abs, "utf-8") : undefined,
+      };
+    },
+    restore(snapshot: NatsConfigSnapshot) {
+      if (!mutate) return;
+      const { natsConfigPath, contents } = snapshot;
+      if (contents === undefined) {
+        // The config did not exist pre-mutation (the from-scratch bootstrap
+        // path) — remove what make-live wrote so a retry starts clean.
+        rmSync(natsConfigPath, { force: true });
+        return;
+      }
+      // Atomic write (temp + rename) — a crash mid-rollback must never corrupt
+      // the very config it is trying to restore (mirrors network-adapters.ts's
+      // O-3 atomicWriteFileSync).
+      const tmp = `${natsConfigPath}.tmp-canary-restore-${process.pid.toString()}`;
+      writeFileSync(tmp, contents, "utf-8");
+      renameSync(tmp, natsConfigPath);
+    },
+    async isHealthy(natsConfigPath) {
+      if (!mutate) return { healthy: true };
+      const abs = expandTilde(natsConfigPath);
+      // Same precedence as network-adapters.ts's resolveMonitorBase: derive from
+      // the config's own http_port/monitor_port/http; fall back to the upstream
+      // default. #831 parity — no monitor declared ⇒ INCONCLUSIVE (healthy), a
+      // configured-but-down monitor still reports unhealthy.
+      let configured = false;
+      let base = DEFAULT_MONITOR_URL;
+      if (existsSync(abs)) {
+        const derived = natsConfigMonitorUrl(readFileSync(abs, "utf-8"));
+        if (derived !== undefined) {
+          base = derived;
+          configured = true;
+        }
+      }
+      if (!configured) return { healthy: true };
+      const timeoutMs = healthProbeTimeoutMs ?? DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
+      try {
+        const res = await fetch(`${base.replace(/\/+$/, "")}/healthz`, {
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) {
+          return {
+            healthy: false,
+            reason: `nats-server monitor ${base}/healthz returned HTTP ${res.status.toString()}`,
+          };
+        }
+        return { healthy: true };
+      } catch (err) {
+        const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+        return {
+          healthy: false,
+          reason: isTimeout
+            ? `nats-server monitor ${base}/healthz timed out after ${timeoutMs.toString()}ms (accepted the connection but never responded — bus hung)`
+            : `nats-server monitor ${base} unreachable: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    },
+  };
+}
+
 /** Build the live {@link MakeLivePorts} bundle for a real `--apply` run. */
 export function buildLiveMakeLivePorts(mutate: boolean): MakeLivePorts {
   return {
@@ -469,5 +575,6 @@ export function buildLiveMakeLivePorts(mutate: boolean): MakeLivePorts {
     resolver: buildResolverPreloadAdapter(),
     restart: buildServiceRestartAdapter(mutate),
     configWrite: buildMakeLiveConfigWriteAdapter(mutate),
+    natsCanary: buildNatsCanaryAdapter(mutate),
   };
 }

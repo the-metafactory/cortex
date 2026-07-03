@@ -45,6 +45,7 @@ import {
 } from "../../../common/types/cortex-config";
 import type { NetworkRosterResult } from "../../../common/registry/types";
 import { pskFingerprint } from "../../../common/nats/leaf-psk";
+import { probeHealthWithSettle, realClock } from "../../../common/nats/restart-with-settle";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { buildRosterPeers } from "../../../bus/agent-network/roster-read";
 import {
@@ -823,11 +824,25 @@ export async function joinNetwork(
       try {
         const r = await natsServer.restart();
         if (!r.ok) return { ok: false, reason: r.reason };
-        const health = await natsServer.isHealthy();
-        if (!health.healthy) {
+        // cortex#1483 (join-4) — a SETTLE WINDOW, not a single immediate probe.
+        // `launchctl kickstart`/`systemctl restart` returning does not mean
+        // nats-server has rebound its HTTP monitor port yet; a lone probe here
+        // races that startup window and reads a HEALTHY bus as DOWN (the exact
+        // #1476 gap-2 false alarm: "bus may be DOWN, intervene manually" on a
+        // perfectly healthy bus). Poll with backoff — a slow-but-healthy bus is
+        // never mistaken for a genuinely down one; only exhausting the whole
+        // window without a healthy result is a real failure.
+        const settled = await probeHealthWithSettle(
+          () => natsServer.isHealthy(),
+          ports.settle,
+          ports.clock ?? realClock,
+        );
+        if (!settled.healthy) {
           return {
             ok: false,
-            reason: `nats-server did not come back up after restart (${health.reason})`,
+            reason:
+              `nats-server did not come back up after restart across ${settled.attempts.toString()} ` +
+              `health check(s) over the settle window (${settled.reason ?? "unknown"})`,
           };
         }
         return { ok: true };

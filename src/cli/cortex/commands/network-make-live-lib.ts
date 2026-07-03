@@ -56,6 +56,12 @@
  */
 
 import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/nats/leaf-remote-renderer";
+import {
+  probeHealthWithSettle,
+  realClock,
+  type ClockPort,
+  type SettleWindowOptions,
+} from "../../../common/nats/restart-with-settle";
 
 // =============================================================================
 // Ports
@@ -164,6 +170,47 @@ export interface MakeLiveConfigWritePort {
     | { ok: false; reason: string };
 }
 
+/**
+ * cortex#1483 (join-4) — a snapshot of `natsConfigPath`'s bytes (or absence),
+ * taken BEFORE the resolver/bootstrap mutation, so a restart that leaves the
+ * bus unhealthy can be rolled back to EXACTLY the pre-make-live state.
+ */
+export interface NatsConfigSnapshot {
+  natsConfigPath: string;
+  /** The prior file contents, or `undefined` if the file did not exist. */
+  contents: string | undefined;
+}
+
+/**
+ * cortex#1483 (join-4, epic #1479) — the CANARY safety port wrapping
+ * make-live's nats-server restart: validate-before-reload, snapshot-before-
+ * mutate, health-verify-after-restart (via {@link probeHealthWithSettle}),
+ * restore-on-genuine-failure. Kills two bugs: a hand-edit or a bad canary
+ * render taking a live public stack down with no recovery, and a restart
+ * whose success was trusted by EXIT CODE alone (`launchctl kickstart`/
+ * `systemctl restart` returning 0 while nats-server then crashes on the new
+ * config at runtime).
+ *
+ * OPTIONAL on {@link MakeLivePorts}: absent ⇒ the pre-#1483 behaviour
+ * (`restartNats`'s exit code trusted as-is, no validate/snapshot/rollback) —
+ * kept for callers/tests that predate this slice.
+ */
+export interface NatsCanaryPort {
+  /**
+   * `nats-server -c <natsConfigPath> -t` — the syntax gate. Reload the
+   * resolver/bootstrap change onto the live bus ONLY when this passes. A
+   * missing `nats-server` binary is SKIPPED (returns ok) rather than blocking
+   * make-live on a machine where the test tool isn't installed.
+   */
+  validateConfig(natsConfigPath: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** Pure READ: capture `natsConfigPath`'s current bytes (or absence). Taken BEFORE any mutation. */
+  snapshot(natsConfigPath: string): NatsConfigSnapshot;
+  /** Restore `natsConfigPath` to exactly the snapshotted bytes (or delete it if it did not exist). */
+  restore(snapshot: NatsConfigSnapshot): void;
+  /** A single post-restart health probe (e.g. the config's own monitor `/healthz`). */
+  isHealthy(natsConfigPath: string): Promise<{ healthy: true } | { healthy: false; reason: string }>;
+}
+
 export interface MakeLivePorts {
   creds: CredsMintPort;
   accountExport: AccountExportPort;
@@ -175,6 +222,23 @@ export interface MakeLivePorts {
    * predate it; only `deriveMakeLiveInputs` + `buildLiveMakeLivePorts` supply it).
    */
   configWrite?: MakeLiveConfigWritePort;
+  /**
+   * cortex#1483 (join-4) — OPTIONAL: the canary safety wrapper around the nats
+   * restart (validate/snapshot/health/rollback). Absent ⇒ pre-#1483 behaviour.
+   */
+  natsCanary?: NatsCanaryPort;
+  /**
+   * cortex#1483 (join-4) — settle-window tuning for the post-restart health
+   * verdict (see {@link probeHealthWithSettle}). Only consulted when
+   * {@link MakeLivePorts.natsCanary} is wired. Absent ⇒
+   * {@link probeHealthWithSettle}'s own sane defaults.
+   */
+  settle?: SettleWindowOptions;
+  /**
+   * cortex#1483 (join-4) — injectable wall-clock wait for the settle-window
+   * backoff delays. Absent ⇒ the real `setTimeout`-backed clock.
+   */
+  clock?: ClockPort;
 }
 
 // =============================================================================
@@ -446,6 +510,16 @@ export async function makeLiveStack(
   // post-hoc record shows exactly which services were restarted).
   const steps: string[] = [...targetLines];
 
+  // cortex#1483 (join-4) — CANARY safety: snapshot the nats config BEFORE any
+  // mutation (bootstrap/resolver) so a restart that leaves the bus unhealthy
+  // can be rolled back to EXACTLY the pre-make-live bytes. A pure READ, taken
+  // only when a nats restart will actually happen AND a canary port is wired
+  // (opt-in — absent ⇒ pre-#1483 behaviour, no snapshot/validate/rollback).
+  const natsSnapshot =
+    natsRestartNeeded && ports.natsCanary !== undefined
+      ? ports.natsCanary.snapshot(inputs.natsConfigPath)
+      : undefined;
+
   // 0. (cortex#1265) Bootstrap the operator-mode skeleton when the bus has no
   //    resolver_preload yet — renders operator + resolver: MEMORY + the federation
   //    account, KEEPING the bus's own server_name/listen/http. The agents account
@@ -518,9 +592,92 @@ export async function makeLiveStack(
   //    `--force`): a `--force` re-mint over an already-present account must not
   //    hard-restart a (potentially shared) nats-server for a no-op resolver.
   if (resolverChanged) {
-    const r = await ports.restart.restartNats(inputs.natsConfigPath);
-    if (!r.ok) return fail(plan, steps, `nats-server restart failed: ${r.reason}`);
-    steps.push(`nats-server restarted (loaded ${inputs.agentsAccountName} into MEMORY resolver)`);
+    const canary = ports.natsCanary;
+
+    // cortex#1483 (join-4) — VALIDATE-BEFORE-RELOAD: `nats-server -c <conf> -t`.
+    // Reload the resolver/bootstrap change onto the LIVE bus ONLY when it
+    // validates. Never-throws contract: validateConfig ultimately shells out
+    // (Bun.spawn throws synchronously on ENOENT), so guard the call.
+    if (canary !== undefined) {
+      let validated: { ok: true } | { ok: false; reason: string };
+      try {
+        validated = await canary.validateConfig(inputs.natsConfigPath);
+      } catch (err) {
+        validated = {
+          ok: false,
+          reason: `nats-server config validation could not run: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      if (!validated.ok) {
+        if (natsSnapshot !== undefined) canary.restore(natsSnapshot);
+        return fail(
+          plan,
+          steps,
+          `nats-server config validation (-t) failed before restart, refusing to restart ` +
+            `(reverted the resolver_preload/bootstrap write): ${validated.reason}`,
+        );
+      }
+    }
+
+    // cortex#1483 (join-4) — restart, then a SETTLE-WINDOW health verdict (not a
+    // single immediate probe — see restart-with-settle.ts for why). Absent a
+    // canary port, the restart's exit code is trusted as-is (pre-#1483).
+    const restartAndProbe = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+      try {
+        const r = await ports.restart.restartNats(inputs.natsConfigPath);
+        if (!r.ok) return r;
+        if (canary === undefined) return { ok: true };
+        const settled = await probeHealthWithSettle(
+          () => canary.isHealthy(inputs.natsConfigPath),
+          ports.settle,
+          ports.clock ?? realClock,
+        );
+        if (!settled.healthy) {
+          return {
+            ok: false,
+            reason:
+              `nats-server did not come back up after restart across ${settled.attempts.toString()} ` +
+              `health check(s) over the settle window (${settled.reason ?? "unknown"})`,
+          };
+        }
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `nats-server restart/probe could not run: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    };
+
+    const initial = await restartAndProbe();
+    if (!initial.ok) {
+      // cortex#1483 (join-4) — AUTO-ROLLBACK: restore the pre-mutation snapshot
+      // and re-restart, health-probing the RECOVERY restart too (never trust its
+      // exit code alone — a recovery that exits 0 but leaves the bus down must
+      // still report failure, mirroring join's #821 rollback).
+      let rollbackNote: string;
+      if (natsSnapshot !== undefined && canary !== undefined) {
+        try {
+          canary.restore(natsSnapshot);
+          const recovery = await restartAndProbe();
+          rollbackNote = recovery.ok
+            ? "rolled back nats config + restarted (bus restored to prior state, verified healthy)"
+            : `rolled back nats config but the recovery restart did NOT bring the bus back up (${recovery.reason}) — bus may be DOWN, intervene manually`;
+        } catch (err) {
+          rollbackNote = `rollback FAILED (${err instanceof Error ? err.message : String(err)}) — bus may be DOWN, intervene manually`;
+        }
+      } else {
+        rollbackNote =
+          "no canary snapshot available (natsCanary port not wired) — could not roll back " +
+          "automatically; bus may be DOWN, intervene manually";
+      }
+      steps.push(`WARN: ${rollbackNote}`);
+      return fail(plan, steps, `nats-server restart failed (${initial.reason}); ${rollbackNote}`);
+    }
+    steps.push(
+      `nats-server restarted (loaded ${inputs.agentsAccountName} into MEMORY resolver` +
+        `${canary !== undefined ? ", verified healthy" : ""})`,
+    );
   }
 
   // 3. Mint the daemon's bus creds under the agents account (server now knows it).

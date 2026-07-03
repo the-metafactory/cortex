@@ -40,6 +40,7 @@ import type {
   StackLeafBinding,
 } from "../../../common/nats/leaf-remote-renderer";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
+import type { ClockPort, SettleWindowOptions } from "../../../common/nats/restart-with-settle";
 
 // =============================================================================
 // Trust-boundary type — only a VERIFIED descriptor flows into the renderer.
@@ -534,4 +535,20 @@ export interface NetworkPorts {
    * join. Default: `false` (dry-run safe). Live ports set this to `true`.
    */
   apply?: boolean;
+  /**
+   * cortex#1483 (join-4) — the settle-window RETRY/BACKOFF tuning for the
+   * post-restart health verdict (see {@link probeHealthWithSettle}). Absent ⇒
+   * {@link probeHealthWithSettle}'s own sane defaults (5 attempts, 500ms→4s
+   * exponential backoff) — a single immediate probe (the pre-#1483 behaviour,
+   * and the exact #1476 gap-2 false-alarm) is no longer the default anywhere a
+   * `natsServer` port is wired. Tests inject small values so they run fast
+   * without depending on {@link NetworkPorts.clock}.
+   */
+  settle?: SettleWindowOptions;
+  /**
+   * cortex#1483 (join-4) — injectable wall-clock wait for the settle-window
+   * backoff delays. Absent ⇒ the real `setTimeout`-backed clock. Tests inject
+   * an instant clock so a multi-attempt settle window never actually sleeps.
+   */
+  clock?: ClockPort;
 }

@@ -208,6 +208,35 @@ describe("#754 live leaf-include wiring", () => {
     expect(after).toContain("system_account: ADSYSACCOUNT");
   });
 
+  test("cortex#1483 (join-4): ensureInclude writes a timestamped .bak of the PRIOR local.conf before mutating", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const original = bareLocalConf();
+    writeFileSync(conf, original, "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.ensureInclude("metafactory");
+
+    const baks = readdirSync(dir).filter((f) => f.startsWith("local.conf.bak-join-"));
+    expect(baks.length).toBe(1);
+    expect(readFileSync(join(dir, baks[0]!), "utf-8")).toBe(original);
+    // The live file carries the NEW content, not the backed-up original.
+    expect(readFileSync(conf, "utf-8")).toContain('include "leafnodes-metafactory.conf"');
+  });
+
+  test("cortex#1483 (join-4): a byte-stable ensureInclude re-run writes NO extra .bak (no-op, nothing to protect)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.ensureInclude("metafactory"); // mutates → 1 backup
+    ports.leafFile.ensureInclude("metafactory"); // idempotent no-op → no 2nd backup
+
+    const baks = readdirSync(dir).filter((f) => f.startsWith("local.conf.bak-join-"));
+    expect(baks.length).toBe(1);
+  });
+
   test("ensureInclude is idempotent + byte-stable on the live file", () => {
     const dir = freshDir();
     const conf = join(dir, "local.conf");
@@ -317,6 +346,21 @@ describe("O-3 live convertToOperatorMode — round-trip a real temp nats config"
     expect(after).toContain("domain: community-andreas");
     // NO leaf include — join renders its own
     expect(after).not.toMatch(/include[ \t]+["']leafnodes-/);
+  });
+
+  test("cortex#1483 (join-4): a converting write backs up the PRE-conversion bytes to a timestamped .bak", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    const original = anonLocalConf();
+    writeFileSync(conf, original, "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    const result = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    expect(result.status).toBe("converted");
+
+    const baks = readdirSync(dir).filter((f) => f.startsWith("community.conf.bak-join-"));
+    expect(baks.length).toBe(1);
+    expect(readFileSync(join(dir, baks[0]!), "utf-8")).toBe(original);
   });
 
   test("already-operator-mode bus under the SAME operator → 'already', file unchanged + leaf can be added", () => {
@@ -1148,6 +1192,29 @@ describe("#821 live leaf-file pre-flight + rollback adapters", () => {
     expect(existsSync(leafPath)).toBe(true);
     // Mask off the file-type bits; only the permission bits must equal 0600.
     expect(statSync(leafPath).mode & 0o777).toBe(0o600);
+  });
+
+  test("cortex#1483 (join-4): a RE-write of the leaf include backs up the PRIOR bytes to a timestamped .bak", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    const binding = {
+      credentials: "/Users/andreas/.config/nats/andreas.creds",
+      account: "AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX",
+    };
+    // First write — nothing to back up yet.
+    ports.leafFile.write({ descriptor: brandVerified(descriptorForLeaf("metafactory")), binding });
+    const leafPath = join(dir, "leafnodes-metafactory.conf");
+    const firstWrite = readFileSync(leafPath, "utf-8");
+    expect(readdirSync(dir).some((f) => f.startsWith("leafnodes-metafactory.conf.bak-join-"))).toBe(false);
+
+    // A re-join re-renders the SAME network — the prior bytes must be .bak'd.
+    ports.leafFile.write({ descriptor: brandVerified(descriptorForLeaf("metafactory")), binding });
+    const baks = readdirSync(dir).filter((f) => f.startsWith("leafnodes-metafactory.conf.bak-join-"));
+    expect(baks.length).toBe(1);
+    expect(readFileSync(join(dir, baks[0]!), "utf-8")).toBe(firstWrite);
   });
 
   test("restore rewrites a pre-existing include file back to its prior bytes + keeps a pre-existing directive", () => {
