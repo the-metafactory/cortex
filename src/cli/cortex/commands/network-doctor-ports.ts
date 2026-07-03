@@ -9,8 +9,8 @@
  *
  * `doctor` verifies the WHOLE federation path from the joining member's own
  * machine and reports pass/fail + a fix + the responsible role, PER LEG. It
- * is READ-ONLY except for the ONE bounded probe echo (reused verbatim from
- * `cortex network ping` — see `network-ping-ports.ts`/`network-ping-lib.ts`).
+ * is READ-ONLY except for the ONE bounded probe echo (the SAME probe transport
+ * `cortex network ping` uses — see `network-ping-ports.ts`/`network-ping-lib.ts`).
  */
 
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
@@ -20,21 +20,22 @@ import type { NetworkPingPorts } from "./network-ping-ports";
 // Config port — read-only `policy.federated.networks[]`
 // =============================================================================
 
-/** The raw on-disk networks snapshot `doctor` checks against. */
+/** The composed networks snapshot `doctor` checks against. */
 export interface DoctorNetworksSnapshot {
   networks: PolicyFederatedNetwork[];
 }
 
 /**
- * Read-only config seam. The LIVE adapter reads straight off the resolved
- * stack config file (the same `readNetworksFromConfig` pattern
- * join/leave/rotate-key use), NOT a cached/derived view — so `doctor` reports
- * against exactly what the daemon would load. Tests inject a fake snapshot.
+ * Read-only config seam. The LIVE adapter reads the COMPOSED
+ * `policy.federated.networks[]` off the already-loaded `LoadedConfig` (the same
+ * source `derivePingInputs` uses), so it reflects exactly what the daemon loads
+ * — including the config-split layout, where `policy.federated` lives in
+ * `stacks/<slug>.yaml` and a raw re-parse of the pointer file would find none.
+ * Tests inject a fake snapshot.
  */
 export interface DoctorConfigPort {
-  /** `policy.federated.networks[]`, raw off disk. Never throws — an unreadable
-   *  or absent config file resolves to `{ networks: [] }` (mirrors
-   *  `readNetworksFromConfig`'s own empty-on-absent behaviour). */
+  /** The composed `policy.federated.networks[]`. Never throws — resolves to
+   *  `{ networks: [] }` when the config declares none. */
   readNetworks(): DoctorNetworksSnapshot;
   /**
    * Best-effort EXPECTED federation account for `networkId`, derived from the
@@ -89,9 +90,9 @@ export interface NetworkDoctorPorts {
   config: DoctorConfigPort;
   monitor: MonitorPort;
   /**
-   * The exact probe-bus port shape `cortex network ping` uses — reused
-   * verbatim (not re-implemented) so `doctor`'s peer-reachable leg is the
-   * SAME real echoed round-trip `ping` performs, just orchestrated as one
+   * The exact probe-bus port shape `cortex network ping` uses — the SAME
+   * transport (not re-implemented) so `doctor`'s peer-reachable leg performs
+   * the same real echoed round-trip `ping` does, just orchestrated as one
    * check per configured peer instead of a `ping -c` report.
    */
   probe: NetworkPingPorts;

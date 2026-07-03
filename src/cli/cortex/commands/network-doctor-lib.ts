@@ -12,8 +12,9 @@
  * live adapters (`network-doctor-adapters.ts`) wire those; tests inject
  * fakes. READ-ONLY except for the ONE bounded probe echo per peer (the
  * SAME transport `cortex network ping` uses — `pingPeer`/`derivePingInputs`
- * are reused verbatim, not re-implemented, so the peer-reachable leg is
- * byte-identical to `ping`'s round-trip).
+ * are the SAME functions, not re-implemented — so the peer-reachable leg
+ * reuses `ping`'s exact probe transport, called with count:1 and doctor's own
+ * timeout and re-mapped to a DoctorCheck).
  *
  * Later checks `skip` when a hard prerequisite failed (spec's check matrix):
  *   1. config-network      — the network is configured, has peers + accept_subjects
@@ -74,7 +75,7 @@ export const DEFAULT_DOCTOR_PROBE_TIMEOUT_MS = 6000;
 export interface DoctorOptions {
   /** The already-loaded LOCAL stack config — the #753 seam. Supplies
    *  principal/stack/assistant for deriving each peer-reachable probe's
-   *  inputs (`derivePingInputs`, reused verbatim from `ping`). */
+   *  inputs (the SAME `derivePingInputs` `ping` uses). */
   cfg: LoadedConfig;
   /** The network to doctor. */
   networkId: string;
@@ -226,16 +227,23 @@ async function checkMonitorReachable(
 // Leg 3 — leaf-established
 // ---------------------------------------------------------------------------
 
+type LeafMatch = { leaf: LeafzEntry; match: "named" | "lone-fallback" };
+
 function findEstablishedLeaf(
   leafz: LeafzResponse,
   leafNode: string,
-): LeafzEntry | undefined {
+): LeafMatch | undefined {
   const leafs = leafz.leafs ?? [];
   const named = leafs.find((l) => l.name === leafNode || l.account === leafNode);
-  if (named !== undefined) return named;
-  // A single-leaf stack (the common case) — treat the lone entry as ours even
-  // when `/leafz` doesn't echo back our configured `leaf_node` name.
-  return leafs.length === 1 ? leafs[0] : undefined;
+  if (named !== undefined) return { leaf: named, match: "named" };
+  // Single-leaf bus (the common creds-only case): one leaf carries every
+  // network's federated traffic and `/leafz` often doesn't echo our configured
+  // `leaf_node` name. We attribute the lone leaf to this network — but flag it
+  // as an ASSUMPTION (not a name match), because with 2+ leaves we canNOT tell
+  // which is this network's, so we do NOT fall back there (returns undefined).
+  return leafs.length === 1 && leafs[0] !== undefined
+    ? { leaf: leafs[0], match: "lone-fallback" }
+    : undefined;
 }
 
 function checkLeafEstablished(
@@ -250,8 +258,8 @@ function checkLeafEstablished(
       result: skipCheck(id, title, "skipped — no /leafz data (see monitor-reachable)", "member"),
     };
   }
-  const established = findEstablishedLeaf(leafz, network.leaf_node);
-  if (established === undefined) {
+  const found = findEstablishedLeaf(leafz, network.leaf_node);
+  if (found === undefined) {
     const seen = (leafz.leafs ?? []).map((l) => l.name ?? l.account ?? "?").join(", ");
     return {
       result: check(
@@ -264,14 +272,26 @@ function checkLeafEstablished(
       ),
     };
   }
+  const { leaf: established, match } = found;
+  const traffic = `in=${(established.in_msgs ?? 0).toString()}, out=${(established.out_msgs ?? 0).toString()}`;
+  // A name/account match is a confident pass; a lone-leaf fallback is an
+  // honest WARN — the leaf is up, but /leafz didn't confirm it's THIS
+  // network's (it could belong to another network on a multi-leaf bus).
+  if (match === "lone-fallback") {
+    return {
+      result: check(
+        id,
+        title,
+        "warn",
+        `assumed the sole leaf on this bus (name/account "${established.name ?? established.account ?? "?"}" did not match the configured leaf_node "${network.leaf_node}") — correct for a single-leaf bus, unverifiable if you run multiple leaves; ${traffic}`,
+        "member",
+        "if this bus carries multiple leaves, ensure the leaf name matches leaf_node so doctor can attribute it to this network",
+      ),
+      established,
+    };
+  }
   return {
-    result: check(
-      id,
-      title,
-      "pass",
-      `established (in=${(established.in_msgs ?? 0).toString()}, out=${(established.out_msgs ?? 0).toString()})`,
-      "hub-owner",
-    ),
+    result: check(id, title, "pass", `established (${traffic})`, "hub-owner"),
     established,
   };
 }
@@ -462,9 +482,13 @@ export async function runDoctorChecks(
   checks.push(checkLeafAccountBound(ports.config, opts.networkId, leafResult.established));
 
   // 5. peer-reachable — one per configured peer, a real echo round-trip.
-  for (const peer of network.peers) {
-    checks.push(await checkPeerReachable(ports, opts, peer));
-  }
+  // Probes are independent request-replies keyed by correlation_id, so run
+  // them CONCURRENTLY — otherwise N unreachable peers cost N×probeTimeoutMs
+  // wall-clock (5 offline peers ≈ 30s). Promise.all preserves peers[] order.
+  const peerChecks = await Promise.all(
+    network.peers.map((peer) => checkPeerReachable(ports, opts, peer)),
+  );
+  checks.push(...peerChecks);
 
   const verdict = aggregateVerdict(checks);
   return { checks, verdict, exitCode: DOCTOR_EXIT_CODE[verdict] };

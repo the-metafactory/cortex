@@ -13,7 +13,7 @@
  * only GETs `/leafz`. Neither ever writes. `doctor` never mutates config,
  * files, or services — its one live effect is the bounded probe echo the
  * caller wires separately via `createLiveProbeBus`/`wrapRuntimeAsProbeBus`
- * (reused verbatim from `network-ping-adapters.ts`, not re-implemented).
+ * (the SAME probe transport `network-ping-adapters.ts` uses, not re-implemented).
  */
 
 import { existsSync, readFileSync } from "fs";

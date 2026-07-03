@@ -313,6 +313,38 @@ describe("runDoctorChecks — (d) leaf down", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (d2) lone-leaf fallback is an HONEST warn, not a silent pass
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — (d2) lone-leaf fallback", () => {
+  test("a single leaf whose name/account doesn't match leaf_node → leaf-established WARN (discloses the assumption), not a silent pass", async () => {
+    // One leaf, name "$G" (≠ leaf_node "hub"); account still "ACCOUNT_A" so
+    // only leaf-established is affected (leaf-account-bound stays a pass).
+    const LONE_UNNAMED: LeafzResponse = {
+      leafs: [{ name: "$G", account: "ACCOUNT_A", in_msgs: 3, out_msgs: 4 }],
+    };
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: LONE_UNNAMED }),
+      probe: fakeProbe((f) => echoReply(f, 20)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const leaf = findCheck(res.checks, "leaf-established");
+    expect(leaf.status).toBe("warn");
+    expect(leaf.detail).toContain("assumed the sole leaf");
+    expect(leaf.owner).toBe("member");
+    // downstream leaf-account-bound still runs (established leaf was returned)
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("pass");
+    // a warn is advisory — it must NOT make the verdict broken
+    expect(res.verdict).not.toBe("broken");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (e) peer timeout
 // ---------------------------------------------------------------------------
 
