@@ -145,6 +145,7 @@ import {
   hubAdminMaterialFromSeedFile,
 } from "./network-secret-adapters";
 import { fetchSealedLeafSecret } from "../../../common/registry/fetch-sealed-secret";
+import { defaultKeyId } from "../../../common/crypto/network-encryption-policy";
 import {
   resolveOwnAdmissionState,
   type OwnAdmissionState,
@@ -452,6 +453,13 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--registry-url": "value",
         // The hub nats-server config the per-member authorization user lands in.
         "--hub-config": "value",
+        // C-1349 Slice 1 — the HUB STACK's cortex config (config-split dir sentinel
+        // or legacy monolith). Read-only: sourced for the per-network payload key
+        // K (`policy.federated.networks[<net>].payload_key`) to seal alongside the
+        // PSK. A config LOCATOR only — K is never a flag/second store. Defaults to
+        // the standard `~/.config/cortex` path (like join/create/status).
+        "--config": "value",
+        "--stack": "value",
         // add-member: sealed (default, plug-and-play) | oob (trusted bootstrap).
         "--deliver": "value",
         // Override the hub leaf user (defaults to the member's principal id).
@@ -651,7 +659,7 @@ export function __setJoinLeafSecretFetcherForTests(f: LeafSecretFetcher | null):
 async function maybeAutoFetchLeafSecret(
   networkId: string,
   inputs: { leafSecret?: string; seedPath: string; registryUrl: string; principal: string },
-): Promise<{ leafSecret: string; leafUser: string } | undefined> {
+): Promise<{ leafSecret: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string } | undefined> {
   // Only when no leaf secret was resolved from flag/config (don't override an
   // explicit secret-auth join).
   if (inputs.leafSecret !== undefined) return undefined;
@@ -679,7 +687,15 @@ async function maybeAutoFetchLeafSecret(
     material,
   });
   if (!res.ok) return undefined;
-  return { leafSecret: res.leafPsk, leafUser: res.leafUser };
+  return {
+    leafSecret: res.leafPsk,
+    leafUser: res.leafUser,
+    // C-1349 Slice 1 — carry the sealed payload key K (+ kid) through to the
+    // join so it installs `encryption: enabled` + `payload_key` into the stack
+    // config. Absent on encryption-off networks / old blobs. K never logged.
+    ...(res.payloadKey !== undefined && { payloadKey: res.payloadKey }),
+    ...(res.payloadKeyKid !== undefined && { payloadKeyKid: res.payloadKeyKid }),
+  };
 }
 
 /**
@@ -911,6 +927,11 @@ async function runJoin(
   const autoSecret = await maybeAutoFetchLeafSecret(networkId, inputs);
   const resolvedLeafSecret = inputs.leafSecret ?? autoSecret?.leafSecret;
   const resolvedLeafUser = inputs.leafUser ?? autoSecret?.leafUser;
+  // C-1349 Slice 1 — the sealed envelope's payload key K (+ kid), when the admin
+  // sealed one via `secret add-member`/`rotate`. Present ⇒ join writes
+  // `encryption: enabled` + `payload_key` (+ kid) into stacks/<slug>.yaml.
+  const resolvedPayloadKey = autoSecret?.payloadKey;
+  const resolvedPayloadKeyKid = autoSecret?.payloadKeyKid;
 
   const stack: JoiningStack = {
     // C-1436 — the own-scope federation identity's PRINCIPAL segment MUST derive
@@ -945,6 +966,9 @@ async function runJoin(
     // `.creds`-file leaf.
     ...(resolvedLeafSecret !== undefined && { leafSecret: resolvedLeafSecret }),
     ...(resolvedLeafUser !== undefined && { leafUser: resolvedLeafUser }),
+    // C-1349 Slice 1 — sealed payload key K (+ kid) → join installs encryption.
+    ...(resolvedPayloadKey !== undefined && { payloadKey: resolvedPayloadKey }),
+    ...(resolvedPayloadKeyKid !== undefined && { payloadKeyId: resolvedPayloadKeyKid }),
     leafNode: optionalValueFlag(flags, "--leaf-node"),
     maxHop,
     // O-3 (cortex#1053) — pass the operator-mode leaf package (when resolved)
@@ -2732,6 +2756,50 @@ export type SecretPortsFactory = (cfg: {
 
 const DEFAULT_SECRET_PORTS_FACTORY: SecretPortsFactory = (cfg) => buildLiveSecretPorts(cfg);
 
+/**
+ * C-1349 Slice 1 — read the per-network payload key `K` (+ its kid) from the HUB
+ * STACK's own resolved cortex config (`policy.federated.networks[<net>]`), the
+ * SAME store the encryption runtime reads (`networkKeyFromConfig`). This is the
+ * single K custody source for sealed delivery (design decision #1: no `--payload
+ * -key-path` flag, no second store). `--config`/`--stack` are config LOCATORS
+ * resolved exactly as every sibling network verb does.
+ *
+ * Returns the base64 K string VERBATIM (the seal carries it opaquely) + the kid
+ * (`payload_key_id ?? <net>/k1`). NEVER logs K. A MISSING config or an
+ * encryption-off / keyless network → `{ ok: true }` with no key (seal PSK only).
+ * A config that EXISTS but fails to parse/validate FAILS (surfaced to the admin)
+ * rather than silently downgrading a network that is supposed to be encrypted.
+ */
+function resolveHubPayloadKey(
+  flags: FlagMap,
+  networkId: string,
+  load: ConfigReader,
+): { ok: true; payloadKey?: string; payloadKeyKid?: string } | { ok: false; reason: string } {
+  const path = resolveLocalStackConfigPath(flags);
+  let cfg: LoadedConfig;
+  try {
+    cfg = load(path);
+  } catch (err) {
+    return {
+      ok: false,
+      reason:
+        `failed to read the hub stack config ${path} for the network payload key: ` +
+        `${err instanceof Error ? err.message : String(err)} — fix the config, or pass ` +
+        `--config <path> to point at the hub stack's cortex config`,
+    };
+  }
+  const network = cfg.policy?.federated?.networks.find((n) => n.id === networkId);
+  if (network?.payload_key === undefined) {
+    // No config, encryption-off network, or a network with no K → seal PSK only.
+    return { ok: true };
+  }
+  return {
+    ok: true,
+    payloadKey: network.payload_key,
+    payloadKeyKid: network.payload_key_id ?? defaultKeyId(networkId),
+  };
+}
+
 async function runSecret(
   actionArg: string,
   networkId: string,
@@ -2739,6 +2807,10 @@ async function runSecret(
   flags: FlagMap,
   json: boolean,
   portsFactory: SecretPortsFactory,
+  // C-1349 Slice 1 — injectable hub stack config reader so the payload-key (K)
+  // read is testable without touching the principal's real `~/.config/cortex/`.
+  // Production omits → the tolerant `loadConfigWithAgents` reader.
+  load: ConfigReader = DEFAULT_READER,
 ): Promise<ExitResult> {
   // 1. Validate the action.
   const validActions: SecretAction[] = ["add-member", "revoke-member", "rotate"];
@@ -2785,6 +2857,22 @@ async function runSecret(
   const matRes = await hubAdminMaterialFromSeedFile(seedRes.value);
   if (!matRes.ok) return opError("secret", matRes.reason, json);
 
+  // 4b. C-1349 Slice 1 — resolve the per-network payload key K from the HUB
+  // STACK's own resolved config (design decision #1: hub config ONLY, no mint,
+  // no second store). add-member / rotate seal it alongside the PSK so join
+  // installs encryption; revoke-member does not touch K. A genuinely-broken hub
+  // config FAILS the command (never silently downgrade encryption); an ABSENT
+  // config or an encryption-off network → seal PSK only (the lib prints the
+  // SOP-fallback info line). K never reaches this function's output.
+  let payloadKey: string | undefined;
+  let payloadKeyKid: string | undefined;
+  if (action !== "revoke-member" && deliver === "sealed") {
+    const kRes = resolveHubPayloadKey(flags, networkId, load);
+    if (!kRes.ok) return opError("secret", kRes.reason, json);
+    payloadKey = kRes.payloadKey;
+    payloadKeyKid = kRes.payloadKeyKid;
+  }
+
   const ports = portsFactory({ hubConfigPath, registryUrl, material: matRes.material });
   const inputs: SecretInputs = {
     action,
@@ -2792,6 +2880,8 @@ async function runSecret(
     memberPubkey: member,
     deliver,
     ...(leafUserOverride !== undefined && { leafUserOverride }),
+    ...(payloadKey !== undefined && { payloadKey }),
+    ...(payloadKeyKid !== undefined && { payloadKeyKid }),
     apply: applyRes.apply,
   };
 
@@ -3413,6 +3503,7 @@ export async function dispatchNetwork(
         parsed.flags,
         json,
         secretPortsFactory,
+        load,
       );
   }
 }
@@ -3506,7 +3597,11 @@ Subcommands:
           the cortex daemon so it reconnects under the agents account. cortex
           runs zero nsc — it shells arc \`add-bot\` / \`export-account\`.
           Network-agnostic (local OR federated; for federated, run \`join\` after
-          to render the leaf). NEVER touches encryption/payload_key config.
+          to render the leaf). make-live NEVER touches encryption/payload_key
+          config — that is join's job: when the sealed leaf-secret envelope
+          carries a payload key K (from \`secret add-member\`/\`rotate\`), join
+          installs \`encryption: enabled\` + \`payload_key\` into the stack config
+          (C-1349 Slice 1).
           The nats-server config it edits + hard-restarts is derived PER-STACK
           from stack.nats_infra.config_path (or --nats-config) — there is NO
           shared default, so a co-located stack on its OWN nats-server

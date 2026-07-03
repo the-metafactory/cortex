@@ -689,6 +689,100 @@ describe("#756 config-split-aware policy write", () => {
     // Sanity: we never touched the real home.
     expect(realHome).not.toBe(home);
   });
+
+  // ---------------------------------------------------------------------------
+  // C-1349 Slice 1 — write-guard + payload-key install.
+  // ---------------------------------------------------------------------------
+
+  // Clearly-FAKE 32-byte key (all-zero base64) — never realistic K material.
+  const FAKE_K = Buffer.alloc(32).toString("base64");
+
+  function encryptedNetwork(id: string): PolicyFederatedNetwork {
+    return {
+      ...sampleNetwork(id),
+      encryption: "enabled",
+      payload_key: FAKE_K,
+      payload_key_id: `${id}/k1`,
+    };
+  }
+
+  test("installs the payload key K + kid, round-trips it, and clamps the file to 0600", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    const stacksDir = join(cortexDir, "meta-factory", "stacks");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      ports.configStore.writeNetworks([encryptedNetwork("metafactory")]);
+    });
+
+    const splitPath = join(stacksDir, "meta-factory.yaml");
+    const parsed = parseYaml(readFileSync(splitPath, "utf-8")) as {
+      policy?: { federated?: { networks?: PolicyFederatedNetwork[] } };
+    };
+    const net = parsed.policy?.federated?.networks?.[0];
+    expect(net?.encryption).toBe("enabled");
+    expect(net?.payload_key).toBe(FAKE_K);
+    expect(net?.payload_key_id).toBe("metafactory/k1");
+    // 0600 — K is a secret at rest.
+    expect(statSync(splitPath).mode & 0o777).toBe(0o600);
+  });
+
+  test("writes a timestamped .pre-join backup before overwriting an existing file", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    const stacksDir = join(cortexDir, "meta-factory", "stacks");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+    mkdirSync(stacksDir, { recursive: true });
+    const splitPath = join(stacksDir, "meta-factory.yaml");
+    const original =
+      "policy:\n  federated:\n    networks:\n      - id: research\n        leaf_node: research\n        peers: []\n        accept_subjects: [federated.andreas.meta-factory.>]\n        deny_subjects: []\n        announce_capabilities: []\n        max_hop: 1\n";
+    writeFileSync(splitPath, original, "utf-8");
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      ports.configStore.writeNetworks([sampleNetwork("metafactory")]);
+    });
+
+    const backups = readdirSync(stacksDir).filter((f) => f.includes(".pre-join-") && f.endsWith(".bak"));
+    expect(backups.length).toBe(1);
+    // The backup holds the ORIGINAL content verbatim (recoverable).
+    expect(readFileSync(join(stacksDir, backups[0]!), "utf-8")).toBe(original);
+  });
+
+  test("validate-before-write: a malformed payload_key is REFUSED and the file is left untouched", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    const stacksDir = join(cortexDir, "meta-factory", "stacks");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+    mkdirSync(stacksDir, { recursive: true });
+    const splitPath = join(stacksDir, "meta-factory.yaml");
+    const original =
+      "policy:\n  federated:\n    networks:\n      - id: research\n        leaf_node: research\n        peers: []\n        accept_subjects: [federated.andreas.meta-factory.>]\n        deny_subjects: []\n        announce_capabilities: []\n        max_hop: 1\n";
+    writeFileSync(splitPath, original, "utf-8");
+
+    // A payload_key that is NOT 32 bytes when base64-decoded — the schema refine
+    // the daemon enforces at boot must reject it BEFORE any write.
+    const bad: PolicyFederatedNetwork = {
+      ...sampleNetwork("metafactory"),
+      encryption: "enabled",
+      payload_key: "dG9vLXNob3J0", // "too-short" — 9 bytes, not 32
+      payload_key_id: "metafactory/k1",
+    };
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      expect(() => ports.configStore.writeNetworks([bad])).toThrow(/schema validation/);
+    });
+
+    // The original file is BYTE-IDENTICAL — the refused write never mutated it,
+    // and never leaked the key into the error path.
+    expect(readFileSync(splitPath, "utf-8")).toBe(original);
+  });
 });
 
 // =============================================================================

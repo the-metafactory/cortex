@@ -52,7 +52,7 @@ export interface FetchSealedLeafSecretInput {
 }
 
 export type FetchSealedLeafSecretResult =
-  | { ok: true; leafPsk: string; leafUser: string; payloadKey?: string }
+  | { ok: true; leafPsk: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
   | { ok: false; reason: string };
 
 /**
@@ -95,6 +95,7 @@ export async function fetchSealedLeafSecret(
       leafPsk: env.leaf_psk,
       leafUser: env.leaf_user,
       ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),
+      ...(env.payload_key_kid !== undefined && { payloadKeyKid: env.payload_key_kid }),
     };
   } catch (err) {
     // Generic — never echo seed/ciphertext/plaintext.

@@ -44,6 +44,7 @@ import {
   PolicyFederatedReconcileSchema,
 } from "../../../common/types/cortex-config";
 import type { NetworkRosterResult } from "../../../common/registry/types";
+import { pskFingerprint } from "../../../common/nats/leaf-psk";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { buildRosterPeers } from "../../../bus/agent-network/roster-read";
 import {
@@ -116,6 +117,23 @@ export interface JoiningStack {
    * O-4 (the register→issue handshake) SUPPLIES this; O-3 only consumes it.
    */
   operatorModePackage?: OperatorModeLeafPackage;
+  /**
+   * C-1349 Slice 1 — the per-network payload key `K` (base64, 32 bytes) the
+   * admin sealed into the leaf-secret envelope (`secret add-member`/`rotate`),
+   * unsealed by the join's auto-fetch. Present ⇒ `joinNetwork` writes
+   * `encryption: enabled` + `payload_key` (+ {@link payloadKeyId}) into the
+   * stack's `policy.federated.networks[<net>]` entry, so the member enables M3
+   * confidentiality with zero manual key handling. Absent ⇒ the entry's
+   * encryption block is left untouched (fresh join stays cleartext; re-join
+   * PRESERVES any prior block verbatim). K is NEVER logged.
+   */
+  payloadKey?: string;
+  /**
+   * C-1349 Slice 1 — the key id (rotation epoch) paired with {@link payloadKey}
+   * (`<net>/k1` by default), written as `payload_key_id`. Only meaningful when
+   * {@link payloadKey} is set.
+   */
+  payloadKeyId?: string;
   /**
    * G1c (#1117, ADR-0013 Model B) — the agents NSC account (nkey-A) where the
    * stack's dispatch-listener subscribes `federated.>`. This is the
@@ -611,6 +629,36 @@ export async function joinNetwork(
     reconcile = PolicyFederatedReconcileSchema.parse({ enabled: true });
   }
 
+  // C-1349 Slice 1 — the M3 encryption block. A freshly-DELIVERED payload key
+  // (`stack.payloadKey`, unsealed from the leaf-secret envelope) turns encryption
+  // ON and installs K + kid. With NO new key, PRESERVE the prior entry's block
+  // verbatim (exactly as `announce_capabilities` above) so a re-join never wipes
+  // an already-installed key; a first join with no key leaves the block absent
+  // (cleartext, unchanged from today). K is NEVER logged — only the kid + a
+  // fingerprint reach `steps`.
+  let encryptionFields: Pick<
+    PolicyFederatedNetwork,
+    "encryption" | "payload_key" | "payload_key_id"
+  > = {};
+  if (typeof stack.payloadKey === "string" && stack.payloadKey.length > 0) {
+    const kid = stack.payloadKeyId ?? `${networkId}/k1`;
+    encryptionFields = {
+      encryption: "enabled",
+      payload_key: stack.payloadKey,
+      payload_key_id: kid,
+    };
+    const kFp = await pskFingerprint(stack.payloadKey);
+    steps.push(
+      `encryption: installed payload key K (kid ${kid}, fp ${kFp}) — network "${networkId}" now seals M3 payloads`,
+    );
+  } else if (priorEntry?.encryption !== undefined) {
+    encryptionFields = {
+      encryption: priorEntry.encryption,
+      ...(priorEntry.payload_key !== undefined && { payload_key: priorEntry.payload_key }),
+      ...(priorEntry.payload_key_id !== undefined && { payload_key_id: priorEntry.payload_key_id }),
+    };
+  }
+
   const entry: PolicyFederatedNetwork = {
     id: networkId,
     leaf_node: stack.leafNode ?? networkId,
@@ -628,6 +676,8 @@ export async function joinNetwork(
     // (default [] only on a first join where no block exists yet).
     announce_capabilities: priorEntry?.announce_capabilities ?? [],
     max_hop: stack.maxHop ?? 1,
+    // C-1349 Slice 1 — M3 encryption (delivered-K install / re-join preserve).
+    ...encryptionFields,
   };
 
   // (d) Merge the network into the federation config with registry-resolved

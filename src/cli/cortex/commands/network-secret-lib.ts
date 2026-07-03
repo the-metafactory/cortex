@@ -46,6 +46,23 @@ export interface SecretInputs {
   deliver: DeliveryMode;
   /** Override the hub leaf user (defaults to the member's principal id). */
   leafUserOverride?: string;
+  /**
+   * C-1349 Slice 1 — the per-network payload key `K` (base64, 32 bytes) read
+   * from the HUB STACK's own resolved config (`policy.federated.networks[<net>]
+   * .payload_key`) by the CLI. When present (add-member / rotate), it is sealed
+   * into the envelope alongside the leaf PSK so `network join` installs it. When
+   * ABSENT (encryption-off network, or no K configured hub-side), the envelope
+   * is sealed exactly as before and an info line points at the SOP fallback.
+   * The orchestrator NEVER mints K — delivery reads the existing hub-side key
+   * verbatim (minting is Slice 2's `rotate-key`).
+   */
+  payloadKey?: string;
+  /**
+   * C-1349 Slice 1 — the key id (rotation epoch) paired with {@link payloadKey}
+   * (`payload_key_id ?? <network>/k1`). Rides beside K in the envelope so the
+   * joiner installs both. Only meaningful when {@link payloadKey} is set.
+   */
+  payloadKeyKid?: string;
   apply: boolean;
 }
 
@@ -119,6 +136,19 @@ async function addOrRotate(
     steps.push(rotate
       ? `would: re-mint PSK → REPLACE hub authorization user "${leafUser}" + reload → re-seal + replace sealed blob`
       : `would: mint PSK → add hub authorization user "${leafUser}" + reload → ${inputs.deliver === "sealed" ? "seal + deliver to the admission row" : "surface PSK for out-of-band handover"}`);
+    // C-1349 Slice 1 — surface whether the sealed blob will carry the payload key
+    // K (kid only, NEVER K). oob never carries K (manual bootstrap path).
+    if (inputs.deliver === "sealed") {
+      const payloadKey =
+        typeof inputs.payloadKey === "string" && inputs.payloadKey.length > 0
+          ? inputs.payloadKey
+          : undefined;
+      steps.push(
+        payloadKey !== undefined
+          ? `would: seal payload key K (kid ${inputs.payloadKeyKid ?? `${inputs.networkId}/k1`}) — join would install encryption`
+          : `would: no payload key configured hub-side for "${inputs.networkId}" — sealing PSK only (SOP Step 8 for manual encryption)`,
+      );
+    }
     return plan(action, inputs, steps, data);
   }
 
@@ -160,9 +190,39 @@ async function addOrRotate(
   }
 
   // sealed (default): seal the envelope to the member + POST onto the row.
+  // C-1349 Slice 1 — when the hub stack config carries a payload key K for this
+  // network, seal it (+ its kid) alongside the leaf PSK so `network join`
+  // installs it with zero manual key handling. K NEVER reaches steps/data — only
+  // its kid + a SHA-256 fingerprint are printable. Absent K ⇒ seal as before +
+  // an info line pointing at the SOP manual-handoff fallback.
+  const payloadKey =
+    typeof inputs.payloadKey === "string" && inputs.payloadKey.length > 0
+      ? inputs.payloadKey
+      : undefined;
+  let payloadKeyKid: string | undefined;
+  if (payloadKey !== undefined) {
+    payloadKeyKid = inputs.payloadKeyKid ?? `${inputs.networkId}/k1`;
+    // Log-safe correlation of K: kid + first 8 hex of SHA-256(K). NEVER K.
+    const kFp = await pskFingerprint(payloadKey);
+    data.payload_key_kid = payloadKeyKid;
+    data.payload_key_fingerprint = kFp;
+    steps.push(`payload key: sealed K (kid ${payloadKeyKid}, fp ${kFp}) — join installs encryption`);
+  } else {
+    steps.push(
+      `payload key: no payload key configured hub-side for "${inputs.networkId}" — sealing PSK only; the member enables encryption via the manual handoff in sop-onboard-peer-principal.md Step 8`,
+    );
+  }
+
   let sealed: string;
   try {
-    const envelope = encodeLeafSecretEnvelope({ leaf_psk: psk, leaf_user: leafUser });
+    const envelope = encodeLeafSecretEnvelope({
+      leaf_psk: psk,
+      leaf_user: leafUser,
+      ...(payloadKey !== undefined && {
+        payload_key: payloadKey,
+        payload_key_kid: payloadKeyKid,
+      }),
+    });
     sealed = await ports.crypto.seal(envelope, inputs.memberPubkey);
   } catch (err) {
     return fail(action, inputs, steps, data, `failed to seal the secret to the member pubkey: ${errText(err)}`);

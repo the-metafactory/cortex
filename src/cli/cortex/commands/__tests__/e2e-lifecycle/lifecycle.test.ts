@@ -35,6 +35,7 @@ import { dispatchNetwork } from "../../network";
 import { dispatchProvisionStack } from "../../provision-stack";
 import { runNetworkSecret } from "../../network-secret-lib";
 import { buildLiveSecretPorts } from "../../network-secret-adapters";
+import { fetchSealedLeafSecret } from "../../../../../common/registry/fetch-sealed-secret";
 import type { NetworkSecretPorts } from "../../network-secret-ports";
 import { leaveNetwork } from "../../network-lib";
 
@@ -345,8 +346,50 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
   // 5 in one privileged move (today they are two commands, driven separately above).
   todo("step 5a (#1316): network admit --and-seal folds admit + secret add-member");
   // #1349 S1 — the M3 payload key K rides the SAME sealed blob: add-member seals
-  // payload_key, join installs it.
-  todo("step 5b (#1349 S1): sealed K delivery — add-member seals payload_key, join installs it");
+  // payload_key, join installs it. Flipped LIVE with the Slice 1 merge.
+  test("step 5b (#1349 S1): sealed K delivery — add-member seals payload_key, joiner unseals it", async () => {
+    expect(ctx.requestId).toBeDefined();
+    expect(ctx.secretPorts).toBeDefined();
+    // Clearly-FAKE 32-byte K (all-0x07) — never realistic key material.
+    const K = Buffer.alloc(32, 7).toString("base64");
+    const KID = `${NETWORK_ID}/k1`;
+
+    // add-member is idempotent on the ADMITTED row — re-seal WITH the payload key.
+    const report = await runNetworkSecret(
+      {
+        action: "add-member",
+        networkId: NETWORK_ID,
+        memberPubkey: ctx.joinerPubkey,
+        deliver: "sealed",
+        apply: true,
+        payloadKey: K,
+        payloadKeyKid: KID,
+      },
+      ctx.secretPorts!,
+    );
+    expect(report.ok).toBe(true);
+    // K is NEVER printed — only the kid + a fingerprint reach the report.
+    expect(report.steps.join("\n")).not.toContain(K);
+    expect(JSON.stringify(report.data)).not.toContain(K);
+    expect(report.data.payload_key_kid).toBe(KID);
+    expect(report.data.payload_key_fingerprint).toBeDefined();
+
+    // The joiner fetches + unseals the blob from the in-process registry and
+    // recovers K + kid — the end-to-end sealed-delivery path.
+    const joinerMaterial = materialFromSeedString(readFileSync(ctx.joinerSeedPath, "utf-8"));
+    const res = await fetchSealedLeafSecret({
+      registryUrl: REGISTRY_BASE,
+      networkId: NETWORK_ID,
+      principalId: JOINER_PRINCIPAL,
+      material: joinerMaterial,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.payloadKey).toBe(K);
+      expect(res.payloadKeyKid).toBe(KID);
+    }
+  });
 
   // ===========================================================================
   // Step 6 — Join: the #1220 regression anchor.

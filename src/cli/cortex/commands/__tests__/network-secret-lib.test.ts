@@ -127,6 +127,64 @@ describe("add-member (sealed)", () => {
   });
 });
 
+// C-1349 Slice 1 — clearly-FAKE payload key (K) material. Never realistic bytes.
+const FAKE_K = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const FAKE_KID = "metafactory/k1";
+
+describe("add-member (sealed) — C-1349 payload key delivery", () => {
+  test("seals payload_key + payload_key_kid into the envelope when hub K is supplied", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(
+      inputs({ payloadKey: FAKE_K, payloadKeyKid: FAKE_KID }),
+      r.ports,
+    );
+    expect(report.ok).toBe(true);
+    expect(report.applied).toBe(true);
+    // The UNSEALED envelope (the fake seal echoes plaintext) carries BOTH fields.
+    expect(r.posted.length).toBe(1);
+    expect(r.posted[0]!.blob).toContain("payload_key");
+    expect(r.posted[0]!.blob).toContain("payload_key_kid");
+    expect(r.posted[0]!.blob).toContain(FAKE_KID);
+    // K itself legitimately rides the SEALED blob, but must NEVER reach steps/data.
+    expect(report.steps.join("\n")).not.toContain(FAKE_K);
+    expect(JSON.stringify(report.data)).not.toContain(FAKE_K);
+    // The kid + a fingerprint are printable identifiers.
+    expect(report.data.payload_key_kid).toBe(FAKE_KID);
+    expect(report.data.payload_key_fingerprint).toBeDefined();
+    expect(report.data.payload_key_fingerprint).not.toContain(FAKE_K);
+  });
+
+  test("no hub K → envelope carries NO payload fields; an info step points at the SOP", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const report = await runNetworkSecret(inputs({}), r.ports);
+    expect(report.ok).toBe(true);
+    expect(r.posted.length).toBe(1);
+    expect(r.posted[0]!.blob).not.toContain("payload_key");
+    // No fingerprint / kid data when no K.
+    expect(report.data.payload_key_kid).toBeUndefined();
+    expect(report.data.payload_key_fingerprint).toBeUndefined();
+    // A single info line points the admin at the manual-handoff fallback.
+    expect(report.steps.join("\n").toLowerCase()).toContain("no payload key");
+  });
+});
+
+describe("rotate — C-1349 payload key delivery", () => {
+  test("re-seals with the CURRENT hub K included", async () => {
+    const start =
+      'leafnodes {\n  # >>> cortex-managed leaf authorization (network secret tooling) — do not hand-edit\n  authorization {\n    users: [\n      { user: "alice", password: "PSK-old" }\n    ]\n  }\n  # <<< cortex-managed leaf authorization\n}\n';
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" }, startConf: start });
+    const report = await runNetworkSecret(
+      inputs({ action: "rotate", payloadKey: FAKE_K, payloadKeyKid: FAKE_KID }),
+      r.ports,
+    );
+    expect(report.applied).toBe(true);
+    expect(r.posted.length).toBe(1);
+    expect(r.posted[0]!.blob).toContain("payload_key_kid");
+    expect(r.posted[0]!.blob).toContain(FAKE_KID);
+    expect(report.steps.join("\n")).not.toContain(FAKE_K);
+  });
+});
+
 describe("add-member (oob)", () => {
   test("surfaces the PSK and leaves the registry untouched", async () => {
     const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });

@@ -34,11 +34,21 @@ export interface LeafSecretEnvelope {
    */
   leaf_user: string;
   /**
-   * M3 SEAM (#1246 / ADR-0019) — the per-network payload key, sealed alongside
-   * the leaf PSK once M3 lands. OPTIONAL + absent in PR5b. Decoders MUST tolerate
-   * its presence (and its absence). Its config field lives in M3, NOT here.
+   * M3 SEAM (#1246 / ADR-0019) — the per-network payload key `K`, sealed
+   * alongside the leaf PSK. Populated by `cortex network secret add-member` /
+   * `rotate` when the hub stack config carries a `payload_key` for the network
+   * (C-1349 Slice 1). OPTIONAL + absent on encryption-off networks and on
+   * pre-C-1349 blobs. Decoders MUST tolerate its presence AND its absence.
    */
   payload_key?: string;
+  /**
+   * C-1349 Slice 1 — the key id (rotation epoch) of {@link payload_key}, the
+   * `<network>/k<n>` the runtime stamps into `extensions.enc.kid`
+   * (`payload_key_id` in stack config, default `<network>/k1`). Rides beside
+   * `payload_key` so the joiner installs BOTH; decoders MUST tolerate its
+   * absence (old blobs, and a `payload_key` sealed before this field existed).
+   */
+  payload_key_kid?: string;
 }
 
 /** Encode a {@link LeafSecretEnvelope} to the UTF-8 JSON that gets sealed. */
@@ -50,6 +60,7 @@ export function encodeLeafSecretEnvelope(
     leaf_psk: fields.leaf_psk,
     leaf_user: fields.leaf_user,
     ...(fields.payload_key !== undefined && { payload_key: fields.payload_key }),
+    ...(fields.payload_key_kid !== undefined && { payload_key_kid: fields.payload_key_kid }),
   };
   return JSON.stringify(env);
 }
@@ -80,10 +91,14 @@ export function decodeLeafSecretEnvelope(plaintext: string): LeafSecretEnvelope 
   if (p.payload_key !== undefined && typeof p.payload_key !== "string") {
     throw new Error("sealed-leaf-secret: payload_key must be a string when present");
   }
+  if (p.payload_key_kid !== undefined && typeof p.payload_key_kid !== "string") {
+    throw new Error("sealed-leaf-secret: payload_key_kid must be a string when present");
+  }
   return {
     v: typeof p.v === "number" ? p.v : LEAF_SECRET_ENVELOPE_VERSION,
     leaf_psk: p.leaf_psk,
     leaf_user: p.leaf_user,
     ...(typeof p.payload_key === "string" && { payload_key: p.payload_key }),
+    ...(typeof p.payload_key_kid === "string" && { payload_key_kid: p.payload_key_kid }),
   };
 }

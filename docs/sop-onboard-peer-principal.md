@@ -232,9 +232,12 @@ curl https://network.meta-factory.ai/principals/<principal>  # → SignedAsserti
 
 Steps 1–7 give you a working federated link, but payloads still cross `federated.>` **cleartext-over-TLS** until you turn on encryption. A network is a **trust group** ([ADR-0019](./adr/0019-federated-payload-encryption.md)): all federated payloads — **Direct, Delegate, AND Offer** — are sealed with **one per-network symmetric key `K`**, readable only by admitted members and protected from any outsider on the transport (another network, the public, a non-member relay/hub).
 
-**1. Get the network key `K`.** Every admitted member of the network holds the same `K`. It is delivered sealed-to-your-pubkey over the **same admission/seal channel** that carried your leaf secret (no new ceremony). As of **v5.27.0** the *automatic* delivery of `K` through `join` is a follow-up (cortex#1246); today the admin hands you `K` (base64, decoding to exactly 32 bytes) over a secure channel and you stage it in config.
+**1. Get the network key `K`.** Every admitted member of the network holds the same `K`. It is delivered sealed-to-your-pubkey over the **same admission/seal channel** that carried your leaf secret (no new ceremony).
 
-**2. Enable encryption in your stack config** (`stacks/<slug>.yaml`):
+- **Default — sealed auto-delivery (C-1349 Slice 1).** When the network admin's hub config carries a `payload_key` for the network, `cortex network secret add-member <network> <member-pubkey> --admin-seed <seed> --apply` (and per-member `rotate`) seals `K` **into the same envelope** as your leaf PSK. Your `cortex network join <network> --apply` then auto-fetches, unseals, and **writes `encryption: enabled` + `payload_key` (+ kid) into your `stacks/<slug>.yaml` for you** — zero manual key handling, and the file is clamped to `0600`. `K` is never printed to a terminal, log, or dry-run output (only the kid + a SHA-256 fingerprint are shown). This is the path to prefer.
+- **Fallback — manual handoff.** If the hub config has no `payload_key` for the network yet (encryption not staged hub-side), `add-member` seals the PSK only and prints an info line pointing here. In that case the admin hands you `K` (base64, decoding to exactly 32 bytes) over a secure channel and you stage it in config as in step 2 below.
+
+**2. (Fallback only) Enable encryption in your stack config** (`stacks/<slug>.yaml`) — the sealed-delivery default writes this block for you:
 
 ```yaml
 policy:

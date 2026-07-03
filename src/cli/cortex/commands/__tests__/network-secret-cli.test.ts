@@ -143,6 +143,67 @@ describe("cortex network secret add-member", () => {
     const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(1);
   });
+
+  // ===========================================================================
+  // C-1349 Slice 1 — the hub stack config supplies the payload key K, sealed
+  // alongside the PSK. K is a clearly-FAKE all-zero 32-byte key; it must ride the
+  // sealed blob but NEVER reach stdout.
+  // ===========================================================================
+  const FAKE_K = Buffer.alloc(32).toString("base64");
+
+  /** A config reader returning a hub stack config with K on `metafactory`. */
+  const loadWithK = ((_path: string) => ({
+    policy: {
+      federated: {
+        networks: [
+          { id: "metafactory", payload_key: FAKE_K, payload_key_id: "metafactory/k1" },
+        ],
+      },
+    },
+  })) as never;
+
+  test("--apply sealed with hub K configured → seals K + kid; K never in stdout", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(
+      argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
+      loadWithK, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    // The sealed blob (fake seal echoes plaintext) carries payload_key + kid.
+    expect(calls.posted.length).toBe(1);
+    expect(calls.posted[0]!.blob).toContain("payload_key");
+    expect(calls.posted[0]!.blob).toContain("metafactory/k1");
+    // K itself NEVER reaches stdout — only the kid + a fingerprint.
+    expect(res.stdout).not.toContain(FAKE_K);
+    expect(res.stdout).toContain("metafactory/k1");
+  });
+
+  test("--apply sealed with NO hub K configured → blob carries no payload_key", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    // Inject an explicit reader with NO key for the network (hermetic — never the
+    // real ~/.config/cortex, which may carry a live metafactory K).
+    const loadNoK = ((_path: string) => ({ policy: { federated: { networks: [] } } })) as never;
+    const res = await dispatchNetwork(
+      argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
+      loadNoK, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(calls.posted.length).toBe(1);
+    expect(calls.posted[0]!.blob).not.toContain("payload_key");
+  });
+
+  test("--json --apply with hub K → payload_key_kid + fingerprint surfaced, K is not", async () => {
+    const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(
+      argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath),
+      loadWithK, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
+    expect(parsed.data.payload_key_kid).toBe("metafactory/k1");
+    expect(parsed.data.payload_key_fingerprint).toBeDefined();
+    expect(res.stdout).not.toContain(FAKE_K);
+  });
 });
 
 describe("cortex network secret revoke-member", () => {

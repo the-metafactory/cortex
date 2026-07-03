@@ -585,6 +585,70 @@ describe("join", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // C-1349 Slice 1 — join installs the sealed payload key K into the stack config.
+  // ---------------------------------------------------------------------------
+
+  // Clearly-FAKE payload key material — never realistic K bytes.
+  const FAKE_K = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+  test("installs encryption:enabled + payload_key + kid when the envelope carried K", async () => {
+    const { ports, storeRef } = makeFakes({});
+    const res = await joinNetwork(
+      "metafactory",
+      { ...LOCAL, payloadKey: FAKE_K, payloadKeyId: "metafactory/k1" },
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks[0]!;
+    expect(net.encryption).toBe("enabled");
+    expect(net.payload_key).toBe(FAKE_K);
+    expect(net.payload_key_id).toBe("metafactory/k1");
+    // K NEVER appears in the human step log — only the kid + a fingerprint.
+    expect(res.steps.join("\n")).not.toContain(FAKE_K);
+    expect(res.steps.join("\n")).toContain("metafactory/k1");
+  });
+
+  test("defaults the kid to <net>/k1 when the envelope carried K but no kid", async () => {
+    const { ports, storeRef } = makeFakes({});
+    const res = await joinNetwork("metafactory", { ...LOCAL, payloadKey: FAKE_K }, ports);
+    expect(res.ok).toBe(true);
+    expect(storeRef.networks[0]!.payload_key_id).toBe("metafactory/k1");
+  });
+
+  test("no K in the envelope → the entry carries NO encryption fields (cleartext, unchanged)", async () => {
+    const { ports, storeRef } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks[0]!;
+    expect(net.encryption).toBeUndefined();
+    expect(net.payload_key).toBeUndefined();
+    expect(net.payload_key_id).toBeUndefined();
+  });
+
+  test("re-join with no new K PRESERVES a prior encryption block verbatim", async () => {
+    const prior: PolicyFederatedNetwork = {
+      id: "metafactory",
+      leaf_node: "metafactory",
+      peers: [],
+      accept_subjects: [],
+      deny_subjects: [],
+      announce_capabilities: [],
+      max_hop: 1,
+      encryption: "enabled",
+      payload_key: FAKE_K,
+      payload_key_id: "metafactory/k1",
+    };
+    const { ports, storeRef } = makeFakes({ initialNetworks: [prior] });
+    // Re-join with NO payloadKey (the member already holds K; a plain re-join).
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks[0]!;
+    expect(net.encryption).toBe("enabled");
+    expect(net.payload_key).toBe(FAKE_K);
+    expect(net.payload_key_id).toBe("metafactory/k1");
+  });
+
+  // ---------------------------------------------------------------------------
   // #794/#799 — choose the bind mode by bus type; FAIL FAST only on a genuinely
   // un-joinable bus (no crash). #799 relaxes the #794 guard for $G+creds buses.
   // ---------------------------------------------------------------------------
