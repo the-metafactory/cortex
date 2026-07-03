@@ -100,6 +100,8 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
       credsPath: "~/.config/nats/mf.creds",
       // #762 — FULL declares no network block, so no caps to announce.
       announceCapabilities: [],
+      // cortex#1485 — FULL declares no networks, so the composed set is empty.
+      policyNetworks: [],
     });
   });
 
@@ -280,6 +282,8 @@ describe("deriveJoinInputs — flag overrides win", () => {
       credsPath: "/flag/x.creds",
       // #762 — no caps flag exists; caps derive from the network block (none here).
       announceCapabilities: [],
+      // cortex#1485 — composed networks (none in FULL).
+      policyNetworks: [],
     });
   });
 

@@ -16,10 +16,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { dispatchNetwork, joinBlockerMessage, shouldReplaceCredsPreflightError } from "../network";
-import type { OwnAdmissionState } from "../../../../common/registry/admission-state";
+import { dispatchNetwork, joinBlockerMessage, shouldReplaceCredsPreflightError, type HandoffPortsFactory } from "../network";
+import type { OwnAdmissionState, ResolveOwnAdmissionStateResult } from "../../../../common/registry/admission-state";
 import type { LoadedConfig } from "../../../../common/config/loader";
 import type { AgentConfig } from "../../../../common/types/config";
+import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
+import type { NetworkHandoffPorts, HandoffHubAuthPort } from "../network-handoff-ports";
 
 // #753 — a reader returning an EMPTY config so derivation tests are
 // deterministic (no dependence on the dev machine's real ~/.config/cortex).
@@ -201,51 +203,140 @@ describe("join dry-run safety", () => {
 });
 
 // =============================================================================
-// cortex#1485 — `join --guided` fail-closed leaf-up gate
+// cortex#1485 (Sage #1499) — `join --guided` discriminating leaf-up gate
 // =============================================================================
 
-describe("#1485 — join --guided guard", () => {
-  test("--guided refuses the leaf-up step when the hub-authorize leg is unconfirmed (exit 1)", async () => {
+// A canned admission state (ADMITTED, optionally sealed) for the guard's seal leg.
+function admitted(hasSealedSecret: boolean): ResolveOwnAdmissionStateResult {
+  return {
+    ok: true,
+    state: {
+      state: hasSealedSecret ? "admitted-sealed" : "admitted-unsealed",
+      networkId: "metafactory",
+      requestId: "req-1",
+      hasSealedSecret,
+      peerPubkey: "PUBKEY_FIXTURE",
+    },
+  };
+}
+
+/** An injectable handoff-ports factory for the `join --guided` guard: seal leg
+ *  from a canned admission state; hub-authorize either the documented stub
+ *  (undefined) or a real true/false; leaf-up unused by the guard. */
+function guidedHandoffFactory(opts: {
+  sealed: boolean;
+  hubConfirmed?: boolean; // undefined = documented stub
+}): HandoffPortsFactory {
+  const hubAuth: HandoffHubAuthPort =
+    opts.hubConfirmed === undefined
+      ? { resolveHubAuthorized: async () => ({ confirmed: undefined, reason: "documented stub" }) }
+      : { resolveHubAuthorized: async () => ({ confirmed: opts.hubConfirmed }) };
+  const ports: NetworkHandoffPorts = {
+    admission: { resolve: async () => admitted(opts.sealed) },
+    hubAuth,
+    config: {
+      readNetworks: () => ({
+        networks: [
+          { id: "metafactory", leaf_node: "hub", peers: [], accept_subjects: [], deny_subjects: [] } as unknown as PolicyFederatedNetwork,
+        ],
+      }),
+    },
+    monitor: { resolve: () => ({ url: "http://127.0.0.1:8222", configured: true }), fetchLeafz: async () => ({ leafs: [] }) },
+  };
+  return () => ports;
+}
+
+/** dispatchNetwork(argv, load, ping, provision, secret, makeLive, keyRotation, doctor, handoff). */
+function joinWithHandoff(argv: string[], factory: HandoffPortsFactory) {
+  return dispatchNetwork(
+    argv,
+    EMPTY_READER,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    factory,
+  );
+}
+
+/** The full-flag join argv that derives cleanly on EMPTY_READER + reaches the guard. */
+function guidedArgv(dir: string, extra: string[]): string[] {
+  return [
+    "join", "metafactory",
+    ...extra,
+    "--principal", "andreas",
+    "--registry-url", "http://127.0.0.1:0",
+    "--seed-path", join(dir, "seed.nk"),
+    "--creds", join(dir, "andreas.creds"),
+    "--account", "A" + "B".repeat(55),
+    "--nats-config", join(dir, "local.conf"),
+    "--plist", join(dir, "nats.plist"),
+  ];
+}
+
+describe("#1485 — join --guided guard DISCRIMINATES", () => {
+  test("seal NOT done → BLOCK naming the seal leg (exit 1, no disk mutation)", async () => {
     const dir = freshDir();
-    // A fully-flagged join whose admission read cannot succeed (no seed file /
-    // unreachable registry) ⇒ seal leg NOT done; the hub-authorize leg is the
-    // documented stub (always undefined). So the guard MUST refuse the leaf-up
-    // step, fail-closed, before any join mutation is attempted.
-    const res = await dispatchNetwork([
-      "join", "metafactory",
-      "--guided",
-      "--principal", "andreas",
-      "--registry-url", "http://127.0.0.1:0", // unreachable by construction
-      "--seed-path", join(dir, "seed.nk"), // missing → admission read fails
-      "--creds", join(dir, "andreas.creds"),
-      "--account", "A" + "B".repeat(55),
-      "--nats-config", join(dir, "local.conf"),
-      "--plist", join(dir, "nats.plist"),
-    ], EMPTY_READER);
+    const res = await joinWithHandoff(guidedArgv(dir, ["--guided"]), guidedHandoffFactory({ sealed: false }));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("cannot bring the leaf up");
-    // The refusal names the outstanding leg (seal here — it gates hub-authorize).
     expect(res.stderr).toContain("seal");
-    // And nothing was written to disk (the guard fired before any mutation).
     expect(existsSync(join(dir, "local.conf"))).toBe(false);
     expect(existsSync(join(dir, "nats.plist"))).toBe(false);
   });
 
-  test("WITHOUT --guided the same join proceeds past the gate (fails later on register, exit 1) — proving the gate is opt-in", async () => {
+  test("sealed, hub-authorize undefined (stub), NO attestation → BLOCK pointing at --hub-authorized-confirmed (exit 1)", async () => {
     const dir = freshDir();
-    const res = await dispatchNetwork([
-      "join", "metafactory",
-      "--principal", "andreas",
-      "--registry-url", "http://127.0.0.1:0",
-      "--seed-path", join(dir, "seed.nk"),
-      "--creds", join(dir, "andreas.creds"),
-      "--account", "A" + "B".repeat(55),
-      "--nats-config", join(dir, "local.conf"),
-      "--plist", join(dir, "nats.plist"),
-    ], EMPTY_READER);
+    const res = await joinWithHandoff(guidedArgv(dir, ["--guided"]), guidedHandoffFactory({ sealed: true }));
     expect(res.exitCode).toBe(1);
-    // The failure is NOT the guided-gate refusal — it's the downstream register
-    // failure (dry-run banner present), confirming the gate did not fire.
+    expect(res.stderr).toContain("can't be auto-verified");
+    expect(res.stderr).toContain("--hub-authorized-confirmed");
+    expect(existsSync(join(dir, "local.conf"))).toBe(false);
+  });
+
+  test("sealed + --hub-authorized-confirmed → PROCEEDS past the gate (fails later on register, not the guard)", async () => {
+    const dir = freshDir();
+    const res = await joinWithHandoff(
+      guidedArgv(dir, ["--guided", "--hub-authorized-confirmed"]),
+      guidedHandoffFactory({ sealed: true }),
+    );
+    expect(res.exitCode).toBe(1);
+    // Proof the guard PASSED: no guard-refusal message; the failure is the
+    // downstream register (dry-run banner present).
+    expect(res.stderr).not.toContain("cannot bring the leaf up");
+    expect(res.stderr).toContain("dry-run");
+  });
+
+  test("sealed + hub-authorize REAL true → PROCEEDS with NO attestation needed", async () => {
+    const dir = freshDir();
+    const res = await joinWithHandoff(
+      guidedArgv(dir, ["--guided"]),
+      guidedHandoffFactory({ sealed: true, hubConfirmed: true }),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).not.toContain("cannot bring the leaf up");
+    expect(res.stderr).toContain("dry-run");
+  });
+
+  test("sealed + hub-authorize REAL false → BLOCKS EVEN WITH attestation (attestation cannot override)", async () => {
+    const dir = freshDir();
+    const res = await joinWithHandoff(
+      guidedArgv(dir, ["--guided", "--hub-authorized-confirmed"]),
+      guidedHandoffFactory({ sealed: true, hubConfirmed: false }),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("cannot bring the leaf up");
+    expect(res.stderr).toContain("cannot override");
+    expect(existsSync(join(dir, "local.conf"))).toBe(false);
+  });
+
+  test("WITHOUT --guided the gate never fires (proceeds to register) — proving it is opt-in", async () => {
+    const dir = freshDir();
+    // Even with an unsealed admission state, no --guided ⇒ no gate.
+    const res = await joinWithHandoff(guidedArgv(dir, []), guidedHandoffFactory({ sealed: false }));
+    expect(res.exitCode).toBe(1);
     expect(res.stderr).not.toContain("cannot bring the leaf up");
     expect(res.stderr).toContain("dry-run");
   });

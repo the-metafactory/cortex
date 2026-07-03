@@ -105,7 +105,6 @@ import {
   buildDryRunPorts,
   buildLivePublicPorts,
   buildDryRunPublicPorts,
-  buildAdmissionStatePort,
   type LivePortsConfig,
 } from "./network-adapters";
 import {
@@ -181,16 +180,14 @@ import {
 import type { NetworkDoctorPorts } from "./network-doctor-ports";
 import {
   deriveHandoffState,
+  gatherHandoffSignals,
   guardLeafUp,
   runHandoffStatus,
   type HandoffLeg,
   type HandoffReport,
 } from "./network-handoff-lib";
 import type { NetworkHandoffPorts } from "./network-handoff-ports";
-import {
-  buildLiveHandoffPorts,
-  buildStubHubAuthPort,
-} from "./network-handoff-adapters";
+import { buildLiveHandoffPorts } from "./network-handoff-adapters";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -291,12 +288,20 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--allow": "value",
         // cortex#1485 (epic #1479, join-6) — opt-in guided-join. When set, the
         // leaf-up step is GATED on the 3-leg handoff state: it refuses (fails
-        // closed) unless the seal + hub-authorize legs are confirmed, instead of
-        // storming the hub with an unauthorized leaf. OPT-IN, never the default:
-        // the hub-authorize leg is a documented stub (always undefined ⇒
-        // fail-closed) until a hub-owner-side `hub_authorized_at` registry marker
-        // exists, so defaulting it would block EVERY join today.
+        // closed) unless the seal leg is done AND the hub-authorize leg is
+        // effectively done, instead of storming the hub with an unauthorized leaf.
+        // OPT-IN, never the default. Because the hub-authorize leg can't be
+        // auto-verified today (documented stub until the #1498 registry marker),
+        // --guided is a DELIBERATE-CONFIRMATION gate: it forces the member to
+        // acknowledge the un-auto-verifiable leg via --hub-authorized-confirmed
+        // rather than blocking unconditionally (Sage #1499).
         "--guided": "bool",
+        // cortex#1485 (Sage #1499) — member ATTESTATION for the guided-join gate:
+        // "the hub owner has confirmed to me they applied my authorization". Under
+        // --guided, upgrades an un-auto-verifiable (undefined) hub-authorize leg to
+        // treated-done so the leaf-up step PROCEEDS — but NEVER overrides a real
+        // negative (#1498) hub-authorize signal. Meaningless without --guided.
+        "--hub-authorized-confirmed": "bool",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -913,6 +918,12 @@ async function runJoin(
   json: boolean,
   load: ConfigReader,
   provisionPortsFactory: ProvisionPortsFactory,
+  // cortex#1485 (Sage #1499) — the SAME injectable handoff-ports factory the
+  // `handoff` command uses, so the `--guided` guard reads the leg signals through
+  // the live hub-auth port and picks up the #1498 real read automatically once
+  // wired (no code change), and CLI tests can inject a fake to drive both guard
+  // branches.
+  handoffPortsFactory: HandoffPortsFactory,
 ): Promise<ExitResult> {
   // S5 (#739) — `join public` is the open-square opt-in, structurally distinct
   // from a federated join (no leaf, no creds/account, no peers). Route it to
@@ -1080,24 +1091,33 @@ async function runJoin(
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
 
-  // cortex#1485 (epic #1479, join-6) — OPT-IN guided-join gate. When `--guided`
-  // is set, the leaf-up step is refused (fail-closed) unless the 3-leg handoff
-  // (seal → hub-authorize → leaf-up) has its seal + hub-authorize legs
-  // confirmed — so a member never storms the hub with an unauthorized leaf
-  // (the metafactory-community Authorization-Violation window). This is opt-in,
-  // NOT the default: the hub-authorize leg is a documented stub (always
-  // undefined ⇒ fail-closed) until a hub-owner-side `hub_authorized_at` registry
-  // marker exists, so defaulting it would block every join today. See
-  // `network-handoff-adapters.ts` `buildStubHubAuthPort`.
+  // cortex#1485 (epic #1479, join-6; Sage #1499) — OPT-IN guided-join gate. When
+  // `--guided` is set, the leaf-up step is refused (fail-closed) unless the
+  // 3-leg handoff (seal → hub-authorize → leaf-up) is clear to bring the leaf
+  // up — so a member never storms the hub with an unauthorized leaf (the
+  // metafactory-community Authorization-Violation window). It reads the leg
+  // signals through the SAME injected handoff-ports factory `handoff status`
+  // uses (via the shared `gatherHandoffSignals`), so the #1498 real
+  // hub-authorize read is picked up automatically once wired — no code change
+  // here. Because that read is a documented stub TODAY (hub-authorize always
+  // undefined), --guided is a DELIBERATE-CONFIRMATION gate rather than an
+  // unconditional block: `--hub-authorized-confirmed` is the member attesting
+  // "the hub owner confirmed my authorization", which upgrades the
+  // un-auto-verifiable leg — but NEVER a real negative (#1498). This is
+  // deliberately NOT the default: without the attestation path it would block
+  // every join today.
   if (flags["--guided"] === true) {
-    const admission = buildAdmissionStatePort(cfg);
-    const hubAuth = buildStubHubAuthPort();
-    const admissionRes = await admission.resolve(networkId);
-    const sealed = admissionRes.ok && admissionRes.state.hasSealedSecret;
-    const hubRes = await hubAuth.resolveHubAuthorized(networkId, inputs.principal);
-    // leafUp:false — we are ABOUT to bring it up; the guard depends only on
-    // seal + hub-authorize.
-    const state = deriveHandoffState({ sealed, hubAuthorized: hubRes.confirmed, leafUp: false });
+    const handoffPorts = handoffPortsFactory(cfg, inputs.policyNetworks);
+    // member == the joining principal — this IS the local stack, so the leaf-up
+    // leg reads local `/leafz` (though the guard depends only on seal +
+    // hub-authorize).
+    const { signals } = await gatherHandoffSignals(handoffPorts, {
+      networkId,
+      member: inputs.principal,
+      selfPrincipal: inputs.principal,
+    });
+    const attested = flags["--hub-authorized-confirmed"] === true;
+    const state = deriveHandoffState(signals, { attested });
     const guard = guardLeafUp(state, networkId);
     if (!guard.allowed) {
       return opError("join", guard.message, json);
@@ -4156,7 +4176,7 @@ export async function dispatchNetwork(
 
   switch (parsed.subcommand) {
     case "join":
-      return runJoin(parsed.positionals.network ?? "", parsed.flags, json, load, provisionPortsFactory);
+      return runJoin(parsed.positionals.network ?? "", parsed.flags, json, load, provisionPortsFactory, handoffPortsFactory);
     case "leave":
       return runLeave(parsed.positionals.network ?? "", parsed.flags, json, load);
     case "status":
@@ -4444,9 +4464,17 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
                           sender principals. Empty (default) = inbound DISABLED (OQ1
                           safe). Non-empty = inbound enabled, gated to these ids only.
   --guided                (join, #1485) OPT-IN guided join: refuse to bring the leaf
-                          up (fail-closed) until the 3-leg handoff's seal + hub-authorize
-                          legs are confirmed, instead of storming the hub. Off by default
-                          (hub-authorize is a documented stub today — see 'handoff').
+                          up (fail-closed) until the 3-leg handoff is clear — seal done
+                          AND hub-authorize effectively done — instead of storming the
+                          hub. Off by default. Hub-authorize can't be auto-verified today
+                          (documented stub until #1498), so --guided is a deliberate-
+                          confirmation gate: pair it with --hub-authorized-confirmed once
+                          the hub owner tells you they applied your authorization.
+  --hub-authorized-confirmed  (join, #1485) member attestation: "the hub owner confirmed
+                          they applied my authorization on the hub". Under --guided,
+                          upgrades the un-auto-verifiable hub-authorize leg to done so the
+                          leaf-up step proceeds. NEVER overrides a real negative (#1498).
+                          No effect without --guided.
   --network <net>         (handoff) the network whose handoff to report (required).
   --monitor-url <url>     (status) nats-server monitor base URL for leaf telemetry.
   --hub <tls-url>         (create) the hub's leaf-node dial URL (e.g. tls://hub.meta-factory.ai:7422).

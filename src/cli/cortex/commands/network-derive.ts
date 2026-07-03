@@ -38,6 +38,7 @@
  */
 
 import type { LoadedConfig } from "../../../common/config/loader";
+import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
 import type { ServicePlatform } from "../../../common/nats/nats-service-manager";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { deriveStackId } from "../../../common/types/stack";
@@ -170,6 +171,13 @@ export interface DerivedJoinInputs {
    * principal joins the network's roster.
    */
   announceCapabilities: string[];
+  /**
+   * cortex#1485 (Sage #1499) — the COMPOSED `policy.federated.networks[]` from
+   * the loaded config, threaded through so the `join --guided` handoff guard can
+   * build its config port (leaf-up leg lookup) off the same composed networks
+   * the daemon loads, without re-reading the file. Empty when none are declared.
+   */
+  policyNetworks: PolicyFederatedNetwork[];
 }
 
 /** The leave inputs — a strict subset (no registry / seed / account / creds). */
@@ -566,6 +574,8 @@ export function deriveJoinInputs(
       ...(leafUser !== undefined && { leafUser }),
       ...(operatorModePackage !== undefined && { operatorModePackage }),
       announceCapabilities,
+      // cortex#1485 — the composed networks, for the --guided handoff guard.
+      policyNetworks: cfg.policy?.federated?.networks ?? [],
     },
   };
 }

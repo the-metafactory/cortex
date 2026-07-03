@@ -92,6 +92,20 @@ describe("deriveHandoffState — leg combinations", () => {
     expect(s.canBringLeafUp).toBe(true);
   });
 
+  test("sealed + attested, leaf-up UNKNOWN (undefined): hub-authorize attested-done, leaf-up pending, canBringLeafUp=true", () => {
+    const s = deriveHandoffState(
+      { sealed: true, hubAuthorized: undefined, leafUp: undefined },
+      { attested: true },
+    );
+    expect(statusOf(s.legs, "hub-authorize")).toBe("done");
+    // leaf-up is ready (seal+hub done) but its state is unobservable → pending,
+    // NOT a false "done".
+    expect(statusOf(s.legs, "leaf-up")).toBe("pending");
+    expect(s.legs.find((l) => l.id === "leaf-up")?.detail).toContain("not observable");
+    expect(s.canBringLeafUp).toBe(true);
+    expect(s.nextLeg).toBe("leaf-up");
+  });
+
   test("legs are always exactly [seal, hub-authorize, leaf-up] in order", () => {
     const s = deriveHandoffState({ sealed: false, hubAuthorized: false, leafUp: false });
     expect(s.legs.map((l) => l.id)).toEqual(["seal", "hub-authorize", "leaf-up"]);
@@ -114,12 +128,23 @@ describe("deriveHandoffState — leg combinations", () => {
 // ---------------------------------------------------------------------------
 
 describe("canBringLeafUp", () => {
-  test("true only when sealed AND hubAuthorized === true", () => {
+  test("true when sealed AND hubAuthorized === true (no attestation needed)", () => {
     expect(canBringLeafUp(true, true)).toBe(true);
     expect(canBringLeafUp(true, false)).toBe(false);
     expect(canBringLeafUp(true, undefined)).toBe(false);
     expect(canBringLeafUp(false, true)).toBe(false);
     expect(canBringLeafUp(false, undefined)).toBe(false);
+  });
+
+  test("attestation upgrades an UNDEFINED hub-authorize (the discriminating case)", () => {
+    // undefined + attested → PROCEEDS.
+    expect(canBringLeafUp(true, undefined, true)).toBe(true);
+    // but still needs the seal leg.
+    expect(canBringLeafUp(false, undefined, true)).toBe(false);
+  });
+
+  test("attestation NEVER upgrades a REAL false hub-authorize", () => {
+    expect(canBringLeafUp(true, false, true)).toBe(false);
   });
 });
 
@@ -134,19 +159,43 @@ describe("guardLeafUp", () => {
     expect(g.allowed).toBe(true);
   });
 
-  test("refuses when hub-authorize pending, naming the outstanding leg + owner", () => {
+  test("PROCEEDS when hub-authorize is undefined but the member attests (--hub-authorized-confirmed)", () => {
+    const s = deriveHandoffState(
+      { sealed: true, hubAuthorized: undefined, leafUp: false },
+      { attested: true },
+    );
+    expect(s.canBringLeafUp).toBe(true);
+    expect(guardLeafUp(s, "metafactory-community").allowed).toBe(true);
+  });
+
+  test("refuses (hub-unverifiable) when hub-authorize undefined + NO attestation — message points at --hub-authorized-confirmed", () => {
     const s = deriveHandoffState({ sealed: true, hubAuthorized: undefined, leafUp: false });
+    expect(s.leafUpBlockedReason).toBe("hub-unverifiable");
     const g = guardLeafUp(s, "metafactory-community");
     expect(g.allowed).toBe(false);
     if (!g.allowed) {
-      expect(g.message).toContain("hub-authorize");
-      expect(g.message).toContain("hub-owner");
+      expect(g.message).toContain("can't be auto-verified");
+      expect(g.message).toContain("--hub-authorized-confirmed");
       expect(g.message).toContain("metafactory-community");
     }
   });
 
-  test("refuses when seal pending, naming seal + admin", () => {
+  test("refuses (hub-denied) on a REAL false hub-authorize EVEN with attestation — message says attestation cannot override", () => {
+    const s = deriveHandoffState(
+      { sealed: true, hubAuthorized: false, leafUp: false },
+      { attested: true },
+    );
+    expect(s.leafUpBlockedReason).toBe("hub-denied");
+    const g = guardLeafUp(s, "metafactory-community");
+    expect(g.allowed).toBe(false);
+    if (!g.allowed) {
+      expect(g.message).toContain("cannot override");
+    }
+  });
+
+  test("refuses (seal-pending) when seal pending, naming seal + admin", () => {
     const s = deriveHandoffState({ sealed: false, hubAuthorized: undefined, leafUp: false });
+    expect(s.leafUpBlockedReason).toBe("seal-pending");
     const g = guardLeafUp(s, "net-x");
     expect(g.allowed).toBe(false);
     if (!g.allowed) {
@@ -285,7 +334,9 @@ describe("runHandoffStatus", () => {
       member: "jc",
       selfPrincipal: "andreas",
     });
-    expect(report.notes.some((n) => n.includes("leaf-up leg reflects THIS machine"))).toBe(true);
+    expect(report.notes.some((n) => n.includes("not observable for member"))).toBe(true);
+    // The leaf-up signal is UNKNOWN for a remote member — never a false local read.
+    expect(statusOf(report.state.legs, "leaf-up") === "done").toBe(false);
   });
 
   test("network not configured locally: leaf-up leg cannot read, note added", async () => {
