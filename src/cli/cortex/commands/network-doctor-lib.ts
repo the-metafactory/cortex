@@ -227,7 +227,10 @@ async function checkMonitorReachable(
 // Leg 3 — leaf-established
 // ---------------------------------------------------------------------------
 
-type LeafMatch = { leaf: LeafzEntry; match: "named" | "lone-fallback" };
+interface LeafMatch {
+  leaf: LeafzEntry;
+  match: "named" | "lone-fallback";
+}
 
 function findEstablishedLeaf(
   leafz: LeafzResponse,
