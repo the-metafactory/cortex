@@ -21,8 +21,9 @@ import {
   renderOperatorModeBlocks,
   renderBaseIsolatedConfig,
   natsConfigMonitorUrl,
-  natsConfigClientListenPort,
+  natsConfigClientListen,
 } from "../../../common/nats/leaf-remote-renderer";
+import { probeHealthzMonitor } from "../../../common/nats/healthz-probe";
 import {
   selectNatsServiceManager,
   currentServicePlatform,
@@ -492,6 +493,23 @@ const MAKELIVE_HEALTH_PROBE_TIMEOUT_MS = 5000;
 const NATS_DEFAULT_CLIENT_PORT = 4222;
 
 /**
+ * cortex#1495 v3 (important) — map a PARSED nats `listen` host to the address the
+ * liveness TCP connect should actually dial:
+ *   - a specific host (`10.0.0.5`, `localhost`, an IPv6 literal) is used as-is —
+ *     hardcoding `127.0.0.1` would false-fail (and false-rollback) a bus that
+ *     listens on a non-loopback address;
+ *   - a WILDCARD bind is reachable via loopback: `0.0.0.0` → `127.0.0.1`,
+ *     `::`/`[::]` → `::1`;
+ *   - an empty/unparseable host (bare `port:` / `listen: <port>`) → `127.0.0.1`.
+ */
+function connectHostForListen(rawHost: string): string {
+  const h = rawHost.trim();
+  if (h === "" || h === "0.0.0.0") return "127.0.0.1";
+  if (h === "::" || h === "[::]") return "::1";
+  return h;
+}
+
+/**
  * cortex#1495 v2 (important 2) — an injectable bounded TCP-connect probe. A bus
  * with NO HTTP monitor (the #1476 community class) still has a client listen
  * port; a successful connect is a REAL liveness signal (the process is up and
@@ -608,10 +626,12 @@ export function buildNatsCanaryAdapter(
       // community bus class: no `http_port`) must NOT read as inconclusive-healthy,
       // or auto-rollback goes inert on the exact config that motivated this slice.
       // Fall back to a REAL liveness signal: a bounded TCP connect to the client
-      // listen port (parsed from `listen:`/`port:`, default 4222). Connect ⇒
-      // genuinely healthy (NOT inconclusive); refused/timeout ⇒ unhealthy → the
-      // orchestrator rolls back. RESIDUAL: a listening client port proves the
-      // process is up + accepting, not that JetStream fully recovered — but it
+      // listen address (parsed from `listen:`/`host:`+`port:`). Connect ⇒ genuinely
+      // healthy (NOT inconclusive); refused/timeout ⇒ unhealthy → the orchestrator
+      // rolls back. cortex#1495 v3 — dial the PARSED host (wildcard/empty mapped to
+      // loopback), never a hardcoded 127.0.0.1 that would false-fail a bus bound to
+      // a specific non-loopback address. RESIDUAL: a listening client port proves
+      // the process is up + accepting, not that JetStream fully recovered — but it
       // catches the "nats-server crashed on the new config" case the slice targets.
       if (base === undefined) {
         if (configText === undefined) {
@@ -619,35 +639,20 @@ export function buildNatsCanaryAdapter(
           // absent/unreadable) — disclosed fallback to inconclusive-healthy.
           return { healthy: true, inconclusive: true };
         }
-        const port = natsConfigClientListenPort(configText) ?? NATS_DEFAULT_CLIENT_PORT;
-        const connected = await tcpConnect("127.0.0.1", port, timeoutMs);
+        const listen = natsConfigClientListen(configText);
+        const host = connectHostForListen(listen?.host ?? "");
+        const port = listen?.port ?? NATS_DEFAULT_CLIENT_PORT;
+        const connected = await tcpConnect(host, port, timeoutMs);
         return connected
           ? { healthy: true }
           : {
               healthy: false,
-              reason: `bus client port 127.0.0.1:${port.toString()} not accepting connections after restart (no HTTP monitor to probe; TCP connect failed)`,
+              reason: `bus client port ${host}:${port.toString()} not accepting connections after restart (no HTTP monitor to probe; TCP connect failed)`,
             };
       }
-      try {
-        const res = await fetch(`${base.replace(/\/+$/, "")}/healthz`, {
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!res.ok) {
-          return {
-            healthy: false,
-            reason: `nats-server monitor ${base}/healthz returned HTTP ${res.status.toString()}`,
-          };
-        }
-        return { healthy: true };
-      } catch (err) {
-        const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
-        return {
-          healthy: false,
-          reason: isTimeout
-            ? `nats-server monitor ${base}/healthz timed out after ${timeoutMs.toString()}ms (accepted the connection but never responded — bus hung)`
-            : `nats-server monitor ${base} unreachable: ${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
+      // cortex#1495 v3 — shared `/healthz` fetch+timeout+error-map (join + make-live
+      // call the ONE helper so their probe bodies can't drift).
+      return probeHealthzMonitor(base, timeoutMs);
     },
   };
 }

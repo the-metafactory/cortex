@@ -57,6 +57,7 @@ import {
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import { NetworkCache } from "../../../common/registry/network-cache";
 import { backupConfigFile } from "../../../common/nats/config-backup";
+import { probeHealthzMonitor } from "../../../common/nats/healthz-probe";
 import {
   findCortexDaemonDescriptor,
   type DaemonLocatorIO,
@@ -1148,39 +1149,13 @@ function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerP
       // INCONCLUSIVE (cortex#1495 important 3) so the caller's step log says
       // "inconclusive, treated as healthy" rather than "verified healthy".
       if (!monitor.configured) return { healthy: true, inconclusive: true };
-      const base = monitor.url.replace(/\/+$/, "");
       // #821 MAJOR — BOUND the probe. A monitor that accepts the TCP connection
       // but never responds (hung/deadlocked nats-server — exactly the failure the
       // probe exists to catch) would hang an unbounded `fetch` forever and stall
-      // joinNetwork with no verdict. AbortSignal.timeout aborts after the
-      // configured budget; a timeout/abort is treated as healthy:false (the
-      // restart did NOT bring a responsive bus up).
+      // joinNetwork with no verdict. cortex#1495 v3 — the fetch+timeout+error-map
+      // body is the SHARED `probeHealthzMonitor` so join + make-live can't drift.
       const timeoutMs = cfg.healthProbeTimeoutMs ?? DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
-      try {
-        const res = await fetch(`${base}/healthz`, {
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!res.ok) {
-          return {
-            healthy: false,
-            reason: `nats-server monitor ${base}/healthz returned HTTP ${res.status.toString()}`,
-          };
-        }
-        return { healthy: true };
-      } catch (err) {
-        // A timeout/abort means the monitor accepted but did not respond in time
-        // — the bus is hung, NOT healthy. A connection error means it's down or
-        // the port isn't listening. Either way the restart did NOT bring a
-        // healthy bus up. Distinguish the timeout for an actionable reason.
-        const isTimeout =
-          err instanceof DOMException && err.name === "TimeoutError";
-        return {
-          healthy: false,
-          reason: isTimeout
-            ? `nats-server monitor ${base}/healthz timed out after ${timeoutMs.toString()}ms (accepted the connection but never responded — bus hung)`
-            : `nats-server monitor ${base} unreachable: ${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
+      return probeHealthzMonitor(monitor.url, timeoutMs);
     },
   };
 }

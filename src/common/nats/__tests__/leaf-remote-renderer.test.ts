@@ -22,7 +22,7 @@ import type { NetworkDescriptor } from "../../registry/types";
 import {
   natsConfigHasAccountTree,
   natsConfigMonitorUrl,
-  natsConfigClientListenPort,
+  natsConfigClientListen,
   leafIncludeFileName,
   mergeLeafRemotes,
   renderLeafIncludeFile,
@@ -526,42 +526,60 @@ describe("#821 natsConfigMonitorUrl", () => {
   });
 });
 
-describe("cortex#1495 v2 natsConfigClientListenPort", () => {
-  test("derives from `listen: 127.0.0.1:4222` (host:port)", () => {
-    expect(natsConfigClientListenPort("listen: 127.0.0.1:4222\n")).toBe(4222);
+describe("cortex#1495 v2/v3 natsConfigClientListen", () => {
+  test("derives host+port from `listen: 127.0.0.1:4222`", () => {
+    expect(natsConfigClientListen("listen: 127.0.0.1:4222\n")).toEqual({ host: "127.0.0.1", port: 4222 });
   });
 
-  test("derives from `listen: \"0.0.0.0:4299\"` (quoted host:port)", () => {
-    expect(natsConfigClientListenPort('listen: "0.0.0.0:4299"\n')).toBe(4299);
+  test("derives host+port from `listen: 10.0.0.5:4222` (v3: keep the NON-loopback host)", () => {
+    expect(natsConfigClientListen("listen: 10.0.0.5:4222\n")).toEqual({ host: "10.0.0.5", port: 4222 });
   });
 
-  test("derives from a bare `listen: 4300` (port only)", () => {
-    expect(natsConfigClientListenPort("listen: 4300\n")).toBe(4300);
+  test("derives from `listen: \"0.0.0.0:4299\"` (quoted, wildcard host kept RAW)", () => {
+    expect(natsConfigClientListen('listen: "0.0.0.0:4299"\n')).toEqual({ host: "0.0.0.0", port: 4299 });
   });
 
-  test("derives from the top-level `port: 4224` directive", () => {
-    expect(natsConfigClientListenPort("port: 4224\nhttp_port: 8224\n")).toBe(4224);
+  test("derives from bracketed IPv6 `listen: [::]:4222`", () => {
+    expect(natsConfigClientListen("listen: [::]:4222\n")).toEqual({ host: "::", port: 4222 });
+  });
+
+  test("derives from bracketed IPv6 with a real addr `listen: [2001:db8::1]:4222`", () => {
+    expect(natsConfigClientListen("listen: [2001:db8::1]:4222\n")).toEqual({ host: "2001:db8::1", port: 4222 });
+  });
+
+  test("a bare `listen: 4300` yields an empty host (caller defaults it)", () => {
+    expect(natsConfigClientListen("listen: 4300\n")).toEqual({ host: "", port: 4300 });
+  });
+
+  test("derives from the split `host:`/`port:` directive form", () => {
+    expect(natsConfigClientListen("host: 10.0.0.9\nport: 4224\nhttp_port: 8224\n")).toEqual({
+      host: "10.0.0.9",
+      port: 4224,
+    });
+  });
+
+  test("a bare `port: 4224` (no host directive) yields an empty host", () => {
+    expect(natsConfigClientListen("port: 4224\nhttp_port: 8224\n")).toEqual({ host: "", port: 4224 });
   });
 
   test("`listen:` wins over `port:` when both are present", () => {
-    expect(natsConfigClientListenPort("listen: 127.0.0.1:4222\nport: 9999\n")).toBe(4222);
+    expect(natsConfigClientListen("listen: 127.0.0.1:4222\nport: 9999\n")).toEqual({ host: "127.0.0.1", port: 4222 });
   });
 
   test("`http_port` / `monitor_port` never false-match the client `port:` parse", () => {
-    // Only a MONITOR port is declared — no client listen/port → undefined.
-    expect(natsConfigClientListenPort("http_port: 8222\nmonitor_port: 8223\n")).toBeUndefined();
+    expect(natsConfigClientListen("http_port: 8222\nmonitor_port: 8223\n")).toBeUndefined();
   });
 
   test("a COMMENTED-OUT listen/port does NOT count", () => {
-    expect(natsConfigClientListenPort("// listen: 4222\n# port: 4223\n")).toBeUndefined();
+    expect(natsConfigClientListen("// listen: 4222\n# port: 4223\n")).toBeUndefined();
   });
 
   test("tolerates an inline trailing comment on `listen:`", () => {
-    expect(natsConfigClientListenPort("listen: 127.0.0.1:4222 # client\n")).toBe(4222);
+    expect(natsConfigClientListen("listen: 127.0.0.1:4222 # client\n")).toEqual({ host: "127.0.0.1", port: 4222 });
   });
 
-  test("no listen/port directive → undefined (caller applies the 4222 default)", () => {
-    expect(natsConfigClientListenPort("server_name: work\n")).toBeUndefined();
+  test("no listen/port directive → undefined (caller applies the 127.0.0.1:4222 default)", () => {
+    expect(natsConfigClientListen("server_name: work\n")).toBeUndefined();
   });
 });
 

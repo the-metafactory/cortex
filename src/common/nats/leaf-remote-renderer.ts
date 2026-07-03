@@ -1191,34 +1191,80 @@ export function natsConfigMonitorUrl(natsConfigText: string): string | undefined
 }
 
 /**
- * cortex#1495 v2 (important 2) — parse the nats-server CLIENT listen PORT from a
- * config, so a bus with NO HTTP monitor can still be liveness-probed by a plain
- * TCP connect to its client port (the #1476 community bus class: no `http_port`,
- * so the `/healthz` probe was inconclusive and auto-rollback went inert). Order:
- *   1. `listen: <host:port | port>` (the explicit client listen directive), then
- *   2. `port: <n>` (the top-level client-port directive).
- * Returns the port, or `undefined` when neither is present (the caller then
- * applies the NATS default 4222, or — if the config is unreadable — falls back to
- * the inconclusive-healthy disclosure). Comments are stripped first; only a
- * line-anchored `port` matches, so `http_port`/`monitor_port` never false-hit.
+ * cortex#1495 v2/v3 — the parsed nats-server CLIENT listen address (HOST + PORT).
+ * `host` is the RAW host as written in the config (`""` when only a bare port was
+ * given); the caller maps a wildcard/empty host to the right loopback for the
+ * connect (v3 important: probing a hardcoded `127.0.0.1` would false-rollback a
+ * bus that listens on a specific non-loopback address like `10.0.0.5:4222`).
  */
-export function natsConfigClientListenPort(natsConfigText: string): number | undefined {
+export interface NatsClientListen {
+  /** Raw listen host (`10.0.0.5`, `0.0.0.0`, `::`, `localhost`, or `""` for a bare port). */
+  host: string;
+  /** Client listen port. */
+  port: number;
+}
+
+/**
+ * cortex#1495 v2/v3 — parse the nats-server CLIENT listen HOST+PORT from a config,
+ * so a bus with NO HTTP monitor can still be liveness-probed by a plain TCP
+ * connect to its client listen address (the #1476 community bus class: no
+ * `http_port`, so the `/healthz` probe was inconclusive and auto-rollback went
+ * inert). Order:
+ *   1. `listen: <host:port | [ipv6]:port | port>` (the explicit listen directive), then
+ *   2. `port: <n>` (+ optional top-level `host:`) — the split-directive form.
+ * Returns `{ host, port }`, or `undefined` when neither is present (the caller
+ * then applies the NATS default `127.0.0.1:4222`, or — if the config is unreadable
+ * — falls back to the inconclusive-healthy disclosure). Comments are stripped
+ * first; only a line-anchored `port`/`host` matches, so `http_port`/`monitor_port`
+ * never false-hit.
+ */
+export function natsConfigClientListen(natsConfigText: string): NatsClientListen | undefined {
   const text = stripConfigComments(natsConfigText);
 
-  // `listen: <value>` — value may be `host:port` (`0.0.0.0:4222`), a bare port,
-  // or quoted, optionally with an inline trailing comment. Take the trailing port.
+  // `listen: <value>` — value may be `host:port` (`10.0.0.5:4222`), bracketed
+  // IPv6 (`[::]:4222`), a bare port, or quoted, optionally with an inline comment.
   const listen = /^[ \t]*listen[ \t]*[:=][ \t]*(.+)$/m.exec(text);
   if (listen?.[1] !== undefined) {
     const value = stripInlineComment(listen[1]).replace(/["']/g, "").trim();
-    const portMatch = /(?::|^)(\d{1,5})$/.exec(value);
-    if (portMatch?.[1] !== undefined) return Number.parseInt(portMatch[1], 10);
+    const hp = splitHostPort(value);
+    if (hp !== undefined) return hp;
   }
 
   // `port: <n>` — the top-level client-port directive (line-anchored so it never
-  // matches `http_port`/`monitor_port`, which start with a different token).
+  // matches `http_port`/`monitor_port`, which start with a different token). Pair
+  // it with an optional top-level `host:` directive when present.
   const port = /^[ \t]*port[ \t]*[:=][ \t]*(\d{1,5})\b/m.exec(text);
-  if (port?.[1] !== undefined) return Number.parseInt(port[1], 10);
+  if (port?.[1] !== undefined) {
+    const hostDirective = /^[ \t]*host[ \t]*[:=][ \t]*(.+)$/m.exec(text);
+    const host =
+      hostDirective?.[1] !== undefined
+        ? stripInlineComment(hostDirective[1]).replace(/["']/g, "").trim()
+        : "";
+    return { host, port: Number.parseInt(port[1], 10) };
+  }
 
+  return undefined;
+}
+
+/**
+ * Split a listen VALUE into `{ host, port }`. Handles bracketed IPv6
+ * (`[::]:4222`), `host:port` with a single colon (IPv4 / hostname), and a bare
+ * port (host `""`). Returns `undefined` when no port can be recovered.
+ */
+function splitHostPort(value: string): NatsClientListen | undefined {
+  // Bracketed IPv6 + port: `[::]:4222`, `[::1]:4222`, `[2001:db8::1]:4222`.
+  const bracket = /^\[([^\]]+)\]:(\d{1,5})$/.exec(value);
+  if (bracket?.[1] !== undefined && bracket[2] !== undefined) {
+    return { host: bracket[1], port: Number.parseInt(bracket[2], 10) };
+  }
+  // `host:port` with exactly one colon (IPv4 / hostname) — reject a bare
+  // multi-colon IPv6 without brackets (ambiguous; NATS uses the bracketed form).
+  const hostPort = /^(.+):(\d{1,5})$/.exec(value);
+  if (hostPort?.[1] !== undefined && hostPort[2] !== undefined && !hostPort[1].includes(":")) {
+    return { host: hostPort[1], port: Number.parseInt(hostPort[2], 10) };
+  }
+  // Bare port — no host specified.
+  if (/^\d{1,5}$/.test(value)) return { host: "", port: Number.parseInt(value, 10) };
   return undefined;
 }
 

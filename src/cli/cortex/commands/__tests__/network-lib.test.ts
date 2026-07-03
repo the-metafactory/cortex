@@ -58,21 +58,7 @@ import {
   type ClockPort,
   type SettleWindowOptions,
 } from "../../../../common/nats/restart-with-settle";
-
-/**
- * cortex#1483 (join-4) — a `ClockPort` whose `sleep` resolves IMMEDIATELY
- * (no real `setTimeout`), so a multi-attempt settle window never actually
- * waits in tests. Records every requested delay so a test can assert the
- * backoff SCHEDULE without ever paying its wall-clock cost.
- */
-function instantClock(delays: number[] = []): ClockPort {
-  return {
-    sleep: (ms) => {
-      delays.push(ms);
-      return Promise.resolve();
-    },
-  };
-}
+import { instantClock } from "./settle-test-helpers";
 
 // O-3 (cortex#1053) — a public-repo-safe fake leaf package: the operator-mode
 // material `cortex network join` renders to convert an anonymous bus. O-4

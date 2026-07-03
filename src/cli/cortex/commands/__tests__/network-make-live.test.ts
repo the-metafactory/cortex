@@ -28,15 +28,8 @@ import type { DaemonLocatorIO } from "../daemon-locator";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import type { ClockPort, SettleWindowOptions } from "../../../../common/nats/restart-with-settle";
-
-/**
- * cortex#1483 (join-4) — a `ClockPort` whose `sleep` resolves IMMEDIATELY, so a
- * multi-attempt settle window never actually waits in tests.
- */
-function instantClock(): ClockPort {
-  return { sleep: () => Promise.resolve() };
-}
+import type { SettleWindowOptions } from "../../../../common/nats/restart-with-settle";
+import { instantClock } from "./settle-test-helpers";
 
 const AGENTS_PUB = "A" + "R".repeat(55);
 const AGENTS_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBQVJSIn0.sig";
@@ -889,22 +882,50 @@ describe("buildNatsCanaryAdapter (live)", () => {
     expect(res.healthy).toBe(true);
     // A REAL signal — no longer flagged inconclusive.
     expect("inconclusive" in res && res.inconclusive).not.toBe(true);
-    // Probed the parsed client listen port on loopback.
+    // Probed the parsed client listen host:port.
+    expect(probed).toEqual([{ host: "127.0.0.1", port: 4222 }]);
+  });
+
+  test("cortex#1495 v3: no monitor + a NON-loopback listen host → probes THAT host (no false 127.0.0.1)", async () => {
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, "listen: 10.0.0.5:4222\n", "utf-8"); // bound to a specific address
+    const probed: { host: string; port: number }[] = [];
+    const adapter = buildNatsCanaryAdapter(true, undefined, async (host, port) => {
+      probed.push({ host, port });
+      return true;
+    });
+    const res = await adapter.isHealthy(conf);
+    expect(res.healthy).toBe(true);
+    // v3 important — the parsed host is dialled, NOT a hardcoded 127.0.0.1.
+    expect(probed).toEqual([{ host: "10.0.0.5", port: 4222 }]);
+  });
+
+  test("cortex#1495 v3: no monitor + a WILDCARD listen host maps to loopback for the connect", async () => {
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, "listen: 0.0.0.0:4222\n", "utf-8"); // wildcard bind
+    const probed: { host: string; port: number }[] = [];
+    const adapter = buildNatsCanaryAdapter(true, undefined, async (host, port) => {
+      probed.push({ host, port });
+      return true;
+    });
+    await adapter.isHealthy(conf);
+    // 0.0.0.0 is reachable via loopback → probe 127.0.0.1.
     expect(probed).toEqual([{ host: "127.0.0.1", port: 4222 }]);
   });
 
   test("cortex#1495 v2: no monitor + client port DOWN (TCP connect fails) → UNHEALTHY (rollback will fire)", async () => {
     const conf = join(dir, "local.conf");
     writeFileSync(conf, "port: 4299\n", "utf-8"); // client port via `port:`, no monitor
-    const probed: number[] = [];
-    const adapter = buildNatsCanaryAdapter(true, undefined, async (_host, port) => {
-      probed.push(port);
+    const probed: { host: string; port: number }[] = [];
+    const adapter = buildNatsCanaryAdapter(true, undefined, async (host, port) => {
+      probed.push({ host, port });
       return false; // nothing accepting → the restart left the bus down
     });
     const res = await adapter.isHealthy(conf);
     expect(res.healthy).toBe(false);
     if (!res.healthy) expect(res.reason).toContain("not accepting connections");
-    expect(probed).toEqual([4299]); // parsed from `port:`
+    // Bare `port:` → empty host defaulted to loopback; port parsed as 4299.
+    expect(probed).toEqual([{ host: "127.0.0.1", port: 4299 }]);
   });
 
   test("cortex#1495 v2: no monitor + client listen unresolvable (config absent) → discloses inconclusive-healthy", async () => {
