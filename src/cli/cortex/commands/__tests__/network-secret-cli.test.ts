@@ -12,7 +12,13 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createUser } from "nkeys.js";
-import { dispatchNetwork, __setJoinLeafSecretFetcherForTests, type SecretPortsFactory } from "../network";
+import {
+  dispatchNetwork,
+  __setJoinLeafSecretFetcherForTests,
+  __setDiscordRemoveClientForTests,
+  type SecretPortsFactory,
+  type DiscordRemoveClient,
+} from "../network";
 import type { NetworkSecretPorts } from "../network-secret-ports";
 import type { FetchSealedLeafSecretInput } from "../../../../common/registry/fetch-sealed-secret";
 
@@ -61,7 +67,10 @@ beforeEach(() => {
   writeFileSync(seedPath, seed, { mode: 0o600 });
   chmodSync(seedPath, 0o600);
 });
-afterEach(() => rmSync(tmp, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+  __setDiscordRemoveClientForTests(null);
+});
 
 function argv(...args: string[]): string[] {
   return args;
@@ -143,6 +152,109 @@ describe("cortex network secret revoke-member", () => {
     expect(res.exitCode).toBe(0);
     expect(calls.reloads).toBe(1);
     expect(calls.revoked).toEqual(["req1"]);
+  });
+
+  // ===========================================================================
+  // C-1350 S3 — Tier-1 de-admission pairing on revoke-member. The role removal
+  // is a NON-FATAL step AFTER the hub-cut + registry REVOKE. Discord ids are
+  // non-numeric placeholder labels (never a live snowflake).
+  // ===========================================================================
+  test("--discord-member --apply: removeRole called AFTER the registry revoke; exit 0", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    let removed = false;
+    const mockDiscord: DiscordRemoveClient = {
+      async resolveRoleId(_t, _g, roleName) {
+        // The revoke (hub cut + registry) must have committed before we get here.
+        expect(calls.revoked).toEqual(["req1"]);
+        expect(roleName).toBe("community-fleet");
+        return "role-id-123";
+      },
+      async removeRole(_t, _g, userId, roleId) {
+        removed = true;
+        expect(userId).toBe("member-snowflake-999");
+        expect(roleId).toBe("role-id-123");
+        return { success: true };
+      },
+    };
+    __setDiscordRemoveClientForTests(mockDiscord);
+
+    const res = await dispatchNetwork(
+      argv("secret", "revoke-member", "metafactory", MEMBER,
+        "--discord-member", "member-snowflake-999", "--discord-guild", "guild-123",
+        "--apply", "--json", "--admin-seed", seedPath),
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(removed).toBe(true);
+    expect(calls.revoked).toEqual(["req1"]);
+    const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
+    expect(parsed.data.discord_status).toBe("removed");
+  });
+
+  test("--discord-member: a removeRole failure still exits 0 with a warning (revoke already committed)", async () => {
+    const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const mockDiscord: DiscordRemoveClient = {
+      async resolveRoleId() { return "role-id-123"; },
+      async removeRole() { return { success: false, error: "missing_permissions" }; },
+    };
+    __setDiscordRemoveClientForTests(mockDiscord);
+
+    const res = await dispatchNetwork(
+      argv("secret", "revoke-member", "metafactory", MEMBER,
+        "--discord-member", "member-999", "--discord-guild", "guild-123",
+        "--apply", "--json", "--admin-seed", seedPath),
+      undefined, undefined, undefined, factory,
+    );
+
+    // The revoke committed (hub cut + registry) → exit 0; Discord failure is a warning.
+    expect(res.exitCode).toBe(0);
+    expect(calls.revoked).toEqual(["req1"]);
+    const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
+    expect(parsed.data.discord_status).toBe("failed");
+    expect(parsed.data.discord_warning).toContain("missing_permissions");
+  });
+
+  test("--discord-member on a FAILED revoke (no ADMITTED row) removes nothing", async () => {
+    const { factory } = fakeFactory({ admitted: undefined });
+    let removeCalled = false;
+    const mockDiscord: DiscordRemoveClient = {
+      async resolveRoleId() { return "role-id-123"; },
+      async removeRole() { removeCalled = true; return { success: true }; },
+    };
+    __setDiscordRemoveClientForTests(mockDiscord);
+
+    const res = await dispatchNetwork(
+      argv("secret", "revoke-member", "metafactory", MEMBER,
+        "--discord-member", "member-999", "--discord-guild", "guild-123",
+        "--apply", "--admin-seed", seedPath),
+      undefined, undefined, undefined, factory,
+    );
+
+    // No ADMITTED row → the revoke didn't commit → the role removal must NOT run
+    // (there is nothing to pair it with).
+    expect(res.exitCode).toBe(1);
+    expect(removeCalled).toBe(false);
+  });
+
+  test("custom --discord-role is forwarded to resolveRoleId (flag-resolution parity with admit)", async () => {
+    const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    let capturedRole = "";
+    const mockDiscord: DiscordRemoveClient = {
+      async resolveRoleId(_t, _g, roleName) { capturedRole = roleName; return "custom-role-id"; },
+      async removeRole() { return { success: true }; },
+    };
+    __setDiscordRemoveClientForTests(mockDiscord);
+
+    const res = await dispatchNetwork(
+      argv("secret", "revoke-member", "metafactory", MEMBER,
+        "--discord-member", "member-999", "--discord-guild", "guild-123",
+        "--discord-role", "custom-fleet", "--apply", "--admin-seed", seedPath),
+      undefined, undefined, undefined, factory,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(capturedRole).toBe("custom-fleet");
   });
 });
 

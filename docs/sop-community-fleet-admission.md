@@ -100,9 +100,30 @@ else needs a human" true (acceptance §6).
 
 ## Step 4 — revoke (bulk or single)
 
-- **Single principal:** remove `community-fleet` from their member(s). Independently revoke
-  their bus creds (`cortex creds revoke <principal-bot>` / `arc nats remove-bot --delete-creds`) —
-  the two are deliberately separate handles.
+- **Single principal — de-admission is one command (C-1350 S3).** Pass `--discord-member`
+  to `secret revoke-member` (post-admission cut) or `reject` (deny a PENDING request) and
+  the bus de-admission and the Discord role removal happen in the same act:
+
+  ```
+  cortex network secret revoke-member <network> <member-pubkey> \
+      --admin-seed <hub-admin-seed> --discord-member <member-id> --apply
+  #   → cuts the hub authorization user (transport), marks the row REVOKED,
+  #     then REMOVES the community-fleet role from <member-id>
+
+  cortex network reject <request-id> \
+      --admin-seed <admin-seed> --discord-member <member-id> --apply
+  #   → moves the PENDING row to REJECTED, then REMOVES the role
+  ```
+
+  The role-removal step mirrors admit's assign flag block exactly —
+  `--discord-guild` / `--discord-server` / `--discord-role` (defaults to
+  `community-fleet`) resolve the guild + role the same way. It is **non-fatal**: if the
+  bot token / guild / role can't resolve, the command warns "remove the role manually"
+  and still exits 0 — the bus de-admission (the trust-bearing act) has already committed.
+  So the **manual Discord edit is now the fallback**, not the default path.
+
+  Bus creds remain a deliberately separate handle where a bot has its own creds
+  (`cortex creds revoke <principal-bot>` / `arc nats remove-bot --delete-creds`).
 - **Bulk:** remove the role from all holders (or delete/replace the role) — one act
   de-admits the whole fleet from Discord. (Bus de-admission is still per-bot cred revoke.)
 

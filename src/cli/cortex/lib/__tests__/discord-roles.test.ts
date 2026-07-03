@@ -17,6 +17,7 @@
 import { describe, expect, test, spyOn } from "bun:test";
 import {
   assignRole,
+  removeRole,
   resolveRoleId,
   resolveServerContext,
   ServerContextError,
@@ -65,6 +66,53 @@ describe("assignRole", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/);
     expect(result.error).not.toContain(BOT_TOKEN);
+    fetchMock.mockRestore();
+  });
+});
+
+describe("removeRole (C-1350 S3 — de-admission)", () => {
+  test("204 → success, hits the correct DELETE endpoint (inverse of assign)", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValueOnce(fakeResponse(204));
+    const result = await removeRole(BOT_TOKEN, GUILD, USER, ROLE_ID);
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `https://discord.com/api/v10/guilds/${GUILD}/members/${USER}/roles/${ROLE_ID}`,
+    );
+    expect(init?.method).toBe("DELETE");
+    fetchMock.mockRestore();
+  });
+
+  test("403 → non-fatal RoleResult (never throws), names guild, hides token", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      fakeResponse(403, { message: "Missing Permissions" }),
+    );
+    // Non-fatal contract: it RESOLVES a failure result, it does NOT reject.
+    const result = await removeRole(BOT_TOKEN, GUILD, USER, ROLE_ID);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Manage Roles/);
+    expect(result.error).toMatch(GUILD);
+    expect(result.error).not.toContain(BOT_TOKEN);
+    fetchMock.mockRestore();
+  });
+
+  test("404 → member or role not found, non-fatal", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValueOnce(fakeResponse(404));
+    const result = await removeRole(BOT_TOKEN, GUILD, USER, ROLE_ID);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not found/);
+    expect(result.error).not.toContain(BOT_TOKEN);
+    fetchMock.mockRestore();
+  });
+
+  test("other status → surfaces status + body, non-fatal", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      fakeResponse(500, { message: "boom" }),
+    );
+    const result = await removeRole(BOT_TOKEN, GUILD, USER, ROLE_ID);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/500/);
     fetchMock.mockRestore();
   });
 });

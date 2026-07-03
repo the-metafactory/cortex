@@ -293,6 +293,8 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
   todo("step 4a (#1314): network admit --list-pending shows the PENDING row");
   // #1348 — the reject verb: a second registration rejected → REJECTED.
   todo("step 4b (#1348): network reject <id> on a second registration → row REJECTED");
+  // #1350 S1 — the depart motion: a member's own `leave --apply` exits the roster.
+  todo("step 4c (#1350 S1): member depart — leave exits the roster (ADMITTED→DEPARTED)");
 
   // ===========================================================================
   // Step 5 — Seal: mint the per-member leaf PSK, seal it to the member, and
@@ -342,6 +344,9 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
   // #1316 — the admit-and-seal FOLD: `network admit --and-seal` does step 4 + step
   // 5 in one privileged move (today they are two commands, driven separately above).
   todo("step 5a (#1316): network admit --and-seal folds admit + secret add-member");
+  // #1349 S1 — the M3 payload key K rides the SAME sealed blob: add-member seals
+  // payload_key, join installs it.
+  todo("step 5b (#1349 S1): sealed K delivery — add-member seals payload_key, join installs it");
 
   // ===========================================================================
   // Step 6 — Join: the #1220 regression anchor.
@@ -452,6 +457,10 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
     expect(row?.sealed_secret).toBeNull();
   });
 
+  // #1349 S2 — key rotation re-seals a fresh K' to every ADMITTED member (and
+  // NEVER to a REVOKED/DEPARTED row), bumping the kid.
+  todo("step 7b (#1349 S2): rotate-key re-seals K' to every ADMITTED member (never REVOKED/DEPARTED)");
+
   // ===========================================================================
   // Step 8 — Leave: joiner tears down its local federation wiring.
   //   Drives the REAL `leaveNetwork` orchestrator over an in-memory config store
@@ -528,4 +537,8 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
     const row = await getIssuanceStore(ctx.env).getIssuanceRequest(ctx.requestId!);
     expect(row?.status).toBe("REVOKED");
   });
+
+  // #1351 S2 — stack retirement tombstones the stack: `provision-stack retire`
+  // returns 409 while ADMITTED rows still reference it, then tombstones once clear.
+  todo("step 10 (#1351 S2): provision-stack retire tombstones the stack (409 while ADMITTED rows live)");
 });

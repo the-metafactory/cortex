@@ -63,6 +63,7 @@ import { canonicalJSON } from "../../../common/registry/signing";
 // admit path cannot import from an external arc bundle.
 import {
   assignRole,
+  removeRole,
   resolveRoleId,
   loadConfig as loadDiscordConfig,
   resolveServerContext,
@@ -379,15 +380,24 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     // Signs an admission decision claim carrying decision:"reject" → POSTs to
     // `/admission-requests/:id/reject` → the PENDING row moves to REJECTED.
     // Grants + seals NOTHING (rejection has no roster row to make connectable),
-    // so it omits admit's Discord flags AND the --hub-config/--roster-only seal
-    // controls. Dry-run by DEFAULT: prints the claim it WOULD post; --apply
-    // executes. The row's network_id is fixed at register time; the registry
-    // authorises and acts on that stored value, so there is no network selector.
+    // so it omits admit's --hub-config/--roster-only seal controls. Dry-run by
+    // DEFAULT: prints the claim it WOULD post; --apply executes. The row's
+    // network_id is fixed at register time; the registry authorises and acts on
+    // that stored value, so there is no network selector.
+    //
+    // C-1350 S3 — Tier-1 de-admission pairing: `--discord-member` (+
+    // `--discord-guild/--discord-server/--discord-role`) mirrors admit's flag
+    // block, but REMOVES the community-fleet role as a final non-fatal step. A
+    // role-removal failure NEVER fails the reject (the decision already committed).
     reject: {
       positionals: ["request-id?"],
       flags: {
         "--admin-seed": "value",
         "--registry-url": "value",
+        "--discord-member": "value",
+        "--discord-server": "value",
+        "--discord-guild": "value",
+        "--discord-role": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -446,6 +456,15 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--deliver": "value",
         // Override the hub leaf user (defaults to the member's principal id).
         "--leaf-user": "value",
+        // C-1350 S3 — revoke-member de-admission pairing: `--discord-member`
+        // (+ `--discord-guild/--discord-server/--discord-role`) mirrors admit's
+        // flag block, REMOVING the community-fleet role as a final non-fatal step
+        // after the hub-cut + registry REVOKE. A removal failure NEVER fails the
+        // revoke (transport is already cut, the row already REVOKED).
+        "--discord-member": "value",
+        "--discord-server": "value",
+        "--discord-guild": "value",
+        "--discord-role": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -1784,6 +1803,122 @@ const defaultDiscordAdmitClient: DiscordAdmitClient = {
   assignRole,
 };
 
+// ---------------------------------------------------------------------------
+// C-1350 S3 — Tier-1 de-admission: REMOVE the community-fleet role (the inverse
+// of admit's assign). `reject` and `secret revoke-member` share this. The flag
+// resolution mirrors runAdmit's block EXACTLY (same names, same precedence, same
+// graceful degradation) — the only difference is it calls `removeRole`, and a
+// failure is ALWAYS non-fatal (the parent decision has already committed).
+// ---------------------------------------------------------------------------
+
+/** Minimal Discord client surface (role removal) injectable for tests. */
+export interface DiscordRemoveClient {
+  resolveRoleId(botToken: string, guildId: string, roleName: string): Promise<string>;
+  removeRole(botToken: string, guildId: string, userId: string, roleId: string): Promise<{ success: boolean; error?: string }>;
+}
+
+let discordRemoveClientOverride: DiscordRemoveClient | null = null;
+
+/** Test-only setter. Production callers never touch this. Null restores default. */
+export function __setDiscordRemoveClientForTests(client: DiscordRemoveClient | null): void {
+  discordRemoveClientOverride = client;
+}
+
+/** Default production client — thin wrappers over the real discord lib. */
+const defaultDiscordRemoveClient: DiscordRemoveClient = {
+  resolveRoleId,
+  removeRole,
+};
+
+/** The Discord flags the de-admission role removal reads (mirrors admit's). */
+interface DiscordRemoveFlags {
+  /** The member snowflake to strip the role from (`--discord-member`). */
+  member: string;
+  /** `--discord-server` profile name (optional). */
+  server?: string;
+  /** `--discord-guild` id override (optional). */
+  guild?: string;
+  /** Role name-or-id (`--discord-role`, defaults to community-fleet). */
+  role: string;
+}
+
+/** Outcome of the (best-effort) de-admission role removal. */
+interface DiscordRemoveOutcome {
+  /** skipped | skipped_no_token | skipped_no_guild | removed | failed. */
+  status: string;
+  /** Actionable warning when the role could not be removed (empty on success). */
+  warning: string;
+}
+
+/**
+ * Remove the community-fleet role from a de-admitted member, mirroring runAdmit's
+ * assignment block byte-for-byte in resolution precedence:
+ *   `--guild` flag > `--server` profile > top-level config (via
+ *   resolveServerContext), with the injected test client short-circuiting token/
+ *   guild resolution exactly as admit does.
+ *
+ * ALWAYS best-effort: any resolution or API failure returns a `failed`/`skipped_*`
+ * status + an actionable "remove the role manually" warning — it NEVER throws, so
+ * the parent `reject`/`revoke-member` decision (already committed) always stands.
+ *
+ * @param verb  the committed parent motion ("rejected" | "revoked") — woven into
+ *              the warning so the principal knows the decision itself held.
+ */
+async function removeDiscordFleetRole(
+  flags: DiscordRemoveFlags,
+  verb: string,
+): Promise<DiscordRemoveOutcome> {
+  const discordClient = discordRemoveClientOverride;
+  try {
+    const discordConfig = loadDiscordConfig();
+    const ctx = resolveServerContext(discordConfig, {
+      server: flags.server,
+      guild: flags.guild,
+    });
+
+    const botToken = discordClient ? "injected" : ctx.botToken;
+    const guildId = discordClient ? (flags.guild ?? ctx.guildId) : ctx.guildId;
+
+    if (!discordClient && !botToken) {
+      return {
+        status: "skipped_no_token",
+        warning: `Discord role not removed: no bot token configured (run: discord config set botToken <token>) — remove the role manually`,
+      };
+    }
+    if (!guildId) {
+      return {
+        status: "skipped_no_guild",
+        warning: `Discord role not removed: no guild id configured — pass --discord-guild <id> or run: discord config set guildId <id> — remove the role manually`,
+      };
+    }
+
+    const client = discordClient ?? defaultDiscordRemoveClient;
+    let roleId: string;
+    try {
+      roleId = await client.resolveRoleId(botToken ?? "", guildId, flags.role);
+    } catch (err) {
+      return {
+        status: "failed",
+        warning: `Discord role not removed: ${err instanceof Error ? err.message : String(err)} — member ${verb}, remove the role manually`,
+      };
+    }
+
+    const roleResult = await client.removeRole(botToken ?? "", guildId, flags.member, roleId);
+    if (roleResult.success) {
+      return { status: "removed", warning: "" };
+    }
+    return {
+      status: "failed",
+      warning: `Discord role removal failed: ${roleResult.error ?? "unknown error"} — member ${verb}, remove the role manually`,
+    };
+  } catch (err) {
+    return {
+      status: "failed",
+      warning: `Discord role removal error: ${err instanceof Error ? err.message : String(err)} — member ${verb}, remove the role manually`,
+    };
+  }
+}
+
 /**
  * Build an admin-signed read claim for the `x-admin-signed` header.
  * No nonce (reads are idempotent). Uses the shared PKCS#8 signing bridge.
@@ -2279,8 +2414,12 @@ async function runAdmit(
  * except the signed decision claim carries `decision: "reject"` and it POSTs to
  * `/admission-requests/:id/reject`. The registry's shared `handleDecision` moves
  * the PENDING row to REJECTED. Grants + seals NOTHING (a rejected request has no
- * roster row to make connectable), so — unlike admit — there is no seal step and
- * no Discord role assignment.
+ * roster row to make connectable), so — unlike admit — there is no seal step.
+ *
+ * C-1350 S3 — the Tier-1 de-admission pairing: where admit's `--discord-member`
+ * block ASSIGNS the community-fleet role, reject's REMOVES it (a final, non-fatal
+ * step after the REJECTED decision commits). Same flag names, same resolution
+ * precedence; a role-removal failure never fails the reject.
  *
  * Dry-run by default (safe posture). Pass --apply to execute.
  *
@@ -2304,6 +2443,11 @@ async function runReject(
   if (!applyRes.ok) return usageError("reject", applyRes.reason, json);
 
   const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_ADMIT_REGISTRY_URL;
+  // C-1350 S3 — de-admission Discord flags (mirror admit's block exactly).
+  const discordMember = optionalValueFlag(flags, "--discord-member");
+  const discordServer = optionalValueFlag(flags, "--discord-server");
+  const discordGuild = optionalValueFlag(flags, "--discord-guild");
+  const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
 
   // Load + chmod-600-gate the admin seed
   const matRes = await adminMaterialFromSeedFile(seedRes.value);
@@ -2331,6 +2475,7 @@ async function runReject(
       `  decision:          reject`,
       `  registry:          ${registryUrl}`,
       `  admin_fingerprint: ${material.fingerprint}`,
+      ...(discordMember !== undefined ? [`  discord_member:    ${discordMember} (role "${discordRole}" would be removed)`] : []),
       ``,
     ];
     return ok(lines.join("\n"));
@@ -2399,28 +2544,47 @@ async function runReject(
     return opError("reject", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
   }
 
-  // 3. Output summary — no seal, no Discord (rejection grants nothing).
-  if (json) {
-    return ok(
-      renderJson(
-        envelopeOk([], {
-          subcommand: "reject",
-          applied: "true",
-          request_id: requestId,
-          decision: "reject",
-          ...(decidedPrincipalId ? { principal_id: decidedPrincipalId } : {}),
-          admin_fingerprint: material.fingerprint,
-        }),
-      ),
+  // 2b. C-1350 S3 — Tier-1 de-admission: remove the community-fleet role. The
+  // REJECTED decision is ALREADY committed above, so this is a final non-fatal
+  // step — any failure degrades to an actionable warning, never a hard error.
+  let discordStatus = "skipped";
+  let discordWarning = "";
+  if (discordMember !== undefined) {
+    const outcome = await removeDiscordFleetRole(
+      { member: discordMember, server: discordServer, guild: discordGuild, role: discordRole },
+      "rejected",
     );
+    discordStatus = outcome.status;
+    discordWarning = outcome.warning;
+  }
+
+  // 3. Output summary — no seal (rejection grants nothing); Discord role removal
+  // rides along only when --discord-member was given.
+  if (json) {
+    const data: Record<string, string> = {
+      subcommand: "reject",
+      applied: "true",
+      request_id: requestId,
+      decision: "reject",
+      ...(decidedPrincipalId ? { principal_id: decidedPrincipalId } : {}),
+      admin_fingerprint: material.fingerprint,
+      ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
+    };
+    if (discordWarning) data.discord_warning = discordWarning;
+    return ok(renderJson(envelopeOk([], data)));
   }
 
   const lines: string[] = [
     `cortex network reject ${requestId}: rejected`,
     ...(decidedPrincipalId ? [`  principal:   ${decidedPrincipalId}`] : []),
     `  admin:       ${material.fingerprint}`,
-    ``,
   ];
+  if (discordStatus === "removed") {
+    lines.push(`  discord:     community-fleet role removed`);
+  } else if (discordStatus !== "skipped") {
+    lines.push(`  discord:     ${discordWarning}`);
+  }
+  lines.push(``);
   return ok(lines.join("\n"));
 }
 
@@ -2601,6 +2765,12 @@ async function runSecret(
   const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_SECRET_REGISTRY_URL;
   const hubConfigPath = optionalValueFlag(flags, "--hub-config") ?? DEFAULT_HUB_CONFIG_PATH;
   const leafUserOverride = optionalValueFlag(flags, "--leaf-user");
+  // C-1350 S3 — revoke-member de-admission Discord flags (mirror admit's block).
+  // Only meaningful for revoke-member; other actions ignore them.
+  const discordMember = optionalValueFlag(flags, "--discord-member");
+  const discordServer = optionalValueFlag(flags, "--discord-server");
+  const discordGuild = optionalValueFlag(flags, "--discord-guild");
+  const discordRole = optionalValueFlag(flags, "--discord-role") ?? DEFAULT_ADMIT_DISCORD_ROLE;
 
   // 4. Load + chmod-600-gate the hub-admin seed.
   const matRes = await hubAdminMaterialFromSeedFile(seedRes.value);
@@ -2623,6 +2793,30 @@ async function runSecret(
     return opError("secret", `secret ${action} failed: ${err instanceof Error ? err.message : String(err)}`, json);
   }
 
+  // 4b. C-1350 S3 — Tier-1 de-admission pairing for revoke-member. The hub cut +
+  // registry REVOKE are ALREADY committed in the report above (transport is cut,
+  // the row is REVOKED), so removing the community-fleet role is a final NON-FATAL
+  // step: any resolution/API failure degrades to an actionable warning and the
+  // revoke still exits 0. Only runs on a successfully-APPLIED revoke-member with
+  // --discord-member given (a dry-run or a failed revoke removes nothing).
+  let discordStatus = "skipped";
+  let discordWarning = "";
+  if (action === "revoke-member" && discordMember !== undefined) {
+    if (report.ok && report.applied) {
+      const outcome = await removeDiscordFleetRole(
+        { member: discordMember, server: discordServer, guild: discordGuild, role: discordRole },
+        "revoked",
+      );
+      discordStatus = outcome.status;
+      discordWarning = outcome.warning;
+    } else if (!report.applied) {
+      // Dry-run: surface the intent (no mutation) — mirrors admit's dry-run line.
+      discordStatus = "dry-run";
+    }
+    // A FAILED apply (report.ok === false) leaves discordStatus "skipped": the
+    // revoke didn't commit, so there is nothing to pair the role removal with.
+  }
+
   // 5. Render. SECRETS never appear in steps/data; the oob PSK is surfaced in a
   // dedicated, explicitly-labelled block (the one place a secret reaches stdout).
   if (json) {
@@ -2631,7 +2825,9 @@ async function runSecret(
       applied: report.applied ? "true" : "false",
       ...report.data,
       hub_admin_fingerprint: matRes.material.fingerprint,
+      ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
     };
+    if (discordWarning) data.discord_warning = discordWarning;
     // The oob PSK is the hub-admin's to hand over — include it under an explicit
     // key so a machine consumer can pluck it, never folded into the plan text.
     if (report.surfaced) {
@@ -2647,6 +2843,13 @@ async function runSecret(
     : `cortex network secret ${action} ${networkId}: dry-run (no mutation; pass --apply)`;
   const lines = [header, ...report.steps.map((s) => `  ${s}`)];
   if (!report.ok) lines.push(`  ✗ ${report.reason ?? "unknown failure"}`);
+  if (discordStatus === "removed") {
+    lines.push(`  discord:    community-fleet role removed`);
+  } else if (discordStatus === "dry-run") {
+    lines.push(`  discord:    would remove role "${discordRole}" from member ${discordMember}`);
+  } else if (discordStatus !== "skipped") {
+    lines.push(`  discord:    ${discordWarning}`);
+  }
   if (report.surfaced) {
     lines.push("");
     lines.push("  ── OUT-OF-BAND SECRET (hand this to the member over a secure channel) ──");

@@ -243,6 +243,44 @@ export async function assignRole(
 }
 
 /**
+ * Remove a guild role from a member.
+ *
+ * Wraps `DELETE /guilds/{guild}/members/{user}/roles/{role}` (Discord v10) — the
+ * exact inverse of {@link assignRole}. Success = 204 (no body). Error mappings
+ * reuse {@link mapRoleError} (403 → bot lacks Manage Roles / role hierarchy;
+ * 404 → member or role not found; other → HTTP status + body). The bot token is
+ * NEVER included in error messages.
+ *
+ * Non-fatal by contract: the caller (`reject` / `secret revoke-member`
+ * de-admission) treats a failed removal as a logged warning, never a hard error
+ * — the parent revoke/reject decision has already committed and must not be
+ * failed by a Discord-side hiccup.
+ *
+ * Prerequisite (document; do NOT attempt to self-grant): the bot must have the
+ * **Manage Roles** permission AND its highest role must sit above
+ * `community-fleet` in the guild role hierarchy.
+ */
+export async function removeRole(
+  botToken: string,
+  guildId: string,
+  userId: string,
+  roleId: string,
+): Promise<RoleResult> {
+  const res = await fetch(
+    `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${roleId}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bot ${botToken}` },
+    },
+  );
+
+  if (res.status === 204) return { success: true };
+
+  const body = await res.text();
+  return mapRoleError(res.status, body, guildId);
+}
+
+/**
  * Resolve a role name (or snowflake id) to a role id.
  *
  * A 17–20 digit input is treated as an id and returned unchanged (no network
