@@ -1035,8 +1035,12 @@ export const DEFAULT_HEALTH_PROBE_TIMEOUT_MS = 5000;
  *      so a non-default bus (the community :8224) is probed on its OWN port;
  *   3. the upstream default `:8222`.
  * The config read is best-effort (a missing/unreadable file just falls through).
+ *
+ * Exported (cortex#1484) so `network-doctor-adapters.ts` reuses the IDENTICAL
+ * precedence + `configured` signal for its `monitor-reachable` check instead
+ * of re-deriving it.
  */
-function resolveMonitorBase(cfg: LivePortsConfig): { url: string; configured: boolean } {
+export function resolveMonitorBase(cfg: LivePortsConfig): { url: string; configured: boolean } {
   // #831 — `configured` says whether THIS bus actually declares a monitor
   // (explicit `--monitor-url` or an `http_port`/`monitor` in its nats config),
   // vs falling back to the upstream default `:8222`. The health probe uses it to

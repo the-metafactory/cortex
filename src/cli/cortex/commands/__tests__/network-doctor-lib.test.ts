@@ -1,0 +1,406 @@
+/**
+ * Tests for the `cortex network doctor` orchestration (cortex#1484, epic #1479).
+ *
+ * Drives `runDoctorChecks` with FAKE ports (a fake config port, a fake
+ * monitor port, and the SAME fake probe-bus shape `network-ping-lib.test.ts`
+ * uses) — no fs, no NATS, no HTTP, no live wire.
+ *
+ * Close-criteria (per the acceptance's check matrix):
+ *   (a) all-green — every leg pass, verdict healthy, exit 0.
+ *   (b) network-not-in-config — config-network fails, downstream legs skip.
+ *   (c) no monitor configured — monitor-reachable warns (not fails); leaf
+ *       checks skip; peer-reachable is unaffected (doesn't need /leafz).
+ *   (d) leaf down — leaf-established fails (a hard prerequisite ⇒ broken).
+ *   (e) peer timeout — peer-reachable fails with the ping timeout verdict.
+ *
+ * Plus a few extra legs (leaf-account-bound mismatch/report-only, a
+ * partial-peer-failure "degraded" verdict) since the orchestrator owns both
+ * the implementation and these tests.
+ */
+
+import { describe, expect, test } from "bun:test";
+
+import type { Envelope } from "../../../../bus/myelin/envelope-validator";
+import { PROBE_REPLY_ECHO_TYPE } from "../../../../bus/probe-responder";
+import type { LoadedConfig } from "../../../../common/config/loader";
+import type { AgentConfig } from "../../../../common/types/config";
+import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
+import {
+  DOCTOR_EXIT_CODE,
+  runDoctorChecks,
+  type DoctorCheck,
+} from "../network-doctor-lib";
+import type {
+  DoctorConfigPort,
+  LeafzResponse,
+  NetworkDoctorPorts,
+} from "../network-doctor-ports";
+import type {
+  NetworkPingPorts,
+  ProbeFireInputs,
+  ProbeRoundTripResult,
+} from "../network-ping-ports";
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+function loadedConfig(peers: { principal_id: string; stack_id: string }[]): LoadedConfig {
+  return {
+    config: { nats: { url: "nats://127.0.0.1:4222" } } as unknown as AgentConfig,
+    inlineAgents: [{ id: "luna" } as unknown as LoadedConfig["inlineAgents"][number]],
+    principal: { id: "andreas" },
+    stack: { id: "andreas/community" },
+    policy: {
+      federated: {
+        networks: [
+          {
+            id: "metafactory-community",
+            peers,
+          } as unknown as NonNullable<
+            NonNullable<LoadedConfig["policy"]>["federated"]
+          >["networks"][number],
+        ],
+      },
+    } as unknown as LoadedConfig["policy"],
+  };
+}
+
+function network(overrides: Partial<PolicyFederatedNetwork> = {}): PolicyFederatedNetwork {
+  return {
+    id: "metafactory-community",
+    leaf_node: "hub",
+    peers: [{ principal_id: "jc", stack_id: "jc/default" }],
+    accept_subjects: ["federated.>"],
+    deny_subjects: [],
+    ...overrides,
+  } as unknown as PolicyFederatedNetwork;
+}
+
+function fakeConfigPort(
+  networks: PolicyFederatedNetwork[],
+  expectedAccount?: string,
+): DoctorConfigPort {
+  return {
+    readNetworks: () => ({ networks }),
+    expectedFedAccount: () => expectedAccount,
+  };
+}
+
+function fakeMonitorPort(opts: {
+  configured: boolean;
+  leafz?: LeafzResponse;
+  url?: string;
+}): NetworkDoctorPorts["monitor"] {
+  return {
+    resolve: () => ({ url: opts.url ?? "http://127.0.0.1:8222", configured: opts.configured }),
+    fetchLeafz: async () => opts.leafz,
+  };
+}
+
+/** A fake probe-bus port (the exact `NetworkPingPorts` shape `pingPeer` consumes). */
+function fakeProbe(
+  respond: (fired: ProbeFireInputs, seq: number) => ProbeRoundTripResult,
+): NetworkPingPorts {
+  let seq = 0;
+  return {
+    bus: {
+      fireProbe: async (f) => {
+        seq++;
+        return respond(f, seq);
+      },
+    },
+    newNonce: () => `nonce-${seq}`,
+    newCorrelationId: () => `corr-${seq}`,
+  };
+}
+
+/** Build a conformant echo reply for a fired probe (mock responder). */
+function echoReply(fired: ProbeFireInputs, rttMs: number): ProbeRoundTripResult {
+  const reqPayload = fired.request.payload as { nonce: string; seq?: number };
+  const reply: Envelope = {
+    id: crypto.randomUUID(),
+    source: "jc.default.sage",
+    type: PROBE_REPLY_ECHO_TYPE,
+    timestamp: "2026-07-03T00:00:00.000Z",
+    correlation_id: fired.correlationId,
+    sovereignty: {
+      classification: "federated",
+      data_residency: "NZ",
+      max_hop: 1,
+      frontier_ok: false,
+      model_class: "local-only",
+    },
+    payload: {
+      nonce: reqPayload.nonce,
+      server_ts: "2026-07-03T00:00:00.000Z",
+      responder_version: "1.0.0",
+      ...(reqPayload.seq !== undefined && { seq: reqPayload.seq }),
+    },
+  };
+  return { kind: "reply", rttMs, reply };
+}
+
+function findCheck(checks: DoctorCheck[], id: string): DoctorCheck {
+  const c = checks.find((x) => x.id === id);
+  if (c === undefined) throw new Error(`no check with id "${id}" in ${JSON.stringify(checks.map((x) => x.id))}`);
+  return c;
+}
+
+const ESTABLISHED_LEAFZ: LeafzResponse = {
+  leafs: [{ name: "hub", account: "ACCOUNT_A", in_msgs: 10, out_msgs: 12 }],
+};
+
+// ---------------------------------------------------------------------------
+// (a) all-green
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — (a) all-green", () => {
+  test("every leg passes, verdict healthy, exit 0", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 41)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    expect(res.verdict).toBe("healthy");
+    expect(res.exitCode).toBe(0);
+    expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.healthy);
+    expect(res.checks).toHaveLength(5);
+    expect(findCheck(res.checks, "config-network").status).toBe("pass");
+    expect(findCheck(res.checks, "monitor-reachable").status).toBe("pass");
+    expect(findCheck(res.checks, "leaf-established").status).toBe("pass");
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("pass");
+    const peerCheck = findCheck(res.checks, "peer-reachable:jc/default");
+    expect(peerCheck.status).toBe("pass");
+    expect(peerCheck.owner).toBe("peer");
+    expect(peerCheck.detail).toContain("rtt=41ms");
+    // Every check carries a responsible owner.
+    for (const c of res.checks) {
+      expect(["member", "hub-owner", "admin", "peer"]).toContain(c.owner);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (b) network-not-in-config
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — (b) network-not-in-config", () => {
+  test("config-network fails; downstream legs skip; no peer checks; verdict broken", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([]), // the requested network isn't configured at all
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    expect(findCheck(res.checks, "config-network").status).toBe("fail");
+    expect(findCheck(res.checks, "config-network").fix).toContain("join the network");
+    expect(findCheck(res.checks, "monitor-reachable").status).toBe("skip");
+    expect(findCheck(res.checks, "leaf-established").status).toBe("skip");
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("skip");
+    expect(res.checks.some((c) => c.id.startsWith("peer-reachable:"))).toBe(false);
+    expect(res.verdict).toBe("broken");
+    expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.broken);
+  });
+
+  test("a network with zero peers[] also fails config-network", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network({ peers: [] })]),
+      monitor: fakeMonitorPort({ configured: true }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "config-network").status).toBe("fail");
+    expect(findCheck(res.checks, "config-network").detail).toContain("no peers[]");
+  });
+
+  test("a network with empty accept_subjects[] also fails config-network", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network({ accept_subjects: [] })]),
+      monitor: fakeMonitorPort({ configured: true }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "config-network").status).toBe("fail");
+    expect(findCheck(res.checks, "config-network").detail).toContain("accept_subjects");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (c) no monitor configured → warn, not fail
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — (c) no monitor configured", () => {
+  test("monitor-reachable warns; leaf legs skip; peer-reachable is unaffected", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()]),
+      monitor: fakeMonitorPort({ configured: false }),
+      probe: fakeProbe((f) => echoReply(f, 30)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const monitorCheck = findCheck(res.checks, "monitor-reachable");
+    expect(monitorCheck.status).toBe("warn");
+    expect(monitorCheck.fix).toContain("http_port/monitor_port");
+    expect(findCheck(res.checks, "leaf-established").status).toBe("skip");
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("skip");
+    // The echo round-trip does not depend on /leafz — it still runs + passes.
+    expect(findCheck(res.checks, "peer-reachable:jc/default").status).toBe("pass");
+    // A warn never blocks "healthy" — only fails do.
+    expect(res.verdict).toBe("healthy");
+    expect(res.exitCode).toBe(0);
+  });
+
+  test("a configured-but-unreachable monitor FAILS (distinct from absent)", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()]),
+      monitor: fakeMonitorPort({ configured: true, leafz: undefined }), // fetch failed
+      probe: fakeProbe((f) => echoReply(f, 30)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "monitor-reachable").status).toBe("fail");
+    expect(findCheck(res.checks, "leaf-established").status).toBe("skip");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (d) leaf down
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — (d) leaf down", () => {
+  test("leaf-established fails (no matching/established leaf in /leafz); verdict broken", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()]),
+      monitor: fakeMonitorPort({ configured: true, leafz: { leafs: [] } }),
+      probe: fakeProbe(() => ({ kind: "timeout" })),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const leafCheck = findCheck(res.checks, "leaf-established");
+    expect(leafCheck.status).toBe("fail");
+    expect(leafCheck.owner).toBe("hub-owner");
+    expect(leafCheck.fix).toContain("leaf not up");
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("skip");
+    // leaf-established is a CRITICAL check — its failure makes the network
+    // fundamentally broken regardless of the peer-reachable outcome.
+    expect(res.verdict).toBe("broken");
+    expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.broken);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) peer timeout
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — (e) peer timeout", () => {
+  test("peer-reachable fails with the ping timeout verdict + a peer/hub fix", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe(() => ({ kind: "timeout" })),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const peerCheck = findCheck(res.checks, "peer-reachable:jc/default");
+    expect(peerCheck.status).toBe("fail");
+    expect(peerCheck.owner).toBe("peer");
+    expect(peerCheck.fix).toContain("peer/hub");
+    // config-network + leaf-established both pass, but the single configured
+    // peer is entirely unreachable ⇒ the federation path is broken.
+    expect(res.verdict).toBe("broken");
+    expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.broken);
+  });
+
+  test("partial peer failure (one of two peers times out) ⇒ degraded, not broken", async () => {
+    const twoPeerNetwork = network({
+      peers: [
+        { principal_id: "jc", stack_id: "jc/default" },
+        { principal_id: "andreas", stack_id: "andreas/community" },
+      ] as unknown as PolicyFederatedNetwork["peers"],
+    });
+    let calls = 0;
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([twoPeerNetwork], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => {
+        calls++;
+        return calls === 1 ? { kind: "timeout" } : echoReply(f, 20);
+      }),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([
+        { principal_id: "jc", stack_id: "jc/default" },
+        { principal_id: "andreas", stack_id: "andreas/community" },
+      ]),
+      networkId: "metafactory-community",
+    });
+
+    expect(res.checks.filter((c) => c.id.startsWith("peer-reachable:"))).toHaveLength(2);
+    expect(res.verdict).toBe("degraded");
+    expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.degraded);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// leaf-account-bound — mismatch fails, undeterminable degrades to warn
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — leaf-account-bound", () => {
+  test("mismatched account FAILS", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_EXPECTED"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }), // reports ACCOUNT_A
+      probe: fakeProbe((f) => echoReply(f, 10)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const accountCheck = findCheck(res.checks, "leaf-account-bound");
+    expect(accountCheck.status).toBe("fail");
+    expect(accountCheck.detail).toContain("ACCOUNT_A");
+    expect(accountCheck.detail).toContain("ACCOUNT_EXPECTED");
+  });
+
+  test("undeterminable expected account degrades to warn/report-only", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], undefined), // not derivable
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 10)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const accountCheck = findCheck(res.checks, "leaf-account-bound");
+    expect(accountCheck.status).toBe("warn");
+    expect(accountCheck.detail).toContain("ACCOUNT_A");
+  });
+});

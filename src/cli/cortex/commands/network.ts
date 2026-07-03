@@ -162,6 +162,16 @@ import {
 } from "./network-ping-adapters";
 import { buildPingSignerFromConfig } from "./network-ping-signer";
 import type { NetworkPingPorts } from "./network-ping-ports";
+import {
+  runDoctorChecks,
+  type DoctorRunResult,
+  type DoctorCheck,
+} from "./network-doctor-lib";
+import {
+  buildDoctorConfigPort,
+  buildMonitorPort,
+} from "./network-doctor-adapters";
+import type { NetworkDoctorPorts } from "./network-doctor-ports";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -169,7 +179,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "admit" | "reject" | "provision" | "make-live" | "secret";
+type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "doctor" | "admit" | "reject" | "provision" | "make-live" | "secret";
 
 /**
  * Default registry URL when neither --registry-url nor config provides one.
@@ -335,6 +345,22 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--count": "value",
         // Per-probe echo wait budget (ms). Default 2000.
         "--timeout": "value",
+      },
+    },
+    // cortex#1484 (epic #1479) — verify the WHOLE federation path from the
+    // joining member's own machine: config → local monitor → leaf established
+    // → leaf account binding → a real echoed round-trip per configured peer.
+    // Read-only (+ one bounded probe echo per peer, reusing `ping`'s
+    // transport). Reports pass/fail/warn/skip + a fix + the responsible role
+    // PER LEG, so a broken link pinpoints the failing leg instead of a bare
+    // "not reachable". Derives principal/stack from cortex.yaml like status.
+    doctor: {
+      positionals: ["network"],
+      flags: {
+        "--config": "value",
+        "--principal": "value",
+        "--stack": "value",
+        "--monitor-url": "value",
       },
     },
     // ADR-0015 — one-command admin admission decision. Signs an admission
@@ -1439,6 +1465,143 @@ function renderPingResult(
   const body = lines.join("\n") + "\n";
   // Reachable → stdout/exit 0; any failure verdict → stderr + the verdict's
   // exit code (so scripts branch on `$?` per §3.3).
+  return res.exitCode === 0
+    ? { exitCode: 0, stdout: body, stderr: "" }
+    : { exitCode: res.exitCode, stdout: "", stderr: body };
+}
+
+// =============================================================================
+// cortex#1484 (epic #1479) — `cortex network doctor`
+// =============================================================================
+
+/**
+ * Factory for the doctor ports bundle. Production builds the live config +
+ * monitor + probe-bus adapters from the resolved {@link LivePortsConfig} +
+ * the loaded {@link LoadedConfig} (the probe-bus signer needs the full
+ * config, mirroring `PingBusFactory`); tests inject fakes. Returns the ports
+ * + a `stop()` to drain the runtime.
+ */
+export type DoctorPortsFactory = (
+  cfg: LoadedConfig,
+  livePortsCfg: LivePortsConfig,
+) => Promise<{ ports: NetworkDoctorPorts; stop: () => Promise<void> }>;
+
+/** The production factory — live config/monitor reads + a live NATS-backed probe bus. */
+const DEFAULT_DOCTOR_PORTS_FACTORY: DoctorPortsFactory = async (cfg, livePortsCfg) => {
+  // Reuse the SAME posture-gated signer + live probe bus `ping` uses, so
+  // doctor's peer-reachable leg is byte-identical to `ping`'s round-trip.
+  const signer = await buildPingSignerFromConfig(cfg);
+  const bus: LiveProbeBus = await createLiveProbeBus(cfg.config, signer);
+  const ports: NetworkDoctorPorts = {
+    config: buildDoctorConfigPort({
+      // Read the COMPOSED networks off the already-loaded config — NOT a raw
+      // re-parse of the pointer file, which finds zero networks under the
+      // config-split layout (policy.federated lives in stacks/<slug>.yaml). Same
+      // source `derivePingInputs` uses (network-ping-lib.ts).
+      networks: cfg.policy?.federated?.networks ?? [],
+      ...(livePortsCfg.natsConfigPath !== undefined && { natsConfigPath: livePortsCfg.natsConfigPath }),
+    }),
+    monitor: buildMonitorPort(livePortsCfg),
+    probe: {
+      bus,
+      newNonce: () => crypto.randomUUID(),
+      newCorrelationId: () => crypto.randomUUID(),
+    },
+  };
+  return { ports, stop: () => bus.stop() };
+};
+
+async function runDoctor(
+  networkId: string,
+  flags: FlagMap,
+  json: boolean,
+  load: ConfigReader,
+  doctorPortsFactory: DoctorPortsFactory,
+): Promise<ExitResult> {
+  const principalRes = requireValueFlag(flags, "--principal");
+  if (!principalRes.ok) return usageError("doctor", principalRes.reason, json);
+  const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
+  if (!slugRes.ok) return usageError("doctor", slugRes.reason, json);
+
+  // #814-style — an explicit --config wins; otherwise resolve the NAMED
+  // stack's config layout-aware (mirrors status/ping so doctor reads the same
+  // file the daemon actually loads).
+  const doctorFlags: FlagMap =
+    optionalValueFlag(flags, "--config") === undefined
+      ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }
+      : flags;
+
+  let cfg: LoadedConfig;
+  try {
+    cfg = load(cortexConfigPathFromFlags(doctorFlags));
+  } catch (err) {
+    return opError("doctor", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  const livePortsCfg = portsConfig(networkId, principalRes.value, slugRes.slug, doctorFlags);
+
+  let handle;
+  try {
+    handle = await doctorPortsFactory(cfg, livePortsCfg);
+  } catch (err) {
+    return opError("doctor", `failed to build doctor ports: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+  try {
+    const res = await runDoctorChecks(handle.ports, { cfg, networkId });
+    return renderDoctorResult(res, networkId, json);
+  } finally {
+    await handle.stop();
+  }
+}
+
+/** Render a {@link DoctorRunResult} — a human per-leg table or a `--json` envelope + exit code. */
+function renderDoctorResult(
+  res: DoctorRunResult,
+  networkId: string,
+  json: boolean,
+): ExitResult {
+  if (json) {
+    const env = envelopeOk(
+      res.checks.map((c) => ({
+        id: c.id,
+        title: c.title,
+        status: c.status,
+        detail: c.detail,
+        owner: c.owner,
+        ...(c.fix !== undefined && { fix: c.fix }),
+      })),
+      { network: networkId, verdict: res.verdict },
+    );
+    // JSON goes to stdout regardless of exit code — the verdict is always
+    // machine-readable; the exit code carries it too (mirrors `ping`).
+    return { exitCode: res.exitCode, stdout: renderJson(env), stderr: "" };
+  }
+
+  const icon = (status: DoctorCheck["status"]): string => {
+    switch (status) {
+      case "pass":
+        return "✓";
+      case "fail":
+        return "✗";
+      case "warn":
+        return "⚠";
+      case "skip":
+        return "·";
+    }
+  };
+
+  const lines: string[] = [`cortex network doctor ${networkId}:`, ""];
+  for (const c of res.checks) {
+    lines.push(`  ${icon(c.status)} ${c.id} — ${c.detail}`);
+    if (c.fix !== undefined) {
+      lines.push(`      fix (${c.owner}): ${c.fix}`);
+    }
+  }
+  lines.push("");
+  lines.push(`verdict: ${res.verdict}`);
+  const body = lines.join("\n") + "\n";
+  // Healthy → stdout/exit 0; degraded/broken → stderr + the verdict's exit
+  // code (so scripts branch on `$?`, mirroring `ping`).
   return res.exitCode === 0
     ? { exitCode: 0, stdout: body, stderr: "" }
     : { exitCode: res.exitCode, stdout: "", stderr: body };
@@ -3599,6 +3762,10 @@ export async function dispatchNetwork(
   // C-1349 Slice 2 — injectable rotate-key ports factory so the CLI tests drive
   // fake hub-conf/registry/crypto/keyStore ports. Production omits → live.
   keyRotationPortsFactory: KeyRotationPortsFactory = DEFAULT_KEY_ROTATION_PORTS_FACTORY,
+  // cortex#1484 — injectable doctor-ports factory so `doctor` CLI tests drive
+  // fake config/monitor/probe-bus ports without touching fs or NATS.
+  // Production omits it → the live adapters.
+  doctorPortsFactory: DoctorPortsFactory = DEFAULT_DOCTOR_PORTS_FACTORY,
 ): Promise<ExitResult> {
   let parsed;
   try {
@@ -3634,6 +3801,8 @@ export async function dispatchNetwork(
       return runCreate(parsed.positionals.network ?? "", parsed.flags, json);
     case "ping":
       return runPing(parsed.positionals.peer ?? "", parsed.flags, json, load, pingBusFactory);
+    case "doctor":
+      return runDoctor(parsed.positionals.network ?? "", parsed.flags, json, load, doctorPortsFactory);
     case "admit":
       return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory);
     case "reject":
@@ -3669,6 +3838,7 @@ Usage:
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
   cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--network-admins <csv>] [--registry-url <url>] [--apply]
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
+  cortex network doctor <network> [--principal <id>] [--stack <id>] [--config <p>] [--monitor-url <url>] [--json]
   cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>] [--hub-config <p>]
                         [--roster-only] [--discord-member <id>] [--discord-guild <id>]
                         [--discord-server <profile>] [--discord-role <name>] [--apply] [--dry-run] [--json]
@@ -3714,6 +3884,17 @@ Subcommands:
           3 no-responder / 4 timeout / 5 refused. --count for multiple probes
           (min/avg/max RTT); --assistant for a named Direct target; --network
           to disambiguate the topology (NEVER a wire segment).
+  doctor  (cortex#1484, epic #1479) Verify the WHOLE federation path from this
+          machine, leg by leg: network configured (peers[]/accept_subjects[])
+          → local NATS monitor reachable → leaf established → leaf account
+          binding → a REAL echoed round-trip per configured peer (reuses
+          ping's transport). Each leg reports pass/fail/warn/skip + a fix +
+          the responsible role (member/hub-owner/admin/peer), so a broken
+          link pinpoints the failing leg instead of a bare "not reachable".
+          READ-ONLY except for the bounded probe echo. No monitor configured
+          on the local bus degrades leaf checks to warn/skip, never fail (the
+          absent-monitor-is-inconclusive rule). Exit codes: 0 healthy /
+          1 degraded / 2 broken.
   status  Show joined networks, peers, accept-subjects, leaf link state + counters.
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.
