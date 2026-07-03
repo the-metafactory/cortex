@@ -17,9 +17,15 @@ import {
   __setJoinLeafSecretFetcherForTests,
   __setDiscordRemoveClientForTests,
   type SecretPortsFactory,
+  type KeyRotationPortsFactory,
   type DiscordRemoveClient,
 } from "../network";
-import type { NetworkSecretPorts } from "../network-secret-ports";
+import type {
+  NetworkSecretPorts,
+  NetworkKeyRotationPorts,
+  AdmittedMember,
+} from "../network-secret-ports";
+import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import type { FetchSealedLeafSecretInput } from "../../../../common/registry/fetch-sealed-secret";
 
 let tmp: string;
@@ -316,6 +322,170 @@ describe("cortex network secret revoke-member", () => {
 
     expect(res.exitCode).toBe(0);
     expect(capturedRole).toBe("custom-fleet");
+  });
+});
+
+// =============================================================================
+// C-1349 Slice 2 — `cortex network secret rotate-key` (network-wide K rotation).
+// K′ is an obviously-FAKE all-zero 32-byte key; it must ride the sealed blob but
+// NEVER reach stdout. Placeholder pubkeys are single-repeated-char base64.
+// =============================================================================
+
+const K_PRIME_B64 = Buffer.alloc(32).toString("base64"); // what the fake mints.
+
+function fakePubkey(ch: string): string {
+  return btoa(ch.repeat(32));
+}
+
+function hubConfWith(users: { user: string; psk: string }[]): string {
+  const entries = users.map((u) => `      { user: "${u.user}", password: "${u.psk}" }`).join(",\n");
+  return (
+    "leafnodes {\n" +
+    "  # >>> cortex-managed leaf authorization (network secret tooling) — do not hand-edit\n" +
+    "  authorization {\n    users: [\n" +
+    entries +
+    "\n    ]\n  }\n" +
+    "  # <<< cortex-managed leaf authorization\n}\n"
+  );
+}
+
+interface RotationCalls {
+  posted: { requestId: string; blob: string }[];
+  written: (readonly PolicyFederatedNetwork[])[];
+  mints: number;
+}
+
+function fakeRotationFactory(opts: {
+  admitted: AdmittedMember[];
+  hubUsers: { user: string; psk: string }[];
+  networks: PolicyFederatedNetwork[];
+}): { factory: KeyRotationPortsFactory; calls: RotationCalls } {
+  const calls: RotationCalls = { posted: [], written: [], mints: 0 };
+  const ports: NetworkKeyRotationPorts = {
+    readHubConf: async () => hubConfWith(opts.hubUsers),
+    admission: { listAdmittedRows: async () => opts.admitted },
+    delivery: {
+      postSealedSecret: async (requestId, blob) => { calls.posted.push({ requestId, blob }); },
+      revoke: async () => {},
+    },
+    crypto: {
+      mintPayloadKey: () => { calls.mints += 1; return new Uint8Array(32); },
+      seal: async (plaintext, pubkey) => `SEALED(${pubkey.slice(0, 4)}:${plaintext})`,
+    },
+    keyStore: {
+      configPath: "/fake/stack.yaml",
+      readNetworks: async () => opts.networks,
+      writeNetworks: async (networks) => { calls.written.push(networks); },
+    },
+  };
+  return { factory: () => ports, calls };
+}
+
+function encNet(): PolicyFederatedNetwork {
+  return {
+    id: "metafactory",
+    encryption: "enabled",
+    payload_key: Buffer.alloc(32, 1).toString("base64"),
+    payload_key_id: "metafactory/k1",
+    peers: [],
+  } as unknown as PolicyFederatedNetwork;
+}
+
+describe("cortex network secret rotate-key", () => {
+  const admitted: AdmittedMember[] = [
+    { request_id: "req-alice", principal_id: "alice", peer_pubkey: fakePubkey("1") },
+    { request_id: "req-bob", principal_id: "bob", peer_pubkey: fakePubkey("2") },
+  ];
+  const hubUsers = [{ user: "alice", psk: "PSK-alice" }, { user: "bob", psk: "PSK-bob" }];
+
+  test("dry-run (default) mints/writes/posts NOTHING; prints the plan + next kid", async () => {
+    const { factory, calls } = fakeRotationFactory({ admitted, hubUsers, networks: [encNet()] });
+    const res = await dispatchNetwork(
+      argv("secret", "rotate-key", "metafactory", "--admin-seed", seedPath),
+      undefined, undefined, undefined, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("dry-run");
+    expect(res.stdout).toContain("metafactory/k2");
+    expect(calls.mints).toBe(0);
+    expect(calls.posted.length).toBe(0);
+    expect(calls.written.length).toBe(0);
+  });
+
+  test("--apply re-seals every ADMITTED member + advances hub K; K never in stdout", async () => {
+    const { factory, calls } = fakeRotationFactory({ admitted, hubUsers, networks: [encNet()] });
+    const res = await dispatchNetwork(
+      argv("secret", "rotate-key", "metafactory", "--apply", "--admin-seed", seedPath),
+      undefined, undefined, undefined, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(calls.mints).toBe(1);
+    expect(calls.posted.length).toBe(2);
+    expect(calls.written.length).toBe(1);
+    const net = calls.written[0]!.find((n) => n.id === "metafactory")!;
+    expect(net.payload_key).toBe(K_PRIME_B64);
+    expect(net.payload_key_id).toBe("metafactory/k2");
+    // K′ never in stdout; the kid IS.
+    expect(res.stdout).not.toContain(K_PRIME_B64);
+    expect(res.stdout).toContain("metafactory/k2");
+    // The member re-join instruction is surfaced.
+    expect(res.stdout).toContain("re-run");
+  });
+
+  test("--json --apply: machine-readable, resealed_count, no K", async () => {
+    const { factory } = fakeRotationFactory({ admitted, hubUsers, networks: [encNet()] });
+    const res = await dispatchNetwork(
+      argv("secret", "rotate-key", "metafactory", "--apply", "--json", "--admin-seed", seedPath),
+      undefined, undefined, undefined, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
+    expect(parsed.data.new_kid).toBe("metafactory/k2");
+    expect(parsed.data.resealed_count).toBe("2");
+    expect(parsed.data.payload_key_fingerprint).toBeDefined();
+    expect(res.stdout).not.toContain(K_PRIME_B64);
+  });
+
+  test("a network with no hub-side K → exit 1 (rotate-key never mints the first K)", async () => {
+    const { factory, calls } = fakeRotationFactory({
+      admitted: [], hubUsers: [],
+      networks: [{ id: "metafactory", peers: [] } as unknown as PolicyFederatedNetwork],
+    });
+    const res = await dispatchNetwork(
+      argv("secret", "rotate-key", "metafactory", "--apply", "--admin-seed", seedPath),
+      undefined, undefined, undefined, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(1);
+    expect(calls.mints).toBe(0);
+    expect(calls.written.length).toBe(0);
+  });
+});
+
+describe("cortex network secret revoke-member — C-1349 rotate-now recommendation", () => {
+  const loadWithK = ((_p: string) => ({
+    policy: { federated: { networks: [{ id: "metafactory", payload_key: Buffer.alloc(32).toString("base64"), payload_key_id: "metafactory/k1" }] } },
+  })) as never;
+  const loadNoK = ((_p: string) => ({ policy: { federated: { networks: [] } } })) as never;
+
+  test("on an ENCRYPTION-ENABLED network prints the rotate-now line naming rotate-key", async () => {
+    const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(
+      argv("secret", "revoke-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
+      loadWithK, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("rotate now");
+    expect(res.stdout).toContain("rotate-key metafactory");
+  });
+
+  test("on a NON-encrypted network prints NO rotate-now line", async () => {
+    const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
+    const res = await dispatchNetwork(
+      argv("secret", "revoke-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
+      loadNoK, undefined, undefined, factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).not.toContain("rotate now");
   });
 });
 

@@ -134,14 +134,20 @@ import type { OperatorModeLeafPackage, NatsBaseIdentity } from "../../../common/
 import { parseLoopbackListen } from "../../../common/nats/leaf-remote-renderer";
 import {
   runNetworkSecret,
+  runNetworkKeyRotation,
   type SecretAction,
   type DeliveryMode,
   type SecretInputs,
   type SecretReport,
+  type KeyRotationInputs,
 } from "./network-secret-lib";
-import type { NetworkSecretPorts } from "./network-secret-ports";
+import type {
+  NetworkSecretPorts,
+  NetworkKeyRotationPorts,
+} from "./network-secret-ports";
 import {
   buildLiveSecretPorts,
+  buildLiveKeyRotationPorts,
   hubAdminMaterialFromSeedFile,
 } from "./network-secret-adapters";
 import { fetchSealedLeafSecret } from "../../../common/registry/fetch-sealed-secret";
@@ -445,8 +451,12 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     // revoke-member, rotate}. Hub-admin authority (Q5): mints the per-member
     // leaf PSK, writes the member's hub `authorization` user + reloads, and
     // seals/delivers (or revokes) the secret. DRY-RUN by default; --apply mutates.
+    // C-1349 Slice 2 — `rotate-key <network>` (NO member positional — network-wide
+    // K rotation) mints K′, re-seals every ADMITTED member, advances the hub K
+    // store. `member` is OPTIONAL so rotate-key parses; the per-member actions
+    // still require it (runSecret enforces).
     secret: {
-      positionals: ["action", "network", "member"],
+      positionals: ["action", "network", "member?"],
       flags: {
         // The HUB-ADMIN seed (mints + seals + signs the registry delivery/revoke).
         "--admin-seed": "value",
@@ -2757,6 +2767,21 @@ export type SecretPortsFactory = (cfg: {
 const DEFAULT_SECRET_PORTS_FACTORY: SecretPortsFactory = (cfg) => buildLiveSecretPorts(cfg);
 
 /**
+ * C-1349 Slice 2 — factory for the `rotate-key` port bundle. Production builds the
+ * live adapters (hub-conf read + registry ADMITTED-list + hub-admin sealed-blob
+ * POST + K mint + guarded hub-K-store write). Tests inject recording fakes.
+ */
+export type KeyRotationPortsFactory = (cfg: {
+  hubConfigPath: string;
+  registryUrl: string;
+  material: import("../../../bus/stack-provisioning").StackIdentityMaterial;
+  hubStackConfigPath: string;
+}) => NetworkKeyRotationPorts;
+
+const DEFAULT_KEY_ROTATION_PORTS_FACTORY: KeyRotationPortsFactory = (cfg) =>
+  buildLiveKeyRotationPorts(cfg);
+
+/**
  * C-1349 Slice 1 — read the per-network payload key `K` (+ its kid) from the HUB
  * STACK's own resolved cortex config (`policy.federated.networks[<net>]`), the
  * SAME store the encryption runtime reads (`networkKeyFromConfig`). This is the
@@ -2811,17 +2836,28 @@ async function runSecret(
   // read is testable without touching the principal's real `~/.config/cortex/`.
   // Production omits → the tolerant `loadConfigWithAgents` reader.
   load: ConfigReader = DEFAULT_READER,
+  // C-1349 Slice 2 — injectable rotate-key ports factory. Production omits → live.
+  keyRotationPortsFactory: KeyRotationPortsFactory = DEFAULT_KEY_ROTATION_PORTS_FACTORY,
 ): Promise<ExitResult> {
+  // C-1349 Slice 2 — `rotate-key` is network-WIDE (no member pubkey); route it to
+  // its own handler BEFORE the per-member action + member-grammar validation.
+  if (actionArg === "rotate-key") {
+    return runKeyRotation(networkId, flags, json, keyRotationPortsFactory);
+  }
+
   // 1. Validate the action.
   const validActions: SecretAction[] = ["add-member", "revoke-member", "rotate"];
   if (!validActions.includes(actionArg as SecretAction)) {
-    return usageError("secret", `unknown action "${actionArg}" (expected one of: ${validActions.join(", ")})`, json);
+    return usageError("secret", `unknown action "${actionArg}" (expected one of: ${validActions.join(", ")}, rotate-key)`, json);
   }
   const action = actionArg as SecretAction;
 
   // 2. Validate network + member pubkey grammar.
   if (!NETWORK_ID_RE.test(networkId)) {
     return usageError("secret", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+  if (member === "") {
+    return usageError("secret", `action "${action}" requires a member pubkey (usage: cortex network secret ${action} <network> <member-pubkey>)`, json);
   }
   if (!MEMBER_PUBKEY_RE.test(member)) {
     return usageError("secret", `member "${member}" must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)`, json);
@@ -2916,6 +2952,22 @@ async function runSecret(
     // revoke didn't commit, so there is nothing to pair the role removal with.
   }
 
+  // 4c. C-1349 Slice 2 — revoke does NOT auto-rotate (design decision #7), but on
+  // an ENCRYPTION-ENABLED network the evictee may retain K and decrypt captured
+  // traffic. So a revoke-member on a network with a hub-side K prints a rotate-now
+  // recommendation naming the EXACT command. Best-effort: a broken/absent hub
+  // config just omits the hint (the revoke already committed — never fail it here).
+  let rotateNowHint: string | undefined;
+  if (action === "revoke-member" && report.ok) {
+    const kRes = resolveHubPayloadKey(flags, networkId, load);
+    if (kRes.ok && kRes.payloadKey !== undefined) {
+      rotateNowHint =
+        `evicted member may retain the payload key K — run ` +
+        `\`cortex network secret rotate-key ${networkId} --admin-seed <p> --apply\` ` +
+        `to mint a new K and re-seal it to the remaining members`;
+    }
+  }
+
   // 5. Render. SECRETS never appear in steps/data; the oob PSK is surfaced in a
   // dedicated, explicitly-labelled block (the one place a secret reaches stdout).
   if (json) {
@@ -2925,6 +2977,7 @@ async function runSecret(
       ...report.data,
       hub_admin_fingerprint: matRes.material.fingerprint,
       ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
+      ...(rotateNowHint !== undefined && { rotate_now_recommendation: rotateNowHint }),
     };
     if (discordWarning) data.discord_warning = discordWarning;
     // The oob PSK is the hub-admin's to hand over — include it under an explicit
@@ -2949,12 +3002,103 @@ async function runSecret(
   } else if (discordStatus !== "skipped") {
     lines.push(`  discord:    ${discordWarning}`);
   }
+  if (rotateNowHint !== undefined) {
+    lines.push(`  ⚠ rotate now: ${rotateNowHint}`);
+  }
   if (report.surfaced) {
     lines.push("");
     lines.push("  ── OUT-OF-BAND SECRET (hand this to the member over a secure channel) ──");
     lines.push(`  leaf user:   ${report.surfaced.leafUser}`);
     lines.push(`  leaf secret: ${report.surfaced.psk}`);
   }
+  lines.push("");
+  const body = lines.join("\n");
+  return report.ok ? ok(body) : { exitCode: 1, stdout: "", stderr: body };
+}
+
+/**
+ * C-1349 Slice 2 — `cortex network secret rotate-key <network> --admin-seed <p>
+ * [--apply]`. Network-WIDE payload-key (K) rotation: mint K′ → re-seal EVERY
+ * ADMITTED member (leaf_psk UNCHANGED + payload_key=K′ + bumped kid) → advance the
+ * hub K store. DRY-RUN by default; --apply mutates. K NEVER reaches stdout/json —
+ * only the new kid + a SHA-256(K′) fingerprint are printable.
+ */
+async function runKeyRotation(
+  networkId: string,
+  flags: FlagMap,
+  json: boolean,
+  keyRotationPortsFactory: KeyRotationPortsFactory,
+): Promise<ExitResult> {
+  if (!NETWORK_ID_RE.test(networkId)) {
+    return usageError("secret", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("secret", applyRes.reason, json);
+
+  const seedRes = requireValueFlag(flags, "--admin-seed");
+  if (!seedRes.ok) return usageError("secret", seedRes.reason, json);
+
+  const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_SECRET_REGISTRY_URL;
+  const hubConfigPath = optionalValueFlag(flags, "--hub-config") ?? DEFAULT_HUB_CONFIG_PATH;
+  const hubStackConfigPath = resolveLocalStackConfigPath(flags);
+
+  const matRes = await hubAdminMaterialFromSeedFile(seedRes.value);
+  if (!matRes.ok) return opError("secret", matRes.reason, json);
+
+  const ports = keyRotationPortsFactory({
+    hubConfigPath,
+    registryUrl,
+    material: matRes.material,
+    hubStackConfigPath,
+  });
+  const inputs: KeyRotationInputs = {
+    networkId,
+    apply: applyRes.apply,
+    nowIso: new Date().toISOString(),
+  };
+
+  let report;
+  try {
+    report = await runNetworkKeyRotation(inputs, ports);
+  } catch (err) {
+    return opError("secret", `secret rotate-key failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  if (json) {
+    const data: Record<string, string> = {
+      subcommand: "secret",
+      action: "rotate-key",
+      applied: report.applied ? "true" : "false",
+      ...report.data,
+      hub_admin_fingerprint: matRes.material.fingerprint,
+      resealed_count: report.members.filter((m) => m.resealed).length.toString(),
+    };
+    const members = report.members.map((m) => ({
+      member_fingerprint: m.memberFingerprint,
+      request_id: m.requestId,
+      resealed: m.resealed ? "yes" : "no",
+      ...(m.note !== undefined && { note: m.note }),
+      ...(report.newKid !== undefined && m.resealed && { kid: report.newKid }),
+    }));
+    const env = report.ok ? envelopeOk(members, data) : envelopeError(report.reason ?? "rotate-key failed", { ...data, members: JSON.stringify(members) });
+    return report.ok ? ok(renderJson(env)) : { exitCode: 1, stdout: "", stderr: renderJson(env) };
+  }
+
+  const header = report.applied
+    ? `cortex network secret rotate-key ${networkId}: ${report.ok ? "ok" : "FAILED"}`
+    : `cortex network secret rotate-key ${networkId}: dry-run (no mutation; pass --apply)`;
+  const lines = [header, ...report.steps.map((s) => `  ${s}`)];
+  if (report.members.length > 0) {
+    lines.push("");
+    lines.push("  MEMBER          RESEALED  KID / NOTE");
+    for (const m of report.members) {
+      const resealed = report.applied ? (m.resealed ? "yes" : "no ") : "—  ";
+      const tail = m.resealed && report.newKid !== undefined ? report.newKid : (m.note ?? "");
+      lines.push(`  ${m.memberFingerprint.padEnd(14)}  ${resealed.padEnd(8)}  ${tail}`);
+    }
+  }
+  if (!report.ok) lines.push(`  ✗ ${report.reason ?? "unknown failure"}`);
   lines.push("");
   const body = lines.join("\n");
   return report.ok ? ok(body) : { exitCode: 1, stdout: "", stderr: body };
@@ -3452,6 +3596,9 @@ export async function dispatchNetwork(
   // C-1257 — injectable make-live ports factory so the make-live CLI tests drive
   // fake arc/fs/restart ports. Production omits → the live adapters.
   makeLivePortsFactory: MakeLivePortsFactory = DEFAULT_MAKE_LIVE_PORTS_FACTORY,
+  // C-1349 Slice 2 — injectable rotate-key ports factory so the CLI tests drive
+  // fake hub-conf/registry/crypto/keyStore ports. Production omits → live.
+  keyRotationPortsFactory: KeyRotationPortsFactory = DEFAULT_KEY_ROTATION_PORTS_FACTORY,
 ): Promise<ExitResult> {
   let parsed;
   try {
@@ -3504,6 +3651,7 @@ export async function dispatchNetwork(
         json,
         secretPortsFactory,
         load,
+        keyRotationPortsFactory,
       );
   }
 }
@@ -3534,6 +3682,9 @@ Usage:
   cortex network secret <add-member|revoke-member|rotate> <network> <member-pubkey>
                         --admin-seed <hub-admin-seed> [--registry-url <url>] [--hub-config <p>]
                         [--deliver sealed|oob] [--leaf-user <u>] [--apply] [--dry-run] [--json]
+  cortex network secret rotate-key <network>   (network-wide K rotation — NO member pubkey)
+                        --admin-seed <hub-admin-seed> [--config <p>] [--registry-url <url>]
+                        [--hub-config <p>] [--apply] [--dry-run] [--json]
 
 The one-liner (#753): \`cortex network join <network>\` derives EVERYTHING from
 the loaded cortex.yaml — principal (principal.id), stack (stack.id), signing

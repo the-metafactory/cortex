@@ -51,12 +51,20 @@ import {
   type StackIdentityMaterial,
 } from "../../../bus/stack-provisioning";
 import { bunExecRunner, type ExecRunner } from "../../../common/nats/nats-service-manager";
+import {
+  readNetworksFromConfig,
+  writeNetworksGuarded,
+} from "./network-config-write";
 import type {
   NetworkSecretPorts,
   HubAuthPort,
   AdmissionLookupPort,
   SealDeliveryPort,
   SecretCrypto,
+  NetworkKeyRotationPorts,
+  AdmittedListPort,
+  HubKeyStorePort,
+  KeyRotationCrypto,
 } from "./network-secret-ports";
 
 /**
@@ -352,6 +360,106 @@ function buildLiveSealDeliveryPort(cfg: LiveSecretPortsConfig): SealDeliveryPort
 function buildLiveSecretCrypto(): SecretCrypto {
   return {
     mintPsk: () => mintLeafPsk(),
+    seal: (plaintext, pubkey) => sealToPrincipal(plaintext, pubkey),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// C-1349 Slice 2 — LIVE adapters for `cortex network secret rotate-key`.
+// ---------------------------------------------------------------------------
+
+export interface LiveKeyRotationPortsConfig {
+  /** The hub nats-server config path (to recover each member's leaf PSK). */
+  hubConfigPath: string;
+  /** Registry base URL. */
+  registryUrl: string;
+  /** The HUB-ADMIN identity (signs the admin read + the sealed-blob POSTs). */
+  material: StackIdentityMaterial;
+  /** The HUB STACK's own cortex config (the K store rotate-key advances). */
+  hubStackConfigPath: string;
+  /** Injectable fetch (tests). Production omits → globalThis.fetch. */
+  fetchImpl?: typeof globalThis.fetch;
+}
+
+/** Build the full live port bundle for `rotate-key`. */
+export function buildLiveKeyRotationPorts(cfg: LiveKeyRotationPortsConfig): NetworkKeyRotationPorts {
+  const hubConfPath = expandTilde(cfg.hubConfigPath);
+  return {
+    readHubConf(): Promise<string> {
+      if (!existsSync(hubConfPath)) {
+        return Promise.reject(new Error(`hub config not found at ${hubConfPath} (set --hub-config)`));
+      }
+      return Promise.resolve(readFileSync(hubConfPath, "utf-8"));
+    },
+    admission: buildLiveAdmittedListPort(cfg),
+    // rotate-key reuses the per-member sealed-blob POST verbatim.
+    delivery: buildLiveSealDeliveryPort({
+      hubConfigPath: cfg.hubConfigPath,
+      registryUrl: cfg.registryUrl,
+      material: cfg.material,
+      ...(cfg.fetchImpl !== undefined && { fetchImpl: cfg.fetchImpl }),
+    }),
+    crypto: buildLiveKeyRotationCrypto(),
+    keyStore: buildLiveHubKeyStorePort(cfg.hubStackConfigPath),
+  };
+}
+
+function buildLiveAdmittedListPort(cfg: LiveKeyRotationPortsConfig): AdmittedListPort {
+  const base = cfg.registryUrl.replace(/\/+$/, "");
+  const fetchImpl = cfg.fetchImpl ?? globalThis.fetch;
+  return {
+    async listAdmittedRows(networkId) {
+      // The SAME admin-signed read `findAdmittedRow` / `admit --list-pending` use.
+      // ADR-0020 scopes admin reads to GLOBAL admins; a per-network admin 403s
+      // here — surfaced readably rather than as a silent empty list.
+      const claim = { admin_pubkey: cfg.material.pubkeyB64, issued_at: new Date().toISOString() };
+      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const resp = await fetchImpl(`${base}/admission-requests?status=ADMITTED`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify({ claim, signature }) },
+      });
+      if (resp.status === 403) {
+        throw new Error(
+          `registry refused the ADMITTED list (HTTP 403 admin_not_authorized): admission reads are ` +
+            `GLOBAL-admin-only today (ADR-0020), so a per-network admin cannot enumerate members for ` +
+            `"${networkId}" to rotate the key. Use a global-admin seed; per-network read-scoping is the ADR-0020 fast-follow.`,
+        );
+      }
+      if (!resp.ok) {
+        throw new Error(`registry ADMITTED list failed (HTTP ${resp.status.toString()}): ${await resp.text()}`);
+      }
+      const rows = (await resp.json()) as AdmissionRow[];
+      return rows
+        .filter((r) => r.network_id === networkId && r.status === "ADMITTED")
+        .map((r) => ({ request_id: r.request_id, principal_id: r.principal_id, peer_pubkey: r.peer_pubkey }));
+    },
+  };
+}
+
+function buildLiveHubKeyStorePort(hubStackConfigPath: string): HubKeyStorePort {
+  const path = expandTilde(hubStackConfigPath);
+  return {
+    configPath: path,
+    readNetworks() {
+      return Promise.resolve(readNetworksFromConfig(path));
+    },
+    writeNetworks(networks) {
+      // The SAME offer.ts write-guard Slice 1 added (validate → backup → atomic →
+      // verify → restore → chmod 600). NO daemon-loads assertion — rotate-key is
+      // the hub admin editing their OWN stack config; they restart the daemon.
+      writeNetworksGuarded(path, networks, { backupLabel: "rotate-key" });
+      return Promise.resolve();
+    },
+  };
+}
+
+function buildLiveKeyRotationCrypto(): KeyRotationCrypto {
+  return {
+    mintPayloadKey: () => {
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      return bytes;
+    },
     seal: (plaintext, pubkey) => sealToPrincipal(plaintext, pubkey),
   };
 }

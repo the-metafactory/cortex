@@ -30,9 +30,15 @@ import { pskFingerprint } from "../../../common/nats/leaf-psk";
 import {
   upsertHubLeafUser,
   removeHubLeafUser,
+  listHubLeafUsers,
   HubAuthConflictError,
 } from "../../../common/nats/hub-leaf-authorization";
-import type { NetworkSecretPorts } from "./network-secret-ports";
+import { defaultKeyId } from "../../../common/crypto/network-encryption-policy";
+import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
+import type {
+  NetworkSecretPorts,
+  NetworkKeyRotationPorts,
+} from "./network-secret-ports";
 
 export type SecretAction = "add-member" | "revoke-member" | "rotate";
 export type DeliveryMode = "sealed" | "oob";
@@ -310,4 +316,264 @@ function fail(action: SecretAction, inputs: SecretInputs, steps: string[], data:
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// ===========================================================================
+// C-1349 Slice 2 — network-wide payload-key (K) rotation (`rotate-key`).
+// ===========================================================================
+
+/**
+ * Deterministic kid epoch bump (design decision #4). Parse the current kid's
+ * trailing counter `<network>/k<n>` → `<network>/k<n+1>`; when the current kid
+ * does NOT match that shape (a manually-set kid, a prior date fallback, a
+ * different network prefix), fall back to `<network>/k-<ISO-date>`. The ISO date
+ * is INJECTED (`isoDate`) so the fallback is deterministic in tests and the
+ * orchestrator never reaches for a clock itself.
+ */
+export function computeNextKid(
+  networkId: string,
+  currentKid: string | undefined,
+  isoDate: string,
+): string {
+  const prefix = `${networkId}/k`;
+  if (currentKid?.startsWith(prefix) === true) {
+    const tail = currentKid.slice(prefix.length);
+    if (/^\d+$/.test(tail)) {
+      return `${prefix}${(Number.parseInt(tail, 10) + 1).toString()}`;
+    }
+  }
+  return `${networkId}/k-${isoDate}`;
+}
+
+/** Inputs for a network-wide K rotation. NO member pubkey — `rotate-key` is
+ *  network-scoped. `nowIso` feeds the kid date-fallback deterministically. */
+export interface KeyRotationInputs {
+  networkId: string;
+  apply: boolean;
+  /** ISO timestamp for the kid date-fallback (the CLI passes `new Date()...`). */
+  nowIso: string;
+}
+
+/** Per-member re-seal outcome for the summary table. NEVER carries K. */
+export interface KeyRotationMemberOutcome {
+  /** Member pubkey fingerprint (first 12 chars) — the summary-table key. */
+  memberFingerprint: string;
+  requestId: string;
+  resealed: boolean;
+  /** Why a member was NOT resealed: `inert` (no hub user) or an error. NEVER K. */
+  note?: string;
+}
+
+export interface KeyRotationReport {
+  ok: boolean;
+  applied: boolean;
+  networkId: string;
+  /** Plan/result steps — NEVER carry K (kid + fingerprint only). */
+  steps: string[];
+  /** Structured data for --json — NEVER carries K. */
+  data: Record<string, string>;
+  /** Per-member re-seal outcomes (the summary table). */
+  members: KeyRotationMemberOutcome[];
+  /** The new kid (printable identifier). */
+  newKid?: string;
+  /** SHA-256(K′) first-8-hex — the ONLY printable K identifier. */
+  keyFingerprint?: string;
+  /** How many ADMITTED members the rotation targeted. */
+  memberCount: number;
+  reason?: string;
+}
+
+/**
+ * `rotate-key` — mint K′ (32 random bytes) → re-seal EVERY ADMITTED member's
+ * envelope (leaf_psk UNCHANGED + payload_key=K′ + bumped kid) → advance the hub
+ * K store. ORDERING (security-critical, design constraint): re-seal ALL members
+ * FIRST, then commit K′ to the hub config LAST, so a mid-flight re-seal failure
+ * leaves the OLD K authoritative and the whole op re-runnable (a re-run mints a
+ * fresh K″ and overwrites every member's blob — no half-rotated state).
+ *
+ * ADMITTED-only: REVOKED/DEPARTED/PENDING/REJECTED rows are never enumerated (the
+ * whole point post-eviction). An ADMITTED-but-INERT member (row exists but no hub
+ * `authorization` user, so no leaf PSK to preserve) is SKIPPED — marked
+ * `resealed: no (inert)` — and does NOT block the commit (it has no transport and
+ * no K to protect; it picks up the current K whenever it is actually sealed via
+ * add-member). Only a GENUINE seal/deliver FAILURE blocks the commit.
+ *
+ * K NEVER appears in steps/data/members/errors — only the new kid and a
+ * SHA-256(K′) fingerprint are printable. Dry-run mints NOTHING and writes NOTHING.
+ */
+export async function runNetworkKeyRotation(
+  inputs: KeyRotationInputs,
+  ports: NetworkKeyRotationPorts,
+): Promise<KeyRotationReport> {
+  const steps: string[] = [];
+  const data: Record<string, string> = { action: "rotate-key", network: inputs.networkId };
+  const base = (): KeyRotationReport => ({
+    ok: true,
+    applied: false,
+    networkId: inputs.networkId,
+    steps,
+    data,
+    members: [],
+    memberCount: 0,
+  });
+
+  // 1. Read the hub K store — rotate-key ROTATES an existing key; it never mints
+  //    the FIRST K (standing up encryption is out of scope, design decision #2).
+  let networks: PolicyFederatedNetwork[];
+  try {
+    networks = await ports.keyStore.readNetworks();
+  } catch (err) {
+    return { ...base(), ok: false, reason: `failed to read the hub stack config (${ports.keyStore.configPath}): ${errText(err)}` };
+  }
+  const netIdx = networks.findIndex((n) => n.id === inputs.networkId);
+  const net = netIdx >= 0 ? networks[netIdx] : undefined;
+  if (net?.payload_key === undefined) {
+    return {
+      ...base(),
+      ok: false,
+      reason:
+        `network "${inputs.networkId}" has no payload key configured hub-side ` +
+        `(${ports.keyStore.configPath}) — rotate-key ROTATES an existing key. ` +
+        `Stand up encryption first (sop-onboard-peer-principal.md Step 8), then rotate.`,
+    };
+  }
+  const currentKid = net.payload_key_id ?? defaultKeyId(inputs.networkId);
+  const newKid = computeNextKid(inputs.networkId, currentKid, inputs.nowIso);
+  data.current_kid = currentKid;
+  data.new_kid = newKid;
+
+  // 2. Enumerate EVERY ADMITTED member (admin read). ADMITTED-only.
+  let admitted;
+  try {
+    admitted = await ports.admission.listAdmittedRows(inputs.networkId);
+  } catch (err) {
+    return { ...base(), ok: false, newKid, reason: `failed to list ADMITTED members for "${inputs.networkId}": ${errText(err)}` };
+  }
+  data.member_count = admitted.length.toString();
+
+  steps.push(`network:    ${inputs.networkId}`);
+  steps.push(`kid:        ${currentKid} → ${newKid}`);
+  steps.push(`members:    ${admitted.length.toString()} ADMITTED`);
+
+  // 3. Dry-run (default): print the plan. Mint NOTHING, write NOTHING, no K.
+  if (!inputs.apply) {
+    steps.push(`would: mint K′ → re-seal ${admitted.length.toString()} ADMITTED member(s) with the new kid → advance the hub K store`);
+    steps.push(`would: ${admitted.length.toString()} member(s) must then re-run \`cortex network join\` to pick up the new key`);
+    const report = base();
+    report.newKid = newKid;
+    report.memberCount = admitted.length;
+    report.members = admitted.map((m) => ({
+      memberFingerprint: m.peer_pubkey.slice(0, 12),
+      requestId: m.request_id,
+      resealed: false,
+      note: "dry-run",
+    }));
+    return report;
+  }
+
+  // 4. --apply. Mint K′ + compute its log-safe fingerprint (NEVER K itself).
+  const kBytes = ports.crypto.mintPayloadKey();
+  const kB64 = Buffer.from(kBytes).toString("base64");
+  const kFp = await pskFingerprint(kB64);
+  data.payload_key_fingerprint = kFp;
+  steps.push(`minted:     K′ (kid ${newKid}, fp ${kFp})`);
+
+  // Recover each member's EXISTING leaf PSK from the hub config so the re-seal
+  // keeps leaf_psk UNCHANGED (rotate-key rotates K, not the per-member PSK).
+  let hubConf: string;
+  try {
+    hubConf = await ports.readHubConf();
+  } catch (err) {
+    return { ...base(), ok: false, newKid, keyFingerprint: kFp, reason: `failed to read hub config to recover member leaf PSKs: ${errText(err)}` };
+  }
+  const pskByUser = new Map(listHubLeafUsers(hubConf).map((u) => [u.user, u.secret]));
+
+  // 5. Re-seal ALL members first (collect outcomes). A GENUINE seal/deliver error
+  //    blocks the commit; an INERT member (no hub user) is skipped, not a failure.
+  const members: KeyRotationMemberOutcome[] = [];
+  let hadFailure = false;
+  for (const m of admitted) {
+    const fp = m.peer_pubkey.slice(0, 12);
+    const leafUser = m.principal_id; // network-wide rotate uses the DEFAULT user.
+    const psk = pskByUser.get(leafUser);
+    if (psk === undefined) {
+      // ADMITTED but no hub authorization user → INERT (never sealed, or a custom
+      // --leaf-user we can't recover). No transport, no K to protect → skip, do
+      // NOT block. It picks up the current K when it is actually sealed.
+      members.push({ memberFingerprint: fp, requestId: m.request_id, resealed: false, note: "inert — no hub authorization user" });
+      continue;
+    }
+    try {
+      const envelope = encodeLeafSecretEnvelope({
+        leaf_psk: psk,
+        leaf_user: leafUser,
+        payload_key: kB64,
+        payload_key_kid: newKid,
+      });
+      const sealed = await ports.crypto.seal(envelope, m.peer_pubkey);
+      await ports.delivery.postSealedSecret(m.request_id, sealed);
+      members.push({ memberFingerprint: fp, requestId: m.request_id, resealed: true });
+    } catch (err) {
+      hadFailure = true;
+      members.push({ memberFingerprint: fp, requestId: m.request_id, resealed: false, note: `error: ${errText(err)}` });
+    }
+  }
+  const resealedCount = members.filter((x) => x.resealed).length;
+
+  // 6. Commit the hub K store LAST — ONLY if no genuine failure. A mid-flight
+  //    failure leaves the OLD K authoritative (config untouched) and re-runnable.
+  if (hadFailure) {
+    steps.push(`re-sealed:  ${resealedCount.toString()}/${admitted.length.toString()} — at least one member FAILED`);
+    steps.push(`hub K:      NOT advanced — OLD K "${currentKid}" remains authoritative; fix the failure and re-run (a re-run mints a fresh K and re-seals every member)`);
+    return {
+      ok: false,
+      applied: true,
+      networkId: inputs.networkId,
+      steps,
+      data,
+      members,
+      newKid,
+      keyFingerprint: kFp,
+      memberCount: admitted.length,
+      reason: `re-seal failed for at least one ADMITTED member — hub K NOT advanced (OLD K retained). Re-run \`cortex network secret rotate-key ${inputs.networkId} --admin-seed <p> --apply\` once the cause is fixed.`,
+    };
+  }
+
+  // All members re-sealed (or inert-skipped) → advance the hub K store.
+  const nextNetworks = networks.map((n, i) =>
+    i === netIdx ? { ...n, encryption: n.encryption ?? "enabled", payload_key: kB64, payload_key_id: newKid } : n,
+  );
+  try {
+    await ports.keyStore.writeNetworks(nextNetworks);
+  } catch (err) {
+    return {
+      ok: false,
+      applied: true,
+      networkId: inputs.networkId,
+      steps,
+      data,
+      members,
+      newKid,
+      keyFingerprint: kFp,
+      memberCount: admitted.length,
+      reason:
+        `all ${resealedCount.toString()} member(s) re-sealed, but advancing the hub K store failed: ${errText(err)}. ` +
+        `The OLD K "${currentKid}" is still authoritative (config restored) — re-run to retry.`,
+    };
+  }
+  steps.push(`re-sealed:  ${resealedCount.toString()}/${admitted.length.toString()} ADMITTED member(s) with kid ${newKid}`);
+  steps.push(`hub K:      advanced to ${newKid} in ${ports.keyStore.configPath} (fp ${kFp})`);
+  steps.push(`pickup:     ${admitted.length.toString()} member(s) must re-run \`cortex network join\` to pick up the new key`);
+
+  return {
+    ok: true,
+    applied: true,
+    networkId: inputs.networkId,
+    steps,
+    data,
+    members,
+    newKid,
+    keyFingerprint: kFp,
+    memberCount: admitted.length,
+  };
 }

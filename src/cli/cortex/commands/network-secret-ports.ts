@@ -64,3 +64,68 @@ export interface NetworkSecretPorts {
   delivery: SealDeliveryPort;
   crypto: SecretCrypto;
 }
+
+// ===========================================================================
+// C-1349 Slice 2 — network-wide payload-key (K) rotation ports.
+//
+// `rotate-key` is network-WIDE (mint K′ → re-seal EVERY ADMITTED member with
+// leaf_psk UNCHANGED + payload_key=K′ + bumped kid → advance the hub K store),
+// so it needs three seams the per-member add/rotate/revoke orchestrator does
+// not: enumerate ADMITTED rows, mint K, and read/write the hub STACK config's
+// `payload_key`. It gets its OWN port bundle so the per-member ports (and their
+// fakes) stay untouched.
+// ===========================================================================
+
+/** One ADMITTED admission row, the unit `rotate-key` re-seals K′ to. */
+export interface AdmittedMember {
+  request_id: string;
+  /** The member's principal id — the DEFAULT hub leaf-user (add-member default). */
+  principal_id: string;
+  /** The member's registered ed25519 pubkey (base64) — the seal target. */
+  peer_pubkey: string;
+}
+
+/** Enumerate EVERY ADMITTED admission row for a network (admin read). */
+export interface AdmittedListPort {
+  /**
+   * List every ADMITTED row for `networkId` (never PENDING/REVOKED/DEPARTED/
+   * REJECTED — the whole point post-eviction). Same admin-signed read the
+   * `admit --list-pending` path uses; ADR-0020 scopes reads to GLOBAL admins,
+   * so a per-network admin may 403 (surfaced readably, never a silent empty).
+   */
+  listAdmittedRows(networkId: string): Promise<AdmittedMember[]>;
+}
+
+/**
+ * Read/write the HUB STACK's own cortex config `policy.federated.networks[]` —
+ * the K store the encryption runtime reads (`networkKeyFromConfig`). `rotate-key`
+ * advances the target network's `payload_key` + `payload_key_id` here, via the
+ * SAME offer.ts write-guard Slice 1 added (`writeNetworksGuarded`).
+ */
+export interface HubKeyStorePort {
+  readNetworks(): Promise<import("../../../common/types/cortex-config").PolicyFederatedNetwork[]>;
+  writeNetworks(
+    networks: readonly import("../../../common/types/cortex-config").PolicyFederatedNetwork[],
+  ): Promise<void>;
+  /** The hub stack config path, for plan/report output. */
+  readonly configPath: string;
+}
+
+/** K minting + sealing for network-wide rotation. Injected for determinism. */
+export interface KeyRotationCrypto {
+  /** Mint a fresh 32-byte payload key K′ (raw bytes; base64-encoded at the edges). */
+  mintPayloadKey(): Uint8Array;
+  /** Seal `plaintext` to `recipientPubkeyB64` (crypto_box_seal). */
+  seal(plaintext: string, recipientPubkeyB64: string): Promise<string>;
+}
+
+/** The full port bundle `rotate-key` depends on. */
+export interface NetworkKeyRotationPorts {
+  /** Read the hub nats-server config text (to recover each member's leaf PSK). */
+  readHubConf(): Promise<string>;
+  admission: AdmittedListPort;
+  /** Reuses the per-member sealed-blob POST (`postSealedSecret`). */
+  delivery: SealDeliveryPort;
+  crypto: KeyRotationCrypto;
+  keyStore: HubKeyStorePort;
+}

@@ -71,11 +71,11 @@ import {
   type StackIdentityMaterial,
   type ClaimCapability,
 } from "../../../bus/stack-provisioning";
-import type {
-  PolicyFederatedNetwork,
-  PolicyPublic,
-} from "../../../common/types/cortex-config";
-import { PolicyFederatedNetworkSchema } from "../../../common/types/cortex-config";
+import type { PolicyPublic } from "../../../common/types/cortex-config";
+import {
+  readNetworksFromConfig,
+  writeNetworksGuarded,
+} from "./network-config-write";
 
 import type {
   AdmissionStatePort,
@@ -917,116 +917,21 @@ function buildConfigStorePort(cfg: LivePortsConfig, mutate: boolean): ConfigStor
   const path = stackConfigPath(cfg);
   return {
     readNetworks() {
-      if (!existsSync(path)) return [];
-      const raw = parseYaml(readFileSync(path, "utf-8")) as
-        | { policy?: { federated?: { networks?: PolicyFederatedNetwork[] } } }
-        | null;
-      return raw?.policy?.federated?.networks ?? [];
+      return readNetworksFromConfig(path);
     },
     writeNetworks(networks) {
       if (!mutate) return;
       // #813 — fail closed before mutating the principal's config in place.
       assertDaemonLoadsConfig(cfg);
-      // #813 — preserve comments: the join now rewrites the principal's
-      // hand-maintained monolith in place. parseDocument + setIn keeps the
-      // header/inline comments (incl. `# DO NOT EDIT BY HAND`) that
-      // parseYaml→stringifyYaml would strip.
-      // C-1349 Slice 1 — the offer.ts write-guard pattern (VALIDATE-before-write →
-      // timestamped backup → atomic write → re-parse verify → restore-on-failure).
-      // The join now writes the per-network payload key K into this file (a secret
-      // at rest), so a malformed entry (e.g. a wrong-length K that boots into
-      // cleartext-with-warning, or a corrupt/partial write) must NEVER silently
-      // land in the stack config.
-
-      // (1) VALIDATE-before-write, SCOPED to the payload key K this slice adds
-      // (never the whole entry — that would newly reject hand-pinned peer shapes
-      // this writer has always tolerated). A `payload_key` MUST base64-decode to
-      // exactly 32 bytes — the SAME refine the daemon enforces at boot; a
-      // malformed K (that would boot into cleartext-with-warning, ADR-0019 §5)
-      // aborts BEFORE any fs mutation, leaving the file untouched. The entry
-      // (which carries K) is never echoed — only its id + the field name.
-      for (const n of networks) {
-        if (n.payload_key === undefined) continue;
-        const check = PolicyFederatedNetworkSchema.shape.payload_key.safeParse(n.payload_key);
-        if (!check.success) {
-          throw new Error(
-            `refusing to write policy.federated.networks — entry "${n.id}" has an invalid payload_key (schema validation failed: must be base64 decoding to exactly 32 bytes)`,
-          );
-        }
-      }
-
-      const existed = existsSync(path);
-      const originalText = existed ? readFileSync(path, "utf-8") : undefined;
-      const doc = parseDocument(originalText ?? "");
-      doc.setIn(["policy", "federated", "networks"], networks);
-      const nextText = doc.toString();
-      mkdirSync(dirname(path), { recursive: true });
-
-      // (2) Timestamped backup (only when a file existed — a fresh file is removed
-      // on failure instead).
-      let backupPath: string | undefined;
-      if (existed && originalText !== undefined) {
-        backupPath = `${path}.pre-join-${backupStamp()}.bak`;
-        writeFileSync(backupPath, originalText, "utf-8");
-      }
-
-      // (3) Atomic write, then (4) re-parse verify the networks round-trip. Any
-      // parse failure / mismatch means the write corrupted the file → RESTORE the
-      // original (or remove a freshly-created file) and rethrow so the join
-      // orchestrator's try/catch converts it to a clean { ok: false } abort.
-      try {
-        atomicWriteFileSync(path, nextText);
-        const reparsed = parseYaml(readFileSync(path, "utf-8")) as
-          | { policy?: { federated?: { networks?: PolicyFederatedNetwork[] } } }
-          | null;
-        const readBack = reparsed?.policy?.federated?.networks ?? [];
-        // Project each entry to id + encryption mode + payload-key PRESENCE (never
-        // K's VALUE into a comparison that could reach an error path) + kid, then
-        // compare the ordered projections. Length-sensitive; no index access.
-        const project = (list: readonly PolicyFederatedNetwork[]): string =>
-          JSON.stringify(
-            list.map((n) => [
-              n.id,
-              n.encryption ?? null,
-              n.payload_key !== undefined,
-              n.payload_key_id ?? null,
-            ]),
-          );
-        if (project(readBack) !== project(networks)) {
-          throw new Error("policy.federated.networks did not round-trip after write");
-        }
-      } catch (err) {
-        if (originalText !== undefined) atomicWriteFileSync(path, originalText);
-        else rmSync(path, { force: true });
-        throw new Error(
-          `config write verification failed for ${path} — restored original${backupPath ? ` (backup ${backupPath})` : ""}: ${err instanceof Error ? err.message : String(err)}`,
-          { cause: err },
-        );
-      }
-
-      // (5) K is a secret at rest — clamp the file to 0600 when any network carries
-      // a payload key (mirrors the leaf-include 0600 floor; the create umask can
-      // otherwise leave it group/world-readable).
-      if (networks.some((n) => n.payload_key !== undefined)) {
-        chmodSync(path, 0o600);
-      }
+      // C-1349 Slice 1/2 — the offer.ts write-guard pattern lives in the SHARED
+      // `writeNetworksGuarded` (VALIDATE-before-write → timestamped backup → atomic
+      // write → re-parse verify → restore-on-failure → chmod 600). The join writes
+      // the per-network payload key K (a secret at rest) here; `rotate-key` calls
+      // the SAME guard hub-side, so the two can never drift. `assertDaemonLoadsConfig`
+      // (join-only) stays above — it is NOT part of the reusable core.
+      writeNetworksGuarded(path, networks, { backupLabel: "join" });
     },
   };
-}
-
-/** Timestamped suffix for the pre-join config backup (offer.ts write-guard). */
-function backupStamp(): string {
-  const now = new Date();
-  const pad = (n: number): string => String(n).padStart(2, "0");
-  return [
-    now.getFullYear(),
-    pad(now.getMonth() + 1),
-    pad(now.getDate()),
-    "T",
-    pad(now.getHours()),
-    pad(now.getMinutes()),
-    pad(now.getSeconds()),
-  ].join("");
 }
 
 // =============================================================================

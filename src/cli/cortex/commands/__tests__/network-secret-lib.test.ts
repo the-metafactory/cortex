@@ -12,8 +12,19 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { runNetworkSecret, type SecretInputs } from "../network-secret-lib";
-import type { NetworkSecretPorts } from "../network-secret-ports";
+import {
+  runNetworkSecret,
+  runNetworkKeyRotation,
+  computeNextKid,
+  type SecretInputs,
+  type KeyRotationInputs,
+} from "../network-secret-lib";
+import type {
+  NetworkSecretPorts,
+  NetworkKeyRotationPorts,
+  AdmittedMember,
+} from "../network-secret-ports";
+import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import { listHubLeafUsers } from "../../../../common/nats/hub-leaf-authorization";
 
 interface Recorder {
@@ -251,5 +262,278 @@ describe("dry-run (default) + guards", () => {
     expect(report.ok).toBe(false);
     expect(r.writes.length).toBe(0);
     expect(r.posted.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// C-1349 Slice 2 — network-wide payload-key (K) rotation (`rotate-key`).
+//
+// Fixtures: all-same-digit placeholder pubkeys; an obviously-FAKE mint key (the
+// fake mintPayloadKey returns 32 ZERO bytes → base64 all-A). K′ must ride the
+// (fake-echoed) sealed blob but NEVER reach steps/data/members.
+// ===========================================================================
+
+/** A 44-char base64 pubkey from a single repeated char (obviously placeholder). */
+function fakePubkey(ch: string): string {
+  return btoa(ch.repeat(32));
+}
+const K_PRIME_B64 = Buffer.alloc(32).toString("base64"); // 32 zero bytes → what the fake mints.
+
+/** Hub conf carrying the cortex-managed leaf users (user → psk). */
+function hubConfWith(users: { user: string; psk: string }[]): string {
+  const entries = users
+    .map((u) => `      { user: "${u.user}", password: "${u.psk}" }`)
+    .join(",\n");
+  return (
+    "leafnodes {\n" +
+    "  # >>> cortex-managed leaf authorization (network secret tooling) — do not hand-edit\n" +
+    "  authorization {\n" +
+    "    users: [\n" +
+    entries +
+    "\n    ]\n" +
+    "  }\n" +
+    "  # <<< cortex-managed leaf authorization\n" +
+    "}\n"
+  );
+}
+
+interface RotationRecorder {
+  ports: NetworkKeyRotationPorts;
+  posted: { requestId: string; blob: string }[];
+  written: (readonly PolicyFederatedNetwork[])[];
+  mints: number;
+}
+
+function makeRotationPorts(opts: {
+  admitted: AdmittedMember[];
+  hubUsers: { user: string; psk: string }[];
+  networks: PolicyFederatedNetwork[];
+  sealThrowsForPub?: string;
+  writeThrows?: boolean;
+  listThrows?: boolean;
+}): RotationRecorder {
+  const posted: { requestId: string; blob: string }[] = [];
+  const written: (readonly PolicyFederatedNetwork[])[] = [];
+  let mints = 0;
+  const ports: NetworkKeyRotationPorts = {
+    readHubConf: async () => hubConfWith(opts.hubUsers),
+    admission: {
+      listAdmittedRows: async () => {
+        if (opts.listThrows) throw new Error("registry 403 (fake)");
+        return opts.admitted;
+      },
+    },
+    delivery: {
+      postSealedSecret: async (requestId: string, blob: string) => {
+        posted.push({ requestId, blob });
+      },
+      revoke: async () => {
+        /* unused by rotate-key */
+      },
+    },
+    crypto: {
+      mintPayloadKey: () => {
+        mints += 1;
+        return new Uint8Array(32); // 32 zero bytes → the obviously-fake K′.
+      },
+      seal: async (plaintext: string, pubkey: string) => {
+        if (opts.sealThrowsForPub !== undefined && pubkey === opts.sealThrowsForPub) {
+          throw new Error("seal failed (fake)");
+        }
+        return `SEALED(${pubkey.slice(0, 6)}:${plaintext})`;
+      },
+    },
+    keyStore: {
+      configPath: "/fake/stack.yaml",
+      readNetworks: async () => opts.networks,
+      writeNetworks: async (networks) => {
+        if (opts.writeThrows) throw new Error("guarded write failed (fake)");
+        written.push(networks);
+      },
+    },
+  };
+  return { ports, posted, written, get mints() { return mints; } };
+}
+
+function rotationInputs(over: Partial<KeyRotationInputs> = {}): KeyRotationInputs {
+  return { networkId: "metafactory", apply: true, nowIso: "2026-07-03", ...over };
+}
+
+/** A network carrying K + an explicit kid (encryption enabled). */
+function encNetwork(over: Partial<PolicyFederatedNetwork> = {}): PolicyFederatedNetwork {
+  return {
+    id: "metafactory",
+    encryption: "enabled",
+    payload_key: Buffer.alloc(32, 1).toString("base64"), // OLD K (all-ones, obviously fake).
+    payload_key_id: "metafactory/k1",
+    peers: [],
+    ...over,
+  } as unknown as PolicyFederatedNetwork;
+}
+
+function assertNoK(report: { steps: string[]; data: Record<string, string>; members: unknown[] }): void {
+  expect(JSON.stringify(report.steps)).not.toContain(K_PRIME_B64);
+  expect(JSON.stringify(report.data)).not.toContain(K_PRIME_B64);
+  expect(JSON.stringify(report.members)).not.toContain(K_PRIME_B64);
+}
+
+describe("computeNextKid", () => {
+  test("standard k<n> → k<n+1>", () => {
+    expect(computeNextKid("metafactory", "metafactory/k1", "2026-07-03")).toBe("metafactory/k2");
+    expect(computeNextKid("metafactory", "metafactory/k9", "2026-07-03")).toBe("metafactory/k10");
+  });
+  test("non-standard kid → date fallback", () => {
+    expect(computeNextKid("metafactory", "metafactory/k-2026-01-01", "2026-07-03")).toBe("metafactory/k-2026-07-03");
+    expect(computeNextKid("metafactory", "custom-label", "2026-07-03")).toBe("metafactory/k-2026-07-03");
+    expect(computeNextKid("metafactory", undefined, "2026-07-03")).toBe("metafactory/k-2026-07-03");
+  });
+  test("mismatched network prefix → date fallback (never bumps another net's counter)", () => {
+    expect(computeNextKid("metafactory", "other/k5", "2026-07-03")).toBe("metafactory/k-2026-07-03");
+  });
+});
+
+describe("rotate-key — apply", () => {
+  test("re-seals EVERY ADMITTED member with K′ + new kid; advances the hub K store; K never printed", async () => {
+    const admitted: AdmittedMember[] = [
+      { request_id: "req-alice", principal_id: "alice", peer_pubkey: fakePubkey("1") },
+      { request_id: "req-bob", principal_id: "bob", peer_pubkey: fakePubkey("2") },
+    ];
+    const r = makeRotationPorts({
+      admitted,
+      hubUsers: [{ user: "alice", psk: "PSK-alice" }, { user: "bob", psk: "PSK-bob" }],
+      networks: [encNetwork()],
+    });
+    const report = await runNetworkKeyRotation(rotationInputs(), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(report.applied).toBe(true);
+    expect(r.mints).toBe(1);
+    expect(report.newKid).toBe("metafactory/k2");
+
+    // Both members re-sealed; leaf_psk UNCHANGED; K′ + new kid present in the
+    // (fake-echoed, i.e. UNSEALED) blob.
+    expect(r.posted.length).toBe(2);
+    const aliceBlob = r.posted.find((p) => p.requestId === "req-alice")!.blob;
+    expect(aliceBlob).toContain("PSK-alice"); // leaf_psk preserved
+    expect(aliceBlob).toContain("payload_key");
+    expect(aliceBlob).toContain("metafactory/k2"); // new kid
+    expect(report.members.every((m) => m.resealed)).toBe(true);
+
+    // Hub K store advanced to K′ + new kid on the target network.
+    expect(r.written.length).toBe(1);
+    const net = r.written[0]!.find((n) => n.id === "metafactory")!;
+    expect(net.payload_key).toBe(K_PRIME_B64);
+    expect(net.payload_key_id).toBe("metafactory/k2");
+
+    // K′ never in any printable output; only the kid + a fingerprint.
+    assertNoK(report);
+    expect(report.keyFingerprint).toBeDefined();
+    expect(report.data.new_kid).toBe("metafactory/k2");
+  });
+
+  test("REVOKED / DEPARTED rows are NOT enumerated → never re-sealed (ADMITTED-only)", async () => {
+    // The port only ever returns ADMITTED rows (the live adapter filters status
+    // === ADMITTED). Model that: only alice is ADMITTED; a revoked bob + departed
+    // carol are absent from the list, so neither is re-sealed.
+    const admitted: AdmittedMember[] = [
+      { request_id: "req-alice", principal_id: "alice", peer_pubkey: fakePubkey("1") },
+    ];
+    const r = makeRotationPorts({
+      admitted,
+      hubUsers: [{ user: "alice", psk: "PSK-alice" }],
+      networks: [encNetwork()],
+    });
+    const report = await runNetworkKeyRotation(rotationInputs(), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(r.posted.length).toBe(1);
+    expect(r.posted[0]!.requestId).toBe("req-alice");
+    // The evicted bob's pubkey is never a seal target / POST target.
+    expect(r.posted.some((p) => p.requestId === "req-bob")).toBe(false);
+    expect(r.written.length).toBe(1); // hub K advanced (rotation succeeded)
+  });
+
+  test("an INERT ADMITTED member (no hub user) is skipped, not a failure; commit still proceeds", async () => {
+    const admitted: AdmittedMember[] = [
+      { request_id: "req-alice", principal_id: "alice", peer_pubkey: fakePubkey("1") },
+      { request_id: "req-ghost", principal_id: "ghost", peer_pubkey: fakePubkey("3") },
+    ];
+    const r = makeRotationPorts({
+      admitted,
+      hubUsers: [{ user: "alice", psk: "PSK-alice" }], // ghost has NO hub user.
+      networks: [encNetwork()],
+    });
+    const report = await runNetworkKeyRotation(rotationInputs(), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(r.posted.length).toBe(1); // only alice re-sealed
+    const ghost = report.members.find((m) => m.requestId === "req-ghost")!;
+    expect(ghost.resealed).toBe(false);
+    expect(ghost.note).toContain("inert");
+    // Commit still happened (inert is not a failure).
+    expect(r.written.length).toBe(1);
+  });
+
+  test("a genuine re-seal FAILURE blocks the hub-K commit (OLD K retained, re-runnable)", async () => {
+    const admitted: AdmittedMember[] = [
+      { request_id: "req-alice", principal_id: "alice", peer_pubkey: fakePubkey("1") },
+      { request_id: "req-bob", principal_id: "bob", peer_pubkey: fakePubkey("2") },
+    ];
+    const r = makeRotationPorts({
+      admitted,
+      hubUsers: [{ user: "alice", psk: "PSK-alice" }, { user: "bob", psk: "PSK-bob" }],
+      networks: [encNetwork()],
+      sealThrowsForPub: fakePubkey("2"), // bob's seal fails
+    });
+    const report = await runNetworkKeyRotation(rotationInputs(), r.ports);
+
+    expect(report.ok).toBe(false);
+    // Hub K NOT advanced — the OLD K stays authoritative.
+    expect(r.written.length).toBe(0);
+    const bob = report.members.find((m) => m.requestId === "req-bob")!;
+    expect(bob.resealed).toBe(false);
+    expect(bob.note).toContain("error");
+    expect(report.reason?.toLowerCase()).toContain("re-run");
+    assertNoK(report);
+  });
+
+  test("a network with NO hub-side K is refused (rotate-key rotates, never mints the first K)", async () => {
+    const r = makeRotationPorts({
+      admitted: [],
+      hubUsers: [],
+      networks: [{ id: "metafactory", peers: [] } as unknown as PolicyFederatedNetwork], // no payload_key
+    });
+    const report = await runNetworkKeyRotation(rotationInputs(), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("no payload key configured");
+    expect(r.mints).toBe(0);
+    expect(r.written.length).toBe(0);
+  });
+});
+
+describe("rotate-key — dry-run (default)", () => {
+  test("mints NOTHING, writes NOTHING, posts NOTHING; prints the plan + count + next kid", async () => {
+    const admitted: AdmittedMember[] = [
+      { request_id: "req-alice", principal_id: "alice", peer_pubkey: fakePubkey("1") },
+      { request_id: "req-bob", principal_id: "bob", peer_pubkey: fakePubkey("2") },
+    ];
+    const r = makeRotationPorts({
+      admitted,
+      hubUsers: [{ user: "alice", psk: "PSK-alice" }, { user: "bob", psk: "PSK-bob" }],
+      networks: [encNetwork()],
+    });
+    const report = await runNetworkKeyRotation(rotationInputs({ apply: false }), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(report.applied).toBe(false);
+    expect(r.mints).toBe(0);
+    expect(r.posted.length).toBe(0);
+    expect(r.written.length).toBe(0);
+    expect(report.newKid).toBe("metafactory/k2");
+    expect(report.memberCount).toBe(2);
+    expect(report.steps.join("\n")).toContain("2 ADMITTED");
+    // No K anywhere (nothing was even minted).
+    assertNoK(report);
+    expect(report.keyFingerprint).toBeUndefined();
   });
 });
