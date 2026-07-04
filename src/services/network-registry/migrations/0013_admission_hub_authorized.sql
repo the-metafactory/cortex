@@ -1,0 +1,31 @@
+-- cortex#1498 (epic #1479 follow-up) — HUB-OWNER authorization marker.
+--
+-- Background
+-- ──────────
+-- #1485 (guided-join) modeled a network join as a 3-leg handoff: seal (admin)
+-- → hub-authorize (hub owner) → leaf-up (member). The hub-authorize leg had NO
+-- registry-side signal — the cortex CLI's `buildStubHubAuthPort` always
+-- returned `confirmed: undefined` (a documented stub), so a member could only
+-- get past that leg via the honor-system `--hub-authorized-confirmed`
+-- attestation (`join --guided`).
+--
+-- This migration adds the real signal: `hub_authorized_at`, a nullable
+-- ISO-8601 UTC timestamp the HUB OWNER stamps (via the new `cortex network
+-- authorize` command, hub-admin authority — the SAME authority that attaches
+-- the sealed leaf secret, ADR-0018 Q5) once they have applied the member's
+-- leaf `authorization` entry on their OWN hub nats-server config (the #1481
+-- hub-owner artifact). NULL = not yet authorized — the default for every row,
+-- including every row that existed before this migration.
+--
+-- Strictly additive: nullable, no CHECK constraint touched (unlike the
+-- REVOKED/DEPARTED status widenings in migrations 0010/0012, this doesn't
+-- extend an enum) — a plain `ALTER TABLE ... ADD COLUMN`, the SAME shape as
+-- migration 0011's `admin_pubkeys`. Existing rows/deploys are unaffected: a
+-- pre-0013 isolate reading a row simply never sees the column, and the store
+-- layer (`rowToAdmissionRequest`) coalesces a missing value to `null`.
+--
+-- Apply:
+--   bunx wrangler d1 migrations apply cortex-network-registry-dev --env dev --remote
+--   bunx wrangler d1 migrations apply cortex-network-registry      --env production --remote
+
+ALTER TABLE admission_requests ADD COLUMN hub_authorized_at TEXT;

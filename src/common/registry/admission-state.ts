@@ -56,6 +56,13 @@ export interface AdmissionMineRow {
    * best-effort hint, never a hard dependency.
    */
   updated_at?: string;
+  /**
+   * cortex#1498 (epic #1479 follow-up) — ISO-8601 UTC the hub owner stamped via
+   * `cortex network authorize`; `null`/absent until they do. OPTIONAL on the
+   * wire for the SAME reason as {@link updated_at}: a pre-#1498 registry
+   * doesn't carry the column at all.
+   */
+  hub_authorized_at?: string | null;
 }
 
 /** Injectable fetch (defaults to `globalThis.fetch`) so callers/tests stay hermetic. */
@@ -166,6 +173,15 @@ export interface OwnAdmissionState {
    * `no-row` and for an older registry that omits `updated_at`.
    */
   updatedAt?: string;
+  /**
+   * cortex#1498 (epic #1479 follow-up) — ISO-8601 UTC the hub owner stamped via
+   * `cortex network authorize`. Present iff the registry row carries a
+   * non-empty `hub_authorized_at`. This is the REAL signal
+   * `buildLiveHubAuthPort` (network-handoff-adapters.ts) reads to replace the
+   * `--hub-authorized-confirmed` honor-system attestation. Undefined for
+   * `no-row` and for a row the hub owner hasn't authorized yet.
+   */
+  hubAuthorizedAt?: string;
 }
 
 /** True when a row carries a non-empty sealed leaf-secret blob. */
@@ -197,6 +213,10 @@ export function classifyOwnAdmissionRows(
     // older registry omits it). On a REVOKED row this is the revoked-at date.
     ...(typeof row.updated_at === "string" && row.updated_at.length > 0
       ? { updatedAt: row.updated_at }
+      : {}),
+    // cortex#1498 — carry the hub-owner authorization stamp through, when present.
+    ...(typeof row.hub_authorized_at === "string" && row.hub_authorized_at.length > 0
+      ? { hubAuthorizedAt: row.hub_authorized_at }
       : {}),
   };
   switch (row.status) {

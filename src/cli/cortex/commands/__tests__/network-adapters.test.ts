@@ -1630,6 +1630,7 @@ describe("#762 registerStack announces capabilities into the network", () => {
             updated_at: "2026-01-01T00:00:00Z",
             granted_by: "admin-pubkey",
             sealed_secret: null,
+            hub_authorized_at: null,
           },
         ];
         const principals = await store.listPrincipals();

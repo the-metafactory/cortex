@@ -26,6 +26,12 @@
  *     Admin-gated single-request fetch. Same auth as the list surface.
  *     404 when the request_id is not found.
  *
+ *   POST /admission-requests/{request_id}/authorize (cortex#1498)
+ *     HUB-ADMIN-signed: stamps `hub_authorized_at` onto an ADMITTED row.
+ *     Same authority + gate order as sealed-secret (below). 409 not_admitted
+ *     if the row is not ADMITTED. This is the real signal the guided-join
+ *     handoff's hub-authorize leg reads.
+ *
  * Trust model
  * ───────────
  * All write operations reuse the network-create admin gate EXACTLY:
@@ -55,6 +61,8 @@ import {
   validateSealedSecretClaim,
   validateSignedAdmissionRevoke,
   validateAdmissionRevokeClaim,
+  validateSignedHubAuthorize,
+  validateHubAuthorizeClaim,
   validateSignedAdmissionDepart,
   validateAdmissionDepartClaim,
   isValidRequestId,
@@ -456,6 +464,45 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
       if (!existing) return c.json({ error: "not_found" }, 404);
       return c.json(
         { error: "not_admitted", details: `request ${requestId} is ${existing.status}, not ADMITTED — cannot deliver a sealed secret` },
+        409,
+      );
+    }
+    return c.json(updated, 200);
+  });
+
+  // ---------------------------------------------------------------------------
+  // POST /admission-requests/:request_id/authorize — cortex#1498
+  //
+  // The HUB-ADMIN stamps `hub_authorized_at` onto the ADMITTED row once they
+  // have applied the member's leaf `authorization` entry on their OWN hub
+  // nats-server config (the #1481 hub-owner artifact). SAME authority as the
+  // sealed-secret write (hub-admin, ADR-0018 Q5) — mints nothing, just records
+  // that the hub owner did their part of the 3-leg guided-join handoff (seal →
+  // hub-authorize → leaf-up). This is the real signal `cortex network handoff
+  // status` / `join --guided` read in place of the honor-system
+  // `--hub-authorized-confirmed` attestation. 409 not_admitted if the row is
+  // not ADMITTED (mirrors sealed-secret's guard — nothing to authorize until
+  // the roster admission has landed).
+  // ---------------------------------------------------------------------------
+
+  app.post("/admission-requests/:request_id/authorize", async (c) => {
+    const requestId = c.req.param("request_id") ?? "";
+    const gate = await verifyHubAdminWrite(
+      c,
+      requestId,
+      validateSignedHubAuthorize,
+      validateHubAuthorizeClaim,
+    );
+    if (!gate.ok) return gate.response;
+
+    const store = getIssuanceStore(c.env);
+    const updated = await store.markHubAuthorized(requestId, gate.claim.issued_at);
+    if (!updated) {
+      // Row missing OR not ADMITTED — distinguish for the caller.
+      const existing = await store.getIssuanceRequest(requestId);
+      if (!existing) return c.json({ error: "not_found" }, 404);
+      return c.json(
+        { error: "not_admitted", details: `request ${requestId} is ${existing.status}, not ADMITTED — cannot authorize` },
         409,
       );
     }

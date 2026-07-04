@@ -15,6 +15,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { createUser } from "nkeys.js";
 
 import { dispatchNetwork, joinBlockerMessage, shouldReplaceCredsPreflightError, type HandoffPortsFactory } from "../network";
 import type { OwnAdmissionState, ResolveOwnAdmissionStateResult } from "../../../../common/registry/admission-state";
@@ -22,6 +23,8 @@ import type { LoadedConfig } from "../../../../common/config/loader";
 import type { AgentConfig } from "../../../../common/types/config";
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import type { NetworkHandoffPorts, HandoffHubAuthPort } from "../network-handoff-ports";
+import { buildLiveHandoffPorts } from "../network-handoff-adapters";
+import { __setAdmissionResolverForTests } from "../network-adapters";
 
 // #753 — a reader returning an EMPTY config so derivation tests are
 // deterministic (no dependence on the dev machine's real ~/.config/cortex).
@@ -318,6 +321,39 @@ describe("#1485 — join --guided guard DISCRIMINATES", () => {
     expect(res.exitCode).toBe(1);
     expect(res.stderr).not.toContain("cannot bring the leaf up");
     expect(res.stderr).toContain("dry-run");
+  });
+
+  test("cortex#1498 — REAL adapter (buildLiveHandoffPorts) + a marked row → join --guided PROCEEDS with NO --hub-authorized-confirmed attestation", async () => {
+    // Unlike the fakes above, this drives the REAL hub-authorize adapter
+    // (`buildLiveHubAuthPort` via `buildLiveHandoffPorts`) — proving the
+    // cortex#1498 wiring itself, not just the pure state model. The admission
+    // read (both the seal AND hub-authorize legs go through the SAME
+    // `buildAdmissionStatePort`) is stubbed via the `__setAdmissionResolverForTests`
+    // seam, but everything downstream (buildLiveHubAuthPort → HandoffHubAuthPort
+    // → gatherHandoffSignals → guardLeafUp) is the REAL production code path.
+    const dir = freshDir();
+    const seedPath = join(dir, "seed.nk");
+    writeFileSync(seedPath, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });
+    __setAdmissionResolverForTests(async () => ({
+      ok: true,
+      state: {
+        state: "admitted-sealed",
+        networkId: "metafactory",
+        requestId: "req-1",
+        hasSealedSecret: true,
+        peerPubkey: "PUBKEY_FIXTURE",
+        hubAuthorizedAt: "2026-03-01T00:00:00.000Z",
+      },
+    }));
+    try {
+      const realHandoffFactory: HandoffPortsFactory = (cfg, networks) => buildLiveHandoffPorts(cfg, networks);
+      const res = await joinWithHandoff(guidedArgv(dir, ["--guided"]), realHandoffFactory);
+      expect(res.exitCode).toBe(1);
+      expect(res.stderr).not.toContain("cannot bring the leaf up");
+      expect(res.stderr).toContain("dry-run");
+    } finally {
+      __setAdmissionResolverForTests(null);
+    }
   });
 
   test("sealed + hub-authorize REAL false → BLOCKS EVEN WITH attestation (attestation cannot override)", async () => {

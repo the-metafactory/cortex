@@ -245,19 +245,40 @@ export interface IssuanceRequestStore {
   ): Promise<AdmissionRequest | undefined>;
 
   /**
+   * cortex#1498 (epic #1479 follow-up) — persist the hub-owner's authorization
+   * stamp onto an ADMITTED admission row (the `cortex network authorize`
+   * write). Mirrors {@link setSealedSecret}'s CAS shape exactly: guarded on
+   * `status = 'ADMITTED'` — a not-yet-admitted (or revoked/departed) row cannot
+   * carry a hub-authorize stamp, so a write against a non-ADMITTED row is a
+   * no-op and returns `undefined` (the route maps that to 409). Returns the
+   * updated row on success, `undefined` when the row is missing or not
+   * ADMITTED. `timestampIso` is the value to persist (the hub-admin's signed
+   * claim `issued_at` — the moment THEY authorized, not the registry's receipt
+   * time); `updated_at` is independently stamped `now` by the store, same as
+   * every other transition.
+   */
+  markHubAuthorized(
+    requestId: string,
+    timestampIso: string,
+  ): Promise<AdmissionRequest | undefined>;
+
+  /**
    * ADR-0018 Q6 / PR5b — transition an ADMITTED row to REVOKED and CLEAR its
    * sealed blob (the bearer copy is dead once the hub `authorization` user is
-   * dropped). Guarded on `status = 'ADMITTED'`. Returns the updated row;
-   * `undefined` when the row is missing. Already-REVOKED is idempotent (returns
-   * the REVOKED row); a PENDING/REJECTED row throws {@link AlreadyDecidedError}
-   * (you cannot revoke a member that was never admitted).
+   * dropped) AND its hub-authorize stamp (cortex#1498 — a revoked member is no
+   * longer authorized). Guarded on `status = 'ADMITTED'`. Returns the updated
+   * row; `undefined` when the row is missing. Already-REVOKED is idempotent
+   * (returns the REVOKED row); a PENDING/REJECTED row throws
+   * {@link AlreadyDecidedError} (you cannot revoke a member that was never
+   * admitted).
    */
   revokeAdmission(requestId: string): Promise<AdmissionRequest | undefined>;
 
   /**
    * C-1350 Slice 1 (#1350) — transition an ADMITTED row to DEPARTED (the member
    * left voluntarily) and CLEAR its sealed blob (a departed member must not
-   * retain a fetchable copy — same hygiene as revoke). Guarded on
+   * retain a fetchable copy — same hygiene as revoke) AND its hub-authorize
+   * stamp (cortex#1498 — a departed member is no longer authorized). Guarded on
    * `status = 'ADMITTED'`. Returns the updated row; `undefined` when the row is
    * missing. Already-DEPARTED is idempotent (returns the DEPARTED row); a
    * PENDING/REJECTED/REVOKED row throws {@link AlreadyDecidedError} (you cannot
@@ -323,6 +344,7 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
       updated_at: now,
       granted_by: null,
       sealed_secret: null,
+      hub_authorized_at: null,
     };
     this.requests.set(request.request_id, request);
     this.byPeer.set(peerKey, request.request_id);
@@ -381,6 +403,22 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
     return updated;
   }
 
+  async markHubAuthorized(
+    requestId: string,
+    timestampIso: string,
+  ): Promise<AdmissionRequest | undefined> {
+    const existing = this.requests.get(requestId);
+    if (!existing) return undefined;
+    if (existing.status !== "ADMITTED") return undefined; // route → 409 not_admitted
+    const updated: AdmissionRequest = {
+      ...existing,
+      hub_authorized_at: timestampIso,
+      updated_at: new Date().toISOString(),
+    };
+    this.requests.set(requestId, updated);
+    return updated;
+  }
+
   async revokeAdmission(requestId: string): Promise<AdmissionRequest | undefined> {
     const existing = this.requests.get(requestId);
     if (!existing) return undefined;
@@ -392,6 +430,7 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
       ...existing,
       status: "REVOKED",
       sealed_secret: null,
+      hub_authorized_at: null,
       updated_at: new Date().toISOString(),
     };
     this.requests.set(requestId, updated);
@@ -409,6 +448,7 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
       ...existing,
       status: "DEPARTED",
       sealed_secret: null,
+      hub_authorized_at: null,
       updated_at: new Date().toISOString(),
     };
     this.requests.set(requestId, updated);
@@ -572,6 +612,29 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     return { ...existing, sealed_secret: sealedSecret, updated_at: now };
   }
 
+  async markHubAuthorized(
+    requestId: string,
+    timestampIso: string,
+  ): Promise<AdmissionRequest | undefined> {
+    const existing = await this.getIssuanceRequest(requestId);
+    if (!existing) return undefined;
+    if (existing.status !== "ADMITTED") return undefined; // route → 409 not_admitted
+    const now = new Date().toISOString();
+    // CAS-ish guard: only an ADMITTED row can carry a hub-authorize stamp. A
+    // concurrent revoke/depart between our read and this UPDATE flips the guard
+    // false → changes 0 → undefined (the route maps it to 409).
+    const res = await this.db
+      .prepare(
+        `UPDATE admission_requests
+         SET hub_authorized_at = ?, updated_at = ?
+         WHERE request_id = ? AND status = 'ADMITTED'`,
+      )
+      .bind(timestampIso, now, requestId)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) return undefined;
+    return { ...existing, hub_authorized_at: timestampIso, updated_at: now };
+  }
+
   async revokeAdmission(requestId: string): Promise<AdmissionRequest | undefined> {
     const existing = await this.getIssuanceRequest(requestId);
     if (!existing) return undefined;
@@ -583,7 +646,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     const res = await this.db
       .prepare(
         `UPDATE admission_requests
-         SET status = 'REVOKED', sealed_secret = NULL, updated_at = ?
+         SET status = 'REVOKED', sealed_secret = NULL, hub_authorized_at = NULL, updated_at = ?
          WHERE request_id = ? AND status = 'ADMITTED'`,
       )
       .bind(now, requestId)
@@ -593,7 +656,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       const current = await this.getIssuanceRequest(requestId);
       return current;
     }
-    return { ...existing, status: "REVOKED", sealed_secret: null, updated_at: now };
+    return { ...existing, status: "REVOKED", sealed_secret: null, hub_authorized_at: null, updated_at: now };
   }
 
   async departAdmission(requestId: string): Promise<AdmissionRequest | undefined> {
@@ -607,7 +670,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     const res = await this.db
       .prepare(
         `UPDATE admission_requests
-         SET status = 'DEPARTED', sealed_secret = NULL, updated_at = ?
+         SET status = 'DEPARTED', sealed_secret = NULL, hub_authorized_at = NULL, updated_at = ?
          WHERE request_id = ? AND status = 'ADMITTED'`,
       )
       .bind(now, requestId)
@@ -623,7 +686,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       if (current.status === "DEPARTED") return current;
       throw new AlreadyDecidedError(current);
     }
-    return { ...existing, status: "DEPARTED", sealed_secret: null, updated_at: now };
+    return { ...existing, status: "DEPARTED", sealed_secret: null, hub_authorized_at: null, updated_at: now };
   }
 }
 
@@ -640,6 +703,8 @@ interface AdmissionRequestRow {
   granted_by: string | null;
   /** ADR-0018 b′ — opaque sealed ciphertext; NULL until add-member delivers it. */
   sealed_secret: string | null;
+  /** cortex#1498 — ISO-8601 UTC hub-owner authorization stamp; NULL until `authorize`. */
+  hub_authorized_at: string | null;
 }
 
 function rowToAdmissionRequest(row: AdmissionRequestRow): AdmissionRequest {
@@ -655,6 +720,8 @@ function rowToAdmissionRequest(row: AdmissionRequestRow): AdmissionRequest {
     granted_by: row.granted_by,
     // A row read from a pre-0010 isolate (column absent) coalesces to null.
     sealed_secret: row.sealed_secret ?? null,
+    // A row read from a pre-0013 isolate (column absent) coalesces to null.
+    hub_authorized_at: row.hub_authorized_at ?? null,
   };
 }
 

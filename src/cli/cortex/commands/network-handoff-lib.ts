@@ -25,16 +25,17 @@
  *     read `cortex network status`'s C-1350 lookup uses.
  *   - **hub-authorize** (hub owner) — `boolean | undefined`:
  *       - `true`  — a real signal says the hub owner applied the authorization
- *                   (the #1498 registry `hub_authorized_at` marker, once wired).
+ *                   (cortex#1498 — the registry's `hub_authorized_at` marker,
+ *                   stamped by `cortex network authorize`).
  *       - `false` — a real signal says they have NOT (a HARD negative — a
  *                   member attestation can NEVER override it).
- *       - `undefined` — cannot be auto-verified from the member side today (the
- *                   documented-stub / remote case: no hub-side visibility per
- *                   cortex#1481, no registry marker until #1498). This is where
- *                   the member ATTESTATION (`attested`) applies: it upgrades an
- *                   `undefined` to treated-done, so `--guided` is a real
- *                   deliberate-confirmation gate TODAY, not an unconditional
- *                   off-switch. It NEVER upgrades a real `false`.
+ *       - `undefined` — the read itself failed (registry unreachable, no
+ *                   seed/registry-url configured) — cannot auto-verify from
+ *                   here at all. This is where the member ATTESTATION
+ *                   (`attested`) applies: it upgrades an `undefined` to
+ *                   treated-done, so `--guided` is a real deliberate-
+ *                   confirmation gate for a degraded-connectivity case, not an
+ *                   unconditional off-switch. It NEVER upgrades a real `false`.
  *   - **leaf-up** (member) — `boolean | undefined`. `true`/`false` from the
  *     LOCAL `/leafz` when the report is about the local stack; `undefined` when
  *     the report is about a REMOTE member (a member's leaf is observable only on
@@ -186,14 +187,14 @@ export function deriveHandoffState(
           ? leg(
               "hub-authorize",
               "done",
-              "attested by the member via `--hub-authorized-confirmed` (no registry marker yet — #1498)",
+              "attested by the member via `--hub-authorized-confirmed` (the registry read could not confirm it directly)",
             )
           : leg(
               "hub-authorize",
               "pending",
-              "cannot be auto-verified from the member side — documented stub (no hub-owner marker on the " +
-                "registry row until #1498); treated as NOT done, fail-closed. If the hub owner has confirmed " +
-                "they applied your authorization, re-run `join` with `--hub-authorized-confirmed`",
+              "cannot be auto-verified right now (the registry read failed — unreachable, or no seed/registry-url " +
+                "configured); treated as NOT done, fail-closed. If the hub owner has confirmed they applied your " +
+                "authorization, re-run `join` with `--hub-authorized-confirmed`",
             );
 
   const leafReady = signals.sealed && hubDone;
@@ -265,8 +266,9 @@ export function guardLeafUp(state: HandoffState, networkId: string): LeafUpGuard
         allowed: false,
         message:
           `cannot bring the leaf up for "${networkId}": hub authorization can't be auto-verified from here ` +
-          `yet (no registry marker until #1498). If the hub owner has confirmed they applied your ` +
-          `authorization on the hub, re-run with \`--hub-authorized-confirmed\`.`,
+          `right now (the registry read failed — unreachable, or no seed/registry-url configured). If the ` +
+          `hub owner has confirmed they applied your authorization on the hub, re-run with ` +
+          `\`--hub-authorized-confirmed\`.`,
       };
   }
 }

@@ -188,6 +188,13 @@ import {
 } from "./network-handoff-lib";
 import type { NetworkHandoffPorts } from "./network-handoff-ports";
 import { buildLiveHandoffPorts } from "./network-handoff-adapters";
+import {
+  runNetworkAuthorize,
+  type AuthorizeInputs,
+  type AuthorizeReport,
+} from "./network-authorize-lib";
+import type { NetworkAuthorizePorts } from "./network-authorize-ports";
+import { buildLiveAuthorizePorts } from "./network-authorize-adapters";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -195,7 +202,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "doctor" | "admit" | "reject" | "provision" | "make-live" | "secret" | "handoff";
+type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "doctor" | "admit" | "reject" | "provision" | "make-live" | "secret" | "handoff" | "authorize";
 
 /**
  * Default registry URL when neither --registry-url nor config provides one.
@@ -290,11 +297,13 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         // leaf-up step is GATED on the 3-leg handoff state: it refuses (fails
         // closed) unless the seal leg is done AND the hub-authorize leg is
         // effectively done, instead of storming the hub with an unauthorized leaf.
-        // OPT-IN, never the default. Because the hub-authorize leg can't be
-        // auto-verified today (documented stub until the #1498 registry marker),
-        // --guided is a DELIBERATE-CONFIRMATION gate: it forces the member to
-        // acknowledge the un-auto-verifiable leg via --hub-authorized-confirmed
-        // rather than blocking unconditionally (Sage #1499).
+        // OPT-IN, never the default. The hub-authorize leg now reads a REAL
+        // registry signal (cortex#1498 — `cortex network authorize` stamps
+        // `hub_authorized_at`); when that read is unreachable/unconfigured it
+        // degrades to the documented undefined fallback, so --guided remains a
+        // DELIBERATE-CONFIRMATION gate: --hub-authorized-confirmed lets the
+        // member acknowledge an un-auto-verifiable leg — but NEVER overrides a
+        // real negative (Sage #1499).
         "--guided": "bool",
         // cortex#1485 (Sage #1499) — member ATTESTATION for the guided-join gate:
         // "the hub owner has confirmed to me they applied my authorization". Under
@@ -580,6 +589,23 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--monitor-url": "value",
         "--registry-url": "value",
         "--seed-path": "value",
+      },
+    },
+    // cortex#1498 (epic #1479 follow-up) — the HUB-OWNER's side of the guided-
+    // join handoff's hub-authorize leg. Run AFTER applying the member's leaf
+    // `authorization` entry on the hub's OWN nats-server config (the #1481
+    // hub-owner artifact) to stamp the registry's `hub_authorized_at`, the real
+    // signal `handoff status` / `join --guided` read. Hub-admin authority — the
+    // SAME allowlist `secret add-member`'s sealed delivery uses (ADR-0018 Q5).
+    // Mints nothing; no local fs/nats-config write. Dry-run by DEFAULT.
+    authorize: {
+      positionals: ["member"],
+      flags: {
+        "--network": "value",
+        "--admin-seed": "value",
+        "--registry-url": "value",
+        "--apply": "bool",
+        "--dry-run": "bool",
       },
     },
   },
@@ -1722,10 +1748,10 @@ function renderDoctorResult(
 
 /**
  * Factory for the handoff ports bundle. Production builds the live
- * admission-read + documented-stub hub-auth + config + monitor adapters from
- * the resolved {@link LivePortsConfig} + the composed networks; tests inject a
- * fake. Read-only — no `stop()` needed (unlike doctor, handoff opens no probe
- * bus).
+ * admission-read + live hub-auth (cortex#1498 — reads the registry's
+ * `hub_authorized_at` marker) + config + monitor adapters from the resolved
+ * {@link LivePortsConfig} + the composed networks; tests inject a fake.
+ * Read-only — no `stop()` needed (unlike doctor, handoff opens no probe bus).
  */
 export type HandoffPortsFactory = (
   cfg: LivePortsConfig,
@@ -1733,7 +1759,7 @@ export type HandoffPortsFactory = (
 ) => NetworkHandoffPorts;
 
 /** The production factory — reuses the live admission + doctor config/monitor
- *  adapters + the documented hub-authorize stub. */
+ *  adapters + the live hub-authorize read (cortex#1498). */
 const DEFAULT_HANDOFF_PORTS_FACTORY: HandoffPortsFactory = (cfg, networks) =>
   buildLiveHandoffPorts(cfg, networks);
 
@@ -1853,6 +1879,94 @@ function renderHandoffReport(report: HandoffReport, json: boolean): ExitResult {
     lines.push(`  note: ${note}`);
   }
   return ok(lines.join("\n") + "\n");
+}
+
+// =============================================================================
+// cortex#1498 (epic #1479 follow-up) — `cortex network authorize <member>`
+// =============================================================================
+
+/** Member pubkey grammar — the SAME acceptance `secret`/`admit` use (either encoding). */
+const AUTHORIZE_PUBKEY_LABEL = "32-byte Ed25519 pubkey — base64 (44 chars) or an NKey public key (A…/U… + 55 base32 chars)";
+
+/**
+ * Factory for the authorize port bundle. Production builds the live adapters
+ * (admin-signed admission lookup + hub-admin-signed authorize POST). Tests
+ * inject fakes that record calls without touching HTTP.
+ */
+export type AuthorizePortsFactory = (cfg: {
+  registryUrl: string;
+  material: StackIdentityMaterial;
+}) => NetworkAuthorizePorts;
+
+const DEFAULT_AUTHORIZE_PORTS_FACTORY: AuthorizePortsFactory = (cfg) => buildLiveAuthorizePorts(cfg);
+
+/**
+ * `cortex network authorize <member> --network <net> --admin-seed <path> [--apply]`.
+ * The hub owner runs this AFTER applying the member's leaf `authorization`
+ * entry on their OWN nats-server config (the #1481 hub-owner artifact), to
+ * stamp the registry's `hub_authorized_at` (cortex#1498) — the real signal
+ * `handoff status` / `join --guided` read in place of the honor-system
+ * `--hub-authorized-confirmed` attestation. Dry-run by DEFAULT; --apply POSTs.
+ */
+async function runAuthorize(
+  member: string,
+  flags: FlagMap,
+  json: boolean,
+  portsFactory: AuthorizePortsFactory,
+): Promise<ExitResult> {
+  const networkRes = requireValueFlag(flags, "--network");
+  if (!networkRes.ok) return usageError("authorize", networkRes.reason, json);
+  const networkId = networkRes.value;
+  if (!NETWORK_ID_RE.test(networkId)) {
+    return usageError("authorize", `--network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+  if (member === "") {
+    return usageError("authorize", `requires a member pubkey (usage: cortex network authorize <member-pubkey> --network <net>)`, json);
+  }
+  if (detectPubkey(member) === undefined) {
+    return usageError("authorize", `member "${member}" must be a ${AUTHORIZE_PUBKEY_LABEL}`, json);
+  }
+
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("authorize", applyRes.reason, json);
+
+  const seedRes = requireValueFlag(flags, "--admin-seed");
+  if (!seedRes.ok) return usageError("authorize", seedRes.reason, json);
+
+  const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_REGISTRY_URL;
+
+  const matRes = await hubAdminMaterialFromSeedFile(seedRes.value);
+  if (!matRes.ok) return opError("authorize", matRes.reason, json);
+
+  const ports = portsFactory({ registryUrl, material: matRes.material });
+  const inputs: AuthorizeInputs = { networkId, memberPubkey: member, apply: applyRes.apply };
+
+  let report: AuthorizeReport;
+  try {
+    report = await runNetworkAuthorize(inputs, ports);
+  } catch (err) {
+    return opError("authorize", `authorize failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  if (json) {
+    const data: Record<string, string> = {
+      subcommand: "authorize",
+      applied: report.applied ? "true" : "false",
+      ...report.data,
+      hub_admin_fingerprint: matRes.material.fingerprint,
+    };
+    const env = report.ok ? envelopeOk([], data) : envelopeError(report.reason ?? "authorize command failed", data);
+    return report.ok ? ok(renderJson(env)) : { exitCode: 1, stdout: "", stderr: renderJson(env) };
+  }
+
+  const header = report.applied
+    ? `cortex network authorize ${networkId}: ${report.ok ? "ok" : "FAILED"}`
+    : `cortex network authorize ${networkId}: dry-run (no mutation; pass --apply)`;
+  const lines = [header, ...report.steps.map((s) => `  ${s}`)];
+  if (!report.ok) lines.push(`  ✗ ${report.reason ?? "unknown failure"}`);
+  lines.push("");
+  const body = lines.join("\n");
+  return report.ok ? ok(body) : { exitCode: 1, stdout: "", stderr: body };
 }
 
 // =============================================================================
@@ -4150,6 +4264,9 @@ export async function dispatchNetwork(
   // cortex#1485 — injectable handoff-ports factory so `handoff` CLI tests drive
   // fake admission/hub-auth/config/monitor ports. Production omits → live.
   handoffPortsFactory: HandoffPortsFactory = DEFAULT_HANDOFF_PORTS_FACTORY,
+  // cortex#1498 — injectable authorize-ports factory so `authorize` CLI tests
+  // drive fake admission-lookup/delivery ports. Production omits → live.
+  authorizePortsFactory: AuthorizePortsFactory = DEFAULT_AUTHORIZE_PORTS_FACTORY,
 ): Promise<ExitResult> {
   let parsed;
   try {
@@ -4196,6 +4313,8 @@ export async function dispatchNetwork(
         load,
         handoffPortsFactory,
       );
+    case "authorize":
+      return runAuthorize(parsed.positionals.member ?? "", parsed.flags, json, authorizePortsFactory);
     case "admit":
       return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory);
     case "reject":
@@ -4233,6 +4352,8 @@ Usage:
   cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
   cortex network doctor <network> [--principal <id>] [--stack <id>] [--config <p>] [--monitor-url <url>] [--json]
   cortex network handoff status <member> --network <net> [--principal <id>] [--stack <id>] [--config <p>] [--json]
+  cortex network authorize <member-pubkey> --network <net> --admin-seed <hub-admin-seed>
+                        [--registry-url <url>] [--apply] [--dry-run] [--json]
   cortex network admit  <request-id> --admin-seed <path> [--registry-url <url>] [--hub-config <p>]
                         [--roster-only] [--seal-only] [--hub-account <A…>] [--discord-member <id>]
                         [--discord-guild <id>] [--discord-server <profile>] [--discord-role <name>]
@@ -4299,13 +4420,23 @@ Subcommands:
           so nobody has to guess what's outstanding or whose turn it is. The seal
           leg reads the member's own ADMITTED admission row (sealed leaf secret
           present); the leaf-up leg reuses doctor's /leafz leaf-established
-          lookup. The hub-authorize leg is a DOCUMENTED STUB (always "pending —
-          cannot confirm from the member side"): the member has no hub-side
-          visibility and the registry row carries no hub-owner authorization
-          marker yet — confirming it needs a hub-owner-side \`hub_authorized_at\`
-          registry field (follow-up), so it is treated fail-closed (NOT done).
-          Read-only. The enforcement counterpart is \`join --guided\`, which
-          refuses to bring the leaf up until seal + hub-authorize are confirmed.
+          lookup. The hub-authorize leg (cortex#1498) reads the registry's
+          \`hub_authorized_at\` marker — a REAL true/false once the hub owner has
+          run \`cortex network authorize\`; a registry-unreachable read degrades to
+          the documented undefined fallback (fail-closed, NOT done). Read-only.
+          The enforcement counterpart is \`join --guided\`, which refuses to bring
+          the leaf up until seal + hub-authorize are confirmed (or, absent a
+          real signal, the \`--hub-authorized-confirmed\` attestation).
+  authorize (cortex#1498, epic #1479 follow-up) The HUB OWNER's side of the
+          hub-authorize leg. Run \`cortex network authorize <member-pubkey>
+          --network <net> --admin-seed <hub-admin-seed>\` AFTER applying the
+          member's leaf \`authorization\` entry on the hub's OWN nats-server
+          config (the #1481 hub-owner artifact printed by \`secret add-member
+          --seal-only\` / an EXTERNAL-hub add-member) to stamp the registry's
+          \`hub_authorized_at\`. Hub-admin authority — the SAME allowlist
+          \`secret add-member\`'s sealed delivery uses (ADR-0018 Q5). Mints
+          nothing; no local fs/nats-config write (registry-only). DRY-RUN by
+          default; --apply POSTs the signed claim.
   status  Show joined networks, peers, accept-subjects, leaf link state + counters.
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.

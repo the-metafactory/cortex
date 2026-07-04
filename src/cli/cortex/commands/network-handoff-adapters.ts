@@ -9,8 +9,10 @@
  *     + `buildMonitorPort` from `network-doctor-adapters.ts` (the SAME
  *     `readNetworks()` + `/leafz` reads `doctor` uses).
  *
- * The one adapter that is genuinely local to this module is the hub-authorize
- * leg — and it is a DOCUMENTED STUB. See {@link buildStubHubAuthPort}.
+ * The hub-authorize leg ({@link buildLiveHubAuthPort}) is the ONE port
+ * genuinely local to this module — it now reads the REAL `hub_authorized_at`
+ * registry marker (cortex#1498), via the SAME `buildAdmissionStatePort` `/mine`
+ * read the seal leg uses (one registry round trip serves both legs).
  */
 
 import type { LivePortsConfig } from "./network-adapters";
@@ -24,34 +26,16 @@ import type {
 } from "./network-handoff-ports";
 
 /**
- * The hub-authorize leg adapter — a DOCUMENTED STUB (cortex#1485).
+ * The hub-authorize leg adapter — a DOCUMENTED STUB (cortex#1485), retained
+ * only as the documented fallback shape / for tests that want an
+ * always-undefined port. Production wires {@link buildLiveHubAuthPort}
+ * instead (cortex#1498).
  *
- * `resolveHubAuthorized` ALWAYS returns `confirmed: undefined`, because there
- * is NO signal a member's machine can read to confirm the hub owner applied
- * the authorization:
- *   - The member has no hub-side visibility at all (the cortex#1481 constraint
- *     that made `admit`/`secret` grow a seal-only path in the first place).
- *   - The registry's admission row carries only an OPAQUE ciphertext sealed to
- *     the member's OWN pubkey (ADR-0018 Q1) — there is nothing on it that says
- *     "the hub owner has authorized this member". This is the SAME gap
- *     `cortex network doctor`'s Pair 3 leg (`sealed-secret-hub-authorized`,
- *     cortex#1482) already documents and always `skip`s.
- *   - A successful leaf connection is NOT a usable signal here — leaf-up is
- *     precisely the thing this handoff GATES on hub-authorize, so inferring
- *     hub-authorize from it would be circular.
- *
- * The clean fix — and the counterpart WRITE this stub is designed to read the
- * moment it exists — is an EXPLICIT per-member marker on the registry
- * admission row (a `hub_authorized_at` timestamp / boolean) that the hub owner
- * STAMPS when they apply the authorization. That is a real change to the
- * registry's `admission_requests` SQL table (`src/services/network-registry/
- * src/{types,store}.ts`) plus a hub-owner-side action (most naturally a flag on
- * the existing `secret add-member` / `admit` seal path), so it is out of scope
- * for THIS slice — tracked as a follow-up. The pure state model
- * ({@link import("./network-handoff-lib").deriveHandoffState}) already types
- * this signal `boolean | undefined` and treats `undefined` as fail-closed
- * (NOT done), so the moment a live `hub_authorized_at` read is wired here,
- * nothing in the state model or the leaf-up guard changes.
+ * `resolveHubAuthorized` ALWAYS returns `confirmed: undefined` — this was the
+ * ONLY possible answer before the registry grew a `hub_authorized_at` marker:
+ * the member has no hub-side visibility (cortex#1481) and the admission row
+ * carried only an opaque sealed-secret ciphertext (ADR-0018 Q1), nothing that
+ * said "the hub owner authorized this member".
  */
 export function buildStubHubAuthPort(): HandoffHubAuthPort {
   return {
@@ -68,6 +52,56 @@ export function buildStubHubAuthPort(): HandoffHubAuthPort {
 }
 
 /**
+ * cortex#1498 (epic #1479 follow-up) — the LIVE hub-authorize leg adapter.
+ *
+ * Reads the member's own admission row via the SAME `/mine` PoP-read path the
+ * seal leg uses ({@link import("./network-adapters").buildAdmissionStatePort}
+ * — `OwnAdmissionState.hubAuthorizedAt`, populated from the registry's
+ * `hub_authorized_at` column). This makes the signal a REAL `boolean`:
+ *   - `confirmed: true`  — the row carries a `hub_authorized_at` stamp (the
+ *     hub owner ran `cortex network authorize`).
+ *   - `confirmed: false` — the row exists (or doesn't) but carries NO stamp —
+ *     a real "not yet authorized", per the module doc's hub-authorize
+ *     semantics (a real `false`, `--hub-authorized-confirmed` cannot override
+ *     it — see `network-handoff-lib.ts`'s `hubAuthorizeDone`).
+ *   - `confirmed: undefined` — ONLY when the admission read itself failed
+ *     (registry unreachable, no seed/registry-url configured) — the
+ *     documented fallback for "cannot auto-verify from here", same as the
+ *     pre-#1498 stub, so `--hub-authorized-confirmed` still has a real job in
+ *     a degraded-connectivity case.
+ *
+ * `member` is UNUSED here — same limitation `buildAdmissionStatePort`'s seal
+ * leg already has: the `/mine` PoP read can only prove possession of THIS
+ * host's own signing key, so it can only ever answer "is MY OWN row
+ * authorized", never a third party's. `handoff status <member>` is only
+ * authoritative when `member` is the principal running the command (mirrors
+ * the leaf-up leg's own local-only caveat in `gatherHandoffSignals`).
+ */
+export function buildLiveHubAuthPort(cfg: LivePortsConfig): HandoffHubAuthPort {
+  const admission = buildAdmissionStatePort(cfg);
+  return {
+    async resolveHubAuthorized(networkId: string, _member: string): Promise<HubAuthorizeResolution> {
+      const res = await admission.resolve(networkId);
+      if (!res.ok) {
+        return {
+          confirmed: undefined,
+          reason: `cannot read the hub-authorize marker from the registry — ${res.reason}`,
+        };
+      }
+      if (res.state.hubAuthorizedAt !== undefined) {
+        return { confirmed: true };
+      }
+      return {
+        confirmed: false,
+        reason:
+          "the registry admission row carries no hub_authorized_at marker yet — the hub owner has not " +
+          "run `cortex network authorize` for this member",
+      };
+    },
+  };
+}
+
+/**
  * Build the live handoff ports bundle from the resolved {@link LivePortsConfig}
  * + the composed `policy.federated.networks[]` (read off the already-loaded
  * config, NOT re-parsed — the config-split #814 concern). Read-only: every
@@ -79,7 +113,7 @@ export function buildLiveHandoffPorts(
 ): NetworkHandoffPorts {
   return {
     admission: buildAdmissionStatePort(cfg),
-    hubAuth: buildStubHubAuthPort(),
+    hubAuth: buildLiveHubAuthPort(cfg),
     config: buildDoctorConfigPort({
       networks,
       ...(cfg.natsConfigPath !== undefined && { natsConfigPath: cfg.natsConfigPath }),

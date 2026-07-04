@@ -369,6 +369,19 @@ export interface AdmissionRequest {
    * schema change. The registry never interprets the bytes either way.
    */
   sealed_secret: string | null;
+  /**
+   * cortex#1498 (epic #1479 follow-up) — ISO-8601 UTC timestamp the HUB OWNER
+   * stamps (via `cortex network authorize`, hub-admin authority — the SAME
+   * authority as {@link sealed_secret}'s delivery, ADR-0018 Q5) once they have
+   * applied this member's leaf `authorization` entry on their OWN hub
+   * nats-server config (the #1481 hub-owner artifact). This is the real signal
+   * the guided-join handoff's hub-authorize leg reads (`cortex network handoff
+   * status` / `join --guided`) — replacing the honor-system
+   * `--hub-authorized-confirmed` attestation with a registry-backed fact. NULL
+   * until authorized; cleared back to NULL on `revoke`/`depart` (a revoked or
+   * departed member is no longer authorized).
+   */
+  hub_authorized_at: string | null;
 }
 
 /**
@@ -567,6 +580,37 @@ export interface AdmissionRevokeClaim {
 /** On-wire envelope for a hub-admin revoke. */
 export interface SignedAdmissionRevoke {
   claim: AdmissionRevokeClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+/**
+ * cortex#1498 (epic #1479 follow-up) — the HUB-ADMIN-signed claim carried by
+ * `POST /admission-requests/{request_id}/authorize`.
+ *
+ * The counterpart to {@link AdmissionRevokeClaim}: instead of cutting
+ * transport, this STAMPS `hub_authorized_at` onto an ADMITTED row once the hub
+ * owner has applied the member's leaf `authorization` entry on their OWN hub
+ * nats-server config (the #1481 hub-owner artifact). Same authority as
+ * {@link SealedSecretWriteClaim} (hub-admin, ADR-0018 Q5) — the registry
+ * mints nothing here either; it only records that the hub owner did their
+ * part of the 3-leg guided-join handoff (seal → hub-authorize → leaf-up).
+ */
+export interface HubAuthorizeClaim {
+  /** Must equal the URL path parameter. */
+  request_id: string;
+  /** Base64 Ed25519 pubkey of the hub-admin signing this claim. */
+  hub_admin_pubkey: string;
+  /** ISO-8601 UTC timestamp at which the hub-admin signed this claim — the
+   *  value persisted as {@link AdmissionRequest.hub_authorized_at}. */
+  issued_at: string;
+  /** Random nonce to prevent replay. */
+  nonce: string;
+}
+
+/** On-wire envelope for a hub-admin authorize. */
+export interface SignedHubAuthorize {
+  claim: HubAuthorizeClaim;
   /** Base64 Ed25519 signature over canonical-JSON(claim). */
   signature: string;
 }
