@@ -18,6 +18,14 @@ describe("stackSlugFromStackId", () => {
     expect(stackSlugFromStackId("")).toBe("");
   });
 
+  // network-doctor-lib's PRIOR local impl (`parts.length === 2 ? parts[1] : stackId`)
+  // returned "a/b/c" unchanged for this input — a >2-segment id fell through its
+  // length check. Adopting this authority fn there DOES change that one
+  // degenerate-case result (see PR discussion on #1516/#1531). That's intended:
+  // canonical stack.id is always 2-part `{principal}/{slug}`, so no real stack.id
+  // ever hits this path — conforming onto the ADR-0004 authority (last segment,
+  // mirroring the shell `${id##*/}` step) is the point of this slice, not an
+  // accidental behavior change.
   test("multiple slashes: takes the LAST segment (lastIndexOf, not a 2-part split)", () => {
     expect(stackSlugFromStackId("a/b/c")).toBe("c");
   });
