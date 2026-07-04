@@ -39,6 +39,7 @@
  */
 
 import type { LoadedConfig } from "../../../common/config/loader";
+import { stackSlugFromStackId } from "../../../common/stack-id";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
 import { samePubkey } from "../../../common/registry/pubkey-normalize";
 import {
@@ -142,12 +143,6 @@ function check(
 
 function skipCheck(id: string, title: string, detail: string, owner: DoctorCheckOwner): DoctorCheck {
   return check(id, title, "skip", detail, owner);
-}
-
-/** `{principal}/{slug}` → the slug (falls back to the whole string). */
-function stackSlugFromStackId(stackId: string): string {
-  const parts = stackId.split("/");
-  return parts.length === 2 ? (parts[1] ?? stackId) : stackId;
 }
 
 /** Truncate a pubkey for display in a check detail (never the full key —

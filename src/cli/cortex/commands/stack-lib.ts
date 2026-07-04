@@ -24,6 +24,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { parse as parseYaml } from "yaml";
+import { stackSlugFromStackId } from "../../../common/stack-id";
 import { DEFAULT_STREAM_MAX_BYTES } from "../../../common/types/cortex-config";
 
 // =============================================================================
@@ -101,12 +102,6 @@ function extractStackId(configPath: string): string | undefined {
   return undefined;
 }
 
-/** The trailing `{slug}` segment of a `{principal}/{slug}` stack id. */
-function stackIdTrailingSlug(stackId: string): string {
-  const idx = stackId.lastIndexOf("/");
-  return idx === -1 ? stackId : stackId.slice(idx + 1);
-}
-
 /**
  * Discover all stacks under `configDir` — split-layout dirs (with the
  * `system/system.yaml` marker) and legacy `cortex*.yaml` monoliths. Mirrors
@@ -177,7 +172,7 @@ function buildDiscovered(
     ...(stackId !== undefined && { stackId }),
     layout,
     configPath,
-    ...(stackId !== undefined && { aligned: stackIdTrailingSlug(stackId) === slugLocator }),
+    ...(stackId !== undefined && { aligned: stackSlugFromStackId(stackId) === slugLocator }),
   };
 }
 
@@ -322,7 +317,7 @@ export function retiredSeedPath(seedPath: string, stamp: string): string {
  * error (those are validated + rejected upstream as usage errors).
  */
 export function assertAligned(slug: string, stackId: string): void {
-  const trailing = stackIdTrailingSlug(stackId);
+  const trailing = stackSlugFromStackId(stackId);
   if (trailing !== slug) {
     throw new Error(
       `alignment self-check failed (#808): stack.id "${stackId}" trailing segment "${trailing}" != slug "${slug}"`,
