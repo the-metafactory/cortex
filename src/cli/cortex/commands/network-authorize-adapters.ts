@@ -27,8 +27,8 @@
  * "whose job is it" model fully faithful. Tracked as a follow-up.
  */
 
-import { canonicalJSON } from "../../../common/registry/signing";
-import { signClaimWithSeed, randomNonce, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import { signAdminRequest } from "../../../common/registry/signing";
+import { randomNonce, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
 import { samePubkey } from "../../../common/registry/pubkey-normalize";
 import type { AdmissionLookupPort, HubAuthorizeDeliveryPort, NetworkAuthorizePorts } from "./network-authorize-ports";
 
@@ -69,10 +69,10 @@ function buildLiveAdmissionLookupPort(cfg: LiveAuthorizePortsConfig): AdmissionL
       // (Q5 collapse), so this works. A fully-separable deployment must put
       // the hub-admin on REGISTRY_ADMIN_PUBKEYS for the lookup.
       const claim = { admin_pubkey: cfg.material.pubkeyB64, issued_at: new Date().toISOString() };
-      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests?status=ADMITTED`, {
         method: "GET",
-        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify({ claim, signature }) },
+        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify(signed) },
       });
       if (!resp.ok) {
         throw new Error(`registry admission list failed (HTTP ${resp.status.toString()}): ${await resp.text()}`);
@@ -102,11 +102,11 @@ function buildLiveHubAuthorizeDeliveryPort(cfg: LiveAuthorizePortsConfig): HubAu
         issued_at: new Date().toISOString(),
         nonce: randomNonce(),
       };
-      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests/${encodeURIComponent(requestId)}/authorize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claim, signature }),
+        body: JSON.stringify(signed),
       });
       if (!resp.ok) {
         throw new Error(`registry rejected authorize (HTTP ${resp.status.toString()}): ${await resp.text()}`);

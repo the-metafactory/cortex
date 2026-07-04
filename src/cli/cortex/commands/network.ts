@@ -52,11 +52,10 @@ import {
   buildNetworkCreateClaim,
   postNetworkCreate,
   randomNonce,
-  signClaimWithSeed,
   type StackIdentityMaterial,
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
-import { canonicalJSON } from "../../../common/registry/signing";
+import { signAdminRequest } from "../../../common/registry/signing";
 // O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
 // cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-discord
 // bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side
@@ -2494,9 +2493,7 @@ async function buildAdmissionReadHeader(
     admin_pubkey: material.pubkeyB64,
     issued_at: new Date().toISOString(),
   };
-  const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
-  const signature = await signClaimWithSeed(material.seed, msgBytes);
-  return JSON.stringify({ claim, signature });
+  return JSON.stringify(await signAdminRequest(material.seed, claim));
 }
 
 /**
@@ -2524,9 +2521,7 @@ async function buildAdmissionDecisionBody(
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
   };
-  const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
-  const signature = await signClaimWithSeed(material.seed, msgBytes);
-  return { claim, signature };
+  return signAdminRequest(material.seed, claim);
 }
 
 // =============================================================================

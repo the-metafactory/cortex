@@ -37,7 +37,7 @@ import { lookup as dnsLookup } from "dns/promises";
 
 import { expandTilde } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
-import { canonicalJSON } from "../../../common/registry/signing";
+import { signAdminRequest } from "../../../common/registry/signing";
 import { sealToPrincipal } from "../../../common/crypto/seal-to-principal";
 import { mintLeafPsk } from "../../../common/nats/leaf-psk";
 import {
@@ -48,7 +48,6 @@ import {
   type NatsProcess,
 } from "../../../common/nats/hub-reload-target";
 import {
-  signClaimWithSeed,
   randomNonce,
   type StackIdentityMaterial,
 } from "../../../bus/stack-provisioning";
@@ -328,10 +327,10 @@ function buildLiveAdmissionLookupPort(cfg: LiveSecretPortsConfig): AdmissionLook
       // fully-separable deployment must put the hub-admin on REGISTRY_ADMIN_PUBKEYS
       // for the lookup (documented in the PR).
       const claim = { admin_pubkey: cfg.material.pubkeyB64, issued_at: new Date().toISOString() };
-      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests?status=ADMITTED`, {
         method: "GET",
-        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify({ claim, signature }) },
+        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify(signed) },
       });
       if (!resp.ok) {
         throw new Error(`registry admission list failed (HTTP ${resp.status.toString()}): ${await resp.text()}`);
@@ -355,11 +354,11 @@ function buildLiveSealDeliveryPort(cfg: LiveSecretPortsConfig): SealDeliveryPort
         issued_at: new Date().toISOString(),
         nonce: randomNonce(),
       };
-      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests/${encodeURIComponent(requestId)}/sealed-secret`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claim, signature }),
+        body: JSON.stringify(signed),
       });
       if (!resp.ok) {
         throw new Error(`registry rejected sealed-secret (HTTP ${resp.status.toString()}): ${await resp.text()}`);
@@ -372,11 +371,11 @@ function buildLiveSealDeliveryPort(cfg: LiveSecretPortsConfig): SealDeliveryPort
         issued_at: new Date().toISOString(),
         nonce: randomNonce(),
       };
-      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests/${encodeURIComponent(requestId)}/revoke`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claim, signature }),
+        body: JSON.stringify(signed),
       });
       if (!resp.ok) {
         throw new Error(`registry rejected revoke (HTTP ${resp.status.toString()}): ${await resp.text()}`);
@@ -506,10 +505,10 @@ function buildLiveAdmittedListPort(cfg: LiveKeyRotationPortsConfig): AdmittedLis
       // ADR-0020 scopes admin reads to GLOBAL admins; a per-network admin 403s
       // here — surfaced readably rather than as a silent empty list.
       const claim = { admin_pubkey: cfg.material.pubkeyB64, issued_at: new Date().toISOString() };
-      const signature = await signClaimWithSeed(cfg.material.seed, new TextEncoder().encode(canonicalJSON(claim)));
+      const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests?status=ADMITTED`, {
         method: "GET",
-        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify({ claim, signature }) },
+        headers: { "Content-Type": "application/json", "x-admin-signed": JSON.stringify(signed) },
       });
       if (resp.status === 403) {
         throw new Error(
