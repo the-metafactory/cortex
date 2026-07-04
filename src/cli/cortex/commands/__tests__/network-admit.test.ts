@@ -29,6 +29,17 @@ import {
 import type { NetworkSecretPorts } from "../network-secret-ports";
 import { dispatchProvisionStack } from "../provision-stack";
 
+// cortex#1517 (S3, epic #1514) — live-registry round-trip coverage. Drives the
+// REAL registry Worker app so buildAdmissionReadHeader (--list-pending) and
+// buildAdmissionDecisionBody (--apply admit) are exercised end-to-end through
+// their ACTUAL network.ts call sites, not a hand-reconstructed claim — a
+// field-name or key-ordering drift inside those functions fails these tests.
+import { generateStackIdentity, buildRegistrationClaim } from "../../../../bus/stack-provisioning";
+import registryApp from "../../../../services/network-registry/src/index";
+import type { Env } from "../../../../services/network-registry/src/index";
+import { makeRegistryKey, resetStores } from "../../../../services/network-registry/__tests__/helpers";
+import { _resetRateLimitBucketsForTest } from "../../../../services/network-registry/src/rate-limit";
+
 /** Type-safe mock-fetch helper */
 function setMockFetch(
   fn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
@@ -1022,5 +1033,151 @@ describe("cortex network admit — signed claim shape", () => {
     expect(capturedClaim!.decision).toBe("admit");
     // Explicitly NOT "grant" — the old Model-A vocabulary
     expect(capturedClaim!.decision).not.toBe("grant");
+  });
+});
+
+// =============================================================================
+// cortex#1517 (S3, epic #1514) — live-registry round-trip.
+//
+// Every other test in this file mocks `globalThis.fetch` with hand-written
+// JSON responses, so it proves the CLI sends the right shape but never
+// actually verifies the signature it produces. That leaves a gap: a
+// field-name or key-ordering drift INSIDE `buildAdmissionReadHeader` /
+// `buildAdmissionDecisionBody` (both in network.ts, both routed through
+// `signAdminRequest` as of S3) could still pass every test above while
+// producing a header/body the real registry would 401.
+//
+// These tests route `globalThis.fetch` to the REAL registry Worker app
+// (`registryApp.fetch`, no re-implemented verifier) and drive the ACTUAL
+// `dispatchNetwork(["admit", ...])` command path — never touching
+// `buildAdmissionReadHeader` / `buildAdmissionDecisionBody` directly (neither
+// is exported, and it shouldn't be just to satisfy a test). If either
+// function's claim shape or signing call drifts, the registry rejects it and
+// these tests fail.
+// =============================================================================
+
+describe("cortex network admit — live registry round-trip (cortex#1517 S3)", () => {
+  async function liveRegistryEnv(): Promise<{ env: Env; adminSeedPath: string }> {
+    resetStores();
+    _resetRateLimitBucketsForTest();
+    const reg = await makeRegistryKey();
+    const { seedPath: adminSeedPath, adminPubkey } = await mintAdminSeed();
+    return {
+      env: {
+        REGISTRY_SIGNING_KEY: reg.signingKey,
+        REGISTRY_PUBLIC_KEY: reg.publicKey,
+        REGISTRY_ADMIN_PUBKEYS: adminPubkey,
+        ENVIRONMENT: "test",
+      },
+      adminSeedPath,
+    };
+  }
+
+  /** Route `globalThis.fetch` into the live registry Worker for the duration of `fn`. */
+  async function withLiveRegistry(env: Env, fn: () => Promise<void>): Promise<void> {
+    setMockFetch(async (input, init) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    });
+    await fn();
+  }
+
+  test("READ: --list-pending's buildAdmissionReadHeader output is accepted by the live registry", async () => {
+    const { env, adminSeedPath } = await liveRegistryEnv();
+
+    await withLiveRegistry(env, async () => {
+      // Register a principal against the REAL registry to create a PENDING row.
+      const member = generateStackIdentity({ seedPath: join(freshDir(), "member.nk") });
+      const regBody = await buildRegistrationClaim({
+        principalId: "dave",
+        material: member,
+        stacks: [{ stack_id: "dave/main", stack_pubkey: member.pubkeyB64 }],
+      });
+      const regRes = await registryApp.fetch(
+        new Request("http://localhost/principals/dave/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(regBody),
+        }),
+        env,
+      );
+      expect(regRes.status).toBe(201);
+
+      // The ACTUAL CLI command — buildAdmissionReadHeader signs the read
+      // claim internally; if it drifted, the registry would 401 and this
+      // command would exit non-zero instead of listing the row.
+      const res = await dispatchNetwork([
+        "admit", "--list-pending",
+        "--admin-seed", adminSeedPath,
+        "--json",
+      ]);
+
+      expect(res.exitCode).toBe(0);
+      const env_ = JSON.parse(res.stdout) as { items: { request_id: string; principal_id: string }[] };
+      expect(env_.items.some((r) => r.principal_id === "dave")).toBe(true);
+    });
+  });
+
+  test("WRITE: --apply admit's buildAdmissionDecisionBody output is accepted by the live registry (PENDING -> ADMITTED)", async () => {
+    const { env, adminSeedPath } = await liveRegistryEnv();
+
+    await withLiveRegistry(env, async () => {
+      const member = generateStackIdentity({ seedPath: join(freshDir(), "erin.nk") });
+      const regBody = await buildRegistrationClaim({
+        principalId: "erin",
+        material: member,
+        stacks: [{ stack_id: "erin/main", stack_pubkey: member.pubkeyB64 }],
+      });
+      const regRes = await registryApp.fetch(
+        new Request("http://localhost/principals/erin/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(regBody),
+        }),
+        env,
+      );
+      expect(regRes.status).toBe(201);
+
+      // Find the PENDING request-id the same way an admin would (also
+      // exercises buildAdmissionReadHeader, same as the READ test above).
+      const listRes = await dispatchNetwork([
+        "admit", "--list-pending",
+        "--admin-seed", adminSeedPath,
+        "--json",
+      ]);
+      expect(listRes.exitCode).toBe(0);
+      const list = JSON.parse(listRes.stdout) as { items: { request_id: string; principal_id: string }[] };
+      const requestId = list.items.find((r) => r.principal_id === "erin")?.request_id;
+      expect(requestId).toBeTruthy();
+
+      // The ACTUAL CLI command — buildAdmissionDecisionBody signs the
+      // admit-decision claim internally. --roster-only skips the unrelated
+      // hub-local seal step so this test stays focused on the admission
+      // decision's signature round-trip. If the claim shape or signing call
+      // drifted, the registry would 401 and this would exit non-zero instead
+      // of committing ADMITTED.
+      const admitRes = await dispatchNetwork([
+        "admit", requestId!,
+        "--admin-seed", adminSeedPath,
+        "--apply", "--roster-only", "--json",
+      ]);
+      expect(admitRes.exitCode).toBe(0);
+      const admitEnv = JSON.parse(admitRes.stdout) as { data: { applied: string; principal_id: string } };
+      expect(admitEnv.data.applied).toBe("true");
+      expect(admitEnv.data.principal_id).toBe("erin");
+
+      // Confirm the row actually moved PENDING -> ADMITTED on the real registry.
+      const listAfter = JSON.parse(
+        (
+          await dispatchNetwork([
+            "admit", "--list-pending",
+            "--admin-seed", adminSeedPath,
+            "--status", "ADMITTED",
+            "--json",
+          ])
+        ).stdout,
+      ) as { items: { request_id: string; principal_id: string }[] };
+      expect(listAfter.items.some((r) => r.request_id === requestId)).toBe(true);
+    });
   });
 });
