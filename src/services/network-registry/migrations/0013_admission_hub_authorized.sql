@@ -17,14 +17,30 @@
 -- hub-owner artifact). NULL = not yet authorized — the default for every row,
 -- including every row that existed before this migration.
 --
--- Strictly additive: nullable, no CHECK constraint touched (unlike the
--- REVOKED/DEPARTED status widenings in migrations 0010/0012, this doesn't
--- extend an enum) — a plain `ALTER TABLE ... ADD COLUMN`, the SAME shape as
--- migration 0011's `admin_pubkeys`. Existing rows/deploys are unaffected: a
--- pre-0013 isolate reading a row simply never sees the column, and the store
--- layer (`rowToAdmissionRequest`) coalesces a missing value to `null`.
+-- Shape: nullable, no CHECK constraint touched (unlike the REVOKED/DEPARTED
+-- status widenings in migrations 0010/0012, this doesn't extend an enum) — a
+-- plain `ALTER TABLE ... ADD COLUMN`, the SAME shape as migration 0011's
+-- `admin_pubkeys`.
 --
--- Apply:
+-- DEPLOY ORDERING — MIGRATION-BEFORE-CODE IS MANDATORY (NOT optional):
+-- ────────────────────────────────────────────────────────────────────
+-- This ADD COLUMN is backward-compatible for READS only: a pre-0013 isolate
+-- reading a row never sees the column, and the store layer
+-- (`rowToAdmissionRequest`) coalesces a missing value to `null`. But the
+-- cortex#1498 code has a HARD dependency on this column at the WRITE path:
+-- `revokeAdmission` / `departAdmission` now emit
+-- `SET ... hub_authorized_at = NULL`, and `markHubAuthorized` emits
+-- `SET hub_authorized_at = ?`. If the NEW code is deployed BEFORE this
+-- migration runs, those existing revoke/depart endpoints (and the new
+-- authorize endpoint) throw "no such column: hub_authorized_at" → 500.
+--
+-- Therefore: APPLY THIS MIGRATION TO THE REGISTRY DB *BEFORE* DEPLOYING THE
+-- cortex#1498 WORKER. It is NOT safe to ship the code first. (This is the
+-- opposite constraint from migrations 0007/0010/0012, which recreated the
+-- table and were framed "not yet deployed at this schema version" — 0013 is
+-- an incremental ADD against a live schema, so the ordering is load-bearing.)
+--
+-- Apply (migration FIRST, then deploy the code):
 --   bunx wrangler d1 migrations apply cortex-network-registry-dev --env dev --remote
 --   bunx wrangler d1 migrations apply cortex-network-registry      --env production --remote
 

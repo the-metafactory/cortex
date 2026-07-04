@@ -11,10 +11,25 @@
  *     the row (cortex#1498). Mints nothing; no local fs/nats-config write at
  *     all (unlike `network secret`, `authorize` never touches the hub-local
  *     nats-server config — it is a registry-only write).
+ *
+ * AUTHORITY COUPLING (v1 design choice — governance question, flagged not
+ * resolved): stamping `hub_authorized_at` currently requires the SAME
+ * hub-admin authority (`REGISTRY_HUB_ADMIN_PUBKEYS`, falling back to
+ * `REGISTRY_ADMIN_PUBKEYS`) that attaches the sealed secret — the authorize
+ * route reuses the sealed-secret route's `verifyHubAdminWrite` gate verbatim
+ * (ADR-0018 Q5). Whether the HUB OWNER — the person who actually applies the
+ * leaf `authorization` on their own VM — should be a DISTINCT authority from
+ * the registry/network admin (rather than collapsed into the hub-admin
+ * allowlist) is a governance question for the team (Andreas), not settled
+ * here. The `#1481` hub-owner-artifact flow already assumes the hub owner and
+ * the seal-issuing admin can be different people; wiring a hub-owner-scoped
+ * signing authority for this stamp would make the guided-join handoff's
+ * "whose job is it" model fully faithful. Tracked as a follow-up.
  */
 
 import { canonicalJSON } from "../../../common/registry/signing";
 import { signClaimWithSeed, randomNonce, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import { samePubkey } from "../../../common/registry/pubkey-normalize";
 import type { AdmissionLookupPort, HubAuthorizeDeliveryPort, NetworkAuthorizePorts } from "./network-authorize-ports";
 
 export interface LiveAuthorizePortsConfig {
@@ -63,7 +78,14 @@ function buildLiveAdmissionLookupPort(cfg: LiveAuthorizePortsConfig): AdmissionL
         throw new Error(`registry admission list failed (HTTP ${resp.status.toString()}): ${await resp.text()}`);
       }
       const rows = (await resp.json()) as AdmissionRow[];
-      const row = rows.find((r) => r.network_id === networkId && r.peer_pubkey === memberPubkey && r.status === "ADMITTED");
+      // cortex#1482 — compare via `samePubkey` (encoding-blind) so a member
+      // passed as an nkey OR base64 resolves the SAME registry row (rows store
+      // base64). The lib already normalizes to base64 before calling, but the
+      // adapter stays robust either way — consistent with what `secret`/`admit`
+      // do post-#1482.
+      const row = rows.find(
+        (r) => r.network_id === networkId && r.status === "ADMITTED" && samePubkey(r.peer_pubkey, memberPubkey),
+      );
       return row ? { request_id: row.request_id, principal_id: row.principal_id } : undefined;
     },
   };

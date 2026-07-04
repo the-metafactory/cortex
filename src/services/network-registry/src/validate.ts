@@ -1031,6 +1031,14 @@ export function validateSignedHubAuthorize(
 /**
  * Validate the `HubAuthorizeClaim` payload before crypto verification.
  * Cross-field rule: claim.request_id MUST match the URL path parameter.
+ *
+ * Freshness/replay (Sage #1501): this validator only checks `issued_at` is a
+ * well-formed ISO-8601 timestamp — the actual freshness WINDOW is enforced at
+ * the ROUTE by `verifyHubAdminWrite` (the shared hub-admin write gate), which
+ * rejects `Math.abs(now - issued) > CLOCK_SKEW_MS` (400) and burns the `nonce`
+ * against the replay cache (409), exactly as the sealed-secret/revoke claims
+ * do. So a signed authorize claim is NOT replayable indefinitely — the bound
+ * lives one layer up, deliberately, not here.
  */
 export function validateHubAuthorizeClaim(
   claim: unknown,

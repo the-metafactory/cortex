@@ -498,7 +498,10 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     const store = getIssuanceStore(c.env);
     const updated = await store.markHubAuthorized(requestId, gate.claim.issued_at);
     if (!updated) {
-      // Row missing OR not ADMITTED — distinguish for the caller.
+      // Row missing OR not ADMITTED — distinguish for the caller. This is the
+      // SAME re-read the sealed-secret route uses (Sage #1501 nit: an extra
+      // SELECT on the cold error path only, to map 404 vs 409 — kept verbatim
+      // for parity with sealed-secret rather than optimised away).
       const existing = await store.getIssuanceRequest(requestId);
       if (!existing) return c.json({ error: "not_found" }, 404);
       return c.json(

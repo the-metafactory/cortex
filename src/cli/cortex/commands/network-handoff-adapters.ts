@@ -70,17 +70,33 @@ export function buildStubHubAuthPort(): HandoffHubAuthPort {
  *     pre-#1498 stub, so `--hub-authorized-confirmed` still has a real job in
  *     a degraded-connectivity case.
  *
- * `member` is UNUSED here — same limitation `buildAdmissionStatePort`'s seal
- * leg already has: the `/mine` PoP read can only prove possession of THIS
- * host's own signing key, so it can only ever answer "is MY OWN row
- * authorized", never a third party's. `handoff status <member>` is only
- * authoritative when `member` is the principal running the command (mirrors
- * the leaf-up leg's own local-only caveat in `gatherHandoffSignals`).
+ * REMOTE-MEMBER guard (Sage #1501): the `/mine` PoP read can only prove
+ * possession of THIS host's OWN signing key, so it always resolves the row for
+ * `cfg.principalId` — never a third party's. Reporting our OWN hub-authorize as
+ * a REMOTE member's would be a false read (the SAME bug class the leaf-up leg's
+ * remote-member guard in `gatherHandoffSignals` already fixes). So when the
+ * requested `member` is NOT this host's own principal, the signal is
+ * `undefined` (not observable from here) — NOT a read of our own row mislabeled
+ * as theirs. `cfg.principalId` IS the `selfPrincipal` the orchestrator passes
+ * (both derive from the SAME resolved principal in `runHandoff` / `runJoin`),
+ * so the comparison is faithful without threading a second self argument.
  */
 export function buildLiveHubAuthPort(cfg: LivePortsConfig): HandoffHubAuthPort {
   const admission = buildAdmissionStatePort(cfg);
   return {
-    async resolveHubAuthorized(networkId: string, _member: string): Promise<HubAuthorizeResolution> {
+    async resolveHubAuthorized(networkId: string, member: string): Promise<HubAuthorizeResolution> {
+      if (member !== cfg.principalId) {
+        // A member's hub-authorize marker lives on THEIR admission row, which
+        // only THEIR machine can PoP-read. Never report this host's own row as
+        // the remote member's — undefined = "not observable from here".
+        return {
+          confirmed: undefined,
+          reason:
+            `not observable for member "${member}" from "${cfg.principalId}"'s machine — the hub-authorize ` +
+            `marker lives on the member's own admission row, which only their machine can PoP-read. Run ` +
+            `this on the member's own machine for an authoritative reading.`,
+        };
+      }
       const res = await admission.resolve(networkId);
       if (!res.ok) {
         return {

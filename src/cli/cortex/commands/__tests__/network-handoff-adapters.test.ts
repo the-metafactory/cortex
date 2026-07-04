@@ -100,6 +100,22 @@ describe("buildLiveHubAuthPort", () => {
     expect(res.reason).toContain("registry mine-read errored");
   });
 
+  test("REMOTE member (member != cfg.principalId) → confirmed: undefined (not observable, never reads own row as theirs)", async () => {
+    // A resolver that WOULD return a marked row — proving the remote-member
+    // guard short-circuits BEFORE the /mine read, so we never mislabel our own
+    // row as the remote member's.
+    let resolverCalled = false;
+    __setAdmissionResolverForTests(async () => {
+      resolverCalled = true;
+      return admittedWith("2026-03-01T00:00:00.000Z");
+    });
+    const port = buildLiveHubAuthPort(cfg()); // cfg().principalId === "andreas"
+    const res = await port.resolveHubAuthorized("metafactory", "someone-else");
+    expect(res.confirmed).toBeUndefined();
+    expect(res.reason).toContain("not observable");
+    expect(resolverCalled).toBe(false); // guard fired before the read
+  });
+
   test("no seed configured at all → confirmed: undefined (never throws)", async () => {
     __setAdmissionResolverForTests(async () => admittedWith("2026-03-01T00:00:00.000Z"));
     const port = buildLiveHubAuthPort({
