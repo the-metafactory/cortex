@@ -78,16 +78,12 @@ import {
   type DispatchTaskFailedOpts,
   type DispatchTaskFailedReason,
 } from "./dispatch-events";
-import type { SystemEventSource } from "./system-events";
+import { buildSource, type SystemEventSource } from "./system-events";
 
 // Re-export the source shape under a domain-neutral alias — mirrors the
 // `DispatchEventSource` pattern in `dispatch-events.ts`. Callers in the
 // review consumer / pilot import from one place.
 export type ReviewEventSource = SystemEventSource;
-
-function buildSource(src: SystemEventSource): string {
-  return `${src.principal}.${src.agent}.${src.instance}`;
-}
 
 /**
  * Default sovereignty for `tasks.code-review.*` and `review.verdict.*`

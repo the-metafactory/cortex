@@ -118,6 +118,7 @@
 
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
+import { buildSource } from "./system-events";
 
 // ---------------------------------------------------------------------------
 // Public types — kept narrow so the publisher composes cleanly with both
@@ -249,10 +250,6 @@ export const CAPABILITY_REGISTERED_EVENT_TYPE = "agents.capabilities.registered"
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
-
-function buildSource(src: CapabilityRegistrySource): string {
-  return `${src.principal}.${src.agent}.${src.instance}`;
-}
 
 /**
  * Default sovereignty posture for capability-registration envelopes.

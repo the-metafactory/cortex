@@ -87,7 +87,22 @@ export interface SystemEventSource {
   dataResidency?: string;
 }
 
-export function buildSource(src: SystemEventSource): string {
+/**
+ * Single owner of the `{principal}.{agent}.{instance}` envelope-source
+ * grammar (myelin#185's 3-segment form). Every `system.*`/`github.*`/
+ * `dev.*`/`review.*`/`dispatch.*`/`agents.*` emitter shares this one
+ * function rather than re-deriving the string locally (cortex#1515 S1).
+ *
+ * The parameter is structural rather than `SystemEventSource` so
+ * domain-specific source shapes (e.g. `CapabilityRegistrySource`) can
+ * pass their value through without importing or extending
+ * `SystemEventSource` itself — same output, no type coupling.
+ */
+export function buildSource(src: {
+  principal: string;
+  agent: string;
+  instance: string;
+}): string {
   return `${src.principal}.${src.agent}.${src.instance}`;
 }
 

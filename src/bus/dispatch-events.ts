@@ -46,7 +46,7 @@
 
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
-import type { SystemEventSource } from "./system-events";
+import { buildSource, type SystemEventSource } from "./system-events";
 
 // Re-export `SystemEventSource` under a domain-neutral alias so callers
 // in `runner/` import from one place. The alias is purely ergonomic;
@@ -131,10 +131,6 @@ export interface LogicalResponseRouting {
  * value — the type widening alone admits both producers.
  */
 export type AnyResponseRouting = ResponseRouting | LogicalResponseRouting;
-
-function buildSource(src: SystemEventSource): string {
-  return `${src.principal}.${src.agent}.${src.instance}`;
-}
 
 /**
  * Default sovereignty for `dispatch.task.*` events. Same posture as

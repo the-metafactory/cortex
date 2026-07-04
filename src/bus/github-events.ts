@@ -62,7 +62,7 @@
 
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
-import type { SystemEventSource } from "./system-events";
+import { buildSource, type SystemEventSource } from "./system-events";
 import { isUuid } from "../common/types/uuid";
 
 /**
@@ -71,10 +71,6 @@ import { isUuid } from "../common/types/uuid";
  * shortcut as `DispatchEventSource` in `bus/dispatch-events.ts`.
  */
 export type GithubEventSource = SystemEventSource;
-
-function buildSource(src: SystemEventSource): string {
-  return `${src.principal}.${src.agent}.${src.instance}`;
-}
 
 /**
  * Default sovereignty for `github.*` events. Principal-only by default / local

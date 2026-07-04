@@ -38,7 +38,7 @@
 
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
-import type { SystemEventSource } from "./system-events";
+import { buildSource, type SystemEventSource } from "./system-events";
 import type { LogicalResponseRouting } from "./dispatch-events";
 
 // Re-export so the orchestrator + dev consumer import the run-thread routing
@@ -54,10 +54,6 @@ export type DevEventSource = SystemEventSource;
 // module for the failure taxonomy (single source of truth stays in
 // `dispatch-events.ts` per cortex#249).
 export type { DispatchTaskFailedReason } from "./dispatch-events";
-
-function buildSource(src: SystemEventSource): string {
-  return `${src.principal}.${src.agent}.${src.instance}`;
-}
 
 /**
  * Default sovereignty for `tasks.dev.implement` envelopes. Same posture as
