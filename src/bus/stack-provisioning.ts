@@ -208,6 +208,40 @@ export async function signClaimWithSeed(seed: string, message: Uint8Array): Prom
   return signWithNKey(kp, message);
 }
 
+/**
+ * cortex#1517 (S3, epic #1514) — sign an admin-request `claim` for the
+ * registry's `x-admin-signed` wire contract: `canonicalJSON(claim)` → sign
+ * with the admin/hub-admin seed (via {@link signClaimWithSeed}, this module's
+ * own PKCS#8 bridge) → package as `{ claim, signature }`.
+ *
+ * Lives HERE, not in `common/registry/signing.ts` (the verify-only client
+ * mirror) — this module already imports `canonicalJSON` FROM that file, so a
+ * signer that needed to import `signClaimWithSeed` back INTO it would form a
+ * common↔bus import cycle. Calling `signClaimWithSeed` directly (same file)
+ * keeps the dependency one-directional.
+ *
+ * This is the ONE implementation of that sign+serialize step; every call site
+ * (read claims → the `x-admin-signed` header, write claims → the POST body)
+ * builds its own `claim` shape and hands it here unchanged — this function
+ * does not know or care which claim shape it signs.
+ *
+ * Generic over the claim's own type so a caller with a narrowly-typed return
+ * (e.g. `{ claim: AdmissionDecisionClaim; signature: string }`) gets that type
+ * back without a cast.
+ *
+ * `JSON.stringify(await signAdminRequest(seed, claim))` is byte-identical to
+ * the `JSON.stringify({ claim, signature })` every hand-rolled copy produced —
+ * same key order (`claim` then `signature`), same canonical-JSON signing input.
+ */
+export async function signAdminRequest<T extends Record<string, unknown>>(
+  seed: string,
+  claim: T,
+): Promise<{ claim: T; signature: string }> {
+  const message = new TextEncoder().encode(canonicalJSON(claim));
+  const signature = await signClaimWithSeed(seed, message);
+  return { claim, signature };
+}
+
 // =============================================================================
 // Identity generation + seed-file write
 // =============================================================================

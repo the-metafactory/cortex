@@ -27,8 +27,7 @@
  * "whose job is it" model fully faithful. Tracked as a follow-up.
  */
 
-import { signAdminRequest } from "../../../common/registry/signing";
-import { randomNonce, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import { randomNonce, signAdminRequest, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
 import { samePubkey } from "../../../common/registry/pubkey-normalize";
 import type { AdmissionLookupPort, HubAuthorizeDeliveryPort, NetworkAuthorizePorts } from "./network-authorize-ports";
 

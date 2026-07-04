@@ -52,10 +52,10 @@ import {
   buildNetworkCreateClaim,
   postNetworkCreate,
   randomNonce,
+  signAdminRequest,
   type StackIdentityMaterial,
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
-import { signAdminRequest } from "../../../common/registry/signing";
 // O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
 // cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-discord
 // bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side

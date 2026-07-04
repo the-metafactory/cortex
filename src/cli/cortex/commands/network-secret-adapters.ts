@@ -37,7 +37,6 @@ import { lookup as dnsLookup } from "dns/promises";
 
 import { expandTilde } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
-import { signAdminRequest } from "../../../common/registry/signing";
 import { sealToPrincipal } from "../../../common/crypto/seal-to-principal";
 import { mintLeafPsk } from "../../../common/nats/leaf-psk";
 import {
@@ -49,6 +48,7 @@ import {
 } from "../../../common/nats/hub-reload-target";
 import {
   randomNonce,
+  signAdminRequest,
   type StackIdentityMaterial,
 } from "../../../bus/stack-provisioning";
 import { bunExecRunner, type ExecRunner } from "../../../common/nats/nats-service-manager";

@@ -14,15 +14,13 @@
  * If the service-side canonicalisation ever changes, this file moves
  * lock-step.
  *
- * Cortex never signs REGISTRY assertions (the `SignedAssertion` wrapper the
- * registry itself produces and this file only verifies, via
- * `verifyEd25519`/`verifySignedAssertion`) — that key lives solely on the
- * registry side. `signAdminRequest` below is a DIFFERENT concern: the
- * principal-side admin-request signing that proves possession of an admin
- * key to the registry (the `x-admin-signed` header / decision-body wire
- * contract, cortex#1517). It used to be hand-rolled at every call site;
- * consolidated here (S3, epic #1514) so the sign+serialize step has exactly
- * one implementation.
+ * Sign is intentionally absent: cortex never signs registry assertions.
+ * Only principal-side registration signs — `signAdminRequest`
+ * (cortex#1517, S3, epic #1514) lives in `bus/stack-provisioning.ts`, not
+ * here: that module already owns `signClaimWithSeed` + the NKey/PKCS#8
+ * bridge, and importing it into this file (this file's `canonicalJSON`
+ * already flows INTO `stack-provisioning.ts`) would form a common↔bus
+ * import cycle. Keeping the signer in `bus/` makes it one-directional.
  */
 
 // =============================================================================
@@ -34,20 +32,6 @@
 // existing importer of this module keeps working unchanged.
 // =============================================================================
 
-import {
-  MAX_CANONICAL_DEPTH,
-  MAX_CANONICAL_KEYS,
-  MAX_CANONICAL_ARRAY_LEN,
-  MAX_CANONICAL_NODES,
-  CanonicalDepthError,
-  CanonicalWidthError,
-  canonicalJSON,
-} from "./canonical-json";
-
-// A real (non-forwarding) import — `signAdminRequest` below needs a local
-// `canonicalJSON` binding to call; `export { x } from "./mod"` alone would not
-// give this file one. Re-exported immediately below so every existing
-// importer of this module keeps working unchanged.
 export {
   MAX_CANONICAL_DEPTH,
   MAX_CANONICAL_KEYS,
@@ -56,14 +40,7 @@ export {
   CanonicalDepthError,
   CanonicalWidthError,
   canonicalJSON,
-};
-
-// cortex#1517 (S3) — `signAdminRequest` signs with the SAME PKCS#8 bridge the
-// CLI/bus admin-signing call sites already use (`bus/stack-provisioning.ts`).
-// This is a genuine two-file import cycle (`stack-provisioning.ts` imports
-// `canonicalJSON` from here) — safe because both sides only touch the
-// cross-imported binding inside function bodies, never at module-eval time.
-import { signClaimWithSeed } from "../../bus/stack-provisioning";
+} from "./canonical-json";
 
 // =============================================================================
 // Base64 helpers — standard alphabet (NOT url-safe).
@@ -122,34 +99,4 @@ export async function verifyEd25519(
   } catch (_err) {
     return false;
   }
-}
-
-// =============================================================================
-// cortex#1517 (S3, epic #1514) — admin-request signing (client → registry).
-// =============================================================================
-
-/**
- * Sign an admin-request `claim` for the registry's `x-admin-signed` wire
- * contract: `canonicalJSON(claim)` → Ed25519-sign with the admin/hub-admin
- * seed → package as `{ claim, signature }`. This is the ONE implementation of
- * that sign+serialize step; every call site (read claims → the `x-admin-signed`
- * header, write claims → the POST body) builds its own `claim` shape and hands
- * it here unchanged — this function does not know or care which claim shape it
- * signs.
- *
- * Generic over the claim's own type so a caller with a narrowly-typed return
- * (e.g. `{ claim: AdmissionDecisionClaim; signature: string }`) gets that type
- * back without a cast.
- *
- * `JSON.stringify(await signAdminRequest(seed, claim))` is byte-identical to
- * the `JSON.stringify({ claim, signature })` every hand-rolled copy produced —
- * same key order (`claim` then `signature`), same canonical-JSON signing input.
- */
-export async function signAdminRequest<T extends Record<string, unknown>>(
-  seed: string,
-  claim: T,
-): Promise<{ claim: T; signature: string }> {
-  const message = new TextEncoder().encode(canonicalJSON(claim));
-  const signature = await signClaimWithSeed(seed, message);
-  return { claim, signature };
 }
