@@ -40,13 +40,22 @@
  * trust-merge step needs (see the next section), so this is the shape that
  * keeps the shared skeleton in ONE place without losing that type safety.
  *
- * ## PRESERVE ORDER — load-bearing
+ * ## PRESERVE ORDER
  *
- * Adapters are built + registered discord → mattermost → slack, EXACTLY the
- * order the pre-extraction inline blocks ran in. `liveSurfaces` tracking,
- * trust-resolver registration order, and surface-router binding order all
- * depend on this sequence. Do not reorder the three `bootPlatformAdapters`
- * calls in `wireSurfaceAdapters` without a deliberate, reviewed decision.
+ * Adapters are built + registered discord → mattermost → slack, and within
+ * each platform Pass 1 (construct/start/trust-register) fully completes for
+ * every instance before Pass 2 (trust-merge/attachInboundDispatch) begins —
+ * EXACTLY the sequence the pre-extraction inline blocks ran in. This is
+ * preserved DEFENSIVELY to match that sequence, not because a test here
+ * demonstrates that reordering breaks something: the unit test
+ * (`surface-adapter-boot.test.ts`) pins that we EMIT discord → mattermost →
+ * slack, it doesn't prove a different order would fail. The basis for
+ * "don't reorder" is the ORIGINAL code's own invariants — cortex#98 item 1 /
+ * cortex#235 r1#7's TOCTOU-closing Pass-1-before-Pass-2 split, and whatever
+ * `liveSurfaces`/trust-resolver-registration ordering assumptions existed
+ * pre-extraction — not a failure test added in this slice. Do not reorder
+ * the three `bootPlatformAdapters` calls in `wireSurfaceAdapters` without a
+ * deliberate, reviewed decision.
  *
  * ## The factory returns `PlatformAdapter`; this module needs the concrete class
  *
@@ -243,6 +252,32 @@ function deferredFallbackAgent(config: AgentConfig, presence: Agent["presence"])
 }
 
 /**
+ * Sage #1547 r4 nit — Mattermost's and Slack's `instanceIdFor` closures
+ * built an identical shape (`instance.instanceId ?? (configInstances.length
+ * > 1 ? "${agentName}-${platform}-${index}" : "${agentName}-${platform}")`),
+ * differing only in the platform word + which config array to index into.
+ * `configInstances` MUST be `opts.config.mattermost` / `opts.config.slack`
+ * (the flat INLINE-config array), NOT `mattermostInstances`/`slackInstances`
+ * (which also include agents.d/ fragment-only instances, S1) — matches the
+ * pre-extraction `config.X.indexOf(instance)` / `config.X.length` exactly.
+ * Discord doesn't use this shape at all (its instanceId derives from
+ * `guildId`, never an index), so it isn't a third caller.
+ */
+function indexedInstanceId<TInstance extends { instanceId?: string }>(
+  configInstances: readonly TInstance[],
+  agentName: string,
+  platform: string,
+  instance: TInstance,
+): string {
+  return (
+    instance.instanceId ??
+    (configInstances.length > 1
+      ? `${agentName}-${platform}-${configInstances.indexOf(instance)}`
+      : `${agentName}-${platform}`)
+  );
+}
+
+/**
  * Sage #1547 r2 nit — Discord's and Slack's `constructAdapter` closures built
  * an identical factory-arg block (instanceId/source/binding/runtime/agent/
  * principal/presence + the policy triad + trustedBotIds/surfaceSubjects/
@@ -381,10 +416,6 @@ async function bootPlatformAdapters<
     }
   }
 
-  if (descriptor.noInstancesConfiguredCount === 0) {
-    console.log(`cortex: no ${descriptor.platform} instances configured`);
-  }
-
   // Pass 2 — merge resolver-derived in-process peer bot ids on top of each
   // adapter's principal-explicit set, log the final allowlist size, then
   // attachInboundDispatch() to drain queued events through the merged
@@ -420,6 +451,20 @@ async function bootPlatformAdapters<
       );
       afterMerge?.(adapter, instance, instanceId);
     }
+  }
+
+  // Sage #1547 r4 (real behavior deviation, fixed) — this check must run
+  // AFTER Pass 2, not before. The pre-extraction inline blocks emitted "no
+  // {platform} instances configured" only once Pass 2 (and, for Discord,
+  // the outbound-poller wiring) had already finished — confirmed against
+  // the pre-S9 `cortex.ts` (both the discord and slack blocks). Since
+  // `noInstancesConfiguredCount` is `config.<platform>.length` (the INLINE
+  // count) while `instances` also includes agents.d/ fragment-only
+  // instances (S1), a config with 0 inline entries but ≥1 fragment
+  // instance would otherwise print this line BEFORE those fragment
+  // instances' "adapter started" lines — reversed vs. the original order.
+  if (descriptor.noInstancesConfiguredCount === 0) {
+    console.log(`cortex: no ${descriptor.platform} instances configured`);
   }
 }
 
@@ -603,10 +648,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
         ? `cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`
         : undefined,
     instanceIdFor: (instance) =>
-      instance.instanceId ??
-      (opts.config.mattermost.length > 1
-        ? `${opts.config.agent.name}-mattermost-${opts.config.mattermost.indexOf(instance)}`
-        : `${opts.config.agent.name}-mattermost`),
+      indexedInstanceId(opts.config.mattermost, opts.config.agent.name, "mattermost", instance),
     buildPresence: (instance): MattermostPresence => ({
       enabled: instance.enabled,
       callbackPort: instance.callbackPort,
@@ -654,10 +696,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     disabledSkipLog: (instance) =>
       `cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`,
     instanceIdFor: (instance) =>
-      instance.instanceId ??
-      (opts.config.slack.length > 1
-        ? `${opts.config.agent.name}-slack-${opts.config.slack.indexOf(instance)}`
-        : `${opts.config.agent.name}-slack`),
+      indexedInstanceId(opts.config.slack, opts.config.agent.name, "slack", instance),
     buildPresence: (instance): SlackPresence => ({
       enabled: instance.enabled,
       botToken: instance.botToken,

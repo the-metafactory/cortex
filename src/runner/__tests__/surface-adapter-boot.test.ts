@@ -26,6 +26,13 @@
  *      but never a credential (`apiToken`/`webhookUrl`/`webhookToken`/
  *      `botToken`/`appToken`/`token`), even though the presence built from
  *      config carries all of them.
+ *   8. (Sage #1547 r4, real behavior deviation, fixed) The "no {platform}
+ *      instances configured" log line fires AFTER Pass 2, not before —
+ *      matching the pre-extraction order. Regression-tested with a
+ *      fragment-only scenario: `config.discord.length === 0` (so the line
+ *      WOULD fire) while `opts.discordInstances` still carries an enabled
+ *      instance (simulating an agents.d/ fragment instance S1 appends,
+ *      which the flat `config.discord.length` count never sees).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -411,5 +418,50 @@ describe("wireSurfaceAdapters", () => {
     expect(bindings.discord?.guildId).toBe("g1");
     expect(bindings.mattermost?.apiUrl).toBe("https://mm.example.com");
     expect(bindings.slack?.workspaceId).toBe("T123");
+  });
+
+  test("'no discord instances configured' fires AFTER Pass 2, matching the pre-extraction order (Sage #1547 r4)", async () => {
+    // The S1 divergence this regression-tests: `config.discord.length` (the
+    // flat INLINE count `noInstancesConfiguredCount` reads) is 0, but
+    // `opts.discordInstances` still carries an enabled instance — exactly
+    // what happens when every discord surface comes from an agents.d/
+    // fragment rather than inline config. Pre-fix, the "no instances"
+    // line printed BEFORE this instance's Pass-2 "adapter started" line;
+    // pre-extraction (and post-fix), it prints after.
+    const config = minimalConfig({ discord: [] });
+    const fragmentInstance: AgentConfig["discord"][number] = {
+      enabled: true,
+      token: "tok-fragment",
+      guildId: "g1",
+      agentChannelId: "c1",
+      logChannelId: "l1",
+      instanceId: "fragment-discord",
+      contextDepth: 10,
+      enableAgentLog: false,
+      trustedBotIds: [],
+      dmOwner: true,
+      surfaceSubjects: [],
+    };
+    const recorded: RecordedAdapter[] = [];
+    const { factory } = makeRecordingFactory(recorded);
+    const { router } = makeRecordingRouter();
+    const opts = baseOpts(config, factory, router, { discordInstances: [fragmentInstance] });
+
+    const logLines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logLines.push(args.map(String).join(" "));
+    };
+    try {
+      await wireSurfaceAdapters(opts);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const startedIndex = logLines.findIndex((l) => l.includes("discord adapter started"));
+    const noInstancesIndex = logLines.indexOf("cortex: no discord instances configured");
+    expect(startedIndex).toBeGreaterThanOrEqual(0);
+    expect(noInstancesIndex).toBeGreaterThanOrEqual(0);
+    expect(startedIndex).toBeLessThan(noInstancesIndex);
   });
 });
