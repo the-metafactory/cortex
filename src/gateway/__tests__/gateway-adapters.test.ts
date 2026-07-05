@@ -32,7 +32,14 @@ import type { MyelinRuntime } from "../../bus/myelin/runtime";
 interface FactoryCall {
   platform: "discord" | "slack" | "mattermost" | "web";
   instanceId: string;
-  source: SystemEventSource;
+  /**
+   * S9 (cortex#1523) widened `FactoryArgsBase.source` to optional so the
+   * per-stack boot path can omit it for a platform that never wired
+   * `systemEventSource` — `buildGatewayAdapters` (this test's subject) still
+   * always supplies one, so every assertion below is unaffected; only the
+   * recorded type widened to match.
+   */
+  source: SystemEventSource | undefined;
   /** The credential block handed to the factory (presence-shaped). */
   binding: Record<string, unknown>;
   runtime: MyelinRuntime | undefined;
@@ -354,7 +361,7 @@ describe("buildGatewayAdapters", () => {
     const { factory, calls } = makeRecordingFactory();
     buildGatewayAdapters(MULTI_SURFACES, makeDeps(factory));
     const slackCall = calls.find((c) => c.platform === "slack");
-    expect(slackCall?.source.instance).toBe("slack:T0123456789");
+    expect(slackCall?.source?.instance).toBe("slack:T0123456789");
     expect(slackCall?.binding.botToken).toBe("xoxb-1-2-3");
     expect(slackCall?.binding.appToken).toBe("xapp-1-2-3");
   });
@@ -363,7 +370,7 @@ describe("buildGatewayAdapters", () => {
     const { factory, calls } = makeRecordingFactory();
     buildGatewayAdapters(MULTI_SURFACES, makeDeps(factory));
     const mmCall = calls.find((c) => c.platform === "mattermost");
-    expect(mmCall?.source.instance).toBe("mattermost:https://mm.example.com");
+    expect(mmCall?.source?.instance).toBe("mattermost:https://mm.example.com");
     expect(mmCall?.binding.apiUrl).toBe("https://mm.example.com");
     expect(mmCall?.binding.apiToken).toBe("mm-tok");
   });

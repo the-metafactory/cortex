@@ -32,7 +32,6 @@ import {
   flattenDiscordPresences,
   flattenMattermostPresences,
   flattenSlackPresences,
-  surfaceInstanceEnabled,
   dedupeSurfaceWarnings,
   type SurfaceTokenWarning,
 } from "./common/config/loader";
@@ -129,12 +128,9 @@ import { RendererSchema, deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./commo
 import type {
   Agent,
   BusConfig,
-  DiscordPresence,
-  MattermostPresence,
   Policy,
   ReflexActivationConfig,
   NotifyConfig,
-  SlackPresence,
   StackConfig,
 } from "./common/types/cortex-config";
 import {
@@ -149,12 +145,11 @@ import {
   buildPlatformPrincipalIndex,
   buildPrincipalRegistry,
 } from "./common/policy";
-import { MattermostAdapter } from "./adapters/mattermost";
-import { SlackAdapter } from "./adapters/slack";
 import type { InboundMessage, PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
 import { startGatewayIfEnabled } from "./gateway/start-gateway";
+import { wireSurfaceAdapters } from "./gateway/wire-surface-adapters";
 // G-1113 ML.5 — cockpit live-refresh loop (opt-in via config.cockpit).
 import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
@@ -2939,490 +2934,42 @@ export async function startCortex(
     }
   }
 
-  // cortex#98 (part B) — two-pass adapter start so peer-bot ids can be
-  // resolved across adapters. Pass 1 starts each adapter with its principal-
-  // explicit `trustedBotIds` set (the cross-process bridge list from
-  // cortex.yaml) and registers each agent's freshly-learned bot user id in
-  // the TrustResolver. Pass 2 walks each adapter's `agent.trust[]` list,
-  // asks the resolver for each peer's bot id, and merges the result into
-  // the adapter's allowlist via `setTrustedBotIds`. The split is required
-  // because adapter A's `trust` list may reference adapter B, and B's
-  // platform id is only known after B's `client.login()` resolves.
-  //
-  // Started Discord state carried between passes. We capture the adapter,
-  // its declaring agent, and the principal-explicit set as a baseline so
-  // Pass 2 can produce the merged set in one place (explicit ∪ resolved
-  // peers) without re-parsing the instance.
-  interface StartedDiscord {
-    adapter: DiscordAdapter;
-    agent: Agent;
-    instance: AgentConfig["discord"][number];
-    instanceId: string;
-    explicitTrustedBotIds: ReadonlySet<string>;
-  }
-  const startedDiscord: StartedDiscord[] = [];
-
-  // cortex#486 — `adapterPolicyEngine` / `adapterPolicyLookup` /
-  // `adapterPolicyRegistry` are constructed above (before the
-  // DispatchHandler) so the dispatch-source publish path can consume the
-  // engine for `(platform, authorId) → principal_id` resolution. The
-  // three values are shared with the adapter loops below verbatim.
-
-  for (const instance of discordInstances) {
-    // cortex#1217 — shared no-fail-open gate: a surface disabled by fail-soft
-    // token degradation is skipped here BEFORE `new DiscordAdapter` / login.
-    if (!surfaceInstanceEnabled(instance)) {
-      console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
-      continue;
-    }
-    // MIG-7.2c-discord-flip: derive the instance id from the agent name plus
-    // the discord guild so multi-instance bot.yaml configs (same `agent.name`,
-    // multiple `discord[]` entries) still produce a unique key. Once
-    // migrate-config (MIG-7.2e) emits a proper `agents[]` array the suffix
-    // collapses to plain `${agent.id}-discord`.
-    const instanceId = instance.instanceId ?? `${config.agent.name}-discord-${instance.guildId}`;
-    // Build the `DiscordPresence` from the bot.yaml discord[i] entry.
-    // Schema defaults already applied by `AgentConfigSchema` at load time —
-    // this is a structural mapping, not a parse.
-    //
-    // cortex#98 (part A): `trustedBotIds` carries the principal-explicit
-    // cross-process bridge list (architecture §9.3). It MUST be threaded
-    // through verbatim — the auto-population step below merges in-process
-    // peers from `agent.trust[]` on top via the TrustResolver (part B).
-    const presence: DiscordPresence = {
-      enabled: instance.enabled,
-      token: instance.token,
-      guildId: instance.guildId,
-      agentChannelId: instance.agentChannelId,
-      logChannelId: instance.logChannelId,
-      ...(instance.worklogChannelId !== undefined && { worklogChannelId: instance.worklogChannelId }),
-      contextDepth: instance.contextDepth,
-      enableAgentLog: instance.enableAgentLog,
-      // v2.0.0 (cortex#297) — roles/defaultRole/dm retired.
-      ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
-      trustedBotIds: instance.trustedBotIds,
-      // cortex#709 — DM stack-ownership. Threaded verbatim from the legacy
-      // instance shape; the adapter drops DM-scoped messageCreate early when
-      // false. Defaults to true at the schema layer (back-compat).
-      dmOwner: instance.dmOwner,
-      surfaceSubjects: instance.surfaceSubjects,
-      ...(instance.surfaceFallbackChannelId !== undefined && {
-        surfaceFallbackChannelId: instance.surfaceFallbackChannelId,
-      }),
-    };
-    // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
-    // per-instance identity (real id, persona, roles, trust) flows from
-    // cortex.yaml. Falls back to the transitional synthesis-from-singular
-    // for legacy bot.yaml input (no inlineAgents).
-    const matchedAgent = agentByDiscordToken.get(instance.token);
-    const agent: Agent = matchedAgent ?? {
-      id: config.agent.name,
-      displayName: config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      trust: [],
-      presence: { discord: presence },
-    };
-    // GW.a.3b.2c — the gateway owns this surface; yield it so we don't
-    // double-connect the same bot token. `gatewayOwned` is empty when
-    // CORTEX_GATEWAY is off → this is never taken on the live boot path. The
-    // suppressed instance never enters `startedDiscord`, so the Pass-2 trust
-    // merge / outbound-poller bookkeeping simply never sees it.
-    if (gatewayOwned.has(`discord:${agent.id}`)) {
-      console.log(
-        `cortex: per-stack discord adapter for agent "${agent.id}" suppressed — the shared surface gateway owns this surface (CORTEX_GATEWAY).`,
-      );
-      continue; // skip — the gateway owns this connection
-    }
-    try {
-      // cortex#84: build the trusted-peer-bot allowlist once per adapter
-      // start so the messageCreate hot path doesn't re-allocate per event.
-      // Empty list → adapter falls back to "drop every bot author"
-      // (pre-cortex#84 behaviour). Pass 2 below merges resolver-derived
-      // in-process peer ids on top via `adapter.setTrustedBotIds`.
-      const explicitTrustedBotIds = new Set<string>(instance.trustedBotIds);
-      const adapter = new DiscordAdapter(
-        agent,
-        presence,
-        {
-          instanceId,
-          principal: {
-            ...(options.principal?.discordId !== undefined && { discordId: options.principal.discordId }),
-          },
-          runtime,
-          systemEventSource,
-          trustedBotIds: explicitTrustedBotIds,
-          ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
-          ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
-          ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
-          // cortex#205: plumb the principal's configured subject patterns
-          // through to the surface-router. Pass the array verbatim — `[]`
-          // included — so the adapter's one-shot empty-array warning at
-          // `discord/index.ts:178` actually fires for the "principal
-          // forgot / typoed surfaceSubjects" case the schema docstrings
-          // promise. A conditional short-circuit here would convert
-          // `[]` → `undefined` on the infra side and silently disable
-          // the diagnostic. Setting e.g.
-          // `["local.metafactory.tasks.code-review.>"]` wires pilot's
-          // IoAW review-requests into the Discord render path.
-          surfaceSubjects: presence.surfaceSubjects,
-          // cortex#207: fallback channel for envelopes that don't carry
-          // their own routing. Spread-conditionally because the field
-          // is optional and `renderEnvelope` discriminates on its
-          // presence (undefined → drop-with-warning, configured → post).
-          ...(presence.surfaceFallbackChannelId !== undefined && {
-            surfaceFallbackChannelId: presence.surfaceFallbackChannelId,
-          }),
-        },
-      );
-      // Register the adapter's surface-router face. Empty `surfaceSubjects`
-      // makes this a no-op match; harmless to register either way.
-      router.register(adapter.surfaceConfig);
-      await adapter.start(inboundWithGateBridge(adapter, agent));
-      // B-3: confirm this surface live (idempotent — seeded from config; a
-      // hot-reloaded surface joins here).
-      liveSurfaces.add(adapter.platform);
-      adapters.push(adapter);
-
-      // cortex#98 (part B) — Pass 1 step c: register this adapter's bot
-      // user id in the trust resolver so OTHER adapters' Pass 2 lookups
-      // can resolve `agent.trust = [<this-agent>]` to this bot id. The
-      // matched-agent lookup above already gave us this agent's
-      // declarative id; pair it with `client.user.id` (available
-      // post-login via `getPlatformUserId`).
-      //
-      // The register call is best-effort: if the agent id isn't in the
-      // registry (legacy bot.yaml with synthesized-from-singular agent
-      // — `mergedAgents` is empty, so the registry has no entries),
-      // skip silently. Pass 2 will still produce a correctly-sized
-      // empty resolved-peer set for those configs.
-      if (agentRegistry.tryGetById(agent.id)) {
-        try {
-          const botUserId = await adapter.getPlatformUserId();
-          trustResolver.register("discord", botUserId, agent.id);
-        } catch (err) {
-          // Register failures (PlatformIdAlreadyRegisteredError on a
-          // misconfigured token, or getPlatformUserId throwing if the
-          // adapter's client.user is unexpectedly null) should not abort
-          // startup — log and continue so other adapters can come up.
-          console.error(
-            `cortex: trust-resolver register for "${agent.id}" failed (non-fatal):`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-
-      startedDiscord.push({
-        adapter,
-        agent,
-        instance,
-        instanceId,
-        explicitTrustedBotIds,
-      });
-    } catch (err) {
-      console.error(`cortex: discord adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  // cortex#98 (part B) — Pass 2: merge resolver-derived in-process peer
-  // bot ids on top of each adapter's principal-explicit set, and log the
-  // final allowlist size per adapter. Peers absent from the resolver
-  // (cross-process — they live in a different cortex deployment) are
-  // silently skipped; the principal-explicit field in
-  // `presence.discord.trustedBotIds` covers those.
-  //
-  // cortex#108 item 1 — closing the Pass-1→Pass-2 TOCTOU window: after
-  // `setTrustedBotIds(merged)` populates the allowlist, we IMMEDIATELY
-  // call `attachInboundDispatch()` so the `messageCreate` listener is
-  // registered against the post-merge allowlist. Order is load-bearing:
-  // setTrustedBotIds MUST complete before attachInboundDispatch, so the
-  // first delivered message sees the correct allowlist. Echo's round-1
-  // review of cortex#105 flagged the start()-attaches-listener-pre-merge
-  // shape as a [major/security] silent-drop bug for bot-to-bot traffic
-  // landing in the startup window.
-  for (const { adapter, agent, instance, instanceId, explicitTrustedBotIds } of startedDiscord) {
-    const merged = new Set<string>(explicitTrustedBotIds);
-    const resolvedPeers: string[] = [];
-    const skippedPeers: string[] = [];
-    for (const peerAgentId of agent.trust) {
-      if (peerAgentId === agent.id) continue; // self-trust handled by adapter's self-loop guard
-      const peerBotId = trustResolver.lookupPlatformIdByAgent("discord", peerAgentId);
-      if (peerBotId !== undefined) {
-        merged.add(peerBotId);
-        resolvedPeers.push(peerAgentId);
-      } else {
-        skippedPeers.push(peerAgentId);
-      }
-    }
-    adapter.setTrustedBotIds(merged);
-    // cortex#108 item 1: attach the messageCreate listener now — AFTER the
-    // merged allowlist is in place. discord.js holds inbound events at the
-    // WebSocket layer until a JS listener is attached, so no startup-window
-    // bot-to-bot traffic is dropped.
-    adapter.attachInboundDispatch();
-    console.log(
-      `cortex: discord adapter started (instance: ${instanceId}, guild: ${instance.guildId}, ` +
-        `trustedBotIds: ${adapter.trustedBotIdCount}` +
-        (resolvedPeers.length > 0 ? ` [resolver: ${resolvedPeers.join(", ")}]` : "") +
-        (skippedPeers.length > 0 ? ` [cross-process: ${skippedPeers.join(", ")}]` : "") +
-        `)`,
-    );
-
-    // Outbound JSONL → #agent-log + worklog (opt-in). Dashboard + cloud
-    // delivery handled by the HTTP path (H-004). Moved into Pass 2 so the
-    // log-line ordering stays "adapter started → outbound poller wired";
-    // poller setup is decoupled from the trust-resolver merge.
-    if (!options.disableOutboundPoller && (instance.enableAgentLog || instance.worklogChannelId)) {
-      const cleanup = setupOutboundLog(adapter, instance, config, router, systemEventSource);
-      if (cleanup) adapterCleanup.push(cleanup);
-    }
-  }
-
-  if (config.discord.length === 0) {
-    console.log("cortex: no discord instances configured");
-  }
-
-  for (const instance of mattermostInstances) {
-    // cortex#1217 — shared no-fail-open gate (see discord loop).
-    if (!surfaceInstanceEnabled(instance)) continue;
-    if (!instance.apiUrl || !instance.apiToken) {
-      console.error(`cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`);
-      continue;
-    }
-    // MIG-7.2c-mattermost: same instanceId-derivation strategy as Discord —
-    // suffix the legacy fallback with `mattermost-${index}` when
-    // botConfig.mattermost[] has multiple entries per agent.name. Collapses
-    // to plain `${agent.id}-mattermost` at MIG-7.2e.
-    const mmIndex = config.mattermost.indexOf(instance);
-    const instanceId = instance.instanceId ?? (config.mattermost.length > 1
-      ? `${config.agent.name}-mattermost-${mmIndex}`
-      : `${config.agent.name}-mattermost`);
-    // Build the `MattermostPresence` from the bot.yaml mattermost[i] entry.
-    const presence: MattermostPresence = {
-      enabled: instance.enabled,
-      callbackPort: instance.callbackPort,
-      apiUrl: instance.apiUrl,
-      apiToken: instance.apiToken,
-      ...(instance.triggerWord !== undefined && { triggerWord: instance.triggerWord }),
-      ...(instance.webhookUrl !== undefined && { webhookUrl: instance.webhookUrl }),
-      ...(instance.webhookToken !== undefined && { webhookToken: instance.webhookToken }),
-      channels: instance.channels,
-      pollIntervalMs: instance.pollIntervalMs,
-      allowedUsers: instance.allowedUsers,
-      // v2.0.0 (cortex#297) — roles/defaultRole retired.
-    };
-    // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
-    // same pattern as the Discord block above. apiToken is the cleanest
-    // unique key on Mattermost presence.
-    const matchedAgent = instance.apiToken
-      ? agentByMattermostApiToken.get(instance.apiToken)
-      : undefined;
-    const agent: Agent = matchedAgent ?? {
-      id: config.agent.name,
-      displayName: config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      trust: [],
-      presence: { mattermost: presence },
-    };
-    // GW.a.3b.2c — yield to the gateway when it owns this surface (see the
-    // Discord block above). `gatewayOwned` is empty when CORTEX_GATEWAY is off,
-    // so this never fires on the live boot path. The Mattermost loop pushes
-    // nothing to a later bookkeeping pass, so skipping is a clean `continue`.
-    if (gatewayOwned.has(`mattermost:${agent.id}`)) {
-      console.log(
-        `cortex: per-stack mattermost adapter for agent "${agent.id}" suppressed — the shared surface gateway owns this surface (CORTEX_GATEWAY).`,
-      );
-      continue; // skip — the gateway owns this connection
-    }
-    try {
-      const adapter = new MattermostAdapter(
-        agent,
-        presence,
-        {
-          instanceId,
-          principal: {
-            ...(options.principal?.mattermostId !== undefined && { mattermostId: options.principal.mattermostId }),
-          },
-          ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
-          ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
-          ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
-        },
-      );
-      router.register(adapter.surfaceConfig);
-      await adapter.start(inboundWithGateBridge(adapter, agent));
-      // B-3: confirm this surface live (idempotent — seeded from config; a
-      // hot-reloaded surface joins here).
-      liveSurfaces.add(adapter.platform);
-      adapters.push(adapter);
-      console.log(`cortex: mattermost adapter started (instance: ${instanceId}, ${instance.channels.length} channel(s))`);
-    } catch (err) {
-      console.error(`cortex: mattermost adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  // F-slack: Slack adapter boot — sibling to Discord + Mattermost above.
-  // Same shape: iterate `config.slack` (synthesized from `agents[].presence.slack`
-  // by `flattenSlackPresences` in the loader), build a `SlackPresence`, look up
-  // the declaring agent by bot token, instantiate the adapter, register its
-  // surface-router face, and start it. Errors during start are logged
-  // per-instance so one bad workspace doesn't block the rest of the boot.
-  //
-  // cortex#235 r1#7 — two-pass boot, mirror of the Discord pattern above.
-  // Pass 1 starts each adapter with its principal-explicit trustedBotIds
-  // set + registers the adapter's bot user id in the TrustResolver.
-  // Pass 2 walks each adapter's `agent.trust[]` list, resolves peer
-  // agent ids to in-process Slack user ids via the resolver, merges
-  // those into the adapter's allowlist via `setTrustedBotIds`, and
-  // calls `attachInboundDispatch` to drain any pre-merge queued events
-  // (Slack's analogue to discord.js's gateway-buffered events).
-  interface StartedSlack {
-    adapter: SlackAdapter;
-    agent: Agent;
-    instance: AgentConfig["slack"][number];
-    instanceId: string;
-    explicitTrustedBotIds: ReadonlySet<string>;
-  }
-  const startedSlack: StartedSlack[] = [];
-
-  for (const instance of slackInstances) {
-    // cortex#1217 — shared no-fail-open gate (see discord loop).
-    if (!surfaceInstanceEnabled(instance)) {
-      console.log(`cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`);
-      continue;
-    }
-    const slackIndex = config.slack.indexOf(instance);
-    const instanceId = instance.instanceId ?? (config.slack.length > 1
-      ? `${config.agent.name}-slack-${slackIndex}`
-      : `${config.agent.name}-slack`);
-    // Build the `SlackPresence` from the legacy `SlackInstance` shape.
-    // Schema defaults have already been applied by `AgentConfigSchema` —
-    // this is a structural map, not a parse.
-    const presence: SlackPresence = {
-      enabled: instance.enabled,
-      botToken: instance.botToken,
-      appToken: instance.appToken,
-      workspaceId: instance.workspaceId,
-      channels: instance.channels,
-      allowedUserIds: instance.allowedUserIds,
-      trustedBotIds: instance.trustedBotIds,
-      // v2.0.0 (cortex#297) — roles/defaultRole retired.
-      surfaceSubjects: instance.surfaceSubjects,
-      ...(instance.surfaceFallbackChannelId !== undefined && {
-        surfaceFallbackChannelId: instance.surfaceFallbackChannelId,
-      }),
-    };
-    const matchedAgent = agentBySlackBotToken.get(instance.botToken);
-    const agent: Agent = matchedAgent ?? {
-      id: config.agent.name,
-      displayName: config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      trust: [],
-      presence: { slack: presence },
-    };
-    // GW.a.3b.2c — yield to the gateway when it owns this surface (see the
-    // Discord block above). `gatewayOwned` is empty when CORTEX_GATEWAY is off,
-    // so this never fires on the live boot path. The suppressed instance never
-    // enters `startedSlack`, so the Pass-2 trust merge never sees it.
-    if (gatewayOwned.has(`slack:${agent.id}`)) {
-      console.log(
-        `cortex: per-stack slack adapter for agent "${agent.id}" suppressed — the shared surface gateway owns this surface (CORTEX_GATEWAY).`,
-      );
-      continue; // skip — the gateway owns this connection
-    }
-    try {
-      const adapter = new SlackAdapter(
-        agent,
-        presence,
-        {
-          instanceId,
-          principal: {
-            ...(options.principal?.slackId !== undefined && { slackId: options.principal.slackId }),
-          },
-          ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
-          ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
-          ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
-          // cortex#235 r1#4 — wire runtime + source so the adapter
-          // can emit `system.adapter.{disconnected,recovered}` on
-          // Socket Mode lifecycle transitions. Same pattern as the
-          // Discord adapter above.
-          runtime,
-          systemEventSource,
-          surfaceSubjects: presence.surfaceSubjects,
-          ...(presence.surfaceFallbackChannelId !== undefined && {
-            surfaceFallbackChannelId: presence.surfaceFallbackChannelId,
-          }),
-          trustedBotIds: new Set(instance.trustedBotIds),
-        },
-      );
-      router.register(adapter.surfaceConfig);
-      // Pass 1: open Socket Mode but do NOT dispatch inbound events
-      // yet. Events arriving here queue in the adapter's
-      // `pendingMessages` until Pass 2 calls
-      // `attachInboundDispatch()`. This is the Slack equivalent of
-      // discord.js's buffered-events-before-listener pattern.
-      const explicitTrustedBotIds: ReadonlySet<string> = new Set(instance.trustedBotIds);
-      await adapter.start(inboundWithGateBridge(adapter, agent));
-      // B-3: confirm this surface live (idempotent — seeded from config; a
-      // hot-reloaded surface joins here).
-      liveSurfaces.add(adapter.platform);
-      adapters.push(adapter);
-      // Best-effort trust-resolver registration matches the Discord pattern.
-      if (agentRegistry.tryGetById(agent.id)) {
-        try {
-          const botUserId = await adapter.getPlatformUserId();
-          trustResolver.register("slack", botUserId, agent.id);
-        } catch (err) {
-          console.error(
-            `cortex: trust-resolver register for "${agent.id}" (slack) failed (non-fatal):`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-      startedSlack.push({
-        adapter,
-        agent,
-        instance,
-        instanceId,
-        explicitTrustedBotIds,
-      });
-    } catch (err) {
-      console.error(`cortex: slack adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  // cortex#235 r1#7 — Pass 2: merge resolver-derived in-process peer
-  // bot ids on top of each adapter's principal-explicit set, log the
-  // final allowlist size, then attachInboundDispatch() to drain
-  // queued events through the merged allowlist. Order is
-  // load-bearing: setTrustedBotIds MUST complete before
-  // attachInboundDispatch, so queued events see the post-merge set.
-  for (const { adapter, agent, instance, instanceId, explicitTrustedBotIds } of startedSlack) {
-    const merged = new Set<string>(explicitTrustedBotIds);
-    const resolvedPeers: string[] = [];
-    const skippedPeers: string[] = [];
-    for (const peerAgentId of agent.trust) {
-      if (peerAgentId === agent.id) continue; // self-loop guard owns this case
-      const peerBotId = trustResolver.lookupPlatformIdByAgent("slack", peerAgentId);
-      if (peerBotId !== undefined) {
-        merged.add(peerBotId);
-        resolvedPeers.push(peerAgentId);
-      } else {
-        skippedPeers.push(peerAgentId);
-      }
-    }
-    adapter.setTrustedBotIds(merged);
-    adapter.attachInboundDispatch();
-    console.log(
-      `cortex: slack adapter started (instance: ${instanceId}, workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s), ` +
-        `trustedBotIds: ${adapter.trustedBotIdCount}` +
-        (resolvedPeers.length > 0 ? ` [resolver: ${resolvedPeers.join(", ")}]` : "") +
-        (skippedPeers.length > 0 ? ` [cross-process: ${skippedPeers.join(", ")}]` : "") +
-        `)`,
-    );
-  }
-
-  if (config.slack.length === 0) {
-    console.log("cortex: no slack instances configured");
-  }
+  // S9 (epic #1514, plan §2, cortex#1523) — the inline Discord/Mattermost/
+  // Slack construct→register→start→trust-merge sequence (three near-
+  // identical loops, ~600 lines) extracted to `wireSurfaceAdapters`.
+  // Construction now routes through the SAME `GatewayAdapterFactory` seam
+  // the shared surface gateway uses (cortex#524) — see that module's doc
+  // for the full "what moved, what stayed" + PRESERVE ORDER contract.
+  // `adapterPolicyEngine` / `adapterPolicyLookup` / `adapterPolicyRegistry`
+  // (constructed above, before the DispatchHandler) are shared verbatim
+  // across all three platforms, same as pre-extraction.
+  await wireSurfaceAdapters({
+    config,
+    discordInstances,
+    mattermostInstances,
+    slackInstances,
+    agentByDiscordToken,
+    agentByMattermostApiToken,
+    agentBySlackBotToken,
+    gatewayOwned,
+    router,
+    runtime,
+    systemEventSource,
+    principalDiscordId: options.principal?.discordId,
+    principalMattermostId: options.principal?.mattermostId,
+    principalSlackId: options.principal?.slackId,
+    policyEngine: adapterPolicyEngine,
+    policyLookup: adapterPolicyLookup,
+    policyRegistry: adapterPolicyRegistry,
+    agentRegistry,
+    trustResolver,
+    inboundWithGateBridge,
+    disableOutboundPoller: options.disableOutboundPoller ?? false,
+    setupOutboundLog,
+    adapters,
+    adapterCleanup,
+    liveSurfaces,
+  });
 
   // MIG-7.2d: non-agent-bound renderers (dashboard, pagerduty, …).
   // Per architecture §9.2 these are activity-centric sinks that subscribe

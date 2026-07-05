@@ -49,6 +49,24 @@
  * shadow/log-only and does not DM the principal, so it passes an empty block.
  * When the live bus-publishing slice lands, the gateway's principal-DM target
  * can be threaded through `deps` if needed.
+ *
+ * ## S9 (cortex#1523) — a second caller
+ *
+ * `wireSurfaceAdapters` (`./wire-surface-adapters.ts`) is the per-stack boot
+ * path's construction — the direct-connect adapters `startCortex` runs
+ * against a stack's own `agents[].presence.*`, as opposed to this file's
+ * shared-surface-gateway construction. It calls the SAME
+ * `GatewayAdapterFactory.discord/mattermost/slack()` functions so exactly one
+ * module (`defaultGatewayAdapterFactory`) knows how to build a
+ * `new DiscordAdapter` / `new MattermostAdapter` / `new SlackAdapter`. The
+ * per-platform `*FactoryArgs` grew optional fields (`agent`, `principal`,
+ * the policy triad, `trustedBotIds`, `surfaceSubjects`,
+ * `surfaceFallbackChannelId`) so that caller can supply what the gateway
+ * never needed — every addition is optional and the gateway's own call sites
+ * (`buildGatewayAdapters`) are unchanged. `source` loosened from required to
+ * optional for the same reason: the per-stack path omits it for Mattermost,
+ * mirroring that platform's pre-existing (no `systemEventSource` wiring)
+ * inline construction.
  */
 
 import { DiscordAdapter } from "../adapters/discord";
@@ -69,6 +87,7 @@ import {
 } from "../common/types/cortex-config";
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
+import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../common/policy";
 import { assertNoUnresolvedPlaceholder } from "../common/config/resolve-env-placeholders";
 import { groupDiscordBindingsByToken } from "./discord-token-groups";
 // Back-compat re-export for callers that still import the old suppression helper here.
@@ -82,8 +101,17 @@ export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
 interface FactoryArgsBase {
   /** Interim instance id `{platform}:{demuxKey}` (= binding-resolver match.instance). */
   instanceId: string;
-  /** Gateway source identity `{principal}.gateway.{instance}`. */
-  source: SystemEventSource;
+  /**
+   * Gateway source identity `{principal}.gateway.{instance}`. Optional —
+   * S9 (cortex#1523) lets the per-stack boot path (`wireSurfaceAdapters`)
+   * omit it for a platform whose inline construction historically never
+   * wired `systemEventSource` onto the adapter (today that's Mattermost
+   * only — see `MattermostAdapterInfra.runtime`'s doc: "today's
+   * resolveAccess path doesn't publish"). Forwarded to the constructed
+   * adapter's `infra.systemEventSource` ONLY when defined; gateway callers
+   * always supply one, so gateway behaviour is unchanged.
+   */
+  source: SystemEventSource | undefined;
   /**
    * The raw credential block from `surfaces.{platform}[].binding`. Forwarded
    * for observability / test assertions; the typed `presence` below is what
@@ -92,6 +120,31 @@ interface FactoryArgsBase {
   binding: Record<string, unknown>;
   /** Myelin runtime for `system.adapter.*` emission (may be dormant). */
   runtime: MyelinRuntime | undefined;
+  /**
+   * S9 (cortex#1523) — the real `Agent` to construct the adapter with.
+   * Optional: the gateway omits this (shadow/log-only; every gateway-owned
+   * adapter uses the synthetic {@link syntheticGatewayAgent} placeholder).
+   * The per-stack boot path always supplies the config-matched (or
+   * deferred-fallback) `Agent` so the constructed adapter carries the real
+   * persona/trust list instead of the gateway's placeholder.
+   */
+  agent?: Agent;
+  /**
+   * S9 (cortex#1523) — principal's platform identity block, forwarded
+   * verbatim to the constructed adapter's `infra.principal`. Defaults to
+   * `{}` (the gateway's shadow/log-only shape) when omitted.
+   */
+  principal?: Record<string, unknown>;
+  /**
+   * S9 (cortex#1523) — v2.0.0 (cortex#297) policy triad. The gateway omits
+   * these (shadow/log-only, never dispatches inbound); the per-stack boot
+   * path supplies the deployment's resolved policy engine/lookup/registry
+   * (shared verbatim across all three platforms — see `cortex.ts`'s
+   * `adapterPolicyEngine` comment).
+   */
+  policyEngine?: PolicyEngine;
+  policyLookup?: PlatformPrincipalIndex;
+  policyRegistry?: PrincipalRegistry;
 }
 
 interface DiscordFactoryArgs extends FactoryArgsBase {
@@ -100,9 +153,23 @@ interface DiscordFactoryArgs extends FactoryArgsBase {
   allowedGuildIds: ReadonlySet<string>;
   /** Per-guild presence config for grouped token connections. */
   presenceByGuildId: ReadonlyMap<string, DiscordPresence>;
+  /**
+   * S9 (cortex#1523) — cortex#84 cross-process bridge allowlist. The gateway
+   * omits this (shadow/log-only, doesn't dispatch inbound); the per-stack
+   * boot path supplies the config-declared set (merged with in-process peers
+   * in its own Pass 2, same as pre-extraction).
+   */
+  trustedBotIds?: ReadonlySet<string>;
+  /** S9 (cortex#1523) — MIG-3b surface-router fields; gateway omits both. */
+  surfaceSubjects?: string[];
+  surfaceFallbackChannelId?: string;
 }
 interface SlackFactoryArgs extends FactoryArgsBase {
   presence: SlackPresence;
+  /** S9 (cortex#1523) — see {@link DiscordFactoryArgs.trustedBotIds}. */
+  trustedBotIds?: ReadonlySet<string>;
+  surfaceSubjects?: string[];
+  surfaceFallbackChannelId?: string;
 }
 interface MattermostFactoryArgs extends FactoryArgsBase {
   presence: MattermostPresence;
@@ -164,6 +231,27 @@ function syntheticGatewayAgent(
   };
 }
 
+/**
+ * S9 (cortex#1523) — resolve the `Agent` a factory call constructs the
+ * adapter with. `args.agent` (the per-stack boot path always supplies it)
+ * wins; the gateway never supplies `agent`, so it falls through to the
+ * synthetic gateway-owned placeholder keyed off `args.source`. Throws if
+ * NEITHER is present — a caller must supply one or the other so the
+ * constructed adapter always has a real identity.
+ */
+function resolveFactoryAgent(
+  args: Pick<FactoryArgsBase, "agent" | "source">,
+  presence: Agent["presence"],
+): Agent {
+  if (args.agent) return args.agent;
+  if (!args.source) {
+    throw new Error(
+      "GatewayAdapterFactory: constructing an adapter requires either `agent` or `source` (neither was supplied)",
+    );
+  }
+  return syntheticGatewayAgent(args.source.agent, presence);
+}
+
 // =============================================================================
 // Default (production) factory — constructs the real adapters
 // =============================================================================
@@ -174,35 +262,72 @@ function syntheticGatewayAgent(
  * adapters are CONSTRUCTED only — `buildGatewayAdapters` does not start them.
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
-  discord: ({ instanceId, source, presence, runtime, allowedGuildIds, presenceByGuildId }) =>
-    new DiscordAdapter(syntheticGatewayAgent(source.agent, { discord: presence }), presence, {
-      instanceId,
-      principal: {},
-      ...(runtime !== undefined && { runtime }),
-      systemEventSource: source,
-      allowedGuildIds,
-      presenceByGuildId,
-    }),
-
-  slack: ({ instanceId, source, presence, runtime }) =>
-    new SlackAdapter(syntheticGatewayAgent(source.agent, { slack: presence }), presence, {
-      instanceId,
-      principal: {},
-      ...(runtime !== undefined && { runtime }),
-      systemEventSource: source,
-    }),
-
-  mattermost: ({ instanceId, source, presence, runtime }) =>
-    new MattermostAdapter(
-      syntheticGatewayAgent(source.agent, { mattermost: presence }),
+  discord: (args) => {
+    const {
+      instanceId, source, presence, runtime, allowedGuildIds, presenceByGuildId,
+      principal, policyEngine, policyLookup, policyRegistry,
+      trustedBotIds, surfaceSubjects, surfaceFallbackChannelId,
+    } = args;
+    return new DiscordAdapter(
+      resolveFactoryAgent(args, { discord: presence }),
       presence,
       {
         instanceId,
-        principal: {},
+        principal: principal ?? {},
         ...(runtime !== undefined && { runtime }),
-        systemEventSource: source,
+        ...(source !== undefined && { systemEventSource: source }),
+        allowedGuildIds,
+        presenceByGuildId,
+        ...(trustedBotIds !== undefined && { trustedBotIds }),
+        ...(policyEngine !== undefined && { policyEngine }),
+        ...(policyLookup !== undefined && { policyLookup }),
+        ...(policyRegistry !== undefined && { policyRegistry }),
+        ...(surfaceSubjects !== undefined && { surfaceSubjects }),
+        ...(surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId }),
       },
-    ),
+    );
+  },
+
+  slack: (args) => {
+    const {
+      instanceId, source, presence, runtime,
+      principal, policyEngine, policyLookup, policyRegistry,
+      trustedBotIds, surfaceSubjects, surfaceFallbackChannelId,
+    } = args;
+    return new SlackAdapter(
+      resolveFactoryAgent(args, { slack: presence }),
+      presence,
+      {
+        instanceId,
+        principal: principal ?? {},
+        ...(runtime !== undefined && { runtime }),
+        ...(source !== undefined && { systemEventSource: source }),
+        ...(trustedBotIds !== undefined && { trustedBotIds }),
+        ...(policyEngine !== undefined && { policyEngine }),
+        ...(policyLookup !== undefined && { policyLookup }),
+        ...(policyRegistry !== undefined && { policyRegistry }),
+        ...(surfaceSubjects !== undefined && { surfaceSubjects }),
+        ...(surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId }),
+      },
+    );
+  },
+
+  mattermost: (args) => {
+    const { instanceId, source, presence, runtime, principal, policyEngine, policyLookup, policyRegistry } = args;
+    return new MattermostAdapter(
+      resolveFactoryAgent(args, { mattermost: presence }),
+      presence,
+      {
+        instanceId,
+        principal: principal ?? {},
+        ...(runtime !== undefined && { runtime }),
+        ...(source !== undefined && { systemEventSource: source }),
+        ...(policyEngine !== undefined && { policyEngine }),
+        ...(policyLookup !== undefined && { policyLookup }),
+        ...(policyRegistry !== undefined && { policyRegistry }),
+      },
+    );
+  },
 
   /**
    * C-110: Generic web/SSE surface adapter. No presence schema re-parse
@@ -210,12 +335,12 @@ export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
    * No reconnect credentials to guard (no bot token); the binding's
    * `broadcastUrl` is already validated by `WebBindingSchema`.
    */
-  web: ({ instanceId, webBinding, source }) =>
+  web: (args) =>
     new WebAdapter(
-      syntheticGatewayAgent(source.agent, {}),
-      webBinding,
+      resolveFactoryAgent(args, {}),
+      args.webBinding,
       {
-        instanceId,
+        instanceId: args.instanceId,
         principal: {},
       },
     ),
