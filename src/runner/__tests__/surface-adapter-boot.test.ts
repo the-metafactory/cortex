@@ -6,7 +6,7 @@
  * fake adapters (no platform connection). The fakes additionally implement
  * `surfaceConfig` / `setTrustedBotIds` / `attachInboundDispatch` /
  * `trustedBotIdCount` — the concrete-class-only members
- * `wire-surface-adapters.ts`'s `as DiscordAdapter` / `as SlackAdapter`
+ * `surface-adapter-boot.ts`'s `as DiscordAdapter` / `as SlackAdapter`
  * narrow-casts assume are present (see that module's doc). A fake missing one
  * of these would throw at the call site, not silently pass — that's the
  * safety net the module doc promises.
@@ -18,13 +18,14 @@
  *   4. GW.a.3b.2c gateway-owned suppression skips construction.
  *   5. Mattermost's `apiUrl`/`apiToken` guard skips without constructing.
  *   6. Pass-2 trust-resolver merge (Discord + Slack) resolves an in-process
- *      peer's bot id and calls `setTrustedBotIds` with the merged set;
+ *      peer's bot id — asserted against the EXACT log line `wireSurfaceAdapters`
+ *      emits (Sage #1547 r1: the claim must match what the test actually pins).
  *      Mattermost has no such call (its fake never implements the method).
  */
 
 import { describe, expect, test } from "bun:test";
-import { wireSurfaceAdapters, type WireSurfaceAdaptersOpts } from "../wire-surface-adapters";
-import type { GatewayAdapterFactory } from "../gateway-adapters";
+import { wireSurfaceAdapters, type WireSurfaceAdaptersOpts } from "../surface-adapter-boot";
+import type { GatewayAdapterFactory } from "../../gateway/gateway-adapters";
 import { AgentConfigSchema, type AgentConfig } from "../../common/types/config";
 import type { Agent } from "../../common/types/cortex-config";
 import { AgentRegistry } from "../../common/agents/registry";
@@ -313,7 +314,21 @@ describe("wireSurfaceAdapters", () => {
       ]),
     });
 
-    await wireSurfaceAdapters(opts);
+    // Sage #1547 r1 (important) — the PR claimed this test "asserts via the
+    // real log line `trustedBotIds: 1 [resolver: echo]`", but it only checked
+    // `setTrustedBotIdsCalls`/`attachInboundDispatchCalls` shapes, never the
+    // log line itself. Capture `console.log` so the assertion below pins the
+    // EXACT text `wireSurfaceAdapters` emits — the claim now matches reality.
+    const logLines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logLines.push(args.map(String).join(" "));
+    };
+    try {
+      await wireSurfaceAdapters(opts);
+    } finally {
+      console.log = originalLog;
+    }
 
     const lunaDiscord = recorded.find((r) => r.platform === "discord" && r.instanceId.includes("g1"));
     const echoDiscord = recorded.find((r) => r.platform === "discord" && r.instanceId.includes("g2"));
@@ -324,6 +339,11 @@ describe("wireSurfaceAdapters", () => {
     // `bot-{instanceId}`) must be in luna's merged allowlist.
     const lunaMerged = lunaDiscord?.setTrustedBotIdsCalls.at(-1);
     expect(lunaMerged && [...lunaMerged].some((id) => id.startsWith("bot-"))).toBe(true);
+    // Pin the EXACT Pass-2 log line for luna's instance: 1 merged id,
+    // resolved via the resolver (peer "echo"), not the cross-process branch.
+    expect(logLines).toContain(
+      "cortex: discord adapter started (instance: test-cortex-discord-g1, guild: g1, trustedBotIds: 1 [resolver: echo])",
+    );
     // Mattermost has no trust support — its fake never got the members, so
     // there is nothing to call; confirm it still started + registered.
     expect(mattermostAdapter?.started).toBe(true);

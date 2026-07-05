@@ -96,6 +96,7 @@ import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import { wireReviewConsumers } from "./runner/review-consumer-boot";
 import { wireBrainConsumers } from "./runner/brain-consumer-boot";
 import { wireReleaseConsumers } from "./runner/release-consumer-boot";
+import { wireSurfaceAdapters } from "./runner/surface-adapter-boot";
 import { ReleaseConsumer } from "./runner/release-consumer";
 import {
   provisionReviewStream,
@@ -149,7 +150,6 @@ import type { InboundMessage, PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
 import { startGatewayIfEnabled } from "./gateway/start-gateway";
-import { wireSurfaceAdapters } from "./gateway/wire-surface-adapters";
 // G-1113 ML.5 — cockpit live-refresh loop (opt-in via config.cockpit).
 import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";

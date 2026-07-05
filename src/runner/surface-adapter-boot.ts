@@ -65,8 +65,19 @@
  * construction. A test-injected factory must return an object that actually
  * implements the concrete class's members this module calls, or the cast is
  * a lie the test's own assertions will catch (see
- * `wire-surface-adapters.test.ts`) — it is never silently unsafe in
+ * `surface-adapter-boot.test.ts`) — it is never silently unsafe in
  * production, where the cast is always true.
+ *
+ * ## Location (Sage #1547 r1 architecture nit)
+ *
+ * Lives in `src/runner/`, not `src/gateway/` — `src/gateway/` is
+ * CONTEXT.md's bounded term for the shared surface gateway (a SEPARATE
+ * process, cortex#524); this module is the per-stack DIRECT-connect boot
+ * lane and belongs beside its sibling `*-consumer-boot.ts` lanes
+ * (`review-consumer-boot.ts`, `brain-consumer-boot.ts`,
+ * `release-consumer-boot.ts`, all S7/S8). It still imports the shared
+ * `GatewayAdapterFactory` FROM `src/gateway/gateway-adapters.ts` — only the
+ * boot-wiring module moved, not the factory it calls.
  */
 
 import { DiscordAdapter } from "../adapters/discord";
@@ -90,7 +101,7 @@ import { surfaceInstanceEnabled } from "../common/config/loader";
 import {
   defaultGatewayAdapterFactory,
   type GatewayAdapterFactory,
-} from "./gateway-adapters";
+} from "../gateway/gateway-adapters";
 
 // =============================================================================
 // Per-platform boot descriptor — the divergent bits `bootPlatformAdapters` needs
@@ -181,6 +192,54 @@ interface AdapterBootDescriptor<
   postStartLog?(adapter: TAdapter, instance: TInstance, instanceId: string): string;
   /** Present for Discord + Slack; `undefined` for Mattermost (no trust resolver, no Pass 2). */
   trustResolverSupport?: TrustResolverSupport<TInstance, TAdapter>;
+}
+
+/**
+ * Minimal shape {@link applyStandardMergedTrust} needs — Discord + Slack's
+ * concrete adapters both satisfy this structurally (Mattermost's doesn't,
+ * which is exactly why this lives behind `TrustResolverSupport.applyMergedTrust`
+ * rather than the generic skeleton — see that field's doc).
+ */
+interface TrustMergeable {
+  setTrustedBotIds(ids: ReadonlySet<string>): void;
+  attachInboundDispatch(): void;
+  readonly trustedBotIdCount: number;
+}
+
+/**
+ * Shared `applyMergedTrust` body — Discord + Slack's pre-hoist descriptors
+ * had this identical three-line closure; hoisted once (Sage #1547 r1 nit 6)
+ * so a future third trust-supporting platform doesn't re-copy it. Takes the
+ * `TrustMergeable` shape directly (not a generic `<TAdapter extends
+ * TrustMergeable>`) — the type parameter would be used only once in the
+ * signature, which `@typescript-eslint/no-unnecessary-type-parameters`
+ * correctly flags as buying no extra safety over the plain interface type.
+ */
+function applyStandardMergedTrust(
+  adapter: TrustMergeable,
+  merged: ReadonlySet<string>,
+): number {
+  adapter.setTrustedBotIds(merged);
+  adapter.attachInboundDispatch();
+  return adapter.trustedBotIdCount;
+}
+
+/**
+ * MIG-7.2e: the synthesized-from-singular fallback `Agent` each platform's
+ * `fallbackAgent` closure built when no `agentBy*Token` match exists —
+ * identical across all three pre-hoist descriptors except for the
+ * `presence` key (hoisted, Sage #1547 r1 nit 5). The `persona` sentinel
+ * value is a marker, never actually read (this synthetic agent never spawns
+ * a CC session).
+ */
+function deferredFallbackAgent(config: AgentConfig, presence: Agent["presence"]): Agent {
+  return {
+    id: config.agent.name,
+    displayName: config.agent.displayName,
+    persona: "(deferred-mig-7.2e)",
+    trust: [],
+    presence,
+  };
 }
 
 /** Shared dependencies every platform boot reads from. */
@@ -435,13 +494,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
       }),
     }),
     lookupAgent: (presence) => opts.agentByDiscordToken.get(presence.token),
-    fallbackAgent: (presence): Agent => ({
-      id: opts.config.agent.name,
-      displayName: opts.config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      trust: [],
-      presence: { discord: presence },
-    }),
+    fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { discord: presence }),
     trustedBotIdsFor: (instance) => new Set<string>(instance.trustedBotIds),
     constructAdapter: ({ agent, presence, instanceId, explicitTrustedBotIds }) =>
       factory.discord({
@@ -454,6 +507,15 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
           ...(opts.principalDiscordId !== undefined && { discordId: opts.principalDiscordId }),
         },
         presence,
+        // Sage #1547 r1 — NOT a scoping change. The inline pre-extraction
+        // `new DiscordAdapter(...)` call passed NEITHER of these two fields,
+        // but `DiscordAdapter`'s own constructor (adapters/discord/index.ts)
+        // already defaults `presenceByGuildId` to `new Map([[presence.guildId,
+        // presence], ...(infra.presenceByGuildId ?? [])])` and `allowedGuildIds`
+        // to `infra.allowedGuildIds ?? new Set(presenceByGuildId.keys())` — i.e.
+        // exactly the single-guild set/map built here. Passing them explicitly
+        // reproduces that construction-time default byte-for-byte; it does not
+        // narrow or widen the adapter's effective guild allowlist.
         allowedGuildIds: new Set([presence.guildId]),
         presenceByGuildId: new Map([[presence.guildId, presence]]),
         ...(explicitTrustedBotIds !== undefined && { trustedBotIds: explicitTrustedBotIds }),
@@ -468,11 +530,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     trustResolverSupport: {
       registerFailSuffix: "",
       startedSummary: (instance) => `guild: ${instance.guildId}`,
-      applyMergedTrust: (adapter, merged) => {
-        adapter.setTrustedBotIds(merged);
-        adapter.attachInboundDispatch();
-        return adapter.trustedBotIdCount;
-      },
+      applyMergedTrust: applyStandardMergedTrust,
       afterMerge: (adapter, instance, _instanceId) => {
         // Outbound JSONL → #agent-log + worklog (opt-in). Dashboard + cloud
         // delivery handled by the HTTP path (H-004). Runs after the trust
@@ -521,13 +579,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     }),
     lookupAgent: (presence) =>
       presence.apiToken ? opts.agentByMattermostApiToken.get(presence.apiToken) : undefined,
-    fallbackAgent: (presence): Agent => ({
-      id: opts.config.agent.name,
-      displayName: opts.config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      trust: [],
-      presence: { mattermost: presence },
-    }),
+    fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { mattermost: presence }),
     // No trustedBotIdsFor — Mattermost's presence carries no trust field.
     constructAdapter: ({ agent, presence, instanceId }) =>
       factory.mattermost({
@@ -578,13 +630,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
       }),
     }),
     lookupAgent: (presence) => opts.agentBySlackBotToken.get(presence.botToken),
-    fallbackAgent: (presence): Agent => ({
-      id: opts.config.agent.name,
-      displayName: opts.config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      trust: [],
-      presence: { slack: presence },
-    }),
+    fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { slack: presence }),
     trustedBotIdsFor: (instance) => new Set<string>(instance.trustedBotIds),
     constructAdapter: ({ agent, presence, instanceId, explicitTrustedBotIds }) =>
       factory.slack({
@@ -609,11 +655,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     trustResolverSupport: {
       registerFailSuffix: " (slack)",
       startedSummary: (instance) => `workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s)`,
-      applyMergedTrust: (adapter, merged) => {
-        adapter.setTrustedBotIds(merged);
-        adapter.attachInboundDispatch();
-        return adapter.trustedBotIdCount;
-      },
+      applyMergedTrust: applyStandardMergedTrust,
       // No afterMerge — Slack has no outbound-poller step.
     },
   };
@@ -627,7 +669,18 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
  * no equivalent "raw pre-parse binding" the way the gateway does (it builds
  * `presence` directly from the already-Zod-parsed config instance), so this
  * forwards the already-built presence as the closest analogue.
+ *
+ * Sage #1547 r1 (security) — presence objects carry LIVE credentials
+ * (`token`, `botToken`, `appToken`, `apiToken`, `webhookToken`). This is an
+ * observability field, not a construction input (the default factory never
+ * reads it) — a future log line or test assertion over `binding` must never
+ * be able to spill one. Every key whose name contains "token"
+ * (case-insensitive) is redacted before forwarding.
  */
 function presenceAsBinding(presence: object): Record<string, unknown> {
-  return presence as Record<string, unknown>;
+  const redacted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(presence as Record<string, unknown>)) {
+    redacted[key] = /token/i.test(key) ? "[REDACTED]" : value;
+  }
+  return redacted;
 }
