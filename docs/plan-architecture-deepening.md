@@ -266,15 +266,17 @@ Umbrella epic: **#1514**.
 
 | Slice | Issue | Candidate | Size | Depends on | Status |
 |---|---|---|---|---|---|
-| S1 source-string owner | #1515 | C4 | S | — | ☐ |
-| S2 slug authority | #1516 | C6 | S | — | ☐ |
-| S3 admin-request signing | #1517 | C5 | S | — | ☐ |
-| S4 MC db write half | #1518 | C2 | M | — | ☐ |
-| S5 network-admit triplet | #1519 | C3 | M | S3 (soft) | ☐ |
-| S6 DashboardSnapshot contract | #1520 | C7 | M | — | ☐ |
+| S1 source-string owner | #1515 | C4 | S | — | ☑ merged (#1530) |
+| S2 slug authority | #1516 | C6 | S | — | ☑ merged (#1531) |
+| S3 admin-request signing | #1517 | C5 | S | — | ☑ merged (#1532) |
+| S4 MC db write half | #1518 | C2 | M | — | ☑ merged (#1535) |
+| S5 network-admit triplet | #1519 | C3 | M | S3 (soft) | ☐ held (network.ts in-flight) |
+| S6 DashboardSnapshot contract | #1520 | C7 | M | — | ☑ merged (#1537) — **retargeted worker-scoped** |
 | S7 review lane | #1521 | C1 | M | — | ☐ |
 | S8 brain + release lanes | #1522 | C1 | M | S7 | ☐ |
 | S9 adapter lane | #1523 | C1 | M | S8 | ☐ |
 | S10 sink ADR | #1524 | C8 | S (ADR) | — | ☐ |
 
 Tick here AND close the slice's GitHub issue on merge (repo sync rule).
+
+**S6 note (retarget, 2026-07-05):** candidate 7's premise was stale — cortex has no local `/api/state` snapshot assembly to unify with the worker (the worker route's "same shape as the local API" is a grove-v2 holdover; the local dashboard uses granular REST + incremental WS). S6 was retargeted worker-scoped: one explicit `DashboardSnapshot` type + a two-layer allow-list SHAPE guard (schema columns + per-section DTO keys) for the public `/api/state` projection. Follow-up #1538 filed: the MC worker `tsc` is outside CI, so the type contract isn't CI-enforced yet.
