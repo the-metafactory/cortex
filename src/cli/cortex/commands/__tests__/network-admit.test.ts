@@ -10,9 +10,11 @@
  *         /admission-requests/:id/admit
  *      c. Optionally assign Discord role (O-5 via --discord-member)
  *
- * All live surfaces (registry HTTP, Discord API) are mocked via globalThis.fetch
- * and the DiscordAdmitClient injection seam. No arc binary is called — ADR-0015
- * retires Model-A credential minting.
+ * All live surfaces (registry HTTP, Discord API) are mocked via
+ * `globalThis.fetch` and — S5 (cortex#1519) — an injected fake
+ * {@link AdmitPortsFactory} for the Discord assign tests (replaces the old
+ * `__setDiscordAdmitClientForTests` mutable-singleton seam). No arc binary is
+ * called — ADR-0015 retires Model-A credential minting.
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
@@ -20,13 +22,9 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import {
-  dispatchNetwork,
-  __setDiscordAdmitClientForTests,
-  type DiscordAdmitClient,
-  type SecretPortsFactory,
-} from "../network";
+import { dispatchNetwork, type SecretPortsFactory, type AdmitPortsFactory, type ExitResult } from "../network";
 import type { NetworkSecretPorts } from "../network-secret-ports";
+import { buildLiveAdmitPorts } from "../network-admit-adapters";
 import { dispatchProvisionStack } from "../provision-stack";
 
 // cortex#1517 (S3, epic #1514) — live-registry round-trip coverage. Drives the
@@ -67,10 +65,20 @@ function freshDir(): string {
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
-  __setDiscordAdmitClientForTests(null);
   globalThis.fetch = realFetch;
   while (tmpDirs.length > 0) rmSync(tmpDirs.pop()!, { recursive: true, force: true });
 });
+
+/**
+ * S5 (cortex#1519) — `dispatchNetwork` with an injected `admitPortsFactory`
+ * (11th positional param, after the 9 other injectable-ports factories).
+ * Used by the Discord-assign tests below to fake JUST the discord port while
+ * the registry/seal ports stay live (driven by the mocked `globalThis.fetch`
+ * / `secretPortsFactory`, same as every other test in this file).
+ */
+function dispatchWithAdmitPorts(argv: string[], admitPortsFactory: AdmitPortsFactory): Promise<ExitResult> {
+  return dispatchNetwork(argv, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, admitPortsFactory);
+}
 
 /**
  * Mint a real admin nkey seed file (chmod 600) via provision-stack and return
@@ -362,23 +370,21 @@ describe("cortex network admit — Discord O-5 role", () => {
   test("--discord-member with successful role assign → discord_status=assigned", async () => {
     const { seedPath } = await mintAdminSeed();
     const req = pendingRequest();
-    let resolvedRole = false;
-    let assignedRole = false;
+    let assignCalled = false;
 
-    const mockDiscord: DiscordAdmitClient = {
-      async resolveRoleId(_token, _guildId, roleName) {
-        resolvedRole = true;
-        expect(roleName).toBe("community-fleet");
-        return "role-id-123";
+    // S5 (cortex#1519) — inject a fake discord port; registry/seal stay LIVE
+    // (driven by the mocked fetch below), matching every other test here.
+    const admitPortsFactory: AdmitPortsFactory = (cfg) => ({
+      ...buildLiveAdmitPorts(cfg),
+      discord: {
+        async assignRole(inputs) {
+          assignCalled = true;
+          expect(inputs.role).toBe("community-fleet");
+          expect(inputs.member).toBe("user-snowflake-999");
+          return { status: "assigned", warning: "" };
+        },
       },
-      async assignRole(_token, _guildId, userId, roleId) {
-        assignedRole = true;
-        expect(userId).toBe("user-snowflake-999");
-        expect(roleId).toBe("role-id-123");
-        return { success: true };
-      },
-    };
-    __setDiscordAdmitClientForTests(mockDiscord);
+    });
 
     setMockFetch(async (input) => {
       const url = urlOf(input);
@@ -392,18 +398,17 @@ describe("cortex network admit — Discord O-5 role", () => {
       });
     });
 
-    const res = await dispatchNetwork([
+    const res = await dispatchWithAdmitPorts([
       "admit", "req-abc-123",
       "--admin-seed", seedPath,
       "--discord-member", "user-snowflake-999",
       "--discord-guild", "guild-123",
       "--apply",
       "--json",
-    ]);
+    ], admitPortsFactory);
 
     expect(res.exitCode).toBe(0);
-    expect(resolvedRole).toBe(true);
-    expect(assignedRole).toBe(true);
+    expect(assignCalled).toBe(true);
     const env = JSON.parse(res.stdout) as { data: { discord_status: string } };
     expect(env.data.discord_status).toBe("assigned");
   });
@@ -412,11 +417,17 @@ describe("cortex network admit — Discord O-5 role", () => {
     const { seedPath } = await mintAdminSeed();
     const req = pendingRequest();
 
-    const mockDiscord: DiscordAdmitClient = {
-      async resolveRoleId() { return "role-id-123"; },
-      async assignRole() { return { success: false, error: "missing_permissions" }; },
-    };
-    __setDiscordAdmitClientForTests(mockDiscord);
+    const admitPortsFactory: AdmitPortsFactory = (cfg) => ({
+      ...buildLiveAdmitPorts(cfg),
+      discord: {
+        async assignRole() {
+          return {
+            status: "failed",
+            warning: "Discord role assignment failed: missing_permissions — admission committed, assign role manually",
+          };
+        },
+      },
+    });
 
     setMockFetch(async (input) => {
       const url = urlOf(input);
@@ -430,14 +441,14 @@ describe("cortex network admit — Discord O-5 role", () => {
       });
     });
 
-    const res = await dispatchNetwork([
+    const res = await dispatchWithAdmitPorts([
       "admit", "req-abc-123",
       "--admin-seed", seedPath,
       "--discord-member", "user-999",
       "--discord-guild", "guild-123",
       "--apply",
       "--json",
-    ]);
+    ], admitPortsFactory);
 
     // Admission committed → exit 0. Discord partial failure is a warning.
     expect(res.exitCode).toBe(0);
@@ -446,19 +457,20 @@ describe("cortex network admit — Discord O-5 role", () => {
     expect(env.data.discord_warning).toContain("missing_permissions");
   });
 
-  test("custom --discord-role is forwarded to resolveRoleId", async () => {
+  test("custom --discord-role is forwarded to the discord port", async () => {
     const { seedPath } = await mintAdminSeed();
     const req = pendingRequest();
     let capturedRoleName = "";
 
-    const mockDiscord: DiscordAdmitClient = {
-      async resolveRoleId(_token, _guildId, roleName) {
-        capturedRoleName = roleName;
-        return "custom-role-id";
+    const admitPortsFactory: AdmitPortsFactory = (cfg) => ({
+      ...buildLiveAdmitPorts(cfg),
+      discord: {
+        async assignRole(inputs) {
+          capturedRoleName = inputs.role;
+          return { status: "assigned", warning: "" };
+        },
       },
-      async assignRole() { return { success: true }; },
-    };
-    __setDiscordAdmitClientForTests(mockDiscord);
+    });
 
     setMockFetch(async (input) => {
       const url = urlOf(input);
@@ -472,14 +484,14 @@ describe("cortex network admit — Discord O-5 role", () => {
       });
     });
 
-    await dispatchNetwork([
+    await dispatchWithAdmitPorts([
       "admit", "req-abc-123",
       "--admin-seed", seedPath,
       "--discord-member", "user-999",
       "--discord-guild", "guild-123",
       "--discord-role", "sovereign-member",
       "--apply",
-    ]);
+    ], admitPortsFactory);
 
     expect(capturedRoleName).toBe("sovereign-member");
   });

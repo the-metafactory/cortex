@@ -51,17 +51,16 @@ import {
   materialFromSeedString,
   buildNetworkCreateClaim,
   postNetworkCreate,
-  randomNonce,
-  signAdminRequest,
   type StackIdentityMaterial,
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
 // O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
 // cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-discord
 // bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side
-// admit path cannot import from an external arc bundle.
+// admit path cannot import from an external arc bundle. Admit's ASSIGN side
+// moved to network-admit-adapters.ts (S5); reject's REMOVE side (shared with
+// `secret revoke-member`, out of scope for S5) still uses these directly.
 import {
-  assignRole,
   removeRole,
   resolveRoleId,
   loadConfig as loadDiscordConfig,
@@ -143,7 +142,6 @@ import {
   type SecretAction,
   type DeliveryMode,
   type SecretInputs,
-  type SecretReport,
   type KeyRotationInputs,
 } from "./network-secret-lib";
 import type {
@@ -194,6 +192,14 @@ import {
 } from "./network-authorize-lib";
 import type { NetworkAuthorizePorts } from "./network-authorize-ports";
 import { buildLiveAuthorizePorts } from "./network-authorize-adapters";
+import {
+  runNetworkAdmit,
+  runNetworkReject,
+  runNetworkListPending,
+  renderPendingTable,
+} from "./network-admit-lib";
+import type { AdmitPorts } from "./network-admit-ports";
+import { buildLiveAdmitPorts } from "./network-admit-adapters";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -2347,31 +2353,37 @@ const DEFAULT_ADMIT_REGISTRY_URL = DEFAULT_REGISTRY.url;
 /** Default Discord role for O-5 community-fleet admission. */
 const DEFAULT_ADMIT_DISCORD_ROLE = "community-fleet";
 
-/** Minimal Discord client surface injectable for tests. */
-export interface DiscordAdmitClient {
-  resolveRoleId(botToken: string, guildId: string, roleName: string): Promise<string>;
-  assignRole(botToken: string, guildId: string, userId: string, roleId: string): Promise<{ success: boolean; error?: string }>;
-}
+/**
+ * S5 (#1519, epic #1514) — factory for the admit/reject port bundle (registry
+ * reads/decision + admit's Discord role ASSIGN + the C-1316 seal delegation).
+ * Production builds the live adapters. Tests inject fakes that record calls
+ * without touching HTTP/Discord — replaces the pre-S5 (admit-only)
+ * `__setDiscordAdmitClientForTests` mutable-singleton override.
+ *
+ * NOTE: reject's Discord role REMOVE stays on `removeDiscordFleetRole` below,
+ * NOT this port — it turns out to be shared with `secret revoke-member`
+ * (`network-secret-cli.test.ts`, out of scope for this slice), so it isn't
+ * admit-exclusive the way the assign-side singleton is.
+ */
+export type AdmitPortsFactory = (cfg: {
+  registryUrl: string;
+  material: StackIdentityMaterial;
+  /** Only meaningful for `admit` — the C-1316 fold-in seal delegates to
+   *  `secret add-member`'s own ports factory. `reject` omits it. */
+  secretPortsFactory?: SecretPortsFactory;
+}) => AdmitPorts;
 
-let discordAdmitClientOverride: DiscordAdmitClient | null = null;
-
-/** Test-only setter. Production callers never touch this. Null restores default. */
-export function __setDiscordAdmitClientForTests(client: DiscordAdmitClient | null): void {
-  discordAdmitClientOverride = client;
-}
-
-/** Default production client — thin wrappers over the real discord lib. */
-const defaultDiscordAdmitClient: DiscordAdmitClient = {
-  resolveRoleId,
-  assignRole,
-};
+const DEFAULT_ADMIT_PORTS_FACTORY: AdmitPortsFactory = (cfg) => buildLiveAdmitPorts(cfg);
 
 // ---------------------------------------------------------------------------
 // C-1350 S3 — Tier-1 de-admission: REMOVE the community-fleet role (the inverse
-// of admit's assign). `reject` and `secret revoke-member` share this. The flag
-// resolution mirrors runAdmit's block EXACTLY (same names, same precedence, same
-// graceful degradation) — the only difference is it calls `removeRole`, and a
-// failure is ALWAYS non-fatal (the parent decision has already committed).
+// of admit's assign). `reject` and `secret revoke-member` share this — it is
+// NOT folded into the S5 `AdmitPorts.discord` port (admit-only) because
+// `secret revoke-member` (out of scope for this slice) depends on the same
+// singleton-override test seam. The flag resolution mirrors admit's block
+// EXACTLY (same names, same precedence, same graceful degradation) — the only
+// difference is it calls `removeRole`, and a failure is ALWAYS non-fatal (the
+// parent decision has already committed).
 // ---------------------------------------------------------------------------
 
 /** Minimal Discord client surface (role removal) injectable for tests. */
@@ -2414,11 +2426,11 @@ interface DiscordRemoveOutcome {
 }
 
 /**
- * Remove the community-fleet role from a de-admitted member, mirroring runAdmit's
+ * Remove the community-fleet role from a de-admitted member, mirroring admit's
  * assignment block byte-for-byte in resolution precedence:
  *   `--guild` flag > `--server` profile > top-level config (via
  *   resolveServerContext), with the injected test client short-circuiting token/
- *   guild resolution exactly as admit does.
+ *   guild resolution exactly as admit's did.
  *
  * ALWAYS best-effort: any resolution or API failure returns a `failed`/`skipped_*`
  * status + an actionable "remove the role manually" warning — it NEVER throws, so
@@ -2482,48 +2494,6 @@ async function removeDiscordFleetRole(
   }
 }
 
-/**
- * Build an admin-signed read claim for the `x-admin-signed` header.
- * No nonce (reads are idempotent). Uses the shared PKCS#8 signing bridge.
- */
-async function buildAdmissionReadHeader(
-  material: StackIdentityMaterial,
-): Promise<string> {
-  const claim = {
-    admin_pubkey: material.pubkeyB64,
-    issued_at: new Date().toISOString(),
-  };
-  return JSON.stringify(await signAdminRequest(material.seed, claim));
-}
-
-/**
- * The two roster-decision verbs the registry's shared `handleDecision` accepts
- * (`admit` | `reject`, `types.ts` AdmissionDecision). Both mint nothing — admit
- * moves PENDING→ADMITTED, reject moves PENDING→REJECTED. `revoke` is a distinct
- * post-admission motion, not a PENDING decision, so it is NOT in this union.
- */
-type AdmissionDecision = "admit" | "reject";
-
-/**
- * Build the admin-signed admission decision body (ADR-0015: `decision` selects
- * admit vs reject; no leaf_package — decides the roster row only, mints nothing).
- */
-async function buildAdmissionDecisionBody(
-  requestId: string,
-  material: StackIdentityMaterial,
-  decision: AdmissionDecision,
-  opts: { issuedAt?: string; nonce?: string } = {},
-): Promise<{ claim: { request_id: string; decision: AdmissionDecision; admin_pubkey: string; issued_at: string; nonce: string }; signature: string }> {
-  const claim = {
-    request_id: requestId,
-    decision,
-    admin_pubkey: material.pubkeyB64,
-    issued_at: opts.issuedAt ?? new Date().toISOString(),
-    nonce: opts.nonce ?? randomNonce(),
-  };
-  return signAdminRequest(material.seed, claim);
-}
-
 // =============================================================================
 // C-1314 — `cortex network admit --list-pending` (admission-queue discovery)
 // =============================================================================
@@ -2535,64 +2505,18 @@ async function buildAdmissionDecisionBody(
  *  the registry-side `validStatuses` gate in routes/admission-requests.ts. */
 const LIST_STATUSES = ["PENDING", "ADMITTED", "REJECTED", "REVOKED", "DEPARTED"] as const;
 
-/** The subset of an `AdmissionRequest` row this CLI renders (matches the
- *  registry `GET /admission-requests` response, `types.ts` AdmissionRequest). */
-interface AdmissionListRow {
-  request_id: string;
-  principal_id: string;
-  peer_pubkey: string;
-  network_id: string | null;
-  status: string;
-  created_at: string;
-}
-
-/** Render the discovery table (human path). Peer pubkey is truncated to a
- *  fingerprint for width; the full value rides the --json output. */
-function renderPendingTable(
-  rows: AdmissionListRow[],
-  status: string,
-  networkFilter: string | undefined,
-  registryUrl: string,
-): string {
-  const scope = networkFilter !== undefined ? ` on network "${networkFilter}"` : "";
-  const header =
-    `cortex network admit --list-pending — ${rows.length.toString()} ${status} request(s)${scope} ` +
-    `(registry: ${registryUrl})`;
-  if (rows.length === 0) {
-    return `${header}\n  (none) — nothing to ${status === "PENDING" ? "admit" : "show"}.\n`;
-  }
-  const cells = rows.map((r) => ({
-    id: r.request_id,
-    principal: r.principal_id,
-    network: r.network_id ?? "(none)",
-    peer: `${r.peer_pubkey.slice(0, 12)}…`,
-    status: r.status,
-    created: r.created_at,
-  }));
-  const w = {
-    id: Math.max("REQUEST-ID".length, ...cells.map((c) => c.id.length)),
-    principal: Math.max("PRINCIPAL".length, ...cells.map((c) => c.principal.length)),
-    network: Math.max("NETWORK".length, ...cells.map((c) => c.network.length)),
-    peer: Math.max("PEER_PUBKEY".length, ...cells.map((c) => c.peer.length)),
-    status: Math.max("STATUS".length, ...cells.map((c) => c.status.length)),
-  };
-  const row = (id: string, principal: string, network: string, peer: string, st: string, created: string): string =>
-    `  ${id.padEnd(w.id)}  ${principal.padEnd(w.principal)}  ${network.padEnd(w.network)}  ${peer.padEnd(w.peer)}  ${st.padEnd(w.status)}  ${created}`;
-  const lines = [header, "", row("REQUEST-ID", "PRINCIPAL", "NETWORK", "PEER_PUBKEY", "STATUS", "CREATED")];
-  for (const c of cells) lines.push(row(c.id, c.principal, c.network, c.peer, c.status, c.created));
-  lines.push("", `To admit: cortex network admit <request-id> --admin-seed <path> --apply`, "");
-  return lines.join("\n");
-}
-
 /**
  * `cortex network admit --list-pending [--status <s>] [--network <id>] --admin-seed <path> [--registry-url <url>] [--json]`
  *
  * C-1314 — the admission-queue DISCOVERY surface. An admin can't otherwise find
  * a request-id from the CLI (the alternatives were the MC Pier queue or a
  * hand-signed GET). Admin-signs a read claim into the `x-admin-signed` header
- * (reuses {@link buildAdmissionReadHeader} — no nonce, reads are idempotent) and
- * GETs `/admission-requests?status=<status>`, mirroring the admit apply-path
+ * and GETs `/admission-requests?status=<status>`, mirroring the admit apply-path
  * read + `findAdmittedRow`. Read-only: no --apply, no request-id positional.
+ *
+ * S5 (#1519) — thin commander wiring: parse + validate flags, load the admin
+ * material, build admit ports, call {@link runNetworkListPending}
+ * (`network-admit-lib.ts`), format the returned report.
  *
  * ADR-0020 read-scoping limitation: admin READS are GLOBAL-admin-only today
  * (the registry list route gates on `parseAdminPubkeys` — the global allowlist —
@@ -2601,7 +2525,11 @@ function renderPendingTable(
  * empty table) and point at the fast-follow. `--network` is a CLIENT-side filter
  * (the endpoint returns every network's rows at once).
  */
-async function runListPending(flags: FlagMap, json: boolean): Promise<ExitResult> {
+async function runListPending(
+  flags: FlagMap,
+  json: boolean,
+  admitPortsFactory: AdmitPortsFactory,
+): Promise<ExitResult> {
   // --admin-seed required: the list is admin-signed (no anonymous read).
   const seedRes = requireValueFlag(flags, "--admin-seed");
   if (!seedRes.ok) {
@@ -2635,61 +2563,32 @@ async function runListPending(flags: FlagMap, json: boolean): Promise<ExitResult
   if (!matRes.ok) return opError("admit", matRes.reason, json);
   const material = matRes.material;
 
-  let rows: AdmissionListRow[];
-  try {
-    const readHeader = await buildAdmissionReadHeader(material);
-    const getUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests?status=${encodeURIComponent(status)}`;
-    const resp = await globalThis.fetch(getUrl, {
-      method: "GET",
-      headers: { "Content-Type": "application/json", "x-admin-signed": readHeader },
-    });
-    if (resp.status === 403) {
-      // ADR-0020 read-scoping: reads are global-admin-only. A per-network admin
-      // lands here even for their own network — surface it readably rather than
-      // as a silent empty table.
-      const body = await resp.text();
-      return opError(
-        "admit",
-        `registry refused the list (HTTP 403 admin_not_authorized): admission reads are ` +
-          `GLOBAL-admin-only today, so a per-network admin cannot list PENDING requests` +
-          `${networkFilter !== undefined ? ` for "${networkFilter}"` : ""} from the CLI yet. ` +
-          `Per-network read-scoping is the ADR-0020 fast-follow; until then use a global-admin ` +
-          `seed or the MC admission queue (Pier). Registry said: ${body}`,
-        json,
-      );
-    }
-    if (!resp.ok) {
-      const body = await resp.text();
-      return opError("admit", `registry list failed (HTTP ${resp.status.toString()}): ${body}`, json);
-    }
-    rows = (await resp.json()) as AdmissionListRow[];
-  } catch (err) {
-    return opError(
-      "admit",
-      `failed to list admission requests from registry: ${err instanceof Error ? err.message : String(err)}`,
-      json,
-    );
-  }
+  const ports = admitPortsFactory({ registryUrl, material });
+  const report = await runNetworkListPending(
+    { status, ...(networkFilter !== undefined && { networkFilter }), registryUrl, material },
+    ports,
+  );
 
-  const filtered =
-    networkFilter !== undefined ? rows.filter((r) => r.network_id === networkFilter) : rows;
+  if (!report.ok) {
+    return opError("admit", report.reason ?? "list-pending failed", json);
+  }
 
   if (json) {
     return ok(
       renderJson(
-        envelopeOk(filtered, {
+        envelopeOk(report.rows, {
           subcommand: "admit",
           mode: "list-pending",
           status,
           ...(networkFilter !== undefined && { network: networkFilter }),
           registry_url: registryUrl,
           admin_fingerprint: material.fingerprint,
-          count: filtered.length.toString(),
+          count: report.rows.length.toString(),
         }),
       ),
     );
   }
-  return ok(renderPendingTable(filtered, status, networkFilter, registryUrl));
+  return ok(renderPendingTable(report.rows, status, networkFilter, registryUrl));
 }
 
 // =============================================================================
@@ -2740,6 +2639,12 @@ function normalizeHubAccountFlag(
  *
  * --network is intentionally absent: the request's network_id is stored at
  * register time. See cortex#1145 to thread it end-to-end.
+ *
+ * S5 (#1519) — thin commander wiring: parse + validate flags, load the admin
+ * material, and — for the apply path only — build admit ports and call
+ * {@link runNetworkAdmit} (`network-admit-lib.ts`). Dry-run stays fully
+ * inline (it never builds a port and never hits the registry — the
+ * `fetchCalled === false` contract the existing tests pin).
  */
 async function runAdmit(
   requestId: string,
@@ -2749,13 +2654,17 @@ async function runAdmit(
   // folded-in seal is testable with fake hub/registry/crypto ports. Production
   // omits it → the live adapters (`buildLiveSecretPorts`).
   secretPortsFactory: SecretPortsFactory = DEFAULT_SECRET_PORTS_FACTORY,
+  // S5 (cortex#1519) — injectable admit-ports factory so admit/reject CLI
+  // tests drive fake registry/Discord/seal ports. Production omits it → the
+  // live adapters (`buildLiveAdmitPorts`).
+  admitPortsFactory: AdmitPortsFactory = DEFAULT_ADMIT_PORTS_FACTORY,
 ): Promise<ExitResult> {
   // C-1314 — DISCOVERY mode. `--list-pending` is a read-only query for the
   // admission queue (no request-id positional, no --apply). Route it before the
   // request-id gate so `cortex network admit --list-pending` doesn't trip the
   // "missing request-id" usage error.
   if (flags["--list-pending"] === true) {
-    return runListPending(flags, json);
+    return runListPending(flags, json, admitPortsFactory);
   }
 
   if (!requestId) {
@@ -2791,7 +2700,7 @@ async function runAdmit(
   if (!matRes.ok) return opError("admit", matRes.reason, json);
   const material = matRes.material;
 
-  // DRY-RUN (default): print the plan, touch nothing
+  // DRY-RUN (default): print the plan, touch nothing — never builds a port.
   if (!applyRes.apply) {
     if (json) {
       return ok(
@@ -2816,174 +2725,51 @@ async function runAdmit(
     return ok(lines.join("\n"));
   }
 
-  // APPLY path
-
-  // 1. Fetch the PENDING admission request (admin-signed GET)
-  let requestPrincipalId: string;
-  let requestStatus: string;
-  // C-1316 — the just-admitted member's seal target. `peer_pubkey` is the
-  // ed25519 pubkey the leaf PSK is sealed to; `network_id` scopes the seal
-  // (null for legacy network-less rows — then the seal can't run).
-  let requestPeerPubkey: string;
-  let requestNetworkId: string | null;
-  try {
-    const readHeader = await buildAdmissionReadHeader(material);
-    const getUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}`;
-    const getResp = await globalThis.fetch(getUrl, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "x-admin-signed": readHeader,
-      },
-    });
-    if (getResp.status === 404) {
-      return opError("admit", `request-id "${requestId}" not found in registry (HTTP 404)`, json);
-    }
-    if (!getResp.ok) {
-      const body = await getResp.text();
-      return opError("admit", `registry GET failed (HTTP ${getResp.status.toString()}): ${body}`, json);
-    }
-    const req = (await getResp.json()) as {
-      request_id: string;
-      principal_id: string;
-      status: string;
-      peer_pubkey: string;
-      network_id: string | null;
-    };
-    requestPrincipalId = req.principal_id;
-    requestStatus = req.status;
-    requestPeerPubkey = req.peer_pubkey;
-    requestNetworkId = req.network_id;
-  } catch (err) {
-    return opError("admit", `failed to fetch request from registry: ${err instanceof Error ? err.message : String(err)}`, json);
-  }
-
-  // Must be PENDING to admit
-  if (requestStatus !== "PENDING") {
-    return opError("admit", `request "${requestId}" is not PENDING (status: ${requestStatus}) — cannot admit an already-decided request`, json);
-  }
-
-  // 2. Build + POST the signed admission decision
-  let decisionBody: { claim: { request_id: string; decision: AdmissionDecision; admin_pubkey: string; issued_at: string; nonce: string }; signature: string };
-  try {
-    decisionBody = await buildAdmissionDecisionBody(requestId, material, "admit");
-  } catch (err) {
-    return opError("admit", `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`, json);
-  }
-
-  try {
-    const postUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}/admit`;
-    const postResp = await globalThis.fetch(postUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(decisionBody),
-    });
-    if (!postResp.ok) {
-      const respBody = await postResp.text();
-      return opError("admit", `registry rejected admission (HTTP ${postResp.status.toString()}): ${respBody}`, json);
-    }
-  } catch (err) {
-    return opError("admit", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
-  }
-
-  // 2b. C-1316 — admit-and-seal. The roster row is now ADMITTED; an admitted-but-
-  // unsealed peer is INERT (on the roster, but its leaf can't connect — no
-  // transport PSK). Under the metafactory Q5 collapse the admit signer
-  // (registry-admin) IS the hub-admin, so the SAME --admin-seed mints + seals +
-  // delivers the per-member leaf PSK in one concierge act. We reuse the EXISTING
-  // `secret add-member` flow (`sealAdmittedMember` → `runNetworkSecret`) — no
-  // sealing is reimplemented here. The admission is ALREADY committed, so the
-  // seal NEVER fails the admit: any problem (hub-admin ≠ registry-admin → registry
-  // refuses the delivery; hub config not local → readConf fails; legacy
-  // network-less row) degrades to a fallback that tells the admin to seal
-  // explicitly. Opt out entirely with --roster-only.
-  let sealOutcome: AdmitSealOutcome;
-  if (flags["--roster-only"] === true) {
-    const net = requestNetworkId ?? "<network>";
-    sealOutcome = {
-      status: "skipped",
-      steps: [],
-      reason: "--roster-only: committed the roster row only, no seal",
-      fallbackCmd: `cortex network secret add-member ${net} ${requestPeerPubkey} --admin-seed ${seedRes.value} --apply`,
-    };
-  } else {
-    sealOutcome = await sealAdmittedMember({
-      networkId: requestNetworkId,
-      memberPubkey: requestPeerPubkey,
+  // APPLY path — fetch/decision/seal/Discord all live in network-admit-lib.ts
+  // over network-admit-ports.ts.
+  const ports = admitPortsFactory({ registryUrl, material, secretPortsFactory });
+  const report = await runNetworkAdmit(
+    {
+      requestId,
       registryUrl,
-      hubConfigPath: optionalValueFlag(flags, "--hub-config") ?? DEFAULT_HUB_CONFIG_PATH,
       material,
-      secretPortsFactory,
-      adminSeedPath: seedRes.value,
+      rosterOnly: flags["--roster-only"] === true,
       // cortex#1481 — --seal-only forces the never-write-a-foreign-hub path even
       // when the auto-detected locality would otherwise call the hub local.
       sealOnly: flags["--seal-only"] === true,
+      hubConfigPath: optionalValueFlag(flags, "--hub-config") ?? DEFAULT_HUB_CONFIG_PATH,
+      adminSeedPath: seedRes.value,
       // Already nkey-U-validated above (fail-fast before the admission commits).
       ...(admitHubAccount !== undefined && { hubAccount: admitHubAccount }),
-    });
+      ...(discordMember !== undefined && {
+        discord: {
+          member: discordMember,
+          role: discordRole,
+          ...(discordServer !== undefined && { server: discordServer }),
+          ...(discordGuild !== undefined && { guild: discordGuild }),
+        },
+      }),
+    },
+    ports,
+  );
+
+  if (!report.ok) {
+    return opError("admit", report.reason, json);
   }
+  const sealOutcome = report.sealOutcome;
 
-  // 3. Assign Discord role (O-5) — when --discord-member is given
-  let discordStatus = "skipped";
-  let discordWarning = "";
-
-  if (discordMember !== undefined) {
-    const discordClient = discordAdmitClientOverride;
-    try {
-      const discordConfig = loadDiscordConfig();
-      const ctx = resolveServerContext(discordConfig, {
-        server: discordServer,
-        guild: discordGuild,
-      });
-
-      const botToken = discordClient ? "injected" : ctx.botToken;
-      const guildId = discordClient ? (discordGuild ?? ctx.guildId) : ctx.guildId;
-
-      if (!discordClient && !botToken) {
-        discordWarning = "Discord role not assigned: no bot token configured (run: discord config set botToken <token>)";
-        discordStatus = "skipped_no_token";
-      } else if (!guildId) {
-        discordWarning = "Discord role not assigned: no guild id configured — pass --discord-guild <id> or run: discord config set guildId <id>";
-        discordStatus = "skipped_no_guild";
-      } else {
-        const client = discordClient ?? defaultDiscordAdmitClient;
-        let roleId: string;
-        try {
-          roleId = await client.resolveRoleId(botToken ?? "", guildId, discordRole);
-        } catch (err) {
-          discordWarning = `Discord role not assigned: ${err instanceof Error ? err.message : String(err)} — assign manually`;
-          discordStatus = "failed";
-          roleId = "";
-        }
-
-        if (roleId) {
-          const roleResult = await client.assignRole(botToken ?? "", guildId, discordMember, roleId);
-          if (roleResult.success) {
-            discordStatus = "assigned";
-          } else {
-            discordWarning = `Discord role assignment failed: ${roleResult.error ?? "unknown error"} — admission committed, assign role manually`;
-            discordStatus = "failed";
-          }
-        }
-      }
-    } catch (err) {
-      discordWarning = `Discord role assignment error: ${err instanceof Error ? err.message : String(err)} — admission committed, assign role manually`;
-      discordStatus = "failed";
-    }
-  }
-
-  // 4. Output summary
+  // Output summary
   if (json) {
     const data: Record<string, string> = {
       subcommand: "admit",
       applied: "true",
       request_id: requestId,
-      principal_id: requestPrincipalId,
+      principal_id: report.principalId,
       admin_fingerprint: material.fingerprint,
       // C-1316 — make the peer's connectability machine-readable.
       seal_status: sealOutcome.status,
       connectable: sealOutcome.status === "sealed" ? "true" : "false",
-      ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
+      ...(report.discordStatus !== "skipped" && { discord_status: report.discordStatus }),
     };
     if (sealOutcome.reason) data.seal_reason = sealOutcome.reason;
     if (sealOutcome.fallbackCmd) data.seal_fallback = sealOutcome.fallbackCmd;
@@ -2991,13 +2777,13 @@ async function runAdmit(
     // `surfaced` block) so it rides its OWN explicit key, joined with real
     // newlines, never folded into a step/reason field.
     if (sealOutcome.hubOwnerArtifact) data.hub_owner_artifact = sealOutcome.hubOwnerArtifact.join("\n");
-    if (discordWarning) data.discord_warning = discordWarning;
+    if (report.discordWarning) data.discord_warning = report.discordWarning;
     return ok(renderJson(envelopeOk([], data)));
   }
 
   const lines: string[] = [
     `cortex network admit ${requestId}: admitted`,
-    `  principal:   ${requestPrincipalId}`,
+    `  principal:   ${report.principalId}`,
     `  admin:       ${material.fingerprint}`,
   ];
   // C-1316 — the seal transcript: state plainly whether the peer is CONNECTABLE.
@@ -3019,10 +2805,10 @@ async function runAdmit(
     if (sealOutcome.fallbackCmd) lines.push(`               to seal: ${sealOutcome.fallbackCmd}`);
   }
   if (discordMember !== undefined) {
-    if (discordStatus === "assigned") {
+    if (report.discordStatus === "assigned") {
       lines.push(`  discord:     role "${discordRole}" assigned to member ${discordMember}`);
     } else {
-      lines.push(`  discord:     ${discordWarning}`);
+      lines.push(`  discord:     ${report.discordWarning}`);
     }
   }
   lines.push("");
@@ -3057,6 +2843,10 @@ async function runReject(
   requestId: string,
   flags: FlagMap,
   json: boolean,
+  // S5 (cortex#1519) — injectable admit-ports factory (shared with `admit`),
+  // so reject's Discord-removal path is testable with fake ports. Production
+  // omits it → the live adapters.
+  admitPortsFactory: AdmitPortsFactory = DEFAULT_ADMIT_PORTS_FACTORY,
 ): Promise<ExitResult> {
   if (!requestId) {
     return usageError("reject", "missing request-id (usage: cortex network reject <request-id> --admin-seed <path>; discover ids with `cortex network admit --list-pending --admin-seed <path>`)", json);
@@ -3080,7 +2870,7 @@ async function runReject(
   if (!matRes.ok) return opError("reject", matRes.reason, json);
   const material = matRes.material;
 
-  // DRY-RUN (default): print the plan, touch nothing
+  // DRY-RUN (default): print the plan, touch nothing — never builds a port.
   if (!applyRes.apply) {
     if (json) {
       return ok(
@@ -3107,72 +2897,23 @@ async function runReject(
     return ok(lines.join("\n"));
   }
 
-  // APPLY path
-  //
-  // Unlike admit, reject does NOT do an admin-signed GET pre-check first. Admit
-  // reads the row because it needs the peer_pubkey + network_id to SEAL; reject
-  // seals nothing, so it needs no read. Crucially, the admin READ gate is
-  // GLOBAL-admin-only today (ADR-0020 read-scoping — see runListPending), so a
-  // GET pre-check would 403 a PER-NETWORK admin BEFORE the POST that would in
-  // fact authorise them (handleDecision authorises global OR per-network admins).
-  // We therefore POST directly and let the registry be the single authority:
-  // its 200 body carries the decided row (principal_id/status) for the summary,
-  // and its own 409/403/404 map to clear, actionable CLI errors.
+  // APPLY path — the decision POST lives in network-admit-lib.ts over
+  // network-admit-ports.ts. No admin-signed GET pre-check first (see
+  // runNetworkReject's doc: the admin READ gate is GLOBAL-admin-only today,
+  // ADR-0020, so a GET pre-check would 403 a PER-NETWORK admin before the
+  // POST that would in fact authorise them).
+  const ports = admitPortsFactory({ registryUrl, material });
+  const report = await runNetworkReject({ requestId, material }, ports);
 
-  // 1. Build the signed admission decision (decision: reject)
-  let decisionBody: { claim: { request_id: string; decision: AdmissionDecision; admin_pubkey: string; issued_at: string; nonce: string }; signature: string };
-  try {
-    decisionBody = await buildAdmissionDecisionBody(requestId, material, "reject");
-  } catch (err) {
-    return opError("reject", `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`, json);
+  if (!report.ok) {
+    return opError("reject", report.reason ?? "reject failed", json);
   }
 
-  // 2. POST it to /admission-requests/:id/reject
-  let decidedPrincipalId = "";
-  try {
-    const postUrl = `${registryUrl.replace(/\/+$/, "")}/admission-requests/${encodeURIComponent(requestId)}/reject`;
-    const postResp = await globalThis.fetch(postUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(decisionBody),
-    });
-    if (!postResp.ok) {
-      const respBody = await postResp.text();
-      // Non-PENDING row → the registry's 409 already_decided. Surface the actual
-      // current status (ADMITTED/REJECTED/REVOKED) readably rather than raw JSON.
-      if (postResp.status === 409 && respBody.includes("already_decided")) {
-        const current = extractCurrentStatus(respBody);
-        const was = current !== undefined ? ` (already ${current})` : "";
-        return opError("reject", `request "${requestId}" is already decided${was} — cannot reject an already-decided request`, json);
-      }
-      if (postResp.status === 404) {
-        return opError("reject", `request-id "${requestId}" not found in registry (HTTP 404)`, json);
-      }
-      // 403 admin_not_authorized — e.g. a per-network admin rejecting a request
-      // that belongs to a DIFFERENT network (their key isn't on that network's
-      // admin allowlist and isn't a global admin). Surface it actionably.
-      if (postResp.status === 403) {
-        return opError("reject", `not authorised to reject request "${requestId}" — the admin key (${material.fingerprint}) is neither a global admin nor an admin of this request's network (HTTP 403)`, json);
-      }
-      return opError("reject", `registry rejected the decision (HTTP ${postResp.status.toString()}): ${respBody}`, json);
-    }
-    // 200 → the decided row. Pull principal_id for the summary (best-effort):
-    // if the body isn't the expected JSON (shouldn't happen on 200), the summary
-    // just omits the principal line — the rejection itself already committed, so
-    // decidedPrincipalId stays "" and we never fail a committed decision on it.
-    try {
-      const row = (await postResp.json()) as { principal_id?: string };
-      decidedPrincipalId = row.principal_id ?? "";
-    } catch (_err) {
-      // Intentionally ignored — see above; decidedPrincipalId remains "".
-    }
-  } catch (err) {
-    return opError("reject", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
-  }
-
-  // 2b. C-1350 S3 — Tier-1 de-admission: remove the community-fleet role. The
-  // REJECTED decision is ALREADY committed above, so this is a final non-fatal
-  // step — any failure degrades to an actionable warning, never a hard error.
+  // C-1350 S3 — Tier-1 de-admission: remove the community-fleet role. The
+  // REJECTED decision is ALREADY committed above, so this is a final
+  // non-fatal step — any failure degrades to an actionable warning. Stays on
+  // `removeDiscordFleetRole` (shared with `secret revoke-member`), not the
+  // S5 `AdmitPorts.discord` port — see the note above `removeDiscordFleetRole`.
   let discordStatus = "skipped";
   let discordWarning = "";
   if (discordMember !== undefined) {
@@ -3184,7 +2925,7 @@ async function runReject(
     discordWarning = outcome.warning;
   }
 
-  // 3. Output summary — no seal (rejection grants nothing); Discord role removal
+  // Output summary — no seal (rejection grants nothing); Discord role removal
   // rides along only when --discord-member was given.
   if (json) {
     const data: Record<string, string> = {
@@ -3192,7 +2933,7 @@ async function runReject(
       applied: "true",
       request_id: requestId,
       decision: "reject",
-      ...(decidedPrincipalId ? { principal_id: decidedPrincipalId } : {}),
+      ...(report.principalId ? { principal_id: report.principalId } : {}),
       admin_fingerprint: material.fingerprint,
       ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
     };
@@ -3202,7 +2943,7 @@ async function runReject(
 
   const lines: string[] = [
     `cortex network reject ${requestId}: rejected`,
-    ...(decidedPrincipalId ? [`  principal:   ${decidedPrincipalId}`] : []),
+    ...(report.principalId ? [`  principal:   ${report.principalId}`] : []),
     `  admin:       ${material.fingerprint}`,
   ];
   if (discordStatus === "removed") {
@@ -3212,146 +2953,6 @@ async function runReject(
   }
   lines.push(``);
   return ok(lines.join("\n"));
-}
-
-/**
- * Pull the current status out of the registry's `already_decided` 409 body.
- * The route returns `{ error, details, current: <AdmissionRequest> }`; we read
- * `current.status` (falling back to undefined so the caller degrades to a
- * generic "already decided" line rather than crashing on an unexpected shape).
- */
-function extractCurrentStatus(respBody: string): string | undefined {
-  try {
-    const parsed = JSON.parse(respBody) as { current?: { status?: string } };
-    const status = parsed.current?.status;
-    return typeof status === "string" ? status : undefined;
-  } catch (_err) {
-    return undefined;
-  }
-}
-
-// =============================================================================
-// C-1316 — admit-and-seal: fold the sealed leaf-secret delivery into admit
-// =============================================================================
-
-/** The outcome of the seal step folded into a successful admit. */
-type AdmitSealStatus = "sealed" | "skipped" | "fallback";
-interface AdmitSealOutcome {
-  /** sealed = delivered (connectable); skipped = deliberately not run
-   *  (--roster-only); fallback = tried/skipped but couldn't seal (still inert). */
-  status: AdmitSealStatus;
-  /** Human transcript lines from the seal — NEVER carry a secret. */
-  steps: string[];
-  /** Why the seal was skipped or fell back. */
-  reason?: string;
-  /** The explicit `secret add-member` command to seal after the fact. */
-  fallbackCmd?: string;
-  /**
-   * cortex#1481 — present iff the seal's hub turned out to be EXTERNAL (or
-   * --seal-only forced it): the hub-owner artifact `sealAdmittedMember`
-   * forwards verbatim from {@link SecretReport.hubOwnerArtifact}. The caller
-   * prints it explicitly (the one other legitimate place the raw PSK reaches
-   * stdout, alongside the OOB `surfaced` block).
-   */
-  hubOwnerArtifact?: string[];
-}
-
-/**
- * Seal + deliver the per-member leaf PSK for a just-admitted member by reusing
- * the EXISTING `secret add-member` orchestration (`runNetworkSecret`) — nothing
- * about sealing is reimplemented here.
- *
- * The caller has ALREADY committed the admission, so this NEVER throws and NEVER
- * fails the admit: every failure mode returns a `fallback` outcome that surfaces
- * the explicit `secret add-member` command instead. Failure modes it degrades on:
- *   - the admission row is network-less (legacy `network_id = null`) — nothing to
- *     bind a leaf PSK to;
- *   - the hub config isn't local / readable (a fully-separable deployment where
- *     the hub isn't on this host) — `readConf` rejects before any mutation;
- *   - the admit signer isn't the hub-admin (registry-admin ≠ hub-admin) — the
- *     registry refuses the sealed-secret delivery.
- */
-async function sealAdmittedMember(args: {
-  networkId: string | null;
-  memberPubkey: string;
-  registryUrl: string;
-  hubConfigPath: string;
-  material: StackIdentityMaterial;
-  secretPortsFactory: SecretPortsFactory;
-  adminSeedPath: string;
-  /** cortex#1481 — force seal-only (never write the local hub) even when the
-   *  auto-detected locality would otherwise call the hub local. */
-  sealOnly?: boolean;
-  /** cortex#1481 — the hub's own federation account nkey-U, when known. */
-  hubAccount?: string;
-}): Promise<AdmitSealOutcome> {
-  const {
-    networkId,
-    memberPubkey,
-    registryUrl,
-    hubConfigPath,
-    material,
-    secretPortsFactory,
-    adminSeedPath,
-    sealOnly,
-    hubAccount,
-  } = args;
-
-  // A network-less admission row (legacy null network_id) can't be sealed — the
-  // leaf PSK is network-scoped, and `secret add-member` needs a real network id.
-  if (networkId === null || networkId === "") {
-    return {
-      status: "fallback",
-      steps: [],
-      reason:
-        "the admission row has no network_id (legacy / network-less request) — a leaf secret is network-scoped, so it can't be sealed automatically",
-      fallbackCmd: `cortex network secret add-member <network> ${memberPubkey} --admin-seed ${adminSeedPath} --apply`,
-    };
-  }
-
-  const fallbackCmd = `cortex network secret add-member ${networkId} ${memberPubkey} --admin-seed ${adminSeedPath} --apply`;
-
-  const inputs: SecretInputs = {
-    action: "add-member",
-    networkId,
-    memberPubkey,
-    deliver: "sealed",
-    apply: true,
-    ...(sealOnly !== undefined && { sealOnly }),
-    ...(hubAccount !== undefined && { hubAccount }),
-  };
-
-  let report: SecretReport;
-  try {
-    // #1316 nit (PR #1412): construct the ports factory INSIDE the try so the
-    // "seal NEVER throws / NEVER fails the admit" invariant is structural — a
-    // throwing factory (bad hub config, unreadable seed) degrades to `fallback`
-    // like every other seal failure instead of escaping past the committed admit.
-    const ports = secretPortsFactory({ hubConfigPath, registryUrl, material });
-    report = await runNetworkSecret(inputs, ports);
-  } catch (err) {
-    return {
-      status: "fallback",
-      steps: [],
-      reason: `seal could not run: ${err instanceof Error ? err.message : String(err)}`,
-      fallbackCmd,
-    };
-  }
-
-  if (!report.ok) {
-    return {
-      status: "fallback",
-      steps: report.steps,
-      reason: report.reason ?? "seal failed",
-      fallbackCmd,
-    };
-  }
-
-  return {
-    status: "sealed",
-    steps: report.steps,
-    ...(report.hubOwnerArtifact !== undefined && { hubOwnerArtifact: report.hubOwnerArtifact }),
-  };
 }
 
 // =============================================================================
@@ -4262,6 +3863,9 @@ export async function dispatchNetwork(
   // cortex#1498 — injectable authorize-ports factory so `authorize` CLI tests
   // drive fake admission-lookup/delivery ports. Production omits → live.
   authorizePortsFactory: AuthorizePortsFactory = DEFAULT_AUTHORIZE_PORTS_FACTORY,
+  // S5 (cortex#1519) — injectable admit-ports factory so `admit`/`reject` CLI
+  // tests drive fake registry/Discord/seal ports. Production omits → live.
+  admitPortsFactory: AdmitPortsFactory = DEFAULT_ADMIT_PORTS_FACTORY,
 ): Promise<ExitResult> {
   let parsed;
   try {
@@ -4311,9 +3915,9 @@ export async function dispatchNetwork(
     case "authorize":
       return runAuthorize(parsed.positionals.member ?? "", parsed.flags, json, authorizePortsFactory);
     case "admit":
-      return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory);
+      return runAdmit(parsed.positionals["request-id"] ?? "", parsed.flags, json, secretPortsFactory, admitPortsFactory);
     case "reject":
-      return runReject(parsed.positionals["request-id"] ?? "", parsed.flags, json);
+      return runReject(parsed.positionals["request-id"] ?? "", parsed.flags, json, admitPortsFactory);
     case "provision":
       return runProvision(parsed.positionals.stack ?? "", parsed.flags, json, load, provisionPortsFactory);
     case "make-live":
