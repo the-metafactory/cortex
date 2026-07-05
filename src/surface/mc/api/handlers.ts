@@ -35,11 +35,21 @@ import type {
 } from "./types";
 
 import {
+  createQueuedAssignment,
+  deleteAssignment,
   listAssignments,
   listFocusArea,
   mostActiveAgent,
 } from "../db/assignments";
-import { getTaskById, listTasks } from "../db/tasks";
+import {
+  cancelTask,
+  createGithubImportedTask,
+  createInternalTask,
+  createTaskInIteration,
+  deleteTask,
+  getTaskById,
+  listTasks,
+} from "../db/tasks";
 import { listWorkingAgents } from "../db/working-agents";
 import {
   aggregateWorkingAgents,
@@ -551,12 +561,12 @@ export function handleListEvents(
  * agent_task_assignment FK.
  */
 function ensureDefaultAgent(db: Database): string {
-  db.query(
-    `INSERT INTO agents (id, name, type, persistent)
-     VALUES (?, ?, 'hands', 1)
-     ON CONFLICT(id) DO NOTHING`
-  ).run(DEFAULT_AGENT_ID, DEFAULT_AGENT_NAME);
-  return DEFAULT_AGENT_ID;
+  return ensureAgentRow(db, {
+    id: DEFAULT_AGENT_ID,
+    name: DEFAULT_AGENT_NAME,
+    type: "hands",
+    persistent: true,
+  });
 }
 
 /**
@@ -730,16 +740,15 @@ export async function handleCreateSession(
 
   const insertRows = db.transaction(() => {
     if (!body.taskId) {
-      db.query(
-        `INSERT INTO tasks (id, title, priority, principal_id, source_system)
-         VALUES (?, ?, ?, ?, 'internal')`
-      ).run(taskId, title, DEFAULT_INTERNAL_TASK_PRIORITY, principalId);
+      createInternalTask(db, {
+        id: taskId,
+        title,
+        priority: DEFAULT_INTERNAL_TASK_PRIORITY,
+        principalId,
+      });
     }
 
-    db.query(
-      `INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
-       VALUES (?, ?, ?, 'queued')`
-    ).run(assignmentId, agentId, taskId);
+    createQueuedAssignment(db, { id: assignmentId, agentId, taskId });
   });
 
   try {
@@ -789,11 +798,9 @@ export async function handleCreateSession(
       // review.
       try {
         db.transaction(() => {
-          db.query(`DELETE FROM agent_task_assignment WHERE id = ?`).run(
-            assignmentId
-          );
+          deleteAssignment(db, assignmentId);
           if (!body.taskId) {
-            db.query(`DELETE FROM tasks WHERE id = ?`).run(taskId);
+            deleteTask(db, taskId);
           }
         })();
       } catch (rollbackErr) {
@@ -849,11 +856,9 @@ export async function handleCreateSession(
     } catch (err) {
       try {
         db.transaction(() => {
-          db.query(`DELETE FROM agent_task_assignment WHERE id = ?`).run(
-            assignmentId
-          );
+          deleteAssignment(db, assignmentId);
           if (!body.taskId) {
-            db.query(`DELETE FROM tasks WHERE id = ?`).run(taskId);
+            deleteTask(db, taskId);
           }
         })();
       } catch (rollbackErr) {
@@ -1553,9 +1558,7 @@ export function handleAbandonAssignment(
   // Update the task row. No state-machine transition on the assignment —
   // the assignment is already terminal (its row is preserved as historical
   // record per Decision 4's "no merging" rule).
-  db.query(
-    `UPDATE tasks SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?`
-  ).run(row.task_id);
+  cancelTask(db, row.task_id);
 
   // Anchor the curation event on the assignment's latest (terminal) session.
   // The FK is to `sessions(id)`, not "active session" — terminal sessions
@@ -1709,10 +1712,11 @@ export async function handleHandoffAssignment(
   // rows on the same task are preserved (Decision 4 / F-8 Decision 4).
   const newAssignmentId = generateId();
   try {
-    db.query(
-      `INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
-       VALUES (?, ?, ?, 'queued')`
-    ).run(newAssignmentId, newAgentId, row.task_id);
+    createQueuedAssignment(db, {
+      id: newAssignmentId,
+      agentId: newAgentId,
+      taskId: row.task_id,
+    });
   } catch (err) {
     return error(
       `Failed to create new assignment: ${(err as Error).message}`,
@@ -1735,9 +1739,7 @@ export async function handleHandoffAssignment(
     );
   } catch (err) {
     try {
-      db.query(`DELETE FROM agent_task_assignment WHERE id = ?`).run(
-        newAssignmentId
-      );
+      deleteAssignment(db, newAssignmentId);
     } catch (rollbackErr) {
       process.stderr.write(
         `[api] handoff rollback after spawn-failure failed: ${(rollbackErr as Error).message}\n`
@@ -2074,12 +2076,14 @@ export async function handleCreateTask(
     { event: null };
 
   const insertAll = db.transaction(() => {
-    db.query(
-      `INSERT INTO tasks
-         (id, title, priority, principal_id,
-          source_system, source_url, source_external_id)
-       VALUES (?, ?, ?, ?, 'github', ?, ?)`
-    ).run(taskId, title, priority, principalId, sourceUrl, canonical);
+    createGithubImportedTask(db, {
+      id: taskId,
+      title,
+      priority,
+      principalId,
+      sourceUrl,
+      externalId: canonical,
+    });
 
     createShadowAssignmentAndSession(db, taskId, {
       assignmentId: shadowAssignmentId,
@@ -2242,9 +2246,7 @@ export function handleAbandonTask(
   const holder: { event: ReturnType<typeof createPrincipalCurationEvent> | null } =
     { event: null };
   const tx = db.transaction(() => {
-    db.query(
-      `UPDATE tasks SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?`
-    ).run(taskId);
+    cancelTask(db, taskId);
 
     holder.event = createPrincipalCurationEvent(db, sessionRow.id, {
       kind: "abandon",
@@ -2820,11 +2822,13 @@ export function handleAttachTaskToIteration(
       // Per Echo grove-v2#42 (Major 2) — the touch is now inside the
       // same transaction so create-and-touch land atomically.
       db.transaction(() => {
-        db.query(
-          `INSERT INTO tasks
-             (id, title, priority, principal_id, source_system, iteration_id)
-           VALUES (?, ?, ?, ?, 'internal', ?)`
-        ).run(newTaskId, newTitle, prio, DEFAULT_PRINCIPAL_ID, iterationId);
+        createTaskInIteration(db, {
+          id: newTaskId,
+          title: newTitle,
+          priority: prio,
+          principalId: DEFAULT_PRINCIPAL_ID,
+          iterationId,
+        });
         touchIteration(db, iterationId);
       })();
     } catch (err) {

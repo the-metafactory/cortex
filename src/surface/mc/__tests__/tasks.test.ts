@@ -16,7 +16,17 @@ import { tmpdir } from "os";
 import { rmSync } from "fs";
 
 import { initDatabase } from "../db/init";
-import { getTaskById, listTasks, epochSecondsToIso, STATE_RANKS } from "../db/tasks";
+import {
+  cancelTask,
+  createGithubImportedTask,
+  createInternalTask,
+  createTaskInIteration,
+  deleteTask,
+  getTaskById,
+  listTasks,
+  epochSecondsToIso,
+  STATE_RANKS,
+} from "../db/tasks";
 import { normalizeSqliteDatetime } from "../db/assignments";
 
 describe("epochSecondsToIso", () => {
@@ -394,5 +404,134 @@ describe("getTaskById", () => {
     ).run(sameTs, endTs);
     const t = getTaskById(db, "t-1");
     expect(t?.assignments[0]?.session?.id).toBe("s-ZZZ");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4 (#1518) — task mutations lifted out of api/handlers.ts
+// ---------------------------------------------------------------------------
+
+describe("task mutations", () => {
+  let db: Database;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `mc-tasks-mutations-test-${Date.now()}-${Math.random()}`);
+    db = initDatabase(join(tmpDir, "test.db"));
+    db.query(
+      `INSERT INTO agents (id, name, type) VALUES ('ag', 'Agent', 'hands')`
+    ).run();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function readTask(id: string) {
+    return db
+      .query(
+        `SELECT id, title, priority, principal_id, source_system, source_url,
+                source_external_id, iteration_id, status
+         FROM tasks WHERE id = ?`
+      )
+      .get(id) as
+      | {
+          id: string;
+          title: string;
+          priority: number;
+          principal_id: string;
+          source_system: string;
+          source_url: string | null;
+          source_external_id: string | null;
+          iteration_id: string | null;
+          status: string;
+        }
+      | null;
+  }
+
+  it("createInternalTask inserts an internal-source, ungrouped task", () => {
+    createInternalTask(db, {
+      id: "t-1",
+      title: "Fresh dispatch",
+      priority: 2,
+      principalId: "op",
+    });
+    expect(readTask("t-1")).toEqual({
+      id: "t-1",
+      title: "Fresh dispatch",
+      priority: 2,
+      principal_id: "op",
+      source_system: "internal",
+      source_url: null,
+      source_external_id: null,
+      iteration_id: null,
+      status: "open",
+    });
+  });
+
+  it("createGithubImportedTask inserts a github-source task with url + external id", () => {
+    createGithubImportedTask(db, {
+      id: "t-1",
+      title: "Fix the thing",
+      priority: 1,
+      principalId: "op",
+      sourceUrl: "https://github.com/x/y/issues/42",
+      externalId: "x/y#42",
+    });
+    expect(readTask("t-1")).toEqual({
+      id: "t-1",
+      title: "Fix the thing",
+      priority: 1,
+      principal_id: "op",
+      source_system: "github",
+      source_url: "https://github.com/x/y/issues/42",
+      source_external_id: "x/y#42",
+      iteration_id: null,
+      status: "open",
+    });
+  });
+
+  it("createTaskInIteration inserts an internal-source task pre-attached to an iteration", () => {
+    db.query(
+      `INSERT INTO iterations (id, title, state, priority) VALUES ('it-1', 'Iter', 'designing', 2)`
+    ).run();
+    createTaskInIteration(db, {
+      id: "t-1",
+      title: "Typed straight into the iteration",
+      priority: 2,
+      principalId: "op",
+      iterationId: "it-1",
+    });
+    expect(readTask("t-1")).toEqual({
+      id: "t-1",
+      title: "Typed straight into the iteration",
+      priority: 2,
+      principal_id: "op",
+      source_system: "internal",
+      source_url: null,
+      source_external_id: null,
+      iteration_id: "it-1",
+      status: "open",
+    });
+  });
+
+  it("deleteTask removes the row", () => {
+    createInternalTask(db, { id: "t-1", title: "T", priority: 2, principalId: "op" });
+    expect(readTask("t-1")).not.toBeNull();
+    deleteTask(db, "t-1");
+    expect(readTask("t-1")).toBeNull();
+  });
+
+  it("cancelTask sets status = 'cancelled' and bumps updated_at", () => {
+    createInternalTask(db, { id: "t-1", title: "T", priority: 2, principalId: "op" });
+    const before = readTask("t-1");
+    expect(before?.status).toBe("open");
+    cancelTask(db, "t-1");
+    expect(readTask("t-1")?.status).toBe("cancelled");
+  });
+
+  it("cancelTask is a no-op on an unknown id (no matching row, no throw)", () => {
+    expect(() => cancelTask(db, "does-not-exist")).not.toThrow();
   });
 });

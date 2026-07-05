@@ -467,3 +467,118 @@ function hydrate(row: TaskRow, assignments: TaskAssignmentRow[]): TaskListItem {
     iteration,
   };
 }
+
+// ---------------------------------------------------------------------------
+// S4 (#1518) — task mutations, lifted out of api/handlers.ts so handlers
+// stop knowing `tasks` column names / status-enum strings. Each function is
+// a plain `db.query(...).run(...)` — no own `db.transaction` — so callers
+// can compose them inside a wider transaction (see e.g. `handleCreateSession`,
+// `handleCreateTask`).
+// ---------------------------------------------------------------------------
+
+export interface CreateInternalTaskParams {
+  id: string;
+  title: string;
+  priority: number;
+  principalId: string;
+}
+
+/**
+ * Insert an internal-source task (no GitHub ref, ungrouped). Used by the
+ * no-`taskId` branch of `POST /api/sessions` — a fresh task minted for a
+ * one-off dispatch.
+ */
+export function createInternalTask(
+  db: Database,
+  params: CreateInternalTaskParams
+): void {
+  db.query(
+    `INSERT INTO tasks (id, title, priority, principal_id, source_system)
+     VALUES (?, ?, ?, ?, 'internal')`
+  ).run(params.id, params.title, params.priority, params.principalId);
+}
+
+export interface CreateGithubImportedTaskParams {
+  id: string;
+  title: string;
+  priority: number;
+  principalId: string;
+  sourceUrl: string;
+  externalId: string;
+}
+
+/**
+ * Insert a GitHub-imported task (F-12b "add to queue"). Caller wraps this
+ * inside the same transaction as the shadow assignment/session + curation
+ * event inserts (see `handleCreateTask`).
+ */
+export function createGithubImportedTask(
+  db: Database,
+  params: CreateGithubImportedTaskParams
+): void {
+  db.query(
+    `INSERT INTO tasks
+       (id, title, priority, principal_id,
+        source_system, source_url, source_external_id)
+     VALUES (?, ?, ?, ?, 'github', ?, ?)`
+  ).run(
+    params.id,
+    params.title,
+    params.priority,
+    params.principalId,
+    params.sourceUrl,
+    params.externalId
+  );
+}
+
+export interface CreateTaskInIterationParams {
+  id: string;
+  title: string;
+  priority: number;
+  principalId: string;
+  iterationId: string;
+}
+
+/**
+ * Insert an internal-source task pre-attached to an iteration — the
+ * create-and-attach branch of `POST /api/iterations/:id/tasks`. Caller
+ * wraps this alongside `touchIteration` in one `db.transaction`.
+ */
+export function createTaskInIteration(
+  db: Database,
+  params: CreateTaskInIterationParams
+): void {
+  db.query(
+    `INSERT INTO tasks
+       (id, title, priority, principal_id, source_system, iteration_id)
+     VALUES (?, ?, ?, ?, 'internal', ?)`
+  ).run(
+    params.id,
+    params.title,
+    params.priority,
+    params.principalId,
+    params.iterationId
+  );
+}
+
+/**
+ * Delete a task row. Callers are responsible for clearing any FK-`RESTRICT`
+ * dependents (`agent_task_assignment.task_id`) first — used by the
+ * rollback paths in `handleCreateSession` that undo a just-inserted
+ * internal task after a same-transaction assignment/spawn failure.
+ */
+export function deleteTask(db: Database, id: string): void {
+  db.query(`DELETE FROM tasks WHERE id = ?`).run(id);
+}
+
+/**
+ * F-12/F-12b task-scope abandon — set `tasks.status = 'cancelled'`.
+ * Shared by `handleAbandonAssignment`'s task-scope branch and
+ * `handleAbandonTask` (the two call sites ran the byte-identical UPDATE
+ * statement before this extraction).
+ */
+export function cancelTask(db: Database, id: string): void {
+  db.query(
+    `UPDATE tasks SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?`
+  ).run(id);
+}

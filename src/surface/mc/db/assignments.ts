@@ -304,6 +304,45 @@ export function mostActiveAgent(db: Database): MostActiveAgent | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// S4 (#1518) — assignment mutations, lifted out of api/handlers.ts so
+// handlers stop knowing `agent_task_assignment` column names / state-enum
+// strings. Plain `db.query(...).run(...)` — no own `db.transaction` — so
+// callers can compose them inside a wider transaction (see e.g.
+// `handleCreateSession`, `handleHandoffAssignment`).
+// ---------------------------------------------------------------------------
+
+export interface CreateQueuedAssignmentParams {
+  id: string;
+  agentId: string;
+  taskId: string;
+}
+
+/**
+ * Insert a fresh `queued` assignment row. Shared by the dispatch path
+ * (`handleCreateSession`) and hand-off's new-assignment step
+ * (`handleHandoffAssignment`) — both mint an assignment that starts life
+ * in `queued`, to be driven through the state machine right after.
+ */
+export function createQueuedAssignment(
+  db: Database,
+  params: CreateQueuedAssignmentParams
+): void {
+  db.query(
+    `INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
+     VALUES (?, ?, ?, 'queued')`
+  ).run(params.id, params.agentId, params.taskId);
+}
+
+/**
+ * Delete an assignment row. Used by the dispatch-rollback paths (observed
+ * duplicate ccSessionId, spawn failure) that undo a just-inserted
+ * assignment — and by hand-off's own spawn-failure rollback.
+ */
+export function deleteAssignment(db: Database, id: string): void {
+  db.query(`DELETE FROM agent_task_assignment WHERE id = ?`).run(id);
+}
+
 // `normalizeSqliteDatetime` was lifted to `db/datetime.ts` per Echo's
 // PR #57 cycle-2 nit so `db/session-join.ts` can consume it without a
 // circular import back here. Re-exported for the existing call sites
