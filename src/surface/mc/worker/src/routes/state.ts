@@ -1,6 +1,19 @@
 /**
  * G-400/G-406: GET /api/state — Dashboard snapshot.
- * Returns the same DashboardSnapshot shape as the local API, reading from D1.
+ *
+ * S6 (#1520) correction: the `:3` comment here used to claim this "returns the
+ * same DashboardSnapshot shape as the local API" — a grove-v2 holdover. Cortex's
+ * local dashboard never regained a combined-snapshot endpoint after the mc-v3
+ * lift: it serves granular REST (`/api/agents`, `/api/working-agents`,
+ * `/api/tasks`, …) plus incremental WS projections, with no `/api/state`
+ * equivalent to mirror. `DashboardSnapshot` (below) is authored independently
+ * here, from the D1 projection this worker populates via event ingestion
+ * (`routes/ingest.ts`) — not a shape ported from, or kept in sync with, any
+ * local assembly. S6 narrows scope to this file's own producer↔consumer
+ * contract: `buildSnapshot()` and the routes that read its cached output are
+ * typed against one exported `DashboardSnapshot`, so a shape change on one
+ * side is a compile error on the other instead of a silent runtime drift.
+ *
  * Public endpoint (no auth required) — the dashboard is a static site.
  *
  * G-406: Module-level snapshot cache with ETag/304 support.
@@ -11,6 +24,180 @@ import { Hono } from "hono";
 import type { Env } from "../index";
 import type { Classification } from "../../../../bus/myelin/envelope-validator";
 import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
+
+// ---------------------------------------------------------------------------
+// S6 (#1520): DashboardSnapshot contract
+//
+// One exported type per section of the `/api/state` / `/api/dashboard`
+// payload, so `buildSnapshot()` (producer) and the routes that read its
+// cached JSON back (consumers) are checked against the same shape.
+//
+// ADR-0005 (Session interior, CONTEXT.md): every field below is lifecycle
+// metadata (existence, dispatch state, outcome) — never tool-call arguments,
+// prompts, diffs, or raw messages. `SessionActivityEntry.detail` is the one
+// free-text field; it carries a pre-sanitized, truncated action summary
+// (G-410 `extractActivityEntry`, e.g. "Editing foo.ts" or a redacted command
+// preview), not raw tool interior.
+// ---------------------------------------------------------------------------
+
+/** IAW D.5.3 sovereignty block — `null` when none of the three fields are populated. */
+export interface SovereigntyInfo {
+  classification: Classification | null;
+  dataResidency: string | null;
+  homePrincipal: string | null;
+}
+
+/** One activity-feed entry surfaced under `agents[].currentTask.activity` (G-410). */
+export interface SessionActivityEntry {
+  timestamp: string;
+  icon: string;
+  label: string;
+  detail: string;
+}
+
+/** A session's current-task detail, as surfaced on an active/recently-terminal agent tile. */
+export interface AgentCurrentTask {
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  project: string | null;
+  description: string;
+  githubIssue: string | null;
+  startedAt: string;
+  eventsCount: number;
+  lastEvent: string;
+  lastEventAt: string;
+  progress: { completed: number; total: number } | null;
+  activity: SessionActivityEntry[];
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    costUsd?: number;
+  };
+  status: "active" | "completed" | "failed";
+  completedAt?: string;
+  durationMs?: number | null;
+  /** ST-P4 — the session-tree edge; `null` ⇒ agent-rooted. */
+  parentSessionId: string | null;
+  substrate: string;
+}
+
+/** One agent tile in the snapshot's `agents` list (session-keyed, not agent-identity-keyed). */
+export interface AgentTile {
+  id: string;
+  name: string;
+  principalId: string | null;
+  homePrincipal: string | null;
+  sovereignty: SovereigntyInfo | null;
+  status: "active" | "completed";
+  currentTask: AgentCurrentTask;
+}
+
+/** One completed/failed session in `recentCompletions`. */
+export interface RecentCompletionItem {
+  agentId: string;
+  agentName: string;
+  principalId: string | null;
+  project: string | null;
+  description: string;
+  durationMs: number | null;
+  completedAt: string;
+  prUrl: string | null;
+  githubIssue: string | null;
+  status: "completed" | "failed";
+  homePrincipal: string | null;
+  sovereignty: SovereigntyInfo | null;
+}
+
+/** One merged entry in `recentActivity` — either a session completion or a GitHub event. */
+export type ActivityFeedItem =
+  | {
+      type: "task_completed" | "task_failed";
+      source: "session";
+      timestamp: string;
+      agentId: string;
+      agentName: string;
+      project: string | null;
+      description: string;
+      durationMs: number | null;
+      prUrl: string | null;
+      githubIssue: string | null;
+      status: "completed" | "failed";
+    }
+  | {
+      type: string;
+      source: "github";
+      timestamp: string;
+      repo: string;
+      title: string | null;
+      number: number | null;
+      url: string | null;
+      author: string | null;
+      agentAuthored: boolean;
+    };
+
+/** One 5h/7d usage-quota reading (per-account or per-principal). */
+export interface UsageSnapshotInfo {
+  fiveHour: { utilization: number; resetsAt: string } | null;
+  sevenDay: { utilization: number; resetsAt: string } | null;
+  sevenDayOpus: { utilization: number; resetsAt: string } | null;
+  sevenDaySonnet: { utilization: number; resetsAt: string } | null;
+  extraUsage: { isEnabled: boolean; monthlyLimit: null; usedCredits: null } | null;
+  updatedAt: string;
+}
+
+/** Today's rollup counters. */
+export interface DailyStats {
+  prsMerged: number;
+  issuesClosed: number;
+  commits: number;
+  filesChanged: number;
+  sessionsCompleted: number;
+}
+
+/**
+ * The `/api/state` payload shape — also the `state` slice of the combined
+ * `/api/dashboard` payload ({@link CombinedDashboardPayload}, below).
+ */
+export interface DashboardSnapshot {
+  projects: Array<{ id: string; displayName: string }>;
+  agents: AgentTile[];
+  sessionTree: SessionTreeNode[];
+  recentCompletions: RecentCompletionItem[];
+  recentActivity: ActivityFeedItem[];
+  stats: { today: DailyStats };
+  accountUsage: UsageSnapshotInfo | null;
+  principalUsage: Record<string, UsageSnapshotInfo>;
+  homePrincipals: string[];
+  updatedAt: string;
+}
+
+/** One repo's dashboard summary ({@link buildRepos}). */
+export interface RepoSummary {
+  fullName: string;
+  shortName: string;
+  description: string | null;
+  defaultBranch: string | null;
+  openIssues: number;
+  openPRs: number;
+  syncedAt: string;
+}
+
+/** One day's activity-heatmap row ({@link buildHeatmap}). */
+export interface HeatmapDay {
+  day: string;
+  github: number;
+  agent: number;
+  byAuthor: Record<string, number>;
+}
+
+/** The combined `/api/dashboard` payload — {@link getCachedSnapshot}'s cached shape. */
+export interface CombinedDashboardPayload {
+  state: DashboardSnapshot;
+  repos: RepoSummary[];
+  heatmap: { days: HeatmapDay[] };
+}
 
 // ---------------------------------------------------------------------------
 // G-406: Module-level cache
@@ -34,7 +221,7 @@ export async function buildSnapshot(
   db: D1Database,
   project?: string | null,
   homePrincipal?: string | null,
-) {
+): Promise<DashboardSnapshot> {
   const [agents, completions, activity, dailyStats, projects, accountUsage, principalUsage, homePrincipals] = await Promise.all([
     getActiveAgents(db, project, homePrincipal),
     getRecentCompletions(db, project, undefined, homePrincipal),
@@ -76,7 +263,7 @@ export async function buildSnapshot(
 }
 
 /** Build repos list from D1 (same query as repos.ts GET /api/repos). */
-export async function buildRepos(db: D1Database) {
+export async function buildRepos(db: D1Database): Promise<RepoSummary[]> {
   const { results } = await db.prepare(`
     SELECT r.full_name, r.short_name, r.description, r.default_branch, r.synced_at,
            COALESCE(i.open_count, 0) AS open_issues,
@@ -101,7 +288,7 @@ export async function buildRepos(db: D1Database) {
 }
 
 /** Build activity heatmap from D1 (same query as stats.ts GET /api/stats/activity). */
-export async function buildHeatmap(db: D1Database, days = 7) {
+export async function buildHeatmap(db: D1Database, days = 7): Promise<HeatmapDay[]> {
   const now = new Date();
   const startDate = new Date(now.getTime() - (days - 1) * 86400000).toISOString().slice(0, 10);
   const endDate = new Date(now.getTime() + 86400000).toISOString().slice(0, 10);
@@ -194,7 +381,7 @@ export async function getCachedSnapshot(db: D1Database): Promise<{ json: string;
       buildHeatmap(db),
     ]);
 
-    const combined = { state, repos, heatmap: { days: heatmap } };
+    const combined: CombinedDashboardPayload = { state, repos, heatmap: { days: heatmap } };
     const json = JSON.stringify(combined);
 
     const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(json));
@@ -235,7 +422,13 @@ stateRoutes.get("/api/state", async (c) => {
   // (ETag is on the combined /api/dashboard payload — using it here would be
   // a semantic mismatch since this returns only the state slice)
   const { json } = await getCachedSnapshot(db);
-  const combined = JSON.parse(json);
+  // S6 (#1520): this used to be a bare `JSON.parse(json)` — an `any` re-hydration
+  // of `getCachedSnapshot`'s own cached JSON, with no check that `.state` still
+  // matches what `buildSnapshot()` produces. Asserting the shared contract type
+  // here closes that producer↔consumer gap for the one real consumer of the
+  // parsed cache (dashboardRoutes.ts's /api/dashboard forwards the raw JSON
+  // text unparsed, so it has no equivalent gap to close).
+  const combined = JSON.parse(json) as CombinedDashboardPayload;
   return c.json(combined.state);
 });
 
@@ -247,7 +440,7 @@ async function getActiveAgents(
   db: D1Database,
   project?: string | null,
   homePrincipal?: string | null,
-) {
+): Promise<AgentTile[]> {
   let sql = `
     SELECT session_id, principal_id, agent_id, agent_name, project, description,
            github_issue, started_at, completed_at, duration_ms, status, pr_url,
@@ -398,11 +591,7 @@ function applyHomePrincipalFilter(homePrincipal?: string | null): {
  * the frontend can fast-path the "pre-IAW row, render nothing" case without
  * a per-field truthy check.
  */
-function buildSovereignty(r: Record<string, unknown>): {
-  classification: Classification | null;
-  dataResidency: string | null;
-  homePrincipal: string | null;
-} | null {
+function buildSovereignty(r: Record<string, unknown>): SovereigntyInfo | null {
   const classification = r.classification as Classification | null | undefined;
   const dataResidency = r.data_residency as string | null | undefined;
   const homePrincipal = r.home_principal as string | null | undefined;
@@ -420,8 +609,8 @@ function buildSovereignty(r: Record<string, unknown>): {
 async function getSessionActivities(
   db: D1Database,
   sessionIds: string[],
-): Promise<Map<string, Array<{ timestamp: string; icon: string; label: string; detail: string }>>> {
-  const map = new Map<string, Array<{ timestamp: string; icon: string; label: string; detail: string }>>();
+): Promise<Map<string, SessionActivityEntry[]>> {
+  const map = new Map<string, SessionActivityEntry[]>();
   if (sessionIds.length === 0) return map;
 
   // D1 doesn't support WHERE IN with bound arrays easily, so batch manually
@@ -454,7 +643,7 @@ async function getRecentCompletions(
   project?: string | null,
   limit = 50,
   homePrincipal?: string | null,
-) {
+): Promise<RecentCompletionItem[]> {
   let sql = `
     SELECT agent_id, agent_name, principal_id, project, description, duration_ms,
            completed_at, pr_url, github_issue, status,
@@ -515,14 +704,18 @@ async function getKnownHomePrincipals(db: D1Database): Promise<string[]> {
   return (results ?? []).map((r) => r.home_principal as string);
 }
 
-async function getRecentActivity(db: D1Database, project?: string | null, limit = 500) {
+async function getRecentActivity(
+  db: D1Database,
+  project?: string | null,
+  limit = 500,
+): Promise<ActivityFeedItem[]> {
   // Merge session completions and GitHub events into one timeline
   const [completions, githubEvents] = await Promise.all([
     getRecentCompletions(db, project, limit),
     getRecentGitHubEvents(db, project, limit),
   ]);
 
-  const items: Array<Record<string, unknown>> = [];
+  const items: ActivityFeedItem[] = [];
 
   for (const c of completions) {
     items.push({
@@ -562,7 +755,26 @@ async function getRecentActivity(db: D1Database, project?: string | null, limit 
   return items.slice(0, limit);
 }
 
-async function getRecentGitHubEvents(db: D1Database, project?: string | null, limit = 100) {
+interface GithubEventRow {
+  eventId: string;
+  repo: string;
+  eventType: string;
+  title: string | null;
+  number: number | null;
+  url: string | null;
+  author: string | null;
+  agentAuthored: boolean;
+  linkedSession: string | null;
+  payload: string | null;
+  createdAt: string;
+  receivedAt: string;
+}
+
+async function getRecentGitHubEvents(
+  db: D1Database,
+  project?: string | null,
+  limit = 100,
+): Promise<GithubEventRow[]> {
   let sql = `
     SELECT event_id, repo, event_type, title, number, url, author,
            agent_authored, linked_session, payload, created_at, received_at
@@ -596,7 +808,7 @@ async function getRecentGitHubEvents(db: D1Database, project?: string | null, li
   }));
 }
 
-async function getDailyStats(db: D1Database, date?: string) {
+async function getDailyStats(db: D1Database, date?: string): Promise<DailyStats> {
   const day = date ?? new Date().toISOString().slice(0, 10);
 
   const [sessionsResult, prsResult, issuesResult, pushResult] = await Promise.all([
@@ -640,7 +852,7 @@ async function getProjects(db: D1Database): Promise<string[]> {
   return (results ?? []).map((r: Record<string, unknown>) => r.name as string);
 }
 
-async function getLatestAccountUsage(db: D1Database) {
+async function getLatestAccountUsage(db: D1Database): Promise<UsageSnapshotInfo | null> {
   const row = await db.prepare(`
     SELECT source, five_hour_pct, five_hour_resets, seven_day_pct, seven_day_resets,
            seven_day_opus_pct, seven_day_sonnet_pct, extra_usage_enabled, recorded_at
@@ -681,7 +893,7 @@ async function getLatestAccountUsage(db: D1Database) {
   };
 }
 
-async function getPerPrincipalUsage(db: D1Database): Promise<Record<string, ReturnType<typeof formatUsageRow>>> {
+async function getPerPrincipalUsage(db: D1Database): Promise<Record<string, UsageSnapshotInfo>> {
   const { results } = await db.prepare(`
     SELECT u.principal_id, u.source, u.five_hour_pct, u.five_hour_resets,
            u.seven_day_pct, u.seven_day_resets, u.seven_day_opus_pct,
@@ -695,7 +907,7 @@ async function getPerPrincipalUsage(db: D1Database): Promise<Record<string, Retu
     ) latest ON u.principal_id = latest.principal_id AND u.recorded_at = latest.max_recorded
   `).all();
 
-  const map: Record<string, ReturnType<typeof formatUsageRow>> = {};
+  const map: Record<string, UsageSnapshotInfo> = {};
   for (const row of results ?? []) {
     const principalId = row.principal_id as string;
     map[principalId] = formatUsageRow(row);
@@ -703,7 +915,7 @@ async function getPerPrincipalUsage(db: D1Database): Promise<Record<string, Retu
   return map;
 }
 
-function formatUsageRow(row: Record<string, unknown>) {
+function formatUsageRow(row: Record<string, unknown>): UsageSnapshotInfo {
   return {
     fiveHour: (row.five_hour_pct as number | null) != null
       ? { utilization: row.five_hour_pct as number, resetsAt: (row.five_hour_resets as string) ?? "" }

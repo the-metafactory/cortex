@@ -178,23 +178,23 @@ grep -n "__set.*ForTests" src/cli/cortex/commands/network.ts
 
 ---
 
-### S6 — Shared `DashboardSnapshot` contract for server + worker  *(candidate 7 · medium-small)*
+### S6 — Worker-scoped `DashboardSnapshot` contract  *(candidate 7 · medium-small · RETARGETED, see #1520)*
 
-**Goal:** the local bun:sqlite API and the CF Worker D1 projection conform to one exported type; divergence becomes a type/test failure.
+**Original goal (superseded):** "the local bun:sqlite API and the CF Worker D1 projection conform to one exported type." **This premise didn't hold.** The read-list's own suggested grep for the local snapshot assembly (`grep -rn "snapshot" src/surface/mc/server.ts src/surface/mc/api/handlers.ts | grep -i "state\|dashboard"`) returns nothing, because there is no local combined-snapshot endpoint to conform to: cortex's local dashboard serves granular REST (`/api/agents`, `/api/working-agents`, `/api/tasks`, …) plus incremental WS projections; it never regained a `/api/state`-equivalent after the mc-v3 lift. `state.ts`'s `:3` comment ("same DashboardSnapshot shape as the local API") is a grove-v2 holdover — grove-v2's monolithic `dashboard-state.ts` (MIG-2.3) was folded into the distributed `api/*.ts` + `db/*.ts` split for CRUD, but no snapshot-assembly function was ever ported in the combined shape the comment describes. Full diagnosis: the escalation comment on [#1520](https://github.com/the-metafactory/cortex/issues/1520).
+
+**Retargeted goal:** the worker's own producer↔consumer pair — `buildSnapshot()` and the routes that read its cached output back — are typed against one exported `DashboardSnapshot`, so a shape change on one side is a compile error on the other. Plus the real prize: an ADR-0005 no-interiors conformance test, pinning the by-hand no-interiors filter (`state.ts`'s SELECTs hand-list lifecycle-safe columns; they never `SELECT *`) as an enforced invariant.
 
 **Read-list:**
-- `src/surface/mc/worker/src/routes/state.ts` (725 — note :3 "same DashboardSnapshot shape as the local API", :78/:103 "same query as…", :60 the by-hand no-interiors filter)
-- the local snapshot assembly — find it: `grep -rn "snapshot" src/surface/mc/server.ts src/surface/mc/api/handlers.ts | grep -i "state\|dashboard" | head`
-- `src/surface/mc/dashboard-v2/types.ts` (or wherever the frontend types the `/api/state` response — locate with `grep -rn "api/state" src/surface/mc/dashboard-v2 | head`)
+- `src/surface/mc/worker/src/routes/state.ts` (the `DashboardSnapshot` type + `buildSnapshot()` + the `/api/state` route's `JSON.parse` re-hydration of `getCachedSnapshot`'s cache — the one real internal type-erasure gap)
+- `docs/adr/0005-mission-control-integration-architecture.md` + `CONTEXT.md`'s "Session interior" entry (tool calls, prompts, file edits, skill invocations, sub-agent spawns — always `local` scope)
 
 **Steps:**
-1. Declare `DashboardSnapshot` in a shared location importable by BOTH sides (mind the worker's separate `tsconfig`/package — check `src/surface/mc/worker/package.json`; if the worker can't import from `src/surface/mc/` directly, put the type in a small shared file inside the worker's include path and re-export locally — pick the least-machinery option that typechecks).
-2. Type the local assembly's return and the worker route's return as `DashboardSnapshot`. Fix mismatches by **matching the local shape** (it is the authority; the worker mirrors it). If a field exists on one side only and you cannot tell which side is right, ESCALATE with the field list.
-3. Add a conformance test: build a snapshot via each side's assembly against a seeded fixture db (sqlite locally; for D1 use the worker's existing test harness if present — `ls src/surface/mc/worker/**/*test*` — otherwise assert key-set equality between the two sides' serialized fixtures and note the limitation in the PR).
-4. ADR-0005 guard: the test must assert no session-interior fields (tool calls, prompts, diffs) appear in the worker projection.
+1. Declare `DashboardSnapshot` (plus its nested section types) directly in `state.ts`, exported. Type `buildSnapshot()`'s return, and the `/api/state` route's `JSON.parse(json) as CombinedDashboardPayload` re-hydration of the cache, against it.
+2. Reword the stale `:3` comment to the corrected premise (no local shape exists to mirror; the worker's D1 projection is populated independently via `routes/ingest.ts`).
+3. Add an ADR-0005 conformance test: build a snapshot from a seeded in-memory bun:sqlite D1 fixture (same shim pattern as `state-session-tree.test.ts`) and recursively assert no interior-shaped key (`tool_input`, `arguments`, `diff`, `messages`, …) appears anywhere in the serialized payload. `SessionActivityEntry.detail` (G-410's pre-sanitized, truncated action summary) is a known, accepted, pre-existing exception — out of scope to change here.
 
-**Scoped tests:** `bun test src/surface/mc`
-**Done when:** both sides typed by the shared contract, conformance + no-interior test green, gates green.
+**Scoped tests:** `bun test src/surface/mc/worker`
+**Done when:** worker producer/consumer typed by the shared contract, no-interiors test green, stale comment corrected, gates green.
 
 ---
 
