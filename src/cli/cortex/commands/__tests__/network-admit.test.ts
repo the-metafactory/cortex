@@ -417,14 +417,16 @@ describe("cortex network admit — Discord O-5 role", () => {
     const { seedPath } = await mintAdminSeed();
     const req = pendingRequest();
 
+    // S5 (Sage review, PR #1586) — the fake returns a MINIMAL warning, not a
+    // copy of production's exact message: this test asserts the CLI plumbs
+    // whatever the port returns through to discord_warning verbatim; the
+    // message text production actually BUILDS is covered by the adapter unit
+    // test (network-admit-adapters.test.ts).
     const admitPortsFactory: AdmitPortsFactory = (cfg) => ({
       ...buildLiveAdmitPorts(cfg),
       discord: {
         async assignRole() {
-          return {
-            status: "failed",
-            warning: "Discord role assignment failed: missing_permissions — admission committed, assign role manually",
-          };
+          return { status: "failed", warning: "missing_permissions" };
         },
       },
     });

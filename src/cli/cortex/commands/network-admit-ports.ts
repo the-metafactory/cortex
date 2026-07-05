@@ -10,14 +10,29 @@
  *
  *   - REGISTRY — admin-signed reads (single request / status-filtered list)
  *     and the signed admit/reject decision POST.
- *   - DISCORD  — best-effort community-fleet role assign (admit) / remove
- *     (reject), O-5.
+ *   - DISCORD  — best-effort community-fleet role ASSIGN ONLY (admit), O-5.
+ *     Reject's role REMOVE is NOT part of this port — see the DISCORD section
+ *     below for why.
  *   - SEAL     — fold the per-member leaf-secret delivery into a successful
  *     admit by delegating to the EXISTING `secret add-member` orchestration
  *     (C-1316). Payload-key / PSK crypto never runs here directly.
  */
 
 import type { StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import type { NetworkSecretPorts } from "./network-secret-ports";
+
+/**
+ * Factory for the `secret add-member` port bundle the C-1316 fold-in seal
+ * delegates to. Homed here (not in `network.ts` or `network-admit-adapters.ts`)
+ * so both can import the SAME type without a circular import — this module
+ * only imports `StackIdentityMaterial` + `NetworkSecretPorts`, never
+ * `network.ts` or the admit adapters.
+ */
+export type SecretPortsFactory = (cfg: {
+  hubConfigPath: string;
+  registryUrl: string;
+  material: StackIdentityMaterial;
+}) => NetworkSecretPorts;
 
 // =============================================================================
 // REGISTRY — admission-request reads + the admit/reject decision POST.
@@ -120,10 +135,12 @@ export interface DiscordRoleInputs {
   role: string;
 }
 
+/** Mirrors the sibling `AdmitSealStatus` union — every status the assign path can land on. */
+export type DiscordRoleStatus = "skipped" | "skipped_no_token" | "skipped_no_guild" | "assigned" | "failed";
+
 /** Outcome of a role assign — mirrors the CLI's discord_status/discord_warning fields. NEVER throws. */
 export interface DiscordRoleOutcome {
-  /** skipped | skipped_no_token | skipped_no_guild | assigned | failed. */
-  status: string;
+  status: DiscordRoleStatus;
   /** Actionable warning when the role could not be assigned (empty on success). */
   warning: string;
 }

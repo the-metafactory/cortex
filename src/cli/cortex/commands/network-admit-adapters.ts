@@ -1,6 +1,6 @@
 /**
- * S5 (#1519, epic #1514) — LIVE + DRY-RUN adapters for `cortex network admit`
- * / `cortex network reject` / `cortex network admit --list-pending`.
+ * S5 (#1519, epic #1514) — LIVE adapters for `cortex network admit` /
+ * `cortex network reject` / `cortex network admit --list-pending`.
  *
  * The real side effects the orchestration (`network-admit-lib.ts`) depends on:
  *   - REGISTRY — admin-signed reads (single request / status-filtered list)
@@ -25,13 +25,12 @@
  *     hub-locality gate or the seal-vs-write sequencing breaks federated
  *     admission.
  *
- * Like the join/leave adapters (`network-adapters.ts`), this module exports
- * BOTH a live constructor and a dry-run constructor. In practice `runAdmit`/
- * `runReject` (network.ts) never construct EITHER for a dry-run invocation —
- * dry-run prints its plan and returns before any port is built (the pre-S5
- * behaviour: `fetchCalled` stays `false`). `buildDryRunAdmitPorts` exists for
- * parity with the sibling triplets and as a defence-in-depth safe fallback,
- * not because the current control flow reaches it.
+ * Unlike the join/leave adapters (`network-adapters.ts`), there is NO
+ * dry-run port constructor here: admit/reject's dry-run path (network.ts)
+ * prints its plan and returns BEFORE building any port at all — it never
+ * touches the registry (`fetchCalled` stays `false`, per the existing
+ * tests). A dry-run ports variant would be permanently unreachable dead
+ * code, so this module only builds the live bundle.
  */
 
 import {
@@ -43,7 +42,6 @@ import {
 import type { StackIdentityMaterial } from "../../../bus/stack-provisioning";
 import { buildAdmissionReadHeader } from "./network-admit-lib";
 import { runNetworkSecret, type SecretInputs, type SecretReport } from "./network-secret-lib";
-import type { NetworkSecretPorts } from "./network-secret-ports";
 import { buildLiveSecretPorts } from "./network-secret-adapters";
 import type {
   AdmissionDecision,
@@ -60,20 +58,9 @@ import type {
   ListRequestsResult,
   PostDecisionResult,
   SealMemberArgs,
+  SecretPortsFactory,
   SignedAdmissionDecision,
 } from "./network-admit-ports";
-
-/**
- * Mirrors network.ts's own `SecretPortsFactory` structurally (an inline type,
- * not an import — avoids a circular import back into network.ts, which
- * imports THIS file). C-1316's fold-in seal reuses `secret add-member`'s
- * existing ports factory verbatim.
- */
-export type SecretPortsFactory = (cfg: {
-  hubConfigPath: string;
-  registryUrl: string;
-  material: StackIdentityMaterial;
-}) => NetworkSecretPorts;
 
 export interface LiveAdmitPortsConfig {
   registryUrl: string;
@@ -86,23 +73,13 @@ export interface LiveAdmitPortsConfig {
   fetchImpl?: typeof globalThis.fetch;
 }
 
-function buildAdmitPorts(cfg: LiveAdmitPortsConfig, mutate: boolean): AdmitPorts {
-  return {
-    registry: mutate ? buildLiveAdmitRegistryPort(cfg) : buildDryRunAdmitRegistryPort(),
-    discord: mutate ? buildLiveAdmitDiscordPort() : buildDryRunAdmitDiscordPort(),
-    seal: mutate ? buildLiveAdmitSealPort(cfg) : buildDryRunAdmitSealPort(),
-  };
-}
-
 /** Live ports — every effect mutates the deployment. */
 export function buildLiveAdmitPorts(cfg: LiveAdmitPortsConfig): AdmitPorts {
-  return buildAdmitPorts(cfg, true);
-}
-
-/** Dry-run ports — every mutation is a safe no-op. See the module doc for why
- *  the current admit/reject control flow never actually reaches these. */
-export function buildDryRunAdmitPorts(cfg: LiveAdmitPortsConfig): AdmitPorts {
-  return buildAdmitPorts(cfg, false);
+  return {
+    registry: buildLiveAdmitRegistryPort(cfg),
+    discord: buildLiveAdmitDiscordPort(),
+    seal: buildLiveAdmitSealPort(cfg),
+  };
 }
 
 // =============================================================================
@@ -183,19 +160,6 @@ function buildLiveAdmitRegistryPort(cfg: LiveAdmitPortsConfig): AdmitRegistryPor
   };
 }
 
-/** Dry-run registry port — never invoked by the current admit/reject control
- *  flow (dry-run short-circuits in network.ts before any port is built), but
- *  every method is a safe no-op in case that ever changes. */
-function buildDryRunAdmitRegistryPort(): AdmitRegistryPort {
-  return {
-    getRequest: () =>
-      Promise.resolve({ outcome: "error", status: 0, body: "dry-run — registry GET skipped (no mutation)" }),
-    listRequests: () => Promise.resolve({ outcome: "ok", rows: [] }),
-    postDecision: () =>
-      Promise.resolve({ outcome: "error", status: 0, body: "dry-run — registry POST skipped (no mutation)" }),
-  };
-}
-
 // =============================================================================
 // DISCORD — O-5 community-fleet role assign (admit only).
 //
@@ -206,14 +170,17 @@ function buildDryRunAdmitRegistryPort(): AdmitRegistryPort {
 // =============================================================================
 
 /**
- * Resolve the bot token + guild id an assign acts against: `--guild` flag >
- * `--server` profile > top-level config (via `resolveServerContext`) — the
- * SAME precedence admit's original inline block used.
+ * Resolve the bot token + guild id an assign acts against. `resolveServerContext`
+ * (discord-roles.ts) already folds `--guild` in at the HIGHEST precedence
+ * (over `--server` profile, over top-level config) — that's the pre-S5
+ * production behaviour verbatim, so `ctx.guildId` alone is the right value;
+ * no second `inputs.guild ??` fallback is needed (or correct — it would be
+ * redundant with, not additive to, what `resolveServerContext` already does).
  */
 function resolveDiscordContext(inputs: DiscordRoleInputs): { botToken?: string; guildId?: string } {
   const discordConfig = loadDiscordConfig();
   const ctx = resolveServerContext(discordConfig, { server: inputs.server, guild: inputs.guild });
-  return { botToken: ctx.botToken, guildId: inputs.guild ?? ctx.guildId };
+  return { botToken: ctx.botToken, guildId: ctx.guildId };
 }
 
 function buildLiveAdmitDiscordPort(): AdmitDiscordPort {
@@ -256,12 +223,6 @@ function buildLiveAdmitDiscordPort(): AdmitDiscordPort {
         };
       }
     },
-  };
-}
-
-function buildDryRunAdmitDiscordPort(): AdmitDiscordPort {
-  return {
-    assignRole: () => Promise.resolve({ status: "skipped", warning: "dry-run — Discord role assign skipped (no mutation)" }),
   };
 }
 
@@ -374,12 +335,5 @@ function buildLiveAdmitSealPort(cfg: LiveAdmitPortsConfig): AdmitSealPort {
   const secretPortsFactory = cfg.secretPortsFactory ?? ((c) => buildLiveSecretPorts(c));
   return {
     sealMember: (args: SealMemberArgs) => sealAdmittedMember({ ...args, secretPortsFactory }),
-  };
-}
-
-function buildDryRunAdmitSealPort(): AdmitSealPort {
-  return {
-    sealMember: () =>
-      Promise.resolve({ status: "skipped", steps: [], reason: "dry-run — seal skipped (no mutation)" }),
   };
 }

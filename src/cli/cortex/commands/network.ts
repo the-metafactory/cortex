@@ -144,10 +144,7 @@ import {
   type SecretInputs,
   type KeyRotationInputs,
 } from "./network-secret-lib";
-import type {
-  NetworkSecretPorts,
-  NetworkKeyRotationPorts,
-} from "./network-secret-ports";
+import type { NetworkKeyRotationPorts } from "./network-secret-ports";
 import {
   buildLiveSecretPorts,
   buildLiveKeyRotationPorts,
@@ -198,10 +195,15 @@ import {
   runNetworkListPending,
   renderPendingTable,
 } from "./network-admit-lib";
-import type { AdmitPorts } from "./network-admit-ports";
+import type { AdmitPorts, SecretPortsFactory } from "./network-admit-ports";
 import { buildLiveAdmitPorts } from "./network-admit-adapters";
 
 export { type ExitResult } from "./_shared/exit-result";
+// Re-exported for backward compatibility: `SecretPortsFactory` is homed in
+// network-admit-ports.ts (S5 #1586 review) so both network.ts and
+// network-admit-adapters.ts import the SAME type without a circular import;
+// external consumers (tests) still import it from here.
+export type { SecretPortsFactory };
 
 // =============================================================================
 // Grammar
@@ -2844,8 +2846,11 @@ async function runReject(
   flags: FlagMap,
   json: boolean,
   // S5 (cortex#1519) — injectable admit-ports factory (shared with `admit`),
-  // so reject's Discord-removal path is testable with fake ports. Production
-  // omits it → the live adapters.
+  // so reject's registry decision-POST is testable with fake ports. NOTE:
+  // reject's Discord ROLE REMOVAL is NOT reachable through this factory — it
+  // stays on the shared `removeDiscordFleetRole` helper below (see that
+  // function's doc comment for why). Production omits this param → the live
+  // adapters.
   admitPortsFactory: AdmitPortsFactory = DEFAULT_ADMIT_PORTS_FACTORY,
 ): Promise<ExitResult> {
   if (!requestId) {
@@ -2967,16 +2972,12 @@ const DEFAULT_HUB_CONFIG_PATH = "~/.config/nats/local.conf";
 const MEMBER_PUBKEY_RE = /^[A-Za-z0-9+/]{43}=$/;
 
 /**
- * Factory for the secret port bundle. Production builds the live adapters (hub
- * config fs + reload, registry admin-read + hub-admin delivery/revoke). Tests
- * inject fakes that record calls without touching fs/registry/nats.
+ * Factory for the secret port bundle (`SecretPortsFactory` type now homed in
+ * network-admit-ports.ts, S5 #1586 review — see the re-export note above).
+ * Production builds the live adapters (hub config fs + reload, registry
+ * admin-read + hub-admin delivery/revoke). Tests inject fakes that record
+ * calls without touching fs/registry/nats.
  */
-export type SecretPortsFactory = (cfg: {
-  hubConfigPath: string;
-  registryUrl: string;
-  material: import("../../../bus/stack-provisioning").StackIdentityMaterial;
-}) => NetworkSecretPorts;
-
 const DEFAULT_SECRET_PORTS_FACTORY: SecretPortsFactory = (cfg) => buildLiveSecretPorts(cfg);
 
 /**
