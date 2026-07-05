@@ -242,6 +242,47 @@ function deferredFallbackAgent(config: AgentConfig, presence: Agent["presence"])
   };
 }
 
+/**
+ * Sage #1547 r2 nit — Discord's and Slack's `constructAdapter` closures built
+ * an identical factory-arg block (instanceId/source/binding/runtime/agent/
+ * principal/presence + the policy triad + trustedBotIds/surfaceSubjects/
+ * surfaceFallbackChannelId), differing only in Discord's extra
+ * `allowedGuildIds`/`presenceByGuildId` (Slack's factory args don't have
+ * those fields at all — Mattermost's shape diverges enough elsewhere —
+ * no `runtime`/`source`, no trust fields — that it stays hand-written).
+ * Each descriptor spreads this, then Discord adds its two extra fields.
+ */
+function baseFactoryArgs<TPresence extends { surfaceSubjects: string[]; surfaceFallbackChannelId?: string }>(args: {
+  instanceId: string;
+  systemEventSource: SystemEventSource;
+  runtime: MyelinRuntime | undefined;
+  agent: Agent;
+  principal: Record<string, unknown>;
+  presence: TPresence;
+  explicitTrustedBotIds: ReadonlySet<string> | undefined;
+  policyEngine: PolicyEngine | undefined;
+  policyLookup: PlatformPrincipalIndex | undefined;
+  policyRegistry: PrincipalRegistry | undefined;
+}) {
+  return {
+    instanceId: args.instanceId,
+    source: args.systemEventSource,
+    binding: presenceAsBinding(args.presence),
+    runtime: args.runtime,
+    agent: args.agent,
+    principal: args.principal,
+    presence: args.presence,
+    ...(args.explicitTrustedBotIds !== undefined && { trustedBotIds: args.explicitTrustedBotIds }),
+    ...(args.policyEngine !== undefined && { policyEngine: args.policyEngine }),
+    ...(args.policyLookup !== undefined && { policyLookup: args.policyLookup }),
+    ...(args.policyRegistry !== undefined && { policyRegistry: args.policyRegistry }),
+    surfaceSubjects: args.presence.surfaceSubjects,
+    ...(args.presence.surfaceFallbackChannelId !== undefined && {
+      surfaceFallbackChannelId: args.presence.surfaceFallbackChannelId,
+    }),
+  };
+}
+
 /** Shared dependencies every platform boot reads from. */
 interface BootCtx {
   gatewayOwned: ReadonlySet<string>;
@@ -498,15 +539,20 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     trustedBotIdsFor: (instance) => new Set<string>(instance.trustedBotIds),
     constructAdapter: ({ agent, presence, instanceId, explicitTrustedBotIds }) =>
       factory.discord({
-        instanceId,
-        source: opts.systemEventSource,
-        binding: presenceAsBinding(presence),
-        runtime: opts.runtime,
-        agent,
-        principal: {
-          ...(opts.principalDiscordId !== undefined && { discordId: opts.principalDiscordId }),
-        },
-        presence,
+        ...baseFactoryArgs({
+          instanceId,
+          systemEventSource: opts.systemEventSource,
+          runtime: opts.runtime,
+          agent,
+          principal: {
+            ...(opts.principalDiscordId !== undefined && { discordId: opts.principalDiscordId }),
+          },
+          presence,
+          explicitTrustedBotIds,
+          policyEngine: opts.policyEngine,
+          policyLookup: opts.policyLookup,
+          policyRegistry: opts.policyRegistry,
+        }),
         // Sage #1547 r1 — NOT a scoping change. The inline pre-extraction
         // `new DiscordAdapter(...)` call passed NEITHER of these two fields,
         // but `DiscordAdapter`'s own constructor (adapters/discord/index.ts)
@@ -515,17 +561,13 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
         // to `infra.allowedGuildIds ?? new Set(presenceByGuildId.keys())` — i.e.
         // exactly the single-guild set/map built here. Passing them explicitly
         // reproduces that construction-time default byte-for-byte; it does not
-        // narrow or widen the adapter's effective guild allowlist.
+        // narrow or widen the adapter's effective guild allowlist — pinned by
+        // `src/adapters/discord/__tests__/guild-filter.test.ts`'s "explicit
+        // allowedGuildIds/presenceByGuildId == omitted (S9, cortex#1523)" suite
+        // (Sage #1547 r2), which fires own-guild/foreign-guild/DM messages at a
+        // REAL `DiscordAdapter` built both ways and asserts identical dispatch.
         allowedGuildIds: new Set([presence.guildId]),
         presenceByGuildId: new Map([[presence.guildId, presence]]),
-        ...(explicitTrustedBotIds !== undefined && { trustedBotIds: explicitTrustedBotIds }),
-        ...(opts.policyEngine !== undefined && { policyEngine: opts.policyEngine }),
-        ...(opts.policyLookup !== undefined && { policyLookup: opts.policyLookup }),
-        ...(opts.policyRegistry !== undefined && { policyRegistry: opts.policyRegistry }),
-        surfaceSubjects: presence.surfaceSubjects,
-        ...(presence.surfaceFallbackChannelId !== undefined && {
-          surfaceFallbackChannelId: presence.surfaceFallbackChannelId,
-        }),
       }) as DiscordAdapter,
     trustResolverSupport: {
       registerFailSuffix: "",
@@ -633,25 +675,22 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { slack: presence }),
     trustedBotIdsFor: (instance) => new Set<string>(instance.trustedBotIds),
     constructAdapter: ({ agent, presence, instanceId, explicitTrustedBotIds }) =>
-      factory.slack({
-        instanceId,
-        source: opts.systemEventSource,
-        binding: presenceAsBinding(presence),
-        runtime: opts.runtime,
-        agent,
-        principal: {
-          ...(opts.principalSlackId !== undefined && { slackId: opts.principalSlackId }),
-        },
-        presence,
-        ...(opts.policyEngine !== undefined && { policyEngine: opts.policyEngine }),
-        ...(opts.policyLookup !== undefined && { policyLookup: opts.policyLookup }),
-        ...(opts.policyRegistry !== undefined && { policyRegistry: opts.policyRegistry }),
-        surfaceSubjects: presence.surfaceSubjects,
-        ...(presence.surfaceFallbackChannelId !== undefined && {
-          surfaceFallbackChannelId: presence.surfaceFallbackChannelId,
+      factory.slack(
+        baseFactoryArgs({
+          instanceId,
+          systemEventSource: opts.systemEventSource,
+          runtime: opts.runtime,
+          agent,
+          principal: {
+            ...(opts.principalSlackId !== undefined && { slackId: opts.principalSlackId }),
+          },
+          presence,
+          explicitTrustedBotIds,
+          policyEngine: opts.policyEngine,
+          policyLookup: opts.policyLookup,
+          policyRegistry: opts.policyRegistry,
         }),
-        ...(explicitTrustedBotIds !== undefined && { trustedBotIds: explicitTrustedBotIds }),
-      }) as SlackAdapter,
+      ) as SlackAdapter,
     trustResolverSupport: {
       registerFailSuffix: " (slack)",
       startedSummary: (instance) => `workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s)`,
@@ -663,24 +702,58 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
 }
 
 /**
+ * S9 r2 (Sage #1547 review round 2, security) — ALLOW-list, not deny-list.
+ * Round 1's `/token/i` deny-list missed `webhookUrl` (Mattermost's webhook
+ * URL embeds a secret hook key in its path — the adapter itself treats
+ * `apiToken`/`webhookUrl` as sensitive). A deny-list is only as complete as
+ * the set of names someone remembered to exclude; a FUTURE secret-bearing
+ * field added to any presence type (a new `*Token`/`*Secret`/`*Key` name, or
+ * a URL that embeds one) would silently pass through unless every reviewer
+ * remembers to extend the pattern. An allow-list fails the opposite,
+ * SAFE direction: a field simply doesn't show up in `binding` until someone
+ * deliberately adds it here.
+ */
+const SAFE_BINDING_KEYS: ReadonlySet<string> = new Set([
+  "enabled",
+  "instanceId",
+  // Discord
+  "guildId",
+  "agentChannelId",
+  "logChannelId",
+  "worklogChannelId",
+  "contextDepth",
+  "enableAgentLog",
+  "operatorRoleId",
+  "dmOwner",
+  "surfaceSubjects",
+  "surfaceFallbackChannelId",
+  "trustedBotIds",
+  // Mattermost
+  "apiUrl",
+  "callbackPort",
+  "channels",
+  "pollIntervalMs",
+  "allowedUsers",
+  // Slack
+  "workspaceId",
+  "allowedUserIds",
+]);
+
+/**
  * `binding` is forwarded to the factory purely for observability/test
  * assertions (see `gateway-adapters.ts`'s `FactoryArgsBase.binding` doc) —
  * the default production factory never reads it. The per-stack boot path has
  * no equivalent "raw pre-parse binding" the way the gateway does (it builds
  * `presence` directly from the already-Zod-parsed config instance), so this
- * forwards the already-built presence as the closest analogue.
- *
- * Sage #1547 r1 (security) — presence objects carry LIVE credentials
- * (`token`, `botToken`, `appToken`, `apiToken`, `webhookToken`). This is an
- * observability field, not a construction input (the default factory never
- * reads it) — a future log line or test assertion over `binding` must never
- * be able to spill one. Every key whose name contains "token"
- * (case-insensitive) is redacted before forwarding.
+ * forwards the already-built presence as the closest analogue, filtered down
+ * to {@link SAFE_BINDING_KEYS} — never `token`/`botToken`/`appToken`/
+ * `apiToken`/`webhookToken`/`webhookUrl`, none of which any test or log line
+ * needs.
  */
 function presenceAsBinding(presence: object): Record<string, unknown> {
-  const redacted: Record<string, unknown> = {};
+  const safe: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(presence as Record<string, unknown>)) {
-    redacted[key] = /token/i.test(key) ? "[REDACTED]" : value;
+    if (SAFE_BINDING_KEYS.has(key)) safe[key] = value;
   }
-  return redacted;
+  return safe;
 }

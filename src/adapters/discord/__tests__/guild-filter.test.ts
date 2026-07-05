@@ -27,6 +27,16 @@
  *      dispatches ONLY on the guild-A adapter; the guild-B adapter ignores it.
  *   2. A DM (no guildId) is still dispatched.
  *   3. A guild message whose guildId matches the adapter's guild dispatches.
+ *   4. (S9, cortex#1523, Sage #1547 r2) — `wireSurfaceAdapters`'s discord
+ *      descriptor (`src/runner/surface-adapter-boot.ts`) passes
+ *      `allowedGuildIds`/`presenceByGuildId` EXPLICITLY (a single-guild set/
+ *      map derived from `presence.guildId`) where the pre-extraction inline
+ *      `new DiscordAdapter(...)` call omitted them entirely, relying on this
+ *      constructor's own default. A code comment there claims the two are
+ *      byte-for-byte equivalent; this suite's 4th block is what actually
+ *      PINS that claim against the real constructor + the real
+ *      `messageCreate` guild-filter path (1-3 above), instead of leaving it
+ *      as an unverified assertion.
  *
  * We never touch a real Discord gateway. The fake client extends
  * EventEmitter so `client.emit("messageCreate", msg)` drives the real
@@ -111,6 +121,17 @@ function makeMessage(opts: { id: string; guildId: string | null }): unknown {
 function makeAdapter(opts: {
   instanceId: string;
   guildId: string;
+  /**
+   * S9 (cortex#1523, Sage #1547 r2) — when true, build
+   * `infra.allowedGuildIds`/`presenceByGuildId` explicitly with the exact
+   * single-guild shape `wireSurfaceAdapters`'s discord descriptor passes
+   * (`src/runner/surface-adapter-boot.ts`), instead of omitting them and
+   * relying on this constructor's own default (below). Default `false` —
+   * every OTHER test in this file exercises the omitted/implicit path,
+   * unchanged. Used by the "explicit == omitted" equivalence suite at the
+   * bottom of this file.
+   */
+  explicitGuildScope?: boolean;
 }): {
   adapter: DiscordAdapter;
   fakeClient: FakeClient;
@@ -139,6 +160,10 @@ function makeAdapter(opts: {
   const infra: DiscordAdapterInfra = {
     instanceId: opts.instanceId,
     principal: {},
+    ...(opts.explicitGuildScope && {
+      allowedGuildIds: new Set([presence.guildId]),
+      presenceByGuildId: new Map([[presence.guildId, presence]]),
+    }),
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 
@@ -235,5 +260,49 @@ describe("DiscordAdapter: guild filter (cortex#704)", () => {
 
     expect(a.dispatched.length).toBe(1);
     expect(a.dispatched[0]?.guildId).toBe(GUILD_A);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. S9 (cortex#1523, Sage #1547 r2) — explicit allowedGuildIds/
+//    presenceByGuildId == omitted. `wireSurfaceAdapters`'s discord descriptor
+//    passes them explicitly (the exact single-guild set/map this
+//    constructor already defaults to when they're omitted); this suite
+//    drives the SAME own-guild/foreign-guild/DM messages at a real adapter
+//    built each way and asserts identical dispatch — the claim in
+//    `surface-adapter-boot.ts`'s comment is now test-backed, not asserted.
+// ---------------------------------------------------------------------------
+
+describe("DiscordAdapter: explicit allowedGuildIds/presenceByGuildId == omitted (S9, cortex#1523)", () => {
+  const GUILD_A = "1487023327791808592";
+  const GUILD_B = "1512054429023731884";
+
+  test("own-guild, foreign-guild, and DM messages dispatch identically whether allowedGuildIds/presenceByGuildId are omitted or explicitly passed as the single-guild {guildId} set/map", async () => {
+    const implicit = makeAdapter({ instanceId: "discord-implicit", guildId: GUILD_A });
+    const explicit = makeAdapter({
+      instanceId: "discord-explicit",
+      guildId: GUILD_A,
+      explicitGuildScope: true,
+    });
+
+    const ownGuildMsg = makeMessage({ id: "own", guildId: GUILD_A });
+    const foreignGuildMsg = makeMessage({ id: "foreign", guildId: GUILD_B });
+    const dm = makeMessage({ id: "dm", guildId: null });
+
+    for (const msg of [ownGuildMsg, foreignGuildMsg, dm]) {
+      await fireMessageCreate(implicit.fakeClient, msg);
+      await fireMessageCreate(explicit.fakeClient, msg);
+    }
+
+    // Positive control: own-guild + DM dispatch, foreign-guild is dropped —
+    // pinned on the IMPLICIT (pre-extraction-equivalent) adapter first, so a
+    // future regression to `makeAdapter`'s default path fails loudly here
+    // rather than only in the equality check below.
+    expect(implicit.dispatched.length).toBe(2);
+    // The actual equivalence: explicit construction behaves IDENTICALLY.
+    expect(explicit.dispatched.length).toBe(implicit.dispatched.length);
+    expect(explicit.dispatched.map((m) => ({ guildId: m.guildId, isDM: m.isDM }))).toEqual(
+      implicit.dispatched.map((m) => ({ guildId: m.guildId, isDM: m.isDM })),
+    );
   });
 });

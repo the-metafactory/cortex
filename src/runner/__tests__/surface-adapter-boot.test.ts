@@ -21,6 +21,11 @@
  *      peer's bot id — asserted against the EXACT log line `wireSurfaceAdapters`
  *      emits (Sage #1547 r1: the claim must match what the test actually pins).
  *      Mattermost has no such call (its fake never implements the method).
+ *   7. (Sage #1547 r2, security) `presenceAsBinding`'s allow-list — the
+ *      `binding` argument the factory receives carries safe identity fields
+ *      but never a credential (`apiToken`/`webhookUrl`/`webhookToken`/
+ *      `botToken`/`appToken`/`token`), even though the presence built from
+ *      config carries all of them.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -347,5 +352,64 @@ describe("wireSurfaceAdapters", () => {
     // Mattermost has no trust support — its fake never got the members, so
     // there is nothing to call; confirm it still started + registered.
     expect(mattermostAdapter?.started).toBe(true);
+  });
+
+  test("presenceAsBinding allow-list: binding never carries a credential, even though presence does", async () => {
+    const config = minimalConfig({
+      discord: [{ enabled: true, token: "d-secret-token", guildId: "g1", agentChannelId: "c1", logChannelId: "l1" }],
+      mattermost: [
+        {
+          enabled: true,
+          apiUrl: "https://mm.example.com",
+          apiToken: "mm-secret-api-token",
+          webhookUrl: "https://mm.example.com/hooks/secret-hook-key",
+          webhookToken: "mm-secret-webhook-token",
+        },
+      ],
+      slack: [{ enabled: true, botToken: "xoxb-secret", appToken: "xapp-secret", workspaceId: "T123" }],
+    });
+    const recorded: RecordedAdapter[] = [];
+    const bindings: Record<string, Record<string, unknown>> = {};
+    const factory: GatewayAdapterFactory = {
+      discord: (args) => {
+        bindings.discord = args.binding;
+        return makeFakeAdapter(
+          { platform: "discord", instanceId: args.instanceId, botUserId: "b", withTrustMembers: true },
+          recorded,
+        );
+      },
+      slack: (args) => {
+        bindings.slack = args.binding;
+        return makeFakeAdapter(
+          { platform: "slack", instanceId: args.instanceId, botUserId: "b", withTrustMembers: true },
+          recorded,
+        );
+      },
+      mattermost: (args) => {
+        bindings.mattermost = args.binding;
+        return makeFakeAdapter({ platform: "mattermost", instanceId: args.instanceId, botUserId: "b" }, recorded);
+      },
+      web: (args) => makeFakeAdapter({ platform: "web", instanceId: args.instanceId, botUserId: "b" }, recorded),
+    };
+    const { router } = makeRecordingRouter();
+    const opts = baseOpts(config, factory, router);
+
+    await wireSurfaceAdapters(opts);
+
+    // No credential-shaped key ever reaches `binding`, for any platform —
+    // this is the exact gap round 1's `/token/i` deny-list missed
+    // (`webhookUrl` embeds a secret hook key but doesn't match "token").
+    for (const binding of Object.values(bindings)) {
+      expect("token" in binding).toBe(false);
+      expect("botToken" in binding).toBe(false);
+      expect("appToken" in binding).toBe(false);
+      expect("apiToken" in binding).toBe(false);
+      expect("webhookToken" in binding).toBe(false);
+      expect("webhookUrl" in binding).toBe(false);
+    }
+    // The field is still useful — safe identity fields DO pass through.
+    expect(bindings.discord?.guildId).toBe("g1");
+    expect(bindings.mattermost?.apiUrl).toBe("https://mm.example.com");
+    expect(bindings.slack?.workspaceId).toBe("T123");
   });
 });
