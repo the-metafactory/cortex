@@ -33,11 +33,24 @@ import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
 // cached JSON back (consumers) are checked against the same shape.
 //
 // ADR-0005 (Session interior, CONTEXT.md): every field below is lifecycle
-// metadata (existence, dispatch state, outcome) — never tool-call arguments,
-// prompts, diffs, or raw messages. `SessionActivityEntry.detail` is the one
-// free-text field; it carries a pre-sanitized, truncated action summary
-// (G-410 `extractActivityEntry`, e.g. "Editing foo.ts" or a redacted command
-// preview), not raw tool interior.
+// metadata — with two known, deliberate exceptions, neither of them RAW
+// interior (a raw tool-call argument/output object, a full unbounded prompt,
+// a diff, or a message array never appear here; D1's schema has no column
+// for any of those — see the schema-guard in
+// `__tests__/dashboard-snapshot-contract.test.ts`):
+//   - `AgentCurrentTask.description` (sourced from `sessions.description`) —
+//     up to a 200-char PREVIEW of the triggering prompt. Truncated at the
+//     source (`EventLogger.hook.ts`'s `preview.slice(0, 200)` →
+//     `payload.prompt_preview`) and passed through `sanitizeDescription()`
+//     (strips `toolu_*` IDs) in `common/event-processor.ts` before it ever
+//     reaches D1. Also the sole `recentCompletions[].description`.
+//   - `SessionActivityEntry.detail` (G-410) — a pre-sanitized, truncated
+//     per-event-type action summary (`extractActivityEntry`, e.g. "Editing
+//     foo.ts" or a redacted, 100-char-capped command preview), never the raw
+//     tool_input/tool_output it summarizes.
+// Both sanitizers run at ingest time, upstream of this file; `state.ts` never
+// re-validates or re-sanitizes a row's values on read. Say "no RAW interiors,
+// two sanitized previews permitted by design" — not "never prompts."
 // ---------------------------------------------------------------------------
 
 /** IAW D.5.3 sovereignty block — `null` when none of the three fields are populated. */
@@ -61,6 +74,7 @@ export interface AgentCurrentTask {
   agentId: string;
   agentName: string;
   project: string | null;
+  /** Ingest-time-sanitized 200-char prompt preview — see the ADR-0005 note above. */
   description: string;
   githubIssue: string | null;
   startedAt: string;
@@ -100,6 +114,7 @@ export interface RecentCompletionItem {
   agentName: string;
   principalId: string | null;
   project: string | null;
+  /** Ingest-time-sanitized 200-char prompt preview — see the ADR-0005 note above. */
   description: string;
   durationMs: number | null;
   completedAt: string;
@@ -135,6 +150,7 @@ export type ActivityFeedItem =
       agentId: string;
       agentName: string;
       project: string | null;
+      /** Ingest-time-sanitized 200-char prompt preview — see the ADR-0005 note above. */
       description: string;
       durationMs: number | null;
       prUrl: string | null;

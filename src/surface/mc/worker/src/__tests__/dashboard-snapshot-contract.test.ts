@@ -41,7 +41,8 @@
  *         → `payload.prompt_preview`), further passed through
  *         `sanitizeDescription()` (strips `toolu_*` IDs) in
  *         `event-processor.ts`. Surfaces as `agents[].currentTask.description`
- *         / `recentCompletions[].description`.
+ *         / `recentCompletions[].description` / the session arm of
+ *         `recentActivity[].description`.
  *       - `session_activity.detail` (G-410) — a per-event-type summary built
  *         by `extractActivityEntry()`, e.g. "Editing foo.ts" or a redacted,
  *         100-char-capped command preview. Surfaces as
@@ -53,18 +54,32 @@
  *     (`EventLogger.hook.ts` / `common/event-processor.ts` /
  *     `common/event-utils.ts`), not here.
  *
+ * CORRECTION (review round 2, Sage on #1537): round 1 used a DENY-LIST
+ * (`INTERIOR_KEY_PATTERN`) at both the schema-column and DTO-key levels. A
+ * deny-list can never be complete — `tool_result`, `raw_diff`, `prompt_text`,
+ * `content`, `body`, `payload`, … all slip through a fixed name pattern.
+ * Replaced with an ALLOW-LIST at both levels: every column name (per table)
+ * and every DTO key (per section type, recursively) must be a member of an
+ * explicit known-safe set. `description` is EXPLICITLY, CONSCIOUSLY included
+ * in that set — it is a permitted, ingest-sanitized 200-char preview, not an
+ * omission. Any future field — interior-named or not — now fails this test
+ * until it is deliberately added to the allow-list; growth can no longer
+ * sneak past by avoiding a handful of banned name patterns.
+ *
  * Given that, this test pins what's actually decidable from `state.ts`'s
  * side of the boundary:
  *
- *   1. SCHEMA guard — no column on the tables `buildSnapshot()` reads is
- *      named like an interior category. Catches a future schema widening
- *      (e.g. someone adds a `tool_input`/`diff` column) at the earliest
- *      possible point, before any query or DTO field could expose it.
- *   2. DTO KEY-SHAPE guard — `buildSnapshot()`'s serialized output introduces
- *      no interior-NAMED field. Catches a future SELECT/mapping change that
- *      surfaces such a column under a new key.
+ *   1. SCHEMA allow-list — every column on the 4 tables `buildSnapshot()`
+ *      reads is a member of the known-safe column set. Catches ANY future
+ *      schema widening (interior-named or not) at the earliest possible
+ *      point, before any query or DTO field could expose it.
+ *   2. DTO allow-list — `buildSnapshot()`'s serialized output, walked
+ *      recursively per section type, never introduces a key outside the
+ *      known-safe set for that section.
  *   3. `session_activity`'s EXACT key set — a session_activity row surfaces
- *      as exactly the 4 known G-410 fields, never more.
+ *      as exactly the 4 known G-410 fields, never more (subsumed by #2, kept
+ *      as a focused regression pin since it's the row most directly derived
+ *      from tool activity).
  *
  * None of these assert anything about the CONTENT of `description`/`detail`
  * — that's the accepted, out-of-scope exception documented above.
@@ -77,28 +92,34 @@ import { join } from "node:path";
 import { buildSnapshot, type DashboardSnapshot } from "../routes/state";
 import { d1, loadSchema, WORKER_DIR } from "./d1-shim";
 
-/**
- * Interior-shaped key/column names: the SHAPE a leaked tool-call, prompt,
- * diff, or raw message would take, per CONTEXT.md's "Session interior" entry.
- * Deliberately name-based — this pins SHAPE (keys/columns), not the free-text
- * VALUES of legitimate lifecycle fields like `description` or `detail` (see
- * the file-level scope note above).
- */
-const INTERIOR_KEY_PATTERN =
-  /^(tool_?input|tool_?output|tool_?call|arguments|args|prompts?|diffs?|raw_?messages?|messages|stdout|stderr|file_?content|skill_?invocation|sub_?agent_?spawn)$/i;
+// ---------------------------------------------------------------------------
+// Schema allow-list — one entry per table `buildSnapshot()` reads, listing
+// every column that table's `CREATE TABLE` declares (schema.sql). Growing
+// the schema requires growing this list — a conscious edit, not a silent
+// pass.
+// ---------------------------------------------------------------------------
 
-/** Recursively collect every object key appearing anywhere in a JSON-shaped value. */
-function collectKeys(value: unknown, into: Set<string> = new Set()): Set<string> {
-  if (Array.isArray(value)) {
-    for (const item of value) collectKeys(item, into);
-  } else if (value !== null && typeof value === "object") {
-    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      into.add(key);
-      collectKeys(v, into);
-    }
-  }
-  return into;
-}
+const ALLOWED_COLUMNS: Record<string, string[]> = {
+  sessions: [
+    "session_id", "principal_id", "agent_id", "agent_name", "project",
+    "description", "github_issue", "started_at", "completed_at",
+    "duration_ms", "status", "pr_url", "events_count", "last_event",
+    "last_event_at", "progress_completed", "progress_total", "input_tokens",
+    "output_tokens", "cache_read_tokens", "cost_usd", "classification",
+    "data_residency", "home_principal", "parent_session_id", "substrate",
+  ],
+  session_activity: ["id", "session_id", "timestamp", "icon", "label", "detail"],
+  github_events: [
+    "id", "event_id", "principal_id", "repo", "event_type", "title",
+    "number", "url", "author", "agent_authored", "linked_session",
+    "payload", "created_at", "received_at",
+  ],
+  usage_snapshots: [
+    "id", "principal_id", "source", "five_hour_pct", "five_hour_resets",
+    "seven_day_pct", "seven_day_resets", "seven_day_opus_pct",
+    "seven_day_sonnet_pct", "extra_usage_enabled", "recorded_at",
+  ],
+};
 
 /**
  * Extract column names for one `CREATE TABLE IF NOT EXISTS <table> (...)`
@@ -121,16 +142,140 @@ function columnNamesForTable(schemaSql: string, table: string): string[] {
     .filter((name): name is string => !!name);
 }
 
+// ---------------------------------------------------------------------------
+// DTO allow-list — one Set per section type in `DashboardSnapshot`, matching
+// `routes/state.ts`'s exported interfaces field-for-field. `description` is
+// deliberately present on every section that carries it — the accepted,
+// sanitized prompt-preview exception documented above.
+// ---------------------------------------------------------------------------
+
+const TOP_LEVEL_KEYS = new Set([
+  "projects", "agents", "sessionTree", "recentCompletions", "recentActivity",
+  "stats", "accountUsage", "principalUsage", "homePrincipals", "updatedAt",
+]);
+const PROJECT_KEYS = new Set(["id", "displayName"]);
+const AGENT_TILE_KEYS = new Set([
+  "id", "name", "principalId", "homePrincipal", "sovereignty", "status", "currentTask",
+]);
+const AGENT_CURRENT_TASK_KEYS = new Set([
+  "sessionId", "agentId", "agentName", "project", "description", "githubIssue",
+  "startedAt", "eventsCount", "lastEvent", "lastEventAt", "progress", "activity",
+  "usage", "status", "completedAt", "durationMs", "parentSessionId", "substrate",
+]);
+const SOVEREIGNTY_KEYS = new Set(["classification", "dataResidency", "homePrincipal"]);
+const PROGRESS_KEYS = new Set(["completed", "total"]);
+const TASK_USAGE_KEYS = new Set(["inputTokens", "outputTokens", "cacheReadTokens", "costUsd"]);
+const SESSION_ACTIVITY_KEYS = new Set(["timestamp", "icon", "label", "detail"]);
+const SESSION_TREE_NODE_KEYS = new Set([
+  "session_id", "parent_session_id", "substrate", "state", "started_at",
+  "ended_at", "agent_name", "task_title", "children",
+]);
+const RECENT_COMPLETION_KEYS = new Set([
+  "agentId", "agentName", "principalId", "project", "description", "durationMs",
+  "completedAt", "prUrl", "githubIssue", "status", "homePrincipal", "sovereignty",
+]);
+const ACTIVITY_SESSION_KEYS = new Set([
+  "type", "source", "timestamp", "agentId", "agentName", "project", "description",
+  "durationMs", "prUrl", "githubIssue", "status",
+]);
+const ACTIVITY_GITHUB_KEYS = new Set([
+  "type", "source", "timestamp", "repo", "title", "number", "url", "author", "agentAuthored",
+]);
+const STATS_KEYS = new Set(["today"]);
+const DAILY_STATS_KEYS = new Set(["prsMerged", "issuesClosed", "commits", "filesChanged", "sessionsCompleted"]);
+const USAGE_SNAPSHOT_KEYS = new Set(["fiveHour", "sevenDay", "sevenDayOpus", "sevenDaySonnet", "extraUsage", "updatedAt"]);
+const USAGE_QUOTA_KEYS = new Set(["utilization", "resetsAt"]);
+const EXTRA_USAGE_KEYS = new Set(["isEnabled", "monthlyLimit", "usedCredits"]);
+
+/** Assert every key on `obj` is in `allowed` — the allow-list primitive every check below uses. */
+function assertKeysAllowed(obj: Record<string, unknown>, allowed: Set<string>, label: string): void {
+  const unexpected = Object.keys(obj).filter((k) => !allowed.has(k));
+  expect([label, unexpected]).toEqual([label, []]);
+}
+
+function assertUsageSnapshot(u: Record<string, unknown>, label: string): void {
+  assertKeysAllowed(u, USAGE_SNAPSHOT_KEYS, label);
+  for (const quota of ["fiveHour", "sevenDay", "sevenDayOpus", "sevenDaySonnet"] as const) {
+    const v = u[quota];
+    if (v) assertKeysAllowed(v as Record<string, unknown>, USAGE_QUOTA_KEYS, `${label}.${quota}`);
+  }
+  if (u.extraUsage) assertKeysAllowed(u.extraUsage as Record<string, unknown>, EXTRA_USAGE_KEYS, `${label}.extraUsage`);
+}
+
+function assertSessionTreeNode(node: Record<string, unknown>, label: string): void {
+  assertKeysAllowed(node, SESSION_TREE_NODE_KEYS, label);
+  for (const child of (node.children as Record<string, unknown>[] | undefined) ?? []) {
+    assertSessionTreeNode(child, `${label}.children[]`);
+  }
+}
+
+/**
+ * Walk a real `DashboardSnapshot` and assert every object's keys, at every
+ * position, are in that position's allow-list. Positional (not a flat global
+ * scan) per Sage's round-2 request — a key name that's legitimate in one
+ * section can't accidentally "cover for" the same name leaking somewhere it
+ * doesn't belong.
+ */
+function assertSnapshotShape(snapshot: DashboardSnapshot): void {
+  assertKeysAllowed(snapshot as unknown as Record<string, unknown>, TOP_LEVEL_KEYS, "DashboardSnapshot");
+
+  for (const p of snapshot.projects) assertKeysAllowed(p, PROJECT_KEYS, "projects[]");
+
+  for (const agent of snapshot.agents) {
+    assertKeysAllowed(agent as unknown as Record<string, unknown>, AGENT_TILE_KEYS, "agents[]");
+    if (agent.sovereignty) {
+      assertKeysAllowed(agent.sovereignty as unknown as Record<string, unknown>, SOVEREIGNTY_KEYS, "agents[].sovereignty");
+    }
+    const task = agent.currentTask;
+    assertKeysAllowed(task as unknown as Record<string, unknown>, AGENT_CURRENT_TASK_KEYS, "agents[].currentTask");
+    if (task.progress) assertKeysAllowed(task.progress, PROGRESS_KEYS, "agents[].currentTask.progress");
+    if (task.usage) assertKeysAllowed(task.usage, TASK_USAGE_KEYS, "agents[].currentTask.usage");
+    for (const a of task.activity) {
+      assertKeysAllowed(a as unknown as Record<string, unknown>, SESSION_ACTIVITY_KEYS, "agents[].currentTask.activity[]");
+    }
+  }
+
+  for (const node of snapshot.sessionTree) {
+    assertSessionTreeNode(node as unknown as Record<string, unknown>, "sessionTree[]");
+  }
+
+  for (const rc of snapshot.recentCompletions) {
+    assertKeysAllowed(rc as unknown as Record<string, unknown>, RECENT_COMPLETION_KEYS, "recentCompletions[]");
+    if (rc.sovereignty) {
+      assertKeysAllowed(rc.sovereignty as unknown as Record<string, unknown>, SOVEREIGNTY_KEYS, "recentCompletions[].sovereignty");
+    }
+  }
+
+  for (const item of snapshot.recentActivity) {
+    if (item.source === "session") {
+      assertKeysAllowed(item as unknown as Record<string, unknown>, ACTIVITY_SESSION_KEYS, "recentActivity[] (session)");
+    } else {
+      assertKeysAllowed(item as unknown as Record<string, unknown>, ACTIVITY_GITHUB_KEYS, "recentActivity[] (github)");
+    }
+  }
+
+  assertKeysAllowed(snapshot.stats, STATS_KEYS, "stats");
+  assertKeysAllowed(snapshot.stats.today as unknown as Record<string, unknown>, DAILY_STATS_KEYS, "stats.today");
+
+  if (snapshot.accountUsage) {
+    assertUsageSnapshot(snapshot.accountUsage as unknown as Record<string, unknown>, "accountUsage");
+  }
+  for (const [principalId, usage] of Object.entries(snapshot.principalUsage)) {
+    assertUsageSnapshot(usage as unknown as Record<string, unknown>, `principalUsage[${principalId}]`);
+  }
+}
+
 describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)", () => {
   const schemaSql = readFileSync(join(WORKER_DIR, "schema.sql"), "utf8");
 
-  it.each(["sessions", "session_activity", "github_events", "usage_snapshots"])(
-    "schema guard: %s has no interior-named column",
+  it.each(Object.keys(ALLOWED_COLUMNS))(
+    "schema allow-list: %s has only known columns",
     (table: string) => {
       const columns = columnNamesForTable(schemaSql, table);
       expect(columns.length).toBeGreaterThan(0); // sanity: the parser actually found columns
-      const leaked = columns.filter((c) => INTERIOR_KEY_PATTERN.test(c));
-      expect(leaked).toEqual([]);
+      const allowed = new Set(ALLOWED_COLUMNS[table]);
+      const unexpected = columns.filter((c) => !allowed.has(c));
+      expect(unexpected).toEqual([]);
     },
   );
 
@@ -158,8 +303,27 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
     ).run(sessionId);
   }
 
-  it("builds a snapshot whose serialized shape carries no interior-keyed field", async () => {
+  /** Seed one COMPLETED session — the shape `recentCompletions` and the
+   * "session" arm of `recentActivity` both project from. */
+  function seedCompletedSession(db: Database, sessionId: string): void {
+    db.query(
+      `INSERT INTO sessions
+         (session_id, principal_id, agent_id, agent_name, project, description,
+          github_issue, started_at, completed_at, duration_ms, pr_url, status,
+          last_event, last_event_at, classification, data_residency, home_principal,
+          parent_session_id, substrate)
+       VALUES (?, 'andreas', 'luna', 'Luna', 'cortex', 'Ship the snapshot contract',
+               '1520', strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour'),
+               strftime('%Y-%m-%dT%H:%M:%fZ','now'), 4200,
+               'https://github.com/the-metafactory/cortex/pull/1537', 'completed',
+               'agent.task.completed', strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+               'federated', 'eu', 'andreas', NULL, 'claude-code')`
+    ).run(sessionId);
+  }
+
+  it("builds a snapshot whose shape matches the per-section allow-list, everywhere", async () => {
     seedFullSession(db, "s-full");
+    seedCompletedSession(db, "s-done");
     // G-410 activity: a sanitized summary — the accepted exception (see
     // file-level scope note) — never the raw tool_input/tool_output it
     // summarizes.
@@ -182,14 +346,16 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
 
     const snapshot: DashboardSnapshot = await buildSnapshot(d1(db));
 
-    // Sanity: the walk actually saw real lifecycle data, not an empty snapshot.
+    // Sanity: the walk actually saw real lifecycle data, not an empty snapshot
+    // — every branch above (agents, sessionTree, recentCompletions, both
+    // recentActivity arms, accountUsage) gets exercised at least once.
     expect(snapshot.agents.length).toBeGreaterThan(0);
-    expect(snapshot.recentActivity.length).toBeGreaterThan(0);
+    expect(snapshot.recentCompletions.length).toBeGreaterThan(0);
+    expect(snapshot.recentActivity.some((i) => i.source === "session")).toBe(true);
+    expect(snapshot.recentActivity.some((i) => i.source === "github")).toBe(true);
     expect(snapshot.accountUsage).not.toBeNull();
 
-    const keys = collectKeys(snapshot);
-    const leaked = [...keys].filter((k) => INTERIOR_KEY_PATTERN.test(k));
-    expect(leaked).toEqual([]);
+    assertSnapshotShape(snapshot);
   });
 
   it("keeps session_activity's projected shape to exactly the 4 known G-410 fields", async () => {

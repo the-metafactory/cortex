@@ -23,7 +23,11 @@ export function d1(db: Database): D1Database {
           return stmt;
         },
         async first() {
-          return db.query(sql).get(...(stmt._args as never[]));
+          // bun:sqlite's `.get()` returns `undefined` on no match; real D1
+          // returns `null`. Coerce so callers checking `if (!row) ...`
+          // (e.g. `getLatestAccountUsage`) see the same falsy-but-typed
+          // value the production binding would give them.
+          return db.query(sql).get(...(stmt._args as never[])) ?? null;
         },
         async all() {
           return { results: db.query(sql).all(...(stmt._args as never[])) };
