@@ -20,16 +20,7 @@ import { join } from "path";
 import { buildLiveAdmitPorts } from "../network-admit-adapters";
 import { generateStackIdentity } from "../../../../bus/stack-provisioning";
 import type { AdmitDiscordPort } from "../network-admit-ports";
-
-function setMockFetch(fn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): void {
-  globalThis.fetch = fn as unknown as typeof globalThis.fetch;
-}
-
-function urlOf(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
-  return input.url;
-}
+import { setMockFetch, urlOf } from "./fetch-mock-helpers";
 
 describe("buildLiveAdmitDiscordPort — live adapter (Sage review, PR #1586)", () => {
   let home: string;
@@ -60,9 +51,10 @@ describe("buildLiveAdmitDiscordPort — live adapter (Sage review, PR #1586)", (
   }
 
   /** The live discord port, built with throwaway registry/material fields —
-   *  this test only exercises `.discord`. */
+   *  this test only exercises `.discord`. The seed lives UNDER `home` (already
+   *  torn down by `afterEach`) so no separate tmpdir needs its own cleanup. */
   function discordPort(): AdmitDiscordPort {
-    const seedPath = join(mkdtempSync(join(tmpdir(), "admit-discord-seed-")), "admin.nk");
+    const seedPath = join(home, "admin.nk");
     const material = generateStackIdentity({ seedPath });
     return buildLiveAdmitPorts({ registryUrl: "http://unused.test", material }).discord;
   }
@@ -141,9 +133,14 @@ describe("buildLiveAdmitDiscordPort — live adapter (Sage review, PR #1586)", (
     const outcome = await port.assignRole({ member: "user-1", role: "community-fleet" });
 
     expect(outcome.status).toBe("failed");
-    expect(outcome.warning).toContain("Manage Roles");
-    expect(outcome.warning).toContain("guild-cfg");
-    expect(outcome.warning).toContain("admission committed, assign role manually");
+    // Exact text: mapRoleError's 403 message (discord-roles.ts) wrapped by
+    // buildLiveAdmitDiscordPort's "Discord role assignment failed: ... —
+    // admission committed, assign role manually" template.
+    expect(outcome.warning).toBe(
+      "Discord role assignment failed: Bot lacks Manage Roles permission (or its highest role is below the " +
+        "target role) in guild guild-cfg. Ensure the bot has Manage Roles and its role is above community-fleet. " +
+        "— admission committed, assign role manually",
+    );
   });
 
   test("resolveRoleId throws (role name not found) → failed, assign-manually warning", async () => {
@@ -154,7 +151,12 @@ describe("buildLiveAdmitDiscordPort — live adapter (Sage review, PR #1586)", (
     const outcome = await port.assignRole({ member: "user-1", role: "nonexistent-role" });
 
     expect(outcome.status).toBe("failed");
-    expect(outcome.warning).toContain('Role "nonexistent-role" not found');
-    expect(outcome.warning).toContain("assign manually");
+    // Exact text: resolveRoleId's not-found Error (discord-roles.ts) wrapped by
+    // buildLiveAdmitDiscordPort's "Discord role not assigned: ... — assign
+    // manually" template.
+    expect(outcome.warning).toBe(
+      'Discord role not assigned: Role "nonexistent-role" not found in guild guild-cfg. ' +
+        "Pass the role's snowflake id directly, or check: discord roles --server <profile> — assign manually",
+    );
   });
 });

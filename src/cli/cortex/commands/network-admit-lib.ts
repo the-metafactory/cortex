@@ -25,6 +25,7 @@ import type {
   AdmitPorts,
   AdmitSealOutcome,
   DiscordRoleInputs,
+  DiscordRoleStatus,
   GetRequestResult,
   ListRequestsResult,
   PostDecisionResult,
@@ -227,7 +228,7 @@ export type AdmitReport =
       adminFingerprint: string;
       principalId: string;
       sealOutcome: AdmitSealOutcome;
-      discordStatus: string;
+      discordStatus: DiscordRoleStatus;
       discordWarning: string;
     }
   | {
@@ -333,7 +334,7 @@ export async function runNetworkAdmit(inputs: AdmitInputs, ports: AdmitPorts): P
   }
 
   // 3. Assign Discord role (O-5) — when --discord-member is given.
-  let discordStatus = "skipped";
+  let discordStatus: DiscordRoleStatus = "skipped";
   let discordWarning = "";
   if (inputs.discord !== undefined) {
     const outcome = await ports.discord.assignRole(inputs.discord);
@@ -390,6 +391,16 @@ function rejectDecisionFailureMessage(inputs: RejectInputs, res: Exclude<PostDec
   return `registry rejected the decision (HTTP ${res.status.toString()}): ${res.body}`;
 }
 
+/** Mirrors `admitFail` — the shared `{ ok: false, ... }` shape every reject failure returns. */
+function rejectFail(inputs: RejectInputs, reason: string): RejectReport {
+  return {
+    ok: false,
+    requestId: inputs.requestId,
+    adminFingerprint: inputs.material.fingerprint,
+    reason,
+  };
+}
+
 /**
  * ADR-0015's admission-denial verb — the exact mirror of {@link runNetworkAdmit},
  * except the signed decision claim carries `decision: "reject"`. Grants +
@@ -410,31 +421,16 @@ export async function runNetworkReject(inputs: RejectInputs, ports: AdmitPorts):
   try {
     signedBody = await buildAdmissionDecisionBody(inputs.requestId, inputs.material, "reject");
   } catch (err) {
-    return {
-      ok: false,
-      requestId: inputs.requestId,
-      adminFingerprint: inputs.material.fingerprint,
-      reason: `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    return rejectFail(inputs, `failed to build admission decision claim: ${err instanceof Error ? err.message : String(err)}`);
   }
   let postRes: PostDecisionResult;
   try {
     postRes = await ports.registry.postDecision(inputs.requestId, "reject", signedBody);
   } catch (err) {
-    return {
-      ok: false,
-      requestId: inputs.requestId,
-      adminFingerprint: inputs.material.fingerprint,
-      reason: `registry POST failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    return rejectFail(inputs, `registry POST failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (postRes.outcome !== "ok") {
-    return {
-      ok: false,
-      requestId: inputs.requestId,
-      adminFingerprint: inputs.material.fingerprint,
-      reason: rejectDecisionFailureMessage(inputs, postRes),
-    };
+    return rejectFail(inputs, rejectDecisionFailureMessage(inputs, postRes));
   }
 
   return {

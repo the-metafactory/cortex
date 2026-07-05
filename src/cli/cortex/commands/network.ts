@@ -2382,10 +2382,18 @@ const DEFAULT_ADMIT_PORTS_FACTORY: AdmitPortsFactory = (cfg) => buildLiveAdmitPo
 // of admit's assign). `reject` and `secret revoke-member` share this — it is
 // NOT folded into the S5 `AdmitPorts.discord` port (admit-only) because
 // `secret revoke-member` (out of scope for this slice) depends on the same
-// singleton-override test seam. The flag resolution mirrors admit's block
-// EXACTLY (same names, same precedence, same graceful degradation) — the only
-// difference is it calls `removeRole`, and a failure is ALWAYS non-fatal (the
-// parent decision has already committed).
+// singleton-override test seam.
+//
+// S5 note: this is NO LONGER an exact mirror of admit's Discord path. Admit's
+// assign moved to `AdmitPorts.discord.assignRole` (network-admit-adapters.ts)
+// — the injected-singleton short-circuit is gone there, replaced by a clean
+// port. `removeDiscordFleetRole` below kept the pre-S5 shape (including the
+// `discordClient ? "injected" : ctx.botToken` singleton-override seam) because
+// it's shared with `secret revoke-member`. The flag NAMES and PRECEDENCE
+// still agree (same `--discord-*` flags, same resolution order); only the
+// TEST-INJECTION mechanism diverged. The only behavioural difference is it
+// calls `removeRole`, and a failure is ALWAYS non-fatal (the parent decision
+// has already committed).
 // ---------------------------------------------------------------------------
 
 /** Minimal Discord client surface (role removal) injectable for tests. */

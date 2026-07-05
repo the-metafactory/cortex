@@ -26,6 +26,7 @@ import { dispatchNetwork, type SecretPortsFactory, type AdmitPortsFactory, type 
 import type { NetworkSecretPorts } from "../network-secret-ports";
 import { buildLiveAdmitPorts } from "../network-admit-adapters";
 import { dispatchProvisionStack } from "../provision-stack";
+import { setMockFetch, urlOf } from "./fetch-mock-helpers";
 
 // cortex#1517 (S3, epic #1514) — live-registry round-trip coverage. Drives the
 // REAL registry Worker app so buildAdmissionReadHeader (--list-pending) and
@@ -37,19 +38,6 @@ import registryApp from "../../../../services/network-registry/src/index";
 import type { Env } from "../../../../services/network-registry/src/index";
 import { makeRegistryKey, resetStores } from "../../../../services/network-registry/__tests__/helpers";
 import { _resetRateLimitBucketsForTest } from "../../../../services/network-registry/src/rate-limit";
-
-/** Type-safe mock-fetch helper */
-function setMockFetch(
-  fn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-): void {
-  globalThis.fetch = fn as unknown as typeof globalThis.fetch;
-}
-
-function urlOf(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
-  return input.url;
-}
 
 // =============================================================================
 // Fixtures and helpers
