@@ -96,10 +96,8 @@ import { DaemonBrainHost } from "./brain/daemon-brain-host";
 import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import { wireReviewConsumers } from "./runner/review-consumer-boot";
 import { wireBrainConsumers } from "./runner/brain-consumer-boot";
-import {
-  ReleaseConsumer,
-  type ReleaseConsumerAgent,
-} from "./runner/release-consumer";
+import { wireReleaseConsumers } from "./runner/release-consumer-boot";
+import { ReleaseConsumer } from "./runner/release-consumer";
 import {
   provisionReviewStream,
   provisionReviewConsumer,
@@ -2406,141 +2404,29 @@ export async function startCortex(
       }
     }
 
+    // S8 (epic #1514, cortex#1522) — the per-agent construct+provision+start+
+    // log body extracted to `wireReleaseConsumers`. Unlike the brain/review
+    // lanes, this construction has exactly ONE call site (this loop) and no
+    // `agents.d/` hot-reload path — see the module's file header for why that
+    // asymmetry is preserved, not "fixed".
+    // Block-scoped: shadows nothing outside this `if` (review's own
+    // `startForAgent` above is a sibling top-level binding, not visible from
+    // inside a nested reload closure the way brain's must be — release has no
+    // hot-reload path, so this name only ever needs to live here).
+    const { startForAgent } = wireReleaseConsumers({
+      principalId,
+      systemEventSource,
+      runtime,
+      makeOfferAdmission,
+      releaseConsumers,
+      releaseJsm,
+      releaseStream,
+      releaseConsumerMaxDeliver,
+      releaseOfferingPatterns,
+      releaseSubjectPattern,
+    });
     for (const agent of releaseCapableAgents) {
-      try {
-        const caps = agent.runtime?.capabilities ?? [];
-        const consumerAgent: ReleaseConsumerAgent = {
-          id: agent.id,
-          capabilities: caps,
-          ...(agent.runtime?.maxConcurrent !== undefined && {
-            maxConcurrent: agent.runtime.maxConcurrent,
-          }),
-        };
-        // F-4.1 — no executor wired yet (see block header). The consumer is
-        // dormant-but-present: capability declared + gate ladder live.
-        const consumer = new ReleaseConsumer({
-          agent: consumerAgent,
-          source: systemEventSource,
-          runtime,
-          // CO-2/CO-4 — per-offer-scope admission gate (inert on `local.`).
-          offerAdmission: makeOfferAdmission("release.cut"),
-        });
-        releaseConsumers.push(consumer);
-
-        const durable = `cortex-release-consumer-${principalId}-${agent.id}`;
-        if (releaseJsm !== null) {
-          try {
-            const outcome = await provisionReviewConsumer({
-              jsm: releaseJsm,
-              stream: releaseStream,
-              durable,
-              maxDeliver: releaseConsumerMaxDeliver,
-            });
-            if (outcome === "created") {
-              console.log(
-                `cortex: provisioned JetStream durable "${durable}" on stream "${releaseStream}"`,
-              );
-            } else if (outcome === "updated") {
-              console.log(
-                `cortex: reconciled JetStream durable "${durable}" on stream "${releaseStream}"`,
-              );
-            }
-          } catch (provisionErr) {
-            process.stderr.write(
-              `cortex: provisionReviewConsumer failed for "${durable}": ` +
-                `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-            );
-          }
-        }
-
-        // CO-2 (cortex#941) — bind on the offering-admitted scope prefixes.
-        // `releaseOfferingPatterns[0]` is byte-identical to
-        // `releaseSubjectPattern` for the CO-1 default (`local`-only); the
-        // `.slice(1)` loop is empty unless `release.cut` is offered wider.
-        const primaryReleasePattern =
-          releaseOfferingPatterns[0] ?? releaseSubjectPattern;
-        const started = await consumer.start({
-          pattern: primaryReleasePattern,
-          stream: releaseStream,
-          durable,
-        });
-        // F-4.1 — log line flags `executor=none` so a principal grepping boot
-        // can see the lane is declared but the forge seam is not yet wired.
-        if (started.subscribed) {
-          console.log(
-            `cortex: release consumer ready for agent=${agent.id} capability=release.cut executor=none (gated; principal-grant required) — PRINCIPAL-GATED, ALWAYS-HUMAN`,
-          );
-        } else {
-          console.log(
-            `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.release.cut envelopes will not be claimed by this consumer)`,
-          );
-        }
-        // CO-2 — extra offering scopes (federated/public) beyond the primary
-        // local one, each on its own scope-named durable. Empty for the CO-1
-        // default ⇒ byte-identical boot.
-        for (const extraPattern of releaseOfferingPatterns.slice(1)) {
-          const scopeToken = extraPattern.split(".", 1)[0] ?? "scope";
-          // A NEW consumer instance per extra scope (one filter per JetStream
-          // pull consumer) — same idiom as the review lane + the NIT-fix on the
-          // dev lane. The CO-2/CO-4 admission gate is wired here too so the
-          // wider-scope release dispatch clears its floor.
-          const extraConsumer = new ReleaseConsumer({
-            agent: consumerAgent,
-            source: systemEventSource,
-            runtime,
-            offerAdmission: makeOfferAdmission("release.cut"),
-          });
-          releaseConsumers.push(extraConsumer);
-          const extraDurable = `cortex-release-consumer-offer-${scopeToken}-${principalId}-${agent.id}`;
-          if (releaseJsm !== null) {
-            try {
-              const outcome = await provisionReviewConsumer({
-                jsm: releaseJsm,
-                stream: releaseStream,
-                durable: extraDurable,
-                maxDeliver: releaseConsumerMaxDeliver,
-              });
-              if (outcome === "created") {
-                console.log(
-                  `cortex: provisioned JetStream durable "${extraDurable}" on stream "${releaseStream}"`,
-                );
-              } else if (outcome === "updated") {
-                console.log(
-                  `cortex: reconciled JetStream durable "${extraDurable}" on stream "${releaseStream}"`,
-                );
-              }
-            } catch (provisionErr) {
-              process.stderr.write(
-                `cortex: provisionReviewConsumer failed for "${extraDurable}": ` +
-                  `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-              );
-            }
-          }
-          const extraStarted = await extraConsumer.start({
-            pattern: extraPattern,
-            stream: releaseStream,
-            durable: extraDurable,
-          });
-          if (extraStarted.subscribed) {
-            console.log(
-              `cortex: release consumer (offer:${scopeToken}) ready for agent=${agent.id} capability=release.cut executor=none pattern=${extraPattern}`,
-            );
-          } else {
-            console.log(
-              `cortex: release consumer (offer:${scopeToken}) DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime subscriptions disabled (${extraPattern} envelopes will not be claimed by this consumer)`,
-            );
-          }
-        }
-      } catch (err) {
-        // Per CLAUDE.md "no empty catch blocks": a single agent's release
-        // consumer crash does NOT abort boot — siblings still wire. The
-        // consumer stays in `releaseConsumers[]` so the shutdown drain still
-        // calls `.stop()` (idempotent — handles the "never subscribed" case).
-        process.stderr.write(
-          `cortex: release consumer init failed for agent=${agent.id}: ` +
-            `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      }
+      await startForAgent(agent);
     }
   }
 
