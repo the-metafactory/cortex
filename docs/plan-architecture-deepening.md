@@ -272,9 +272,9 @@ Umbrella epic: **#1514**.
 | S4 MC db write half | #1518 | C2 | M | — | ☑ merged (#1535) |
 | S5 network-admit triplet | #1519 | C3 | M | S3 (soft) | ☐ held (network.ts in-flight) |
 | S6 DashboardSnapshot contract | #1520 | C7 | M | — | ☑ merged (#1537) — **retargeted worker-scoped** |
-| S7 review lane | #1521 | C1 | M | — | ☐ |
-| S8 brain + release lanes | #1522 | C1 | M | S7 | ☐ |
-| S9 adapter lane | #1523 | C1 | M | S8 | ☐ |
+| S7 review lane | #1521 | C1 | M | — | ☑ merged (#1542) — cortex.ts 7204→6736 |
+| S8 brain + release lanes | #1522 | C1 | M | S7 | ☑ merged (#1545) — →6390 |
+| S9 adapter lane | #1523 | C1 | M | S8 | ☑ merged (#1547) — →5937 (via GatewayAdapterFactory in src/runner/) |
 | S10 sink ADR | #1524 | C8 | S (ADR) | — | ☐ |
 
 Tick here AND close the slice's GitHub issue on merge (repo sync rule).
