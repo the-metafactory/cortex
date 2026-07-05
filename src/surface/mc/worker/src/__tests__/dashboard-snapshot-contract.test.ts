@@ -1,5 +1,6 @@
 /**
- * S6 (#1520) — `DashboardSnapshot` contract: the ADR-0005 no-interiors guard.
+ * S6 (#1520) — allow-list SHAPE guard for the `DashboardSnapshot` contract
+ * (the public, unauthenticated `/api/state` / `/api/dashboard` projection).
  *
  * cortex#1520 set out to unify the worker's `/api/state` shape with a "local
  * assembly" — but no such local combined-snapshot endpoint exists (cortex's
@@ -9,80 +10,93 @@
  * `buildSnapshot()` and the `/api/state` route are checked against, plus this
  * test.
  *
+ * WHAT THIS TEST ACTUALLY CHECKS, PRECISELY (deliberately under-claiming —
+ * see the three review-round corrections below for how this wording hardened):
+ *
+ *   (a) KEY SHAPE, not VALUES. It asserts which field NAMES may appear at
+ *       each position in the payload — never that a field's CONTENT is safe.
+ *       `description` and `detail` are allow-listed (see below); this test
+ *       does not, and cannot, check what's actually inside them on a given
+ *       run.
+ *   (b) Does NOT re-verify upstream sanitization. `sessions.description` and
+ *       `session_activity.detail` are ingest-time-sanitized previews (see
+ *       "the two known exceptions" below); their sanitization runs in
+ *       `EventLogger.hook.ts` / `common/event-processor.ts` /
+ *       `common/event-utils.ts`, entirely upstream of `state.ts`. This file
+ *       never re-checks that work.
+ *   (c) Column-backed fields are guarded UNCONDITIONALLY. The schema
+ *       allow-list (`ALLOWED_COLUMNS`) reads `schema.sql` directly — a new
+ *       column on any of the 4 tables `buildSnapshot()` reads fails this test
+ *       regardless of whether any query or fixture ever touches it.
+ *   (d) DTO fields are guarded ONLY where the fixture actually populates
+ *       them. The shape walk is `Object.keys(obj)` on ONE seeded snapshot;
+ *       a conditionally-computed field (e.g. `currentTask.usage`,
+ *       `agent.sovereignty`, a nested `sessionTree[].children[]` entry) is
+ *       only checked on runs where that branch's precondition is met. The
+ *       fixture (below) deliberately forces every such branch present at
+ *       least once — see the "sanity" assertions in the main test, which
+ *       assert the fixture itself, not just the walker, exercised each one.
+ *       A field this fixture never triggers would still pass silently.
+ *
  * ADR-0005 / CONTEXT.md "Session interior": tool calls and their
  * arguments/outputs, prompts, file edits, skill invocations, and sub-agent
- * spawns never leave `local.` scope.
+ * spawns never leave `local.` scope. This test's schema + DTO allow-lists are
+ * ONE way that boundary gets enforced on the cloud side — not the only one,
+ * and (per (a)/(b) above) not a value-level guarantee.
  *
  * CORRECTION (review round 1, Sage on #1537): the first version of this test
  * claimed to "seed rows that would carry interior-shaped data" — that wasn't
  * true. Investigation (D1 schema + the full write path: `EventLogger.hook.ts`
- * → `event-processor.ts`/`event-utils.ts` → `ingest.ts`) found:
- *
- *   - D1's schema (`schema.sql`) declares NO column for a raw tool-call
- *     argument/output object, a diff, or a message array, on ANY table
- *     `buildSnapshot()` reads (`sessions`, `session_activity`, `github_events`,
- *     `usage_snapshots`). `ingest.ts`'s INSERT statements always name bound
- *     columns explicitly — nothing ever spreads a raw event payload into a
- *     catch-all column.
- *   - The full RAW local event (`EventLogger.hook.ts`) DOES carry
- *     `payload.tool_input` / `payload.tool_output` — but that hook's own
- *     comment says "raw — relay will filter": stripping those before
- *     anything reaches this worker's `/api/ingest` is `cortex-relay`'s job,
- *     entirely outside `src/surface/mc/worker`. By the time an event reaches
- *     `event-processor.ts`, nothing there reads or persists `tool_input`/
- *     `tool_output` (the one place that inspects `tool_input`,
- *     `extractActivityEntry` in `common/event-utils.ts`, uses it only to pick
- *     a "Write" vs "Edit" label — the object itself is never stored).
- *   - Two free-text D1 columns DO carry short, ALREADY-SANITIZED derivatives
- *     of interior events, by deliberate pre-existing design — not raw
- *     interior, and not something this test (or this slice) changes:
- *       - `sessions.description` — up to a 200-char preview of the
- *         triggering prompt (`EventLogger.hook.ts`'s `preview.slice(0, 200)`
- *         → `payload.prompt_preview`), further passed through
- *         `sanitizeDescription()` (strips `toolu_*` IDs) in
- *         `event-processor.ts`. Surfaces as `agents[].currentTask.description`
- *         / `recentCompletions[].description` / the session arm of
- *         `recentActivity[].description`.
- *       - `session_activity.detail` (G-410) — a per-event-type summary built
- *         by `extractActivityEntry()`, e.g. "Editing foo.ts" or a redacted,
- *         100-char-capped command preview. Surfaces as
- *         `agents[].currentTask.activity[].detail`.
- *     Both are VALUES, produced by ingest-time sanitizers that run before
- *     anything reaches D1 — `state.ts` never re-validates or re-sanitizes a
- *     row's values on read. This test cannot, and does not, re-verify that
- *     upstream sanitization; that invariant lives at the ingest layer
- *     (`EventLogger.hook.ts` / `common/event-processor.ts` /
- *     `common/event-utils.ts`), not here.
+ * → `event-processor.ts`/`event-utils.ts` → `ingest.ts`) found two free-text
+ * D1 columns carry short, ALREADY-SANITIZED derivatives of interior events,
+ * by deliberate pre-existing design:
+ *   - `sessions.description` — up to a 200-char preview of the triggering
+ *     prompt (`EventLogger.hook.ts`'s `preview.slice(0, 200)` →
+ *     `payload.prompt_preview`), further passed through
+ *     `sanitizeDescription()` (strips `toolu_*` IDs) in `event-processor.ts`.
+ *     Surfaces as `agents[].currentTask.description` /
+ *     `recentCompletions[].description` / the session arm of
+ *     `recentActivity[].description`.
+ *   - `session_activity.detail` (G-410) — a per-event-type summary built by
+ *     `extractActivityEntry()`, e.g. "Editing foo.ts" or a redacted,
+ *     100-char-capped command preview. Surfaces as
+ *     `agents[].currentTask.activity[].detail`.
+ * Both are VALUES, produced by ingest-time sanitizers that run before
+ * anything reaches D1 — see (b) above.
  *
  * CORRECTION (review round 2, Sage on #1537): round 1 used a DENY-LIST
  * (`INTERIOR_KEY_PATTERN`) at both the schema-column and DTO-key levels. A
  * deny-list can never be complete — `tool_result`, `raw_diff`, `prompt_text`,
- * `content`, `body`, `payload`, … all slip through a fixed name pattern.
- * Replaced with an ALLOW-LIST at both levels: every column name (per table)
- * and every DTO key (per section type, recursively) must be a member of an
- * explicit known-safe set. `description` is EXPLICITLY, CONSCIOUSLY included
- * in that set — it is a permitted, ingest-sanitized 200-char preview, not an
- * omission. Any future field — interior-named or not — now fails this test
- * until it is deliberately added to the allow-list; growth can no longer
- * sneak past by avoiding a handful of banned name patterns.
+ * `content`, `body`, … all slip through a fixed name pattern. Replaced with
+ * an ALLOW-LIST at both levels: every column name (per table) and every DTO
+ * key (per section type, recursively) must be a member of an explicit
+ * known-safe set. `description` is EXPLICITLY, CONSCIOUSLY included in that
+ * set — a permitted, ingest-sanitized preview, not an omission.
  *
- * Given that, this test pins what's actually decidable from `state.ts`'s
- * side of the boundary:
- *
- *   1. SCHEMA allow-list — every column on the 4 tables `buildSnapshot()`
- *      reads is a member of the known-safe column set. Catches ANY future
- *      schema widening (interior-named or not) at the earliest possible
- *      point, before any query or DTO field could expose it.
- *   2. DTO allow-list — `buildSnapshot()`'s serialized output, walked
- *      recursively per section type, never introduces a key outside the
- *      known-safe set for that section.
- *   3. `session_activity`'s EXACT key set — a session_activity row surfaces
- *      as exactly the 4 known G-410 fields, never more (subsumed by #2, kept
- *      as a focused regression pin since it's the row most directly derived
- *      from tool activity).
- *
- * None of these assert anything about the CONTENT of `description`/`detail`
- * — that's the accepted, out-of-scope exception documented above.
+ * CORRECTION (review round 3, Sage on #1537): two more overclaims, both
+ * fixed:
+ *   - Round 1/2's prose implied D1 has NO raw/blob-shaped column at all.
+ *     False: `github_events.payload` IS such a column (present in
+ *     `ALLOWED_COLUMNS.github_events` below) — a JSON blob written by
+ *     `common/github-events.ts`'s webhook processors. Verified its actual
+ *     content and reach: for a PR event it's
+ *     `JSON.stringify({branch, base, additions, deletions, changedFiles})`;
+ *     for a push, `{commits, filesChanged, branch}`; for a release,
+ *     `{tag, prerelease}` — small, curated GitHub metadata, never a raw
+ *     webhook body, and NOT session interior (it has nothing to do with tool
+ *     calls, prompts, or agent sessions). Read `getRecentGitHubEvents`
+ *     (below) and its one caller, `getRecentActivity`: the column IS
+ *     SELECTed into the internal `GithubEventRow.payload` field, but the
+ *     github arm of `ActivityFeedItem` it builds names only `type`, `source`,
+ *     `timestamp`, `repo`, `title`, `number`, `url`, `author`,
+ *     `agentAuthored` — `payload` is never referenced, so it never reaches
+ *     the public DTO. `ACTIVITY_GITHUB_KEYS` (below) omits it on purpose.
+ *   - "Any future field fails until deliberately added; growth can no longer
+ *     sneak past" overclaimed uniformly for ALL fields. Corrected to (c)/(d)
+ *     above: unconditional for schema columns, conditional-on-the-fixture for
+ *     DTO fields. The fixture was strengthened (seeds a genuine parent/child
+ *     session pair, sovereignty, progress, usage, and all 4 usage-quota
+ *     sub-shapes) to close as much of that gap as a single-snapshot test can.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -109,6 +123,10 @@ const ALLOWED_COLUMNS: Record<string, string[]> = {
     "data_residency", "home_principal", "parent_session_id", "substrate",
   ],
   session_activity: ["id", "session_id", "timestamp", "icon", "label", "detail"],
+  // `payload` IS a raw-JSON-blob column (round-3 correction above) — it
+  // exists, it's here, it's read by `getRecentGitHubEvents`. It never reaches
+  // the public DTO though: `getRecentActivity`'s github-arm mapping doesn't
+  // reference it, and `ACTIVITY_GITHUB_KEYS` below omits it on purpose.
   github_events: [
     "id", "event_id", "principal_id", "repo", "event_type", "title",
     "number", "url", "author", "agent_authored", "linked_session",
@@ -178,6 +196,12 @@ const ACTIVITY_SESSION_KEYS = new Set([
   "type", "source", "timestamp", "agentId", "agentName", "project", "description",
   "durationMs", "prUrl", "githubIssue", "status",
 ]);
+// Deliberately excludes `payload` — the raw-JSON-blob github_events column
+// exists (`ALLOWED_COLUMNS.github_events` above) and IS read into
+// `GithubEventRow.payload`, but `getRecentActivity`'s mapping never forwards
+// it into this shape. If a future change starts spreading `GithubEventRow`
+// into the DTO instead of naming fields, `payload` showing up here is exactly
+// the regression this allow-list is meant to catch.
 const ACTIVITY_GITHUB_KEYS = new Set([
   "type", "source", "timestamp", "repo", "title", "number", "url", "author", "agentAuthored",
 ]);
@@ -265,7 +289,7 @@ function assertSnapshotShape(snapshot: DashboardSnapshot): void {
   }
 }
 
-describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)", () => {
+describe("DashboardSnapshot allow-list SHAPE guard for the public /api/state projection (S6, #1520)", () => {
   const schemaSql = readFileSync(join(WORKER_DIR, "schema.sql"), "utf8");
 
   it.each(Object.keys(ALLOWED_COLUMNS))(
@@ -321,9 +345,27 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
     ).run(sessionId);
   }
 
+  /**
+   * Seed one ACTIVE session that is a CHILD of `parentSessionId` — the only
+   * way to force `sessionTree[].children[]` non-empty, so
+   * `assertSessionTreeNode`'s recursive branch actually runs at least once
+   * (round-3 fixture strengthening, Sage on #1537).
+   */
+  function seedChildSession(db: Database, sessionId: string, parentSessionId: string): void {
+    db.query(
+      `INSERT INTO sessions
+         (session_id, agent_id, agent_name, started_at, last_event, last_event_at,
+          status, parent_session_id, substrate)
+       VALUES (?, 'echo', 'Echo', strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+               'agent.task.started', strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+               'active', ?, 'claude-code')`
+    ).run(sessionId, parentSessionId);
+  }
+
   it("builds a snapshot whose shape matches the per-section allow-list, everywhere", async () => {
     seedFullSession(db, "s-full");
     seedCompletedSession(db, "s-done");
+    seedChildSession(db, "s-child", "s-full");
     // G-410 activity: a sanitized summary — the accepted exception (see
     // file-level scope note) — never the raw tool_input/tool_output it
     // summarizes.
@@ -346,14 +388,25 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
 
     const snapshot: DashboardSnapshot = await buildSnapshot(d1(db));
 
-    // Sanity: the walk actually saw real lifecycle data, not an empty snapshot
-    // — every branch above (agents, sessionTree, recentCompletions, both
-    // recentActivity arms, accountUsage) gets exercised at least once.
+    // Sanity: the walk actually saw real lifecycle data — every branch the
+    // walker below can take is exercised at least once, INCLUDING the
+    // conditionally-computed ones (round-3 fixture strengthening, Sage on
+    // #1537): agent.sovereignty, currentTask.progress, currentTask.usage,
+    // recentCompletions[].sovereignty, accountUsage + all 4 usage-quota
+    // sub-objects + extraUsage, principalUsage, and (via s-child)
+    // sessionTree[].children[] non-empty at least one level deep. A DTO field
+    // this fixture does NOT populate would still pass silently — see the
+    // describe-level limits note.
     expect(snapshot.agents.length).toBeGreaterThan(0);
+    expect(snapshot.agents.some((a) => a.sovereignty !== null)).toBe(true);
+    expect(snapshot.agents.some((a) => a.currentTask.progress !== null)).toBe(true);
+    expect(snapshot.agents.some((a) => a.currentTask.usage !== undefined)).toBe(true);
     expect(snapshot.recentCompletions.length).toBeGreaterThan(0);
+    expect(snapshot.recentCompletions.some((rc) => rc.sovereignty !== null)).toBe(true);
     expect(snapshot.recentActivity.some((i) => i.source === "session")).toBe(true);
     expect(snapshot.recentActivity.some((i) => i.source === "github")).toBe(true);
     expect(snapshot.accountUsage).not.toBeNull();
+    expect(snapshot.sessionTree.some((n) => n.children.length > 0)).toBe(true);
 
     assertSnapshotShape(snapshot);
   });

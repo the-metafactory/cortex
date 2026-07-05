@@ -36,8 +36,10 @@ import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
 // metadata — with two known, deliberate exceptions, neither of them RAW
 // interior (a raw tool-call argument/output object, a full unbounded prompt,
 // a diff, or a message array never appear here; D1's schema has no column
-// for any of those — see the schema-guard in
-// `__tests__/dashboard-snapshot-contract.test.ts`):
+// for any of those categories on the 4 tables this file reads — see the
+// allow-list guard in `__tests__/dashboard-snapshot-contract.test.ts`, which
+// checks SHAPE, not content — read that file's header before assuming more
+// than it actually enforces):
 //   - `AgentCurrentTask.description` (sourced from `sessions.description`) —
 //     up to a 200-char PREVIEW of the triggering prompt. Truncated at the
 //     source (`EventLogger.hook.ts`'s `preview.slice(0, 200)` →
@@ -50,7 +52,11 @@ import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
 //     tool_input/tool_output it summarizes.
 // Both sanitizers run at ingest time, upstream of this file; `state.ts` never
 // re-validates or re-sanitizes a row's values on read. Say "no RAW interiors,
-// two sanitized previews permitted by design" — not "never prompts."
+// two sanitized previews permitted by design" — not "never prompts," and NOT
+// "no raw-shaped column of any kind": `github_events.payload` is a genuine
+// JSON-blob column (small, curated GitHub metadata — branch/additions/
+// deletions for a PR, commit/file counts for a push — not session interior),
+// read by `getRecentGitHubEvents` but never forwarded into `ActivityFeedItem`.
 // ---------------------------------------------------------------------------
 
 /** IAW D.5.3 sovereignty block — `null` when none of the three fields are populated. */
