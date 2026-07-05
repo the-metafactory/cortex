@@ -12,41 +12,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { buildSnapshot } from "../routes/state";
-
-const WORKER_DIR = join(import.meta.dir, "..", "..");
-
-/** Minimal D1Database shim over bun:sqlite (same surface buildSnapshot uses). */
-function d1(db: Database): D1Database {
-  return {
-    prepare(sql: string) {
-      const stmt: any = {
-        _args: [] as unknown[],
-        bind(...args: unknown[]) {
-          stmt._args = args;
-          return stmt;
-        },
-        async first() {
-          return db.query(sql).get(...(stmt._args as never[]));
-        },
-        async all() {
-          return { results: db.query(sql).all(...(stmt._args as never[])) };
-        },
-        async run() {
-          const res = db.query(sql).run(...(stmt._args as never[]));
-          return { meta: { changes: res.changes } };
-        },
-      };
-      return stmt;
-    },
-  } as unknown as D1Database;
-}
-
-function loadSchema(db: Database): void {
-  db.exec(readFileSync(join(WORKER_DIR, "schema.sql"), "utf8"));
-}
+import { d1, loadSchema } from "./d1-shim";
 
 /** Seed an ACTIVE session (inside the 3-hour active window). */
 function seedActiveSession(

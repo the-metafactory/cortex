@@ -7,26 +7,67 @@
  * escalation on #1520). S6 was retargeted to the worker's own producer↔consumer
  * contract: one exported `DashboardSnapshot` type (`routes/state.ts`) both
  * `buildSnapshot()` and the `/api/state` route are checked against, plus this
- * test — pinning the by-hand no-interiors filter (the SELECTs in `state.ts`
- * hand-list lifecycle-safe columns; they never `SELECT *`) as an ENFORCED
- * invariant rather than an unverified convention.
+ * test.
  *
  * ADR-0005 / CONTEXT.md "Session interior": tool calls and their
  * arguments/outputs, prompts, file edits, skill invocations, and sub-agent
- * spawns never leave `local.` scope. This test drives the REAL `buildSnapshot`
- * against an in-memory bun:sqlite DB (the same D1 shim pattern as
- * `state-session-tree.test.ts`), seeds rows that WOULD carry interior-shaped
- * data if the filter regressed, and recursively asserts no interior-shaped key
- * appears anywhere in the serialized payload.
+ * spawns never leave `local.` scope.
  *
- * Scope note: `SessionActivityEntry.detail` is a known, accepted exception —
- * G-410's `extractActivityEntry` (common/event-utils.ts) already sanitizes and
- * truncates it at ingest time (e.g. a redacted, 100-char-capped command
- * preview, or "Editing foo.ts"). That sanitization is pre-existing, out of
- * S6's scope, and unchanged here. This test's job is narrower: pin that the
- * snapshot DTO's KEY SHAPE never grows a field that would carry raw tool
- * interior (e.g. `toolInput`, `arguments`, `diff`, `messages`) even if a row
- * somehow carried one.
+ * CORRECTION (review round 1, Sage on #1537): the first version of this test
+ * claimed to "seed rows that would carry interior-shaped data" — that wasn't
+ * true. Investigation (D1 schema + the full write path: `EventLogger.hook.ts`
+ * → `event-processor.ts`/`event-utils.ts` → `ingest.ts`) found:
+ *
+ *   - D1's schema (`schema.sql`) declares NO column for a raw tool-call
+ *     argument/output object, a diff, or a message array, on ANY table
+ *     `buildSnapshot()` reads (`sessions`, `session_activity`, `github_events`,
+ *     `usage_snapshots`). `ingest.ts`'s INSERT statements always name bound
+ *     columns explicitly — nothing ever spreads a raw event payload into a
+ *     catch-all column.
+ *   - The full RAW local event (`EventLogger.hook.ts`) DOES carry
+ *     `payload.tool_input` / `payload.tool_output` — but that hook's own
+ *     comment says "raw — relay will filter": stripping those before
+ *     anything reaches this worker's `/api/ingest` is `cortex-relay`'s job,
+ *     entirely outside `src/surface/mc/worker`. By the time an event reaches
+ *     `event-processor.ts`, nothing there reads or persists `tool_input`/
+ *     `tool_output` (the one place that inspects `tool_input`,
+ *     `extractActivityEntry` in `common/event-utils.ts`, uses it only to pick
+ *     a "Write" vs "Edit" label — the object itself is never stored).
+ *   - Two free-text D1 columns DO carry short, ALREADY-SANITIZED derivatives
+ *     of interior events, by deliberate pre-existing design — not raw
+ *     interior, and not something this test (or this slice) changes:
+ *       - `sessions.description` — up to a 200-char preview of the
+ *         triggering prompt (`EventLogger.hook.ts`'s `preview.slice(0, 200)`
+ *         → `payload.prompt_preview`), further passed through
+ *         `sanitizeDescription()` (strips `toolu_*` IDs) in
+ *         `event-processor.ts`. Surfaces as `agents[].currentTask.description`
+ *         / `recentCompletions[].description`.
+ *       - `session_activity.detail` (G-410) — a per-event-type summary built
+ *         by `extractActivityEntry()`, e.g. "Editing foo.ts" or a redacted,
+ *         100-char-capped command preview. Surfaces as
+ *         `agents[].currentTask.activity[].detail`.
+ *     Both are VALUES, produced by ingest-time sanitizers that run before
+ *     anything reaches D1 — `state.ts` never re-validates or re-sanitizes a
+ *     row's values on read. This test cannot, and does not, re-verify that
+ *     upstream sanitization; that invariant lives at the ingest layer
+ *     (`EventLogger.hook.ts` / `common/event-processor.ts` /
+ *     `common/event-utils.ts`), not here.
+ *
+ * Given that, this test pins what's actually decidable from `state.ts`'s
+ * side of the boundary:
+ *
+ *   1. SCHEMA guard — no column on the tables `buildSnapshot()` reads is
+ *      named like an interior category. Catches a future schema widening
+ *      (e.g. someone adds a `tool_input`/`diff` column) at the earliest
+ *      possible point, before any query or DTO field could expose it.
+ *   2. DTO KEY-SHAPE guard — `buildSnapshot()`'s serialized output introduces
+ *      no interior-NAMED field. Catches a future SELECT/mapping change that
+ *      surfaces such a column under a new key.
+ *   3. `session_activity`'s EXACT key set — a session_activity row surfaces
+ *      as exactly the 4 known G-410 fields, never more.
+ *
+ * None of these assert anything about the CONTENT of `description`/`detail`
+ * — that's the accepted, out-of-scope exception documented above.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -34,45 +75,14 @@ import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildSnapshot, type DashboardSnapshot } from "../routes/state";
-
-const WORKER_DIR = join(import.meta.dir, "..", "..");
-
-/** Minimal D1Database shim over bun:sqlite (same surface buildSnapshot uses). */
-function d1(db: Database): D1Database {
-  return {
-    prepare(sql: string) {
-      const stmt: any = {
-        _args: [] as unknown[],
-        bind(...args: unknown[]) {
-          stmt._args = args;
-          return stmt;
-        },
-        async first() {
-          return db.query(sql).get(...(stmt._args as never[]));
-        },
-        async all() {
-          return { results: db.query(sql).all(...(stmt._args as never[])) };
-        },
-        async run() {
-          const res = db.query(sql).run(...(stmt._args as never[]));
-          return { meta: { changes: res.changes } };
-        },
-      };
-      return stmt;
-    },
-  } as unknown as D1Database;
-}
-
-function loadSchema(db: Database): void {
-  db.exec(readFileSync(join(WORKER_DIR, "schema.sql"), "utf8"));
-}
+import { d1, loadSchema, WORKER_DIR } from "./d1-shim";
 
 /**
- * Interior-shaped key names: the SHAPE a leaked tool-call, prompt, diff, or raw
- * message would take on the wire, per CONTEXT.md's "Session interior" entry.
- * Deliberately name-based (not value-based) — this pins the DTO's KEY SHAPE,
- * not the free-text VALUES of legitimate lifecycle fields like `description`
- * or the sanitized `detail` (see file-level scope note above).
+ * Interior-shaped key/column names: the SHAPE a leaked tool-call, prompt,
+ * diff, or raw message would take, per CONTEXT.md's "Session interior" entry.
+ * Deliberately name-based — this pins SHAPE (keys/columns), not the free-text
+ * VALUES of legitimate lifecycle fields like `description` or `detail` (see
+ * the file-level scope note above).
  */
 const INTERIOR_KEY_PATTERN =
   /^(tool_?input|tool_?output|tool_?call|arguments|args|prompts?|diffs?|raw_?messages?|messages|stdout|stderr|file_?content|skill_?invocation|sub_?agent_?spawn)$/i;
@@ -90,7 +100,40 @@ function collectKeys(value: unknown, into: Set<string> = new Set()): Set<string>
   return into;
 }
 
+/**
+ * Extract column names for one `CREATE TABLE IF NOT EXISTS <table> (...)`
+ * block in `schema.sql`. Good enough for this schema's actual shape (verified
+ * against all 4 tables `buildSnapshot()` reads): every column is one line,
+ * `<name> <TYPE...>[, -- comment]`; no separate constraint-only lines
+ * (PRIMARY KEY / UNIQUE are always inline on a column, never their own line)
+ * on any of those 4 tables.
+ */
+function columnNamesForTable(schemaSql: string, table: string): string[] {
+  const match = new RegExp(
+    `CREATE TABLE IF NOT EXISTS ${table} \\(([\\s\\S]*?)\\n\\);`,
+  ).exec(schemaSql);
+  if (!match) throw new Error(`schema.sql: table "${table}" not found — did it get renamed?`);
+  return match[1]!
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("--"))
+    .map((line) => /^([A-Za-z_][A-Za-z0-9_]*)/.exec(line)?.[1])
+    .filter((name): name is string => !!name);
+}
+
 describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)", () => {
+  const schemaSql = readFileSync(join(WORKER_DIR, "schema.sql"), "utf8");
+
+  it.each(["sessions", "session_activity", "github_events", "usage_snapshots"])(
+    "schema guard: %s has no interior-named column",
+    (table: string) => {
+      const columns = columnNamesForTable(schemaSql, table);
+      expect(columns.length).toBeGreaterThan(0); // sanity: the parser actually found columns
+      const leaked = columns.filter((c) => INTERIOR_KEY_PATTERN.test(c));
+      expect(leaked).toEqual([]);
+    },
+  );
+
   let db: Database;
   beforeEach(() => {
     db = new Database(":memory:");
@@ -117,8 +160,9 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
 
   it("builds a snapshot whose serialized shape carries no interior-keyed field", async () => {
     seedFullSession(db, "s-full");
-    // G-410 activity: a sanitized summary, exactly the accepted exception —
-    // never the raw tool_input/tool_output pair it was derived from.
+    // G-410 activity: a sanitized summary — the accepted exception (see
+    // file-level scope note) — never the raw tool_input/tool_output it
+    // summarizes.
     db.query(
       `INSERT INTO session_activity (session_id, timestamp, icon, label, detail)
        VALUES ('s-full', strftime('%Y-%m-%dT%H:%M:%fZ','now'), '📝', 'file changed', 'Editing state.ts')`
@@ -148,11 +192,8 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
     expect(leaked).toEqual([]);
   });
 
-  it("keeps the one accepted free-text field (`detail`) bounded to a summary, not a raw payload", async () => {
+  it("keeps session_activity's projected shape to exactly the 4 known G-410 fields", async () => {
     seedFullSession(db, "s-detail");
-    // Even a maximally-long, non-truncated detail (as if the ingest-time
-    // sanitizer were bypassed) must still surface as a plain string under the
-    // known `detail` key — never restructured into a nested tool-call object.
     db.query(
       `INSERT INTO session_activity (session_id, timestamp, icon, label, detail)
        VALUES ('s-detail', strftime('%Y-%m-%dT%H:%M:%fZ','now'), '💻', 'command', 'echo hello')`
@@ -162,7 +203,6 @@ describe("DashboardSnapshot contract — ADR-0005 no-interiors guard (S6, #1520)
     const agent = snapshot.agents.find((a) => a.currentTask.sessionId === "s-detail")!;
     expect(agent.currentTask.activity).toHaveLength(1);
     expect(typeof agent.currentTask.activity[0]!.detail).toBe("string");
-    // The activity entry has EXACTLY the four G-410 fields — no extra keys.
     expect(Object.keys(agent.currentTask.activity[0]!).sort()).toEqual(
       ["detail", "icon", "label", "timestamp"].sort()
     );

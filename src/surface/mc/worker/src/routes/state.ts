@@ -110,6 +110,22 @@ export interface RecentCompletionItem {
   sovereignty: SovereigntyInfo | null;
 }
 
+/**
+ * The `github_events.event_type` values every writer emits — enumerated from
+ * `common/github-events.ts`'s PR/issue processors (`pr_opened`/`pr_merged`/
+ * `pr_closed`/`pr_reopened`, `issue_opened`/`issue_closed`/`issue_reopened`,
+ * `comment`) plus `push`/`release`, and cross-checked against the sync-route
+ * writer (`routes/sync.ts`, same literal set). The D1 column itself is an
+ * untyped TEXT with no CHECK constraint, so a row could in principle carry
+ * something else — hence the `(string & {})` escape hatch, which keeps the
+ * known values autocompletable without falsely claiming exhaustiveness.
+ */
+export type GithubEventType =
+  | "pr_opened" | "pr_merged" | "pr_closed" | "pr_reopened"
+  | "issue_opened" | "issue_closed" | "issue_reopened"
+  | "comment" | "push" | "release"
+  | (string & {});
+
 /** One merged entry in `recentActivity` — either a session completion or a GitHub event. */
 export type ActivityFeedItem =
   | {
@@ -126,7 +142,7 @@ export type ActivityFeedItem =
       status: "completed" | "failed";
     }
   | {
-      type: string;
+      type: GithubEventType;
       source: "github";
       timestamp: string;
       repo: string;
@@ -143,7 +159,12 @@ export interface UsageSnapshotInfo {
   sevenDay: { utilization: number; resetsAt: string } | null;
   sevenDayOpus: { utilization: number; resetsAt: string } | null;
   sevenDaySonnet: { utilization: number; resetsAt: string } | null;
-  extraUsage: { isEnabled: boolean; monthlyLimit: null; usedCredits: null } | null;
+  // `monthlyLimit`/`usedCredits` are future-numeric placeholders: no D1 column
+  // backs them yet (usage_snapshots has no `monthly_limit`/`used_credits`
+  // schema columns), so both are always constructed as literal `null` today.
+  // Typed `number | null` (not frozen `null`) so a future column can start
+  // populating them without a DashboardSnapshot type change.
+  extraUsage: { isEnabled: boolean; monthlyLimit: number | null; usedCredits: number | null } | null;
   updatedAt: string;
 }
 
@@ -422,12 +443,19 @@ stateRoutes.get("/api/state", async (c) => {
   // (ETag is on the combined /api/dashboard payload — using it here would be
   // a semantic mismatch since this returns only the state slice)
   const { json } = await getCachedSnapshot(db);
-  // S6 (#1520): this used to be a bare `JSON.parse(json)` — an `any` re-hydration
-  // of `getCachedSnapshot`'s own cached JSON, with no check that `.state` still
-  // matches what `buildSnapshot()` produces. Asserting the shared contract type
-  // here closes that producer↔consumer gap for the one real consumer of the
-  // parsed cache (dashboardRoutes.ts's /api/dashboard forwards the raw JSON
-  // text unparsed, so it has no equivalent gap to close).
+  // S6 (#1520): this used to be a bare `JSON.parse(json)` (typed `any`). The
+  // `as CombinedDashboardPayload` below is an UNCHECKED assertion — it gives
+  // `.state` a type for this one call site, but TypeScript does NOT verify
+  // the parsed JSON actually has this shape; a genuine producer↔consumer
+  // drift would compile silently here. The real compile-time link is above,
+  // in `getCachedSnapshot()`: `const combined: CombinedDashboardPayload = {
+  // state, repos, heatmap: { days: heatmap } }` fails to compile the moment
+  // `buildSnapshot()`'s return type drifts from `DashboardSnapshot` — that's
+  // what catches the drift, before the value is ever stringified into the
+  // cache this route re-parses. (`dashboardRoutes.ts`'s `/api/dashboard`,
+  // by contrast, returns `new Response(json, {...})` straight from the cache
+  // — see dashboard.ts:13-23 — so it never touches `.state` and has no
+  // equivalent gap to close.)
   const combined = JSON.parse(json) as CombinedDashboardPayload;
   return c.json(combined.state);
 });
@@ -758,7 +786,7 @@ async function getRecentActivity(
 interface GithubEventRow {
   eventId: string;
   repo: string;
-  eventType: string;
+  eventType: GithubEventType;
   title: string | null;
   number: number | null;
   url: string | null;
@@ -795,7 +823,7 @@ async function getRecentGitHubEvents(
   return (results ?? []).map((r: Record<string, unknown>) => ({
     eventId: r.event_id as string,
     repo: r.repo as string,
-    eventType: r.event_type as string,
+    eventType: r.event_type as GithubEventType,
     title: r.title as string | null,
     number: r.number as number | null,
     url: r.url as string | null,
