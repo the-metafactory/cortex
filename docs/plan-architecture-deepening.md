@@ -275,7 +275,7 @@ Umbrella epic: **#1514**.
 | S7 review lane | #1521 | C1 | M | — | ☑ merged (#1542) — cortex.ts 7204→6736 |
 | S8 brain + release lanes | #1522 | C1 | M | S7 | ☑ merged (#1545) — →6390 |
 | S9 adapter lane | #1523 | C1 | M | S8 | ☑ merged (#1547) — →5937 (via GatewayAdapterFactory in src/runner/) |
-| S10 sink ADR | #1524 | C8 | S (ADR) | — | ☐ |
+| S10 sink ADR | #1524 | C8 | S (ADR) | — | ☑ merged (#1553) — ADR-0021 (twins stand) |
 
 Tick here AND close the slice's GitHub issue on merge (repo sync rule).
 
