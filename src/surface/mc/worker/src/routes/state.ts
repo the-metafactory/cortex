@@ -1,18 +1,15 @@
 /**
  * G-400/G-406: GET /api/state — Dashboard snapshot.
  *
- * S6 (#1520) correction: the `:3` comment here used to claim this "returns the
- * same DashboardSnapshot shape as the local API" — a grove-v2 holdover. Cortex's
- * local dashboard never regained a combined-snapshot endpoint after the mc-v3
- * lift: it serves granular REST (`/api/agents`, `/api/working-agents`,
- * `/api/tasks`, …) plus incremental WS projections, with no `/api/state`
- * equivalent to mirror. `DashboardSnapshot` (below) is authored independently
- * here, from the D1 projection this worker populates via event ingestion
- * (`routes/ingest.ts`) — not a shape ported from, or kept in sync with, any
- * local assembly. S6 narrows scope to this file's own producer↔consumer
- * contract: `buildSnapshot()` and the routes that read its cached output are
- * typed against one exported `DashboardSnapshot`, so a shape change on one
- * side is a compile error on the other instead of a silent runtime drift.
+ * `DashboardSnapshot` (below) is authored independently in this file, from
+ * the D1 projection this worker populates via event ingestion
+ * (`routes/ingest.ts`) — it does not mirror or stay in sync with any local
+ * assembly. Cortex's local dashboard serves granular REST (`/api/agents`,
+ * `/api/working-agents`, `/api/tasks`, …) plus incremental WS projections;
+ * there is no local `/api/state` equivalent (S6, #1520). `buildSnapshot()`
+ * and the routes that read its cached output are typed against one exported
+ * `DashboardSnapshot`, so a shape change on one side is a compile error on
+ * the other instead of a silent runtime drift.
  *
  * Public endpoint (no auth required) — the dashboard is a static site.
  *
@@ -51,12 +48,12 @@ import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
 //     foo.ts" or a redacted, 100-char-capped command preview), never the raw
 //     tool_input/tool_output it summarizes.
 // Both sanitizers run at ingest time, upstream of this file; `state.ts` never
-// re-validates or re-sanitizes a row's values on read. Say "no RAW interiors,
-// two sanitized previews permitted by design" — not "never prompts," and NOT
-// "no raw-shaped column of any kind": `github_events.payload` is a genuine
-// JSON-blob column (small, curated GitHub metadata — branch/additions/
-// deletions for a PR, commit/file counts for a push — not session interior),
-// read by `getRecentGitHubEvents` but never forwarded into `ActivityFeedItem`.
+// re-validates or re-sanitizes a row's values on read.
+//
+// `github_events.payload` IS a raw JSON-blob column — small, curated GitHub
+// metadata (branch/additions/deletions for a PR, commit/file counts for a
+// push — not session interior), read by `getRecentGitHubEvents` but never
+// forwarded into `ActivityFeedItem`.
 // ---------------------------------------------------------------------------
 
 /** IAW D.5.3 sovereignty block — `null` when none of the three fields are populated. */
@@ -465,19 +462,21 @@ stateRoutes.get("/api/state", async (c) => {
   // (ETag is on the combined /api/dashboard payload — using it here would be
   // a semantic mismatch since this returns only the state slice)
   const { json } = await getCachedSnapshot(db);
-  // S6 (#1520): this used to be a bare `JSON.parse(json)` (typed `any`). The
-  // `as CombinedDashboardPayload` below is an UNCHECKED assertion — it gives
-  // `.state` a type for this one call site, but TypeScript does NOT verify
-  // the parsed JSON actually has this shape; a genuine producer↔consumer
-  // drift would compile silently here. The real compile-time link is above,
-  // in `getCachedSnapshot()`: `const combined: CombinedDashboardPayload = {
-  // state, repos, heatmap: { days: heatmap } }` fails to compile the moment
-  // `buildSnapshot()`'s return type drifts from `DashboardSnapshot` — that's
-  // what catches the drift, before the value is ever stringified into the
-  // cache this route re-parses. (`dashboardRoutes.ts`'s `/api/dashboard`,
-  // by contrast, returns `new Response(json, {...})` straight from the cache
-  // — see dashboard.ts:13-23 — so it never touches `.state` and has no
-  // equivalent gap to close.)
+  // The `as CombinedDashboardPayload` below is an UNCHECKED assertion — it
+  // gives `.state` a type for this one call site, but TypeScript does NOT
+  // verify the parsed JSON actually has this shape; a genuine
+  // producer↔consumer drift would compile silently here. The real
+  // compile-time link is above, in `getCachedSnapshot()`:
+  // `const combined: CombinedDashboardPayload = { state, repos, heatmap: {
+  // days: heatmap } }` fails to compile the moment `buildSnapshot()`'s
+  // return type drifts from `DashboardSnapshot`. That guard only fires under
+  // THIS FILE'S OWN `bunx tsc` — the worker has its own tsconfig, and the
+  // root tsconfig (the one CI actually runs) excludes `src/surface/mc/worker`
+  // entirely, so nothing currently runs the worker's tsc in CI (see the
+  // follow-up issue tracking this gap). `dashboardRoutes.ts`'s
+  // `/api/dashboard`, by contrast, returns `new Response(json, {...})`
+  // straight from the cache (dashboard.ts:13-23) — it never touches `.state`
+  // and has no equivalent gap.
   const combined = JSON.parse(json) as CombinedDashboardPayload;
   return c.json(combined.state);
 });
