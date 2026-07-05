@@ -274,8 +274,12 @@ describe("DiscordAdapter: guild filter (cortex#704)", () => {
 // ---------------------------------------------------------------------------
 
 describe("DiscordAdapter: explicit allowedGuildIds/presenceByGuildId == omitted (S9, cortex#1523)", () => {
-  const GUILD_A = "1487023327791808592";
-  const GUILD_B = "1512054429023731884";
+  // Non-snowflake placeholders — the `messageCreate` guild filter is plain
+  // string equality, so these exercise own-guild/foreign-guild/DM dispatch
+  // identically to real snowflake-shaped ids (confidentiality-gate: platform
+  // snowflakes don't belong in the diff even as test fixtures).
+  const GUILD_A = "guild-a";
+  const GUILD_B = "guild-b";
 
   test("own-guild, foreign-guild, and DM messages dispatch identically whether allowedGuildIds/presenceByGuildId are omitted or explicitly passed as the single-guild {guildId} set/map", async () => {
     const implicit = makeAdapter({ instanceId: "discord-implicit", guildId: GUILD_A });
