@@ -646,6 +646,27 @@ export function _resetDispatchDebounceForTests(): void {
 // `src/common/types/uuid.ts`. Same 8-4-4-4-12 hex layout, no
 // version/variant constraint (matches the comment above).
 
+/**
+ * Undo a just-inserted dispatch pair (assignment + optionally its
+ * internal task) after a same-request failure — observed duplicate
+ * ccSessionId, or controlled spawn failure. Both call sites in
+ * `handleCreateSession` ran this identical transaction inline; extracted
+ * so the rollback shape can't drift between them.
+ */
+function rollbackDispatch(
+  db: Database,
+  assignmentId: string,
+  taskId: string,
+  hadTaskId: boolean
+): void {
+  db.transaction(() => {
+    deleteAssignment(db, assignmentId);
+    if (!hadTaskId) {
+      deleteTask(db, taskId);
+    }
+  })();
+}
+
 // eslint-disable-next-line @typescript-eslint/require-await
 export async function handleCreateSession(
   db: Database,
@@ -797,12 +818,7 @@ export async function handleCreateSession(
       // caller didn't supply taskId) lying around. Per Echo's PR-#56
       // review.
       try {
-        db.transaction(() => {
-          deleteAssignment(db, assignmentId);
-          if (!body.taskId) {
-            deleteTask(db, taskId);
-          }
-        })();
+        rollbackDispatch(db, assignmentId, taskId, Boolean(body.taskId));
       } catch (rollbackErr) {
         process.stderr.write(
           `[api] rollback after observed-dup-409 failed: ${(rollbackErr as Error).message}\n`
@@ -855,12 +871,7 @@ export async function handleCreateSession(
       endpoint = ep;
     } catch (err) {
       try {
-        db.transaction(() => {
-          deleteAssignment(db, assignmentId);
-          if (!body.taskId) {
-            deleteTask(db, taskId);
-          }
-        })();
+        rollbackDispatch(db, assignmentId, taskId, Boolean(body.taskId));
       } catch (rollbackErr) {
         process.stderr.write(
           `[api] rollback after spawn-failure failed: ${(rollbackErr as Error).message}\n`

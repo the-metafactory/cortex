@@ -525,10 +525,20 @@ describe("task mutations", () => {
 
   it("cancelTask sets status = 'cancelled' and bumps updated_at", () => {
     createInternalTask(db, { id: "t-1", title: "T", priority: 2, principalId: "op" });
-    const before = readTask("t-1");
-    expect(before?.status).toBe("open");
+    // Backdate updated_at so the "bumps" half of this test is deterministic
+    // regardless of how fast the test runs — unixepoch() is whole-seconds,
+    // so a same-second before/after pair would look unchanged without this.
+    const oldUpdatedAt = 1_000_000;
+    db.query(`UPDATE tasks SET updated_at = ? WHERE id = ?`).run(oldUpdatedAt, "t-1");
+
     cancelTask(db, "t-1");
-    expect(readTask("t-1")?.status).toBe("cancelled");
+
+    const after = readTask("t-1");
+    expect(after?.status).toBe("cancelled");
+    const { updated_at } = db
+      .query(`SELECT updated_at FROM tasks WHERE id = ?`)
+      .get("t-1") as { updated_at: number };
+    expect(updated_at).toBeGreaterThan(oldUpdatedAt);
   });
 
   it("cancelTask is a no-op on an unknown id (no matching row, no throw)", () => {
