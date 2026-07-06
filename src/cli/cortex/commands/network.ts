@@ -40,7 +40,7 @@
  * Exit codes: 0 success · 1 operational failure · 2 usage error.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { dirname, join } from "path";
 
@@ -815,11 +815,14 @@ function leafCredsInstallPath(networkId: string): string {
 
 /**
  * #1597 — install the fetched v2 credential file at the conventional path.
- * Created 0600 (never transitions through a group-readable state); byte-stable
- * no-op when the on-disk content already matches (re-join idempotency — no
- * mtime churn), with the mode re-asserted either way. A truncated write is
- * self-healing here (unlike the nats config, #1058): the next join re-fetches
- * and rewrites, and the #821 preflight refuses a marker-less torso.
+ * Written as a NEW same-dir tmp file created 0600, then renamed over the
+ * target: `writeFileSync`'s mode only applies to newly-created files, so a
+ * direct overwrite of a looser pre-existing file would expose the fresh
+ * credential group-readable until a trailing chmod (Sage #1609). The
+ * tmp+rename keeps the text 0600 for its entire on-disk life AND makes the
+ * replacement atomic. Byte-stable no-op when the content already matches
+ * (re-join idempotency — no mtime churn), with the mode re-asserted either
+ * way for a looser identical pre-existing file.
  */
 function installLeafCreds(networkId: string, creds: string): string {
   const path = leafCredsInstallPath(networkId);
@@ -831,10 +834,22 @@ function installLeafCreds(networkId: string, creds: string): string {
   }
   if (existing !== creds) {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, creds, { mode: 0o600 });
+    const tmp = `${path}.tmp-${process.pid}`;
+    writeFileSync(tmp, creds, { mode: 0o600 });
+    try {
+      renameSync(tmp, path);
+    } catch (err) {
+      // Never leave the credential text behind under the tmp name.
+      try {
+        rmSync(tmp, { force: true });
+      } catch (_cleanupErr) {
+        // Best-effort cleanup only — the rename failure below is the real error.
+      }
+      throw err;
+    }
   }
-  // Re-assert 0600 even on the byte-stable path — a pre-existing file may have
-  // been created with looser permissions.
+  // Re-assert 0600 on the byte-stable path — a pre-existing identical file may
+  // carry looser permissions.
   chmodSync(path, 0o600);
   return path;
 }

@@ -657,74 +657,86 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
   // #1597 (epic #1595) — v2 payload: the delivered per-member credential FILE
   // is installed at the conventional 0600 path before the join renders.
   // ===========================================================================
-  test("a v2 (credential-file) payload is installed 0600 at the conventional per-network path", async () => {
-    const joinerSeed = join(tmp, "joiner3.seed");
-    writeFileSync(joinerSeed, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });
-    chmodSync(joinerSeed, 0o600);
 
-    // Clearly-FAKE `.creds` text (structure only, all-A payloads).
-    const FAKE_CREDS =
-      "-----BEGIN NATS USER JWT-----\n" + "A".repeat(64) + "\n------END NATS USER JWT------\n\n" +
-      "-----BEGIN USER NKEY SEED-----\nSUA" + "A".repeat(55) + "\n------END USER NKEY SEED------\n";
+  // Clearly-FAKE `.creds` text (structure only, all-A payloads).
+  const FAKE_CREDS =
+    "-----BEGIN NATS USER JWT-----\n" + "A".repeat(64) + "\n------END NATS USER JWT------\n\n" +
+    "-----BEGIN USER NKEY SEED-----\nSUA" + "A".repeat(55) + "\n------END USER NKEY SEED------\n";
 
-    const installDir = join(tmp, "nats-install");
-    __setLeafCredsInstallDirForTests(installDir);
-    __setJoinLeafSecretFetcherForTests(async () => ({
-      ok: true,
-      kind: "creds",
-      creds: FAKE_CREDS,
-      leafUser: "andreas/default",
-      mintedAt: "2026-07-06T00:00:00Z",
-    }));
+  /** Write a real joiner seed (so materialFromSeedString succeeds) → its path. */
+  function writeJoinerSeed(name: string): string {
+    const p = join(tmp, name);
+    writeFileSync(p, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });
+    chmodSync(p, 0o600);
+    return p;
+  }
 
-    // Dry-run join: the descriptor fetch fails against the unreachable registry,
-    // but the auto-fetch + install run FIRST — the install is what #1597 claims.
-    await dispatchNetwork([
+  /** The shared dry-run join argv (descriptor fetch fails against the
+   *  unreachable registry, but the auto-fetch + install run FIRST). */
+  function joinArgs(seedPath: string): string[] {
+    return [
       "join", "metafactory",
       "--principal", "andreas",
       "--registry-url", "http://127.0.0.1:0",
-      "--seed-path", joinerSeed,
+      "--seed-path", seedPath,
       "--account", "A" + "B".repeat(55),
       "--nats-config", join(tmp, "local.conf"),
       "--plist", join(tmp, "nats.plist"),
-    ], (() => ({})) as never);
+    ];
+  }
+
+  function fakeV2Fetcher(creds: string): void {
+    __setJoinLeafSecretFetcherForTests(async () => ({
+      ok: true,
+      kind: "creds",
+      creds,
+      leafUser: "andreas/default",
+      mintedAt: "2026-07-06T00:00:00Z",
+    }));
+  }
+
+  test("a v2 (credential-file) payload is installed 0600 at the conventional per-network path", async () => {
+    const installDir = join(tmp, "nats-install");
+    __setLeafCredsInstallDirForTests(installDir);
+    fakeV2Fetcher(FAKE_CREDS);
+
+    await dispatchNetwork(joinArgs(writeJoinerSeed("joiner3.seed")), (() => ({})) as never);
 
     const installed = join(installDir, "metafactory-leaf.creds");
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     // 0600 — not group- or world-readable (the acceptance bar).
-    const mode = statSync(installed).mode & 0o777;
-    expect(mode).toBe(0o600);
+    expect(statSync(installed).mode & 0o777).toBe(0o600);
   });
 
-  test("v2 install is byte-stable + re-asserts 0600 on a pre-existing looser file", async () => {
-    const joinerSeed = join(tmp, "joiner4.seed");
-    writeFileSync(joinerSeed, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });
-    chmodSync(joinerSeed, 0o600);
-
-    const FAKE_CREDS = "-----BEGIN NATS USER JWT-----\nAAAA\n------END NATS USER JWT------\n";
+  test("v2 install REPLACES a pre-existing looser file with different content, ending 0600", async () => {
+    // The Sage #1609 window: new credential text written over a 0644 file must
+    // never end up (or transit) group-readable — exercises the WRITE branch.
     const installDir = join(tmp, "nats-install-2");
     const installed = join(installDir, "metafactory-leaf.creds");
     mkdirSync(installDir, { recursive: true });
-    writeFileSync(installed, FAKE_CREDS, { mode: 0o644 }); // pre-existing, too loose
+    writeFileSync(installed, "-----BEGIN NATS USER JWT-----\nOLD\n", { mode: 0o644 });
 
     __setLeafCredsInstallDirForTests(installDir);
-    __setJoinLeafSecretFetcherForTests(async () => ({
-      ok: true,
-      kind: "creds",
-      creds: FAKE_CREDS,
-      leafUser: "andreas/default",
-      mintedAt: "2026-07-06T00:00:00Z",
-    }));
+    fakeV2Fetcher(FAKE_CREDS);
 
-    await dispatchNetwork([
-      "join", "metafactory",
-      "--principal", "andreas",
-      "--registry-url", "http://127.0.0.1:0",
-      "--seed-path", joinerSeed,
-      "--account", "A" + "B".repeat(55),
-      "--nats-config", join(tmp, "local.conf"),
-      "--plist", join(tmp, "nats.plist"),
-    ], (() => ({})) as never);
+    await dispatchNetwork(joinArgs(writeJoinerSeed("joiner4.seed")), (() => ({})) as never);
+
+    expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
+    expect(statSync(installed).mode & 0o777).toBe(0o600);
+  });
+
+  test("v2 install is byte-stable + re-asserts 0600 on an IDENTICAL pre-existing looser file", async () => {
+    // Same content on disk → the write branch is skipped (no mtime churn) and
+    // only the trailing chmod tightens the looser pre-existing mode.
+    const installDir = join(tmp, "nats-install-3");
+    const installed = join(installDir, "metafactory-leaf.creds");
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(installed, FAKE_CREDS, { mode: 0o644 });
+
+    __setLeafCredsInstallDirForTests(installDir);
+    fakeV2Fetcher(FAKE_CREDS);
+
+    await dispatchNetwork(joinArgs(writeJoinerSeed("joiner5.seed")), (() => ({})) as never);
 
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     expect(statSync(installed).mode & 0o777).toBe(0o600);

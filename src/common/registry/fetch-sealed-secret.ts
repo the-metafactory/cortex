@@ -143,8 +143,7 @@ export async function fetchSealedLeafSecret(
         creds: env.creds,
         leafUser: env.leaf_user,
         mintedAt: env.minted_at,
-        ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),
-        ...(env.payload_key_kid !== undefined && { payloadKeyKid: env.payload_key_kid }),
+        ...payloadKeyFields(env),
       };
     }
     return {
@@ -152,13 +151,23 @@ export async function fetchSealedLeafSecret(
       kind: "psk",
       leafPsk: env.leaf_psk,
       leafUser: env.leaf_user,
-      ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),
-      ...(env.payload_key_kid !== undefined && { payloadKeyKid: env.payload_key_kid }),
+      ...payloadKeyFields(env),
     };
   } catch (err) {
     // Generic — never echo seed/ciphertext/plaintext.
     return { ok: false, reason: `failed to open sealed leaf secret: ${errText(err)}` };
   }
+}
+
+/** The optional ADR-0019 payload-key rider, in result-field casing (one site). */
+function payloadKeyFields(env: {
+  payload_key?: string;
+  payload_key_kid?: string;
+}): { payloadKey?: string; payloadKeyKid?: string } {
+  return {
+    ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),
+    ...(env.payload_key_kid !== undefined && { payloadKeyKid: env.payload_key_kid }),
+  };
 }
 
 /** Error → message, never echoing secret-bearing inputs. */
