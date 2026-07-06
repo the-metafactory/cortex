@@ -40,7 +40,7 @@
  * Exit codes: 0 success · 1 operational failure · 2 usage error.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { dirname, join } from "path";
 
@@ -821,19 +821,25 @@ function leafCredsInstallPath(networkId: string): string {
  * over the target: a direct overwrite of a looser pre-existing file would
  * expose the fresh credential group-readable until a trailing chmod (Sage
  * #1609). The tmp+rename keeps the text 0600 from creation to install AND
- * makes the replacement atomic. Byte-stable no-op when the content already
- * matches (re-join idempotency — no mtime churn), with the mode re-asserted
- * either way for a looser identical pre-existing file. Returns whether a
- * write happened so the caller can surface the mutation (it runs in dry-run
- * too — see the call site).
+ * makes the replacement atomic. When the content already matches, the write
+ * is skipped (re-join idempotency — no content/mtime churn) but a looser
+ * pre-existing mode is still tightened to 0600. BOTH mutations — the write
+ * and the mode-tighten — are reported to the caller, which surfaces them on
+ * stderr (this runs in dry-run too — see the call site).
  */
-function installLeafCreds(networkId: string, creds: string): { path: string; wrote: boolean } {
+function installLeafCreds(
+  networkId: string,
+  creds: string,
+): { path: string; wrote: boolean; tightened: boolean } {
   const path = leafCredsInstallPath(networkId);
   let existing: string | undefined;
   try {
     existing = readFileSync(path, "utf-8");
-  } catch (_err) {
-    existing = undefined; // ENOENT etc. — treat as "not installed yet".
+  } catch (err) {
+    // Only ENOENT means "not installed yet" — surface EACCES/EISDIR/etc. as
+    // the real filesystem problem they are (the caller's catch reports them).
+    if ((err as { code?: string }).code !== "ENOENT") throw err;
+    existing = undefined;
   }
   const wrote = existing !== creds;
   if (wrote) {
@@ -853,10 +859,12 @@ function installLeafCreds(networkId: string, creds: string): { path: string; wro
       throw err;
     }
   }
-  // Re-assert 0600 on the byte-stable path — a pre-existing identical file may
-  // carry looser permissions.
-  chmodSync(path, 0o600);
-  return { path, wrote };
+  // Tighten a looser mode ONLY when needed, and report it: even the
+  // identical-content path is a (metadata) mutation when a pre-existing file
+  // was group-readable. A fresh tmp+rename install is already 0600.
+  const tightened = (statSync(path).mode & 0o777) !== 0o600;
+  if (tightened) chmodSync(path, 0o600);
+  return { path, wrote, tightened };
 }
 
 /**
@@ -915,26 +923,32 @@ async function maybeAutoFetchLeafSecret(
   // DELIBERATE carve-out from the "dry-run touches nothing" contract — it
   // installs only the member's OWN delivered credential at its conventional
   // 0600 path (the same member-local class as the enforceChmod600 above); the
-  // nats config / plist / registry writes all stay behind --apply. The
-  // stderr notice below keeps the mutation explicit in dry-run output.
+  // nats config / plist / registry writes all stay behind --apply. EVERY
+  // mutation this carve-out performs — a content write AND a mode tighten —
+  // is surfaced by the stderr notice below, so dry-run output stays honest.
   if (res.kind === "creds") {
-    let install: { path: string; wrote: boolean };
+    let install: { path: string; wrote: boolean; tightened: boolean };
     try {
       install = installLeafCreds(networkId, res.creds);
     } catch (err) {
       // Best-effort like every other auto-fetch failure: fall through to the
       // existing join behaviour, surfacing why on stderr (never the creds).
+      // On a v2-only hub with nothing at the derive-time creds path this is
+      // NOT silent: the #821 existence preflight then fails the join loudly.
       process.stderr.write(
         `cortex network join: fetched a v2 leaf credential for "${networkId}" but could not ` +
           `install it: ${err instanceof Error ? err.message : String(err)}\n`,
       );
       return undefined;
     }
-    if (install.wrote) {
+    if (install.wrote || install.tightened) {
+      const action = install.wrote
+        ? "installed the fetched per-member leaf credential file at"
+        : "tightened the mode of the leaf credential file at";
       process.stderr.write(
-        `cortex network join: installed the fetched per-member leaf credential file at ` +
-          `${install.path} (0600). NOTE: this install happens even without --apply, so the ` +
-          `leaf-file preflight previews truthfully; all other join mutations stay behind --apply.\n`,
+        `cortex network join: ${action} ${install.path} (0600). NOTE: this happens even ` +
+          `without --apply, so the leaf-file preflight previews truthfully; all other join ` +
+          `mutations stay behind --apply.\n`,
       );
     }
     return {

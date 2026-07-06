@@ -705,8 +705,10 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
   });
 
   test("v2 install REPLACES a pre-existing looser file with different content, ending 0600", async () => {
-    // The Sage #1609 window: new credential text written over a 0644 file must
-    // never end up (or transit) group-readable — exercises the WRITE branch.
+    // Exercises the WRITE branch against a pre-existing 0644 file (the Sage
+    // #1609 window). Asserts the END state only — content replaced, final mode
+    // 0600; the no-transit-through-group-readable property is guaranteed by
+    // the tmp+rename design in installLeafCreds, not observable from here.
     const installDir = join(tmp, "nats-install-2");
     const installed = join(installDir, "metafactory-leaf.creds");
     mkdirSync(installDir, { recursive: true });
