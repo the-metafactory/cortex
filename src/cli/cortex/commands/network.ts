@@ -47,6 +47,7 @@ import { dirname, join } from "path";
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
 import type { LoadedConfig } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
+import { NetworkCache } from "../../../common/registry/network-cache";
 import {
   materialFromSeedString,
   buildNetworkCreateClaim,
@@ -2938,6 +2939,10 @@ async function runAdmit(
       adminSeedPath: seedRes.value,
       // Already nkey-U-validated above (fail-fast before the admission commits).
       ...(admitHubAccount !== undefined && { hubAccount: admitHubAccount }),
+      // cortex#1598 — DEFERRED operator-mode attestation resolver (the network id
+      // is only known after the row fetch inside runNetworkAdmit).
+      resolveOperatorAttestation: (networkId: string) =>
+        resolveOperatorAttestation(flags, networkId, DEFAULT_READER),
       ...(discordMember !== undefined && {
         discord: {
           member: discordMember,
@@ -3204,6 +3209,48 @@ const DEFAULT_KEY_ROTATION_PORTS_FACTORY: KeyRotationPortsFactory = (cfg) =>
  * A config that EXISTS but fails to parse/validate FAILS (surfaced to the admin)
  * rather than silently downgrading a network that is supposed to be encrypted.
  */
+/**
+ * cortex#1598 (epic #1595 slice 2) — resolve the OPERATOR-MODE attestation for a
+ * network. `hub_mode` / `resolver_mode` come off the last VERIFIED descriptor
+ * (the SAME DD-10 `~/.config/cortex/network-cache/` cache the hub-locality read
+ * uses — the admin reads the attestation they signed onto the registry, not a
+ * local claim). The hub FED account comes from `--hub-fed-account` → else the
+ * local `policy.federated.networks[<id>].hub_fed_account`. Everything is optional:
+ * a network with no cached descriptor / no attestation resolves to the simple
+ * (PSK) path unchanged. Injectable cache for tests.
+ */
+function resolveOperatorAttestation(
+  flags: FlagMap,
+  networkId: string,
+  load: ConfigReader,
+  cache: NetworkCache = new NetworkCache({
+    cacheDir: expandTilde(join("~", ".config", "cortex", "network-cache")),
+  }),
+): { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string } {
+  const descriptor = cache.load(networkId)?.descriptor;
+  const hubMode = descriptor?.hub_mode;
+  const resolverMode = descriptor?.resolver_mode;
+
+  let hubFedAccount = optionalValueFlag(flags, "--hub-fed-account");
+  if (hubFedAccount === undefined) {
+    try {
+      const cfg = load(resolveLocalStackConfigPath(flags));
+      hubFedAccount = cfg.policy?.federated?.networks.find((n) => n.id === networkId)?.hub_fed_account;
+    } catch (_err) {
+      // The local config being unreadable is non-fatal here: leave hubFedAccount
+      // undefined and let the operator branch refuse with a clear message (it
+      // already fail-fasts on an absent hub FED account). A genuinely-broken
+      // config also fails the separate payload-key read below with its own text.
+    }
+  }
+
+  return {
+    ...(hubMode !== undefined && { hubMode }),
+    ...(resolverMode !== undefined && { resolverMode }),
+    ...(hubFedAccount !== undefined && hubFedAccount.length > 0 && { hubFedAccount }),
+  };
+}
+
 function resolveHubPayloadKey(
   flags: FlagMap,
   networkId: string,
@@ -3347,6 +3394,11 @@ async function runSecret(
     payloadKeyKid = kRes.payloadKeyKid;
   }
 
+  // cortex#1598 — operator-mode attestation (hub_mode/resolver_mode off the
+  // verified descriptor + the hub FED account). Absent ⇒ the simple/PSK path
+  // (unchanged); present + operator-mode ⇒ addOrRotate mints a scoped user + seals v2.
+  const op = resolveOperatorAttestation(flags, networkId, load);
+
   const ports = portsFactory({ hubConfigPath, registryUrl, material: matRes.material });
   const inputs: SecretInputs = {
     action,
@@ -3358,6 +3410,9 @@ async function runSecret(
     ...(payloadKeyKid !== undefined && { payloadKeyKid }),
     sealOnly,
     ...(hubAccount !== undefined && { hubAccount }),
+    ...(op.hubMode !== undefined && { hubMode: op.hubMode }),
+    ...(op.resolverMode !== undefined && { resolverMode: op.resolverMode }),
+    ...(op.hubFedAccount !== undefined && { hubFedAccount: op.hubFedAccount }),
     apply: applyRes.apply,
   };
 

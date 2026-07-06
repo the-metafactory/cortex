@@ -211,6 +211,23 @@ const CARVEOUT_PATHS: string[] = [
   // same "gate's own source" class as scripts/check-carveouts.sh (keeps diff-mode clean).
   "scripts/vocab-ratchet.json",
   "scripts/gen-vocab-ratchet.ts",
+  // cortex#1598 (epic #1595 slice 2): the operator-mode admit family — the SAME
+  // NSC-account-tree sense as the network-provision/make-live/federation-wiring
+  // files above. `operator` throughout is the hub-mode attestation VALUE, never
+  // the deprecated operator=principal sense.
+  "src/cli/cortex/commands/network-secret-lib.ts",
+  "src/cli/cortex/commands/network-secret-adapters.ts",
+  "src/cli/cortex/commands/network-secret-ports.ts",
+  "src/cli/cortex/commands/network-admit-lib.ts",
+  "src/cli/cortex/commands/network-admit-adapters.ts",
+  "src/cli/cortex/commands/network-admit-ports.ts",
+  "src/cli/cortex/commands/__tests__/network-secret-lib.test.ts",
+  "src/cli/cortex/commands/__tests__/network-scoped-mint-adapter.test.ts",
+  "src/cli/cortex/commands/__tests__/network-admit-operator-stamp.test.ts",
+  // Frozen SQL DDL — the #1598 hub_mode migration (historical, never edited)
+  "src/services/network-registry/migrations/0014_network_hub_mode.sql",
+  // #1598 working doc (design/worklog class, like design-federation-hub-mode)
+  "docs/federation-1598-admit-mint-worklog.md",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -313,6 +330,17 @@ const CARVEOUT_LINE_PATTERNS: string[] = [
   // F18 (compass#98): all-caps line carve-outs — fake Slack test-ID + external SOC-demo env ref
   "UOPERATOR",
   "CHANNEL_ID/OPERATOR_ID",
+  // cortex#1598 (epic #1595 slice 2) — the hub-mode / resolver-mode attestation
+  // vocabulary. `operator` here is the NSC hub-mode VALUE (`hub_mode: operator`),
+  // not the deprecated operator=principal sense. These tokens are #1598-specific,
+  // so carving them globally cannot mask a real operator=principal regression.
+  "[Hh]ub[ _-]?[Mm]ode",
+  "[Rr]esolver[ _-]?[Mm]ode",
+  "[Hh]ub[ _-]?[Ff]ed[ _-]?[Aa]ccount",
+  "resolveOperatorAttestation",
+  "OPERATOR-MODE",
+  "operator[ -](branch|hub|network|seal|admit|credential|mint|scoped)",
+  "operator-mode",
 ];
 
 // myelin-GATED transition-test files (R5 back-compat regression suite): the bare

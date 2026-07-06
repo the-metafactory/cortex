@@ -144,7 +144,18 @@
       "src/taps/cc-events/hooks/lib/__tests__/principal-env.test.ts",
       "src/surface/mc/dashboard-v2/__tests__/mc-shell.test.tsx",
       "scripts/vocab-ratchet.json",
-      "scripts/gen-vocab-ratchet.ts"
+      "scripts/gen-vocab-ratchet.ts",
+      "src/cli/cortex/commands/network-secret-lib.ts",
+      "src/cli/cortex/commands/network-secret-adapters.ts",
+      "src/cli/cortex/commands/network-secret-ports.ts",
+      "src/cli/cortex/commands/network-admit-lib.ts",
+      "src/cli/cortex/commands/network-admit-adapters.ts",
+      "src/cli/cortex/commands/network-admit-ports.ts",
+      "src/cli/cortex/commands/__tests__/network-secret-lib.test.ts",
+      "src/cli/cortex/commands/__tests__/network-scoped-mint-adapter.test.ts",
+      "src/cli/cortex/commands/__tests__/network-admit-operator-stamp.test.ts",
+      "src/services/network-registry/migrations/0014_network_hub_mode.sql",
+      "docs/federation-1598-admit-mint-worklog.md"
     ],
     "linePatterns": [
       "//[[:space:]]*historical:",
@@ -227,7 +238,14 @@
       "[Oo]perator-driven dev-loop",
       "design-operator-driven-dev-loop",
       "UOPERATOR",
-      "CHANNEL_ID/OPERATOR_ID"
+      "CHANNEL_ID/OPERATOR_ID",
+      "[Hh]ub[ _-]?[Mm]ode",
+      "[Rr]esolver[ _-]?[Mm]ode",
+      "[Hh]ub[ _-]?[Ff]ed[ _-]?[Aa]ccount",
+      "resolveOperatorAttestation",
+      "OPERATOR-MODE",
+      "operator[ -](branch|hub|network|seal|admit|credential|mint|scoped)",
+      "operator-mode"
     ],
     "gatedTestPaths": [
       "src/bus/myelin/__tests__/envelope-validator.test.ts"

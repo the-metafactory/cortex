@@ -217,6 +217,17 @@ export interface AdmitInputs {
   /** The --admin-seed path (rides the seal's fallback command text). */
   adminSeedPath: string;
   discord?: DiscordRoleInputs;
+  /**
+   * cortex#1598 (epic #1595 slice 2) — resolve the operator-mode attestation for
+   * the request's network. DEFERRED (a callback, not resolved fields) because the
+   * network id is only known AFTER the PENDING row is fetched here. Called once
+   * the row's `network_id` is in hand; the result gates the seal onto the scoped-
+   * mint path. Omitted ⇒ the simple/PSK seal (unchanged) — the CLI binds the real
+   * resolver (descriptor cache + `--hub-fed-account`/config), tests omit it.
+   */
+  resolveOperatorAttestation?: (
+    networkId: string,
+  ) => { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string };
 }
 
 /** Discriminated on `ok` so a caller narrows to `sealOutcome`/`principalId`
@@ -321,6 +332,13 @@ export async function runNetworkAdmit(inputs: AdmitInputs, ports: AdmitPorts): P
       fallbackCmd: `cortex network secret add-member ${net} ${requestPeerPubkey} --admin-seed ${inputs.adminSeedPath} --apply`,
     };
   } else {
+    // cortex#1598 — resolve the operator-mode attestation for THIS network (now
+    // that the row's network_id is known). On an operator network the seal mints
+    // a scoped user + seals v2 instead of a PSK; absent ⇒ the simple seal.
+    const op =
+      requestNetworkId !== null && inputs.resolveOperatorAttestation !== undefined
+        ? inputs.resolveOperatorAttestation(requestNetworkId)
+        : {};
     sealOutcome = await ports.seal.sealMember({
       networkId: requestNetworkId,
       memberPubkey: requestPeerPubkey,
@@ -330,7 +348,43 @@ export async function runNetworkAdmit(inputs: AdmitInputs, ports: AdmitPorts): P
       adminSeedPath: inputs.adminSeedPath,
       sealOnly: inputs.sealOnly,
       ...(inputs.hubAccount !== undefined && { hubAccount: inputs.hubAccount }),
+      ...(op.hubMode !== undefined && { hubMode: op.hubMode }),
+      ...(op.resolverMode !== undefined && { resolverMode: op.resolverMode }),
+      ...(op.hubFedAccount !== undefined && { hubFedAccount: op.hubFedAccount }),
     });
+  }
+
+  // 2c. cortex#1598 (C3) — operator-mode probe-then-stamp. When the seal minted
+  // a scoped credential (an `operator` block), probe the LOCAL hub monitor to
+  // confirm the FED account is visible on the resolver, then stamp
+  // `hub_authorized_at` — NEVER blind. On a negative probe or a stamp failure the
+  // member stays connectable; the stamp is a separate re-runnable step. The
+  // simple/PSK path never enters here (no `operator` block).
+  if (sealOutcome.status === "sealed" && sealOutcome.operator !== undefined && ports.hubProbe !== undefined) {
+    const { fedAccountPubKey, signingKeyPubKey } = sealOutcome.operator;
+    let probe: { present: boolean; reason?: string };
+    try {
+      probe = await ports.hubProbe.probeAccountOnHub({ hubConfigPath: inputs.hubConfigPath, fedAccountPubKey, signingKeyPubKey });
+    } catch (err) {
+      probe = { present: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+    if (probe.present) {
+      try {
+        await ports.hubProbe.postAuthorize(inputs.requestId);
+        sealOutcome.hubAuthorizedStamped = true;
+        sealOutcome.steps.push("authorize:  FED account visible on the hub resolver → hub_authorized_at stamped");
+      } catch (err) {
+        sealOutcome.hubAuthorizedStamped = false;
+        sealOutcome.steps.push(
+          `authorize:  FED account visible but stamping hub_authorized_at failed (${err instanceof Error ? err.message : String(err)}) — re-run \`cortex network authorize\``,
+        );
+      }
+    } else {
+      sealOutcome.hubAuthorizedStamped = false;
+      sealOutcome.steps.push(
+        `authorize:  FED account not yet visible on the hub resolver (${probe.reason ?? "unknown"}) — hub_authorized_at NOT stamped; re-run \`cortex network authorize\` after the account JWT propagates`,
+      );
+    }
   }
 
   // 3. Assign Discord role (O-5) — when --discord-member is given.

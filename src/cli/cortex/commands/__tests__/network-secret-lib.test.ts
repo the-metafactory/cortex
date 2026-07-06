@@ -40,11 +40,20 @@ interface Recorder {
   posted: { requestId: string; blob: string }[];
   revoked: string[];
   minted: string[];
+  /** cortex#1598 — the natsUser argument of each scoped-mint call, in order. */
+  scopedMints: string[];
 }
 
 function makePorts(opts: {
-  admitted?: { request_id: string; principal_id: string };
+  admitted?: { request_id: string; principal_id: string; stack_id?: string };
   startConf?: string;
+  /**
+   * cortex#1598 — when set, wire a fake {@link ScopedUserMintPort} that returns
+   * these fields (fake creds) and records each natsUser it was called with.
+   * `userAlreadyPresent` flips to true on the SECOND call so idempotency (C2)
+   * is observable. Omit → `ports.scopedMint` is undefined (unwired).
+   */
+  scopedMint?: { creds: string; failWith?: string };
   // cortex#1481 — hub-locality fakes. Defaults resolve LOCAL (loopback alias)
   // so every PRE-#1481 test keeps its local-hub-write assumption unchanged.
   /** Cached hub_url the fake `resolveHubUrl` returns. Default: loopback (LOCAL). */
@@ -63,6 +72,7 @@ function makePorts(opts: {
   const posted: { requestId: string; blob: string }[] = [];
   const revoked: string[] = [];
   const minted: string[] = [];
+  const scopedMints: string[] = [];
   let mintCounter = 0;
   const hubUrl = opts.noHubCache === true ? undefined : (opts.hubUrl ?? "tls://localhost:7422");
   const localHostname = opts.localHostname ?? "localhost";
@@ -104,6 +114,25 @@ function makePorts(opts: {
       localHostname: () => localHostname,
       hubHostIsLocalInterface: async () => hubHostIsLocalInterface,
     },
+    ...(opts.scopedMint !== undefined && {
+      scopedMint: {
+        mintScopedUser: async ({ natsUser }: { natsUser: string }) => {
+          scopedMints.push(natsUser);
+          if (opts.scopedMint!.failWith !== undefined) {
+            return { ok: false as const, reason: opts.scopedMint!.failWith, code: "OTHER" as const };
+          }
+          return {
+            ok: true as const,
+            creds: opts.scopedMint!.creds,
+            userPubKey: "U" + "A".repeat(55),
+            signingKeyPubKey: "A" + "B".repeat(55),
+            accountPubKey: "A" + "D".repeat(55),
+            scopeAlreadyPresent: scopedMints.length > 1,
+            userAlreadyPresent: scopedMints.length > 1,
+          };
+        },
+      },
+    }),
   };
   return {
     ports,
@@ -115,6 +144,7 @@ function makePorts(opts: {
     posted,
     revoked,
     minted,
+    scopedMints,
   };
 }
 
@@ -165,6 +195,165 @@ describe("add-member (sealed)", () => {
     const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" } });
     await runNetworkSecret(inputs({ leafUserOverride: "alice-laptop" }), r.ports);
     expect(listHubLeafUsers(r.hubConf.text)[0]!.user).toBe("alice-laptop");
+  });
+});
+
+// cortex#1598 — clearly-FAKE creds text (never a real JWT/seed) + a fixed clock.
+const FAKE_CREDS =
+  "-----BEGIN NATS USER JWT-----\nAAAA\n------END NATS USER JWT------\n" +
+  "-----BEGIN USER NKEY SEED-----\nSUAAAA\n------END USER NKEY SEED------\n";
+const FIXED_NOW = new Date("2026-07-06T12:00:00.000Z");
+
+/** Operator-mode SecretInputs — the attestation the verified descriptor carries. */
+function operatorInputs(over: Partial<SecretInputs> = {}): SecretInputs {
+  return inputs({
+    hubMode: "operator",
+    resolverMode: "nats",
+    hubFedAccount: "FEDERATION",
+    now: () => FIXED_NOW,
+    ...over,
+  });
+}
+
+describe("cortex#1598 — operator-mode add-member (scoped mint + v2 seal)", () => {
+  test("mints a scoped user (dotted) → seals a v2 creds envelope (slash id) → posts; ZERO hub writes", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs(), r.ports);
+
+    expect(report.ok).toBe(true);
+    expect(report.applied).toBe(true);
+    // Scoped user minted with the DOTTED name; the SLASH id rides the envelope.
+    expect(r.scopedMints).toEqual(["alice.laptop"]);
+    // A v2 envelope carrying the creds + the slash leaf_user + minted_at.
+    expect(r.posted.length).toBe(1);
+    const blob = r.posted[0]!.blob;
+    expect(blob).toContain('"v":2');
+    expect(blob).toContain('"creds"');
+    expect(blob).toContain('"leaf_user":"alice/laptop"');
+    expect(blob).toContain('"minted_at":"2026-07-06T12:00:00.000Z"');
+    // NEVER wrote or reloaded the hub config (operator hub has none).
+    expect(r.writes.length).toBe(0);
+    expect(r.reloads).toBe(0);
+    // Fingerprint-class data, envelope version marker; NO creds/JWT in the report.
+    expect(report.data.envelope_version).toBe("2");
+    expect(report.data.leaf_user).toBe("alice/laptop");
+    expect(report.data.user_already_present).toBe("false");
+    expect(report.steps.join("\n")).not.toContain(FAKE_CREDS);
+    expect(JSON.stringify(report.data)).not.toContain(FAKE_CREDS);
+  });
+
+  test("stack_id absent → the username stack segment defaults to 'default'", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    await runNetworkSecret(operatorInputs(), r.ports);
+    expect(r.scopedMints).toEqual(["alice.default"]);
+    expect(r.posted[0]!.blob).toContain('"leaf_user":"alice/default"');
+  });
+
+  test("a second add-member re-exports → userAlreadyPresent (idempotency, C2)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    await runNetworkSecret(operatorInputs(), r.ports);
+    const second = await runNetworkSecret(operatorInputs(), r.ports);
+    expect(second.data.user_already_present).toBe("true");
+    expect(r.scopedMints).toEqual(["alice.laptop", "alice.laptop"]);
+  });
+
+  test("Guard A: --deliver oob is refused on an operator network — no mint, no hub write", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ deliver: "oob" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("operator-mode");
+    expect(r.scopedMints.length).toBe(0);
+    expect(r.writes.length).toBe(0);
+  });
+
+  test("Guard B: resolver_mode !== nats is refused — no mint", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ resolverMode: "memory" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("resolver_mode: nats");
+    expect(r.scopedMints.length).toBe(0);
+  });
+
+  test("missing scoped-mint port → clear ARC_TOO_OLD-style refusal", async () => {
+    // No scopedMint wired (operator network but the arc verb isn't available).
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" } });
+    const report = await runNetworkSecret(operatorInputs(), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("add-federated-user");
+  });
+
+  test("missing --hub-fed-account → refused", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ hubFedAccount: undefined }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("hub federation account");
+  });
+
+  test("rotate on an operator network → refused-and-deferred (cortex#1599)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ action: "rotate" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("1599");
+    expect(r.scopedMints.length).toBe(0);
+  });
+
+  test("revoke-member on an operator network → refused-and-deferred (cortex#1599)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ action: "revoke-member" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("1599");
+    expect(r.writes.length).toBe(0);
+    expect(r.revoked.length).toBe(0);
+  });
+
+  test("a scoped-mint failure is surfaced (no seal, no post)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS, failWith: "nsc exploded" },
+    });
+    const report = await runNetworkSecret(operatorInputs(), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("nsc exploded");
+    expect(r.posted.length).toBe(0);
+  });
+
+  test("dry-run: plans the mint + v2 seal, mutates nothing", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ apply: false }), r.ports);
+    expect(report.ok).toBe(true);
+    expect(report.applied).toBe(false);
+    expect(report.steps.join("\n")).toContain("would: mint scoped user");
+    expect(report.steps.join("\n")).toContain("NO hub config write");
+    expect(r.scopedMints.length).toBe(0);
+    expect(r.posted.length).toBe(0);
+    expect(r.writes.length).toBe(0);
   });
 });
 

@@ -173,6 +173,21 @@ export interface AdmitSealOutcome {
    * `SecretReport.hubOwnerArtifact`. The caller prints it explicitly.
    */
   hubOwnerArtifact?: string[];
+  /**
+   * cortex#1598 (C3) — present iff this was an OPERATOR-MODE scoped-mint seal:
+   * the FED account + scoped-signing pubkeys the admit fold's probe-then-stamp
+   * reads to verify the account is visible on the hub resolver BEFORE stamping
+   * `hub_authorized_at`. Fingerprint-class values only (never a secret).
+   */
+  operator?: { fedAccountPubKey: string; signingKeyPubKey: string };
+  /**
+   * cortex#1598 (C3) — set by the admit fold's probe-then-stamp: `true` iff the
+   * FED account was visible on the hub resolver AND `hub_authorized_at` was
+   * stamped; `false` iff the probe was negative or the stamp failed (the member
+   * is still connectable — the stamp is a separate re-runnable step). `undefined`
+   * on the simple/non-operator path (authorize stays a manual command there).
+   */
+  hubAuthorizedStamped?: boolean;
 }
 
 /** The per-call arguments `sealMember` needs — everything EXCEPT the adapter's
@@ -190,11 +205,41 @@ export interface SealMemberArgs {
   sealOnly?: boolean;
   /** cortex#1481 — the hub's own federation account nkey-U, when known. */
   hubAccount?: string;
+  /** cortex#1598 — operator-mode attestation (off the verified descriptor): when
+   *  `operator`, the seal mints a scoped user + seals v2 instead of a PSK. */
+  hubMode?: "operator" | "simple";
+  /** cortex#1598 — resolver attestation; operator-mode admit refuses unless `nats`. */
+  resolverMode?: "nats" | "memory";
+  /** cortex#1598 — the hub FED account the scoped user is minted under. */
+  hubFedAccount?: string;
 }
 
 /** Seal + deliver the per-member leaf PSK for a just-admitted member (C-1316). */
 export interface AdmitSealPort {
   sealMember(args: SealMemberArgs): Promise<AdmitSealOutcome>;
+}
+
+/**
+ * cortex#1598 (C3) — the operator-mode probe-then-stamp seam. After a scoped
+ * mint seals, the admit fold probes the LOCAL hub monitor to confirm the FED
+ * account (+ its scoped signing key) is visible on the resolver, then stamps
+ * `hub_authorized_at` — NEVER blind (R4/R7). Both halves live here so the fold
+ * stays pure (fake in tests, HTTP in prod).
+ */
+export interface HubAccountProbePort {
+  /**
+   * Read the hub config at `hubConfigPath`, derive its monitor URL, and GET
+   * `/accountz?acc=<fedAccountPubKey>`. `present: true` iff the account (and
+   * ideally its scoped signing key) is visible. NEVER throws — any failure
+   * (no monitor, unreachable, non-200) returns `present: false` + a reason.
+   */
+  probeAccountOnHub(input: {
+    hubConfigPath: string;
+    fedAccountPubKey: string;
+    signingKeyPubKey: string;
+  }): Promise<{ present: boolean; reason?: string }>;
+  /** Stamp `hub_authorized_at` on the row (the SAME hub-admin-signed POST `authorize` uses). */
+  postAuthorize(requestId: string): Promise<void>;
 }
 
 // =============================================================================
@@ -205,4 +250,11 @@ export interface AdmitPorts {
   registry: AdmitRegistryPort;
   discord: AdmitDiscordPort;
   seal: AdmitSealPort;
+  /**
+   * cortex#1598 (C3) — OPTIONAL operator-mode probe-then-stamp. Present on the
+   * live bundle; the fold only reaches for it when the seal returns an
+   * `operator` block (an operator-mode scoped mint). Absent ⇒ no auto-stamp
+   * (simple-mode admit keeps `authorize` as a separate manual command).
+   */
+  hubProbe?: HubAccountProbePort;
 }

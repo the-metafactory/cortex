@@ -433,7 +433,7 @@ export interface NetworkCreateClaim {
   admin_pubkeys?: string;
   /**
    * #1598 — OPTIONAL hub-mode attestation: how the network's hub authenticates
-   * leaves. `operator` (NSC/JWT — admit seals a per-member scoped-user
+   * leaves. hub_mode `operator` (NSC/JWT — admit seals a per-member scoped-user
    * credential, v2 envelope) or `simple` (inline leaf authorization — admit
    * seals the shared-string secret, v1 envelope). Drives the admit-side
    * fail-fast guards BOTH ways (design §4 D2). Omitted = unattested (legacy

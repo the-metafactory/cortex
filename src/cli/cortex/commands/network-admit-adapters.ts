@@ -39,7 +39,11 @@ import {
   loadConfig as loadDiscordConfig,
   resolveServerContext,
 } from "../lib/discord-roles";
-import type { StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import { existsSync, readFileSync } from "fs";
+import { randomNonce, signAdminRequest, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import { expandTilde } from "../../../common/config/loader";
+import { natsConfigMonitorUrl } from "../../../common/nats/leaf-remote-renderer";
+import type { HubAccountProbePort } from "./network-admit-ports";
 import { buildAdmissionReadHeader } from "./network-admit-lib";
 import { runNetworkSecret, type SecretInputs, type SecretReport } from "./network-secret-lib";
 import { buildLiveSecretPorts } from "./network-secret-adapters";
@@ -79,6 +83,8 @@ export function buildLiveAdmitPorts(cfg: LiveAdmitPortsConfig): AdmitPorts {
     registry: buildLiveAdmitRegistryPort(cfg),
     discord: buildLiveAdmitDiscordPort(),
     seal: buildLiveAdmitSealPort(cfg),
+    // cortex#1598 (C3) — operator-mode probe-then-stamp (accountz read + authorize POST).
+    hubProbe: buildLiveHubAccountProbePort(cfg),
   };
 }
 
@@ -261,6 +267,10 @@ async function sealAdmittedMember(args: {
   sealOnly?: boolean;
   /** cortex#1481 — the hub's own federation account nkey-U, when known. */
   hubAccount?: string;
+  /** cortex#1598 — operator-mode attestation (off the verified descriptor). */
+  hubMode?: "operator" | "simple";
+  resolverMode?: "nats" | "memory";
+  hubFedAccount?: string;
 }): Promise<AdmitSealOutcome> {
   const {
     networkId,
@@ -272,6 +282,9 @@ async function sealAdmittedMember(args: {
     adminSeedPath,
     sealOnly,
     hubAccount,
+    hubMode,
+    resolverMode,
+    hubFedAccount,
   } = args;
 
   // A network-less admission row (legacy null network_id) can't be sealed — the
@@ -296,6 +309,9 @@ async function sealAdmittedMember(args: {
     apply: true,
     ...(sealOnly !== undefined && { sealOnly }),
     ...(hubAccount !== undefined && { hubAccount }),
+    ...(hubMode !== undefined && { hubMode }),
+    ...(resolverMode !== undefined && { resolverMode }),
+    ...(hubFedAccount !== undefined && { hubFedAccount }),
   };
 
   let report: SecretReport;
@@ -324,10 +340,22 @@ async function sealAdmittedMember(args: {
     };
   }
 
+  // cortex#1598 (C3) — surface the operator-mode fingerprints so the admit fold
+  // can probe the hub resolver + stamp hub_authorized_at. Present only on the
+  // operator seal path (`envelope_version === "2"` + account/signing pubkeys in
+  // the report data); absent on the simple/PSK path.
+  const operator =
+    report.data.envelope_version === "2" &&
+    typeof report.data.account_pubkey === "string" &&
+    typeof report.data.signing_key === "string"
+      ? { fedAccountPubKey: report.data.account_pubkey, signingKeyPubKey: report.data.signing_key }
+      : undefined;
+
   return {
     status: "sealed",
     steps: report.steps,
     ...(report.hubOwnerArtifact !== undefined && { hubOwnerArtifact: report.hubOwnerArtifact }),
+    ...(operator !== undefined && { operator }),
   };
 }
 
@@ -335,5 +363,90 @@ function buildLiveAdmitSealPort(cfg: LiveAdmitPortsConfig): AdmitSealPort {
   const secretPortsFactory = cfg.secretPortsFactory ?? ((c) => buildLiveSecretPorts(c));
   return {
     sealMember: (args: SealMemberArgs) => sealAdmittedMember({ ...args, secretPortsFactory }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// cortex#1598 (C3) — operator-mode probe-then-stamp: read the hub monitor's
+// /accountz to confirm the FED account is on the resolver, then stamp
+// hub_authorized_at. Mint-admit only ever runs on the hub owner's machine
+// (where the nsc store + hub conf live), so the monitor is a LOOPBACK read.
+// ---------------------------------------------------------------------------
+
+/** Bound the accountz probe — the hub monitor is loopback + local, so a short
+ *  budget is right; a slow/absent monitor must not stall the admit fold. */
+const ACCOUNTZ_PROBE_TIMEOUT_MS = 2000;
+
+function buildLiveHubAccountProbePort(cfg: LiveAdmitPortsConfig): HubAccountProbePort {
+  const base = cfg.registryUrl.replace(/\/+$/, "");
+  const fetchImpl = cfg.fetchImpl ?? globalThis.fetch;
+  return {
+    async probeAccountOnHub({ hubConfigPath, fedAccountPubKey, signingKeyPubKey }) {
+      // Derive the monitor URL from the LOCAL hub conf (loopback:port). No conf /
+      // no monitor directive → we cannot verify, so report NOT present (fail-safe:
+      // the fold leaves hub_authorized_at unstamped, never a blind stamp).
+      const confPath = expandTilde(hubConfigPath);
+      if (!existsSync(confPath)) {
+        return { present: false, reason: `hub config not found at ${confPath} — cannot probe the resolver` };
+      }
+      let monitorUrl: string | undefined;
+      try {
+        monitorUrl = natsConfigMonitorUrl(readFileSync(confPath, "utf-8"));
+      } catch (err) {
+        return { present: false, reason: `could not read the hub config: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      if (monitorUrl === undefined) {
+        return { present: false, reason: `hub config ${confPath} declares no HTTP monitor port — cannot probe /accountz (add http_port to the hub conf)` };
+      }
+      try {
+        const res = await fetchImpl(`${monitorUrl}/accountz?acc=${encodeURIComponent(fedAccountPubKey)}`, {
+          signal: AbortSignal.timeout(ACCOUNTZ_PROBE_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+          return { present: false, reason: `hub monitor ${monitorUrl}/accountz returned HTTP ${res.status.toString()}` };
+        }
+        const body = await res.text();
+        // Present iff the account pubkey appears in the resolver's account detail.
+        // The scoped signing key appearing too confirms the UPDATED account JWT
+        // propagated (not just an older revision) — report it, but the account's
+        // presence is the gating signal.
+        if (!body.includes(fedAccountPubKey)) {
+          return { present: false, reason: `FED account ${fedAccountPubKey.slice(0, 12)}… not present in the hub resolver's /accountz` };
+        }
+        if (!body.includes(signingKeyPubKey)) {
+          return {
+            present: false,
+            reason: `FED account present but the scoped signing key ${signingKeyPubKey.slice(0, 12)}… is not yet in the resolver's account JWT (an older account revision) — the updated JWT has not propagated`,
+          };
+        }
+        return { present: true };
+      } catch (err) {
+        const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+        return {
+          present: false,
+          reason: isTimeout
+            ? `hub monitor ${monitorUrl}/accountz timed out after ${ACCOUNTZ_PROBE_TIMEOUT_MS.toString()}ms`
+            : `hub monitor ${monitorUrl} unreachable: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    },
+    async postAuthorize(requestId) {
+      // The SAME hub-admin-signed POST `cortex network authorize` uses.
+      const claim = {
+        request_id: requestId,
+        hub_admin_pubkey: cfg.material.pubkeyB64,
+        issued_at: new Date().toISOString(),
+        nonce: randomNonce(),
+      };
+      const signed = await signAdminRequest(cfg.material.seed, claim);
+      const resp = await fetchImpl(`${base}/admission-requests/${encodeURIComponent(requestId)}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(signed),
+      });
+      if (!resp.ok) {
+        throw new Error(`registry rejected authorize (HTTP ${resp.status.toString()}): ${await resp.text()}`);
+      }
+    },
   };
 }

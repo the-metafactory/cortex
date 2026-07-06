@@ -25,7 +25,10 @@
  * schema change — that is the documented M3 seam.
  */
 
-import { encodeLeafSecretEnvelope } from "../../../common/registry/sealed-leaf-secret";
+import {
+  encodeLeafSecretEnvelope,
+  encodeLeafSecretEnvelopeV2,
+} from "../../../common/registry/sealed-leaf-secret";
 import { looksLikeNkeyRole, toBase64Pubkey } from "../../../common/registry/pubkey-normalize";
 import { pskFingerprint } from "../../../common/nats/leaf-psk";
 import {
@@ -89,6 +92,32 @@ export interface SecretInputs {
    * joiner installs both. Only meaningful when {@link payloadKey} is set.
    */
   payloadKeyKid?: string;
+  /**
+   * cortex#1598 (epic #1595 slice 2) — the network's hub mode, read off the
+   * VERIFIED {@link NetworkDescriptor} attestation (P2). `"operator"` routes
+   * add-member to the scoped-user mint + v2 seal (no inline hub write);
+   * `"simple"` / absent keeps the existing per-member PSK + hub-config path.
+   */
+  hubMode?: "operator" | "simple";
+  /**
+   * cortex#1598 — the network's resolver mode, also off the verified descriptor.
+   * The operator-mode admit REFUSES unless this is `"nats"` (Guard B): a scoped
+   * mint edits the FED account JWT, which a `"memory"` (preloaded) resolver
+   * cannot learn without a hub restart — silently regressing admit/revoke.
+   */
+  resolverMode?: "nats" | "memory";
+  /**
+   * cortex#1598 — the hub's federation account (UPPER_SNAKE nsc account) the
+   * scoped user is minted under. Resolved from `--hub-fed-account` → else
+   * `policy.federated.networks[<id>].hub_fed_account`. REQUIRED on the
+   * operator-mode path; ignored on the simple path.
+   */
+  hubFedAccount?: string;
+  /**
+   * cortex#1598 — injectable clock for the v2 envelope's `minted_at`
+   * (deterministic in tests). Defaults to `() => new Date()`.
+   */
+  now?: () => Date;
   apply: boolean;
 }
 
@@ -367,6 +396,19 @@ async function addOrRotate(
   steps.push(`leaf user:  ${leafUser}`);
   steps.push(`deliver:    ${inputs.deliver}`);
 
+  // cortex#1598 (epic #1595 slice 2) — OPERATOR-MODE branch. When the network's
+  // VERIFIED descriptor attests `hub_mode: operator`, admit seals a subject-
+  // scoped per-member `.creds` credential (minted via `arc nats
+  // add-federated-user`) INSTEAD of minting a shared PSK and writing an inline
+  // hub `authorization` user. This early return IS Guard A (C4): the entire
+  // simple/PSK + hub-config write path below is structurally UNREACHABLE on an
+  // operator network — a shared-string leaf user would crash an operator hub
+  // (cortex#794). The simple path stays byte-for-byte unchanged for every other
+  // network.
+  if (inputs.hubMode === "operator") {
+    return operatorModeSeal(inputs, ports, rotate, { row, memberPubkeyB64, steps, data });
+  }
+
   // cortex#1481 — resolve hub locality BEFORE any mutation, so both the
   // dry-run plan and the apply path branch identically. `sealOnly` forces the
   // EXTERNAL path even when the descriptor would otherwise read as local (the
@@ -526,6 +568,157 @@ async function addOrRotate(
 }
 
 /**
+ * cortex#1598 (epic #1595 slice 2) — the OPERATOR-MODE add-member seal.
+ *
+ * On an operator-mode hub there is NO inline `authorization` block: admit mints
+ * a subject-SCOPED per-member NSC user (`arc nats add-federated-user`, arc#269)
+ * and seals its `.creds` in a v2 envelope. ZERO hub-config writes — `ports.hub`
+ * is never touched. The two guards below are the security contract (C4):
+ *
+ *   - the `--deliver oob` shared-PSK handover is refused (there is no PSK), and
+ *   - the mint is refused unless the network attests a push-capable resolver
+ *     (`resolver_mode: nats`) — the scoped mint edits the FED account JWT, which
+ *     a preloaded (memory) resolver can't learn without a hub restart.
+ *
+ * rotate/revoke on an operator network is the nsc rotate/revoke slice
+ * (cortex#1599) — refused-and-deferred here.
+ */
+async function operatorModeSeal(
+  inputs: SecretInputs,
+  ports: NetworkSecretPorts,
+  rotate: boolean,
+  ctx: {
+    row: { request_id: string; principal_id: string; stack_id?: string };
+    memberPubkeyB64: string;
+    steps: string[];
+    data: Record<string, string>;
+  },
+): Promise<SecretReport> {
+  const action: SecretAction = rotate ? "rotate" : "add-member";
+  const { row, memberPubkeyB64, steps, data } = ctx;
+  data.hub_mode = "operator";
+
+  // rotate on an operator network re-mints the scoped credential — the nsc
+  // rotate/revoke slice (cortex#1599), gated on the resolver migration.
+  if (rotate) {
+    return fail(action, inputs, steps, data,
+      `rotate on an operator-mode network re-mints the scoped nsc credential — that is the nsc rotate/revoke slice (cortex#1599), gated on the MEMORY→nats resolver migration. Re-run add-member to idempotently re-export the current credential.`);
+  }
+
+  // Guard A (deliver): --deliver oob is the shared-PSK handover — meaningless on
+  // an operator hub. Refuse before any mint.
+  if (inputs.deliver !== "sealed") {
+    return fail(action, inputs, steps, data,
+      `operator-mode network "${inputs.networkId}" seals a subject-scoped credential; --deliver oob (shared-PSK handover) cannot run. Use sealed delivery.`);
+  }
+
+  // Guard B (§5.1): the scoped mint edits the FED account JWT; a preloaded
+  // (memory) resolver can't learn it without a hub restart, silently regressing
+  // admit + revoke. Refuse unless the network attests a push-capable resolver.
+  if (inputs.resolverMode !== "nats") {
+    return fail(action, inputs, steps, data,
+      `operator-mode admit needs a push-capable resolver (resolver_mode: nats) — network "${inputs.networkId}" attests "${inputs.resolverMode ?? "unset"}". A scoped mint edits the federation account JWT; a preloaded (memory) resolver cannot learn it without a hub restart. Migrate the hub resolver first (cortex#1599 prerequisite).`);
+  }
+
+  // The mint port + the hub FED account are both required on this path.
+  if (ports.scopedMint === undefined) {
+    return fail(action, inputs, steps, data,
+      `operator-mode admit needs an arc that provides 'add-federated-user' (arc#269) — the scoped-mint port is not wired. Run 'arc upgrade'.`);
+  }
+  if (inputs.hubFedAccount === undefined || inputs.hubFedAccount.length === 0) {
+    return fail(action, inputs, steps, data,
+      `operator-mode admit needs the hub federation account — pass --hub-fed-account <ACCOUNT> or set policy.federated.networks[${inputs.networkId}].hub_fed_account.`);
+  }
+
+  // Two DIFFERENT names (do not conflate): the DOTTED nsc username (the
+  // `{{name()}}` scope-template convention), and the SLASH member identity the
+  // v2 envelope carries — what #1597's install refuses a mismatched credential
+  // against. The stack segment is the admitted row's `stack_id` trailing
+  // segment when present, else "default".
+  const stackSeg =
+    row.stack_id !== undefined && row.stack_id.includes("/")
+      ? (row.stack_id.slice(row.stack_id.lastIndexOf("/") + 1) || "default")
+      : "default";
+  const natsUser = `${row.principal_id}.${stackSeg}`;
+  const leafUserSlash = `${row.principal_id}/${stackSeg}`;
+  data.leaf_user = leafUserSlash;
+  data.nats_user = natsUser;
+
+  steps.push(`hub:        OPERATOR-MODE — scoped mint under account ${inputs.hubFedAccount} (NO hub config write)`);
+
+  // Resolve the optional payload key K (rides v2 unchanged, same as v1).
+  const payloadKey =
+    typeof inputs.payloadKey === "string" && inputs.payloadKey.length > 0 ? inputs.payloadKey : undefined;
+  const payloadKeyKid = payloadKey !== undefined ? (inputs.payloadKeyKid ?? `${inputs.networkId}/k1`) : undefined;
+
+  if (!inputs.apply) {
+    steps.push(
+      `would: mint scoped user "${natsUser}" (arc add-federated-user) → seal v2 creds (leaf_user ${leafUserSlash}) → deliver to admission row ${row.request_id} — NO hub config write`,
+    );
+    steps.push(
+      payloadKey !== undefined
+        ? `would: seal payload key K (kid ${payloadKeyKid}) alongside the v2 creds — join installs encryption`
+        : `would: no payload key configured hub-side for "${inputs.networkId}" — sealing v2 creds only`,
+    );
+    return plan(action, inputs, steps, data);
+  }
+
+  // Mint the scoped user (idempotency + refusal is arc's job — a second admit
+  // re-exports with userAlreadyPresent:true, which is C2 for free).
+  const mint = await ports.scopedMint.mintScopedUser({
+    hubFedAccount: inputs.hubFedAccount,
+    natsUser,
+    networkId: inputs.networkId,
+  });
+  if (!mint.ok) {
+    return fail(action, inputs, steps, data,
+      `scoped-user mint failed (${mint.code ?? "OTHER"}): ${mint.reason}`);
+  }
+  // Fingerprint-class fields only — NEVER the creds/JWT/seed. The account +
+  // signing pubkeys are what the admit fold's probe-then-stamp (C3) reads to
+  // verify the account is visible on the hub resolver before stamping.
+  data.user_pubkey = mint.userPubKey;
+  data.signing_key = mint.signingKeyPubKey;
+  data.account_pubkey = mint.accountPubKey;
+  data.scope_already_present = String(mint.scopeAlreadyPresent);
+  data.user_already_present = String(mint.userAlreadyPresent);
+  data.envelope_version = "2";
+  steps.push(
+    `scoped user: "${natsUser}" minted (scope ${mint.signingKeyPubKey.slice(0, 12)}…, userAlreadyPresent=${String(mint.userAlreadyPresent)})`,
+  );
+
+  if (payloadKey !== undefined) {
+    const kFp = await pskFingerprint(payloadKey);
+    data.payload_key_kid = payloadKeyKid ?? "";
+    data.payload_key_fingerprint = kFp;
+    steps.push(`payload key: sealed K (kid ${payloadKeyKid}, fp ${kFp}) — join installs encryption`);
+  }
+
+  let sealed: string;
+  try {
+    const envelope = encodeLeafSecretEnvelopeV2({
+      creds: mint.creds,
+      leaf_user: leafUserSlash,
+      minted_at: (inputs.now?.() ?? new Date()).toISOString(),
+      ...(payloadKey !== undefined && { payload_key: payloadKey, payload_key_kid: payloadKeyKid }),
+    });
+    sealed = await ports.crypto.seal(envelope, memberPubkeyB64);
+  } catch (err) {
+    return fail(action, inputs, steps, data, `failed to seal the v2 scoped credential: ${errText(err)}`);
+  }
+  try {
+    await ports.delivery.postSealedSecret(row.request_id, sealed);
+  } catch (err) {
+    return fail(action, inputs, steps, data, `failed to deliver the sealed v2 credential to the registry: ${errText(err)}`);
+  }
+  steps.push(`deliver:    sealed v2 creds → posted to admission row ${row.request_id}`);
+
+  const report = plan(action, inputs, steps, data);
+  report.applied = true;
+  return report;
+}
+
+/**
  * cortex#1481 (Sage review, nit) — attach the hub-owner artifact to `report`
  * IFF the hub is external. Shared by the oob and sealed delivery tails of
  * {@link addOrRotate} (the block was verbatim in both). The raw PSK riding the
@@ -572,6 +765,18 @@ async function revokeMember(
   data.leaf_user = leafUser;
   steps.push(`member:     ${memberPubkeyB64.slice(0, 12)}… (request ${row.request_id})`);
   steps.push(`leaf user:  ${leafUser}`);
+
+  // cortex#1598 (C4) — revoke on an operator-mode network must nsc-revoke the
+  // scoped user + push the account JWT, NOT drop an inline hub `authorization`
+  // user (there is none). That is the nsc rotate/revoke slice (cortex#1599),
+  // gated on the resolver migration. Refuse-and-defer rather than silently
+  // dropping a non-existent user and marking the row REVOKED while the member's
+  // scoped credential stays live on the hub.
+  if (inputs.hubMode === "operator") {
+    data.hub_mode = "operator";
+    return fail(action, inputs, steps, data,
+      `revoke on an operator-mode network must nsc-revoke the scoped user + push the account JWT — that is the nsc rotate/revoke slice (cortex#1599), gated on the MEMORY→nats resolver migration. Not available in this build.`);
+  }
 
   if (!inputs.apply) {
     steps.push(`would: DROP hub authorization user "${leafUser}" + reload (CUT transport) → mark admission row REVOKED`);

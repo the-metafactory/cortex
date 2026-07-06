@@ -36,8 +36,9 @@
  * are not invoked during a dry-run.
  */
 
-import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync, mkdtempSync, rmSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
+import { tmpdir } from "os";
 import { hostname as osHostname, networkInterfaces as osNetworkInterfaces } from "os";
 import { lookup as dnsLookup } from "dns/promises";
 
@@ -71,6 +72,7 @@ import type {
   SealDeliveryPort,
   SecretCrypto,
   HubLocalityPort,
+  ScopedUserMintPort,
   NetworkKeyRotationPorts,
   AdmittedListPort,
   HubKeyStorePort,
@@ -182,6 +184,10 @@ export function buildLiveSecretPorts(cfg: LiveSecretPortsConfig): NetworkSecretP
     delivery: buildLiveSealDeliveryPort(cfg),
     crypto: buildLiveSecretCrypto(),
     hubLocality: buildLiveHubLocalityPort(cfg),
+    // cortex#1598 — the operator-mode scoped-user mint (arc-backed). Present on
+    // the live bundle unconditionally; the operator branch of `addOrRotate` only
+    // reaches for it when the network attests hub_mode: operator.
+    scopedMint: buildScopedUserMintAdapter(),
   };
 }
 
@@ -324,6 +330,8 @@ interface AdmissionRow {
   peer_pubkey: string;
   network_id: string | null;
   status: string;
+  /** `{principal}/{stack}` slash form — the scoped-user stack segment (cortex#1598). */
+  stack_id?: string | null;
 }
 
 function buildLiveAdmissionLookupPort(cfg: LiveSecretPortsConfig): AdmissionLookupPort {
@@ -347,7 +355,13 @@ function buildLiveAdmissionLookupPort(cfg: LiveSecretPortsConfig): AdmissionLook
       }
       const rows = (await resp.json()) as AdmissionRow[];
       const row = rows.find((r) => r.network_id === networkId && r.peer_pubkey === memberPubkey && r.status === "ADMITTED");
-      return row ? { request_id: row.request_id, principal_id: row.principal_id } : undefined;
+      return row
+        ? {
+            request_id: row.request_id,
+            principal_id: row.principal_id,
+            ...(typeof row.stack_id === "string" && row.stack_id.length > 0 && { stack_id: row.stack_id }),
+          }
+        : undefined;
     },
   };
 }
@@ -398,6 +412,229 @@ function buildLiveSecretCrypto(): SecretCrypto {
   return {
     mintPsk: () => mintLeafPsk(),
     seal: (plaintext, pubkey) => sealToPrincipal(plaintext, pubkey),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// cortex#1598 — SCOPED-USER MINT: shell `arc nats add-federated-user` (arc#269),
+// read the exported creds text back, hand it to the operator-mode admit seal.
+//
+// Modeled 1:1 on `network-federation-wiring.ts` (the ADR-0013 Model B arc-shell
+// pattern): cortex → arc → nsc. Never throws — every failure surfaces as
+// `{ ok: false, reason, code }` so the orchestrator can `fail(...)` cleanly.
+//
+// The verb is on arc MAIN but not yet in a released arc binary (arc#269 merged,
+// deploy is a separate step). So an arc that does not know the subcommand
+// (exit 127 / unknown-command / a non-`arc.nats.federated-user.v1` envelope) is
+// mapped to `code: "ARC_TOO_OLD"` — a clear "run `arc upgrade`" signal, never a
+// silent no-op.
+// ---------------------------------------------------------------------------
+
+/** Result of one `arc nats add-federated-user` subprocess invocation. */
+export interface ArcScopedMintRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/**
+ * Pluggable arc subprocess driver. Receives the FULL argv (`["nats",
+ * "add-federated-user", …]`); production prepends `arc` via Bun.spawn. Tests
+ * inject a fake to assert the argv and drive success/error envelopes.
+ */
+export type ArcScopedMintRunner = (argv: readonly string[]) => Promise<ArcScopedMintRunResult>;
+
+async function defaultArcScopedMintRunner(argv: readonly string[]): Promise<ArcScopedMintRunResult> {
+  const proc = Bun.spawn(["arc", ...argv], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
+/** Module-level runner override — the `__set…ForTests` seam (mirrors the join
+ *  leaf-secret fetcher override). Lets tests swap the arc runner used by the
+ *  adapter that `buildLiveSecretPorts` wires, without threading a runner arg
+ *  through every construction site. */
+let scopedMintRunnerOverride: ArcScopedMintRunner | null = null;
+
+/** Test-only — inject a fake arc runner for the scoped-mint adapter. */
+export function __setScopedMintRunnerForTests(r: ArcScopedMintRunner | null): void {
+  scopedMintRunnerOverride = r;
+}
+
+/** Schema arc emits for `nats add-federated-user` (arc#269). Must match arc's
+ *  `ARC_NATS_FEDERATED_USER_SCHEMA`; a divergence fails as ARC_TOO_OLD. */
+const ARC_NATS_FEDERATED_USER_SCHEMA = "arc.nats.federated-user.v1";
+
+interface ArcFederatedUserOk {
+  schema: typeof ARC_NATS_FEDERATED_USER_SCHEMA;
+  ok: true;
+  account: string;
+  accountPubKey: string;
+  user: string;
+  userPubKey: string;
+  signingKeyPubKey: string;
+  scopeCreated: boolean;
+  scopeAlreadyPresent: boolean;
+  userCreated: boolean;
+  userAlreadyPresent: boolean;
+  credsPath: string;
+  jwt: string;
+  subTemplate: string;
+  pubTemplate: string;
+}
+
+interface ArcFederatedUserError {
+  schema: typeof ARC_NATS_FEDERATED_USER_SCHEMA;
+  ok: false;
+  error: { code: string; message: string };
+}
+
+type ArcFederatedUserEnvelope = ArcFederatedUserOk | ArcFederatedUserError;
+
+/**
+ * Build the live {@link ScopedUserMintPort} backed by `arc nats add-federated-user`.
+ *
+ * @param runner - Injectable subprocess driver. Defaults to the module-level
+ *   test override when set, else `Bun.spawn(["arc", …])`.
+ */
+export function buildScopedUserMintAdapter(
+  runner?: ArcScopedMintRunner,
+): ScopedUserMintPort {
+  return {
+    async mintScopedUser({ hubFedAccount, natsUser, networkId }) {
+      const run = runner ?? scopedMintRunnerOverride ?? defaultArcScopedMintRunner;
+
+      // A private tmp dir for the exported creds — read the text back, then
+      // remove the whole dir in `finally`. No creds plaintext residue on the
+      // admin machine (nsc can re-derive the creds anytime).
+      const outDir = mkdtempSync(joinPath(tmpdir(), "cortex-scoped-"));
+      const outPath = joinPath(outDir, `${natsUser}.creds`);
+
+      try {
+        const argv: readonly string[] = [
+          "nats",
+          "add-federated-user",
+          natsUser,
+          "--account",
+          hubFedAccount,
+          "--output",
+          outPath,
+          "--json",
+        ];
+
+        let result: ArcScopedMintRunResult;
+        try {
+          result = await run(argv);
+        } catch (err) {
+          // A missing arc binary throws on spawn (ENOENT) — the operator has an
+          // arc without the verb, or no arc at all. Treat as ARC_TOO_OLD.
+          return {
+            ok: false,
+            code: "ARC_TOO_OLD",
+            reason:
+              `failed to invoke 'arc nats add-federated-user' for network "${networkId}" — ` +
+              `${err instanceof Error ? err.message : String(err)}. ` +
+              `Operator-mode admit needs an arc that provides 'add-federated-user' (arc#269); run 'arc upgrade'.`,
+          };
+        }
+
+        // Parse the first non-blank JSON line (same pattern as the federation
+        // wiring adapter). No valid envelope → the arc is too old / unknown
+        // command / not installed.
+        const line = result.stdout.split("\n").find((l) => l.trim().length > 0) ?? "";
+        let parsed: unknown;
+        if (line.length > 0) {
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            parsed = undefined;
+          }
+        }
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          (parsed as { schema?: unknown }).schema !== ARC_NATS_FEDERATED_USER_SCHEMA
+        ) {
+          return {
+            ok: false,
+            code: "ARC_TOO_OLD",
+            reason:
+              `arc returned no valid '${ARC_NATS_FEDERATED_USER_SCHEMA}' envelope ` +
+              `(the installed arc predates the add-federated-user verb, arc#269). ` +
+              `Run 'arc upgrade'. arc exit ${result.exitCode.toString()}, stderr: ${result.stderr.trim() || "(empty)"}`,
+          };
+        }
+
+        const envelope = parsed as ArcFederatedUserEnvelope;
+
+        if (!envelope.ok) {
+          const rawError = (envelope as { error?: unknown }).error;
+          const errCode =
+            rawError !== null &&
+            typeof rawError === "object" &&
+            "code" in rawError &&
+            typeof (rawError as { code?: unknown }).code === "string"
+              ? (rawError as { code: string }).code
+              : "(unknown code)";
+          const errMsg =
+            rawError !== null &&
+            typeof rawError === "object" &&
+            "message" in rawError &&
+            typeof (rawError as { message?: unknown }).message === "string"
+              ? (rawError as { message: string }).message
+              : "(no message)";
+          // USER_NOT_SCOPED is a first-class refusal (a pre-existing user signed
+          // by something other than the federated scope — re-exporting it would
+          // hand out an unscoped credential). Surface it distinctly; everything
+          // else is OTHER.
+          return {
+            ok: false,
+            code: errCode === "USER_NOT_SCOPED" ? "USER_NOT_SCOPED" : "OTHER",
+            reason: `arc nats add-federated-user failed: ${errCode}: ${errMsg}`,
+          };
+        }
+
+        // arc wrote the creds to outPath (0600). Read the FULL text — the JSON
+        // envelope carries only the JWT, but the leaf needs the JWT + seed the
+        // creds file holds.
+        let creds: string;
+        try {
+          creds = readFileSync(outPath, "utf-8");
+        } catch (err) {
+          return {
+            ok: false,
+            code: "OTHER",
+            reason:
+              `arc reported a minted user for "${natsUser}" but its creds file at ${outPath} ` +
+              `was unreadable: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+
+        return {
+          ok: true,
+          creds,
+          userPubKey: envelope.userPubKey,
+          signingKeyPubKey: envelope.signingKeyPubKey,
+          accountPubKey: envelope.accountPubKey,
+          scopeAlreadyPresent: envelope.scopeAlreadyPresent,
+          userAlreadyPresent: envelope.userAlreadyPresent,
+        };
+      } finally {
+        // Remove the whole tmp dir (creds + any residue), best-effort.
+        try {
+          rmSync(outDir, { recursive: true, force: true });
+        } catch (err) {
+          process.stderr.write(
+            `cortex network secret: could not remove scoped-mint tmp dir ${outDir} ` +
+              `(${err instanceof Error ? err.message : String(err)}) — it may hold a creds file; remove it manually\n`,
+          );
+        }
+      }
+    },
   };
 }
 

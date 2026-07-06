@@ -32,13 +32,15 @@ export interface HubAuthPort {
 export interface AdmissionLookupPort {
   /**
    * Find the ADMITTED admission row for (networkId, memberPubkey). Returns the
-   * `request_id` + the member's `principal_id` (the leaf-user default), or
-   * `undefined` when no ADMITTED row exists for that member+network.
+   * `request_id` + the member's `principal_id` (the leaf-user default) + the
+   * row's `stack_id` (`{principal}/{stack}` slash form, when the registry
+   * carries it — cortex#1598 derives the scoped-user's stack segment from it),
+   * or `undefined` when no ADMITTED row exists for that member+network.
    */
   findAdmittedRow(
     networkId: string,
     memberPubkey: string,
-  ): Promise<{ request_id: string; principal_id: string } | undefined>;
+  ): Promise<{ request_id: string; principal_id: string; stack_id?: string } | undefined>;
 }
 
 /** Deliver / revoke the opaque sealed blob on the registry. HUB-ADMIN authority. */
@@ -101,6 +103,49 @@ export interface HubLocalityPort {
   hubHostIsLocalInterface(hubUrl: string): Promise<boolean>;
 }
 
+/**
+ * cortex#1598 (epic #1595 slice 2) — mint a subject-scoped hub-transport user
+ * on an OPERATOR-MODE hub, returning its `.creds` TEXT for sealing. Backed by
+ * the `arc nats add-federated-user` verb (arc#269): cortex shells arc → arc
+ * calls nsc (the ADR-0013 Model B boundary; cortex NEVER calls nsc directly).
+ *
+ * The operator-mode admit path seals this scoped credential instead of writing
+ * an inline PSK leaf user into the hub config — an operator hub has no inline
+ * `authorization` block to write, and a shared-string leaf user would crash it
+ * (cortex#794). OPTIONAL on {@link NetworkSecretPorts}: the simple/PSK path and
+ * every existing fake keep compiling without it.
+ */
+export interface ScopedUserMintPort {
+  /**
+   * Mint (idempotent) a scoped federated user + return its `.creds` TEXT.
+   * Never leaves the creds file on disk: the adapter writes to a tmp path,
+   * reads the text back, and unlinks it (nsc can re-derive creds anytime).
+   */
+  mintScopedUser(input: {
+    /** The hub's federation account (UPPER_SNAKE nsc account). */
+    hubFedAccount: string;
+    /** DOTTED `<principal>.<stack>` — the `{{name()}}` scope-template convention. */
+    natsUser: string;
+    /** The network id (diagnostics only; the scope is account-derived). */
+    networkId: string;
+  }): Promise<
+    | {
+        ok: true;
+        /** The minted user's `.creds` text (JWT + seed) — sealed, never logged. */
+        creds: string;
+        /** U-prefixed user NKey public key (fingerprint-class; safe to log). */
+        userPubKey: string;
+        /** A-prefixed pubkey of the `federated`-role scoped signing key. */
+        signingKeyPubKey: string;
+        /** A-prefixed pubkey of the hub FED account (the probe-then-stamp target, C3). */
+        accountPubKey: string;
+        scopeAlreadyPresent: boolean;
+        userAlreadyPresent: boolean;
+      }
+    | { ok: false; reason: string; code?: "ARC_TOO_OLD" | "USER_NOT_SCOPED" | "OTHER" }
+  >;
+}
+
 /** The full port bundle the orchestrator depends on. */
 export interface NetworkSecretPorts {
   hub: HubAuthPort;
@@ -109,6 +154,12 @@ export interface NetworkSecretPorts {
   crypto: SecretCrypto;
   /** cortex#1481 — the hub-locality read the orchestrator gates the hub write on. */
   hubLocality: HubLocalityPort;
+  /**
+   * cortex#1598 — OPTIONAL scoped-user mint (operator-mode hubs only). Absent on
+   * the simple/PSK path and in every per-member fake; the operator branch of
+   * `addOrRotate` requires it and fails clearly when it is missing.
+   */
+  scopedMint?: ScopedUserMintPort;
 }
 
 // ===========================================================================

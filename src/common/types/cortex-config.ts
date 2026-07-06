@@ -2190,6 +2190,15 @@ export const PolicyFederatedNetworkSchema = z.object({
    * when omitted. PR5b bumps this on each network-key rotation.
    */
   payload_key_id: z.string().optional(),
+  /**
+   * cortex#1598 (epic #1595 slice 2) — the hub's federation account (UPPER_SNAKE
+   * nsc account) that an OPERATOR-MODE admit mints scoped per-member users under
+   * (`arc nats add-federated-user … --account <this>`). Only meaningful on the
+   * hub owner's machine (where the nsc store lives) and only for networks that
+   * attest `hub_mode: operator`. The `--hub-fed-account` flag overrides it.
+   * Absent ⇒ operator-mode admit refuses until it is provided.
+   */
+  hub_fed_account: z.string().optional(),
 });
 
 export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema>;
