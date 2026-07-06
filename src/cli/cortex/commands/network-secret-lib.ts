@@ -639,11 +639,15 @@ async function operatorModeSeal(
   // `{{name()}}` scope-template convention), and the SLASH member identity the
   // v2 envelope carries — what #1597's install refuses a mismatched credential
   // against. The stack segment is the admitted row's `stack_id` trailing
-  // segment when present, else "default".
+  // segment: the part after the last "/" for the canonical `{principal}/{stack}`
+  // form; a present-but-slashless `stack_id` is used VERBATIM as the segment (do
+  // not silently collapse a real value to "default" — that would mint under the
+  // wrong scoped username); only a wholly-absent `stack_id` falls back to
+  // "default".
   const stackSeg =
-    row.stack_id !== undefined && row.stack_id.includes("/")
-      ? (row.stack_id.slice(row.stack_id.lastIndexOf("/") + 1) || "default")
-      : "default";
+    row.stack_id === undefined || row.stack_id.length === 0
+      ? "default"
+      : (row.stack_id.slice(row.stack_id.lastIndexOf("/") + 1) || "default");
   const natsUser = `${row.principal_id}.${stackSeg}`;
   const leafUserSlash = `${row.principal_id}/${stackSeg}`;
   data.leaf_user = leafUserSlash;

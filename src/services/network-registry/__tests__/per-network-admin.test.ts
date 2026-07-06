@@ -222,6 +222,45 @@ describe("network create/update — per-network admin", () => {
     expect(stored?.admin_pubkeys).toBe(pna.publicKeyB64);
   });
 
+  test("#1598 — a per-network admin CANNOT downgrade hub_mode operator→simple → 403", async () => {
+    const pna = await makePrincipalKey();
+    // Global admin creates the network as operator-mode.
+    expect((await post("/networks/research-collab",
+      await makeSignedNetworkCreate("research-collab", globalAdmin, { adminPubkeys: pna.publicKeyB64, hubMode: "operator", resolverMode: "nats" }),
+    )).status).toBe(201);
+
+    // The per-network admin tries to downgrade to simple — the F4 crash vector — must be refused.
+    const downgrade = await makeSignedNetworkCreate("research-collab", pna, { hubMode: "simple" });
+    expect((await post("/networks/research-collab", downgrade)).status).toBe(403);
+
+    // The attestation is unchanged.
+    const stored = await getStore(env).getNetwork("research-collab");
+    expect(stored?.hub_mode).toBe("operator");
+  });
+
+  test("#1598 — a per-network topology update (no attestation) PRESERVES hub_mode", async () => {
+    const pna = await makePrincipalKey();
+    expect((await post("/networks/research-collab",
+      await makeSignedNetworkCreate("research-collab", globalAdmin, { adminPubkeys: pna.publicKeyB64, hubMode: "operator", resolverMode: "nats" }),
+    )).status).toBe(201);
+
+    // A plain topology update (no hub_mode in the claim) succeeds + keeps the attestation.
+    const update = await makeSignedNetworkCreate("research-collab", pna, { hubUrl: "tls://moved:7600", leafPort: 7600 });
+    expect((await post("/networks/research-collab", update)).status).toBe(201);
+    const stored = await getStore(env).getNetwork("research-collab");
+    expect(stored?.hub_mode).toBe("operator");
+  });
+
+  test("#1598 — the global admin CAN set/change hub_mode", async () => {
+    const pna = await makePrincipalKey();
+    expect((await createNetwork("research-collab", pna.publicKeyB64)).status).toBe(201);
+    const setMode = await makeSignedNetworkCreate("research-collab", globalAdmin, { hubMode: "operator", resolverMode: "nats" });
+    expect((await post("/networks/research-collab", setMode)).status).toBe(201);
+    const stored = await getStore(env).getNetwork("research-collab");
+    expect(stored?.hub_mode).toBe("operator");
+    expect(stored?.resolver_mode).toBe("nats");
+  });
+
   test("the global admin CAN set/change admin_pubkeys", async () => {
     const pna = await makePrincipalKey();
     expect((await createNetwork("research-collab").then((r) => r.status))).toBe(201);

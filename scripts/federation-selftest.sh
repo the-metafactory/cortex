@@ -275,7 +275,12 @@ arc_has_federated_user() { arc nats --help 2>&1 | grep -q 'add-federated-user'; 
 verify_scope_roundtrip() {  # verify_scope_roundtrip <principal.stack>
   local user="$1"
   local claims; claims="$(nsc describe user -a "$HUB_FED_ACCOUNT" -n "$user" -J 2>/dev/null)"
-  [ -n "$claims" ] || { warn "  §5.3: could not describe user $user (mint has not run — arc verb gated)"; return 0; }
+  # FAIL-CLOSED: this only runs after run_operator_scenario's arc-verb gate and a
+  # successful admit, so an un-describable user means the mint did NOT create it —
+  # a real failure, NOT a skip. Reporting "verified" (or even a silent pass) here
+  # would let the load-bearing least-privilege assertion pass while checking
+  # nothing. Die instead so the harness never green-lights an unverified scope.
+  [ -n "$claims" ] || die "  §5.3: user $user has no nsc claims after admit — the scoped mint did not create it; scope UNVERIFIED"
   # The scoped user carries NO own perms; its EFFECTIVE sub scope is the scoped
   # signing key's template `federated.{{name()}}.>` → `federated.<user>.>`.
   local want="federated.${user}.>"

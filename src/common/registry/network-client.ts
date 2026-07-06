@@ -379,6 +379,14 @@ function parseDescriptor(
   if (p.resolver_mode !== undefined && p.resolver_mode !== "nats" && p.resolver_mode !== "memory") {
     return undefined;
   }
+  // Coherence invariant (mirrors `validate.ts` at write time): resolver_mode is
+  // only meaningful on an operator hub. Re-assert it HERE so a verified reader
+  // can rely on the illegal `{ hub_mode: simple, resolver_mode }` state never
+  // reaching them off the signed descriptor — the enum checks above alone leave
+  // that state representable.
+  if (p.resolver_mode !== undefined && p.hub_mode !== "operator") {
+    return undefined;
+  }
   return {
     network_id: networkId,
     hub_url: p.hub_url,

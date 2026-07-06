@@ -229,9 +229,12 @@ export interface AdmitSealPort {
 export interface HubAccountProbePort {
   /**
    * Read the hub config at `hubConfigPath`, derive its monitor URL, and GET
-   * `/accountz?acc=<fedAccountPubKey>`. `present: true` iff the account (and
-   * ideally its scoped signing key) is visible. NEVER throws — any failure
-   * (no monitor, unreachable, non-200) returns `present: false` + a reason.
+   * `/accountz?acc=<fedAccountPubKey>`. `present: true` REQUIRES BOTH the account
+   * AND its scoped signing key to be visible — the signing key's presence is what
+   * confirms the UPDATED account JWT propagated (a mint edits the account JWT), so
+   * a first-admit before propagation reports `present: false` and does NOT stamp.
+   * NEVER throws — any failure (no monitor, unreachable, non-200) returns
+   * `present: false` + a reason.
    */
   probeAccountOnHub(input: {
     hubConfigPath: string;

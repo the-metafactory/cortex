@@ -202,6 +202,9 @@ export async function makeSignedNetworkCreate(
     signWith?: PrincipalKey;
     /** #1321 — per-network admin allowlist to bootstrap (comma-separated base64). */
     adminPubkeys?: string;
+    /** #1598 — hub-mode / resolver-mode attestation on the claim. */
+    hubMode?: "operator" | "simple";
+    resolverMode?: "nats" | "memory";
   } = {},
 ): Promise<{ claim: NetworkCreateClaim; signature: string }> {
   const claim: NetworkCreateClaim = {
@@ -214,6 +217,8 @@ export async function makeSignedNetworkCreate(
     // Only include admin_pubkeys when supplied — keeps canonicalJSON stable for
     // the existing #747 tests that sign a claim without the field.
     ...(opts.adminPubkeys !== undefined && { admin_pubkeys: opts.adminPubkeys }),
+    ...(opts.hubMode !== undefined && { hub_mode: opts.hubMode }),
+    ...(opts.resolverMode !== undefined && { resolver_mode: opts.resolverMode }),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));
   const signer = opts.signWith ?? adminKey;

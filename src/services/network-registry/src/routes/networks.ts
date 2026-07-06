@@ -197,6 +197,17 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "admin_pubkeys_requires_global_admin" }, 403);
     }
 
+    // #1598 — the hub-mode attestation gates a SECURITY-critical branch: admit
+    // seals a scoped credential on `hub_mode: operator`, but writes an inline
+    // leaf user on `simple`. A per-network admin who could DOWNGRADE to simple would
+    // reroute admit to the PSK/inline-hub-write path that crashes an operator hub
+    // (cortex#794). So changing the attestation requires the SAME global-admin
+    // authority as admin_pubkeys; a per-network admin who supplies it is refused
+    // (403) rather than silently dropped, so the attempt is visible.
+    if ((claim.hub_mode !== undefined || claim.resolver_mode !== undefined) && !isGlobalAdmin) {
+      return c.json({ error: "hub_mode_requires_global_admin" }, 403);
+    }
+
     // Replay check — only on the authentic+authorised path so a nonce row is
     // consumed exclusively by a genuine admin write. A legit replay (valid
     // signature, previously-seen nonce) still rejects 409.
@@ -213,13 +224,13 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
     const adminPubkeysToStore = isGlobalAdmin
       ? (claim.admin_pubkeys ?? existing?.admin_pubkeys)
       : existing?.admin_pubkeys;
-    // #1598 — hub-mode / resolver-mode attestation. Same preserve-on-omit rule
-    // as admin_pubkeys: a topology update that doesn't restate the attestation
-    // keeps the existing one (never silently un-attest a network). Any admin
-    // authorised to write the topology may attest the mode — it describes the
-    // hub they operate, not the admin set.
-    const hubModeToStore = claim.hub_mode ?? existing?.hub_mode;
-    const resolverModeToStore = claim.resolver_mode ?? existing?.resolver_mode;
+    // #1598 — hub-mode / resolver-mode attestation. Same GLOBAL-ADMIN gate +
+    // preserve-on-omit rule as admin_pubkeys (a non-global admin is already
+    // refused above if they supplied it): a global admin may set/change it from
+    // the claim; otherwise PRESERVE the existing attestation (never clobber, never
+    // silently un-attest). Gating the STORE value too is defense-in-depth.
+    const hubModeToStore = isGlobalAdmin ? (claim.hub_mode ?? existing?.hub_mode) : existing?.hub_mode;
+    const resolverModeToStore = isGlobalAdmin ? (claim.resolver_mode ?? existing?.resolver_mode) : existing?.resolver_mode;
     const record = await store.putNetwork(
       claim.network_id,
       claim.hub_url,
