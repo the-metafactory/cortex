@@ -366,6 +366,10 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--admin-seed": "value",
         "--network-admins": "value",
         "--registry-url": "value",
+        // #1598 — hub-mode / resolver-mode attestation (closed enums; the
+        // registry re-validates and serves them on the SIGNED descriptor).
+        "--hub-mode": "value",
+        "--resolver-mode": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -2215,6 +2219,24 @@ async function runCreate(
     adminPubkeys = entries.join(",");
   }
 
+  // #1598 — optional hub-mode / resolver-mode attestation (closed enums,
+  // validated locally for fast feedback; the registry validator re-checks).
+  // resolver-mode only means something for an operator hub — refuse the
+  // incoherent combination here too.
+  const hubModeRaw = optionalValueFlag(flags, "--hub-mode");
+  if (hubModeRaw !== undefined && hubModeRaw !== "operator" && hubModeRaw !== "simple") {
+    return usageError("create", `--hub-mode "${hubModeRaw}" must be "operator" or "simple"`, json);
+  }
+  const resolverModeRaw = optionalValueFlag(flags, "--resolver-mode");
+  if (resolverModeRaw !== undefined && resolverModeRaw !== "nats" && resolverModeRaw !== "memory") {
+    return usageError("create", `--resolver-mode "${resolverModeRaw}" must be "nats" or "memory"`, json);
+  }
+  if (resolverModeRaw !== undefined && hubModeRaw !== "operator") {
+    return usageError("create", `--resolver-mode requires --hub-mode operator`, json);
+  }
+  const hubMode = hubModeRaw as "operator" | "simple" | undefined;
+  const resolverMode = resolverModeRaw as "nats" | "memory" | undefined;
+
   // Load the admin nkey seed + derive its base64 pubkey (the SAME key shape +
   // signing path provision-stack uses), then build the signed claim.
   const matRes = await adminMaterialFromSeedFile(seedRes.value);
@@ -2228,6 +2250,8 @@ async function runCreate(
       leafPort,
       material: matRes.material,
       adminPubkeys,
+      ...(hubMode !== undefined && { hubMode }),
+      ...(resolverMode !== undefined && { resolverMode }),
     });
   } catch (err) {
     return opError("create", `failed to build network-create claim: ${err instanceof Error ? err.message : String(err)}`, json);
@@ -2255,6 +2279,8 @@ async function runCreate(
       `  admin_pubkey: ${matRes.material.pubkeyB64}`,
       `  fingerprint:  ${matRes.material.fingerprint}`,
       `  network_admins: ${adminPubkeys ?? "(none — defers to global REGISTRY_ADMIN_PUBKEYS)"}`,
+      `  hub_mode:     ${hubMode ?? "(unattested)"}`,
+      `  resolver_mode: ${resolverMode ?? "(unattested)"}`,
       ``,
       `Would POST ${registryUrl}/networks/${networkId}:`,
       JSON.stringify(body, null, 2),

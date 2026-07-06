@@ -213,11 +213,22 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
     const adminPubkeysToStore = isGlobalAdmin
       ? (claim.admin_pubkeys ?? existing?.admin_pubkeys)
       : existing?.admin_pubkeys;
+    // #1598 — hub-mode / resolver-mode attestation. Same preserve-on-omit rule
+    // as admin_pubkeys: a topology update that doesn't restate the attestation
+    // keeps the existing one (never silently un-attest a network). Any admin
+    // authorised to write the topology may attest the mode — it describes the
+    // hub they operate, not the admin set.
+    const hubModeToStore = claim.hub_mode ?? existing?.hub_mode;
+    const resolverModeToStore = claim.resolver_mode ?? existing?.resolver_mode;
     const record = await store.putNetwork(
       claim.network_id,
       claim.hub_url,
       claim.leaf_port,
       adminPubkeysToStore,
+      {
+        ...(hubModeToStore !== undefined && { hubMode: hubModeToStore }),
+        ...(resolverModeToStore !== undefined && { resolverMode: resolverModeToStore }),
+      },
     );
 
     // Return the stored record wrapped in a registry-signed assertion — the
@@ -250,6 +261,11 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
       hub_url: record.hub_url,
       leaf_port: record.leaf_port,
       members: membersFromAdmissions(admitted, principals, networkId),
+      // #1598 — surface the admin-attested hub/resolver mode on the SIGNED
+      // descriptor (absent on unattested legacy rows, keeping the signed bytes
+      // identical to pre-#1598 descriptors for them).
+      ...(record.hub_mode !== undefined && { hub_mode: record.hub_mode }),
+      ...(record.resolver_mode !== undefined && { resolver_mode: record.resolver_mode }),
     };
     const assertion = await signAssertion(c.env, descriptor);
     return c.json(assertion);

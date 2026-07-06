@@ -557,6 +557,15 @@ export interface NetworkCreateClaimShape {
    * canonical-JSON the registry verifies stays byte-identical to pre-#1321 claims.
    */
   admin_pubkeys?: string;
+  /**
+   * #1598 — OPTIONAL hub-mode attestation (`operator` | `simple`): how this
+   * network's hub authenticates leaves, driving the admit-side seal branch +
+   * fail-fast guards. Omitted keeps the canonical-JSON byte-identical to
+   * pre-#1598 claims.
+   */
+  hub_mode?: "operator" | "simple";
+  /** #1598 / design §5.1 — resolver-mode attestation for an operator hub. */
+  resolver_mode?: "nats" | "memory";
 }
 
 /** A network-create claim + detached signature, ready to POST. */
@@ -582,6 +591,10 @@ export interface BuildNetworkCreateClaimOptions {
    * admin (ADR-0020). Omit on a plain topology create/update.
    */
   readonly adminPubkeys?: string;
+  /** #1598 — OPTIONAL hub-mode attestation to set on the network record. */
+  readonly hubMode?: "operator" | "simple";
+  /** #1598 — OPTIONAL resolver-mode attestation (requires hubMode "operator"). */
+  readonly resolverMode?: "nats" | "memory";
 }
 
 /**
@@ -605,6 +618,9 @@ export async function buildNetworkCreateClaim(
     // Only include admin_pubkeys when set — keeps canonicalJSON byte-identical to
     // pre-#1321 claims when omitted, so existing signatures/tests are unaffected.
     ...(opts.adminPubkeys !== undefined && { admin_pubkeys: opts.adminPubkeys }),
+    // #1598 — same include-only-when-set rule as admin_pubkeys.
+    ...(opts.hubMode !== undefined && { hub_mode: opts.hubMode }),
+    ...(opts.resolverMode !== undefined && { resolver_mode: opts.resolverMode }),
   };
   // Re-derive the KeyPair from the in-memory seed and sign over the SAME
   // canonical-JSON the registry route reconstructs and verifies.

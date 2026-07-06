@@ -431,6 +431,23 @@ export interface NetworkCreateClaim {
    * topology update.
    */
   admin_pubkeys?: string;
+  /**
+   * #1598 — OPTIONAL hub-mode attestation: how the network's hub authenticates
+   * leaves. `operator` (NSC/JWT — admit seals a per-member scoped-user
+   * credential, v2 envelope) or `simple` (inline leaf authorization — admit
+   * seals the shared-string secret, v1 envelope). Drives the admit-side
+   * fail-fast guards BOTH ways (design §4 D2). Omitted = unattested (legacy
+   * rows) — admit treats that as `simple` for back-compat but the creds path
+   * refuses to run.
+   */
+  hub_mode?: "operator" | "simple";
+  /**
+   * #1598 / design §5.1 — OPTIONAL resolver-mode attestation for an
+   * operator-mode hub: `nats` (push-capable full resolver — runtime revocation
+   * works) or `memory` (preload — revocation needs a hub restart). The
+   * rotate/revoke tooling (#1599) fail-fasts unless `nats`.
+   */
+  resolver_mode?: "nats" | "memory";
 }
 
 /** The on-wire envelope: an admin claim + detached Ed25519 signature. */
@@ -523,6 +540,22 @@ export function validateNetworkCreateClaim(
     }
   }
 
+  // hub_mode / resolver_mode (#1598) — OPTIONAL closed enums. Reject anything
+  // outside the enum pre-crypto so a typo'd attestation is never persisted (the
+  // admit-side guards branch on these values).
+  if (c.hub_mode !== undefined && c.hub_mode !== "operator" && c.hub_mode !== "simple") {
+    errors.push({ field: "hub_mode", message: 'must be "operator" or "simple" when present' });
+  }
+  if (c.resolver_mode !== undefined && c.resolver_mode !== "nats" && c.resolver_mode !== "memory") {
+    errors.push({ field: "resolver_mode", message: 'must be "nats" or "memory" when present' });
+  }
+  // resolver_mode only means something for an operator-mode hub — reject the
+  // incoherent combination rather than persisting an attestation the consumers
+  // would have to special-case.
+  if (c.resolver_mode !== undefined && c.hub_mode !== "operator") {
+    errors.push({ field: "resolver_mode", message: 'requires hub_mode "operator"' });
+  }
+
   if (errors.length > 0) return { ok: false, errors };
 
   const result: NetworkCreateClaim = {
@@ -533,6 +566,8 @@ export function validateNetworkCreateClaim(
     issued_at: c.issued_at as string,
     nonce: c.nonce as string,
     ...(c.admin_pubkeys !== undefined && { admin_pubkeys: c.admin_pubkeys as string }),
+    ...(c.hub_mode !== undefined && { hub_mode: c.hub_mode as "operator" | "simple" }),
+    ...(c.resolver_mode !== undefined && { resolver_mode: c.resolver_mode as "nats" | "memory" }),
   };
   return { ok: true, claim: result };
 }

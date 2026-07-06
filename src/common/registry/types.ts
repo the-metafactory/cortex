@@ -134,6 +134,15 @@ export interface NetworkDescriptor {
    * pubkeys + stacks) comes from `GET /networks/{id}/roster`.
    */
   members: string[];
+  /**
+   * #1598 — the admin-attested hub mode (`operator` | `simple`), rider on the
+   * registry-SIGNED descriptor. Drives the admit-side mode branch + fail-fast
+   * guards and the member-side payload-type expectation. Absent on unattested
+   * (legacy) networks.
+   */
+  hub_mode?: "operator" | "simple";
+  /** #1598 / design §5.1 — resolver-mode attestation for an operator hub. */
+  resolver_mode?: "nats" | "memory";
 }
 
 /**

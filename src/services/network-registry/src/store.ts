@@ -149,6 +149,11 @@ export interface RegistryStore {
     leafPort: number,
     /** #1321 — per-network admin allowlist (comma-separated base64). Omit to leave unset. */
     adminPubkeys?: string,
+    /** #1598 — hub-mode / resolver-mode attestation. Omit to leave unset. */
+    attestation?: {
+      hubMode?: "operator" | "simple";
+      resolverMode?: "nats" | "memory";
+    },
   ): Promise<NetworkRecord>;
 
   /**
@@ -863,6 +868,7 @@ export class InMemoryRegistryStore implements RegistryStore {
     hubUrl: string,
     leafPort: number,
     adminPubkeys?: string,
+    attestation?: { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory" },
   ): Promise<NetworkRecord> {
     const record: NetworkRecord = {
       network_id: networkId,
@@ -870,6 +876,8 @@ export class InMemoryRegistryStore implements RegistryStore {
       leaf_port: leafPort,
       updated_at: new Date().toISOString(),
       ...(adminPubkeys !== undefined && { admin_pubkeys: adminPubkeys }),
+      ...(attestation?.hubMode !== undefined && { hub_mode: attestation.hubMode }),
+      ...(attestation?.resolverMode !== undefined && { resolver_mode: attestation.resolverMode }),
     };
     this.networks.set(networkId, record);
     return record;
@@ -1015,6 +1023,7 @@ export class D1RegistryStore implements RegistryStore {
     hubUrl: string,
     leafPort: number,
     adminPubkeys?: string,
+    attestation?: { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory" },
   ): Promise<NetworkRecord> {
     const record: NetworkRecord = {
       network_id: networkId,
@@ -1022,20 +1031,32 @@ export class D1RegistryStore implements RegistryStore {
       leaf_port: leafPort,
       updated_at: new Date().toISOString(),
       ...(adminPubkeys !== undefined && { admin_pubkeys: adminPubkeys }),
+      ...(attestation?.hubMode !== undefined && { hub_mode: attestation.hubMode }),
+      ...(attestation?.resolverMode !== undefined && { resolver_mode: attestation.resolverMode }),
     };
     // UPSERT: re-seeding a network replaces the topology row in place.
     // Parameterised — no value is string-interpolated into SQL.
     await this.db
       .prepare(
-        `INSERT INTO networks (network_id, hub_url, leaf_port, updated_at, admin_pubkeys)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO networks (network_id, hub_url, leaf_port, updated_at, admin_pubkeys, hub_mode, resolver_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(network_id) DO UPDATE SET
            hub_url       = excluded.hub_url,
            leaf_port     = excluded.leaf_port,
            updated_at    = excluded.updated_at,
-           admin_pubkeys = excluded.admin_pubkeys`,
+           admin_pubkeys = excluded.admin_pubkeys,
+           hub_mode      = excluded.hub_mode,
+           resolver_mode = excluded.resolver_mode`,
       )
-      .bind(networkId, hubUrl, leafPort, record.updated_at, adminPubkeys ?? null)
+      .bind(
+        networkId,
+        hubUrl,
+        leafPort,
+        record.updated_at,
+        adminPubkeys ?? null,
+        attestation?.hubMode ?? null,
+        attestation?.resolverMode ?? null,
+      )
       .run();
     return record;
   }
@@ -1043,7 +1064,7 @@ export class D1RegistryStore implements RegistryStore {
   async getNetwork(networkId: string): Promise<NetworkRecord | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT network_id, hub_url, leaf_port, updated_at, admin_pubkeys FROM networks WHERE network_id = ?",
+        "SELECT network_id, hub_url, leaf_port, updated_at, admin_pubkeys, hub_mode, resolver_mode FROM networks WHERE network_id = ?",
       )
       .bind(networkId)
       .first<NetworkRow>();
@@ -1083,6 +1104,10 @@ interface NetworkRow {
   updated_at: string;
   /** #1321 — nullable per-network admin allowlist (TEXT column, migration 0011). */
   admin_pubkeys?: string | null;
+  /** #1598 — nullable hub-mode attestation (TEXT column, migration 0014). */
+  hub_mode?: string | null;
+  /** #1598 — nullable resolver-mode attestation (TEXT column, migration 0014). */
+  resolver_mode?: string | null;
 }
 
 function rowToNetworkRecord(row: NetworkRow): NetworkRecord {
@@ -1093,6 +1118,12 @@ function rowToNetworkRecord(row: NetworkRow): NetworkRecord {
     updated_at: row.updated_at,
     // Normalise SQL NULL → undefined so the record shape matches the InMemory store.
     ...(row.admin_pubkeys != null && { admin_pubkeys: row.admin_pubkeys }),
+    // #1598 — the validator is the only writer, so the stored value is inside the
+    // enum; narrow it back on read (a hand-edited junk value degrades to unset).
+    ...((row.hub_mode === "operator" || row.hub_mode === "simple") && { hub_mode: row.hub_mode }),
+    ...((row.resolver_mode === "nats" || row.resolver_mode === "memory") && {
+      resolver_mode: row.resolver_mode,
+    }),
   };
 }
 

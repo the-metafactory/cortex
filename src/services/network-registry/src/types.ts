@@ -246,6 +246,16 @@ export interface NetworkDescriptor {
    * capabilities), not stored on the network record.
    */
   members: string[];
+  /**
+   * #1598 — hub-mode attestation (`operator` | `simple`), passed through from
+   * the admin-seeded {@link NetworkRecord}. Registry-SIGNED with the rest of
+   * the descriptor, so the admit-side mode branch and the member-side
+   * payload-type expectation read a verified value. Absent on unattested
+   * (legacy) rows.
+   */
+  hub_mode?: "operator" | "simple";
+  /** #1598 / design §5.1 — resolver-mode attestation for an operator hub. */
+  resolver_mode?: "nats" | "memory";
 }
 
 /**
@@ -277,6 +287,14 @@ export interface NetworkRecord {
    * posture rendering is a follow-up).
    */
   admin_pubkeys?: string;
+  /**
+   * #1598 — hub-mode attestation (`operator` | `simple`). Written only through
+   * the signed-admin create/update route; exposed on the signed descriptor.
+   * Absent = unattested (legacy rows).
+   */
+  hub_mode?: "operator" | "simple";
+  /** #1598 / design §5.1 — resolver-mode attestation for an operator hub. */
+  resolver_mode?: "nats" | "memory";
 }
 
 /**
