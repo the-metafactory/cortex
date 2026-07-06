@@ -78,15 +78,17 @@ export interface LeafSecretEnvelopeV2 {
   creds: string;
   /**
    * The subject this credential was minted FOR — the member's
-   * `{principal}/{stack}` (or the leaf username). The member checks this
-   * matches its own identity before installing, so a courier that seals another
-   * member's real creds to this member (red-team R7) is refused rather than
-   * silently authenticating as someone else.
+   * `{principal}/{stack}` (or the leaf username). Carrying it here is what lets
+   * the member install (#1597) refuse a credential minted for a DIFFERENT
+   * subject (red-team R7: a courier sealing another member's real creds to this
+   * member). NOTE: this module only validates the field is present — the
+   * identity-binding CHECK itself lands in #1597, not here.
    */
   leaf_user: string;
   /**
-   * ISO-8601 mint timestamp. The member uses it for a staleness check (a
-   * re-fetched, long-superseded credential can be rejected). Set at seal time.
+   * ISO-8601 mint timestamp, set at seal time. Exists so the member install
+   * (#1597) can reject a re-fetched, long-superseded credential. NOTE: this
+   * module validates it is a PARSEABLE date; the staleness COMPARISON is #1597.
    */
   minted_at: string;
   /** M3 payload key `K` (ADR-0019) — rides v2 unchanged (see v1's `payload_key`). */
@@ -148,6 +150,27 @@ export class UnsupportedEnvelopeVersionError extends Error {
   }
 }
 
+/**
+ * Validate + extract the optional ADR-0019 payload-key rider (`payload_key` +
+ * `payload_key_kid`) shared by both the v1 and v2 decoders. Fails closed on a
+ * wrong-typed field; returns only the fields that are present. One site for a
+ * future K change instead of four.
+ */
+function readPayloadKeyFields(
+  p: Record<string, unknown>,
+): { payload_key?: string; payload_key_kid?: string } {
+  if (p.payload_key !== undefined && typeof p.payload_key !== "string") {
+    throw new Error("sealed-leaf-secret: payload_key must be a string when present");
+  }
+  if (p.payload_key_kid !== undefined && typeof p.payload_key_kid !== "string") {
+    throw new Error("sealed-leaf-secret: payload_key_kid must be a string when present");
+  }
+  return {
+    ...(typeof p.payload_key === "string" && { payload_key: p.payload_key }),
+    ...(typeof p.payload_key_kid === "string" && { payload_key_kid: p.payload_key_kid }),
+  };
+}
+
 /** Parse the sealed plaintext to a JSON object, failing closed (never echoes it). */
 function parseEnvelopeObject(plaintext: string): Record<string, unknown> {
   let parsed: unknown;
@@ -184,18 +207,11 @@ export function decodeLeafSecretEnvelope(plaintext: string): LeafSecretEnvelope 
   if (typeof p.leaf_user !== "string" || p.leaf_user.length === 0) {
     throw new Error("sealed-leaf-secret: unsealed payload missing leaf_user");
   }
-  if (p.payload_key !== undefined && typeof p.payload_key !== "string") {
-    throw new Error("sealed-leaf-secret: payload_key must be a string when present");
-  }
-  if (p.payload_key_kid !== undefined && typeof p.payload_key_kid !== "string") {
-    throw new Error("sealed-leaf-secret: payload_key_kid must be a string when present");
-  }
   return {
     v: typeof p.v === "number" ? p.v : LEAF_SECRET_ENVELOPE_VERSION,
     leaf_psk: p.leaf_psk,
     leaf_user: p.leaf_user,
-    ...(typeof p.payload_key === "string" && { payload_key: p.payload_key }),
-    ...(typeof p.payload_key_kid === "string" && { payload_key_kid: p.payload_key_kid }),
+    ...readPayloadKeyFields(p),
   };
 }
 
@@ -210,19 +226,15 @@ function decodeLeafSecretEnvelopeV2(p: Record<string, unknown>): LeafSecretEnvel
   if (typeof p.minted_at !== "string" || p.minted_at.length === 0) {
     throw new Error("sealed-leaf-secret: v2 payload missing minted_at");
   }
-  if (p.payload_key !== undefined && typeof p.payload_key !== "string") {
-    throw new Error("sealed-leaf-secret: payload_key must be a string when present");
-  }
-  if (p.payload_key_kid !== undefined && typeof p.payload_key_kid !== "string") {
-    throw new Error("sealed-leaf-secret: payload_key_kid must be a string when present");
+  if (Number.isNaN(Date.parse(p.minted_at))) {
+    throw new Error("sealed-leaf-secret: v2 payload minted_at must be a parseable ISO-8601 date");
   }
   return {
     v: LEAF_SECRET_ENVELOPE_VERSION_V2,
     creds: p.creds,
     leaf_user: p.leaf_user,
     minted_at: p.minted_at,
-    ...(typeof p.payload_key === "string" && { payload_key: p.payload_key }),
-    ...(typeof p.payload_key_kid === "string" && { payload_key_kid: p.payload_key_kid }),
+    ...readPayloadKeyFields(p),
   };
 }
 

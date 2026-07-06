@@ -183,6 +183,11 @@ describe("v2 envelope (creds payload) — #1596", () => {
     expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/v2 payload missing minted_at/);
   });
 
+  test("v2 fails closed on a non-date minted_at (a garbage string is not a timestamp)", () => {
+    const bad = JSON.stringify({ v: 2, creds: FAKE_CREDS, leaf_user: "alice/lab", minted_at: "x" });
+    expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/parseable ISO-8601 date/);
+  });
+
   test("v2 fails closed on a missing leaf_user (subject) field", () => {
     const bad = JSON.stringify({ v: 2, creds: FAKE_CREDS, minted_at: MINTED_AT });
     expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/v2 payload missing leaf_user/);
