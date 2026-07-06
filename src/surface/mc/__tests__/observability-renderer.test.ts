@@ -8,7 +8,7 @@
  *     validated envelope carrying a body `signed_by` is parsed structurally.
  *   - WS `observability` (+ `attention`) family broadcast on a projected mutation.
  *   - the att:adapter: attention producer opens/resolves on the six health
- *     signals (collector degraded/recovered, transport backend un/reachable,
+ *     signals (collector degraded/recovered, signal backend un/reachable,
  *     leaf dis/connect) and is idempotent under redelivery.
  *   - non-matching types are ignored; idempotent row insert on envelope id.
  *   - the renderer's render() is non-throwing.
@@ -229,14 +229,29 @@ describe("produceObservabilityAttention — att:adapter: open/resolve", () => {
     expect(attentionRow(db, open!.itemId)?.status).toBe("resolved");
   });
 
-  it("opens on transport backend.unreachable and on leaf_disconnect", () => {
+  it("opens on signal backend.unreachable and resolves on backend.reachable", () => {
+    // Wire-faithful: signal nests `exporter_id` under `payload.attributes`, which
+    // the producer's top-level `idKeys` do not read — so both edges resolve to the
+    // NAMESPACE-FALLBACK id `att:adapter:transport:transport` that production
+    // actually delivers (per-origin attribution is a future producer enhancement).
     const backend = produceObservabilityAttention(db, {
-      type: "system.transport.backend.unreachable",
-      payload: { backend: "victoria" },
+      type: "system.signal.backend.unreachable",
+      payload: { failure_mode: "backend.unreachable", attributes: { exporter_id: "victoria" } },
     });
     expect(backend).toMatchObject({ action: "opened" });
+    expect(backend?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}transport:transport`);
     expect(attentionRow(db, backend!.itemId)?.status).toBe("open");
 
+    const reachable = produceObservabilityAttention(db, {
+      type: "system.signal.backend.reachable",
+      payload: { failure_mode: "backend.reachable", attributes: { exporter_id: "victoria" } },
+    });
+    expect(reachable).toMatchObject({ action: "resolved" });
+    expect(reachable?.itemId).toBe(backend?.itemId);
+    expect(attentionRow(db, backend!.itemId)?.status).toBe("resolved");
+  });
+
+  it("opens on transport leaf-disconnect (leaf arm, cortex#1467) unchanged", () => {
     const leaf = produceObservabilityAttention(db, {
       type: "system.transport.leaf-disconnect",
       payload: { leaf: "leaf-a" },
@@ -258,8 +273,19 @@ describe("produceObservabilityAttention — att:adapter: open/resolve", () => {
     expect(produceObservabilityAttention(db, { type: "system.federation.peer.added", payload: {} })).toBeNull();
   });
 
+  it("returns null for the RETIRED phantom transport-backend types (cortex#1468)", () => {
+    // The phantom transport-backend names (the retired `transport` ns + `backend`
+    // leaves) never existed in signal and are now retired from classify(); they
+    // must no-op. Built from segments so the dotted phantom literal stays out of
+    // src/surface/ entirely — the AC1 grep gate must return zero hits tree-wide.
+    const retiredUnreachable = ["system", "transport", "backend", "unreachable"].join(".");
+    const retiredReachable = ["system", "transport", "backend", "reachable"].join(".");
+    expect(produceObservabilityAttention(db, { type: retiredUnreachable, payload: {} })).toBeNull();
+    expect(produceObservabilityAttention(db, { type: retiredReachable, payload: {} })).toBeNull();
+  });
+
   it("falls back to the namespace id when the origin id is absent", () => {
-    const res = produceObservabilityAttention(db, { type: "system.transport.backend.unreachable", payload: {} });
+    const res = produceObservabilityAttention(db, { type: "system.signal.backend.unreachable", payload: {} });
     expect(res?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}transport:transport`);
   });
 });

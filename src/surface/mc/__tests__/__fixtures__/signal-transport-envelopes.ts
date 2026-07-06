@@ -59,12 +59,25 @@ export const TRANSPORT_TYPES = {
 
 export type TransportType = (typeof TRANSPORT_TYPES)[keyof typeof TRANSPORT_TYPES];
 
+/**
+ * The hub SERVER-vitals body `type` (signal#154) — hyphen-mapped like the four
+ * families above, but a DISTINCT category: not a per-peer/leaf observation but
+ * the hub's own `/varz` resource vitals (cortex#1469). Kept out of
+ * {@link TRANSPORT_TYPES} because that constant is asserted to be exactly the
+ * four leaf/roster families the Network-view overlay folds; the vitals strip
+ * folds this one instead. Subject stays underscored (`...server_vitals`); the
+ * envelope body `type` is the hyphen form — the only spelling the myelin schema
+ * (and this fixture) accepts.
+ */
+export const SERVER_VITALS_TYPE = "system.transport.server-vitals" as const;
+
 /** The subject-leaf action (underscores) that pairs with each hyphen `type`. */
 const ACTION_FOR_TYPE: Record<string, string> = {
   [TRANSPORT_TYPES.leafConnect]: "leaf_connect",
   [TRANSPORT_TYPES.leafDisconnect]: "leaf_disconnect",
   [TRANSPORT_TYPES.livenessDrift]: "liveness_drift",
   [TRANSPORT_TYPES.rosterSnapshot]: "roster_snapshot",
+  [SERVER_VITALS_TYPE]: "server_vitals",
 };
 
 /**
@@ -189,3 +202,69 @@ export const TRANSPORT_FAMILY_FIXTURES: readonly TransportFamilyFixture[] = [
     peer: { principal: "jc", stack: "default" },
   },
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Hub SERVER-vitals (signal#154 / cortex#1469) — a distinct transport body:
+// the hub's own `/varz` resource vitals, not a per-leaf observation. Reproduced
+// field-for-field from the pinned oracle
+// (signal canonical-envelope-schema.test.ts "server_vitals" case, signal @
+// 81eebaa) so the vitals strip folds the SAME shape production emits.
+// ---------------------------------------------------------------------------
+
+/**
+ * The canonical `ServerVitals` body — verbatim from the signal oracle. Field
+ * names are signal's `ServerVitals` interface
+ * (`src/lib/transport-observability/leafz-parser.ts`); numeric fields are
+ * concrete, string fields are non-null here (the strip tolerates null strings
+ * and a missing `vitals` separately — exercised in the fold unit tests).
+ */
+export const CANONICAL_SERVER_VITALS = {
+  server_id: "ND5XYZHUBSERVER000000000000000000000000000000000000",
+  server_name: "metafactory-hub",
+  version: "2.10.18",
+  uptime: "3d4h5m6s",
+  connections: 5,
+  leafnodes: 2,
+  routes: 0,
+  subscriptions: 87,
+  slow_consumers: 1,
+  mem: 134217728,
+  cpu: 12.5,
+  frames: { in_msgs: 100, out_msgs: 200, in_bytes: 300, out_bytes: 400 },
+} as const;
+
+/**
+ * A canonical, schema-valid `system.transport.server-vitals` envelope carrying
+ * {@link CANONICAL_SERVER_VITALS}. Built through {@link makeTransportEnvelope}
+ * (same builder as the four families) so it clears cortex's vendored myelin
+ * schema via `validateEnvelope` — the vitals-strip tests assert validity BEFORE
+ * folding, closing the same anti-drift hole cortex#1467 named.
+ */
+export const SERVER_VITALS_FIXTURE = {
+  type: SERVER_VITALS_TYPE,
+  network: "metafactory-community",
+  vitals: CANONICAL_SERVER_VITALS,
+  envelope: makeTransportEnvelope(SERVER_VITALS_TYPE, {
+    payload: { network: "metafactory-community", vitals: CANONICAL_SERVER_VITALS },
+  }),
+} as const;
+
+/**
+ * Build a `system.transport.server-vitals` envelope for `network`, optionally
+ * overriding individual `vitals` fields (e.g. a null string or a different
+ * `cpu`). Used by the fold tests to seed newest-per-network + tolerance cases
+ * without hand-writing envelope scaffolding.
+ */
+export function makeServerVitalsEnvelope(
+  network: string,
+  vitalsOverrides: Record<string, unknown> = {},
+  opts: { id?: string } = {},
+): Envelope {
+  return makeTransportEnvelope(SERVER_VITALS_TYPE, {
+    id: opts.id,
+    payload: {
+      network,
+      vitals: { ...CANONICAL_SERVER_VITALS, ...vitalsOverrides },
+    },
+  });
+}
