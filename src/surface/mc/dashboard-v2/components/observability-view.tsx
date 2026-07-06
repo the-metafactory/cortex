@@ -21,6 +21,8 @@ import type { ObservabilityState } from "../hooks/use-observability";
 import type { ObsMetricsState } from "../hooks/use-obs-metrics";
 import { ObsMetricsPanels } from "./obs-metrics-panels";
 import type { ObservabilityEventRow } from "../../db/observability";
+import type { TransportRosterEventRow } from "../../api/observability-tab";
+import { foldHubVitals, humanizeBytes, scrapeAge } from "../lib/hub-vitals";
 
 function when(ts: string): string {
   // ISO-8601 (or SQLite 'YYYY-MM-DD HH:MM:SS') → compact 'YYYY-MM-DD HH:MM'.
@@ -68,6 +70,69 @@ function Section({ title, rows, count, emptyNote }: SectionProps) {
         {count > 0 ? <span className="dim">({count})</span> : null}
       </h3>
       {rows.length === 0 ? <p className="dim">{emptyNote}</p> : <EventTable rows={rows} />}
+    </div>
+  );
+}
+
+/**
+ * The exact honest empty-state copy for the hub-vitals strip (cortex#1469).
+ * Named signal#118 (hub provisioning) so the absence points at the real cause —
+ * the transport collector isn't running against the hub yet — not a cortex bug.
+ * Exported so the test can assert it verbatim without re-typing the string.
+ */
+export const HUB_VITALS_EMPTY_NOTE =
+  "no hub vitals — transport collector not running (signal#118)";
+
+/**
+ * cortex#1469 — the compact hub VITALS strip. Folds signal's
+ * `system.transport.server-vitals` rows (payload-bearing on `transportRoster`)
+ * into the latest vitals PER NETWORK and renders CPU / mem / connections /
+ * leafnodes / slow-consumers + scrape age. A strip, not a panel: no charts, no
+ * history, no synthesized numbers. Zero vitals rows → the honest empty state.
+ *
+ * Numbers use tabular numerals (`.tnum`) so columns align across rows.
+ */
+function HubVitalsStrip({ rows }: { rows: readonly TransportRosterEventRow[] }) {
+  const vitals = foldHubVitals(rows);
+  const now = Date.now();
+  return (
+    <div className="observability-section">
+      <h3>
+        Hub vitals{" "}
+        {vitals.length > 0 ? <span className="dim">({vitals.length})</span> : null}
+      </h3>
+      {vitals.length === 0 ? (
+        <p className="dim">{HUB_VITALS_EMPTY_NOTE}</p>
+      ) : (
+        <table className="observability-events hub-vitals-strip">
+          <thead>
+            <tr>
+              <th>Network</th>
+              <th>CPU</th>
+              <th>Mem</th>
+              <th>Conns</th>
+              <th>Leafs</th>
+              <th>Slow</th>
+              <th>Scraped</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vitals.map((v) => (
+              <tr key={v.network}>
+                <td className="mono" title={v.serverName ?? undefined}>
+                  {v.network}
+                </td>
+                <td className="mono tnum">{v.cpu.toFixed(1)}%</td>
+                <td className="mono tnum">{humanizeBytes(v.mem)}</td>
+                <td className="mono tnum">{v.connections}</td>
+                <td className="mono tnum">{v.leafnodes}</td>
+                <td className="mono tnum">{v.slowConsumers}</td>
+                <td className="mono dim tnum">{scrapeAge(v, now)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -137,6 +202,8 @@ export function ObservabilityView({ state, metrics }: ObservabilityViewProps) {
         count={data.counts.federation}
         emptyNote="No federation events. These are hub-emitted — a non-hub stack does not see federation envelopes until it joins a network and a roster arrives (U3.3). This empty state is expected on a leaf, not a fault."
       />
+
+      <HubVitalsStrip rows={data.transportRoster} />
 
       <Section
         title="Transport"
