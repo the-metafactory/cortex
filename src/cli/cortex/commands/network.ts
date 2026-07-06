@@ -815,16 +815,19 @@ function leafCredsInstallPath(networkId: string): string {
 
 /**
  * #1597 — install the fetched v2 credential file at the conventional path.
- * Written as a NEW same-dir tmp file created 0600, then renamed over the
- * target: `writeFileSync`'s mode only applies to newly-created files, so a
- * direct overwrite of a looser pre-existing file would expose the fresh
- * credential group-readable until a trailing chmod (Sage #1609). The
- * tmp+rename keeps the text 0600 for its entire on-disk life AND makes the
- * replacement atomic. Byte-stable no-op when the content already matches
- * (re-join idempotency — no mtime churn), with the mode re-asserted either
- * way for a looser identical pre-existing file.
+ * Written as a NEW same-dir tmp file EXCLUSIVELY created 0600 (flag "wx" — a
+ * stale tmp from a crashed run is removed, never silently reused, so
+ * `writeFileSync`'s create-only mode semantics always apply), then renamed
+ * over the target: a direct overwrite of a looser pre-existing file would
+ * expose the fresh credential group-readable until a trailing chmod (Sage
+ * #1609). The tmp+rename keeps the text 0600 from creation to install AND
+ * makes the replacement atomic. Byte-stable no-op when the content already
+ * matches (re-join idempotency — no mtime churn), with the mode re-asserted
+ * either way for a looser identical pre-existing file. Returns whether a
+ * write happened so the caller can surface the mutation (it runs in dry-run
+ * too — see the call site).
  */
-function installLeafCreds(networkId: string, creds: string): string {
+function installLeafCreds(networkId: string, creds: string): { path: string; wrote: boolean } {
   const path = leafCredsInstallPath(networkId);
   let existing: string | undefined;
   try {
@@ -832,18 +835,20 @@ function installLeafCreds(networkId: string, creds: string): string {
   } catch (_err) {
     existing = undefined; // ENOENT etc. — treat as "not installed yet".
   }
-  if (existing !== creds) {
+  const wrote = existing !== creds;
+  if (wrote) {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}`;
-    writeFileSync(tmp, creds, { mode: 0o600 });
+    rmSync(tmp, { force: true }); // a stale tmp (crash + PID reuse) may be loose
     try {
+      writeFileSync(tmp, creds, { mode: 0o600, flag: "wx" });
       renameSync(tmp, path);
     } catch (err) {
       // Never leave the credential text behind under the tmp name.
       try {
         rmSync(tmp, { force: true });
       } catch (_cleanupErr) {
-        // Best-effort cleanup only — the rename failure below is the real error.
+        // Best-effort cleanup only — the write/rename failure is the real error.
       }
       throw err;
     }
@@ -851,7 +856,7 @@ function installLeafCreds(networkId: string, creds: string): string {
   // Re-assert 0600 on the byte-stable path — a pre-existing identical file may
   // carry looser permissions.
   chmodSync(path, 0o600);
-  return path;
+  return { path, wrote };
 }
 
 /**
@@ -905,14 +910,17 @@ async function maybeAutoFetchLeafSecret(
   // #1597 — a v2 envelope delivered a per-member `.creds` file (operator-mode
   // hub). Install it NOW, before the ports split: the #821 existence preflight
   // is a pure read in BOTH live and dry-run, so the file must exist for either
-  // mode to render a truthful plan. Installing the member's OWN delivered
-  // credential at its conventional 0600 path is member-local hygiene (the same
-  // class as the enforceChmod600 above), not live-deployment mutation — the
-  // nats config / plist / registry writes all stay behind --apply.
+  // mode to render a truthful plan (the issue pins this ordering: "the #821
+  // existence preflight passes because the file was just written"). This is a
+  // DELIBERATE carve-out from the "dry-run touches nothing" contract — it
+  // installs only the member's OWN delivered credential at its conventional
+  // 0600 path (the same member-local class as the enforceChmod600 above); the
+  // nats config / plist / registry writes all stay behind --apply. The
+  // stderr notice below keeps the mutation explicit in dry-run output.
   if (res.kind === "creds") {
-    let credsPath: string;
+    let install: { path: string; wrote: boolean };
     try {
-      credsPath = installLeafCreds(networkId, res.creds);
+      install = installLeafCreds(networkId, res.creds);
     } catch (err) {
       // Best-effort like every other auto-fetch failure: fall through to the
       // existing join behaviour, surfacing why on stderr (never the creds).
@@ -922,9 +930,16 @@ async function maybeAutoFetchLeafSecret(
       );
       return undefined;
     }
+    if (install.wrote) {
+      process.stderr.write(
+        `cortex network join: installed the fetched per-member leaf credential file at ` +
+          `${install.path} (0600). NOTE: this install happens even without --apply, so the ` +
+          `leaf-file preflight previews truthfully; all other join mutations stay behind --apply.\n`,
+      );
+    }
     return {
       kind: "creds-file",
-      credsPath,
+      credsPath: install.path,
       leafUser: res.leafUser,
       ...(res.payloadKey !== undefined && { payloadKey: res.payloadKey }),
       ...(res.payloadKeyKid !== undefined && { payloadKeyKid: res.payloadKeyKid }),

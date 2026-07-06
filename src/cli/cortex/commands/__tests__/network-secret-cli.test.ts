@@ -28,6 +28,7 @@ import type {
 } from "../network-secret-ports";
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import type { FetchSealedLeafSecretInput } from "../../../../common/registry/fetch-sealed-secret";
+import { FAKE_CREDS } from "../../../../common/registry/__tests__/fixtures";
 
 let tmp: string;
 let seedPath: string;
@@ -657,11 +658,6 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
   // #1597 (epic #1595) — v2 payload: the delivered per-member credential FILE
   // is installed at the conventional 0600 path before the join renders.
   // ===========================================================================
-
-  // Clearly-FAKE `.creds` text (structure only, all-A payloads).
-  const FAKE_CREDS =
-    "-----BEGIN NATS USER JWT-----\n" + "A".repeat(64) + "\n------END NATS USER JWT------\n\n" +
-    "-----BEGIN USER NKEY SEED-----\nSUA" + "A".repeat(55) + "\n------END USER NKEY SEED------\n";
 
   /** Write a real joiner seed (so materialFromSeedString succeeds) → its path. */
   function writeJoinerSeed(name: string): string {

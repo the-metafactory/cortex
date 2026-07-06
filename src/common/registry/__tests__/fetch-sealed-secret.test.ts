@@ -18,6 +18,7 @@ import {
 } from "../sealed-leaf-secret";
 import { fetchSealedLeafSecret, type FetchLike } from "../fetch-sealed-secret";
 import { materialFromSeedString, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
+import { FAKE_CREDS } from "./fixtures";
 
 function newMember(): StackIdentityMaterial {
   const kp = createUser();
@@ -112,11 +113,6 @@ describe("fetchSealedLeafSecret — round-trip", () => {
 // =============================================================================
 // #1597 (epic #1595) — the v2 per-member credential-file payload.
 // =============================================================================
-
-/** Clearly-FAKE `.creds` text (structure only, all-A payloads). */
-const FAKE_CREDS =
-  "-----BEGIN NATS USER JWT-----\n" + "A".repeat(64) + "\n------END NATS USER JWT------\n\n" +
-  "-----BEGIN USER NKEY SEED-----\nSUA" + "A".repeat(55) + "\n------END USER NKEY SEED------\n";
 
 async function sealedV2For(
   material: StackIdentityMaterial,
