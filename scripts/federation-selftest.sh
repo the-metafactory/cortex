@@ -354,7 +354,7 @@ stage_admit_operator() {
   isolate_env
   local adminseed; adminseed="$(cat "$ROOT/.adminseed-path")"
   local hubconf; hubconf="$(cat "$ROOT/.hub-operator-conf" 2>/dev/null)"
-  local before_hash; before_hash="$(md5 -q "$hubconf" 2>/dev/null || echo none)"
+  local before_hash; before_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
 
   # discover pending request-ids on the operator network
   $CORTEX network admit --list-pending --admin-seed "$adminseed" --registry-url "$REG_URL" --json \
@@ -379,18 +379,26 @@ stage_admit_operator() {
   for member in $MEMBERS; do
     verify_scope_roundtrip "$(mem_principal "$member").$(mem_slug "$member")"
   done
-  # (b) ZERO hub config writes on the operator path.
-  local after_hash; after_hash="$(md5 -q "$hubconf" 2>/dev/null || echo none)"
-  [ "$before_hash" = "$after_hash" ] \
-    && ok "  hub.conf UNCHANGED across operator admit (zero hub writes — C1/C2)" \
-    || die "  hub.conf CHANGED during operator admit — operator path must never write the hub config"
+  # (b) ZERO hub config writes on the operator path. FAIL-CLOSED: a MISSING conf
+  # hash means we never read a real file, so the "unchanged" comparison would be
+  # vacuous ("none == none") — die rather than substantiate zero-writes on nothing.
+  local after_hash; after_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  if [ "$before_hash" = "MISSING" ] || [ "$after_hash" = "MISSING" ]; then
+    die "  zero-hub-writes check could not hash the hub conf ($hubconf) — cannot substantiate the claim (setup error)"
+  elif [ "$before_hash" = "$after_hash" ]; then
+    ok "  hub.conf UNCHANGED across operator admit (zero hub writes — C1/C2)"
+  else
+    die "  hub.conf CHANGED during operator admit — operator path must never write the hub config"
+  fi
   # (c) second admit is a clean no-op (userAlreadyPresent) — re-run the first id.
+  # PRECISE match only (never the bare word "already", which matches unrelated
+  # "X already exists" log noise and would falsely green-light non-idempotency).
   set -- $ids
   $CORTEX network admit "$1" --admin-seed "$adminseed" --registry-url "$REG_URL" \
     --hub-config "$hubconf" --hub-fed-account "$HUB_FED_ACCOUNT" --apply > "$LOG/admit-op-2nd.log" 2>&1 || true
-  grep -qiE "userAlreadyPresent|user_already_present.*true|already" "$LOG/admit-op-2nd.log" \
+  grep -qiE "userAlreadyPresent|user_already_present.{0,8}true" "$LOG/admit-op-2nd.log" \
     && ok "  second admit is a clean no-op (userAlreadyPresent — C2)" \
-    || warn "  second-admit idempotency not confirmed (needs the arc verb)"
+    || warn "  second-admit idempotency not confirmed (needs the arc verb + a real mint)"
 }
 
 # ── operator scenario dispatch (gated on the dual release-gate) ───────────────
