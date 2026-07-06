@@ -125,6 +125,7 @@
       "docs/design-federation-hub-mode-and-join.md",
       "docs/runbook-leaf-cred-issuance.md",
       "docs/sop-onboard-peer-principal.md",
+      "docs/mockups/mc-layouts/Vision - Internet of Agentic Work (v2).md",
       "src/__tests__/principal-identity-consistency.test.ts",
       "docs/migration-examples/",
       "src/cli/cortex/commands/__tests__/fixtures/",

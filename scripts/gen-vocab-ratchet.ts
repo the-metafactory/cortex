@@ -182,6 +182,9 @@ const CARVEOUT_PATHS: string[] = [
   "docs/design-federation-hub-mode-and-join.md",
   "docs/runbook-leaf-cred-issuance.md",
   "docs/sop-onboard-peer-principal.md",
+  // 2026-07-07 design-drop vision text (verbatim principal-authored artifact; its
+  // glossary line explicitly RECORDS the operator→principal deprecation)
+  "docs/mockups/mc-layouts/Vision - Internet of Agentic Work (v2).md",
   // HISTORICAL removed-field guard test (v3-REMOVED config.agent.operatorId)
   "src/__tests__/principal-identity-consistency.test.ts",
   // Legacy migration examples / fixtures / archive (demonstrate the migrate-config reader)

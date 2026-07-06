@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:oklch(0.11 0.012 250);}
+  @keyframes corePulse{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.6);opacity:.4}}
+  @keyframes barSweep{0%{left:-30%}100%{left:120%}}
+  @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+</style>
+</helmet>
+<div style="width:1920px;height:1080px;position:relative;overflow:hidden;display:flex;flex-direction:column;font-family:var(--sans);color:var(--fg);--bg:oklch(0.13 0.012 250);--panel:oklch(0.175 0.012 252);--panel2:oklch(0.215 0.013 252);--line:oklch(0.33 0.013 252);--lsoft:oklch(0.255 0.012 252);--fg:oklch(0.94 0.006 250);--dim:oklch(0.66 0.012 250);--faint:oklch(0.50 0.012 250);--mer:oklch(0.76 0.13 224);--ok:oklch(0.80 0.13 162);--warn:oklch(0.82 0.13 78);--bad:oklch(0.66 0.20 22);--gold:oklch(0.84 0.13 90);--frontier:oklch(0.82 0.13 60);--local:oklch(0.70 0.07 220);--d:oklch(0.80 0.14 158);--a:oklch(0.82 0.13 80);--h:oklch(0.76 0.15 8);--mono:'JetBrains Mono',ui-monospace,monospace;--sans:'Inter',system-ui,sans-serif;background:oklch(0.125 0.012 250);">
+
+  <!-- ═══ TOP BAR ═══ -->
+  <div style="height:60px;flex-shrink:0;display:flex;align-items:center;padding:0 26px;gap:16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, oklch(0.20 0.013 252), var(--panel));z-index:20;">
+    <div style="display:flex;align-items:center;gap:10px;"><div style="width:24px;height:24px;border-radius:50%;border:2px solid var(--mer);position:relative;box-shadow:0 0 12px oklch(0.76 0.13 224 / .5);"><div style="position:absolute;top:50%;left:50%;width:4px;height:4px;border-radius:50%;background:var(--mer);transform:translate(-50%,-50%);"></div></div><div style="font:700 14px var(--mono);letter-spacing:.16em;">MISSION&nbsp;CONTROL</div></div>
+    <div style="width:1px;height:24px;background:var(--line);"></div>
+    <div style="display:flex;align-items:center;gap:8px;font:500 11px var(--mono);color:var(--dim);"><span style="color:var(--faint);letter-spacing:.08em;">ALT</span><span>aria·atlas</span><span style="color:var(--faint);">/</span><span style="color:var(--gold);font-weight:600;">SESSION</span><span style="color:var(--faint);">— attribution ledger</span></div>
+    <div style="flex:1;"></div>
+    <div style="display:flex;align-items:center;gap:7px;font:500 11px var(--mono);color:var(--dim);"><span style="color:var(--faint);letter-spacing:.06em;">TODAY</span><span style="color:var(--fg);font-weight:700;">2.41M</span><span style="color:var(--faint);">tok</span><span style="color:var(--faint);">·</span><span style="color:var(--gold);font-weight:700;">$79</span><span style="color:var(--faint);">·</span><span style="color:var(--fg);font-weight:700;">142</span><span style="color:var(--faint);">sessions</span></div>
+    <div style="width:1px;height:24px;background:var(--line);"></div>
+    <div style="font:600 13px var(--mono);color:var(--fg);min-width:78px;text-align:right;">{{ clock }}</div>
+  </div>
+
+  <!-- ═══ BODY ═══ -->
+  <div style="flex:1;display:flex;min-height:0;">
+
+    <!-- altitude rail (SESSION lit) -->
+    <div style="width:54px;flex-shrink:0;border-right:1px solid var(--line);background:var(--panel);position:relative;">
+      <div style="position:absolute;top:34px;bottom:60px;left:26px;width:2px;background:linear-gradient(180deg,var(--lsoft),var(--gold) 78%,var(--gold) 84%,var(--lsoft));"></div>
+      <div style="position:absolute;top:56px;left:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:26px;">
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Networks"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Network"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Stack"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Assistant"></div>
+        <div style="width:16px;height:16px;border-radius:50%;background:var(--gold);box-shadow:0 0 12px var(--gold);border:2px solid var(--gold);" title="Session"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Envelope"></div>
+      </div>
+      <div style="position:absolute;bottom:16px;left:0;width:100%;text-align:center;font:600 8px var(--mono);color:var(--faint);letter-spacing:.1em;">↕</div>
+    </div>
+
+    <!-- ═ SESSIONS LEDGER ═ -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--line);">
+      <div style="flex-shrink:0;padding:14px 22px 12px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, oklch(0.19 0.013 252), var(--panel));">
+        <div style="display:flex;align-items:center;gap:9px;"><div style="width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold);"></div><div style="font:700 13px var(--mono);color:var(--fg);letter-spacing:.12em;">SESSIONS</div><div style="font:500 10px var(--sans);color:var(--dim);">— every session runs <strong style="color:var(--fg);font-weight:600;">on behalf of</strong> an accountable human. attribution rolls up spend; signed_by rolls up <span style="color:var(--gold);">responsibility</span>. it's their trust at stake.</div></div>
+      </div>
+      <!-- column header -->
+      <div style="flex-shrink:0;display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--line);background:var(--panel);font:700 8px var(--mono);color:var(--faint);letter-spacing:.1em;">
+        <div style="width:16px;"></div>
+        <div style="width:236px;">SESSION · ASSISTANT ▸ FOR</div>
+        <div style="flex:1;">→ ATTRIBUTION (where the work goes)</div>
+        <div style="width:84px;">MODEL</div>
+        <div style="width:148px;">TOKENS in/out</div>
+        <div style="width:60px;text-align:right;">COST</div>
+        <div style="width:50px;text-align:right;">AGE</div>
+      </div>
+      <!-- rows -->
+      <div style="flex:1;overflow:hidden;">
+        <!-- 1 Halo cortex -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:7f2a</span> · <span style="color:var(--mer);">Halo</span> <span style="color:var(--faint);font-size:9px;">aria</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:var(--gold);font-weight:600;">cortex</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.11 232);"></span>eng</span><span style="color:var(--faint);font-size:10px;">· schema.migrate</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:60%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">84k/12k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$2.40</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">3m</div>
+        </div>
+        <!-- 1b child -->
+        <div style="display:flex;align-items:center;padding:7px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);background:oklch(0.15 0.012 250 / .4);">
+          <div style="width:16px;"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);"></span></div>
+          <div style="width:236px;padding-left:18px;"><span style="color:var(--faint);">↳ sess:7f2b</span> · <span style="color:var(--dim);">sub-agent</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:oklch(0.84 0.13 90 / .7);">cortex</span><span style="color:var(--faint);font-size:10px;">· schema.migrate</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--local);padding:2px 6px;border:1px solid oklch(0.70 0.07 220 / .4);border-radius:4px;">local</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:14%;height:100%;background:var(--local);border-radius:3px;"></div></div><span style="color:var(--faint);font-size:10px;">18k/3k</span></div>
+          <div style="width:60px;text-align:right;color:var(--dim);">$0.10</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">2m</div>
+        </div>
+        <!-- 2 Vela cortex security -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 6px var(--warn);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:9c41</span> · <span style="color:var(--mer);">Vela</span> <span style="color:var(--faint);font-size:9px;">aria</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:var(--gold);font-weight:600;">cortex</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.11 232);"></span>security</span><span style="color:var(--faint);font-size:10px;">· encrypt.harden</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:86%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">120k/22k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$4.10</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">12m</div>
+        </div>
+        <!-- 3 Pike signal -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:3d88</span> · <span style="color:var(--mer);">Pike</span> <span style="color:var(--faint);font-size:9px;">aria</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:var(--ok);font-weight:600;">signal</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.80 0.12 162);"></span>devops</span><span style="color:var(--faint);font-size:10px;">· deploy.canary · operate</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--local);padding:2px 6px;border:1px solid oklch(0.70 0.07 220 / .4);border-radius:4px;">local</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:29%;height:100%;background:var(--local);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">40k/8k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$0.22</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">1m</div>
+        </div>
+        <!-- 4 Marisol Q3 campaign -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:5a10</span> · <span style="color:oklch(0.78 0.13 150);">Marisol</span> <span style="color:var(--faint);font-size:9px;">dana</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:oklch(0.74 0.14 350);font-weight:600;">Q3-campaign</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.14 350);"></span>marketing</span><span style="color:var(--faint);font-size:10px;">· creative</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:43%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">60k/15k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$3.10</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">5m</div>
+        </div>
+        <!-- 5 Wren myelin -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:c7d3</span> · <span style="color:oklch(0.80 0.12 70);">Wren</span> <span style="color:var(--faint);font-size:9px;">jun</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:oklch(0.74 0.10 200);font-weight:600;">myelin</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.11 232);"></span>eng</span><span style="color:var(--faint);font-size:10px;">· proto.review · federated</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:51%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">72k/14k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$2.80</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">7m</div>
+        </div>
+        <!-- 6 Onyx payments -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:44ab</span> · <span style="color:oklch(0.70 0.12 260);">Onyx</span> <span style="color:var(--faint);font-size:9px;">cole</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:var(--ok);font-weight:600;">payments</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.78 0.11 145);"></span>finance-ops</span><span style="color:var(--faint);font-size:10px;">· reconcile · operate</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--local);padding:2px 6px;border:1px solid oklch(0.70 0.07 220 / .4);border-radius:4px;">local</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:36%;height:100%;background:var(--local);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">50k/9k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$0.28</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">9m</div>
+        </div>
+        <!-- 7 Briar cortex audit -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 6px var(--warn);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:8b21</span> · <span style="color:oklch(0.72 0.15 330);">Briar</span> <span style="color:var(--faint);font-size:9px;">bel</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:var(--gold);font-weight:600;">cortex</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.11 232);"></span>security</span><span style="color:var(--faint);font-size:10px;">· audit · federated</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:68%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">95k/18k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$3.40</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">15m</div>
+        </div>
+        <!-- 8 Quill soma -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:f309</span> · <span style="color:oklch(0.72 0.15 330);">Quill</span> <span style="color:var(--faint);font-size:9px;">bel</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:oklch(0.74 0.13 300);font-weight:600;">soma</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.11 232);"></span>eng</span><span style="color:var(--faint);font-size:10px;">· identity.persist · federated</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:30%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">41k/9k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$1.60</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">6m</div>
+        </div>
+        <!-- 9 Scout Acme -->
+        <div style="display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid var(--lsoft);font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:2a77</span> · <span style="color:oklch(0.74 0.10 200);">Scout</span> <span style="color:var(--faint);font-size:9px;">kerr</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:oklch(0.80 0.12 72);font-weight:600;">Acme-rollout</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.80 0.12 72);"></span>sales</span><span style="color:var(--faint);font-size:10px;">· proposal</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:24%;height:100%;background:var(--gold);border-radius:3px;"></div></div><span style="color:var(--dim);font-size:10px;">33k/7k</span></div>
+          <div style="width:60px;text-align:right;color:var(--fg);">$1.30</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">4m</div>
+        </div>
+        <!-- 10 Sable research queued -->
+        <div style="display:flex;align-items:center;padding:8px 18px;font:500 11px var(--mono);">
+          <div style="width:16px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim);"></span></div>
+          <div style="width:236px;"><span style="color:var(--fg);">sess:b2e9</span> · <span style="color:var(--mer);">Sable</span> <span style="color:var(--faint);font-size:9px;">aria</span></div>
+          <div style="flex:1;display:flex;align-items:center;gap:7px;"><span style="color:var(--faint);">→</span><span style="color:oklch(0.74 0.13 300);font-weight:600;">research</span><span style="display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:10px;"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.74 0.13 300);"></span>research</span><span style="color:var(--faint);font-size:10px;">· lit.scan · queued</span></div>
+          <div style="width:84px;"><span style="font:600 8px var(--mono);color:var(--frontier);padding:2px 6px;border:1px solid oklch(0.82 0.13 60 / .4);border-radius:4px;">frontier</span></div>
+          <div style="width:148px;display:flex;align-items:center;gap:7px;"><div style="flex:1;height:5px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:21%;height:100%;background:var(--faint);border-radius:3px;"></div></div><span style="color:var(--faint);font-size:10px;">30k/6k</span></div>
+          <div style="width:60px;text-align:right;color:var(--dim);">$1.20</div>
+          <div style="width:50px;text-align:right;color:var(--faint);">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═ ATTRIBUTION ROLLUP ═ -->
+    <div style="width:520px;flex-shrink:0;background:var(--panel);display:flex;flex-direction:column;">
+      <div style="flex-shrink:0;padding:14px 20px 12px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, oklch(0.19 0.013 252), var(--panel));">
+        <div style="font:700 12px var(--mono);color:var(--fg);letter-spacing:.1em;">WHERE THE WORK GOES</div>
+        <div style="display:flex;align-items:center;gap:7px;margin-top:9px;"><span style="font:600 9px var(--mono);color:var(--gold);padding:4px 11px;border:1px solid var(--gold);border-radius:6px;background:oklch(0.84 0.13 90 / .1);">by Project</span><span style="font:600 9px var(--mono);color:var(--dim);padding:4px 11px;border:1px solid var(--lsoft);border-radius:6px;">by Person</span><span style="font:600 9px var(--mono);color:var(--dim);padding:4px 11px;border:1px solid var(--lsoft);border-radius:6px;">by Domain</span><span style="font:600 9px var(--mono);color:var(--dim);padding:4px 11px;border:1px solid var(--lsoft);border-radius:6px;">by Model</span></div>
+      </div>
+
+      <div style="flex:1;overflow:hidden;padding:16px 20px;display:flex;flex-direction:column;gap:13px;">
+        <div style="font:700 9px var(--mono);color:var(--faint);letter-spacing:.12em;">TOKEN SPEND PER PROJECT · today</div>
+        <!-- bars -->
+        <div style="display:flex;flex-direction:column;gap:11px;">
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:var(--gold);font-weight:600;">cortex</span><span style="color:var(--dim);">1.21M · <span style="color:var(--fg);">$38</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:100%;height:100%;background:linear-gradient(90deg,oklch(0.84 0.13 90 / .5),var(--gold));border-radius:4px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:oklch(0.74 0.10 200);font-weight:600;">myelin</span><span style="color:var(--dim);">482k · <span style="color:var(--fg);">$14</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:40%;height:100%;background:oklch(0.74 0.10 200);border-radius:4px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:oklch(0.74 0.13 300);font-weight:600;">soma</span><span style="color:var(--dim);">361k · <span style="color:var(--fg);">$9</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:30%;height:100%;background:oklch(0.74 0.13 300);border-radius:4px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:oklch(0.74 0.14 350);font-weight:600;">Q3-campaign</span><span style="color:var(--dim);">240k · <span style="color:var(--fg);">$11</span> <span style="color:var(--frontier);font-size:9px;">frontier-heavy</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:20%;height:100%;background:oklch(0.74 0.14 350);border-radius:4px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:var(--ok);font-weight:600;">signal <span style="color:var(--faint);font-size:9px;">operate</span></span><span style="color:var(--dim);">92k · <span style="color:var(--fg);">$2</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:9%;height:100%;background:var(--ok);border-radius:4px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:oklch(0.80 0.12 72);font-weight:600;">Acme-rollout</span><span style="color:var(--dim);">70k · <span style="color:var(--fg);">$2</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:7%;height:100%;background:oklch(0.80 0.12 72);border-radius:4px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font:500 10px var(--mono);margin-bottom:4px;"><span style="color:var(--dim);font-weight:600;">others (4)</span><span style="color:var(--dim);">130k · <span style="color:var(--fg);">$3</span></span></div><div style="height:8px;border-radius:4px;background:var(--lsoft);overflow:hidden;"><div style="width:11%;height:100%;background:var(--faint);border-radius:4px;"></div></div></div>
+        </div>
+
+        <div style="height:1px;background:var(--line);margin:4px 0;"></div>
+        <!-- secondary breakdowns -->
+        <div style="display:flex;gap:18px;">
+          <div style="flex:1;"><div style="font:700 8px var(--mono);color:var(--faint);letter-spacing:.1em;margin-bottom:8px;">BY MODEL</div><div style="display:flex;height:10px;border-radius:5px;overflow:hidden;"><div style="width:74%;background:var(--frontier);"></div><div style="width:26%;background:var(--local);"></div></div><div style="display:flex;justify-content:space-between;font:500 9px var(--mono);margin-top:5px;"><span style="color:var(--frontier);">frontier 74%</span><span style="color:var(--local);">local 26%</span></div></div>
+        </div>
+        <div><div style="font:700 8px var(--mono);color:var(--faint);letter-spacing:.1em;margin-bottom:8px;">BY PERSON</div>
+          <div style="display:flex;flex-direction:column;gap:6px;font:500 10px var(--mono);">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:50px;color:var(--mer);">Andreas</span><div style="flex:1;height:6px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:38%;height:100%;background:var(--mer);border-radius:3px;"></div></div><span style="width:30px;text-align:right;color:var(--dim);">38%</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:50px;color:oklch(0.72 0.15 330);">Bel</span><div style="flex:1;height:6px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:18%;height:100%;background:oklch(0.72 0.15 330);border-radius:3px;"></div></div><span style="width:30px;text-align:right;color:var(--dim);">18%</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:50px;color:oklch(0.78 0.13 150);">Dana</span><div style="flex:1;height:6px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:14%;height:100%;background:oklch(0.78 0.13 150);border-radius:3px;"></div></div><span style="width:30px;text-align:right;color:var(--dim);">14%</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:50px;color:oklch(0.80 0.12 70);">Jun</span><div style="flex:1;height:6px;border-radius:3px;background:var(--lsoft);overflow:hidden;"><div style="width:12%;height:100%;background:oklch(0.80 0.12 70);border-radius:3px;"></div></div><span style="width:30px;text-align:right;color:var(--dim);">12%</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SESSION ENVELOPE INSPECTOR ═══ -->
+  <div style="height:150px;flex-shrink:0;border-top:1px solid var(--line);background:linear-gradient(180deg, var(--panel), oklch(0.155 0.012 252));display:flex;align-items:stretch;z-index:20;">
+    <div style="flex:1;min-width:0;padding:14px 22px;display:flex;flex-direction:column;gap:8px;border-right:1px solid var(--line);">
+      <div style="display:flex;align-items:center;gap:9px;"><div style="font:700 9px var(--mono);color:var(--faint);letter-spacing:.12em;">SESSION ENVELOPE</div><div style="font:500 9px var(--mono);color:var(--gold);">sess:7f2a — the attribution that makes rollups possible</div></div>
+      <div style="font:500 11px var(--mono);color:var(--dim);line-height:1.55;white-space:nowrap;overflow:hidden;">
+        <span style="color:var(--faint);">session</span> <span style="color:var(--fg);">7f2a</span> { <span style="color:var(--mer);">assistant</span>:<span style="color:var(--fg);">"Halo"</span> <span style="color:var(--gold);">on_behalf_of</span>:<span style="color:var(--fg);">"andreas"</span> · <span style="color:var(--h);">accountable</span>:<span style="color:var(--fg);">"Andreas K."</span> · <span style="color:var(--gold);">work_ref</span>:{ project:<span style="color:var(--gold);">"cortex"</span>, capability:<span style="color:var(--fg);">"schema.migrate"</span> }<br>
+        &nbsp;&nbsp;<span style="color:var(--frontier);">model_class</span>:<span style="color:var(--fg);">"frontier"</span> · <span style="color:var(--a);">tokens</span>:{ in:<span style="color:var(--fg);">84_200</span>, out:<span style="color:var(--fg);">12_100</span> } · <span style="color:var(--ok);">cost_usd</span>:<span style="color:var(--fg);">2.40</span> · <span style="color:var(--mer);">sovereignty</span>:<span style="color:var(--fg);">"local"</span><br>
+        &nbsp;&nbsp;<span style="color:var(--h);">signed_by</span>:[ <span style="color:var(--fg);">andreas.nkey</span> ▸ <span style="color:var(--fg);">halo.session</span> ] <span style="color:var(--faint);">// chain of accountability — every action traces to the human</span> }
+      </div>
+      <div style="font:500 9px var(--sans);color:var(--faint);">Every session acts <strong style="color:var(--fg);font-weight:600;">on behalf of</strong> a human. Attribution rolls up <em>spend</em>; the <span style="color:var(--h);">signed_by</span> chain rolls up <span style="color:var(--gold);">responsibility</span> — the agent is the tool, the human is accountable, and it's their trust at stake.</div>
+    </div>
+    <div style="width:300px;flex-shrink:0;padding:14px 20px;display:flex;flex-direction:column;justify-content:center;gap:10px;">
+      <div style="font:700 9px var(--mono);color:var(--faint);letter-spacing:.12em;">TODAY · ALL ATTRIBUTED</div>
+      <div style="display:flex;gap:20px;"><div><div style="font:700 22px var(--mono);color:var(--fg);">2.41M</div><div style="font:500 8px var(--mono);color:var(--faint);">tokens</div></div><div><div style="font:700 22px var(--mono);color:var(--gold);">$79</div><div style="font:500 8px var(--mono);color:var(--faint);">spend</div></div><div><div style="font:700 22px var(--mono);color:var(--fg);">142</div><div style="font:500 8px var(--mono);color:var(--faint);">sessions</div></div></div>
+      <div style="font:500 9px var(--mono);color:var(--ok);">100% attributed · signed_by a human · 0 untagged</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { clock: "" };
+  componentDidMount() {
+    const tick = () => this.setState({ clock: new Date().toLocaleTimeString("en-GB", { hour12: false }) });
+    tick();
+    this._t = setInterval(tick, 1000);
+  }
+  componentWillUnmount() { if (this._t) clearInterval(this._t); }
+  renderVals() {
+    return { clock: this.state.clock || "00:00:00" };
+  }
+}
+</script>
+</body>
+</html>

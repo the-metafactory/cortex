@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:oklch(0.11 0.012 250);}
+  @keyframes corePulse{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.8);opacity:.35}}
+  @keyframes coreSlow{0%,100%{transform:scale(1);opacity:.7}50%{transform:scale(1.5);opacity:.25}}
+  @keyframes haloBreathe{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:.85;transform:scale(1.1)}}
+  @keyframes dashFlow{to{stroke-dashoffset:-160}}
+  @keyframes dashFlowFed{to{stroke-dashoffset:-220}}
+  @keyframes dashFlowPub{to{stroke-dashoffset:-90}}
+  @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @keyframes attnBlink{0%,100%{opacity:1}50%{opacity:.3}}
+  @keyframes barSweep{0%{left:-30%}100%{left:120%}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes connDraw{0%,100%{opacity:.4}50%{opacity:.9}}
+  @keyframes twinkle{0%,100%{opacity:.32}50%{opacity:.82}}
+</style>
+</helmet>
+<div style="width:1920px;height:1080px;position:relative;overflow:hidden;font-family:var(--sans);color:var(--fg);--bg:oklch(0.13 0.012 250);--panel:oklch(0.175 0.012 252);--panel2:oklch(0.215 0.013 252);--line:oklch(0.33 0.013 252);--lsoft:oklch(0.255 0.012 252);--fg:oklch(0.94 0.006 250);--dim:oklch(0.66 0.012 250);--faint:oklch(0.50 0.012 250);--mer:oklch(0.76 0.13 224);--tide:oklch(0.72 0.13 288);--pub:oklch(0.70 0.075 205);--ok:oklch(0.80 0.13 162);--warn:oklch(0.82 0.13 78);--bad:oklch(0.66 0.20 22);--d:oklch(0.80 0.14 158);--a:oklch(0.82 0.13 80);--h:oklch(0.76 0.15 8);--mono:'JetBrains Mono',ui-monospace,monospace;--sans:'Inter',system-ui,sans-serif;background:radial-gradient(ellipse 120% 100% at 30% 52%, oklch(0.185 0.018 248), oklch(0.105 0.012 250) 74%);">
+
+  <!-- ═══ FULL-BLEED MAP ═══ -->
+  <div style="position:absolute;inset:0;z-index:1;">
+    <div style="position:absolute;inset:0;background-image:radial-gradient(oklch(0.40 0.01 250 / .12) 1px, transparent 1px);background-size:42px 42px;opacity:.5;"></div>
+    <!-- region washes -->
+    <div style="position:absolute;left:120px;top:380px;width:760px;height:720px;border-radius:50%;background:radial-gradient(circle, oklch(0.76 0.13 224 / .10), transparent 64%);filter:blur(12px);"></div>
+    <div style="position:absolute;left:820px;top:160px;width:520px;height:560px;border-radius:50%;background:radial-gradient(circle, oklch(0.72 0.13 288 / .08), transparent 66%);filter:blur(12px);"></div>
+    <div style="position:absolute;left:560px;top:60px;width:340px;height:340px;border-radius:50%;background:radial-gradient(circle, oklch(0.72 0.13 288 / .06), transparent 66%);filter:blur(10px);"></div>
+    <div style="position:absolute;left:980px;top:580px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle, oklch(0.72 0.13 288 / .06), transparent 66%);filter:blur(10px);"></div>
+    <div style="position:absolute;left:1180px;top:20px;width:780px;height:760px;border-radius:50%;background:radial-gradient(circle, oklch(0.70 0.075 205 / .07), transparent 64%);filter:blur(14px);"></div>
+
+    <!-- big region labels -->
+    <div style="position:absolute;left:200px;top:392px;"><div style="font:700 17px var(--mono);color:var(--mer);letter-spacing:.16em;">MERIDIAN</div><div style="font:500 10px var(--mono);color:var(--faint);letter-spacing:.08em;margin-top:4px;">YOU OPERATE · 2 STACKS · K7</div></div>
+    <div style="position:absolute;left:880px;top:262px;"><div style="font:700 12px var(--mono);color:var(--tide);letter-spacing:.14em;">TIDE</div><div style="font:500 8px var(--mono);color:var(--faint);letter-spacing:.06em;margin-top:2px;">joined · member</div></div>
+    <div style="position:absolute;left:600px;top:96px;"><div style="font:700 12px var(--mono);color:var(--tide);letter-spacing:.14em;">FORGE·COOP</div><div style="font:500 8px var(--mono);color:var(--faint);letter-spacing:.06em;margin-top:2px;">joined · code-review</div></div>
+    <div style="position:absolute;left:1090px;top:800px;"><div style="font:700 12px var(--mono);color:var(--tide);letter-spacing:.14em;">HALDEN·JV</div><div style="font:500 8px var(--mono);color:var(--faint);letter-spacing:.06em;margin-top:2px;">joined · isolated-private</div></div>
+    <div style="position:absolute;right:60px;top:72px;text-align:right;z-index:4;"><div style="font:700 19px var(--mono);color:var(--pub);letter-spacing:.18em;opacity:.85;">PUBLIC&nbsp;MESH</div><div style="font:500 10px var(--mono);color:var(--faint);letter-spacing:.08em;margin-top:4px;">public.* · capability marketplace · come find me</div></div>
+
+    <!-- EDGES -->
+    <svg viewBox="0 0 1920 1080" style="position:absolute;inset:0;width:100%;height:100%;" fill="none">
+      <!-- meridian intra -->
+      <line x1="470" y1="560" x2="320" y2="460" stroke="oklch(0.76 0.13 224 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 3.2s linear infinite;"></line>
+      <line x1="470" y1="560" x2="610" y2="470" stroke="oklch(0.76 0.13 224 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 2.6s linear infinite;"></line>
+      <line x1="470" y1="560" x2="640" y2="650" stroke="oklch(0.76 0.13 224 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 2.9s linear infinite;"></line>
+      <line x1="470" y1="560" x2="390" y2="710" stroke="oklch(0.76 0.13 224 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 3.4s linear infinite;"></line>
+      <line x1="470" y1="560" x2="300" y2="610" stroke="oklch(0.76 0.13 224 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 3.0s linear infinite;"></line>
+      <line x1="470" y1="560" x2="360" y2="840" stroke="oklch(0.76 0.13 224 / .6)" stroke-width="2" stroke-dasharray="3 6" style="animation:dashFlow 3.6s linear infinite;"></line>
+      <line x1="360" y1="840" x2="260" y2="910" stroke="oklch(0.76 0.13 224 / .45)" stroke-width="1.3" stroke-dasharray="5 7" style="animation:dashFlow 3.2s linear infinite;"></line>
+      <!-- tide intra -->
+      <line x1="980" y1="330" x2="1080" y2="260" stroke="oklch(0.72 0.13 288 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 2.8s linear infinite;"></line>
+      <line x1="980" y1="330" x2="1040" y2="500" stroke="oklch(0.82 0.13 78 / .6)" stroke-width="1.8" stroke-dasharray="4 9" style="animation:dashFlow 4.6s linear infinite;"></line>
+      <line x1="1040" y1="500" x2="1150" y2="540" stroke="oklch(0.72 0.13 288 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 3.1s linear infinite;"></line>
+      <!-- forge-coop intra -->
+      <line x1="700" y1="200" x2="620" y2="140" stroke="oklch(0.72 0.13 288 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 2.7s linear infinite;"></line>
+      <line x1="700" y1="200" x2="780" y2="150" stroke="oklch(0.72 0.13 288 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 3.3s linear infinite;"></line>
+      <!-- halden-jv intra -->
+      <line x1="1180" y1="720" x2="1110" y2="820" stroke="oklch(0.72 0.13 288 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 2.9s linear infinite;"></line>
+      <line x1="1180" y1="720" x2="1280" y2="800" stroke="oklch(0.72 0.13 288 / .5)" stroke-width="1.4" stroke-dasharray="5 7" style="animation:dashFlow 3.5s linear infinite;"></line>
+      <!-- FEDERATION (bright) -->
+      <line x1="470" y1="560" x2="980" y2="330" stroke="oklch(0.74 0.12 256 / .62)" stroke-width="2.6" stroke-dasharray="2 8" style="animation:dashFlowFed 2.2s linear infinite;"></line>
+      <line x1="470" y1="560" x2="700" y2="200" stroke="oklch(0.74 0.12 256 / .6)" stroke-width="2.4" stroke-dasharray="2 8" style="animation:dashFlowFed 2.5s linear infinite;"></line>
+      <line x1="470" y1="560" x2="1180" y2="720" stroke="oklch(0.74 0.12 256 / .55)" stroke-width="2.2" stroke-dasharray="2 8" style="animation:dashFlowFed 2.8s linear infinite;"></line>
+      <!-- DISCOVERY (public, faint) -->
+      <line x1="900" y1="110" x2="980" y2="330" stroke="oklch(0.70 0.075 205 / .4)" stroke-width="1.3" stroke-dasharray="2 9" style="animation:dashFlowPub 3s linear infinite;"></line>
+      <line x1="1450" y1="115" x2="980" y2="330" stroke="oklch(0.70 0.075 205 / .32)" stroke-width="1.2" stroke-dasharray="2 9" style="animation:dashFlowPub 3.4s linear infinite;"></line>
+      <line x1="1770" y1="470" x2="1180" y2="720" stroke="oklch(0.70 0.075 205 / .34)" stroke-width="1.2" stroke-dasharray="2 9" style="animation:dashFlowPub 3.8s linear infinite;"></line>
+    </svg>
+
+    <!-- federation labels -->
+    <div style="position:absolute;left:690px;top:432px;display:flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--line);border-radius:20px;background:var(--panel2);box-shadow:0 2px 10px oklch(0.10 0.01 250 / .5);"><div style="width:5px;height:5px;border-radius:50%;background:var(--mer);"></div><span style="font:600 9px var(--mono);color:var(--dim);letter-spacing:.05em;">federated · K7</span><div style="width:5px;height:5px;border-radius:50%;background:var(--tide);"></div></div>
+
+    <!-- PUBLIC NODES (the wider internet) -->
+    <sc-for list="{{ publicNodes }}" as="n" hint-placeholder-count="20">
+      <div style="{{ n.style }}">{{ n.glyph }}</div>
+      <div style="{{ n.labelStyle }}">{{ n.label }}</div>
+    </sc-for>
+
+    <!-- ═ YOUR / FEDERATED NODES ═ -->
+    <!-- atlas hub YOU ARE HERE -->
+    <div style="position:absolute;left:408px;top:528px;width:124px;display:flex;flex-direction:column;align-items:center;gap:8px;z-index:6;">
+      <div style="position:relative;width:64px;height:64px;display:flex;align-items:center;justify-content:center;">
+        <div style="position:absolute;inset:-14px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .45), transparent 70%);animation:haloBreathe 3.6s ease-in-out infinite;"></div>
+        <div style="position:absolute;inset:-8px;border-radius:50%;border:1.5px solid var(--mer);opacity:.45;animation:spin 14s linear infinite;border-left-color:transparent;border-bottom-color:transparent;"></div>
+        <div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid var(--mer);background:oklch(0.22 0.04 224 / .65);box-shadow:0 0 22px oklch(0.76 0.13 224 / .5), inset 0 0 14px oklch(0.76 0.13 224 / .3);display:flex;align-items:center;justify-content:center;font:600 22px var(--mono);color:var(--mer);">⬣</div>
+      </div>
+      <div style="text-align:center;"><div style="font:700 12px var(--mono);color:var(--fg);">aria/atlas</div><div style="font:500 9px var(--mono);color:var(--faint);margin-top:1px;">5 assistants</div></div>
+      <div style="position:absolute;top:-28px;left:50%;transform:translateX(-50%);white-space:nowrap;font:700 8px var(--mono);color:var(--mer);letter-spacing:.16em;padding:2px 8px;border:1px solid var(--mer);border-radius:4px;background:oklch(0.76 0.13 224 / .14);">◎ YOU ARE HERE</div>
+    </div>
+    <!-- Vela attn -->
+    <div style="position:absolute;left:275px;top:442px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.4s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--mer);background:oklch(0.21 0.03 224 / .6);box-shadow:0 0 11px oklch(0.76 0.13 224 / .35);"></div><div style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;border-radius:50%;background:var(--a);color:oklch(0.18 0 0);font:700 10px var(--mono);display:flex;align-items:center;justify-content:center;animation:attnBlink 1.6s ease-in-out infinite;box-shadow:0 0 9px var(--a);">!</div></div><div style="font:600 10px var(--mono);color:var(--fg);">Vela</div></div>
+    <!-- Halo -->
+    <div style="position:absolute;left:565px;top:452px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.0s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--mer);background:oklch(0.21 0.03 224 / .6);box-shadow:0 0 11px oklch(0.76 0.13 224 / .35);"></div><div style="width:9px;height:9px;border-radius:50%;background:var(--mer);box-shadow:0 0 8px var(--mer);animation:corePulse 1.7s ease-in-out infinite;"></div></div><div style="font:600 10px var(--mono);color:var(--fg);">Halo</div></div>
+    <!-- Pike warn -->
+    <div style="position:absolute;left:595px;top:632px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle, oklch(0.82 0.13 78 / .5), transparent 70%);animation:haloBreathe 2.2s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--mer);background:oklch(0.21 0.03 224 / .6);box-shadow:0 0 11px oklch(0.76 0.13 224 / .35);"></div><div style="width:9px;height:9px;border-radius:50%;background:var(--mer);box-shadow:0 0 8px var(--mer);animation:corePulse 1.9s ease-in-out infinite;"></div></div><div style="font:600 10px var(--mono);color:var(--fg);">Pike</div></div>
+    <!-- Mott attn -->
+    <div style="position:absolute;left:345px;top:692px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.5s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--mer);background:oklch(0.21 0.03 224 / .6);box-shadow:0 0 11px oklch(0.76 0.13 224 / .35);"></div><div style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;border-radius:50%;background:var(--a);color:oklch(0.18 0 0);font:700 10px var(--mono);display:flex;align-items:center;justify-content:center;animation:attnBlink 1.9s ease-in-out infinite;box-shadow:0 0 9px var(--a);">!</div></div><div style="font:600 10px var(--mono);color:var(--fg);">Mott</div></div>
+    <!-- Sable -->
+    <div style="position:absolute;left:255px;top:592px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-9px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .35), transparent 70%);animation:haloBreathe 3.8s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--mer);background:oklch(0.21 0.03 224 / .6);box-shadow:0 0 10px oklch(0.76 0.13 224 / .3);"></div><div style="width:8px;height:8px;border-radius:50%;background:var(--mer);opacity:.7;animation:coreSlow 2.6s ease-in-out infinite;"></div></div><div style="font:600 10px var(--mono);color:var(--fg);">Sable</div></div>
+    <!-- relay hub -->
+    <div style="position:absolute;left:312px;top:817px;width:96px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:6;"><div style="position:relative;width:46px;height:46px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-9px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.7s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--mer);background:oklch(0.21 0.03 224 / .6);box-shadow:0 0 12px oklch(0.76 0.13 224 / .35);display:flex;align-items:center;justify-content:center;font:600 15px var(--mono);color:var(--mer);opacity:.92;">⬣</div></div><div style="font:600 10px var(--mono);color:var(--dim);">aria/relay</div></div>
+    <!-- Cleo idle -->
+    <div style="position:absolute;left:215px;top:895px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-7px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .26), transparent 70%);"></div><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--faint);background:oklch(0.20 0.01 250 / .5);"></div></div><div style="font:600 10px var(--mono);color:var(--dim);">Cleo</div></div>
+    <!-- harbor hub (tide) -->
+    <div style="position:absolute;left:920px;top:304px;width:120px;display:flex;flex-direction:column;align-items:center;gap:7px;z-index:6;"><div style="position:relative;width:52px;height:52px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-12px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.3s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid var(--tide);background:oklch(0.22 0.04 288 / .6);box-shadow:0 0 18px oklch(0.72 0.13 288 / .45);display:flex;align-items:center;justify-content:center;font:600 18px var(--mono);color:var(--tide);">⬣</div></div><div style="text-align:center;"><div style="font:600 11px var(--mono);color:var(--fg);">jun/harbor</div><div style="font:500 9px var(--mono);color:var(--faint);">hub · admits</div></div></div>
+    <!-- Wren -->
+    <div style="position:absolute;left:1035px;top:243px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-9px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.1s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--tide);background:oklch(0.21 0.03 288 / .6);box-shadow:0 0 10px oklch(0.72 0.13 288 / .35);"></div><div style="width:9px;height:9px;border-radius:50%;background:var(--tide);box-shadow:0 0 8px var(--tide);animation:corePulse 2.0s ease-in-out infinite;"></div></div><div style="font:600 10px var(--mono);color:var(--dim);">Wren</div></div>
+    <!-- loom hub warn -->
+    <div style="position:absolute;left:980px;top:476px;width:120px;display:flex;flex-direction:column;align-items:center;gap:7px;z-index:6;"><div style="position:relative;width:48px;height:48px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-11px;border-radius:50%;background:radial-gradient(circle, oklch(0.82 0.13 78 / .5), transparent 70%);animation:haloBreathe 2.3s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid var(--tide);background:oklch(0.22 0.04 288 / .6);box-shadow:0 0 16px oklch(0.72 0.13 288 / .4);display:flex;align-items:center;justify-content:center;font:600 16px var(--mono);color:var(--tide);">⬣</div></div><div style="text-align:center;"><div style="font:600 11px var(--mono);color:var(--fg);">dara/loom</div><div style="font:500 9px var(--mono);color:var(--warn);">⚠ RTT 840ms</div></div></div>
+    <!-- Iris -->
+    <div style="position:absolute;left:1105px;top:523px;width:90px;display:flex;flex-direction:column;align-items:center;gap:5px;z-index:6;"><div style="position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-9px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.2s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--tide);background:oklch(0.21 0.03 288 / .6);box-shadow:0 0 10px oklch(0.72 0.13 288 / .35);"></div><div style="width:9px;height:9px;border-radius:50%;background:var(--tide);box-shadow:0 0 8px var(--tide);animation:corePulse 2.3s ease-in-out infinite;"></div></div><div style="font:600 10px var(--mono);color:var(--dim);">Iris</div></div>
+    <!-- forge hub -->
+    <div style="position:absolute;left:645px;top:177px;width:110px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:6;"><div style="position:relative;width:46px;height:46px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-9px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.5s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--tide);background:oklch(0.22 0.04 288 / .6);box-shadow:0 0 12px oklch(0.72 0.13 288 / .4);display:flex;align-items:center;justify-content:center;font:600 15px var(--mono);color:var(--tide);">⬣</div></div><div style="font:600 10px var(--mono);color:var(--dim);">bel/forge</div></div>
+    <!-- Briar -->
+    <div style="position:absolute;left:578px;top:125px;width:84px;display:flex;flex-direction:column;align-items:center;gap:4px;z-index:6;"><div style="position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-8px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .35), transparent 70%);animation:haloBreathe 3.0s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--tide);background:oklch(0.21 0.03 288 / .6);"></div><div style="width:7px;height:7px;border-radius:50%;background:var(--tide);box-shadow:0 0 6px var(--tide);animation:corePulse 2.1s ease-in-out infinite;"></div></div><div style="font:600 9px var(--mono);color:var(--dim);">Briar</div></div>
+    <!-- Quill -->
+    <div style="position:absolute;left:738px;top:135px;width:84px;display:flex;flex-direction:column;align-items:center;gap:4px;z-index:6;"><div style="position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-8px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .35), transparent 70%);animation:haloBreathe 3.3s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--tide);background:oklch(0.21 0.03 288 / .6);"></div><div style="width:7px;height:7px;border-radius:50%;background:var(--tide);box-shadow:0 0 6px var(--tide);animation:corePulse 2.4s ease-in-out infinite;"></div></div><div style="font:600 9px var(--mono);color:var(--dim);">Quill</div></div>
+    <!-- halden hub -->
+    <div style="position:absolute;left:1120px;top:696px;width:120px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:6;"><div style="position:relative;width:48px;height:48px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .4), transparent 70%);animation:haloBreathe 3.6s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid var(--tide);background:oklch(0.22 0.04 288 / .6);box-shadow:0 0 14px oklch(0.72 0.13 288 / .4);display:flex;align-items:center;justify-content:center;font:600 16px var(--mono);color:var(--tide);">⬣</div></div><div style="font:600 10px var(--mono);color:var(--dim);">cole/halden</div></div>
+    <!-- Onyx -->
+    <div style="position:absolute;left:1068px;top:804px;width:84px;display:flex;flex-direction:column;align-items:center;gap:4px;z-index:6;"><div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-8px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .35), transparent 70%);animation:haloBreathe 3.1s ease-in-out infinite;"></div><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--tide);background:oklch(0.21 0.03 288 / .6);"></div><div style="width:7px;height:7px;border-radius:50%;background:var(--tide);box-shadow:0 0 6px var(--tide);animation:corePulse 2.2s ease-in-out infinite;"></div></div><div style="font:600 9px var(--mono);color:var(--dim);">Onyx</div></div>
+    <!-- Reed idle -->
+    <div style="position:absolute;left:1238px;top:784px;width:84px;display:flex;flex-direction:column;align-items:center;gap:4px;z-index:6;"><div style="position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:-7px;border-radius:50%;background:radial-gradient(circle, oklch(0.80 0.13 162 / .26), transparent 70%);"></div><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--faint);background:oklch(0.20 0.01 250 / .5);"></div></div><div style="font:600 9px var(--mono);color:var(--faint);">Reed</div></div>
+
+    <!-- PINNED ATTENTION CALLOUT — Vela -->
+    <div style="position:absolute;left:64px;top:300px;width:258px;border:1px solid oklch(0.66 0.20 22 / .55);border-radius:10px;background:oklch(0.17 0.012 252 / .94);backdrop-filter:blur(7px);box-shadow:0 8px 26px oklch(0.08 0.01 250 / .6);overflow:hidden;z-index:7;">
+      <div style="display:flex;align-items:center;gap:7px;padding:8px 12px;background:oklch(0.66 0.20 22 / .14);border-bottom:1px solid oklch(0.66 0.20 22 / .3);"><div style="width:7px;height:7px;border-radius:50%;background:var(--a);animation:attnBlink 1.6s ease-in-out infinite;box-shadow:0 0 7px var(--a);"></div><span style="font:700 9px var(--mono);color:var(--a);letter-spacing:.12em;">NEEDS YOU</span><span style="margin-left:auto;font:600 9px var(--mono);color:var(--bad);">P0</span></div>
+      <div style="padding:11px 12px;display:flex;flex-direction:column;gap:7px;"><div style="font:600 11px var(--mono);color:var(--fg);">Vela <span style="color:var(--faint);">×</span> T-204</div><div style="font:500 12px var(--sans);color:var(--fg);">rotate webhook signing key</div><div style="display:flex;gap:6px;flex-wrap:wrap;"><span style="font:600 9px var(--mono);color:var(--bad);padding:2px 7px;border:1px solid oklch(0.66 0.20 22 / .5);border-radius:5px;">BLOCKED</span><span style="font:500 9px var(--mono);color:var(--dim);padding:2px 7px;border:1px solid var(--lsoft);border-radius:5px;">permission · tool.edit</span></div><div style="display:flex;gap:7px;margin-top:2px;"><div style="font:600 10px var(--mono);color:var(--mer);padding:5px 12px;border:1px solid var(--mer);border-radius:6px;background:oklch(0.76 0.13 224 / .1);">Open ▸</div><span style="margin-left:auto;font:500 9px var(--mono);color:var(--faint);align-self:center;">2m ago</span></div></div>
+    </div>
+    <!-- PINNED ATTENTION CALLOUT — Mott -->
+    <div style="position:absolute;left:64px;top:740px;width:258px;border:1px solid oklch(0.82 0.13 78 / .5);border-radius:10px;background:oklch(0.17 0.012 252 / .94);backdrop-filter:blur(7px);box-shadow:0 8px 26px oklch(0.08 0.01 250 / .6);overflow:hidden;z-index:7;">
+      <div style="display:flex;align-items:center;gap:7px;padding:8px 12px;background:oklch(0.82 0.13 78 / .12);border-bottom:1px solid oklch(0.82 0.13 78 / .3);"><div style="width:7px;height:7px;border-radius:50%;background:var(--a);animation:attnBlink 1.9s ease-in-out infinite;box-shadow:0 0 7px var(--a);"></div><span style="font:700 9px var(--mono);color:var(--a);letter-spacing:.12em;">NEEDS YOU</span><span style="margin-left:auto;font:600 9px var(--mono);color:var(--warn);">P1</span></div>
+      <div style="padding:11px 12px;display:flex;flex-direction:column;gap:7px;"><div style="font:600 11px var(--mono);color:var(--fg);">Mott <span style="color:var(--faint);">×</span> T-198</div><div style="font:500 12px var(--sans);color:var(--fg);">draft Q3 federation runbook</div><div style="display:flex;gap:6px;flex-wrap:wrap;"><span style="font:600 9px var(--mono);color:var(--warn);padding:2px 7px;border:1px solid oklch(0.82 0.13 78 / .5);border-radius:5px;">BLOCKED</span><span style="font:500 9px var(--mono);color:var(--dim);padding:2px 7px;border:1px solid var(--lsoft);border-radius:5px;">review · checkpoint</span></div><div style="display:flex;gap:7px;margin-top:2px;"><div style="font:600 10px var(--mono);color:var(--mer);padding:5px 12px;border:1px solid var(--mer);border-radius:6px;background:oklch(0.76 0.13 224 / .1);">Open ▸</div><span style="margin-left:auto;font:500 9px var(--mono);color:var(--faint);align-self:center;">6m ago</span></div></div>
+    </div>
+  </div>
+
+  <!-- ═══ TOP BAR ═══ -->
+  <div style="position:absolute;top:0;left:0;right:0;height:56px;z-index:20;display:flex;align-items:center;padding:0 24px;gap:18px;background:linear-gradient(180deg, oklch(0.13 0.012 250 / .92), oklch(0.13 0.012 250 / .4));backdrop-filter:blur(8px);border-bottom:1px solid var(--line);">
+    <div style="display:flex;align-items:center;gap:10px;"><div style="width:24px;height:24px;border-radius:50%;border:2px solid var(--mer);position:relative;box-shadow:0 0 12px oklch(0.76 0.13 224 / .5);"><div style="position:absolute;top:50%;left:50%;width:4px;height:4px;border-radius:50%;background:var(--mer);transform:translate(-50%,-50%);"></div></div><div style="font:700 14px var(--mono);letter-spacing:.16em;">MISSION&nbsp;CONTROL</div></div>
+    <div style="width:1px;height:24px;background:var(--line);"></div>
+    <div style="display:flex;align-items:center;gap:8px;font:500 11px var(--mono);color:var(--dim);"><span style="color:var(--faint);letter-spacing:.1em;">ALT</span><span style="color:var(--mer);font-weight:600;">NETWORK·OF·NETWORKS</span><span style="color:var(--faint);">/</span><span>aria·atlas</span></div>
+    <div style="flex:1;"></div>
+    <sc-if value="{{ postureOperator }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--mer);border-radius:6px;background:oklch(0.76 0.13 224 / .12);font:600 11px var(--mono);color:var(--mer);letter-spacing:.12em;"><div style="width:6px;height:6px;border-radius:50%;background:var(--mer);box-shadow:0 0 8px var(--mer);"></div>OPERATOR</div></sc-if>
+    <sc-if value="{{ postureMember }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--tide);border-radius:6px;background:oklch(0.72 0.13 288 / .12);font:600 11px var(--mono);color:var(--tide);letter-spacing:.12em;"><div style="width:6px;height:6px;border-radius:50%;background:var(--tide);box-shadow:0 0 8px var(--tide);"></div>MEMBER</div></sc-if>
+    <div style="display:flex;align-items:center;gap:6px;font:500 11px var(--mono);color:var(--dim);"><span style="color:var(--fg);font-weight:700;">7</span><span style="color:var(--faint);letter-spacing:.06em;">NETWORKS</span><span style="color:var(--faint);">·</span><span style="color:var(--fg);font-weight:700;">142</span><span style="color:var(--faint);letter-spacing:.06em;">STACKS</span></div>
+    <div style="width:1px;height:24px;background:var(--line);"></div>
+    <div style="display:flex;align-items:center;gap:8px;font:500 11px var(--mono);"><div style="width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 9px var(--ok);"></div><span style="color:var(--fg);font-weight:600;">98%</span><span style="color:var(--faint);letter-spacing:.08em;">NOMINAL</span></div>
+    <div style="width:1px;height:24px;background:var(--line);"></div>
+    <div style="font:600 13px var(--mono);color:var(--fg);min-width:78px;text-align:right;">{{ clock }}</div>
+  </div>
+
+  <!-- SCOPE KEY (top-left under bar) -->
+  <div style="position:absolute;left:70px;top:70px;z-index:18;display:flex;align-items:center;gap:15px;padding:8px 14px;border:1px solid var(--line);border-radius:8px;background:oklch(0.16 0.012 252 / .9);backdrop-filter:blur(6px);font:600 9px var(--mono);letter-spacing:.04em;">
+    <span style="color:var(--faint);letter-spacing:.14em;">SCOPE</span>
+    <span style="display:flex;align-items:center;gap:6px;color:var(--fg);"><span style="width:10px;height:10px;border-radius:50%;border:2px solid var(--mer);"></span>local</span>
+    <span style="display:flex;align-items:center;gap:6px;color:var(--fg);"><span style="width:10px;height:10px;border-radius:50%;border:2px solid var(--tide);"></span>federated</span>
+    <span style="display:flex;align-items:center;gap:6px;color:var(--fg);"><span style="width:10px;height:10px;border-radius:50%;border:2px solid var(--pub);"></span>public</span>
+  </div>
+
+  <!-- ═══ SLIM ALTITUDE RAIL (left) ═══ -->
+  <div style="position:absolute;left:0;top:56px;bottom:44px;width:54px;z-index:17;background:oklch(0.15 0.012 250 / .82);backdrop-filter:blur(8px);border-right:1px solid var(--line);">
+    <div style="position:absolute;top:34px;bottom:90px;left:26px;width:2px;background:linear-gradient(180deg,var(--mer),var(--lsoft) 20%,var(--lsoft));"></div>
+    <div style="position:absolute;top:60px;left:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:30px;">
+      <div style="width:16px;height:16px;border-radius:50%;background:var(--mer);box-shadow:0 0 12px var(--mer);border:2px solid var(--mer);" title="Networks"></div>
+      <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Network"></div>
+      <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Stack"></div>
+      <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Assistant"></div>
+      <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Session"></div>
+      <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Envelope"></div>
+    </div>
+    <div style="position:absolute;bottom:18px;left:0;width:100%;text-align:center;font:600 8px var(--mono);color:var(--faint);letter-spacing:.1em;">↓<br>DIVE</div>
+  </div>
+
+  <!-- ═══ LOCAL STACK HUD ═══ -->
+  <div style="position:absolute;right:24px;bottom:64px;width:392px;z-index:19;border:1px solid var(--line);border-radius:12px;background:oklch(0.16 0.012 252 / .94);backdrop-filter:blur(10px);box-shadow:0 14px 40px oklch(0.07 0.01 250 / .7);overflow:hidden;">
+    <div style="padding:13px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, oklch(0.20 0.013 252 / .6), transparent);">
+      <div style="display:flex;align-items:center;gap:9px;"><div style="width:22px;height:22px;border-radius:6px;border:1.5px solid var(--mer);display:flex;align-items:center;justify-content:center;font:600 12px var(--mono);color:var(--mer);box-shadow:0 0 10px oklch(0.76 0.13 224 / .3);">⬣</div><div style="font:700 13px var(--mono);color:var(--fg);">aria/atlas <span style="color:var(--faint);font-weight:500;font-size:9px;letter-spacing:.1em;">· LOCAL STACK</span></div><div style="margin-left:auto;display:flex;align-items:center;gap:5px;font:500 10px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);"></span>4/5 online</div></div>
+    </div>
+    <div style="padding:13px 16px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><div style="width:6px;height:6px;border-radius:50%;background:var(--mer);box-shadow:0 0 7px var(--mer);animation:corePulse 1.8s ease-in-out infinite;"></div><div style="font:700 10px var(--mono);color:var(--fg);letter-spacing:.12em;">WORKING</div><div style="margin-left:auto;font:600 10px var(--mono);color:var(--faint);">3 running · 2 need you</div></div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:9px 11px;"><div style="display:flex;align-items:center;justify-content:space-between;"><span style="font:600 10px var(--mono);color:var(--fg);">Halo × T-210</span><span style="display:flex;align-items:center;gap:5px;font:600 8px var(--mono);color:var(--ok);"><span style="width:5px;height:5px;border-radius:50%;background:var(--ok);"></span>RUNNING</span></div><div style="font:500 11px var(--sans);color:var(--dim);margin-top:4px;">reconcile envelope schema · ⋔ sub-agent·1</div><div style="height:3px;border-radius:2px;background:var(--lsoft);position:relative;overflow:hidden;margin-top:7px;"><div style="position:absolute;top:0;width:30%;height:100%;border-radius:2px;background:linear-gradient(90deg,transparent,var(--mer),transparent);animation:barSweep 2.2s linear infinite;"></div></div></div>
+        <div style="border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:9px 11px;"><div style="display:flex;align-items:center;justify-content:space-between;"><span style="font:600 10px var(--mono);color:var(--fg);">Pike × T-185</span><span style="display:flex;align-items:center;gap:5px;font:600 8px var(--mono);color:var(--warn);"><span style="width:5px;height:5px;border-radius:50%;background:var(--warn);"></span>RATE-LIMITED</span></div><div style="font:500 11px var(--sans);color:var(--dim);margin-top:4px;">canary deploy → signal · retry 2/3</div></div>
+        <div style="border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:9px 11px;"><div style="display:flex;align-items:center;justify-content:space-between;"><span style="font:600 10px var(--mono);color:var(--fg);">Sable × T-176</span><span style="display:flex;align-items:center;gap:5px;font:600 8px var(--mono);color:var(--dim);"><span style="width:5px;height:5px;border-radius:50%;background:var(--dim);"></span>QUEUED</span></div><div style="font:500 11px var(--sans);color:var(--dim);margin-top:4px;">lit review: leaf-node federation</div></div>
+      </div>
+      <sc-if value="{{ postureOperator }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:7px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);"><span style="font:700 8px var(--mono);color:var(--faint);letter-spacing:.12em;">GOVERN</span><div style="font:600 9px var(--mono);color:var(--dim);padding:5px 10px;border:1px solid var(--line);border-radius:6px;">⊕ Admit</div><div style="font:600 9px var(--mono);color:var(--dim);padding:5px 10px;border:1px solid var(--line);border-radius:6px;">⟳ Rotate K7</div><div style="font:600 9px var(--mono);color:var(--dim);padding:5px 10px;border:1px solid var(--line);border-radius:6px;">⇲ Dispatch</div></div></sc-if>
+    </div>
+  </div>
+
+  <!-- LEGEND (bottom-left) -->
+  <div style="position:absolute;left:72px;bottom:58px;z-index:18;display:flex;gap:16px;padding:9px 14px;border:1px solid var(--line);border-radius:8px;background:oklch(0.16 0.012 252 / .9);backdrop-filter:blur(6px);font:500 9px var(--mono);color:var(--dim);">
+    <span style="display:flex;align-items:center;gap:6px;"><span style="width:11px;height:11px;border-radius:50%;border:2px solid var(--mer);"></span>presence</span>
+    <span style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;border-radius:50%;background:var(--mer);box-shadow:0 0 6px var(--mer);animation:corePulse 1.7s ease-in-out infinite;"></span>activity</span>
+    <span style="display:flex;align-items:center;gap:6px;"><svg width="14" height="11"><line x1="0" y1="5" x2="14" y2="5" stroke="var(--mer)" stroke-width="2" stroke-dasharray="3 3" style="animation:dashFlow 2s linear infinite;"></line></svg>traffic</span>
+    <span style="display:flex;align-items:center;gap:6px;"><span style="display:flex;gap:3px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok);"></span><span style="width:7px;height:7px;border-radius:50%;background:var(--warn);"></span><span style="width:7px;height:7px;border-radius:50%;background:var(--bad);"></span></span>health</span>
+  </div>
+
+  <!-- ═══ THIN TRAFFIC RIBBON ═══ -->
+  <div style="position:absolute;left:0;right:0;bottom:0;height:44px;z-index:20;background:oklch(0.14 0.012 250 / .94);backdrop-filter:blur(8px);border-top:1px solid var(--line);display:flex;align-items:center;overflow:hidden;">
+    <div style="flex-shrink:0;padding:0 16px;display:flex;align-items:center;gap:8px;border-right:1px solid var(--line);height:100%;"><span style="font:700 8px var(--mono);color:var(--faint);letter-spacing:.12em;">BUS</span><span style="font:700 14px var(--mono);color:var(--fg);">{{ eps }}</span><span style="font:500 9px var(--mono);color:var(--dim);">env/s</span></div>
+    <div style="flex:1;overflow:hidden;position:relative;-webkit-mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent);mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent);">
+      <div style="display:flex;gap:22px;white-space:nowrap;animation:ticker 36s linear infinite;animation-play-state:{{ flowPlay }};padding-left:24px;font:500 10px var(--mono);">
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--mer);font-weight:700;">↑</span><span style="width:6px;height:6px;border-radius:2px;background:var(--d);"></span>local.aria.tasks.@halo.schema.migrate</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--tide);font-weight:700;">⇄</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>federated.tide.tasks.research.lit → jun/harbor</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--pub);font-weight:700;">↗</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>public.capability.code-review.offer ← bel/forge</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--h);font-weight:700;">↓</span><span style="width:6px;height:6px;border-radius:2px;background:var(--h);"></span>local.aria.principal.input ⇒ Mott</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--pub);font-weight:700;">↗</span><span style="width:6px;height:6px;border-radius:2px;background:var(--d);"></span>public.principal.identity.announce → research-commons</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--tide);font-weight:700;">⇄</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>federated.tide.review.checkpoint ← dara/loom</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--pub);font-weight:700;">↘</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>public.discovery.deploy.canary.offer ← deploy-exch</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--mer);font-weight:700;">↑</span><span style="width:6px;height:6px;border-radius:2px;background:var(--d);"></span>local.aria.system.session.spawned</span>
+        <!-- dup -->
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--mer);font-weight:700;">↑</span><span style="width:6px;height:6px;border-radius:2px;background:var(--d);"></span>local.aria.tasks.@halo.schema.migrate</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--tide);font-weight:700;">⇄</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>federated.tide.tasks.research.lit → jun/harbor</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--pub);font-weight:700;">↗</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>public.capability.code-review.offer ← bel/forge</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--h);font-weight:700;">↓</span><span style="width:6px;height:6px;border-radius:2px;background:var(--h);"></span>local.aria.principal.input ⇒ Mott</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--pub);font-weight:700;">↗</span><span style="width:6px;height:6px;border-radius:2px;background:var(--d);"></span>public.principal.identity.announce → research-commons</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--tide);font-weight:700;">⇄</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>federated.tide.review.checkpoint ← dara/loom</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--pub);font-weight:700;">↘</span><span style="width:6px;height:6px;border-radius:2px;background:var(--a);"></span>public.discovery.deploy.canary.offer ← deploy-exch</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;color:var(--dim);"><span style="color:var(--mer);font-weight:700;">↑</span><span style="width:6px;height:6px;border-radius:2px;background:var(--d);"></span>local.aria.system.session.spawned</span>
+      </div>
+    </div>
+    <div style="flex-shrink:0;padding:0 16px;display:flex;align-items:center;gap:13px;border-left:1px solid var(--line);height:100%;font:500 9px var(--mono);color:var(--dim);"><span><span style="color:var(--mer);">local</span> <span style="color:var(--fg);font-weight:700;">1.24k</span></span><span><span style="color:var(--tide);">fed</span> <span style="color:var(--fg);font-weight:700;">318</span></span><span><span style="color:var(--pub);">pub</span> <span style="color:var(--fg);font-weight:700;">142</span></span><span style="color:var(--faint);">hop ≤1</span></div>
+  </div>
+
+  <sc-if value="{{ atmosphereOn }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;inset:0;pointer-events:none;z-index:30;background:radial-gradient(ellipse 130% 90% at 40% 48%, transparent 50%, oklch(0.07 0.01 250 / .62) 100%);"></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080},&quot;posture&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;operator&quot;,&quot;member&quot;],&quot;default&quot;:&quot;operator&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Posture&quot;},&quot;liveTraffic&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Atmosphere&quot;},&quot;atmosphere&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Atmosphere&quot;}}">
+class Component extends DCLogic {
+  state = { clock: "", eps: 312 };
+
+  componentDidMount() {
+    const tick = () => {
+      const d = new Date();
+      this.setState({ clock: d.toLocaleTimeString("en-GB", { hour12: false }), eps: 280 + Math.floor(Math.random() * 120) });
+    };
+    tick();
+    this._t = setInterval(tick, 1000);
+  }
+  componentWillUnmount() { if (this._t) clearInterval(this._t); }
+
+  buildPublicNodes() {
+    const data = [
+      { cx: 900, cy: 110, d: 34, hub: true, label: "research-commons" },
+      { cx: 770, cy: 120, d: 14 }, { cx: 840, cy: 88, d: 12 }, { cx: 990, cy: 96, d: 13 }, { cx: 1050, cy: 150, d: 12 }, { cx: 712, cy: 168, d: 11 },
+      { cx: 1450, cy: 115, d: 30, hub: true, label: "open-review" },
+      { cx: 1352, cy: 162, d: 13 }, { cx: 1540, cy: 100, d: 12 }, { cx: 1616, cy: 168, d: 12 }, { cx: 1432, cy: 206, d: 11 },
+      { cx: 1770, cy: 470, d: 30, hub: true, label: "deploy-exch" },
+      { cx: 1700, cy: 372, d: 12 }, { cx: 1832, cy: 406, d: 13 }, { cx: 1694, cy: 562, d: 12 }, { cx: 1812, cy: 602, d: 11 }, { cx: 1866, cy: 496, d: 11 },
+      { cx: 1292, cy: 256, d: 11 }, { cx: 1564, cy: 302, d: 10 }, { cx: 1612, cy: 662, d: 11 }, { cx: 1232, cy: 176, d: 10 },
+    ];
+    return data.map((n, i) => {
+      const left = Math.round(n.cx - n.d / 2);
+      const top = Math.round(n.cy - n.d / 2);
+      const dur = (2.6 + (i % 5) * 0.6).toFixed(1);
+      const delay = ((i % 7) * 0.3).toFixed(1);
+      const base = `position:absolute;left:${left}px;top:${top}px;width:${n.d}px;height:${n.d}px;border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:3;animation:twinkle ${dur}s ease-in-out ${delay}s infinite;`;
+      const skin = n.hub
+        ? `border:2px solid var(--pub);background:oklch(0.20 0.03 205 / .55);box-shadow:0 0 12px oklch(0.70 0.075 205 / .4);font:600 ${Math.round(n.d * 0.42)}px var(--mono);color:var(--pub);`
+        : `border:1.5px solid oklch(0.70 0.075 205 / .5);background:oklch(0.22 0.02 205 / .42);`;
+      const labelStyle = n.hub
+        ? `position:absolute;left:${n.cx - 70}px;top:${Math.round(n.cy + n.d / 2 + 5)}px;width:140px;text-align:center;font:600 9px var(--mono);color:oklch(0.70 0.075 205 / .92);letter-spacing:.05em;z-index:3;`
+        : `display:none;`;
+      return { style: base + skin, glyph: n.hub ? "⬣" : "", label: n.label || "", labelStyle };
+    });
+  }
+
+  renderVals() {
+    const posture = this.props.posture ?? "operator";
+    const liveTraffic = this.props.liveTraffic ?? true;
+    const atmosphere = this.props.atmosphere ?? true;
+    return {
+      clock: this.state.clock || "00:00:00",
+      eps: String(this.state.eps),
+      postureOperator: posture === "operator",
+      postureMember: posture === "member",
+      flowPlay: liveTraffic ? "running" : "paused",
+      atmosphereOn: atmosphere,
+      publicNodes: this.buildPublicNodes(),
+    };
+  }
+}
+</script>
+</body>
+</html>

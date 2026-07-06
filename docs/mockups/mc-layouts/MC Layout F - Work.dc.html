@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:oklch(0.11 0.012 250);}
+  @keyframes corePulse{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.7);opacity:.4}}
+  @keyframes swarmPulse{0%,100%{opacity:.55}50%{opacity:1}}
+  @keyframes orbBreathe{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:.95;transform:scale(1.04)}}
+  @keyframes opSteady{0%,100%{opacity:.65}50%{opacity:.9}}
+  @keyframes dashFlow{to{stroke-dashoffset:-160}}
+  @keyframes dashOrbit{to{stroke-dashoffset:-300}}
+  @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @keyframes attnBlink{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes starPop{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
+  @keyframes pull{0%{opacity:.2;stroke-dashoffset:0}50%{opacity:.7}100%{opacity:.2;stroke-dashoffset:-40}}
+  @keyframes capZap{0%,100%{opacity:.6}50%{opacity:1}}
+</style>
+</helmet>
+<div style="width:1920px;height:1080px;position:relative;overflow:hidden;display:flex;flex-direction:column;font-family:var(--sans);color:var(--fg);--bg:oklch(0.13 0.012 250);--panel:oklch(0.175 0.012 252);--panel2:oklch(0.215 0.013 252);--line:oklch(0.33 0.013 252);--lsoft:oklch(0.255 0.012 252);--fg:oklch(0.94 0.006 250);--dim:oklch(0.66 0.012 250);--faint:oklch(0.50 0.012 250);--mer:oklch(0.76 0.13 224);--ok:oklch(0.80 0.13 162);--warn:oklch(0.82 0.13 78);--bad:oklch(0.66 0.20 22);--gold:oklch(0.84 0.13 90);--cap:oklch(0.74 0.16 300);--trust:oklch(0.82 0.09 66);--d:oklch(0.80 0.14 158);--a:oklch(0.82 0.13 80);--h:oklch(0.76 0.15 8);--mono:'JetBrains Mono',ui-monospace,monospace;--sans:'Inter',system-ui,sans-serif;background:oklch(0.125 0.012 250);">
+
+  <!-- ═══ TOP BAR ═══ -->
+  <div style="height:60px;flex-shrink:0;display:flex;align-items:center;padding:0 26px;gap:16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, oklch(0.20 0.013 252), var(--panel));z-index:20;">
+    <div style="display:flex;align-items:center;gap:10px;"><div style="width:24px;height:24px;border-radius:50%;border:2px solid var(--mer);position:relative;box-shadow:0 0 12px oklch(0.76 0.13 224 / .5);"><div style="position:absolute;top:50%;left:50%;width:4px;height:4px;border-radius:50%;background:var(--mer);transform:translate(-50%,-50%);"></div></div><div style="font:700 14px var(--mono);letter-spacing:.16em;">MISSION&nbsp;CONTROL</div></div>
+    <div style="width:1px;height:24px;background:var(--line);"></div>
+    <div style="display:flex;align-items:center;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--bg);"><div style="font:600 10px var(--mono);color:var(--faint);padding:6px 12px;letter-spacing:.08em;">TOPOLOGY</div><div style="font:600 10px var(--mono);color:var(--gold);padding:6px 12px;letter-spacing:.08em;background:oklch(0.84 0.13 90 / .14);border-left:1px solid var(--line);display:flex;align-items:center;gap:6px;"><span style="width:5px;height:5px;border-radius:50%;background:var(--gold);box-shadow:0 0 7px var(--gold);"></span>WORK</div><div style="font:600 10px var(--mono);color:var(--faint);padding:6px 12px;letter-spacing:.08em;border-left:1px solid var(--line);">PEOPLE</div></div>
+    <div style="display:flex;align-items:center;gap:6px;font:500 9px var(--mono);"><span style="color:var(--faint);letter-spacing:.1em;">DOMAINS</span><span style="color:var(--fg);padding:3px 8px;border:1px solid var(--mer);border-radius:5px;background:oklch(0.76 0.13 224 / .1);">all</span><span style="color:var(--dim);padding:3px 8px;border:1px solid var(--lsoft);border-radius:5px;">eng</span><span style="color:var(--dim);padding:3px 8px;border:1px solid var(--lsoft);border-radius:5px;">devops</span><span style="color:var(--dim);padding:3px 8px;border:1px solid var(--lsoft);border-radius:5px;">marketing</span><span style="color:var(--dim);padding:3px 8px;border:1px solid var(--lsoft);border-radius:5px;">sales</span><span style="color:var(--dim);padding:3px 8px;border:1px solid var(--lsoft);border-radius:5px;">finance</span></div>
+    <div style="flex:1;"></div>
+    <sc-if value="{{ postureOperator }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--mer);border-radius:6px;background:oklch(0.76 0.13 224 / .12);font:600 11px var(--mono);color:var(--mer);letter-spacing:.12em;"><div style="width:6px;height:6px;border-radius:50%;background:var(--mer);box-shadow:0 0 8px var(--mer);"></div>OPERATOR</div></sc-if>
+    <sc-if value="{{ postureMember }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid oklch(0.72 0.13 288);border-radius:6px;background:oklch(0.72 0.13 288 / .12);font:600 11px var(--mono);color:oklch(0.72 0.13 288);letter-spacing:.12em;"><div style="width:6px;height:6px;border-radius:50%;background:oklch(0.72 0.13 288);"></div>MEMBER</div></sc-if>
+    <div style="font:600 13px var(--mono);color:var(--fg);min-width:78px;text-align:right;">{{ clock }}</div>
+  </div>
+
+  <!-- ═══ BODY ═══ -->
+  <div style="flex:1;display:flex;min-height:0;">
+
+    <!-- altitude rail -->
+    <div style="width:54px;flex-shrink:0;border-right:1px solid var(--line);background:var(--panel);position:relative;">
+      <div style="position:absolute;top:34px;bottom:60px;left:26px;width:2px;background:linear-gradient(180deg,var(--gold),var(--lsoft) 20%,var(--lsoft));"></div>
+      <div style="position:absolute;top:56px;left:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:26px;">
+        <div style="width:16px;height:16px;border-radius:50%;background:var(--gold);box-shadow:0 0 12px var(--gold);border:2px solid var(--gold);" title="The Work"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Network"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Stack"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Assistant"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Session"></div>
+        <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);background:var(--panel);" title="Envelope"></div>
+      </div>
+      <div style="position:absolute;bottom:16px;left:0;width:100%;text-align:center;font:600 8px var(--mono);color:var(--faint);letter-spacing:.1em;">↓<br>DIVE</div>
+    </div>
+
+    <!-- ═ WORK FIELD (lifecycle lanes) ═ -->
+    <div style="width:1306px;flex-shrink:0;position:relative;overflow:hidden;background:oklch(0.128 0.012 250);">
+      <div style="position:absolute;left:0;top:0;width:418px;height:100%;background:linear-gradient(180deg, oklch(0.74 0.16 300 / .04), transparent 40%);"></div>
+      <div style="position:absolute;left:418px;top:0;width:474px;height:100%;background:linear-gradient(180deg, oklch(0.84 0.13 90 / .045), transparent 40%);"></div>
+      <div style="position:absolute;left:892px;top:0;width:414px;height:100%;background:linear-gradient(180deg, oklch(0.80 0.13 162 / .045), transparent 40%);"></div>
+      <div style="position:absolute;inset:0;background-image:radial-gradient(oklch(0.40 0.01 250 / .09) 1px, transparent 1px);background-size:44px 44px;opacity:.5;"></div>
+      <div style="position:absolute;left:418px;top:96px;bottom:0;width:1px;background:var(--lsoft);"></div>
+      <div style="position:absolute;left:892px;top:96px;bottom:0;width:1px;background:var(--lsoft);"></div>
+
+      <!-- title -->
+      <div style="position:absolute;left:24px;top:16px;z-index:9;display:flex;align-items:center;gap:10px;"><div style="width:10px;height:10px;border-radius:50%;background:var(--gold);box-shadow:0 0 9px var(--gold);"></div><div style="font:700 13px var(--mono);color:var(--fg);letter-spacing:.14em;">THE WORK</div><div style="font:500 10px var(--sans);color:var(--dim);">— form → build → operate. work is the transient gravity that gathers <span style="color:var(--fg);">people</span> (and their swarms). trust outlives it.</div></div>
+
+      <!-- lane headers -->
+      <div style="position:absolute;left:0;top:54px;width:418px;text-align:center;z-index:8;"><div style="font:700 11px var(--mono);color:var(--cap);letter-spacing:.14em;">FORMING</div><div style="font:500 8px var(--mono);color:var(--faint);letter-spacing:.06em;margin-top:2px;">gigs · capacity · gathering people</div></div>
+      <div style="position:absolute;left:418px;top:54px;width:474px;text-align:center;z-index:8;"><div style="font:700 11px var(--mono);color:var(--gold);letter-spacing:.14em;">BUILDING</div><div style="font:500 8px var(--mono);color:var(--faint);letter-spacing:.06em;margin-top:2px;">coming together to make something</div></div>
+      <div style="position:absolute;left:892px;top:54px;width:414px;text-align:center;z-index:8;"><div style="font:700 11px var(--mono);color:var(--ok);letter-spacing:.14em;">OPERATING</div><div style="font:500 8px var(--mono);color:var(--faint);letter-spacing:.06em;margin-top:2px;">shipped — maintain &amp; run</div></div>
+      <div style="position:absolute;left:402px;top:62px;font:700 14px var(--mono);color:var(--lsoft);z-index:8;">▸</div>
+      <div style="position:absolute;left:876px;top:62px;font:700 14px var(--mono);color:var(--lsoft);z-index:8;">▸</div>
+
+      <!-- edges -->
+      <svg viewBox="0 0 1306 916" style="position:absolute;inset:0;width:100%;height:100%;z-index:1;" fill="none">
+        <circle cx="650" cy="318" r="126" stroke="oklch(0.84 0.13 90 / .13)" stroke-width="1" stroke-dasharray="3 8" style="animation:dashOrbit 44s linear infinite;"></circle>
+        <line x1="650" y1="318" x2="566" y2="250" stroke="oklch(0.76 0.13 224 / .5)" stroke-width="1.5" stroke-dasharray="4 5" style="animation:dashFlow 2.6s linear infinite;"></line>
+        <line x1="650" y1="318" x2="744" y2="256" stroke="oklch(0.70 0.13 288 / .5)" stroke-width="1.5" stroke-dasharray="4 5" style="animation:dashFlow 3s linear infinite;"></line>
+        <line x1="650" y1="318" x2="660" y2="430" stroke="oklch(0.72 0.15 330 / .5)" stroke-width="1.5" stroke-dasharray="4 5" style="animation:dashFlow 2.8s linear infinite;"></line>
+        <line x1="738" y1="318" x2="1046" y2="260" stroke="oklch(0.80 0.13 162 / .4)" stroke-width="1.6" stroke-dasharray="2 8" style="animation:pull 3s linear infinite;"></line>
+        <line x1="210" y1="404" x2="566" y2="300" stroke="oklch(0.74 0.16 300 / .26)" stroke-width="1.2" stroke-dasharray="2 7" style="animation:pull 2.8s linear infinite;"></line>
+      </svg>
+      <div style="position:absolute;left:832px;top:266px;z-index:6;font:600 8px var(--mono);color:var(--ok);letter-spacing:.06em;transform:rotate(-9deg);">ship → operate</div>
+
+      <!-- ══ FORMING ══ -->
+      <!-- GIG -->
+      <div style="position:absolute;left:176px;top:128px;width:64px;height:64px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:50%;border:2px dashed var(--faint);background:radial-gradient(circle, oklch(0.50 0.01 250 / .12), transparent 70%);"></div><div style="font:600 10px var(--mono);color:var(--dim);">⟡</div></div>
+      <div style="position:absolute;left:62px;top:200px;width:296px;z-index:6;display:flex;flex-direction:column;gap:5px;align-items:center;text-align:center;">
+        <div style="display:flex;gap:6px;align-items:center;"><span style="font:700 8px var(--mono);color:var(--dim);letter-spacing:.06em;padding:2px 6px;border:1px solid var(--lsoft);border-radius:4px;">• GIG</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.74 0.10 200);"></span>content</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);">Translate release notes → JP</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">open · ~20 min · 4 people bidding</div>
+      </div>
+      <!-- CAPACITY -->
+      <div style="position:absolute;left:166px;top:356px;width:68px;height:68px;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:14px;transform:rotate(45deg);border:2px solid var(--cap);background:radial-gradient(circle, oklch(0.74 0.16 300 / .16), transparent 70%);box-shadow:0 0 22px oklch(0.74 0.16 300 / .2);animation:capZap 2.4s ease-in-out infinite;"></div><div style="font:700 16px var(--mono);color:var(--cap);z-index:1;">⚡</div></div>
+      <div style="position:absolute;left:62px;top:432px;width:296px;z-index:6;display:flex;flex-direction:column;gap:5px;align-items:center;text-align:center;">
+        <div style="display:flex;gap:6px;align-items:center;"><span style="font:700 8px var(--mono);color:var(--cap);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.74 0.16 300 / .5);border-radius:4px;">⚡ CAPACITY</span><span style="font:500 9px var(--mono);color:var(--faint);">supply</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);"><span style="font-family:var(--mono);">Andreas</span> lends 40k tokens/hr</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">spare frontier capacity · 3 stacks drawing</div>
+      </div>
+      <!-- PROJECT finance forming -->
+      <div style="position:absolute;left:172px;top:566px;width:60px;height:60px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:50%;border:2px dashed var(--gold);background:radial-gradient(circle, oklch(0.84 0.13 90 / .08), transparent 70%);"></div><div style="font:700 9px var(--mono);color:var(--gold);">FORM</div></div>
+      <div style="position:absolute;left:62px;top:632px;width:296px;z-index:6;display:flex;flex-direction:column;gap:5px;align-items:center;text-align:center;">
+        <div style="display:flex;gap:6px;align-items:center;"><span style="font:700 8px var(--mono);color:var(--gold);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.84 0.13 90 / .5);border-radius:4px;">◆ PROJECT</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.78 0.11 145);"></span>finance</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);">FY25 tax return prep</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">forming · needs finance.tax · Cole interested</div>
+      </div>
+
+      <!-- ══ BUILDING ══ -->
+      <!-- FLAGSHIP -->
+      <div style="position:absolute;left:566px;top:234px;width:168px;height:168px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;">
+        <div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--gold);background:radial-gradient(circle, oklch(0.84 0.13 90 / .14), oklch(0.20 0.02 90 / .04) 70%);box-shadow:0 0 40px oklch(0.84 0.13 90 / .25), inset 0 0 26px oklch(0.84 0.13 90 / .1);animation:orbBreathe 4s ease-in-out infinite;"></div>
+        <div style="position:relative;text-align:center;z-index:1;"><div style="font:600 9px var(--mono);color:var(--gold);">security.*</div><div style="display:flex;align-items:center;justify-content:center;gap:5px;margin-top:5px;"><span style="font:700 13px var(--mono);color:var(--gold);animation:starPop 2.4s ease-in-out infinite;">★3</span><span style="font:500 8px var(--mono);color:var(--dim);">ideas</span></div><div style="font:600 8px var(--mono);color:var(--warn);margin-top:5px;">◷ in review</div></div>
+      </div>
+      <div style="position:absolute;left:518px;top:420px;width:264px;text-align:center;z-index:6;">
+        <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:6px;"><span style="font:700 8px var(--mono);color:var(--gold);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.84 0.13 90 / .5);border-radius:4px;">◆ PROJECT</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.74 0.11 232);"></span>security</span></div>
+        <div style="font:600 14px var(--sans);color:var(--fg);">Harden cross-network envelope encryption</div>
+        <div style="font:500 10px var(--mono);color:var(--gold);margin-top:5px;">⬡ 3 people · forming around the problem</div>
+      </div>
+      <!-- flagship PEOPLE (with swarms) -->
+      <div style="position:absolute;left:534px;top:218px;width:64px;display:flex;flex-direction:column;align-items:center;gap:3px;z-index:5;"><div style="width:38px;height:38px;border-radius:50%;border:2.5px solid oklch(0.74 0.13 224);background:var(--panel2);display:flex;align-items:center;justify-content:center;font:700 13px var(--mono);color:var(--fg);box-shadow:0 0 11px oklch(0.74 0.13 224 / .4);">AK</div><div style="display:flex;gap:2px;"><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.74 0.13 224 / .8);animation:swarmPulse 1.6s ease-in-out infinite;"></span><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.74 0.13 224 / .8);animation:swarmPulse 2s ease-in-out infinite;"></span><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.74 0.13 224 / .8);animation:swarmPulse 1.8s ease-in-out infinite;"></span></div><div style="font:600 9px var(--mono);color:var(--fg);">Andreas</div></div>
+      <div style="position:absolute;left:712px;top:224px;width:64px;display:flex;flex-direction:column;align-items:center;gap:3px;z-index:5;"><div style="width:38px;height:38px;border-radius:50%;border:2.5px solid oklch(0.70 0.13 288);background:var(--panel2);display:flex;align-items:center;justify-content:center;font:700 13px var(--mono);color:var(--fg);box-shadow:0 0 11px oklch(0.70 0.13 288 / .4);">JC</div><div style="display:flex;gap:2px;"><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.70 0.13 288 / .8);animation:swarmPulse 1.7s ease-in-out infinite;"></span><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.70 0.13 288 / .8);animation:swarmPulse 2.1s ease-in-out infinite;"></span></div><div style="font:600 9px var(--mono);color:var(--fg);">JC</div></div>
+      <div style="position:absolute;left:628px;top:402px;width:64px;display:flex;flex-direction:column;align-items:center;gap:3px;z-index:5;"><div style="width:38px;height:38px;border-radius:50%;border:2.5px solid oklch(0.72 0.15 330);background:var(--panel2);display:flex;align-items:center;justify-content:center;font:700 13px var(--mono);color:var(--fg);box-shadow:0 0 11px oklch(0.72 0.15 330 / .4);">BS</div><div style="display:flex;gap:2px;"><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.72 0.15 330 / .8);animation:swarmPulse 1.9s ease-in-out infinite;"></span><span style="width:4px;height:4px;border-radius:50%;background:oklch(0.72 0.15 330 / .8);animation:swarmPulse 2.2s ease-in-out infinite;"></span></div><div style="font:600 9px var(--mono);color:var(--gold);">Bel ★</div></div>
+
+      <!-- marketing project -->
+      <div style="position:absolute;left:455px;top:556px;width:72px;height:72px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--gold);background:radial-gradient(circle, oklch(0.84 0.13 90 / .1), transparent 70%);box-shadow:0 0 18px oklch(0.84 0.13 90 / .15);animation:orbBreathe 4.4s ease-in-out infinite;"></div><div style="width:30px;height:30px;border-radius:50%;border:2px solid oklch(0.78 0.13 150);background:var(--panel2);display:flex;align-items:center;justify-content:center;font:700 10px var(--mono);color:var(--fg);">DR</div></div>
+      <div style="position:absolute;left:431px;top:634px;width:220px;text-align:center;z-index:6;">
+        <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:5px;"><span style="font:700 8px var(--mono);color:var(--gold);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.84 0.13 90 / .5);border-radius:4px;">◆ PROJECT</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.74 0.14 350);"></span>marketing</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);">Q3 brand campaign</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">building · Dana + 1</div>
+      </div>
+      <!-- sales project -->
+      <div style="position:absolute;left:736px;top:638px;width:68px;height:68px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--gold);background:radial-gradient(circle, oklch(0.84 0.13 90 / .1), transparent 70%);box-shadow:0 0 18px oklch(0.84 0.13 90 / .15);animation:orbBreathe 4.1s ease-in-out infinite;"></div><div style="width:28px;height:28px;border-radius:50%;border:2px solid oklch(0.70 0.13 288);background:var(--panel2);display:flex;align-items:center;justify-content:center;font:700 9px var(--mono);color:var(--fg);">JC</div></div>
+      <div style="position:absolute;left:662px;top:712px;width:220px;text-align:center;z-index:6;">
+        <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:5px;"><span style="font:700 8px var(--mono);color:var(--gold);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.84 0.13 90 / .5);border-radius:4px;">◆ PROJECT</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.80 0.12 72);"></span>sales</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);">Acme enterprise rollout</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">building · proposal + onboarding</div>
+      </div>
+
+      <!-- ══ OPERATING ══ -->
+      <div style="position:absolute;left:1048px;top:218px;width:84px;height:84px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--ok);background:radial-gradient(circle, oklch(0.80 0.13 162 / .1), transparent 70%);box-shadow:0 0 22px oklch(0.80 0.13 162 / .16);animation:opSteady 5s ease-in-out infinite;"></div><div style="position:relative;text-align:center;"><div style="font:700 13px var(--mono);color:var(--ok);">99.9%</div><div style="font:500 7px var(--mono);color:var(--dim);">SLO</div></div></div>
+      <div style="position:absolute;left:978px;top:312px;width:228px;text-align:center;z-index:6;">
+        <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:5px;"><span style="font:700 8px var(--mono);color:var(--ok);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.80 0.13 162 / .5);border-radius:4px;">▣ PRODUCT</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.80 0.12 162);"></span>devops</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);">Signal observability</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">shipped 3wks ago · on-call <span style="color:var(--mer);">Andreas</span> · 0 incidents</div>
+      </div>
+      <div style="position:absolute;left:1096px;top:452px;width:76px;height:76px;border-radius:50%;z-index:3;display:flex;align-items:center;justify-content:center;"><div style="position:absolute;inset:0;border-radius:50%;border:2px solid var(--ok);background:radial-gradient(circle, oklch(0.80 0.13 162 / .1), transparent 70%);box-shadow:0 0 18px oklch(0.80 0.13 162 / .14);animation:opSteady 5.4s ease-in-out infinite;"></div><div style="width:28px;height:28px;border-radius:50%;border:2px solid oklch(0.70 0.12 260);background:var(--panel2);display:flex;align-items:center;justify-content:center;font:700 9px var(--mono);color:var(--fg);">CM</div></div>
+      <div style="position:absolute;left:1018px;top:536px;width:232px;text-align:center;z-index:6;">
+        <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:5px;"><span style="font:700 8px var(--mono);color:var(--ok);letter-spacing:.06em;padding:2px 6px;border:1px solid oklch(0.80 0.13 162 / .5);border-radius:4px;">▣ PRODUCT</span><span style="display:inline-flex;align-items:center;gap:4px;font:500 9px var(--mono);color:var(--dim);"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.78 0.11 145);"></span>finance-ops</span></div>
+        <div style="font:600 13px var(--sans);color:var(--fg);">Payments &amp; reconciliation</div>
+        <div style="font:500 9px var(--mono);color:var(--faint);">maintain · <span style="color:oklch(0.70 0.12 260);">Cole</span> · monthly close</div>
+      </div>
+    </div>
+
+    <!-- ═ MARKETPLACE ═ -->
+    <div style="flex:1;min-width:0;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;">
+      <div style="flex-shrink:0;padding:14px 20px 12px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, oklch(0.19 0.013 252), var(--panel));">
+        <div style="display:flex;align-items:center;gap:9px;"><div style="width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold);"></div><div style="font:700 12px var(--mono);color:var(--fg);letter-spacing:.1em;">MARKETPLACE OF WORK</div></div>
+        <div style="display:flex;align-items:center;gap:7px;margin-top:9px;">
+          <span style="font:600 9px var(--mono);color:var(--gold);padding:4px 11px;border:1px solid var(--gold);border-radius:6px;background:oklch(0.84 0.13 90 / .1);">Projects</span>
+          <span style="font:600 9px var(--mono);color:var(--dim);padding:4px 11px;border:1px solid var(--lsoft);border-radius:6px;">Gigs</span>
+          <span style="font:600 9px var(--mono);color:var(--dim);padding:4px 11px;border:1px solid var(--lsoft);border-radius:6px;">Capacity</span>
+          <sc-if value="{{ postureOperator }}" hint-placeholder-val="{{ true }}"><span style="margin-left:auto;font:600 9px var(--mono);color:var(--gold);padding:4px 11px;border:1px solid var(--gold);border-radius:6px;background:oklch(0.84 0.13 90 / .1);">+ Post</span></sc-if>
+        </div>
+      </div>
+
+      <div style="flex:1;overflow:hidden;padding:13px 18px;display:flex;flex-direction:column;gap:9px;">
+        <div style="border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:11px 13px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font:600 9px var(--mono);color:var(--bad);padding:2px 7px;border:1px solid oklch(0.66 0.20 22 / .5);border-radius:5px;">P0</span><span style="font:500 9px var(--mono);color:var(--faint);">posted 4m ago</span></div>
+          <div style="font:600 12px var(--sans);color:var(--fg);margin-bottom:7px;">Red-team gate for CO7 release</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="font:500 9px var(--mono);color:var(--gold);padding:2px 7px;border:1px solid oklch(0.84 0.13 90 / .4);border-radius:5px;background:oklch(0.84 0.13 90 / .08);">needs security.redteam</span><span style="font:500 9px var(--mono);color:var(--dim);">by Andreas</span></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px;"><span style="font:500 9px var(--mono);color:var(--dim);">3 people interested</span><span style="font:600 9px var(--mono);color:var(--gold);padding:5px 12px;border:1px solid var(--gold);border-radius:6px;background:oklch(0.84 0.13 90 / .1);">Claim ▸</span></div>
+        </div>
+        <div style="border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:11px 13px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font:600 9px var(--mono);color:oklch(0.72 0.13 288);padding:2px 7px;border:1px solid var(--lsoft);border-radius:5px;">P1</span><span style="font:500 9px var(--mono);color:var(--faint);">open · 5 bidders</span></div>
+          <div style="font:600 12px var(--sans);color:var(--fg);margin-bottom:7px;">TypeScript review: surface-router</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="font:500 9px var(--mono);color:var(--gold);padding:2px 7px;border:1px solid oklch(0.84 0.13 90 / .4);border-radius:5px;background:oklch(0.84 0.13 90 / .08);">needs code-review.ts</span><span style="font:500 9px var(--mono);color:var(--dim);">by Bel · public</span></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px;"><span style="font:500 9px var(--mono);color:var(--dim);">JC claiming…</span><span style="font:600 9px var(--mono);color:var(--dim);padding:5px 12px;border:1px solid var(--line);border-radius:6px;">Offer help</span></div>
+        </div>
+        <div style="border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:11px 13px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font:600 9px var(--mono);color:oklch(0.72 0.13 288);padding:2px 7px;border:1px solid var(--lsoft);border-radius:5px;">P1</span><span style="font:500 9px var(--mono);color:var(--faint);">open</span></div>
+          <div style="font:600 12px var(--sans);color:var(--fg);margin-bottom:7px;">Q3 campaign — launch assets</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="font:500 9px var(--mono);color:var(--gold);padding:2px 7px;border:1px solid oklch(0.84 0.13 90 / .4);border-radius:5px;background:oklch(0.84 0.13 90 / .08);">needs marketing.creative</span><span style="font:500 9px var(--mono);color:var(--dim);">by Dana</span></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px;"><span style="font:500 9px var(--mono);color:var(--dim);">2 interested</span><span style="font:600 9px var(--mono);color:var(--gold);padding:5px 12px;border:1px solid var(--gold);border-radius:6px;background:oklch(0.84 0.13 90 / .1);">Claim ▸</span></div>
+        </div>
+        <div style="border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:11px 13px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font:600 9px var(--mono);color:var(--cap);padding:2px 7px;border:1px solid oklch(0.74 0.16 300 / .5);border-radius:5px;">⚡ CAPACITY</span><span style="font:500 9px var(--mono);color:var(--faint);">demand</span></div>
+          <div style="font:600 12px var(--sans);color:var(--fg);margin-bottom:7px;">Need 80k tokens/hr — frontier, 6h</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="font:500 9px var(--mono);color:var(--dim);">by Jun · NZT batch run</span></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px;"><span style="font:500 9px var(--mono);color:var(--cap);">2 stacks offering</span><span style="font:600 9px var(--mono);color:var(--dim);padding:5px 12px;border:1px solid var(--line);border-radius:6px;">Offer ⚡</span></div>
+        </div>
+      </div>
+
+      <!-- recognition -->
+      <div style="flex-shrink:0;border-top:1px solid var(--line);background:linear-gradient(0deg, oklch(0.155 0.012 252), var(--panel));padding:12px 18px;">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;"><span style="font:700 12px var(--mono);color:var(--gold);animation:starPop 2.6s ease-in-out infinite;">★</span><div style="font:700 11px var(--mono);color:var(--fg);letter-spacing:.12em;">RECOGNITION</div><div style="font:500 9px var(--mono);color:var(--faint);">— see &amp; be seen</div><div style="margin-left:auto;font:500 9px var(--mono);color:var(--dim);">31 today</div></div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;gap:9px;"><span style="font:600 11px var(--mono);color:var(--gold);flex-shrink:0;">★</span><div style="font:500 11px var(--sans);color:var(--dim);"><span style="font-family:var(--mono);color:var(--fg);">Bel</span>'s encryption approach adopted across Forge·Coop</div></div>
+          <div style="display:flex;align-items:center;gap:9px;"><span style="font:600 11px var(--mono);color:var(--ok);flex-shrink:0;">↑</span><div style="font:500 11px var(--sans);color:var(--dim);"><span style="font-family:var(--mono);color:var(--fg);">Dana</span>'s campaign direction accepted by sales + strategy</div></div>
+          <div style="display:flex;align-items:center;gap:9px;"><span style="font:600 11px var(--mono);color:var(--gold);flex-shrink:0;">★</span><div style="font:500 11px var(--sans);color:var(--dim);">tax-prep checklist reused by 2 stacks · recognised to <span style="font-family:var(--mono);color:var(--fg);">Cole</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ WORK FLOW STRIP ═══ -->
+  <div style="height:104px;flex-shrink:0;border-top:1px solid var(--line);background:linear-gradient(180deg, var(--panel), oklch(0.155 0.012 252));display:flex;align-items:stretch;z-index:20;">
+    <div style="width:230px;flex-shrink:0;border-right:1px solid var(--line);padding:0 22px;display:flex;flex-direction:column;justify-content:center;gap:8px;">
+      <div style="font:700 9px var(--mono);color:var(--faint);letter-spacing:.14em;">WORK FLOW</div>
+      <div style="display:flex;gap:14px;font:500 10px var(--mono);"><span><span style="color:var(--gold);font-weight:700;">23</span> <span style="color:var(--faint);">open</span></span><span><span style="color:var(--fg);font-weight:700;">8</span> <span style="color:var(--faint);">building</span></span><span><span style="color:var(--ok);font-weight:700;">5</span> <span style="color:var(--faint);">operating</span></span></div>
+      <div style="font:500 9px var(--mono);color:var(--faint);">work transient · trust persists</div>
+    </div>
+    <div style="flex:1;overflow:hidden;position:relative;display:flex;align-items:center;-webkit-mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);">
+      <div style="position:absolute;left:22px;top:9px;font:700 8px var(--mono);color:var(--faint);letter-spacing:.12em;z-index:2;">⋯ OFFER · CLAIM · DISPATCH · REVIEW · VERDICT · SHIP→OPERATE</div>
+      <div style="display:flex;gap:11px;white-space:nowrap;animation:ticker 34s linear infinite;animation-play-state:{{ flowPlay }};padding-left:22px;">
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--gold);font:700 10px var(--mono);">⊕ offer</span><span style="font:500 11px var(--mono);color:var(--dim);">public.capability.security.redteam.offer</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:oklch(0.72 0.13 288);font:700 10px var(--mono);">✋ claim</span><span style="font:500 11px var(--mono);color:var(--dim);">JC → code-review.ts · bel/forge</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--mer);font:700 10px var(--mono);">⇲ dispatch</span><span style="font:500 11px var(--mono);color:var(--dim);">Andreas ↳ swarm · schema.migrate</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--ok);font:700 10px var(--mono);">★ verdict</span><span style="font:500 11px var(--mono);color:var(--dim);">Bel's approach accepted · +trust</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--ok);font:700 10px var(--mono);">⊳ operate</span><span style="font:500 11px var(--mono);color:var(--dim);">Signal observability shipped → on-call Andreas</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--cap);font:700 10px var(--mono);">⚡ grant</span><span style="font:500 11px var(--mono);color:var(--dim);">Andreas → 40k tok/hr → Jun</span></span>
+        <!-- dup -->
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--gold);font:700 10px var(--mono);">⊕ offer</span><span style="font:500 11px var(--mono);color:var(--dim);">public.capability.security.redteam.offer</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:oklch(0.72 0.13 288);font:700 10px var(--mono);">✋ claim</span><span style="font:500 11px var(--mono);color:var(--dim);">JC → code-review.ts · bel/forge</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--mer);font:700 10px var(--mono);">⇲ dispatch</span><span style="font:500 11px var(--mono);color:var(--dim);">Andreas ↳ swarm · schema.migrate</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--ok);font:700 10px var(--mono);">★ verdict</span><span style="font:500 11px var(--mono);color:var(--dim);">Bel's approach accepted · +trust</span></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);"><span style="color:var(--ok);font:700 10px var(--mono);">⊳ operate</span><span style="font:500 11px var(--mono);color:var(--dim);">Signal observability shipped → on-call Andreas</span></span>
+      </div>
+    </div>
+    <div style="width:240px;flex-shrink:0;border-left:1px solid var(--line);padding:0 20px;display:flex;flex-direction:column;justify-content:center;gap:8px;"><div style="display:flex;align-items:center;gap:8px;font:500 10px var(--mono);color:var(--dim);"><span style="font:700 11px var(--mono);color:var(--gold);">★ 31</span><span>ideas recognised today</span></div><div style="font:500 9px var(--mono);color:var(--faint);">good work pulls collaborators · trust grows the network</div></div>
+  </div>
+
+  <sc-if value="{{ atmosphereOn }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;inset:0;pointer-events:none;z-index:30;background:radial-gradient(ellipse 120% 90% at 40% 46%, transparent 56%, oklch(0.07 0.01 250 / .5) 100%);"></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080},&quot;posture&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;operator&quot;,&quot;member&quot;],&quot;default&quot;:&quot;operator&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Posture&quot;},&quot;liveTraffic&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Atmosphere&quot;},&quot;atmosphere&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Atmosphere&quot;}}">
+class Component extends DCLogic {
+  state = { clock: "" };
+  componentDidMount() {
+    const tick = () => this.setState({ clock: new Date().toLocaleTimeString("en-GB", { hour12: false }) });
+    tick();
+    this._t = setInterval(tick, 1000);
+  }
+  componentWillUnmount() { if (this._t) clearInterval(this._t); }
+  renderVals() {
+    const posture = this.props.posture ?? "operator";
+    return {
+      clock: this.state.clock || "00:00:00",
+      postureOperator: posture === "operator",
+      postureMember: posture === "member",
+      flowPlay: (this.props.liveTraffic ?? true) ? "running" : "paused",
+      atmosphereOn: this.props.atmosphere ?? true,
+    };
+  }
+}
+</script>
+</body>
+</html>
