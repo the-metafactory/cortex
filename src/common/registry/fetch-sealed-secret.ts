@@ -14,16 +14,18 @@
  *   3. selects the ADMITTED row for the target network that carries a sealed
  *      blob,
  *   4. opens the `crypto_box_seal` with the member's raw ed25519 seed
- *      ({@link openSealed}) and decodes the {@link LeafSecretEnvelope}.
+ *      ({@link openSealed}) and decodes the envelope — VERSION-AWARE (#1597,
+ *      epic #1595): a v1 envelope yields the PSK path, a v2 envelope yields the
+ *      per-member `.creds` file text the join installs on disk.
  *
- * Returns the leaf PSK + user (and, once M3 lands, the same call surfaces the
- * payload key from the SAME envelope). Fails SOFT-CLOSED: every failure is a
- * typed `{ ok: false, reason }` so the join can fall through to its existing
+ * Returns a `kind`-discriminated payload (the M3 payload key rides BOTH kinds
+ * from the SAME envelope). Fails SOFT-CLOSED: every failure is a typed
+ * `{ ok: false, reason }` so the join can fall through to its existing
  * config/flag/oob behaviour rather than aborting.
  */
 
 import { openSealed } from "../crypto/seal-to-principal";
-import { decodeLeafSecretEnvelope } from "./sealed-leaf-secret";
+import { decodeAnyLeafSecretEnvelope, isLeafSecretEnvelopeV2 } from "./sealed-leaf-secret";
 import {
   rawEd25519SeedFromNkeySeed,
   type StackIdentityMaterial,
@@ -49,10 +51,31 @@ export interface FetchSealedLeafSecretInput {
   fetchImpl?: FetchLike;
   /** Injected clock (tests). Production omits → `Date`. */
   now?: () => Date;
+  /**
+   * #1597 (red-team R7) — the member's OWN identities a v2 envelope's
+   * `leaf_user` (the subject the credential was minted FOR) must match, e.g.
+   * `["{principal}/{stack}", "{principal}"]`. FAIL-CLOSED for v2: when a v2
+   * envelope arrives and this is absent/empty, the fetch refuses — a caller
+   * that cannot state its own identity must not install a credential that may
+   * have been minted for someone else (a hostile courier sealing ANOTHER
+   * member's real creds to this member). v1 is unaffected: its `leaf_user` is
+   * the userinfo USER the hub pairs with the PSK, not an identity claim.
+   */
+  expectedLeafUsers?: readonly string[];
 }
 
 export type FetchSealedLeafSecretResult =
-  | { ok: true; leafPsk: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
+  /** v1 envelope — the Model-B shared-string secret-auth pipe (ADR-0013). */
+  | { ok: true; kind: "psk"; leafPsk: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
+  /**
+   * v2 envelope (#1597, epic #1595) — the per-member NSC user `.creds` file
+   * text for an operator-mode hub. The caller writes `creds` to disk (0600)
+   * and renders the EXISTING creds-file leaf-remote branch. `mintedAt` is the
+   * seal-time stamp, surfaced for observability; staleness is deliberately NOT
+   * enforced here — a legitimate join may happen days after admission, and
+   * there is no rotation story until #1599.
+   */
+  | { ok: true; kind: "creds"; creds: string; leafUser: string; mintedAt: string; payloadKey?: string; payloadKeyKid?: string }
   | { ok: false; reason: string };
 
 /**
@@ -85,13 +108,48 @@ export async function fetchSealedLeafSecret(
     };
   }
 
-  // 4. Open the sealed box with the member's raw seed + decode the envelope.
+  // 4. Open the sealed box with the member's raw seed + decode the envelope —
+  //    VERSION-AWARE (#1597): the payload variant is pinned by `v` (design
+  //    §5.2 / R9/R12 — never an either-field relaxation).
   try {
     const rawSeed = rawEd25519SeedFromNkeySeed(input.material.seed);
     const plaintextBytes = await openSealed(row.sealed_secret, rawSeed);
-    const env = decodeLeafSecretEnvelope(new TextDecoder().decode(plaintextBytes));
+    const env = decodeAnyLeafSecretEnvelope(new TextDecoder().decode(plaintextBytes));
+    if (isLeafSecretEnvelopeV2(env)) {
+      // R7 identity binding — refuse a credential minted for a DIFFERENT
+      // subject. FAIL-CLOSED when the caller supplied no expected identities.
+      // `leaf_user` is an identity label, not secret material — safe to name
+      // in the reason (the creds text itself is NEVER echoed).
+      const expected = input.expectedLeafUsers ?? [];
+      if (expected.length === 0) {
+        return {
+          ok: false,
+          reason:
+            `sealed envelope for "${input.networkId}" carries a v2 per-member credential, but the caller ` +
+            `supplied no expected identities to bind it to (R7) — refusing to install it`,
+        };
+      }
+      if (!expected.includes(env.leaf_user)) {
+        return {
+          ok: false,
+          reason:
+            `sealed v2 credential for "${input.networkId}" was minted for subject "${env.leaf_user}", ` +
+            `not this member (expected one of: ${expected.join(", ")}) — refusing to install it (R7)`,
+        };
+      }
+      return {
+        ok: true,
+        kind: "creds",
+        creds: env.creds,
+        leafUser: env.leaf_user,
+        mintedAt: env.minted_at,
+        ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),
+        ...(env.payload_key_kid !== undefined && { payloadKeyKid: env.payload_key_kid }),
+      };
+    }
     return {
       ok: true,
+      kind: "psk",
       leafPsk: env.leaf_psk,
       leafUser: env.leaf_user,
       ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),

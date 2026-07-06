@@ -11,7 +11,11 @@
 import { describe, test, expect } from "bun:test";
 import { createUser } from "nkeys.js";
 import { sealToPrincipal } from "../../crypto/seal-to-principal";
-import { encodeLeafSecretEnvelope, decodeLeafSecretEnvelope } from "../sealed-leaf-secret";
+import {
+  encodeLeafSecretEnvelope,
+  encodeLeafSecretEnvelopeV2,
+  decodeLeafSecretEnvelope,
+} from "../sealed-leaf-secret";
 import { fetchSealedLeafSecret, type FetchLike } from "../fetch-sealed-secret";
 import { materialFromSeedString, type StackIdentityMaterial } from "../../../bus/stack-provisioning";
 
@@ -51,7 +55,7 @@ describe("fetchSealedLeafSecret — round-trip", () => {
       material: member,
       fetchImpl,
     });
-    expect(res).toEqual({ ok: true, leafPsk: "PSK-abc", leafUser: "alice" });
+    expect(res).toEqual({ ok: true, kind: "psk", leafPsk: "PSK-abc", leafUser: "alice" });
   });
 
   test("selects the row for the TARGET network (ignores other networks)", async () => {
@@ -63,7 +67,7 @@ describe("fetchSealedLeafSecret — round-trip", () => {
       { request_id: "r2", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: sealedMeta },
     ]);
     const res = await fetchSealedLeafSecret({ registryUrl: "x", networkId: "metafactory", principalId: "alice", material: member, fetchImpl });
-    expect(res.ok && res.leafPsk).toBe("PSK-meta");
+    expect(res.ok && res.kind === "psk" && res.leafPsk).toBe("PSK-meta");
   });
 
   test("no admitted+sealed row → soft-closed { ok: false }", async () => {
@@ -102,6 +106,141 @@ describe("fetchSealedLeafSecret — round-trip", () => {
     const fetchImpl: FetchLike = async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => "down" });
     const res = await fetchSealedLeafSecret({ registryUrl: "x", networkId: "metafactory", principalId: "alice", material: member, fetchImpl });
     expect(res.ok).toBe(false);
+  });
+});
+
+// =============================================================================
+// #1597 (epic #1595) — the v2 per-member credential-file payload.
+// =============================================================================
+
+/** Clearly-FAKE `.creds` text (structure only, all-A payloads). */
+const FAKE_CREDS =
+  "-----BEGIN NATS USER JWT-----\n" + "A".repeat(64) + "\n------END NATS USER JWT------\n\n" +
+  "-----BEGIN USER NKEY SEED-----\nSUA" + "A".repeat(55) + "\n------END USER NKEY SEED------\n";
+
+async function sealedV2For(
+  material: StackIdentityMaterial,
+  leafUser: string,
+  creds: string = FAKE_CREDS,
+): Promise<string> {
+  const plaintext = encodeLeafSecretEnvelopeV2({
+    creds,
+    leaf_user: leafUser,
+    minted_at: "2026-07-06T00:00:00Z",
+  });
+  return sealToPrincipal(plaintext, material.pubkeyB64);
+}
+
+describe("fetchSealedLeafSecret — v2 credential-file payload (#1597)", () => {
+  test("member fetches + unseals its own v2 credential (identity matches)", async () => {
+    const member = newMember();
+    const sealed = await sealedV2For(member, "alice/default");
+    const fetchImpl = fakeRegistry([
+      { request_id: "r1", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: sealed },
+    ]);
+    const res = await fetchSealedLeafSecret({
+      registryUrl: "x",
+      networkId: "metafactory",
+      principalId: "alice",
+      material: member,
+      fetchImpl,
+      expectedLeafUsers: ["alice/default", "alice"],
+    });
+    expect(res).toEqual({
+      ok: true,
+      kind: "creds",
+      creds: FAKE_CREDS,
+      leafUser: "alice/default",
+      mintedAt: "2026-07-06T00:00:00Z",
+    });
+  });
+
+  test("R7 — a v2 credential minted for a DIFFERENT subject is refused, creds never echoed", async () => {
+    const member = newMember();
+    const sealed = await sealedV2For(member, "mallory/default");
+    const fetchImpl = fakeRegistry([
+      { request_id: "r1", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: sealed },
+    ]);
+    const res = await fetchSealedLeafSecret({
+      registryUrl: "x",
+      networkId: "metafactory",
+      principalId: "alice",
+      material: member,
+      fetchImpl,
+      expectedLeafUsers: ["alice/default", "alice"],
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("mallory/default");
+      expect(res.reason).toContain("R7");
+      expect(res.reason).not.toContain(FAKE_CREDS.slice(0, 40));
+    }
+  });
+
+  test("R7 fail-closed — a v2 payload with NO expected identities supplied is refused", async () => {
+    const member = newMember();
+    const sealed = await sealedV2For(member, "alice/default");
+    const fetchImpl = fakeRegistry([
+      { request_id: "r1", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: sealed },
+    ]);
+    // No expectedLeafUsers — the caller cannot vouch for its own identity, so a
+    // v2 credential must NOT be installed even when it would have matched.
+    const res = await fetchSealedLeafSecret({
+      registryUrl: "x",
+      networkId: "metafactory",
+      principalId: "alice",
+      material: member,
+      fetchImpl,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("R7");
+  });
+
+  test("v1 envelopes are UNAFFECTED by expectedLeafUsers (no identity claim in v1)", async () => {
+    const member = newMember();
+    const sealed = await sealedFor(member, "PSK-abc", "some-hub-userinfo-user");
+    const fetchImpl = fakeRegistry([
+      { request_id: "r1", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: sealed },
+    ]);
+    const res = await fetchSealedLeafSecret({
+      registryUrl: "x",
+      networkId: "metafactory",
+      principalId: "alice",
+      material: member,
+      fetchImpl,
+      expectedLeafUsers: ["alice/default", "alice"],
+    });
+    expect(res).toEqual({ ok: true, kind: "psk", leafPsk: "PSK-abc", leafUser: "some-hub-userinfo-user" });
+  });
+
+  test("the M3 payload key rides the v2 envelope too", async () => {
+    const member = newMember();
+    const plaintext = encodeLeafSecretEnvelopeV2({
+      creds: FAKE_CREDS,
+      leaf_user: "alice/default",
+      minted_at: "2026-07-06T00:00:00Z",
+      payload_key: "K",
+      payload_key_kid: "metafactory/k1",
+    });
+    const sealed = await sealToPrincipal(plaintext, member.pubkeyB64);
+    const fetchImpl = fakeRegistry([
+      { request_id: "r1", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: sealed },
+    ]);
+    const res = await fetchSealedLeafSecret({
+      registryUrl: "x",
+      networkId: "metafactory",
+      principalId: "alice",
+      material: member,
+      fetchImpl,
+      expectedLeafUsers: ["alice/default"],
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.kind === "creds") {
+      expect(res.payloadKey).toBe("K");
+      expect(res.payloadKeyKid).toBe("metafactory/k1");
+    } else {
+      throw new Error("expected the v2 creds kind");
+    }
   });
 });
 

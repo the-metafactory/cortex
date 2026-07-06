@@ -8,13 +8,14 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createUser } from "nkeys.js";
 import {
   dispatchNetwork,
   __setJoinLeafSecretFetcherForTests,
+  __setLeafCredsInstallDirForTests,
   __setDiscordRemoveClientForTests,
   type SecretPortsFactory,
   type KeyRotationPortsFactory,
@@ -611,7 +612,10 @@ describe("cortex network secret revoke-member — C-1349 rotate-now recommendati
 // =============================================================================
 
 describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
-  afterEach(() => __setJoinLeafSecretFetcherForTests(null));
+  afterEach(() => {
+    __setJoinLeafSecretFetcherForTests(null);
+    __setLeafCredsInstallDirForTests(null);
+  });
 
   test("join with NO configured leaf-secret AUTO-fetches it from the admission gate", async () => {
     // A real joiner seed so materialFromSeedString succeeds.
@@ -622,7 +626,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     const seen: FetchSealedLeafSecretInput[] = [];
     __setJoinLeafSecretFetcherForTests(async (input) => {
       seen.push(input);
-      return { ok: true, leafPsk: "AUTO-PSK", leafUser: "andreas" };
+      return { ok: true, kind: "psk", leafPsk: "AUTO-PSK", leafUser: "andreas" };
     });
 
     // Dry-run join (no --apply): the descriptor fetch will fail against the
@@ -643,6 +647,87 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     expect(seen[0]!.networkId).toBe("metafactory");
     expect(seen[0]!.principalId).toBe("andreas");
     expect(seen[0]!.registryUrl).toBe("http://127.0.0.1:0");
+    // #1597 (R7) — the join declares the member's OWN identities so a v2
+    // credential minted for a different subject is refused inside the fetch.
+    expect(seen[0]!.expectedLeafUsers).toContain("andreas/default");
+    expect(seen[0]!.expectedLeafUsers).toContain("andreas");
+  });
+
+  // ===========================================================================
+  // #1597 (epic #1595) — v2 payload: the delivered per-member credential FILE
+  // is installed at the conventional 0600 path before the join renders.
+  // ===========================================================================
+  test("a v2 (credential-file) payload is installed 0600 at the conventional per-network path", async () => {
+    const joinerSeed = join(tmp, "joiner3.seed");
+    writeFileSync(joinerSeed, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });
+    chmodSync(joinerSeed, 0o600);
+
+    // Clearly-FAKE `.creds` text (structure only, all-A payloads).
+    const FAKE_CREDS =
+      "-----BEGIN NATS USER JWT-----\n" + "A".repeat(64) + "\n------END NATS USER JWT------\n\n" +
+      "-----BEGIN USER NKEY SEED-----\nSUA" + "A".repeat(55) + "\n------END USER NKEY SEED------\n";
+
+    const installDir = join(tmp, "nats-install");
+    __setLeafCredsInstallDirForTests(installDir);
+    __setJoinLeafSecretFetcherForTests(async () => ({
+      ok: true,
+      kind: "creds",
+      creds: FAKE_CREDS,
+      leafUser: "andreas/default",
+      mintedAt: "2026-07-06T00:00:00Z",
+    }));
+
+    // Dry-run join: the descriptor fetch fails against the unreachable registry,
+    // but the auto-fetch + install run FIRST — the install is what #1597 claims.
+    await dispatchNetwork([
+      "join", "metafactory",
+      "--principal", "andreas",
+      "--registry-url", "http://127.0.0.1:0",
+      "--seed-path", joinerSeed,
+      "--account", "A" + "B".repeat(55),
+      "--nats-config", join(tmp, "local.conf"),
+      "--plist", join(tmp, "nats.plist"),
+    ], (() => ({})) as never);
+
+    const installed = join(installDir, "metafactory-leaf.creds");
+    expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
+    // 0600 — not group- or world-readable (the acceptance bar).
+    const mode = statSync(installed).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  test("v2 install is byte-stable + re-asserts 0600 on a pre-existing looser file", async () => {
+    const joinerSeed = join(tmp, "joiner4.seed");
+    writeFileSync(joinerSeed, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });
+    chmodSync(joinerSeed, 0o600);
+
+    const FAKE_CREDS = "-----BEGIN NATS USER JWT-----\nAAAA\n------END NATS USER JWT------\n";
+    const installDir = join(tmp, "nats-install-2");
+    const installed = join(installDir, "metafactory-leaf.creds");
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(installed, FAKE_CREDS, { mode: 0o644 }); // pre-existing, too loose
+
+    __setLeafCredsInstallDirForTests(installDir);
+    __setJoinLeafSecretFetcherForTests(async () => ({
+      ok: true,
+      kind: "creds",
+      creds: FAKE_CREDS,
+      leafUser: "andreas/default",
+      mintedAt: "2026-07-06T00:00:00Z",
+    }));
+
+    await dispatchNetwork([
+      "join", "metafactory",
+      "--principal", "andreas",
+      "--registry-url", "http://127.0.0.1:0",
+      "--seed-path", joinerSeed,
+      "--account", "A" + "B".repeat(55),
+      "--nats-config", join(tmp, "local.conf"),
+      "--plist", join(tmp, "nats.plist"),
+    ], (() => ({})) as never);
+
+    expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
+    expect(statSync(installed).mode & 0o777).toBe(0o600);
   });
 
   test("an explicit --leaf-secret SUPPRESSES the auto-fetch", async () => {
