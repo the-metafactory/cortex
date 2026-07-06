@@ -198,4 +198,16 @@ describe("v2 envelope (creds payload) — #1596", () => {
     expect(json).not.toContain("leaf_psk");
     expect(json).toContain('"v":2');
   });
+
+  test("v2 encoder fails fast on empty creds / leaf_user / bad minted_at (producer-side)", () => {
+    expect(() => encodeLeafSecretEnvelopeV2({ creds: "", leaf_user: "alice/lab", minted_at: MINTED_AT })).toThrow(/empty creds/);
+    expect(() => encodeLeafSecretEnvelopeV2({ creds: FAKE_CREDS, leaf_user: "", minted_at: MINTED_AT })).toThrow(/empty leaf_user/);
+    expect(() => encodeLeafSecretEnvelopeV2({ creds: FAKE_CREDS, leaf_user: "alice/lab", minted_at: "nope" })).toThrow(/minted_at/);
+  });
+
+  test("a string version (v: \"2\") is rejected, not mis-routed to the v1 path", () => {
+    const bad = JSON.stringify({ v: "2", creds: FAKE_CREDS, leaf_user: "alice/lab", minted_at: MINTED_AT });
+    expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/`v` must be a number/);
+    expect(() => decodeAnyLeafSecretEnvelope(bad)).not.toThrow(/missing leaf_psk/);
+  });
 });

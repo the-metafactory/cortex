@@ -128,6 +128,16 @@ export function encodeLeafSecretEnvelope(
 export function encodeLeafSecretEnvelopeV2(
   fields: Omit<LeafSecretEnvelopeV2, "v">,
 ): string {
+  // Fail fast at the PRODUCER: never mint a blob our own decoder rejects.
+  if (fields.creds.length === 0) {
+    throw new Error("sealed-leaf-secret: cannot encode a v2 envelope with empty creds");
+  }
+  if (fields.leaf_user.length === 0) {
+    throw new Error("sealed-leaf-secret: cannot encode a v2 envelope with empty leaf_user");
+  }
+  if (fields.minted_at.length === 0 || Number.isNaN(Date.parse(fields.minted_at))) {
+    throw new Error("sealed-leaf-secret: cannot encode a v2 envelope with a non-ISO-8601 minted_at");
+  }
   const env: LeafSecretEnvelopeV2 = {
     v: LEAF_SECRET_ENVELOPE_VERSION_V2,
     creds: fields.creds,
@@ -182,7 +192,14 @@ function parseEnvelopeObject(plaintext: string): Record<string, unknown> {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("sealed-leaf-secret: unsealed payload must be a JSON object");
   }
-  return parsed as Record<string, unknown>;
+  const obj = parsed as Record<string, unknown>;
+  // `v`, when present, MUST be a number — else the numeric version guards below
+  // (and the upgrade-vs-v1 routing) silently mis-route a `v: "2"` string blob to
+  // the v1 "missing leaf_psk" path. Reject it here so every decoder is covered.
+  if ("v" in obj && typeof obj.v !== "number") {
+    throw new Error("sealed-leaf-secret: envelope version `v` must be a number when present");
+  }
+  return obj;
 }
 
 /**
