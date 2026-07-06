@@ -396,15 +396,20 @@ async function addOrRotate(
   steps.push(`leaf user:  ${leafUser}`);
   steps.push(`deliver:    ${inputs.deliver}`);
 
-  // cortex#1598 (epic #1595 slice 2) — OPERATOR-MODE branch. When the network's
-  // VERIFIED descriptor attests `hub_mode: operator`, admit seals a subject-
-  // scoped per-member `.creds` credential (minted via `arc nats
-  // add-federated-user`) INSTEAD of minting a shared PSK and writing an inline
-  // hub `authorization` user. This early return IS Guard A (C4): the entire
-  // simple/PSK + hub-config write path below is structurally UNREACHABLE on an
-  // operator network — a shared-string leaf user would crash an operator hub
-  // (cortex#794). The simple path stays byte-for-byte unchanged for every other
-  // network.
+  // cortex#1598 (epic #1595 slice 2) — OPERATOR-MODE branch (Guard A, C4). When
+  // the network is ATTESTED operator-mode (`inputs.hubMode === "operator"`, from
+  // the verified descriptor OR the hub owner's local config —
+  // `resolveOperatorAttestation`), admit seals a subject-scoped per-member
+  // `.creds` credential (minted via `arc nats add-federated-user`) INSTEAD of
+  // minting a shared PSK and writing an inline hub `authorization` user (which
+  // would crash an operator hub, cortex#794). This early return keeps the
+  // simple/PSK + hub-config write path below UNREACHABLE while the attestation
+  // holds. NOTE this is a runtime, attestation-DRIVEN guard, not a structural
+  // one: an operator network MUST be attested (descriptor or local `hub_mode`)
+  // for it to fire — an UNATTESTED network is treated as simple for back-compat
+  // (design §5.1 / registry `validate.ts`), so the fallback direction is
+  // simple, never a silent operator-hub write. The simple path is byte-for-byte
+  // unchanged for every non-operator-attested network.
   if (inputs.hubMode === "operator") {
     return operatorModeSeal(inputs, ports, rotate, { row, memberPubkeyB64, steps, data });
   }

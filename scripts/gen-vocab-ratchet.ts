@@ -224,6 +224,7 @@ const CARVEOUT_PATHS: string[] = [
   "src/cli/cortex/commands/__tests__/network-secret-lib.test.ts",
   "src/cli/cortex/commands/__tests__/network-scoped-mint-adapter.test.ts",
   "src/cli/cortex/commands/__tests__/network-admit-operator-stamp.test.ts",
+  "src/cli/cortex/commands/__tests__/network-operator-attestation.test.ts",
   // Frozen SQL DDL — the #1598 hub_mode migration (historical, never edited)
   "src/services/network-registry/migrations/0014_network_hub_mode.sql",
   // #1598 working doc (design/worklog class, like design-federation-hub-mode)
@@ -332,8 +333,13 @@ const CARVEOUT_LINE_PATTERNS: string[] = [
   "CHANNEL_ID/OPERATOR_ID",
   // cortex#1598 (epic #1595 slice 2) — the hub-mode / resolver-mode attestation
   // vocabulary. `operator` here is the NSC hub-mode VALUE (`hub_mode: operator`),
-  // not the deprecated operator=principal sense. These tokens are #1598-specific,
-  // so carving them globally cannot mask a real operator=principal regression.
+  // the SAME account-tree sense already carved for the federation-tooling files
+  // above — not the deprecated operator=principal sense. The `hub_?mode` /
+  // `resolver_?mode` / `hub_?fed_account` / `resolveOperatorAttestation` tokens
+  // are #1598-specific. `operator-mode`/`OPERATOR-MODE` and `operator (hub|…)`
+  // are broader NSC-adjective phrases (`operator-mode` was already carved at the
+  // NSC-vocabulary group above) — they carve the legitimate NSC hub-mode prose,
+  // which is the operator=account, not operator=principal, sense.
   "[Hh]ub[ _-]?[Mm]ode",
   "[Rr]esolver[ _-]?[Mm]ode",
   "[Hh]ub[ _-]?[Ff]ed[ _-]?[Aa]ccount",

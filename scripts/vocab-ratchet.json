@@ -154,6 +154,7 @@
       "src/cli/cortex/commands/__tests__/network-secret-lib.test.ts",
       "src/cli/cortex/commands/__tests__/network-scoped-mint-adapter.test.ts",
       "src/cli/cortex/commands/__tests__/network-admit-operator-stamp.test.ts",
+      "src/cli/cortex/commands/__tests__/network-operator-attestation.test.ts",
       "src/services/network-registry/migrations/0014_network_hub_mode.sql",
       "docs/federation-1598-admit-mint-worklog.md"
     ],

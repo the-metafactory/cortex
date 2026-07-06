@@ -3213,13 +3213,22 @@ const DEFAULT_KEY_ROTATION_PORTS_FACTORY: KeyRotationPortsFactory = (cfg) =>
  * cortex#1598 (epic #1595 slice 2) — resolve the OPERATOR-MODE attestation for a
  * network. `hub_mode` / `resolver_mode` come off the last VERIFIED descriptor
  * (the SAME DD-10 `~/.config/cortex/network-cache/` cache the hub-locality read
- * uses — the admin reads the attestation they signed onto the registry, not a
- * local claim). The hub FED account comes from `--hub-fed-account` → else the
- * local `policy.federated.networks[<id>].hub_fed_account`. Everything is optional:
- * a network with no cached descriptor / no attestation resolves to the simple
- * (PSK) path unchanged. Injectable cache for tests.
+ * uses) when present — the verified attestation wins — ELSE off the hub owner's
+ * own `policy.federated.networks[<id>].hub_mode`/`.resolver_mode`.
+ *
+ * The local-config fallback is LOAD-BEARING, not cosmetic: the hub owner runs
+ * `network create`, not `join`, so they may have NO cached descriptor for their
+ * OWN network. Reading only the cache would leave `hubMode` undefined and
+ * silently degrade an operator network to the PSK/hub-write path — writing an
+ * inline leaf user onto an operator hub and crashing it (cortex#794), the exact
+ * F4 failure Guard A exists to prevent. The local declaration closes that gap.
+ * A network with NEITHER a cached descriptor NOR a local declaration resolves to
+ * simple (unattested = legacy/simple, the design §5.1 / registry `validate.ts`
+ * back-compat rule) — so an operator network MUST be attested one way or the
+ * other. The hub FED account comes from `--hub-fed-account` → else the local
+ * `hub_fed_account`. Injectable cache for tests.
  */
-function resolveOperatorAttestation(
+export function resolveOperatorAttestation(
   flags: FlagMap,
   networkId: string,
   load: ConfigReader,
@@ -3228,21 +3237,23 @@ function resolveOperatorAttestation(
   }),
 ): { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string } {
   const descriptor = cache.load(networkId)?.descriptor;
-  const hubMode = descriptor?.hub_mode;
-  const resolverMode = descriptor?.resolver_mode;
 
-  let hubFedAccount = optionalValueFlag(flags, "--hub-fed-account");
-  if (hubFedAccount === undefined) {
-    try {
-      const cfg = load(resolveLocalStackConfigPath(flags));
-      hubFedAccount = cfg.policy?.federated?.networks.find((n) => n.id === networkId)?.hub_fed_account;
-    } catch (_err) {
-      // The local config being unreadable is non-fatal here: leave hubFedAccount
-      // undefined and let the operator branch refuse with a clear message (it
-      // already fail-fasts on an absent hub FED account). A genuinely-broken
-      // config also fails the separate payload-key read below with its own text.
-    }
+  // Read the local config once (the hub owner's own declaration + the FED
+  // account). Non-fatal if unreadable — the operator branch fail-fasts clearly
+  // on a missing FED account, and the separate payload-key read reports a broken
+  // config with its own message.
+  let cfgNetwork: import("../../../common/types/cortex-config").PolicyFederatedNetwork | undefined;
+  try {
+    const cfg = load(resolveLocalStackConfigPath(flags));
+    cfgNetwork = cfg.policy?.federated?.networks.find((n) => n.id === networkId);
+  } catch (_err) {
+    cfgNetwork = undefined;
   }
+
+  // Verified descriptor wins; the hub owner's local declaration is the fallback.
+  const hubMode = descriptor?.hub_mode ?? cfgNetwork?.hub_mode;
+  const resolverMode = descriptor?.resolver_mode ?? cfgNetwork?.resolver_mode;
+  const hubFedAccount = optionalValueFlag(flags, "--hub-fed-account") ?? cfgNetwork?.hub_fed_account;
 
   return {
     ...(hubMode !== undefined && { hubMode }),

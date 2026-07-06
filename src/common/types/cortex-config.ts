@@ -2199,6 +2199,19 @@ export const PolicyFederatedNetworkSchema = z.object({
    * Absent ⇒ operator-mode admit refuses until it is provided.
    */
   hub_fed_account: z.string().optional(),
+  /**
+   * cortex#1598 — the hub owner's OWN declaration of this network's hub mode, the
+   * RELIABLE local source the admit-side guards read when the verified-descriptor
+   * cache has no entry (the hub owner runs `network create`, not `join`, so they
+   * may have no cached descriptor for their own network — reading only the cache
+   * would silently degrade an operator network to the PSK/hub-write path and
+   * crash the operator hub, cortex#794). The verified descriptor still wins when
+   * present; this is the hub-owner's local fallback. Mirrors the registry
+   * attestation (`hub_mode` on the signed NetworkDescriptor).
+   */
+  hub_mode: z.enum(["operator", "simple"]).optional(),
+  /** cortex#1598 — the hub owner's local resolver-mode declaration (see `hub_mode`). */
+  resolver_mode: z.enum(["nats", "memory"]).optional(),
 });
 
 export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema>;
