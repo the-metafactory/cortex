@@ -385,6 +385,17 @@ function buildRegistryPort(cfg: LivePortsConfig, mutate: boolean): NetworkRegist
 
   return {
     async registerStack() {
+      // DRY-RUN GATE (#1527) — register is a real registry mutation: it upserts
+      // the stack's pubkey AND raises a network-PINNED PENDING admission row an
+      // admin can `admit`. A dry-run join (a preview) must NOT fire it, exactly
+      // as `departFromNetwork` below gates its own POST. Without this, a
+      // "dry-run first" join per the SOPs performs a live registration — the
+      // observation logged as join-issues-2026-06-26 §8. The rest of a dry-run
+      // join (fetchVerified, config rendering) is read-only, so skipping the
+      // register leaves a faithful preview.
+      if (!mutate) {
+        return { ok: true, note: "dry-run — registry register skipped (no mutation)" };
+      }
       // ADR-0018 Gap-B (BLOCK-1/N3) — roster membership is NO LONGER implicit in
       // the announced capabilities. Under Gap-B a principal is "in" `networkId`
       // iff they hold an ADMITTED admission row for it (`rosterFromAdmissions`);

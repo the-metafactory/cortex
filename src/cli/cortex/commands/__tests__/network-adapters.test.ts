@@ -2420,3 +2420,57 @@ describe("#800 daemon restart port", () => {
     if (!res.ok) expect(res.reason).toContain("no cortex daemon service found");
   });
 });
+
+// =============================================================================
+// #1527 — dry-run `network join` must NOT register with the registry.
+// registerStack upserts the stack pubkey AND raises a network-pinned PENDING
+// admission row; a preview (`join` without `--apply`) touching that is
+// join-issues-2026-06-26 §8. We stub global fetch to throw, so ANY HTTP attempt
+// fails the test — the dry-run gate must short-circuit before the transport.
+// =============================================================================
+
+describe("#1527 dry-run registerStack gate", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const cfgWithRegistry = () => ({
+    networkId: "metafactory",
+    principalId: "jc",
+    stackId: "jc/default",
+    platform: "darwin" as const,
+    // A reachable-looking registry + a seed: absent the gate, registerStack
+    // would attempt a live signed POST here.
+    registryUrl: "https://registry.example.test",
+    seedPath: "/tmp/cortex-c1527-nonexistent.seed",
+    announceCapabilities: ["code-review.typescript"],
+  });
+
+  test("dry-run registerStack returns the skip note and makes ZERO fetch calls", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("#1527: dry-run registerStack must not hit the network");
+    }) as unknown as typeof fetch;
+
+    const ports = buildDryRunPorts(cfgWithRegistry());
+    const res = await ports.registry.registerStack();
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.note).toContain("dry-run");
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("live registerStack proceeds past the gate into real registration (not the dry-run note)", async () => {
+    // Same config; the live port does NOT short-circuit on the gate — it runs
+    // the real path, which here fails on the absent seed file. The point is
+    // that it does NOT return the dry-run skip note (proving the gate is scoped
+    // to dry-run), and the failure is a genuine registration attempt.
+    const ports = buildLivePorts(cfgWithRegistry());
+    const res = await ports.registry.registerStack();
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason.toLowerCase()).not.toContain("dry-run");
+  });
+});
