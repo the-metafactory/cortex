@@ -4,9 +4,10 @@
  * Sibling of `signal-transport-envelopes.test.ts` (cortex#1467), for the
  * self-observability family the attention producer consumes: signal's
  * `system.signal.*` collector/backend health edges. The U2.1 attention arms
- * originally shipped DEAD because they matched phantom `system.transport.backend.*`
- * names that exist nowhere in signal; cortex#1468 re-points them to signal's real
- * `system.signal.backend.*` grammar (recovery emitters added by
+ * originally shipped DEAD because they matched the phantom transport-backend names
+ * (a `transport` ns with `backend` leaves) that exist nowhere in signal; cortex#1468
+ * re-points them to signal's real `system.signal.backend.*` grammar (recovery
+ * emitters added by
  * the-metafactory/signal#166). This suite locks the fix two ways, driven by
  * provenance-pinned fixtures reproduced from signal's builder output
  * (signal `main` @ 81eebaa):
@@ -88,7 +89,12 @@ describe("produceObservabilityAttention — driven by canonical signal-health bo
   });
   afterEach(() => db.close());
 
-  it("backend.unreachable OPENS att:adapter:transport:{id}; backend.reachable RESOLVES it", () => {
+  // The identifying `exporter_id` rides under `payload.attributes` on the real wire
+  // (see fixture header), which the producer's top-level `idKeys` never read — so
+  // production delivers the NAMESPACE-FALLBACK id. These assertions pin exactly that
+  // id. Per-origin attribution (`transport:victoria`) would require the producer to
+  // read `payload.attributes.exporter_id` — a future enhancement, out of #1468 scope.
+  it("backend.unreachable OPENS att:adapter:transport:transport (fallback); backend.reachable RESOLVES it", () => {
     const outage = SIGNAL_HEALTH_FIXTURES.find((f) => f.family === "backend-unreachable")!;
     const recovery = SIGNAL_HEALTH_FIXTURES.find((f) => f.family === "backend-reachable")!;
 
@@ -97,18 +103,18 @@ describe("produceObservabilityAttention — driven by canonical signal-health bo
       payload: outage.envelope.payload,
     });
     expect(opened).toMatchObject({ action: "opened" });
-    expect(opened?.itemId.startsWith(`${ADAPTER_ATTENTION_PREFIX}transport:`)).toBe(true);
+    expect(opened?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}transport:transport`);
 
     const resolved = produceObservabilityAttention(db, {
       type: recovery.envelope.type,
       payload: recovery.envelope.payload,
     });
     expect(resolved).toMatchObject({ action: "resolved" });
-    // Same origin id (`backend: "victoria"`) → resolves the item just opened.
+    // Both fall back to the same namespace id → the recovery resolves the outage.
     expect(resolved?.itemId).toBe(opened?.itemId);
   });
 
-  it("collector.degraded OPENS; collector.recovered RESOLVES the same item", () => {
+  it("collector.degraded OPENS att:adapter:collector:collector (fallback); collector.recovered RESOLVES it", () => {
     const outage = SIGNAL_HEALTH_FIXTURES.find((f) => f.family === "collector-degraded")!;
     const recovery = SIGNAL_HEALTH_FIXTURES.find((f) => f.family === "collector-recovered")!;
 
@@ -117,7 +123,7 @@ describe("produceObservabilityAttention — driven by canonical signal-health bo
       payload: outage.envelope.payload,
     });
     expect(opened).toMatchObject({ action: "opened" });
-    expect(opened?.itemId.startsWith(`${ADAPTER_ATTENTION_PREFIX}collector:`)).toBe(true);
+    expect(opened?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}collector:collector`);
 
     const resolved = produceObservabilityAttention(db, {
       type: recovery.envelope.type,

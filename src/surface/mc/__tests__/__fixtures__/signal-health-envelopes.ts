@@ -8,7 +8,8 @@
  * myelin-canonical envelope shapes signal's `SystemEventPublisher` puts on the
  * wire, derived from signal's OWN builder OUTPUT — so cortex's fixtures can never
  * pin an impossible shape (the dead-code failure mode that shipped the U2.1
- * attention arms against phantom `system.transport.backend.*` names: cortex#1468).
+ * attention arms against the phantom transport-backend names — a `transport` ns
+ * with `backend` leaves that exist nowhere in signal: cortex#1468).
  *
  * PROVENANCE (pinned):
  *   - signal `main` @ 81eebaa (recovery emitters added by the-metafactory/signal#166)
@@ -28,9 +29,20 @@
  *     (no `_`→`-` mapping applies; contrast C1's `leaf_connect`→`leaf-connect`).
  *   - envelope BODY `type` == subject tail  (`system.signal.backend.unreachable`)
  *   - `payload.failure_mode`               → the two-segment leaf (`backend.unreachable`)
- *   - `payload.reason` (+ optional `attributes`) → free-form; NO fixed id contract
- *     (signal/src/lib/system-events/publisher.ts:115-124). The attention producer
- *     falls back to the namespace when no id key is present — do not invent one.
+ *   - `payload.reason`                     → free-form human string
+ *   - `payload.attributes`                 → caller-supplied fields are NESTED here,
+ *     NOT hoisted to the payload top level (signal `buildEnvelope` :499-508). Signal
+ *     stamps `exporter_id` under `attributes` (oracle :189) — there is NO fixed id
+ *     contract at the payload top level (publisher.ts:115-124).
+ *
+ *   CONSEQUENCE for the attention producer: its `idKeys` read the payload TOP LEVEL
+ *   (`backend`/`backend_id`/`id`; `collector_id`/`collector`/`id`) — none of which
+ *   the real wire populates — so production ALWAYS falls back to the namespace id
+ *   (`att:adapter:transport:transport`, `att:adapter:collector:collector`). These
+ *   fixtures reproduce that faithfully: the id lives under `attributes.exporter_id`,
+ *   so the producer-driven tests assert the FALLBACK ids production really delivers.
+ *   Per-origin attribution (e.g. `transport:victoria`) would require the producer to
+ *   read `payload.attributes.exporter_id` — a FUTURE enhancement, out of #1468 scope.
  *
  * ANTI-DRIFT: the companion test (`signal-health-envelopes.test.ts`) routes every
  * fixture through cortex's vendored myelin `validateEnvelope`, so a schema-invalid
@@ -147,42 +159,50 @@ export interface SignalHealthFixture {
   payload: Record<string, unknown>;
 }
 
-/** The canonical four health leaves — the fixture set the MC attention tests fold. */
+/**
+ * The canonical four health leaves — the fixture set the MC attention tests fold.
+ *
+ * Payloads are WIRE-FAITHFUL: the identifying `exporter_id` is nested under
+ * `attributes` exactly as signal's `buildEnvelope` emits it (:499-508, oracle
+ * :189) — NOT hoisted to the payload top level. Because the attention producer's
+ * `idKeys` only read the top level, these fixtures deterministically drive the
+ * NAMESPACE-FALLBACK item ids that production actually delivers.
+ */
 export const SIGNAL_HEALTH_FIXTURES: readonly SignalHealthFixture[] = [
   {
     family: "backend-unreachable",
     opens: true,
     type: SIGNAL_HEALTH_TYPES.backendUnreachable,
-    payload: { failure_mode: "backend.unreachable", reason: 'exporter "victoria" backend unreachable', backend: "victoria" },
+    payload: { failure_mode: "backend.unreachable", reason: 'exporter "victoria" backend unreachable', attributes: { exporter_id: "victoria" } },
     envelope: makeSignalHealthEnvelope(SIGNAL_HEALTH_TYPES.backendUnreachable, {
-      payload: { failure_mode: "backend.unreachable", reason: 'exporter "victoria" backend unreachable', backend: "victoria" },
+      payload: { failure_mode: "backend.unreachable", reason: 'exporter "victoria" backend unreachable', attributes: { exporter_id: "victoria" } },
     }),
   },
   {
     family: "backend-reachable",
     opens: false,
     type: SIGNAL_HEALTH_TYPES.backendReachable,
-    payload: { failure_mode: "backend.reachable", reason: 'exporter "victoria" backend reachable again', backend: "victoria" },
+    payload: { failure_mode: "backend.reachable", reason: 'exporter "victoria" backend reachable again', attributes: { exporter_id: "victoria" } },
     envelope: makeSignalHealthEnvelope(SIGNAL_HEALTH_TYPES.backendReachable, {
-      payload: { failure_mode: "backend.reachable", reason: 'exporter "victoria" backend reachable again', backend: "victoria" },
+      payload: { failure_mode: "backend.reachable", reason: 'exporter "victoria" backend reachable again', attributes: { exporter_id: "victoria" } },
     }),
   },
   {
     family: "collector-degraded",
     opens: true,
     type: SIGNAL_HEALTH_TYPES.collectorDegraded,
-    payload: { failure_mode: "collector.degraded", reason: "collector falling behind", collector_id: "relay-1" },
+    payload: { failure_mode: "collector.degraded", reason: "collector falling behind", attributes: { exporter_id: "relay-1" } },
     envelope: makeSignalHealthEnvelope(SIGNAL_HEALTH_TYPES.collectorDegraded, {
-      payload: { failure_mode: "collector.degraded", reason: "collector falling behind", collector_id: "relay-1" },
+      payload: { failure_mode: "collector.degraded", reason: "collector falling behind", attributes: { exporter_id: "relay-1" } },
     }),
   },
   {
     family: "collector-recovered",
     opens: false,
     type: SIGNAL_HEALTH_TYPES.collectorRecovered,
-    payload: { failure_mode: "collector.recovered", reason: "collector recovered from degraded state", collector_id: "relay-1" },
+    payload: { failure_mode: "collector.recovered", reason: "collector recovered from degraded state", attributes: { exporter_id: "relay-1" } },
     envelope: makeSignalHealthEnvelope(SIGNAL_HEALTH_TYPES.collectorRecovered, {
-      payload: { failure_mode: "collector.recovered", reason: "collector recovered from degraded state", collector_id: "relay-1" },
+      payload: { failure_mode: "collector.recovered", reason: "collector recovered from degraded state", attributes: { exporter_id: "relay-1" } },
     }),
   },
 ] as const;

@@ -230,17 +230,21 @@ describe("produceObservabilityAttention — att:adapter: open/resolve", () => {
   });
 
   it("opens on signal backend.unreachable and resolves on backend.reachable", () => {
+    // Wire-faithful: signal nests `exporter_id` under `payload.attributes`, which
+    // the producer's top-level `idKeys` do not read — so both edges resolve to the
+    // NAMESPACE-FALLBACK id `att:adapter:transport:transport` that production
+    // actually delivers (per-origin attribution is a future producer enhancement).
     const backend = produceObservabilityAttention(db, {
       type: "system.signal.backend.unreachable",
-      payload: { backend: "victoria" },
+      payload: { failure_mode: "backend.unreachable", attributes: { exporter_id: "victoria" } },
     });
     expect(backend).toMatchObject({ action: "opened" });
-    expect(backend?.itemId.startsWith(`${ADAPTER_ATTENTION_PREFIX}transport:`)).toBe(true);
+    expect(backend?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}transport:transport`);
     expect(attentionRow(db, backend!.itemId)?.status).toBe("open");
 
     const reachable = produceObservabilityAttention(db, {
       type: "system.signal.backend.reachable",
-      payload: { backend: "victoria" },
+      payload: { failure_mode: "backend.reachable", attributes: { exporter_id: "victoria" } },
     });
     expect(reachable).toMatchObject({ action: "resolved" });
     expect(reachable?.itemId).toBe(backend?.itemId);
