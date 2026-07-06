@@ -1,5 +1,47 @@
 # Cortex — Changelog
 
+## 6.2.1 — 2026-07-06 — Architecture deepening (epic #1514)
+
+Ten behavior-preserving refactor slices completed the architecture-deepening
+epic (#1514). No new features, no breaking changes, no runtime behavior change —
+each slice was proven by its existing integration tests staying green unchanged,
+with new unit coverage added for the extracted seams.
+
+### Refactor
+
+- **`startCortex` split into four boot lanes** — the ~1,270-line inline
+  consumer/adapter boot in `src/cortex.ts` (7,204 → 5,937 lines) extracted into
+  focused `src/runner/*-boot.ts` modules: `wireReviewConsumers` (S7, #1542),
+  `wireBrainConsumers` + `wireReleaseConsumers` (S8, #1545), and
+  `wireSurfaceAdapters` routed through the existing `GatewayAdapterFactory` (S9,
+  #1547). New unit coverage for boot wiring, registration order, and (S9)
+  guild-allowlist scoping + credential redaction.
+- **`network-admit` extracted into a lib/ports/adapters triplet** (S5, #1586) —
+  `network.ts` 4,630 → 4,243; the `__set*ForTests` admit singleton retired in
+  favour of injected ports (the two shared with `network secret`/`join` kept
+  intentionally).
+- **Duplicated knowledge collapsed to single owners:** one envelope
+  source-string builder (S1, #1530), one `stackSlugFromStackId` slug authority
+  embodying ADR-0004 (S2, #1531), one `signAdminRequest` admin-signing seam with
+  its import cycle broken (S3, #1532), and Mission Control's inline SQL mutations
+  moved behind db-module functions (S4, #1535).
+- **Worker `DashboardSnapshot` contract** (S6, #1537) — one explicit type for the
+  CF Worker `/api/state` producer↔consumer, with an allow-list shape guard for
+  the ADR-0005 no-interiors invariant on the public endpoint.
+
+### Docs
+
+- **ADR-0021 — outbound sink shape** (S10, #1553): the `DispatchSink`/`ReviewSink`
+  twins stand; collapse only when a third variant is planned.
+
+### Follow-ups filed
+
+#1529, #1538, #1543, #1548, #1552 (repo-wide guild-ID confidentiality sweep),
+#1587.
+
+> **Note:** the `## Unreleased` section below is stale — its entries shipped in
+> v3.1–v6.2 but were never moved out. Curation is tracked as a follow-up.
+
 ## Unreleased
 
 ### Breaking
