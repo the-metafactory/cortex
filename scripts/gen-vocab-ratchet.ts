@@ -179,6 +179,7 @@ const CARVEOUT_PATHS: string[] = [
   "docs/adr/0013-sovereign-federation-model.md",
   "docs/adr/0015-two-tier-onboarding-and-admission-gate.md",
   "docs/design-admission-gate-leaf-secret.md",
+  "docs/design-federation-hub-mode-and-join.md",
   "docs/runbook-leaf-cred-issuance.md",
   "docs/sop-onboard-peer-principal.md",
   // HISTORICAL removed-field guard test (v3-REMOVED config.agent.operatorId)

@@ -122,6 +122,7 @@
       "docs/adr/0013-sovereign-federation-model.md",
       "docs/adr/0015-two-tier-onboarding-and-admission-gate.md",
       "docs/design-admission-gate-leaf-secret.md",
+      "docs/design-federation-hub-mode-and-join.md",
       "docs/runbook-leaf-cred-issuance.md",
       "docs/sop-onboard-peer-principal.md",
       "src/__tests__/principal-identity-consistency.test.ts",
