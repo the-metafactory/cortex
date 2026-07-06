@@ -4,7 +4,7 @@
  * Two of signal's observability conditions are not just history to chart — they
  * are surface-health outages the cockpit should raise: a degraded collector
  * (`system.signal.collector.degraded`) and an unreachable transport backend
- * (`system.transport.backend.unreachable`). Both are the SAME class of signal as
+ * (`system.signal.backend.unreachable`). Both are the SAME class of signal as
  * the existing adapter-health producer (`projectAdapterLifecycle`), so they reuse
  * its `att:adapter:` namespace (db/adapter-lifecycle.ts `ADAPTER_ATTENTION_PREFIX`)
  * and the same upsert/resolve lifecycle — one open item per origin, idempotent
@@ -12,8 +12,8 @@
  *
  *   - `system.signal.collector.degraded`           → OPEN  att:adapter:collector:{id}
  *   - `system.signal.collector.recovered`          → RESOLVE it
- *   - `system.transport.backend.unreachable`       → OPEN  att:adapter:transport:{id}
- *   - `system.transport.backend.reachable`         → RESOLVE it
+ *   - `system.signal.backend.unreachable`          → OPEN  att:adapter:transport:{id}
+ *   - `system.signal.backend.reachable`            → RESOLVE it
  *   - `system.transport.leaf-disconnect`           → OPEN  att:adapter:transport:{id}
  *   - `system.transport.leaf-connect`              → RESOLVE it
  *
@@ -59,9 +59,9 @@ function classify(type: string): Mapping | null {
       return { opens: true, ns: "collector", idKeys: ["collector_id", "collector", "id"] };
     case "system.signal.collector.recovered":
       return { opens: false, ns: "collector", idKeys: ["collector_id", "collector", "id"] };
-    case "system.transport.backend.unreachable":
+    case "system.signal.backend.unreachable":
       return { opens: true, ns: "transport", idKeys: ["backend", "backend_id", "id"] };
-    case "system.transport.backend.reachable":
+    case "system.signal.backend.reachable":
       return { opens: false, ns: "transport", idKeys: ["backend", "backend_id", "id"] };
     case "system.transport.leaf-disconnect":
       return { opens: true, ns: "transport", idKeys: ["leaf", "node", "peer", "id"] };
