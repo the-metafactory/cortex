@@ -156,6 +156,9 @@ describe("add-member (sealed)", () => {
     // No PSK in the report surfaces
     expect(report.surfaced).toBeUndefined();
     assertNoSecretLeak(report.steps, report.data, "PSK-1");
+    // #1528 — the add step must tell the hub owner to RESTART for the new
+    // authorization to take effect (SIGHUP reload does not apply leaf-auth).
+    expect(report.steps.join("\n")).toContain("RESTART");
   });
 
   test("--leaf-user override is honoured as the hub user", async () => {
@@ -248,12 +251,20 @@ describe("revoke-member", () => {
 
     expect(report.ok).toBe(true);
     expect(report.applied).toBe(true);
-    // Hub user gone (transport cut) + reloaded
+    // Hub user removed from config + reload attempted
     expect(listHubLeafUsers(r.hubConf.text)).toEqual([]);
     expect(r.hubConf.text).not.toContain("PSK-old");
     expect(r.reloads).toBe(1);
     // Registry revoke fired
     expect(r.revoked).toEqual(["req1"]);
+    // #1528 — the step must NOT claim transport was cut (a SIGHUP reload does
+    // not drop an active leaf session; nats-server rejects leaf-auth reloads).
+    // It must tell the hub owner a RESTART is required and that the member stays
+    // connected until then.
+    const revokeStep = report.steps.join("\n");
+    expect(revokeStep).not.toContain("transport CUT");
+    expect(revokeStep).toContain("RESTART");
+    expect(revokeStep.toLowerCase()).toContain("stays connected");
   });
 });
 

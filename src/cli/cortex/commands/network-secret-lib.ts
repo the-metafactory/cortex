@@ -320,8 +320,10 @@ export function renderHubOwnerArtifact(inputs: HubOwnerArtifactInputs): string[]
   lines.push("");
   lines.push(
     `Hand this snippet to whoever runs network "${inputs.networkId}"'s hub. After they add it, they ` +
-      "must validate (`nats-server -c <hub.conf> -t`) and reload (SIGHUP) their hub nats-server for " +
-      "the new leaf-authorization user to take effect.",
+      "must validate (`nats-server -c <hub.conf> -t`) and RESTART their hub nats-server for the new " +
+      "leaf-authorization user to take effect. A SIGHUP reload is NOT enough: nats-server rejects " +
+      "leafnode-authorization changes on reload and keeps the old auth (server/reload.go), so a " +
+      "reloaded hub will refuse the new member until it is restarted.",
   );
   return lines;
 }
@@ -450,7 +452,10 @@ async function addOrRotate(
     } catch (err) {
       return fail(action, inputs, steps, data, `failed to write/reload hub config: ${errText(err)}`);
     }
-    steps.push(`hub:        ${rotate ? "replaced" : "added"} authorization user "${leafUser}" + reloaded (psk ${fp})`);
+    steps.push(
+      `hub:        ${rotate ? "replaced" : "added"} authorization user "${leafUser}" in config (psk ${fp}) — ` +
+        `RESTART the hub nats-server for it to take effect (leaf-authorization is not applied by SIGHUP reload, server/reload.go)`,
+    );
   } else {
     // cortex#1481 — the #1 storm cause: DO NOT touch ports.hub at all. The
     // registry seal below still runs (machine-independent); the hub-owner
@@ -588,7 +593,12 @@ async function revokeMember(
   } catch (err) {
     return fail(action, inputs, steps, data, `failed to drop hub authorization user / reload: ${errText(err)}`);
   }
-  steps.push(`hub:        dropped authorization user "${leafUser}" + reloaded (transport CUT)`);
+  steps.push(
+    `hub:        dropped authorization user "${leafUser}" from config — ` +
+      `RESTART the hub nats-server to actually cut transport. A SIGHUP reload does NOT drop an ` +
+      `active leaf session (nats-server rejects leafnode-authorization reloads, server/reload.go): ` +
+      `until the hub restarts, the revoked member stays connected.`,
+  );
 
   // 2. Mark the admission row REVOKED (clears the sealed blob).
   try {

@@ -3,9 +3,15 @@
  *
  * The real side effects the orchestrator (`network-secret-lib.ts`) depends on:
  *   - HUB-LOCAL: read/write the hub nats-server config (chmod 600 — it carries
- *     leaf secrets) + reload it (SIGHUP — an in-place authorization reload, no
- *     restart). A `-c <conf> -t` syntax gate runs first so a malformed config
- *     never reaches a live reload.
+ *     leaf secrets) + SIGHUP it. A `-c <conf> -t` syntax gate runs first so a
+ *     malformed config never reaches a live reload.
+ *     CAVEAT (#1528): nats-server does NOT apply leafnode-`authorization`
+ *     changes on reload — `getLeafNodeOptionsChanges` rejects any `Users`
+ *     change and the server keeps the old auth (server/reload.go:921-941). So
+ *     the SIGHUP here applies any OTHER reloadable options but leaves the new/
+ *     dropped leaf user pending until the hub is RESTARTED. The orchestrator's
+ *     hub-owner-facing steps say so; the caller must not read "reloaded" as
+ *     "the authorization change is live".
  *   - REGISTRY: the admin-signed admission-row LOOKUP + the hub-admin-signed
  *     sealed-secret delivery / revoke POSTs.
  *
@@ -259,7 +265,11 @@ function buildLiveHubAuthPort(cfg: LiveSecretPortsConfig): HubAuthPort {
         );
       }
 
-      // SIGHUP — nats-server applies authorization changes in place, no restart.
+      // SIGHUP the hub. NOTE (#1528): nats-server does NOT apply leafnode-
+      // `authorization` (`Users`) changes on reload — it rejects that reload and
+      // keeps the old auth (server/reload.go:921-941). The signal still applies
+      // other reloadable options; the new/dropped leaf user takes effect only on
+      // a hub RESTART. Callers surface that to the hub owner (see network-secret-lib).
       try {
         sendSignal(pid, "SIGHUP");
       } catch (err) {
