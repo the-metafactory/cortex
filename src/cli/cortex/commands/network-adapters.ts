@@ -385,14 +385,12 @@ function buildRegistryPort(cfg: LivePortsConfig, mutate: boolean): NetworkRegist
 
   return {
     async registerStack() {
-      // DRY-RUN GATE (#1527) — register is a real registry mutation: it upserts
-      // the stack's pubkey AND raises a network-PINNED PENDING admission row an
+      // DRY-RUN GATE (#1527) — register is a registry MUTATION: it upserts the
+      // stack's pubkey AND raises a network-PINNED PENDING admission row an
       // admin can `admit`. A dry-run join (a preview) must NOT fire it, exactly
       // as `departFromNetwork` below gates its own POST. Without this, a
       // "dry-run first" join per the SOPs performs a live registration — the
-      // observation logged as join-issues-2026-06-26 §8. The rest of a dry-run
-      // join (fetchVerified, config rendering) is read-only, so skipping the
-      // register leaves a faithful preview.
+      // observation logged as join-issues-2026-06-26 §8.
       if (!mutate) {
         return { ok: true, note: "dry-run — registry register skipped (no mutation)" };
       }

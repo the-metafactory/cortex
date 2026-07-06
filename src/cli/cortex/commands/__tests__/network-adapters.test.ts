@@ -13,7 +13,7 @@
  * live ports bundle.
  */
 
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, afterEach, beforeEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, statSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
@@ -2431,20 +2431,32 @@ describe("#800 daemon restart port", () => {
 
 describe("#1527 dry-run registerStack gate", () => {
   const realFetch = globalThis.fetch;
-  afterEach(() => {
-    globalThis.fetch = realFetch;
-  });
+  let seedDir: string;
+  let seedPath: string;
 
   const cfgWithRegistry = () => ({
     networkId: "metafactory",
     principalId: "jc",
     stackId: "jc/default",
     platform: "darwin" as const,
-    // A reachable-looking registry + a seed: absent the gate, registerStack
-    // would attempt a live signed POST here.
+    // A reachable-looking registry + a REAL seed on disk: absent the gate,
+    // registerStack loads the seed, signs the claim, and POSTs it here.
     registryUrl: "https://registry.example.test",
-    seedPath: "/tmp/cortex-c1527-nonexistent.seed",
+    seedPath,
     announceCapabilities: ["code-review.typescript"],
+  });
+
+  // A genuine seed so the LIVE path's loadSeedMaterial succeeds and control
+  // actually reaches the network — otherwise a live-path test would fail at
+  // seed-load before ever exercising the gate (Sage HonestOracle catch).
+  beforeEach(() => {
+    seedDir = mkdtempSync(join(tmpdir(), "c1527-seed-"));
+    seedPath = join(seedDir, "stack.seed");
+    generateStackIdentity({ seedPath });
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    rmSync(seedDir, { recursive: true, force: true });
   });
 
   test("dry-run registerStack returns the skip note and makes ZERO fetch calls", async () => {
@@ -2462,14 +2474,21 @@ describe("#1527 dry-run registerStack gate", () => {
     expect(fetchCalls).toBe(0);
   });
 
-  test("live registerStack proceeds past the gate into real registration (not the dry-run note)", async () => {
-    // Same config; the live port does NOT short-circuit on the gate — it runs
-    // the real path, which here fails on the absent seed file. The point is
-    // that it does NOT return the dry-run skip note (proving the gate is scoped
-    // to dry-run), and the failure is a genuine registration attempt.
+  test("live registerStack reaches the registry POST (gate is dry-run only)", async () => {
+    // Same config + a valid seed, so the live path runs to completion and
+    // actually hits the network. We count fetch calls and throw to avoid a
+    // real registry — asserting fetchCalls > 0 proves it got PAST the gate to
+    // the transport (not merely that it avoided the dry-run note).
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("network down (test)");
+    }) as unknown as typeof fetch;
+
     const ports = buildLivePorts(cfgWithRegistry());
     const res = await ports.registry.registerStack();
 
+    expect(fetchCalls).toBeGreaterThan(0);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason.toLowerCase()).not.toContain("dry-run");
   });
