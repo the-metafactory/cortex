@@ -15,7 +15,12 @@ import { describe, test, expect } from "bun:test";
 import {
   encodeLeafSecretEnvelope,
   decodeLeafSecretEnvelope,
+  encodeLeafSecretEnvelopeV2,
+  decodeAnyLeafSecretEnvelope,
+  isLeafSecretEnvelopeV2,
+  UnsupportedEnvelopeVersionError,
   LEAF_SECRET_ENVELOPE_VERSION,
+  LEAF_SECRET_ENVELOPE_VERSION_V2,
 } from "../sealed-leaf-secret";
 
 // Clearly-fake placeholder key material — an all-A base64 blob, never real K.
@@ -99,5 +104,93 @@ describe("encodeLeafSecretEnvelope / decodeLeafSecretEnvelope", () => {
     });
     expect(json).not.toContain("payload_key_kid");
     expect(json).toContain("payload_key");
+  });
+
+  // #1596 — the v1 decoder must reject a KNOWN-newer envelope with a clear
+  // "upgrade" error, NOT the old misleading "missing leaf_psk" path (which the
+  // C-1315 diagnostic then reports as "sealed to a different pubkey / corrupted").
+  test("v1 decoder rejects a v2 payload with UnsupportedEnvelopeVersionError (not 'missing leaf_psk')", () => {
+    const v2blob = encodeLeafSecretEnvelopeV2({
+      creds: "-----BEGIN NATS USER JWT-----\nFAKE\n------END NATS USER JWT------\n",
+      leaf_user: "alice/lab",
+      minted_at: "2026-07-06T00:00:00.000Z",
+    });
+    expect(() => decodeLeafSecretEnvelope(v2blob)).toThrow(UnsupportedEnvelopeVersionError);
+    expect(() => decodeLeafSecretEnvelope(v2blob)).toThrow(/upgrade cortex/i);
+    expect(() => decodeLeafSecretEnvelope(v2blob)).not.toThrow(/missing leaf_psk/);
+  });
+});
+
+// Clearly-fake creds text — never realistic JWT/nkey material.
+const FAKE_CREDS =
+  "-----BEGIN NATS USER JWT-----\nFAKE.JWT.PART\n------END NATS USER JWT------\n" +
+  "-----BEGIN USER NKEY SEED-----\nSUAFAKEFAKEFAKE\n------END USER NKEY SEED------\n";
+const MINTED_AT = "2026-07-06T12:00:00.000Z";
+
+describe("v2 envelope (creds payload) — #1596", () => {
+  test("round-trips creds + leaf_user + minted_at via decodeAny", () => {
+    const env = decodeAnyLeafSecretEnvelope(
+      encodeLeafSecretEnvelopeV2({ creds: FAKE_CREDS, leaf_user: "alice/lab", minted_at: MINTED_AT }),
+    );
+    expect(env.v).toBe(LEAF_SECRET_ENVELOPE_VERSION_V2);
+    expect(isLeafSecretEnvelopeV2(env)).toBe(true);
+    if (isLeafSecretEnvelopeV2(env)) {
+      expect(env.creds).toBe(FAKE_CREDS);
+      expect(env.leaf_user).toBe("alice/lab");
+      expect(env.minted_at).toBe(MINTED_AT);
+      expect(env.payload_key).toBeUndefined();
+    }
+  });
+
+  test("v2 rides payload_key + kid (K on the same envelope)", () => {
+    const env = decodeAnyLeafSecretEnvelope(
+      encodeLeafSecretEnvelopeV2({
+        creds: FAKE_CREDS,
+        leaf_user: "alice/lab",
+        minted_at: MINTED_AT,
+        payload_key: FAKE_K,
+        payload_key_kid: FAKE_KID,
+      }),
+    );
+    expect(isLeafSecretEnvelopeV2(env)).toBe(true);
+    if (isLeafSecretEnvelopeV2(env)) {
+      expect(env.payload_key).toBe(FAKE_K);
+      expect(env.payload_key_kid).toBe(FAKE_KID);
+    }
+  });
+
+  test("decodeAny still decodes a v1 blob (and narrows to NOT v2)", () => {
+    const env = decodeAnyLeafSecretEnvelope(
+      encodeLeafSecretEnvelope({ leaf_psk: "psk-1", leaf_user: "alice" }),
+    );
+    expect(env.v).toBe(LEAF_SECRET_ENVELOPE_VERSION);
+    expect(isLeafSecretEnvelopeV2(env)).toBe(false);
+  });
+
+  test("decodeAny rejects an UNKNOWN newer version (v3) with the upgrade error", () => {
+    const v3 = JSON.stringify({ v: 3, creds: FAKE_CREDS, leaf_user: "alice/lab", minted_at: MINTED_AT });
+    expect(() => decodeAnyLeafSecretEnvelope(v3)).toThrow(UnsupportedEnvelopeVersionError);
+    expect(() => decodeAnyLeafSecretEnvelope(v3)).toThrow(/upgrade cortex/i);
+  });
+
+  test("v2 fails closed on a missing creds field", () => {
+    const bad = JSON.stringify({ v: 2, leaf_user: "alice/lab", minted_at: MINTED_AT });
+    expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/v2 payload missing creds/);
+  });
+
+  test("v2 fails closed on a missing minted_at field", () => {
+    const bad = JSON.stringify({ v: 2, creds: FAKE_CREDS, leaf_user: "alice/lab" });
+    expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/v2 payload missing minted_at/);
+  });
+
+  test("v2 fails closed on a missing leaf_user (subject) field", () => {
+    const bad = JSON.stringify({ v: 2, creds: FAKE_CREDS, minted_at: MINTED_AT });
+    expect(() => decodeAnyLeafSecretEnvelope(bad)).toThrow(/v2 payload missing leaf_user/);
+  });
+
+  test("a v2 blob carries no leaf_psk (the discriminant, not an either-field relaxation)", () => {
+    const json = encodeLeafSecretEnvelopeV2({ creds: FAKE_CREDS, leaf_user: "alice/lab", minted_at: MINTED_AT });
+    expect(json).not.toContain("leaf_psk");
+    expect(json).toContain('"v":2');
   });
 });
