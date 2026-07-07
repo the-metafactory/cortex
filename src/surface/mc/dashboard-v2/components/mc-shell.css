@@ -30,6 +30,35 @@
   overflow: auto;
 }
 
+/* ── CK-3 cockpit dock ────────────────────────────────────────────────────── */
+/* When a stack is dived into, the content splits into the framed pane (left) +
+   the stack-scoped cockpit dock (right). Above STACK the pane renders full-width
+   and neither of these selectors applies (non-regressive). */
+.mc-shell-split {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  min-height: 100%;
+}
+.mc-shell-pane {
+  flex: 1;
+  min-width: 0;
+}
+.mc-cockpit-dock {
+  width: 360px;
+  flex-shrink: 0;
+}
+
+/* Narrow viewports: drop the dock below the pane rather than squeezing both. */
+@media (max-width: 1100px) {
+  .mc-shell-split {
+    flex-direction: column;
+  }
+  .mc-cockpit-dock {
+    width: 100%;
+  }
+}
+
 /* ── Command bar (64px top chrome) ───────────────────────────────────────── */
 .mc-command-bar {
   display: flex;

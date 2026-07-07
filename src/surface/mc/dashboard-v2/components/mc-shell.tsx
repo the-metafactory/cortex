@@ -61,6 +61,14 @@ export interface McShellProps {
    * from the live agent snapshot + the transport overlay (`buildStackHeader`).
    */
   stackHeader?: StackHeaderModel | null;
+  /**
+   * CK-3 — the stack-scoped right-panel cockpit (ATTENTION / WORKING / GOVERN /
+   * DISPATCH folded). Present ONLY when a stack is dived into; `null`/absent above
+   * STACK → the framed pane renders full-width exactly as pre-CK-3 (non-regressive).
+   * The caller (`network-view`) builds it from the app-scope snapshots scoped to
+   * the dived stack.
+   */
+  cockpit?: ReactNode | null;
   /** The framed pane (the existing Network view body). */
   children: ReactNode;
 }
@@ -73,10 +81,20 @@ export function McShell({
   sessionTargets = [],
   onOpenSession,
   stackHeader = null,
+  cockpit = null,
   children,
 }: McShellProps) {
   const breadcrumb = buildBreadcrumb(selection);
   const posture = selectedNetworkPosture(networks, selection);
+
+  // The framed pane (stack header + the Network body). Shared between the
+  // cockpit-docked and full-width layouts so `children` renders identically.
+  const pane = (
+    <>
+      {stackHeader ? <McStackHeader model={stackHeader} /> : null}
+      {children}
+    </>
+  );
 
   return (
     <div className="mc-skin mc-shell">
@@ -100,8 +118,20 @@ export function McShell({
           {...(onOpenSession ? { onOpenSession } : {})}
         />
         <div className="mc-shell-content">
-          {stackHeader ? <McStackHeader model={stackHeader} /> : null}
-          {children}
+          {cockpit ? (
+            // CK-3 — dived into a stack: split the content into the framed pane +
+            // the stack-scoped right-panel cockpit dock.
+            <div className="mc-shell-split">
+              <div className="mc-shell-pane">{pane}</div>
+              <aside className="mc-cockpit-dock" aria-label="Stack cockpit">
+                {cockpit}
+              </aside>
+            </div>
+          ) : (
+            // Above STACK (or no cockpit): the pane renders full-width, exactly as
+            // pre-CK-3 — non-regressive.
+            pane
+          )}
         </div>
       </div>
     </div>

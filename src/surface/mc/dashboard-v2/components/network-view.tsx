@@ -79,6 +79,7 @@ import { NetworkSpotlight } from "./network-spotlight";
 import { NetworkRosterPanel } from "./network-roster-panel";
 import { PierQueue } from "./pier-queue";
 import { McShell } from "./mc-shell";
+import { McCockpit } from "./mc-cockpit";
 import {
   ROOT_SELECTION,
   diveToStack,
@@ -86,8 +87,11 @@ import {
   openSession,
   drillToNetwork,
   stackReachesSession,
+  selectedNetworkPosture,
   type AltitudeSelection,
 } from "../lib/mc-shell-model";
+import type { AttentionEntry } from "../../api/attention";
+import type { GovernanceState } from "../hooks/use-governance";
 import {
   stackCoordFromHub,
   stackCoordFromTile,
@@ -186,9 +190,26 @@ export interface NetworkViewProps {
    * REUSED F-7 drill-down overlay (App owns `setDrillId`). Never called for a
    * federated peer (ADR-0005 — `openSession` refuses one). Omitted → the SESSION
    * targets still dive the rail, but no interior mounts (a host without the drill
-   * wired, e.g. a test harness).
+   * wired, e.g. a test harness). ALSO the cockpit's working-tile / attention-session
+   * drill opener (CK-3) — a bare overlay open, without diving the rail.
    */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * CK-3 (cortex#1289) — the app-scope attention queue (whole-dashboard), scoped
+   * to the dived stack inside the cockpit. Omitted → the cockpit's ATTENTION lane
+   * shows its loading/empty state.
+   */
+  attention?: { entries: readonly AttentionEntry[]; loaded: boolean };
+  /**
+   * CK-3 — the app-scope governance audit (whole-dashboard), scoped to the dived
+   * stack inside the cockpit. Omitted → the GOVERN lane shows its loading state.
+   */
+  governance?: GovernanceState;
+  /** CK-3 — working-agents load/error, forwarded to the cockpit WORKING lane. */
+  workingLoaded?: boolean;
+  workingError?: string | null;
+  /** CK-3 — open the work-item-detail surface (attention work-item deep link). */
+  onOpenWorkItem?: (workItemId: string) => void;
 }
 
 export function NetworkView({
@@ -201,6 +222,11 @@ export function NetworkView({
   transportRoster = [],
   networks = [],
   onOpenSession,
+  attention = { entries: [], loaded: false },
+  governance = { data: null, loaded: false, error: null },
+  workingLoaded = false,
+  workingError = null,
+  onOpenWorkItem,
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
@@ -529,6 +555,47 @@ export function NetworkView({
     [state.agents, shellSelection.stack, fullTransportOverlay, servingPrincipal],
   );
 
+  // CK-3 — the stack-scoped right-panel cockpit, present ONLY when a stack is
+  // dived into. Folds ATTENTION/WORKING/GOVERN/DISPATCH scoped to `shellSelection.
+  // stack`, fed by the app-scope snapshots (single subscription). Posture is the
+  // dived network's (admin/member); the dispatch verb is admin-gated + own-local.
+  // Above STACK → null (McShell renders the pane full-width, exactly as pre-CK-3).
+  const cockpit = useMemo(() => {
+    if (shellSelection.stack === null) return null;
+    return (
+      <McCockpit
+        stack={shellSelection.stack}
+        posture={selectedNetworkPosture(networks, shellSelection)}
+        servingPrincipal={servingPrincipal}
+        presenceAgents={state.agents}
+        workingAgents={workingAgents}
+        workingLoaded={workingLoaded}
+        workingError={workingError}
+        attention={attention.entries}
+        attentionLoaded={attention.loaded}
+        governance={governance}
+        onOpenDrill={(id) => onOpenSession?.(id)}
+        {...(onOpenWorkItem ? { onOpenWorkItem } : {})}
+        {...(onDispatchDirect ? { onDispatchDirect } : {})}
+        {...(dispatchingAgentKeys ? { dispatchingAgentKeys } : {})}
+      />
+    );
+  }, [
+    shellSelection,
+    networks,
+    servingPrincipal,
+    state.agents,
+    workingAgents,
+    workingLoaded,
+    workingError,
+    attention,
+    governance,
+    onOpenSession,
+    onOpenWorkItem,
+    onDispatchDirect,
+    dispatchingAgentKeys,
+  ]);
+
   return (
     <McShell
       principal={servingPrincipal}
@@ -538,6 +605,7 @@ export function NetworkView({
       sessionTargets={sessionTargets}
       onOpenSession={handleOpenSession}
       stackHeader={stackHeader}
+      cockpit={cockpit}
     >
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
       <h2>Network</h2>
