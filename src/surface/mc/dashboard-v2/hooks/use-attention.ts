@@ -19,10 +19,27 @@ interface AttentionResponse {
   attention: AttentionEntry[];
 }
 
+export interface AttentionQueue {
+  entries: AttentionEntry[];
+  loaded: boolean;
+  /**
+   * CK-6b — reconcile the queue with server truth. Called after a resolve/dismiss
+   * POST settles: on success it confirms the drop, on failure it RESTORES the row
+   * (the item is still `open` server-side), so the optimistic removal self-heals.
+   * Ungated (a mutation implies the surface is live), unlike the projection refetch.
+   */
+  refetch: () => void;
+  /**
+   * CK-6b — optimistically remove an item by id for instant feedback the moment a
+   * lifecycle button is pressed, before the POST resolves. `refetch` reconciles.
+   */
+  dropOptimistic: (attentionId: string) => void;
+}
+
 export function useAttention(
   ws: WsClient,
   enabled: boolean
-): { entries: AttentionEntry[]; loaded: boolean } {
+): AttentionQueue {
   const [entries, setEntries] = useState<AttentionEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -75,5 +92,15 @@ export function useAttention(
   }, [load]);
   useProjectionRefetch(ws, "attention", refetch);
 
-  return { entries, loaded };
+  // CK-6b — ungated reload for post-mutation reconcile (see AttentionQueue.refetch).
+  const reload = useCallback(() => {
+    void load();
+  }, [load]);
+
+  const dropOptimistic = useCallback((attentionId: string) => {
+    if (!aliveRef.current) return;
+    setEntries((prev) => prev.filter((e) => e.item.id !== attentionId));
+  }, []);
+
+  return { entries, loaded, refetch: reload, dropOptimistic };
 }

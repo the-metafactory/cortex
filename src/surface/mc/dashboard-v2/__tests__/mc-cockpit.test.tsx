@@ -154,6 +154,27 @@ describe("McCockpit — own-local stack", () => {
     expect(html).toContain("No local agent online to dispatch");
   });
 
+  it("CK-6b — renders Resolve/Dismiss on the ATTENTION lane when onAttentionLifecycle is wired", () => {
+    const html = render({
+      attention: [attn("mine", "meta-factory")],
+      onAttentionLifecycle: () => {},
+    });
+    expect(html).toContain("attention-resolve");
+    expect(html).toContain("attention-dismiss");
+    expect(html).toContain("Resolve");
+    expect(html).toContain("Dismiss");
+    // truth-not-theater: no Approve/Deny leaks through the fold.
+    expect(html.toLowerCase()).not.toContain("approve");
+    expect(html.toLowerCase()).not.toContain("deny");
+    expect(html).not.toContain(FORBIDDEN);
+  });
+
+  it("CK-6b — renders NO lifecycle buttons when onAttentionLifecycle is omitted", () => {
+    const html = render({ attention: [attn("mine", "meta-factory")] });
+    expect(html).not.toContain("attention-action");
+    expect(html).not.toContain("attention-resolve");
+  });
+
   it("renders the CK-4b cross-stack 'Across stacks' lane above the LOCAL grid", () => {
     const html = render({
       workingAggregation: [
@@ -187,6 +208,21 @@ describe("McCockpit — federated peer (ADR-0005)", () => {
     expect(html).not.toContain("attention-view");
     expect(html).not.toContain("working-grid-section");
     expect(html).not.toContain("dispatch-btn");
+  });
+
+  it("CK-6b — never renders resolve/dismiss for a federated peer (ADR-0005 scope)", () => {
+    // Even with the lifecycle handler wired + open items, a peer bottoms out at
+    // the aggregate notice — its attention interior (and mutations) never render.
+    const html = render({
+      stack: PEER,
+      posture: "member",
+      attention: [attn("theirs", "home")],
+      onAttentionLifecycle: () => {},
+    });
+    expect(html).toContain("AGGREGATE ONLY");
+    expect(html).not.toContain("attention-resolve");
+    expect(html).not.toContain("attention-dismiss");
+    expect(html).not.toContain("attention-action");
   });
 
   it("does NOT render the CK-4b cross-stack lane for a federated peer", () => {

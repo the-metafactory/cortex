@@ -87,6 +87,15 @@ export interface McCockpitProps {
   /** Open the work-item-detail surface (attention work-item deep link). */
   onOpenWorkItem?: (workItemId: string) => void;
   /**
+   * CK-6b — resolve/dismiss an attention item via the FND-6-gated CK-6a route
+   * (`POST /api/attention/:id/{resolve,dismiss}`). App owns the call + identity
+   * context (mirrors `onDispatchDirect`). Only wired on the own-local render path
+   * below — a federated peer bottoms out at the aggregate notice, so its attention
+   * interior (and these mutations) never render (ADR-0005). Approve/Deny is NOT
+   * part of this contract (SPX-7/SPX-8, post-release).
+   */
+  onAttentionLifecycle?: (attentionId: string, action: "resolve" | "dismiss") => void;
+  /**
    * Dispatch DIRECTLY to a local agent via the FND-6-gated `/api/sessions` path
    * (App owns the call + identity context). Admin-posture + own-local only.
    */
@@ -111,6 +120,7 @@ export function McCockpit({
   governance,
   onOpenDrill,
   onOpenWorkItem,
+  onAttentionLifecycle,
   onDispatchDirect,
   dispatchingAgentKeys,
 }: McCockpitProps) {
@@ -143,6 +153,7 @@ export function McCockpit({
           loaded={attentionLoaded}
           {...(onOpenWorkItem ? { onOpenWorkItem } : {})}
           onOpenAssignment={onOpenDrill}
+          {...(onAttentionLifecycle ? { onLifecycle: onAttentionLifecycle } : {})}
         />
       </section>
 

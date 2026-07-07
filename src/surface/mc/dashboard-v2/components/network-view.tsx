@@ -231,6 +231,12 @@ export interface NetworkViewProps {
   /** CK-3 — open the work-item-detail surface (attention work-item deep link). */
   onOpenWorkItem?: (workItemId: string) => void;
   /**
+   * CK-6b — resolve/dismiss an attention item (drives the CK-6a route). Forwarded
+   * to the cockpit's own-local ATTENTION lane; the host (App) owns the POST +
+   * identity context + optimistic reconcile. Omitted → the queue is read-only.
+   */
+  onAttentionLifecycle?: (attentionId: string, action: "resolve" | "dismiss") => void;
+  /**
    * CK-5 (cortex#1292) — the app-scope WebSocket client. The constellation's live
    * traffic (dash-flow + atmosphere + bus-traffic strip) rides this ONE socket as
    * a wildcard subscriber (decision D-10 — no second feed, no poll). Omitted → a
@@ -269,6 +275,7 @@ export function NetworkView({
   workingAggregationLoaded = false,
   workingAggregationError = null,
   onOpenWorkItem,
+  onAttentionLifecycle,
   ws,
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
@@ -656,6 +663,7 @@ export function NetworkView({
         governance={governance}
         onOpenDrill={(id) => onOpenSession?.(id)}
         {...(onOpenWorkItem ? { onOpenWorkItem } : {})}
+        {...(onAttentionLifecycle ? { onAttentionLifecycle } : {})}
         {...(onDispatchDirect ? { onDispatchDirect } : {})}
         {...(dispatchingAgentKeys ? { dispatchingAgentKeys } : {})}
       />
@@ -675,6 +683,7 @@ export function NetworkView({
     governance,
     onOpenSession,
     onOpenWorkItem,
+    onAttentionLifecycle,
     onDispatchDirect,
     dispatchingAgentKeys,
   ]);

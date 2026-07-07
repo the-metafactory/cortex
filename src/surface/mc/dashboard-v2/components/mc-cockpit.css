@@ -113,6 +113,31 @@
 .mc-cockpit .attention-link:hover {
   text-decoration: underline;
 }
+/* CK-6b — resolve / dismiss lifecycle buttons (own-local stack only). */
+.mc-cockpit .attention-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+.mc-cockpit .attention-action {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--dim);
+  font: 600 9px var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.mc-cockpit .attention-action:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+.mc-cockpit .attention-resolve:hover {
+  color: var(--ok);
+  border-color: var(--ok);
+}
 
 /* ── WORKING lane ─────────────────────────────────────────────────────────── */
 /* Single-column tiles — the dock is narrow, so the multi-column grid collapses. */

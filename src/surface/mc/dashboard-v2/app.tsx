@@ -669,6 +669,36 @@ export function App() {
               setWorkItemBackView("network");
               setView("work-item-detail");
             }}
+            // CK-6b — resolve/dismiss an attention item via the CK-6a route
+            // (`POST /api/attention/:id/{resolve,dismiss}` over `db/attention
+            // setStatus`), gated by FND-6 identity. App owns the call + identity
+            // context (mirrors `onDispatchDirect`). Optimistic: drop the row now,
+            // then reconcile — `refetch` restores it if the POST failed (the item
+            // is still `open` server-side). Approve/Deny is NOT wired (SPX-7/SPX-8).
+            onAttentionLifecycle={async (attentionId, action) => {
+              attention.dropOptimistic(attentionId);
+              try {
+                await postJson<Record<string, never>, unknown>(
+                  `/api/attention/${encodeURIComponent(attentionId)}/${action}`,
+                  {},
+                );
+                showToast(
+                  action === "resolve" ? "Attention resolved" : "Attention dismissed",
+                  "ok",
+                );
+              } catch (e) {
+                const msg =
+                  e instanceof ApiFailure
+                    ? e.info.message
+                    : e instanceof Error
+                      ? e.message
+                      : String(e);
+                showToast(`Could not ${action} attention: ${msg}`, "error");
+              } finally {
+                // Reconcile with server truth (restores the row on failure).
+                attention.refetch();
+              }
+            }}
             onViewInWorkingGrid={() => setView("default")}
             // CK-1 (cortex#1289) — diving the altitude rail to SESSION (an
             // own-local assistant's session) opens the REUSED F-7 drill-down —
