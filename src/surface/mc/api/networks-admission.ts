@@ -229,8 +229,15 @@ function parseBody(
  *      · verified JWT carries no `email` claim ⇒ 401
  *
  * Returns the resolved principal email, or a `Response` to return verbatim.
+ *
+ * FND-6 (cortex#, docs/plan-mc-future-state.md §4.0): exported + generalized so
+ * the shared mutation guard (`mutation-guard.ts`) resolves identity for EVERY
+ * governed glass mutation (`/api/sessions`, `/requeue`, `/abandon`, …) through
+ * the SAME bind-conditioned Gate-1 the admission route uses — one auth path, no
+ * drift. The error KEYS (`unauthenticated` / `not_configured`) are load-bearing
+ * (asserted by the admission unit tests); only the `detail` copy is generic.
  */
-async function resolveAdmissionPrincipal(
+export async function resolveRequestPrincipal(
   auth: AdmissionAuthContext,
 ): Promise<string | Response> {
   if (auth.isLoopback) {
@@ -240,8 +247,8 @@ async function resolveAdmissionPrincipal(
         {
           error: "unauthenticated",
           detail:
-            "a CF-Access authenticated principal identity is required to admit/reject " +
-            `(missing/empty ${CF_ACCESS_EMAIL_HEADER}). This mutation is not available on an unauthenticated request.`,
+            "a CF-Access authenticated principal identity is required for this mutation " +
+            `(missing/empty ${CF_ACCESS_EMAIL_HEADER}). This control-plane mutation is not available on an unauthenticated request.`,
         },
         401,
       );
@@ -256,7 +263,7 @@ async function resolveAdmissionPrincipal(
         error: "not_configured",
         detail:
           "cf-access is not configured for a non-loopback Mission Control bind — set " +
-          "`cfAccess.aud` (the Access application audience) so admit/reject can verify " +
+          "`cfAccess.aud` (the Access application audience) so this mutation can verify " +
           `the ${CF_ACCESS_JWT_HEADER}. Refusing to trust the raw email header off loopback.`,
       },
       503,
@@ -269,7 +276,7 @@ async function resolveAdmissionPrincipal(
       {
         error: "unauthenticated",
         detail:
-          "a verified CF-Access JWT is required to admit/reject on a non-loopback bind " +
+          "a verified CF-Access JWT is required for this mutation on a non-loopback bind " +
           `(missing/empty ${CF_ACCESS_JWT_HEADER}).`,
       },
       401,
@@ -283,7 +290,7 @@ async function resolveAdmissionPrincipal(
         error: "unauthenticated",
         detail:
           "the CF-Access JWT failed verification (bad signature, wrong audience/issuer, " +
-          "expired, or not yet valid). Refusing to admit/reject.",
+          "expired, or not yet valid). Refusing the mutation.",
       },
       401,
     );
@@ -294,7 +301,7 @@ async function resolveAdmissionPrincipal(
     return json(
       {
         error: "unauthenticated",
-        detail: "the verified CF-Access JWT carries no `email` claim to attribute the decision to.",
+        detail: "the verified CF-Access JWT carries no `email` claim to attribute the mutation to.",
       },
       401,
     );
@@ -317,7 +324,7 @@ export async function handleAdmissionDecision(
   rawBody: unknown,
 ): Promise<Response> {
   // Gate 1 — a CF-Access principal identity is required for a mutation.
-  const who = await resolveAdmissionPrincipal(auth);
+  const who = await resolveRequestPrincipal(auth);
   if (who instanceof Response) return who;
 
   // Gate 2 — body shape + typed-confirm.

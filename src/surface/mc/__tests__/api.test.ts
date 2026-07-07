@@ -12,6 +12,8 @@ import {
   expect,
   beforeEach,
   afterEach,
+  beforeAll,
+  afterAll,
   spyOn,
 } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -37,6 +39,26 @@ const fakeCatSpawn: SpawnFn = () =>
     stdout: "pipe",
     stderr: "pipe",
   });
+
+// FND-6: mutating routes (`/api/sessions`, `/input`, …) now require a CF-Access
+// identity on the loopback bind (mutation-guard identity gate). This file
+// exercises HANDLER behavior across the whole REST surface, not the gate (which
+// has dedicated coverage in mutation-guard-rebinding.test.ts), so inject the
+// loopback principal header on every test-server call. Non-mutating GETs ignore
+// it; guarded POSTs pass Gate 1 through it.
+const _realFetch = globalThis.fetch;
+beforeAll(() => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Cf-Access-Authenticated-User-Email")) {
+      headers.set("Cf-Access-Authenticated-User-Email", "principal@example.com");
+    }
+    return _realFetch(input, { ...init, headers });
+  }) as unknown as typeof globalThis.fetch;
+});
+afterAll(() => {
+  globalThis.fetch = _realFetch;
+});
 
 interface TestContext {
   db: Database;
