@@ -52,13 +52,29 @@ NATS, and the config `.conf` are identical); only the **service manager** differ
 
 **Path A — arc-managed (preferred when `arc` is available):**
 
+**First-time install.** cortex is not published to the arc registry yet, so
+`arc install cortex` (by *name*) reports *"not found in any source"* — and
+`arc upgrade cortex` reports *"not installed"* (upgrade is the *update* command,
+not the first step). Install by **git URL** instead: the repo is public and
+ships an `arc-manifest.yaml`, so arc installs it directly.
+
 ```bash
-arc upgrade cortex
+arc install https://github.com/the-metafactory/cortex --pin vX.Y.Z
 ```
 
-This installs the released package and renders + loads the launchd agents
-(`ai.meta-factory.cortex.*`). Note: `arc upgrade` tracks **GitHub releases**,
-not `main`.
+Use the latest release tag for `vX.Y.Z` (see the repo's
+[releases](https://github.com/the-metafactory/cortex/releases)). This installs
+the released package and renders + loads the launchd agents
+(`ai.meta-factory.cortex.*`).
+
+**Updates.** Once installed, track new GitHub releases with `arc upgrade cortex`
+(it tracks **GitHub releases**, not `main`, and only works on an
+already-installed package).
+
+> If you see a `404 … metafactory-registry … REGISTRY.yaml` warning, that's a
+> stale default source ([arc#267](https://github.com/the-metafactory/arc/issues/267)),
+> not a cortex problem — silence it with `arc source remove metafactory-registry`.
+> The git-URL install above never touches the registry.
 
 **Ordering:** seed auto-provisioning reads `stack.nkey_seed_path` from the
 stack config — which doesn't exist until §3.1 scaffolds it. On a fresh machine:
