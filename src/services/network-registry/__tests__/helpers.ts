@@ -151,10 +151,15 @@ export async function makeSignedAdminRead(
     issuedAt?: string;
     /** Sign with a DIFFERENT key — forged signature test. */
     signWith?: PrincipalKey;
+    /** FND-5 — bind an optional network scope into the signed claim. */
+    networkId?: string;
   } = {},
 ): Promise<{ claim: AdmissionReadClaim; signature: string }> {
   const claim: AdmissionReadClaim = {
     admin_pubkey: adminKey.publicKeyB64,
+    // Only include network_id when supplied — keeps canonicalJSON stable for the
+    // backward-compatible two-field (unscoped, global) read claim.
+    ...(opts.networkId !== undefined && { network_id: opts.networkId }),
     issued_at: opts.issuedAt ?? new Date().toISOString(),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));

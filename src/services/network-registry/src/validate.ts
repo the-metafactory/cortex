@@ -741,13 +741,32 @@ export function validateSignedAdmissionRead(
       errors: [{ field: "claim.admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" }],
     };
   }
+  // FND-5 — OPTIONAL network scope. When present it must be a well-formed
+  // network id; the read gate then FORCES a per-network admin's read to it.
+  if (
+    bc.network_id !== undefined &&
+    (typeof bc.network_id !== "string" || !isValidNetworkId(bc.network_id))
+  ) {
+    return {
+      ok: false,
+      errors: [{ field: "claim.network_id", message: "must be a valid network id" }],
+    };
+  }
   if (typeof bc.issued_at !== "string" || Number.isNaN(Date.parse(bc.issued_at))) {
     return { ok: false, errors: [{ field: "claim.issued_at", message: "must be an ISO-8601 timestamp" }] };
   }
   return {
     ok: true,
     signed: {
-      claim: { admin_pubkey: bc.admin_pubkey, issued_at: bc.issued_at },
+      // Reconstruct the claim the caller signed. Include network_id ONLY when
+      // supplied — so the signature verifies over the same canonicalJSON bytes
+      // whether or not the caller scoped the read (backward compatible with the
+      // pre-FND-5 two-field claim).
+      claim: {
+        admin_pubkey: bc.admin_pubkey,
+        ...(typeof bc.network_id === "string" && { network_id: bc.network_id }),
+        issued_at: bc.issued_at,
+      },
       signature: b.signature,
     },
   };
