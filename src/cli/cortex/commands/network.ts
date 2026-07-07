@@ -2235,8 +2235,8 @@ async function runCreate(
   if (resolverModeRaw !== undefined && hubModeRaw !== "operator") {
     return usageError("create", `--resolver-mode requires --hub-mode operator`, json);
   }
-  const hubMode = hubModeRaw as "operator" | "simple" | undefined;
-  const resolverMode = resolverModeRaw as "nats" | "memory" | undefined;
+  const hubMode = hubModeRaw;
+  const resolverMode = resolverModeRaw;
 
   // Load the admin nkey seed + derive its base64 pubkey (the SAME key shape +
   // signing path provision-stack uses), then build the signed claim.

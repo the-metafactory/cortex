@@ -7,6 +7,12 @@
 > [`design-mission-control-cortex-cockpit.md`](./design-mission-control-cortex-cockpit.md) and
 > [`glossary-mission-control.md`](./glossary-mission-control.md) (tracked under
 > [G-1113](https://github.com/the-metafactory/cortex/issues/354)).
+>
+> **Superseded (Spawn premise specifically):** the head/hands/execution integration this doc sketches
+> is superseded by [`design-distributed-agent-execution.md`](./design-distributed-agent-execution.md)
+> (Mode A — recovered under FND-2, `docs/plan-mc-future-state.md` §4.C). That doc's own header states
+> it plainly: "Spawn is superseded — integrate the shipped product (Managed Agents / CF sandboxes), do
+> not rebuild the engine." Read this file for lineage only.
 
 <!-- lifted-from-grove-v2-at-MIG-7.11 -->
 <!-- Original location: github.com/the-metafactory/grove-v2 docs/design-spawn-integration.md -->
