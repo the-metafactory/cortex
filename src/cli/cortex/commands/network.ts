@@ -2338,21 +2338,15 @@ async function runCreate(
     return opError("create", reason, json);
   }
 
-  // #1652 — seed THIS admin's descriptor cache with the network they just wrote,
-  // so a subsequent `admit` on the SAME machine resolves the operator-mode
-  // attestation (hub_mode / resolver_mode) off the VERIFIED descriptor. Nothing
-  // else populates the cache for the create-then-admit hub-owner flow — only
-  // `join` does — so without this the hub owner's admit sees no hub_mode and
-  // silently falls back to the simple/PSK path (the #1610 fail-open, confirmed
-  // live in #1652). Best-effort + verified: a failure NEVER fails the create (the
-  // row IS written), but it IS surfaced (stderr + the --json `descriptor_cached`
-  // field) so an operator knows admit will fall back to local-config hub_mode
-  // rather than silently going PSK.
+  // #1652 — seed this admin's descriptor cache so a later `admit` here resolves
+  // the operator-mode attestation (see {@link seedAdminDescriptorCache}). Never
+  // fails create; surfaced on failure so admit doesn't silently go PSK.
   const seed = await seedAdminDescriptorCache(networkId, registryUrl, optionalValueFlag(flags, "--registry-pubkey"));
   if (!seed.seeded) {
     process.stderr.write(
-      `cortex network create: (note) descriptor cache NOT seeded for "${networkId}" (${seed.reason ?? "unknown"}) — ` +
-        `a subsequent admit will fall back to your local config's hub_mode (declare policy.federated.networks[${networkId}].hub_mode)\n`,
+      `cortex network create: (note) descriptor cache NOT seeded for "${networkId}" (${seed.reason ?? "unknown"}). ` +
+        `A later admit here resolves hub_mode from this cache OR the networks[] entry whose id is "${networkId}". ` +
+        `If NEITHER is present, admit takes the simple/PSK path (the #1610 fail-open) — set hub_mode on that networks[] entry, or re-run create when the registry is reachable, before admitting on an operator network.\n`,
     );
   }
 
