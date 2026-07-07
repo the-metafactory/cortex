@@ -5,6 +5,7 @@
 import type { AssignmentListItem, MostActiveAgent } from "../db/assignments";
 import type { TaskListItem } from "../db/tasks";
 import type { WorkingAgentTile } from "../db/working-agents";
+import type { WorkingStackAggregate } from "../db/working-aggregation";
 import type { AgentOrigin } from "./agents";
 import type {
   InboxItem,
@@ -73,6 +74,26 @@ export interface ListTasksResponse {
  */
 export interface ListWorkingAgentsResponse {
   agents: (WorkingAgentTile & { origin?: AgentOrigin })[];
+}
+
+// --- GET /api/working-aggregation ---
+
+/**
+ * CK-4b (cortex#1295) — cross-stack WORKING aggregation feed for the cockpit's
+ * pane-of-glass lane. One METADATA rollup per origin stack (keyed on the schema
+ * `origin_stack_id`, decision D-8) from CK-4a's `listWorkingAggregation`: active
+ * + sub-agent (session-tree child) counts and a provider-retry hint.
+ *
+ * Metadata ONLY — the shape carries NO session id, prompt, or interior (ADR-0005
+ * / the `db/working-aggregation.ts` scope boundary). A federated PEER's origin
+ * yields the SAME metadata rollup as a local origin; dispatch + interior drill
+ * stay LOCAL-only (served by `/api/working-agents` + the F-7 drill-down).
+ *
+ * `providerRetry` is local-only back-pressure and is populated here (the cloud
+ * `/api/state` DashboardSnapshot projection carries the same field but null).
+ */
+export interface ListWorkingAggregationResponse {
+  aggregation: WorkingStackAggregate[];
 }
 
 // --- POST /api/sessions ---

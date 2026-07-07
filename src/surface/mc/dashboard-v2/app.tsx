@@ -18,6 +18,7 @@ import { WorkingGrid } from "./components/working-grid";
 import { useIterations } from "./hooks/use-iterations";
 import { useMetrics } from "./hooks/use-metrics";
 import { useWorkingAgents } from "./hooks/use-working-agents";
+import { useWorkingAggregation } from "./hooks/use-working-aggregation";
 import { MetricsPanel } from "./components/metrics-panel";
 import { SourcesView } from "./components/sources-view";
 import { RepositoriesView } from "./components/repositories-view";
@@ -97,6 +98,10 @@ export function App() {
   const focus = useFocusArea(ws);
   const tasks = useTasks(ws);
   const working = useWorkingAgents(ws);
+  // CK-4b (cortex#1295) — cross-stack WORKING rollup feed for the cockpit's
+  // "Across stacks" pane-of-glass lane. App-level (principal-wide, own stacks),
+  // mirroring `useWorkingAgents`; forwarded through NetworkView → McCockpit.
+  const workingAgg = useWorkingAggregation(ws);
   const iterations = useIterations(ws);
 
   // G-1113.C.6 — batch-fetch PR/branch links for the visible github-sourced
@@ -643,6 +648,11 @@ export function App() {
             governance={governance}
             workingLoaded={working.loaded}
             workingError={working.error}
+            // CK-4b — cross-stack WORKING rollup (metadata-only, ADR-0005) for
+            // the cockpit's "Across stacks" lane above the LOCAL working grid.
+            workingAggregation={workingAgg.aggregation}
+            workingAggregationLoaded={workingAgg.loaded}
+            workingAggregationError={workingAgg.error}
             // CK-3 — cockpit attention work-item deep link → work-item-detail
             // (returns to the Network view). Needs software mode (the surface is
             // software-mode-gated); honest toast otherwise.

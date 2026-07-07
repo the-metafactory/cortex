@@ -32,6 +32,7 @@ import {
   handleListIterations,
   handleListTasks,
   handleListWorkingAgents,
+  handleListWorkingAggregation,
   handlePatchIteration,
   handlePreviewTask,
   handleRequeueAssignment,
@@ -531,6 +532,7 @@ export function startServer(
  *   GET  /api/focus-area                 — blocked-only feed for dashboard §8.2
  *   GET  /api/tasks                      — task-keyed feed for dashboard §8.4 (F-8)
  *   GET  /api/working-agents             — agent-keyed feed for dashboard §8.3 (F-9)
+ *   GET  /api/working-aggregation        — cross-stack WORKING rollup (CK-4b, metadata-only)
  *   GET  /api/assignments/:id/events     — paged event feed (F-7 drill-down)
  *   POST /api/sessions                   — create controlled session
  *   POST /api/assignments/:id/input      — write turn to an active session
@@ -776,6 +778,16 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListWorkingAgents(db, localAggregation);
+  }
+
+  // CK-4b (cortex#1295) — GET /api/working-aggregation — cross-stack WORKING
+  // rollup (schema-origin-keyed metadata) for the cockpit's pane-of-glass lane.
+  // Metadata-only (ADR-0005): counts + provider-retry, never a session interior.
+  if (pathname === "/api/working-aggregation") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return handleListWorkingAggregation(db);
   }
 
   // G-1114.B.4 — GET /api/agents — stack-local runtime agent-presence snapshot

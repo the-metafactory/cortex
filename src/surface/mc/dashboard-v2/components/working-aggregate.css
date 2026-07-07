@@ -1,0 +1,120 @@
+/*
+ * CK-4b (cortex#1295) — cross-stack WORKING aggregate lane styles.
+ *
+ * Metadata-only pane-of-glass rollup that sits above the cockpit's local,
+ * drillable WorkingGrid. Uses the mc-skin D1 tokens (already in scope under
+ * `.mc-cockpit`) so it re-skins cleanly with zero blast radius on `?legacy=1`.
+ */
+
+.working-aggregate-section {
+  margin-bottom: 12px;
+}
+
+.working-aggregate-title {
+  font: 700 10px var(--mono);
+  color: var(--faint);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.working-aggregate-empty,
+.working-aggregate-error {
+  font: 500 11px var(--sans);
+  color: var(--dim);
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.working-aggregate-error {
+  color: var(--warn, var(--dim));
+  border-style: solid;
+}
+
+.working-aggregate-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.working-aggregate-tile {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel2);
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A cross-stack (non-local) origin gets a subtle accent edge so the pane-of-glass
+   reads at a glance which tiles are OTHER stacks vs this one. */
+.working-aggregate-tile[data-origin-kind="cross-stack"] {
+  border-left: 2px solid var(--accent, var(--mer));
+}
+
+.working-aggregate-origin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.working-aggregate-origin-mark {
+  color: var(--dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.working-aggregate-origin-label {
+  font: 600 11px var(--mono);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-aggregate-origin-tag {
+  font: 600 8px var(--mono);
+  color: var(--faint);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.working-aggregate-counts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 10px var(--mono);
+  color: var(--dim);
+}
+
+.working-aggregate-dot {
+  color: var(--faint);
+}
+
+/* Honest queued / provider back-pressure chip (D-9: queued-only, no capacity copy). */
+.working-aggregate-queued {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 9px var(--mono);
+  color: var(--warn, var(--dim));
+  letter-spacing: 0.02em;
+}
+
+.working-aggregate-queued-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn, var(--dim));
+  flex-shrink: 0;
+}

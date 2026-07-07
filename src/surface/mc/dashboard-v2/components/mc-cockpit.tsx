@@ -36,6 +36,7 @@
 
 import { AttentionView } from "./attention-view";
 import { WorkingGrid } from "./working-grid";
+import { WorkingAggregate } from "./working-aggregate";
 import { GovernanceView } from "./governance-view";
 import { DispatchButton } from "./dispatch-button";
 import {
@@ -47,6 +48,7 @@ import {
 import { stackLabel, type StackCoord, type NetworkPosture } from "../lib/mc-shell-model";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
+import type { WorkingStackAggregate } from "../hooks/use-working-aggregation";
 import type { AttentionEntry } from "../../api/attention";
 import type { GovernanceState } from "../hooks/use-governance";
 import "./mc-cockpit.css";
@@ -64,6 +66,17 @@ export interface McCockpitProps {
   workingAgents: readonly WorkingAgentTile[];
   workingLoaded: boolean;
   workingError: string | null;
+  /**
+   * CK-4b (cortex#1295) — the cross-stack WORKING rollup: one METADATA tile per
+   * origin stack (ADR-0005 metadata-only), rendered as the "Across stacks"
+   * pane-of-glass lane ABOVE the LOCAL, drillable `WorkingGrid`. Optional so a
+   * caller that doesn't wire the feed simply omits the lane (the hook lives at
+   * App level, mirroring `workingAgents`). Own-local render only — a federated
+   * peer bottoms out at the aggregate notice before this lane.
+   */
+  workingAggregation?: readonly WorkingStackAggregate[];
+  workingAggregationLoaded?: boolean;
+  workingAggregationError?: string | null;
   /** Attention queue (whole-dashboard) — scoped to the stack. */
   attention: readonly AttentionEntry[];
   attentionLoaded: boolean;
@@ -90,6 +103,9 @@ export function McCockpit({
   workingAgents,
   workingLoaded,
   workingError,
+  workingAggregation = [],
+  workingAggregationLoaded = false,
+  workingAggregationError = null,
   attention,
   attentionLoaded,
   governance,
@@ -132,6 +148,13 @@ export function McCockpit({
 
       {/* ── WORKING — whose hands are working, on this stack ────────────────── */}
       <section className="mc-cockpit-lane" aria-label="Working (stack)">
+        {/* CK-4b — the cross-stack "Across stacks" pane-of-glass rollup
+            (metadata-only, ADR-0005) sits ABOVE the LOCAL, drillable grid. */}
+        <WorkingAggregate
+          aggregates={workingAggregation}
+          loaded={workingAggregationLoaded}
+          error={workingAggregationError}
+        />
         <WorkingGrid
           agents={scopedWorking}
           loaded={workingLoaded}

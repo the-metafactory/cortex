@@ -30,6 +30,7 @@ import type {
   ListIterationsResponse,
   ListTasksResponse,
   ListWorkingAgentsResponse,
+  ListWorkingAggregationResponse,
   SendInputRequest,
   SendInputResponse,
 } from "./types";
@@ -51,6 +52,7 @@ import {
   listTasks,
 } from "../db/tasks";
 import { listWorkingAgents } from "../db/working-agents";
+import { listWorkingAggregation } from "../db/working-aggregation";
 import {
   aggregateWorkingAgents,
   type LocalAggregationContext,
@@ -472,6 +474,36 @@ export function handleListWorkingAgents(
     );
     return error(
       `Failed to list working agents: ${(err as Error).message}`,
+      500
+    );
+  }
+}
+
+// ---------- GET /api/working-aggregation ----------
+
+/**
+ * CK-4b (cortex#1295) — cross-stack WORKING aggregation feed for the cockpit's
+ * pane-of-glass lane. Projects CK-4a's `listWorkingAggregation` read model: one
+ * METADATA rollup per origin stack (schema `origin_stack_id`), with active +
+ * sub-agent (session-tree child) counts and a provider-retry hint.
+ *
+ * On an aggregating (#1008 MC-DB) daemon the local db already holds each readable
+ * sibling stack's sessions tagged with their `origin_stack_id`, so a single
+ * `listWorkingAggregation(db)` naturally spans the principal's own stacks — no
+ * `LocalAggregationContext` fan-out needed (unlike `/api/working-agents`). The
+ * result is metadata-only (ADR-0005): no session id, prompt, or interior crosses
+ * this feed, so a federated PEER's rollup is the same shape as a local one.
+ */
+export function handleListWorkingAggregation(db: Database): Response {
+  try {
+    const aggregation = listWorkingAggregation(db);
+    return json({ aggregation } satisfies ListWorkingAggregationResponse);
+  } catch (err) {
+    process.stderr.write(
+      `[api] GET /api/working-aggregation failed: ${(err as Error).message}\n`
+    );
+    return error(
+      `Failed to list working aggregation: ${(err as Error).message}`,
       500
     );
   }

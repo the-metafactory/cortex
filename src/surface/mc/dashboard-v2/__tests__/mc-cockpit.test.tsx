@@ -153,6 +153,28 @@ describe("McCockpit — own-local stack", () => {
     expect(html).not.toContain("dispatch-btn");
     expect(html).toContain("No local agent online to dispatch");
   });
+
+  it("renders the CK-4b cross-stack 'Across stacks' lane above the LOCAL grid", () => {
+    const html = render({
+      workingAggregation: [
+        { originStackId: null, activeSessionCount: 2, subAgentCount: 1, providerRetry: null },
+        { originStackId: "jc/home", activeSessionCount: 1, subAgentCount: 0, providerRetry: null },
+      ],
+      workingAggregationLoaded: true,
+    });
+    // the pane-of-glass rollup mounts inside the WORKING lane…
+    expect(html).toContain("working-aggregate-section");
+    expect(html).toContain("Across stacks");
+    expect(html).toContain('data-origin="local"');
+    expect(html).toContain('data-origin="jc/home"');
+    expect(html).toContain("1 sub-agent");
+    // …ABOVE the local, drillable grid (both present, aggregate first).
+    expect(html.indexOf("working-aggregate-section")).toBeLessThan(
+      html.indexOf("working-grid-section")
+    );
+    // metadata-only: the cross-stack lane exposes no drill control.
+    expect(html).not.toContain(FORBIDDEN);
+  });
 });
 
 describe("McCockpit — federated peer (ADR-0005)", () => {
@@ -165,5 +187,20 @@ describe("McCockpit — federated peer (ADR-0005)", () => {
     expect(html).not.toContain("attention-view");
     expect(html).not.toContain("working-grid-section");
     expect(html).not.toContain("dispatch-btn");
+  });
+
+  it("does NOT render the CK-4b cross-stack lane for a federated peer", () => {
+    // The peer branch bottoms out at the aggregate notice before the WORKING
+    // lane — the "Across stacks" rollup never renders under a peer dive.
+    const html = render({
+      stack: PEER,
+      posture: "member",
+      workingAggregation: [
+        { originStackId: null, activeSessionCount: 3, subAgentCount: 0, providerRetry: null },
+      ],
+      workingAggregationLoaded: true,
+    });
+    expect(html).not.toContain("working-aggregate-section");
+    expect(html).not.toContain("Across stacks");
   });
 });

@@ -30,6 +30,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentPresenceTile, AgentsState } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
+import type { WorkingStackAggregate } from "../hooks/use-working-aggregation";
 import { pickAgentsPanelMode } from "../lib/agents-display";
 import {
   buildNetworkGraph,
@@ -208,6 +209,14 @@ export interface NetworkViewProps {
   /** CK-3 — working-agents load/error, forwarded to the cockpit WORKING lane. */
   workingLoaded?: boolean;
   workingError?: string | null;
+  /**
+   * CK-4b (cortex#1295) — the cross-stack WORKING rollup (metadata-only,
+   * ADR-0005), forwarded to the cockpit's "Across stacks" pane-of-glass lane.
+   * Omitted → the lane shows its loading/empty state.
+   */
+  workingAggregation?: readonly WorkingStackAggregate[];
+  workingAggregationLoaded?: boolean;
+  workingAggregationError?: string | null;
   /** CK-3 — open the work-item-detail surface (attention work-item deep link). */
   onOpenWorkItem?: (workItemId: string) => void;
 }
@@ -226,6 +235,9 @@ export function NetworkView({
   governance = { data: null, loaded: false, error: null },
   workingLoaded = false,
   workingError = null,
+  workingAggregation = [],
+  workingAggregationLoaded = false,
+  workingAggregationError = null,
   onOpenWorkItem,
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
@@ -571,6 +583,9 @@ export function NetworkView({
         workingAgents={workingAgents}
         workingLoaded={workingLoaded}
         workingError={workingError}
+        workingAggregation={workingAggregation}
+        workingAggregationLoaded={workingAggregationLoaded}
+        workingAggregationError={workingAggregationError}
         attention={attention.entries}
         attentionLoaded={attention.loaded}
         governance={governance}
@@ -588,6 +603,9 @@ export function NetworkView({
     workingAgents,
     workingLoaded,
     workingError,
+    workingAggregation,
+    workingAggregationLoaded,
+    workingAggregationError,
     attention,
     governance,
     onOpenSession,
