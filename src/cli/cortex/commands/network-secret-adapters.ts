@@ -544,6 +544,30 @@ function parseFederatedUserEnvelope(
 }
 
 /**
+ * Spawn `arc nats <verb>` once. A spawn throw (ENOENT — arc missing / no such
+ * verb) is `ARC_TOO_OLD`. Shared by every federated-user verb so the invoke +
+ * arc-missing handling can't drift.
+ */
+async function invokeArcVerb(
+  run: ArcScopedMintRunner,
+  argv: readonly string[],
+  verb: string,
+  networkId: string,
+): Promise<{ ok: true; result: ArcScopedMintRunResult } | { ok: false; code: "ARC_TOO_OLD"; reason: string }> {
+  try {
+    return { ok: true, result: await run(argv) };
+  } catch (err) {
+    return {
+      ok: false,
+      code: "ARC_TOO_OLD",
+      reason:
+        `failed to invoke 'arc nats ${verb}' for network "${networkId}" — ${err instanceof Error ? err.message : String(err)}. ` +
+        `Needs an arc that provides '${verb}' (arc#269/#270); run 'arc upgrade'.`,
+    };
+  }
+}
+
+/**
  * Run a federated-user verb that EXPORTS creds to a tmp file, read the creds
  * text back, and remove the tmp dir. Shared by add (mint) + reissue (rotate) —
  * no creds plaintext residue on the admin machine (nsc can re-derive anytime).
@@ -560,19 +584,9 @@ async function runCredsExportingVerb(
   const outPath = joinPath(outDir, `${natsUser}.creds`);
   try {
     const argv: readonly string[] = ["nats", verb, natsUser, "--account", hubFedAccount, "--output", outPath, "--json"];
-    let result: ArcScopedMintRunResult;
-    try {
-      result = await run(argv);
-    } catch (err) {
-      return {
-        ok: false,
-        code: "ARC_TOO_OLD",
-        reason:
-          `failed to invoke 'arc nats ${verb}' for network "${networkId}" — ${err instanceof Error ? err.message : String(err)}. ` +
-          `Needs an arc that provides '${verb}' (arc#269/#270); run 'arc upgrade'.`,
-      };
-    }
-    const parsed = parseFederatedUserEnvelope(result, verb);
+    const invoked = await invokeArcVerb(run, argv, verb, networkId);
+    if (!invoked.ok) return invoked;
+    const parsed = parseFederatedUserEnvelope(invoked.result, verb);
     if (!parsed.ok) return parsed;
     let creds: string;
     try {
@@ -624,9 +638,14 @@ export function buildScopedUserMintAdapter(
   runner?: ArcScopedMintRunner,
 ): ScopedUserMintPort {
   const pickRun = () => runner ?? scopedMintRunnerOverride ?? defaultArcScopedMintRunner;
-  /** Read a required string field from arc's OK envelope, or "" if absent. */
+  /** Read a string field from arc's OK envelope, or "" if absent. */
   const field = (env: ArcFederatedUserOk, key: keyof ArcFederatedUserOk): string =>
     typeof env[key] === "string" ? (env[key] as string) : "";
+  /** The first REQUIRED field missing / empty on an ok:true envelope, or null.
+   *  An `ok:true` envelope that omits a guaranteed field is a contract breach —
+   *  fail typed rather than seal a v2 envelope with empty fingerprint data. */
+  const firstMissing = (env: ArcFederatedUserOk, keys: (keyof ArcFederatedUserOk)[]): string | null =>
+    keys.find((k) => typeof env[k] !== "string" || env[k] === "") ?? null;
   return {
     async mintScopedUser({ hubFedAccount, natsUser, networkId }) {
       const res = await runCredsExportingVerb(pickRun(), "add-federated-user", natsUser, hubFedAccount, networkId);
@@ -634,6 +653,10 @@ export function buildScopedUserMintAdapter(
         // mint's port union is narrower (no PUSH_FAILED/USER_NOT_FOUND) — collapse to OTHER.
         const code = res.code === "ARC_TOO_OLD" ? "ARC_TOO_OLD" : res.code === "USER_NOT_SCOPED" ? "USER_NOT_SCOPED" : "OTHER";
         return { ok: false, code, reason: res.reason };
+      }
+      const missing = firstMissing(res.env, ["userPubKey", "signingKeyPubKey", "accountPubKey"]);
+      if (missing !== null || res.creds === "") {
+        return { ok: false, code: "OTHER", reason: `arc add-federated-user returned ok but is missing a required field (${missing ?? "creds"})` };
       }
       return {
         ok: true,
@@ -650,6 +673,10 @@ export function buildScopedUserMintAdapter(
       // cortex#1599 ROTATE — same creds-exporting shape as add, different verb.
       const res = await runCredsExportingVerb(pickRun(), "reissue-federated-user", natsUser, hubFedAccount, networkId);
       if (!res.ok) return { ok: false, code: mapArcCode(res.code), reason: res.reason };
+      const missing = firstMissing(res.env, ["newPubKey", "signingKeyPubKey", "accountPubKey", "revokedPubKey"]);
+      if (missing !== null || res.creds === "") {
+        return { ok: false, code: "OTHER", reason: `arc reissue-federated-user returned ok but is missing a required field (${missing ?? "creds"})` };
+      }
       return {
         ok: true,
         creds: res.creds,
@@ -662,25 +689,17 @@ export function buildScopedUserMintAdapter(
 
     async revokeScopedUser({ hubFedAccount, natsUser, networkId }) {
       // cortex#1599 REVOKE — no creds export; a lean argv + parse.
-      const run = pickRun();
       const argv: readonly string[] = ["nats", "revoke-federated-user", natsUser, "--account", hubFedAccount, "--json"];
-      let result: ArcScopedMintRunResult;
-      try {
-        result = await run(argv);
-      } catch (err) {
-        return {
-          ok: false,
-          code: "ARC_TOO_OLD",
-          reason:
-            `failed to invoke 'arc nats revoke-federated-user' for network "${networkId}" — ${err instanceof Error ? err.message : String(err)}. ` +
-            `Needs an arc that provides 'revoke-federated-user' (arc#270); run 'arc upgrade'.`,
-        };
-      }
-      const parsed = parseFederatedUserEnvelope(result, "revoke-federated-user");
+      const invoked = await invokeArcVerb(pickRun(), argv, "revoke-federated-user", networkId);
+      if (!invoked.ok) return { ok: false, code: invoked.code, reason: invoked.reason };
+      const parsed = parseFederatedUserEnvelope(invoked.result, "revoke-federated-user");
       if (!parsed.ok) {
         // revoke never checks scope, so USER_NOT_SCOPED cannot arise — narrow it to OTHER.
         const c = mapArcCode(parsed.code);
         return { ok: false, code: c === "USER_NOT_SCOPED" ? "OTHER" : c, reason: parsed.reason };
+      }
+      if (firstMissing(parsed.env, ["revokedPubKey"]) !== null) {
+        return { ok: false, code: "OTHER", reason: `arc revoke-federated-user returned ok but is missing revokedPubKey` };
       }
       return { ok: true, revokedPubKey: field(parsed.env, "revokedPubKey") };
     },

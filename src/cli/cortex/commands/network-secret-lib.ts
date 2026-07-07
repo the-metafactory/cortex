@@ -632,12 +632,15 @@ async function operatorModeSeal(
       `operator-mode network "${inputs.networkId}" seals a subject-scoped credential; --deliver oob (shared-PSK handover) cannot run. Use sealed delivery.`);
   }
 
-  // Guard B (§5.1): the scoped mint edits the FED account JWT; a preloaded
-  // (memory) resolver can't learn it without a hub restart, silently regressing
-  // admit + revoke. Refuse unless the network attests a push-capable resolver.
+  // Guard B (§5.1) — applies to BOTH add-member AND rotate: a scoped mint edits
+  // the FED account JWT, and rotate's revoke+push of the OLD key needs the push
+  // to land too. A preloaded (memory) resolver can't learn either without a hub
+  // restart, silently regressing (rotating away a compromised key would leave
+  // the old credential LIVE). Refuse unless the network attests a push-capable
+  // resolver — this is BEFORE the mint/reissue branch, so rotate is guarded.
   if (inputs.resolverMode !== "nats") {
     return fail(action, inputs, steps, data,
-      `operator-mode admit needs a push-capable resolver (resolver_mode: nats) — network "${inputs.networkId}" attests "${inputs.resolverMode ?? "unset"}". A scoped mint edits the federation account JWT; a preloaded (memory) resolver cannot learn it without a hub restart. Migrate the hub resolver first (cortex#1599 prerequisite).`);
+      `operator-mode ${rotate ? "rotate" : "admit"} needs a push-capable resolver (resolver_mode: nats) — network "${inputs.networkId}" attests "${inputs.resolverMode ?? "unset"}". A scoped ${rotate ? "rotate revoke+pushes the old key and re-mints" : "mint edits the federation account JWT"}; a preloaded (memory) resolver cannot learn it without a hub restart. Migrate the hub resolver first (cortex#1599 prerequisite).`);
   }
 
   // The mint port + the hub FED account are both required on this path.

@@ -429,9 +429,12 @@ stage_rotate_revoke_operator() {
   # (rotate) re-mint FRESH material + re-seal v2; ZERO hub config write.
   $CORTEX network secret rotate "$NET_OP" "$pub" --admin-seed "$adminseed" --registry-url "$REG_URL" \
     --hub-config "$hubconf" --hub-fed-account "$HUB_FED_ACCOUNT" --apply > "$LOG/rotate-op.log" 2>&1 || true
+  # FAIL-CLOSED: this stage runs only past the arc#270 gate, so a rotate that did
+  # not re-mint means the credential path is broken (or $CORTEX lacks #1599 — use
+  # a worktree CORTEX_BIN). A green harness MUST confirm the actual rotate.
   grep -qiE "ROTATED|reissue-federated-user|revoked_pubkey" "$LOG/rotate-op.log" \
     && ok "  rotate re-minted fresh material (revoke old + re-mint) — runtime, no hub restart" \
-    || warn "  rotate not confirmed (needs arc#270 reissue verb + a real mint)"
+    || die "  rotate did NOT re-mint (see $LOG/rotate-op.log) — the credential path is broken, or CORTEX_BIN lacks #1599"
   local after_rotate_hash; after_rotate_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
   if [ "$before_hash" = "MISSING" ] || [ "$after_rotate_hash" = "MISSING" ]; then
     die "  rotate zero-writes check could not hash the hub conf ($hubconf) — setup error"
@@ -449,14 +452,18 @@ stage_rotate_revoke_operator() {
     --hub-config "$hubconf" --hub-fed-account "$HUB_FED_ACCOUNT" --apply > "$LOG/revoke-op.log" 2>&1 || true
   grep -qiE "revoked \+ pushed|revoke-federated-user|transport cut at runtime" "$LOG/revoke-op.log" \
     && ok "  revoke cut transport at runtime (revoke + push)" \
-    || warn "  revoke not confirmed (needs arc#270 revoke verb + a push-capable resolver)"
+    || die "  revoke did NOT cut transport (see $LOG/revoke-op.log) — broken, or CORTEX_BIN lacks #1599"
+  # §seam4 acceptance (fail-closed): the revoked pubkey MUST land in the FED
+  # account's nsc revocation ledger — proof of a REAL cut, not just a registry
+  # row flip. An empty/absent ledger entry fails the harness.
   local revoked_now; revoked_now="$(grep -oE 'revoked_pubkey[^A-Za-z0-9]+U[A-Z0-9]+' "$LOG/revoke-op.log" | grep -oE 'U[A-Z0-9]+' | head -1)"
-  if [ -n "$revoked_now" ] && revocation_ledger_has "$revoked_now"; then
-    ok "  §seam4: the FED account revocation ledger carries the revoked pubkey (real cut, not just a row flip)"
-  else
-    warn "  revocation-ledger check inconclusive (needs a real nsc revoke)"
-  fi
-  grep -qiE "REVOKED" "$LOG/revoke-op.log" && ok "  registry admission row marked REVOKED" || warn "  registry REVOKED mark not confirmed"
+  [ -n "$revoked_now" ] || die "  §seam4: no revoked pubkey in the revoke output — cannot verify a real cut"
+  revocation_ledger_has "$revoked_now" \
+    && ok "  §seam4: the FED account revocation ledger carries the revoked pubkey (real cut, not just a row flip)" \
+    || die "  §seam4: revoked pubkey $revoked_now is NOT in the FED account revocation ledger — the cut did not land"
+  grep -qiE "REVOKED" "$LOG/revoke-op.log" \
+    && ok "  registry admission row marked REVOKED" \
+    || die "  registry REVOKED mark not confirmed (see $LOG/revoke-op.log)"
   # The hub must NOT have restarted — a runtime cut, no all-member disruption.
   local hub_pid_after; hub_pid_after="$(cat "$PID/hub.pid" 2>/dev/null || echo none)"
   [ "$hub_pid_before" = "$hub_pid_after" ] \

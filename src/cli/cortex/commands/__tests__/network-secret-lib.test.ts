@@ -352,8 +352,13 @@ describe("cortex#1598 — operator-mode add-member (scoped mint + v2 seal)", () 
     expect(r.posted.length).toBe(1);
     expect(r.posted[0]!.blob).toContain('"v":2');
     expect(r.writes.length).toBe(0);
-    // The revoked (old) key and the new user key are DIFFERENT — the defining
-    // property of rotation (fresh material, so the revoke can't kill the new user).
+    // This verifies the cortex WIRING: reissue's revokedPubKey (old) and
+    // userPubKey (new) flow to DISTINCT data fields (never conflated). That
+    // arc's REAL reissue mints fresh material (old ≠ new key on the nsc store) is
+    // tested against the actual nsc-verb flow in arc#270's suite
+    // (nats-federated-user-lifecycle.test.ts asserts revokedPubKey !== newPubKey
+    // via distinct pre/post-mint pubkeys); here the fake returns two constants so
+    // the cortex side can assert it threads them through without conflation.
     expect(report.data.revoked_pubkey).toBe("U" + "A".repeat(55));
     expect(report.data.user_pubkey).toBe("U" + "C".repeat(55));
     expect(report.data.revoked_pubkey).not.toBe(report.data.user_pubkey);
@@ -408,6 +413,20 @@ describe("cortex#1598 — operator-mode add-member (scoped mint + v2 seal)", () 
     expect(report.ok).toBe(false);
     expect(report.reason).toContain("resolver_mode: nats");
     expect(r.revokedScopedUsers.length).toBe(0);
+  });
+
+  test("cortex#1599 — ROTATE also refuses resolver_mode !== nats (rotate revoke+pushes the old key)", async () => {
+    // Guard B is BEFORE the mint/reissue branch, so it covers rotate too — a
+    // memory resolver can't learn the old-key revocation, so rotating away a
+    // compromised key would leave it live. Refuse, and NEVER reach reissue.
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ action: "rotate", resolverMode: "memory" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("resolver_mode: nats");
+    expect(r.reissues.length).toBe(0);
   });
 
   test("a scoped-mint failure is surfaced (no seal, no post)", async () => {
