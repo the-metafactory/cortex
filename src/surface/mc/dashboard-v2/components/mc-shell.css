@@ -340,6 +340,44 @@
   color: var(--tide);
 }
 
+/* CK-1 — SESSION drill targets under the ASSISTANT stop (own-local only). Mirror
+   the network drill list, one indent deeper. */
+.mc-rail-sessions {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 22px;
+}
+.mc-rail-session {
+  margin-bottom: 4px;
+}
+.mc-rail-session-btn {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.mc-rail-session-btn:hover {
+  background: color-mix(in oklch, var(--fg) 6%, transparent);
+}
+.mc-rail-session-btn--active {
+  border-color: color-mix(in oklch, var(--mer) 45%, transparent);
+  background: color-mix(in oklch, var(--mer) 10%, transparent);
+}
+.mc-rail-session-name {
+  font: 500 10px var(--mono);
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mc-rail-session-btn--active .mc-rail-session-name {
+  color: var(--fg);
+}
+
 .mc-rail-dive {
   text-align: center;
   font: 600 8px var(--mono);

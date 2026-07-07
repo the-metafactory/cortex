@@ -79,13 +79,51 @@ import { NetworkSpotlight } from "./network-spotlight";
 import { NetworkRosterPanel } from "./network-roster-panel";
 import { PierQueue } from "./pier-queue";
 import { McShell } from "./mc-shell";
-import { ROOT_SELECTION, type AltitudeSelection } from "../lib/mc-shell-model";
+import {
+  ROOT_SELECTION,
+  diveToStack,
+  selectAssistant,
+  openSession,
+  drillToNetwork,
+  stackReachesSession,
+  type AltitudeSelection,
+} from "../lib/mc-shell-model";
+import {
+  stackCoordFromHub,
+  stackCoordFromTile,
+  sessionTargetsForAssistant,
+} from "../lib/mc-dive";
+import type { NetworkGraph } from "../lib/network-graph-adapter";
 import type { NetworkMembershipDTO } from "../hooks/use-networks";
 
 // Lazy: the xyflow + elk engine chunk loads only when this resolves (first
 // entry into the Network tab). Keep this the ONLY dynamic import in the view —
 // the other dashboard views stay statically bundled.
 const NetworkCanvas = lazy(() => import("./network-canvas"));
+
+/**
+ * CK-1 — derive the next altitude selection from a constellation hub click. A
+ * selected hub dives to that stack; a cleared selection (`hubId === null`)
+ * ascends to the current network context (or the 10k-ft root). An unresolvable
+ * hub leaves the altitude untouched — never a fabricated dive.
+ */
+function diveFromHub(
+  hubId: string | null,
+  graph: NetworkGraph,
+  servingPrincipal: string | null,
+  prevShell: AltitudeSelection,
+): AltitudeSelection {
+  if (hubId === null) {
+    return prevShell.networkId !== null
+      ? drillToNetwork(prevShell.networkId)
+      : ROOT_SELECTION;
+  }
+  const node = graph.nodes.find((n) => n.id === hubId);
+  if (!node || node.data.kind !== "stack-hub") return prevShell;
+  const coord = stackCoordFromHub(node.data, servingPrincipal);
+  if (coord === null) return prevShell;
+  return diveToStack(prevShell.networkId, coord);
+}
 
 export interface NetworkViewProps {
   state: AgentsState;
@@ -137,6 +175,16 @@ export interface NetworkViewProps {
    * roster panel renders nothing (a non-federated stack is unchanged).
    */
   networks?: readonly NetworkMembershipDTO[];
+  /**
+   * CK-1 (cortex#1289) — open a session interior on an OWN-LOCAL stack. When the
+   * principal dives the altitude rail to SESSION (picking one of a local
+   * assistant's sessions), the Network view calls this so the App mounts the
+   * REUSED F-7 drill-down overlay (App owns `setDrillId`). Never called for a
+   * federated peer (ADR-0005 — `openSession` refuses one). Omitted → the SESSION
+   * targets still dive the rail, but no interior mounts (a host without the drill
+   * wired, e.g. a test harness).
+   */
+  onOpenSession?: (sessionId: string) => void;
 }
 
 export function NetworkView({
@@ -148,6 +196,7 @@ export function NetworkView({
   matchTasks = [],
   transportRoster = [],
   networks = [],
+  onOpenSession,
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
@@ -236,10 +285,30 @@ export function NetworkView({
   const [selection, setSelection] = useState<SubtreeSelection>(
     EMPTY_SUBTREE_SELECTION,
   );
+
+  // CK-1 (cortex#1289) — the constellation shell-chrome selection (you-are-here).
+  // Owned here so the command-bar breadcrumb, the altitude rail, AND the dive
+  // gestures below all read/write ONE source. Declared before the hub/agent
+  // handlers so they can dive it; the network-dropout guard lives just below.
+  const [shellSelection, setShellSelection] =
+    useState<AltitudeSelection>(ROOT_SELECTION);
+
   const onToggleHubSelection = useCallback(
-    (clickedHubId: string | null) =>
-      setSelection((prev) => computeToggleHubSelection(prev, clickedHubId, graph)),
-    [graph],
+    (clickedHubId: string | null) => {
+      const nextSubtree = computeToggleHubSelection(
+        selection,
+        clickedHubId,
+        graph,
+      );
+      setSelection(nextSubtree);
+      // CK-1 — reflect the hub click on the altitude rail: a selected hub dives
+      // to that stack; a cleared selection ascends to the network context.
+      // Derived from the RESULTING subtree hub so highlight + altitude agree.
+      setShellSelection((prevShell) =>
+        diveFromHub(nextSubtree.selectedHubId, graph, servingPrincipal, prevShell),
+      );
+    },
+    [selection, graph, servingPrincipal],
   );
   // Re-derive the highlight set when the graph changes while a hub is selected
   // (an agent popped in/out of that stack), and clear a selection whose hub no
@@ -323,15 +392,38 @@ export function NetworkView({
 
   const closePanel = useCallback(() => setSelectedKey(null), []);
 
+  // CK-1 — selecting an agent node ALSO advances the altitude rail to ASSISTANT
+  // for that agent's stack (diving to the stack first if needed), so STACK +
+  // ASSISTANT go live and the rail can expand the assistant's own-local sessions.
+  // Wraps the D.4 panel selection; `key === null` (canvas deselect) leaves the
+  // altitude where it is (the hub-toggle owns ascent).
+  const onSelectAgentNode = useCallback(
+    (key: string | null) => {
+      setSelectedKey(key);
+      if (key === null) return;
+      const tile = resolveSelectedAgent(state.agents, key);
+      if (!tile) return;
+      const coord = stackCoordFromTile(tile, servingPrincipal);
+      setShellSelection((prev) =>
+        selectAssistant(diveToStack(prev.networkId, coord), tile.agent_id),
+      );
+    },
+    [state.agents, servingPrincipal],
+  );
+
   // D.5 — Cmd+K spotlight. Open state is local to the Network view (the spotlight
   // only makes sense here), and selecting a hit reuses D.4's selection path.
   const [spotlightOpen, setSpotlightOpen] = useState(false);
   const openSpotlight = useCallback(() => setSpotlightOpen(true), []);
   const closeSpotlight = useCallback(() => setSpotlightOpen(false), []);
-  const onSpotlightSelect = useCallback((key: string) => {
-    // Reuse D.4's selection: set the key → the live tile resolves → panel opens.
-    setSelectedKey(key);
-  }, []);
+  const onSpotlightSelect = useCallback(
+    (key: string) => {
+      // Reuse D.4's selection (now altitude-aware): live tile resolves → panel
+      // opens AND the rail advances to that agent's ASSISTANT stop.
+      onSelectAgentNode(key);
+    },
+    [onSelectAgentNode],
+  );
 
   // Cmd+K / Ctrl+K opens the spotlight. Registered on the CAPTURE phase so it
   // runs BEFORE the app-level global ⌘K palette (a bubble-phase listener) and
@@ -369,14 +461,10 @@ export function NetworkView({
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedKey, spotlightOpen, closePanel]);
 
-  // MC-D2 (#1289) — the constellation shell-chrome selection (you-are-here).
-  // Owned here so BOTH the command-bar breadcrumb and the altitude rail read one
-  // source. D2 wires networks↔network; deeper levels are scaffolding (D3+).
-  const [shellSelection, setShellSelection] =
-    useState<AltitudeSelection>(ROOT_SELECTION);
   // If the drilled-into network drops out of the live `/api/networks` snapshot,
   // ascend back to the 10k-ft root rather than holding a stale selection (the
   // breadcrumb/posture would otherwise point at a network that no longer exists).
+  // This clears any dived stack/assistant/session below it too (ROOT_SELECTION).
   useEffect(() => {
     if (
       shellSelection.networkId !== null &&
@@ -386,12 +474,43 @@ export function NetworkView({
     }
   }, [networks, shellSelection.networkId]);
 
+  // CK-1 — the selected LOCAL assistant's sessions, expanded on the rail as
+  // SESSION drill targets. Own-local only (ADR-0005): empty for a federated peer
+  // (`stackReachesSession` false) or when no assistant is selected.
+  const sessionTargets = useMemo(() => {
+    if (
+      shellSelection.assistantId === null ||
+      shellSelection.stack === null ||
+      !stackReachesSession(shellSelection.stack)
+    ) {
+      return [];
+    }
+    return sessionTargetsForAssistant(
+      workingAgents,
+      shellSelection.assistantId,
+      shellSelection.stack,
+    );
+  }, [workingAgents, shellSelection.assistantId, shellSelection.stack]);
+
+  // CK-1 — open a session interior: dive the rail to SESSION (own-local only —
+  // `openSession` refuses a federated stack) and mount the REUSED App-level F-7
+  // drill-down via the host callback.
+  const handleOpenSession = useCallback(
+    (sessionId: string) => {
+      setShellSelection((prev) => openSession(prev, sessionId) ?? prev);
+      onOpenSession?.(sessionId);
+    },
+    [onOpenSession],
+  );
+
   return (
     <McShell
       principal={servingPrincipal}
       networks={networks}
       selection={shellSelection}
       onSelectionChange={setShellSelection}
+      sessionTargets={sessionTargets}
+      onOpenSession={handleOpenSession}
     >
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
       <h2>Network</h2>
@@ -451,7 +570,7 @@ export function NetworkView({
               >
                 <NetworkCanvas
                   graph={graph}
-                  onSelectAgent={setSelectedKey}
+                  onSelectAgent={onSelectAgentNode}
                   hover={hover}
                 />
               </Suspense>

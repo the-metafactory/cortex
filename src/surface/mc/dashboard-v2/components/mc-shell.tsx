@@ -18,12 +18,13 @@
 
 import type { ReactNode } from "react";
 import { McCommandBar } from "./mc-command-bar";
-import { McAltitudeRail } from "./mc-altitude-rail";
+import { McAltitudeRail, type RailSessionTarget } from "./mc-altitude-rail";
 import {
   buildBreadcrumb,
   drillToNetwork,
   navigateToSegment,
   ascendToRoot,
+  ascendToLevel,
   selectedNetworkPosture,
   type AltitudeSelection,
 } from "../lib/mc-shell-model";
@@ -39,6 +40,18 @@ export interface McShellProps {
   selection: AltitudeSelection;
   /** Report a new selection from a chrome navigation gesture. */
   onSelectionChange: (next: AltitudeSelection) => void;
+  /**
+   * CK-1 — the selected LOCAL assistant's sessions, forwarded to the rail as
+   * SESSION drill targets (own-local only; empty for a federated peer). The
+   * caller (Network view) derives these from the working-agents session tree.
+   */
+  sessionTargets?: readonly RailSessionTarget[];
+  /**
+   * CK-1 — open a session interior (reuses the App-level F-7 drill-down). The
+   * caller wires this to the existing drill overlay; the shell only reports the
+   * chosen session id and dives the rail to SESSION.
+   */
+  onOpenSession?: (sessionId: string) => void;
   /** The framed pane (the existing Network view body). */
   children: ReactNode;
 }
@@ -48,6 +61,8 @@ export function McShell({
   networks,
   selection,
   onSelectionChange,
+  sessionTargets = [],
+  onOpenSession,
   children,
 }: McShellProps) {
   const breadcrumb = buildBreadcrumb(selection);
@@ -68,6 +83,11 @@ export function McShell({
           networks={networks}
           onAscendRoot={() => onSelectionChange(ascendToRoot())}
           onDrillNetwork={(id) => onSelectionChange(drillToNetwork(id))}
+          onAscendToLevel={(level) =>
+            onSelectionChange(ascendToLevel(selection, level))
+          }
+          sessionTargets={sessionTargets}
+          {...(onOpenSession ? { onOpenSession } : {})}
         />
         <div className="mc-shell-content">{children}</div>
       </div>

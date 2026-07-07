@@ -612,6 +612,13 @@ export function App() {
             // lands / on a non-federated stack; the panel renders nothing then.
             networks={networks.networks}
             onViewInWorkingGrid={() => setView("default")}
+            // CK-1 (cortex#1289) — diving the altitude rail to SESSION (an
+            // own-local assistant's session) opens the REUSED F-7 drill-down —
+            // the same App-level overlay attention/work-item flows drive via
+            // `setDrillId`. Own-local only (the Network view's `openSession`
+            // refuses a federated peer, ADR-0005), so no interior crosses the
+            // sovereignty boundary.
+            onOpenSession={(sessionId) => setDrillId(sessionId)}
             // G-1114.F.3 — dispatch-direct to a LOCAL agent, REUSING the
             // existing dispatch path (`POST /api/sessions` with `agentId`). The
             // panel only invokes this for a local agent (foreign peers get a
