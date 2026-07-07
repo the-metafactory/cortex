@@ -401,6 +401,69 @@ stage_admit_operator() {
     || warn "  second-admit idempotency not confirmed (needs the arc verb + a real mint)"
 }
 
+# True iff the arc on PATH knows the #1599 rotate/revoke verbs (arc#270).
+arc_has_revoke_verbs() { arc nats --help 2>&1 | grep -q 'revoke-federated-user'; }
+
+# The FED account's revocation ledger must list `pubkey` (proof the runtime revoke
+# added it) — `nsc describe account -J`.nats.revocations is keyed by pubkey.
+revocation_ledger_has() {  # revocation_ledger_has <userPubKey>
+  hub_env
+  nsc describe account -a "$HUB_FED_ACCOUNT" -J 2>/dev/null \
+    | bun -e 'const j=JSON.parse(await Bun.stdin.text()); const r=j?.nats?.revocations??{}; process.stdout.write(Object.keys(r).includes(process.argv[1])?"YES":"NO")' "$1" 2>/dev/null \
+    | grep -q "YES"
+}
+
+# ── stage: rotate + revoke (operator) — cortex#1599 seam 4 ───────────────────
+stage_rotate_revoke_operator() {
+  log "stage rotate+revoke (operator) — cortex#1599 runtime rotate + revoke"
+  isolate_env
+  local adminseed; adminseed="$(cat "$ROOT/.adminseed-path")"
+  local hubconf; hubconf="$(cat "$ROOT/.hub-operator-conf" 2>/dev/null)"
+  # Pick the FIRST member for the rotate/revoke acceptances.
+  set -- $MEMBERS; local member="$1"
+  local principal; principal="$(mem_principal "$member")"; local slug; slug="$(mem_slug "$member")"
+  local pub; pub="$(member_pubkey "$principal" "$slug" "$ROOT/nats/cortex-$slug.nk" | tr -d '[:space:]')"
+  local before_hash; before_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  local hub_pid_before; hub_pid_before="$(cat "$PID/hub.pid" 2>/dev/null || echo none)"
+
+  # (rotate) re-mint FRESH material + re-seal v2; ZERO hub config write.
+  $CORTEX network secret rotate "$NET_OP" "$pub" --admin-seed "$adminseed" --registry-url "$REG_URL" \
+    --hub-config "$hubconf" --hub-fed-account "$HUB_FED_ACCOUNT" --apply > "$LOG/rotate-op.log" 2>&1 || true
+  grep -qiE "ROTATED|reissue-federated-user|revoked_pubkey" "$LOG/rotate-op.log" \
+    && ok "  rotate re-minted fresh material (revoke old + re-mint) — runtime, no hub restart" \
+    || warn "  rotate not confirmed (needs arc#270 reissue verb + a real mint)"
+  local after_rotate_hash; after_rotate_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  if [ "$before_hash" = "MISSING" ] || [ "$after_rotate_hash" = "MISSING" ]; then
+    die "  rotate zero-writes check could not hash the hub conf ($hubconf) — setup error"
+  elif [ "$before_hash" = "$after_rotate_hash" ]; then
+    ok "  hub.conf UNCHANGED across rotate (no hub-conf round-trip — seam 4)"
+  else
+    die "  hub.conf CHANGED during rotate — the credential path must never write the hub config"
+  fi
+
+  # (revoke) cut the member's transport at runtime; assert the revocation ledger
+  # carries the revoked pubkey, the registry row is REVOKED, and the hub NEVER
+  # restarted (the whole point — no all-member disruption).
+  local revoked_pub; revoked_pub="$(grep -oE 'revoked_pubkey[^A-Za-z0-9]+U[A-Z0-9]+' "$LOG/rotate-op.log" | grep -oE 'U[A-Z0-9]+' | head -1)"
+  $CORTEX network secret revoke-member "$NET_OP" "$pub" --admin-seed "$adminseed" --registry-url "$REG_URL" \
+    --hub-config "$hubconf" --hub-fed-account "$HUB_FED_ACCOUNT" --apply > "$LOG/revoke-op.log" 2>&1 || true
+  grep -qiE "revoked \+ pushed|revoke-federated-user|transport cut at runtime" "$LOG/revoke-op.log" \
+    && ok "  revoke cut transport at runtime (revoke + push)" \
+    || warn "  revoke not confirmed (needs arc#270 revoke verb + a push-capable resolver)"
+  local revoked_now; revoked_now="$(grep -oE 'revoked_pubkey[^A-Za-z0-9]+U[A-Z0-9]+' "$LOG/revoke-op.log" | grep -oE 'U[A-Z0-9]+' | head -1)"
+  if [ -n "$revoked_now" ] && revocation_ledger_has "$revoked_now"; then
+    ok "  §seam4: the FED account revocation ledger carries the revoked pubkey (real cut, not just a row flip)"
+  else
+    warn "  revocation-ledger check inconclusive (needs a real nsc revoke)"
+  fi
+  grep -qiE "REVOKED" "$LOG/revoke-op.log" && ok "  registry admission row marked REVOKED" || warn "  registry REVOKED mark not confirmed"
+  # The hub must NOT have restarted — a runtime cut, no all-member disruption.
+  local hub_pid_after; hub_pid_after="$(cat "$PID/hub.pid" 2>/dev/null || echo none)"
+  [ "$hub_pid_before" = "$hub_pid_after" ] \
+    && ok "  hub nats-server PID unchanged across rotate+revoke (NO hub restart — seam 4's whole point)" \
+    || die "  hub PID changed ($hub_pid_before → $hub_pid_after) — a restart defeats the runtime-revoke design"
+}
+
 # ── operator scenario dispatch (gated on the dual release-gate) ───────────────
 run_operator_scenario() {
   stage_env
@@ -414,6 +477,12 @@ run_operator_scenario() {
   stage_down; rm -rf "$ROOT"; stage_env
   stage_hub_operator; stage_registry
   stage_stacks; stage_register; stage_create_operator; stage_admit_operator
+  # cortex#1599 — rotate + revoke, gated additionally on the arc#270 verbs.
+  if arc_has_revoke_verbs; then
+    stage_rotate_revoke_operator
+  else
+    warn "ROTATE/REVOKE SKIPPED — the arc on PATH lacks 'revoke-federated-user' (arc#270 unreleased)."
+  fi
   log "operator self-test complete (see assertions above)"
   [ "${KEEP:-0}" = "1" ] || stage_down
 }

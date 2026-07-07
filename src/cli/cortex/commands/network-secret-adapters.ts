@@ -469,31 +469,150 @@ export function __setScopedMintRunnerForTests(r: ArcScopedMintRunner | null): vo
  *  `ARC_NATS_FEDERATED_USER_SCHEMA`; a divergence fails as ARC_TOO_OLD. */
 const ARC_NATS_FEDERATED_USER_SCHEMA = "arc.nats.federated-user.v1";
 
+/**
+ * The `arc.nats.federated-user.v1` OK envelope — a superset across the
+ * add / reissue / revoke verbs (each populates the subset it emits). Fields are
+ * optional here so ONE parser serves all three; each caller asserts the fields
+ * its verb guarantees.
+ */
 interface ArcFederatedUserOk {
   schema: typeof ARC_NATS_FEDERATED_USER_SCHEMA;
   ok: true;
-  account: string;
-  accountPubKey: string;
-  user: string;
-  userPubKey: string;
-  signingKeyPubKey: string;
-  scopeCreated: boolean;
-  scopeAlreadyPresent: boolean;
-  userCreated: boolean;
-  userAlreadyPresent: boolean;
-  credsPath: string;
-  jwt: string;
-  subTemplate: string;
-  pubTemplate: string;
+  account?: string;
+  accountPubKey?: string;
+  user?: string;
+  /** add: the minted user pubkey. */
+  userPubKey?: string;
+  /** reissue: the NEW user pubkey. */
+  newPubKey?: string;
+  /** reissue / revoke: the OLD (revoked) user pubkey. */
+  revokedPubKey?: string;
+  signingKeyPubKey?: string;
+  scopeAlreadyPresent?: boolean;
+  userAlreadyPresent?: boolean;
+  credsPath?: string;
+  jwt?: string;
 }
 
-interface ArcFederatedUserError {
-  schema: typeof ARC_NATS_FEDERATED_USER_SCHEMA;
-  ok: false;
-  error: { code: string; message: string };
+/**
+ * Parse arc's `arc.nats.federated-user.v1` JSON envelope from a runner result.
+ * A missing / wrong-schema / unparseable line is `ARC_TOO_OLD` (the installed
+ * arc predates the verb); an `ok:false` envelope surfaces arc's typed error
+ * code. Shared by all three federated-user verbs so the boilerplate can't drift.
+ */
+function parseFederatedUserEnvelope(
+  result: ArcScopedMintRunResult,
+  verb: string,
+): { ok: true; env: ArcFederatedUserOk } | { ok: false; code: string; reason: string } {
+  const line = result.stdout.split("\n").find((l) => l.trim().length > 0) ?? "";
+  let parsed: unknown;
+  if (line.length > 0) {
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      parsed = undefined;
+    }
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as { schema?: unknown }).schema !== ARC_NATS_FEDERATED_USER_SCHEMA
+  ) {
+    return {
+      ok: false,
+      code: "ARC_TOO_OLD",
+      reason:
+        `arc returned no valid '${ARC_NATS_FEDERATED_USER_SCHEMA}' envelope for '${verb}' ` +
+        `(the installed arc predates it — arc#269/#270). Run 'arc upgrade'. ` +
+        `arc exit ${result.exitCode.toString()}, stderr: ${result.stderr.trim() || "(empty)"}`,
+    };
+  }
+  const env = parsed as { ok?: unknown; error?: unknown };
+  if (env.ok !== true) {
+    const rawError = env.error;
+    const errCode =
+      rawError !== null && typeof rawError === "object" && "code" in rawError && typeof (rawError as { code?: unknown }).code === "string"
+        ? (rawError as { code: string }).code
+        : "(unknown code)";
+    const errMsg =
+      rawError !== null && typeof rawError === "object" && "message" in rawError && typeof (rawError as { message?: unknown }).message === "string"
+        ? (rawError as { message: string }).message
+        : "(no message)";
+    return { ok: false, code: errCode, reason: `arc nats ${verb} failed: ${errCode}: ${errMsg}` };
+  }
+  return { ok: true, env: parsed as ArcFederatedUserOk };
 }
 
-type ArcFederatedUserEnvelope = ArcFederatedUserOk | ArcFederatedUserError;
+/**
+ * Run a federated-user verb that EXPORTS creds to a tmp file, read the creds
+ * text back, and remove the tmp dir. Shared by add (mint) + reissue (rotate) —
+ * no creds plaintext residue on the admin machine (nsc can re-derive anytime).
+ * Returns the parsed OK envelope + the creds text, or a typed error.
+ */
+async function runCredsExportingVerb(
+  run: ArcScopedMintRunner,
+  verb: string,
+  natsUser: string,
+  hubFedAccount: string,
+  networkId: string,
+): Promise<{ ok: true; env: ArcFederatedUserOk; creds: string } | { ok: false; code: string; reason: string }> {
+  const outDir = mkdtempSync(joinPath(tmpdir(), "cortex-scoped-"));
+  const outPath = joinPath(outDir, `${natsUser}.creds`);
+  try {
+    const argv: readonly string[] = ["nats", verb, natsUser, "--account", hubFedAccount, "--output", outPath, "--json"];
+    let result: ArcScopedMintRunResult;
+    try {
+      result = await run(argv);
+    } catch (err) {
+      return {
+        ok: false,
+        code: "ARC_TOO_OLD",
+        reason:
+          `failed to invoke 'arc nats ${verb}' for network "${networkId}" — ${err instanceof Error ? err.message : String(err)}. ` +
+          `Needs an arc that provides '${verb}' (arc#269/#270); run 'arc upgrade'.`,
+      };
+    }
+    const parsed = parseFederatedUserEnvelope(result, verb);
+    if (!parsed.ok) return parsed;
+    let creds: string;
+    try {
+      creds = readFileSync(outPath, "utf-8");
+    } catch (err) {
+      return {
+        ok: false,
+        code: "OTHER",
+        reason: `arc reported a user for "${natsUser}" but its creds file at ${outPath} was unreadable: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    return { ok: true, env: parsed.env, creds };
+  } finally {
+    try {
+      rmSync(outDir, { recursive: true, force: true });
+    } catch (err) {
+      process.stderr.write(
+        `cortex network secret: could not remove scoped-mint tmp dir ${outDir} ` +
+          `(${err instanceof Error ? err.message : String(err)}) — it may hold a creds file; remove it manually\n`,
+      );
+    }
+  }
+}
+
+/** Map an arc federated-user error code to the port's narrower code union. */
+function mapArcCode(code: string): "ARC_TOO_OLD" | "USER_NOT_SCOPED" | "USER_NOT_FOUND" | "PUSH_FAILED" | "OTHER" {
+  switch (code) {
+    case "ARC_TOO_OLD":
+      return "ARC_TOO_OLD";
+    case "USER_NOT_SCOPED":
+      return "USER_NOT_SCOPED";
+    case "USER_NOT_FOUND":
+      return "USER_NOT_FOUND";
+    case "PUSH_FAILED":
+    case "REVOKE_FAILED":
+      return "PUSH_FAILED";
+    default:
+      return "OTHER";
+  }
+}
 
 /**
  * Build the live {@link ScopedUserMintPort} backed by `arc nats add-federated-user`.
@@ -504,136 +623,66 @@ type ArcFederatedUserEnvelope = ArcFederatedUserOk | ArcFederatedUserError;
 export function buildScopedUserMintAdapter(
   runner?: ArcScopedMintRunner,
 ): ScopedUserMintPort {
+  const pickRun = () => runner ?? scopedMintRunnerOverride ?? defaultArcScopedMintRunner;
+  /** Read a required string field from arc's OK envelope, or "" if absent. */
+  const field = (env: ArcFederatedUserOk, key: keyof ArcFederatedUserOk): string =>
+    typeof env[key] === "string" ? (env[key] as string) : "";
   return {
     async mintScopedUser({ hubFedAccount, natsUser, networkId }) {
-      const run = runner ?? scopedMintRunnerOverride ?? defaultArcScopedMintRunner;
-
-      // A private tmp dir for the exported creds — read the text back, then
-      // remove the whole dir in `finally`. No creds plaintext residue on the
-      // admin machine (nsc can re-derive the creds anytime).
-      const outDir = mkdtempSync(joinPath(tmpdir(), "cortex-scoped-"));
-      const outPath = joinPath(outDir, `${natsUser}.creds`);
-
-      try {
-        const argv: readonly string[] = [
-          "nats",
-          "add-federated-user",
-          natsUser,
-          "--account",
-          hubFedAccount,
-          "--output",
-          outPath,
-          "--json",
-        ];
-
-        let result: ArcScopedMintRunResult;
-        try {
-          result = await run(argv);
-        } catch (err) {
-          // A missing arc binary throws on spawn (ENOENT) — the operator has an
-          // arc without the verb, or no arc at all. Treat as ARC_TOO_OLD.
-          return {
-            ok: false,
-            code: "ARC_TOO_OLD",
-            reason:
-              `failed to invoke 'arc nats add-federated-user' for network "${networkId}" — ` +
-              `${err instanceof Error ? err.message : String(err)}. ` +
-              `Operator-mode admit needs an arc that provides 'add-federated-user' (arc#269); run 'arc upgrade'.`,
-          };
-        }
-
-        // Parse the first non-blank JSON line (same pattern as the federation
-        // wiring adapter). No valid envelope → the arc is too old / unknown
-        // command / not installed.
-        const line = result.stdout.split("\n").find((l) => l.trim().length > 0) ?? "";
-        let parsed: unknown;
-        if (line.length > 0) {
-          try {
-            parsed = JSON.parse(line);
-          } catch {
-            parsed = undefined;
-          }
-        }
-        if (
-          typeof parsed !== "object" ||
-          parsed === null ||
-          (parsed as { schema?: unknown }).schema !== ARC_NATS_FEDERATED_USER_SCHEMA
-        ) {
-          return {
-            ok: false,
-            code: "ARC_TOO_OLD",
-            reason:
-              `arc returned no valid '${ARC_NATS_FEDERATED_USER_SCHEMA}' envelope ` +
-              `(the installed arc predates the add-federated-user verb, arc#269). ` +
-              `Run 'arc upgrade'. arc exit ${result.exitCode.toString()}, stderr: ${result.stderr.trim() || "(empty)"}`,
-          };
-        }
-
-        const envelope = parsed as ArcFederatedUserEnvelope;
-
-        if (!envelope.ok) {
-          const rawError = (envelope as { error?: unknown }).error;
-          const errCode =
-            rawError !== null &&
-            typeof rawError === "object" &&
-            "code" in rawError &&
-            typeof (rawError as { code?: unknown }).code === "string"
-              ? (rawError as { code: string }).code
-              : "(unknown code)";
-          const errMsg =
-            rawError !== null &&
-            typeof rawError === "object" &&
-            "message" in rawError &&
-            typeof (rawError as { message?: unknown }).message === "string"
-              ? (rawError as { message: string }).message
-              : "(no message)";
-          // USER_NOT_SCOPED is a first-class refusal (a pre-existing user signed
-          // by something other than the federated scope — re-exporting it would
-          // hand out an unscoped credential). Surface it distinctly; everything
-          // else is OTHER.
-          return {
-            ok: false,
-            code: errCode === "USER_NOT_SCOPED" ? "USER_NOT_SCOPED" : "OTHER",
-            reason: `arc nats add-federated-user failed: ${errCode}: ${errMsg}`,
-          };
-        }
-
-        // arc wrote the creds to outPath (0600). Read the FULL text — the JSON
-        // envelope carries only the JWT, but the leaf needs the JWT + seed the
-        // creds file holds.
-        let creds: string;
-        try {
-          creds = readFileSync(outPath, "utf-8");
-        } catch (err) {
-          return {
-            ok: false,
-            code: "OTHER",
-            reason:
-              `arc reported a minted user for "${natsUser}" but its creds file at ${outPath} ` +
-              `was unreadable: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-
-        return {
-          ok: true,
-          creds,
-          userPubKey: envelope.userPubKey,
-          signingKeyPubKey: envelope.signingKeyPubKey,
-          accountPubKey: envelope.accountPubKey,
-          scopeAlreadyPresent: envelope.scopeAlreadyPresent,
-          userAlreadyPresent: envelope.userAlreadyPresent,
-        };
-      } finally {
-        // Remove the whole tmp dir (creds + any residue), best-effort.
-        try {
-          rmSync(outDir, { recursive: true, force: true });
-        } catch (err) {
-          process.stderr.write(
-            `cortex network secret: could not remove scoped-mint tmp dir ${outDir} ` +
-              `(${err instanceof Error ? err.message : String(err)}) — it may hold a creds file; remove it manually\n`,
-          );
-        }
+      const res = await runCredsExportingVerb(pickRun(), "add-federated-user", natsUser, hubFedAccount, networkId);
+      if (!res.ok) {
+        // mint's port union is narrower (no PUSH_FAILED/USER_NOT_FOUND) — collapse to OTHER.
+        const code = res.code === "ARC_TOO_OLD" ? "ARC_TOO_OLD" : res.code === "USER_NOT_SCOPED" ? "USER_NOT_SCOPED" : "OTHER";
+        return { ok: false, code, reason: res.reason };
       }
+      return {
+        ok: true,
+        creds: res.creds,
+        userPubKey: field(res.env, "userPubKey"),
+        signingKeyPubKey: field(res.env, "signingKeyPubKey"),
+        accountPubKey: field(res.env, "accountPubKey"),
+        scopeAlreadyPresent: res.env.scopeAlreadyPresent === true,
+        userAlreadyPresent: res.env.userAlreadyPresent === true,
+      };
+    },
+
+    async reissueScopedUser({ hubFedAccount, natsUser, networkId }) {
+      // cortex#1599 ROTATE — same creds-exporting shape as add, different verb.
+      const res = await runCredsExportingVerb(pickRun(), "reissue-federated-user", natsUser, hubFedAccount, networkId);
+      if (!res.ok) return { ok: false, code: mapArcCode(res.code), reason: res.reason };
+      return {
+        ok: true,
+        creds: res.creds,
+        userPubKey: field(res.env, "newPubKey"),
+        signingKeyPubKey: field(res.env, "signingKeyPubKey"),
+        accountPubKey: field(res.env, "accountPubKey"),
+        revokedPubKey: field(res.env, "revokedPubKey"),
+      };
+    },
+
+    async revokeScopedUser({ hubFedAccount, natsUser, networkId }) {
+      // cortex#1599 REVOKE — no creds export; a lean argv + parse.
+      const run = pickRun();
+      const argv: readonly string[] = ["nats", "revoke-federated-user", natsUser, "--account", hubFedAccount, "--json"];
+      let result: ArcScopedMintRunResult;
+      try {
+        result = await run(argv);
+      } catch (err) {
+        return {
+          ok: false,
+          code: "ARC_TOO_OLD",
+          reason:
+            `failed to invoke 'arc nats revoke-federated-user' for network "${networkId}" — ${err instanceof Error ? err.message : String(err)}. ` +
+            `Needs an arc that provides 'revoke-federated-user' (arc#270); run 'arc upgrade'.`,
+        };
+      }
+      const parsed = parseFederatedUserEnvelope(result, "revoke-federated-user");
+      if (!parsed.ok) {
+        // revoke never checks scope, so USER_NOT_SCOPED cannot arise — narrow it to OTHER.
+        const c = mapArcCode(parsed.code);
+        return { ok: false, code: c === "USER_NOT_SCOPED" ? "OTHER" : c, reason: parsed.reason };
+      }
+      return { ok: true, revokedPubKey: field(parsed.env, "revokedPubKey") };
     },
   };
 }

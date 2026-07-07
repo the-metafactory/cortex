@@ -144,6 +144,49 @@ export interface ScopedUserMintPort {
       }
     | { ok: false; reason: string; code?: "ARC_TOO_OLD" | "USER_NOT_SCOPED" | "OTHER" }
   >;
+
+  /**
+   * cortex#1599 (epic #1595 slice 4) — ROTATE: revoke the OLD key server-side
+   * (`nsc revocations add-user` + push — runtime, no hub restart) then re-mint
+   * FRESH material under the same scoped signing key + return its `.creds` TEXT.
+   * Same never-leaves-disk creds handling as {@link mintScopedUser}. Backed by
+   * `arc nats reissue-federated-user`. OPTIONAL — the rotate operator branch
+   * requires it and fails clearly when it (or the arc verb) is absent.
+   */
+  reissueScopedUser?(input: {
+    hubFedAccount: string;
+    natsUser: string;
+    networkId: string;
+  }): Promise<
+    | {
+        ok: true;
+        /** The NEW user's `.creds` text — sealed, never logged. */
+        creds: string;
+        /** U-prefixed pubkey of the NEW user. */
+        userPubKey: string;
+        signingKeyPubKey: string;
+        accountPubKey: string;
+        /** U-prefixed pubkey of the OLD (revoked) user — fingerprint-class. */
+        revokedPubKey: string;
+      }
+    | { ok: false; reason: string; code?: "ARC_TOO_OLD" | "USER_NOT_SCOPED" | "USER_NOT_FOUND" | "PUSH_FAILED" | "OTHER" }
+  >;
+
+  /**
+   * cortex#1599 — REVOKE: add the user's pubkey to the account revocation map +
+   * push (runtime transport cut, no hub restart), then delete the local user.
+   * A push failure surfaces as `PUSH_FAILED` (the memory/preload-resolver caveat
+   * is loud, never a silent no-op). Backed by `arc nats revoke-federated-user`.
+   * OPTIONAL — the revoke operator branch requires it.
+   */
+  revokeScopedUser?(input: {
+    hubFedAccount: string;
+    natsUser: string;
+    networkId: string;
+  }): Promise<
+    | { ok: true; revokedPubKey: string }
+    | { ok: false; reason: string; code?: "ARC_TOO_OLD" | "USER_NOT_FOUND" | "PUSH_FAILED" | "OTHER" }
+  >;
 }
 
 /** The full port bundle the orchestrator depends on. */

@@ -176,3 +176,98 @@ describe("buildScopedUserMintAdapter", () => {
     expect(res.code).toBe("ARC_TOO_OLD");
   });
 });
+
+// cortex#1599 — reissue (rotate) + revoke federated-user adapter methods.
+
+const FAKE_NEW_PUB = "U" + "C".repeat(55);
+const FAKE_REVOKED_PUB = "U" + "A".repeat(55);
+
+/** A fake arc runner for reissue: writes creds to --output + returns the reissue envelope. */
+function reissueRunner(): { runner: ArcScopedMintRunner; seen: { argv?: readonly string[]; outPath?: string } } {
+  const seen: { argv?: readonly string[]; outPath?: string } = {};
+  const runner: ArcScopedMintRunner = (argv) => {
+    seen.argv = argv;
+    const outPath = argOf(argv, "--output");
+    seen.outPath = outPath;
+    if (outPath !== undefined) writeFileSync(outPath, FAKE_CREDS);
+    const env = {
+      schema: "arc.nats.federated-user.v1",
+      ok: true,
+      account: "FEDERATION",
+      accountPubKey: "A" + "D".repeat(55),
+      user: argv[2],
+      newPubKey: FAKE_NEW_PUB,
+      revokedPubKey: FAKE_REVOKED_PUB,
+      signingKeyPubKey: FAKE_SK_PUB,
+      scopeAlreadyPresent: true,
+      credsPath: outPath,
+      jwt: "AAAA",
+      subTemplate: "federated.{{name()}}.>,_INBOX.>",
+      pubTemplate: "federated.>,_INBOX.>",
+    };
+    return Promise.resolve({ stdout: JSON.stringify(env) + "\n", stderr: "", exitCode: 0 });
+  };
+  return { runner, seen };
+}
+
+describe("buildScopedUserMintAdapter — reissueScopedUser (rotate)", () => {
+  test("passes the reissue argv + returns the NEW creds and revoked/new pubkeys; tmp removed", async () => {
+    const { runner, seen } = reissueRunner();
+    const port = buildScopedUserMintAdapter(runner);
+    const res = await port.reissueScopedUser!(INPUT);
+
+    expect(seen.argv?.slice(0, 3)).toEqual(["nats", "reissue-federated-user", "jc.default"]);
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+    expect(res.creds).toBe(FAKE_CREDS);
+    expect(res.userPubKey).toBe(FAKE_NEW_PUB); // arc's newPubKey → the port's userPubKey
+    expect(res.revokedPubKey).toBe(FAKE_REVOKED_PUB);
+    expect(res.userPubKey).not.toBe(res.revokedPubKey);
+    expect(existsSync(seen.outPath!)).toBe(false);
+  });
+
+  test("maps a PUSH_FAILED arc error through distinctly", async () => {
+    const res = await buildScopedUserMintAdapter(errorRunner("PUSH_FAILED")).reissueScopedUser!(INPUT);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("expected failure");
+    expect(res.code).toBe("PUSH_FAILED");
+  });
+});
+
+describe("buildScopedUserMintAdapter — revokeScopedUser", () => {
+  test("passes the revoke argv (no --output) + returns the revoked pubkey", async () => {
+    let seenArgv: readonly string[] | undefined;
+    const runner: ArcScopedMintRunner = (argv) => {
+      seenArgv = argv;
+      const env = { schema: "arc.nats.federated-user.v1", ok: true, account: "FEDERATION", user: argv[2], revokedPubKey: FAKE_REVOKED_PUB };
+      return Promise.resolve({ stdout: JSON.stringify(env) + "\n", stderr: "", exitCode: 0 });
+    };
+    const res = await buildScopedUserMintAdapter(runner).revokeScopedUser!(INPUT);
+
+    expect(seenArgv?.slice(0, 3)).toEqual(["nats", "revoke-federated-user", "jc.default"]);
+    expect(seenArgv).not.toContain("--output"); // revoke exports nothing
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+    expect(res.revokedPubKey).toBe(FAKE_REVOKED_PUB);
+  });
+
+  test("maps USER_NOT_FOUND + PUSH_FAILED distinctly", async () => {
+    const nf = await buildScopedUserMintAdapter(errorRunner("USER_NOT_FOUND")).revokeScopedUser!(INPUT);
+    expect(nf.ok).toBe(false);
+    if (nf.ok) throw new Error("expected failure");
+    expect(nf.code).toBe("USER_NOT_FOUND");
+
+    const pf = await buildScopedUserMintAdapter(errorRunner("PUSH_FAILED")).revokeScopedUser!(INPUT);
+    expect(pf.ok).toBe(false);
+    if (pf.ok) throw new Error("expected failure");
+    expect(pf.code).toBe("PUSH_FAILED");
+  });
+
+  test("a verb-less arc (bad schema) maps to ARC_TOO_OLD", async () => {
+    const runner: ArcScopedMintRunner = () => Promise.resolve({ stdout: JSON.stringify({ schema: "arc.nats.v1", ok: true }) + "\n", stderr: "", exitCode: 0 });
+    const res = await buildScopedUserMintAdapter(runner).revokeScopedUser!(INPUT);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("expected failure");
+    expect(res.code).toBe("ARC_TOO_OLD");
+  });
+});
