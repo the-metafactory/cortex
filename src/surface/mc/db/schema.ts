@@ -82,6 +82,16 @@ export const SCHEMA_SQL: string[] = [
     state TEXT NOT NULL DEFAULT 'queued'
       CHECK(state IN ('queued','dispatched','running','blocked','completed','failed','cancelled')),
     block_reason TEXT,
+    -- CK-4a / #1295: provider back-pressure hint. When the dispatch lifecycle
+    -- reports not_now { retry_after_ms } (rate/capacity exhaustion — see
+    -- src/runner/dispatch-listener.ts), the assignment sits pre-spawn (queued)
+    -- carrying the earliest-retry delay in ms. NULL ⇒ no pending provider retry.
+    -- LOCAL-ONLY: the dispatch lifecycle never crosses the federation boundary
+    -- (ADR-0005 / the CK-4a scope boundary — dispatch stays local), so the D1
+    -- substrate has no analogue. The read model (db/working-aggregation.ts)
+    -- PROJECTS this; the dispatch-listener → assignment WRITER is the CK-4a
+    -- write-half (#1514 lane) and is deliberately NOT wired here.
+    retry_after_ms INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     -- Invariant: block_reason is non-null iff state = 'blocked'.
@@ -136,7 +146,13 @@ export const SCHEMA_SQL: string[] = [
     cost_usd REAL,
     classification TEXT,
     data_residency TEXT,
-    home_principal TEXT
+    home_principal TEXT,
+    -- CK-4a / #1295 / ADR-0011 canonical: the ORIGIN-stack attribution the
+    -- cross-stack WORKING aggregation groups by (see canonical-session.ts).
+    -- NULL ⇒ own/local-stack origin. Its lookup index idx_sessions_origin_stack_id
+    -- is created by the origin_stack_id COLUMN_ADD_MIGRATIONS post[] (NOT here) —
+    -- same #961/#1048 pre-existing-DB rule as parent_session_id/substrate below.
+    origin_stack_id TEXT
   )`,
 
   // --- events ---
@@ -731,6 +747,36 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   { table: "sessions", column: "classification", ddl: `ALTER TABLE sessions ADD COLUMN classification TEXT` },
   { table: "sessions", column: "data_residency", ddl: `ALTER TABLE sessions ADD COLUMN data_residency TEXT` },
   { table: "sessions", column: "home_principal", ddl: `ALTER TABLE sessions ADD COLUMN home_principal TEXT` },
+
+  // CK-4a / #1295 / D-8 — the cross-stack ORIGIN attribution for EXISTING DBs.
+  // Fresh DBs get it from the sessions CREATE TABLE above; an already-initialised
+  // DB (the running / aggregating MC-DB stacks) backfills the column here via the
+  // same pragma_table_info gate. Nullable TEXT, no FK (the origin is a stack
+  // IDENTITY string, not a row in this DB). The value-level backfill of existing
+  // NULL rows to this daemon's own stack id is a SEPARATE, id-aware step —
+  // `backfillOriginStackId(db, stackId)` in db/sessions.ts — because the schema
+  // layer does not know the resolved stack id (it lives in config, wired at boot).
+  // The lookup index runs in post[] (unconditional, so fresh DBs get it too).
+  {
+    table: "sessions",
+    column: "origin_stack_id",
+    ddl: `ALTER TABLE sessions ADD COLUMN origin_stack_id TEXT`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_sessions_origin_stack_id ON sessions(origin_stack_id)`,
+    ],
+  },
+
+  // CK-4a / #1295 — provider back-pressure hint for EXISTING assignment DBs.
+  // Fresh DBs get it from the agent_task_assignment CREATE TABLE above. Nullable
+  // INTEGER (ms); a plain ADD COLUMN with no CHECK/NOT NULL, so the ALTER is safe
+  // on a table with rows. LOCAL-ONLY (no D1 analogue — dispatch stays local per
+  // the CK-4a scope boundary). Read by db/working-aggregation.ts; writer deferred
+  // to the dispatch-listener write-half.
+  {
+    table: "agent_task_assignment",
+    column: "retry_after_ms",
+    ddl: `ALTER TABLE agent_task_assignment ADD COLUMN retry_after_ms INTEGER`,
+  },
 
   // P-14 U3.3 (#937) — origin-badge columns for EXISTING observability DBs.
   // Fresh DBs get these from the observability_events CREATE TABLE above; an

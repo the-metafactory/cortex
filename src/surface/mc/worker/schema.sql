@@ -41,7 +41,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- status/metrics/sovereignty are columns above) — these two close the gap.
   -- Added to deployed D1 via migrations/0005_session_tree.sql.
   parent_session_id TEXT,                   -- self-ref to the spawning session; NULL ⇒ agent-rooted
-  substrate TEXT NOT NULL DEFAULT 'claude-code'  -- claude-code | codex | … (attribute of a session)
+  substrate TEXT NOT NULL DEFAULT 'claude-code',  -- claude-code | codex | … (attribute of a session)
+  -- CK-4a / #1295 / D-8 canonical: the ORIGIN-stack attribution the cross-stack
+  -- WORKING aggregation (DashboardSnapshot.workingAggregation) groups by. NULL ⇒
+  -- own/local-stack origin. Added to deployed D1 via migrations/0006_session_origin_stack.sql.
+  origin_stack_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
@@ -152,6 +156,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_home_principal ON sessions(home_principa
 -- (CANONICAL_SESSION_INDICES) the parity test pins on both substrates.
 CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_substrate ON sessions(substrate);
+-- CK-4a / #1295 — cross-stack aggregation groups WORKING metadata by origin stack.
+CREATE INDEX IF NOT EXISTS idx_sessions_origin_stack_id ON sessions(origin_stack_id);
 CREATE INDEX IF NOT EXISTS idx_github_repo ON github_events(repo, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_agent ON github_events(agent_authored, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_principal ON github_events(principal_id);

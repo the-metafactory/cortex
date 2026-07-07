@@ -53,6 +53,7 @@ describe("mission-control types", () => {
       task_id: "t-1",
       state: "blocked",
       block_reason: { kind: "permission.request", payload: { requested_action: "tool.bash" } },
+      retry_after_ms: null,
       created_at: "2026-04-17T00:00:00Z",
       updated_at: "2026-04-17T00:00:00Z",
     };
@@ -79,6 +80,7 @@ describe("mission-control types", () => {
       classification: null,
       data_residency: null,
       home_principal: null,
+      origin_stack_id: null,
     };
     const controlled: Session = {
       id: "s-1",
