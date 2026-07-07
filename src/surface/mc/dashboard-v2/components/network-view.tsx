@@ -93,6 +93,10 @@ import {
   stackCoordFromTile,
   sessionTargetsForAssistant,
 } from "../lib/mc-dive";
+import {
+  buildStackHeader,
+  type StackHeaderModel,
+} from "../lib/mc-stack-header";
 import type { NetworkGraph } from "../lib/network-graph-adapter";
 import type { NetworkMembershipDTO } from "../hooks/use-networks";
 
@@ -235,13 +239,17 @@ export function NetworkView({
   // hides foreign verdicts (those hubs/nodes aren't in the graph to paint onto).
   // SOURCED FROM SIGNAL: `buildTransportOverlay` carries signal's verdict strings
   // verbatim; cortex never re-derives them.
-  const transportOverlay = useMemo(
-    () =>
-      filter.transportOverlay
-        ? buildTransportOverlay(transportRoster)
-        : EMPTY_TRANSPORT_OVERLAY,
-    [filter.transportOverlay, transportRoster],
+  // The FULL fold of signal's roster, built regardless of the render-lens toggle.
+  // The canvas overlay is toggle-gated (below); the CK-2 cockpit-header verdict
+  // chip reads THIS one, so a stack's transport verdict stays honest even when the
+  // principal has the canvas transport-overlay lens off (dark ≠ toggle-off).
+  const fullTransportOverlay = useMemo(
+    () => buildTransportOverlay(transportRoster),
+    [transportRoster],
   );
+  const transportOverlay = filter.transportOverlay
+    ? fullTransportOverlay
+    : EMPTY_TRANSPORT_OVERLAY;
   const graph = useMemo(
     () =>
       filter.transportOverlay
@@ -503,6 +511,24 @@ export function NetworkView({
     [onOpenSession],
   );
 
+  // CK-2 — the stack-detail cockpit header, present ONLY when a stack is dived
+  // into. Rolls the on-stack agents' capabilities up to the stack, tags the
+  // LOCAL-vs-federated-PEER variant (peer = aggregate-only, ADR-0005), and reads
+  // the transport verdict VERBATIM off the FULL overlay (honest `unobserved` when
+  // signal is dark). Above STACK → null (no header; the pane renders unchanged).
+  const stackHeader = useMemo<StackHeaderModel | null>(
+    () =>
+      shellSelection.stack === null
+        ? null
+        : buildStackHeader(
+            state.agents,
+            shellSelection.stack,
+            fullTransportOverlay,
+            servingPrincipal,
+          ),
+    [state.agents, shellSelection.stack, fullTransportOverlay, servingPrincipal],
+  );
+
   return (
     <McShell
       principal={servingPrincipal}
@@ -511,6 +537,7 @@ export function NetworkView({
       onSelectionChange={setShellSelection}
       sessionTargets={sessionTargets}
       onOpenSession={handleOpenSession}
+      stackHeader={stackHeader}
     >
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
       <h2>Network</h2>

@@ -387,6 +387,117 @@
   margin-top: 12px;
 }
 
+/* ── CK-2 stack-detail cockpit header ─────────────────────────────────────── */
+.mc-stack-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 15px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+}
+.mc-stack-header-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mc-stack-header-glyph {
+  font: 600 13px var(--mono);
+  color: var(--mer);
+  text-shadow: 0 0 10px color-mix(in oklch, var(--mer) 40%, transparent);
+}
+.mc-stack-header-name {
+  font: 700 14px var(--mono);
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+.mc-stack-header-variant {
+  font: 500 10px var(--mono);
+  color: var(--faint);
+  letter-spacing: 0.1em;
+}
+/* federated-peer aggregate tag (ADR-0005) */
+.mc-stack-header-aggregate {
+  font: 600 8px var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tide);
+  border: 1px solid color-mix(in oklch, var(--tide) 45%, transparent);
+  background: color-mix(in oklch, var(--tide) 12%, transparent);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+.mc-stack-header-presence {
+  font: 500 10px var(--mono);
+  color: var(--dim);
+}
+.mc-stack-header-verdict-slot {
+  margin-left: auto;
+  display: inline-flex;
+}
+
+/* capability rollup chips */
+.mc-stack-header-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mc-stack-cap {
+  font: 500 10px var(--mono);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  padding: 3px 8px;
+  border-radius: 5px;
+}
+.mc-stack-cap--none {
+  color: var(--faint);
+  border-style: dashed;
+}
+
+/* transport-verdict chip — colour keyed on `data-severity` (verbatim verdict
+   label + severity sourced from the overlay's canonical verdictBadge). The
+   `unobserved` treatment is deliberately neutral — never green, never red. */
+.mc-verdict-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 600 10px var(--mono);
+  letter-spacing: 0.04em;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--faint);
+  color: var(--faint);
+}
+.mc-verdict-chip[data-severity="ok"] {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok) 50%, transparent);
+  background: color-mix(in oklch, var(--ok) 12%, transparent);
+}
+.mc-verdict-chip[data-severity="warn"] {
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 50%, transparent);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+}
+.mc-verdict-chip[data-severity="alert"] {
+  color: var(--bad);
+  border-color: color-mix(in oklch, var(--bad) 55%, transparent);
+  background: color-mix(in oklch, var(--bad) 14%, transparent);
+}
+.mc-verdict-chip--unobserved {
+  color: var(--faint);
+  border-style: dashed;
+  border-color: var(--line);
+  background: none;
+}
+.mc-verdict-chip-rtt {
+  color: var(--dim);
+  font-weight: 500;
+}
+
 /* ── Reduced-motion guard (mirrors D1) ───────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .mc-logo-mark {
