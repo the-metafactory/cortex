@@ -41,6 +41,8 @@ import {
 import { handleListGitLinks } from "./api/git-links";
 import { handleListAgents, type AgentPresenceView } from "./api/agents";
 import { handleListNetworks, type NetworksView } from "./api/networks";
+// FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner read seam.
+import { handleGetHandoff, type HandoffView } from "./api/handoff";
 import {
   handleAdmissionDecision,
   CF_ACCESS_EMAIL_HEADER,
@@ -220,6 +222,15 @@ export interface StartServerOptions {
    */
   admissionDecider?: () => AdmissionDecider | null;
   /**
+   * FLG-1 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the guided-join
+   * handoff view (serves `GET /api/networks/:net/handoff/:member`: the 3-leg
+   * seal → hub-authorize → leaf-up state via the pure `deriveHandoffState`). A
+   * GETTER like `networks` because the registry client + stack identity boot
+   * AFTER the embed in `cortex.ts`; resolved per request. Read-only (no signing);
+   * `null` ⇒ no federation/registry → the route 503s honestly.
+   */
+  handoffView?: () => HandoffView | null;
+  /**
    * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
    * `/api/observability/*` routes proxy to it server-side. Loopback-enforced
    * at config-parse time; the proxy re-checks at the request boundary.
@@ -342,6 +353,9 @@ export function startServer(
         // MC-B2 — resolve the admission-decision signer lazily too (stack
         // identity + registry client boot after the server). null ⇒ 503.
         const admissionDecider = options.admissionDecider?.() ?? null;
+        // FLG-1 — resolve the handoff view lazily (same boot-order reason as
+        // `networks`). null ⇒ the handoff route 503s honestly.
+        const handoffView = options.handoffView?.() ?? null;
         // FND-6 — finalize the guard context with the ACTUAL bound port.
         const guard: MutationGuardContext = {
           ...guardBase,
@@ -357,6 +371,7 @@ export function startServer(
           networks,
           admissionDecider,
           guard,
+          handoffView,
         );
       }
 
@@ -516,6 +531,7 @@ async function handleApi(
   networks: NetworksView | null = null,
   admissionDecider: AdmissionDecider | null = null,
   guard: MutationGuardContext,
+  handoffView: HandoffView | null = null,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -764,6 +780,34 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListNetworks(networks, agentPresence);
+  }
+
+  // FLG-1 (docs/plan-mc-future-state.md §4.D) — GET
+  // /api/networks/:net/handoff/:member — the guided-join two-party handoff
+  // banner's read seam. Wraps the PURE `deriveHandoffState` (#1479) via the
+  // injected HandoffView. Read-only (GET), so it is NOT identity-gated — the
+  // FND-6 guard above only wraps MUTATING_METHODS; this read carries
+  // metadata-only DTO (no interiors — invariant 1). The `?confirmed=` toggle
+  // maps to the member attestation (`undefined`→done only, NEVER a real
+  // `false` — invariant 9 / Sage #1499). The `/handoff/` segment disambiguates
+  // from the exact-match `/api/networks` + `/api/networks/admission-decision`
+  // routes, so registration order is immaterial.
+  const networkHandoffMatch = /^\/api\/networks\/([^/]+)\/handoff\/([^/]+)$/.exec(pathname);
+  if (networkHandoffMatch) {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    const netCaptured = networkHandoffMatch[1];
+    const memberCaptured = networkHandoffMatch[2];
+    if (!netCaptured || !memberCaptured) {
+      return new Response("Not Found", { status: 404 });
+    }
+    const networkId = decodeURIComponent(netCaptured);
+    const member = decodeURIComponent(memberCaptured);
+    // Fail-closed: only an explicit `?confirmed=true` attests. Any other value
+    // (absent, "false", garbage) is treated as no attestation.
+    const confirmed = url.searchParams.get("confirmed") === "true";
+    return handleGetHandoff(handoffView, { networkId, member, confirmed });
   }
 
   // MC-B2 (cortex#1279) — POST /api/networks/admission-decision — the mutating

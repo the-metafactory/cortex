@@ -25,6 +25,8 @@ import type { WsClientRegistry } from "./ws/client-registry";
 import type { AgentPresenceView } from "./api/agents";
 import type { NetworksView } from "./api/networks";
 import type { AdmissionDecider } from "./api/networks-admission";
+// FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff view passthrough.
+import type { HandoffView } from "./api/handoff";
 import type { LocalAggregationProvider } from "./local-aggregation/sibling-db-reader";
 
 export interface MissionControlHandle {
@@ -104,6 +106,15 @@ export interface StartMissionControlOptions {
    * embed. Omitted → the route 503s honestly.
    */
   admissionDecider?: () => AdmissionDecider | null;
+  /**
+   * FLG-1 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the guided-join
+   * handoff view, forwarded verbatim to `startServer` so
+   * `GET /api/networks/:net/handoff/:member` surfaces the 3-leg seal →
+   * hub-authorize → leaf-up state. A GETTER (like `networks`) because the
+   * registry client + stack identity boot AFTER the embed. Omitted → the route
+   * 503s honestly.
+   */
+  handoffView?: () => HandoffView | null;
   /**
    * P-14 U0.1 — Tier-3 sideband base URL (`config.mc.sideband`). Loopback-
    * enforced at config-parse time; forwarded verbatim to `startServer`, which
@@ -189,6 +200,7 @@ export async function startMissionControl(
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
       ...(opts.networks ? { networks: opts.networks } : {}),
       ...(opts.admissionDecider ? { admissionDecider: opts.admissionDecider } : {}),
+      ...(opts.handoffView ? { handoffView: opts.handoffView } : {}),
       ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
     });

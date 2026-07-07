@@ -22,6 +22,11 @@ import {
   rosterStatusBadge,
   summarizeMembership,
 } from "../lib/network-membership-adapter";
+// FLG-1 (docs/plan-mc-future-state.md §4.D) — the guided-join handoff banner, a
+// strip per joined network (R1 render home; CK-7 rehomes it into the cockpit).
+// Self-fetching + SSR-inert (renders nothing until the read resolves), so the
+// panel stays effectively pure and a non-federated stack is unchanged.
+import { HandoffBannerLive } from "./handoff-banner";
 
 export interface NetworkRosterPanelProps {
   networks: readonly NetworkMembershipDTO[];
@@ -86,6 +91,11 @@ export function NetworkRosterPanel({
                     : ""}
                 </span>
               </div>
+              {/* FLG-1 — the guided-join handoff banner for THIS stack's own
+                  join to this network (member = the local principal). Self-
+                  fetching + SSR-inert: renders nothing until the read resolves,
+                  and nothing at all on a stack with no local principal. */}
+              <HandoffBannerLive networkId={net.network_id} member={localPrincipal} />
               {net.members.length === 0 ? (
                 <div className="dim network-roster-empty">
                   No admitted members resolved.

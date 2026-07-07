@@ -157,6 +157,12 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 import type { NetworksView } from "./surface/mc/api/networks";
+// FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner: the MC
+// read seam + the shared signal-gathering / live-ports the daemon wires it to.
+import type { HandoffView } from "./surface/mc/api/handoff";
+import { gatherHandoffSignals } from "./cli/cortex/commands/network-handoff-lib";
+import { buildLiveHandoffPorts } from "./cli/cortex/commands/network-handoff-adapters";
+import type { LivePortsConfig } from "./cli/cortex/commands/network-adapters";
 import type {
   AdmissionDecider,
   AdmissionDecisionResult,
@@ -4011,6 +4017,13 @@ export async function startCortex(
   // `resolvedPolicy` is known); `null` until then ⇒ the route serves an empty
   // list. The MC server resolves it per request.
   let networksViewForApi: NetworksView | null = null;
+  // FLG-1 (docs/plan-mc-future-state.md §4.D) — the guided-join handoff view for
+  // `GET /api/networks/:net/handoff/:member`. Assigned in the federation block
+  // below alongside `networksViewForApi` (it reuses the SAME resolved registry +
+  // stack seed to gather the 3 leg signals via the shared `gatherHandoffSignals`
+  // + live ports). `null` until then ⇒ the handoff route 503s honestly. Read-only
+  // — signs/mutates nothing; the leaf-up leg reads the LOCAL `/leafz`.
+  let handoffViewForApi: HandoffView | null = null;
   // MC-B2 (cortex#1279) — the admission-decision signer for the mutating
   // `POST /api/networks/admission-decision` action. Assigned in the federation
   // block below alongside `networksViewForApi` (it reuses the SAME stack
@@ -4099,6 +4112,10 @@ export async function startCortex(
         // registry are resolved). null ⇒ `POST /api/networks/admission-decision`
         // 503s honestly.
         admissionDecider: () => admissionDeciderForApi,
+        // FLG-1 (docs/plan-mc-future-state.md §4.D) — the guided-join handoff
+        // view (lazy; assigned in the federation block). null ⇒
+        // `GET /api/networks/:net/handoff/:member` 503s honestly.
+        handoffView: () => handoffViewForApi,
         // #1008 — DB-read pane-of-glass aggregation. The getter returns a context
         // only when discovery produced a resolve-opts (dbRead on); otherwise null
         // ⇒ single-db feeds. Lazy so the roster can be (re)read consistently.
@@ -4599,6 +4616,46 @@ export async function startCortex(
             `as first-class trust groups (admission roster: ${live ? "LIVE member-read (A2)" : "not_configured — self-only"}; ` +
             "per-principal acceptance from offerings)",
         );
+
+        // FLG-1 (docs/plan-mc-future-state.md §4.D) — the guided-join handoff
+        // view. Gathers the 3 leg signals (seal via admission `/mine`,
+        // hub-authorize via the #1498 registry marker, leaf-up via the LOCAL
+        // `/leafz`) through the SAME `gatherHandoffSignals` + live ports the
+        // `cortex network handoff status` CLI uses — the surface never re-derives
+        // them. Read-only; never-throw (a degraded read fails closed to a
+        // `pending` leg + a note). Reuses the resolved registry + stack seed
+        // already loaded for the networks view above.
+        handoffViewForApi = {
+          localPrincipal: principalId,
+          resolveHandoffSignals: async (networkId, member) => {
+            const network = networksList.find((n) => n.id === networkId);
+            if (network === undefined) return null;
+            // A minimal per-network LivePortsConfig — `networkId` varies per
+            // request; the registry + seed come from the already-resolved
+            // federation context. Absent knobs (monitor url, nats config) fall
+            // back to the live adapters' local defaults; a missing seed/registry
+            // simply degrades the reads to fail-closed signals + notes.
+            const cfg: LivePortsConfig = {
+              networkId,
+              principalId,
+              stackId: options.stack?.id ?? principalId,
+              ...(resolvedRegistry?.url !== undefined && {
+                registryUrl: resolvedRegistry.url,
+              }),
+              ...(resolvedRegistry?.pubkey !== undefined && {
+                registryPubkey: resolvedRegistry.pubkey,
+              }),
+              ...(options.stack?.nkey_seed_path !== undefined && {
+                seedPath: expandTilde(options.stack.nkey_seed_path),
+              }),
+            };
+            return gatherHandoffSignals(buildLiveHandoffPorts(cfg, [network]), {
+              networkId,
+              member,
+              selfPrincipal: principalId,
+            });
+          },
+        };
 
         // MC-B2 (cortex#1279) — the WRITE sibling of the member-roster read:
         // sign a Tier-2 admit/reject with the SAME `stackMaterial` and POST it to

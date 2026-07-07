@@ -993,6 +993,44 @@ html, body {
 .tone-warn { color: var(--warn); }
 .tone-danger { color: var(--bad); }
 .tone-pending { color: var(--accent); }
+.tone-muted { color: var(--dim, #8a8f98); }
+
+/* FLG-1 (docs/plan-mc-future-state.md §4.D) — the guided-join handoff banner:
+   the 3-leg seal → hub-authorize → leaf-up chain per joined network. A strip on
+   the roster panel (R1 render home; CK-7 rehomes it into the cockpit). */
+.handoff-banner {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.handoff-banner-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+}
+.handoff-banner-title { font-weight: 600; }
+.handoff-banner-network { font-size: 11px; font-family: var(--mono); }
+.handoff-legs {
+  list-style: none; margin: 0 0 6px; padding: 0;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+}
+.handoff-leg {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 6px; border-radius: 999px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.handoff-leg-glyph { font-size: 11px; }
+.handoff-leg-label { font-family: var(--mono); font-size: 11px; }
+.handoff-leg-owner { font-size: 10px; }
+.handoff-leg-arrow { margin: 0 2px; border: 0; }
+.handoff-banner-next { margin-bottom: 2px; }
+.handoff-banner-blocked, .handoff-banner-denied { font-size: 11px; margin-top: 2px; }
+.handoff-banner-confirm {
+  display: block; margin-top: 6px; font-size: 11px; cursor: pointer;
+}
+.handoff-banner-confirm-caption { font-size: 10px; }
 
 /* MC-B1 (cortex#1278) — Pier queue (operator inbox of pending admission
    requests). Additive section in the Network view, below the roster panel. */
