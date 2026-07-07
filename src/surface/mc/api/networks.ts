@@ -49,7 +49,11 @@
  */
 
 import type { AgentPresenceView } from "./agents";
-import type { ResolveAdmittedRosterResult } from "../../../bus/agent-network/admission-read";
+import type {
+  AdmissionStatus,
+  ResolveAdmittedRosterResult,
+} from "../../../bus/agent-network/admission-read";
+import type { RosterAuthorship } from "../../../bus/agent-network/roster-authorship";
 import type { PeerAcceptance } from "../../../bus/agent-network/peer-acceptance";
 import type {
   EncryptionMode,
@@ -143,6 +147,44 @@ export interface NetworkConfidentialityDTO {
   key_id: string | null;
 }
 
+export type { RosterAuthorship } from "../../../bus/agent-network/roster-authorship";
+
+/**
+ * FLG-4 (docs/plan-mc-future-state.md §4.D) — a member's admission LIFECYCLE
+ * state, snake_case + lower-cased for the wire. Mirrors the registry's
+ * `AdmissionStatus` (incl. the C-1350 `departed` vs `revoked` distinction the
+ * glass must keep visually separable: "left" ≠ "kicked"). `unknown` when a read
+ * cannot resolve the state.
+ */
+export type RosterAdmissionState =
+  | "admitted"
+  | "pending"
+  | "rejected"
+  | "revoked" // admin-kicked
+  | "departed" // voluntary leave
+  | "unknown";
+
+/**
+ * FLG-4 — one member's roster lifecycle STATE on the `/api/networks` wire DTO:
+ * seal-delivery, hub-authorize timestamp, admission state, and the #1600 hub-admin
+ * authorship verdict. METADATA ONLY — no secret material crosses this seam:
+ * `sealed` is a boolean delivery signal (never the ciphertext), and `authorship`
+ * is the RESOLVED tri-state (never the raw `{claim, signature}`). This is the
+ * carrier for BOTH current members (matched to a `MembershipMemberDTO` by
+ * principal) and FORMER members (departed/revoked — not in the reconciled member
+ * set but surfaced honestly as lifecycle state).
+ */
+export interface RosterMemberStateDTO {
+  principal: string;
+  admission_state: RosterAdmissionState;
+  /** Sealed leaf secret DELIVERED (boolean signal; never the ciphertext). */
+  sealed: boolean;
+  /** ISO-8601 UTC the hub-admin authorized this member's leaf, or `null`. */
+  hub_authorized_at: string | null;
+  /** #1600 — hub-admin authorship verdict vs the pinned network-admin pubkey. */
+  authorship: RosterAuthorship;
+}
+
 /** One reconciled roster member, snake_case for the DTO. */
 export interface MembershipMemberDTO {
   principal: string;
@@ -178,6 +220,17 @@ export interface NetworkMembershipDTO {
   confidentiality: NetworkConfidentialityDTO;
   /** Admitted roster reconciled ⋈ presence into per-member verdicts. */
   members: MembershipMemberDTO[];
+  /**
+   * FLG-4 — per-member roster lifecycle states (seal-delivery, hub-authorize
+   * timestamp, admission state incl. departed/revoked, #1600 authorship). Covers
+   * BOTH current members (join to `members[]` by `principal` for the seal/authorize
+   * badges) and FORMER members (departed/revoked — rendered as a distinct former-
+   * members group). `[]` when the read carries no state facets (honest absence).
+   * OPTIONAL on the wire so an older server (pre-FLG-4) that omits it still
+   * deserializes; the daemon handler ALWAYS emits it (possibly `[]`), and the
+   * panel treats absent as `[]`.
+   */
+  roster_states?: RosterMemberStateDTO[];
 }
 
 /** `GET /api/networks` response body. */
@@ -190,6 +243,44 @@ function failureStatus(
   reason: "unreachable" | "unauthorized" | "not_configured",
 ): RosterStatus {
   return reason;
+}
+
+/** FLG-4 — map the registry `AdmissionStatus` → the lower-cased wire state. */
+function toWireAdmissionState(status: AdmissionStatus): RosterAdmissionState {
+  switch (status) {
+    case "ADMITTED":
+      return "admitted";
+    case "PENDING":
+      return "pending";
+    case "REJECTED":
+      return "rejected";
+    case "REVOKED":
+      return "revoked";
+    case "DEPARTED":
+      return "departed";
+  }
+}
+
+/**
+ * FLG-4 — project an admission-read `AdmittedMemberState` → the metadata-only
+ * {@link RosterMemberStateDTO}. Total over the status union (compiler-enforced via
+ * {@link toWireAdmissionState}). Carries NO secret material: `sealed` is a boolean,
+ * `authorship` is the resolved verdict string.
+ */
+function toRosterMemberStateDTO(s: {
+  principal_id: string;
+  status: AdmissionStatus;
+  sealed: boolean;
+  hub_authorized_at: string | null;
+  authorship: RosterAuthorship;
+}): RosterMemberStateDTO {
+  return {
+    principal: s.principal_id,
+    admission_state: toWireAdmissionState(s.status),
+    sealed: s.sealed,
+    hub_authorized_at: s.hub_authorized_at,
+    authorship: s.authorship,
+  };
 }
 
 /**
@@ -267,6 +358,11 @@ export async function handleListNetworks(
       let pending: string[] = [];
       let rosterStatus: RosterStatus;
       let rosterScope: RosterScope | null;
+      // FLG-4 — per-member lifecycle states, projected verbatim from the read
+      // (empty for a failed/facet-less read — honest absence).
+      const rosterStates: RosterMemberStateDTO[] = result.ok
+        ? (result.roster.states ?? []).map(toRosterMemberStateDTO)
+        : [];
 
       if (result.ok) {
         for (const p of result.roster.admitted) admitted.push(p);
@@ -316,6 +412,7 @@ export async function handleListNetworks(
                 ? "self"
                 : "not-accepted",
         })),
+        roster_states: rosterStates,
       };
     });
 

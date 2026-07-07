@@ -155,6 +155,13 @@ describe("GET /networks/:id/roster/member — member PoP-read (ADR-0018 Q4)", ()
     // capabilities are joined as a facet on the roster
     const alphaRow = json.payload.members.find((m) => m.principal_id === "alpha");
     expect(alphaRow?.capabilities).toEqual(["tasks.code-review"]);
+    // FLG-4 — additive roster lifecycle facets: this read serves the ADMITTED
+    // roster, so `admission_state` is ADMITTED; `sealed` is a boolean delivery
+    // signal (false — no sealed secret delivered in this fixture); hub-authorize
+    // is null (not yet authorized). NONE of these carry secret material.
+    expect(alphaRow?.admission_state).toBe("ADMITTED");
+    expect(alphaRow?.sealed).toBe(false);
+    expect(alphaRow?.hub_authorized_at).toBeNull();
   });
 
   test("the response is a registry-signed assertion (verifies against the registry pubkey)", async () => {

@@ -17,7 +17,12 @@
 import type { NetworkMembershipDTO } from "../hooks/use-networks";
 import {
   acceptanceBadge,
+  admissionStateBadge,
+  authorshipBadge,
   confidentialityBadge,
+  formatHubAuthorized,
+  partitionRosterStates,
+  sealBadge,
   verdictBadge,
   rosterStatusBadge,
   summarizeMembership,
@@ -65,6 +70,11 @@ export function NetworkRosterPanel({
           const status = rosterStatusBadge(net.roster_status, net.roster_scope);
           const confidentiality = confidentialityBadge(net.confidentiality);
           const summary = summarizeMembership(net);
+          // FLG-4 — per-member lifecycle states: seal/authorize/authorship badges
+          // on live rows (keyed by principal), plus FORMER members (departed vs
+          // revoked, kept visually distinct) rendered as a separate group.
+          const { byPrincipal: stateByPrincipal, former: formerMembers } =
+            partitionRosterStates(net.roster_states ?? []);
           return (
             <li key={net.network_id} className="network-roster-group">
               <div className="network-roster-group-header">
@@ -115,6 +125,13 @@ export function NetworkRosterPanel({
                     const badge = verdictBadge(m.verdict);
                     const acceptance = acceptanceBadge(m.accepts);
                     const isYou = localPrincipal !== null && m.principal === localPrincipal;
+                    // FLG-4 — the member's lifecycle state (seal / hub-authorize /
+                    // authorship), when the read carries it. Absent ⇒ no extra
+                    // badges (honest: pre-FLG-4 server or facet-less read).
+                    const st = stateByPrincipal.get(m.principal);
+                    const seal = st ? sealBadge(st.sealed) : null;
+                    const hubAuth = st ? formatHubAuthorized(st.hub_authorized_at) : null;
+                    const authorship = st ? authorshipBadge(st.authorship) : null;
                     return (
                       <li
                         key={m.principal}
@@ -145,6 +162,34 @@ export function NetworkRosterPanel({
                             {acceptance.label}
                           </span>
                         ) : null}
+                        {/* FLG-4 — seal delivery + hub-authorize + #1600 authorship. */}
+                        {seal ? (
+                          <span
+                            className={`network-roster-seal tone-${seal.tone}`}
+                            data-seal={seal.token}
+                            title={seal.title}
+                          >
+                            {seal.label}
+                          </span>
+                        ) : null}
+                        {hubAuth ? (
+                          <span
+                            className={`network-roster-hubauth ${hubAuth.authorized ? "tone-ok" : "tone-warn"}`}
+                            data-hub-authorized={hubAuth.authorized ? "true" : "false"}
+                            title={hubAuth.title}
+                          >
+                            {hubAuth.label}
+                          </span>
+                        ) : null}
+                        {authorship ? (
+                          <span
+                            className={`network-roster-authorship tone-${authorship.tone}`}
+                            data-authorship={authorship.token}
+                            title={authorship.title}
+                          >
+                            {authorship.label}
+                          </span>
+                        ) : null}
                         {m.present_stacks.length > 0 ? (
                           <span className="dim network-roster-stacks">
                             {m.present_stacks.join(", ")}
@@ -155,6 +200,34 @@ export function NetworkRosterPanel({
                   })}
                 </ul>
               )}
+              {/* FLG-4 — FORMER members (departed vs revoked, kept visually
+                  distinct). Depart/leave/retire are surfaced as STATE ONLY —
+                  there are NO glass verbs here (retire is root-seed-signed and
+                  never a button; leave/depart are CLI-side by design). */}
+              {formerMembers.length > 0 ? (
+                <div className="network-roster-former" data-former-count={formerMembers.length}>
+                  <div className="dim network-roster-former-title">
+                    Former members <span className="dim">— state only (leave / retire are CLI-side by design)</span>
+                  </div>
+                  <ul className="network-roster-members network-roster-former-list">
+                    {formerMembers.map((f) => {
+                      const stateBadge = admissionStateBadge(f.admission_state);
+                      return (
+                        <li key={`former:${f.principal}`} className="network-roster-member network-roster-former-member">
+                          <span className="network-roster-principal">{f.principal}</span>
+                          <span
+                            className={`network-roster-badge tone-${stateBadge.tone}`}
+                            data-admission-state={stateBadge.token}
+                            title={stateBadge.title}
+                          >
+                            {stateBadge.label}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
             </li>
           );
         })}

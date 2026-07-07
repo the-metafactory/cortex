@@ -59,7 +59,13 @@ import type {
   AdmissionRow,
   AdmissionRowsProvider,
   AdmissionRowsResult,
+  AdmissionStatus,
 } from "./admission-read";
+import {
+  verifyRosterAuthorship,
+  type RosterAuthorship,
+  type RosterAuthorshipMaterial,
+} from "./roster-authorship";
 
 /**
  * Injectable `fetch`, narrowed to what this provider needs. Production omits it
@@ -89,6 +95,14 @@ export interface MemberRosterAdmissionProviderOptions {
    */
   registryPubkey?: string;
   /**
+   * FLG-4 / #1600 — the PINNED network-admin pubkey (base64 Ed25519) the sealed
+   * row's hub-admin `{claim, signature}` is verified against. When absent, or
+   * when the read carries no authorship material, per-member `authorship`
+   * resolves to `"unchecked"` (honest — never a fabricated pass). No config field
+   * pins this yet (residual risk in the FLG-4 PR), so this is normally undefined.
+   */
+  networkAdminPubkey?: string;
+  /**
    * The stack's identity material — its registered `SU…` seed + base64 pubkey.
    * The pubkey is the registry `peer_pubkey`; the seed signs the PoP claim.
    * SECRET (the seed) — never logged.
@@ -104,17 +118,54 @@ export interface MemberRosterAdmissionProviderOptions {
   logError?: (msg: string) => void;
 }
 
-/** The minimal verified-roster shape the member endpoint returns (admission-sourced). */
+/** One parsed roster member — `principal_id` plus the OPTIONAL FLG-4 facets. */
+interface VerifiedRosterMember {
+  principal_id: string;
+  /** FLG-4 — the row's lifecycle status when the registry emits it (else ADMITTED). */
+  admission_state?: AdmissionStatus;
+  /** FLG-4 — sealed-secret delivered (boolean signal; never the ciphertext). */
+  sealed?: boolean;
+  /** FLG-4 — ISO-8601 UTC hub-authorize timestamp, or null. */
+  hub_authorized_at?: string | null;
+  /** #1600 — hub-admin authorship material (verified against the pinned admin key). */
+  authorship?: RosterAuthorshipMaterial;
+}
+
+/** The verified-roster shape the member endpoint returns (admission-sourced). */
 interface VerifiedRosterPayload {
   network_id: string;
-  members: { principal_id: string }[];
+  members: VerifiedRosterMember[];
+}
+
+/** The registry's `AdmissionStatus` values (guard for the optional `admission_state`). */
+const ADMISSION_STATES: readonly AdmissionStatus[] = [
+  "PENDING",
+  "ADMITTED",
+  "REJECTED",
+  "REVOKED",
+  "DEPARTED",
+];
+
+/** Parse a member's OPTIONAL FLG-4 authorship material, or `undefined` when absent/malformed. */
+function parseAuthorshipMaterial(m: Record<string, unknown>): RosterAuthorshipMaterial | undefined {
+  const claim = m.seal_claim;
+  const signature = m.seal_signature;
+  const hubAdmin = m.sealed_by;
+  if (claim === undefined || claim === null) return undefined;
+  if (typeof signature !== "string" || signature.length === 0) return undefined;
+  if (typeof hubAdmin !== "string" || hubAdmin.length === 0) return undefined;
+  return { claim, signature, hub_admin_pubkey: hubAdmin };
 }
 
 /**
  * Parse a DD-9-verified payload as the member roster — `{ network_id,
- * members: [{ principal_id }] }`. A verified-but-wrong-shape payload is a
- * wire-contract violation, not a value to trust → `undefined` (caller maps to
- * `unreachable`). Mirrors `network-client`'s `parseRoster` discipline.
+ * members: [{ principal_id, ...FLG-4 facets }] }`. The FLG-4 facets
+ * (`admission_state`, `sealed`, `hub_authorized_at`, and the authorship material)
+ * are all OPTIONAL and ADDITIVE: a pre-FLG-4 registry omits them and the member
+ * simply carries `{ principal_id }`, so this stays backward-compatible. A
+ * verified-but-wrong-shape payload is a wire-contract violation, not a value to
+ * trust → `undefined` (caller maps to `unreachable`). Mirrors `network-client`'s
+ * `parseRoster` discipline.
  */
 function parseVerifiedRoster(
   payload: unknown,
@@ -124,14 +175,29 @@ function parseVerifiedRoster(
   const p = payload as Record<string, unknown>;
   if (p.network_id !== networkId) return undefined;
   if (!Array.isArray(p.members)) return undefined;
-  const members: { principal_id: string }[] = [];
+  const members: VerifiedRosterMember[] = [];
   for (const raw of p.members) {
     if (raw === null || typeof raw !== "object") return undefined;
     const m = raw as Record<string, unknown>;
     if (typeof m.principal_id !== "string" || m.principal_id.length === 0) {
       return undefined;
     }
-    members.push({ principal_id: m.principal_id });
+    const member: VerifiedRosterMember = { principal_id: m.principal_id };
+    if (
+      typeof m.admission_state === "string" &&
+      (ADMISSION_STATES as readonly string[]).includes(m.admission_state)
+    ) {
+      member.admission_state = m.admission_state as AdmissionStatus;
+    }
+    if (typeof m.sealed === "boolean") member.sealed = m.sealed;
+    if (typeof m.hub_authorized_at === "string") {
+      member.hub_authorized_at = m.hub_authorized_at;
+    } else if (m.hub_authorized_at === null) {
+      member.hub_authorized_at = null;
+    }
+    const authorship = parseAuthorshipMaterial(m);
+    if (authorship !== undefined) member.authorship = authorship;
+    members.push(member);
   }
   return { network_id: networkId, members };
 }
@@ -271,11 +337,30 @@ export function createMemberRosterAdmissionProvider(
         detail: "member roster payload was not a valid roster shape",
       };
     }
-    const rows: AdmissionRow[] = roster.members.map((m) => ({
-      principal_id: m.principal_id,
-      network_id: networkId,
-      status: "ADMITTED" as const,
-    }));
+    // FLG-4 — project each member into an AdmissionRow, carrying the OPTIONAL
+    // state facets. The member-read serves the ADMITTED roster, so `status`
+    // defaults to ADMITTED unless the registry emits an explicit `admission_state`.
+    // #1600 — resolve authorship per member: verify the hub-admin {claim,
+    // signature} (when present) against the pinned network-admin pubkey. Absent
+    // material or no pinned key ⇒ "unchecked" (honest — never a fabricated pass).
+    const rows: AdmissionRow[] = await Promise.all(
+      roster.members.map(async (m): Promise<AdmissionRow> => {
+        const authorship: RosterAuthorship = await verifyRosterAuthorship(
+          m.authorship,
+          options.networkAdminPubkey,
+        );
+        return {
+          principal_id: m.principal_id,
+          network_id: networkId,
+          status: m.admission_state ?? "ADMITTED",
+          ...(m.sealed !== undefined && { sealed: m.sealed }),
+          ...(m.hub_authorized_at !== undefined && {
+            hub_authorized_at: m.hub_authorized_at,
+          }),
+          authorship,
+        };
+      }),
+    );
     return { ok: true, rows, scope: "complete" };
   }
 

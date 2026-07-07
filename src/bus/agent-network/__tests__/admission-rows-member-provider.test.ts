@@ -133,9 +133,12 @@ describe("createMemberRosterAdmissionProvider — happy path", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.scope).toBe("complete");
+    // FLG-4 — rows now carry a resolved `authorship` verdict (default "unchecked"
+    // when no admin key is pinned + no material on the row). `sealed`/
+    // `hub_authorized_at` are omitted here (this fixture emits neither facet).
     expect(res.rows).toEqual([
-      { principal_id: "andreas", network_id: "research-collab", status: "ADMITTED" },
-      { principal_id: "jc", network_id: "research-collab", status: "ADMITTED" },
+      { principal_id: "andreas", network_id: "research-collab", status: "ADMITTED", authorship: "unchecked" },
+      { principal_id: "jc", network_id: "research-collab", status: "ADMITTED", authorship: "unchecked" },
     ]);
   });
 
@@ -153,6 +156,118 @@ describe("createMemberRosterAdmissionProvider — happy path", () => {
     });
     const res = await provider.readAdmissionRows("research-collab");
     expect(res).toEqual({ ok: true, rows: [], scope: "complete" });
+  });
+});
+
+describe("createMemberRosterAdmissionProvider — FLG-4 roster-state facets", () => {
+  it("parses the additive facets (admission_state / sealed / hub_authorized_at) when the registry emits them", async () => {
+    const reg = await registryKeypair();
+    const roster = {
+      network_id: "research-collab",
+      members: [
+        {
+          principal_id: "andreas",
+          principal_pubkey: "x",
+          capabilities: [],
+          admission_state: "ADMITTED",
+          sealed: true,
+          hub_authorized_at: "2026-07-08T00:00:00.000Z",
+        },
+      ],
+    };
+    const assertion = await signAssertion(reg.privateKey, reg.publicKeyB64, roster);
+    const provider = createMemberRosterAdmissionProvider({
+      registryUrl: "https://registry.example",
+      registryPubkey: reg.publicKeyB64,
+      material: stackMaterial(),
+      fetchImpl: fakeFetch(200, assertion),
+    });
+    const res = await provider.readAdmissionRows("research-collab");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]).toEqual({
+      principal_id: "andreas",
+      network_id: "research-collab",
+      status: "ADMITTED",
+      sealed: true,
+      hub_authorized_at: "2026-07-08T00:00:00.000Z",
+      authorship: "unchecked",
+    });
+  });
+
+  it("#1600 — resolves authorship to 'verified' when the row carries valid material AND an admin key is pinned", async () => {
+    // Hub-admin keypair — signs the sealed-row authorship claim.
+    const hubAdmin = await registryKeypair();
+    const claim = { request_id: "req-1", hub_admin_pubkey: hubAdmin.publicKeyB64, issued_at: "2026-07-08T00:00:00.000Z", nonce: "n1" };
+    const claimSig = await crypto.subtle.sign(
+      { name: "Ed25519" },
+      hubAdmin.privateKey,
+      new TextEncoder().encode(canonicalJSON(claim)),
+    );
+    const claimSigB64 = bytesToBase64(new Uint8Array(claimSig));
+
+    const reg = await registryKeypair();
+    const roster = {
+      network_id: "research-collab",
+      members: [
+        {
+          principal_id: "andreas",
+          principal_pubkey: "x",
+          capabilities: [],
+          seal_claim: claim,
+          seal_signature: claimSigB64,
+          sealed_by: hubAdmin.publicKeyB64,
+        },
+      ],
+    };
+    const assertion = await signAssertion(reg.privateKey, reg.publicKeyB64, roster);
+    const provider = createMemberRosterAdmissionProvider({
+      registryUrl: "https://registry.example",
+      registryPubkey: reg.publicKeyB64,
+      material: stackMaterial(),
+      networkAdminPubkey: hubAdmin.publicKeyB64,
+      fetchImpl: fakeFetch(200, assertion),
+    });
+    const res = await provider.readAdmissionRows("research-collab");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]?.authorship).toBe("verified");
+  });
+
+  it("#1600 — authorship stays 'unchecked' when material is present but NO admin key is pinned (never a fabricated pass)", async () => {
+    const hubAdmin = await registryKeypair();
+    const claim = { request_id: "req-1", hub_admin_pubkey: hubAdmin.publicKeyB64, issued_at: "2026-07-08T00:00:00.000Z", nonce: "n1" };
+    const claimSig = await crypto.subtle.sign(
+      { name: "Ed25519" },
+      hubAdmin.privateKey,
+      new TextEncoder().encode(canonicalJSON(claim)),
+    );
+    const reg = await registryKeypair();
+    const roster = {
+      network_id: "research-collab",
+      members: [
+        {
+          principal_id: "andreas",
+          principal_pubkey: "x",
+          capabilities: [],
+          seal_claim: claim,
+          seal_signature: bytesToBase64(new Uint8Array(claimSig)),
+          sealed_by: hubAdmin.publicKeyB64,
+        },
+      ],
+    };
+    const assertion = await signAssertion(reg.privateKey, reg.publicKeyB64, roster);
+    const provider = createMemberRosterAdmissionProvider({
+      registryUrl: "https://registry.example",
+      registryPubkey: reg.publicKeyB64,
+      material: stackMaterial(),
+      // networkAdminPubkey deliberately omitted.
+      fetchImpl: fakeFetch(200, assertion),
+    });
+    const res = await provider.readAdmissionRows("research-collab");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]?.authorship).toBe("unchecked");
   });
 });
 
