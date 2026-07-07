@@ -14,8 +14,9 @@
  * network's hub is run by ANOTHER principal the seal silently lands on the wrong
  * server and the joiner's leaf is rejected with `Authorization Violation`.
  *
- * The CLI made that a two-party operator responsibility (remember `--hub-config`).
- * A GOVERN button on the glass has no operator to remember — so the FUTURE glass
+ * The CLI made that a two-party responsibility the principal had to remember
+ * (`--hub-config`). A GOVERN button on the glass has no human-at-a-terminal to
+ * remember it — so the FUTURE glass
  * deciders (FLG-6 seal, FLG-8 rotate-K, FLG-9 revoke — NOT built yet) MUST call
  * this guard and REFUSE a hub-half verb when this daemon is not the hub, or MC
  * reintroduces the exact same class FROM THE GLASS (invariant 7).
