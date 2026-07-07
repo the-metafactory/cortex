@@ -443,6 +443,21 @@ export interface SignedAdmissionDecision {
 export interface AdmissionReadClaim {
   /** The admin's own pubkey — used for allowlist check. */
   admin_pubkey: string;
+  /**
+   * FND-5 (ADR-0020 §4 read-scoping) — OPTIONAL network scope, bound INTO the
+   * signed claim so a token minted for network A cannot be replayed to read
+   * network B.
+   *
+   * Authorization + scoping (fail-closed, enforced in the read gate):
+   *   - PER-NETWORK admin → MUST name a network they administer; the read is
+   *     FORCED to that network's rows only. Naming a network they do NOT
+   *     administer (or omitting it) ⇒ 403. This is the security-critical
+   *     property: a per-network admin can never read another network's rows.
+   *   - GLOBAL admin (`REGISTRY_ADMIN_PUBKEYS`) → MAY name a network to narrow
+   *     the result, or OMIT it to read ALL networks (backward-compatible with
+   *     the pre-FND-5 global-only read).
+   */
+  network_id?: string;
   /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
   issued_at: string;
 }

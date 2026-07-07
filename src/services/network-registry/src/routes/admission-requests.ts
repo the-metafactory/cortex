@@ -253,39 +253,52 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
 
   // ---------------------------------------------------------------------------
   // Helper: verify admin signature for read endpoints (x-admin-signed header)
+  //
+  // FND-5 (ADR-0020 §4 read-scoping) — reads are no longer global-admin-only.
+  // The gate resolves the caller to a READ SCOPE (fail-closed):
+  //   - scope === null      → GLOBAL admin, read ALL networks (incl. network-less
+  //                            rows). The caller MAY narrow with claim.network_id.
+  //   - scope === <id>      → read is FORCED to that one network's rows.
+  //
+  // Authorization is keyed off the network the caller NAMES in the signed claim
+  // (bound into the signature, so a token minted for network A cannot read B),
+  // checked against THAT network's stored `admin_pubkeys` — NEVER off anything a
+  // caller could forge past the signature. The security-critical property: a
+  // per-network admin is authorised for — and scoped to — exactly the network
+  // they administer, and nothing else (unauthorised ⇒ 403).
   // ---------------------------------------------------------------------------
 
-  async function verifyAdminReadHeader(
+  async function resolveAdminReadScope(
     c: Context<{ Bindings: Env }>,
-  ): Promise<{ error: string; status: number } | null> {
+  ): Promise<{ ok: true; scope: string | null } | { ok: false; error: string; status: number }> {
     // 1. FAIL-CLOSED: admin allowlist must be configured.
     const adminPubkeys = parseAdminPubkeys(c.env);
     if (adminPubkeys.size === 0) {
-      return { error: "admin_not_configured", status: 503 };
+      return { ok: false, error: "admin_not_configured", status: 503 };
     }
 
     // M1 — rate-limit BEFORE the Ed25519 verify.
     const allowed = await checkRateLimit(c.env, "read", clientKey(c.req.raw));
     if (!allowed) {
-      return { error: "rate_limited", status: 429 };
+      return { ok: false, error: "rate_limited", status: 429 };
     }
 
     // 2. Parse + validate x-admin-signed header.
     const headerVal = c.req.header("x-admin-signed");
     if (!headerVal) {
-      return { error: "x-admin-signed header required", status: 400 };
+      return { ok: false, error: "x-admin-signed header required", status: 400 };
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(headerVal);
     } catch (_err) {
-      return { error: "x-admin-signed must be valid JSON", status: 400 };
+      return { ok: false, error: "x-admin-signed must be valid JSON", status: 400 };
     }
 
     const readCheck = validateSignedAdmissionRead(parsed);
     if (!readCheck.ok) {
-      return { error: "x-admin-signed validation_failed", status: 400 };
+      return { ok: false, error: "x-admin-signed validation_failed", status: 400 };
     }
     const { signed } = readCheck;
 
@@ -293,16 +306,39 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     const issued = Date.parse(signed.claim.issued_at);
     const now = Date.now();
     if (Math.abs(now - issued) > CLOCK_SKEW_MS) {
-      return { error: "issued_at out of skew window", status: 400 };
+      return { ok: false, error: "issued_at out of skew window", status: 400 };
     }
 
-    // 4. Signature + allowlist check (no nonce for reads — idempotent).
+    // 4. Signature check FIRST (no nonce for reads — idempotent). Verify over the
+    // reconstructed claim (validate echoes network_id only when the caller sent
+    // it) so the bytes match what the caller signed either way.
     const message = new TextEncoder().encode(canonicalJSON(signed.claim));
     const valid = await verifyEd25519(signed.claim.admin_pubkey, signed.signature, message as Uint8Array<ArrayBuffer>);
-    if (!valid) return { error: "signature_invalid", status: 401 };
-    if (!adminPubkeys.has(signed.claim.admin_pubkey)) return { error: "admin_not_authorized", status: 403 };
+    if (!valid) return { ok: false, error: "signature_invalid", status: 401 };
 
-    return null; // pass
+    // 5. Authorisation + scoping (FND-5). A GLOBAL admin reads all networks (and
+    // MAY narrow to a named one). Otherwise the caller MUST name a network they
+    // administer — authorised ONLY as a per-network admin of THAT network, and
+    // the read is FORCED to it. Anything else is 403 (a per-network admin cannot
+    // read all networks, nor a network they do not administer).
+    const isGlobal = adminPubkeys.has(signed.claim.admin_pubkey);
+    const claimedNetworkId = signed.claim.network_id;
+
+    if (isGlobal) {
+      // Global admin: honour an optional narrowing, else read everything.
+      return { ok: true, scope: claimedNetworkId ?? null };
+    }
+
+    // Per-network path: a network MUST be named (no network ⇒ nothing to scope
+    // to, and a non-global admin may not read all → 403).
+    if (!claimedNetworkId) {
+      return { ok: false, error: "admin_not_authorized", status: 403 };
+    }
+    const net = await getStore(c.env).getNetwork(claimedNetworkId);
+    if (!parseNetworkAdminPubkeys(net?.admin_pubkeys).has(signed.claim.admin_pubkey)) {
+      return { ok: false, error: "admin_not_authorized", status: 403 };
+    }
+    return { ok: true, scope: claimedNetworkId };
   }
 
   // ---------------------------------------------------------------------------
@@ -685,9 +721,9 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
   // ---------------------------------------------------------------------------
 
   app.get("/admission-requests", async (c) => {
-    const authError = await verifyAdminReadHeader(c);
-    if (authError) {
-      return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 429 | 503);
+    const auth = await resolveAdminReadScope(c);
+    if (!auth.ok) {
+      return c.json({ error: auth.error }, auth.status as 400 | 401 | 403 | 429 | 503);
     }
 
     const status = c.req.query("status") as AdmissionStatus | undefined;
@@ -706,7 +742,14 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
 
     const store = getIssuanceStore(c.env);
     const requests = await store.listIssuanceRequests(status);
-    return c.json(requests, 200);
+    // FND-5 — scope the result to the authorised network. A GLOBAL admin's scope
+    // is null → all rows (incl. network-less). A per-network admin's scope is
+    // their network id → ONLY that network's rows (a network-less row, network_id
+    // null, never matches a concrete scope, so it stays global-admin-only per
+    // ADR-0020 §3). Filtering here (not in SQL) keeps the store interface intact;
+    // the admission queue is small and the filtered set never leaves the worker.
+    const scoped = auth.scope === null ? requests : requests.filter((r) => r.network_id === auth.scope);
+    return c.json(scoped, 200);
   });
 
   // ---------------------------------------------------------------------------
@@ -784,9 +827,9 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
   // ---------------------------------------------------------------------------
 
   app.get("/admission-requests/:request_id", async (c) => {
-    const authError = await verifyAdminReadHeader(c);
-    if (authError) {
-      return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 429 | 503);
+    const auth = await resolveAdminReadScope(c);
+    if (!auth.ok) {
+      return c.json({ error: auth.error }, auth.status as 400 | 401 | 403 | 429 | 503);
     }
 
     const requestId = c.req.param("request_id") ?? "";
@@ -797,6 +840,14 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     const store = getIssuanceStore(c.env);
     const request = await store.getIssuanceRequest(requestId);
     if (!request) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    // FND-5 — a per-network admin (scope = their network id) must not read a row
+    // outside their network. Return 404, NOT 403, so a non-owning admin cannot
+    // even confirm the row EXISTS (no existence oracle across networks). A global
+    // admin (scope null) is unaffected; a global admin who narrowed to a network
+    // likewise only sees that network's rows.
+    if (auth.scope !== null && request.network_id !== auth.scope) {
       return c.json({ error: "not_found" }, 404);
     }
     return c.json(request, 200);
