@@ -447,7 +447,6 @@ stage_rotate_revoke_operator() {
   # (revoke) cut the member's transport at runtime; assert the revocation ledger
   # carries the revoked pubkey, the registry row is REVOKED, and the hub NEVER
   # restarted (the whole point — no all-member disruption).
-  local revoked_pub; revoked_pub="$(grep -oE 'revoked_pubkey[^A-Za-z0-9]+U[A-Z0-9]+' "$LOG/rotate-op.log" | grep -oE 'U[A-Z0-9]+' | head -1)"
   $CORTEX network secret revoke-member "$NET_OP" "$pub" --admin-seed "$adminseed" --registry-url "$REG_URL" \
     --hub-config "$hubconf" --hub-fed-account "$HUB_FED_ACCOUNT" --apply > "$LOG/revoke-op.log" 2>&1 || true
   grep -qiE "revoked \+ pushed|revoke-federated-user|transport cut at runtime" "$LOG/revoke-op.log" \

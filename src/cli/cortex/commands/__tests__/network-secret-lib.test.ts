@@ -56,7 +56,7 @@ function makePorts(opts: {
    * `userAlreadyPresent` flips to true on the SECOND call so idempotency (C2)
    * is observable. Omit → `ports.scopedMint` is undefined (unwired).
    */
-  scopedMint?: { creds: string; failWith?: string; revokeFailWith?: string };
+  scopedMint?: { creds: string; failWith?: string; revokeFailWith?: string; revokeFailCode?: "PUSH_FAILED" | "USER_NOT_FOUND" };
   // cortex#1481 — hub-locality fakes. Defaults resolve LOCAL (loopback alias)
   // so every PRE-#1481 test keeps its local-hub-write assumption unchanged.
   /** Cached hub_url the fake `resolveHubUrl` returns. Default: loopback (LOCAL). */
@@ -155,7 +155,7 @@ function makePorts(opts: {
         revokeScopedUser: async ({ natsUser }: { natsUser: string }) => {
           revokedScopedUsers.push(natsUser);
           if (opts.scopedMint!.revokeFailWith !== undefined) {
-            return { ok: false as const, reason: opts.scopedMint!.revokeFailWith, code: "PUSH_FAILED" as const };
+            return { ok: false as const, reason: opts.scopedMint!.revokeFailWith, code: opts.scopedMint!.revokeFailCode ?? "PUSH_FAILED" };
           }
           return { ok: true as const, revokedPubKey: "U" + "A".repeat(55) };
         },
@@ -392,6 +392,21 @@ describe("cortex#1598 — operator-mode add-member (scoped mint + v2 seal)", () 
     // Hub revoke was attempted but the registry row was left ADMITTED (untouched).
     expect(r.revokedScopedUsers).toEqual(["alice.laptop"]);
     expect(r.revoked.length).toBe(0);
+  });
+
+  test("cortex#1599 — a USER_NOT_FOUND revoke is treated as an idempotent re-run (reaches the REVOKED mark)", async () => {
+    // A prior cut succeeded on the hub but failed at the registry mark, leaving
+    // the row ADMITTED + the user gone. A re-run's revoke returns USER_NOT_FOUND;
+    // it must NOT abort (that would strand the row ADMITTED forever) — it proceeds
+    // to mark the row REVOKED.
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
+      scopedMint: { creds: FAKE_CREDS, revokeFailWith: "user not found (already revoked)", revokeFailCode: "USER_NOT_FOUND" },
+    });
+    const report = await runNetworkSecret(operatorInputs({ action: "revoke-member" }), r.ports);
+    expect(report.ok).toBe(true);
+    expect(r.revoked).toEqual(["req1"]); // the registry row IS marked REVOKED
+    expect(report.steps.join("\n")).toContain("already revoked");
   });
 
   test("cortex#1599 — rotate refuses when the reissue port is absent (arc too old)", async () => {

@@ -682,6 +682,14 @@ async function operatorModeSeal(
   // the scoped key); add-member mints idempotently (arc re-exports the existing
   // user with userAlreadyPresent:true — C2 for free). Both return a sealable
   // creds text + the account/signing pubkeys the probe-then-stamp (C3) reads.
+  //
+  // ROTATE PARTIAL-FAILURE WINDOW (asymmetric with revoke, by nature): arc's
+  // reissue revokes the OLD key BEFORE cortex seals + delivers the NEW creds
+  // (you cannot deliver creds you have not minted, and minting re-keys). So a
+  // seal/deliver failure AFTER a successful reissue leaves the member briefly
+  // offline — old key dead, new creds not yet delivered — until rotate is
+  // re-run (which mints fresh again + delivers). This is inherent to a re-key;
+  // the fail messages below name it so the operator knows to re-run.
   let creds: string;
   let userPubKey: string;
   let signingKeyPubKey: string;
@@ -741,12 +749,14 @@ async function operatorModeSeal(
     });
     sealed = await ports.crypto.seal(envelope, memberPubkeyB64);
   } catch (err) {
-    return fail(action, inputs, steps, data, `failed to seal the v2 scoped credential: ${errText(err)}`);
+    const tail = rotate ? " — ROTATE already revoked the old key, so the member is offline until you re-run rotate" : "";
+    return fail(action, inputs, steps, data, `failed to seal the v2 scoped credential: ${errText(err)}${tail}`);
   }
   try {
     await ports.delivery.postSealedSecret(row.request_id, sealed);
   } catch (err) {
-    return fail(action, inputs, steps, data, `failed to deliver the sealed v2 credential to the registry: ${errText(err)}`);
+    const tail = rotate ? " — ROTATE already revoked the old key, so the member is offline until you re-run rotate" : "";
+    return fail(action, inputs, steps, data, `failed to deliver the sealed v2 credential to the registry: ${errText(err)}${tail}`);
   }
   steps.push(`deliver:    sealed v2 creds → posted to admission row ${row.request_id}`);
 
@@ -900,13 +910,22 @@ async function revokeMemberOperator(
   // 1. Cut hub transport FIRST (revoke + push). A failure here (incl. PUSH_FAILED
   //    on a non-push-capable resolver) aborts BEFORE the registry mark — never a
   //    REVOKED row over a still-live credential.
+  //    IDEMPOTENT RECOVERY: a USER_NOT_FOUND means the scoped user is ALREADY
+  //    gone — a prior cut that succeeded on the hub but failed at the registry
+  //    mark below (leaving the row ADMITTED). Treat that as an idempotent success
+  //    so the re-run reaches the REVOKED mark; otherwise the row would stay
+  //    ADMITTED forever while the member is actually cut.
   const rev = await ports.scopedMint.revokeScopedUser({ hubFedAccount: inputs.hubFedAccount, natsUser, networkId: inputs.networkId });
-  if (!rev.ok) {
+  if (!rev.ok && rev.code !== "USER_NOT_FOUND") {
     return fail(action, inputs, steps, data,
       `hub transport NOT cut — scoped-user revoke failed (${rev.code ?? "OTHER"}): ${rev.reason}. The registry row is left ADMITTED (unchanged) so it does not misreport a live member as revoked.`);
   }
-  data.revoked_pubkey = rev.revokedPubKey;
-  steps.push(`hub:        scoped user "${natsUser}" revoked + pushed (${rev.revokedPubKey.slice(0, 12)}…) — transport cut at runtime, no hub restart`);
+  if (rev.ok) {
+    data.revoked_pubkey = rev.revokedPubKey;
+    steps.push(`hub:        scoped user "${natsUser}" revoked + pushed (${rev.revokedPubKey.slice(0, 12)}…) — transport cut at runtime, no hub restart`);
+  } else {
+    steps.push(`hub:        scoped user "${natsUser}" already revoked (USER_NOT_FOUND) — idempotent re-run; proceeding to mark the row REVOKED`);
+  }
 
   // 2. Mark the registry row REVOKED. If this fails, transport is ALREADY cut —
   //    surface it (the member is off the bus; the row just needs a re-mark).
