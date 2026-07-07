@@ -2177,7 +2177,7 @@ async function adminMaterialFromSeedFile(
 
 /** A minimal fetch-and-cache client seam — the subset of {@link NetworkRegistryClient}
  *  the descriptor-cache seed needs. Injectable so the seed is unit-testable. */
-type DescriptorCacheClient = { fetchAndCache: (id: string) => Promise<{ status: string }> };
+interface DescriptorCacheClient { fetchAndCache: (id: string) => Promise<{ status: string }> }
 
 /**
  * cortex#1652 — best-effort: fetch + VERIFY + cache the network's descriptor so a
