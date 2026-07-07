@@ -14,6 +14,9 @@ import type {
   NetworkConfidentialityDTO,
   NetworkMembershipDTO,
   PeerAcceptance,
+  RosterAdmissionState,
+  RosterAuthorship,
+  RosterMemberStateDTO,
   RosterStatus,
   RosterScope,
 } from "../../api/networks";
@@ -282,6 +285,187 @@ export function confidentialityBadge(
       };
     }
   }
+}
+
+// --- FLG-4: per-member roster lifecycle state (seal / authorize / departed) ---
+
+/**
+ * A render-ready admission-state badge. The load-bearing distinction FLG-4
+ * demands: `departed` ("left") is visually SEPARABLE from `revoked` ("kicked") —
+ * different label, different tone, different stable token — so the glass never
+ * blurs a voluntary leave into an admin kick.
+ */
+export interface AdmissionStateBadge {
+  label: string;
+  tone: VerdictTone;
+  /** Stable token (data-* / tests); never localized. */
+  token: RosterAdmissionState;
+  title: string;
+}
+
+/**
+ * Map a member's {@link RosterAdmissionState} → a badge. Total over the union
+ * (compiler-enforced via the `never` guard), so a new state cannot silently fall
+ * through. `departed` vs `revoked` are deliberately given DIFFERENT tones + labels
+ * (the FLG-4 honesty invariant: "left" ≠ "kicked").
+ */
+export function admissionStateBadge(state: RosterAdmissionState): AdmissionStateBadge {
+  switch (state) {
+    case "admitted":
+      return { label: "admitted", tone: "ok", token: "admitted", title: "Admitted to the network roster" };
+    case "pending":
+      return { label: "pending", tone: "pending", token: "pending", title: "Admission request pending — not yet admitted" };
+    case "departed":
+      return {
+        label: "left",
+        tone: "warn",
+        token: "departed",
+        title:
+          "DEPARTED — this member left the network voluntarily (ADMITTED → DEPARTED). A voluntary leave, NOT an admin kick.",
+      };
+    case "revoked":
+      return {
+        label: "revoked",
+        tone: "danger",
+        token: "revoked",
+        title:
+          "REVOKED — an admin kicked this member from the network (admin-signed revoke). Distinct from a voluntary 'left'.",
+      };
+    case "rejected":
+      return {
+        label: "rejected",
+        tone: "danger",
+        token: "rejected",
+        title: "REJECTED — this admission request was declined by an admin (never admitted).",
+      };
+    case "unknown":
+      return {
+        label: "state unknown",
+        tone: "warn",
+        token: "unknown",
+        title: "Admission state not resolvable from the current read — not assumed admitted.",
+      };
+    default: {
+      const _exhaustive: never = state;
+      return {
+        label: "state unknown",
+        tone: "warn",
+        token: "unknown",
+        title: `Unrecognized admission state '${String(_exhaustive)}' — not assumed admitted.`,
+      };
+    }
+  }
+}
+
+/** A render-ready seal-delivery badge. */
+export interface SealBadge {
+  label: string;
+  tone: VerdictTone;
+  /** Stable token (data-* / tests). */
+  token: "sealed" | "unsealed";
+  title: string;
+}
+
+/**
+ * Map the boolean seal-delivery signal → a badge. `sealed` is a DELIVERY signal
+ * only (a leaf secret ciphertext has been placed on the row) — never the secret
+ * itself. An admitted member with no sealed delivery is a real, honest state
+ * (the handoff's seal leg is still outstanding), shown as `warn`.
+ */
+export function sealBadge(sealed: boolean): SealBadge {
+  return sealed
+    ? { label: "sealed", tone: "ok", token: "sealed", title: "A sealed leaf secret has been delivered onto this member's row (delivery signal only — never the secret)." }
+    : { label: "unsealed", tone: "warn", token: "unsealed", title: "No sealed leaf secret delivered yet — the guided-join seal leg is still outstanding." };
+}
+
+/**
+ * Format the hub-authorize timestamp for display, or a stable "not authorized"
+ * label when `null`. Kept pure (no `toLocaleString` locale drift in tests): the
+ * ISO string is surfaced verbatim, the UI can prettify in the DOM layer.
+ */
+export function formatHubAuthorized(ts: string | null): { label: string; authorized: boolean; title: string } {
+  return ts === null
+    ? { label: "hub-authorize pending", authorized: false, title: "The hub owner has not yet authorized this member's leaf (no hub_authorized_at)." }
+    : { label: `hub-authorized ${ts}`, authorized: true, title: `Hub owner authorized this member's leaf at ${ts} (cortex#1498).` };
+}
+
+/** A render-ready #1600 authorship badge. */
+export interface AuthorshipBadge {
+  label: string;
+  tone: VerdictTone;
+  /** Stable token (data-* / tests). */
+  token: RosterAuthorship;
+  title: string;
+}
+
+/**
+ * Map the #1600 hub-admin authorship verdict → a badge. The honesty invariant:
+ * `verified` is shown ONLY when the daemon actually ran the signature check and
+ * it passed; `unverifiable` is a surfaced NEGATIVE (checked, did not pass);
+ * `unchecked` is an honest gap (no pinned admin key / no material) — NEVER
+ * dressed up as a pass. Total over the union (compiler-enforced).
+ */
+export function authorshipBadge(a: RosterAuthorship): AuthorshipBadge {
+  switch (a) {
+    case "verified":
+      return {
+        label: "authorship verified",
+        tone: "ok",
+        token: "verified",
+        title: "The hub-admin's signature on this member's sealed row verified against the pinned network-admin pubkey (#1600).",
+      };
+    case "unverifiable":
+      return {
+        label: "authorship UNVERIFIABLE",
+        tone: "danger",
+        token: "unverifiable",
+        title: "The hub-admin authorship signature did NOT verify against the pinned network-admin pubkey (mismatched admin or bad signature). Treat with suspicion (#1600).",
+      };
+    case "unchecked":
+      return {
+        label: "authorship unchecked",
+        tone: "warn",
+        token: "unchecked",
+        title: "Authorship not checked — no pinned network-admin pubkey configured, or the row carries no hub-admin {claim, signature}. Not a pass and not a failure (#1600).",
+      };
+    default: {
+      const _exhaustive: never = a;
+      return {
+        label: "authorship unchecked",
+        tone: "warn",
+        token: "unchecked",
+        title: `Unrecognized authorship verdict '${String(_exhaustive)}' — not assumed verified.`,
+      };
+    }
+  }
+}
+
+/** Whether an admission state denotes a FORMER member (left / kicked / declined). */
+export function isFormerMemberState(state: RosterAdmissionState): boolean {
+  return state === "departed" || state === "revoked" || state === "rejected";
+}
+
+/**
+ * Partition a network's `roster_states` into current-member states (keyed by
+ * principal for the seal/authorize/authorship badges on live rows) and FORMER
+ * members (departed/revoked/rejected — rendered as a distinct group). Pure.
+ */
+export function partitionRosterStates(states: readonly RosterMemberStateDTO[]): {
+  byPrincipal: Map<string, RosterMemberStateDTO>;
+  former: RosterMemberStateDTO[];
+} {
+  const byPrincipal = new Map<string, RosterMemberStateDTO>();
+  const former: RosterMemberStateDTO[] = [];
+  for (const s of states) {
+    if (isFormerMemberState(s.admission_state)) {
+      former.push(s);
+    } else {
+      // First-seen wins (matches the server-side dedupe); don't let a later
+      // duplicate silently overwrite the canonical current state.
+      if (!byPrincipal.has(s.principal)) byPrincipal.set(s.principal, s);
+    }
+  }
+  return { byPrincipal, former };
 }
 
 /** Per-verdict counts for a network's member set (for the panel summary). */

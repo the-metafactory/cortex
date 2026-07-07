@@ -194,6 +194,23 @@ export interface NetworkRoster {
     principal_id: string;
     principal_pubkey: string;
     capabilities: string[];
+    /**
+     * FLG-4 (cortex, docs/plan-mc-future-state.md §4.D) — the OPTIONAL roster
+     * lifecycle facets the MC roster glass surfaces per member. ADDITIVE: a
+     * pre-FLG-4 consumer ignores them; the cortex member-read provider
+     * (`admission-rows-member-provider.ts`) parses them when present, else
+     * defaults to honest absence. NONE are secret material:
+     *
+     *  - `admission_state` — the row's `AdmissionStatus` (the member-read serves
+     *    the ADMITTED roster, so this is `"ADMITTED"` here; the field exists so
+     *    an admin-list read can reuse the same shape for former members).
+     *  - `sealed` — whether a sealed leaf secret has been DELIVERED
+     *    (`sealed_secret !== null`). A boolean signal ONLY — never the ciphertext.
+     *  - `hub_authorized_at` — the cortex#1498 hub-authorize timestamp, or null.
+     */
+    admission_state?: AdmissionStatus;
+    sealed?: boolean;
+    hub_authorized_at?: string | null;
   }[];
 }
 

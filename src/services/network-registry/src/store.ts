@@ -1308,6 +1308,13 @@ export function rosterFromAdmissions(
       principal_id: record.principal_id,
       principal_pubkey: record.principal_pubkey,
       capabilities,
+      // FLG-4 — ADDITIVE roster lifecycle facets (cortex MC roster glass). This
+      // read is the ADMITTED roster, so `admission_state` is ADMITTED; `sealed`
+      // is a boolean DELIVERY signal (`sealed_secret !== null` — NEVER the
+      // ciphertext); `hub_authorized_at` is the cortex#1498 authorize timestamp.
+      admission_state: "ADMITTED",
+      sealed: row.sealed_secret !== null,
+      hub_authorized_at: row.hub_authorized_at,
     });
   }
   members.sort((a, b) => a.principal_id.localeCompare(b.principal_id));
