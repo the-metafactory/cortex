@@ -1,5 +1,49 @@
 # Cortex — Changelog
 
+## 6.3.0 — 2026-07-07 — Federation payload swap (epic #1595)
+
+The operator-mode federation credential path — epic #1595's payload swap — is
+code-complete. On a network whose verified descriptor attests `hub_mode:
+operator`, admit now seals a subject-scoped per-member NSC `.creds` credential
+instead of a shared inline-leaf PSK (which is structurally illegal on an operator
+hub). The whole path — mint → seal → member install → rotate → revoke — was
+validated end-to-end against a real operator hub with a full nats resolver: the
+scoped creds bind a real leaf, rotate re-keys, revoke cuts at runtime, and the
+hub never restarts. Production go-live is gated only on the hub-resolver
+migration (#1626) + this deploy.
+
+### Added
+
+- **Operator-mode admit: scoped mint + v2 seal** (C-1598, #1610) — a network
+  attesting `hub_mode: operator` mints a subject-scoped user via `arc nats
+  add-federated-user` (least privilege as code: `federated.{{name()}}.>`) and
+  seals its `.creds` in a v2 envelope; ZERO hub-config writes. Two fail-fast
+  guards: the shared-string/PSK path is refused on an operator network (Guard A),
+  and the mint is refused unless the network attests a push-capable resolver
+  (`resolver_mode: nats`, Guard B). Probe-then-stamp of `hub_authorized_at` —
+  the account must be visible on the hub resolver before authorization is
+  stamped, never blind.
+- **Operator-mode rotate + revoke** (C-1599, #1619) — rotate re-mints fresh
+  scoped material (`arc nats reissue-federated-user`: revoke+push old key,
+  re-mint under the same scoped key) and re-seals v2; revoke cuts the member's
+  leaf at runtime (`arc nats revoke-federated-user`: nsc revocations + push) —
+  no hub restart. Hub-first, fail-closed ordering: any revoke failure aborts
+  before the registry mark, so a REVOKED row never sits over a possibly-live
+  credential; an ambiguous `USER_NOT_FOUND` is not treated as a cut.
+- **`hub_mode` / `resolver_mode` attestation** (C-1598, #1610) — carried on the
+  registry `NetworkRecord` + the signed `NetworkDescriptor`; set via `cortex
+  network create --hub-mode operator --resolver-mode nats`. Changing the
+  attestation requires GLOBAL-admin authority (an operator→simple downgrade is a
+  hub-crash vector).
+
+### Fixed
+
+- **Admit resolves the operator-mode attestation** (C-1652, #1653) — `network
+  create --apply` now best-effort seeds the admin's verified descriptor cache, so
+  a subsequent `admit` on the same machine reads `hub_mode` off the verified
+  descriptor rather than silently falling back to the simple/PSK path. Failures
+  are surfaced (stderr + `--json descriptor_cached`), never silent.
+
 ## 6.2.1 — 2026-07-06 — Architecture deepening (epic #1514)
 
 Ten behavior-preserving refactor slices completed the architecture-deepening
