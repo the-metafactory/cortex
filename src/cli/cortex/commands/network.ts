@@ -48,6 +48,7 @@ import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader
 import type { LoadedConfig } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import { NetworkCache } from "../../../common/registry/network-cache";
+import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import {
   materialFromSeedString,
   buildNetworkCreateClaim,
@@ -2305,6 +2306,36 @@ async function runCreate(
         : String(result.response);
     const reason = `registry rejected network create (HTTP ${result.status.toString()}): ${detail}`;
     return opError("create", reason, json);
+  }
+
+  // #1652 — seed THIS admin's descriptor cache with the network they just wrote,
+  // so a subsequent `admit` on the SAME machine resolves the operator-mode
+  // attestation (hub_mode / resolver_mode) off the VERIFIED descriptor. Nothing else
+  // populates the cache for the create-then-admit hub-owner flow — only `join`
+  // does — so without this the hub owner's admit sees no hub_mode and silently
+  // falls back to the simple/PSK path (the #1610 fail-open, confirmed live in
+  // #1652). Best-effort + verified: a fetch/verify failure NEVER fails the create
+  // (the row IS written); the hub owner can still declare hub_mode in their local
+  // config (the resolveOperatorAttestation fallback).
+  try {
+    const registryPubkey = optionalValueFlag(flags, "--registry-pubkey");
+    const client = new NetworkRegistryClient({
+      url: registryUrl,
+      ...(registryPubkey !== undefined ? { pubkey: registryPubkey } : {}),
+    });
+    const cached = await client.fetchAndCache(networkId);
+    if (cached.status !== "ok" && !json) {
+      process.stderr.write(
+        `cortex network create: (note) could not cache the verified descriptor for "${networkId}" ` +
+          `(${cached.status}) — admit will fall back to your local config's hub_mode\n`,
+      );
+    }
+  } catch (err) {
+    if (!json) {
+      process.stderr.write(
+        `cortex network create: (note) descriptor-cache seed skipped (${err instanceof Error ? err.message : String(err)})\n`,
+      );
+    }
   }
 
   if (json) {
