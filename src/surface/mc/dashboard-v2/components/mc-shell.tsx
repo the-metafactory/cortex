@@ -19,6 +19,7 @@
 import type { ReactNode } from "react";
 import { McCommandBar } from "./mc-command-bar";
 import { McAltitudeRail, type RailSessionTarget } from "./mc-altitude-rail";
+import { McStackHeader } from "./mc-stack-header";
 import {
   buildBreadcrumb,
   drillToNetwork,
@@ -28,6 +29,7 @@ import {
   selectedNetworkPosture,
   type AltitudeSelection,
 } from "../lib/mc-shell-model";
+import type { StackHeaderModel } from "../lib/mc-stack-header";
 import type { NetworkMembershipDTO } from "../hooks/use-networks";
 import "./mc-shell.css";
 
@@ -52,6 +54,13 @@ export interface McShellProps {
    * chosen session id and dives the rail to SESSION.
    */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * CK-2 — the stack-detail cockpit header model, present ONLY when a stack is
+   * dived into (STACK level or deeper). `null`/absent above STACK → no header
+   * (the framed pane renders unchanged, exactly as pre-CK-2). Built by the caller
+   * from the live agent snapshot + the transport overlay (`buildStackHeader`).
+   */
+  stackHeader?: StackHeaderModel | null;
   /** The framed pane (the existing Network view body). */
   children: ReactNode;
 }
@@ -63,6 +72,7 @@ export function McShell({
   onSelectionChange,
   sessionTargets = [],
   onOpenSession,
+  stackHeader = null,
   children,
 }: McShellProps) {
   const breadcrumb = buildBreadcrumb(selection);
@@ -89,7 +99,10 @@ export function McShell({
           sessionTargets={sessionTargets}
           {...(onOpenSession ? { onOpenSession } : {})}
         />
-        <div className="mc-shell-content">{children}</div>
+        <div className="mc-shell-content">
+          {stackHeader ? <McStackHeader model={stackHeader} /> : null}
+          {children}
+        </div>
       </div>
     </div>
   );
