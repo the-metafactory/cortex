@@ -640,7 +640,7 @@ export function buildScopedUserMintAdapter(
   const pickRun = () => runner ?? scopedMintRunnerOverride ?? defaultArcScopedMintRunner;
   /** Read a string field from arc's OK envelope, or "" if absent. */
   const field = (env: ArcFederatedUserOk, key: keyof ArcFederatedUserOk): string =>
-    typeof env[key] === "string" ? (env[key] as string) : "";
+    typeof env[key] === "string" ? (env[key]) : "";
   /** The first REQUIRED field missing / empty on an ok:true envelope, or null.
    *  An `ok:true` envelope that omits a guaranteed field is a contract breach —
    *  fail typed rather than seal a v2 envelope with empty fingerprint data. */
