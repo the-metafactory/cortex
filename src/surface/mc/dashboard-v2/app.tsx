@@ -634,6 +634,10 @@ export function App() {
           <NetworkView
             state={agents}
             workingAgents={working.agents}
+            // CK-5 (#1292) — the app-scope WS drives the constellation's live
+            // traffic (dash-flow + atmosphere + bus-traffic strip) as a wildcard
+            // subscriber (decision D-10 — one socket, no second feed, no poll).
+            ws={ws}
             // U2.3 — signal's projected transport roster (verdict-bearing) feeds
             // the Network view's transport overlay. Empty until the obs fetch
             // lands / on a non-hub stack; the overlay paints nothing then.

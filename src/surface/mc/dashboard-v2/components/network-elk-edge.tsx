@@ -139,6 +139,13 @@ export default function NetworkElkEdge(props: EdgeProps) {
   // flow here is the relationship treatment, not REAL bus traffic — binding the
   // dash-flow to live envelope flow is D5 (#1292).
   const federated = edgeData?.["federated"] === true;
+  // CK-5 (#1292) — bind the admitted-peer dash-flow to REAL bus flow. `live` is
+  // true only when there IS envelope flow AND liveTraffic is on AND motion is
+  // permitted; the canvas threads it through the edge `data`. When false the
+  // federated edge draws a STATIC dash (relationship still legible, nothing
+  // fabricates motion — truth-not-theater). `edge-live--fed` animates (D1's
+  // dashFlowFed, reduced-motion-guarded); `edge-fed-static` holds the dash.
+  const live = edgeData?.["live"] === true;
   const layoutSourceX = edgeData?.["layoutSourceX"] as number | undefined;
   const layoutSourceY = edgeData?.["layoutSourceY"] as number | undefined;
   const layoutTargetX = edgeData?.["layoutTargetX"] as number | undefined;
@@ -238,7 +245,14 @@ export default function NetworkElkEdge(props: EdgeProps) {
         markerEnd={markerEnd}
         // The constellation skin keys the dashed-flow treatment off this class
         // (scoped under `.mc-skin`; inert in the un-skinned legacy render).
-        className={federated ? "edge-live--fed" : undefined}
+        // CK-5: animate ONLY on real flow; otherwise a static dash.
+        className={
+          federated
+            ? live
+              ? "edge-live--fed"
+              : "edge-fed-static"
+            : undefined
+        }
       />
       {federated && (
         <EdgeLabelRenderer>

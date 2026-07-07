@@ -51,6 +51,13 @@
 .mc-skin .network-canvas-wrap .react-flow__renderer {
   background: transparent;
 }
+/* CK-5 — the flow canvas paints ABOVE the atmosphere layer (which is a
+ * positioned z-index:0 sibling). Without this, the positioned atmosphere would
+ * paint over the non-positioned canvas. Header stays at z-index:4 above both. */
+.mc-skin .network-canvas-wrap .react-flow {
+  position: relative;
+  z-index: 1;
+}
 /* Mute React Flow's default dotted background grid against the atmosphere. */
 .mc-skin .react-flow__background {
   opacity: 0.35;
@@ -270,13 +277,150 @@
 .mc-skin .mc-ch-conf[data-confidentiality="encrypted-required"],
 .mc-skin .mc-ch-conf[data-confidentiality="encrypted"] { color: var(--ok); }
 
+/* ── CK-5 (#1292) — federated edge STATIC dash (no real flow) ────────────────
+ * When there is no bus flow (or liveTraffic is off / reduced-motion), the
+ * admitted-peer edge still reads as a dashed federated connector — it just does
+ * NOT march. `edge-live--fed` (constellation.css) animates; this holds the dash.
+ * Truth-not-theater: motion only ever tracks real envelope flow. */
+.mc-skin .edge-fed-static {
+  stroke-dasharray: var(--edge-dash-fed);
+  /* no animation — deliberately static */
+}
+
+/* ── CK-5 — Atmosphere glow layer ────────────────────────────────────────────
+ * An additive breathing bloom BEHIND the constellation, its opacity keyed to
+ * REAL throughput via the inline `--atmosphere-intensity` (0…1). At intensity 0
+ * (idle / toggle off / reduced-motion) it collapses to nothing — a resting,
+ * static layer. It never intercepts pointer events (the canvas sits above it). */
+.mc-skin .mc-atmosphere {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: calc(0.15 + 0.6 * var(--atmosphere-intensity, 0));
+  background:
+    radial-gradient(
+      ellipse 80% 60% at 50% 45%,
+      color-mix(in oklch, var(--mer) calc(18% * var(--atmosphere-intensity, 0)), transparent) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 70% 55% at 30% 80%,
+      color-mix(in oklch, var(--tide) calc(14% * var(--atmosphere-intensity, 0)), transparent) 0%,
+      transparent 65%
+    );
+  transition: opacity 0.8s ease-out;
+}
+/* Only breathe when there's live flow; the intensity already scales the color. */
+.mc-skin .mc-atmosphere[data-live="true"] {
+  animation: mcOrbBreathe 6s ease-in-out infinite;
+}
+
+/* ── CK-5 — Bottom BUS TRAFFIC STRIP (mockup @505) ───────────────────────────
+ * Throughput readout · live-flow ticker · D/A/H scope-count legend · toggles.
+ * Fed by the SAME model the dash-flow + atmosphere read (decision D-10). */
+.mc-skin .mc-bus-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  border: 1px solid color-mix(in oklch, var(--mer) 20%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 82%, var(--bg));
+}
+.mc-skin .mc-bus-throughput {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+.mc-skin .mc-bus-metric-value {
+  color: var(--fg);
+  font-weight: 600;
+}
+/* Dim the readout when idle so a dead-quiet stack reads as quiet, not broken. */
+.mc-skin .mc-bus-strip[data-active="false"] .mc-bus-metric-value {
+  color: var(--faint);
+}
+
+/* Ticker: a masked lane; two runs translate -50% to loop seamlessly (the
+ * `ticker` keyframe shipped in constellation.css with no consumer — this is it,
+ * and it's added to the reduced-motion guard below). */
+.mc-skin .mc-bus-ticker {
+  flex: 1 1 auto;
+  min-width: 40px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: color-mix(in oklch, var(--mer) 60%, var(--dim));
+  mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+}
+.mc-skin .mc-bus-ticker-track {
+  display: inline-flex;
+  width: max-content;
+}
+.mc-skin .mc-bus-ticker[data-flowing="true"] .mc-bus-ticker-run {
+  animation: ticker 6s linear infinite;
+}
+.mc-skin .mc-bus-ticker-idle {
+  color: var(--faint);
+  letter-spacing: 0.04em;
+}
+
+.mc-skin .mc-bus-scopes {
+  display: inline-flex;
+  gap: 10px;
+}
+.mc-skin .mc-bus-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mc-skin .mc-bus-scope-key {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.mc-skin .mc-bus-scope-d .mc-bus-scope-key { background: var(--d); }
+.mc-skin .mc-bus-scope-a .mc-bus-scope-key { background: var(--a); }
+.mc-skin .mc-bus-scope-h .mc-bus-scope-key { background: var(--h); }
+.mc-skin .mc-bus-scope-label { color: var(--dim); font-weight: 600; }
+.mc-skin .mc-bus-scope-count { color: var(--fg); }
+
+.mc-skin .mc-bus-toggles {
+  display: inline-flex;
+  gap: 6px;
+}
+.mc-skin .mc-bus-toggle {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  padding: 2px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--dim);
+  border: 1px solid color-mix(in oklch, var(--mer) 25%, var(--line));
+  background: transparent;
+}
+.mc-skin .mc-bus-toggle[aria-pressed="true"] {
+  color: var(--bg);
+  background: color-mix(in oklch, var(--mer) 80%, var(--fg));
+  border-color: var(--mer);
+}
+
 /* ── Reduced-motion guard ───────────────────────────────────────────────────
  * Hold every constellation-canvas animation on its resting frame; the static
  * glow shapes + tokens remain. Mirrors D1's guard for this slice's own keyframes
- * (D1 already guards `.edge-live--fed`). */
+ * (D1 already guards `.edge-live--fed`). CK-5 adds the atmosphere breathe + the
+ * bus-strip ticker (the JS gate also withholds them, this is defense-in-depth). */
 @media (prefers-reduced-motion: reduce) {
   .mc-skin .network-node-agent.network-node-online,
-  .mc-skin .network-hub-you-are-here {
+  .mc-skin .network-hub-you-are-here,
+  .mc-skin .mc-atmosphere[data-live="true"],
+  .mc-skin .mc-bus-ticker[data-flowing="true"] .mc-bus-ticker-run {
     animation: none !important;
   }
 }
