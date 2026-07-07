@@ -932,12 +932,15 @@ async function revokeMemberOperator(
   steps.push(`hub:        scoped user "${natsUser}" revoked + pushed (${rev.revokedPubKey.slice(0, 12)}…) — transport cut at runtime, no hub restart`);
 
   // 2. Mark the registry row REVOKED. If this fails, transport is ALREADY cut —
-  //    surface it (the member is off the bus; the row just needs a re-mark).
+  //    surface it honestly: a plain re-run WON'T recover the row, because the
+  //    scoped user is now gone and the re-run's revoke hits USER_NOT_FOUND, which
+  //    fail-closes (above). So the operator must mark the row REVOKED out-of-band
+  //    (the registry revoke endpoint) rather than re-running this command.
   try {
     await ports.delivery.revoke(row.request_id);
   } catch (err) {
     return fail(action, inputs, steps, data,
-      `hub transport cut (the member is off the bus), but failed to mark the admission row REVOKED: ${errText(err)}. Re-run to mark the row.`);
+      `hub transport cut (the member is off the bus), but failed to mark the admission row REVOKED: ${errText(err)}. The credential is ALREADY revoked — do NOT re-run this command (the re-run's revoke would hit USER_NOT_FOUND and abort); mark the row REVOKED out-of-band via the registry revoke endpoint.`);
   }
   steps.push(`registry:   admission row ${row.request_id} marked REVOKED (sealed blob cleared)`);
 
