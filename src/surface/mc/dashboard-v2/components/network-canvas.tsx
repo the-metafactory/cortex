@@ -90,6 +90,12 @@ export interface NetworkCanvasProps {
    * xyflow node renderer. Omitted → the inert default (no highlight).
    */
   hover?: NetworkHoverContextValue;
+  /**
+   * CK-5 (#1292) — REAL bus flow is present AND liveTraffic is on AND motion is
+   * permitted (reduced-motion off). Threads to the admitted-peer edges so the
+   * dash-flow marches only on real envelope flow. Default false ⇒ static.
+   */
+  live?: boolean;
 }
 
 /** The React Flow canvas — rendered once ELK has positioned the nodes. */
@@ -97,10 +103,17 @@ function FlowCanvas({
   nodes,
   laidOutEdges,
   onSelectAgent,
+  live = false,
 }: {
   nodes: NetworkGraphNode[];
   laidOutEdges: LaidOutNetworkEdge[];
   onSelectAgent?: (key: string | null) => void;
+  /**
+   * CK-5 (#1292) — REAL bus flow is present AND liveTraffic is on AND motion is
+   * permitted. Drives the admitted-peer dash-flow: true ⇒ marching edge, false ⇒
+   * static dash (truth-not-theater — zero flow never animates).
+   */
+  live?: boolean;
 }) {
   // React Flow's node `data` is typed `Record<string, unknown>`; our discriminated
   // `NetworkNodeData` is structurally compatible but lacks the index signature, so
@@ -138,9 +151,14 @@ function FlowCanvas({
           // edge draws a federated (cross-principal admitted-peer) connector
           // dashed + flowing, and labels it. Local/sibling edges stay solid.
           federated: e.data?.federated ?? false,
+          // CK-5 (#1292) — bind the admitted-peer dash-flow to REAL bus flow.
+          // The edge animates ONLY when `live`; otherwise it renders a static
+          // dash (the relationship is still legible, but nothing pretends to
+          // move). Local/sibling edges ignore this (they're never `federated`).
+          live,
         } as Record<string, unknown>,
       })),
-    [laidOutEdges],
+    [laidOutEdges, live],
   );
 
   // #1068 — the sticky hub-subtree selection lives in the hover context (set by
@@ -211,6 +229,7 @@ export default function NetworkCanvas({
   graph,
   onSelectAgent,
   hover,
+  live = false,
 }: NetworkCanvasProps) {
   const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
   const [laidOutEdges, setLaidOutEdges] = useState<LaidOutNetworkEdge[]>([]);
@@ -258,6 +277,7 @@ export default function NetworkCanvas({
         nodes={positioned}
         laidOutEdges={laidOutEdges}
         onSelectAgent={onSelectAgent}
+        live={live}
       />
     </ReactFlowProvider>
   );

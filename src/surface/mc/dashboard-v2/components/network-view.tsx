@@ -27,7 +27,18 @@
  * ADR-0007: nodes carry presence + lifecycle only — never session interiors.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
+import type { WsClient, WsMessage } from "../hooks/use-websocket";
+import { useBusTraffic } from "../hooks/use-bus-traffic";
+import { BusTrafficStrip } from "./bus-traffic-strip";
 import type { AgentPresenceTile, AgentsState } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
 import type { WorkingStackAggregate } from "../hooks/use-working-aggregation";
@@ -219,7 +230,26 @@ export interface NetworkViewProps {
   workingAggregationError?: string | null;
   /** CK-3 — open the work-item-detail surface (attention work-item deep link). */
   onOpenWorkItem?: (workItemId: string) => void;
+  /**
+   * CK-5 (cortex#1292) — the app-scope WebSocket client. The constellation's live
+   * traffic (dash-flow + atmosphere + bus-traffic strip) rides this ONE socket as
+   * a wildcard subscriber (decision D-10 — no second feed, no poll). Omitted → a
+   * stable no-op client is used and the traffic reads idle/static (a test harness,
+   * or a host without the socket wired).
+   */
+  ws?: WsClient;
 }
+
+/**
+ * CK-5 — a stable no-op WS client for when the host doesn't wire one (tests). Its
+ * `subscribe` returns an unsubscribe and never fires — so `useBusTraffic` reads a
+ * permanent idle model (static render), which is the honest default.
+ */
+const NOOP_WS: WsClient = {
+  state: "offline",
+  send: () => {},
+  subscribe: (_type: string, _handler: (msg: WsMessage) => void) => () => {},
+};
 
 export function NetworkView({
   state,
@@ -239,8 +269,43 @@ export function NetworkView({
   workingAggregationLoaded = false,
   workingAggregationError = null,
   onOpenWorkItem,
+  ws,
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
+
+  // CK-5 (#1292) — live bus-traffic model off the ONE WS (wildcard subscriber,
+  // decision D-10). Only accumulates while the Network view is mounted. A missing
+  // client falls back to the no-op → a permanent idle (static) reading.
+  const busTraffic = useBusTraffic(ws ?? NOOP_WS);
+
+  // CK-5 — motion toggles + reduced-motion respect. liveTraffic/atmosphere default
+  // ON; `prefers-reduced-motion` forces every motion gate off regardless. The JS
+  // gate mirrors the CSS reduced-motion guard so we never START a JS-driven
+  // animation the CSS would then have to stop.
+  const [liveTraffic, setLiveTraffic] = useState(true);
+  const [atmosphere, setAtmosphere] = useState(true);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mq) return;
+    const sync = () => setReducedMotion(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  // The single motion gate the canvas dash-flow + atmosphere read: real flow is
+  // present AND liveTraffic is on AND motion is permitted. Zero-flow ⇒ static.
+  const trafficLive = liveTraffic && !reducedMotion && busTraffic.active;
+  // The strip's own ticker gate: liveTraffic ∧ motion permitted (it renders its
+  // own idle state when the model is inactive).
+  const stripLive = liveTraffic && !reducedMotion;
+  // Atmosphere intensity: 0 when idle/off, scaling gently with throughput. Capped
+  // so a burst never blows out the glow. Honest — 0 flow ⇒ 0 intensity ⇒ resting.
+  const atmosphereIntensity =
+    atmosphere && busTraffic.active
+      ? Math.min(1, busTraffic.throughput / 20)
+      : 0;
 
   // D.5 — filters. The filter state lives here so it feeds BOTH the graph adapter
   // and the spotlight off ONE filtered snapshot (filter + search stay consistent).
@@ -664,6 +729,20 @@ export function NetworkView({
             onOpenSpotlight={openSpotlight}
           />
           <div className="network-canvas-wrap">
+            {/* CK-5 (#1292) — atmosphere glow layer. An additive breathing bloom
+                BEHIND the constellation whose intensity keys off REAL throughput
+                (`--atmosphere-intensity`). 0 flow / toggle off / reduced-motion ⇒
+                intensity 0 ⇒ a resting, static layer (truth-not-theater). */}
+            <div
+              className="mc-atmosphere"
+              data-live={trafficLive ? "true" : "false"}
+              style={
+                {
+                  "--atmosphere-intensity": atmosphereIntensity,
+                } as CSSProperties
+              }
+              aria-hidden="true"
+            />
             {/* MC-D3 — on-canvas network header (<NETWORK> · admin|member · N
                 stacks), overlaying the top of the star-map. Renders nothing for a
                 non-federated stack. admin/member vocab (deprecated label gated). */}
@@ -685,6 +764,7 @@ export function NetworkView({
                   graph={graph}
                   onSelectAgent={onSelectAgentNode}
                   hover={hover}
+                  live={trafficLive}
                 />
               </Suspense>
             )}
@@ -710,6 +790,18 @@ export function NetworkView({
               />
             )}
           </div>
+          {/* CK-5 (#1292) — the bottom BUS TRAFFIC STRIP (mockup @505): throughput
+              + D/A/H scope counts + live-flow ticker, off the SAME model the
+              dash-flow + atmosphere consume (no second feed). Hosts the
+              liveTraffic / atmosphere toggles. Static when idle. */}
+          <BusTrafficStrip
+            model={busTraffic}
+            live={stripLive}
+            liveTraffic={liveTraffic}
+            atmosphere={atmosphere}
+            onToggleLiveTraffic={setLiveTraffic}
+            onToggleAtmosphere={setAtmosphere}
+          />
           <NetworkSpotlight
             open={spotlightOpen}
             onClose={closeSpotlight}
