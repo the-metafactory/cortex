@@ -394,19 +394,20 @@ describe("cortex#1598 — operator-mode add-member (scoped mint + v2 seal)", () 
     expect(r.revoked.length).toBe(0);
   });
 
-  test("cortex#1599 — a USER_NOT_FOUND revoke is treated as an idempotent re-run (reaches the REVOKED mark)", async () => {
-    // A prior cut succeeded on the hub but failed at the registry mark, leaving
-    // the row ADMITTED + the user gone. A re-run's revoke returns USER_NOT_FOUND;
-    // it must NOT abort (that would strand the row ADMITTED forever) — it proceeds
-    // to mark the row REVOKED.
+  test("cortex#1599 — a USER_NOT_FOUND revoke is FAIL-CLOSED (never marks REVOKED on the ambiguous case)", async () => {
+    // USER_NOT_FOUND is ambiguous — already-cut vs a wrong --hub-fed-account /
+    // never-minted user with a LIVE credential elsewhere. Marking the row REVOKED
+    // on that guess would be the exact fail-open the hub-first order prevents, so
+    // it aborts and leaves the row ADMITTED (safe: never a REVOKED row over a
+    // possibly-live credential).
     const r = makePorts({
       admitted: { request_id: "req1", principal_id: "alice", stack_id: "alice/laptop" },
-      scopedMint: { creds: FAKE_CREDS, revokeFailWith: "user not found (already revoked)", revokeFailCode: "USER_NOT_FOUND" },
+      scopedMint: { creds: FAKE_CREDS, revokeFailWith: "user not found", revokeFailCode: "USER_NOT_FOUND" },
     });
     const report = await runNetworkSecret(operatorInputs({ action: "revoke-member" }), r.ports);
-    expect(report.ok).toBe(true);
-    expect(r.revoked).toEqual(["req1"]); // the registry row IS marked REVOKED
-    expect(report.steps.join("\n")).toContain("already revoked");
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("ambiguous");
+    expect(r.revoked.length).toBe(0); // the registry row is NOT marked REVOKED
   });
 
   test("cortex#1599 — rotate refuses when the reissue port is absent (arc too old)", async () => {

@@ -739,6 +739,11 @@ async function operatorModeSeal(
     steps.push(`payload key: sealed K (kid ${payloadKeyKid}, fp ${kFp}) — join installs encryption`);
   }
 
+  // On the rotate path the old key is ALREADY revoked, so any seal/deliver
+  // failure below leaves the member offline until re-run (see the window note).
+  const rotateOfflineTail = rotate
+    ? " — ROTATE already revoked the old key, so the member is offline until you re-run rotate"
+    : "";
   let sealed: string;
   try {
     const envelope = encodeLeafSecretEnvelopeV2({
@@ -749,14 +754,12 @@ async function operatorModeSeal(
     });
     sealed = await ports.crypto.seal(envelope, memberPubkeyB64);
   } catch (err) {
-    const tail = rotate ? " — ROTATE already revoked the old key, so the member is offline until you re-run rotate" : "";
-    return fail(action, inputs, steps, data, `failed to seal the v2 scoped credential: ${errText(err)}${tail}`);
+    return fail(action, inputs, steps, data, `failed to seal the v2 scoped credential: ${errText(err)}${rotateOfflineTail}`);
   }
   try {
     await ports.delivery.postSealedSecret(row.request_id, sealed);
   } catch (err) {
-    const tail = rotate ? " — ROTATE already revoked the old key, so the member is offline until you re-run rotate" : "";
-    return fail(action, inputs, steps, data, `failed to deliver the sealed v2 credential to the registry: ${errText(err)}${tail}`);
+    return fail(action, inputs, steps, data, `failed to deliver the sealed v2 credential to the registry: ${errText(err)}${rotateOfflineTail}`);
   }
   steps.push(`deliver:    sealed v2 creds → posted to admission row ${row.request_id}`);
 
@@ -907,25 +910,26 @@ async function revokeMemberOperator(
     return plan(action, inputs, steps, data);
   }
 
-  // 1. Cut hub transport FIRST (revoke + push). A failure here (incl. PUSH_FAILED
-  //    on a non-push-capable resolver) aborts BEFORE the registry mark — never a
-  //    REVOKED row over a still-live credential.
-  //    IDEMPOTENT RECOVERY: a USER_NOT_FOUND means the scoped user is ALREADY
-  //    gone — a prior cut that succeeded on the hub but failed at the registry
-  //    mark below (leaving the row ADMITTED). Treat that as an idempotent success
-  //    so the re-run reaches the REVOKED mark; otherwise the row would stay
-  //    ADMITTED forever while the member is actually cut.
+  // 1. Cut hub transport FIRST (revoke + push). ANY failure aborts BEFORE the
+  //    registry mark — never a REVOKED row over a still-live credential.
+  //    USER_NOT_FOUND is FAIL-CLOSED, not treated as "already cut": it is
+  //    AMBIGUOUS — the user may be gone because a prior cut succeeded, OR because
+  //    the account is wrong (`--hub-fed-account` typo) / the user was never
+  //    minted, in which case a live credential runs elsewhere. Marking the row
+  //    REVOKED on that guess is the exact fail-open the hub-first order exists to
+  //    prevent. So we abort; a partial failure (cut succeeded, mark failed) is
+  //    resolved by the operator verifying the user is really gone, then re-marking
+  //    the row — never by a blind re-run.
   const rev = await ports.scopedMint.revokeScopedUser({ hubFedAccount: inputs.hubFedAccount, natsUser, networkId: inputs.networkId });
-  if (!rev.ok && rev.code !== "USER_NOT_FOUND") {
+  if (!rev.ok) {
     return fail(action, inputs, steps, data,
-      `hub transport NOT cut — scoped-user revoke failed (${rev.code ?? "OTHER"}): ${rev.reason}. The registry row is left ADMITTED (unchanged) so it does not misreport a live member as revoked.`);
+      `hub transport NOT cut — scoped-user revoke failed (${rev.code ?? "OTHER"}): ${rev.reason}. The registry row is left ADMITTED (unchanged) so it never misreports a live member as revoked` +
+      (rev.code === "USER_NOT_FOUND"
+        ? ` — NOTE: USER_NOT_FOUND is ambiguous (already-cut vs a wrong --hub-fed-account / never-minted user), so it is NOT auto-treated as a cut. Verify the account + user, then re-mark the row if the credential is genuinely gone.`
+        : `.`));
   }
-  if (rev.ok) {
-    data.revoked_pubkey = rev.revokedPubKey;
-    steps.push(`hub:        scoped user "${natsUser}" revoked + pushed (${rev.revokedPubKey.slice(0, 12)}…) — transport cut at runtime, no hub restart`);
-  } else {
-    steps.push(`hub:        scoped user "${natsUser}" already revoked (USER_NOT_FOUND) — idempotent re-run; proceeding to mark the row REVOKED`);
-  }
+  data.revoked_pubkey = rev.revokedPubKey;
+  steps.push(`hub:        scoped user "${natsUser}" revoked + pushed (${rev.revokedPubKey.slice(0, 12)}…) — transport cut at runtime, no hub restart`);
 
   // 2. Mark the registry row REVOKED. If this fails, transport is ALREADY cut —
   //    surface it (the member is off the bus; the row just needs a re-mark).

@@ -354,7 +354,7 @@ stage_admit_operator() {
   isolate_env
   local adminseed; adminseed="$(cat "$ROOT/.adminseed-path")"
   local hubconf; hubconf="$(cat "$ROOT/.hub-operator-conf" 2>/dev/null)"
-  local before_hash; before_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  local before_hash; before_hash="$(hash_file "$hubconf")"
 
   # discover pending request-ids on the operator network
   $CORTEX network admit --list-pending --admin-seed "$adminseed" --registry-url "$REG_URL" --json \
@@ -382,7 +382,7 @@ stage_admit_operator() {
   # (b) ZERO hub config writes on the operator path. FAIL-CLOSED: a MISSING conf
   # hash means we never read a real file, so the "unchanged" comparison would be
   # vacuous ("none == none") — die rather than substantiate zero-writes on nothing.
-  local after_hash; after_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  local after_hash; after_hash="$(hash_file "$hubconf")"
   if [ "$before_hash" = "MISSING" ] || [ "$after_hash" = "MISSING" ]; then
     die "  zero-hub-writes check could not hash the hub conf ($hubconf) — cannot substantiate the claim (setup error)"
   elif [ "$before_hash" = "$after_hash" ]; then
@@ -401,8 +401,19 @@ stage_admit_operator() {
     || warn "  second-admit idempotency not confirmed (needs the arc verb + a real mint)"
 }
 
-# True iff the arc on PATH knows the #1599 rotate/revoke verbs (arc#270).
-arc_has_revoke_verbs() { arc nats --help 2>&1 | grep -q 'revoke-federated-user'; }
+# True iff the arc on PATH knows BOTH #1599 verbs (arc#270 ships them together;
+# the rotate step needs reissue, the revoke step needs revoke — gate on both).
+arc_has_revoke_verbs() {
+  local h; h="$(arc nats --help 2>&1)"
+  echo "$h" | grep -q 'revoke-federated-user' && echo "$h" | grep -q 'reissue-federated-user'
+}
+
+# Portable file hash: BSD `md5 -q` (macOS) or `md5sum` (Linux); else MISSING.
+hash_file() {  # hash_file <path>
+  if command -v md5 >/dev/null 2>&1; then md5 -q "$1" 2>/dev/null || echo MISSING
+  elif command -v md5sum >/dev/null 2>&1; then md5sum "$1" 2>/dev/null | cut -d' ' -f1 || echo MISSING
+  else echo MISSING; fi
+}
 
 # The FED account's revocation ledger must list `pubkey` (proof the runtime revoke
 # added it) — `nsc describe account -J`.nats.revocations is keyed by pubkey.
@@ -423,7 +434,7 @@ stage_rotate_revoke_operator() {
   set -- $MEMBERS; local member="$1"
   local principal; principal="$(mem_principal "$member")"; local slug; slug="$(mem_slug "$member")"
   local pub; pub="$(member_pubkey "$principal" "$slug" "$ROOT/nats/cortex-$slug.nk" | tr -d '[:space:]')"
-  local before_hash; before_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  local before_hash; before_hash="$(hash_file "$hubconf")"
   local hub_pid_before; hub_pid_before="$(cat "$PID/hub.pid" 2>/dev/null || echo none)"
 
   # (rotate) re-mint FRESH material + re-seal v2; ZERO hub config write.
@@ -435,7 +446,7 @@ stage_rotate_revoke_operator() {
   grep -qiE "ROTATED|reissue-federated-user|revoked_pubkey" "$LOG/rotate-op.log" \
     && ok "  rotate re-minted fresh material (revoke old + re-mint) — runtime, no hub restart" \
     || die "  rotate did NOT re-mint (see $LOG/rotate-op.log) — the credential path is broken, or CORTEX_BIN lacks #1599"
-  local after_rotate_hash; after_rotate_hash="$(md5 -q "$hubconf" 2>/dev/null || echo MISSING)"
+  local after_rotate_hash; after_rotate_hash="$(hash_file "$hubconf")"
   if [ "$before_hash" = "MISSING" ] || [ "$after_rotate_hash" = "MISSING" ]; then
     die "  rotate zero-writes check could not hash the hub conf ($hubconf) — setup error"
   elif [ "$before_hash" = "$after_rotate_hash" ]; then
