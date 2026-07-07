@@ -1,0 +1,256 @@
+/*
+ * CK-3 (cortex#1289) — right-panel COCKPIT re-skin.
+ *
+ * The cockpit FOLDS the four legacy surfaces (AttentionView / WorkingGrid /
+ * GovernanceView / DispatchButton) unchanged. Because it mounts inside McShell's
+ * `.mc-skin` wrapper, the shared token NAMES those components reference
+ * (--line/--warn/--bad/--ok/--dim/--faint/--fg/--mono/--sans) already resolve to
+ * the D1 constellation palette — so most colour adapts for free. This file adds
+ * the LANE LAYOUT + the chrome overrides that turn the components' `scaffold-*`
+ * markup into mc-skin panels in the narrow dock. Everything is scoped under
+ * `.mc-cockpit`, so it has zero blast radius on the legacy `?legacy=1` tabs.
+ */
+
+.mc-cockpit {
+  /* The scaffold components use `--accent`; mc-skin doesn't define it. Remap it to
+     the meridian accent so links/pills read on-brand inside the cockpit. */
+  --accent: var(--mer);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: var(--sans);
+  color: var(--fg);
+}
+
+/* ── Lane framing ─────────────────────────────────────────────────────────── */
+.mc-cockpit-lane {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  padding: 12px 14px;
+}
+
+.mc-cockpit-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mc-cockpit-lane-title {
+  font: 700 11px var(--mono);
+  color: var(--faint);
+  letter-spacing: 0.14em;
+}
+
+/* Re-skin the folded components' section chrome: drop their card look (they get
+   the mc lane frame above) and normalise spacing for the narrow dock. */
+.mc-cockpit .scaffold-section,
+.mc-cockpit .working-grid-section {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+/* Their headings → the mono lane-title look. */
+.mc-cockpit h2 {
+  font: 700 11px var(--mono);
+  color: var(--faint);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.mc-cockpit h3 {
+  font: 600 10px var(--mono);
+  color: var(--dim);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin: 12px 0 6px;
+}
+.mc-cockpit .dim {
+  color: var(--dim);
+}
+.mc-cockpit .faint {
+  color: var(--faint);
+}
+
+/* ── ATTENTION lane ───────────────────────────────────────────────────────── */
+.mc-cockpit .attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mc-cockpit .attention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: var(--panel);
+  font: 500 11px var(--mono);
+}
+.mc-cockpit .attention-item .badge {
+  font: 600 9px var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--dim);
+}
+.mc-cockpit .attention-link {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--mer);
+  font: 500 11px var(--mono);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.mc-cockpit .attention-link:hover {
+  text-decoration: underline;
+}
+
+/* ── WORKING lane ─────────────────────────────────────────────────────────── */
+/* Single-column tiles — the dock is narrow, so the multi-column grid collapses. */
+.mc-cockpit .working-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mc-cockpit .working-tile {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 9px 11px;
+  cursor: pointer;
+  color: var(--fg);
+}
+.mc-cockpit .working-tile:hover {
+  border-color: color-mix(in oklch, var(--mer) 45%, transparent);
+}
+.mc-cockpit .working-tile .agent {
+  font: 600 12px var(--mono);
+  color: var(--fg);
+}
+.mc-cockpit .working-tile .task {
+  font: 400 11px var(--sans);
+  color: var(--dim);
+  margin-top: 2px;
+}
+.mc-cockpit .working-tile .meta {
+  font: 500 10px var(--mono);
+  color: var(--faint);
+  margin-top: 4px;
+}
+.mc-cockpit .working-grid-empty,
+.mc-cockpit .working-grid-error {
+  font: 500 11px var(--mono);
+  color: var(--faint);
+  padding: 6px 0;
+}
+
+/* ── GOVERN lane ──────────────────────────────────────────────────────────── */
+.mc-cockpit-govern .governance-alarm {
+  font: 500 11px var(--mono);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  margin: 0 0 10px;
+}
+.mc-cockpit-govern .governance-alarm.alarm-elevated {
+  border-color: color-mix(in oklch, var(--warn) 50%, transparent);
+  color: var(--warn);
+}
+.mc-cockpit-govern .governance-alarm.alarm-high {
+  border-color: color-mix(in oklch, var(--bad) 55%, transparent);
+  color: var(--bad);
+}
+/* The audit tables are wide; let them scroll inside the narrow dock rather than
+   forcing the whole panel to overflow. */
+.mc-cockpit-govern .governance-subsection {
+  overflow-x: auto;
+}
+.mc-cockpit-govern .governance-table {
+  border-collapse: collapse;
+  font: 500 10px var(--mono);
+  min-width: 100%;
+}
+.mc-cockpit-govern .governance-table th {
+  text-align: left;
+  color: var(--faint);
+  font-weight: 600;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.mc-cockpit-govern .governance-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--lsoft);
+  color: var(--dim);
+}
+.mc-cockpit-govern .governance-table .badge {
+  font: 600 9px var(--mono);
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.mc-cockpit-govern .governance-summary {
+  font: 500 10px var(--mono);
+  color: var(--faint);
+  margin: 6px 0;
+}
+
+/* ── DISPATCH affordance (admin posture, own-local) ───────────────────────── */
+.mc-cockpit-dispatch {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.mc-cockpit-dispatch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mc-cockpit-dispatch-label {
+  font: 500 11px var(--mono);
+  color: var(--dim);
+}
+.mc-cockpit .mc-cockpit-dispatch-btn .dispatch-btn {
+  font: 600 10px var(--mono);
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  border: 1px solid color-mix(in oklch, var(--mer) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--mer) 12%, transparent);
+  color: var(--mer);
+  cursor: pointer;
+}
+.mc-cockpit .mc-cockpit-dispatch-btn .dispatch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mc-cockpit-note {
+  font: 500 11px var(--mono);
+  color: var(--faint);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── Federated-peer aggregate notice (ADR-0005) ───────────────────────────── */
+.mc-cockpit--peer .mc-cockpit-peer-notice {
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--tide) 7%, transparent);
+  padding: 14px 15px;
+}
+.mc-cockpit--peer .mc-cockpit-note {
+  color: var(--dim);
+}

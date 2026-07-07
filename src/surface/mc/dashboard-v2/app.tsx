@@ -69,6 +69,17 @@ import type { Command } from "./components/command-palette";
  */
 type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network" | "governance" | "observability";
 
+/**
+ * CK-3 / D-1(c) — the legacy escape hatch. The cockpit (in the Network view) is
+ * now the stack-scoped home for the ATTENTION + GOVERNANCE surfaces; their
+ * whole-dashboard standalone tabs are kept behind `?legacy=1` for ONE release,
+ * then CK-10 deletes them. Read once at module load (the flag never changes
+ * mid-session). SSR-safe (`renderToStaticMarkup` tests have no `window`).
+ */
+const LEGACY_ESCAPE_HATCH =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("legacy") === "1";
+
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   // G-1113.C.7 — software mode gates the Repositories panel.
@@ -125,8 +136,14 @@ export function App() {
   const phaseDetail = usePhaseDetail(view === "phase-detail" ? selectedPhaseId : null);
   // G-1113.D.5 — work-item-detail data (fetched whenever a work item is selected).
   const workItemDetail = useWorkItemDetail(view === "work-item-detail" ? selectedWorkItemId : null);
-  // G-1113.E.3 — attention queue data (fetched only when on the Attention tab).
-  const attention = useAttention(ws, softwareMode && view === "attention");
+  // G-1113.E.3 — attention queue data. Enabled on the legacy Attention tab AND on
+  // the Network tab (CK-3): the cockpit's ATTENTION lane consumes this ONE
+  // snapshot (fetched once + WS-kept-fresh), scoped per-stack in the panel — the
+  // single subscription that replaces the folded surfaces' fetch-on-tab-visible.
+  const attention = useAttention(
+    ws,
+    (softwareMode && view === "attention") || view === "network",
+  );
   // G-1114.B.4 — stack-local agent-presence data (fetched only when on the
   // Network tab); live-refreshed off the `agent.presence` WS frame.
   const agents = useAgents(ws, view === "network");
@@ -134,8 +151,10 @@ export function App() {
   // Network view's first-class trust-group panel. Fetched only when the tab is
   // visible; refreshes off the same `agent.presence` signal as `useAgents`.
   const networks = useNetworks(ws, view === "network");
-  // G-1115 — governance verdicts, fetched only when the tab is visible.
-  const governance = useGovernance(ws, view === "governance");
+  // G-1115 — governance verdicts. Enabled on the legacy Governance tab AND on the
+  // Network tab (CK-3): the cockpit's GOVERN lane folds this audit scoped to the
+  // dived stack. Same single-snapshot rationale as `attention` above.
+  const governance = useGovernance(ws, view === "governance" || view === "network");
   // P-14 U2.1 (#934) — observability events (signal's four system.* families),
   // fetched when the Observability tab is visible; live-refreshed off the
   // `observability` mc.projection family.
@@ -378,15 +397,19 @@ export function App() {
         >
           Network
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === "governance"}
-          className={`tab${view === "governance" ? " active" : ""}`}
-          onClick={() => setView("governance")}
-        >
-          Governance
-        </button>
+        {/* CK-3 / D-1(c) — Governance folds into the stack cockpit (Network view).
+            The whole-dashboard tab survives behind `?legacy=1` for one release. */}
+        {LEGACY_ESCAPE_HATCH && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "governance"}
+            className={`tab${view === "governance" ? " active" : ""}`}
+            onClick={() => setView("governance")}
+          >
+            Governance <span className="dim mono" style={{ fontSize: 9 }}>legacy</span>
+          </button>
+        )}
         <button
           type="button"
           role="tab"
@@ -418,7 +441,9 @@ export function App() {
             Plans
           </button>
         )}
-        {softwareMode && (
+        {/* CK-3 / D-1(c) — Attention folds into the stack cockpit (Network view).
+            The whole-dashboard tab survives behind `?legacy=1` for one release. */}
+        {softwareMode && LEGACY_ESCAPE_HATCH && (
           <button
             type="button"
             role="tab"
@@ -426,7 +451,7 @@ export function App() {
             className={`tab${view === "attention" ? " active" : ""}`}
             onClick={() => setView("attention")}
           >
-            Attention
+            Attention <span className="dim mono" style={{ fontSize: 9 }}>legacy</span>
           </button>
         )}
       </nav>
@@ -580,9 +605,10 @@ export function App() {
           <SourcesView />
         )}
 
-        {view === "governance" && (
+        {view === "governance" && LEGACY_ESCAPE_HATCH && (
           /* G-1115 — read-only governance audit surface: verdicts from the
-             governed-action stack (pulse P-702) read back off the bus. */
+             governed-action stack (pulse P-702) read back off the bus. CK-3/D-1:
+             folded into the stack cockpit; this whole-dashboard tab is `?legacy=1`. */
           <GovernanceView state={governance} />
         )}
 
@@ -611,6 +637,24 @@ export function App() {
             // roster ⋈ presence → membership verdict). Empty until the fetch
             // lands / on a non-federated stack; the panel renders nothing then.
             networks={networks.networks}
+            // CK-3 — the app-scope snapshots the stack cockpit folds + scopes to
+            // the dived stack (ATTENTION / WORKING / GOVERN). One subscription each.
+            attention={attention}
+            governance={governance}
+            workingLoaded={working.loaded}
+            workingError={working.error}
+            // CK-3 — cockpit attention work-item deep link → work-item-detail
+            // (returns to the Network view). Needs software mode (the surface is
+            // software-mode-gated); honest toast otherwise.
+            onOpenWorkItem={(workItemId) => {
+              if (!softwareMode) {
+                showToast("Enable software mode to open work items", "info");
+                return;
+              }
+              setSelectedWorkItemId(workItemId);
+              setWorkItemBackView("network");
+              setView("work-item-detail");
+            }}
             onViewInWorkingGrid={() => setView("default")}
             // CK-1 (cortex#1289) — diving the altitude rail to SESSION (an
             // own-local assistant's session) opens the REUSED F-7 drill-down —
@@ -841,8 +885,9 @@ export function App() {
           />
         )}
 
-        {view === "attention" && softwareMode && (
-          /* G-1113.E.3 — attention queue surface (deep-links to WI / session). */
+        {view === "attention" && softwareMode && LEGACY_ESCAPE_HATCH && (
+          /* G-1113.E.3 — attention queue surface (deep-links to WI / session).
+             CK-3/D-1: folded into the stack cockpit; this tab is `?legacy=1`. */
           <AttentionView
             entries={attention.entries}
             loaded={attention.loaded}

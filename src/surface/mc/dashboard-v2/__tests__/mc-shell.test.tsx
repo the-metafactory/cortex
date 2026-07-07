@@ -238,4 +238,39 @@ describe("McShell", () => {
     expect(html).toContain("ADMIN");
     expect(html).not.toContain("OPERATOR");
   });
+
+  it("renders the pane full-width when no cockpit is provided (non-regressive)", () => {
+    const html = renderToStaticMarkup(
+      createElement(McShell, {
+        principal: "aria",
+        networks: NETWORKS,
+        selection: ROOT_SELECTION,
+        onSelectionChange: () => {},
+        children: createElement("div", { className: "framed-pane" }, "BODY"),
+      }),
+    );
+    // No split/dock chrome above STACK.
+    expect(html).not.toContain("mc-shell-split");
+    expect(html).not.toContain("mc-cockpit-dock");
+    expect(html).toContain("framed-pane");
+  });
+
+  it("CK-3 — splits into pane + cockpit dock when a cockpit slot is given", () => {
+    const html = renderToStaticMarkup(
+      createElement(McShell, {
+        principal: "aria",
+        networks: NETWORKS,
+        selection: ROOT_SELECTION,
+        onSelectionChange: () => {},
+        cockpit: createElement("div", { className: "the-cockpit" }, "COCKPIT"),
+        children: createElement("div", { className: "framed-pane" }, "BODY"),
+      }),
+    );
+    expect(html).toContain("mc-shell-split");
+    expect(html).toContain("mc-cockpit-dock");
+    // both the framed pane AND the cockpit render
+    expect(html).toContain("framed-pane");
+    expect(html).toContain("the-cockpit");
+    expect(html).toContain("COCKPIT");
+  });
 });
