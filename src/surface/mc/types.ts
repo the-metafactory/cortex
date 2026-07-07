@@ -559,6 +559,22 @@ export interface Config {
    * "metafactory". Omitted entirely on every current (loopback) deployment.
    */
   cfAccess?: CfAccessConfig;
+  /**
+   * FND-6 — the `mc.governance.principals` authorization allowlist. Every
+   * governed glass mutation (`/api/sessions`, `/requeue`, `/abandon`, the
+   * attention lifecycle, admission-decision) checks the resolved CF-Access
+   * principal against this list. Fail-closed: unset ⇒ refuse mutations on a
+   * non-loopback bind (403); on loopback an unset list stays permissive so
+   * legit local callers keep working (the loopback boundary + Host/Origin are
+   * the gate there). Omitted on a default loopback dev deployment.
+   */
+  governance?: GovernanceConfig;
+}
+
+/** FND-6 — per-daemon control-plane authorization. */
+export interface GovernanceConfig {
+  /** Principal emails (CF-Access identities) allowed to run glass mutations. */
+  principals: string[];
 }
 
 /** cortex#1410 — CF Access application binding for non-loopback MC. */

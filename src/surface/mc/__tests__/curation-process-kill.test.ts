@@ -22,6 +22,8 @@ import {
   expect,
   beforeEach,
   afterEach,
+  beforeAll,
+  afterAll,
 } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "path";
@@ -47,6 +49,24 @@ const fakeCatSpawn: SpawnFn = () =>
     stdout: "pipe",
     stderr: "pipe",
   });
+
+// FND-6: session spawn/control mutations now require a CF-Access identity on the
+// loopback bind (mutation-guard identity gate). These tests exercise HANDLER
+// behavior, not the gate (covered by mutation-guard-rebinding.test.ts), so
+// inject the loopback principal header on every test-server call here.
+const _realFetch = globalThis.fetch;
+beforeAll(() => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Cf-Access-Authenticated-User-Email")) {
+      headers.set("Cf-Access-Authenticated-User-Email", "principal@example.com");
+    }
+    return _realFetch(input, { ...init, headers });
+  }) as unknown as typeof globalThis.fetch;
+});
+afterAll(() => {
+  globalThis.fetch = _realFetch;
+});
 
 interface TestContext {
   db: Database;

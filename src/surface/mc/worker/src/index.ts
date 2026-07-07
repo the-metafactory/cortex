@@ -36,10 +36,20 @@ const app = new Hono<{ Bindings: Env }>();
 // Global middleware
 // ---------------------------------------------------------------------------
 
-// S-002: CORS restricted to known origins (comma-separated in env var)
+// S-002 / FND-6: CORS restricted to configured origins, DEFAULT-DENY.
+// `CORS_ORIGIN` unset ⇒ emit NO CORS headers (never `*`+credentials — that
+// pairing is an authenticated cross-origin read primitive and violates dev=prod
+// parity). Only when the principal configures explicit origins do we attach the
+// credentialed CORS middleware.
 app.use("*", async (c, next) => {
-  const raw = c.env.CORS_ORIGIN || "*";
-  const origins = raw.includes(",") ? raw.split(",").map((s) => s.trim()) : raw;
+  const raw = (c.env.CORS_ORIGIN ?? "").trim();
+  if (raw === "") {
+    // Fail-closed: no allowlist configured ⇒ same-origin only, no CORS headers.
+    return next();
+  }
+  const origins = raw.includes(",")
+    ? raw.split(",").map((s) => s.trim()).filter((s) => s !== "")
+    : raw;
   const corsMiddleware = cors({
     origin: origins,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],

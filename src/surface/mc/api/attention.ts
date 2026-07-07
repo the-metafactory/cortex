@@ -13,7 +13,11 @@
  */
 import type { Database } from "bun:sqlite";
 import type { AttentionItem } from "../types";
-import { listOpenAttention } from "../db/attention";
+import {
+  listOpenAttention,
+  resolveAttentionItem,
+  dismissAttentionItem,
+} from "../db/attention";
 import { getWorkItem } from "../db/work-items";
 
 export type AttentionLink =
@@ -52,4 +56,38 @@ export function handleListAttention(db: Database): Response {
     status: 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * CK-6a — the attention lifecycle data route (POST resolve/dismiss over
+ * `db/attention setStatus`). A REAL db state op, distinct from Approve/Deny
+ * (which stays theater until SPX-8). Registered under the FND-6 identity gate
+ * in `server.ts`: no unauthenticated mutation joins the surface.
+ *
+ * @param action `"resolve"` (condition cleared) or `"dismiss"` (principal
+ *               cleared it without action). 404 when no open row changed.
+ */
+export function handleAttentionLifecycle(
+  db: Database,
+  id: string,
+  action: "resolve" | "dismiss",
+): Response {
+  const changed =
+    action === "resolve"
+      ? resolveAttentionItem(db, id)
+      : dismissAttentionItem(db, id);
+  if (!changed) {
+    return json(
+      { error: "not_found", detail: `no open attention item with id '${id}'` },
+      404,
+    );
+  }
+  return json({ status: action === "resolve" ? "resolved" : "dismissed", id }, 200);
 }

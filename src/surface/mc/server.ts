@@ -58,7 +58,16 @@ import { handleListRepositories } from "./api/git-repos";
 import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
-import { handleListAttention } from "./api/attention";
+import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
+import {
+  MUTATING_METHODS,
+  buildAllowedHostnames,
+  checkRebindGuard,
+  enforceMutationAuth,
+  isIdentityGatedMutation,
+  isRebindExempt,
+  type MutationGuardContext,
+} from "./api/mutation-guard";
 import { handleGetGovernance } from "./api/governance";
 import { handleGetObservability } from "./api/observability-tab";
 import { proxySideband } from "../../common/sideband/proxy";
@@ -242,6 +251,19 @@ export function startServer(
         })
     : undefined;
 
+  // FND-6 — mutation-surface hardening. The Host/Origin allowlist + principal
+  // allowlist are fixed for the server's lifetime (bind + config are fixed), so
+  // build the invariant part once; `listenPort` is resolved per request from
+  // `server.port` (differs from `config.port` on an ephemeral bind — tests).
+  const guardBase: Omit<MutationGuardContext, "listenPort"> = {
+    isLoopback,
+    allowedHostnames: buildAllowedHostnames(config.hostname),
+    principals: new Set(
+      (config.governance?.principals ?? []).map((p) => p.trim().toLowerCase()),
+    ),
+    ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
+  };
+
   const apiDeps: ApiDeps | null = options.processManager
     ? {
         processManager: options.processManager,
@@ -320,6 +342,11 @@ export function startServer(
         // MC-B2 — resolve the admission-decision signer lazily too (stack
         // identity + registry client boot after the server). null ⇒ 503.
         const admissionDecider = options.admissionDecider?.() ?? null;
+        // FND-6 — finalize the guard context with the ACTUAL bound port.
+        const guard: MutationGuardContext = {
+          ...guardBase,
+          listenPort: server.port ?? config.port,
+        };
         return handleApi(
           req,
           url,
@@ -329,8 +356,7 @@ export function startServer(
           localAggregation,
           networks,
           admissionDecider,
-          isLoopback,
-          cfAccessVerifier,
+          guard,
         );
       }
 
@@ -489,10 +515,22 @@ async function handleApi(
   localAggregation: LocalAggregationContext | null,
   networks: NetworksView | null = null,
   admissionDecider: AdmissionDecider | null = null,
-  isLoopback = true,
-  cfAccessVerifier?: AdmissionAuthContext["verifyJwt"]
+  guard: MutationGuardContext,
 ): Promise<Response> {
   const { pathname } = url;
+
+  // FND-6 — mutation-surface hardening, BEFORE any route match or body read.
+  // (a)+(b) Host/Origin anti-rebinding on every mutating route except HMAC M2M;
+  // (c)+(d) identity gate + authorization binding on the governed glass set.
+  // Runs first so no unauthenticated/rebound request can reach a handler.
+  if (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname)) {
+    const rebindDenial = checkRebindGuard(req, guard);
+    if (rebindDenial) return rebindDenial;
+  }
+  if (isIdentityGatedMutation(req.method, pathname)) {
+    const authResult = await enforceMutationAuth(req, guard);
+    if (authResult instanceof Response) return authResult;
+  }
 
   if (pathname === "/api/assignments") {
     if (req.method !== "GET") {
@@ -574,6 +612,23 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListAttention(db);
+  }
+
+  // CK-6a — POST /api/attention/:id/resolve|dismiss — attention lifecycle.
+  // A real db state op (db/attention setStatus), gated by the FND-6 identity
+  // guard above (see isIdentityGatedMutation). Approve/Deny stays theater until
+  // SPX-8 and is deliberately NOT mounted here.
+  const attentionLifecycleMatch =
+    /^\/api\/attention\/([^/]+)\/(resolve|dismiss)$/.exec(pathname);
+  if (attentionLifecycleMatch) {
+    if (req.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+    const captured = attentionLifecycleMatch[1];
+    if (!captured) return new Response("Not Found", { status: 404 });
+    const id = decodeURIComponent(captured);
+    const action = attentionLifecycleMatch[2] as "resolve" | "dismiss";
+    return handleAttentionLifecycle(db, id, action);
   }
 
   // G-1115 — GET /api/governance — governance verdicts + summary + alarm tier.
@@ -722,15 +777,18 @@ async function handleApi(
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
     }
+    // The FND-6 guard already enforced Host/Origin + identity + authorization
+    // for this route; the handler re-resolves the principal for signing/audit
+    // (typed-confirm is its intent gate). `guard` carries the bind + verifier.
     const emailHeader = req.headers.get(CF_ACCESS_EMAIL_HEADER) ?? undefined;
     const jwtAssertion = req.headers.get(CF_ACCESS_JWT_HEADER) ?? undefined;
     const body = await parseJsonBody(req);
     if (body.error) return body.error;
     const auth: AdmissionAuthContext = {
-      isLoopback,
+      isLoopback: guard.isLoopback,
       emailHeader,
       jwtAssertion,
-      ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
+      ...(guard.verifyJwt ? { verifyJwt: guard.verifyJwt } : {}),
     };
     return handleAdmissionDecision(admissionDecider, auth, body.value);
   }

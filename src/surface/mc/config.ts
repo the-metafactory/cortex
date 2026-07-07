@@ -6,7 +6,7 @@ import { readFileSync, existsSync } from "fs";
 import { parse as parseYaml } from "yaml";
 import { join } from "path";
 import { homedir } from "os";
-import type { Config, LogLevel, CfAccessConfig } from "./types";
+import type { Config, LogLevel, CfAccessConfig, GovernanceConfig } from "./types";
 import { resolveConfigFilePath } from "../../common/config/config-path";
 
 const VALID_LOG_LEVELS: ReadonlySet<LogLevel> = new Set([
@@ -123,6 +123,31 @@ export function loadConfig(configPath?: string): Readonly<Config> {
     };
   }
 
+  // FND-6 — `governance.principals` authorization allowlist. Parsed strictly:
+  // when the block is present, `principals` MUST be an array of non-empty
+  // strings (a malformed block throws rather than silently disabling the
+  // authorization binding on a mutating surface).
+  const governanceRaw = parsed.governance as Record<string, unknown> | undefined;
+  let governance: GovernanceConfig | undefined;
+  if (governanceRaw !== undefined) {
+    const rawPrincipals = governanceRaw.principals;
+    if (!Array.isArray(rawPrincipals)) {
+      throw new Error(
+        `governance.principals must be an array of principal emails in ${resolvedPath}`,
+      );
+    }
+    const principals: string[] = [];
+    for (const entry of rawPrincipals) {
+      if (typeof entry !== "string" || entry.trim() === "") {
+        throw new Error(
+          `governance.principals entries must be non-empty strings in ${resolvedPath}`,
+        );
+      }
+      principals.push(entry.trim());
+    }
+    governance = { principals };
+  }
+
   let level: LogLevel = DEFAULT_CONFIG.log.level;
   if (typeof log?.level === "string") {
     if (!VALID_LOG_LEVELS.has(log.level as LogLevel)) {
@@ -176,6 +201,7 @@ export function loadConfig(configPath?: string): Readonly<Config> {
           : DEFAULT_CONFIG.ws.maxClients,
     },
     ...(cfAccess ? { cfAccess } : {}),
+    ...(governance ? { governance } : {}),
   };
 
   return Object.freeze(config);
