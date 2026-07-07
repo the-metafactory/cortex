@@ -12,10 +12,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import type {
-  NetworkMembershipDTO,
-  MembershipMemberDTO,
-} from "../hooks/use-networks";
+import type { NetworkMembershipDTO } from "../hooks/use-networks";
 import {
   ALTITUDE_LEVELS,
   ALTITUDE_META,
@@ -25,15 +22,26 @@ import {
   buildBreadcrumb,
   drillToNetwork,
   ascendToRoot,
+  diveToStack,
+  selectAssistant,
+  openSession,
+  ascendToLevel,
+  stackReachesSession,
+  stackLabel,
   navigateToSegment,
   stopReachability,
   type AltitudeSelection,
+  type StackCoord,
 } from "../lib/mc-shell-model";
 
-function member(
-  over: Partial<MembershipMemberDTO> & { principal: string },
-): MembershipMemberDTO {
-  return { verdict: "admitted-present", present_stacks: [], accepts: "not-accepted", ...over };
+/** A dived OWN-LOCAL stack coordinate (SESSION-reachable). */
+function localStack(over: Partial<StackCoord> = {}): StackCoord {
+  return { principal: "andreas", stack: "meta-factory", federated: false, ...over };
+}
+
+/** A dived FEDERATED peer stack coordinate (SESSION-capped at ASSISTANT). */
+function peerStack(over: Partial<StackCoord> = {}): StackCoord {
+  return { principal: "jc", stack: "research", federated: true, ...over };
 }
 
 function net(
@@ -134,10 +142,13 @@ describe("MC-D2 shell model — breadcrumb", () => {
 });
 
 describe("MC-D2 shell model — navigation", () => {
-  it("drillToNetwork sets network level + id", () => {
+  it("drillToNetwork sets network level + id, clearing deeper coords", () => {
     expect(drillToNetwork("meridian")).toEqual({
       level: "network",
       networkId: "meridian",
+      stack: null,
+      assistantId: null,
+      sessionId: null,
     });
   });
 
@@ -173,10 +184,115 @@ describe("MC-D2 shell model — rail stop reachability", () => {
     expect(stopReachability("network", root, 0)).toBe("future");
   });
 
-  it("stack/assistant/session are future stubs in D2", () => {
+  it("stack/assistant/session are future until a stack is dived", () => {
+    // At NETWORK level (no stack dived) the deeper stops have no backing coord.
+    const atNetwork = drillToNetwork("meridian");
     for (const lvl of ["stack", "assistant", "session"] as const) {
-      expect(stopReachability(lvl, root, 9)).toBe("future");
+      expect(stopReachability(lvl, atNetwork, 9)).toBe("future");
     }
+  });
+});
+
+describe("CK-1 shell model — dive-to-stack reachability (data-driven)", () => {
+  it("STACK + ASSISTANT go live once a LOCAL stack is dived", () => {
+    const sel = diveToStack("meridian", localStack());
+    expect(stopReachability("stack", sel, 2)).toBe("current");
+    expect(stopReachability("assistant", sel, 2)).toBe("reachable");
+    // NETWORKS/NETWORK stay reachable above.
+    expect(stopReachability("networks", sel, 2)).toBe("reachable");
+    expect(stopReachability("network", sel, 2)).toBe("reachable");
+  });
+
+  it("STACK + ASSISTANT go live for a FEDERATED peer too (aggregate metadata)", () => {
+    const sel = diveToStack("meridian", peerStack());
+    expect(stopReachability("stack", sel, 2)).toBe("current");
+    expect(stopReachability("assistant", sel, 2)).toBe("reachable");
+  });
+
+  it("SESSION is reachable ONLY on an OWN-LOCAL stack", () => {
+    const local = diveToStack("meridian", localStack());
+    expect(stopReachability("session", local, 2)).toBe("reachable");
+  });
+
+  it("SESSION stays FUTURE for a federated peer — it bottoms out at STACK/ASSISTANT", () => {
+    const peer = diveToStack("meridian", peerStack());
+    expect(stopReachability("session", peer, 2)).toBe("future");
+    // The invariant, stated as the boundary: the deepest reachable federated
+    // stop is ASSISTANT; SESSION (and anything below) is unreachable.
+    expect(stopReachability("assistant", peer, 2)).toBe("reachable");
+    expect(stopReachability("session", peer, 2)).not.toBe("reachable");
+  });
+
+  it("SESSION stays FUTURE when no stack is dived", () => {
+    expect(stopReachability("session", ROOT_SELECTION, 2)).toBe("future");
+    expect(stopReachability("session", drillToNetwork("meridian"), 2)).toBe(
+      "future",
+    );
+  });
+
+  it("stackReachesSession: true for own-local, false for federated/absent", () => {
+    expect(stackReachesSession(localStack())).toBe(true);
+    expect(stackReachesSession(peerStack())).toBe(false);
+    expect(stackReachesSession(null)).toBe(false);
+  });
+});
+
+describe("CK-1 shell model — session gating (openSession)", () => {
+  it("opens a session on an own-local stack", () => {
+    const base = selectAssistant(diveToStack("meridian", localStack()), "luna");
+    const sel = openSession(base, "sess-123");
+    expect(sel).not.toBeNull();
+    expect(sel).toEqual({
+      level: "session",
+      networkId: "meridian",
+      stack: localStack(),
+      assistantId: "luna",
+      sessionId: "sess-123",
+    });
+  });
+
+  it("REFUSES to open a session on a federated peer stack (ADR-0005 defense in depth)", () => {
+    const base = selectAssistant(diveToStack("meridian", peerStack()), "atlas");
+    expect(openSession(base, "sess-xyz")).toBeNull();
+  });
+
+  it("REFUSES to open a session when no stack is dived", () => {
+    expect(openSession(drillToNetwork("meridian"), "sess-xyz")).toBeNull();
+  });
+});
+
+describe("CK-1 shell model — assistant selection + ascend", () => {
+  it("selectAssistant advances to ASSISTANT, preserving the stack, clearing session", () => {
+    const dived = diveToStack("meridian", localStack());
+    const withSession = openSession(
+      selectAssistant(dived, "luna"),
+      "sess-1",
+    )!;
+    // Re-selecting the assistant from the session-level selection clears session.
+    const sel = selectAssistant(withSession, "luna");
+    expect(sel).toEqual({
+      level: "assistant",
+      networkId: "meridian",
+      stack: localStack(),
+      assistantId: "luna",
+      sessionId: null,
+    });
+  });
+
+  it("ascendToLevel truncates every coordinate deeper than the target", () => {
+    const deep = openSession(
+      selectAssistant(diveToStack("meridian", localStack()), "luna"),
+      "sess-1",
+    )!;
+    expect(ascendToLevel(deep, "stack")).toEqual({
+      level: "stack",
+      networkId: "meridian",
+      stack: localStack(),
+      assistantId: null,
+      sessionId: null,
+    });
+    expect(ascendToLevel(deep, "network")).toEqual(drillToNetwork("meridian"));
+    expect(ascendToLevel(deep, "networks")).toEqual(ROOT_SELECTION);
   });
 });
 
@@ -194,5 +310,61 @@ describe("MC-D2 shell model — altitude metadata", () => {
   it("only the NETWORKS root carries an altitude annotation", () => {
     expect(ALTITUDE_META.networks.altLabel).toBe("10k ft");
     expect(ALTITUDE_META.network.altLabel).toBeUndefined();
+  });
+});
+
+describe("CK-1 shell model — deep breadcrumb + stackLabel", () => {
+  it("stackLabel is bare stack for local, principal/stack for federated", () => {
+    expect(stackLabel(localStack())).toBe("meta-factory");
+    expect(stackLabel(peerStack())).toBe("jc/research");
+  });
+
+  it("grows a segment per dived coordinate (network → stack → assistant → session)", () => {
+    const sel = openSession(
+      selectAssistant(diveToStack("meridian", localStack()), "luna"),
+      "sess-1",
+    )!;
+    const crumbs = buildBreadcrumb(sel);
+    expect(crumbs.map((c) => c.level)).toEqual([
+      "networks",
+      "network",
+      "stack",
+      "assistant",
+      "session",
+    ]);
+    expect(crumbs.map((c) => c.label)).toEqual([
+      "NETWORK·OF·NETWORKS",
+      "meridian",
+      "meta-factory",
+      "luna",
+      "sess-1",
+    ]);
+  });
+
+  it("a federated stack segment shows principal/stack and has no session below it", () => {
+    const sel = selectAssistant(diveToStack("meridian", peerStack()), "atlas");
+    const crumbs = buildBreadcrumb(sel);
+    expect(crumbs.map((c) => c.level)).toEqual([
+      "networks",
+      "network",
+      "stack",
+      "assistant",
+    ]);
+    const stackSeg = crumbs.find((c) => c.level === "stack")!;
+    expect(stackSeg.label).toBe("jc/research");
+  });
+
+  it("navigateToSegment round-trips every deep segment back to its exact selection", () => {
+    const sel = openSession(
+      selectAssistant(diveToStack("meridian", localStack()), "luna"),
+      "sess-1",
+    )!;
+    const crumbs = buildBreadcrumb(sel);
+    // Clicking the deepest (session) segment reconstructs the full selection.
+    expect(navigateToSegment(crumbs[crumbs.length - 1]!)).toEqual(sel);
+    // Clicking the stack segment reconstructs the stack-level selection.
+    expect(navigateToSegment(crumbs[2]!)).toEqual(
+      diveToStack("meridian", localStack()),
+    );
   });
 });

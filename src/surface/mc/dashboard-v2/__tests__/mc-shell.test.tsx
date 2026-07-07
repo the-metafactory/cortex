@@ -124,6 +124,7 @@ describe("McAltitudeRail", () => {
         networks: NETWORKS,
         onAscendRoot: () => {},
         onDrillNetwork: () => {},
+        onAscendToLevel: () => {},
       }),
     );
     expect(html).toContain("ALTITUDE");
@@ -143,6 +144,7 @@ describe("McAltitudeRail", () => {
         networks: NETWORKS,
         onAscendRoot: () => {},
         onDrillNetwork: () => {},
+        onAscendToLevel: () => {},
       }),
     );
     for (const lvl of ["stack", "assistant", "session"]) {
@@ -159,6 +161,7 @@ describe("McAltitudeRail", () => {
         networks: NETWORKS,
         onAscendRoot: () => {},
         onDrillNetwork: () => {},
+        onAscendToLevel: () => {},
       }),
     );
     expect(html).toContain('data-network-id="meridian"');
@@ -178,6 +181,7 @@ describe("McAltitudeRail", () => {
         networks: [],
         onAscendRoot: () => {},
         onDrillNetwork: () => {},
+        onAscendToLevel: () => {},
       }),
     );
     expect(html).toMatch(/data-level="network"[^>]*data-reach="future"/);
@@ -192,6 +196,7 @@ describe("McAltitudeRail", () => {
         networks: NETWORKS,
         onAscendRoot: () => {},
         onDrillNetwork: () => {},
+        onAscendToLevel: () => {},
       }),
     );
     expect(html).toMatch(/data-level="network"[^>]*data-reach="current"/);
