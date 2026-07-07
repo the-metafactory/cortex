@@ -252,6 +252,16 @@ export const CANONICAL_SESSION_COLUMNS: CanonicalSessionColumn[] = [
     default: null,
     note: "principal.home_principal (post-did:mf: strip).",
   },
+  // --- cross-stack origin (CK-4a / #1295 / decision D-8) ---
+  {
+    d1Name: "origin_stack_id",
+    localName: "origin_stack_id",
+    type: "TEXT",
+    notNull: false,
+    default: null,
+    note:
+      "The stack this session ORIGINATED on — the schema-level attribution the cross-stack WORKING aggregation groups by (#1295). D-8 adopts a column + backfill that EXTENDS the ADR-0011 canonical row rather than forking a parallel origin table, so both substrates carry it and the read model stays a plain GROUP BY. NULL ⇒ own/local-stack origin (the pre-CK-4a and single-stack case) — an honest 'unattributed to a specific peer stack', never fabricated. Never sourced from an attacker-controlled payload; stamped from the stack's own resolved identity on write / backfill.",
+  },
 ];
 
 /** The two indices the session-tree refactor adds to BOTH substrates (Phase 0). */
@@ -295,5 +305,6 @@ export const CANONICAL_ADDED_COLUMNS = CANONICAL_SESSION_COLUMNS.filter((c) =>
     "classification",
     "data_residency",
     "home_principal",
+    "origin_stack_id",
   ].includes(c.d1Name)
 );

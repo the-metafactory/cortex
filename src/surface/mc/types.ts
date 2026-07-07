@@ -447,6 +447,14 @@ export interface AgentTaskAssignment {
   task_id: string;
   state: AssignmentState;
   block_reason: BlockReason | null;
+  /**
+   * CK-4a / #1295 — provider back-pressure hint. Set from the dispatch
+   * lifecycle's `not_now { retry_after_ms }` (rate/capacity exhaustion); the
+   * assignment sits pre-spawn (`queued`) carrying the earliest-retry delay in ms.
+   * NULL ⇒ no pending provider retry. LOCAL-ONLY (no D1 analogue — dispatch stays
+   * local). Projected by db/working-aggregation.ts; writer is the write-half.
+   */
+  retry_after_ms: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -505,6 +513,13 @@ export interface Session {
   classification: string | null;
   data_residency: string | null;
   home_principal: string | null;
+  /**
+   * CK-4a / #1295 / D-8 — the stack this session ORIGINATED on; the schema-level
+   * attribution the cross-stack WORKING aggregation groups by. NULL ⇒ own/local
+   * stack (the pre-CK-4a / single-stack case). Stamped from the stack's own
+   * resolved identity on write / backfill, never from a peer-controlled payload.
+   */
+  origin_stack_id: string | null;
 }
 
 export interface McEvent {

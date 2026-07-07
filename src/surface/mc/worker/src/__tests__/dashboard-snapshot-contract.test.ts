@@ -77,6 +77,8 @@ const ALLOWED_COLUMNS: Record<string, string[]> = {
     "last_event_at", "progress_completed", "progress_total", "input_tokens",
     "output_tokens", "cache_read_tokens", "cost_usd", "classification",
     "data_residency", "home_principal", "parent_session_id", "substrate",
+    // CK-4a / #1295 — the cross-stack origin the workingAggregation groups by.
+    "origin_stack_id",
   ],
   session_activity: ["id", "session_id", "timestamp", "icon", "label", "detail"],
   // `payload` IS a raw-JSON-blob column (see the file header) — it exists,
@@ -132,8 +134,18 @@ function columnNamesForTable(schemaSql: string, table: string): string[] {
 
 const TOP_LEVEL_KEYS = new Set([
   "projects", "agents", "sessionTree", "recentCompletions", "recentActivity",
-  "stats", "accountUsage", "principalUsage", "homePrincipals", "updatedAt",
+  "stats", "accountUsage", "principalUsage", "homePrincipals",
+  // CK-4a / #1295 — cross-stack WORKING metadata rollup.
+  "workingAggregation", "updatedAt",
 ]);
+// CK-4a / #1295 — the workingAggregation section is metadata ONLY: an origin id,
+// two counts, and a provider-retry hint. NO session id / interior may appear here
+// (the cross-stack half of the no-interiors guard — see the file header + the
+// db/working-aggregation.ts scope boundary).
+const WORKING_ROLLUP_KEYS = new Set([
+  "originStackId", "activeSessionCount", "subAgentCount", "providerRetry",
+]);
+const PROVIDER_RETRY_KEYS = new Set(["state", "retryAfterMs"]);
 const PROJECT_KEYS = new Set(["id", "displayName"]);
 const AGENT_TILE_KEYS = new Set([
   "id", "name", "principalId", "homePrincipal", "sovereignty", "status", "currentTask",
@@ -260,6 +272,18 @@ function assertSnapshotShape(snapshot: DashboardSnapshot): void {
   for (const [principalId, usage] of Object.entries(snapshot.principalUsage)) {
     assertUsageSnapshot(usage as unknown as Record<string, unknown>, `principalUsage[${principalId}]`);
   }
+
+  // CK-4a / #1295 — the cross-stack WORKING rollup: metadata-only, no interiors.
+  for (const rollup of snapshot.workingAggregation) {
+    assertKeysAllowed(rollup as unknown as Record<string, unknown>, WORKING_ROLLUP_KEYS, "workingAggregation[]");
+    if (rollup.providerRetry) {
+      assertKeysAllowed(
+        rollup.providerRetry as unknown as Record<string, unknown>,
+        PROVIDER_RETRY_KEYS,
+        "workingAggregation[].providerRetry",
+      );
+    }
+  }
 }
 
 describe("DashboardSnapshot allow-list SHAPE guard for the public /api/state projection (S6, #1520)", () => {
@@ -378,6 +402,14 @@ describe("DashboardSnapshot allow-list SHAPE guard for the public /api/state pro
     expect(snapshot.recentActivity.some((i) => i.source === "github")).toBe(true);
     expect(snapshot.accountUsage).not.toBeNull();
     expect(snapshot.sessionTree.some((n) => n.children.length > 0)).toBe(true);
+    // CK-4a — the cross-stack WORKING rollup is populated (s-full + s-child are
+    // active under the null/own origin; s-child is the sub-agent), and the cloud
+    // projection never carries a provider-retry (dispatch lifecycle is local-only).
+    expect(snapshot.workingAggregation.length).toBeGreaterThan(0);
+    const ownOrigin = snapshot.workingAggregation.find((r) => r.originStackId === null);
+    expect(ownOrigin?.activeSessionCount).toBe(2);
+    expect(ownOrigin?.subAgentCount).toBe(1);
+    expect(snapshot.workingAggregation.every((r) => r.providerRetry === null)).toBe(true);
 
     assertSnapshotShape(snapshot);
   });

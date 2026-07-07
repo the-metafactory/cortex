@@ -35,6 +35,12 @@ export function createSession(
     principalId?: string | null;
     /** Denormalized lifecycle status. */
     status?: string | null;
+    /**
+     * CK-4a / #1295 — the stack this session ORIGINATED on. Omit (→ NULL) for
+     * own/local-stack origin, the pre-CK-4a / single-stack default. Stamped from
+     * the stack's own resolved identity; never from a peer-controlled payload.
+     */
+    originStackId?: string | null;
   }
 ): Session {
   const id = generateId();
@@ -45,12 +51,14 @@ export function createSession(
   const agentName = params.agentName ?? null;
   const principalId = params.principalId ?? null;
   const status = params.status ?? null;
+  const originStackId = params.originStackId ?? null;
 
   db.query(
     `INSERT INTO sessions
        (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at,
-        parent_session_id, substrate, agent_id, agent_name, principal_id, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        parent_session_id, substrate, agent_id, agent_name, principal_id, status,
+        origin_stack_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     params.assignmentId,
@@ -63,7 +71,8 @@ export function createSession(
     agentId,
     agentName,
     principalId,
-    status
+    status,
+    originStackId
   );
 
   return {
@@ -89,6 +98,7 @@ export function createSession(
     classification: null,
     data_residency: null,
     home_principal: null,
+    origin_stack_id: originStackId,
   };
 }
 
@@ -115,6 +125,7 @@ interface SessionRow {
   classification: string | null;
   data_residency: string | null;
   home_principal: string | null;
+  origin_stack_id: string | null;
 }
 
 /**
@@ -147,6 +158,7 @@ export function rowToSession(row: SessionRow): Session {
     classification: row.classification,
     data_residency: row.data_residency,
     home_principal: row.home_principal,
+    origin_stack_id: row.origin_stack_id,
   };
 }
 
@@ -154,7 +166,34 @@ export function rowToSession(row: SessionRow): Session {
 export const SESSION_SELECT_COLUMNS = `id, assignment_id, cc_session_id, endpoint_kind, pid,
         started_at, ended_at, parent_session_id, substrate, agent_id, agent_name,
         principal_id, status, duration_ms, events_count, input_tokens, output_tokens,
-        cache_read_tokens, cost_usd, classification, data_residency, home_principal`;
+        cache_read_tokens, cost_usd, classification, data_residency, home_principal,
+        origin_stack_id`;
+
+/**
+ * CK-4a / #1295 / decision D-8 — value-level backfill of `origin_stack_id`.
+ *
+ * The COLUMN_ADD_MIGRATIONS ALTER (db/schema.ts) only ADDS the column (NULL for
+ * every pre-existing row). This stamps the daemon's OWN resolved `stackId` onto
+ * the rows that predate origin attribution — the sessions this stack produced
+ * itself, which by definition originate here. Scoped to `origin_stack_id IS NULL`
+ * so it is idempotent (re-running is a no-op) and NEVER overwrites a value already
+ * attributed to a specific origin (a peer stack's rows in an aggregating MC-DB, or
+ * a value a later write already stamped) — that would corrupt cross-stack grouping.
+ *
+ * Kept out of the schema migration on purpose: the schema layer does not know the
+ * resolved stack id (it lives in config, wired at daemon boot), so the id-aware
+ * backfill is a caller-invoked step. The boot wiring that calls this with the
+ * resolved stack id is the CK-4a write-half (server/runner scope) — deliberately
+ * NOT wired here (the CK-4a scope keeps `server.ts` untouched).
+ *
+ * Returns the number of rows stamped.
+ */
+export function backfillOriginStackId(db: Database, stackId: string): number {
+  const info = db
+    .query(`UPDATE sessions SET origin_stack_id = ? WHERE origin_stack_id IS NULL`)
+    .run(stackId);
+  return info.changes;
+}
 
 /**
  * Shared lookup for the most-recent session of an assignment. `activeOnly`

@@ -197,6 +197,42 @@ export interface DailyStats {
 }
 
 /**
+ * CK-4a / #1295 — provider back-pressure status for a stack's WORKING lane.
+ * Metadata ONLY: a semantic tag + a delay in ms; never an interior.
+ *
+ * Byte-shape-mirror of `db/working-aggregation.ts`'s `ProviderRetryStatus` (a
+ * separate-bundle DUPLICATE, not an import — same rationale as
+ * `worker/src/lib/session-tree.ts` vs `lib/session-tree.ts`). In the CLOUD it is
+ * always `null` (the dispatch lifecycle is local-only — D1 has no
+ * `agent_task_assignment` table), typed here only so the DashboardSnapshot
+ * section shape stays congruent with the local read model.
+ */
+export interface ProviderRetryStatus {
+  state: "not_now";
+  retryAfterMs: number;
+}
+
+/**
+ * CK-4a / #1295 — one origin-stack's cross-stack WORKING rollup, keyed on
+ * `sessions.origin_stack_id` (decision D-8). Pure lifecycle METADATA — active +
+ * sub-agent counts + a provider-retry hint — and the ONLY thing that crosses the
+ * own-stacks boundary. Per ADR-0005 / the CK-4a scope boundary, a peer origin
+ * yields this same metadata-only shape, NEVER a session id/interior: this section
+ * is the cross-stack half of the DashboardSnapshot no-interiors guard, walked by
+ * `__tests__/dashboard-snapshot-contract.test.ts`.
+ *
+ * Byte-shape-mirror of `db/working-aggregation.ts`'s `WorkingStackAggregate`. The
+ * cloud producer sets `providerRetry` to `null` (local-only); the local read
+ * model populates it.
+ */
+export interface WorkingOriginRollup {
+  originStackId: string | null;
+  activeSessionCount: number;
+  subAgentCount: number;
+  providerRetry: ProviderRetryStatus | null;
+}
+
+/**
  * The `/api/state` payload shape — also the `state` slice of the combined
  * `/api/dashboard` payload ({@link CombinedDashboardPayload}, below).
  */
@@ -210,6 +246,13 @@ export interface DashboardSnapshot {
   accountUsage: UsageSnapshotInfo | null;
   principalUsage: Record<string, UsageSnapshotInfo>;
   homePrincipals: string[];
+  /**
+   * CK-4a / #1295 — cross-stack WORKING metadata, one rollup per
+   * `sessions.origin_stack_id`. Metadata-only (counts + provider-retry hint) and
+   * guarded by the no-interiors contract test. `providerRetry` is always `null`
+   * in this cloud projection (dispatch lifecycle is local-only).
+   */
+  workingAggregation: WorkingOriginRollup[];
   updatedAt: string;
 }
 
@@ -262,7 +305,7 @@ export async function buildSnapshot(
   project?: string | null,
   homePrincipal?: string | null,
 ): Promise<DashboardSnapshot> {
-  const [agents, completions, activity, dailyStats, projects, accountUsage, principalUsage, homePrincipals] = await Promise.all([
+  const [agents, completions, activity, dailyStats, projects, accountUsage, principalUsage, homePrincipals, workingAggregation] = await Promise.all([
     getActiveAgents(db, project, homePrincipal),
     getRecentCompletions(db, project, undefined, homePrincipal),
     getRecentActivity(db, project),
@@ -271,6 +314,7 @@ export async function buildSnapshot(
     getLatestAccountUsage(db),
     getPerPrincipalUsage(db),
     getKnownHomePrincipals(db),
+    getWorkingAggregation(db),
   ]);
 
   return {
@@ -298,6 +342,12 @@ export async function buildSnapshot(
      * dropdown; "Local only" (the default) corresponds to `null` here.
      */
     homePrincipals,
+    /**
+     * CK-4a / #1295 — cross-stack WORKING metadata rollup (counts by origin
+     * stack). Metadata-only; providerRetry is null in the cloud (dispatch is
+     * local-only). Flows through the no-interiors contract-test guard.
+     */
+    workingAggregation,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -891,6 +941,40 @@ async function getDailyStats(db: D1Database, date?: string): Promise<DailyStats>
     filesChanged: pushResult?.files ?? 0,
     sessionsCompleted: sessionsResult?.count ?? 0,
   };
+}
+
+/**
+ * CK-4a / #1295 — cross-stack WORKING metadata rollup from D1, grouped by
+ * `sessions.origin_stack_id`. Counts ACTIVE sessions per origin stack and, of
+ * those, the SUB-AGENTS (`parent_session_id IS NOT NULL`).
+ *
+ * Metadata ONLY (ADR-0005 / the CK-4a scope boundary): counts + origin id, never
+ * a session id or interior. `providerRetry` is `null` in the cloud — the dispatch
+ * lifecycle that sources it (`agent_task_assignment.retry_after_ms`) is local-only
+ * and D1 carries no assignment table. The local read model
+ * (`db/working-aggregation.ts`) is the one that populates it.
+ *
+ * Deterministic order: the `null` (own/local) origin first, then origin id ASC —
+ * congruent with the local read model's sort.
+ */
+async function getWorkingAggregation(db: D1Database): Promise<WorkingOriginRollup[]> {
+  const { results } = await db.prepare(`
+    SELECT origin_stack_id AS origin,
+           COUNT(*) AS active,
+           SUM(CASE WHEN parent_session_id IS NOT NULL THEN 1 ELSE 0 END) AS subagents
+    FROM sessions
+    WHERE status = 'active'
+    GROUP BY origin_stack_id
+    ORDER BY (origin_stack_id IS NOT NULL), origin_stack_id
+  `).all();
+
+  return (results ?? []).map((r: Record<string, unknown>) => ({
+    originStackId: (r.origin as string | null) ?? null,
+    activeSessionCount: Number(r.active),
+    subAgentCount: Number(r.subagents),
+    // Local-only (dispatch lifecycle never reaches D1) — always null in the cloud.
+    providerRetry: null,
+  }));
 }
 
 async function getProjects(db: D1Database): Promise<string[]> {
