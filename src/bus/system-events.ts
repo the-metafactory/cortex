@@ -1597,3 +1597,98 @@ export function createSystemDispatchStageEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.gateway.routing_decision — cortex#596 gateway inbound observability
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcome of the SurfaceGateway's inbound routing decision.
+ *
+ *   - `routed`      — the inbound message matched a binding and its canonical
+ *                     `tasks.@{agent}.chat` dispatch envelope was published to
+ *                     the bound stack. `stack` / `subject` carry the target the
+ *                     inbound reached.
+ *   - `unroutable`  — the message matched a binding but the dispatch to the
+ *                     bound stack was REFUSED by the dispatch-source publisher
+ *                     (`{ published: false }`); `reason` carries the refusal
+ *                     (`invalid-originator`, `missing-runtime`, …). Nothing
+ *                     reached a stack — the inbound is dropped.
+ *
+ * Two outcomes of ONE decision, so they share a single envelope type
+ * discriminated on `outcome` — the same shape the sibling
+ * `system.bus.notify_discord` (`posted`/`failed`/`skipped`) and
+ * `system.bus.process` (`started`/`completed`/`failed`) visibility events use,
+ * rather than two near-identical `.routed` / `.unroutable` types.
+ */
+export type SystemGatewayRoutingOutcome = "routed" | "unroutable";
+
+export interface SystemGatewayRoutingDecisionOpts {
+  source: SystemEventSource;
+  /** Routing outcome — see {@link SystemGatewayRoutingOutcome}. */
+  outcome: SystemGatewayRoutingOutcome;
+  /** Platform the inbound arrived on (`discord` / `slack` / `mattermost` / …). */
+  platform: string;
+  /** Adapter connection-instance key (`msg.instanceId`) that received it. */
+  instanceId: string;
+  /** Target agent id from the binding match. */
+  agent: string;
+  /** Target principal from the binding match, when resolved. */
+  principal?: string;
+  /**
+   * Target stack from the binding match. Present on `routed`; may still be
+   * absent for a stackless (binding-resolver gap-4) binding.
+   */
+  stack?: string;
+  /** Canonical dispatch subject the routed envelope landed on — `routed` only. */
+  subject?: string;
+  /** Dispatch-source publisher refusal reason — `unroutable` only. */
+  reason?: string;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"` (principal-private), matching the rest of `system.*`.
+   */
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.gateway.routing_decision` envelope (cortex#596).
+ *
+ * The SurfaceGateway is a thin demux in front of the per-stack runners; it
+ * carries its own source identity `{principal}.gateway.{instance}` (see
+ * `gatewaySource()` in `src/gateway/gateway-adapters.ts`). This event is the
+ * structured replacement for the interim stdout routing hunt-line the gateway
+ * dry-run relied on — a dashboard glance instead of a stdout tail (#596).
+ *
+ * **New `system.gateway.*` family — why its own leaf.** The sibling `system.*`
+ * families are concern-scoped: `system.adapter.*` = adapter connection
+ * lifecycle, `system.inbound.*` = STACK-side inbound dispatch lifecycle
+ * (`system.inbound.aborted` is a timeout during an already-routed dispatch),
+ * `system.bus.*` = bus listener/handler visibility. The gateway's demux
+ * routing decision — which stack an inbound reached, or why it did not — fits
+ * none of those and PRECEDES the stack-side `system.inbound.*` lifecycle, so it
+ * takes its own `gateway` leaf. `git grep system.gateway` was empty before this
+ * event: an unclaimed, natural namespace.
+ *
+ * Subject convention: `local.{principal}.system.gateway.routing_decision` —
+ * surfaces subscribe to `system.gateway.>` (or the broader `system.>`).
+ */
+export function createSystemGatewayRoutingDecisionEvent(
+  opts: SystemGatewayRoutingDecisionOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.gateway.routing_decision",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      outcome: opts.outcome,
+      platform: opts.platform,
+      instance_id: opts.instanceId,
+      agent: opts.agent,
+      ...(opts.principal !== undefined && { principal: opts.principal }),
+      ...(opts.stack !== undefined && { stack: opts.stack }),
+      ...(opts.subject !== undefined && { subject: opts.subject }),
+      ...(opts.reason !== undefined && { reason: opts.reason }),
+    },
+  });
+}

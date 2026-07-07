@@ -26,6 +26,7 @@ import type { InboundChatDispatchPublishOpts, DispatchSourcePublishResult } from
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { PolicyEngine } from "../../common/policy/engine";
 import type { SystemEventSource } from "../../bus/system-events";
+import type { Envelope } from "../../bus/myelin/envelope-validator";
 
 // =============================================================================
 // Fixtures
@@ -423,5 +424,102 @@ describe("BusInboundSink", () => {
     // undefined threads through; the publisher's `?? source.principal` yields
     // the gateway principal — the intended gap-4 default.
     expect(calls[0]?.subjectPrincipal).toBeUndefined();
+  });
+
+  // ── cortex#596: system.gateway.routing_decision bus events ──────────────────
+  //
+  // The sink emits a structured routing-decision event on both branches so
+  // signal + Mission Control observe the gateway's demux decision instead of
+  // tailing stdout. Emission is fire-and-forget via `runtime.publish` and
+  // guarded on the optional runtime/source deps.
+
+  /** Runtime stub that captures every published envelope. */
+  function makeCapturingRuntime(): {
+    runtime: MyelinRuntime;
+    published: Envelope[];
+  } {
+    const published: Envelope[] = [];
+    const runtime = {
+      publish: (env: Envelope): Promise<void> => {
+        published.push(env);
+        return Promise.resolve();
+      },
+    } as unknown as MyelinRuntime;
+    return { runtime, published };
+  }
+
+  test("routed publish → emits system.gateway.routing_decision { outcome: routed, stack, subject }", async () => {
+    const { runtime, published } = makeCapturingRuntime();
+    const { sink } = makeSink(
+      [{ published: true, subject: "local.andreas.meta-factory.tasks.@luna.chat" }],
+      { runtime },
+    );
+
+    await sink.publish(makeDecision(), makeMsg());
+
+    const evt = published.find(
+      (e) => e.type === "system.gateway.routing_decision",
+    );
+    expect(evt).toBeDefined();
+    const payload = evt!.payload;
+    expect(payload.outcome).toBe("routed");
+    expect(payload.platform).toBe("discord");
+    expect(payload.agent).toBe("luna");
+    expect(payload.stack).toBe("meta-factory");
+    expect(payload.principal).toBe("andreas");
+    expect(payload.subject).toBe("local.andreas.meta-factory.tasks.@luna.chat");
+    // No refusal reason on the routed branch.
+    expect(payload.reason).toBeUndefined();
+  });
+
+  test("refused publish → emits system.gateway.routing_decision { outcome: unroutable, reason }", async () => {
+    const { runtime, published } = makeCapturingRuntime();
+    // Silence the expected stderr refusal breadcrumb.
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true);
+    const { sink } = makeSink(
+      [
+        {
+          published: false,
+          reason: "invalid-originator",
+          subject: "local.andreas.meta-factory.tasks.@luna.chat",
+        },
+      ],
+      { runtime },
+    );
+
+    try {
+      await sink.publish(makeDecision(), makeMsg());
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const evt = published.find(
+      (e) => e.type === "system.gateway.routing_decision",
+    );
+    expect(evt).toBeDefined();
+    const payload = evt!.payload;
+    expect(payload.outcome).toBe("unroutable");
+    expect(payload.reason).toBe("invalid-originator");
+    expect(payload.agent).toBe("luna");
+    expect(payload.platform).toBe("discord");
+  });
+
+  test("source undefined → routing-decision emit is skipped (optional-dep guard, no throw)", async () => {
+    const { runtime, published } = makeCapturingRuntime();
+    const { sink } = makeSink([{ published: true, subject: "s" }], {
+      runtime,
+      source: undefined,
+    });
+
+    await expect(sink.publish(makeDecision(), makeMsg())).resolves.toBeUndefined();
+    expect(published).toHaveLength(0);
+  });
+
+  test("runtime without publish (stub) → routing-decision emit is skipped, no throw", async () => {
+    // STUB_RUNTIME is `{}` — `typeof runtime.publish !== "function"` must
+    // short-circuit the emit rather than throwing inside the sink.
+    const { sink } = makeSink([{ published: true, subject: "s" }]);
+    await expect(sink.publish(makeDecision(), makeMsg())).resolves.toBeUndefined();
   });
 });

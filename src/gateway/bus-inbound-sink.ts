@@ -36,7 +36,8 @@ import type { GatewayInboundSink, GatewayInboundDecision } from "./surface-gatew
 import type { InboundMessage } from "../adapters/types";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { PolicyEngine } from "../common/policy/engine";
-import type { SystemEventSource } from "../bus/system-events";
+import type { SystemEventSource, SystemGatewayRoutingDecisionOpts } from "../bus/system-events";
+import { createSystemGatewayRoutingDecisionEvent } from "../bus/system-events";
 import {
   publishInboundChatDispatchEnvelope,
   type InboundChatDispatchPublishOpts,
@@ -101,6 +102,13 @@ export interface BusInboundSinkDeps {
  * full context (platform / instanceId / subject / reason) — a publish refusal
  * must surface, not silently drop. The method never throws; callers (the
  * `SurfaceGateway.handleInbound` catch-swallow loop) are free to rely on this.
+ *
+ * cortex#596 — on BOTH branches the sink also emits a structured
+ * `system.gateway.routing_decision` bus event (`outcome: "routed"` on success,
+ * `"unroutable"` on refusal) via {@link source}, so signal + Mission Control
+ * observe the gateway's demux decision instead of tailing stdout. The emit is
+ * fire-and-forget and guarded on the optional runtime/source deps (see
+ * {@link emitRoutingDecision}) — it never throws and never blocks the sink.
  */
 export class BusInboundSink implements GatewayInboundSink {
   private readonly runtime: MyelinRuntime | undefined;
@@ -196,19 +204,86 @@ export class BusInboundSink implements GatewayInboundSink {
 
     const result = await this.publishFn(opts);
 
-    if (!result.published) {
-      // A publish refusal must surface. Log with full context so the principal
-      // can diagnose invalid-originator, missing-runtime, etc. Not an empty
-      // catch — this is the error path.
-      process.stderr.write(
-        `[bus-inbound-sink] publish refused — dropping inbound message. ` +
-          `platform=${msg.platform} instanceId=${msg.instanceId} ` +
-          `agent=${match.agent} ` +
-          `stack=${match.stack ?? "<unresolved>"} ` +
-          `principal=${match.principal ?? "<unresolved>"} ` +
-          (result.subject !== undefined ? `subject=${result.subject} ` : "") +
-          `reason=${result.reason ?? "<unknown>"}\n`,
-      );
+    if (result.published) {
+      // cortex#596 — routed: the inbound matched a binding and its canonical
+      // dispatch envelope reached the bound stack. Emit the structured
+      // routing-decision event (the signal/MC-consumable replacement for the
+      // interim stdout hunt-line the gateway dry-run complained about).
+      this.emitRoutingDecision({
+        outcome: "routed",
+        platform: msg.platform,
+        instanceId: msg.instanceId,
+        agent: match.agent,
+        ...(match.principal !== undefined && { principal: match.principal }),
+        ...(match.stack !== undefined && { stack: match.stack }),
+        ...(result.subject !== undefined && { subject: result.subject }),
+      });
+      return;
     }
+
+    // A publish refusal must surface. Log with full context so the principal
+    // can diagnose invalid-originator, missing-runtime, etc. Not an empty
+    // catch — this is the error path. Kept as a local breadcrumb because a
+    // `missing-runtime` refusal means the bus is unavailable, so the
+    // routing-decision emit below is skipped and stderr is the only signal.
+    process.stderr.write(
+      `[bus-inbound-sink] publish refused — dropping inbound message. ` +
+        `platform=${msg.platform} instanceId=${msg.instanceId} ` +
+        `agent=${match.agent} ` +
+        `stack=${match.stack ?? "<unresolved>"} ` +
+        `principal=${match.principal ?? "<unresolved>"} ` +
+        (result.subject !== undefined ? `subject=${result.subject} ` : "") +
+        `reason=${result.reason ?? "<unknown>"}\n`,
+    );
+
+    // cortex#596 — unroutable: matched a binding but the dispatch was refused.
+    // Emit the structured event too (a no-op when the refusal is
+    // `missing-runtime`, since `this.runtime` is then undefined and the guard
+    // in `emitRoutingDecision` short-circuits — stderr above is the fallback).
+    this.emitRoutingDecision({
+      outcome: "unroutable",
+      platform: msg.platform,
+      instanceId: msg.instanceId,
+      agent: match.agent,
+      ...(match.principal !== undefined && { principal: match.principal }),
+      ...(match.stack !== undefined && { stack: match.stack }),
+      ...(result.subject !== undefined && { subject: result.subject }),
+      ...(result.reason !== undefined && { reason: result.reason }),
+    });
+  }
+
+  /**
+   * cortex#596 — emit a `system.gateway.routing_decision` bus event, the
+   * structured replacement for the gateway's interim stdout routing hunt-line.
+   *
+   * Fire-and-forget and guarded on BOTH optional deps: the gateway may run
+   * before the bus connects (`runtime === undefined`) or without a configured
+   * source identity (`source === undefined`), and `runtime.publish` is treated
+   * defensively (a stub runtime without the method must not throw). In any of
+   * those cases emission is skipped rather than raised — this sink's `publish`
+   * MUST NOT throw. Matches the optional-source guard the dispatch-handler
+   * `system.*` emitters use (`canPublishSystemEvent` → skip when unwired).
+   */
+  private emitRoutingDecision(
+    fields: Omit<SystemGatewayRoutingDecisionOpts, "source">,
+  ): void {
+    const source = this.source;
+    const runtime = this.runtime;
+    if (
+      source === undefined ||
+      runtime === undefined ||
+      typeof runtime.publish !== "function"
+    ) {
+      return;
+    }
+    const env = createSystemGatewayRoutingDecisionEvent({ source, ...fields });
+    // MyelinRuntime.publish signs + swallows its own errors; the extra catch is
+    // defence-in-depth so a runtime contract change can't crash the sink.
+    void runtime.publish(env).catch((err: unknown) => {
+      process.stderr.write(
+        `[bus-inbound-sink] publish(system.gateway.routing_decision) failed — ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    });
   }
 }
