@@ -17,7 +17,7 @@ import { mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-import { resolveOperatorAttestation } from "../network";
+import { resolveOperatorAttestation, seedAdminDescriptorCache } from "../network";
 import { NetworkCache } from "../../../../common/registry/network-cache";
 import type { LoadedConfig } from "../../../../common/config/loader";
 
@@ -85,5 +85,46 @@ describe("cortex#1598 — resolveOperatorAttestation", () => {
   test("an unreadable config is non-fatal (undefined, never throws)", () => {
     const r = resolveOperatorAttestation({}, NET, throwingLoader, freshCache());
     expect(r.hubMode).toBeUndefined();
+  });
+});
+
+describe("cortex#1652 — seedAdminDescriptorCache", () => {
+  test("reports seeded on a verified fetch (ok)", async () => {
+    let seenId = "";
+    const r = await seedAdminDescriptorCache("metafactory", "http://reg", undefined, () => ({
+      fetchAndCache: async (id: string) => {
+        seenId = id;
+        return { status: "ok" };
+      },
+    }));
+    expect(r.seeded).toBe(true);
+    expect(seenId).toBe("metafactory");
+  });
+
+  test("reports NOT seeded (with the status as reason) on a non-ok fetch — never throws", async () => {
+    const r = await seedAdminDescriptorCache("metafactory", "http://reg", undefined, () => ({
+      fetchAndCache: async () => ({ status: "unreachable" }),
+    }));
+    expect(r.seeded).toBe(false);
+    expect(r.reason).toBe("unreachable");
+  });
+
+  test("a throwing client is swallowed (best-effort — never fails the create)", async () => {
+    const r = await seedAdminDescriptorCache("metafactory", "http://reg", undefined, () => ({
+      fetchAndCache: async () => {
+        throw new Error("connection refused");
+      },
+    }));
+    expect(r.seeded).toBe(false);
+    expect(r.reason).toContain("connection refused");
+  });
+
+  test("passes a pinned registry pubkey through to the client when supplied", async () => {
+    let seenCfg: { url: string; pubkey?: string } | undefined;
+    await seedAdminDescriptorCache("metafactory", "http://reg", "PINNEDPUB", (cfg) => {
+      seenCfg = cfg;
+      return { fetchAndCache: async () => ({ status: "ok" }) };
+    });
+    expect(seenCfg).toEqual({ url: "http://reg", pubkey: "PINNEDPUB" });
   });
 });
