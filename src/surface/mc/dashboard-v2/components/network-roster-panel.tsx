@@ -27,6 +27,11 @@ import {
 // Self-fetching + SSR-inert (renders nothing until the read resolves), so the
 // panel stays effectively pure and a non-federated stack is unchanged.
 import { HandoffBannerLive } from "./handoff-banner";
+// FLG-3 (docs/plan-mc-future-state.md §4.D) — the network doctor drill ("why is
+// this red"), an on-demand control per joined network (R1 render home; CK-7
+// rehomes it into the cockpit + wires red-edge drilling). Self-fetching only on
+// click, so the panel stays effectively pure.
+import { DoctorDrill } from "./network-doctor-panel";
 
 export interface NetworkRosterPanelProps {
   networks: readonly NetworkMembershipDTO[];
@@ -96,6 +101,10 @@ export function NetworkRosterPanel({
                   fetching + SSR-inert: renders nothing until the read resolves,
                   and nothing at all on a stack with no local principal. */}
               <HandoffBannerLive networkId={net.network_id} member={localPrincipal} />
+              {/* FLG-3 — the doctor drill for THIS network. On-demand (a live
+                  per-peer probe), collapsed to a button until the principal
+                  asks "why is this red?". */}
+              <DoctorDrill networkId={net.network_id} />
               {net.members.length === 0 ? (
                 <div className="dim network-roster-empty">
                   No admitted members resolved.

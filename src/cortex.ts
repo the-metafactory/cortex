@@ -163,6 +163,20 @@ import type { HandoffView } from "./surface/mc/api/handoff";
 import { gatherHandoffSignals } from "./cli/cortex/commands/network-handoff-lib";
 import { buildLiveHandoffPorts } from "./cli/cortex/commands/network-handoff-adapters";
 import type { LivePortsConfig } from "./cli/cortex/commands/network-adapters";
+// FLG-3 (docs/plan-mc-future-state.md §4.D) — network doctor-on-glass: the MC
+// read seam + the pure orchestrator / live ports the daemon wires it to. The
+// daemon reuses its ALREADY-RUNNING runtime as the peer-reachable probe bus
+// (`wrapRuntimeAsProbeBus`) — same probe transport `cortex network ping` /
+// `doctor` use, without opening a second NATS connection.
+import type { DoctorView } from "./surface/mc/api/doctor";
+import { runDoctorChecks } from "./cli/cortex/commands/network-doctor-lib";
+import {
+  buildDoctorConfigPort,
+  buildMonitorPort,
+} from "./cli/cortex/commands/network-doctor-adapters";
+import type { NetworkDoctorPorts } from "./cli/cortex/commands/network-doctor-ports";
+import { wrapRuntimeAsProbeBus } from "./cli/cortex/commands/network-ping-adapters";
+import type { LoadedConfig } from "./common/config/loader";
 import type {
   AdmissionDecider,
   AdmissionDecisionResult,
@@ -4024,6 +4038,14 @@ export async function startCortex(
   // + live ports). `null` until then ⇒ the handoff route 503s honestly. Read-only
   // — signs/mutates nothing; the leaf-up leg reads the LOCAL `/leafz`.
   let handoffViewForApi: HandoffView | null = null;
+  // FLG-3 (docs/plan-mc-future-state.md §4.D) — the network doctor view for
+  // `GET /api/networks/:net/doctor`. Assigned in the federation block below
+  // alongside `handoffViewForApi` (it reuses the SAME resolved policy + the
+  // daemon's already-running `runtime` as the probe bus). `null` until then ⇒
+  // the doctor route 503s honestly. Read-only — signs/mutates nothing beyond the
+  // ONE bounded probe echo per peer (the SAME transport `cortex network ping`
+  // uses).
+  let doctorViewForApi: DoctorView | null = null;
   // MC-B2 (cortex#1279) — the admission-decision signer for the mutating
   // `POST /api/networks/admission-decision` action. Assigned in the federation
   // block below alongside `networksViewForApi` (it reuses the SAME stack
@@ -4116,6 +4138,10 @@ export async function startCortex(
         // view (lazy; assigned in the federation block). null ⇒
         // `GET /api/networks/:net/handoff/:member` 503s honestly.
         handoffView: () => handoffViewForApi,
+        // FLG-3 (docs/plan-mc-future-state.md §4.D) — the network doctor view
+        // (lazy; assigned in the federation block). null ⇒
+        // `GET /api/networks/:net/doctor` 503s honestly.
+        doctorView: () => doctorViewForApi,
         // #1008 — DB-read pane-of-glass aggregation. The getter returns a context
         // only when discovery produced a resolve-opts (dbRead on); otherwise null
         // ⇒ single-db feeds. Lazy so the roster can be (re)read consistently.
@@ -4654,6 +4680,56 @@ export async function startCortex(
               member,
               selfPrincipal: principalId,
             });
+          },
+        };
+
+        // FLG-3 (docs/plan-mc-future-state.md §4.D) — the network doctor view.
+        // Runs the SAME pure `runDoctorChecks` + config/monitor adapters the
+        // `cortex network doctor` CLI uses, over the daemon's ALREADY-RUNNING
+        // `runtime` as the peer-reachable probe bus (`wrapRuntimeAsProbeBus`) —
+        // NOT a second NATS connection (the standalone CLI must open one; the
+        // daemon already holds one, and `wrapRuntimeAsProbeBus` declares its own
+        // per-probe reply subscription, so reuse is the intended path). The lib
+        // never calls `bus.stop()`, so the daemon runtime is never torn down.
+        // Read-only; never-throw ports degrade a leg to warn/skip rather than
+        // failing the whole read. Reuses the resolved policy + stack identity
+        // already loaded for the networks view above.
+        doctorViewForApi = {
+          localPrincipal: principalId,
+          runDoctor: async (networkId) => {
+            const fedNetworks = resolvedPolicy?.federated?.networks ?? [];
+            if (!fedNetworks.some((n) => n.id === networkId)) return null;
+            // A minimal LoadedConfig for the pure orchestrator: it reads only
+            // `principal.id`, `stack.id`/`stack.nkey_pub`, `inlineAgents[0].id`,
+            // and `policy.federated.networks[]` (via `derivePingInputs` + the
+            // representation-pair legs) — all already resolved at boot.
+            const loadedForDoctor: LoadedConfig = {
+              config,
+              inlineAgents: [...inlineAgents],
+              principal: { id: principalId },
+              ...(options.stack !== undefined && { stack: options.stack }),
+              ...(resolvedPolicy !== undefined && { policy: resolvedPolicy }),
+            };
+            const livePortsCfg: LivePortsConfig = {
+              networkId,
+              principalId,
+              stackId: options.stack?.id ?? principalId,
+            };
+            const ports: NetworkDoctorPorts = {
+              // The composed networks (config-split-aware); `runDoctorChecks`
+              // finds the one by id. Same adapter the CLI factory builds.
+              config: buildDoctorConfigPort({ networks: fedNetworks }),
+              // No daemon-known monitor config path ⇒ monitor-reachable warns
+              // and the leaf legs skip (HONEST degradation) rather than guess a
+              // monitor URL and risk a false "unreachable" fail.
+              monitor: buildMonitorPort(livePortsCfg),
+              probe: {
+                bus: wrapRuntimeAsProbeBus(runtime),
+                newNonce: () => crypto.randomUUID(),
+                newCorrelationId: () => crypto.randomUUID(),
+              },
+            };
+            return runDoctorChecks(ports, { cfg: loadedForDoctor, networkId });
           },
         };
 

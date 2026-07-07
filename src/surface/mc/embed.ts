@@ -27,6 +27,8 @@ import type { NetworksView } from "./api/networks";
 import type { AdmissionDecider } from "./api/networks-admission";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff view passthrough.
 import type { HandoffView } from "./api/handoff";
+// FLG-3 (docs/plan-mc-future-state.md §4.D) — network doctor view passthrough.
+import type { DoctorView } from "./api/doctor";
 import type { LocalAggregationProvider } from "./local-aggregation/sibling-db-reader";
 
 export interface MissionControlHandle {
@@ -116,6 +118,14 @@ export interface StartMissionControlOptions {
    */
   handoffView?: () => HandoffView | null;
   /**
+   * FLG-3 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the network
+   * doctor view, forwarded verbatim to `startServer` so
+   * `GET /api/networks/:net/doctor` surfaces the 8-leg status/fix/owner matrix.
+   * A GETTER (like `handoffView`) because the registry client + stack identity +
+   * runtime boot AFTER the embed. Omitted → the route 503s honestly.
+   */
+  doctorView?: () => DoctorView | null;
+  /**
    * P-14 U0.1 — Tier-3 sideband base URL (`config.mc.sideband`). Loopback-
    * enforced at config-parse time; forwarded verbatim to `startServer`, which
    * wires it onto `ApiDeps.sidebandUrl` so the `/api/observability/*` proxy can
@@ -201,6 +211,7 @@ export async function startMissionControl(
       ...(opts.networks ? { networks: opts.networks } : {}),
       ...(opts.admissionDecider ? { admissionDecider: opts.admissionDecider } : {}),
       ...(opts.handoffView ? { handoffView: opts.handoffView } : {}),
+      ...(opts.doctorView ? { doctorView: opts.doctorView } : {}),
       ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
     });

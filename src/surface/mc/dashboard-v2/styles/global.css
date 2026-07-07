@@ -1032,6 +1032,54 @@ html, body {
 }
 .handoff-banner-confirm-caption { font-size: 10px; }
 
+/* FLG-3 (docs/plan-mc-future-state.md §4.D) — the network doctor drill: the
+   "why is this link red" affordance per joined network. Collapsed to a button
+   until the principal drills; the report renders the 8-leg status/fix/owner
+   matrix + aggregate verdict. A strip on the roster panel (R1 render home; CK-7
+   rehomes it into the cockpit). */
+.doctor-drill { margin: 0 0 8px; }
+.doctor-drill-run {
+  font: inherit; font-size: 11px; cursor: pointer;
+  padding: 2px 10px; border-radius: 999px;
+  color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+}
+.doctor-drill-run:hover:not(:disabled) { border-color: var(--accent); }
+.doctor-drill-run:disabled { cursor: default; opacity: 0.7; }
+.doctor-drill-error { font-size: 11px; margin-top: 4px; }
+.doctor-report {
+  margin: 6px 0 4px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.doctor-report-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+}
+.doctor-report-title { font-weight: 600; }
+.doctor-report-network { font-size: 11px; font-family: var(--mono); }
+.doctor-report-verdict {
+  font-size: 10px; margin-left: auto; text-transform: uppercase;
+  letter-spacing: 0.04em; font-weight: 600;
+}
+.doctor-legs {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.doctor-leg {
+  display: flex; flex-direction: column; gap: 1px;
+  padding-left: 8px; border-left: 2px solid currentColor;
+}
+.doctor-leg-status { font-size: 12px; }
+.doctor-leg-glyph { font-size: 11px; }
+.doctor-leg-id { font-family: var(--mono); font-size: 11px; }
+.doctor-leg-detail { font-size: 11px; }
+.doctor-leg-fix { font-size: 11px; }
+.doctor-leg-fix-owner { font-style: italic; }
+
 /* MC-B1 (cortex#1278) — Pier queue (operator inbox of pending admission
    requests). Additive section in the Network view, below the roster panel. */
 .pier-queue-panel {

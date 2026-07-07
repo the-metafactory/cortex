@@ -43,6 +43,8 @@ import { handleListAgents, type AgentPresenceView } from "./api/agents";
 import { handleListNetworks, type NetworksView } from "./api/networks";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner read seam.
 import { handleGetHandoff, type HandoffView } from "./api/handoff";
+// FLG-3 (docs/plan-mc-future-state.md §4.D) — network doctor-on-glass read seam.
+import { handleGetDoctor, type DoctorView } from "./api/doctor";
 import {
   handleAdmissionDecision,
   CF_ACCESS_EMAIL_HEADER,
@@ -231,6 +233,16 @@ export interface StartServerOptions {
    */
   handoffView?: () => HandoffView | null;
   /**
+   * FLG-3 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the network
+   * doctor view (serves `GET /api/networks/:net/doctor`: the 8-leg
+   * status/fix/owner matrix via the pure `runDoctorChecks`). A GETTER like
+   * `handoffView` because the registry client + stack identity + runtime boot
+   * AFTER the embed in `cortex.ts`; resolved per request. Read-only (no signing —
+   * one bounded probe echo per peer, the SAME transport `cortex network ping`
+   * uses); `null` ⇒ no federation/registry → the route 503s honestly.
+   */
+  doctorView?: () => DoctorView | null;
+  /**
    * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
    * `/api/observability/*` routes proxy to it server-side. Loopback-enforced
    * at config-parse time; the proxy re-checks at the request boundary.
@@ -356,6 +368,9 @@ export function startServer(
         // FLG-1 — resolve the handoff view lazily (same boot-order reason as
         // `networks`). null ⇒ the handoff route 503s honestly.
         const handoffView = options.handoffView?.() ?? null;
+        // FLG-3 — resolve the doctor view lazily (same boot-order reason).
+        // null ⇒ the doctor route 503s honestly.
+        const doctorView = options.doctorView?.() ?? null;
         // FND-6 — finalize the guard context with the ACTUAL bound port.
         const guard: MutationGuardContext = {
           ...guardBase,
@@ -372,6 +387,7 @@ export function startServer(
           admissionDecider,
           guard,
           handoffView,
+          doctorView,
         );
       }
 
@@ -532,6 +548,7 @@ async function handleApi(
   admissionDecider: AdmissionDecider | null = null,
   guard: MutationGuardContext,
   handoffView: HandoffView | null = null,
+  doctorView: DoctorView | null = null,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -808,6 +825,27 @@ async function handleApi(
     // (absent, "false", garbage) is treated as no attestation.
     const confirmed = url.searchParams.get("confirmed") === "true";
     return handleGetHandoff(handoffView, { networkId, member, confirmed });
+  }
+
+  // FLG-3 (docs/plan-mc-future-state.md §4.D) — GET /api/networks/:net/doctor —
+  // the "why is this link red" drill. Wraps the PURE `runDoctorChecks` (#1484/
+  // #1482) via the injected DoctorView. Read-only (GET), so it is NOT identity-
+  // gated — the FND-6 guard above only wraps MUTATING_METHODS; this read carries
+  // a metadata-only DTO (no interiors/secrets — invariant 1). The `/doctor`
+  // suffix disambiguates from the exact-match `/api/networks` +
+  // `/api/networks/admission-decision` routes and the `/handoff/` route above,
+  // so registration order is immaterial.
+  const networkDoctorMatch = /^\/api\/networks\/([^/]+)\/doctor$/.exec(pathname);
+  if (networkDoctorMatch) {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    const netCaptured = networkDoctorMatch[1];
+    if (!netCaptured) {
+      return new Response("Not Found", { status: 404 });
+    }
+    const networkId = decodeURIComponent(netCaptured);
+    return handleGetDoctor(doctorView, { networkId });
   }
 
   // MC-B2 (cortex#1279) — POST /api/networks/admission-decision — the mutating
