@@ -57,7 +57,7 @@ if [ ! -f "${CLAUDE_DIR}/relay/relay-policy.yaml" ]; then
     echo "  ✓ Default relay policy created (~/.claude/relay/relay-policy.yaml — controls which session events the relay forwards)"
   fi
 else
-  echo "  ⊘ Relay policy exists (not overwriting)"
+  echo "  ⊘ Relay policy exists (~/.claude/relay/relay-policy.yaml — not overwriting)"
 fi
 
 # ─── 4. Launchd plist rendering (macOS only) ─────────────────────
@@ -75,6 +75,16 @@ fi
 
 echo ""
 echo "✓ Cortex postinstall complete"
+echo ""
+echo "  What was installed into ~/.claude:"
+echo "    • hooks/CortexSkillGuard.hook.ts — installed but NOT registered globally by"
+echo "      design; used per-session by bot sessions carrying skill grants (cortex#710)"
+echo "    • statusline-command.sh, cortex-status.sh — status line renderer + data source;"
+echo "      wiring is optional/manual — add to ~/.claude/settings.json:"
+echo "      \"statusLine\": {\"type\": \"command\", \"command\": \"~/.claude/statusline-command.sh\"}"
+echo "    • relay/cortex/, relay/relay-policy.yaml — relay tap source + forwarding policy"
+echo "    • Events buffer locally to ~/.claude/events; run the relay to forward them"
+echo "      (optional)"
 echo ""
 echo "  Next steps:"
 echo "    1. (Only if migrating from grove — fresh installs skip this step)"
@@ -96,7 +106,8 @@ if [ "$(uname)" = "Darwin" ]; then
 else
   echo "    4. Linux: service management is manual for now — see docs/"
 fi
-echo "    5. (Optional) Install grove-bot deprecation shim — see"
+echo "    5. (Only if migrating from grove — fresh installs skip this step)"
+echo "       Install grove-bot deprecation shim — see"
 echo "       ${CORTEX_DIR}/scripts/grove-bot-shim.sh"
 echo ""
 echo "  Note: Claude Code hooks are auto-registered into ~/.claude/settings.json"
