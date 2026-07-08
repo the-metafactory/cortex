@@ -73,6 +73,14 @@ export interface LiveAdmitPortsConfig {
    *  add-member`). Only meaningful for `admit` (`reject` never seals).
    *  Production omits it → the live secret-ports adapters. */
   secretPortsFactory?: SecretPortsFactory;
+  /**
+   * cortex#1652 — OPTIONAL network scope for the admin-signed READS
+   * (`getRequest`/`listRequests`). REQUIRED for a per-network admin (#1321):
+   * the registry's FND-5 read gate 403s an unscoped read claim from a
+   * non-global admin. A global admin may omit it (unscoped) or supply it
+   * (registry narrows the read). Wired from `--network`.
+   */
+  networkId?: string;
   /** Injectable fetch (tests). Production omits → globalThis.fetch. */
   fetchImpl?: typeof globalThis.fetch;
 }
@@ -99,7 +107,7 @@ function buildLiveAdmitRegistryPort(cfg: LiveAdmitPortsConfig): AdmitRegistryPor
 
   return {
     async getRequest(requestId): Promise<GetRequestResult> {
-      const readHeader = await buildAdmissionReadHeader(material);
+      const readHeader = await buildAdmissionReadHeader(material, cfg.networkId);
       const getUrl = `${base}/admission-requests/${encodeURIComponent(requestId)}`;
       const resp = await fetchImpl(getUrl, {
         method: "GET",
@@ -115,7 +123,7 @@ function buildLiveAdmitRegistryPort(cfg: LiveAdmitPortsConfig): AdmitRegistryPor
     },
 
     async listRequests(status): Promise<ListRequestsResult> {
-      const readHeader = await buildAdmissionReadHeader(material);
+      const readHeader = await buildAdmissionReadHeader(material, cfg.networkId);
       const getUrl = `${base}/admission-requests?status=${encodeURIComponent(status)}`;
       const resp = await fetchImpl(getUrl, {
         method: "GET",
