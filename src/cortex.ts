@@ -47,8 +47,11 @@ import { AgentRegistry } from "./common/agents/registry";
 import { TrustResolver } from "./common/agents/trust-resolver";
 import {
   scaffoldInstance,
+  replayPending,
   type ScaffoldOptions,
   type ScaffoldResult,
+  type ReplayOptions,
+  type ReplayResult,
 } from "./common/agents/agent-state-scaffold";
 // cortex#79 — creds minting moved to `arc nats … --json` (shelled out from
 // `src/cli/cortex/commands/creds.ts`). No daemon-side RPC handler in
@@ -610,6 +613,18 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   scaffoldAgentState?: (agent: Agent, opts?: ScaffoldOptions) => ScaffoldResult;
+  /**
+   * cortex#1720 S2 — override the AgentState ReplayPending invoked after a
+   * stateful fragment's scaffold succeeds on activation (the `onStart` hook).
+   * Production omits this and the real `replayPending` (subprocess to the
+   * bundle's `errands.ts pending`, soft-skip when the bundle isn't installed)
+   * runs. Tests inject a recorder so the "stateful triggers replay / stateless
+   * doesn't / missing-script soft-skips / throwing replay never crashes boot"
+   * assertions run WITHOUT touching `~/.config` or spawning `bun`.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  replayPendingAgentState?: (agent: Agent, opts?: ReplayOptions) => ReplayResult;
   /**
    * IAW Phase A.5 (refs cortex#113) — optional `stack:` block from
    * `CortexConfig`, threaded through from the loader so the boot path can
@@ -1305,6 +1320,47 @@ export async function startCortex(
   // the opt-in / idempotency / regression behaviour without touching the
   // principal's real `~/.config` or spawning `bun`.
   const doScaffold = options.scaffoldAgentState ?? scaffoldInstance;
+  const doReplayPending = options.replayPendingAgentState ?? replayPending;
+
+  // cortex#1720 S2 — ReplayPending (the `onStart` hook).
+  //
+  // After a stateful fragment's scaffold succeeds, re-surface the work that was
+  // still pending when the daemon last stopped by listing its pending
+  // work_items via the bundle's `errands.ts pending`. S2 scope is deliberately
+  // MINIMAL: we LOG the count and emit a structured log line — we do NOT wire
+  // the pending items back into BrainConsumer dispatch (that re-emission is S3).
+  //
+  // Same three guarantees as the scaffold above:
+  //   (a) OPT-IN — only reached for a stateful agent (guarded at the call site
+  //       inside scaffoldStatefulAgent, after a successful scaffold).
+  //   (b) SOFT-SKIP — a missing bundle errands.ts yields one log line, no crash.
+  //   (c) NON-FATAL — a thrown replay is caught and swallowed; activation
+  //       continues and the daemon never crashes on a replay fault.
+  const replayStatefulAgent = (agent: Agent): void => {
+    try {
+      const replay = doReplayPending(agent);
+      if (!replay.ran) {
+        console.log(
+          `cortex: agent-state — replay-pending SKIPPED for "${agent.id}" ` +
+            `(reason=${replay.skipReason ?? "unknown"}; dir=${replay.instanceDir})`,
+        );
+        return;
+      }
+      // Structured log event: count of pending work_items re-surfaced. S3 will
+      // consume these rows into dispatch; S2 just makes them visible.
+      console.log(
+        `cortex: agent-state — replay-pending for "${agent.id}" re-surfaced ` +
+          `${replay.pendingCount} pending item(s) (dir=${replay.instanceDir})`,
+      );
+    } catch (err) {
+      // (c) Non-fatal — a replay fault must never block activation.
+      process.stderr.write(
+        `cortex: agent-state — replay-pending FAILED for "${agent.id}" (non-fatal; agent still activates): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  };
+
   const scaffoldStatefulAgent = (agent: Agent): void => {
     // (a) Opt-in guard — a stateless fragment returns before any work.
     if (!agent.state) return;
@@ -1323,7 +1379,12 @@ export async function startCortex(
         `cortex: agent-state — scaffold FAILED for "${agent.id}" (non-fatal; agent still activates): ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
+      // Scaffold failed → do NOT replay (the instance dir / state.sqlite may not
+      // exist). The next activation retries both from a clean footing.
+      return;
     }
+    // cortex#1720 S2 — onStart replay, only after a clean scaffold.
+    replayStatefulAgent(agent);
   };
   for (const agent of mergedAgents) {
     scaffoldStatefulAgent(agent);

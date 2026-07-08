@@ -23,8 +23,10 @@ import { tmpdir } from "os";
 
 import {
   isFullyScaffolded,
+  replayPending,
   resolveInstanceDir,
   scaffoldInstance,
+  type ReplaySpawn,
   type ScaffoldSpawn,
 } from "../agent-state-scaffold";
 
@@ -178,5 +180,113 @@ describe("resolveInstanceDir", () => {
     expect(resolveInstanceDir("echo", "grove")).toBe(
       join(home, ".config", "grove", "agents", "echo"),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1720 S2 — replayPending (the onStart hook, pending-rows CLI path)
+// ---------------------------------------------------------------------------
+
+describe("replayPending — bundle-present path", () => {
+  test("spawns `bun errands.ts pending` with the standard env + counts NDJSON rows", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub errands\n");
+
+    const calls: { cmd: string; args: string[]; env?: NodeJS.ProcessEnv }[] = [];
+    const spawn: ReplaySpawn = (cmd, args, opts) => {
+      calls.push({ cmd, args, env: opts.env });
+      // Two pending work_items, one JSON object per line (NDJSON).
+      return {
+        status: 0,
+        stdout:
+          JSON.stringify({ id: "wi-1", status: "pending" }) +
+          "\n" +
+          JSON.stringify({ id: "wi-2", status: "pending" }) +
+          "\n",
+      };
+    };
+
+    const result = replayPending(AGENT, {
+      instanceDir,
+      errandsScript,
+      spawn,
+      host: "cortex",
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.pendingCount).toBe(2);
+    expect(result.instanceDir).toBe(instanceDir);
+
+    // Exactly one spawn: `bun <errandsScript> pending`.
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.cmd).toBe("bun");
+    expect(call.args[0]).toBe(errandsScript);
+    expect(call.args).toContain("pending");
+
+    // Standard subprocess env contract, same as scaffold.
+    expect(call.env?.MF_AGENT_NAME).toBe("luna");
+    expect(call.env?.MF_HOST).toBe("cortex");
+    expect(call.env?.MF_INSTANCE_DIR).toBe(instanceDir);
+  });
+
+  test("zero pending rows → ran with pendingCount 0 (empty + blank-line safe)", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    // Empty output, and a spurious trailing blank line, both count as zero.
+    const spawn: ReplaySpawn = () => ({ status: 0, stdout: "\n" });
+
+    const result = replayPending(AGENT, { instanceDir, errandsScript, spawn });
+
+    expect(result.ran).toBe(true);
+    expect(result.pendingCount).toBe(0);
+  });
+
+  test("non-zero exit → soft-skip with reason nonzero-exit (no throw)", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    const spawn: ReplaySpawn = () => ({ status: 1, stderr: "boom" });
+
+    const result = replayPending(AGENT, { instanceDir, errandsScript, spawn });
+
+    expect(result.ran).toBe(false);
+    expect(result.skipReason).toBe("nonzero-exit");
+    expect(result.pendingCount).toBe(0);
+  });
+
+  test("spawn error → soft-skip with reason spawn-error (no throw)", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    const spawn: ReplaySpawn = () => ({
+      status: null,
+      error: new Error("ENOENT: bun not found"),
+    });
+
+    const result = replayPending(AGENT, { instanceDir, errandsScript, spawn });
+
+    expect(result.ran).toBe(false);
+    expect(result.skipReason).toBe("spawn-error");
+  });
+});
+
+describe("replayPending — bundle-absent path", () => {
+  test("missing errands.ts → soft-skip with reason script-absent, no spawn", () => {
+    const missingScript = join(root, "does-not-exist", "errands.ts");
+    let spawned = false;
+    const spawn: ReplaySpawn = () => {
+      spawned = true;
+      return { status: 0 };
+    };
+
+    const result = replayPending(AGENT, {
+      instanceDir,
+      errandsScript: missingScript,
+      spawn,
+    });
+
+    expect(spawned).toBe(false);
+    expect(result.ran).toBe(false);
+    expect(result.skipReason).toBe("script-absent");
+    expect(result.pendingCount).toBe(0);
   });
 });

@@ -746,6 +746,7 @@ describe("startCortex — AgentState scaffold-on-activation (cortex#1720 S1)", (
   async function bootWithScaffold(
     runtime: RecordingRuntime,
     scaffold: NonNullable<Parameters<typeof startCortex>[1]>["scaffoldAgentState"],
+    replay?: NonNullable<Parameters<typeof startCortex>[1]>["replayPendingAgentState"],
   ): Promise<CortexHandle> {
     const handle = await startCortex(minimalConfig(), {
       disableConfigWatcher: true,
@@ -757,6 +758,7 @@ describe("startCortex — AgentState scaffold-on-activation (cortex#1720 S1)", (
       injectRuntime: runtime,
       principal: { id: "test-op" },
       scaffoldAgentState: scaffold,
+      ...(replay !== undefined && { replayPendingAgentState: replay }),
     });
     handles.push(handle);
     return handle;
@@ -826,6 +828,182 @@ describe("startCortex — AgentState scaffold-on-activation (cortex#1720 S1)", (
     const handle = await bootWithScaffold(runtime, throwingScaffold);
 
     // The agent activated despite the scaffold failure.
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["luna"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1720 S2 — ReplayPending on stateful agent activation (onStart hook)
+// ---------------------------------------------------------------------------
+
+describe("startCortex — AgentState ReplayPending on activation (cortex#1720 S2)", () => {
+  // A scaffold recorder that always succeeds (so replay is reached). We assert
+  // replay behaviour independently of scaffold outcome.
+  function okScaffold(): {
+    calls: string[];
+    fn: NonNullable<Parameters<typeof startCortex>[1]>["scaffoldAgentState"];
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      fn: (agent) => {
+        calls.push(agent.id);
+        return {
+          strategy: "fallback-manual",
+          instanceDir: `/tmp/fake/agents/${agent.id}`,
+          created: [],
+          skipped: [],
+        };
+      },
+    };
+  }
+
+  // Records every replay invocation, WITHOUT spawning bun. Returns a ran result
+  // with a fixed pending count so the count-logging path is exercised.
+  function recordingReplay(pendingCount = 2): {
+    calls: string[];
+    fn: NonNullable<Parameters<typeof startCortex>[1]>["replayPendingAgentState"];
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      fn: (agent) => {
+        calls.push(agent.id);
+        return {
+          ran: true,
+          pendingCount,
+          instanceDir: `/tmp/fake/agents/${agent.id}`,
+        };
+      },
+    };
+  }
+
+  async function bootWith(
+    runtime: RecordingRuntime,
+    scaffold: NonNullable<Parameters<typeof startCortex>[1]>["scaffoldAgentState"],
+    replay: NonNullable<Parameters<typeof startCortex>[1]>["replayPendingAgentState"],
+  ): Promise<CortexHandle> {
+    const handle = await startCortex(minimalConfig(), {
+      disableConfigWatcher: true,
+      disableDashboard: true,
+      disableOutboundPoller: true,
+      disableAgentsWatcher: true,
+      agentsDir: tmpAgentsDir,
+      configPath: join(tmpAgentsDir, "cortex.yaml"),
+      injectRuntime: runtime,
+      principal: { id: "test-op" },
+      scaffoldAgentState: scaffold,
+      replayPendingAgentState: replay,
+    });
+    handles.push(handle);
+    return handle;
+  }
+
+  test("a stateful fragment triggers ReplayPending at boot with its id", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = okScaffold();
+    const replay = recordingReplay();
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+
+    await bootWith(runtime, scaffold.fn, replay.fn);
+
+    // Scaffold then replay, both for luna.
+    expect(scaffold.calls).toEqual(["luna"]);
+    expect(replay.calls).toEqual(["luna"]);
+  });
+
+  test("REGRESSION — a stateless fragment triggers NO replay", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = okScaffold();
+    const replay = recordingReplay();
+    writeStateFragment("echo"); // no state: block
+
+    const handle = await bootWith(runtime, scaffold.fn, replay.fn);
+
+    // Activated normally, but neither scaffold nor replay fired.
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["echo"]);
+    expect(scaffold.calls).toEqual([]);
+    expect(replay.calls).toEqual([]);
+  });
+
+  test("mixed roster — only the stateful fragment triggers replay", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = okScaffold();
+    const replay = recordingReplay();
+    writeStateFragment("echo"); // stateless
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.2.0" } });
+
+    await bootWith(runtime, scaffold.fn, replay.fn);
+
+    expect(replay.calls).toEqual(["luna"]);
+  });
+
+  test("hot-ADDED stateful fragment triggers replay on reload; stateless add does not", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = okScaffold();
+    const replay = recordingReplay();
+    writeStateFragment("echo"); // stateless at boot
+    const handle = await bootWith(runtime, scaffold.fn, replay.fn);
+    expect(replay.calls).toEqual([]);
+
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+    writeStateFragment("holly"); // stateless add
+    await handle.reloadAgents("cli");
+
+    expect(replay.calls).toEqual(["luna"]);
+  });
+
+  test("SOFT-SKIP — a replay reporting script-absent does not crash boot; agent still activates", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = okScaffold();
+    // Replay soft-skips (bundle not installed): ran=false, script-absent.
+    const skipReplay: NonNullable<
+      Parameters<typeof startCortex>[1]
+    >["replayPendingAgentState"] = (agent) => ({
+      ran: false,
+      pendingCount: 0,
+      instanceDir: `/tmp/fake/agents/${agent.id}`,
+      skipReason: "script-absent",
+    });
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+
+    const handle = await bootWith(runtime, scaffold.fn, skipReplay);
+
+    // Boot completed; luna activated despite the replay soft-skip.
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["luna"]);
+  });
+
+  test("NON-FATAL — a throwing replay does not crash boot; the agent still activates", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = okScaffold();
+    const throwingReplay: NonNullable<
+      Parameters<typeof startCortex>[1]
+    >["replayPendingAgentState"] = () => {
+      throw new Error("errands.ts exploded");
+    };
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+
+    // Must NOT reject — the replay fault is swallowed.
+    const handle = await bootWith(runtime, scaffold.fn, throwingReplay);
+
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["luna"]);
+  });
+
+  test("scaffold FAILURE skips replay — a throwing scaffold means no replay attempt", async () => {
+    const runtime = createRecordingRuntime();
+    const throwingScaffold: NonNullable<
+      Parameters<typeof startCortex>[1]
+    >["scaffoldAgentState"] = () => {
+      throw new Error("scaffold exploded");
+    };
+    const replay = recordingReplay();
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+
+    const handle = await bootWith(runtime, throwingScaffold, replay.fn);
+
+    // Scaffold threw → replay is NOT attempted (instance dir may not exist).
+    expect(replay.calls).toEqual([]);
+    // But the agent still activates (scaffold+replay both non-fatal).
     expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["luna"]);
   });
 });
