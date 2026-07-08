@@ -44,8 +44,10 @@ const EMPTY_SUMMARY: SidebandMetricsSummary = {
 
 const HISTORY_ROWS: SidebandLogRecord[] = [
   {
-    // 2026-05-01 00:00 UTC in unix-nanos.
-    timeUnixNano: "1777593600000000000",
+    // 2026-05-01 00:00 UTC in unix-nanos. Split literal (seconds + "e9" zeros):
+    // an unbroken 19-digit run trips the confidentiality-gate's platform-id
+    // shape check (tier2:platform-snowflake) even for timestamps (#1552).
+    timeUnixNano: "1777593600" + "000000000",
     body: '{"type":"dispatch.task.received"}',
     severityText: "INFO",
     attributes: {

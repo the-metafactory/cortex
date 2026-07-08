@@ -2129,9 +2129,9 @@ function discordPresenceForRunner() {
   return {
     enabled: true,
     token: "discord-bot-token",
-    guildId: "1487000000000000000",
-    agentChannelId: "1487000000000000001",
-    logChannelId: "1487000000000000002",
+    guildId: "111111111111111111",
+    agentChannelId: "222222222222222222",
+    logChannelId: "333333333333333333",
     contextDepth: 10,
     enableAgentLog: false,
     roles: [],
@@ -2611,7 +2611,7 @@ describe("dispatch-listener — Shape B re-sign on ingest (TC-1c #552)", () => {
           home_stack: "andreas/meta-factory",
           role: ["operator"],
           trust: [],
-          platform_ids: { discord: ["1134325176796987522"] },
+          platform_ids: { discord: ["777777777777777777"] },
         },
       ],
       roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
@@ -3162,7 +3162,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
           // platform_ids stays on the principal — still used by the
           // engine's `lookupPrincipalIdByPlatformId` surface (consumed
           // at publish time by the dispatch-source).
-          platform_ids: { discord: ["1134325176796987522"] },
+          platform_ids: { discord: ["777777777777777777"] },
         },
       ],
       roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
@@ -3220,7 +3220,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
-          platform_ids: { discord: ["1134325176796987522"] },
+          platform_ids: { discord: ["777777777777777777"] },
         },
       ],
       roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
@@ -3248,7 +3248,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
       // This shape is no longer produced by `adapterOriginatorIdentity`
       // post-#486. If it lands here, treat it as opaque and let the
       // engine deny — no implicit back-resolution.
-      identity: "did:mf:discord-1134325176796987522",
+      identity: "did:mf:discord-777777777777777777",
       attribution: "adapter-resolved",
     };
 
@@ -3257,7 +3257,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
 
     expect(captured).toHaveLength(1);
     // Listener strips `did:mf:` and forwards the raw tail verbatim.
-    expect(captured[0]!.principalId).toBe("discord-1134325176796987522");
+    expect(captured[0]!.principalId).toBe("discord-777777777777777777");
     const types = r.published.map((e) => e.type);
     expect(types).toContain("system.access.denied");
     expect(types).toContain("dispatch.task.failed");

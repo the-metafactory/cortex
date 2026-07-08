@@ -12,7 +12,7 @@ const SURFACES: Surfaces = {
       stack: "andreas/meta-factory",
       binding: {
         token: "discord-token",
-        guildId: "111222333444555666",
+        guildId: "111111111111111111",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
       },
@@ -22,7 +22,7 @@ const SURFACES: Surfaces = {
       stack: "robin/research",
       binding: {
         token: "discord-token-2",
-        guildId: "222333444555666777",
+        guildId: "222222222222222222",
         agentChannelId: "ccc000000000000003",
         logChannelId: "ddd000000000000004",
       },
@@ -112,8 +112,8 @@ describe("planSurfaceOwnership", () => {
       "slack:echo",
     ]);
     expect(plan.gatewayAdapterInstanceIds).toEqual([
-      "discord:111222333444555666",
-      "discord:222333444555666777",
+      "discord:111111111111111111",
+      "discord:222222222222222222",
       "slack:T01234567",
       "mattermost:https://mm.example.com",
     ]);
@@ -135,9 +135,9 @@ describe("planSurfaceOwnership", () => {
             stack: "jc/default",
             binding: {
               token: "discord-token",
-              guildId: "1487023327791808592",
-              agentChannelId: "1487023328324616266",
-              logChannelId: "1487023328324616266",
+              guildId: "333333333333333333",
+              agentChannelId: "444444444444444444",
+              logChannelId: "444444444444444444",
             },
           },
           {
@@ -145,9 +145,9 @@ describe("planSurfaceOwnership", () => {
             stack: "jc/default",
             binding: {
               token: "discord-token",
-              guildId: "555666777888999000",
-              agentChannelId: "1513296336739635322",
-              logChannelId: "1513296336739635322",
+              guildId: "555555555555555555",
+              agentChannelId: "666666666666666666",
+              logChannelId: "666666666666666666",
             },
           },
         ],
@@ -171,9 +171,9 @@ describe("planSurfaceOwnership", () => {
             stack: "jc/default",
             binding: {
               token: "discord-token",
-              guildId: "1487023327791808592",
-              agentChannelId: "1487023328324616266",
-              logChannelId: "1487023328324616266",
+              guildId: "333333333333333333",
+              agentChannelId: "444444444444444444",
+              logChannelId: "444444444444444444",
             },
           },
           {
@@ -181,9 +181,9 @@ describe("planSurfaceOwnership", () => {
             stack: "jc/research",
             binding: {
               token: "discord-token",
-              guildId: "555666777888999000",
-              agentChannelId: "1513296336739635322",
-              logChannelId: "1513296336739635322",
+              guildId: "555555555555555555",
+              agentChannelId: "666666666666666666",
+              logChannelId: "666666666666666666",
             },
           },
         ],
@@ -193,8 +193,8 @@ describe("planSurfaceOwnership", () => {
     });
 
     expect(plan.gatewayAdapterInstanceIds).toEqual([
-      "discord:1487023327791808592",
-      "discord:555666777888999000",
+      "discord:333333333333333333",
+      "discord:555555555555555555",
     ]);
     expect(plan.outboundPrincipalStacks).toEqual([
       { principal: "jc", stack: "default" },
@@ -207,22 +207,22 @@ describe("gatewayAdapterInstanceCollisions", () => {
   test("reports Gateway adapter ids that collide with per-stack adapter ids", () => {
     const collisions = gatewayAdapterInstanceCollisions(
       [
-        { instanceId: "discord:111222333444555666" },
+        { instanceId: "discord:111111111111111111" },
         { instanceId: "slack-stack" },
       ],
       [
-        { instanceId: "discord:111222333444555666" },
+        { instanceId: "discord:111111111111111111" },
         { instanceId: "slack:T01234567" },
       ],
     );
 
-    expect(collisions).toEqual(["discord:111222333444555666"]);
+    expect(collisions).toEqual(["discord:111111111111111111"]);
   });
 
   test("returns an empty list when instance id sets are disjoint", () => {
     const collisions = gatewayAdapterInstanceCollisions(
       [{ instanceId: "discord-stack" }],
-      [{ instanceId: "discord:111222333444555666" }],
+      [{ instanceId: "discord:111111111111111111" }],
     );
 
     expect(collisions).toEqual([]);

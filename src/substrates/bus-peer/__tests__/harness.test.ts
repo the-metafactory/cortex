@@ -41,9 +41,9 @@ function discordPresence() {
   return {
     enabled: true,
     token: "discord-bot-token",
-    guildId: "1487000000000000000",
-    agentChannelId: "1487000000000000001",
-    logChannelId: "1487000000000000002",
+    guildId: "111111111111111111",
+    agentChannelId: "222222222222222222",
+    logChannelId: "333333333333333333",
     contextDepth: 10,
     enableAgentLog: false,
     roles: [],
