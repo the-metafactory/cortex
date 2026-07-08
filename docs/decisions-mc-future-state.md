@@ -217,3 +217,16 @@
 ---
 
 *Note (plan §7): Prior-plan Q3 (meta-sandboxing as default enterprise backend vs opt-in profile) is assigned to the SPX-11 design doc scope — not a pre-R0 fork, and so is not listed as a D-N row above.*
+
+---
+
+## RATIFIED — 2026-07-08 (principal: Andreas)
+
+These supersede the `[NEEDS PRINCIPAL RATIFICATION]` tags above; verb-builders build against these.
+
+- **D-2 (step-up MFA mechanism) → LOCAL TOTP at the daemon decider seam.** Enroll a TOTP secret at the daemon; challenge on high-blast verbs (seal/rotate-K/revoke/escalation-approve). Loopback-viable, no OS/hardware dependency. Absent enrollment ⇒ high-blast verbs 403 + honest "enroll or use the CLI" (never silent downgrade). OS-presence/WebAuthn may be ADDITIONAL hardening later, never the base mechanism. Unblocks **FND-3**.
+- **Hub-resolver question (§3.5) → NATS-BASED / PUSH-CAPABLE (migration live 2026-07-08).** The production metafactory hub runs a push-capable nats resolver. Therefore **FLG-9 revoke uses the runtime `nsc revocations add-user` + `nsc push` path** (cuts the live session, per-member, no restart) — the honest-partial "hub-cut pending" degrade is NOT needed. **#1626 prerequisite is satisfied.**
+- **D-11 (hub-admin provisioning) → ADOPT:** documented runbook (`docs/runbook-hub-admin-provisioning.md`) + manual key add to `REGISTRY_HUB_ADMIN_PUBKEYS`; self-service enrollment out of scope. Execution (adding the operating principal's key) remains a [principal-hands] step before FLG-2 can demo.
+- **D-16 (session-attribution shape) → ADOPT:** a `sessions` column with a controlled vocabulary seeded from repos/domains (a schema field extending ADR-0011 rows, not a naming convention). Unblocks **SES-1**.
+
+**Still [principal-hands] (deploys/ops, NOT decisions):** FND-5 registry deploy · CK-4a D1 migration 0006 apply · D-11 hub-admin key provisioning · OBS-1 signal activation.
