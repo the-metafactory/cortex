@@ -1786,7 +1786,7 @@ function renderPingResult(
     lines.push(`verdict: ${res.verdict}${res.detail !== undefined ? ` — ${res.detail}` : ""}`);
   }
   // cortex#1728 (guard 4) — when local `/leafz` was sampled around a `timeout`,
-  // append the half-disambiguation line so the operator knows WHICH leg to chase
+  // append the half-disambiguation line so it is clear WHICH leg to chase
   // instead of the four-way guess in the verdict detail.
   if (res.leafz !== undefined) {
     lines.push(`leafz: ${res.leafz.line}`);
