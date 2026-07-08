@@ -687,3 +687,145 @@ describe("startCortex — surface principal gate boot (B-3, cortex#1021 W-2)", (
     expect(line).toContain("gate=surface");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#1720 S1 — AgentState scaffold-on-activation (opt-in + regression)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a fragment optionally declaring a `state:` block. Reuses the reload
+ * harness's tmp agents.d/ + personas dirs.
+ */
+function writeStateFragment(
+  id: string,
+  opts: { state?: { blueprint: string; version: string } } = {},
+): void {
+  const personaPath = join(tmpPersonasDir, `${id}.md`);
+  writeFileSync(personaPath, `# ${id} persona\n`);
+  let yaml = `id: ${id}
+displayName: ${id.charAt(0).toUpperCase() + id.slice(1)}
+persona: "${personaPath}"
+presence: {}
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - "code-review.typescript"
+`;
+  if (opts.state) {
+    yaml += `state:
+  blueprint: ${opts.state.blueprint}
+  version: "${opts.state.version}"
+`;
+  }
+  writeFileSync(join(tmpAgentsDir, `${id}.yaml`), yaml);
+}
+
+describe("startCortex — AgentState scaffold-on-activation (cortex#1720 S1)", () => {
+  // Records every scaffold invocation the boot/reload path makes, WITHOUT
+  // touching ~/.config or spawning bun. Each element is the agent id passed.
+  function recordingScaffold(): {
+    calls: string[];
+    fn: NonNullable<Parameters<typeof startCortex>[1]>["scaffoldAgentState"];
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      fn: (agent) => {
+        calls.push(agent.id);
+        return {
+          strategy: "fallback-manual",
+          instanceDir: `/tmp/fake/agents/${agent.id}`,
+          created: [],
+          skipped: [],
+        };
+      },
+    };
+  }
+
+  async function bootWithScaffold(
+    runtime: RecordingRuntime,
+    scaffold: NonNullable<Parameters<typeof startCortex>[1]>["scaffoldAgentState"],
+  ): Promise<CortexHandle> {
+    const handle = await startCortex(minimalConfig(), {
+      disableConfigWatcher: true,
+      disableDashboard: true,
+      disableOutboundPoller: true,
+      disableAgentsWatcher: true,
+      agentsDir: tmpAgentsDir,
+      configPath: join(tmpAgentsDir, "cortex.yaml"),
+      injectRuntime: runtime,
+      principal: { id: "test-op" },
+      scaffoldAgentState: scaffold,
+    });
+    handles.push(handle);
+    return handle;
+  }
+
+  test("a fragment declaring state IS scaffolded at boot with its id", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = recordingScaffold();
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+
+    await bootWithScaffold(runtime, scaffold.fn);
+
+    expect(scaffold.calls).toEqual(["luna"]);
+  });
+
+  test("REGRESSION — a stateless fragment activates with NO scaffold attempt", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = recordingScaffold();
+    // No `state:` block → must take zero new code paths.
+    writeStateFragment("echo");
+
+    const handle = await bootWithScaffold(runtime, scaffold.fn);
+
+    // Agent activated normally (registry + consumer), but scaffold never fired.
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["echo"]);
+    expect(runtime.subscribePullCalls.length).toBe(1); // echo's review consumer
+    expect(scaffold.calls).toEqual([]);
+  });
+
+  test("mixed roster — only the stateful fragment is scaffolded", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = recordingScaffold();
+    writeStateFragment("echo"); // stateless
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.2.0" } });
+
+    await bootWithScaffold(runtime, scaffold.fn);
+
+    expect(scaffold.calls).toEqual(["luna"]);
+  });
+
+  test("hot-ADDED stateful fragment is scaffolded on reload; stateless add is not", async () => {
+    const runtime = createRecordingRuntime();
+    const scaffold = recordingScaffold();
+    writeStateFragment("echo"); // stateless at boot
+    const handle = await bootWithScaffold(runtime, scaffold.fn);
+    expect(scaffold.calls).toEqual([]); // nothing stateful yet
+
+    // Add a stateful agent + another stateless one, reload.
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+    writeStateFragment("holly"); // stateless add
+    await handle.reloadAgents("cli");
+
+    // Only luna (the stateful add) was scaffolded on reload.
+    expect(scaffold.calls).toEqual(["luna"]);
+  });
+
+  test("NON-FATAL — a throwing scaffolder does not crash boot; the agent still activates", async () => {
+    const runtime = createRecordingRuntime();
+    const throwingScaffold: NonNullable<
+      Parameters<typeof startCortex>[1]
+    >["scaffoldAgentState"] = () => {
+      throw new Error("bundle exploded");
+    };
+    writeStateFragment("luna", { state: { blueprint: "AgentState", version: ">=0.1.0" } });
+
+    // Must NOT reject — the scaffold fault is swallowed.
+    const handle = await bootWithScaffold(runtime, throwingScaffold);
+
+    // The agent activated despite the scaffold failure.
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["luna"]);
+  });
+});

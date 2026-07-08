@@ -350,6 +350,43 @@ describe("AgentSchema", () => {
     }));
     expect(parsed.presence.discord?.guildId).toBe("1487");
   });
+
+  // ---------------------------------------------------------------------
+  // cortex#1720 S1 — optional `state:` field (opt-in instance state)
+  // ---------------------------------------------------------------------
+
+  test("stateless by default — a fragment WITHOUT state parses, state is undefined", () => {
+    const parsed = AgentSchema.parse(minAgent());
+    expect(parsed.state).toBeUndefined();
+  });
+
+  test("accepts a fragment declaring state: { blueprint, version }", () => {
+    const parsed = AgentSchema.parse(
+      minAgent({ state: { blueprint: "AgentState", version: ">=0.1.0" } }),
+    );
+    expect(parsed.state).toEqual({ blueprint: "AgentState", version: ">=0.1.0" });
+  });
+
+  test("rejects a state block missing blueprint", () => {
+    expect(() =>
+      AgentSchema.parse(minAgent({ state: { version: ">=0.1.0" } })),
+    ).toThrow();
+  });
+
+  test("rejects a state block missing version", () => {
+    expect(() =>
+      AgentSchema.parse(minAgent({ state: { blueprint: "AgentState" } })),
+    ).toThrow();
+  });
+
+  test("rejects empty-string blueprint / version", () => {
+    expect(() =>
+      AgentSchema.parse(minAgent({ state: { blueprint: "", version: ">=0.1.0" } })),
+    ).toThrow();
+    expect(() =>
+      AgentSchema.parse(minAgent({ state: { blueprint: "AgentState", version: "" } })),
+    ).toThrow();
+  });
 });
 
 // =============================================================================

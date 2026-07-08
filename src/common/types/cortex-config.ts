@@ -940,6 +940,44 @@ export const AgentSchema = z.object({
    * Default `false`/absent.
    */
   strictMcpConfig: z.boolean().optional(),
+  /**
+   * cortex#1720 S1 — OPT-IN per-instance durable state.
+   *
+   * Names the blueprint (state bundle) that owns this agent's instance state,
+   * per the agent-platform contract (`forge/design/agent-platform.md`
+   * §"the `state` field"): `state: { blueprint: AgentState, version: ">=0.1.0" }`.
+   *
+   * **Stateless is the default — "bring your own grounding".** A fragment
+   * WITHOUT `state` behaves exactly as before: no instance dir is scaffolded,
+   * no lifecycle hook fires, zero new code paths. Every downstream step (the
+   * scaffold-on-activation in `agent-state-scaffold.ts`, and S2–S4's replay /
+   * dispatch / dashboard wiring) is guarded behind `if (agent.state)`.
+   *
+   * When present, on activation (boot + agents.d hot-reload) cortex ensures the
+   * per-instance dir `~/.config/cortex/agents/{id}/` exists by SUBPROCESSING to
+   * the state bundle's `ScaffoldFolders` workflow (no code imports from the
+   * bundle — subprocess contract only). Scaffolding is idempotent and non-fatal:
+   * a failure logs and never blocks activation or crashes the daemon.
+   *
+   * Additive: existing fragments omit this key and are unaffected.
+   */
+  state: z
+    .object({
+      /**
+       * The state bundle that owns this instance's durable state. Free-form
+       * string (the bundle name, e.g. `AgentState`); cortex does not enumerate
+       * or validate bundle names — the platform's no-coupling rule keeps cortex
+       * ignorant of the bundle's identity beyond "there is one".
+       */
+      blueprint: z.string().min(1),
+      /**
+       * Semver range the agent requires of the state bundle (e.g. `">=0.1.0"`).
+       * Recorded for provenance; cortex does not resolve or enforce the range
+       * in S1 (that is the installer/registry's job).
+       */
+      version: z.string().min(1),
+    })
+    .optional(),
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

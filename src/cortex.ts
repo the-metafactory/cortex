@@ -45,6 +45,11 @@ import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
 import { AgentRegistry } from "./common/agents/registry";
 import { TrustResolver } from "./common/agents/trust-resolver";
+import {
+  scaffoldInstance,
+  type ScaffoldOptions,
+  type ScaffoldResult,
+} from "./common/agents/agent-state-scaffold";
 // cortex#79 — creds minting moved to `arc nats … --json` (shelled out from
 // `src/cli/cortex/commands/creds.ts`). No daemon-side RPC handler in
 // cortex; the account-signature verifier in TrustResolver keeps using
@@ -590,6 +595,21 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   inlineAgents?: readonly Agent[];
+  /**
+   * cortex#1720 S1 — override the AgentState scaffolder invoked on activation
+   * of a fragment that declares `state:`. Production omits this and the real
+   * `scaffoldInstance` (subprocess to the bundle, ~/.config/cortex/agents/<id>/
+   * fallback) runs. Tests inject a recorder so the opt-in / idempotency /
+   * regression-stateless assertions run WITHOUT touching the principal's real
+   * `~/.config` or spawning `bun`.
+   *
+   * The default is a thin wrapper so a test can pass either just a `spawn` seam
+   * (to exercise the real `scaffoldInstance` with a stub script) or replace the
+   * whole scaffolder.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  scaffoldAgentState?: (agent: Agent, opts?: ScaffoldOptions) => ScaffoldResult;
   /**
    * IAW Phase A.5 (refs cortex#113) — optional `stack:` block from
    * `CortexConfig`, threaded through from the loader so the boot path can
@@ -1261,6 +1281,52 @@ export async function startCortex(
     );
   } else {
     console.log("cortex: agent registry assembled — 0 agents (no inline agents, no fragments)");
+  }
+
+  // ===========================================================================
+  // cortex#1720 S1 — AgentState scaffold-on-activation (OPT-IN).
+  // ===========================================================================
+  //
+  // For each agent that declares `state:`, ensure its per-instance dir
+  // (`~/.config/cortex/agents/<id>/`) exists by delegating to the AgentState
+  // bundle (subprocess; manual fallback when the bundle isn't installed).
+  //
+  // Three guarantees the S1 spec pins down:
+  //   (a) OPT-IN — `if (agent.state)` guards EVERY invocation. A stateless
+  //       fragment takes ZERO new code paths: `scaffoldStatefulAgent` returns
+  //       immediately and never touches the filesystem or spawns anything.
+  //   (b) IDEMPOTENT — the underlying `scaffoldInstance` skips existing files,
+  //       so re-activation (a reload, a restart) is a safe no-op.
+  //   (c) NON-FATAL — a thrown error or a bundle non-zero exit is logged and
+  //       swallowed; activation continues and the daemon never crashes on a
+  //       scaffold fault.
+  //
+  // The scaffolder is injectable (`options.scaffoldAgentState`) so tests assert
+  // the opt-in / idempotency / regression behaviour without touching the
+  // principal's real `~/.config` or spawning `bun`.
+  const doScaffold = options.scaffoldAgentState ?? scaffoldInstance;
+  const scaffoldStatefulAgent = (agent: Agent): void => {
+    // (a) Opt-in guard — a stateless fragment returns before any work.
+    if (!agent.state) return;
+    try {
+      // (b) Idempotent by construction of scaffoldInstance (skip-if-exists).
+      const result = doScaffold(agent);
+      console.log(
+        `cortex: agent-state — scaffolded instance for "${agent.id}" via ${result.strategy} ` +
+          `(dir=${result.instanceDir}, created=${result.created.length}, skipped=${result.skipped.length})`,
+      );
+    } catch (err) {
+      // (c) Non-fatal — log and carry on. A failed scaffold must never block
+      //     activation or crash the daemon (the fragment still activates
+      //     stateless; the principal can re-run once the bundle is fixed).
+      process.stderr.write(
+        `cortex: agent-state — scaffold FAILED for "${agent.id}" (non-fatal; agent still activates): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  };
+  for (const agent of mergedAgents) {
+    scaffoldStatefulAgent(agent);
   }
 
   // cortex#98 (part B) — in-process trust map. Each Discord adapter
@@ -3872,6 +3938,17 @@ export async function startCortex(
     liveMergedAgents = freshMerged;
     agentRegistry = AgentRegistry.fromAgents(freshMerged);
     agentGeneration += 1;
+
+    // ── cortex#1720 S1 — scaffold-on-activation for added + changed agents. ──
+    //    Same opt-in / idempotent / non-fatal helper boot uses. A hot-added (or
+    //    changed-into-stateful) fragment gets its instance dir ensured here; a
+    //    stateless add is a no-op (the `if (agent.state)` guard inside). Removed
+    //    agents are intentionally NOT torn down — the events log is append-only
+    //    and the principal owns the instance dir's lifecycle.
+    for (const id of [...added, ...changed]) {
+      const agent = freshById.get(id);
+      if (agent !== undefined) scaffoldStatefulAgent(agent);
+    }
 
     // ── Start consumers for added + changed (new definition) agents via the
     //    SAME construction path boot uses — concurrently (sage round 2),
