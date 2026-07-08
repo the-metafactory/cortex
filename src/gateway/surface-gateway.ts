@@ -139,15 +139,7 @@ export class SurfaceGateway {
     this.adapters = adapters;
     this.index = index;
     this.sink = sink;
-    this.onUnroutable =
-      opts?.onUnroutable ??
-      ((msg, reason) => {
-        console.warn(
-          `[surface-gateway] unroutable inbound message — dropping. ` +
-            `platform=${msg.platform} instanceId=${msg.instanceId} ` +
-            `channelId=${msg.channelId} reason="${reason}"`,
-        );
-      });
+    this.onUnroutable = opts?.onUnroutable ?? defaultUnroutableWarn;
   }
 
   /**
@@ -320,6 +312,30 @@ export class LoggingInboundSink implements GatewayInboundSink {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/**
+ * The gateway's default `onUnroutable` breadcrumb — a `console.warn` naming the
+ * dropped inbound and the reason.
+ *
+ * Exported (cortex#596) as the single source of truth for the breadcrumb string
+ * so the composition-root's bus-emitting `onUnroutable` (see
+ * `makeEmittingUnroutable` in `gateway-unroutable-emit.ts`) can PRESERVE the
+ * exact stdout breadcrumb — it stays the fallback when the bus is down — while
+ * ALSO emitting the structured `system.gateway.routing_decision` event. Reusing
+ * this function keeps the two in lockstep instead of duplicating the format.
+ *
+ * `onUnroutable` must never throw; `console.warn` does not.
+ */
+export function defaultUnroutableWarn(
+  msg: InboundMessage,
+  reason: string,
+): void {
+  console.warn(
+    `[surface-gateway] unroutable inbound message — dropping. ` +
+      `platform=${msg.platform} instanceId=${msg.instanceId} ` +
+      `channelId=${msg.channelId} reason="${reason}"`,
+  );
+}
 
 /**
  * Derive a human-readable reason string for an unroutable inbound message.

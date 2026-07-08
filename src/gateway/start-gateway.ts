@@ -54,6 +54,8 @@ import {
   type GatewayAdapterFactory,
 } from "./gateway-adapters";
 import { BusInboundSink } from "./bus-inbound-sink";
+import { defaultUnroutableWarn } from "./surface-gateway";
+import { makeEmittingUnroutable } from "./gateway-unroutable-emit";
 import type { BoundPrincipalStack } from "./binding-resolver";
 import type { SurfaceOwnershipPlan } from "./surface-ownership-plan";
 import type { SurfaceGateway } from "./surface-gateway";
@@ -252,6 +254,25 @@ export async function startGatewayIfEnabled(
       })
     : undefined;
 
+  // cortex#596 — on the LIVE path, decorate `onUnroutable` so a NO-BINDING-match
+  // inbound emits a `system.gateway.routing_decision { outcome: "unroutable" }`
+  // bus event (the signal/MC-consumable replacement for the stdout hunt-line),
+  // NOT just the `console.warn` breadcrumb. This is the upstream twin of the
+  // publish-refusal emit `BusInboundSink` already does (that case matched a
+  // binding; this one matched none). Only wired when the gateway is LIVE
+  // (`publish`), symmetric with the sink: SHADOW mode publishes nothing to the
+  // bus, so it keeps the plain breadcrumb (`opts.onUnroutable` unchanged). The
+  // breadcrumb is preserved as the emit's base (the fallback when the bus is
+  // down); a caller-supplied `onUnroutable` is decorated in its place when one
+  // was passed. The emit itself is fully guarded on runtime/source (see
+  // `emitUnroutableRoutingDecision`).
+  const onUnroutable = publish
+    ? makeEmittingUnroutable(opts.onUnroutable ?? defaultUnroutableWarn, {
+        runtime: opts.runtime,
+        source: opts.source,
+      })
+    : opts.onUnroutable;
+
   process.stdout.write(
     publish
       ? "[surface-gateway] CORTEX_GATEWAY_PUBLISH set — gateway LIVE" +
@@ -265,7 +286,7 @@ export async function startGatewayIfEnabled(
     surfaces,
     adapters,
     ...(sink !== undefined && { sink }),
-    ...(opts.onUnroutable !== undefined && { onUnroutable: opts.onUnroutable }),
+    ...(onUnroutable !== undefined && { onUnroutable }),
   });
 
   // `gw` is defined here (bindings > 0 + adapters built), but the factory
