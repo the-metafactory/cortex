@@ -65,6 +65,7 @@ import {
   type LeafLinkState,
   type AdmissionStatePort,
 } from "./network-ports";
+import { checkLeafAccountMatchesCreds } from "./network-bus-safety";
 
 // =============================================================================
 // Identity of the joining stack — who "me" is on the wire.
@@ -421,6 +422,72 @@ export async function joinNetwork(
   const leafAccount =
     bindMode.mode === "operator-account" ? bindMode.account : undefined;
 
+  // (b.5.2) cortex#1728 Guard 1 — the armed F4 crash bomb. Scan the RESOLVED
+  // nats config (config + every file it `include`s) for an operator-mode
+  // `leafnodes { authorization { users … } }` block. On an operator-mode bus
+  // that block is STARTUP-FATAL, and `nats-server -t` PASSES it — so the #821
+  // `-t` gate below cannot catch it. A stale hub-side PSK block written by
+  // pre-#1491 `add-member` tooling sits armed until the NEXT restart, which is
+  // exactly the restart this join is about to perform. Refuse BEFORE any
+  // mutation; we do NOT auto-remove (naming the file + fix is enough). A READ
+  // (identical in live + dry-run).
+  const bombs = ports.leafFile.scanLeafnodeAuthorizationBomb();
+  if (bombs.length > 0) {
+    const first = bombs[0];
+    return {
+      ok: false,
+      steps,
+      reason:
+        `refusing to join — the resolved nats config carries an operator-mode-FATAL ` +
+        `\`leafnodes { authorization { users … } }\` block in ${bombs.map((b) => b.path).join(", ")}. ` +
+        `On an operator-mode bus this crashes nats-server on its next restart ("operator mode does not ` +
+        `allow specifying users in leafnode config"), and \`nats-server -t\` does NOT catch it — so this ` +
+        `join's restart would take the bus DOWN. ${first?.fix ?? ""} (cortex#1728 Guard 1 / #1491)`,
+    };
+  }
+
+  // (b.5.3) cortex#1728 Guard 3 — the leaf's local `account:` MUST match the
+  // account the daemon actually PUBLISHES on (decoded from the creds'
+  // `issuer_account`). On the first live operator-mode join the config's
+  // `nats_infra.account` (the FED account) and the daemon's real publisher
+  // account (from `cortex.creds`) were a THIRD account apart → the leaf came up,
+  // interest was visible, but publishes NEVER crossed (out=0). Rendering a leaf
+  // into an account the daemon doesn't publish on is silently broken, so we
+  // HARD-ERROR on a decodable mismatch rather than render it. Only meaningful on
+  // the operator-mode path (`leafAccount !== undefined`); a $G/creds-only or
+  // secret-auth bus renders no `account:` line, so the check is indeterminate
+  // and skipped. A READ (identical in live + dry-run).
+  if (leafAccount !== undefined && hasCreds) {
+    const credsIssuerAccount = ports.leafFile.credsIssuerAccount(
+      stack.credentials ?? "",
+    );
+    const accountCheck = checkLeafAccountMatchesCreds({
+      renderedAccount: leafAccount,
+      credsIssuerAccount,
+    });
+    if (accountCheck.status === "mismatch") {
+      return {
+        ok: false,
+        steps,
+        reason:
+          `refusing to render a leaf into account ${accountCheck.renderedAccount} — the daemon creds ` +
+          `(${stack.credentials}) publish on a DIFFERENT account ${accountCheck.credsAccount} ` +
+          `(decoded from the creds' issuer_account). A leaf bound to the config's account while the daemon ` +
+          `publishes on another means the leaf comes up and interest is visible but publishes never cross ` +
+          `(out=0). Set stack.nats_infra.account to ${accountCheck.credsAccount} (the daemon's real ` +
+          `publisher account), or wire a cross-account export/import between them. (cortex#1728 Guard 3)`,
+      };
+    }
+    if (accountCheck.status === "match") {
+      steps.push(
+        `verified leaf account ${accountCheck.account} matches the daemon creds' issuer_account (cortex#1728 Guard 3)`,
+      );
+    }
+    // `indeterminate` (undecodable creds JWT) is non-fatal here: the #821
+    // creds-exist preflight below already refuses a genuinely absent/bad creds
+    // file, and a decodable-but-accountless JWT should not block a join.
+  }
+
   // (b.4) G1c (#1117, ADR-0013 Model B) — WIRE the local-side `federated.>`
   // export/import BEFORE writing the leaf file (fail-fast: an arc failure here
   // aborts before any mutation touches the live nats-server config). Skipped
@@ -732,6 +799,35 @@ export async function joinNetwork(
     // (c, cont.) Ensure the plist loads the nats config (DD-6).
     ports.plist.ensureConfigLoaded(ports.leafFile.natsConfigPath());
     steps.push(`ensured nats-server plist loads ${ports.leafFile.natsConfigPath()}`);
+
+    // (c, cont.) cortex#1728 Guard 2 — VERIFY the plist actually loads the
+    // config, don't just report success. The ensure step above reported success
+    // against a homebrew-default plist whose ProgramArguments was a bare
+    // `nats-server` with NO `-c` — so the "restart" kicked a service that never
+    // reads the edited config while brew's KeepAlive server squatted :4222
+    // config-less. Parse ProgramArguments and ERROR when the config path isn't
+    // among them, pointing at rendering a proper `ai.meta-factory.nats.<stack>`
+    // agent (as community/halden already have).
+    const plistCheck = ports.plist.verifyLoadsConfig(ports.leafFile.natsConfigPath());
+    if (!plistCheck.loadsConfig) {
+      const argsRepr =
+        plistCheck.programArguments.length > 0
+          ? plistCheck.programArguments.join(" ")
+          : "(no ProgramArguments / no descriptor configured)";
+      return {
+        ok: false,
+        steps,
+        reason:
+          `the nats-server service descriptor does NOT load ${ports.leafFile.natsConfigPath()} — its ` +
+          `ProgramArguments are [${argsRepr}], with no \`-c <config>\`. Restarting it would kick a ` +
+          `service that never reads the edited config (the homebrew-default \`nats-server\` squatter). ` +
+          `Point stack.nats_infra.plist_path at a real \`ai.meta-factory.nats.<stack>\` launchd agent ` +
+          `whose ProgramArguments carry \`-c ${ports.leafFile.natsConfigPath()}\` (mirror ` +
+          `~/Library/LaunchAgents/ai.meta-factory.nats.community.plist), then re-run join. ` +
+          `(cortex#1728 Guard 2)`,
+      };
+    }
+    steps.push(`verified nats-server descriptor loads the config via -c (cortex#1728 Guard 2)`);
 
     // (c, cont.) Ensure the nats config actually `include`s the rendered leaf
     // file (#754). Without this the plist loads a config that never references

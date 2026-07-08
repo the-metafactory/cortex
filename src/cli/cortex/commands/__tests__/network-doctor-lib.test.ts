@@ -89,11 +89,19 @@ function fakeConfigPort(
   // resolver_preload block / no local nats config, the (c) no-monitor-style
   // default); tests that care about the leg override it explicitly.
   resolverPreloadHasAccount?: (accountPubkey: string) => boolean | undefined,
+  // cortex#1728 Guard 1 — the leafnode-authorization crash-bomb files; default
+  // clean bus (no bomb).
+  leafnodeAuthBombFiles?: string[],
 ): DoctorConfigPort {
   return {
     readNetworks: () => ({ networks }),
     expectedFedAccount: () => expectedAccount,
     resolverPreloadHasAccount: resolverPreloadHasAccount ?? (() => undefined),
+    scanLeafnodeAuthorizationBomb: () =>
+      (leafnodeAuthBombFiles ?? []).map((path) => ({
+        path,
+        fix: `remove the leafnodes authorization block from ${path}`,
+      })),
   };
 }
 
@@ -181,9 +189,11 @@ describe("runDoctorChecks — (a) all-green", () => {
     expect(res.exitCode).toBe(0);
     expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.healthy);
     // 5 pre-#1482 legs + registered-vs-fed-account + resolver-preload-account
-    // + the sealed-secret-hub-authorized stub (always present, always skip).
-    expect(res.checks).toHaveLength(8);
+    // + the sealed-secret-hub-authorized stub (always present, always skip)
+    // + the cortex#1728 leafnode-authorization-bomb leg.
+    expect(res.checks).toHaveLength(9);
     expect(findCheck(res.checks, "config-network").status).toBe("pass");
+    expect(findCheck(res.checks, "leafnode-authorization-bomb").status).toBe("pass");
     expect(findCheck(res.checks, "registered-vs-fed-account").status).toBe("pass");
     expect(findCheck(res.checks, "resolver-preload-account").status).toBe("pass");
     expect(findCheck(res.checks, "sealed-secret-hub-authorized").status).toBe("skip");
@@ -200,6 +210,67 @@ describe("runDoctorChecks — (a) all-green", () => {
     for (const c of res.checks) {
       expect(["member", "hub-owner", "admin", "peer"]).toContain(c.owner);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1728 Guard 1 — leafnode-authorization crash-bomb leg
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — cortex#1728 leafnode-authorization-bomb leg", () => {
+  test("FAILS when the resolved config carries the operator-mode fatal block", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort(
+        [network()],
+        "ACCOUNT_A",
+        (acct) => acct === "ACCOUNT_A",
+        ["/Users/andreas/.config/nats/local.conf"],
+      ),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const leg = findCheck(res.checks, "leafnode-authorization-bomb");
+    expect(leg.status).toBe("fail");
+    expect(leg.detail).toContain("/Users/andreas/.config/nats/local.conf");
+    expect(leg.fix).toBeDefined();
+    // A non-critical fail ⇒ degraded (config-network + leaf still pass).
+    expect(res.verdict).not.toBe("healthy");
+  });
+
+  test("still runs (and can FAIL) even when the network is NOT configured", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort(
+        [], // network-not-configured ⇒ config-network fails, downstream legs skip
+        undefined,
+        undefined,
+        ["/Users/andreas/.config/nats/local.conf"],
+      ),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    // The member most needs to know their bus is armed even before joining.
+    expect(findCheck(res.checks, "leafnode-authorization-bomb").status).toBe("fail");
+  });
+
+  test("PASSES on a clean bus", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 1)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "leafnode-authorization-bomb").status).toBe("pass");
   });
 });
 

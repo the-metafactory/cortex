@@ -46,6 +46,10 @@ import type {
   HealthProbeResult,
   SettleWindowOptions,
 } from "../../../common/nats/restart-with-settle";
+import type {
+  LeafnodeAuthorizationBomb,
+  PlistConfigCheck,
+} from "./network-bus-safety";
 
 // =============================================================================
 // Trust-boundary type — only a VERIFIED descriptor flows into the renderer.
@@ -247,6 +251,25 @@ export interface LeafFilePort {
    */
   credsExist(path: string): boolean;
   /**
+   * cortex#1728 Guard 1 — scan the RESOLVED nats config (`natsConfigPath()` +
+   * every file it `include`s) for an operator-mode `leafnodes { authorization {
+   * users … } }` block. On an operator-mode bus that block is startup-fatal
+   * ("operator mode does not allow specifying users in leafnode config") and
+   * `nats-server -t` does NOT catch it. Returns the offending file(s) + the
+   * removal fix (never auto-removed); `[]` when clean / not operator-mode. A
+   * pure READ (identical in live + dry-run). The live adapter follows `include`
+   * directives from disk; the orchestrator refuses the join when non-empty.
+   */
+  scanLeafnodeAuthorizationBomb(): LeafnodeAuthorizationBomb[];
+  /**
+   * cortex#1728 Guard 3 — decode the `issuer_account` (fallback `iss`) from the
+   * NATS user JWT embedded in the leaf creds file at `credsPath`. This is the
+   * account the daemon actually PUBLISHES on. `undefined` when there is no
+   * decodable creds JWT (a secret-auth leaf, a missing/undecodable file). Reads
+   * PUBLIC claim material only — never the seed. A pure READ.
+   */
+  credsIssuerAccount(credsPath: string): string | undefined;
+  /**
    * #821 — restart-safety SNAPSHOT. Capture the current on-disk leaf state for
    * `networkId` (the per-network include file + the base nats config's `include`
    * directive presence) so a failed nats-server restart can be ROLLED BACK to
@@ -301,6 +324,17 @@ export interface PlistPort {
    * {@link PlistPort.ensureConfigLoaded}).
    */
   dropConfigArg(configPath: string): void;
+  /**
+   * cortex#1728 Guard 2 — VERIFY the target nats-server launchd/systemd
+   * descriptor actually loads `configPath`: parse its `ProgramArguments`
+   * (launchd) and confirm `-c <configPath>` (or `--config=<configPath>`) is
+   * present. The homebrew-default plist runs a bare `nats-server` with no `-c`,
+   * so a join that "restarts the bus" against it kicks a service that never reads
+   * the edited config. Returns `{ loadsConfig, programArguments }` — the
+   * orchestrator ERRORS when `loadsConfig` is false. A pure READ (no descriptor
+   * configured / unreadable → `loadsConfig:false`, empty `programArguments`).
+   */
+  verifyLoadsConfig(configPath: string): PlistConfigCheck;
 }
 
 /**

@@ -59,6 +59,18 @@ export interface DoctorConfigPort {
    * apply). Never throws.
    */
   resolverPreloadHasAccount(accountPubkey: string): boolean | undefined;
+  /**
+   * cortex#1728 Guard 1 — scan the RESOLVED local nats config (the config file +
+   * every file it `include`s) for an operator-mode-FATAL `leafnodes {
+   * authorization { users … } }` block. On an operator-mode bus that block
+   * crashes nats-server on its NEXT restart ("operator mode does not allow
+   * specifying users in leafnode config"), and `nats-server -t` does NOT catch
+   * it — so a `doctor` run is the only pre-restart signal a member gets. Returns
+   * the offending file path(s) + removal fix; `[]` when clean or the config is
+   * not operator-mode (the block is legal on a $G bus). Never throws — an absent
+   * config resolves to `[]`.
+   */
+  scanLeafnodeAuthorizationBomb(): { path: string; fix: string }[];
 }
 
 // =============================================================================

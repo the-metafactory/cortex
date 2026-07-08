@@ -199,6 +199,27 @@ function makeFakes(opts: {
   /** #821 — model the leaf creds file as MISSING (pre-flight refuses). */
   credsMissing?: boolean;
   /**
+   * cortex#1728 Guard 1 — model the resolved nats config carrying the
+   * operator-mode-fatal `leafnodes.authorization.users` block. When set,
+   * `scanLeafnodeAuthorizationBomb` returns these as offending files → the join
+   * refuses. Default: none (clean bus).
+   */
+  leafnodeAuthBombFiles?: string[];
+  /**
+   * cortex#1728 Guard 2 — model the nats-server plist NOT loading the config
+   * (bare `nats-server`, no `-c` — the homebrew squatter). When true,
+   * `verifyLoadsConfig` returns loadsConfig:false → the join refuses. Default:
+   * loads the config.
+   */
+  plistMissingConfigArg?: boolean;
+  /**
+   * cortex#1728 Guard 3 — model the account the daemon creds actually publish on
+   * (decoded issuer_account). When set AND it differs from the rendered leaf
+   * account, `credsIssuerAccount` returns it → the join refuses on mismatch.
+   * `undefined` → indeterminate (no creds JWT to decode), the pre-guard path.
+   */
+  credsIssuerAccount?: string;
+  /**
    * #821 — model nats-server's post-restart health. `false` = the restart exited
    * 0 but the server then crashed (the community case) → orchestrator rolls back.
    * Default: healthy.
@@ -414,6 +435,20 @@ function makeFakes(opts: {
       // refusal via `credsMissing: true`.
       return opts.credsMissing !== true;
     },
+    scanLeafnodeAuthorizationBomb() {
+      // cortex#1728 Guard 1 — default: clean bus. A test opts into the armed
+      // crash bomb via `leafnodeAuthBombFiles`.
+      return (opts.leafnodeAuthBombFiles ?? []).map((path) => ({
+        path,
+        fix: `remove the leafnodes authorization block from ${path}`,
+      }));
+    },
+    credsIssuerAccount(_path) {
+      // cortex#1728 Guard 3 — default: undecodable (no creds JWT modelled), so
+      // the orchestrator's account check is indeterminate (skipped). A test sets
+      // `credsIssuerAccount` to the daemon's real publisher account.
+      return opts.credsIssuerAccount;
+    },
     snapshotLeafState(networkId) {
       rec.snapshots.push(networkId);
       return { networkId, includeFile: undefined, natsConfig: undefined };
@@ -429,6 +464,13 @@ function makeFakes(opts: {
     },
     dropConfigArg(p) {
       rec.dropped.push(p);
+    },
+    verifyLoadsConfig(configPath) {
+      // cortex#1728 Guard 2 — default: the descriptor loads the config. A test
+      // opts into the bare-nats-server squatter via `plistMissingConfigArg`.
+      return opts.plistMissingConfigArg === true
+        ? { loadsConfig: false, programArguments: ["/opt/homebrew/bin/nats-server"] }
+        : { loadsConfig: true, programArguments: ["nats-server", "-c", configPath] };
     },
   };
 
@@ -764,6 +806,107 @@ describe("join", () => {
     // #799 — the critical new behaviour: a $G/default-account bus + creds is
     // now JOINABLE via a NO-ACCOUNT leaf remote (the case #794 wrongly refused).
     // -------------------------------------------------------------------------
+  });
+
+  describe("cortex#1728 — bus-safety guards", () => {
+    describe("Guard 1 — F4 leafnode-authorization crash bomb", () => {
+      test("REFUSES an operator-mode bus carrying the fatal block, BEFORE any mutation", async () => {
+        const { ports, rec, storeRef } = makeFakes({
+          busType: "operator-mode",
+          leafnodeAuthBombFiles: ["/Users/andreas/.config/nats/local.conf"],
+        });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(false);
+        expect(res.reason).toContain("leafnodes { authorization { users");
+        expect(res.reason).toContain("/Users/andreas/.config/nats/local.conf");
+        expect(res.reason).toContain("cortex#1728 Guard 1");
+        // touched nothing.
+        expect(rec.writes.length).toBe(0);
+        expect(rec.natsRestarts).toBe(0);
+        expect(storeRef.networks.length).toBe(0);
+      });
+
+      test("is SILENT on a clean operator-mode bus (join proceeds)", async () => {
+        const { ports } = makeFakes({ busType: "operator-mode" });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(true);
+      });
+    });
+
+    describe("Guard 2 — plist must actually load the config", () => {
+      test("ERRORS when the descriptor has no -c <config> (bare homebrew nats-server)", async () => {
+        const { ports, rec, storeRef } = makeFakes({
+          busType: "operator-mode",
+          plistMissingConfigArg: true,
+        });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(false);
+        expect(res.reason).toContain("does NOT load");
+        expect(res.reason).toContain("ai.meta-factory.nats");
+        expect(res.reason).toContain("cortex#1728 Guard 2");
+        // The policy config was NOT written (the guard fires inside the write try).
+        expect(storeRef.networks.length).toBe(0);
+        expect(rec.configWrites.length).toBe(0);
+      });
+
+      test("passes + records the step when the descriptor loads the config", async () => {
+        const { ports } = makeFakes({ busType: "operator-mode" });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(true);
+        expect(res.steps.some((s) => s.includes("Guard 2"))).toBe(true);
+      });
+    });
+
+    describe("Guard 3 — leaf account must match the daemon creds account", () => {
+      test("HARD-ERRORS when the creds issuer_account differs from the rendered account", async () => {
+        // The daemon publishes on a THIRD account, not the config's FED account.
+        const { ports, rec, storeRef } = makeFakes({
+          busType: "operator-mode",
+          credsIssuerAccount: "A" + "C".repeat(55),
+        });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(false);
+        expect(res.reason).toContain("publish on a DIFFERENT account");
+        expect(res.reason).toContain("A" + "C".repeat(55));
+        expect(res.reason).toContain("cortex#1728 Guard 3");
+        // refused before any mutation.
+        expect(rec.writes.length).toBe(0);
+        expect(storeRef.networks.length).toBe(0);
+      });
+
+      test("PROCEEDS + records the match step when the accounts agree", async () => {
+        const { ports } = makeFakes({
+          busType: "operator-mode",
+          credsIssuerAccount: LOCAL.account, // matches the rendered leaf account
+        });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(true);
+        expect(res.steps.some((s) => s.includes("Guard 3"))).toBe(true);
+      });
+
+      test("is indeterminate (skipped) when the creds JWT is undecodable — join proceeds", async () => {
+        // No credsIssuerAccount modelled → undefined → indeterminate, not a block.
+        const { ports } = makeFakes({ busType: "operator-mode" });
+        const res = await joinNetwork("metafactory", LOCAL, ports);
+        expect(res.ok).toBe(true);
+      });
+
+      test("does not run on a $G/creds-only bus (no rendered account to compare)", async () => {
+        const G_PEER: JoiningStack = {
+          principalId: "jc",
+          stackSlug: "default",
+          credentials: "/Users/jc/.config/nats/jc.creds",
+        };
+        // Even with a modelled creds account, a $G bus renders no account: line,
+        // so Guard 3 is indeterminate and the join proceeds.
+        const { ports } = makeFakes({
+          busType: "default-g",
+          credsIssuerAccount: "A" + "C".repeat(55),
+        });
+        const res = await joinNetwork("metafactory-community", G_PEER, ports);
+        expect(res.ok).toBe(true);
+      });
+    });
     test("#799 $G/default bus + creds → joins with a NO-ACCOUNT leaf remote", async () => {
       // The driving case: jc/default ($G bus + jc.creds) → metafactory-community.
       const G_PEER: JoiningStack = {

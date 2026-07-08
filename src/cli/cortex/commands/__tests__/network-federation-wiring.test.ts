@@ -160,6 +160,8 @@ function makeMinimalPorts(opts: {
     },
     convertToOperatorMode() { return { status: "already", conf: "" }; },
     credsExist() { return true; },
+    scanLeafnodeAuthorizationBomb() { return []; },
+    credsIssuerAccount() { return undefined; },
     snapshotLeafState(networkId) { return { networkId, includeFile: undefined, natsConfig: undefined }; },
     restoreLeafState() {},
   };
@@ -167,6 +169,7 @@ function makeMinimalPorts(opts: {
   const plist: PlistPort = {
     ensureConfigLoaded() {},
     dropConfigArg() {},
+    verifyLoadsConfig(configPath) { return { loadsConfig: true, programArguments: ["nats-server", "-c", configPath] }; },
   };
 
   const configStore: ConfigStorePort = {
@@ -347,6 +350,8 @@ describe("G1c — federation-wiring step in joinNetwork (ADR-0013 Model B)", () 
       },
       convertToOperatorMode() { return { status: "already", conf: "" }; },
       credsExist() { return true; },
+      scanLeafnodeAuthorizationBomb() { return []; },
+      credsIssuerAccount() { return undefined; },
       snapshotLeafState(networkId) { return { networkId, includeFile: undefined, natsConfig: undefined }; },
       restoreLeafState() {},
     };
@@ -354,7 +359,7 @@ describe("G1c — federation-wiring step in joinNetwork (ADR-0013 Model B)", () 
     const ports: NetworkPorts = {
       registry,
       leafFile,
-      plist: { ensureConfigLoaded() {}, dropConfigArg() {} },
+      plist: { ensureConfigLoaded() {}, dropConfigArg() {}, verifyLoadsConfig(configPath) { return { loadsConfig: true, programArguments: ["nats-server", "-c", configPath] }; } },
       configStore: { readNetworks() { return []; }, writeNetworks() {} },
       daemon: { async restart() { return { ok: true }; } },
       natsServer: {

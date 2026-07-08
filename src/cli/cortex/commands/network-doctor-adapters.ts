@@ -33,6 +33,11 @@ import type {
   LeafzResponse,
   MonitorPort,
 } from "./network-doctor-ports";
+import {
+  resolveConfigIncludes,
+  scanForLeafnodeAuthorizationBomb,
+  type ConfigFileReader,
+} from "./network-bus-safety";
 
 /** Bound the `/leafz` probe so a hung monitor cannot stall `doctor` forever. */
 export const DEFAULT_LEAFZ_TIMEOUT_MS = DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
@@ -186,8 +191,40 @@ export function buildDoctorConfigPort(cfg: DoctorConfigAdapterConfig): DoctorCon
       }
       return resolverPreloadHasAccountKey(text, accountPubkey);
     },
+
+    // cortex#1728 Guard 1 (doctor leg) — resolve the base nats config + its
+    // `include`s from disk and scan for the operator-mode-fatal
+    // `leafnodes.authorization.users` block. Read-only; an absent config
+    // resolves to no files → `[]`.
+    scanLeafnodeAuthorizationBomb(): { path: string; fix: string }[] {
+      const natsConfigPath = expandTilde(cfg.natsConfigPath ?? "");
+      if (natsConfigPath.length === 0) return [];
+      const resolved = resolveConfigIncludes(natsConfigPath, doctorConfigFileReader);
+      return scanForLeafnodeAuthorizationBomb(resolved);
+    },
   };
 }
+
+/**
+ * cortex#1728 Guard 1 — real-fs {@link ConfigFileReader} for the doctor leg's
+ * `include`-following scan. A missing include is skipped (nats-server's own boot
+ * error), so `read` returns `undefined` on any read failure.
+ */
+const doctorConfigFileReader: ConfigFileReader = {
+  read(path) {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch (_err) {
+      return undefined;
+    }
+  },
+  dirname(path) {
+    return dirname(path);
+  },
+  join(dir, file) {
+    return join(dir, file);
+  },
+};
 
 /**
  * The live {@link MonitorPort}: resolves the monitor base via the SAME

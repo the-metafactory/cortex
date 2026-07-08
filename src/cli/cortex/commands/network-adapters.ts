@@ -78,6 +78,13 @@ import {
   readNetworksFromConfig,
   writeNetworksGuarded,
 } from "./network-config-write";
+import {
+  decodeCredsIssuerAccount,
+  plistLoadsConfig,
+  resolveConfigIncludes,
+  scanForLeafnodeAuthorizationBomb,
+  type ConfigFileReader,
+} from "./network-bus-safety";
 
 import type {
   AdmissionStatePort,
@@ -537,6 +544,28 @@ function atomicWriteFileSync(path: string, contents: string): void {
   renameSync(tmpPath, path); // POSIX-atomic: old-or-new, never partial.
 }
 
+/**
+ * cortex#1728 Guard 1 — real-fs {@link ConfigFileReader} for
+ * {@link resolveConfigIncludes}. `read` returns `undefined` on ENOENT/unreadable
+ * (a missing include is nats-server's own boot error, not ours to raise), and
+ * `dirname`/`join` bridge to node `path` so the pure resolver stays fs-free.
+ */
+const liveConfigFileReader: ConfigFileReader = {
+  read(path) {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch (_err) {
+      return undefined; // missing / unreadable — skip (nats-server's error).
+    }
+  },
+  dirname(path) {
+    return dirname(path);
+  },
+  join(dir, file) {
+    return join(dir, file);
+  },
+};
+
 /** Directory the per-network leaf include files live in (beside nats config). */
 function leafDir(cfg: LivePortsConfig): string {
   const natsConfig = expandTilde(cfg.natsConfigPath ?? "");
@@ -685,6 +714,31 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       }
       return head.includes("-----BEGIN NATS USER JWT-----");
     },
+    scanLeafnodeAuthorizationBomb() {
+      // cortex#1728 Guard 1 — pure READ (identical live + dry-run): resolve the
+      // nats config + its `include`s from disk and scan for the operator-mode-
+      // fatal `leafnodes { authorization { users } }` block. An absent config
+      // resolves to no files → no bomb.
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      if (configPath.length === 0) return [];
+      const resolved = resolveConfigIncludes(configPath, liveConfigFileReader);
+      return scanForLeafnodeAuthorizationBomb(resolved);
+    },
+    credsIssuerAccount(credsPath) {
+      // cortex#1728 Guard 3 — pure READ: decode the creds JWT's issuer_account.
+      // Reads PUBLIC claim material only (never the seed). Missing/unreadable /
+      // no-JWT file → undefined (the orchestrator then treats it as
+      // indeterminate, not a mismatch).
+      const expanded = expandTilde(credsPath);
+      if (expanded.length === 0 || !existsSync(expanded)) return undefined;
+      let text: string;
+      try {
+        text = readFileSync(expanded, "utf-8");
+      } catch (_err) {
+        return undefined; // unreadable — cannot decode.
+      }
+      return decodeCredsIssuerAccount(text);
+    },
     snapshotLeafState(networkId) {
       // #821 — capture the per-network include file bytes + WHETHER the base nats
       // config carried the `include` directive, so a failed restart can be rolled
@@ -817,7 +871,72 @@ function buildPlistPort(cfg: LivePortsConfig, mutate: boolean): PlistPort {
     dropConfigArg(configPath) {
       buildServiceManager(cfg, mutate)?.dropConfigArg(configPath);
     },
+    verifyLoadsConfig(configPath) {
+      // cortex#1728 Guard 2 — pure READ (identical live + dry-run): parse the
+      // nats-server descriptor's launchd ProgramArguments (or systemd ExecStart)
+      // and confirm `-c <configPath>` is present. An absent descriptor / one we
+      // cannot read reads as "does not load the config" (empty ProgramArguments)
+      // — the orchestrator then errors, exactly as if a bare-`nats-server`
+      // homebrew plist were configured.
+      const descriptorPath = descriptorPathFor(cfg);
+      if (descriptorPath === undefined || !existsSync(descriptorPath)) {
+        return { loadsConfig: false, programArguments: [] };
+      }
+      let xml: string;
+      try {
+        xml = readFileSync(descriptorPath, "utf-8");
+      } catch (_err) {
+        return { loadsConfig: false, programArguments: [] };
+      }
+      // Linux systemd units carry the argv on an `ExecStart=` line, not a plist
+      // <array>; extract it into the same shape so the check is platform-uniform.
+      const platform = cfg.platform ?? currentServicePlatform();
+      if (platform === "linux" && !/<key>\s*ProgramArguments\s*<\/key>/.test(xml)) {
+        const args = parseSystemdExecStart(xml);
+        return plistLoadsConfigFromArgs(args, configPath);
+      }
+      return plistLoadsConfig(xml, configPath);
+    },
   };
+}
+
+/**
+ * cortex#1728 Guard 2 — extract the `ExecStart=` argv from a systemd unit so the
+ * SAME `-c <config>` check applies on Linux. Returns the tokens after the
+ * executable (a simple whitespace split — sufficient for the nats-server unit's
+ * `ExecStart=/usr/bin/nats-server -c /path` shape). `[]` when no ExecStart.
+ */
+function parseSystemdExecStart(unitText: string): string[] {
+  const m = /^\s*ExecStart\s*=\s*(.+)$/m.exec(unitText);
+  const line = m?.[1];
+  if (line === undefined) return [];
+  return line.trim().split(/\s+/);
+}
+
+/**
+ * cortex#1728 Guard 2 — the argv-list form of {@link plistLoadsConfig} for the
+ * systemd path (which produces a raw token list rather than plist XML). Mirrors
+ * plistLoadsConfig's `-c <path>` / `--config=<path>` acceptance.
+ */
+function plistLoadsConfigFromArgs(
+  args: string[],
+  configPath: string,
+): { loadsConfig: boolean; programArguments: string[] } {
+  const target = configPath.trim();
+  let loadsConfig = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if ((arg === "-c" || arg === "--config") && args[i + 1] === target) {
+      loadsConfig = true;
+      break;
+    }
+    if (arg === `-c=${target}` || arg === `--config=${target}`) {
+      loadsConfig = true;
+      break;
+    }
+  }
+  return { loadsConfig, programArguments: args };
 }
 
 // =============================================================================

@@ -216,6 +216,39 @@ function checkConfigNetwork(
 }
 
 // ---------------------------------------------------------------------------
+// Leg 1.4 — leafnode-authorization crash bomb (cortex#1728 Guard 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#1728 Guard 1 (doctor leg) — flag the armed F4 crash bomb: an
+ * operator-mode `leafnodes { authorization { users … } }` block in the resolved
+ * local nats config. This is the ONLY pre-restart signal a member gets — the
+ * block is startup-fatal on the next restart and `nats-server -t` passes it. A
+ * clean/non-operator-mode config yields no bomb → `pass`. Static/config-only, so
+ * it runs early and gates nothing downstream.
+ */
+function checkLeafnodeAuthorizationBomb(config: DoctorConfigPort): DoctorCheck {
+  const id = "leafnode-authorization-bomb";
+  const title = "no operator-mode leafnode authorization block (crash bomb)";
+  const bombs = config.scanLeafnodeAuthorizationBomb();
+  if (bombs.length === 0) {
+    return check(id, title, "pass", "no operator-mode-fatal leafnode authorization block found", "member");
+  }
+  const first = bombs[0];
+  return check(
+    id,
+    title,
+    "fail",
+    `the resolved nats config carries an operator-mode-FATAL \`leafnodes { authorization { users … } }\` ` +
+      `block in ${bombs.map((b) => b.path).join(", ")} — it crashes nats-server on the NEXT restart ` +
+      `("operator mode does not allow specifying users in leafnode config") and \`nats-server -t\` does ` +
+      `NOT catch it (cortex#1728/#1491)`,
+    "member",
+    first?.fix ?? "remove the leafnodes authorization block from the operator-mode nats config",
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Leg 1.5 — registered-vs-fed-account (cortex#1482, Pair 1 — informational)
 // ---------------------------------------------------------------------------
 
@@ -668,7 +701,12 @@ export async function runDoctorChecks(
   const configResult = checkConfigNetwork(ports.config, opts.networkId);
   checks.push(configResult.result);
   const network = configResult.network;
+  // cortex#1728 Guard 1 — the crash-bomb scan is config-only + network-agnostic
+  // (it scans THIS bus's resolved nats config, independent of whether the named
+  // network is configured), so it ALWAYS runs — even on the config-network-failed
+  // path, where a member most needs to know their bus is armed.
   if (configResult.result.status !== "pass" || network === undefined) {
+    checks.push(checkLeafnodeAuthorizationBomb(ports.config));
     checks.push(
       skipCheck(
         PAIR_LEGS.registeredVsFedAccount.id,
@@ -698,6 +736,10 @@ export async function runDoctorChecks(
     const verdict = aggregateVerdict(checks);
     return { checks, verdict, exitCode: DOCTOR_EXIT_CODE[verdict] };
   }
+
+  // 1.4. cortex#1728 Guard 1 — the armed F4 crash-bomb scan. Config-only, so it
+  // runs right after config-network and gates nothing downstream.
+  checks.push(checkLeafnodeAuthorizationBomb(ports.config));
 
   // 1.5-1.7. cortex#1482 — the three representation-pairs. Purely
   // static/config-based (no live NATS), so they run right after
