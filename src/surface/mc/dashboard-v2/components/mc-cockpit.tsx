@@ -39,6 +39,7 @@ import { WorkingGrid } from "./working-grid";
 import { WorkingAggregate } from "./working-aggregate";
 import { GovernanceView } from "./governance-view";
 import { DispatchButton } from "./dispatch-button";
+import { GovernBar } from "./govern-bar";
 import {
   scopeAttention,
   scopeWorkingTiles,
@@ -46,6 +47,7 @@ import {
   cockpitDispatchAgent,
 } from "../lib/mc-cockpit-scope";
 import { stackLabel, type StackCoord, type NetworkPosture } from "../lib/mc-shell-model";
+import type { NetworkMembershipDTO } from "../hooks/use-networks";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
 import type { WorkingStackAggregate } from "../hooks/use-working-aggregation";
@@ -58,6 +60,23 @@ export interface McCockpitProps {
   stack: StackCoord;
   /** Posture toward the selected network (`null` at the root / no network). */
   posture: NetworkPosture | null;
+  /**
+   * CK-7 (cortex#1673) — the dived network id, feeding the GOVERN bar's two
+   * named banners (handoff + admission-request), the doctor drill, and the
+   * member footer copy. `null` when no network is resolved.
+   */
+  networkId?: string | null;
+  /**
+   * CK-7 — the serving (local) principal: the handoff banner's member and the
+   * member footer's "you". `null` ⇒ the handoff banner self-effaces.
+   */
+  localPrincipal?: string | null;
+  /**
+   * CK-7 — the dived network's membership DTO, when resolved. Feeds the GOVERN
+   * bar's admin-authoritative gate (`isAdminPosture`) and the admission-request
+   * count. `null` ⇒ the bar falls back to `posture` for the gate.
+   */
+  network?: NetworkMembershipDTO | null;
   /** Serving principal — classifies own-local vs federated for the dispatch pick. */
   servingPrincipal: string | null;
   /** Live presence agents (whole-dashboard) — scoped to the stack for dispatch. */
@@ -107,6 +126,9 @@ export interface McCockpitProps {
 export function McCockpit({
   stack,
   posture,
+  networkId = null,
+  localPrincipal = null,
+  network = null,
   servingPrincipal,
   presenceAgents,
   workingAgents,
@@ -178,7 +200,7 @@ export function McCockpit({
         />
       </section>
 
-      {/* ── GOVERN — read-only audit + the posture-gated DISPATCH verb ──────── */}
+      {/* ── GOVERN — read-only audit + the CK-7 posture-gated GOVERN bar shell ─ */}
       <section className="mc-cockpit-lane mc-cockpit-govern" aria-label="Govern (stack)">
         <div className="mc-cockpit-lane-head">
           <span className="mc-cockpit-lane-title">GOVERN</span>
@@ -186,9 +208,25 @@ export function McCockpit({
 
         <GovernanceView state={scopedGovernance} />
 
-        <div className="mc-cockpit-dispatch">
-          {isAdmin ? (
-            dispatchTarget && onDispatchDirect ? (
+        {/* CK-7 (cortex#1673) — the GOVERN bar SHELL: the posture-gated verb rail
+            (empty per-verb harness — NO verbs wired), the two named banners
+            (handoff FLG-1 + admission-request), the doctor drill (FLG-3), and the
+            member footer (participate + CLI-only Leave, invariant 16). Every admin
+            affordance gates on the same admin-authoritative read the Pier queue
+            uses (fail-closed). */}
+        <GovernBar
+          posture={posture}
+          networkId={networkId}
+          localPrincipal={localPrincipal}
+          network={network}
+        />
+
+        {/* CK-3 — the one already-LIVE govern verb (direct dispatch), admin
+            posture + own-local + a local agent present. The GOVERN bar's rail
+            names a `dispatch` slot as `live`; THIS is the control it points at. */}
+        {isAdmin ? (
+          <div className="mc-cockpit-dispatch">
+            {dispatchTarget && onDispatchDirect ? (
               <div className="mc-cockpit-dispatch-row">
                 <span className="mc-cockpit-dispatch-label">
                   Dispatch to <strong>{dispatchTarget.label}</strong>
@@ -204,28 +242,11 @@ export function McCockpit({
               <p className="mc-cockpit-note dim">
                 No local agent online to dispatch to on this stack.
               </p>
-            )
-          ) : (
-            <MemberGovernNote posture={posture} />
-          )}
-        </div>
+            )}
+          </div>
+        ) : null}
       </section>
     </div>
-  );
-}
-
-/**
- * The member-posture govern note. Govern verbs (admission, keys, dispatch) are the
- * network admin's — a member observes. Leave is deliberately NOT a button (it is
- * CLI-only by design, invariant 16); CK-7 owns the fuller member footer.
- */
-function MemberGovernNote({ posture }: { posture: NetworkPosture | null }) {
-  return (
-    <p className="mc-cockpit-note dim">
-      {posture === "member"
-        ? "You participate in this network — admission, keys, and dispatch are the network admin's."
-        : "Govern verbs are the network admin's."}
-    </p>
   );
 }
 

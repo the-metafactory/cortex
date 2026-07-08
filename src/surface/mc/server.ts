@@ -54,6 +54,12 @@ import {
   type AdmissionDecider,
   type AdmissionAuthContext,
 } from "./api/networks-admission";
+// FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — authorize-from-glass.
+import {
+  handleAuthorize,
+  AUTHORIZE_PATH,
+  type Authorizer,
+} from "./api/networks-authorize";
 import { verifyCfAccessJwt } from "../../common/auth/cf-access-jwt";
 import type {
   LocalAggregationContext,
@@ -73,6 +79,13 @@ import {
   isRebindExempt,
   type MutationGuardContext,
 } from "./api/mutation-guard";
+import { enforceStepUp, requiresStepUp } from "./api/step-up-mfa";
+import {
+  DEFAULT_STEP_UP_SECRET_PATH,
+  loadEnrollment,
+  type StepUpEnrollment,
+} from "../../common/step-up/enrollment";
+import { expandTilde } from "../../common/config/loader";
 import { handleGetGovernance } from "./api/governance";
 import { handleGetObservability } from "./api/observability-tab";
 import { proxySideband } from "../../common/sideband/proxy";
@@ -225,6 +238,18 @@ export interface StartServerOptions {
    */
   admissionDecider?: () => AdmissionDecider | null;
   /**
+   * FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — lazy accessor
+   * for the authorize-from-glass signer: the hub-admin-signed
+   * `POST /api/networks/authorize` that stamps `hub_authorized_at` on an
+   * ADMITTED admission row. A GETTER like `admissionDecider` because the
+   * hub-admin material + registry client boot AFTER the embed in `cortex.ts`;
+   * resolved per request. Returns `null` ⇒ no hub-admin seed / registry
+   * configured → the route returns a structured 503 `hub_admin_not_configured`
+   * (fail-closed — never a silent success). Signs LOCALLY (the daemon holds the
+   * hub-admin seed); the CF worker never wires this.
+   */
+  authorizer?: () => Authorizer | null;
+  /**
    * FLG-1 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the guided-join
    * handoff view (serves `GET /api/networks/:net/handoff/:member`: the 3-leg
    * seal → hub-authorize → leaf-up state via the pure `deriveHandoffState`). A
@@ -287,6 +312,15 @@ export function startServer(
     ),
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
+
+  // FND-3 — step-up MFA secret path. Absolute, tilde-expanded once (the config
+  // is fixed for the server's lifetime). The enrollment itself is loaded
+  // LAZILY per control-verb request (below) so re-enrollment never requires a
+  // daemon restart. Default `~/.config/cortex/step-up-totp.json`; overridable
+  // via `mc.governance.stepUp.secretPath`.
+  const stepUpSecretPath = expandTilde(
+    config.governance?.stepUp?.secretPath ?? DEFAULT_STEP_UP_SECRET_PATH,
+  );
 
   const apiDeps: ApiDeps | null = options.processManager
     ? {
@@ -366,6 +400,10 @@ export function startServer(
         // MC-B2 — resolve the admission-decision signer lazily too (stack
         // identity + registry client boot after the server). null ⇒ 503.
         const admissionDecider = options.admissionDecider?.() ?? null;
+        // FLG-2 — resolve the authorize-from-glass signer lazily too (hub-admin
+        // material + registry boot after the server). null ⇒ 503
+        // `hub_admin_not_configured`.
+        const authorizer = options.authorizer?.() ?? null;
         // FLG-1 — resolve the handoff view lazily (same boot-order reason as
         // `networks`). null ⇒ the handoff route 503s honestly.
         const handoffView = options.handoffView?.() ?? null;
@@ -389,6 +427,8 @@ export function startServer(
           guard,
           handoffView,
           doctorView,
+          stepUpSecretPath,
+          authorizer,
         );
       }
 
@@ -551,6 +591,8 @@ async function handleApi(
   guard: MutationGuardContext,
   handoffView: HandoffView | null = null,
   doctorView: DoctorView | null = null,
+  stepUpSecretPath: string = expandTilde(DEFAULT_STEP_UP_SECRET_PATH),
+  authorizer: Authorizer | null = null,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -562,9 +604,43 @@ async function handleApi(
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
-  if (isIdentityGatedMutation(req.method, pathname)) {
+  // A high-blast control verb (FND-3) is ALSO identity-gated: step-up without
+  // knowing WHO is stepping up is meaningless. Per invariant 3 the hardened
+  // decider pattern is Host/Origin + identity + authz + step-up, composed — so
+  // control routes run the identity+authz gate here and the step-up gate below.
+  if (isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
+  }
+  // FND-3 — step-up MFA on the high-blast `'control'` verb set (seal / rotate-K
+  // / revoke / escalation-approve). Runs AFTER the identity gate and is
+  // bind-agnostic: loopback is challenged too (terminal possession ≠ step-up).
+  // Enrollment is loaded lazily here (control verbs are rare + high-blast; a
+  // per-request read means re-enrollment needs no daemon restart). A malformed
+  // / bad-permission secret THROWS from the loader — mapped to 500 rather than
+  // a silent downgrade. The secret is never logged (the loader's error carries
+  // only the path + reason, never the secret).
+  if (requiresStepUp(req.method, pathname)) {
+    let enrollment: StepUpEnrollment | null;
+    try {
+      enrollment = loadEnrollment(stepUpSecretPath);
+    } catch (err) {
+      process.stderr.write(
+        `[step-up] failed to load enrollment: ${(err as Error).message}\n`,
+      );
+      return new Response(
+        JSON.stringify({
+          error: "step_up_load_failed",
+          detail:
+            "the step-up MFA enrollment could not be read (malformed or wrong " +
+            "permissions). Refusing the control verb fail-closed. Re-enroll with " +
+            "`cortex step-up enroll`.",
+        }),
+        { status: 500, headers: { "content-type": "application/json" } },
+      );
+    }
+    const stepUpDenial = enforceStepUp(req, { enrollment });
+    if (stepUpDenial) return stepUpDenial;
   }
 
   if (pathname === "/api/assignments") {
@@ -885,6 +961,26 @@ async function handleApi(
       ...(guard.verifyJwt ? { verifyJwt: guard.verifyJwt } : {}),
     };
     return handleAdmissionDecision(admissionDecider, auth, body.value);
+  }
+
+  // FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — POST
+  // /api/networks/authorize — the trust-GRANTING authorize-from-glass verb:
+  // stamp `hub_authorized_at` on an ADMITTED admission row (registry
+  // cortex#1498, hub-admin-signed). Placed AFTER the FND-3 step-up gate block
+  // above: this path is in `STEP_UP_CONTROL_ROUTES`, so a POST without a valid
+  // current TOTP code was already refused (403) before reaching here, and the
+  // FND-6 identity gate ran first. The handler owns the typed-confirm intent
+  // gate + the fail-closed hub-admin seam (null ⇒ 503 `hub_admin_not_configured`)
+  // + the registry-verdict passthrough. Signs LOCALLY (the daemon holds the
+  // hub-admin seed); the CF worker never wires `authorizer`, so this route 503s
+  // there.
+  if (pathname === AUTHORIZE_PATH) {
+    if (req.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+    const body = await parseJsonBody(req);
+    if (body.error) return body.error;
+    return handleAuthorize(authorizer, body.value);
   }
 
   // F-17 — principal-driven GitHub iteration import.

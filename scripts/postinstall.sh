@@ -31,7 +31,7 @@ mkdir -p "${EVENTS_DIR}/raw" "${EVENTS_DIR}/published" \
          "${HOME}/bin"
 chmod 700 "${EVENTS_DIR}/raw"
 chmod 755 "${EVENTS_DIR}/published"
-echo "  ✓ Runtime directories created"
+echo "  ✓ Runtime directories created (~/.claude/events — hook event buffer; ~/.config/cortex/{logs,state} — daemon logs + state)"
 
 # ─── 2. Executable permissions ──────────────────────────────────
 # Idempotent: skip chmod when the file is already executable. Both entry
@@ -47,14 +47,14 @@ for f in "${CORTEX_DIR}/src/cortex.ts" "${CORTEX_DIR}/src/taps/cc-events/relay.t
     chmod +x "$f"
   fi
 done
-echo "  ✓ Executables marked"
+echo "  ✓ Executables marked (src/cortex.ts, src/taps/cc-events/relay.ts — made executable for direct invocation)"
 
 # ─── 3. Relay policy (conditional copy — never overwrites) ──────
 if [ ! -f "${CLAUDE_DIR}/relay/relay-policy.yaml" ]; then
   if [ -f "${CORTEX_DIR}/src/taps/cc-events/relay-policy.yaml" ]; then
     cp "${CORTEX_DIR}/src/taps/cc-events/relay-policy.yaml" \
        "${CLAUDE_DIR}/relay/relay-policy.yaml"
-    echo "  ✓ Default relay policy created"
+    echo "  ✓ Default relay policy created (~/.claude/relay/relay-policy.yaml — controls which session events the relay forwards)"
   fi
 else
   echo "  ⊘ Relay policy exists (not overwriting)"
@@ -77,21 +77,25 @@ echo ""
 echo "✓ Cortex postinstall complete"
 echo ""
 echo "  Next steps:"
-echo "    1. Migrate your bot config (if upgrading from grove):"
+echo "    1. (Only if migrating from grove — fresh installs skip this step)"
+echo "       Migrate your bot config:"
 echo "       bun ${CORTEX_DIR}/src/cli/cortex/commands/migrate-config.ts \\"
 echo "           ~/.config/grove/bot.yaml \\"
 echo "           --out ${CONFIG_DIR}/cortex.yaml"
 echo "    2. Validate the new config:"
 echo "       cortex start --config ${CONFIG_DIR}/cortex.yaml --dry-run"
-echo "    3. Set GROVE_CHANNEL=<name> in Claude Code sessions to enable events"
-echo "       (still GROVE_CHANNEL — env var rename to CORTEX_CHANNEL is deferred"
-echo "       to a future MIG step alongside the code-side hook+relay update)"
-echo "    4. Load services (macOS) — one plist per discovered stack config:"
-echo "       launchctl load ~/Library/LaunchAgents/ai.meta-factory.cortex.relay.plist"
-echo "       # For each cortex*.yaml in ~/.config/cortex/ a stack plist is rendered:"
-echo "       #   cortex.yaml         → ai.meta-factory.cortex.meta-factory.plist"
-echo "       #   cortex.{slug}.yaml  → ai.meta-factory.cortex.{slug}.plist"
-echo "       launchctl load ~/Library/LaunchAgents/ai.meta-factory.cortex.meta-factory.plist"
+echo "    3. Set CORTEX_CHANNEL=<name> in Claude Code sessions to enable events"
+echo "       (legacy GROVE_CHANNEL still honored)."
+if [ "$(uname)" = "Darwin" ]; then
+  echo "    4. Load services (macOS) — one plist per discovered stack config:"
+  echo "       launchctl load ~/Library/LaunchAgents/ai.meta-factory.cortex.relay.plist"
+  echo "       # For each cortex*.yaml in ~/.config/cortex/ a stack plist is rendered:"
+  echo "       #   cortex.yaml         → ai.meta-factory.cortex.meta-factory.plist"
+  echo "       #   cortex.{slug}.yaml  → ai.meta-factory.cortex.{slug}.plist"
+  echo "       launchctl load ~/Library/LaunchAgents/ai.meta-factory.cortex.meta-factory.plist"
+else
+  echo "    4. Linux: service management is manual for now — see docs/"
+fi
 echo "    5. (Optional) Install grove-bot deprecation shim — see"
 echo "       ${CORTEX_DIR}/scripts/grove-bot-shim.sh"
 echo ""

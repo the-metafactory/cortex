@@ -25,6 +25,8 @@ import type { WsClientRegistry } from "./ws/client-registry";
 import type { AgentPresenceView } from "./api/agents";
 import type { NetworksView } from "./api/networks";
 import type { AdmissionDecider } from "./api/networks-admission";
+// FLG-2 (cortex#1706) — authorize-from-glass signer seam.
+import type { Authorizer } from "./api/networks-authorize";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff view passthrough.
 import type { HandoffView } from "./api/handoff";
 // FLG-3 (docs/plan-mc-future-state.md §4.D) — network doctor view passthrough.
@@ -108,6 +110,15 @@ export interface StartMissionControlOptions {
    * embed. Omitted → the route 503s honestly.
    */
   admissionDecider?: () => AdmissionDecider | null;
+  /**
+   * FLG-2 (cortex#1706) — lazy accessor for the authorize-from-glass signer,
+   * forwarded verbatim to `startServer` so `POST /api/networks/authorize` can
+   * stamp `hub_authorized_at` on an ADMITTED row LOCALLY with the hub-admin
+   * seed. A GETTER (like `admissionDecider`) because the hub-admin material +
+   * registry client boot AFTER the embed. Omitted → the route 503s
+   * `hub_admin_not_configured` (fail-closed).
+   */
+  authorizer?: () => Authorizer | null;
   /**
    * FLG-1 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the guided-join
    * handoff view, forwarded verbatim to `startServer` so
@@ -210,6 +221,7 @@ export async function startMissionControl(
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
       ...(opts.networks ? { networks: opts.networks } : {}),
       ...(opts.admissionDecider ? { admissionDecider: opts.admissionDecider } : {}),
+      ...(opts.authorizer ? { authorizer: opts.authorizer } : {}),
       ...(opts.handoffView ? { handoffView: opts.handoffView } : {}),
       ...(opts.doctorView ? { doctorView: opts.doctorView } : {}),
       ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),

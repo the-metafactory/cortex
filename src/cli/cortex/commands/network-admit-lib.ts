@@ -45,10 +45,20 @@ import type {
  * (the live-registry round-trip test, cortex#1517 S3, deliberately drives
  * this only through the real `dispatchNetwork` command path).
  */
-export async function buildAdmissionReadHeader(material: StackIdentityMaterial): Promise<string> {
+export async function buildAdmissionReadHeader(
+  material: StackIdentityMaterial,
+  // cortex#1652 — OPTIONAL network scope. The registry's read gate (FND-5)
+  // authorizes a GLOBAL admin with or without it, but a PER-NETWORK admin
+  // (#1321) is authorized ONLY when the signed claim names a network they
+  // administer — an unscoped read claim from a per-network admin is a hard 403
+  // (`admin_not_authorized`). Omitted ⇒ the historical unscoped claim
+  // (byte-identical for existing global-admin callers).
+  networkId?: string,
+): Promise<string> {
   const claim = {
     admin_pubkey: material.pubkeyB64,
     issued_at: new Date().toISOString(),
+    ...(networkId !== undefined && { network_id: networkId }),
   };
   return JSON.stringify(await signAdminRequest(material.seed, claim));
 }

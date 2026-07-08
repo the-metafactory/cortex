@@ -81,7 +81,19 @@ function isHookEventName(v: string): v is HookEventName {
 
 const EVENTS_DIR = join(process.env.HOME ?? "~", ".claude", "events");
 const RAW_DIR = join(EVENTS_DIR, "raw");
-const INGEST_URL = "http://localhost:8766/api/events/ingest";
+// cortex#1677: the relay is OPTIONAL. The env var below overrides the
+// default target for a moved/rebound relay; when unset, the literal
+// fallback is used (fresh installs with no relay configured will
+// fast-fail here). Either way, `postEvent()` below has a 500ms timeout
+// and swallows all errors, and every event is ALSO always written to
+// JSONL under `~/.claude/events/raw/*.jsonl` via `writeToJsonl()`
+// regardless of POST outcome — the relay is a nice-to-have forwarder,
+// not a dependency, and this hook never blocks the agent on it. No
+// `GROVE_*` fallback here: this is a new var (cortex#774's
+// CORTEX_*/GROVE_* dual-read pattern is only for names being migrated,
+// not newly introduced ones).
+const INGEST_URL =
+  process.env.CORTEX_INGEST_URL ?? "http://localhost:8766/api/events/ingest";
 
 // =============================================================================
 // Session Scoping (T-2.2)

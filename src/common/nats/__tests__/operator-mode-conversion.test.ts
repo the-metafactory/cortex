@@ -490,3 +490,188 @@ describe("renderOperatorModeBlocks — cortex#1480: ensure a MISSING account und
     expect(result.reason).toContain("resolver_preload");
   });
 });
+
+// =============================================================================
+// cortex#1662 S1 / cortex#1626 — the OPTIONAL push-capable full/dir resolver.
+//
+// A full/dir resolver (`resolver { type: full, dir, allow_delete, interval }`)
+// accepts a runtime `nsc push` of updated account JWTs, so admit/rotate/revoke
+// each become a live per-member push instead of an all-member-dropping hub
+// restart (#1626 design §5.1). This is the SAME conf shape the operator-mode
+// hub fixture in `scripts/federation-selftest.sh` (`stage_hub_operator`) renders
+// by hand; S1 makes the renderer emit it behind an opt-in `resolver` option.
+//
+// The load-bearing guarantee: the DEFAULT (option absent) stays BYTE-IDENTICAL
+// to the pre-#1662 MEMORY+preload render — zero behavior change for every
+// existing caller.
+// =============================================================================
+
+/**
+ * Structural extractor for the full-resolver block's scalar fields — an
+ * INDEPENDENT parse (not the production emit) so the shape assertions can't be
+ * circular with the code under test. Returns the `type`/`dir`/`allow_delete`/
+ * `interval` values found inside the top-level `resolver { … }` block, or null
+ * when there is no such braced block.
+ */
+function fullResolverFields(
+  conf: string,
+): { type?: string; dir?: string; allowDelete?: string; interval?: string } | null {
+  const m = /resolver\s*\{/.exec(conf);
+  if (m === null) return null;
+  const open = m.index + m[0].length - 1;
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < conf.length; i++) {
+    if (conf[i] === "{") depth++;
+    else if (conf[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) return null;
+  const body = conf.slice(open + 1, end);
+  const grab = (key: string): string | undefined => {
+    const g = new RegExp(`${key}\\s*[:=]\\s*"?([^"\\n]+?)"?\\s*$`, "m").exec(body);
+    return g?.[1]?.trim();
+  };
+  return {
+    type: grab("type"),
+    dir: grab("dir"),
+    allowDelete: grab("allow_delete"),
+    interval: grab("interval"),
+  };
+}
+
+const FULL_RESOLVER_DIR = "/Users/andreas/.config/nats/community-jwt";
+
+describe("renderOperatorModeBlocks — cortex#1662 S1: full/dir resolver emit", () => {
+  test("DEFAULT (no resolver option) is BYTE-IDENTICAL to an explicit { type: 'memory' }", () => {
+    const implicit = mustConvert(renderOperatorModeBlocks(ANON_CONF, PACKAGE));
+    const explicit = mustConvert(
+      renderOperatorModeBlocks(ANON_CONF, { ...PACKAGE, resolver: { type: "memory" } }),
+    );
+    expect(explicit).toBe(implicit);
+  });
+
+  test("DEFAULT still emits `resolver: MEMORY` + a resolver_preload carrying FED (no behavior change)", () => {
+    const conf = mustConvert(renderOperatorModeBlocks(ANON_CONF, PACKAGE));
+    expect(conf).toContain("resolver: MEMORY");
+    expect(conf).toContain("resolver_preload");
+    expect(preloadKeys(conf)).toContain(ACCOUNT);
+    // and NO full-resolver braced block leaked in.
+    expect(conf).not.toContain("type: full");
+  });
+
+  test("a full resolver emits `resolver { type: full, dir, allow_delete, interval }` with the blessed defaults", () => {
+    const conf = mustConvert(
+      renderOperatorModeBlocks(ANON_CONF, {
+        ...PACKAGE,
+        resolver: { type: "full", dir: FULL_RESOLVER_DIR },
+      }),
+    );
+    const fields = fullResolverFields(conf);
+    expect(fields).not.toBeNull();
+    expect(fields?.type).toBe("full");
+    expect(fields?.dir).toBe(FULL_RESOLVER_DIR);
+    // #1626 / selftest-fixture blessed defaults.
+    expect(fields?.allowDelete).toBe("false");
+    expect(fields?.interval).toBe("2m");
+  });
+
+  test("a full resolver emits NO resolver_preload (a dir resolver is push-populated, not boot-preloaded)", () => {
+    const conf = mustConvert(
+      renderOperatorModeBlocks(ANON_CONF, {
+        ...PACKAGE_WITH_ALL_THREE,
+        resolver: { type: "full", dir: FULL_RESOLVER_DIR },
+      }),
+    );
+    expect(conf).not.toContain("resolver_preload");
+    expect(conf).not.toContain("resolver: MEMORY");
+    // No account is preloaded — the resolver_preload extractor finds nothing.
+    expect(preloadKeys(conf)).toHaveLength(0);
+  });
+
+  test("a full resolver still emits `operator:` and (when the package carries SYS) `system_account:`", () => {
+    const conf = mustConvert(
+      renderOperatorModeBlocks(ANON_CONF, {
+        ...PACKAGE_WITH_SYS,
+        resolver: { type: "full", dir: FULL_RESOLVER_DIR },
+      }),
+    );
+    expect(conf).toContain(`operator: ${OPERATOR_JWT}`);
+    expect(conf).toContain(`system_account: ${SYS_ACCOUNT}`);
+  });
+
+  test("full-resolver allow_delete + interval are overridable", () => {
+    const conf = mustConvert(
+      renderOperatorModeBlocks(ANON_CONF, {
+        ...PACKAGE,
+        resolver: { type: "full", dir: FULL_RESOLVER_DIR, allowDelete: true, interval: "30s" },
+      }),
+    );
+    const fields = fullResolverFields(conf);
+    expect(fields?.allowDelete).toBe("true");
+    expect(fields?.interval).toBe("30s");
+  });
+
+  test("the converted full-resolver config is still recognised as operator-mode (has an account tree)", () => {
+    const conf = mustConvert(
+      renderOperatorModeBlocks(ANON_CONF, {
+        ...PACKAGE,
+        resolver: { type: "full", dir: FULL_RESOLVER_DIR },
+      }),
+    );
+    expect(natsConfigHasAccountTree(conf)).toBe(true);
+  });
+
+  // ── option validation ────────────────────────────────────────────────────
+  test("a full resolver with an empty dir → refuse", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, {
+      ...PACKAGE,
+      resolver: { type: "full", dir: "   " },
+    });
+    expect(result.status).toBe("refuse");
+    if (result.status !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toMatch(/dir/i);
+  });
+
+  test("a full resolver dir carrying a quote/brace/newline → refuse (HOCON-injection guard)", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, {
+      ...PACKAGE,
+      resolver: { type: "full", dir: '/tmp/jwt"\nallow_delete: true' },
+    });
+    expect(result.status).toBe("refuse");
+    if (result.status !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toMatch(/quote|brace|newline/i);
+  });
+
+  test("a full resolver with a non-duration interval → refuse", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, {
+      ...PACKAGE,
+      resolver: { type: "full", dir: FULL_RESOLVER_DIR, interval: "soon" },
+    });
+    expect(result.status).toBe("refuse");
+    if (result.status !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toMatch(/interval|duration/i);
+  });
+
+  test("a full resolver aimed at an ALREADY operator-mode config → refuse (no preload to ensure into)", () => {
+    const fedOnly = mustConvert(renderOperatorModeBlocks(ANON_CONF, PACKAGE));
+    const result = renderOperatorModeBlocks(fedOnly, {
+      ...PACKAGE,
+      resolver: { type: "full", dir: FULL_RESOLVER_DIR },
+    });
+    expect(result.status).toBe("refuse");
+    if (result.status !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toMatch(/full|from-scratch|resolver_preload/i);
+  });
+
+  test("an explicit { type: 'memory' } on an already-converted bus is still 'already' (memory ensure path unaffected)", () => {
+    const fedOnly = mustConvert(renderOperatorModeBlocks(ANON_CONF, PACKAGE));
+    const again = renderOperatorModeBlocks(fedOnly, { ...PACKAGE, resolver: { type: "memory" } });
+    expect(again.status).toBe("already");
+  });
+});

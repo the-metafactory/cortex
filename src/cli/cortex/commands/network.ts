@@ -2827,7 +2827,14 @@ async function runListPending(
   if (!matRes.ok) return opError("admit", matRes.reason, json);
   const material = matRes.material;
 
-  const ports = admitPortsFactory({ registryUrl, material });
+  // cortex#1652 — thread the --network scope into the admin-signed read claim:
+  // a per-network admin (#1321) is only authorized when the claim names their
+  // network (FND-5); a global admin's unscoped read is unchanged when omitted.
+  const ports = admitPortsFactory({
+    registryUrl,
+    material,
+    ...(networkFilter !== undefined && { networkId: networkFilter }),
+  });
   const report = await runNetworkListPending(
     { status, ...(networkFilter !== undefined && { networkFilter }), registryUrl, material },
     ports,
@@ -2991,7 +2998,18 @@ async function runAdmit(
 
   // APPLY path — fetch/decision/seal/Discord all live in network-admit-lib.ts
   // over network-admit-ports.ts.
-  const ports = admitPortsFactory({ registryUrl, material, secretPortsFactory });
+  // cortex#1652 — `--network <id>` threads into the admin-signed read claim.
+  // A PER-NETWORK admin (#1321) MUST pass it: the registry's FND-5 read gate
+  // 403s (`admin_not_authorized`) an unscoped read claim from a non-global
+  // admin — the row fetch is the first apply-path leg, so without the scope
+  // the whole admit fails before any decision/seal. A global admin may omit it.
+  const admitNetworkScope = optionalValueFlag(flags, "--network");
+  const ports = admitPortsFactory({
+    registryUrl,
+    material,
+    secretPortsFactory,
+    ...(admitNetworkScope !== undefined && { networkId: admitNetworkScope }),
+  });
   const report = await runNetworkAdmit(
     {
       requestId,
@@ -3496,6 +3514,30 @@ async function runSecret(
   // cortex#1598 — operator-mode attestation (hub_mode/resolver_mode off the
   // verified descriptor + the hub FED account). Absent ⇒ the simple/PSK path
   // (unchanged); present + operator-mode ⇒ addOrRotate mints a scoped user + seals v2.
+  // cortex#1652 — seed the VERIFIED descriptor on a cache MISS first (same
+  // fail-open as the admit path, #1669): a custodian machine that never ran
+  // create/join has an empty cache, so the attestation would resolve undefined
+  // and the seal would SILENTLY take the PSK path — exactly the artifact an
+  // operator hub rejects. Best-effort: never throws; local-config fallback
+  // still applies when the registry is unreachable. LIVE-ONLY: gated on the
+  // production ports factory — an injected test factory means a hermetic run,
+  // and the seed's registry GET would escape the test's fakes (in CI it reached
+  // the REAL registry and flipped fixture networks onto the operator-mode path).
+  if (portsFactory === DEFAULT_SECRET_PORTS_FACTORY) {
+    const seed = await seedDescriptorCacheOnMiss(
+      networkId,
+      registryUrl,
+      optionalValueFlag(flags, "--registry-pubkey"),
+    );
+    if (!seed.seeded) {
+      process.stderr.write(
+        `cortex network secret: could not seed the "${networkId}" descriptor ` +
+          `(${seed.reason ?? "unknown"}); operator-mode resolution falls back to local ` +
+          `config — on an operator-mode network without a local hub_mode declaration, ` +
+          `the seal may take the simple/PSK path.\n`,
+      );
+    }
+  }
   const op = resolveOperatorAttestation(flags, networkId, load);
 
   const ports = portsFactory({ hubConfigPath, registryUrl, material: matRes.material });

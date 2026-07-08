@@ -145,7 +145,28 @@ export function loadConfig(configPath?: string): Readonly<Config> {
       }
       principals.push(entry.trim());
     }
-    governance = { principals };
+    // FND-3 — optional step-up MFA knobs. Only `secretPath` (a string) is
+    // accepted today; a malformed block throws rather than silently ignoring a
+    // security-relevant override.
+    const stepUpRaw: unknown = governanceRaw.stepUp;
+    let stepUp: { secretPath?: string } | undefined;
+    if (stepUpRaw !== undefined) {
+      if (stepUpRaw === null || typeof stepUpRaw !== "object" || Array.isArray(stepUpRaw)) {
+        throw new Error(`governance.stepUp must be an object in ${resolvedPath}`);
+      }
+      const secretPathRaw = (stepUpRaw as Record<string, unknown>).secretPath;
+      if (secretPathRaw !== undefined) {
+        if (typeof secretPathRaw !== "string" || secretPathRaw.trim() === "") {
+          throw new Error(
+            `governance.stepUp.secretPath must be a non-empty string in ${resolvedPath}`,
+          );
+        }
+        stepUp = { secretPath: secretPathRaw.trim() };
+      } else {
+        stepUp = {};
+      }
+    }
+    governance = stepUp ? { principals, stepUp } : { principals };
   }
 
   let level: LogLevel = DEFAULT_CONFIG.log.level;

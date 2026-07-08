@@ -339,12 +339,17 @@ function buildLiveAdmissionLookupPort(cfg: LiveSecretPortsConfig): AdmissionLook
   const fetchImpl = cfg.fetchImpl ?? globalThis.fetch;
   return {
     async findAdmittedRow(networkId, memberPubkey) {
-      // Admin-signed read of the ADMITTED list (x-admin-signed header). NOTE: the
-      // registry's read gate checks the REGISTRY-admin allowlist; for metafactory
-      // the hub-admin seed IS the registry-admin (Q5 collapse), so this works. A
-      // fully-separable deployment must put the hub-admin on REGISTRY_ADMIN_PUBKEYS
-      // for the lookup (documented in the PR).
-      const claim = { admin_pubkey: cfg.material.pubkeyB64, issued_at: new Date().toISOString() };
+      // Admin-signed read of the ADMITTED list (x-admin-signed header).
+      // cortex#1652 — the claim CARRIES the network scope: the registry's FND-5
+      // read gate authorizes a GLOBAL admin with or without it, but a
+      // PER-NETWORK admin (#1321) only when the claim names a network they
+      // administer — the pre-#1652 unscoped claim 403'd every per-network
+      // custodian (the decision-A separated-authorities deployment).
+      const claim = {
+        admin_pubkey: cfg.material.pubkeyB64,
+        issued_at: new Date().toISOString(),
+        network_id: networkId,
+      };
       const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests?status=ADMITTED`, {
         method: "GET",
@@ -817,9 +822,14 @@ function buildLiveAdmittedListPort(cfg: LiveKeyRotationPortsConfig): AdmittedLis
   return {
     async listAdmittedRows(networkId) {
       // The SAME admin-signed read `findAdmittedRow` / `admit --list-pending` use.
-      // ADR-0020 scopes admin reads to GLOBAL admins; a per-network admin 403s
-      // here — surfaced readably rather than as a silent empty list.
-      const claim = { admin_pubkey: cfg.material.pubkeyB64, issued_at: new Date().toISOString() };
+      // cortex#1652 (the ADR-0020 fast-follow) — the claim carries the network
+      // scope, so a PER-NETWORK admin (#1321) of `networkId` is authorized by
+      // the FND-5 read gate; a global admin's read narrows to the same network.
+      const claim = {
+        admin_pubkey: cfg.material.pubkeyB64,
+        issued_at: new Date().toISOString(),
+        network_id: networkId,
+      };
       const signed = await signAdminRequest(cfg.material.seed, claim);
       const resp = await fetchImpl(`${base}/admission-requests?status=ADMITTED`, {
         method: "GET",
@@ -827,9 +837,9 @@ function buildLiveAdmittedListPort(cfg: LiveKeyRotationPortsConfig): AdmittedLis
       });
       if (resp.status === 403) {
         throw new Error(
-          `registry refused the ADMITTED list (HTTP 403 admin_not_authorized): admission reads are ` +
-            `GLOBAL-admin-only today (ADR-0020), so a per-network admin cannot enumerate members for ` +
-            `"${networkId}" to rotate the key. Use a global-admin seed; per-network read-scoping is the ADR-0020 fast-follow.`,
+          `registry refused the ADMITTED list (HTTP 403 admin_not_authorized): the signing seed is ` +
+            `neither a GLOBAL registry admin nor a per-network admin of "${networkId}" (#1321). ` +
+            `Use a seed on one of those allowlists.`,
         );
       }
       if (!resp.ok) {

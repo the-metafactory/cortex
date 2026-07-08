@@ -107,8 +107,8 @@ file:
 
 ```yaml
 # labels.yaml
-discord:285727653603049472: mike
-discord:1134325176796987522: andreas
+discord:222222222222222222: mike
+discord:333333333333333333: andreas
 mattermost:abc123: mike
 ```
 

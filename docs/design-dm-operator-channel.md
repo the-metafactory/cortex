@@ -111,7 +111,7 @@ discord:
             - "mellanon/arc"
       defaultRole: denied                      # Unknown DMs are ignored
       userRoles:                               # Optional: per-user DM roles
-        - users: ["285727653603049472"]        # Jens-Christian Fischer
+        - users: ["222222222222222222"]        # Jens-Christian Fischer
           features: ["chat"]
           disallowedTools: ["Write", "Edit", "NotebookEdit"]
           bashGuard: true                      # Same guards as guild channel

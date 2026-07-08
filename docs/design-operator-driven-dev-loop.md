@@ -17,7 +17,7 @@ The current dev-loop entry is `pilot tick`: a **standalone `pilot` daemon** scan
 ## 2. The model
 
 ```
-Andreas (Discord, gated to user 1134325176796987522)
+Andreas (Discord, gated to user 333333333333333333)
    │  "@vega implement cortex#1196"        (or: review cortex#1204)
    ▼
 Pilot/vega  — IN-PROCESS meta-factory agent (agents.d fragment, rides the stack identity + runtime)

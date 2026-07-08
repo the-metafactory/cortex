@@ -590,6 +590,23 @@ export interface Config {
 export interface GovernanceConfig {
   /** Principal emails (CF-Access identities) allowed to run glass mutations. */
   principals: string[];
+  /**
+   * FND-3 — step-up MFA (LOCAL TOTP) knobs. Optional; when omitted the daemon
+   * reads the enrolled secret from the default path
+   * (`~/.config/cortex/step-up-totp.json`). Absent enrollment fails high-blast
+   * control verbs closed (403) regardless — this block only relocates the
+   * secret, it never disables the gate.
+   */
+  stepUp?: StepUpGovernanceConfig;
+}
+
+/** FND-3 — step-up MFA configuration. */
+export interface StepUpGovernanceConfig {
+  /**
+   * Override the on-disk home of the enrolled TOTP secret. Tilde-expanded.
+   * Never contains the secret itself — only its path.
+   */
+  secretPath?: string;
 }
 
 /** cortex#1410 — CF Access application binding for non-loopback MC. */

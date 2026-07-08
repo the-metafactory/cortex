@@ -857,7 +857,63 @@ export interface OperatorModeLeafPackage {
    * {@link OperatorModeLeafPackage.systemAccountJwt} pairing rule).
    */
   agentsAccountJwt?: string;
+  /**
+   * cortex#1662 S1 / cortex#1626 — OPTIONAL account-resolver mode selector.
+   *
+   * DEFAULT (absent or `{ type: "memory" }`): the historical
+   * `resolver: MEMORY` + `resolver_preload { … }` shape — byte-identical to the
+   * pre-#1662 render (zero behavior change for every existing caller).
+   *
+   * `{ type: "full"; dir; … }`: a push-capable full/dir resolver
+   * (`resolver { type: full, dir, allow_delete, interval }`) and NO
+   * `resolver_preload` block — a dir resolver is populated at RUNTIME by
+   * `nsc push` rather than at boot from a preload, so admit/rotate/revoke each
+   * become a live per-member `nsc push` instead of an all-member-dropping hub
+   * restart (#1626 design §5.1). This is the same conf shape the operator-mode
+   * hub fixture in `scripts/federation-selftest.sh` (`stage_hub_operator`)
+   * renders by hand; #1662 S1 makes the renderer emit it.
+   *
+   * Only meaningful on the FROM-SCRATCH (anonymous bus) render path: a full
+   * resolver has no preload to preload accounts into, so `renderOperatorModeBlocks`
+   * REFUSES a `type: "full"` package aimed at an already-operator-mode config
+   * (its ensure-missing-account path is a `resolver_preload` splice with no
+   * full-resolver analogue). The `dir` string is HOCON-quoted on emit so a value
+   * carrying whitespace/braces cannot break out of the block.
+   */
+  resolver?: ResolverMode;
 }
+
+/**
+ * cortex#1662 S1 / cortex#1626 — the account-resolver-mode selector carried on
+ * {@link OperatorModeLeafPackage.resolver}. A discriminated union:
+ *   - `memory` (the DEFAULT when absent) → `resolver: MEMORY` + `resolver_preload`.
+ *   - `full` → a push-capable `resolver { type: full, dir, allow_delete, interval }`
+ *     block and NO preload (runtime `nsc push` populates the `dir`).
+ */
+export type ResolverMode =
+  | { type: "memory" }
+  | {
+      /** A push-capable full/dir resolver (accepts runtime `nsc push`). */
+      type: "full";
+      /** Directory the resolver persists account JWTs to (HOCON-quoted on emit). */
+      dir: string;
+      /**
+       * Whether the resolver may DELETE account JWTs on a pruning push.
+       * DEFAULT `false` (the #1626 / selftest-fixture blessed value) — a hub
+       * should not silently drop an account it can no longer see.
+       */
+      allowDelete?: boolean;
+      /**
+       * Directory re-scan interval (a nats duration, e.g. `"2m"`). DEFAULT
+       * `"2m"` — the value the `stage_hub_operator` fixture and the #1626 recipe
+       * bless.
+       */
+      interval?: string;
+    };
+
+/** cortex#1662 S1 — the blessed defaults for a full/dir resolver (#1626 / selftest fixture). */
+const FULL_RESOLVER_DEFAULT_ALLOW_DELETE = false;
+const FULL_RESOLVER_DEFAULT_INTERVAL = "2m";
 
 /**
  * The outcome of {@link renderOperatorModeBlocks}:
@@ -912,6 +968,80 @@ function validateOptionalPackageAccount(
     };
   }
   return { ok: true };
+}
+
+/**
+ * cortex#1662 S1 / cortex#1626 — validate the OPTIONAL resolver-mode selector.
+ * Absent ⇒ ok (the default MEMORY+preload path). `memory` ⇒ ok (explicit
+ * default). `full` ⇒ its `dir` must be a non-empty HOCON-quote-safe string (no
+ * `"` / newline that would break out of the quoted value) and, if supplied, its
+ * `interval` must match {@link NATS_DURATION}. A malformed resolver would emit a
+ * `resolver { … }` block nats-server rejects at RUNTIME (bus restart) instead of
+ * failing fast here.
+ */
+function validateResolverMode(
+  resolver: ResolverMode | undefined,
+): { ok: true } | { ok: false; reason: string } {
+  if (resolver === undefined || resolver.type === "memory") return { ok: true };
+  const dir = resolver.dir.trim();
+  if (dir.length === 0) {
+    return {
+      ok: false,
+      reason:
+        "a full/dir resolver was requested without a `dir` — a push-capable " +
+        "resolver needs a directory to persist account JWTs into.",
+    };
+  }
+  if (/["\r\n{}]/.test(dir)) {
+    return {
+      ok: false,
+      reason:
+        `resolver dir ${JSON.stringify(resolver.dir)} contains a quote, brace, or ` +
+        "newline — refusing to emit a value that could break out of the resolver block.",
+    };
+  }
+  if (resolver.interval !== undefined && !NATS_DURATION.test(resolver.interval.trim())) {
+    return {
+      ok: false,
+      reason:
+        `resolver interval ${JSON.stringify(resolver.interval)} is not a nats duration ` +
+        "(e.g. \"2m\", \"30s\", \"1h\").",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * cortex#1662 S1 / cortex#1626 — render the account-resolver block(s) for a
+ * from-scratch operator-mode conversion. Returns the lines to splice between the
+ * `operator:` / optional `system_account:` lines and the trailing marker.
+ *
+ *   - `memory` (or absent) → the historical `resolver: MEMORY` + `resolver_preload
+ *     { <pubkey>: <jwt> … }` shape, BYTE-IDENTICAL to the pre-#1662 render.
+ *   - `full` → a push-capable `resolver { type: full, dir, allow_delete, interval }`
+ *     block and NO `resolver_preload` (a dir resolver is populated by runtime
+ *     `nsc push`, not from a boot-time preload). `dir` + `interval` are quoted to
+ *     match the `stage_hub_operator` fixture; both were validated upstream.
+ */
+function renderResolverBlockLines(
+  resolver: ResolverMode | undefined,
+  preload: string[],
+): string[] {
+  if (resolver?.type === "full") {
+    const allowDelete = resolver.allowDelete ?? FULL_RESOLVER_DEFAULT_ALLOW_DELETE;
+    const interval = (resolver.interval ?? FULL_RESOLVER_DEFAULT_INTERVAL).trim();
+    return [
+      "resolver {",
+      "  type: full",
+      `  dir: "${resolver.dir.trim()}"`,
+      `  allow_delete: ${allowDelete}`,
+      `  interval: "${interval}"`,
+      "}",
+    ];
+  }
+  // DEFAULT — the MEMORY + preload shape. Security-review NIT-2 (#1058): the
+  // colon form `resolver_preload:` to match the production hub's local.conf.
+  return ["resolver: MEMORY", "resolver_preload: {", ...preload, "}"];
 }
 
 /**
@@ -1064,6 +1194,12 @@ export function renderOperatorModeBlocks(
   const agentsValid = validateOptionalPackageAccount("AGENTS", agentsAccount, agentsAccountJwt);
   if (!agentsValid.ok) return { status: "refuse", reason: agentsValid.reason };
 
+  // cortex#1662 S1 / cortex#1626 — validate the OPTIONAL resolver-mode selector
+  // BEFORE either conversion branch (a malformed full-resolver `dir`/`interval`
+  // would otherwise reach nats-server as a runtime restart failure).
+  const resolverValid = validateResolverMode(pkg.resolver);
+  if (!resolverValid.ok) return { status: "refuse", reason: resolverValid.reason };
+
   // The accounts THIS package wants preloaded — FED always, AGENTS/SYS when
   // the package carries them. Shared by BOTH the "already, ensure missing"
   // branch (2) and the "anonymous, render from scratch" branch (3) below so
@@ -1081,6 +1217,23 @@ export function renderOperatorModeBlocks(
   // 2) Already operator-mode? Decide between idempotent no-op, an ENSURE of any
   // MISSING package account, and a clobber-refuse.
   if (natsConfigHasAccountTree(currentConf)) {
+    // cortex#1662 S1 — a full/dir resolver has no `resolver_preload` block, so
+    // the ensure-missing-account path (a preload splice) has no analogue for it.
+    // A `type: "full"` package aimed at an already-operator-mode config is a
+    // caller error: full-resolver rendering is a FROM-SCRATCH concern (the S2
+    // hub-provision composition), never an in-place preload edit. Refuse rather
+    // than silently ignore the requested mode.
+    if (pkg.resolver?.type === "full") {
+      return {
+        status: "refuse",
+        reason:
+          "a full/dir resolver was requested for a bus that is ALREADY operator-mode — " +
+          "the renderer only emits a full resolver on a from-scratch conversion (a dir " +
+          "resolver has no resolver_preload to ensure a missing account into). Provision " +
+          "the hub conf from scratch, or drop the resolver option to ensure accounts into " +
+          "the existing MEMORY preload.",
+      };
+    }
     const stripped = stripConfigComments(currentConf);
     const existingOperatorJwt = /^[ \t]*operator[ \t]*[:=][ \t]*(\S+)/m.exec( // operator-mode block line
       stripped,
@@ -1166,12 +1319,13 @@ export function renderOperatorModeBlocks(
   if (systemAccount !== undefined && systemAccount.length > 0) {
     blocks.push(`system_account: ${systemAccount}`);
   }
-  // Security-review NIT-2 (#1058) — `resolver_preload:` with the COLON form
-  // (not the brace-only `resolver_preload {`): this matches the production hub's
-  // `~/.config/nats/local.conf` shape (which uses the colon form), so a converted
-  // bus looks identical to a hand-built operator-mode one. Both forms are valid
-  // HOCON; we pick the colon form deliberately to match local.conf.
-  blocks.push("resolver: MEMORY", "resolver_preload: {", ...preload, "}");
+  // cortex#1662 S1 / cortex#1626 — the resolver block(s). DEFAULT (resolver
+  // absent or `memory`) is the historical `resolver: MEMORY` + `resolver_preload
+  // { … }` shape, byte-identical to the pre-#1662 render (Security-review NIT-2
+  // #1058: the colon form matches the production hub's local.conf). A `full`
+  // resolver emits a push-capable `resolver { type: full, dir, allow_delete,
+  // interval }` block and NO preload (runtime `nsc push` populates the dir).
+  blocks.push(...renderResolverBlockLines(pkg.resolver, preload));
   blocks.push(OPERATOR_MODE_MARKER_END);
 
   const base = currentConf.replace(/\n+$/, "");
@@ -1291,6 +1445,17 @@ export function renderBaseIsolatedConfig(identity: NatsBaseIdentity): string {
  * nats-server reject it at RUNTIME (bus restart) instead of failing fast here.
  */
 const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
+
+/**
+ * cortex#1662 S1 — a nats-server duration literal for the full resolver's
+ * `interval` (e.g. `2m`, `30s`, `1h`, `500ms`). Deliberately narrow: a bare
+ * `<number><unit>` with no whitespace/braces/quotes so a hostile value cannot
+ * break out of the rendered `resolver { … }` block even though the interval is
+ * emitted quoted (matching the `stage_hub_operator` fixture's `interval: "2m"`).
+ * Validated here, never semantically checked — nats-server owns the unit set at
+ * runtime.
+ */
+const NATS_DURATION = /^\d+(?:ns|us|µs|ms|s|m|h)$/;
 
 // =============================================================================
 // O-4b (cortex#1063) — reusable shape guards for the leaf-package consumer.

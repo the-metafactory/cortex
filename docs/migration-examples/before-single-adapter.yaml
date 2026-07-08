@@ -5,7 +5,7 @@
 operator:
   id: andreas
   displayName: Andreas
-  discordId: "1134325176796987522"
+  discordId: "333333333333333333"
   dataResidency: NZ
 
 stack:
@@ -27,10 +27,10 @@ agents:
         defaultRole: denied
         roles:
           - name: operator
-            users: ["1134325176796987522"]
+            users: ["333333333333333333"]
             features: [chat, async, team]
           - name: user
-            users: ["285727653603049472"]
+            users: ["222222222222222222"]
             features: [chat]
           - name: agent-echo
             users: ["999000111"]

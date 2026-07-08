@@ -1120,6 +1120,49 @@ describe("cortex network admit — live registry round-trip (cortex#1517 S3)", (
     });
   });
 
+  // cortex#1652 — the PER-NETWORK admin read path (#1321 + FND-5). The live
+  // incident: a per-network admin's `admit --apply` 403'd `admin_not_authorized`
+  // on the row GET because the CLI's read claim carried no `network_id` (the
+  // registry authorizes a non-global admin ONLY for a claim naming a network
+  // they administer). `--network <id>` now threads into the signed read claim.
+  test("READ: per-network admin is 403 unscoped, authorized with --network (cortex#1652)", async () => {
+    const { env, adminSeedPath } = await liveRegistryEnv();
+
+    // A second admin identity that is NOT on the global allowlist…
+    const { seedPath: perNetSeedPath, adminPubkey: perNetPubkey } = await mintAdminSeed();
+    expect(env.REGISTRY_ADMIN_PUBKEYS).not.toContain(perNetPubkey);
+
+    await withLiveRegistry(env, async () => {
+      // …but IS the per-network admin of "netx" (global admin attests it).
+      const created = await dispatchNetwork([
+        "create", "netx",
+        "--hub", "tls://hub.example:7422", "--leaf-port", "7422",
+        "--network-admins", perNetPubkey,
+        "--admin-seed", adminSeedPath,
+        "--apply",
+      ]);
+      expect(created.exitCode).toBe(0);
+
+      // UNSCOPED read claim from the per-network admin → the registry's FND-5
+      // gate refuses (a non-global admin may not read all networks).
+      const unscoped = await dispatchNetwork([
+        "admit", "--list-pending",
+        "--admin-seed", perNetSeedPath,
+        "--json",
+      ]);
+      expect(unscoped.exitCode).not.toBe(0);
+
+      // SCOPED to their own network → authorized (list may be empty — the
+      // assertion is the AUTH outcome, not row contents).
+      const scoped = await dispatchNetwork([
+        "admit", "--list-pending", "--network", "netx",
+        "--admin-seed", perNetSeedPath,
+        "--json",
+      ]);
+      expect(scoped.exitCode).toBe(0);
+    });
+  });
+
   test("WRITE: --apply admit's buildAdmissionDecisionBody output is accepted by the live registry (PENDING -> ADMITTED)", async () => {
     const { env, adminSeedPath } = await liveRegistryEnv();
 
