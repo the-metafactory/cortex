@@ -2205,6 +2205,28 @@ export async function seedAdminDescriptorCache(
   }
 }
 
+/**
+ * cortex#1652 — seed the descriptor cache for `admit` ONLY on a MISS. Unlike
+ * create/join, the admit path never populated the cache, so a custodian who runs
+ * `admit` without a prior create/join on this machine resolved hub_mode=undefined
+ * → silent PSK fallback (the re-seal gap: `network join` then re-renders a PSK
+ * leaf remote the operator hub rejects). A warm cache → NO network call. Delegates
+ * to {@link seedAdminDescriptorCache} (never throws). Injectable cache + seed fn
+ * for tests. `skipped` marks the warm-cache no-op (still `seeded: true`).
+ */
+export async function seedDescriptorCacheOnMiss(
+  networkId: string,
+  registryUrl: string,
+  registryPubkey: string | undefined,
+  cache: NetworkCache = new NetworkCache({
+    cacheDir: expandTilde(join("~", ".config", "cortex", "network-cache")),
+  }),
+  seed: typeof seedAdminDescriptorCache = seedAdminDescriptorCache,
+): Promise<{ seeded: boolean; reason?: string; skipped?: boolean }> {
+  if (cache.load(networkId)?.descriptor !== undefined) return { seeded: true, skipped: true };
+  return seed(networkId, registryUrl, registryPubkey);
+}
+
 async function runCreate(
   networkId: string,
   flags: FlagMap,
@@ -2985,8 +3007,30 @@ async function runAdmit(
       ...(admitHubAccount !== undefined && { hubAccount: admitHubAccount }),
       // cortex#1598 — DEFERRED operator-mode attestation resolver (the network id
       // is only known after the row fetch inside runNetworkAdmit).
-      resolveOperatorAttestation: (networkId: string) =>
-        resolveOperatorAttestation(flags, networkId, DEFAULT_READER),
+      // cortex#1652 — nothing populated the descriptor cache on an admit-only
+      // machine (create/join do; #1653 seeds it on create). A custodian who only
+      // runs `admit` therefore resolved hub_mode=undefined → silent PSK fallback:
+      // the re-seal gap, where `network join` then re-renders a PSK leaf remote
+      // the operator hub rejects. Seed the VERIFIED descriptor on a cache MISS
+      // before resolving. Best-effort — seedAdminDescriptorCache never throws,
+      // and resolveOperatorAttestation's local-config fallback still applies if
+      // the registry is unreachable; the seal only stays PSK if genuinely so.
+      resolveOperatorAttestation: async (networkId: string) => {
+        const seed = await seedDescriptorCacheOnMiss(
+          networkId,
+          registryUrl,
+          optionalValueFlag(flags, "--registry-pubkey"),
+        );
+        if (!seed.seeded) {
+          process.stderr.write(
+            `cortex network admit: could not seed the "${networkId}" descriptor ` +
+              `(${seed.reason ?? "unknown"}); operator-mode resolution falls back to ` +
+              `local config. If this network's hub is operator-mode and no local ` +
+              `hub_mode is set, the seal may take the simple/PSK path.\n`,
+          );
+        }
+        return resolveOperatorAttestation(flags, networkId, DEFAULT_READER);
+      },
       ...(discordMember !== undefined && {
         discord: {
           member: discordMember,

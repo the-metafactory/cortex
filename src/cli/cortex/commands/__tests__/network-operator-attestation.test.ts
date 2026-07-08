@@ -17,7 +17,7 @@ import { mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-import { resolveOperatorAttestation, seedAdminDescriptorCache } from "../network";
+import { resolveOperatorAttestation, seedAdminDescriptorCache, seedDescriptorCacheOnMiss } from "../network";
 import { NetworkCache } from "../../../../common/registry/network-cache";
 import type { LoadedConfig } from "../../../../common/config/loader";
 
@@ -126,5 +126,47 @@ describe("cortex#1652 — seedAdminDescriptorCache", () => {
       return { fetchAndCache: async () => ({ status: "ok" }) };
     });
     expect(seenCfg).toEqual({ url: "http://reg", pubkey: "PINNEDPUB" });
+  });
+});
+
+describe("cortex#1652 — seedDescriptorCacheOnMiss (admit-path re-seal gap)", () => {
+  test("cache MISS → calls the seed fn (so admit resolves operator, not PSK)", async () => {
+    let called = 0;
+    let seenArgs: [string, string, string | undefined] | undefined;
+    const seedSpy = async (id: string, url: string, pk?: string) => {
+      called += 1;
+      seenArgs = [id, url, pk];
+      return { seeded: true };
+    };
+    const r = await seedDescriptorCacheOnMiss(NET, "http://reg", "PIN", freshCache(), seedSpy);
+    expect(called).toBe(1);
+    expect(seenArgs).toEqual([NET, "http://reg", "PIN"]);
+    expect(r.seeded).toBe(true);
+    expect(r.skipped).toBeUndefined();
+  });
+
+  test("cache HIT → skips the network fetch entirely (warm cache, no seed call)", async () => {
+    const cache = freshCache();
+    cache.store(
+      NET,
+      { network_id: NET, hub_url: "tls://h:7422", leaf_port: 7422, members: [], hub_mode: "operator" },
+      { network_id: NET, members: [] },
+    );
+    let called = 0;
+    const seedSpy = async () => {
+      called += 1;
+      return { seeded: true };
+    };
+    const r = await seedDescriptorCacheOnMiss(NET, "http://reg", undefined, cache, seedSpy);
+    expect(called).toBe(0);
+    expect(r.seeded).toBe(true);
+    expect(r.skipped).toBe(true);
+  });
+
+  test("cache MISS + seed reports NOT seeded → propagates the reason (admit warns, stays best-effort)", async () => {
+    const seedSpy = async () => ({ seeded: false, reason: "unreachable" });
+    const r = await seedDescriptorCacheOnMiss(NET, "http://reg", undefined, freshCache(), seedSpy);
+    expect(r.seeded).toBe(false);
+    expect(r.reason).toBe("unreachable");
   });
 });

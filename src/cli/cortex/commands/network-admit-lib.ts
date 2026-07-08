@@ -224,10 +224,16 @@ export interface AdmitInputs {
    * the row's `network_id` is in hand; the result gates the seal onto the scoped-
    * mint path. Omitted ⇒ the simple/PSK seal (unchanged) — the CLI binds the real
    * resolver (descriptor cache + `--hub-fed-account`/config), tests omit it.
+   *
+   * cortex#1652 — may be async: the production resolver seeds the admin's
+   * descriptor cache on a miss (nothing populated it on an admit-only machine),
+   * so the call site awaits. Tests may still pass a synchronous resolver.
    */
   resolveOperatorAttestation?: (
     networkId: string,
-  ) => { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string };
+  ) =>
+    | { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string }
+    | Promise<{ hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string }>;
 }
 
 /** Discriminated on `ok` so a caller narrows to `sealOutcome`/`principalId`
@@ -337,7 +343,7 @@ export async function runNetworkAdmit(inputs: AdmitInputs, ports: AdmitPorts): P
     // a scoped user + seals v2 instead of a PSK; absent ⇒ the simple seal.
     const op =
       requestNetworkId !== null && inputs.resolveOperatorAttestation !== undefined
-        ? inputs.resolveOperatorAttestation(requestNetworkId)
+        ? await inputs.resolveOperatorAttestation(requestNetworkId)
         : {};
     sealOutcome = await ports.seal.sealMember({
       networkId: requestNetworkId,
