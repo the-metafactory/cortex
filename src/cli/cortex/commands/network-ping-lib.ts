@@ -30,6 +30,7 @@ import { encodeDidSegment } from "@the-metafactory/myelin/subjects";
 
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 import {
+  PROBE_ECHO_CAPABILITY,
   PROBE_REPLY_ECHO_TYPE,
   type ProbeEchoReplyPayload,
 } from "../../../bus/probe-responder";
@@ -272,13 +273,20 @@ export function buildProbeRequestEnvelope(opts: {
   seq: number;
 }): Envelope {
   const { inputs, nonce, correlationId, seq } = opts;
-  const enc = encodeDidSegment(inputs.targetAssistantDid);
   return {
     id: crypto.randomUUID(),
     // `source` addresses the TARGET stack (ADR-0002 §1) — the sender assistant
     // is our own assistant id.
     source: `${inputs.targetPrincipal}.${inputs.targetStack}.${inputs.requesterAssistant}`,
-    type: `tasks.${enc}.probe.echo`,
+    // cortex#1728 — the envelope `type` is the plain CAPABILITY (`probe.echo`),
+    // schema-valid under the envelope `type` pattern. The `@{enc-did}` DID
+    // segment is a SUBJECT-routing construct (encodeDidSegment → the subject's
+    // `tasks.@{assistant}.{capability}` form, built in buildProbeRequestSubject)
+    // — putting it in `type` made the type schema-INVALID (`@` fails the
+    // pattern), so the peer's envelope validator dropped every probe. Direct
+    // addressing rides in distribution_mode:"direct" + target_assistant, not the
+    // type. isProbeEcho() recognises the bare `probe.echo` capability.
+    type: PROBE_ECHO_CAPABILITY,
     distribution_mode: "direct",
     timestamp: new Date().toISOString(),
     correlation_id: correlationId,
@@ -295,6 +303,13 @@ export function buildProbeRequestEnvelope(opts: {
       identity: `did:mf:${inputs.requesterPrincipal}-${inputs.requesterStack}`,
       attribution: "federated",
     },
+    // cortex#1728 — a Direct probe IS a direct-addressed dispatch, so the F-021
+    // envelope rule (`target_assistant` required when distribution_mode ===
+    // "direct" | "delegate", envelope-validator.ts) applies. The emitter already
+    // has the target DID (it encodes it into the subject above) — omitting it
+    // here made every probe schema-invalid, dropped at the peer's subscriber
+    // BEFORE the probe-responder saw it (0 echoes, the whole ping gap). Stamp it.
+    target_assistant: inputs.targetAssistantDid,
     payload: {
       nonce,
       sent_at: new Date().toISOString(),

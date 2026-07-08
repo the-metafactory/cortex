@@ -138,6 +138,11 @@ describe("buildProbeRequestEnvelope — FG conformance", () => {
     expect(env.source).toBe("jc.default.luna");
     // FG-3: requester rides in originator.identity = our DID.
     expect(env.originator?.identity).toBe("did:mf:andreas-community");
+    // cortex#1728: a Direct probe carries target_assistant (F-021 requires it
+    // for distribution_mode:direct — omitting it got every probe dropped at the
+    // peer's envelope validator before the responder saw it).
+    expect(env.distribution_mode).toBe("direct");
+    expect(env.target_assistant).toBe("did:mf:jc-default");
     expect(env.sovereignty.classification).toBe("federated");
     expect(env.sovereignty.max_hop).toBe(1);
     expect(env.distribution_mode).toBe("direct");
