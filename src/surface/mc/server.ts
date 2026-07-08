@@ -73,6 +73,13 @@ import {
   isRebindExempt,
   type MutationGuardContext,
 } from "./api/mutation-guard";
+import { enforceStepUp, requiresStepUp } from "./api/step-up-mfa";
+import {
+  DEFAULT_STEP_UP_SECRET_PATH,
+  loadEnrollment,
+  type StepUpEnrollment,
+} from "../../common/step-up/enrollment";
+import { expandTilde } from "../../common/config/loader";
 import { handleGetGovernance } from "./api/governance";
 import { handleGetObservability } from "./api/observability-tab";
 import { proxySideband } from "../../common/sideband/proxy";
@@ -288,6 +295,15 @@ export function startServer(
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
 
+  // FND-3 — step-up MFA secret path. Absolute, tilde-expanded once (the config
+  // is fixed for the server's lifetime). The enrollment itself is loaded
+  // LAZILY per control-verb request (below) so re-enrollment never requires a
+  // daemon restart. Default `~/.config/cortex/step-up-totp.json`; overridable
+  // via `mc.governance.stepUp.secretPath`.
+  const stepUpSecretPath = expandTilde(
+    config.governance?.stepUp?.secretPath ?? DEFAULT_STEP_UP_SECRET_PATH,
+  );
+
   const apiDeps: ApiDeps | null = options.processManager
     ? {
         processManager: options.processManager,
@@ -389,6 +405,7 @@ export function startServer(
           guard,
           handoffView,
           doctorView,
+          stepUpSecretPath,
         );
       }
 
@@ -551,6 +568,7 @@ async function handleApi(
   guard: MutationGuardContext,
   handoffView: HandoffView | null = null,
   doctorView: DoctorView | null = null,
+  stepUpSecretPath: string = expandTilde(DEFAULT_STEP_UP_SECRET_PATH),
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -562,9 +580,43 @@ async function handleApi(
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
-  if (isIdentityGatedMutation(req.method, pathname)) {
+  // A high-blast control verb (FND-3) is ALSO identity-gated: step-up without
+  // knowing WHO is stepping up is meaningless. Per invariant 3 the hardened
+  // decider pattern is Host/Origin + identity + authz + step-up, composed — so
+  // control routes run the identity+authz gate here and the step-up gate below.
+  if (isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
+  }
+  // FND-3 — step-up MFA on the high-blast `'control'` verb set (seal / rotate-K
+  // / revoke / escalation-approve). Runs AFTER the identity gate and is
+  // bind-agnostic: loopback is challenged too (terminal possession ≠ step-up).
+  // Enrollment is loaded lazily here (control verbs are rare + high-blast; a
+  // per-request read means re-enrollment needs no daemon restart). A malformed
+  // / bad-permission secret THROWS from the loader — mapped to 500 rather than
+  // a silent downgrade. The secret is never logged (the loader's error carries
+  // only the path + reason, never the secret).
+  if (requiresStepUp(req.method, pathname)) {
+    let enrollment: StepUpEnrollment | null;
+    try {
+      enrollment = loadEnrollment(stepUpSecretPath);
+    } catch (err) {
+      process.stderr.write(
+        `[step-up] failed to load enrollment: ${(err as Error).message}\n`,
+      );
+      return new Response(
+        JSON.stringify({
+          error: "step_up_load_failed",
+          detail:
+            "the step-up MFA enrollment could not be read (malformed or wrong " +
+            "permissions). Refusing the control verb fail-closed. Re-enroll with " +
+            "`cortex step-up enroll`.",
+        }),
+        { status: 500, headers: { "content-type": "application/json" } },
+      );
+    }
+    const stepUpDenial = enforceStepUp(req, { enrollment });
+    if (stepUpDenial) return stepUpDenial;
   }
 
   if (pathname === "/api/assignments") {

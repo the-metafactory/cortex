@@ -288,6 +288,7 @@ import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
+import { dispatchStepUp } from "./cli/cortex/commands/stepup";
 // #1352 — `agents` + `migrate-config` were complete standalone `import.meta.main`
 // scripts, unreachable from the installed binary while docs
 // (docs/design-arc-agent-bots.md) and cortex.ts:682 told users to run them as
@@ -5962,6 +5963,24 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // FND-3 (#1689) — step-up MFA enrollment/inspection. Same passthrough shape
+  // as `network` / `stack`: `dispatchStepUp` owns its own arg parsing, so
+  // commander hands it the raw remaining argv untouched. Never boots the
+  // daemon — runs the CLI flow and exits.
+  program
+    .command("step-up")
+    .description("Enroll + manage the daemon step-up MFA secret (enroll / status / verify)")
+    .argument("[args...]", "step-up subcommand + flags (see `cortex step-up --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchStepUp(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
