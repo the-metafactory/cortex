@@ -1609,11 +1609,18 @@ export function createSystemDispatchStageEvent(
  *                     `tasks.@{agent}.chat` dispatch envelope was published to
  *                     the bound stack. `stack` / `subject` carry the target the
  *                     inbound reached.
- *   - `unroutable`  — the message matched a binding but the dispatch to the
- *                     bound stack was REFUSED by the dispatch-source publisher
- *                     (`{ published: false }`); `reason` carries the refusal
- *                     (`invalid-originator`, `missing-runtime`, …). Nothing
- *                     reached a stack — the inbound is dropped.
+ *   - `unroutable`  — the inbound reached NO bound stack. Two sub-cases share
+ *                     this outcome, discriminated by whether `agent` is present:
+ *                       (1) NO binding matched at all (cortex#596) — emitted from
+ *                           the gateway's `onUnroutable` path; `reason` carries
+ *                           the `unroutableReason()` string (e.g. `no binding for
+ *                           discord guildId "X"`) and `agent`/`stack` are absent.
+ *                       (2) a binding matched but the dispatch to the bound stack
+ *                           was REFUSED by the dispatch-source publisher
+ *                           (`{ published: false }`) — `reason` carries the refusal
+ *                           (`invalid-originator`, `missing-runtime`, …) and
+ *                           `agent` is the matched agent.
+ *                     In both cases nothing reached a stack — the inbound is dropped.
  *
  * Two outcomes of ONE decision, so they share a single envelope type
  * discriminated on `outcome` — the same shape the sibling
@@ -1631,8 +1638,15 @@ export interface SystemGatewayRoutingDecisionOpts {
   platform: string;
   /** Adapter connection-instance key (`msg.instanceId`) that received it. */
   instanceId: string;
-  /** Target agent id from the binding match. */
-  agent: string;
+  /**
+   * Target agent id from the binding match. Optional because the no-binding-match
+   * unroutable case (cortex#596) has NO binding and therefore NO agent — the
+   * inbound arrived on a `(platform, instance)` the gateway owns but matched no
+   * surface binding, so there is genuinely nothing to attribute an agent to. The
+   * routed branch (and the publish-refusal unroutable branch) DO carry a matched
+   * agent and always set it. Omitted from the payload when absent.
+   */
+  agent?: string;
   /** Target principal from the binding match, when resolved. */
   principal?: string;
   /**
@@ -1684,7 +1698,7 @@ export function createSystemGatewayRoutingDecisionEvent(
       outcome: opts.outcome,
       platform: opts.platform,
       instance_id: opts.instanceId,
-      agent: opts.agent,
+      ...(opts.agent !== undefined && { agent: opts.agent }),
       ...(opts.principal !== undefined && { principal: opts.principal }),
       ...(opts.stack !== undefined && { stack: opts.stack }),
       ...(opts.subject !== undefined && { subject: opts.subject }),
