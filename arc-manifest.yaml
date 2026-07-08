@@ -79,8 +79,17 @@ provides:
     # reference the installed absolute path.
     - source: src/runner/hooks/skill-guard.hook.ts
       target: ~/.claude/hooks/CortexSkillGuard.hook.ts
-    - source: src/taps/cc-events/hooks/lib
-      target: ~/.claude/hooks/lib/cortex-events
+    # cortex#1676: deliberately NO `hooks/lib` symlink under ~/.claude. Hook
+    # files import their lib modules with paths relative to their own file
+    # (e.g. `./lib/...`, or `../../taps/cc-events/hooks/lib/...` for
+    # bash-guard.hook.ts, which lives outside src/taps/cc-events/hooks/).
+    # Bun/Node resolve relative imports against the REALPATH of the
+    # importing module (symlinks resolved, no --preserve-symlinks), so those
+    # imports reach directly into this repo's checkout — nothing ever
+    # resolves through an installed lib link. The `~/.claude/hooks/lib/`
+    # symlink this manifest used to declare (pointing at this same source
+    # dir) was vestigial dead weight (Vincent's fresh-install feedback,
+    # 8 Jul 2026 thread).
 
     # ─── Relay policy directory ───────────────────────────────
     - source: src/taps/cc-events

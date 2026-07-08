@@ -18,17 +18,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="${HOME}/.claude"
 CONFIG_DIR="${HOME}/.config/cortex"
 
-mkdir -p "${HOME}/bin" "${CLAUDE_DIR}/hooks/lib" "${CLAUDE_DIR}/relay" \
+mkdir -p "${HOME}/bin" "${CLAUDE_DIR}/relay" \
          "${CLAUDE_DIR}/skills" "${CONFIG_DIR}/logs"
 
 echo "Upgrading Cortex (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 
 # ─── 1. Belt-and-braces symlink refresh ───────────────────────────
-# arc's provides.files already handled the primary symlinks; these are the
-# nested-target ones (hook lib + relay dir) where arc's behaviour around
-# directory targets has varied historically.
+# arc's provides.files already handled the primary symlinks; this is the
+# nested-target one (relay dir) where arc's behaviour around directory
+# targets has varied historically.
+# cortex#1676: the vestigial `hooks/lib/` link that used to be refreshed
+# here was removed — nothing resolved through it (hook imports are relative
+# to their own file and resolve via realpath; see arc-manifest.yaml).
 echo "  Refreshing nested-target symlinks..."
-ln -sf "${CORTEX_DIR}/src/taps/cc-events/hooks/lib" "${CLAUDE_DIR}/hooks/lib/cortex-events"
 ln -sf "${CORTEX_DIR}/src/taps/cc-events"          "${CLAUDE_DIR}/relay/cortex"
 # The ~/.claude/skills/Discord symlink is no longer cortex's to manage: the
 # Discord CLI + skill were extracted to the metafactory-discord arc bundle
