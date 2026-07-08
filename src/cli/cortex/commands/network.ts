@@ -3519,8 +3519,11 @@ async function runSecret(
   // create/join has an empty cache, so the attestation would resolve undefined
   // and the seal would SILENTLY take the PSK path — exactly the artifact an
   // operator hub rejects. Best-effort: never throws; local-config fallback
-  // still applies when the registry is unreachable.
-  {
+  // still applies when the registry is unreachable. LIVE-ONLY: gated on the
+  // production ports factory — an injected test factory means a hermetic run,
+  // and the seed's registry GET would escape the test's fakes (in CI it reached
+  // the REAL registry and flipped fixture networks onto the operator path).
+  if (portsFactory === DEFAULT_SECRET_PORTS_FACTORY) {
     const seed = await seedDescriptorCacheOnMiss(
       networkId,
       registryUrl,
