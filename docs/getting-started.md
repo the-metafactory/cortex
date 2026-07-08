@@ -105,21 +105,21 @@ still honored during the migration window. See
 [`docs/agents-md/pai-integration.md`](agents-md/pai-integration.md) for the
 full env-var table (including `CORTEX_PRINCIPAL`).
 
-## Event relay & CORTEX_INGEST_URL
+## Event relay and CORTEX_INGEST_URL
 
 The event relay is **optional** — you do not need it running for cortex to
-work. Every hook-captured event is always written locally to
-`~/.claude/events/raw/*.jsonl` first, independent of whether anything is
-listening on the network.
+work. Every hook-captured event is always written to
+`~/.claude/events/raw/*.jsonl`, regardless of whether anything is listening
+on the network.
 
-Separately, the `EventLogger` hook also tries to `POST` each event to an
-ingest endpoint so it shows up live on the Mission Control dashboard. That
-endpoint defaults to `http://localhost:8766/api/events/ingest`;
+Before that local write, the `EventLogger` hook first tries to `POST` each
+event to an ingest endpoint so it shows up live on the Mission Control
+dashboard. That endpoint defaults to `http://localhost:8766/api/events/ingest`;
 `CORTEX_INGEST_URL` overrides it (e.g. if your relay/dashboard listens on a
 different host or port). If nothing is listening — the common case on a
 fresh install before you've stood up a relay — the `POST` fails fast (a
 500ms timeout) and is silently swallowed. Nothing blocks, nothing errors:
-your local JSONL buffer keeps working either way.
+the local JSONL write always follows, whether or not the POST succeeded.
 
 ## Services
 
