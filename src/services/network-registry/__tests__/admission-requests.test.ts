@@ -174,6 +174,60 @@ describe("POST /principals/:id/register — admission request side-effect", () =
     expect(bobRequests.length).toBe(1);
     expect(bobRequests[0]!.request_id).toBe(req1.request_id);
   });
+
+  // cortex#1723 — admission reads DERIVE stack_id from the principal record
+  // (peer_pubkey joined against live stacks). Rows never stored it; the
+  // custodian seal then defaulted the scoped-user name to "<principal>.default"
+  // — the live jc↔andreas mis-seal (a SUB scope the member's real stack can
+  // never receive on).
+  test("admission reads carry the DERIVED stack_id (list + by-id) (cortex#1723)", async () => {
+    const req = await registerAndGetRequest("carol");
+    // The list read already carried it (registerAndGetRequest reads the list):
+    expect((req as AdmissionRequest & { stack_id?: string }).stack_id).toBe("carol/main");
+
+    // The single-row admin read derives it too.
+    const signedRead = await makeSignedAdminRead(admin);
+    const byId = await get(
+      `/admission-requests/${req.request_id}`,
+      env,
+      { "x-admin-signed": JSON.stringify(signedRead) },
+    );
+    expect(byId.status).toBe(200);
+    const row = (await byId.json()) as AdmissionRequest & { stack_id?: string };
+    expect(row.stack_id).toBe("carol/main");
+  });
+
+  test("stack_id derivation is fail-safe: no matching live stack ⇒ absent, never 'default' (cortex#1723)", async () => {
+    // Register with a DIFFERENT stack pubkey than the admission row's peer
+    // pubkey (the row is keyed on stacks[0] here, so register a second stack
+    // whose pubkey the row does NOT use — then retire-simulate by asserting the
+    // unmatched case directly through the derivation on a mismatched record).
+    const req = await registerAndGetRequest("dave");
+    const enriched = req as AdmissionRequest & { stack_id?: string };
+    // Sanity: dave DID match (same pubkey) — now assert the negative via the
+    // exported derivation helper with a mismatched record.
+    expect(enriched.stack_id).toBe("dave/main");
+    const { deriveAdmissionStackId } = await import("../src/store");
+    expect(
+      deriveAdmissionStackId(
+        { principal_id: "dave", peer_pubkey: "someOtherPubkeyThatMatchesNoStack=" },
+        [{ principal_id: "dave", principal_pubkey: "x", stacks: [{ stack_id: "dave/main", stack_pubkey: principal.publicKeyB64 }], capabilities: [], updated_at: "now" }],
+      ),
+    ).toBeUndefined();
+    // Ambiguity (same pubkey on TWO live stacks) is also fail-safe: absent.
+    expect(
+      deriveAdmissionStackId(
+        { principal_id: "dave", peer_pubkey: principal.publicKeyB64 },
+        [{
+          principal_id: "dave", principal_pubkey: "x", capabilities: [], updated_at: "now",
+          stacks: [
+            { stack_id: "dave/main", stack_pubkey: principal.publicKeyB64 },
+            { stack_id: "dave/lab", stack_pubkey: principal.publicKeyB64 },
+          ],
+        }],
+      ),
+    ).toBeUndefined();
+  });
 });
 
 // =============================================================================

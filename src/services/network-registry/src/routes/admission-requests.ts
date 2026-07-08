@@ -51,7 +51,7 @@
 
 import { Hono, type Context } from "hono";
 import { parseAdminPubkeys, parseHubAdminPubkeys, parseNetworkAdminPubkeys, type Env } from "../index";
-import { getNonceCache, getIssuanceStore, getStore, AlreadyDecidedError } from "../store";
+import { getNonceCache, getIssuanceStore, getStore, AlreadyDecidedError, withDerivedStackId } from "../store";
 import {
   validateSignedAdmissionDecision,
   validateAdmissionDecisionClaim,
@@ -749,7 +749,11 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     // ADR-0020 §3). Filtering here (not in SQL) keeps the store interface intact;
     // the admission queue is small and the filtered set never leaves the worker.
     const scoped = auth.scope === null ? requests : requests.filter((r) => r.network_id === auth.scope);
-    return c.json(scoped, 200);
+    // cortex#1723 — enrich each row with the DERIVED stack_id (peer_pubkey joined
+    // against the principal record's live stacks) so the custodian seal derives
+    // the scoped-user name from the row instead of defaulting to "<principal>.default".
+    const principals = await getStore(c.env).listPrincipals();
+    return c.json(scoped.map((r) => withDerivedStackId(r, principals)), 200);
   });
 
   // ---------------------------------------------------------------------------
@@ -818,7 +822,9 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     // the holder of the matching seed (ADR-0018 Q4 b′).
     const store = getIssuanceStore(c.env);
     const rows = await store.listIssuanceRequestsByPeer(signed.claim.peer_pubkey);
-    const mine: AdmissionMineRow[] = rows;
+    // cortex#1723 — same derived stack_id enrichment as the admin list read.
+    const minePrincipals = await getStore(c.env).listPrincipals();
+    const mine: AdmissionMineRow[] = rows.map((r) => withDerivedStackId(r, minePrincipals));
     return c.json(mine, 200);
   });
 
@@ -850,7 +856,8 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     if (auth.scope !== null && request.network_id !== auth.scope) {
       return c.json({ error: "not_found" }, 404);
     }
-    return c.json(request, 200);
+    // cortex#1723 — derived stack_id enrichment (see the list read).
+    return c.json(withDerivedStackId(request, await getStore(c.env).listPrincipals()), 200);
   });
 
   return app;

@@ -596,17 +596,45 @@ async function addOrRotate(
  * the admitted row's `stack_id` trailing segment (the part after the last "/"
  * for the canonical `{principal}/{stack}` form); a present-but-slashless
  * `stack_id` is used VERBATIM (never silently collapsed to "default" — that
- * would target the wrong scoped username); only a wholly-absent `stack_id` falls
- * back to "default".
+ * would target the wrong scoped username).
+ *
+ * cortex#1723 — a wholly-absent `stack_id` NO LONGER falls back to "default":
+ * the live jc↔andreas join mis-sealed exactly that way (registry rows carried
+ * no stack_id; the "default" fallback minted scope `federated.andreas.default.>`
+ * for a stack whose wire identity is `andreas.meta-factory` — a silent one-way
+ * link). An explicit `--leaf-user` override (the DOTTED nsc form) wins and MUST
+ * name this row's principal (a cross-principal override would mint someone
+ * else's scope sealed to this member's pubkey); else a present `stack_id`
+ * derives; else `null` — the caller fails loud with the fix options.
  */
-function deriveScopedUserNames(row: { principal_id: string; stack_id?: string }): {
-  natsUser: string;
-  leafUserSlash: string;
-} {
-  const stackSeg =
-    row.stack_id === undefined || row.stack_id.length === 0
-      ? "default"
-      : row.stack_id.slice(row.stack_id.lastIndexOf("/") + 1) || "default";
+function deriveScopedUserNames(
+  row: { principal_id: string; stack_id?: string },
+  leafUserOverride?: string,
+): { natsUser: string; leafUserSlash: string } | { error: string } {
+  if (leafUserOverride !== undefined && leafUserOverride.length > 0) {
+    const dotted = /^[a-z0-9-]+\.[a-z0-9_-]+$/;
+    if (!dotted.test(leafUserOverride)) {
+      return { error: `--leaf-user "${leafUserOverride}" must be the dotted scoped-user form "<principal>.<stack>" (e.g. "andreas.meta-factory")` };
+    }
+    const [p, stackSeg] = leafUserOverride.split(".", 2) as [string, string];
+    if (p !== row.principal_id) {
+      return { error: `--leaf-user "${leafUserOverride}" names principal "${p}" but the admission row is for "${row.principal_id}" — refusing a cross-principal scoped mint` };
+    }
+    return { natsUser: leafUserOverride, leafUserSlash: `${p}/${stackSeg}` };
+  }
+  if (row.stack_id === undefined || row.stack_id.length === 0) {
+    return {
+      error:
+        `admission row for "${row.principal_id}" carries no stack_id, so the scoped-user name (and with it the ` +
+        `SUB scope) cannot be derived — refusing to default to "${row.principal_id}.default" (cortex#1723: that mints ` +
+        `a scope the member's real stack can never receive on). Fix: upgrade the registry (it derives stack_id from ` +
+        `the principal record), or pass --leaf-user ${row.principal_id}.<stack>.`,
+    };
+  }
+  const stackSeg = row.stack_id.slice(row.stack_id.lastIndexOf("/") + 1);
+  if (stackSeg.length === 0) {
+    return { error: `admission row stack_id "${row.stack_id}" has an empty trailing segment — cannot derive the scoped-user name` };
+  }
   return { natsUser: `${row.principal_id}.${stackSeg}`, leafUserSlash: `${row.principal_id}/${stackSeg}` };
 }
 
@@ -649,11 +677,21 @@ async function operatorModeSeal(
       `operator-mode admit needs an arc that provides 'add-federated-user' (arc#269) — the scoped-mint port is not wired. Run 'arc upgrade'.`);
   }
   if (inputs.hubFedAccount === undefined || inputs.hubFedAccount.length === 0) {
+    // cortex#1723 (runbook finding) — the old hint named a `--hub-fed-account`
+    // flag that does not exist on `secret add-member`; the real options are the
+    // config field or `--hub-account <account-pubkey>`.
     return fail(action, inputs, steps, data,
-      `operator-mode admit needs the hub federation account — pass --hub-fed-account <ACCOUNT> or set policy.federated.networks[${inputs.networkId}].hub_fed_account.`);
+      `operator-mode admit needs the hub federation account — set policy.federated.networks[${inputs.networkId}].hub_fed_account in the hub stack config (load it with --config <pointer>), or pass --hub-account <account-pubkey>.`);
   }
 
-  const { natsUser, leafUserSlash } = deriveScopedUserNames(row);
+  // cortex#1723 — the override now DRIVES the mint (it was display-only: the
+  // echo showed it while the nsc user re-derived from the row); an absent
+  // stack_id fails loud instead of silently minting "<principal>.default".
+  const derived = deriveScopedUserNames(row, inputs.leafUserOverride);
+  if ("error" in derived) {
+    return fail(action, inputs, steps, data, derived.error);
+  }
+  const { natsUser, leafUserSlash } = derived;
   data.leaf_user = leafUserSlash;
   data.nats_user = natsUser;
 
@@ -886,7 +924,15 @@ async function revokeMemberOperator(
   const action: SecretAction = "revoke-member";
   const { row, steps, data } = ctx;
   data.hub_mode = "operator";
-  const { natsUser } = deriveScopedUserNames(row);
+  // cortex#1723 — same loud failure as the seal: revoking "<principal>.default"
+  // when the real user is "<principal>.<stack>" would silently cut NOTHING
+  // (the revoke targets a user that isn't the live one). Override or stack_id
+  // required; never guess.
+  const derived = deriveScopedUserNames(row, inputs.leafUserOverride);
+  if ("error" in derived) {
+    return fail(action, inputs, steps, data, derived.error);
+  }
+  const { natsUser } = derived;
   data.nats_user = natsUser;
 
   // Guard (§5.1): the revoke push targets the FED account JWT — a preloaded

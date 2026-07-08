@@ -1337,6 +1337,35 @@ export function membersFromAdmissions(
 }
 
 /**
+ * cortex#1723 — derive an admission row's `stack_id` at READ time by joining
+ * `peer_pubkey` against the principal record's LIVE stacks (same
+ * derived-not-stored posture as roster membership). Admission rows never stored
+ * a stack segment, so the custodian seal tooling defaulted the scoped-user name
+ * to `<principal>.default` — minting a SUB scope the member's real stack can
+ * never receive on (the live jc↔andreas mis-seal). Returns undefined when the
+ * pubkey matches no live stack or MORE than one (ambiguous — never guess; the
+ * seal side fails loud and asks for --leaf-user).
+ */
+export function deriveAdmissionStackId(
+  row: Pick<AdmissionRequest, "principal_id" | "peer_pubkey">,
+  principals: PrincipalRecord[],
+): string | undefined {
+  const record = principals.find((p) => p.principal_id === row.principal_id);
+  if (!record) return undefined;
+  const live = record.stacks.filter((s) => s.retired_at === undefined && s.stack_pubkey === row.peer_pubkey);
+  return live.length === 1 ? live[0]?.stack_id : undefined;
+}
+
+/** cortex#1723 — an admission row enriched with the derived `stack_id` (absent when underivable). */
+export function withDerivedStackId(
+  row: AdmissionRequest,
+  principals: PrincipalRecord[],
+): AdmissionRequest & { stack_id?: string } {
+  const stackId = deriveAdmissionStackId(row, principals);
+  return stackId !== undefined ? { ...row, stack_id: stackId } : row;
+}
+
+/**
  * Search capabilities across all principals. The query is a substring
  * match against `capability.id` (lowercase, dotted) and against
  * `description`. v1 returns all hits unsorted — pagination is a

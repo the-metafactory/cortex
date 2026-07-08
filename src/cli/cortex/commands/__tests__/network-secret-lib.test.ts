@@ -275,14 +275,54 @@ describe("cortex#1598 — operator-mode add-member (scoped mint + v2 seal)", () 
     expect(JSON.stringify(report.data)).not.toContain(FAKE_CREDS);
   });
 
-  test("stack_id absent → the username stack segment defaults to 'default'", async () => {
+  // cortex#1723 — the OLD behavior here (silently defaulting to "alice.default")
+  // caused the live jc↔andreas mis-seal: a scope the member's real stack can
+  // never receive on. A stackless row now FAILS LOUD; --leaf-user (validated,
+  // same-principal) drives the mint when the row can't.
+  test("stack_id absent + no override → FAILS LOUD, no mint, no post (cortex#1723)", async () => {
     const r = makePorts({
       admitted: { request_id: "req1", principal_id: "alice" },
       scopedMint: { creds: FAKE_CREDS },
     });
-    await runNetworkSecret(operatorInputs(), r.ports);
-    expect(r.scopedMints).toEqual(["alice.default"]);
-    expect(r.posted[0]!.blob).toContain('"leaf_user":"alice/default"');
+    const report = await runNetworkSecret(operatorInputs(), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("no stack_id");
+    expect(report.reason).toContain("--leaf-user alice.<stack>");
+    expect(r.scopedMints).toEqual([]);
+    expect(r.posted).toEqual([]);
+  });
+
+  test("stack_id absent + --leaf-user drives the ACTUAL mint (not display-only) (cortex#1723)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ leafUserOverride: "alice.laptop" }), r.ports);
+    expect(report.ok).toBe(true);
+    expect(r.scopedMints).toEqual(["alice.laptop"]);
+    expect(r.posted[0]!.blob).toContain('"leaf_user":"alice/laptop"');
+  });
+
+  test("--leaf-user naming a DIFFERENT principal is refused (cross-principal mint guard) (cortex#1723)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ leafUserOverride: "mallory.laptop" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("cross-principal");
+    expect(r.scopedMints).toEqual([]);
+  });
+
+  test("--leaf-user must be the dotted <principal>.<stack> form (cortex#1723)", async () => {
+    const r = makePorts({
+      admitted: { request_id: "req1", principal_id: "alice" },
+      scopedMint: { creds: FAKE_CREDS },
+    });
+    const report = await runNetworkSecret(operatorInputs({ leafUserOverride: "alice" }), r.ports);
+    expect(report.ok).toBe(false);
+    expect(report.reason).toContain("dotted");
+    expect(r.scopedMints).toEqual([]);
   });
 
   test("a second add-member re-exports → userAlreadyPresent (idempotency, C2)", async () => {
