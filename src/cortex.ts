@@ -181,6 +181,16 @@ import type {
   AdmissionDecider,
   AdmissionDecisionResult,
 } from "./surface/mc/api/networks-admission";
+// FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — authorize-from-
+// glass: reuse the CLI's hub-admin seed loader + authorize orchestrator/ports so
+// the daemon route signs the SAME hub-admin claim `cortex network authorize`
+// does (no hand-rolled seed loading / signing).
+import type {
+  Authorizer,
+  AuthorizeResult,
+  AuthorizeFailure,
+} from "./surface/mc/api/networks-authorize";
+import { hubAdminMaterialFromSeedFile } from "./cli/cortex/commands/network-secret-adapters";
 import {
   resolveAdmittedRoster,
   type AdmissionRowsProvider,
@@ -196,7 +206,7 @@ import {
   summarizeAcceptancePolicy,
   resolvePeerAcceptance,
 } from "./bus/agent-network/peer-acceptance";
-import { materialFromSeedString } from "./bus/stack-provisioning";
+import { materialFromSeedString, signAdminRequest, randomNonce } from "./bus/stack-provisioning";
 // MC-A3 (cortex#1277, ADR-0019/0018) — derive each joined network's read-only
 // confidentiality posture from config for the `/api/networks` view.
 import { confidentialityPosture } from "./common/crypto/network-encryption-policy";
@@ -704,6 +714,48 @@ export interface StartCortexOptions {
  * @throws if `options.principal.id` is unset or empty — fail-fast at
  *   boot rather than masking the gap.
  */
+/**
+ * FLG-2 (cortex#1706) — map the registry authorize endpoint's HTTP status +
+ * `error` code onto the surface's structured {@link AuthorizeFailure}. Prefers
+ * the registry's own error code (its gate order is `503 admin_not_configured →
+ * 401 signature_invalid → 403 admin_not_authorized`, plus `409 not_admitted`),
+ * falling back to the raw status for anything unmapped. Pure.
+ */
+function mapAuthorizeStatus(status: number, registryError: string | undefined): AuthorizeFailure {
+  switch (registryError) {
+    case "admin_not_configured":
+      return "hub_admin_not_configured";
+    case "signature_invalid":
+      return "signature_invalid";
+    case "admin_not_authorized":
+      return "admin_not_authorized";
+    case "not_admitted":
+      return "not_admitted";
+    case "not_found":
+      return "not_found";
+    default:
+      break;
+  }
+  switch (status) {
+    case 503:
+      return "hub_admin_not_configured";
+    case 401:
+      return "signature_invalid";
+    case 403:
+      return "admin_not_authorized";
+    case 409:
+      return "not_admitted";
+    case 429:
+      return "rate_limited";
+    case 400:
+      return "invalid";
+    case 404:
+      return "not_found";
+    default:
+      return "unreachable";
+  }
+}
+
 function resolvePrincipalId(
   principal: StartCortexOptions["principal"],
 ): string {
@@ -4053,6 +4105,13 @@ export async function startCortex(
   // identity material + resolved registry). `null` until then ⇒ the route 503s.
   // Signs LOCALLY with the stack seed; never wired in the CF worker.
   let admissionDeciderForApi: AdmissionDecider | null = null;
+  // FLG-2 (cortex#1706) — the authorize-from-glass signer for the trust-granting
+  // `POST /api/networks/authorize` action. Assigned in the federation block below
+  // from the hub-admin seed (the Q5-collapse hub-admin = the stack seed for a
+  // single-principal deployment). `null` until then ⇒ the route returns a
+  // structured 503 `hub_admin_not_configured` (fail-closed). Signs LOCALLY with
+  // the hub-admin seed; never wired in the CF worker.
+  let authorizerForApi: Authorizer | null = null;
   // #1008/#989 — discovered LOCAL sibling stacks, used by BOTH the DB-read
   // pane-of-glass aggregation (the embed's `localAggregation` getter, below, for
   // session trees) AND the #989 bus sibling-presence aggregator (later, for
@@ -4135,6 +4194,11 @@ export async function startCortex(
         // registry are resolved). null ⇒ `POST /api/networks/admission-decision`
         // 503s honestly.
         admissionDecider: () => admissionDeciderForApi,
+        // FLG-2 (cortex#1706) — the local-daemon authorize-from-glass signer
+        // (lazy; assigned in the federation block once the hub-admin seed +
+        // registry are resolved). null ⇒ `POST /api/networks/authorize` returns
+        // 503 `hub_admin_not_configured`.
+        authorizer: () => authorizerForApi,
         // FLG-1 (docs/plan-mc-future-state.md §4.D) — the guided-join handoff
         // view (lazy; assigned in the federation block). null ⇒
         // `GET /api/networks/:net/handoff/:member` 503s honestly.
@@ -4773,6 +4837,117 @@ export async function startCortex(
             "cortex: MC /api/networks/admission-decision wired — LIVE local-daemon-signed " +
               "Tier-2 admit/reject (stack-seed-signed; CF-Access + typed-confirm gated at the surface)",
           );
+        }
+
+        // FLG-2 (cortex#1706) — the authorize-from-glass signer: stamp
+        // `hub_authorized_at` on an ADMITTED admission row (registry cortex#1498).
+        // HUB-ADMIN authority (ADR-0018 Q5) — for the common single-principal
+        // deployment the hub-admin seed IS the stack seed, so we load it via the
+        // SAME chmod-600-gated `hubAdminMaterialFromSeedFile` the CLI's `cortex
+        // network authorize` uses (no hand-rolled seed loading). Live iff the
+        // hub-admin seed loads AND a registry URL is resolved. Absent/unloadable
+        // seed ⇒ `authorizerForApi` stays null ⇒ the route 503s
+        // `hub_admin_not_configured` (fail-closed). Signs LOCALLY; never in the
+        // CF worker.
+        if (options.stack?.nkey_seed_path && resolvedRegistry !== undefined) {
+          const hubSeedPath = options.stack.nkey_seed_path;
+          const authorizeRegistryUrl = resolvedRegistry.url;
+          const hubAdmin = await hubAdminMaterialFromSeedFile(hubSeedPath);
+          if (!hubAdmin.ok) {
+            // Honest degradation: the route will 503 `hub_admin_not_configured`.
+            // Never crashes the embed boot (mirrors the member-roster read).
+            console.error(
+              "cortex: MC /api/networks/authorize DARK — could not load the hub-admin seed " +
+                `(non-fatal, authorize-from-glass 503s until fixed): ${hubAdmin.reason}`,
+            );
+          } else {
+            const hubMaterial = hubAdmin.material;
+            const authorizeBase = authorizeRegistryUrl.replace(/\/+$/, "");
+            authorizerForApi = {
+              authorize: async (requestId): Promise<AuthorizeResult> => {
+                const claim = {
+                  request_id: requestId,
+                  hub_admin_pubkey: hubMaterial.pubkeyB64,
+                  issued_at: new Date().toISOString(),
+                  nonce: randomNonce(),
+                };
+                let resp: Response;
+                try {
+                  const signed = await signAdminRequest(hubMaterial.seed, claim);
+                  resp = await fetch(
+                    `${authorizeBase}/admission-requests/${encodeURIComponent(requestId)}/authorize`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(signed),
+                    },
+                  );
+                } catch (err) {
+                  const detail = err instanceof Error ? err.message : String(err);
+                  console.log(
+                    `cortex: FLG-2 authorize — request=${requestId} -> unreachable(${detail})`,
+                  );
+                  return { ok: false, reason: "unreachable", detail: `registry unreachable: ${detail}` };
+                }
+
+                let parsed: unknown;
+                try {
+                  parsed = await resp.json();
+                } catch {
+                  // Non-JSON body (e.g. a proxy error page) — map by status below.
+                  parsed = null;
+                }
+                const obj =
+                  parsed !== null && typeof parsed === "object"
+                    ? (parsed as Record<string, unknown>)
+                    : {};
+
+                if (resp.ok) {
+                  const hubAuthorizedAt =
+                    typeof obj.hub_authorized_at === "string" ? obj.hub_authorized_at : undefined;
+                  if (hubAuthorizedAt === undefined) {
+                    // 2xx but no stamp — treat as an invalid registry response
+                    // rather than fabricate a success signal.
+                    console.log(
+                      `cortex: FLG-2 authorize — request=${requestId} -> invalid(no hub_authorized_at)`,
+                    );
+                    return {
+                      ok: false,
+                      reason: "invalid",
+                      detail: "registry returned 2xx but no hub_authorized_at timestamp",
+                    };
+                  }
+                  console.log(
+                    `cortex: FLG-2 authorize — request=${requestId} -> authorized(${hubAuthorizedAt})`,
+                  );
+                  return { ok: true, requestId, hubAuthorizedAt };
+                }
+
+                // Failure — map the registry's status + error code to the
+                // surface's structured failure (propagated verbatim to the glass).
+                const registryError = typeof obj.error === "string" ? obj.error : undefined;
+                const registryDetail =
+                  typeof obj.details === "string"
+                    ? obj.details
+                    : typeof obj.detail === "string"
+                      ? obj.detail
+                      : undefined;
+                const reason = mapAuthorizeStatus(resp.status, registryError);
+                const detail =
+                  registryDetail ??
+                  registryError ??
+                  `registry rejected authorize (HTTP ${resp.status.toString()})`;
+                console.log(
+                  `cortex: FLG-2 authorize — request=${requestId} -> refused(${reason}, HTTP ${resp.status.toString()})`,
+                );
+                return { ok: false, reason, detail };
+              },
+            };
+            console.log(
+              "cortex: MC /api/networks/authorize wired — LIVE local-daemon-signed " +
+                "hub-admin authorize (stamps hub_authorized_at; step-up-MFA gated at the surface)",
+            );
+          }
         }
       }
 

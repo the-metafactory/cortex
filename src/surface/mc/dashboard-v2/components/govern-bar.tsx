@@ -28,6 +28,7 @@
  * static markup for the tests.
  */
 
+import { useState } from "react";
 import type { NetworkPosture } from "../lib/mc-shell-model";
 import type { NetworkMembershipDTO } from "../../api/networks";
 import {
@@ -36,9 +37,24 @@ import {
   selectAdmissionRequests,
   adminAuthorityBadges,
 } from "../lib/govern-bar-adapter";
+import {
+  canAuthorize,
+  submitAuthorize,
+  describeAuthorizeOutcome,
+  type AuthorizeOutcome,
+  type FetchLike,
+} from "../lib/authorize-lib";
 import { HandoffBannerLive } from "./handoff-banner";
 import { DoctorDrill } from "./network-doctor-panel";
 import "./govern-bar.css";
+
+/**
+ * The browser `fetch` narrowed to the {@link FetchLike} shape the authorize lib
+ * consumes. Defined once so the live control and any injected test double share
+ * the exact call surface (the lib never imports the DOM `fetch`).
+ */
+const browserFetch: FetchLike = (path, init) =>
+  fetch(path, { method: init.method, headers: init.headers, body: init.body });
 
 export interface GovernBarProps {
   /** Posture toward the dived network (`null` at the root / unresolved). */
@@ -74,14 +90,115 @@ function AuthorityBadges() {
 }
 
 /**
- * The empty per-verb rail (admin only). Every slot is a HARNESS placeholder —
- * the decision-gated verbs are disabled with an honest "lands with FLG-N"
- * caption; the one `live` slot (dispatch) points at the existing control. No slot
- * dispatches a real verb in this shell.
+ * FLG-2 (cortex#1706) — the WIRED **Authorize** control. Rendered ONLY inside
+ * the admin verb rail (the rail itself is admin-gated by `governIsAdmin`, so
+ * invariant 8 holds — a non-admin never sees this affordance at all).
+ *
+ * Authorize stamps `hub_authorized_at` on an ADMITTED admission request — a
+ * trust-GRANTING, high-blast control verb. It therefore sits behind the FND-3
+ * step-up MFA gate: the principal supplies the target `request_id`, re-types it
+ * to confirm (the intent gate, mirroring the CLI `--apply` posture), AND enters
+ * the current 6-digit TOTP code, which is sent in the `X-Cortex-Step-Up-Otp`
+ * header. The daemon signs the hub-admin claim locally + POSTs the registry.
+ *
+ * SSR-inert: no effect fires until the principal interacts, so the whole bar
+ * still renders to static markup for the tests.
+ */
+function AuthorizeControl({ caption }: { caption: string }) {
+  const [requestId, setRequestId] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [stepUpCode, setStepUpCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<AuthorizeOutcome | null>(null);
+
+  const ready = canAuthorize({ requestId, confirm, stepUpCode, busy });
+
+  async function onAuthorize(): Promise<void> {
+    if (!ready) return;
+    setBusy(true);
+    setOutcome(null);
+    const result = await submitAuthorize(
+      { request_id: requestId.trim(), confirm },
+      stepUpCode,
+      browserFetch,
+    );
+    setOutcome(result);
+    setBusy(false);
+    if (result.kind === "ok") {
+      // Clear the fields on success — the request is authorized; a fresh code
+      // would be needed for the next one anyway (TOTP is single-use per window).
+      setRequestId("");
+      setConfirm("");
+      setStepUpCode("");
+    }
+  }
+
+  const described = outcome ? describeAuthorizeOutcome(outcome) : null;
+
+  return (
+    <div className="govern-authorize" data-verb-live="authorize">
+      <div className="govern-authorize-fields">
+        <input
+          type="text"
+          className="govern-authorize-input"
+          placeholder="admission request id"
+          aria-label="Admission request id to authorize"
+          value={requestId}
+          disabled={busy}
+          onChange={(e) => setRequestId(e.target.value)}
+        />
+        <input
+          type="text"
+          className="govern-authorize-input"
+          placeholder="re-type request id to confirm"
+          aria-label="Confirm the request id"
+          value={confirm}
+          disabled={busy}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          className="govern-authorize-input govern-authorize-otp"
+          placeholder="step-up code"
+          aria-label="Step-up MFA code"
+          value={stepUpCode}
+          disabled={busy}
+          onChange={(e) => setStepUpCode(e.target.value)}
+        />
+        <button
+          type="button"
+          className="govern-verb-btn govern-authorize-btn"
+          disabled={!ready}
+          aria-disabled={!ready}
+          title={caption}
+          onClick={() => {
+            void onAuthorize();
+          }}
+        >
+          {busy ? "Authorizing…" : "Authorize"}
+        </button>
+      </div>
+      {described !== null ? (
+        <p className={`govern-authorize-result tone-${described.tone}`} role="status">
+          {described.text}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The per-verb rail (admin only). FLG-2 wired the **Authorize** slot LIVE (it
+ * renders the interactive {@link AuthorizeControl}); the remaining decision-gated
+ * verbs (seal / rotate / revoke) stay HARNESS placeholders — disabled with an
+ * honest "lands with FLG-N" caption. DISPATCH is a `live` pointer at the
+ * existing control below the bar (not a second dispatch trigger).
  */
 function VerbRail() {
   return (
-    <div className="govern-verb-rail" role="group" aria-label="Govern verbs (shell)">
+    <div className="govern-verb-rail" role="group" aria-label="Govern verbs">
       {GOVERN_VERB_SLOTS.map((slot) => (
         <div
           key={slot.id}
@@ -89,18 +206,22 @@ function VerbRail() {
           data-verb={slot.id}
           data-verb-state={slot.state}
         >
-          <button
-            type="button"
-            className="govern-verb-btn"
-            // SHELL: no verb is wired — the slot is inert. The decision-gated
-            // verbs are disabled outright; the live slot is a pointer, not a
-            // second dispatch trigger (the live control renders below the bar).
-            disabled
-            aria-disabled="true"
-            title={slot.caption}
-          >
-            {slot.label}
-          </button>
+          {slot.id === "authorize" ? (
+            <AuthorizeControl caption={slot.caption} />
+          ) : (
+            <button
+              type="button"
+              className="govern-verb-btn"
+              // The decision-gated verbs (seal/rotate/revoke) are disabled
+              // outright; the `dispatch` live slot is a pointer, not a second
+              // dispatch trigger (the live control renders below the bar).
+              disabled
+              aria-disabled="true"
+              title={slot.caption}
+            >
+              {slot.label}
+            </button>
+          )}
           <span className="dim govern-verb-flag" title={slot.caption}>
             {slot.state === "live" ? "live · " : "soon · "}
             {slot.flag}

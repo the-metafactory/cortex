@@ -60,20 +60,19 @@ function render(over: Partial<GovernBarProps>): string {
   return renderToStaticMarkup(createElement(GovernBar, props(over)));
 }
 
-describe("GovernBar — admin posture (verb rail harness)", () => {
-  it("renders the verb rail with every slot as an inert harness placeholder", () => {
+describe("GovernBar — admin posture (verb rail)", () => {
+  it("renders the verb rail with every taxonomy slot present", () => {
     const html = render({});
     expect(html).toContain("govern-verb-rail");
     // every taxonomy slot renders…
     for (const slot of GOVERN_VERB_SLOTS) {
       expect(html).toContain(`data-verb="${slot.id}"`);
     }
-    // …and every button is disabled (NO verb is wired in this shell).
-    const buttons = html.match(/govern-verb-btn/g) ?? [];
-    expect(buttons.length).toBe(GOVERN_VERB_SLOTS.length);
+    // FLG-2 (cortex#1706) — authorize is now a WIRED control (its own form), not
+    // a disabled placeholder; the remaining decision-gated verbs stay disabled.
+    expect(html).toContain('data-verb-live="authorize"');
+    // seal/rotate/revoke are still honest placeholders (disabled).
     expect(html).toContain("disabled");
-    // the four decision-gated verbs are honest placeholders
-    expect(html).toContain('data-verb="authorize"');
     expect(html).toContain('data-verb="seal"');
     expect(html).toContain('data-verb="rotate"');
     expect(html).toContain('data-verb="revoke"');
@@ -81,10 +80,16 @@ describe("GovernBar — admin posture (verb rail harness)", () => {
     expect(html).not.toContain(FORBIDDEN);
   });
 
-  it("marks the one already-live slot (dispatch) distinct from the pending ones", () => {
+  it("wires the Authorize verb LIVE (step-up-gated form), not a disabled placeholder", () => {
     const html = render({});
-    expect(html).toContain('data-verb="dispatch"');
-    expect(html).toContain('data-verb-state="live"');
+    expect(html).toContain('data-verb="authorize"');
+    expect(html).toContain('data-verb-state="live"'); // authorize + dispatch are live
+    expect(html).toContain('data-verb-live="authorize"');
+    // the wired control collects the request id, a typed-confirm echo, and the
+    // step-up code (all three fields render).
+    expect(html).toContain("govern-authorize-input");
+    expect(html).toContain("govern-authorize-otp");
+    // the remaining decision-gated verbs are still pending placeholders.
     expect(html).toContain('data-verb-state="pending"');
   });
 
@@ -223,10 +228,11 @@ describe("govern-bar-adapter — pure gate + selectors", () => {
     expect(badges[0]?.tone).not.toBe(badges[1]?.tone);
   });
 
-  it("the verb rail taxonomy has exactly one live slot (dispatch); the rest pending", () => {
+  it("the verb rail taxonomy has authorize + dispatch live (FLG-2); seal/rotate/revoke pending", () => {
     const live = GOVERN_VERB_SLOTS.filter((s) => s.state === "live");
     const pending = GOVERN_VERB_SLOTS.filter((s) => s.state === "pending");
-    expect(live.map((s) => s.id)).toEqual(["dispatch"]);
-    expect(pending.map((s) => s.id)).toEqual(["authorize", "seal", "rotate", "revoke"]);
+    // FLG-2 (cortex#1706) flipped authorize from pending → live.
+    expect(live.map((s) => s.id)).toEqual(["authorize", "dispatch"]);
+    expect(pending.map((s) => s.id)).toEqual(["seal", "rotate", "revoke"]);
   });
 });

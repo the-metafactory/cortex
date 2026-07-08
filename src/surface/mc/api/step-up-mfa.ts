@@ -76,6 +76,7 @@ export function readStepUpCode(req: Request): string {
  * the FND-6 identity + typed-confirm tier.
  */
 export const STEP_UP_CONTROL_ROUTES: ReadonlySet<string> = new Set([
+  "/api/networks/authorize", // FLG-2 — authorize-from-glass (stamp hub_authorized_at)
   "/api/networks/seal", // FLG-6 — admit-and-seal from glass
   "/api/networks/rotate-key", // FLG-8 — rotate-K from glass
   "/api/networks/revoke", // FLG-9 — revoke from glass

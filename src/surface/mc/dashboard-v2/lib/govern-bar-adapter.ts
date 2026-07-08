@@ -65,8 +65,8 @@ export const GOVERN_VERB_SLOTS: readonly GovernVerbSlot[] = [
     id: "authorize",
     label: "Authorize",
     flag: "FLG-2",
-    state: "pending",
-    caption: "Grant a pending admission request — decision-gated, lands with FLG-2.",
+    state: "live",
+    caption: "Stamp hub_authorized_at on an ADMITTED request — hub-admin, step-up-gated.",
   },
   {
     id: "seal",

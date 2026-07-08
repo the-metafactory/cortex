@@ -54,6 +54,12 @@ import {
   type AdmissionDecider,
   type AdmissionAuthContext,
 } from "./api/networks-admission";
+// FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — authorize-from-glass.
+import {
+  handleAuthorize,
+  AUTHORIZE_PATH,
+  type Authorizer,
+} from "./api/networks-authorize";
 import { verifyCfAccessJwt } from "../../common/auth/cf-access-jwt";
 import type {
   LocalAggregationContext,
@@ -232,6 +238,18 @@ export interface StartServerOptions {
    */
   admissionDecider?: () => AdmissionDecider | null;
   /**
+   * FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — lazy accessor
+   * for the authorize-from-glass signer: the hub-admin-signed
+   * `POST /api/networks/authorize` that stamps `hub_authorized_at` on an
+   * ADMITTED admission row. A GETTER like `admissionDecider` because the
+   * hub-admin material + registry client boot AFTER the embed in `cortex.ts`;
+   * resolved per request. Returns `null` ⇒ no hub-admin seed / registry
+   * configured → the route returns a structured 503 `hub_admin_not_configured`
+   * (fail-closed — never a silent success). Signs LOCALLY (the daemon holds the
+   * hub-admin seed); the CF worker never wires this.
+   */
+  authorizer?: () => Authorizer | null;
+  /**
    * FLG-1 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the guided-join
    * handoff view (serves `GET /api/networks/:net/handoff/:member`: the 3-leg
    * seal → hub-authorize → leaf-up state via the pure `deriveHandoffState`). A
@@ -382,6 +400,10 @@ export function startServer(
         // MC-B2 — resolve the admission-decision signer lazily too (stack
         // identity + registry client boot after the server). null ⇒ 503.
         const admissionDecider = options.admissionDecider?.() ?? null;
+        // FLG-2 — resolve the authorize-from-glass signer lazily too (hub-admin
+        // material + registry boot after the server). null ⇒ 503
+        // `hub_admin_not_configured`.
+        const authorizer = options.authorizer?.() ?? null;
         // FLG-1 — resolve the handoff view lazily (same boot-order reason as
         // `networks`). null ⇒ the handoff route 503s honestly.
         const handoffView = options.handoffView?.() ?? null;
@@ -406,6 +428,7 @@ export function startServer(
           handoffView,
           doctorView,
           stepUpSecretPath,
+          authorizer,
         );
       }
 
@@ -569,6 +592,7 @@ async function handleApi(
   handoffView: HandoffView | null = null,
   doctorView: DoctorView | null = null,
   stepUpSecretPath: string = expandTilde(DEFAULT_STEP_UP_SECRET_PATH),
+  authorizer: Authorizer | null = null,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -937,6 +961,26 @@ async function handleApi(
       ...(guard.verifyJwt ? { verifyJwt: guard.verifyJwt } : {}),
     };
     return handleAdmissionDecision(admissionDecider, auth, body.value);
+  }
+
+  // FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — POST
+  // /api/networks/authorize — the trust-GRANTING authorize-from-glass verb:
+  // stamp `hub_authorized_at` on an ADMITTED admission row (registry
+  // cortex#1498, hub-admin-signed). Placed AFTER the FND-3 step-up gate block
+  // above: this path is in `STEP_UP_CONTROL_ROUTES`, so a POST without a valid
+  // current TOTP code was already refused (403) before reaching here, and the
+  // FND-6 identity gate ran first. The handler owns the typed-confirm intent
+  // gate + the fail-closed hub-admin seam (null ⇒ 503 `hub_admin_not_configured`)
+  // + the registry-verdict passthrough. Signs LOCALLY (the daemon holds the
+  // hub-admin seed); the CF worker never wires `authorizer`, so this route 503s
+  // there.
+  if (pathname === AUTHORIZE_PATH) {
+    if (req.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+    const body = await parseJsonBody(req);
+    if (body.error) return body.error;
+    return handleAuthorize(authorizer, body.value);
   }
 
   // F-17 — principal-driven GitHub iteration import.
