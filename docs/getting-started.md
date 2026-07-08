@@ -15,8 +15,8 @@ stack-onboarding SOP).
 
 If you have never run cortex before, you have no `~/.config/cortex/*.yaml`
 yet — that's expected. `cortex start --config …` has nothing to validate until
-you create a stack config, and the migrate path below is for **grove**
-operators only.
+you create a stack config, and the migrate path below is only for those
+coming from an existing **grove** install.
 
 1. **Create your first stack config** with [`cortex stack create`](../src/cli/cortex/commands/stack.ts)
    (dry-run by default; verified against the command's own `--help` output —
