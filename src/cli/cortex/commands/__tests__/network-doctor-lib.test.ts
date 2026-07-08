@@ -36,6 +36,7 @@ import type {
   NetworkDoctorPorts,
 } from "../network-doctor-ports";
 import type {
+  LeafzCounters,
   NetworkPingPorts,
   ProbeFireInputs,
   ProbeRoundTripResult,
@@ -119,9 +120,10 @@ function fakeMonitorPort(opts: {
 /** A fake probe-bus port (the exact `NetworkPingPorts` shape `pingPeer` consumes). */
 function fakeProbe(
   respond: (fired: ProbeFireInputs, seq: number) => ProbeRoundTripResult,
+  leafzReadings?: (LeafzCounters | undefined)[],
 ): NetworkPingPorts {
   let seq = 0;
-  return {
+  const ports: NetworkPingPorts = {
     bus: {
       fireProbe: async (f) => {
         seq++;
@@ -131,6 +133,19 @@ function fakeProbe(
     newNonce: () => `nonce-${seq}`,
     newCorrelationId: () => `corr-${seq}`,
   };
+  // cortex#1728 (guard 4) — inject a scripted before/after leafz sampler so the
+  // doctor timeout leg can fold the half-disambiguation.
+  if (leafzReadings !== undefined) {
+    let call = 0;
+    ports.leafz = {
+      sample: async () => {
+        const r = leafzReadings[call];
+        call++;
+        return r;
+      },
+    };
+  }
+  return ports;
 }
 
 /** Build a conformant echo reply for a fired probe (mock responder). */
@@ -456,6 +471,45 @@ describe("runDoctorChecks — (e) peer timeout", () => {
     // peer is entirely unreachable ⇒ the federation path is broken.
     expect(res.verdict).toBe("broken");
     expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.broken);
+  });
+
+  test("cortex#1728 — leafz out+/in0 sharpens the timeout fix to the REMOTE half", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe(() => ({ kind: "timeout" }), [
+        { outMsgs: 10, inMsgs: 5 }, // before
+        { outMsgs: 11, inMsgs: 5 }, // after: probe crossed, no echo back ⇒ remote
+      ]),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const peerCheck = findCheck(res.checks, "peer-reachable:jc/default");
+    expect(peerCheck.status).toBe("fail");
+    expect(peerCheck.detail).toContain("REMOTE");
+    expect(peerCheck.fix).toContain("peer/echo leg");
+    expect(peerCheck.fix).not.toContain("peer/hub"); // the sharper remediation wins
+  });
+
+  test("cortex#1728 — leafz out+0 sharpens the timeout fix to the LOCAL-egress half", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe(() => ({ kind: "timeout" }), [
+        { outMsgs: 10, inMsgs: 5 }, // before
+        { outMsgs: 10, inMsgs: 5 }, // after: nothing left the leaf ⇒ local egress
+      ]),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const peerCheck = findCheck(res.checks, "peer-reachable:jc/default");
+    expect(peerCheck.status).toBe("fail");
+    expect(peerCheck.detail).toContain("LOCAL egress");
+    expect(peerCheck.fix).toContain("local egress");
   });
 
   test("partial peer failure (one of two peers times out) ⇒ degraded, not broken", async () => {

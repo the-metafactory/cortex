@@ -26,11 +26,14 @@ import {
   buildReplySubjectPattern,
   classifyRoundTrip,
   derivePingInputs,
+  diagnoseLeafzDelta,
   pingPeer,
   VERDICT_EXIT_CODE,
   type PingInputs,
 } from "../network-ping-lib";
 import type {
+  LeafzCounters,
+  LeafzSamplerPort,
   NetworkPingPorts,
   ProbeFireInputs,
   ProbeRoundTripResult,
@@ -424,5 +427,130 @@ describe("VERDICT_EXIT_CODE — spec §3.3 mapping", () => {
     expect(VERDICT_EXIT_CODE["no-responder"]).toBe(3);
     expect(VERDICT_EXIT_CODE.timeout).toBe(4);
     expect(VERDICT_EXIT_CODE.refused).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1728 (guard 4) — leafz-aware half-disambiguation
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake leafz sampler that returns a scripted sequence of readings — one per
+ * `sample()` call, so a before/after pair can encode a controlled delta. A
+ * `undefined` entry (or exhausting the script) models a failed read.
+ */
+function fakeLeafz(
+  readings: (LeafzCounters | undefined)[],
+): { port: LeafzSamplerPort; calls: number } {
+  const state = { calls: 0 };
+  const port: LeafzSamplerPort = {
+    sample: async () => {
+      const r = readings[state.calls];
+      state.calls++;
+      return r;
+    },
+  };
+  return { port, calls: 0 };
+}
+
+describe("diagnoseLeafzDelta — pure half-disambiguation (cortex#1728)", () => {
+  test("out +N, in +0 ⇒ remote (echo leg / peer responder)", () => {
+    const d = diagnoseLeafzDelta({ outMsgs: 100, inMsgs: 50 }, { outMsgs: 103, inMsgs: 50 });
+    expect(d?.half).toBe("remote");
+    expect(d?.outDelta).toBe(3);
+    expect(d?.inDelta).toBe(0);
+    expect(d?.line).toContain("REMOTE");
+    expect(d?.line).toContain("out +3");
+  });
+
+  test("out +0 ⇒ local-egress (leaf account/binding, not the peer)", () => {
+    const d = diagnoseLeafzDelta({ outMsgs: 100, inMsgs: 50 }, { outMsgs: 100, inMsgs: 50 });
+    expect(d?.half).toBe("local-egress");
+    expect(d?.outDelta).toBe(0);
+    expect(d?.line).toContain("LOCAL egress");
+  });
+
+  test("out +N, in +N ⇒ inconclusive (both legs advanced, not a clean split)", () => {
+    const d = diagnoseLeafzDelta({ outMsgs: 100, inMsgs: 50 }, { outMsgs: 103, inMsgs: 53 });
+    expect(d?.half).toBe("inconclusive");
+    expect(d?.outDelta).toBe(3);
+    expect(d?.inDelta).toBe(3);
+  });
+
+  test("negative delta (counter reset / reconnect) ⇒ inconclusive", () => {
+    const d = diagnoseLeafzDelta({ outMsgs: 100, inMsgs: 50 }, { outMsgs: 2, inMsgs: 0 });
+    expect(d?.half).toBe("inconclusive");
+    expect(d?.line).toContain("reconnected");
+  });
+
+  test("missing before/after sample ⇒ undefined (nothing to diff)", () => {
+    expect(diagnoseLeafzDelta(undefined, { outMsgs: 1, inMsgs: 1 })).toBeUndefined();
+    expect(diagnoseLeafzDelta({ outMsgs: 1, inMsgs: 1 }, undefined)).toBeUndefined();
+    expect(diagnoseLeafzDelta(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("pingPeer — folds leafz delta into a timeout verdict (cortex#1728)", () => {
+  test("timeout + out+ / in0 ⇒ leafz.half=remote on the result", async () => {
+    const { ports } = fakeBus(() => ({ kind: "timeout" }));
+    const { port: leafz } = fakeLeafz([
+      { outMsgs: 100, inMsgs: 50 }, // before
+      { outMsgs: 101, inMsgs: 50 }, // after: 1 probe crossed, no echo back
+    ]);
+    const res = await pingPeer(inputs(), { ...ports, leafz });
+    expect(res.verdict).toBe("timeout");
+    expect(res.leafz?.half).toBe("remote");
+    expect(res.leafz?.outDelta).toBe(1);
+    expect(res.leafz?.inDelta).toBe(0);
+  });
+
+  test("timeout + out+0 ⇒ leafz.half=local-egress on the result", async () => {
+    const { ports } = fakeBus(() => ({ kind: "timeout" }));
+    const { port: leafz } = fakeLeafz([
+      { outMsgs: 100, inMsgs: 50 }, // before
+      { outMsgs: 100, inMsgs: 50 }, // after: nothing left the leaf
+    ]);
+    const res = await pingPeer(inputs(), { ...ports, leafz });
+    expect(res.verdict).toBe("timeout");
+    expect(res.leafz?.half).toBe("local-egress");
+    expect(res.leafz?.outDelta).toBe(0);
+  });
+
+  test("reachable ⇒ NO leafz diagnosis folded (only timeout is disambiguated)", async () => {
+    const { ports } = fakeBus((f) => echoReply(f, 12));
+    const { port: leafz } = fakeLeafz([
+      { outMsgs: 100, inMsgs: 50 },
+      { outMsgs: 101, inMsgs: 51 },
+    ]);
+    const res = await pingPeer(inputs(), { ...ports, leafz });
+    expect(res.verdict).toBe("reachable");
+    expect(res.leafz).toBeUndefined();
+  });
+
+  test("no leafz sampler wired ⇒ timeout carries no leafz field (best-effort)", async () => {
+    const { ports } = fakeBus(() => ({ kind: "timeout" }));
+    const res = await pingPeer(inputs(), ports); // no `leafz` on ports
+    expect(res.verdict).toBe("timeout");
+    expect(res.leafz).toBeUndefined();
+  });
+
+  test("leafz sampler throws ⇒ ping still succeeds, no leafz line", async () => {
+    const { ports } = fakeBus(() => ({ kind: "timeout" }));
+    const leafz: LeafzSamplerPort = {
+      sample: async () => {
+        throw new Error("monitor exploded");
+      },
+    };
+    const res = await pingPeer(inputs(), { ...ports, leafz });
+    expect(res.verdict).toBe("timeout"); // never fails the ping
+    expect(res.leafz).toBeUndefined();
+  });
+
+  test("leafz sampler returns undefined (monitor unreachable) ⇒ no line", async () => {
+    const { ports } = fakeBus(() => ({ kind: "timeout" }));
+    const { port: leafz } = fakeLeafz([undefined, undefined]);
+    const res = await pingPeer(inputs(), { ...ports, leafz });
+    expect(res.verdict).toBe("timeout");
+    expect(res.leafz).toBeUndefined();
   });
 });

@@ -159,6 +159,7 @@ import {
   type OwnAdmissionState,
 } from "../../../common/registry/admission-state";
 import {
+  createLiveLeafzSampler,
   createLiveProbeBus,
   type LiveProbeBus,
 } from "./network-ping-adapters";
@@ -1618,6 +1619,11 @@ const DEFAULT_PING_BUS_FACTORY: PingBusFactory = async (cfg) => {
     bus,
     newNonce: () => crypto.randomUUID(),
     newCorrelationId: () => crypto.randomUUID(),
+    // cortex#1728 (guard 4) — wire the best-effort local `/leafz` sampler so a
+    // `timeout` verdict is localised to a half (our egress vs the peer's echo
+    // leg) from the counter delta. Best-effort: a failed read just omits the
+    // extra line.
+    leafz: createLiveLeafzSampler(cfg),
   };
   return { ports, stop: () => bus.stop() };
 };
@@ -1744,6 +1750,14 @@ function renderPingResult(
         ...(res.stats.rttAvgMs !== undefined && { rtt_avg_ms: res.stats.rttAvgMs.toFixed(1) }),
         ...(res.stats.rttMaxMs !== undefined && { rtt_max_ms: String(res.stats.rttMaxMs) }),
         ...(res.detail !== undefined && { detail: res.detail }),
+        // cortex#1728 (guard 4) — machine-readable leafz half-disambiguation for
+        // a `timeout` verdict. Present only when a before/after sample was read.
+        ...(res.leafz !== undefined && {
+          leafz_half: res.leafz.half,
+          leafz_out_delta: String(res.leafz.outDelta),
+          leafz_in_delta: String(res.leafz.inDelta),
+          leafz_diagnosis: res.leafz.line,
+        }),
       },
     );
     // JSON goes to stdout regardless of exit code so a verdict is always
@@ -1770,6 +1784,12 @@ function renderPingResult(
   }
   if (res.verdict !== "reachable") {
     lines.push(`verdict: ${res.verdict}${res.detail !== undefined ? ` — ${res.detail}` : ""}`);
+  }
+  // cortex#1728 (guard 4) — when local `/leafz` was sampled around a `timeout`,
+  // append the half-disambiguation line so the operator knows WHICH leg to chase
+  // instead of the four-way guess in the verdict detail.
+  if (res.leafz !== undefined) {
+    lines.push(`leafz: ${res.leafz.line}`);
   }
   const body = lines.join("\n") + "\n";
   // Reachable → stdout/exit 0; any failure verdict → stderr + the verdict's
@@ -1815,6 +1835,10 @@ const DEFAULT_DOCTOR_PORTS_FACTORY: DoctorPortsFactory = async (cfg, livePortsCf
       bus,
       newNonce: () => crypto.randomUUID(),
       newCorrelationId: () => crypto.randomUUID(),
+      // cortex#1728 (guard 4) — the same best-effort `/leafz` sampler `ping`
+      // wires, so doctor's peer-reachable leg can localise a `timeout` to a half
+      // (our egress vs the peer's echo leg). Best-effort: a failed read omits it.
+      leafz: createLiveLeafzSampler(cfg),
     },
   };
   return { ports, stop: () => bus.stop() };

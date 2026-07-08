@@ -71,10 +71,57 @@ export interface ProbeBusPort {
   fireProbe(inputs: ProbeFireInputs): Promise<ProbeRoundTripResult>;
 }
 
+/**
+ * cortex#1728 (guard 4) — a single `/leafz` counter reading for the local leaf
+ * carrying THIS network's federated traffic.
+ *
+ * `out_msgs` / `in_msgs` from the nats-server monitor `/leafz` surface, keyed to
+ * the network's own leaf. The orchestrator samples this BEFORE and AFTER the
+ * probe volley and diffs the two, so a `timeout` verdict can say WHICH half is
+ * broken instead of listing four undifferentiated candidate causes:
+ *
+ *   - `out` incremented, `in` did not ⇒ probes crossed the leaf but no echo
+ *     returned ⇒ the failure is REMOTE (peer responder / echo leg);
+ *   - `out` did not move ⇒ nothing left the leaf ⇒ LOCAL egress is broken
+ *     (leaf account/binding), not the peer.
+ */
+export interface LeafzCounters {
+  /** Messages SENT over the network's leaf since connect (`out_msgs`). */
+  outMsgs: number;
+  /** Messages RECEIVED over the network's leaf since connect (`in_msgs`). */
+  inMsgs: number;
+}
+
+/**
+ * cortex#1728 (guard 4) — best-effort sampler for the local leaf's `/leafz`
+ * counters. The live adapter reads the nats-server monitor; tests inject a fake
+ * returning controlled deltas.
+ *
+ * OPTIONAL on {@link NetworkPingPorts} and BEST-EFFORT: a `sample()` returning
+ * `undefined` (monitor unreachable, no matching leaf, malformed body) MUST NOT
+ * fail the ping — the orchestrator simply omits the extra diagnostic line. This
+ * is additive diagnostic context, never a gate.
+ */
+export interface LeafzSamplerPort {
+  /**
+   * Read the current `out_msgs` / `in_msgs` for the network's leaf, or
+   * `undefined` when it cannot be read. NEVER throws — a failed read resolves
+   * `undefined` so the ping proceeds unaffected.
+   */
+  sample(): Promise<LeafzCounters | undefined>;
+}
+
 /** The ports bundle (room to grow — clock, etc., stay injectable). */
 export interface NetworkPingPorts {
   bus: ProbeBusPort;
   /** Monotonic-ish nonce + correlation id source (testable). */
   newNonce(): string;
   newCorrelationId(): string;
+  /**
+   * cortex#1728 (guard 4) — OPTIONAL local-`/leafz` sampler. When present, the
+   * orchestrator samples before/after the probes and folds the counter delta
+   * into a `timeout` verdict ("probes crossed the leaf — failure is remote" vs
+   * "nothing left the leaf — local egress broken"). Absent ⇒ no extra line.
+   */
+  leafz?: LeafzSamplerPort;
 }
