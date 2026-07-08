@@ -12,7 +12,7 @@
  * (`leafnodes { authorization { users … } }`) into the MEMBER's local.conf. On
  * an **operator-mode** server that block is STARTUP-FATAL (`operator mode does
  * not allow specifying users in leafnode config`) — but only at the NEXT
- * restart, and `nats-server -t` PASSES it as valid (the leafnode/operator
+ * restart, and `nats-server -t` PASSES it as valid (the leafnode operator-mode
  * validation doesn't run in `-t`; verified live). A deployment that ever ran
  * pre-#1491 tooling carries a bomb that detonates on its next restart.
  * {@link scanForLeafnodeAuthorizationBomb} scans the RESOLVED config (the config

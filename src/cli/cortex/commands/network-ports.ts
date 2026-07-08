@@ -254,7 +254,7 @@ export interface LeafFilePort {
    * cortex#1728 Guard 1 — scan the RESOLVED nats config (`natsConfigPath()` +
    * every file it `include`s) for an operator-mode `leafnodes { authorization {
    * users … } }` block. On an operator-mode bus that block is startup-fatal
-   * ("operator mode does not allow specifying users in leafnode config") and
+   * ("operator-mode does not allow specifying users in leafnode config") and
    * `nats-server -t` does NOT catch it. Returns the offending file(s) + the
    * removal fix (never auto-removed); `[]` when clean / not operator-mode. A
    * pure READ (identical in live + dry-run). The live adapter follows `include`

@@ -163,6 +163,7 @@ const CARVEOUT_PATHS: string[] = [
   "src/cli/cortex/commands/network-federation-wiring.ts",
   "src/cli/cortex/commands/network-make-live-lib.ts",
   "src/cli/cortex/commands/network-make-live-adapters.ts",
+  "src/cli/cortex/commands/__tests__/network-bus-safety.test.ts",
   "src/cli/cortex/commands/__tests__/network-make-live.test.ts",
   "src/cli/cortex/commands/__tests__/network-make-live-cli.test.ts",
   "src/common/nats/__tests__/leaf-remote-renderer.test.ts",

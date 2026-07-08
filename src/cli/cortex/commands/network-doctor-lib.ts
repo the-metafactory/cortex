@@ -241,7 +241,7 @@ function checkLeafnodeAuthorizationBomb(config: DoctorConfigPort): DoctorCheck {
     "fail",
     `the resolved nats config carries an operator-mode-FATAL \`leafnodes { authorization { users … } }\` ` +
       `block in ${bombs.map((b) => b.path).join(", ")} — it crashes nats-server on the NEXT restart ` +
-      `("operator mode does not allow specifying users in leafnode config") and \`nats-server -t\` does ` +
+      `("operator-mode does not allow specifying users in leafnode config") and \`nats-server -t\` does ` +
       `NOT catch it (cortex#1728/#1491)`,
     "member",
     first?.fix ?? "remove the leafnodes authorization block from the operator-mode nats config",
