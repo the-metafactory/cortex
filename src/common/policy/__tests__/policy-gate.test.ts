@@ -33,28 +33,28 @@ function principal(overrides: Partial<PolicyPrincipal> = {}): PolicyPrincipal {
 describe("PlatformPrincipalIndex", () => {
   test("resolves (platform, id) → principal id when the principal claims the tuple", () => {
     const idx = new PlatformPrincipalIndex([
-      principal({ id: "luna", platform_ids: { discord: ["1487180524542890144"] } }),
+      principal({ id: "luna", platform_ids: { discord: ["777777777777777777"] } }),
     ]);
-    expect(idx.resolve("discord", "1487180524542890144")).toBe("luna");
+    expect(idx.resolve("discord", "777777777777777777")).toBe("luna");
   });
 
   test("returns undefined for unknown platform", () => {
     const idx = new PlatformPrincipalIndex([
-      principal({ id: "luna", platform_ids: { discord: ["1487180524542890144"] } }),
+      principal({ id: "luna", platform_ids: { discord: ["777777777777777777"] } }),
     ]);
-    expect(idx.resolve("mattermost", "1487180524542890144")).toBeUndefined();
+    expect(idx.resolve("mattermost", "777777777777777777")).toBeUndefined();
   });
 
   test("returns undefined for unknown id on a known platform", () => {
     const idx = new PlatformPrincipalIndex([
-      principal({ id: "luna", platform_ids: { discord: ["1487180524542890144"] } }),
+      principal({ id: "luna", platform_ids: { discord: ["777777777777777777"] } }),
     ]);
     expect(idx.resolve("discord", "9999")).toBeUndefined();
   });
 
   test("returns undefined for an empty index", () => {
     const idx = new PlatformPrincipalIndex([]);
-    expect(idx.resolve("discord", "1487180524542890144")).toBeUndefined();
+    expect(idx.resolve("discord", "777777777777777777")).toBeUndefined();
     expect(idx.size).toBe(0);
   });
 
@@ -63,23 +63,23 @@ describe("PlatformPrincipalIndex", () => {
       principal({
         id: "operator",
         platform_ids: {
-          discord: ["1134325176796987522"],
+          discord: ["666666666666666666"],
           slack: ["U01234"],
         },
       }),
     ]);
-    expect(idx.resolve("discord", "1134325176796987522")).toBe("operator");
+    expect(idx.resolve("discord", "666666666666666666")).toBe("operator");
     expect(idx.resolve("slack", "U01234")).toBe("operator");
     expect(idx.size).toBe(2);
   });
 
   test("indexes multiple principals on different ids", () => {
     const idx = new PlatformPrincipalIndex([
-      principal({ id: "luna", platform_ids: { discord: ["1487180524542890144"] } }),
-      principal({ id: "echo", platform_ids: { discord: ["1497872105067253800"] } }),
+      principal({ id: "luna", platform_ids: { discord: ["777777777777777777"] } }),
+      principal({ id: "echo", platform_ids: { discord: ["3333333333333333333"] } }),
     ]);
-    expect(idx.resolve("discord", "1487180524542890144")).toBe("luna");
-    expect(idx.resolve("discord", "1497872105067253800")).toBe("echo");
+    expect(idx.resolve("discord", "777777777777777777")).toBe("luna");
+    expect(idx.resolve("discord", "3333333333333333333")).toBe("echo");
   });
 
   test("PR #310 r1 N-1 — uses `:` separator so prefix-aliased platform names don't collide", () => {
@@ -100,11 +100,11 @@ describe("PlatformPrincipalIndex", () => {
       principal({
         id: "operator",
         platform_ids: {
-          discord: ["1134325176796987522"],
+          discord: ["666666666666666666"],
           slack: ["U01234", "U05678"],
         },
       }),
-      principal({ id: "luna", platform_ids: { discord: ["1487180524542890144"] } }),
+      principal({ id: "luna", platform_ids: { discord: ["777777777777777777"] } }),
     ]);
     expect(idx.size).toBe(4);
   });
@@ -123,13 +123,13 @@ describe("buildPlatformPrincipalIndex", () => {
   test("returns a populated index when principals are declared", () => {
     const policy: Policy = {
       principals: [
-        principal({ id: "luna", platform_ids: { discord: ["1487180524542890144"] } }),
+        principal({ id: "luna", platform_ids: { discord: ["777777777777777777"] } }),
       ],
       roles: [],
     };
     const idx = buildPlatformPrincipalIndex(policy);
     expect(idx).toBeDefined();
-    expect(idx?.resolve("discord", "1487180524542890144")).toBe("luna");
+    expect(idx?.resolve("discord", "777777777777777777")).toBe("luna");
   });
 });
 

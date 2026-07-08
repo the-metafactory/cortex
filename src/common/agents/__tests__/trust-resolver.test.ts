@@ -394,12 +394,12 @@ describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust
       agentFixture({ id: "forge" }),
     ));
     resolver.register("discord", ECHO_DISCORD_ID, "echo");
-    resolver.register("discord", "1497954389736947876", "forge");
+    resolver.register("discord", "5555555555555555555", "forge");
 
     const merged = mergeFor(resolver, ["echo", "forge"], "luna", []);
     expect(merged.size).toBe(2);
     expect(merged.has(ECHO_DISCORD_ID)).toBe(true);
-    expect(merged.has("1497954389736947876")).toBe(true);
+    expect(merged.has("5555555555555555555")).toBe(true);
   });
 
   test("operator-explicit trustedBotIds (cross-process bridge) merge with resolver-derived ids", () => {

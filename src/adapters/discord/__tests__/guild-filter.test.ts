@@ -201,8 +201,8 @@ async function fireMessageCreate(
 // ---------------------------------------------------------------------------
 
 describe("DiscordAdapter: guild filter (cortex#704)", () => {
-  const GUILD_A = "1487023327791808592"; // meta-factory
-  const GUILD_B = "1512054429023731884"; // halden
+  const GUILD_A = "111111111111111111"; // guild A (placeholder snowflake)
+  const GUILD_B = "444444444444444444"; // guild B (placeholder snowflake)
 
   test("same token, different guildId: guild-A message dispatches only on the guild-A adapter", async () => {
     const a = makeAdapter({ instanceId: "discord-A", guildId: GUILD_A });

@@ -263,7 +263,7 @@ describe("CapabilitySchema.provided_by", () => {
     // letter-prefix regex; once one tightens, the other must too — that's
     // why they're enforced as a single coordinated edit in cortex#145.
     expect(() =>
-      CapabilitySchema.parse(minCapability({ provided_by: ["1497204875912609844"] })),
+      CapabilitySchema.parse(minCapability({ provided_by: ["6666666666666666666"] })),
     ).toThrow(/starting with a letter/);
   });
 

@@ -332,7 +332,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
             platform_ids: {
               discord: ["1487123456789012345"],
               slack: ["U01ABCDEF"],
-              email: ["luna@meta-factory.ai"],
+              email: ["luna@example.com"],
               mcp: ["mcp://luna/inbox"],
               http: ["bearer:abc123"],
             },
@@ -343,7 +343,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
       expect(policy.principals[0]?.platform_ids).toEqual({
         discord: ["1487123456789012345"],
         slack: ["U01ABCDEF"],
-        email: ["luna@meta-factory.ai"],
+        email: ["luna@example.com"],
         mcp: ["mcp://luna/inbox"],
         http: ["bearer:abc123"],
       });

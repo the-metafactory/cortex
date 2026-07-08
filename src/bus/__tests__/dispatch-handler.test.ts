@@ -30,7 +30,7 @@ import { readLogicalRouting } from "../../adapters/response-routing-delivery";
  * builds an engine that resolves the two `(platform, authorId)` tuples
  * the publish-path tests use:
  *
- *   - `(discord, 1487204875912609844)` → `andreas`
+ *   - `(discord, 888888888888888888)` → `andreas`
  *   - `(mattermost, 8wkrnxq3abcdef)` → `andreas`
  *
  * Tests that exercise unresolvable inputs (the cortex#420 nit-5
@@ -48,7 +48,7 @@ function makePublishPolicyEngine(): PolicyEngine {
         role: ["operator"],
         trust: [],
         platform_ids: {
-          discord: ["1487204875912609844"],
+          discord: ["888888888888888888"],
           mattermost: ["8wkrnxq3abcdef"],
         },
       },
@@ -61,7 +61,7 @@ function makePublishPolicyEngine(): PolicyEngine {
  * cortex#1167 — the PRODUCTION engine shape: built via `policyEngineFromConfig`
  * (exactly how cortex.ts wires it) so the synthetic `public` principal is
  * registered with `dispatch.<agentId>` per flagged agent. Maps
- * (discord, 1487204875912609844) → andreas (a fully-privileged principal). Used
+ * (discord, 888888888888888888) → andreas (a fully-privileged principal). Used
  * by the round-trip tests that prove the listener's engine.check passes for `public`.
  */
 function makeWiredEngineWithPublic(openOnboardingAgentIds: string[]): PolicyEngine {
@@ -73,7 +73,7 @@ function makeWiredEngineWithPublic(openOnboardingAgentIds: string[]): PolicyEngi
         home_stack: "andreas/meta-factory",
         role: ["operator"],
         trust: [],
-        platform_ids: { discord: ["1487204875912609844"] },
+        platform_ids: { discord: ["888888888888888888"] },
       },
     ],
     roles: [{ id: "operator", capabilities: ["operator", "keyword.chat", "dispatch.test-agent", "dispatch.pier"] }],
@@ -1593,7 +1593,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     taskId: "11111111-1111-4111-8111-111111111111",
     msg: makeMsg({
       platform: "discord",
-      authorId: "1487204875912609844",
+      authorId: "888888888888888888",
       content: "hello",
     }),
     prompt: "user prompt here",
@@ -1710,7 +1710,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       stack: "meta-factory",
       // PRODUCTION engine: built via the factory WITH the public principal
       // granted dispatch.pier (exactly how cortex.ts wires it). It maps
-      // (discord, 1487204875912609844) → andreas; JC's id below is UNMAPPED.
+      // (discord, 888888888888888888) → andreas; JC's id below is UNMAPPED.
       policyEngine: makeWiredEngineWithPublic(["pier"]),
     });
     const adapter = new MockAdapter();
@@ -1723,7 +1723,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
 
     await handler.handleMessage(
       adapter,
-      makeMsg({ platform: "discord", authorId: "285727653603049472", authorName: "JC", content: "hi, I'm new here" }),
+      makeMsg({ platform: "discord", authorId: "555555555555555555", authorName: "JC", content: "hi, I'm new here" }),
       { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
     );
 
@@ -1787,7 +1787,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
 
     await handler.handleMessage(
       adapter,
-      makeMsg({ platform: "discord", authorId: "1487204875912609844", authorName: "andreas", content: "hello" }),
+      makeMsg({ platform: "discord", authorId: "888888888888888888", authorName: "andreas", content: "hello" }),
       { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
     );
 
@@ -1823,7 +1823,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       dispatchOpts({
         msg: makeMsg({
           platform: "discord",
-          authorId: "1487204875912609844",
+          authorId: "888888888888888888",
           instanceId: "discord-pai-collab",
           channelId: "C100",
           threadId: "T200",
@@ -2141,7 +2141,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       makeMsg({
         content: "hello",
         platform: "discord",
-        authorId: "1487204875912609844",
+        authorId: "888888888888888888",
       }),
     );
     expect(runtime.subjectPublishes.length).toBe(1);
@@ -2179,7 +2179,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         makeMsg({
           content: "hello",
           platform: "discord",
-          authorId: "1487204875912609844",
+          authorId: "888888888888888888",
         }),
         { id: "juniper", displayName: "Juniper", persona: personaPath },
       );
@@ -2238,7 +2238,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         makeMsg({
           content: "hello",
           platform: "discord",
-          authorId: "1487204875912609844",
+          authorId: "888888888888888888",
         }),
       );
       expect(runtime.subjectPublishes.length).toBe(1);

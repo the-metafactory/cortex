@@ -173,9 +173,9 @@ const SAME_TOKEN_DISCORD_SURFACES: Surfaces = {
       stack: "jc/default",
       binding: {
         token: "tok-juniper",
-        guildId: "1487023327791808592",
-        agentChannelId: "1487023328324616266",
-        logChannelId: "1487023328324616266",
+        guildId: "111111111111111111",
+        agentChannelId: "222222222222222222",
+        logChannelId: "222222222222222222",
       },
     },
     {
@@ -184,8 +184,8 @@ const SAME_TOKEN_DISCORD_SURFACES: Surfaces = {
       binding: {
         token: "tok-juniper",
         guildId: "555666777888999000",
-        agentChannelId: "1513296336739635322",
-        logChannelId: "1513296336739635322",
+        agentChannelId: "333333333333333333",
+        logChannelId: "333333333333333333",
       },
     },
   ],
@@ -198,9 +198,9 @@ const SAME_TOKEN_DIFFERENT_STACKS_DISCORD_SURFACES: Surfaces = {
       stack: "jc/default",
       binding: {
         token: "tok-juniper",
-        guildId: "1487023327791808592",
-        agentChannelId: "1487023328324616266",
-        logChannelId: "1487023328324616266",
+        guildId: "111111111111111111",
+        agentChannelId: "222222222222222222",
+        logChannelId: "222222222222222222",
       },
     },
     {
@@ -209,8 +209,8 @@ const SAME_TOKEN_DIFFERENT_STACKS_DISCORD_SURFACES: Surfaces = {
       binding: {
         token: "tok-juniper",
         guildId: "555666777888999000",
-        agentChannelId: "1513296336739635322",
-        logChannelId: "1513296336739635322",
+        agentChannelId: "333333333333333333",
+        logChannelId: "333333333333333333",
       },
     },
   ],
@@ -314,17 +314,17 @@ describe("buildGatewayAdapters", () => {
     expect(calls[0]?.platform).toBe("discord");
     expect(calls[0]?.instanceId).toMatch(/^discord:token:[0-9a-f]{12}$/);
     expect(calls[0]?.allowedGuildIds).toEqual([
-      "1487023327791808592",
+      "111111111111111111",
       "555666777888999000",
     ]);
     expect(calls[0]?.presenceByGuildId).toEqual({
-      "1487023327791808592": {
-        agentChannelId: "1487023328324616266",
-        logChannelId: "1487023328324616266",
+      "111111111111111111": {
+        agentChannelId: "222222222222222222",
+        logChannelId: "222222222222222222",
       },
       "555666777888999000": {
-        agentChannelId: "1513296336739635322",
-        logChannelId: "1513296336739635322",
+        agentChannelId: "333333333333333333",
+        logChannelId: "333333333333333333",
       },
     });
   });
@@ -338,11 +338,11 @@ describe("buildGatewayAdapters", () => {
 
     expect(adapters.length).toBe(2);
     expect(calls.map((call) => call.instanceId)).toEqual([
-      "discord:1487023327791808592",
+      "discord:111111111111111111",
       "discord:555666777888999000",
     ]);
     expect(calls.map((call) => call.allowedGuildIds)).toEqual([
-      ["1487023327791808592"],
+      ["111111111111111111"],
       ["555666777888999000"],
     ]);
   });

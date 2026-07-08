@@ -51,7 +51,7 @@ function loadCortexShape(yamlStr: string): LegacyBotYaml {
 const CORTEX_SHAPE_SINGLE_ADAPTER = `
 operator:
   id: andreas
-  discordId: "1134325176796987522"
+  discordId: "666666666666666666"
   dataResidency: NZ
 stack:
   id: andreas/meta-factory
@@ -70,14 +70,14 @@ agents:
         logChannelId: "3"
         roles:
           - name: operator
-            users: ["1134325176796987522"]
+            users: ["666666666666666666"]
             features: [chat, async, team]
           - name: user
-            users: ["285727653603049472"]
+            users: ["555555555555555555"]
             features: [chat]
             disallowedTools: [Write, Edit, NotebookEdit]
           - name: agent-echo
-            users: ["1497872105067253800"]
+            users: ["3333333333333333333"]
             features: [chat]
         defaultRole: denied
 `;
@@ -91,7 +91,7 @@ describe("convertBotYaml — single-adapter policy synthesis", () => {
     const legacy = loadCortexShape(`
 operator:
   id: andreas
-  discordId: "1134325176796987522"
+  discordId: "666666666666666666"
 stack:
   id: andreas/meta-factory
 agents:
@@ -109,14 +109,14 @@ agents:
         logChannelId: "3"
         roles:
           - name: operator
-            users: ["1134325176796987522"]
+            users: ["666666666666666666"]
             features: [chat, async, team]
           - name: user
-            users: ["285727653603049472"]
+            users: ["555555555555555555"]
             features: [chat]
             disallowedTools: [Write, Edit, NotebookEdit]
           - name: agent-echo
-            users: ["1497872105067253800"]
+            users: ["3333333333333333333"]
             features: [chat]
   - id: echo
     displayName: Echo
@@ -141,17 +141,17 @@ agents:
     // echo is a declared agent → role agent-echo maps to principal "echo"
     expect(ids).toContain("echo");
 
-    // user mike via Discord 285... → user-d049472
-    expect(ids).toContain("user-d049472");
+    // user mike via Discord 555... → user-d555555
+    expect(ids).toContain("user-d555555");
 
     const operator = policy.principals.find((p) => p.id === "operator")!;
-    expect(operator.platform_ids.discord).toContain("1134325176796987522");
+    expect(operator.platform_ids.discord).toContain("666666666666666666");
     expect(operator.role).toContain("operator");
     expect(operator.home_principal).toBe("andreas");
     expect(operator.home_stack).toBe("andreas/meta-factory");
 
-    const user = policy.principals.find((p) => p.id === "user-d049472")!;
-    expect(user.platform_ids.discord).toContain("285727653603049472");
+    const user = policy.principals.find((p) => p.id === "user-d555555")!;
+    expect(user.platform_ids.discord).toContain("555555555555555555");
     expect(user.role).toContain("user");
 
     // operator role got [keyword.chat, keyword.async, keyword.team, dispatch.echo, dispatch.luna, operator, tool.*]
@@ -467,7 +467,7 @@ describe("idempotency", () => {
 describe("--labels override", () => {
   test("label takes precedence over synthesised principal id", () => {
     const labels = new Map<string, string>([
-      ["discord:285727653603049472", "mike"],
+      ["discord:555555555555555555", "mike"],
     ]);
     const legacy = loadCortexShape(`
 operator:
@@ -489,13 +489,13 @@ agents:
         logChannelId: "3"
         roles:
           - name: user
-            users: ["285727653603049472"]
+            users: ["555555555555555555"]
             features: [chat]
 `);
     const result = convertBotYaml(legacy, { labels });
     const ids = result.cortex.policy!.principals.map((p) => p.id);
     expect(ids).toContain("mike");
-    expect(ids).not.toContain("user-d049472");
+    expect(ids).not.toContain("user-d555555");
   });
 });
 

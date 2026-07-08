@@ -56,9 +56,9 @@ afterEach(() => {
 
 const DISCORD_BINDING = {
   token: "fake-token-ivy",
-  guildId: "1487023327791808592",
-  agentChannelId: "1487029848164536361",
-  logChannelId: "1487029942129524786",
+  guildId: "111111111111111111",
+  agentChannelId: "999999999999999999",
+  logChannelId: "1111111111111111111",
 };
 
 const SLACK_BINDING = {

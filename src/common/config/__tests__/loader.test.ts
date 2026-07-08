@@ -378,7 +378,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
       principal: {
         id: "jc",
         displayName: "Jens-Christian",
-        discordId: "285727653603049472",
+        discordId: "555555555555555555",
       },
       agents: [
         {
@@ -390,9 +390,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
           presence: {
             discord: {
               token: "fake-token-ivy",
-              guildId: "1487023327791808592",
-              agentChannelId: "1487029848164536361",
-              logChannelId: "1487029942129524786",
+              guildId: "111111111111111111",
+              agentChannelId: "999999999999999999",
+              logChannelId: "1111111111111111111",
             },
           },
         },
@@ -420,7 +420,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     // `LoadedConfig.principal`.
     expect(principal?.id).toBe("jc");
     expect(principal?.displayName).toBe("Jens-Christian");
-    expect(principal?.discordId).toBe("285727653603049472");
+    expect(principal?.discordId).toBe("555555555555555555");
   });
 
   // fix/c-844 — the mc:/cockpit: blocks must survive the cortex-shape parse.
@@ -488,9 +488,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
       presence: {
         discord: {
           token: "fake-token-holly",
-          guildId: "1487023327791808592",
-          agentChannelId: "1487029848164536361",
-          logChannelId: "1487029942129524786",
+          guildId: "111111111111111111",
+          agentChannelId: "999999999999999999",
+          logChannelId: "1111111111111111111",
         },
       },
     });
@@ -719,7 +719,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
 
   test("rejects cortex.yaml carrying legacy top-level `trustedAgentBots:`", () => {
     const cfg = minimalCortex();
-    cfg.trustedAgentBots = [{ id: "1487180524542890144", role: "agent-restricted" }];
+    cfg.trustedAgentBots = [{ id: "777777777777777777", role: "agent-restricted" }];
     const path = writeCortexConfig(testDir, cfg);
     expect(() => loadConfigWithAgents(path)).toThrow(/legacy `trustedAgentBots:`/);
   });
@@ -835,7 +835,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     // `logChannelId`, etc. all quote Discord snowflakes as strings. Verify
     // a quoted snowflake survives the round-trip without any digit-loss
     // from JS Number precision.
-    const snowflake = "1487029848164536361"; // Echo's actual agent-channel snowflake
+    const snowflake = "999999999999999999"; // shared agent-channel snowflake (placeholder)
     const cfg = minimalCortex();
     const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
     const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
@@ -1024,7 +1024,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     // cortex#429 PR-C — `config.agent.operatorId` retired; principal id
     // is sole-sourced from `LoadedConfig.principal.id` now.
     expect(loaded.principal?.id).toBe("jc");
-    expect(loaded.principal?.discordId).toBe("285727653603049472");
+    expect(loaded.principal?.discordId).toBe("555555555555555555");
   });
 
   // v4.0.0 BREAKING CUT — cortex.yaml requires the canonical `principal:`
@@ -1157,9 +1157,9 @@ describe("S1 (cortex#1159) — exported presence-flatten helpers + boot-path app
   const discordPresence = (over: Record<string, unknown> = {}) => ({
     discord: {
       token: `tok-${Math.random().toString(36).slice(2)}`,
-      guildId: "1487023327791808592",
-      agentChannelId: "1487029848164536361",
-      logChannelId: "1487029942129524786",
+      guildId: "111111111111111111",
+      agentChannelId: "999999999999999999",
+      logChannelId: "1111111111111111111",
       ...over,
     },
   });

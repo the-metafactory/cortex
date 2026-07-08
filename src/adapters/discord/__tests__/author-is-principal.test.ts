@@ -65,7 +65,7 @@ afterEach(() => {
 const SELF_BOT_ID = "self-bot-id";
 const PRINCIPAL_AUTHOR_ID = "principal-author";
 const STRANGER_AUTHOR_ID = "stranger-author";
-const GUILD_ID = "1487023327791808592";
+const GUILD_ID = "111111111111111111";
 
 class FakeClient extends EventEmitter {
   public user = { id: SELF_BOT_ID };

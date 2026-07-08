@@ -155,8 +155,8 @@ async function fireMessageCreate(
 // ---------------------------------------------------------------------------
 
 describe("DiscordAdapter: DM stack-ownership (cortex#709)", () => {
-  const GUILD_A = "1487023327791808592";
-  const GUILD_B = "1512054429023731884";
+  const GUILD_A = "111111111111111111";
+  const GUILD_B = "444444444444444444";
 
   test("same token, one owner + one non-owner: a DM dispatches ONLY on the owner", async () => {
     const owner = makeAdapter({ instanceId: "discord-A", guildId: GUILD_A, dmOwner: true });

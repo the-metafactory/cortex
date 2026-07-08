@@ -238,7 +238,7 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)"
   // layer so `originator.identity` carries the RESOLVED principal DID
   // (`did:mf:<principal-id>`), per CONTEXT.md §Dispatch-source. The
   // post-#486 dispatch-listener no longer calls this surface; an
-  // illustrative example like `did:mf:discord-1134325176796987522` is
+  // illustrative example like `did:mf:discord-666666666666666666` is
   // therefore no longer produced anywhere in cortex.
 
   test("registered (platform, author_id) tuple → principal id", () => {
@@ -246,14 +246,14 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)"
       principals: [
         principal({
           id: "andreas",
-          platform_ids: { discord: ["1134325176796987522"] },
+          platform_ids: { discord: ["666666666666666666"] },
         }),
       ],
       roles: [role("operator", ["dispatch.cortex"])],
     });
 
     expect(
-      engine.lookupPrincipalIdByPlatformId("discord", "1134325176796987522"),
+      engine.lookupPrincipalIdByPlatformId("discord", "666666666666666666"),
     ).toBe("andreas");
   });
 
@@ -262,7 +262,7 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)"
       principals: [
         principal({
           id: "andreas",
-          platform_ids: { discord: ["1134325176796987522"] },
+          platform_ids: { discord: ["666666666666666666"] },
         }),
       ],
       roles: [role("operator", [])],
@@ -274,7 +274,7 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)"
     ).toBeUndefined();
     // Known author_id but on a platform this principal doesn't claim.
     expect(
-      engine.lookupPrincipalIdByPlatformId("slack", "1134325176796987522"),
+      engine.lookupPrincipalIdByPlatformId("slack", "666666666666666666"),
     ).toBeUndefined();
     // Platform with no declared principals at all.
     expect(
@@ -301,7 +301,7 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)"
         principal({
           id: "andreas",
           platform_ids: {
-            discord: ["1134325176796987522"],
+            discord: ["666666666666666666"],
             mattermost: ["mm-andreas-id"],
           },
         }),
@@ -310,7 +310,7 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)"
     });
 
     expect(
-      engine.lookupPrincipalIdByPlatformId("discord", "1134325176796987522"),
+      engine.lookupPrincipalIdByPlatformId("discord", "666666666666666666"),
     ).toBe("andreas");
     expect(
       engine.lookupPrincipalIdByPlatformId("mattermost", "mm-andreas-id"),

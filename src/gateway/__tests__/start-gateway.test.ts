@@ -271,9 +271,9 @@ describe("startGatewayIfEnabled — flag on", () => {
           stack: "jc/default",
           binding: {
             token: "tok-juniper",
-            guildId: "1487023327791808592",
-            agentChannelId: "1487023328324616266",
-            logChannelId: "1487023328324616266",
+            guildId: "111111111111111111",
+            agentChannelId: "222222222222222222",
+            logChannelId: "222222222222222222",
           },
         },
         {
@@ -282,8 +282,8 @@ describe("startGatewayIfEnabled — flag on", () => {
           binding: {
             token: "tok-juniper",
             guildId: "555666777888999000",
-            agentChannelId: "1513296336739635322",
-            logChannelId: "1513296336739635322",
+            agentChannelId: "333333333333333333",
+            logChannelId: "333333333333333333",
           },
         },
       ],

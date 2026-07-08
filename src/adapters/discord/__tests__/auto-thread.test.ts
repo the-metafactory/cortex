@@ -53,7 +53,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 const BOT_ID = "999000111";
-const HUMAN_ID = "285727653603049472";
+const HUMAN_ID = "555555555555555555";
 const CHANNEL_ID = "ch-cortex-1";
 const PARENT_NAME = "cortex";
 

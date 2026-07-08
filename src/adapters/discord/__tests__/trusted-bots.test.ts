@@ -20,9 +20,9 @@ import { isMentionForBot } from "../client";
 import { DiscordInstanceSchema } from "../../../common/types/config";
 
 const SELF_ID = "1111";
-const PEER_BOT_ID = "1497898452351455393"; // Holly's id from cortex#84 timeline
+const PEER_BOT_ID = "4444444444444444444"; // peer bot (placeholder snowflake)
 const UNTRUSTED_BOT_ID = "9999";
-const HUMAN_ID = "285727653603049472";
+const HUMAN_ID = "555555555555555555";
 
 function makeClient(): Client {
   // isMentionForBot reads `client.user.id` and `message.mentions.has(client.user)`.
@@ -125,15 +125,15 @@ describe("DiscordInstanceSchema.trustedBotIds (cortex#84)", () => {
   test("accepts a populated array of Discord user ids", () => {
     const parsed = DiscordInstanceSchema.parse({
       ...minInstance,
-      trustedBotIds: [PEER_BOT_ID, "1487024060411023491"],
+      trustedBotIds: [PEER_BOT_ID, "2222222222222222222"],
     });
-    expect(parsed.trustedBotIds).toEqual([PEER_BOT_ID, "1487024060411023491"]);
+    expect(parsed.trustedBotIds).toEqual([PEER_BOT_ID, "2222222222222222222"]);
   });
 
   test("coerces numeric ids to strings (snowflakes-as-numbers in YAML)", () => {
     const parsed = DiscordInstanceSchema.parse({
       ...minInstance,
-      trustedBotIds: [1497898452351455393n.toString(), 1487024060411023491n.toString()],
+      trustedBotIds: [4444444444444444444n.toString(), 2222222222222222222n.toString()],
     });
     expect(parsed.trustedBotIds.every((id) => typeof id === "string")).toBe(true);
   });

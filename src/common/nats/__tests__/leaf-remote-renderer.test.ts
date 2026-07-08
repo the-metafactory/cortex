@@ -46,7 +46,7 @@ import { join } from "path";
 
 const DESCRIPTOR: NetworkDescriptor = {
   network_id: "metafactory",
-  hub_url: "tls://nats.meta-factory.dev:7422",
+  hub_url: "tls://nats.example.com:7422",
   leaf_port: 7422,
   members: ["andreas", "jc"],
 };
@@ -61,7 +61,7 @@ const BINDING: StackLeafBinding = {
 describe("renderLeafRemote", () => {
   test("produces a structured remote from a descriptor + binding", () => {
     const remote = renderLeafRemote(DESCRIPTOR, BINDING);
-    expect(remote.url).toBe("tls://nats.meta-factory.dev:7422");
+    expect(remote.url).toBe("tls://nats.example.com:7422");
     expect(remote.credentials).toBe(
       "/Users/andreas/.config/nats/andreas.creds",
     );
@@ -78,16 +78,16 @@ describe("renderLeafRemote", () => {
     // / reconstruct the dial URL independently of URL parsing.
     const bareHost: NetworkDescriptor = {
       ...DESCRIPTOR,
-      hub_url: "nats.meta-factory.dev",
+      hub_url: "nats.example.com",
     };
     const remote = renderLeafRemote(bareHost, BINDING);
-    expect(remote.url).toBe("tls://nats.meta-factory.dev:7422");
+    expect(remote.url).toBe("tls://nats.example.com:7422");
   });
 
   test("preserves an explicit port in hub_url over leaf_port (url wins, no double-port)", () => {
     const remote = renderLeafRemote(DESCRIPTOR, BINDING);
     // hub_url already has :7422 — must not become :7422:7422.
-    expect(remote.url).toBe("tls://nats.meta-factory.dev:7422");
+    expect(remote.url).toBe("tls://nats.example.com:7422");
     expect(remote.url).not.toContain(":7422:7422");
   });
 
@@ -108,7 +108,7 @@ describe("renderLeafRemote", () => {
     const noAccount: StackLeafBinding = { credentials: BINDING.credentials };
     const remote = renderLeafRemote(DESCRIPTOR, noAccount);
     expect(remote.account).toBeUndefined();
-    expect(remote.url).toBe("tls://nats.meta-factory.dev:7422");
+    expect(remote.url).toBe("tls://nats.example.com:7422");
     expect(remote.credentials).toBe(BINDING.credentials);
   });
 
@@ -286,12 +286,12 @@ describe("mergeLeafRemotes — idempotency key = network_id", () => {
     // Hub relocated (DD-12) — same network, new url. Must replace in place.
     const relocated: NetworkDescriptor = {
       ...DESCRIPTOR,
-      hub_url: "tls://hub2.meta-factory.dev:7422",
+      hub_url: "tls://hub2.example.com:7422",
     };
     const r2 = renderLeafRemote(relocated, BINDING);
     const twice = mergeLeafRemotes(once, r2);
     expect(twice).toHaveLength(1);
-    expect(twice[0]?.url).toBe("tls://hub2.meta-factory.dev:7422");
+    expect(twice[0]?.url).toBe("tls://hub2.example.com:7422");
   });
 
   test("multi-network (OQ3) composes distinct networks into one array", () => {
@@ -343,7 +343,7 @@ describe("renderLeafIncludeFile — HOCON fragment for a single network", () => 
     const conf = renderLeafIncludeFile(DESCRIPTOR, BINDING);
     expect(conf).toContain("leafnodes");
     expect(conf).toContain("remotes");
-    expect(conf).toContain('url: "tls://nats.meta-factory.dev:7422"');
+    expect(conf).toContain('url: "tls://nats.example.com:7422"');
     expect(conf).toContain(
       'credentials: "/Users/andreas/.config/nats/andreas.creds"',
     );
@@ -372,7 +372,7 @@ describe("renderLeafIncludeFile — HOCON fragment for a single network", () => 
     const noAccount: StackLeafBinding = { credentials: BINDING.credentials };
     const conf = renderLeafIncludeFile(DESCRIPTOR, noAccount);
     // url + credentials still present...
-    expect(conf).toContain('url: "tls://nats.meta-factory.dev:7422"');
+    expect(conf).toContain('url: "tls://nats.example.com:7422"');
     expect(conf).toContain(
       'credentials: "/Users/andreas/.config/nats/andreas.creds"',
     );
@@ -724,7 +724,7 @@ describe("renderLeafRemote — C-1224 Model B secret-auth", () => {
     const remote = renderLeafRemote(DESCRIPTOR, SECRET_BINDING);
     // Clean dial URL — the secret is NOT spliced into the structured url
     // (status/logging surfaces stay secret-free).
-    expect(remote.url).toBe("tls://nats.meta-factory.dev:7422");
+    expect(remote.url).toBe("tls://nats.example.com:7422");
     expect(remote.url).not.toContain("s3cr3t");
     expect(remote.credentials).toBeUndefined();
     expect(remote.secretAuth).toEqual({
@@ -779,7 +779,7 @@ describe("renderLeafIncludeFile — C-1224 Model B secret-auth serialization", (
     const conf = renderLeafIncludeFile(DESCRIPTOR, SECRET_BINDING);
     // userinfo spliced into the dial URL (URL-encoded user:secret@host).
     expect(conf).toContain(
-      'url: "tls://andreas:s3cr3t-leaf-pipe@nats.meta-factory.dev:7422"',
+      'url: "tls://andreas:s3cr3t-leaf-pipe@nats.example.com:7422"',
     );
     // No `.creds` file on a Model-B leaf.
     expect(conf).not.toContain("credentials:");
@@ -804,11 +804,11 @@ describe("renderLeafIncludeFile — C-1224 Model B secret-auth serialization", (
 
   test("the creds path is unchanged — no userinfo, keeps the credentials line", () => {
     const conf = renderLeafIncludeFile(DESCRIPTOR, BINDING);
-    expect(conf).toContain('url: "tls://nats.meta-factory.dev:7422"');
+    expect(conf).toContain('url: "tls://nats.example.com:7422"');
     expect(conf).toContain(
       'credentials: "/Users/andreas/.config/nats/andreas.creds"',
     );
-    expect(conf).not.toContain("@nats.meta-factory.dev");
+    expect(conf).not.toContain("@nats.example.com");
   });
 });
 

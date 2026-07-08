@@ -33,11 +33,11 @@ import type { InboundMessage } from "../../../adapters/types";
 function msg(overrides: Partial<InboundMessage> = {}): InboundMessage {
   return {
     platform: "discord",
-    instanceId: "1487023327791808592",
-    authorId: "1134325176796987522",
+    instanceId: "111111111111111111",
+    authorId: "666666666666666666",
     authorName: "andreas",
     content: "hello",
-    channelId: "1487029848164536361",
+    channelId: "999999999999999999",
     timestamp: new Date("2026-05-17T00:00:00Z"),
     ...overrides,
   } as InboundMessage;
@@ -60,7 +60,7 @@ const OPERATOR_POLICY: Policy = {
       home_stack: "andreas/meta-factory",
       role: ["operator"],
       trust: [],
-      platform_ids: { discord: ["1134325176796987522"] },
+      platform_ids: { discord: ["666666666666666666"] },
     },
   ],
   roles: [
@@ -88,7 +88,7 @@ const USER_POLICY: Policy = {
       home_stack: "andreas/meta-factory",
       role: ["user"],
       trust: [],
-      platform_ids: { discord: ["285727653603049472"] },
+      platform_ids: { discord: ["555555555555555555"] },
     },
   ],
   roles: [
@@ -194,7 +194,7 @@ describe("resolvePolicyAccess — unknown principal deny path", () => {
 
 describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#1165)", () => {
   test("allows chat ONLY — async + team stay false (no privileged keywords)", () => {
-    const result = anonOnboardingAccess(msg({ authorId: "285727653603049472" }));
+    const result = anonOnboardingAccess(msg({ authorId: "555555555555555555" }));
     expect(result.allowed).toBe(true);
     expect(result.features.chat).toBe(true);
     expect(result.features.async).toBe(false);
@@ -227,12 +227,12 @@ describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#11
   });
 
   test("marks the decision as anon, keeping the per-sender id as an AUDIT label only", () => {
-    const result = anonOnboardingAccess(msg({ platform: "discord", authorId: "285727653603049472" }));
+    const result = anonOnboardingAccess(msg({ platform: "discord", authorId: "555555555555555555" }));
     expect(result.anonPrincipal).toBe(true);
     // cortex#1167 — this is an audit label, NOT the authority. Authority is the
     // single `public` principal (proven in the buildPublicPrincipalEntries +
     // dispatch-handler round-trip tests).
-    expect(result.anonPrincipalId).toBe("anon:discord:285727653603049472");
+    expect(result.anonPrincipalId).toBe("anon:discord:555555555555555555");
   });
 
   test("threads isDM through when the inbound was a DM", () => {
@@ -344,7 +344,7 @@ describe("buildPublicPrincipalEntries — single minimal-privilege public princi
 describe("resolvePolicyAccess — happy path (user)", () => {
   test("user principal with keyword.chat allows chat feature only", () => {
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "285727653603049472" }),
+      msg: msg({ authorId: "555555555555555555" }),
       ...buildHarness(USER_POLICY),
     });
     expect(result.allowed).toBe(true);
@@ -357,7 +357,7 @@ describe("resolvePolicyAccess — happy path (user)", () => {
     // The content-filter trust gate keys off `trusted`. A recognized peer
     // principal must NOT carry it — they keep the prompt-injection hard block.
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "285727653603049472" }),
+      msg: msg({ authorId: "555555555555555555" }),
       ...buildHarness(USER_POLICY),
     });
     expect(result.allowed).toBe(true);
@@ -366,7 +366,7 @@ describe("resolvePolicyAccess — happy path (user)", () => {
 
   test("user without async or team caps gets toolRestrictions for ungranted tools", () => {
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "285727653603049472" }),
+      msg: msg({ authorId: "555555555555555555" }),
       ...buildHarness(USER_POLICY),
     });
     expect(result.allowed).toBe(true);
@@ -393,7 +393,7 @@ describe("resolvePolicyAccess — operator short-circuit", () => {
       ],
     };
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "1134325176796987522" }),
+      msg: msg({ authorId: "666666666666666666" }),
       ...buildHarness(operatorOnly),
     });
     expect(result.allowed).toBe(true);
@@ -408,7 +408,7 @@ describe("resolvePolicyAccess — operator short-circuit", () => {
     // set ONLY for the operator role (conservative boundary) — see the
     // companion peer-principal assertion in the user happy-path block.
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "1134325176796987522" }),
+      msg: msg({ authorId: "666666666666666666" }),
       ...buildHarness(OPERATOR_POLICY),
     });
     expect(result.allowed).toBe(true);
@@ -437,7 +437,7 @@ describe("resolvePolicyAccess — session_config selection", () => {
       roles: USER_POLICY.roles,
     };
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "285727653603049472", isDM: false }),
+      msg: msg({ authorId: "555555555555555555", isDM: false }),
       ...buildHarness(withSession),
     });
     expect(result.dirRestrictions).toEqual(["~/Developer/grove"]);
@@ -463,7 +463,7 @@ describe("resolvePolicyAccess — session_config selection", () => {
       roles: USER_POLICY.roles,
     };
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "285727653603049472", isDM: true }),
+      msg: msg({ authorId: "555555555555555555", isDM: true }),
       ...buildHarness(withSession),
     });
     expect(result.dirRestrictions).toEqual([
@@ -489,7 +489,7 @@ describe("resolvePolicyAccess — session_config selection", () => {
       roles: USER_POLICY.roles,
     };
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "285727653603049472", isDM: true }),
+      msg: msg({ authorId: "555555555555555555", isDM: true }),
       ...buildHarness(withSession),
     });
     expect(result.dirRestrictions).toEqual(["~/Developer/grove"]);
@@ -529,12 +529,12 @@ describe("resolvePolicyAccess — lockout path", () => {
 describe("isOperatorPrincipal", () => {
   test("returns true when the resolved principal has the operator capability", () => {
     const { engine, index } = buildHarness(OPERATOR_POLICY);
-    expect(isOperatorPrincipal("discord", "1134325176796987522", engine, index)).toBe(true);
+    expect(isOperatorPrincipal("discord", "666666666666666666", engine, index)).toBe(true);
   });
 
   test("returns false when the resolved principal lacks the operator capability", () => {
     const { engine, index } = buildHarness(USER_POLICY);
-    expect(isOperatorPrincipal("discord", "285727653603049472", engine, index)).toBe(false);
+    expect(isOperatorPrincipal("discord", "555555555555555555", engine, index)).toBe(false);
   });
 
   test("returns false when the (platform, id) tuple resolves to no principal", () => {
@@ -543,7 +543,7 @@ describe("isOperatorPrincipal", () => {
   });
 
   test("returns false when engine is undefined (no-policy deployment)", () => {
-    expect(isOperatorPrincipal("discord", "1134325176796987522", undefined, undefined)).toBe(false);
+    expect(isOperatorPrincipal("discord", "666666666666666666", undefined, undefined)).toBe(false);
   });
 });
 
@@ -601,7 +601,7 @@ describe("resolvePolicyAccess — facilitator-role: pylon locked-out as sender (
           home_stack: "andreas/work",
           role: ["operator"],
           trust: [],
-          platform_ids: { discord: ["1134325176796987522"] },
+          platform_ids: { discord: ["666666666666666666"] },
         },
       ],
       roles: [

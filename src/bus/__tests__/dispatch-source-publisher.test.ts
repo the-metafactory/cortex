@@ -58,7 +58,7 @@ function makePolicyEngine(): PolicyEngine {
         home_stack: "andreas/research",
         role: ["operator"],
         trust: [],
-        platform_ids: { discord: ["1487204875912609844"] },
+        platform_ids: { discord: ["888888888888888888"] },
       },
       {
         id: "holly",
@@ -103,7 +103,7 @@ function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
   return {
     platform: "discord",
     instanceId: "discord:111222333",
-    authorId: "1487204875912609844",
+    authorId: "888888888888888888",
     authorName: "TestUser",
     channelId: "channel-aaa",
     content: "Hello!",

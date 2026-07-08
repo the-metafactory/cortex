@@ -277,7 +277,7 @@ describe("AgentSchema", () => {
   });
 
   test("rejects all-digit agent id (Discord-snowflake paste-bug)", () => {
-    expect(() => AgentSchema.parse(minAgent({ id: "1497204875912609844" }))).toThrow(
+    expect(() => AgentSchema.parse(minAgent({ id: "6666666666666666666" }))).toThrow(
       /starting with a letter/,
     );
   });
@@ -301,7 +301,7 @@ describe("AgentSchema", () => {
     // deterministically — pre-#145 the regex was `^[a-z0-9-]+$` and digit-only
     // entries silently slipped past the structural check.
     expect(() => AgentSchema.parse(minAgent({
-      trust: ["echo", "1497898452351455393"], // ← Discord id, all digits
+      trust: ["echo", "4444444444444444444"], // ← Discord id, all digits
     }))).toThrow(/starting with a letter/);
     expect(() => AgentSchema.parse(minAgent({ trust: ["Echo"] }))).toThrow();
     expect(() => AgentSchema.parse(minAgent({ trust: ["echo bot"] }))).toThrow();

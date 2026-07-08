@@ -214,7 +214,7 @@ describe("convertBotYaml — trustedAgentBots", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
       trustedAgentBots: [
         // production shape — id + role only, no symbolic name
-        { id: "1487180524542890144", role: "agent-restricted" },
+        { id: "777777777777777777", role: "agent-restricted" },
       ],
     };
     const result = convertBotYaml(legacy);
@@ -222,7 +222,7 @@ describe("convertBotYaml — trustedAgentBots", () => {
     const warn = result.warnings.find((w) => w.field === "trustedAgentBots");
     expect(warn).toBeDefined();
     expect(warn!.message).toMatch(/missing symbolic `name`/);
-    expect(warn!.message).toMatch(/1487180524542890144/);
+    expect(warn!.message).toMatch(/777777777777777777/);
     expect(warn!.message).toMatch(/role="agent-restricted"/);
   });
 
@@ -1043,7 +1043,7 @@ describe("convertBotYaml — shared agentChannelId warning (cortex#88 item 4)", 
     // because grove's bot.yaml carried one shared #agent-log channel.
     // After migrate-config, all three cortex agents emit with the same
     // id — per-agent log routing silently no-ops.
-    const sharedChannel = "1487029848164536361";
+    const sharedChannel = "999999999999999999";
     const legacy: LegacyBotYaml = {
       agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
       discord: [
@@ -1073,7 +1073,7 @@ describe("convertBotYaml — shared agentChannelId warning (cortex#88 item 4)", 
     const result = convertBotYaml(legacy, {});
     const sharedWarns = result.warnings.filter((w) => w.field === "agents.agentChannelId");
     expect(sharedWarns).toHaveLength(1);
-    expect(sharedWarns[0]!.message).toMatch(/agents \[luna,echo,forge\] share agentChannelId 1487029848164536361/);
+    expect(sharedWarns[0]!.message).toMatch(/agents \[luna,echo,forge\] share agentChannelId 999999999999999999/);
     expect(sharedWarns[0]!.message).toMatch(/set distinct channels in cortex.yaml for per-agent log routing/);
     // The channel id is NOT blanked — operator may want shared logging.
     for (const a of result.cortex.agents) {
