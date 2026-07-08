@@ -262,6 +262,16 @@ export const CANONICAL_SESSION_COLUMNS: CanonicalSessionColumn[] = [
     note:
       "The stack this session ORIGINATED on — the schema-level attribution the cross-stack WORKING aggregation groups by (#1295). D-8 adopts a column + backfill that EXTENDS the ADR-0011 canonical row rather than forking a parallel origin table, so both substrates carry it and the read model stays a plain GROUP BY. NULL ⇒ own/local-stack origin (the pre-CK-4a and single-stack case) — an honest 'unattributed to a specific peer stack', never fabricated. Never sourced from an attacker-controlled payload; stamped from the stack's own resolved identity on write / backfill.",
   },
+  // --- attribution (SES-1 / #1709 / decision D-16) ---
+  {
+    d1Name: "attribution_target",
+    localName: "attribution_target",
+    type: "TEXT",
+    notNull: false,
+    default: null,
+    note:
+      "The controlled-vocabulary target a session's spend rolls up to — a repo / domain, seeded from repos/domains and EXTENSIBLE (D-16, #1679). A schema field extending the ADR-0011 canonical row, NOT a naming convention. The vocabulary is enforced at WRITE time (like classification/substrate), so this stays plain nullable TEXT — ALTER-safe on a table with rows, and the vocabulary grows without a schema migration. NULL ⇒ the read model renders `unattributed` (an honest 'not yet attributed'), NEVER inferred or defaulted to a principal/project (D-16 honesty; §6 invariant 20).",
+  },
 ];
 
 /** The two indices the session-tree refactor adds to BOTH substrates (Phase 0). */
@@ -306,5 +316,6 @@ export const CANONICAL_ADDED_COLUMNS = CANONICAL_SESSION_COLUMNS.filter((c) =>
     "data_residency",
     "home_principal",
     "origin_stack_id",
+    "attribution_target",
   ].includes(c.d1Name)
 );

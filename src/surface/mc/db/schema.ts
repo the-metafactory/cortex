@@ -152,7 +152,13 @@ export const SCHEMA_SQL: string[] = [
     -- NULL ⇒ own/local-stack origin. Its lookup index idx_sessions_origin_stack_id
     -- is created by the origin_stack_id COLUMN_ADD_MIGRATIONS post[] (NOT here) —
     -- same #961/#1048 pre-existing-DB rule as parent_session_id/substrate below.
-    origin_stack_id TEXT
+    origin_stack_id TEXT,
+    -- SES-1 / #1709 / decision D-16 canonical: the controlled-vocab ATTRIBUTION
+    -- target a session's spend rolls up to (repo/domain, extensible). NULL ⇒ the
+    -- read model renders `unattributed`, NEVER inferred (D-16 honesty). Its lookup
+    -- index idx_sessions_attribution_target is created by the attribution_target
+    -- COLUMN_ADD_MIGRATIONS post[] (NOT here) — same pre-existing-DB rule as above.
+    attribution_target TEXT
   )`,
 
   // --- events ---
