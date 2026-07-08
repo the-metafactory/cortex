@@ -3514,6 +3514,27 @@ async function runSecret(
   // cortex#1598 — operator-mode attestation (hub_mode/resolver_mode off the
   // verified descriptor + the hub FED account). Absent ⇒ the simple/PSK path
   // (unchanged); present + operator-mode ⇒ addOrRotate mints a scoped user + seals v2.
+  // cortex#1652 — seed the VERIFIED descriptor on a cache MISS first (same
+  // fail-open as the admit path, #1669): a custodian machine that never ran
+  // create/join has an empty cache, so the attestation would resolve undefined
+  // and the seal would SILENTLY take the PSK path — exactly the artifact an
+  // operator hub rejects. Best-effort: never throws; local-config fallback
+  // still applies when the registry is unreachable.
+  {
+    const seed = await seedDescriptorCacheOnMiss(
+      networkId,
+      registryUrl,
+      optionalValueFlag(flags, "--registry-pubkey"),
+    );
+    if (!seed.seeded) {
+      process.stderr.write(
+        `cortex network secret: could not seed the "${networkId}" descriptor ` +
+          `(${seed.reason ?? "unknown"}); operator-mode resolution falls back to local ` +
+          `config — on an operator-mode network without a local hub_mode declaration, ` +
+          `the seal may take the simple/PSK path.\n`,
+      );
+    }
+  }
   const op = resolveOperatorAttestation(flags, networkId, load);
 
   const ports = portsFactory({ hubConfigPath, registryUrl, material: matRes.material });
