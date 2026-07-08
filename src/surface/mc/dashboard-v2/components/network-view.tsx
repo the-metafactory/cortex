@@ -650,6 +650,13 @@ export function NetworkView({
       <McCockpit
         stack={shellSelection.stack}
         posture={selectedNetworkPosture(networks, shellSelection)}
+        networkId={shellSelection.networkId}
+        localPrincipal={servingPrincipal}
+        network={
+          networks.find(
+            (n) => n.network_id === shellSelection.networkId,
+          ) ?? null
+        }
         servingPrincipal={servingPrincipal}
         presenceAgents={state.agents}
         workingAgents={workingAgents}

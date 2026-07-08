@@ -1,0 +1,151 @@
+/*
+ * CK-7 (cortex#1673) — the GOVERN bar SHELL styling.
+ *
+ * Scoped under `.govern-bar`, mounted inside `.mc-cockpit-govern`, so it inherits
+ * the D1 mc-skin tokens (--line/--dim/--faint/--fg/--mono/--sans/--mer/--panel…)
+ * exactly like the rest of the cockpit. SHELL only — the verb slots are inert
+ * placeholders, styled to read as disabled harness affordances (never live).
+ */
+
+.govern-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* ── The empty per-verb rail (admin only) ─────────────────────────────────── */
+.govern-verb-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.govern-verb-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 74px;
+}
+.govern-verb-btn {
+  font: 600 10px var(--mono);
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--faint);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+/* The one already-wired slot (dispatch) reads on-brand, not dashed-disabled. */
+.govern-verb-slot.state-live .govern-verb-btn {
+  border-style: solid;
+  border-color: color-mix(in oklch, var(--mer) 40%, transparent);
+  color: var(--mer);
+  opacity: 0.85;
+}
+.govern-verb-flag {
+  font: 500 9px var(--mono);
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  text-transform: uppercase;
+}
+
+/* ── Named banners (admission-request + the FLG-1/FLG-3 mounts) ────────────── */
+.govern-banner {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 9px 11px;
+}
+.govern-banner-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.govern-banner-title {
+  font: 700 10px var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.govern-banner-network {
+  font: 500 10px var(--mono);
+  color: var(--dim);
+}
+.govern-banner-body {
+  font: 500 11px var(--mono);
+  color: var(--fg);
+  margin: 0;
+  line-height: 1.5;
+}
+.govern-admission-banner[data-pending="0"] {
+  opacity: 0.8;
+}
+.govern-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Authority badges (registry-admin vs hub-admin — visually distinct) ────── */
+.govern-authority-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.govern-authority-badge {
+  font: 600 9px var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.govern-authority-badge.tone-info {
+  color: var(--tide);
+  border-color: color-mix(in oklch, var(--tide) 45%, transparent);
+  background: color-mix(in oklch, var(--tide) 10%, transparent);
+}
+.govern-authority-badge.tone-accent {
+  color: var(--mer);
+  border-color: color-mix(in oklch, var(--mer) 45%, transparent);
+  background: color-mix(in oklch, var(--mer) 10%, transparent);
+}
+
+/* ── Member footer (participate + CLI-only Leave, invariant 16) ────────────── */
+.govern-member-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.govern-member-note {
+  font: 500 11px var(--mono);
+  color: var(--dim);
+  margin: 0;
+  line-height: 1.5;
+}
+.govern-leave-guidance {
+  font: 500 10px var(--mono);
+  color: var(--faint);
+  margin: 0;
+  line-height: 1.5;
+}
+.govern-leave-cmd {
+  font: 600 10px var(--mono);
+  color: var(--fg);
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.govern-unknown-note {
+  font: 500 11px var(--mono);
+  color: var(--faint);
+  margin: 0;
+  line-height: 1.5;
+}
