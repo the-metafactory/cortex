@@ -126,12 +126,26 @@ export function derivePingInputs(opts: {
     opts.network !== undefined
       ? networks.filter((n) => n.id === opts.network)
       : networks;
-  const isConfiguredPeer = scoped.some((n) =>
+  const matchingNetworks = scoped.filter((n) =>
     n.peers.some(
       (p) =>
         p.principal_id === opts.targetPrincipal && p.stack_id === targetStackId,
     ),
   );
+  const isConfiguredPeer = matchingNetworks.length > 0;
+
+  // cortex#1728 (guard 4) — the network's `leaf_node` scopes the leafz sampler.
+  // Resolve it ONLY when exactly one network carries this peer with a distinct
+  // leaf_node: if the peer sits on multiple networks with DIFFERENT leaves (no
+  // `--network` selector), we can't tell which leaf the probe rides, so we leave
+  // it undefined (the sampler omits the diagnostic rather than sample the wrong
+  // leaf). Two networks that share ONE `leaf_node` (the pool-key case) collapse
+  // to that single unambiguous leaf.
+  const distinctLeafNodes = [
+    ...new Set(matchingNetworks.map((n) => n.leaf_node)),
+  ];
+  const networkLeafNode =
+    distinctLeafNodes.length === 1 ? distinctLeafNodes[0] : undefined;
 
   return {
     ok: true,
@@ -145,6 +159,7 @@ export function derivePingInputs(opts: {
       count: opts.count,
       timeoutMs: opts.timeoutMs,
       isConfiguredPeer,
+      ...(networkLeafNode !== undefined && { networkLeafNode }),
     },
   };
 }
@@ -209,6 +224,16 @@ export interface PingInputs {
    * caller from config; `false` ⇒ `not-configured` (nothing emitted).
    */
   isConfiguredPeer: boolean;
+  /**
+   * cortex#1728 (guard 4) — the `leaf_node` name of the network the probe rides
+   * (the network whose `peers[]` contains the target). The leafz sampler scopes
+   * its `/leafz` read to THIS leaf so the counter delta reflects only this
+   * network's traffic, never a sibling leaf's heartbeats. `undefined` when the
+   * network's `leaf_node` can't be resolved (peer in multiple networks with no
+   * `--network` selector, or none declares a leaf_node) — the sampler then omits
+   * the diagnostic rather than misattribute.
+   */
+  networkLeafNode?: string;
 }
 
 /** One probe's result row (for per-seq reporting). */
@@ -515,10 +540,12 @@ export async function pingPeer(
     inputs.requesterStack,
   );
 
-  // cortex#1728 (guard 4) — sample the local leaf's `/leafz` counters BEFORE the
-  // probe volley so a `timeout` verdict can be localised to a half from the
-  // delta. Best-effort: a missing/failed sample just omits the diagnostic line.
-  const leafzBefore = await sampleLeafzBestEffort(ports);
+  // cortex#1728 (guard 4) — sample THIS network's leaf `/leafz` counters BEFORE
+  // the probe volley so a `timeout` verdict can be localised to a half from the
+  // delta. Scoped to `inputs.networkLeafNode` (never summed across sibling
+  // leaves — the #1731 review BLOCK). Best-effort: an unresolvable leaf_node or
+  // a failed sample just omits the diagnostic line.
+  const leafzBefore = await sampleLeafzBestEffort(ports, inputs.networkLeafNode);
 
   for (let seq = 1; seq <= inputs.count; seq++) {
     const nonce = ports.newNonce();
@@ -559,7 +586,7 @@ export async function pingPeer(
   // sample to localise the failure. Only meaningful for `timeout` (the verdict
   // whose four-way cause list this delta disambiguates); computed here but
   // attached below only when the overall verdict is `timeout`.
-  const leafzAfter = await sampleLeafzBestEffort(ports);
+  const leafzAfter = await sampleLeafzBestEffort(ports, inputs.networkLeafNode);
   const leafzDiagnosis = diagnoseLeafzDelta(leafzBefore, leafzAfter);
 
   // Overall verdict: reachable iff at least one probe got a conformant echo.
@@ -601,16 +628,20 @@ export async function pingPeer(
 }
 
 /**
- * cortex#1728 (guard 4) — read the local `/leafz` counters if a sampler is
- * wired, swallowing ANY failure to a `undefined`. The whole guard is additive
- * diagnostic context: a leafz read must NEVER fail or perturb the ping.
+ * cortex#1728 (guard 4) — read THIS network's leaf `/leafz` counters if a
+ * sampler is wired AND the network's `leaf_node` is known, swallowing ANY
+ * failure to `undefined`. The whole guard is additive diagnostic context: a
+ * leafz read must NEVER fail or perturb the ping. A missing `leafNode` (peer on
+ * multiple networks with no `--network` selector) omits the sample rather than
+ * risk sampling the wrong leaf.
  */
 async function sampleLeafzBestEffort(
   ports: NetworkPingPorts,
+  leafNode: string | undefined,
 ): Promise<LeafzCounters | undefined> {
-  if (ports.leafz === undefined) return undefined;
+  if (ports.leafz === undefined || leafNode === undefined) return undefined;
   try {
-    return await ports.leafz.sample();
+    return await ports.leafz.sample(leafNode);
   } catch (err) {
     // Best-effort: a failed leafz read degrades to "no diagnostic line", never
     // a failed ping. Log to stderr so the read failure is not silent.

@@ -94,21 +94,30 @@ export interface LeafzCounters {
 
 /**
  * cortex#1728 (guard 4) — best-effort sampler for the local leaf's `/leafz`
- * counters. The live adapter reads the nats-server monitor; tests inject a fake
- * returning controlled deltas.
+ * counters, SCOPED to a single network's leaf. The live adapter reads the
+ * nats-server monitor; tests inject a fake returning controlled deltas.
  *
  * OPTIONAL on {@link NetworkPingPorts} and BEST-EFFORT: a `sample()` returning
- * `undefined` (monitor unreachable, no matching leaf, malformed body) MUST NOT
- * fail the ping — the orchestrator simply omits the extra diagnostic line. This
- * is additive diagnostic context, never a gate.
+ * `undefined` (monitor unreachable, no UNIQUELY-identifiable leaf for this
+ * network, malformed body) MUST NOT fail the ping — the orchestrator simply
+ * omits the extra diagnostic line. Additive diagnostic context, never a gate.
+ *
+ * SCOPING (the #1731 review BLOCK): a host runs several leaves that share the
+ * same hub ip:port, so summing counters across ALL of them picks up other
+ * networks' heartbeat traffic and MISATTRIBUTES the diagnosis. `sample()` takes
+ * the pinged network's `leafNode` name and reads ONLY that leaf's counters;
+ * when the target leaf cannot be uniquely identified it returns `undefined`
+ * (omit the line — never misattribute).
  */
 export interface LeafzSamplerPort {
   /**
-   * Read the current `out_msgs` / `in_msgs` for the network's leaf, or
-   * `undefined` when it cannot be read. NEVER throws — a failed read resolves
-   * `undefined` so the ping proceeds unaffected.
+   * Read the current `out_msgs` / `in_msgs` for THE `leafNode` network's leaf
+   * only, or `undefined` when that leaf cannot be uniquely identified / read.
+   * `leafNode` is the network's configured `leaf_node` (the rendered leaf-remote
+   * name cortex writes into `leafnodes-<network>.conf`). NEVER throws — a failed
+   * read resolves `undefined` so the ping proceeds unaffected.
    */
-  sample(): Promise<LeafzCounters | undefined>;
+  sample(leafNode: string): Promise<LeafzCounters | undefined>;
 }
 
 /** The ports bundle (room to grow — clock, etc., stay injectable). */

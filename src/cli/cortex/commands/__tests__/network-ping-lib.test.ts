@@ -54,6 +54,10 @@ function inputs(overrides: Partial<PingInputs> = {}): PingInputs {
     count: 1,
     timeoutMs: 2000,
     isConfiguredPeer: true,
+    // cortex#1728 (guard 4) — a resolved leaf_node so the leafz sampler runs in
+    // the fold tests. Tests that assert the "no leaf_node" omit-path override
+    // this to `undefined`.
+    networkLeafNode: "hub",
     ...overrides,
   };
 }
@@ -328,6 +332,7 @@ describe("pingPeer — --count aggregation", () => {
 function loadedConfig(
   peers: { principal_id: string; stack_id: string }[],
   networkId = "metafactory-community",
+  leafNode = "hub",
 ): LoadedConfig {
   return {
     config: {} as unknown as LoadedConfig["config"],
@@ -337,10 +342,34 @@ function loadedConfig(
     policy: {
       federated: {
         networks: [
-          { id: networkId, peers } as unknown as NonNullable<
+          { id: networkId, leaf_node: leafNode, peers } as unknown as NonNullable<
             NonNullable<LoadedConfig["policy"]>["federated"]
           >["networks"][number],
         ],
+      },
+    } as unknown as LoadedConfig["policy"],
+  };
+}
+
+/** A two-network config where a peer sits on BOTH networks (distinct leaves). */
+function loadedConfigTwoNetworks(
+  peer: { principal_id: string; stack_id: string },
+  leafA: string,
+  leafB: string,
+): LoadedConfig {
+  return {
+    config: {} as unknown as LoadedConfig["config"],
+    inlineAgents: [{ id: "luna" } as unknown as LoadedConfig["inlineAgents"][number]],
+    principal: { id: "andreas" },
+    stack: { id: "andreas/community" },
+    policy: {
+      federated: {
+        networks: [
+          { id: "net-a", leaf_node: leafA, peers: [peer] },
+          { id: "net-b", leaf_node: leafB, peers: [peer] },
+        ] as unknown as NonNullable<
+          NonNullable<LoadedConfig["policy"]>["federated"]
+        >["networks"],
       },
     } as unknown as LoadedConfig["policy"],
   };
@@ -362,6 +391,56 @@ describe("derivePingInputs", () => {
     expect(r.inputs?.requesterAssistant).toBe("luna");
     expect(r.inputs?.targetAssistantDid).toBe("did:mf:jc-default");
     expect(r.inputs?.isConfiguredPeer).toBe(true);
+  });
+
+  test("cortex#1728 — resolves the peer's network leaf_node for leafz scoping", () => {
+    const cfg = loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }], "metafactory-community", "mfleaf");
+    const r = derivePingInputs({
+      cfg,
+      targetPrincipal: "jc",
+      targetStack: "default",
+      count: 1,
+      timeoutMs: 2000,
+    });
+    expect(r.inputs?.networkLeafNode).toBe("mfleaf");
+  });
+
+  test("cortex#1728 — peer on TWO networks with distinct leaves ⇒ leaf_node undefined (ambiguous, no --network)", () => {
+    const cfg = loadedConfigTwoNetworks({ principal_id: "jc", stack_id: "jc/default" }, "leaf-a", "leaf-b");
+    const r = derivePingInputs({
+      cfg,
+      targetPrincipal: "jc",
+      targetStack: "default",
+      count: 1,
+      timeoutMs: 2000,
+    });
+    expect(r.inputs?.isConfiguredPeer).toBe(true);
+    expect(r.inputs?.networkLeafNode).toBeUndefined(); // never guess which leaf
+  });
+
+  test("cortex#1728 — --network selector disambiguates the leaf_node", () => {
+    const cfg = loadedConfigTwoNetworks({ principal_id: "jc", stack_id: "jc/default" }, "leaf-a", "leaf-b");
+    const r = derivePingInputs({
+      cfg,
+      targetPrincipal: "jc",
+      targetStack: "default",
+      network: "net-b",
+      count: 1,
+      timeoutMs: 2000,
+    });
+    expect(r.inputs?.networkLeafNode).toBe("leaf-b");
+  });
+
+  test("cortex#1728 — two networks SHARING one leaf_node collapse to that leaf", () => {
+    const cfg = loadedConfigTwoNetworks({ principal_id: "jc", stack_id: "jc/default" }, "shared", "shared");
+    const r = derivePingInputs({
+      cfg,
+      targetPrincipal: "jc",
+      targetStack: "default",
+      count: 1,
+      timeoutMs: 2000,
+    });
+    expect(r.inputs?.networkLeafNode).toBe("shared"); // one distinct leaf ⇒ unambiguous
   });
 
   test("a target NOT in peers[] resolves isConfiguredPeer=false", () => {
@@ -441,16 +520,18 @@ describe("VERDICT_EXIT_CODE — spec §3.3 mapping", () => {
  */
 function fakeLeafz(
   readings: (LeafzCounters | undefined)[],
-): { port: LeafzSamplerPort; calls: number } {
-  const state = { calls: 0 };
+): { port: LeafzSamplerPort; leafNodes: string[] } {
+  const leafNodes: string[] = [];
+  let calls = 0;
   const port: LeafzSamplerPort = {
-    sample: async () => {
-      const r = readings[state.calls];
-      state.calls++;
+    sample: async (leafNode: string) => {
+      leafNodes.push(leafNode); // record the scoping key each call received
+      const r = readings[calls];
+      calls++;
       return r;
     },
   };
-  return { port, calls: 0 };
+  return { port, leafNodes };
 }
 
 describe("diagnoseLeafzDelta — pure half-disambiguation (cortex#1728)", () => {
@@ -493,15 +574,17 @@ describe("diagnoseLeafzDelta — pure half-disambiguation (cortex#1728)", () => 
 describe("pingPeer — folds leafz delta into a timeout verdict (cortex#1728)", () => {
   test("timeout + out+ / in0 ⇒ leafz.half=remote on the result", async () => {
     const { ports } = fakeBus(() => ({ kind: "timeout" }));
-    const { port: leafz } = fakeLeafz([
+    const { port: leafz, leafNodes } = fakeLeafz([
       { outMsgs: 100, inMsgs: 50 }, // before
       { outMsgs: 101, inMsgs: 50 }, // after: 1 probe crossed, no echo back
     ]);
-    const res = await pingPeer(inputs(), { ...ports, leafz });
+    const res = await pingPeer(inputs({ networkLeafNode: "mfleaf" }), { ...ports, leafz });
     expect(res.verdict).toBe("timeout");
     expect(res.leafz?.half).toBe("remote");
     expect(res.leafz?.outDelta).toBe(1);
     expect(res.leafz?.inDelta).toBe(0);
+    // The sampler was scoped to the network's leaf_node on BOTH before/after.
+    expect(leafNodes).toEqual(["mfleaf", "mfleaf"]);
   });
 
   test("timeout + out+0 ⇒ leafz.half=local-egress on the result", async () => {
@@ -552,5 +635,17 @@ describe("pingPeer — folds leafz delta into a timeout verdict (cortex#1728)", 
     const res = await pingPeer(inputs(), { ...ports, leafz });
     expect(res.verdict).toBe("timeout");
     expect(res.leafz).toBeUndefined();
+  });
+
+  test("cortex#1728 — no resolved leaf_node ⇒ sampler NOT called, no line (never misattribute)", async () => {
+    const { ports } = fakeBus(() => ({ kind: "timeout" }));
+    const { port: leafz, leafNodes } = fakeLeafz([
+      { outMsgs: 100, inMsgs: 50 },
+      { outMsgs: 200, inMsgs: 50 }, // would look like "remote" if wrongly sampled
+    ]);
+    const res = await pingPeer(inputs({ networkLeafNode: undefined }), { ...ports, leafz });
+    expect(res.verdict).toBe("timeout");
+    expect(res.leafz).toBeUndefined(); // ambiguous leaf ⇒ omit rather than guess
+    expect(leafNodes).toEqual([]); // sampler never invoked
   });
 });

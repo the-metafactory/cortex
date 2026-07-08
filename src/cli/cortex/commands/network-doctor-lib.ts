@@ -452,12 +452,37 @@ async function checkMonitorReachable(
 // Leg 3 — leaf-established
 // ---------------------------------------------------------------------------
 
-interface LeafMatch {
+/**
+ * How a `/leafz` entry was attributed to a network's `leaf_node`:
+ *   - `named`         — a `name`/`account` match against the configured leaf_node;
+ *   - `lone-fallback` — no name match, but the bus has exactly ONE leaf, so it
+ *                       necessarily carries this network's traffic.
+ */
+export type LeafMatchKind = "named" | "lone-fallback";
+
+export interface LeafMatch {
   leaf: LeafzEntry;
-  match: "named" | "lone-fallback";
+  match: LeafMatchKind;
 }
 
-function findEstablishedLeaf(
+/**
+ * cortex#1728 (guard 4) — select the SINGLE `/leafz` entry attributable to a
+ * network's `leaf_node`, or `undefined` when it cannot be uniquely identified.
+ *
+ * The leaves on a host share ip:port (they all dial the same hub) and the leaf
+ * `account` is the field config famously disagrees with (guard 3), so the
+ * ONLY reliable key is the rendered leaf-remote `name` cortex controls when it
+ * writes `leafnodes-<network>.conf`. Match on `name` (or `account` as a
+ * secondary), else fall back to the lone leaf on a single-leaf bus. On a
+ * MULTI-leaf bus with no name match we return `undefined` — we must NEVER
+ * attribute another network's leaf (e.g. summing community's heartbeat traffic
+ * onto metafactory's dead egress would mask the exact break guard 4 exists to
+ * catch, #1731 review BLOCK).
+ *
+ * PURE — the caller supplies the `/leafz` snapshot. Shared by `doctor`'s
+ * leaf-established leg and the ping leafz sampler so both attribute identically.
+ */
+export function selectNetworkLeaf(
   leafz: LeafzResponse,
   leafNode: string,
 ): LeafMatch | undefined {
@@ -472,6 +497,13 @@ function findEstablishedLeaf(
   return leafs.length === 1 && leafs[0] !== undefined
     ? { leaf: leafs[0], match: "lone-fallback" }
     : undefined;
+}
+
+function findEstablishedLeaf(
+  leafz: LeafzResponse,
+  leafNode: string,
+): LeafMatch | undefined {
+  return selectNetworkLeaf(leafz, leafNode);
 }
 
 /**

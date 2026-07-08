@@ -25,6 +25,7 @@ import { expandTilde } from "../../../common/config/loader";
 import { natsConfigMonitorUrl } from "../../../common/nats/leaf-remote-renderer";
 import type { MyelinRuntime, BusEnvelopeSigner } from "../../../bus/myelin/runtime";
 import { startMyelinRuntime } from "../../../bus/myelin/runtime";
+import { selectNetworkLeaf } from "./network-doctor-lib";
 import type {
   LeafzCounters,
   LeafzSamplerPort,
@@ -187,18 +188,28 @@ function resolveMonitorBaseFromLoaded(cfg: LoadedConfig): string {
 
 /**
  * cortex#1728 (guard 4) — a live {@link LeafzSamplerPort} over the nats-server
- * `/leafz` monitor endpoint. Sums `out_msgs` / `in_msgs` across the reported
- * leaf connections (a federating stack typically carries the network on a single
- * leaf; summing yields the aggregate egress/ingress the delta test needs).
+ * `/leafz` monitor endpoint, SCOPED to the pinged network's own leaf.
+ *
+ * A host runs SEVERAL leaves that all dial the same hub ip:port (this stack:
+ * metafactory + community + halden), so summing `out_msgs`/`in_msgs` across all
+ * of them picks up other networks' heartbeat traffic and MISATTRIBUTES the
+ * diagnosis — e.g. metafactory egress dead (out+0 on that leaf) while community
+ * ticks out+2 would sum to out+2 and MASK the local-egress break, the exact
+ * failure guard 4 exists to catch (#1731 review BLOCK). We therefore select the
+ * ONE leaf attributable to the `leafNode` via the SHARED {@link selectNetworkLeaf}
+ * attribution `doctor` uses (name/account match, or the lone-leaf fallback on a
+ * single-leaf bus), and read only that leaf's counters. When the target leaf
+ * cannot be uniquely identified (2+ leaves, no name match) we return `undefined`
+ * — omit the diagnostic, never misattribute.
  *
  * BEST-EFFORT by contract: every failure path (monitor unreachable, non-200,
- * malformed body, timeout) resolves `undefined`, so the ping proceeds without a
- * diagnostic line and NEVER fails on account of the sampler.
+ * malformed body, timeout, no unique leaf) resolves `undefined`, so the ping
+ * proceeds without a diagnostic line and NEVER fails on account of the sampler.
  */
 export function createLiveLeafzSampler(cfg: LoadedConfig): LeafzSamplerPort {
   const base = resolveMonitorBaseFromLoaded(cfg);
   return {
-    async sample(): Promise<LeafzCounters | undefined> {
+    async sample(leafNode: string): Promise<LeafzCounters | undefined> {
       // Bound the fetch: a monitor that accepts the TCP connection but never
       // responds (hung nats-server) must not hang the ping.
       const controller = new AbortController();
@@ -209,17 +220,15 @@ export function createLiveLeafzSampler(cfg: LoadedConfig): LeafzSamplerPort {
         const res = await fetch(`${base}/leafz`, { signal: controller.signal });
         if (!res.ok) return undefined;
         const body = (await res.json()) as {
-          leafs?: { in_msgs?: number; out_msgs?: number }[];
+          leafs?: { account?: string; name?: string; in_msgs?: number; out_msgs?: number }[];
         };
-        const leafs = body.leafs ?? [];
-        if (leafs.length === 0) return undefined;
-        let outMsgs = 0;
-        let inMsgs = 0;
-        for (const leaf of leafs) {
-          if (typeof leaf.out_msgs === "number") outMsgs += leaf.out_msgs;
-          if (typeof leaf.in_msgs === "number") inMsgs += leaf.in_msgs;
-        }
-        return { outMsgs, inMsgs };
+        // Scope to THIS network's leaf only — never sum across sibling leaves.
+        const match = selectNetworkLeaf(body, leafNode);
+        if (match === undefined) return undefined;
+        return {
+          outMsgs: typeof match.leaf.out_msgs === "number" ? match.leaf.out_msgs : 0,
+          inMsgs: typeof match.leaf.in_msgs === "number" ? match.leaf.in_msgs : 0,
+        };
       } catch {
         // Monitor genuinely unreachable / aborted — degrade to "no sample".
         // The orchestrator omits the diagnostic line; the ping is unaffected.
