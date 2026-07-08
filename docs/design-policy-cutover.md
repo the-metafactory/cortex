@@ -240,9 +240,9 @@ For each `presence.<platform>[instance].roles[]` entry:
 
 ### 6.1 Principal id synthesis from platform IDs
 
-Discord snowflake `1487123456789012345` doesn't fit letter-prefix grammar. The CLI generates a synthetic id:
+Discord snowflake `111111111111111111` doesn't fit letter-prefix grammar. The CLI generates a synthetic id:
 - Use existing display name if reachable (CLI prompts principal to label each platform id during migration)
-- Otherwise `user-{platform[0]}{last-6-of-id}` → e.g. `user-d567890`
+- Otherwise `user-{platform[0]}{last-6-of-id}` → e.g. `user-d111111`
 
 **Open question:** should the migrate-config CLI prompt for friendly names interactively? Or generate synthetic ids and let the principal edit post-migration? Echo's earlier framing on cortex#243 said "Idempotent: running twice produces the same output" — interactive prompting breaks idempotency. Recommendation: synthetic-by-default, optional `--labels labels.yaml` flag for principal-curated names.
 
@@ -340,16 +340,16 @@ Anchoring the design in operational config. Two files: `~/.config/cortex/cortex.
 
 | Role name | Identity | Discord IDs | Cross-agent agreement |
 |---|---|---|---|
-| `operator` | Andreas (the operator human) | `1134325176796987522` | ✓ identical on all 3 agents — features `[chat, async, team]` |
-| `user` | Mike (restricted human user) | `285727653603049472` | ✓ identical on all 3 agents — features `[chat]`, deny `[Write, Edit, NotebookEdit]` |
+| `operator` | Andreas (the operator human) | `333333333333333333` | ✓ identical on all 3 agents — features `[chat, async, team]` |
+| `user` | Mike (restricted human user) | `222222222222222222` | ✓ identical on all 3 agents — features `[chat]`, deny `[Write, Edit, NotebookEdit]` |
 | `agent-restricted` | template, no users assigned | `[]` | ✓ same shape, no holders — could be retired in migration |
-| `agent-luna` | Luna's bot | `1487180524542890144` | ⚠ Luna has it empty (self); Echo + Forge declare it |
-| `agent-echo` | Echo's bot | `1497872105067253800` | ⚠ Luna + Forge declare it with bare `features: [chat]`; Echo's view of itself has tighter tool denies + `allowedSkills: [code-review]` (dead config — self-loop guarded) |
-| `agent-forge` | Forge's bot | `1497954389736947876` | ⚠ Luna declares it with extra `allowedDirs` + `allowedSkills`; Echo declares minimally; Forge's view of itself is dead config |
-| `agent-ivy` | external Ivy bot | `1487024060411023491` | ✓ identical bare `features: [chat]` on all 3 |
-| `agent-holly` | external Holly bot | `1497898452351455393` | ✓ identical bare `features: [chat]` on all 3 |
-| `agent-pilot` | external Pilot bot | `1498571063582392390` | ✓ identical bare `features: [chat]` on all 3 |
-| `agent-juniper` | external Juniper bot | `1498328127259021404` | ✓ identical bare `features: [chat]` on all 3 |
+| `agent-luna` | Luna's bot | `444444444444444444` | ⚠ Luna has it empty (self); Echo + Forge declare it |
+| `agent-echo` | Echo's bot | `555555555555555555` | ⚠ Luna + Forge declare it with bare `features: [chat]`; Echo's view of itself has tighter tool denies + `allowedSkills: [code-review]` (dead config — self-loop guarded) |
+| `agent-forge` | Forge's bot | `666666666666666666` | ⚠ Luna declares it with extra `allowedDirs` + `allowedSkills`; Echo declares minimally; Forge's view of itself is dead config |
+| `agent-ivy` | external Ivy bot | `777777777777777777` | ✓ identical bare `features: [chat]` on all 3 |
+| `agent-holly` | external Holly bot | `888888888888888888` | ✓ identical bare `features: [chat]` on all 3 |
+| `agent-pilot` | external Pilot bot | `999999999999999999` | ✓ identical bare `features: [chat]` on all 3 |
+| `agent-juniper` | external Juniper bot | `000000000000000000` | ✓ identical bare `features: [chat]` on all 3 |
 
 **Total distinct principals after unification: 13** — counted as:
 - 3 local agent bots (luna, echo, forge)
@@ -620,7 +620,7 @@ They CAN share capability id strings — that's good ergonomics — but they don
 **Walk-through within Andreas's own cortex instances:**
 - Within `cortex.yaml`, `policy.principals[]` has ONE entry for `luna` with `home_stack: andreas/meta-factory`
 - Within `cortex.work.yaml`, separate file, ONE entry for `luna` with `home_stack: andreas/work`
-- The Discord bot id `1487180524542890144` appears in `platform_ids.discord` in both files
+- The Discord bot id `444444444444444444` appears in `platform_ids.discord` in both files
 - Each stack reads its own config — no cross-file collision detection needed within Andreas's deployment
 - Federated envelopes carry `signed_by[].principal` AND the chain identifies the originating stack via the stack NKey — the receiving cortex resolves which Luna by `(principal_id, originating_stack)` not just principal_id
 

@@ -138,7 +138,7 @@ Below: every file, one-line responsibility, line count, primary concern.
 
 ### §2.3 Hardcoded `LUNA_DISCORD_ID` and friends — every site
 
-Despite the task framing referring to `LUNA_DISCORD_ID`, the codebase does **not** carry that env var. Instead `src/reviewers.ts:46` hardcodes `discordId: "1487180524542890144"` in the `REVIEWERS.luna` record. The same pattern hardcodes Echo, Ivy, Holly. Fern (GitLab-only) has no `discordId`.
+Despite the task framing referring to `LUNA_DISCORD_ID`, the codebase does **not** carry that env var. Instead `src/reviewers.ts:46` hardcodes `discordId: "444444444444444444"` in the `REVIEWERS.luna` record. The same pattern hardcodes Echo, Ivy, Holly. Fern (GitLab-only) has no `discordId`.
 
 The fragility is the **registry of Discord IDs**, not a single var. Every site:
 
@@ -153,7 +153,7 @@ The fragility is the **registry of Discord IDs**, not a single var. Every site:
 | `src/cli.ts:41` | `import { REVIEWERS, reviewerMentionOrName }` | Used in `pilot release` claim-re-announcement flow. |
 | `src/merge-orchestrator.ts:64-77` | `validateReviewerIdentity(prState.reviews, config.reviewerInfo)` | Reviewer-identity check; reads `reviewer.githubLogin`, NOT `discordId`, but couples the bot-identity model to a static registry. |
 | `src/agent-state.ts:142-148` | `claim.requested-by-mention` event payload carries reviewer identity through the work-item event log | Soft coupling — not a literal `discordId`, but a reviewer-name field whose semantics derive from the static `REVIEWERS` registry. Phase D's "retire LUNA_DISCORD_ID" deliverable retires this too. (Echo cortex#238 round 1 suggestion.) |
-| `tests/discord.test.ts:53-54` | `expect(REVIEWERS.luna.discordId).toBe("1487180524542890144")` | Test pins the literal snowflake. |
+| `tests/discord.test.ts:53-54` | `expect(REVIEWERS.luna.discordId).toBe("444444444444444444")` | Test pins the literal snowflake. |
 
 **Why the registry is a fragility:** every reviewer addition is a source change. Adding a sixth reviewer (e.g. Sage when sage subscribes to `tasks.code-review.generic`) requires editing `reviewers.ts`, updating tests, redeploying. Replacing the static registry with capability-dispatch retires this: pilot publishes a task, the bus dispatches to whatever agent claims the capability. The reviewer's Discord ID becomes a presence detail, not a routing key.
 
@@ -188,7 +188,7 @@ These bear special attention during the move (decide retire-vs-keep):
 
 47 test files, 1:1 with src files for the most part. The pattern is consistent — `src/X.ts` ↔ `tests/X.test.ts`. Some files split (`agent-state.test.ts` + `agent-state-principal-cols.test.ts` + `agent-state-transition.test.ts` + `agent-state-work-items.test.ts`).
 
-**`tests/discord.test.ts:53-54`** is the test that pins `REVIEWERS.luna.discordId === "1487180524542890144"`. This test moves with `reviewers.ts` into `bus/legacy/` and survives unchanged across the restructure; it retires alongside the legacy registry post-cutover.
+**`tests/discord.test.ts:53-54`** is the test that pins `REVIEWERS.luna.discordId === "444444444444444444"`. This test moves with `reviewers.ts` into `bus/legacy/` and survives unchanged across the restructure; it retires alongside the legacy registry post-cutover.
 
 **Test moves track source moves 1:1.** Tests live in `tests/` rather than co-located. The restructure does NOT change that — tests stay flat. Test file paths get a path prefix update on imports (`./fetch` → `../workflow/review/fetch`) but no test rewrites.
 

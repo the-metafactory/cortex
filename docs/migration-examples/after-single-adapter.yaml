@@ -1,7 +1,7 @@
 operator:
   id: andreas
   displayName: Andreas
-  discordId: "1134325176796987522"
+  discordId: "333333333333333333"
   dataResidency: NZ
 stack:
   id: andreas/example
@@ -31,7 +31,7 @@ policy:
       trust: []
       platform_ids:
         discord:
-          - "1134325176796987522"
+          - "333333333333333333"
       session_config:
         default:
           bash_guard: true
@@ -47,7 +47,7 @@ policy:
       trust: []
       platform_ids:
         discord:
-          - "285727653603049472"
+          - "222222222222222222"
   roles:
     - id: agent-echo
       capabilities:
@@ -126,14 +126,14 @@ agents:
         roles:
           - name: operator
             users:
-              - "1134325176796987522"
+              - "333333333333333333"
             features:
               - chat
               - async
               - team
           - name: user
             users:
-              - "285727653603049472"
+              - "222222222222222222"
             features:
               - chat
           - name: agent-echo

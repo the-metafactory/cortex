@@ -32,7 +32,7 @@ The `discord` CLI is provided by the **`metafactory-discord`** arc bundle (ADR-0
 ```bash
 discord post "PR merged, tests passing"              # Default channel
 discord post --channel tasks "Deployed v0.5.0"       # Specific channel
-discord post --thread 1487204875912609844 "Done"     # Specific thread
+discord post --thread 111111111111111111 "Done"     # Specific thread
 discord read                                          # Read last 10 messages
 ```
 
