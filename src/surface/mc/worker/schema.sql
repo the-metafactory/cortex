@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- CK-4a / #1295 / D-8 canonical: the ORIGIN-stack attribution the cross-stack
   -- WORKING aggregation (DashboardSnapshot.workingAggregation) groups by. NULL ⇒
   -- own/local-stack origin. Added to deployed D1 via migrations/0006_session_origin_stack.sql.
-  origin_stack_id TEXT
+  origin_stack_id TEXT,
+  -- SES-1 / #1709 / decision D-16 canonical: the controlled-vocab ATTRIBUTION
+  -- target a session's spend rolls up to (repo/domain, extensible). NULL means
+  -- the read model renders 'unattributed', NEVER inferred (D-16 honesty). Added
+  -- to deployed D1 via migrations/0007_session_attribution.sql.
+  attribution_target TEXT
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
@@ -158,6 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_ses
 CREATE INDEX IF NOT EXISTS idx_sessions_substrate ON sessions(substrate);
 -- CK-4a / #1295 — cross-stack aggregation groups WORKING metadata by origin stack.
 CREATE INDEX IF NOT EXISTS idx_sessions_origin_stack_id ON sessions(origin_stack_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_attribution_target ON sessions(attribution_target);
 CREATE INDEX IF NOT EXISTS idx_github_repo ON github_events(repo, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_agent ON github_events(agent_authored, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_principal ON github_events(principal_id);

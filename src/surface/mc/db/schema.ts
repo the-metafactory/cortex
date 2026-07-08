@@ -154,10 +154,11 @@ export const SCHEMA_SQL: string[] = [
     -- same #961/#1048 pre-existing-DB rule as parent_session_id/substrate below.
     origin_stack_id TEXT,
     -- SES-1 / #1709 / decision D-16 canonical: the controlled-vocab ATTRIBUTION
-    -- target a session's spend rolls up to (repo/domain, extensible). NULL ⇒ the
-    -- read model renders `unattributed`, NEVER inferred (D-16 honesty). Its lookup
-    -- index idx_sessions_attribution_target is created by the attribution_target
-    -- COLUMN_ADD_MIGRATIONS post[] (NOT here) — same pre-existing-DB rule as above.
+    -- target a session's spend rolls up to (repo/domain, extensible). NULL means
+    -- the read model renders 'unattributed', NEVER inferred (D-16 honesty). Its
+    -- lookup index idx_sessions_attribution_target is created by the
+    -- attribution_target COLUMN_ADD_MIGRATIONS post[] (NOT here) — same
+    -- pre-existing-DB rule as above.
     attribution_target TEXT
   )`,
 
@@ -769,6 +770,23 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     ddl: `ALTER TABLE sessions ADD COLUMN origin_stack_id TEXT`,
     post: [
       `CREATE INDEX IF NOT EXISTS idx_sessions_origin_stack_id ON sessions(origin_stack_id)`,
+    ],
+  },
+
+  // SES-1 / #1709 / decision D-16 — session ATTRIBUTION for EXISTING DBs.
+  // Fresh DBs get the column from the sessions CREATE TABLE above; an already-
+  // initialised DB backfills it here via the same pragma_table_info gate.
+  // Nullable TEXT, no CHECK/NOT NULL (the controlled vocabulary is enforced at
+  // WRITE time, like classification/substrate) so the ALTER is safe on a table
+  // with rows. NULL ⇒ the read model renders `unattributed`, NEVER inferred
+  // (D-16 honesty). The lookup index runs in post[] (unconditional, so fresh
+  // DBs get it too) — mirrors origin_stack_id above.
+  {
+    table: "sessions",
+    column: "attribution_target",
+    ddl: `ALTER TABLE sessions ADD COLUMN attribution_target TEXT`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_sessions_attribution_target ON sessions(attribution_target)`,
     ],
   },
 
