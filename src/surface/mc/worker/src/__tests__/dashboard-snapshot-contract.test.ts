@@ -79,6 +79,13 @@ const ALLOWED_COLUMNS: Record<string, string[]> = {
     "data_residency", "home_principal", "parent_session_id", "substrate",
     // CK-4a / #1295 — the cross-stack origin the workingAggregation groups by.
     "origin_stack_id",
+    // SES-1 / #1709 / D-16 — the controlled-vocab attribution target. Schema-KNOWN
+    // and vetted here, but NOT projected into the public DTO by this slice
+    // (buildSnapshot does not read it yet). Whether the future SES-1 cost read
+    // model exposes it in the public /api/state vs keeps it own-local (ADR-0005)
+    // is a deliberate decision made WHEN that projection lands + its DTO key is
+    // added below — never a silent pass-through.
+    "attribution_target",
   ],
   session_activity: ["id", "session_id", "timestamp", "icon", "label", "detail"],
   // `payload` IS a raw-JSON-blob column (see the file header) — it exists,
