@@ -39,7 +39,7 @@ import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
 // than it actually enforces):
 //   - `AgentCurrentTask.description` (sourced from `sessions.description`) —
 //     up to a 200-char PREVIEW of the triggering prompt. Truncated at the
-//     source (`EventLogger.hook.ts`'s `preview.slice(0, 200)` →
+//     source (`event-logger.hook.ts`'s `preview.slice(0, 200)` →
 //     `payload.prompt_preview`) and passed through `sanitizeDescription()`
 //     (strips `toolu_*` IDs) in `common/event-processor.ts` before it ever
 //     reaches D1. Also the sole `recentCompletions[].description`.

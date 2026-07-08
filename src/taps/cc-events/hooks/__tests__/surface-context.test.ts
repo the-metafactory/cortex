@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
 
-const HOOK_PATH = join(import.meta.dir, "..", "SurfaceContext.hook.ts");
+const HOOK_PATH = join(import.meta.dir, "..", "surface-context.hook.ts");
 
 /** Helper: run the hook with SessionStart JSON on stdin */
 function runHook(env: Record<string, string>, prompt = "Hello") {

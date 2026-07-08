@@ -8,7 +8,7 @@ name: "cortex"
 # now fail to load (strict canonical-only schemas). Run `cortex migrate-config`
 # to rewrite a pre-v4 config to the canonical `principal:` / `principalId` /
 # `principal_id` shape.
-version: "6.3.8"
+version: "6.3.9"
 type: component
 tier: community
 description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin stack"
@@ -56,17 +56,17 @@ provides:
       target: ~/bin/cldyo-live
 
     # ─── Claude Code hooks ────────────────────────────────────
-    # Some hook source filenames keep grove-era names (EventLogger.hook.ts,
-    # bash-guard.hook.ts) so the in-repo tree stays operator-facing-stable
-    # while internals migrate. The installed symlink targets ARE renamed to
-    # Cortex* so settings.json references are cortex-side and don't collide
-    # with grove leftovers. NOTE: each `source` below MUST match the actual
-    # filename in src/taps/cc-events/hooks/ — rename the file and update this
-    # path in the SAME commit, or arc recreates a dangling symlink at the
-    # target (the cause of the CortexContext breakage this entry fixes).
-    - source: src/taps/cc-events/hooks/SurfaceContext.hook.ts
+    # Hook source filenames are kebab-case (event-logger.hook.ts,
+    # surface-context.hook.ts, bash-guard.hook.ts) matching repo convention.
+    # The installed symlink targets ARE renamed to Cortex* so settings.json
+    # references are cortex-side and don't collide with grove leftovers.
+    # NOTE: each `source` below MUST match the actual filename in
+    # src/taps/cc-events/hooks/ — rename the file and update this path in
+    # the SAME commit, or arc recreates a dangling symlink at the target
+    # (the cause of the CortexContext breakage this entry fixes).
+    - source: src/taps/cc-events/hooks/surface-context.hook.ts
       target: ~/.claude/hooks/CortexContext.hook.ts
-    - source: src/taps/cc-events/hooks/EventLogger.hook.ts
+    - source: src/taps/cc-events/hooks/event-logger.hook.ts
       target: ~/.claude/hooks/CortexEventLogger.hook.ts
     - source: src/runner/hooks/bash-guard.hook.ts
       target: ~/.claude/hooks/CortexBashGuard.hook.ts

@@ -155,7 +155,7 @@ export function eventToRows(ev: McEvent): LogRow[] {
     case "stream-json.system":
       return [systemRow(ev)];
     // --- U1.1 item 1: observed-session hook events → the SAME row grammar ---
-    // These come off the cc-events tap (EventLogger.hook.ts) for sessions cortex
+    // These come off the cc-events tap (event-logger.hook.ts) for sessions cortex
     // OBSERVES but did not dispatch. The data (tool_input, tool_output,
     // duration_ms, prompt_preview) is already in the events table; we just need
     // to render it into tool_use / principal.input rows instead of RawRow crumbs.

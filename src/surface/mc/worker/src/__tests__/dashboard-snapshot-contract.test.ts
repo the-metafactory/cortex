@@ -18,7 +18,7 @@
  *       run.
  *   (b) Does NOT re-verify upstream sanitization. `sessions.description`
  *       (up to a 200-char preview of the triggering prompt, truncated in
- *       `EventLogger.hook.ts` and further cleaned by `sanitizeDescription()`
+ *       `event-logger.hook.ts` and further cleaned by `sanitizeDescription()`
  *       in `common/event-processor.ts`) and `session_activity.detail` (G-410,
  *       a per-event-type summary built by `extractActivityEntry()` in
  *       `common/event-utils.ts`, e.g. "Editing foo.ts" or a redacted,

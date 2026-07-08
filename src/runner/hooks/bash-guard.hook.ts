@@ -276,7 +276,7 @@ function deny(reason: string): void {
 
 // =============================================================================
 // Telemetry — emit a `tool.bash.blocked` event into the cc-events pipeline.
-// Mirrors EventLogger.hook.ts: HTTP POST to the dashboard ingest endpoint as
+// Mirrors event-logger.hook.ts: HTTP POST to the dashboard ingest endpoint as
 // primary delivery, JSONL append as fallback/archive. Best-effort — a failure
 // here must never affect the deny decision.
 // =============================================================================
