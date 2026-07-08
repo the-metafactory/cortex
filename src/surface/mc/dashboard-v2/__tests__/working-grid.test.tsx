@@ -265,3 +265,59 @@ describe("workingTileKey — #1065 stack-namespaced unique key", () => {
     );
   });
 });
+
+describe("CK-8 — WORKING row → signal-trace deep link", () => {
+  const ANCHOR = "mc-dispatch-task-";
+
+  it("LOCAL + anchored tile renders the 'View signal trace' toggle", () => {
+    const html = renderGrid({
+      origin: "local",
+      primary_assignment: {
+        id: "a-1",
+        task_id: `${ANCHOR}corr-42`,
+        task_title: "Dispatched work",
+        task_priority: 1,
+        updated_at: "2026-04-26T00:00:00.000Z",
+      },
+    });
+    expect(html).toContain("working-trace-toggle");
+    expect(html).toContain("View signal trace");
+    // Collapsed by default — the SidebandSource panel is not mounted yet.
+    expect(html).not.toContain("working-trace-panel");
+    // Honest: no degrade line on a local row.
+    expect(html).not.toContain("working-trace-degrade");
+  });
+
+  it("CROSS-STACK tile renders the honest degrade line — never a toggle/link", () => {
+    const html = renderGrid({
+      origin: { principal: "jc", stack: "work" },
+      primary_assignment: {
+        id: "a-1",
+        // Even a perfectly anchored task id must degrade off-origin (ADR-0005).
+        task_id: `${ANCHOR}corr-42`,
+        task_title: "Peer work",
+        task_priority: 1,
+        updated_at: "2026-04-26T00:00:00.000Z",
+      },
+    });
+    expect(html).toContain("working-trace-degrade");
+    expect(html).toContain("trace lives on jc/work");
+    expect(html).not.toContain("working-trace-toggle");
+    // The degrade line is a <div role=note>, not an anchor — no dead link.
+    expect(html).not.toContain("/api/observability/traces/");
+  });
+
+  it("LOCAL + non-anchored tile renders NO trace affordance (honest absence)", () => {
+    const html = renderGrid({
+      origin: "local",
+      primary_assignment: {
+        id: "a-1",
+        task_id: "orphan-task-99",
+        task_title: "Observed orphan",
+        task_priority: 1,
+        updated_at: "2026-04-26T00:00:00.000Z",
+      },
+    });
+    expect(html).not.toContain("working-trace");
+  });
+});

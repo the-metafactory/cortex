@@ -26,7 +26,7 @@
  * <button>s — Enter/Space toggle them for free (G-1114.F a11y bar).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import "./working-grid.css";
 import { priorityBorderClass } from "../lib/block-reason";
 import { pickWorkingGridMode, priorityLabel } from "../lib/working-grid-display";
@@ -36,10 +36,20 @@ import {
   type SessionTreeRow,
 } from "../lib/session-tree-rows";
 import { substrateLabel } from "../lib/substrate-label";
+import { resolveTraceDeepLink } from "../lib/working-trace-deeplink";
 import type {
   WorkingAgentTile,
   SessionTreeNode,
 } from "../hooks/use-working-agents";
+
+/**
+ * CK-8 — the signal-trace timeline source, LAZY-imported so its fetch + the
+ * `sideband-timeline` mapper land in the SAME split chunk the drill-down already
+ * pays for (never the working-grid entry bundle). Reused verbatim: it fetches
+ * `/api/observability/traces/{id}/timeline`, renders the trace rows, and degrades
+ * HONESTLY on a `SidebandError` (interior-absent line + backend `deep_link`).
+ */
+const SidebandSource = lazy(() => import("./sideband-source"));
 
 /**
  * #1065 — a globally-unique React key for a working tile. The pane-of-glass
@@ -176,6 +186,11 @@ export function WorkingGrid({
                 expanded={expanded}
                 onToggleExpand={onToggleExpand}
               />
+              <WorkingTraceDrill
+                taskId={a.primary_assignment.task_id}
+                origin={a.origin}
+                agentName={a.agent_name}
+              />
             </div>
           ))}
         </div>
@@ -279,5 +294,76 @@ function SessionTreeItem({ row, onToggleExpand }: SessionTreeItemProps) {
         <span className={`session-state state-${node.state}`}>{node.state}</span>
       )}
     </li>
+  );
+}
+
+interface WorkingTraceDrillProps {
+  /** The tile's primary-assignment task id — carries the anchor correlation_id. */
+  taskId: string;
+  /** The tile's origin — drives the local-only scoping (ADR-0005). */
+  origin: WorkingAgentTile["origin"];
+  /** Owning agent display name — for the trace panel's aria-label. */
+  agentName: string;
+}
+
+/**
+ * CK-8 — the task→signal-trace deep link on a WORKING row.
+ *
+ * Three honest states, decided by `resolveTraceDeepLink` (pure):
+ *   - LOCAL, correlatable  → a "View signal trace" toggle that lazily mounts
+ *     `SidebandSource` for the derived trace_id. The trace timeline, its
+ *     `SidebandError` degrade, and the backend `deep_link` exit are all owned
+ *     downstream by `SidebandSource` — this component just opens it.
+ *   - CROSS-STACK          → an HONEST degrade line ("trace lives on ⟨stack⟩ —
+ *     open its MC"). NOT a link: the loopback proxy can't resolve a peer's trace
+ *     on this daemon (ADR-0005 / truth-not-theater — never a dead affordance).
+ *   - NONE (local, non-anchored) → nothing. There is no correlatable trace, so
+ *     honest absence is rendering no affordance at all.
+ */
+function WorkingTraceDrill({ taskId, origin, agentName }: WorkingTraceDrillProps) {
+  const [open, setOpen] = useState(false);
+  const link = resolveTraceDeepLink({ taskId, origin });
+
+  if (link.kind === "none") return null;
+
+  if (link.kind === "cross-stack") {
+    return (
+      <div className="working-trace working-trace-degrade" role="note">
+        <span className="working-trace-degrade-mark" aria-hidden="true">⟿</span>
+        trace lives on {link.stackLabel} — open its MC
+      </div>
+    );
+  }
+
+  // Local + correlatable: the real drill affordance.
+  return (
+    <div className="working-trace">
+      <button
+        type="button"
+        className="working-trace-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        {open ? "Hide signal trace" : "View signal trace"}
+      </button>
+      {open && (
+        <div
+          className="working-trace-panel"
+          role="log"
+          aria-label={`Signal trace for ${agentName}`}
+        >
+          <Suspense
+            fallback={
+              <div className="drill-log-wrap">
+                <div className="drill-log-empty">Loading trace…</div>
+              </div>
+            }
+          >
+            <SidebandSource correlationId={link.traceId} />
+          </Suspense>
+        </div>
+      )}
+    </div>
   );
 }
