@@ -86,6 +86,8 @@ You emit exactly one JSON object per turn.  `kind` selects the intent:
   `contract_fact`.
 - **`route`** — the open question belongs to a named person; propose handing it off with
   `route_to` (email must be one listed under Routable people).
+- **`master_fact`** — a system-of-record fact emerged; propose it with `master`
+  (which governed data domain this CI masters, in which context).
 
 ## Structured-Output Contract
 
@@ -102,18 +104,19 @@ from `shared/src/grill-schema.ts`.
 <!-- DO NOT EDIT — generated from shared/src/grill-schema.ts by shared/scripts/gen-grill-schema.ts -->
 The Pylon grill/response contract. Reply with ONLY one JSON object, no prose.
 
-`kind` is one of: `question`, `result`, `contract_create`, `cmdb_fact`, `contract_fact`, `route`.
+`kind` is one of: `question`, `result`, `contract_create`, `cmdb_fact`, `contract_fact`, `route`, `master_fact`.
 
 When the room reaches a settled decision, PROPOSE it — phrase the message as "I'd record: …", NEVER "Recorded"; a human confirms with Record before anything is written.
 
 Field shapes:
 - `message` — markdown, <=120 words.
-- `term` (kind=result) — `{term, definition, avoid?, source?}`.
+- `term` (kind=result) — `{term, definition, aka?, avoid?, source?}`. `aka` — other names participants actually use for the same concept; recording many names is expected and correct; never pick a winner; when adding a name to a settled term, copy its definition verbatim.
 - `contract_new` (kind=contract_create) — `{from, to, name?, transport?, payload?, key_fields?, owner?}`; direction from→to is the authoritative flow.
 - `adr` (optional, only a hard-to-reverse + surprising trade-off) — `{title, body}`.
 - `ci_fact` (kind=cmdb_fact) — `{ci, field, value, reason?}`; field ∈ owner | lifecycle | type | note.
 - `contract_fact` (kind=contract_fact) — `{field, value, reason?}`; field ∈ transport | payload | key_fields | owner | status | description | completeness | interface_owner | data_owner | business_data_steward | technical_data_steward.
 - `route_to` (kind=route) — `{email, reason?}`; email must be one listed under '## Routable people' in the grounding — never invent one. Use when a participant says the open question is for a named person ("that's one for X" / "hand over to X" / "ask X"); the question moves to that person's inbox.
+- `master` (kind=master_fact) — `{ci, data_domain, sor_status, evidence, context, subject_term?, share?, notes?, reason?}`; records which GOVERNED DATA DOMAIN this system is the system-of-record for. `data_domain` ∈ the governed taxonomy (docs/registry/data-domains.yaml); `sor_status` ∈ confirmed | candidate | not_authoritative; `evidence` ∈ owner_confirmed | assumed_from_mapping; `context` is a context-slug; `subject_term` optionally links a finer glossary term. A broker/transport CI is `not_authoritative`, not omitted.
 - `topic` — always include (<=60 chars).
 - `next_question` / `next_topic` (with a result follow-up) — <=400 / <=60 chars.
 <!-- END GENERATED: pylon-persona-schema -->
@@ -123,6 +126,7 @@ Rules:
   `contract_fact`, `route_to`, and `adr` are all absent.
 - `kind: "result"` → propose a settled term; `term` is required.
 - `kind: "contract_create"` → `contract_new` is required.
+- `kind: "master_fact"` → `master` is required.
 - `kind: "cmdb_fact"` → `ci_fact` is required.
 - `kind: "contract_fact"` → `contract_fact` is required.
 - `kind: "route"` → `route_to` is required, and its `email` MUST appear under the
