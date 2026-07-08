@@ -3522,7 +3522,7 @@ async function runSecret(
   // still applies when the registry is unreachable. LIVE-ONLY: gated on the
   // production ports factory — an injected test factory means a hermetic run,
   // and the seed's registry GET would escape the test's fakes (in CI it reached
-  // the REAL registry and flipped fixture networks onto the operator path).
+  // the REAL registry and flipped fixture networks onto the operator-mode path).
   if (portsFactory === DEFAULT_SECRET_PORTS_FACTORY) {
     const seed = await seedDescriptorCacheOnMiss(
       networkId,
