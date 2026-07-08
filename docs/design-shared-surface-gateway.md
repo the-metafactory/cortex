@@ -219,15 +219,15 @@ surfaces:
       binding:
         token: REPLACE_WITH_DISCORD_BOT_TOKEN_A
         guildId: "111111111111111111"
-        agentChannelId: "000000000000000001"
-        logChannelId: "000000000000000002"
+        agentChannelId: "333333333333333333"
+        logChannelId: "444444444444444444"
     - agent: sage
       stack: joel/production           # CROSS-principal — second principal, unsigned
       binding:
         token: REPLACE_WITH_DISCORD_BOT_TOKEN_B
         guildId: "222222222222222222"
-        agentChannelId: "000000000000000003"
-        logChannelId: "000000000000000004"
+        agentChannelId: "555555555555555555"
+        logChannelId: "666666666666666666"
 ```
 
 With this map, an inbound on guild `111…` publishes on `local.andreas.research.tasks.@…luna.chat` and an inbound on guild `222…` on `local.joel.production.tasks.@…sage.chat`; each principal's reply routes back to its own adapter instance, with no cross-posting. End-to-end coverage: `src/gateway/__tests__/cross-principal-routing.integration.test.ts`.

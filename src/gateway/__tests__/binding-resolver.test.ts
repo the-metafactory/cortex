@@ -53,7 +53,7 @@ const DISCORD_SURFACES: Surfaces = {
       stack: "andreas/meta-factory",
       binding: {
         token: "tok-luna-discord",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
       },
@@ -118,7 +118,7 @@ describe("buildBindingIndex — happy path", () => {
   test("discord: indexes by guildId", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
     expect(index.discord.size).toBe(1);
-    expect(index.discord.has("111222333444555666")).toBe(true);
+    expect(index.discord.has("555555555555555555")).toBe(true);
   });
 
   test("slack: indexes by workspaceId", () => {
@@ -223,7 +223,7 @@ describe("buildBindingIndex — collision throws", () => {
 describe("resolveBinding — happy path", () => {
   test("discord: resolves by guildId", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
-    const inbound = msg({ platform: "discord", guildId: "111222333444555666" });
+    const inbound = msg({ platform: "discord", guildId: "555555555555555555" });
     const match = resolveBinding(index, inbound);
     expect(match).not.toBeNull();
     expect(match!.platform).toBe("discord");
@@ -258,7 +258,7 @@ describe("resolveBinding — happy path", () => {
 describe("resolveBinding — no platform bindings", () => {
   test("discord inbound against slack-only index → null", () => {
     const index = buildBindingIndex(SLACK_SURFACES);
-    const inbound = msg({ platform: "discord", guildId: "111222333444555666" });
+    const inbound = msg({ platform: "discord", guildId: "555555555555555555" });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
 
@@ -333,7 +333,7 @@ describe("stack-parsing", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
     const match = resolveBinding(
       index,
-      msg({ platform: "discord", guildId: "111222333444555666" }),
+      msg({ platform: "discord", guildId: "555555555555555555" }),
     );
     expect(match!.principal).toBe("andreas");
     expect(match!.stack).toBe("meta-factory");
@@ -396,11 +396,11 @@ describe("instance-id determinism", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
     const m1 = resolveBinding(
       index,
-      msg({ platform: "discord", guildId: "111222333444555666" }),
+      msg({ platform: "discord", guildId: "555555555555555555" }),
     );
     const m2 = resolveBinding(
       index,
-      msg({ platform: "discord", guildId: "111222333444555666", content: "different content" }),
+      msg({ platform: "discord", guildId: "555555555555555555", content: "different content" }),
     );
     expect(m1!.instance).toBe(m2!.instance);
   });
@@ -409,9 +409,9 @@ describe("instance-id determinism", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
     const match = resolveBinding(
       index,
-      msg({ platform: "discord", guildId: "111222333444555666" }),
+      msg({ platform: "discord", guildId: "555555555555555555" }),
     );
-    expect(match!.instance).toBe("discord:111222333444555666");
+    expect(match!.instance).toBe("discord:555555555555555555");
   });
 
   test("mattermost single-binding: instance is 'mattermost:apiUrl'", () => {
@@ -461,7 +461,7 @@ describe("resolveBinding — unknown platform", () => {
     const index = buildBindingIndex(DISCORD_SURFACES);
     // InboundMessage.platform is typed `string`, so a future/unknown platform
     // is representable; the resolver must fall through to null, never throw.
-    const inbound = msg({ platform: "teams", guildId: "111222333444555666" });
+    const inbound = msg({ platform: "teams", guildId: "555555555555555555" });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
 });

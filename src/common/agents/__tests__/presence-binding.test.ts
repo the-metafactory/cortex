@@ -112,9 +112,9 @@ function discordPresence() {
   return {
     enabled: true,
     token: "discord-bot-token",
-    guildId: "1487000000000000000",
-    agentChannelId: "1487000000000000001",
-    logChannelId: "1487000000000000002",
+    guildId: "1111111111111111111",
+    agentChannelId: "2222222222222222222",
+    logChannelId: "3333333333333333333",
     contextDepth: 10,
     enableAgentLog: false,
     roles: [],
@@ -216,34 +216,34 @@ describe("PresenceBinding.startAndBind", () => {
   test("calls start → getPlatformUserId → register in order", async () => {
     const adapter = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding = new PresenceBinding("luna", adapter, resolver);
 
     await binding.startAndBind(noopMessageHandler());
 
     expect(adapter.calls).toEqual(["start", "getPlatformUserId"]);
-    expect(binding.registeredPlatformId).toBe("1487100000000000001");
-    expect(resolver.lookupAgentId("discord", "1487100000000000001")).toBe("luna");
+    expect(binding.registeredPlatformId).toBe("4444444444444444444");
+    expect(resolver.lookupAgentId("discord", "4444444444444444444")).toBe("luna");
   });
 
   test("registers under the constructor's agent id, not adapter.instanceId", async () => {
     const adapter = new FakeAdapter({
       platform: "discord",
       instanceId: "this-is-not-the-agent-id",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding = new PresenceBinding("luna", adapter, resolver);
 
     await binding.startAndBind(noopMessageHandler());
 
-    expect(resolver.lookupAgentId("discord", "1487100000000000001")).toBe("luna");
+    expect(resolver.lookupAgentId("discord", "4444444444444444444")).toBe("luna");
   });
 
   test("idempotent re-bind to the same platform user id is a no-op at the resolver", async () => {
     const adapter = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding = new PresenceBinding("luna", adapter, resolver);
 
@@ -253,13 +253,13 @@ describe("PresenceBinding.startAndBind", () => {
     await binding.startAndBind(noopMessageHandler());
 
     expect(resolver.size).toBe(1);
-    expect(resolver.lookupAgentId("discord", "1487100000000000001")).toBe("luna");
+    expect(resolver.lookupAgentId("discord", "4444444444444444444")).toBe("luna");
   });
 
   test("rejects when a different agent already owns the platform user id", async () => {
     const adapter1 = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding1 = new PresenceBinding("luna", adapter1, resolver);
     await binding1.startAndBind(noopMessageHandler());
@@ -269,7 +269,7 @@ describe("PresenceBinding.startAndBind", () => {
     // by stopping adapter2.
     const adapter2 = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding2 = new PresenceBinding("echo", adapter2, resolver);
 
@@ -279,7 +279,7 @@ describe("PresenceBinding.startAndBind", () => {
     // Rollback: adapter2 was stopped despite the registration failure.
     expect(adapter2.calls).toEqual(["start", "getPlatformUserId", "stop"]);
     // The original luna mapping is untouched.
-    expect(resolver.lookupAgentId("discord", "1487100000000000001")).toBe("luna");
+    expect(resolver.lookupAgentId("discord", "4444444444444444444")).toBe("luna");
   });
 });
 
@@ -362,7 +362,7 @@ describe("PresenceBinding.unbindAndStop", () => {
   test("happy path: unregister then stop", async () => {
     const adapter = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding = new PresenceBinding("luna", adapter, resolver);
     await binding.startAndBind(noopMessageHandler());
@@ -377,7 +377,7 @@ describe("PresenceBinding.unbindAndStop", () => {
   test("idempotent — second unbind is a no-op", async () => {
     const adapter = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const binding = new PresenceBinding("luna", adapter, resolver);
     await binding.startAndBind(noopMessageHandler());
@@ -429,7 +429,7 @@ describe("PresenceBinding — multi-platform per agent", () => {
 
     const discordAdapter = new FakeAdapter({
       platform: "discord",
-      platformUserId: "1487100000000000001",
+      platformUserId: "4444444444444444444",
     });
     const mattermostAdapter = new FakeAdapter({
       platform: "mattermost",
@@ -444,7 +444,7 @@ describe("PresenceBinding — multi-platform per agent", () => {
 
     expect(resolver.size).toBe(2);
     expect(resolver.identitiesOf("luna")).toEqual([
-      { platform: "discord", platformId: "1487100000000000001" },
+      { platform: "discord", platformId: "4444444444444444444" },
       { platform: "mattermost", platformId: "luna-mm-userid-abc123" },
     ]);
 

@@ -7,14 +7,14 @@ agent:
 
 discord:
   - token: luna-token
-    guildId: "500000000000000001"
-    agentChannelId: "500000000000000002"
-    logChannelId: "500000000000000003"
+    guildId: "222222222222222222"
+    agentChannelId: "333333333333333333"
+    logChannelId: "444444444444444444"
 
 trustedAgentBots:
-  - discordId: "600000000000000001"
+  - discordId: "111111111111111111"
     name: echo
-  - discordId: "700000000000000001"
+  - discordId: "555555555555555555"
     name: holly
-  - discordId: "800000000000000001"
+  - discordId: "666666666666666666"
     name: ivy

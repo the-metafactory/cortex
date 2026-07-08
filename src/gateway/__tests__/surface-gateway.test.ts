@@ -38,7 +38,7 @@ const DISCORD_SURFACES: Surfaces = {
       stack: "andreas/meta-factory",
       binding: {
         token: "tok-luna-discord",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
       },
@@ -253,7 +253,7 @@ describe("handleInbound — routable Discord message", () => {
     const inbound = msg({
       platform: "discord",
       instanceId: "discord-luna-mf",
-      guildId: "111222333444555666",
+      guildId: "555555555555555555",
       channelId: "ch-9000",
     });
     await adapter.trigger(inbound);
@@ -267,7 +267,7 @@ describe("handleInbound — routable Discord message", () => {
     expect(decision.match.agent).toBe("luna");
     expect(decision.match.principal).toBe("andreas");
     expect(decision.match.stack).toBe("meta-factory");
-    expect(decision.match.instance).toBe("discord:111222333444555666");
+    expect(decision.match.instance).toBe("discord:555555555555555555");
 
     expect(decision.responseRouting.adapter_instance).toBe("discord-luna-mf");
     expect(decision.responseRouting.channel_id).toBe("ch-9000");
@@ -348,7 +348,7 @@ describe("handleInbound — thread_id propagation", () => {
     const inbound = msg({
       platform: "discord",
       instanceId: "discord-luna-mf",
-      guildId: "111222333444555666",
+      guildId: "555555555555555555",
       channelId: "ch-9000",
       threadId: "thread-42",
     });
@@ -370,7 +370,7 @@ describe("handleInbound — thread_id propagation", () => {
     const inbound = msg({
       platform: "discord",
       instanceId: "discord-luna-mf",
-      guildId: "111222333444555666",
+      guildId: "555555555555555555",
       channelId: "ch-9000",
       threadId: undefined,
     });
@@ -499,7 +499,7 @@ describe("handleInbound — sink throws", () => {
       const inbound = msg({
         platform: "discord",
         instanceId: "discord-luna-mf",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         channelId: "ch-9000",
       });
 
@@ -534,7 +534,7 @@ describe("handleInbound — sink throws", () => {
       const inbound = msg({
         platform: "discord",
         instanceId: "discord-luna-mf",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         channelId: "ch-9000",
       });
       await expect(adapter.trigger(inbound)).resolves.toBeUndefined();
@@ -633,7 +633,7 @@ describe("LoggingInboundSink", () => {
       agent: "luna",
       principal: "andreas",
       stack: "meta-factory",
-      instance: "discord:111222333444555666",
+      instance: "discord:555555555555555555",
     };
     const decision: GatewayInboundDecision = {
       match,
@@ -646,7 +646,7 @@ describe("LoggingInboundSink", () => {
     const inbound = msg({
       platform: "discord",
       instanceId: "discord-luna-mf",
-      guildId: "111222333444555666",
+      guildId: "555555555555555555",
       channelId: "ch-9000",
       threadId: "t-42",
     });

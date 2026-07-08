@@ -38,9 +38,9 @@ const MINIMAL_VALID: Record<string, unknown> = {
       presence: {
         discord: {
           token: "DISCORD_TOKEN",
-          guildId: "123456789012345678",
-          agentChannelId: "234567890123456789",
-          logChannelId: "345678901234567890",
+          guildId: "111111111111111111",
+          agentChannelId: "222222222222222222",
+          logChannelId: "333333333333333333",
         },
       },
     },

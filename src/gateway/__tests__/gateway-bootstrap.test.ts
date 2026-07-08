@@ -74,7 +74,7 @@ const DISCORD_SURFACES: Surfaces = {
       stack: "andreas/meta-factory",
       binding: {
         token: "tok-luna-discord",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
       },

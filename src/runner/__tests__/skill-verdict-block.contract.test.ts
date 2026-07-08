@@ -149,7 +149,7 @@ const APPROVED_FIXTURE = [
       github_review_url:
         "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459200001",
       submitted_at: "2026-05-17T08:15:42Z",
-      commit_id: "d4e5f6a7b8c9012345678901234567890abcdef1",
+      commit_id: "d4e5f6a7b8c1111111111111111111190abcdef1",
       findings: { blockers: 0, majors: 0, nits: 0 },
       inline_comments: 0,
     },
@@ -184,7 +184,7 @@ const CHANGES_REQUESTED_FIXTURE = [
       github_review_url:
         "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459200002",
       submitted_at: "2026-05-17T08:22:11Z",
-      commit_id: "d4e5f6a7b8c9012345678901234567890abcdef1",
+      commit_id: "d4e5f6a7b8c1111111111111111111190abcdef1",
       findings: { blockers: 0, majors: 2, nits: 3 },
       inline_comments: 5,
     },
@@ -215,7 +215,7 @@ const COMMENTED_FIXTURE = [
       github_review_url:
         "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459200003",
       submitted_at: "2026-05-17T08:27:55Z",
-      commit_id: "d4e5f6a7b8c9012345678901234567890abcdef1",
+      commit_id: "d4e5f6a7b8c1111111111111111111190abcdef1",
       findings: { blockers: 0, majors: 0, nits: 1 },
       inline_comments: 1,
     },
@@ -246,7 +246,7 @@ const TYPO_VERDICT_FIXTURE = [
       github_review_url:
         "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459200099",
       submitted_at: "2026-05-17T08:30:00Z",
-      commit_id: "d4e5f6a7b8c9012345678901234567890abcdef1",
+      commit_id: "d4e5f6a7b8c1111111111111111111190abcdef1",
       findings: { blockers: 0, majors: 0, nits: 0 },
       inline_comments: 0,
     },
@@ -283,7 +283,7 @@ describe("skill verdict-block contract — positive fixtures round-trip via runR
     expect(payload.inline_comments).toBe(0);
     expect(payload.github_review_id).toBe(2459200001);
     expect(payload.commit_id).toBe(
-      "d4e5f6a7b8c9012345678901234567890abcdef1",
+      "d4e5f6a7b8c1111111111111111111190abcdef1",
     );
   });
 

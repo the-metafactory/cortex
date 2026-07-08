@@ -230,9 +230,9 @@ describe("resolveAgentPresenceTokens — fail SOFT on unset env (cortex#1217)", 
 // ===========================================================================
 describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)", () => {
   test("resolves guildId/agentChannelId/logChannelId placeholders from env", () => {
-    process.env.PIER_GUILD_ID = "000000000000000001";
-    process.env.PIER_AGENT_CHANNEL_ID = "000000000000000002";
-    process.env.PIER_LOG_CHANNEL_ID = "000000000000000003";
+    process.env.PIER_GUILD_ID = "333333333333333333";
+    process.env.PIER_AGENT_CHANNEL_ID = "444444444444444444";
+    process.env.PIER_LOG_CHANNEL_ID = "555555555555555555";
     const agent: Record<string, unknown> = {
       id: "pier",
       presence: {
@@ -247,9 +247,9 @@ describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)
     };
     resolveAgentPresenceTokens(agent, "agents.d/pier.yaml");
     const discord = (agent.presence as any).discord;
-    expect(discord.guildId).toBe("000000000000000001");
-    expect(discord.agentChannelId).toBe("000000000000000002");
-    expect(discord.logChannelId).toBe("000000000000000003");
+    expect(discord.guildId).toBe("333333333333333333");
+    expect(discord.agentChannelId).toBe("444444444444444444");
+    expect(discord.logChannelId).toBe("555555555555555555");
     // all resolvable ⇒ surface stays enabled
     expect(discord.enabled).toBe(true);
   });
@@ -261,16 +261,16 @@ describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)
         discord: {
           enabled: true,
           token: "inline-token",
-          guildId: "123456789012345678",
-          agentChannelId: "223456789012345678",
-          logChannelId: "323456789012345678",
+          guildId: "111111111111111111",
+          agentChannelId: "222222222222222222",
+          logChannelId: "666666666666666666",
         },
       },
     };
     resolveAgentPresenceTokens(agent, "agents[0]");
     const discord = (agent.presence as any).discord;
-    expect(discord.guildId).toBe("123456789012345678");
-    expect(discord.agentChannelId).toBe("223456789012345678");
+    expect(discord.guildId).toBe("111111111111111111");
+    expect(discord.agentChannelId).toBe("222222222222222222");
     expect(discord.enabled).toBe(true);
   });
 
@@ -311,7 +311,7 @@ describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)
         discord: {
           enabled: true,
           token: "__PIER_BOT_TOKEN__",
-          guildId: "123456789012345678",
+          guildId: "111111111111111111",
           logChannelId: "__PIER_LOG_CHANNEL_ID__",
         },
       },
@@ -326,7 +326,7 @@ describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)
   });
 
   test("optional worklogChannelId placeholder resolves when set; absent → no-op", () => {
-    process.env.PIER_LOG_CHANNEL_ID = "000000000000000009";
+    process.env.PIER_LOG_CHANNEL_ID = "777777777777777777";
     const agent: Record<string, unknown> = {
       id: "pier",
       presence: {
@@ -334,7 +334,7 @@ describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)
       },
     };
     expect(() => resolveAgentPresenceTokens(agent, "agents[0]")).not.toThrow();
-    expect((agent.presence as any).discord.worklogChannelId).toBe("000000000000000009");
+    expect((agent.presence as any).discord.worklogChannelId).toBe("777777777777777777");
     // a fragment with no worklogChannelId key at all must not choke
     const bare: Record<string, unknown> = {
       id: "x",
@@ -347,7 +347,7 @@ describe("resolveAgentPresenceTokens — surface ID placeholders (compass#84 L2)
 
 describe("resolveSurfaceBindingTokens — ID placeholders (compass#84 L2)", () => {
   test("resolves a binding.guildId placeholder from env", () => {
-    process.env.GW_GUILD_ID = "000000000000000010";
+    process.env.GW_GUILD_ID = "888888888888888888";
     const surfaces = {
       discord: [
         {
@@ -362,7 +362,7 @@ describe("resolveSurfaceBindingTokens — ID placeholders (compass#84 L2)", () =
       ],
     } as unknown as Surfaces;
     resolveSurfaceBindingTokens(surfaces);
-    expect((surfaces.discord as any)[0].binding.guildId).toBe("000000000000000010");
+    expect((surfaces.discord as any)[0].binding.guildId).toBe("888888888888888888");
   });
 
   test("fail SOFT: unset binding.guildId env → the binding ENTRY is dropped", () => {

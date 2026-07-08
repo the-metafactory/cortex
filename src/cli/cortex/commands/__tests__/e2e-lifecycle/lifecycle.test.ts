@@ -436,9 +436,9 @@ describe("C-1355 — E2E admission lifecycle guard", () => {
             presence: {
               discord: {
                 token: "discord-bot-token",
-                guildId: "1487000000000000000",
-                agentChannelId: "1487000000000000001",
-                logChannelId: "1487000000000000002",
+                guildId: "1111111111111111111",
+                agentChannelId: "2222222222222222222",
+                logChannelId: "3333333333333333333",
               },
             },
           },

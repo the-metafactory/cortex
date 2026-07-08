@@ -195,7 +195,7 @@ describe("createSystemInboundAbortedEvent", () => {
     const env = createSystemInboundAbortedEvent({
       source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
-      inboundMessageId: "1234567890123456789",
+      inboundMessageId: "1111111111111111111",
       timeoutSource: "attachment_fetch",
       timeoutMs: 30_000,
       elapsedMs: 30_142,
@@ -204,7 +204,7 @@ describe("createSystemInboundAbortedEvent", () => {
     expect(env.type).toBe("system.inbound.aborted");
     expect(env.payload).toMatchObject({
       adapter_id: "discord-luna",
-      inbound_message_id: "1234567890123456789",
+      inbound_message_id: "1111111111111111111",
       timeout_source: "attachment_fetch",
       timeout_ms: 30_000,
       elapsed_ms: 30_142,
@@ -217,7 +217,7 @@ describe("createSystemInboundAbortedEvent", () => {
     const env = createSystemInboundAbortedEvent({
       source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
-      inboundMessageId: "1234567890123456789",
+      inboundMessageId: "1111111111111111111",
       correlationId: "11111111-1111-4111-8111-111111111111",
       timeoutSource: "cc_session_spawn",
       timeoutMs: 5_000,
@@ -232,7 +232,7 @@ describe("createSystemInboundAbortedEvent", () => {
     const env = createSystemInboundAbortedEvent({
       source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
-      inboundMessageId: "1234567890123456789",
+      inboundMessageId: "1111111111111111111",
       timeoutSource: "unknown",
       timeoutMs: 1_000,
       elapsedMs: 1_001,

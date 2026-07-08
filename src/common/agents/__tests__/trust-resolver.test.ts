@@ -33,9 +33,9 @@ function discordPresence() {
   return {
     enabled: true,
     token: "discord-bot-token",
-    guildId: "1487000000000000000",
-    agentChannelId: "1487000000000000001",
-    logChannelId: "1487000000000000002",
+    guildId: "1111111111111111111",
+    agentChannelId: "2222222222222222222",
+    logChannelId: "3333333333333333333",
     contextDepth: 10,
     enableAgentLog: false,
     roles: [],
@@ -70,9 +70,9 @@ function registryOf(...agents: Agent[]): AgentRegistry {
 
 // Some plausible-looking platform ids — these are just strings to the
 // resolver, no validation against Discord snowflake format.
-const LUNA_DISCORD_ID = "1487100000000000001";
-const ECHO_DISCORD_ID = "1487100000000000002";
-const HOLLY_DISCORD_ID = "1487100000000000003";
+const LUNA_DISCORD_ID = "4444444444444444444";
+const ECHO_DISCORD_ID = "6666666666666666666";
+const HOLLY_DISCORD_ID = "7777777777777777777";
 const LUNA_MATTERMOST_ID = "luna-mm-userid-abc123";
 
 // =============================================================================
@@ -450,10 +450,10 @@ describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust
     const resolver = new TrustResolver(registryOf(agentFixture({ id: "luna", trust: [] })));
     resolver.register("discord", LUNA_DISCORD_ID, "luna");
 
-    const explicit = ["1487999999999999999"]; // op-set cross-process id
+    const explicit = ["8888888888888888888"]; // op-set cross-process id
     const merged = mergeFor(resolver, [], "luna", explicit);
     expect(merged.size).toBe(1);
-    expect(merged.has("1487999999999999999")).toBe(true);
+    expect(merged.has("8888888888888888888")).toBe(true);
   });
 
   test("explicit and resolver-derived ids dedupe when they overlap", () => {

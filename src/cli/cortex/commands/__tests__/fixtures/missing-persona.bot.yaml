@@ -7,6 +7,6 @@ agent:
 
 discord:
   - token: ghost-token
-    guildId: "900000000000000001"
-    agentChannelId: "900000000000000002"
-    logChannelId: "900000000000000003"
+    guildId: "111111111111111111"
+    agentChannelId: "222222222222222222"
+    logChannelId: "333333333333333333"

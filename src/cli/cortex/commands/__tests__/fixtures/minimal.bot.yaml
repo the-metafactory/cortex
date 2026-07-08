@@ -3,15 +3,15 @@ agent:
   displayName: Luna
   operatorId: jc
   operatorName: Jens-Christian
-  operatorDiscordId: "112233445566778899"
+  operatorDiscordId: "11111111111111111"
   dataResidency: NZ
   personaFile: ./personas/luna.md
 
 discord:
   - token: discord-token-aaaa
-    guildId: "100000000000000001"
-    agentChannelId: "100000000000000002"
-    logChannelId: "100000000000000003"
+    guildId: "666666666666666666"
+    agentChannelId: "888888888888888888"
+    logChannelId: "000000000000000000"
     contextDepth: 10
 
 claude:

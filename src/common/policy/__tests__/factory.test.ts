@@ -330,7 +330,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
             role: [],
             trust: [],
             platform_ids: {
-              discord: ["1487123456789012345"],
+              discord: ["1111111111111111111"],
               slack: ["U01ABCDEF"],
               email: ["luna@example.com"],
               mcp: ["mcp://luna/inbox"],
@@ -341,7 +341,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         roles: [],
       });
       expect(policy.principals[0]?.platform_ids).toEqual({
-        discord: ["1487123456789012345"],
+        discord: ["1111111111111111111"],
         slack: ["U01ABCDEF"],
         email: ["luna@example.com"],
         mcp: ["mcp://luna/inbox"],
@@ -573,7 +573,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
               home_stack: "andreas/research",
               role: [],
               trust: [],
-              platform_ids: { discord: ["1487123456789012345"] },
+              platform_ids: { discord: ["1111111111111111111"] },
             },
             {
               id: "echo",
@@ -581,12 +581,12 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
               home_stack: "andreas/research",
               role: [],
               trust: [],
-              platform_ids: { discord: ["1487123456789012345"] },
+              platform_ids: { discord: ["1111111111111111111"] },
             },
           ],
           roles: [],
         }),
-      ).toThrow(/platform_ids\.discord entry.*1487123456789012345.*already claimed by principal.*luna/);
+      ).toThrow(/platform_ids\.discord entry.*1111111111111111111.*already claimed by principal.*luna/);
     });
 
     test("accepts same id under different platforms (no cross-platform collision)", () => {

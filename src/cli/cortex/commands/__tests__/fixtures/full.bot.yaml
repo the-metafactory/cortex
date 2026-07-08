@@ -3,23 +3,23 @@ agent:
   displayName: Luna
   operatorId: jc
   operatorName: Jens-Christian
-  operatorDiscordId: "112233445566778899"
+  operatorDiscordId: "11111111111111111"
   operatorMattermostId: mm-jc-id
   dataResidency: NZ
   personaFile: ./personas/luna.md
 
 discord:
   - token: discord-token-aaaa
-    guildId: "100000000000000001"
-    agentChannelId: "100000000000000002"
-    logChannelId: "100000000000000003"
-    worklogChannelId: "100000000000000004"
+    guildId: "666666666666666666"
+    agentChannelId: "888888888888888888"
+    logChannelId: "000000000000000000"
+    worklogChannelId: "22222222222222222"
     contextDepth: 12
     enableAgentLog: true
-    operatorRoleId: "100000000000000099"
+    operatorRoleId: "33333333333333333"
     roles:
       - name: operator
-        users: ["112233445566778899"]
+        users: ["11111111111111111"]
         features: [chat, async, team]
 
 mattermost:
@@ -30,7 +30,7 @@ mattermost:
     pollIntervalMs: 5000
 
 trustedAgentBots:
-  - discordId: "600000000000000001"
+  - discordId: "111111111111111111"
     name: echo
 
 claude:

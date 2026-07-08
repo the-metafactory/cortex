@@ -95,7 +95,7 @@ describe("convertBotYaml — minimal single-agent", () => {
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
 
     expect(result.cortex.principal.id).toBe("jc");
-    expect(result.cortex.principal.discordId).toBe("112233445566778899");
+    expect(result.cortex.principal.discordId).toBe("11111111111111111");
     expect(result.cortex.principal.dataResidency).toBe("NZ");
 
     expect(result.cortex.agents).toHaveLength(1);
@@ -104,7 +104,7 @@ describe("convertBotYaml — minimal single-agent", () => {
     expect(agent.displayName).toBe("Luna");
     expect(agent.persona).toBe("./personas/luna.md");
     expect(agent.presence.discord).toBeDefined();
-    expect(agent.presence.discord!.guildId).toBe("100000000000000001");
+    expect(agent.presence.discord!.guildId).toBe("666666666666666666");
     expect(agent.presence.mattermost).toBeUndefined();
     expect(agent.trust).toEqual([]);
   });
@@ -399,7 +399,7 @@ describe("convertBotYaml — full fixture", () => {
     expect(result.cortex.principal).toEqual({
       id: "jc",
       displayName: "Jens-Christian",
-      discordId: "112233445566778899",
+      discordId: "11111111111111111",
       mattermostId: "mm-jc-id",
       dataResidency: "NZ",
     });
@@ -412,8 +412,8 @@ describe("convertBotYaml — full fixture", () => {
     const agent = result.cortex.agents[0]!;
     expect(agent.presence.discord).toBeDefined();
     expect(agent.presence.mattermost).toBeDefined();
-    expect(agent.presence.discord!.worklogChannelId).toBe("100000000000000004");
-    expect(agent.presence.discord!.operatorRoleId).toBe("100000000000000099");
+    expect(agent.presence.discord!.worklogChannelId).toBe("22222222222222222");
+    expect(agent.presence.discord!.operatorRoleId).toBe("33333333333333333");
     expect(agent.presence.mattermost!.apiUrl).toBe("https://mm.example.com");
   });
 
@@ -466,12 +466,12 @@ describe("convertBotYaml — full fixture", () => {
     const policy = result.cortex.policy!;
     // The legacy `operator` role + its users[] entry must surface as
     // (a) a PolicyRole with the operator capability, and
-    // (b) a PolicyPrincipal whose platform_ids.discord includes 112233445566778899.
+    // (b) a PolicyPrincipal whose platform_ids.discord includes 11111111111111111.
     const operatorRole = policy.roles.find((r) => r.id === "operator");
     expect(operatorRole).toBeDefined();
     expect(operatorRole?.capabilities).toContain("operator");
     const operatorPrincipal = policy.principals.find(
-      (p) => p.platform_ids?.discord?.includes("112233445566778899"),
+      (p) => p.platform_ids?.discord?.includes("11111111111111111"),
     );
     expect(operatorPrincipal).toBeDefined();
     expect(operatorPrincipal?.role).toContain("operator");
@@ -757,8 +757,8 @@ describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
         agentChannelId: "2",
         logChannelId: "3",
         roles: [
-          { name: "operator", users: ["112233445566778899"], features: ["chat"] },
-          { name: "agent-echo", users: ["999888777666555444"], features: ["chat"] },
+          { name: "operator", users: ["11111111111111111"], features: ["chat"] },
+          { name: "agent-echo", users: ["44444444444444444"], features: ["chat"] },
         ],
       }],
     };
@@ -781,7 +781,7 @@ describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
         agentChannelId: "2",
         logChannelId: "3",
         roles: [
-          { name: "operator", users: ["112233445566778899"], features: ["chat"] },
+          { name: "operator", users: ["11111111111111111"], features: ["chat"] },
         ],
       }],
     };
@@ -858,21 +858,21 @@ describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
           guildId: "1",
           agentChannelId: "2",
           logChannelId: "3",
-          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["666666666666666666"], features: ["chat"] }],
         },
         {
           token: "echo-token",
           guildId: "10",
           agentChannelId: "20",
           logChannelId: "30",
-          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+          roles: [{ name: "agent-echo", users: ["444444444444444444"], features: ["chat"] }],
         },
         {
           token: "forge-token",
           guildId: "100",
           agentChannelId: "200",
           logChannelId: "300",
-          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+          roles: [{ name: "agent-forge", users: ["555555555555555555"], features: ["chat"] }],
         },
       ],
     };
@@ -918,7 +918,7 @@ describe("convertBotYaml — collision fallback termination (cortex#119)", () =>
           roles: [
             {
               name: "agent-luna-2",
-              users: ["100000000000000001"],
+              users: ["666666666666666666"],
               features: ["chat"],
             },
           ],
@@ -957,15 +957,15 @@ describe("convertBotYaml — collision fallback numbering (cortex#106 item 1)", 
       discord: [
         {
           token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3",
-          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["666666666666666666"], features: ["chat"] }],
         },
         {
           token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30",
-          roles: [{ name: "agent-luna", users: ["200000000000000002"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["444444444444444444"], features: ["chat"] }],
         },
         {
           token: "t3", guildId: "100", agentChannelId: "200", logChannelId: "300",
-          roles: [{ name: "agent-luna", users: ["300000000000000003"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["555555555555555555"], features: ["chat"] }],
         },
       ],
     };
@@ -985,11 +985,11 @@ describe("convertBotYaml — duplicate hint across adapters (cortex#106 item 2)"
       discord: [
         {
           token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3",
-          roles: [{ name: "agent-echo", users: ["100000000000000001"], features: ["chat"] }],
+          roles: [{ name: "agent-echo", users: ["666666666666666666"], features: ["chat"] }],
         },
         {
           token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30",
-          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+          roles: [{ name: "agent-echo", users: ["444444444444444444"], features: ["chat"] }],
         },
       ],
     };
@@ -1012,15 +1012,15 @@ describe("convertBotYaml — duplicate hint across adapters (cortex#106 item 2)"
       discord: [
         {
           token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3",
-          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["666666666666666666"], features: ["chat"] }],
         },
         {
           token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30",
-          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+          roles: [{ name: "agent-echo", users: ["444444444444444444"], features: ["chat"] }],
         },
         {
           token: "t3", guildId: "100", agentChannelId: "200", logChannelId: "300",
-          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+          roles: [{ name: "agent-forge", users: ["555555555555555555"], features: ["chat"] }],
         },
       ],
     };
@@ -1052,21 +1052,21 @@ describe("convertBotYaml — shared agentChannelId warning (cortex#88 item 4)", 
           guildId: "1",
           agentChannelId: sharedChannel,
           logChannelId: "3",
-          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["666666666666666666"], features: ["chat"] }],
         },
         {
           token: "echo-token",
           guildId: "10",
           agentChannelId: sharedChannel,
           logChannelId: "30",
-          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+          roles: [{ name: "agent-echo", users: ["444444444444444444"], features: ["chat"] }],
         },
         {
           token: "forge-token",
           guildId: "100",
           agentChannelId: sharedChannel,
           logChannelId: "300",
-          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+          roles: [{ name: "agent-forge", users: ["555555555555555555"], features: ["chat"] }],
         },
       ],
     };
@@ -1092,21 +1092,21 @@ describe("convertBotYaml — shared agentChannelId warning (cortex#88 item 4)", 
           guildId: "1",
           agentChannelId: "111111111111111111",
           logChannelId: "3",
-          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+          roles: [{ name: "agent-luna", users: ["666666666666666666"], features: ["chat"] }],
         },
         {
           token: "echo-token",
           guildId: "10",
           agentChannelId: "222222222222222222",
           logChannelId: "30",
-          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+          roles: [{ name: "agent-echo", users: ["444444444444444444"], features: ["chat"] }],
         },
         {
           token: "forge-token",
           guildId: "100",
           agentChannelId: "333333333333333333",
           logChannelId: "300",
-          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+          roles: [{ name: "agent-forge", users: ["555555555555555555"], features: ["chat"] }],
         },
       ],
     };
@@ -1312,9 +1312,9 @@ describe("convertBotYaml — stack signing (cortex#324)", () => {
       discord: [
         {
           token: "discord-token-xxxx",
-          guildId: "100000000000000001",
-          agentChannelId: "100000000000000002",
-          logChannelId: "100000000000000003",
+          guildId: "666666666666666666",
+          agentChannelId: "888888888888888888",
+          logChannelId: "000000000000000000",
         },
       ],
       stack: { id: "test-op/research" },
@@ -1363,9 +1363,9 @@ describe("convertBotYaml — stack signing (cortex#324)", () => {
       discord: [
         {
           token: "discord-token-xxxx",
-          guildId: "100000000000000001",
-          agentChannelId: "100000000000000002",
-          logChannelId: "100000000000000003",
+          guildId: "666666666666666666",
+          agentChannelId: "888888888888888888",
+          logChannelId: "000000000000000000",
         },
       ],
       stack: {
@@ -1444,7 +1444,7 @@ describe("convertBotYaml — R3 principal block emission (cortex#388)", () => {
       operator: {
         id: "andreas",
         displayName: "Andreas",
-        discordId: "112233445566778899",
+        discordId: "11111111111111111",
         dataResidency: "NZ",
       },
       stack: { id: "andreas/work" },
@@ -1457,9 +1457,9 @@ describe("convertBotYaml — R3 principal block emission (cortex#388)", () => {
           presence: {
             discord: {
               token: "discord-token-xxxx",
-              guildId: "100000000000000001",
-              agentChannelId: "100000000000000002",
-              logChannelId: "100000000000000003",
+              guildId: "666666666666666666",
+              agentChannelId: "888888888888888888",
+              logChannelId: "000000000000000000",
             },
           },
         },
@@ -1468,7 +1468,7 @@ describe("convertBotYaml — R3 principal block emission (cortex#388)", () => {
     const result = convertBotYaml(operatorShapedInput, { configDir: FIXTURE_DIR });
     expect(result.cortex.principal.id).toBe("andreas");
     expect(result.cortex.principal.displayName).toBe("Andreas");
-    expect(result.cortex.principal.discordId).toBe("112233445566778899");
+    expect(result.cortex.principal.discordId).toBe("11111111111111111");
     expect(result.cortex.principal.dataResidency).toBe("NZ");
     expect((result.cortex as Record<string, unknown>).operator).toBeUndefined();
     expect(result.cortex.agents).toHaveLength(1);
@@ -1491,9 +1491,9 @@ describe("convertBotYaml — R3 principal block emission (cortex#388)", () => {
           presence: {
             discord: {
               token: "discord-token-xxxx",
-              guildId: "100000000000000001",
-              agentChannelId: "100000000000000002",
-              logChannelId: "100000000000000003",
+              guildId: "666666666666666666",
+              agentChannelId: "888888888888888888",
+              logChannelId: "000000000000000000",
             },
           },
         },

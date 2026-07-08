@@ -61,9 +61,9 @@ function minPrincipal() {
 function minDiscordPresence() {
   return {
     token: "discord-bot-token",
-    guildId: "1487000000000000000",
-    agentChannelId: "1487000000000000001",
-    logChannelId: "1487000000000000002",
+    guildId: "1111111111111111111",
+    agentChannelId: "2222222222222222222",
+    logChannelId: "3333333333333333333",
   };
 }
 
@@ -175,11 +175,11 @@ describe("PrincipalConfigSchema", () => {
     const parsed = PrincipalConfigSchema.parse({
       id: "andreas",
       displayName: "Andreas Astrom",
-      discordId: "1134000000000000000",
+      discordId: "5555555555555555555",
       mattermostId: "abc123def456",
     });
     expect(parsed.displayName).toBe("Andreas Astrom");
-    expect(parsed.discordId).toBe("1134000000000000000");
+    expect(parsed.discordId).toBe("5555555555555555555");
     expect(parsed.mattermostId).toBe("abc123def456");
   });
 
@@ -1116,7 +1116,7 @@ describe("CortexConfigSchema", () => {
       principal: {
         id: "andreas",
         displayName: "Andreas Astrom",
-        discordId: "1134000000000000000",
+        discordId: "5555555555555555555",
       },
       agents: [
         minAgent({ id: "luna", roles: ["operator"], trust: ["echo", "holly"] }),

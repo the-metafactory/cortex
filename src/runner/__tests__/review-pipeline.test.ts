@@ -779,7 +779,7 @@ describe("runReviewPipeline — presentation on the verdict payload", () => {
   test("verdict payload carries deterministic presentation matching the helper", async () => {
     const block = buildVerdictBlock("changes-requested", {
       summary: "Blocking: SQL injection in the search route.",
-      commit_id: "deadbeef0000111122223333444455556666aaaa",
+      commit_id: "deadbeef2222222222222222222255556666aaaa",
       github_review_url: "https://github.com/the-metafactory/cortex/pull/229#r1",
       findings: { blockers: 1, majors: 0, nits: 2 },
       inline_comments: 4,
@@ -801,7 +801,7 @@ describe("runReviewPipeline — presentation on the verdict payload", () => {
         github_review_id: 2459183744,
         github_review_url: "https://github.com/the-metafactory/cortex/pull/229#r1",
         submitted_at: "2026-05-16T09:51:30Z",
-        commit_id: "deadbeef0000111122223333444455556666aaaa",
+        commit_id: "deadbeef2222222222222222222255556666aaaa",
         findings: { blockers: 1, majors: 0, nits: 2 },
         inline_comments: 4,
       }),

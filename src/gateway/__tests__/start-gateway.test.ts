@@ -117,7 +117,7 @@ const DISCORD_SURFACES: Surfaces = {
       stack: "andreas/meta-factory",
       binding: {
         token: "tok-luna-discord",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
       },
@@ -197,13 +197,13 @@ describe("startGatewayIfEnabled — flag on", () => {
     });
     expect(gw?.gateway).toBeInstanceOf(SurfaceGateway);
     // one adapter constructed for the one discord binding
-    expect(constructed).toEqual(["discord:111222333444555666"]);
+    expect(constructed).toEqual(["discord:555555555555555555"]);
     // gw.start() was awaited → the adapter's start() ran
-    expect(started).toEqual(["discord:111222333444555666"]);
+    expect(started).toEqual(["discord:555555555555555555"]);
     // a.3d — the started gateway exposes its adapters + bound stacks so the
     // boot path can wire the OUTBOUND dispatch sink over them.
     expect(gw?.adapters.map((a) => a.instanceId)).toEqual([
-      "discord:111222333444555666",
+      "discord:555555555555555555",
     ]);
     // the one binding's stack leaf (parsed from "andreas/meta-factory")
     expect(gw?.stacks).toEqual(["meta-factory"]);
@@ -281,7 +281,7 @@ describe("startGatewayIfEnabled — flag on", () => {
           stack: "jc/default",
           binding: {
             token: "tok-juniper",
-            guildId: "555666777888999000",
+            guildId: "444444444444444444",
             agentChannelId: "333333333333333333",
             logChannelId: "333333333333333333",
           },
@@ -382,7 +382,7 @@ describe("startGatewayIfEnabled — flag on", () => {
           stack: "someone-else/meta-factory",
           binding: {
             token: "tok",
-            guildId: "111222333444555666",
+            guildId: "555555555555555555",
             agentChannelId: "aaa000000000000001",
             logChannelId: "bbb000000000000002",
           },
@@ -417,8 +417,8 @@ describe("startGatewayIfEnabled — flag on", () => {
 
     // ALLOWED: the gateway started over the cross-principal binding.
     expect(gw?.gateway).toBeInstanceOf(SurfaceGateway);
-    expect(constructed).toEqual(["discord:111222333444555666"]);
-    expect(started).toEqual(["discord:111222333444555666"]);
+    expect(constructed).toEqual(["discord:555555555555555555"]);
+    expect(started).toEqual(["discord:555555555555555555"]);
 
     // WARNED: a clear UNSIGNED/dev-only stderr warning fired, naming the
     // offending binding.

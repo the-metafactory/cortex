@@ -24,9 +24,9 @@ import {
   type DiscordCliConfig,
 } from "../discord-roles";
 
-const GUILD = "555666777888999000";
-const USER = "123456789012345678";
-const ROLE_ID = "999000111222333444";
+const GUILD = "444444444444444444";
+const USER = "111111111111111111";
+const ROLE_ID = "222222222222222222";
 const BOT_TOKEN = "Bot.secret-token-must-not-appear-in-errors";
 
 function fakeResponse(status: number, body: unknown = null): Response {

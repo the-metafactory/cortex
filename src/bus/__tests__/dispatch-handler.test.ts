@@ -574,7 +574,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
 
     callPublishInboundAborted(handler, {
       adapterId: "discord-luna",
-      inboundMessageId: "1234567890123456789",
+      inboundMessageId: "1111111111111111111",
       timeoutSource: "attachment_fetch",
       timeoutMs: 30_000,
       elapsedMs: 30_142,
@@ -586,7 +586,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
     expect(env.source).toBe("metafactory.cortex.local");
     expect(env.payload).toMatchObject({
       adapter_id: "discord-luna",
-      inbound_message_id: "1234567890123456789",
+      inbound_message_id: "1111111111111111111",
       timeout_source: "attachment_fetch",
       timeout_ms: 30_000,
       elapsed_ms: 30_142,

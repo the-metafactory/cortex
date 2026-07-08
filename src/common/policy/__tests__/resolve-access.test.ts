@@ -177,14 +177,14 @@ describe("resolvePolicyAccess — unknown principal deny path", () => {
           home_stack: "andreas/meta-factory",
           role: ["muted"],
           trust: [],
-          platform_ids: { discord: ["555000111222333444"] },
+          platform_ids: { discord: ["222222222222222222"] },
         },
       ],
       // role exists but grants NO keyword.* and NOT operator
       roles: [{ id: "muted", capabilities: ["tool.read"] }],
     };
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "555000111222333444" }),
+      msg: msg({ authorId: "222222222222222222" }),
       ...buildHarness(lockoutPolicy),
     });
     expect(result.allowed).toBe(false);
@@ -506,7 +506,7 @@ describe("resolvePolicyAccess — lockout path", () => {
           home_stack: "andreas/meta-factory",
           role: ["guest"],
           trust: [],
-          platform_ids: { discord: ["100000000000000111"] },
+          platform_ids: { discord: ["333333333333333333"] },
         },
       ],
       roles: [
@@ -517,7 +517,7 @@ describe("resolvePolicyAccess — lockout path", () => {
       ],
     };
     const result = resolvePolicyAccess({
-      msg: msg({ authorId: "100000000000000111" }),
+      msg: msg({ authorId: "333333333333333333" }),
       ...buildHarness(lockedOutPolicy),
     });
     expect(result.allowed).toBe(false);

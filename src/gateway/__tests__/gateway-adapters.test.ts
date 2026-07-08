@@ -158,7 +158,7 @@ const DISCORD_SURFACES: Surfaces = {
       stack: "andreas/meta-factory",
       binding: {
         token: "tok-luna-discord",
-        guildId: "111222333444555666",
+        guildId: "555555555555555555",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
       },
@@ -183,7 +183,7 @@ const SAME_TOKEN_DISCORD_SURFACES: Surfaces = {
       stack: "jc/default",
       binding: {
         token: "tok-juniper",
-        guildId: "555666777888999000",
+        guildId: "444444444444444444",
         agentChannelId: "333333333333333333",
         logChannelId: "333333333333333333",
       },
@@ -208,7 +208,7 @@ const SAME_TOKEN_DIFFERENT_STACKS_DISCORD_SURFACES: Surfaces = {
       stack: "jc/research",
       binding: {
         token: "tok-juniper",
-        guildId: "555666777888999000",
+        guildId: "444444444444444444",
         agentChannelId: "333333333333333333",
         logChannelId: "333333333333333333",
       },
@@ -278,7 +278,7 @@ describe("buildGatewayAdapters", () => {
     buildGatewayAdapters(DISCORD_SURFACES, makeDeps(factory));
     const call = calls[0];
     expect(call?.binding.token).toBe("tok-luna-discord");
-    expect(call?.binding.guildId).toBe("111222333444555666");
+    expect(call?.binding.guildId).toBe("555555555555555555");
     expect(call?.binding.agentChannelId).toBe("aaa000000000000001");
     expect(call?.binding.logChannelId).toBe("bbb000000000000002");
   });
@@ -290,13 +290,13 @@ describe("buildGatewayAdapters", () => {
     expect(src?.principal).toBe("andreas");
     expect(src?.agent).toBe("gateway");
     // interim instance id = `{platform}:{demuxKey}` (= guildId for discord)
-    expect(src?.instance).toBe("discord:111222333444555666");
+    expect(src?.instance).toBe("discord:555555555555555555");
   });
 
   test("instanceId threaded to the factory matches the interim instance id", () => {
     const { factory, calls } = makeRecordingFactory();
     buildGatewayAdapters(DISCORD_SURFACES, makeDeps(factory));
-    expect(calls[0]?.instanceId).toBe("discord:111222333444555666");
+    expect(calls[0]?.instanceId).toBe("discord:555555555555555555");
   });
 
   test("runtime is forwarded verbatim to the factory", () => {
@@ -315,14 +315,14 @@ describe("buildGatewayAdapters", () => {
     expect(calls[0]?.instanceId).toMatch(/^discord:token:[0-9a-f]{12}$/);
     expect(calls[0]?.allowedGuildIds).toEqual([
       "111111111111111111",
-      "555666777888999000",
+      "444444444444444444",
     ]);
     expect(calls[0]?.presenceByGuildId).toEqual({
       "111111111111111111": {
         agentChannelId: "222222222222222222",
         logChannelId: "222222222222222222",
       },
-      "555666777888999000": {
+      "444444444444444444": {
         agentChannelId: "333333333333333333",
         logChannelId: "333333333333333333",
       },
@@ -339,11 +339,11 @@ describe("buildGatewayAdapters", () => {
     expect(adapters.length).toBe(2);
     expect(calls.map((call) => call.instanceId)).toEqual([
       "discord:111111111111111111",
-      "discord:555666777888999000",
+      "discord:444444444444444444",
     ]);
     expect(calls.map((call) => call.allowedGuildIds)).toEqual([
       ["111111111111111111"],
-      ["555666777888999000"],
+      ["444444444444444444"],
     ]);
   });
 
@@ -419,7 +419,7 @@ describe("buildGatewayAdapters — unresolved placeholder fail-fast (#1209)", ()
           stack: "andreas/research",
           binding: {
             token: "__VEGA_BOT_TOKEN__",
-            guildId: "111222333444555666",
+            guildId: "555555555555555555",
             agentChannelId: "aaa000000000000001",
             logChannelId: "bbb000000000000002",
           },
