@@ -18,6 +18,24 @@ yet — that's expected. `cortex start --config …` has nothing to validate unt
 you create a stack config, and the migrate path below is only for those
 coming from an existing **grove** install.
 
+**Prerequisite — nats-server with JetStream.** cortex needs its own,
+already-running NATS server (JetStream enabled); it does not install or
+start one for you. Install it now — macOS: `brew install nats-server`;
+Linux: a release binary from
+[nats-io/nats-server releases](https://github.com/nats-io/nats-server/releases)
+or your distro package (JetStream is built in) — and keep it running before
+step 4 below. [`README-AGENTS.md` §1](../README-AGENTS.md#1-prerequisites)
+and [§4](../README-AGENTS.md#4-stand-up-the-bus) are the authoritative
+reference for the full prerequisite list and the isolated per-stack bus
+config; this page only orders the steps.
+
+The fresh-install happy path, in order:
+
+0. **Stand up the bus** — run an isolated NATS server for this stack (one
+   server per stack; see [`README-AGENTS.md` §4](../README-AGENTS.md#4-stand-up-the-bus)
+   for the `.conf` template and port-allocation rules). You'll point
+   `system/system.yaml`'s `nats.url` at it in step 2.
+
 1. **Create your first stack config** with [`cortex stack create`](../src/cli/cortex/commands/stack.ts)
    (dry-run by default; verified against the command's own `--help` output —
    nothing here is invented):
@@ -43,22 +61,40 @@ coming from an existing **grove** install.
 
 2. **Fill the `<REPLACE_ME>` markers** in the generated
    `~/.config/cortex/<slug>/stacks/<slug>.yaml` and `surfaces/surfaces.yaml`
-   (Discord bot token, guild id, channel ids, your Discord id).
+   (Discord bot token, guild id, channel ids, your Discord id), and point
+   `system/system.yaml`'s `nats.url` at the bus from step 0.
 
-3. **Validate the config** — this is the step postinstall used to print
-   unconditionally, which fails for a fresh user because the file doesn't
-   exist until step 1 runs:
+3. **Generate the stack's signing identity** — mints the `nkey_pub` that
+   `stacks/<slug>.yaml` records for this stack:
 
    ```bash
-   cortex start --config ~/.config/cortex/<slug>/<slug>.yaml --dry-run
+   cortex provision-stack generate <principal> \
+     --seed-path ~/.config/nats/cortex-<slug>.nk \
+     --stack-id <principal>/<slug>
    ```
 
-4. Continue with signing-seed provisioning (`arc upgrade cortex`), bus
-   account minting (`cortex network provision <slug> --apply`), and bringing
-   the bus live (`cortex network make-live <slug> --apply`) — `cortex stack
-   create --apply` prints these as its own next-steps once it runs. See
-   [`docs/sop-stack-onboarding.md`](sop-stack-onboarding.md) for the full
-   walkthrough, including Discord bot setup and bus port allocation.
+   Not a hard requirement to *start* a purely local, non-federated stack —
+   own-stack implicit trust works with `security.signing: off` and no
+   identity block — but it's the standard step, and it's required before you
+   federate later (§6). An `arc`-managed install (`arc upgrade cortex`)
+   auto-provisions this seed for you, so you can skip running it by hand in
+   that case. See
+   [`README-AGENTS.md` §3.3](../README-AGENTS.md#33-signing-identity) for the
+   exact flags and the local-vs-federated distinction.
+
+4. **Validate, then start:**
+
+   ```bash
+   # Validate schema + agent registry resolution without starting:
+   cortex start --config ~/.config/cortex/<slug>/<slug>.yaml --dry-run
+
+   # Start for real:
+   cortex start --config ~/.config/cortex/<slug>/<slug>.yaml
+   ```
+
+   See [`docs/sop-stack-onboarding.md`](sop-stack-onboarding.md) for the full
+   walkthrough — Discord bot setup, bus port allocation, plist/systemd — and,
+   only once you're ready to federate, the network-join steps (Part 2).
 
 ## Migrating from grove
 
