@@ -1,7 +1,7 @@
 # Design — own-operator onboarding: one-command sovereign setup (T1 / G1d)
 
 **Status:** design (2026-06-27) · **Author:** Luna (for Andreas) · **Issue:** cortex#1139 (G1d) · **EPIC:** cortex#1142 T1
-**Refs:** [ADR-0013](./adr/0013-sovereign-federation-model.md) (sovereign federation / Model B), [ADR-0012](./adr/0012-external-operator-account-isolation.md) (account isolation), [ADR-0015](#) (two-tier onboarding + admission gate), [`docs/design-onboarding-tooling-audit.md`](./design-onboarding-tooling-audit.md) (G1 linchpin), [`docs/sop-stack-onboarding.md`](./sop-stack-onboarding.md) §B0.1 (manual operator-mode conversion). `CONTEXT.md` §Identity & trust → **NSC operator**, **Federation account**, **Network-admission gate**.
+**Refs:** [ADR-0013](./adr/0013-sovereign-federation-model.md) (sovereign federation), [ADR-0012](./adr/0012-external-operator-account-isolation.md) (account isolation), [ADR-0015](#) (two-tier onboarding + admission gate), [`docs/design-onboarding-tooling-audit.md`](./design-onboarding-tooling-audit.md) (G1 linchpin), [`docs/sop-stack-onboarding.md`](./sop-stack-onboarding.md) §B0.1 (manual operator-mode conversion). `CONTEXT.md` §Identity & trust → **NSC operator**, **Federation account**, **Network-admission gate**.
 
 > **Scope.** This is a DESIGN-FIRST scoping note. It defines the one-command UX, the compose-vs-net-new split, the idempotency/dry-run contract, and a TDD plan. No feature code, no PR.
 
@@ -9,7 +9,7 @@
 
 ## 1. The problem this closes
 
-ADR-0013 drops the hub-minted guest account (Model A) entirely: **a principal MUST run their own NSC operator to federate.** The cost ADR-0013 §Decision-4 names explicitly — *"a newcomer with no NSC operator yet cannot federate until they stand one up"* — is paid down **"by investing in making 'stand up your own NSC operator' trivial (arc tooling)."** This doc designs that investment.
+ADR-0013 drops the hub-minted guest account (hub-minted identity) entirely: **a principal MUST run their own NSC operator to federate.** The cost ADR-0013 §Decision-4 names explicitly — *"a newcomer with no NSC operator yet cannot federate until they stand one up"* — is paid down **"by investing in making 'stand up your own NSC operator' trivial (arc tooling)."** This doc designs that investment.
 
 Today, standing up the sovereign federation substrate is the **least-tooled edge in the whole lifecycle** — ranked #1 ("Federated account-topology — zero tooling (the linchpin)") in [`design-onboarding-tooling-audit.md`](./design-onboarding-tooling-audit.md). The manual recipe (SOP §B0.1) is: hand-author an operator-mode `nats-server` `.conf`, copy four operator blocks verbatim from `~/.config/nats/local.conf`, hand-`nsc` an account, and hope the leaf binds. The pieces that ARE tooled are scattered across three verbs:
 
@@ -63,7 +63,7 @@ Each step is **ensure-shaped**: present-and-correct ⇒ no-op; absent ⇒ mint; 
 4. **Ensure the local connection creds.** Mint the daemon's bus `.creds` under the agents account via arc (`arc nats add-bot`, the existing `cortex creds issue` path) → writes `stack.nats_infra.creds_path`.
 5. **Ensure the envelope signing identity.** Compose `provision-stack generate` (local-only, no `--register`) if `stack.nkey_seed_path` has no seed yet.
 6. **Pre-stage the local `federated.>` export/import** between federation-account ↔ agents-account (the G1c wiring, `arc nats add-federation-export`). This is *also* run by `cortex network join`; running it here makes the stack "ready to join" and turns G1c's same-account no-op into the real cross-account wire. Idempotent (the arc primitive is a no-op when already wired).
-7. **Ensure the bus is operator-mode under THIS principal's own operator.** Render the SOP §B0.1 operator-mode blocks (operator JWT + system_account + `resolver: MEMORY` + `resolver_preload`) into the stack's `nats-server` `.conf`, KEEPING the stack's own `server_name`/ports/JS domain. This reuses the O-3 `convertToOperatorMode` renderer (`network-ports.ts:194-215`) — but sourced from the principal's **own** freshly-minted operator material, not a hub-supplied package (the Model-B correction to O-3's input).
+7. **Ensure the bus is operator-mode under THIS principal's own operator.** Render the SOP §B0.1 operator-mode blocks (operator JWT + system_account + `resolver: MEMORY` + `resolver_preload`) into the stack's `nats-server` `.conf`, KEEPING the stack's own `server_name`/ports/JS domain. This reuses the O-3 `convertToOperatorMode` renderer (`network-ports.ts:194-215`) — but sourced from the principal's **own** freshly-minted operator material, not a hub-supplied package (the sovereign-model correction to O-3's input).
 
 **Terminal state:** the stack stands on an operator-mode bus rooted in the principal's own NSC operator, with a dedicated federation account, an agents account, the `federated.>` export/import pre-wired, valid local creds, and a registered-able signing identity. The only things left before `cortex network join` succeeds are the **two irreducible two-party steps** (audit §The two irreducible steps): the **leaf shared secret** and **hub topology agreement**. The command's closing output names exactly those two as the remaining manual moments.
 

@@ -131,6 +131,7 @@ const CARVEOUT_PATHS: string[] = [
   // Vocabulary manifests + the CONTEXT.md contract (they DEFINE the deprecated terms)
   "docs/migrations/0001-vocabulary-grilled-2026-05.md",
   "docs/migrations/0002-vocabulary-finish-2026-05.md",
+  "docs/migrations/0004-retire-model-b-federation-language.md",
   "CONTEXT.md",
   // The gate's own source + CI definition necessarily NAME the deprecated terms
   "scripts/check-carveouts.sh",

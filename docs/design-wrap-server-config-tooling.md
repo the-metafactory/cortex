@@ -1,6 +1,6 @@
 # Design — Wrap the raw `nsc` server-config generation in cortex tooling
 
-**Status:** SIGNED OFF + IMPLEMENTED (2026-06-28) — Option A (provision) + A2 (make-live bootstrap) · **Author:** Luna (for Andreas) · **Refs:** cortex#1265 (from #1262), arc server-config-export · **Builds on:** [`design-onboarding-tooling-audit.md`](./design-onboarding-tooling-audit.md) (G1–G5), ADR-0013 (sovereign Model B), ADR-0012 (account isolation)
+**Status:** SIGNED OFF + IMPLEMENTED (2026-06-28) — Option A (provision) + A2 (make-live bootstrap) · **Author:** Luna (for Andreas) · **Refs:** cortex#1265 (from #1262), arc server-config-export · **Builds on:** [`design-onboarding-tooling-audit.md`](./design-onboarding-tooling-audit.md) (G1–G5), ADR-0013 (sovereign federation), ADR-0012 (account isolation)
 
 > **Decision (§4) is signed off and built.** Andreas approved **Option A** (the server-config JWT-export bridge lives in `cortex network provision`) and the secondary **A2** (the local-only path bootstraps its initial `.conf` via `cortex network make-live`). Implementation: provision now exports operator + federation + (best-effort) SYS JWTs into `stack.nats_infra` (`network-provision-lib.ts` + `operator-mode-export.ts`, backed by new arc verbs `nats export-operator` / `export-system`); make-live bootstraps an initial operator-mode resolver via `renderOperatorModeBlocks` when none exists. **Note on SYS:** `nsc add operator` does not auto-create a SYS account, and the renderer treats `system_account` as optional, so provision exports it *best-effort* (a missing SYS is a clean skip, never a failure) rather than forcing a new account into the tree.
 
@@ -140,6 +140,6 @@ This stays inside the established split: **cortex (M7) orchestrates; arc owns th
 - [`sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md) — the consolidated runbook whose §B0.1 deferral is the gap; **§4a doc-lag** to fix (provision already wraps account creation)
 - [`sop-stack-onboarding.md §B0.1`](./sop-stack-onboarding.md) — the hand-edit this would replace
 - [`design-make-live-daemon-switch.md`](./design-make-live-daemon-switch.md) — the sibling daemon-switch (the A2 bootstrap would extend it)
-- [ADR-0013](./adr/0013-sovereign-federation-model.md) · [ADR-0012](./adr/0012-external-operator-account-isolation.md) — sovereign Model B + account isolation
+- [ADR-0013](./adr/0013-sovereign-federation-model.md) · [ADR-0012](./adr/0012-external-operator-account-isolation.md) — sovereign federation + account isolation
 - **Code:** `network-provision-lib.ts` (extend) · `leaf-remote-renderer.ts:882` (`renderOperatorModeBlocks`, reuse) · `network-derive.ts:441` (the config fields to populate) · `network-make-live-lib.ts:271` (the bootstrap refusal A2 would relax)
 - **Issues:** cortex#1265 (this) · cortex#1262 (parent) · cortex#1139 (provision/G1d) · cortex#1053 (O-3 join conversion)

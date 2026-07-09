@@ -1,6 +1,6 @@
 # Design — make-live / daemon-switch (land a provisioned stack onto its own account)
 
-**Feature:** C-1257 (PR7 / #1225, EPIC #1142, ADR-0013 Model B)
+**Feature:** C-1257 (PR7 / #1225, EPIC #1142, ADR-0013 sovereign model)
 **Status:** implemented (validated on the `work` throwaway stack)
 **Companion:** `cortex network provision` (#1253 + arc#255) — the non-disruptive account-tree mint this step lands.
 

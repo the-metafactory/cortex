@@ -82,6 +82,7 @@
       "src/surface/mc/worker/migrations/0004",
       "docs/migrations/0001-vocabulary-grilled-2026-05.md",
       "docs/migrations/0002-vocabulary-finish-2026-05.md",
+      "docs/migrations/0004-retire-model-b-federation-language.md",
       "CONTEXT.md",
       "scripts/check-carveouts.sh",
       ".github/workflows/",
