@@ -11,6 +11,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync, readdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { stringify } from "yaml";
 import { readNetworksFromConfig, writeNetworksGuarded } from "../network-config-write";
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 
@@ -74,5 +75,53 @@ describe("writeNetworksGuarded", () => {
   test("readNetworksFromConfig returns [] for a missing file", () => {
     expect(readNetworksFromConfig(join(tmp, "nope.yaml"))).toEqual([]);
     expect(existsSync(join(tmp, "nope.yaml"))).toBe(false);
+  });
+});
+
+// FS-7 (cortex#1839) — whole-config validate-on-write via `validateComposePath`.
+describe("writeNetworksGuarded — FS-7 whole-config validation", () => {
+  let tmp2: string;
+  let monolith: string;
+
+  /** A complete, loadable single-file cortex config (monolith). */
+  function validMonolith(): Record<string, unknown> {
+    return {
+      principal: { id: "jc", displayName: "JC", discordId: "555555555555555555" },
+      agents: [
+        { id: "ivy", displayName: "Ivy", persona: "./personas/ivy.md", roles: [], trust: [], presence: {} },
+      ],
+      claude: {},
+    };
+  }
+
+  beforeEach(() => {
+    tmp2 = mkdtempSync(join(tmpdir(), "cfgwrite-whole-"));
+    monolith = join(tmp2, "cortex.yaml");
+    // 0600 — the single-file loader enforces it (and the guard preserves the mode).
+    writeFileSync(monolith, stringify(validMonolith()), { mode: 0o600 });
+  });
+  afterEach(() => rmSync(tmp2, { recursive: true, force: true }));
+
+  test("rejects a write that composes to an INVALID whole config, leaving the file byte-identical", () => {
+    const before = readFileSync(monolith, "utf-8");
+    // Valid payload_key (passes the scoped guard) but an INVALID network id →
+    // the payload_key + round-trip checks pass, yet `loadConfigWithAgents`
+    // rejects the composed whole (the ADR-0001-class defence FS-7 adds).
+    const badWhole = net({ id: "Bad Network!" });
+    expect(() =>
+      writeNetworksGuarded(monolith, [badWhole], { validateComposePath: monolith }),
+    ).toThrow(/config write verification failed/);
+    // Byte-identical: the guard restored the original.
+    expect(readFileSync(monolith, "utf-8")).toBe(before);
+    // 0600 preserved across the failed write.
+    expect(statSync(monolith).mode & 0o777).toBe(0o600);
+  });
+
+  test("without validateComposePath, the scoped guard alone does NOT catch a whole-config violation", () => {
+    // Regression guard for the FS-7 gap: the same bad-id write WITHOUT the compose
+    // path passes (scoped guard only checks payload_key + round-trip) — proving the
+    // new whole-config check is what closes the hole.
+    const badWhole = net({ id: "Bad Network!" });
+    expect(() => writeNetworksGuarded(monolith, [badWhole])).not.toThrow();
   });
 });

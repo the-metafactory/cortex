@@ -77,6 +77,30 @@ describe("mission-control server", () => {
     expect(res.status).toBe(404);
   });
 
+  // FS-7 / D-3 (cortex#1839) — a degraded boot surfaces on /health.
+  it("reports status=degraded on /health when the daemon booted DEGRADED", async () => {
+    const degradedPort = 18768;
+    const degradedDb = initDatabase(join(tmpDir, "degraded.db"));
+    const ctx = startServer({ ...DEFAULT_CONFIG, port: degradedPort }, degradedDb, {
+      degraded: {
+        error: "agents[0].persona: Invalid input: expected string, received undefined",
+        snapshotPath: "/tmp/x/.last-good/x.snapshot",
+        since: "2026-07-10T00:00:00.000Z",
+      },
+    });
+    try {
+      const res = await fetch(`http://localhost:${degradedPort}/health`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("degraded");
+      expect(body.degraded.snapshotPath).toBe("/tmp/x/.last-good/x.snapshot");
+      expect(body.degraded.error).toContain("persona");
+    } finally {
+      ctx.server.stop(true);
+      degradedDb.close();
+    }
+  });
+
   // cortex#89 — this case depends on the bundled dashboard artifact at
   // `dist/dashboard-v2/index.html`. The build is not part of `bun test`
   // (option 2 from cortex#89: self-skip rather than bloat every run with

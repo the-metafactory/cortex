@@ -81,10 +81,9 @@ import { dirname, join, resolve } from "path";
 import YAML from "yaml";
 import { z } from "zod/v4";
 
-import { composeRawConfig } from "../../../common/config/loader";
+import { validateConfigLoads } from "../../../common/config/validate-on-write";
 import { CapabilitySchema } from "../../../common/types/capability";
 import {
-  CortexConfigSchema,
   PolicyPrincipalSchema,
   PolicyRoleSchema,
 } from "../../../common/types/cortex-config";
@@ -747,25 +746,25 @@ export async function runConfigMerge(argv: string[]): Promise<number> {
     return 1;
   }
 
-  // 9. Re-compose from disk + re-validate (belt-and-braces; the in-memory
-  //    validation in step 5 already passed, but a disk re-compose catches any
-  //    serialization surprise — e.g. a YAML anchor the stringify introduced).
+  // 9. Re-load from disk through the boot validator (belt-and-braces; the
+  //    in-memory validation in step 5 already passed, but a disk re-load catches
+  //    any serialization surprise — e.g. a YAML anchor the stringify introduced).
+  //    FS-7 (cortex#1839): the SAME `loadConfigWithAgents` seam as step 5.
   try {
-    const recomposed = composeRawConfig(target.composePath);
-    const reval = CortexConfigSchema.safeParse(recomposed);
-    if (!reval.success) {
+    const reval = validateConfigLoads(target.composePath);
+    if (!reval.ok) {
       // Restore from backup — never leave the stack in an unloadable state.
       writeFileSync(target.filePath, originalText, "utf-8");
       process.stderr.write(
-        `config ${verb}: post-write re-compose FAILED validation — restored original from backup.\n` +
-          `  ${reval.error.message}\n`,
+        `config ${verb}: post-write re-load FAILED validation — restored original from backup.\n` +
+          `  ${reval.errors.join("\n  ")}\n`,
       );
       return 1;
     }
   } catch (err) {
     writeFileSync(target.filePath, originalText, "utf-8");
     process.stderr.write(
-      `config ${verb}: post-write re-compose threw — restored original from backup.\n` +
+      `config ${verb}: post-write re-load threw — restored original from backup.\n` +
         `  ${err instanceof Error ? err.message : String(err)}\n`,
     );
     return 1;
@@ -776,43 +775,36 @@ export async function runConfigMerge(argv: string[]): Promise<number> {
 }
 
 /**
- * Validate the composed whole with the merged layer substituted in. For the
- * single-file form the merged layer IS the whole config. For the split form we
- * compose with the on-disk layers but swap our merged candidate in for the
- * target layer by writing it, composing, then restoring — done here behind a
- * try/finally so a validation failure never leaves the disk dirty.
+ * Validate the composed whole with the merged layer substituted in, through the
+ * daemon's OWN boot validator (`loadConfigWithAgents`, via `validateConfigLoads`)
+ * — FS-7 (cortex#1839): the SAME validator `cortex config validate` and the boot
+ * path run, not a `CortexConfigSchema`-only fork that could accept a config the
+ * daemon rejects at boot (a legacy authorisation field, an agents.d fragment
+ * error, the AgentConfig projection).
+ *
+ * Both forms stage the candidate bytes on disk, point the validator at the
+ * config-split pointer (or the single file), then ALWAYS restore the original in
+ * a `finally` so this validation is pure from the disk's point of view. A
+ * `writeFileSync` over an existing file preserves that file's mode (0600 on a
+ * single-file cortex.yaml), so the loader's chmod-600 gate still passes on the
+ * staged bytes.
  */
 function validateComposed(
   target: ResolvedTarget,
   newLayerText: string,
   originalLayerText: string,
 ): { ok: true } | { ok: false; error: string } {
-  if (target.singleFile) {
-    // The whole config is the single file — validate the merged candidate.
-    let parsed: unknown;
-    try {
-      parsed = YAML.parse(newLayerText);
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-    const res = CortexConfigSchema.safeParse(parsed);
-    return res.success ? { ok: true } : { ok: false, error: res.error.message };
-  }
-
-  // Split form: temporarily stage the candidate layer on disk, compose, then
-  // ALWAYS restore the original (try/finally) so this validation is pure from
-  // the disk's point of view.
-  let composed: Record<string, unknown>;
   try {
     writeFileSync(target.filePath, newLayerText, "utf-8");
-    composed = composeRawConfig(target.composePath);
+    const result = validateConfigLoads(target.composePath);
+    if (result.ok) return { ok: true };
+    return { ok: false, error: result.errors.join("\n  ") };
   } catch (err) {
+    // A stage-write / restore fs error (not a validation failure) — surface it.
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
     writeFileSync(target.filePath, originalLayerText, "utf-8");
   }
-  const res = CortexConfigSchema.safeParse(composed);
-  return res.success ? { ok: true } : { ok: false, error: res.error.message };
 }
 
 /** A minimal line-oriented diff for --dry-run output (added/removed prefixes). */

@@ -1072,7 +1072,17 @@ function buildConfigStorePort(cfg: LivePortsConfig, mutate: boolean): ConfigStor
       // the per-network payload key K (a secret at rest) here; `rotate-key` calls
       // the SAME guard hub-side, so the two can never drift. `assertDaemonLoadsConfig`
       // (join-only) stays above — it is NOT part of the reusable core.
-      writeNetworksGuarded(path, networks, { backupLabel: "join" });
+      //
+      // FS-7 (cortex#1839) — thread the daemon's real `--config` pointer so the
+      // guard ALSO validates the COMPOSED WHOLE (`loadConfigWithAgents`) after the
+      // write, not just the payload-key + networks round-trip. A join that composes
+      // to a config the daemon would reject at boot is aborted + rolled back here.
+      writeNetworksGuarded(path, networks, {
+        backupLabel: "join",
+        ...(cfg.cortexConfigPath !== undefined && cfg.cortexConfigPath !== ""
+          ? { validateComposePath: expandTilde(cfg.cortexConfigPath) }
+          : {}),
+      });
     },
   };
 }

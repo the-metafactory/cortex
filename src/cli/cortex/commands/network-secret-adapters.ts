@@ -37,7 +37,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync, mkdtempSync, rmSync } from "fs";
-import { resolve as resolvePath, join as joinPath } from "path";
+import { resolve as resolvePath, join as joinPath, dirname as pathDirname } from "path";
 import { tmpdir } from "os";
 import { hostname as osHostname, networkInterfaces as osNetworkInterfaces } from "os";
 import { lookup as dnsLookup } from "dns/promises";
@@ -855,6 +855,15 @@ function buildLiveAdmittedListPort(cfg: LiveKeyRotationPortsConfig): AdmittedLis
 
 function buildLiveHubKeyStorePort(hubStackConfigPath: string): HubKeyStorePort {
   const path = expandTilde(hubStackConfigPath);
+  // FS-7 (cortex#1839) — whole-config validate-on-write. For a MONOLITH (single-
+  // file) hub config, `path` IS the whole config, so we can point the boot
+  // validator straight at it. For a config-split hub, `path` is the `stacks/*.yaml`
+  // that holds `policy.federated.networks`; composing the whole needs the POINTER,
+  // which is not threaded to this hub-key store — so we fall back to the scoped
+  // payload_key + round-trip guard there (rotate-key only advances the K fields,
+  // which that guard already validates; it never touches whole-config fields like
+  // accept_subjects). The single-file case (JC's deployment) gets the full check.
+  const isConfigSplit = existsSync(joinPath(pathDirname(path), "system", "system.yaml"));
   return {
     configPath: path,
     readNetworks() {
@@ -864,7 +873,10 @@ function buildLiveHubKeyStorePort(hubStackConfigPath: string): HubKeyStorePort {
       // The SAME offer.ts write-guard Slice 1 added (validate → backup → atomic →
       // verify → restore → chmod 600). NO daemon-loads assertion — rotate-key is
       // the hub admin editing their OWN stack config; they restart the daemon.
-      writeNetworksGuarded(path, networks, { backupLabel: "rotate-key" });
+      writeNetworksGuarded(path, networks, {
+        backupLabel: "rotate-key",
+        ...(isConfigSplit ? {} : { validateComposePath: path }),
+      });
       return Promise.resolve();
     },
   };

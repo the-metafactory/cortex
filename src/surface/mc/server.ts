@@ -61,6 +61,7 @@ import {
   type Authorizer,
 } from "./api/networks-authorize";
 import { verifyCfAccessJwt } from "../../common/auth/cf-access-jwt";
+import type { DegradedInfo } from "../../common/config/degraded-state";
 import type {
   LocalAggregationContext,
   LocalAggregationProvider,
@@ -144,12 +145,22 @@ export interface ServerContext {
 }
 
 export interface HealthResponse {
-  status: "ok";
+  /**
+   * `"ok"` on a healthy boot; `"degraded"` when the daemon booted on the
+   * last-known-good config snapshot because the LIVE config failed to load
+   * (FS-7 / D-3, cortex#1839). A monitor can alert on `status !== "ok"`.
+   */
+  status: "ok" | "degraded";
   version: string;
   /** Seconds since startServer. */
   uptime: number;
   /** Count of currently-connected WebSocket clients. */
   wsClients: number;
+  /**
+   * FS-7 / D-3 — present ONLY on a degraded boot: the precise live-config load
+   * error + the snapshot path the daemon fell back to. Absent on a healthy boot.
+   */
+  degraded?: DegradedInfo;
 }
 
 export interface StartServerOptions {
@@ -160,6 +171,13 @@ export interface StartServerOptions {
    * 503. The tests that don't exercise REST can keep calling without it.
    */
   processManager?: ProcessManager;
+  /**
+   * FS-7 / D-3 (cortex#1839) — set when the daemon booted DEGRADED on the
+   * last-known-good config snapshot (the LIVE config failed to load). Surfaced on
+   * `GET /health` so the degraded state is visible to monitors + the dashboard.
+   * Static (degraded status is fixed at boot); absent on a healthy boot.
+   */
+  degraded?: DegradedInfo;
   /**
    * Spawn override for CC children. Tests inject a `cat`-based fake; in
    * production this is left undefined and endpoint-resolver's default
@@ -377,11 +395,15 @@ export function startServer(
       // response or gate /health behind auth. Principal-liveness probes should
       // only see `status` + `version`.
       if (req.method === "GET" && url.pathname === "/health") {
+        // FS-7 / D-3 (cortex#1839) — a degraded boot flips `status` to
+        // `"degraded"` and attaches the load error + snapshot path so a monitor
+        // or the dashboard can alert on it instead of a silent fallback.
         const body: HealthResponse = {
-          status: "ok",
+          status: options.degraded !== undefined ? "degraded" : "ok",
           version: VERSION,
           uptime: Math.floor((Date.now() - startTime) / 1000),
           wsClients: wsRegistry.size,
+          ...(options.degraded !== undefined && { degraded: options.degraded }),
         };
         return Response.json(body);
       }

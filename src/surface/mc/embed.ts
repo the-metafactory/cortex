@@ -15,6 +15,7 @@
 import type { Database } from "bun:sqlite";
 import { dirname, join } from "path";
 
+import type { DegradedInfo } from "../../common/config/degraded-state";
 import { loadConfig } from "./config";
 import { initDatabase } from "./db/init";
 import { startServer } from "./server";
@@ -144,6 +145,12 @@ export interface StartMissionControlOptions {
    * a structured not-available error.
    */
   sidebandUrl?: string;
+  /**
+   * FS-7 / D-3 (cortex#1839) — set when the daemon booted DEGRADED on the
+   * last-known-good config snapshot. Forwarded verbatim to `startServer` so
+   * `GET /health` reports the degraded state. Omitted on a healthy boot.
+   */
+  degraded?: DegradedInfo;
 }
 
 /**
@@ -226,6 +233,7 @@ export async function startMissionControl(
       ...(opts.doctorView ? { doctorView: opts.doctorView } : {}),
       ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
+      ...(opts.degraded ? { degraded: opts.degraded } : {}),
     });
     const { server, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);

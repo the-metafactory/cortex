@@ -348,6 +348,15 @@ import {
 // PID (to signal a reload) without importing this whole module graph. Re-import
 // here so cortex.ts's lifecycle paths stay on the single source of truth.
 import { STATE_DIR, DEFAULT_CONFIG, pidFileFor } from "./common/pidfile";
+// FS-7 / D-3 (cortex#1839) — last-known-good boot fallback + degraded state.
+import { readLastGoodSnapshotPath, writeLastGoodSnapshot } from "./common/config/last-good";
+import {
+  clearDegradedMarker,
+  readDegradedMarker,
+  writeDegradedMarker,
+  type DegradedInfo,
+} from "./common/config/degraded-state";
+import { formatConfigLoadError } from "./common/config/validate-on-write";
 
 /**
  * Resolve the PID file path for a given `--config` value.
@@ -491,6 +500,14 @@ export interface CortexHandle {
 export interface StartCortexOptions {
   /** Override config-file path. Defaults to no watching. */
   configPath?: string;
+  /**
+   * FS-7 / D-3 (cortex#1839) — set when the daemon booted DEGRADED on the
+   * last-known-good snapshot because the LIVE config failed to load. Carries the
+   * precise load error + the snapshot path. Surfaced on the MC `/health` endpoint
+   * (via the embed) so the degraded state is visible, never silent. Undefined on
+   * a healthy boot.
+   */
+  degraded?: DegradedInfo;
   /** Skip the config-watcher (tests). */
   disableConfigWatcher?: boolean;
   /** Skip the Mission Control embed even if config.mc.enabled is set (tests). */
@@ -4332,6 +4349,8 @@ export async function startCortex(
         dbPath,
         port: config.mc.port,
         ...(mcHeadless ? { headless: true } : {}),
+        // FS-7 / D-3 (cortex#1839) — surface a degraded boot on MC `/health`.
+        ...(options.degraded !== undefined ? { degraded: options.degraded } : {}),
         agentPresence: () => presenceViewForApi,
         // MC-A1 (cortex#1275) — networks view (lazy; assigned in the federation
         // block once `resolvedPolicy` is known). null ⇒ empty `/api/networks`.
@@ -6131,6 +6150,72 @@ export async function bootOrDie<T>(
   }
 }
 
+/** Result of the D-3 boot-config resolution: the loaded config + optional degraded marker. */
+export interface BootConfigResolution {
+  loaded: ReturnType<typeof loadConfigWithAgents>;
+  /** Set when the LIVE config failed to load and the daemon fell back to last-good. */
+  degraded?: DegradedInfo;
+}
+
+/**
+ * FS-7 / D-3 (cortex#1839) — resolve the boot config with a last-known-good
+ * fallback. On a healthy load it refreshes the last-good snapshot and clears any
+ * stale degraded marker; on a load THROW it either fails hard (`strict`, or no
+ * snapshot to fall back to) or loads the last-good snapshot, writes a degraded
+ * marker, and returns the config tagged `degraded` so the daemon boots DEGRADED
+ * instead of crash-looping.
+ *
+ * `now` is injectable so tests get a deterministic `since` timestamp.
+ * Exported for unit testing.
+ */
+export function resolveBootConfig(
+  configPath: string,
+  opts: { strict: boolean; now?: () => string } = { strict: false },
+): BootConfigResolution {
+  const nowIso = opts.now ?? (() => new Date().toISOString());
+  try {
+    const loaded = loadConfigWithAgents(configPath);
+    // Healthy boot: refresh the last-good snapshot + clear any prior degraded state.
+    const snap = writeLastGoodSnapshot(configPath);
+    if (!snap.ok) {
+      // Non-fatal — a snapshot-write failure must not fail a good boot; log it.
+      process.stderr.write(
+        `cortex: WARN could not write last-good config snapshot: ${snap.error}\n`,
+      );
+    }
+    clearDegradedMarker(configPath);
+    return { loaded };
+  } catch (err) {
+    const preciseError = formatConfigLoadError(err).join("\n");
+    // `--strict` (CI / provisioning) never falls back — fail hard, loudly.
+    if (opts.strict) {
+      throw new Error(
+        `config load failed and --strict is set (no last-known-good fallback):\n  ${preciseError.replace(/\n/g, "\n  ")}`,
+        { cause: err },
+      );
+    }
+    const snapshotPath = readLastGoodSnapshotPath(configPath);
+    if (snapshotPath === null) {
+      // No snapshot to fall back to (first boot with a bad config) — fail hard.
+      throw new Error(
+        `config load failed and no last-known-good snapshot exists to fall back to:\n  ${preciseError.replace(/\n/g, "\n  ")}`,
+        { cause: err },
+      );
+    }
+    // D-3 fallback: boot DEGRADED on the last-good snapshot. A snapshot that
+    // itself fails to load (e.g. an env var it needs is now unset) is fatal —
+    // there is nothing safe left to boot, so let this throw propagate.
+    console.error(
+      `cortex: LIVE config failed to load — booting DEGRADED on last-known-good snapshot ${snapshotPath}.\n` +
+        `  Underlying error:\n  ${preciseError.replace(/\n/g, "\n  ")}`,
+    );
+    const loaded = loadConfigWithAgents(snapshotPath);
+    const info: DegradedInfo = { error: preciseError, snapshotPath, since: nowIso() };
+    writeDegradedMarker(configPath, info);
+    return { loaded, degraded: info };
+  }
+}
+
 if (import.meta.main) {
   const program = new Command()
     .name("cortex")
@@ -6147,7 +6232,11 @@ if (import.meta.main) {
     .description("Start the agent")
     .option("--config <path>", "Path to agent config YAML", DEFAULT_CONFIG)
     .option("--dry-run", "Validate config file and exit (no adapter / NATS / daemon startup)")
-    .action(async (options: { config: string; dryRun?: boolean }) => {
+    .option(
+      "--strict",
+      "FS-7/D-3: disable the last-known-good fallback — fail hard on an invalid config (CI / provisioning)",
+    )
+    .action(async (options: { config: string; dryRun?: boolean; strict?: boolean }) => {
       // cortex#88 item 2 — short-circuit: skip PID file, signal handlers,
       // and the full startCortex pipeline. Just parse + validate the config.
       if (options.dryRun) {
@@ -6183,8 +6272,16 @@ if (import.meta.main) {
       // exits the process non-zero instead of being swallowed as a "non-fatal"
       // unhandled rejection. The daemon must not survive a failed security gate.
       const handle = await bootOrDie(async () => {
+        // FS-7 / D-3 (cortex#1839) — resolve the boot config with a last-known-good
+        // fallback. A healthy load refreshes the snapshot + clears any degraded
+        // marker; a bad load either fails hard (`--strict` / no snapshot) or boots
+        // DEGRADED on the last-good snapshot (never a keepalive crash-loop). A
+        // fail-hard throw propagates to bootOrDie → FATAL exit, as before.
+        const { loaded, degraded } = resolveBootConfig(options.config, {
+          strict: options.strict === true,
+        });
         const { config, inlineAgents, stack, policy, principal, bus, surfaces, reflexActivation, notify, surfaceWarnings } =
-          loadConfigWithAgents(options.config);
+          loaded;
         // cortex#1217 — a surface secret placeholder with an unset env var no
         // longer FATAL-boots the daemon (which crash-looped the whole stack).
         // The resolver disabled that ONE surface; thread the inline/gateway
@@ -6193,6 +6290,8 @@ if (import.meta.main) {
         return startCortex(config, {
           ...(surfaceWarnings !== undefined && surfaceWarnings.length > 0 && { surfaceWarnings }),
           configPath: options.config,
+          // FS-7 / D-3 — thread the degraded marker so MC `/health` surfaces it.
+          ...(degraded !== undefined && { degraded }),
           ...(inlineAgents.length > 0 && { inlineAgents }),
           ...(stack !== undefined && { stack }),
           ...(policy !== undefined && { policy }),
@@ -6260,7 +6359,17 @@ if (import.meta.main) {
       const pid = parseInt(readFileSync(pidFile, "utf-8").trim());
       try {
         process.kill(pid, 0);
-        console.log(`cortex: running (PID ${pid}, ${pidFile})`);
+        // FS-7 / D-3 (cortex#1839) — surface a DEGRADED boot (running on the
+        // last-known-good snapshot because the LIVE config failed to load).
+        const degraded = readDegradedMarker(options.config);
+        if (degraded !== null) {
+          console.log(`cortex: running DEGRADED (PID ${pid}, ${pidFile})`);
+          console.log(`  booted on last-known-good snapshot: ${degraded.snapshotPath} (since ${degraded.since})`);
+          console.log(`  LIVE config load error:\n    ${degraded.error.replace(/\n/g, "\n    ")}`);
+          console.log(`  fix the live config, then restart to clear degraded state.`);
+        } else {
+          console.log(`cortex: running (PID ${pid}, ${pidFile})`);
+        }
       } catch {
         console.log(`cortex: stale PID file ${pidFile}`);
         unlinkSync(pidFile);

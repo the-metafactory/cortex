@@ -22,6 +22,7 @@
 import {
   existsSync,
   readFileSync,
+  statSync,
   writeFileSync,
   chmodSync,
   mkdirSync,
@@ -30,6 +31,7 @@ import {
 } from "fs";
 import { dirname } from "path";
 import { parse as parseYaml, parseDocument } from "yaml";
+import { validateConfigLoads } from "../../../common/config/validate-on-write";
 import {
   PolicyFederatedNetworkSchema,
   type PolicyFederatedNetwork,
@@ -44,10 +46,20 @@ export function readNetworksFromConfig(path: string): PolicyFederatedNetwork[] {
   return raw?.policy?.federated?.networks ?? [];
 }
 
-/** POSIX-atomic write (temp + same-dir rename → old-or-new, never partial). */
-function atomicWriteFileSync(path: string, contents: string): void {
+/**
+ * POSIX-atomic write (temp + same-dir rename → old-or-new, never partial).
+ *
+ * `mode`, when given, is applied to the temp file (umask-proof re-chmod) BEFORE
+ * the rename, so the live file's permissions are preserved across the write. FS-7
+ * (cortex#1839) needs this: a monolith `cortex.yaml` is chmod-600-gated by the
+ * loader, and the post-write whole-config validation re-reads it through the
+ * loader — a non-atomic write that dropped the mode to the umask default (0644)
+ * would trip that gate and spuriously fail validation.
+ */
+function atomicWriteFileSync(path: string, contents: string, mode?: number): void {
   const tmpPath = `${path}.tmp`;
-  writeFileSync(tmpPath, contents, "utf-8");
+  writeFileSync(tmpPath, contents, mode !== undefined ? { encoding: "utf-8", mode } : "utf-8");
+  if (mode !== undefined) chmodSync(tmpPath, mode); // create mode is umask-masked; re-chmod.
   renameSync(tmpPath, path);
 }
 
@@ -81,7 +93,7 @@ function backupStamp(): string {
 export function writeNetworksGuarded(
   path: string,
   networks: readonly PolicyFederatedNetwork[],
-  opts: { backupLabel?: string } = {},
+  opts: { backupLabel?: string; validateComposePath?: string } = {},
 ): void {
   const backupLabel = opts.backupLabel ?? "write";
 
@@ -103,6 +115,18 @@ export function writeNetworksGuarded(
 
   const existed = existsSync(path);
   const originalText = existed ? readFileSync(path, "utf-8") : undefined;
+  // FS-7 (cortex#1839) — preserve the live file's mode across the atomic write so
+  // the post-write whole-config validation (which re-reads through the loader's
+  // chmod-600 gate on a monolith cortex.yaml) sees the same permissions.
+  const originalMode = existed ? statSync(path).mode & 0o777 : undefined;
+  // FS-7 — only ENFORCE the whole-config check when the config was ALREADY
+  // loadable BEFORE this write. The invariant this writer guarantees is "a write
+  // must not BREAK a working config"; it is not this writer's job to fix a config
+  // that was already unloadable. In production the daemon loaded the config (so it
+  // IS loadable → the check runs); a partial/stub config or an already-broken one
+  // is skipped rather than have the write blamed for a pre-existing fault.
+  const enforceWholeConfig =
+    opts.validateComposePath !== undefined && validateConfigLoads(opts.validateComposePath).ok;
   const doc = parseDocument(originalText ?? "");
   doc.setIn(["policy", "federated", "networks"], networks);
   const nextText = doc.toString();
@@ -120,7 +144,7 @@ export function writeNetworksGuarded(
   // failure / mismatch means the write corrupted the file → RESTORE the original
   // (or remove a freshly-created file) and rethrow.
   try {
-    atomicWriteFileSync(path, nextText);
+    atomicWriteFileSync(path, nextText, originalMode);
     const reparsed = parseYaml(readFileSync(path, "utf-8")) as
       | { policy?: { federated?: { networks?: PolicyFederatedNetwork[] } } }
       | null;
@@ -140,8 +164,23 @@ export function writeNetworksGuarded(
     if (project(readBack) !== project(networks)) {
       throw new Error("policy.federated.networks did not round-trip after write");
     }
+    // FS-7 (cortex#1839) — VALIDATE THE COMPOSED WHOLE. The payload_key + round-trip
+    // checks above are SCOPED to the networks array; a write can still compose to a
+    // config the daemon rejects at boot (e.g. an `accept_subjects` ADR-0001 scope
+    // violation — a `policy.federated.networks` field!). When the caller threads the
+    // config-split pointer AND the config was loadable before this write, run the
+    // daemon's OWN boot validator over the composed whole; a throw here trips the
+    // same restore-and-rethrow path as a bad round-trip.
+    if (enforceWholeConfig && opts.validateComposePath !== undefined) {
+      const validation = validateConfigLoads(opts.validateComposePath);
+      if (!validation.ok) {
+        throw new Error(
+          `composed config failed boot validation:\n  ${validation.errors.join("\n  ")}`,
+        );
+      }
+    }
   } catch (err) {
-    if (originalText !== undefined) atomicWriteFileSync(path, originalText);
+    if (originalText !== undefined) atomicWriteFileSync(path, originalText, originalMode);
     else rmSync(path, { force: true });
     throw new Error(
       `config write verification failed for ${path} — restored original${backupPath ? ` (backup ${backupPath})` : ""}: ${err instanceof Error ? err.message : String(err)}`,

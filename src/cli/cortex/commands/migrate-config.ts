@@ -20,10 +20,11 @@
  *   2  — strict-mode warnings (would have succeeded without --strict)
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import YAML from "yaml";
 
+import { validateConfigLoads } from "../../../common/config/validate-on-write";
 import {
   convertBotYaml,
   formatCheckReport,
@@ -226,7 +227,35 @@ export async function runMigrateConfig(argv: string[]): Promise<number> {
     // writeFileSync ENOENTs unless we ensure the parent exists. mkdir
     // recursive is idempotent — pre-existing dirs are a no-op.
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, yamlOut, "utf-8");
+    // FS-7 (cortex#1839) — validate-on-write: capture any pre-existing bytes so
+    // a validation failure can restore the target byte-identical (or remove a
+    // freshly-created file), never leaving a written-but-unloadable config.
+    const preExisted = existsSync(outPath);
+    const originalBytes = preExisted ? readFileSync(outPath, "utf-8") : undefined;
+    // 0600 — a migrated cortex.yaml is a single-file config carrying inline
+    // platform tokens, so it is a secret-at-rest AND the single-file loader
+    // enforces chmod-600 (which the FS-7 validation below re-reads through). The
+    // create mode is umask-masked, so chmod explicitly.
+    writeFileSync(outPath, yamlOut, { encoding: "utf-8", mode: 0o600 });
+    chmodSync(outPath, 0o600);
+    // Run the daemon's OWN boot validator against the just-written file. On a
+    // throw we restore/remove and exit non-zero with the precise error — the
+    // same seam `cortex config validate` + the boot path use.
+    const validation = validateConfigLoads(outPath);
+    if (!validation.ok) {
+      if (originalBytes !== undefined) {
+        writeFileSync(outPath, originalBytes, { encoding: "utf-8", mode: 0o600 });
+        chmodSync(outPath, 0o600);
+      } else {
+        rmSync(outPath, { force: true });
+      }
+      process.stderr.write(
+        `migrate-config: converted config failed validation — ${
+          originalBytes !== undefined ? "restored original" : "removed the written file"
+        }; NOT leaving an unloadable config.\n  ${validation.errors.join("\n  ")}\n`,
+      );
+      return 1;
+    }
     const policySummary = result.cortex.policy
       ? `, ${result.cortex.policy.principals.length} principal(s), ${result.cortex.policy.roles.length} role(s)`
       : "";

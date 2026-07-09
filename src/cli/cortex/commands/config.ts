@@ -45,9 +45,8 @@
  *             · 2 CLI usage error (bad subcommand / unknown flag).
  */
 
-import { ZodError } from "zod";
-
 import { loadConfigWithAgents, expandTilde } from "../../../common/config/loader";
+import { formatConfigLoadError } from "../../../common/config/validate-on-write";
 import { DEFAULT_CONFIG } from "../../../common/pidfile";
 
 import { CliArgsError } from "./_shared/arg-error";
@@ -96,51 +95,10 @@ interface ValidateSummary {
   networks: number;
 }
 
-/**
- * Format a Zod issue the way the boot path surfaces it: dotted/bracketed path +
- * message. `policy.federated.networks[0].accept_subjects[1]: <message>`. Array
- * indices render as `[n]`, object keys as `.key`. Matches the field-pathed
- * shape principals already see when the daemon rejects a bad config at boot.
- */
-function formatZodIssue(issue: ZodError["issues"][number]): string {
-  let path = "";
-  for (const seg of issue.path) {
-    if (typeof seg === "number") {
-      path += `[${seg}]`;
-    } else {
-      path += path === "" ? String(seg) : `.${String(seg)}`;
-    }
-  }
-  if (path === "") return issue.message;
-  // Some schema `custom` issues (e.g. the ADR-0001 accept_subjects scope check)
-  // already lead their message with the same field path. Don't prepend it twice
-  // — surface the message verbatim when it already begins with the path.
-  if (issue.message.startsWith(path)) return issue.message;
-  return `${path}: ${issue.message}`;
-}
-
-/**
- * Extract the list of precise validation error strings from any error the boot
- * load path can throw. A `ZodError` (the schema-validation failure — the common
- * case, including the `accept_subjects` cross-check) yields one string per
- * issue, each field-pathed. Any other error (unreadable file, malformed YAML,
- * chmod gate) yields its single message.
- */
-function errorsFrom(err: unknown): string[] {
-  if (err instanceof ZodError) {
-    return err.issues.map(formatZodIssue);
-  }
-  if (err instanceof Error) {
-    // A schema failure may be wrapped: unwrap a nested ZodError cause so the
-    // precise per-issue paths still surface rather than an opaque wrapper.
-    const cause = (err as { cause?: unknown }).cause;
-    if (cause instanceof ZodError) {
-      return cause.issues.map(formatZodIssue);
-    }
-    return [err.message];
-  }
-  return [String(err)];
-}
+// FS-7 (cortex#1839) — the precise per-issue error formatter that was local here
+// now lives in `validate-on-write.ts` as `formatConfigLoadError`, so `cortex
+// config validate` (this file) and the write-time validators share ONE formatter
+// and surface byte-identical errors. `runValidate` calls it directly below.
 
 // =============================================================================
 // validate
@@ -186,7 +144,7 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
       stderr: "",
     };
   } catch (err) {
-    const errors = errorsFrom(err);
+    const errors = formatConfigLoadError(err);
     if (json) {
       const payload = { ok: false, path: resolvedPath, errors };
       return { exitCode: 1, stdout: "", stderr: JSON.stringify(payload) + "\n" };

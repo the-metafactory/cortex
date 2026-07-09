@@ -38,6 +38,7 @@ import { execFileSync } from "child_process";
 import { dirname, join } from "path";
 import { homedir } from "os";
 
+import { validateConfigLoads } from "../../../common/config/validate-on-write";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
@@ -332,6 +333,29 @@ function runCreate(
     return opError(
       "create",
       `write failed (partial scaffold rolled back): ${err instanceof Error ? err.message : String(err)}`,
+      json,
+    );
+  }
+
+  // FS-7 (cortex#1839) — validate-on-write: the scaffold is designed to load
+  // cleanly out of the box (every file parses; secrets are valid-FORMAT
+  // placeholders). Confirm that by running the daemon's OWN boot validator
+  // against the just-written pointer. On failure, roll back the whole scaffold
+  // (targetDir was confirmed absent before the write, so it is wholly owned by
+  // this command) so `stack create --apply` never leaves an unloadable stack.
+  const pointerPath = join(targetDir, `${slug}.yaml`);
+  const validation = validateConfigLoads(pointerPath);
+  if (!validation.ok) {
+    try {
+      rmSync(targetDir, { recursive: true, force: true });
+    } catch (cleanupErr) {
+      process.stderr.write(
+        `  ⚠ stack create: rollback of ${targetDir} failed: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}\n`,
+      );
+    }
+    return opError(
+      "create",
+      `scaffold failed validation (rolled back) — refusing to leave an unloadable stack:\n  ${validation.errors.join("\n  ")}`,
       json,
     );
   }
