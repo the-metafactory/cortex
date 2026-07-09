@@ -270,8 +270,8 @@ export interface StartFederatedAgentPresenceSubscriberOptions {
     networkId: string,
   ) => boolean;
   /**
-   * FS-1 (cortex#1825) — principals for which the operator HAND-PINNED a
-   * `peers[].principal_pubkey` in the ORIGINAL config (pre-resolution). DD-11 is
+   * FS-1 (cortex#1825) — principals for which a `peers[].principal_pubkey`
+   * was HAND-PINNED in the ORIGINAL config (pre-resolution). DD-11 is
    * UNCHANGED for these: a hand-pinned peer keeps the exact pre-FS-1 path
    * (`resolveFederatedPeers`: matching pin → admit; mismatching pin → fail-closed
    * DROP), so it is NEVER re-admitted by membership — a membership-fold of a
@@ -508,7 +508,7 @@ export async function startFederatedAgentPresenceSubscriber(
         // ONLY the `unknown_network` variant of `peer_not_in_accept_list` is an
         // offering precondition. The NON-`unknown_network` variant — a
         // config-declared peer whose `accept_subjects` deliberately excludes the
-        // presence subtree — is the operator's EXPLICIT narrowing and is NEVER
+        // presence subtree — is the principal's EXPLICIT narrowing and is NEVER
         // overridden by membership (cortex#1825 PROBE 2). `peer_deny_list`,
         // `max_hop_exceeded`, and `source_link_mismatch` are SAFETY / anti-spoof
         // checks — NEVER overridden by membership (a member on a deny-listed subject,

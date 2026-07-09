@@ -18,7 +18,7 @@
  * requires `decision.unknown_network === true`, so a peer that IS declared in
  * `peers[]` (known, not hand-pinned) but whose `accept_subjects` deliberately
  * excludes the presence subject is NO LONGER folded by membership — the
- * operator's explicit narrowing is honoured.
+ * principal's explicit narrowing is honoured.
  *
  * POSITIVE CONTROL: a legitimately admitted member delivered on ITS OWN
  * network's leaf STILL folds (the fix must not over-correct into breaking FS-1).
@@ -182,7 +182,7 @@ function networkWithRestrictedJoel(): PolicyFederatedNetwork {
     leaf_node: "primary",
     // joel IS declared (known peer, NOT hand-pinned — no principal_pubkey)...
     peers: [{ principal_id: "joel", stack_id: "joel/research" }],
-    // ...but the operator deliberately did NOT put joel's presence subject on
+    // ...but the principal deliberately did NOT put joel's presence subject on
     // accept_subjects (e.g. joel is allowed dispatch only, not presence).
     accept_subjects: ["federated.joel.research.dispatch.>"],
     deny_subjects: [],
@@ -222,7 +222,7 @@ describe("FS-1 REGRESSION 2 — known-but-subject-restricted peer is DROPPED", (
 
     // joel IS resolved via peers[] ⇒ the gate denies with
     // `peer_not_in_accept_list` but WITHOUT `unknown_network`. The override now
-    // requires `unknown_network === true`, so the operator's accept_subjects
+    // requires `unknown_network === true`, so the principal's accept_subjects
     // narrowing is honoured ⇒ DROP.
     expect(registry.getAgents().length).toBe(0);
     await handle.stop();

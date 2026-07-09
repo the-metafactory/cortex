@@ -863,7 +863,7 @@ function targetAgentForDispatch(
       agent.openOnboardingAllowedTools !== undefined && {
         openOnboardingAllowedTools: agent.openOnboardingAllowedTools,
       }),
-    // #1206 (operator-driven dev-loop, S1) — carry the agent's declared
+    // #1206 (principal-driven dev-loop, S1) — carry the agent's declared
     // `runtime.capabilities[]` so the dispatch handler's orchestrator-command
     // gate activates ONLY for the agent declaring `dev.orchestrate` (e.g. vega).
     ...(agent.runtime?.capabilities !== undefined && {
@@ -1439,8 +1439,8 @@ export async function startCortex(
 
   // cortex#79 — creds minting is no longer a cortex daemon responsibility.
   // `cortex creds issue / revoke / rotate` now shell out to
-  // `arc nats … --json`; arc owns nsc and the operator account.
-  // `config.nats.accountSigningKeyPath` survives for the operator-signature
+  // `arc nats … --json`; arc owns nsc and the principal account.
+  // `config.nats.accountSigningKeyPath` survives for the principal-signature
   // verifier on TrustResolver (cortex#76); see
   // `src/common/agents/trust-resolver.ts`.
 
@@ -4533,8 +4533,8 @@ export async function startCortex(
   // late binding is safe — a member simply isn't membership-folded until the
   // first refresh warms the snapshot (self-heals on the next heartbeat).
   let federatedMembershipHandle: FederatedMembershipOracleHandle | null = null;
-  // FS-1 (cortex#1825) — principals the operator HAND-PINNED a `principal_pubkey`
-  // for in the ORIGINAL config (pre-resolution). DD-11 stays fail-closed for
+  // FS-1 (cortex#1825) — principals that HAND-PINNED a `principal_pubkey`
+  // in the ORIGINAL config (pre-resolution). DD-11 stays fail-closed for
   // these: they are NEVER re-admitted by membership (see federated-subscriber.ts
   // `handPinnedPrincipals`). Computed from the raw `options.policy`, not the
   // post-`resolveFederatedPeers` set (which has already DROPPED a mismatched pin).
