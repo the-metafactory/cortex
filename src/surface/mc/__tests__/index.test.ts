@@ -20,8 +20,11 @@ async function spawnBoot(
   env: Record<string, string>,
   timeoutMs = 8000
 ): Promise<{ exitCode: number; stderr: string }> {
+  // The standalone entry is retired for production (FS-8a, #1822): run as a
+  // plain entrypoint it prints a pointer and exits non-zero. The integration
+  // harness opts into the real boot via the `--legacy` escape hatch.
   const proc = Bun.spawn({
-    cmd: ["bun", "run", ENTRY],
+    cmd: ["bun", "run", ENTRY, "--legacy"],
     env: { ...process.env, ...env },
     stderr: "pipe",
     stdout: "pipe",
