@@ -1,7 +1,10 @@
 /**
- * Runner-side event utilities for the `PublishedEvent` shape (CC hook events
- * lifted by the relay). Used by `dashboard-state` and `worklog-manager` to
- * detect project / extract GitHub references / surface activity entries.
+ * Event utilities for the `PublishedEvent` shape (CC hook events lifted by
+ * the relay), used by the discord adapter's `worklog-manager` /
+ * `worklog-formatter` to detect project / extract GitHub references /
+ * surface activity entries. Moved here from `src/runner/` (cortex#1787 — S2)
+ * alongside `worklog-manager.ts`, since it has no consumers outside the
+ * worklog family.
  *
  * Distinct from `src/common/event-utils.ts`, which serves the `IngestEvent`
  * shape used by the mc API + cc-events tap. The two files share function
@@ -13,13 +16,13 @@
  * really on. No consolidation is planned.
  *
  * If you find yourself wanting to call one from the other, you're probably
- * on the wrong side of the surface boundary — the runner shouldn't be
- * inspecting IngestEvents, and the mc/tap layer shouldn't be inspecting
- * PublishedEvents. Reach for the projection at the boundary instead.
+ * on the wrong side of the surface boundary — the mc/tap layer shouldn't be
+ * inspecting PublishedEvents. Reach for the projection at the boundary
+ * instead.
  */
 
-import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
-import { formatDuration } from "../shared/format-utils";
+import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
+import { formatDuration } from "../../shared/format-utils";
 
 /**
  * Coerce an `unknown` payload field to string. Avoids the

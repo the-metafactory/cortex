@@ -1524,3 +1524,12 @@ export class DiscordAdapter implements PlatformAdapter {
     void wiring.runtime.publish(env);
   }
 }
+
+/**
+ * Public seam for the legacy JSONL→`#agent-log`/worklog outbound bridge
+ * (cortex#1787, S2). `cortex.ts` calls this instead of reaching through
+ * `DiscordAdapter.getClient()` / importing `formatEventForDiscord` /
+ * constructing `WorklogManager` directly — all of that now lives entirely
+ * inside this adapter's module tree.
+ */
+export { attachLegacyOutboundLog } from "./outbound-log";

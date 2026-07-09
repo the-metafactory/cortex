@@ -501,11 +501,16 @@ export interface WireSurfaceAdaptersOpts {
   ) => (msg: InboundMessage) => Promise<void>;
   disableOutboundPoller: boolean;
   /**
-   * The legacy JSONL→`#agent-log`/worklog bridge (`cortex.ts`'s
-   * `setupOutboundLog`), threaded as a function reference rather than
-   * imported — it stays defined in `cortex.ts` to avoid a circular import
-   * (this module → cortex.ts → this module) for a Discord-only, otherwise
-   * unrelated legacy path.
+   * The legacy JSONL→`#agent-log`/worklog bridge. Cortex#1787 (S2) moved
+   * the implementation into `adapters/discord/outbound-log.ts` (exported
+   * as `attachLegacyOutboundLog` from the adapter's index) so the
+   * discord.js-specific coupling — `DiscordAdapter.getClient()`,
+   * `formatEventForDiscord`, `WorklogManager`-with-`Client` — lives on the
+   * adapter's side of the boundary instead of in `cortex.ts`. Still
+   * threaded through as a function reference (not imported directly here)
+   * to keep this Discord-only, otherwise-unrelated legacy path opt-in via
+   * `cortex.ts`'s wiring rather than a hard import from this shared boot
+   * module.
    */
   setupOutboundLog: (
     discordAdapter: DiscordAdapter,

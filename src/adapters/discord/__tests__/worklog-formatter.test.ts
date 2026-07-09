@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { formatThreadName, formatEventForThread, formatCompletionSummary } from "../worklog-formatter";
-import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
+import type { PublishedEvent } from "../../../taps/cc-events/hooks/lib/event-types";
 
 function makeEvent(overrides: Partial<PublishedEvent> = {}): PublishedEvent {
   return {

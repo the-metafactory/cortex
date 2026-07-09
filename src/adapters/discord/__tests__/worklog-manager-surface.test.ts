@@ -19,15 +19,15 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Client, TextChannel, ThreadChannel } from "discord.js";
-import type { Envelope } from "../../bus/myelin/envelope-validator";
-import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
+import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import type { PublishedEvent } from "../../../taps/cc-events/hooks/lib/event-types";
 import { WorklogManager } from "../worklog-manager";
 import {
   createDispatchTaskAbortedEvent,
   createDispatchTaskCompletedEvent,
   createDispatchTaskFailedEvent,
   createDispatchTaskStartedEvent,
-} from "../../bus/dispatch-events";
+} from "../../../bus/dispatch-events";
 
 // ---------------------------------------------------------------------------
 // Fake Discord client

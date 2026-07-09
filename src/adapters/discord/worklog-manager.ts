@@ -8,7 +8,7 @@
  */
 
 import type { Client, TextChannel, ThreadChannel } from "discord.js";
-import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
+import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
 import {
   formatEventForThread,
   formatThreadName,
@@ -24,8 +24,8 @@ import { detectProject, extractGitHubIssue } from "./event-utils";
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
-import type { Envelope } from "../bus/myelin/envelope-validator";
-import type { SurfaceAdapter } from "../bus/surface-router";
+import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { SurfaceAdapter } from "../../bus/surface-router";
 
 export class WorklogManager {
   private client: Client;
