@@ -514,4 +514,20 @@ describe("FederatedPeerCard (MC-D4 — absent admitted peer)", () => {
     expect(html).toContain(">vincent<");
     expect(html).toContain('data-fed-peer-principal="vincent"');
   });
+
+  it("renders the eyebrow EXACTLY ONCE (no duplicate label chrome)", () => {
+    // netui-fedpeer-polish2 regression guard: the live `jc` orb was showing its
+    // sublabel TWICE — the intended styled eyebrow PLUS a second, lowercase copy
+    // in a bordered box (React Flow's default-node chrome leaking through when the
+    // custom node type doesn't render cleanly). The card must emit its eyebrow
+    // once and rely solely on the custom `network-fed-peer-eyebrow` element.
+    const html = render();
+    const eyebrows = html.match(/network-fed-peer-eyebrow/g) ?? [];
+    expect(eyebrows).toHaveLength(1);
+    const sublabels = html.match(/federated · absent/g) ?? [];
+    expect(sublabels).toHaveLength(1);
+    // The card must NOT hand React Flow a default `label` prop it would render
+    // as a second (bordered, lowercase) label box.
+    expect(html).not.toContain('data-label');
+  });
 });
