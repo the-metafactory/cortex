@@ -152,6 +152,17 @@ interface Cluster {
  * incoming hub edge (defensive — shouldn't happen) becomes its own singleton
  * cluster so it's never dropped.
  *
+ * ## MC-D4 vis2 — absent federated peers cluster on their OWN cell
+ *
+ * An absent-federated-peer placeholder (`federatedPeer`) is anchored to the LOCAL
+ * hub only for its DOTTED cross-cluster edge (`localHub → federatedPeer`). It must
+ * NOT ring around the local hub — bucketed there it becomes a faint dot lost among
+ * the local agents. So a `federatedPeer` node is deliberately EXCLUDED from its
+ * source hub's ring and instead forms its OWN hub-less singleton cluster (exactly
+ * like a defensive orphan agent), earning a distinct `clusterCentre` grid cell
+ * apart from every local stack. The dotted `fed-absent-*` edge still routes
+ * local-hub → peer, so it draws as a long cross-cluster "federated link".
+ *
  * Pure + exported for unit testing.
  */
 export function clusterNetworkGraph(graph: NetworkGraph): Cluster[] {
@@ -164,18 +175,24 @@ export function clusterNetworkGraph(graph: NetworkGraph): Cluster[] {
     }
   }
 
-  // Map each orbiting node to its hub via the (hub → node) edge. This covers both
-  // agent nodes (`hub → agent`) and MC-D4 absent-federated-peer placeholders
-  // (`localHub → federatedPeer`) — both ring around their source hub.
+  // Map each ORBITING AGENT to its hub via the (hub → agent) edge. Absent-
+  // federated-peer placeholders are intentionally NOT ringed around their source
+  // hub (see doc-comment) — they cluster standalone below.
   const hubOfChild = new Map<string, string>();
   for (const e of graph.edges) {
     if (agentsByHub.has(e.source)) hubOfChild.set(e.target, e.source);
   }
 
   const orphanCluster: string[] = [];
+  // Absent-federated-peer placeholders, in graph order — each its OWN singleton
+  // cluster so it lands on a distinct grid cell, not the local hub ring.
+  const federatedPeerClusters: string[] = [];
   for (const n of graph.nodes) {
-    // Both agents and absent-federated-peer placeholders orbit a hub.
-    if (n.type !== "agent" && n.type !== "federatedPeer") continue;
+    if (n.type === "federatedPeer") {
+      federatedPeerClusters.push(n.id);
+      continue;
+    }
+    if (n.type !== "agent") continue;
     const hub = hubOfChild.get(n.id);
     if (hub !== undefined) {
       agentsByHub.get(hub)!.push(n.id);
@@ -191,6 +208,11 @@ export function clusterNetworkGraph(graph: NetworkGraph): Cluster[] {
   // Each orphan agent forms its own hub-less singleton cluster (defensive).
   for (const agentId of orphanCluster) {
     clusters.push({ hubId: agentId, agentIds: [] });
+  }
+  // Each absent federated peer forms its own hub-less singleton cluster, so it
+  // gets a distinct cluster-grid cell away from the local stacks (MC-D4 vis2).
+  for (const peerId of federatedPeerClusters) {
+    clusters.push({ hubId: peerId, agentIds: [] });
   }
   return clusters;
 }

@@ -19,8 +19,13 @@ import {
   HUB_NODE_SIZE,
   AGENT_NODE_SIZE,
 } from "../lib/network-graph-layout";
-import { buildNetworkGraph, STACK_HUB_NODE_ID } from "../lib/network-graph-adapter";
+import {
+  buildNetworkGraph,
+  STACK_HUB_NODE_ID,
+  federatedPeerIdForPrincipal,
+} from "../lib/network-graph-adapter";
 import type { AgentPresenceTile } from "../hooks/use-agents";
+import type { NetworkMembershipDTO } from "../hooks/use-networks";
 
 function tile(
   over: Partial<AgentPresenceTile> & { agent_id: string },
@@ -59,6 +64,39 @@ function foreignTile(
     stack,
     origin: { principal, stack },
   });
+}
+
+/**
+ * MC-D4 — a minimal `NetworkMembershipDTO` fixture (only the fields the adapter
+ * reads matter). Mirrors the network-graph-adapter test helper so the layout
+ * test can build a graph that carries an absent-federated-peer node.
+ */
+function membership(
+  over: Partial<NetworkMembershipDTO> & {
+    network_id: string;
+    members: NetworkMembershipDTO["members"];
+  },
+): NetworkMembershipDTO {
+  return {
+    leaf_node: "leaf-1",
+    roster_status: "ok",
+    roster_scope: "complete",
+    confidentiality: { mode: "off", key_present: false, key_id: null },
+    ...over,
+  };
+}
+
+/** One roster member DTO (absent when it has no present stacks). */
+function member(
+  principal: string,
+  present_stacks: string[] = [],
+): NetworkMembershipDTO["members"][number] {
+  return {
+    principal,
+    verdict: present_stacks.length ? "admitted-present" : "admitted-absent",
+    present_stacks,
+    accepts: "accepted-network",
+  };
 }
 
 describe("ringRadiusForCount (MC-D1)", () => {
@@ -125,6 +163,33 @@ describe("clusterNetworkGraph (MC-D1)", () => {
     expect(clusters[1]!.hubId).toBe("__stack__:jc/research");
     expect(clusters[1]!.agentIds).toHaveLength(1);
   });
+
+  it("gives an ABSENT federated-peer node its OWN singleton cluster (not the local hub ring)", () => {
+    // MC-D4 vis2: an admitted-but-absent peer must NOT be bucketed onto the
+    // local hub's agent ring (where it drowns among the local agents). It gets
+    // its own singleton cluster so it lands on a distinct cluster-grid cell.
+    const graph = buildNetworkGraph(
+      [tile({ agent_id: "luna" }), tile({ agent_id: "echo" })],
+      [
+        membership({
+          network_id: "mfnet",
+          members: [member("andreas", ["research"]), member("jc")],
+        }),
+      ],
+    );
+    const peerId = federatedPeerIdForPrincipal("jc");
+    const clusters = clusterNetworkGraph(graph);
+
+    // The local hub keeps ONLY its two local agents — the peer is not in its ring.
+    const localCluster = clusters.find((c) => c.hubId === STACK_HUB_NODE_ID)!;
+    expect(localCluster.agentIds).not.toContain(peerId);
+    expect(localCluster.agentIds).toHaveLength(2);
+
+    // The peer forms its own hub-less singleton cluster (hubId === the peer id).
+    const peerCluster = clusters.find((c) => c.hubId === peerId);
+    expect(peerCluster).toBeDefined();
+    expect(peerCluster!.agentIds).toHaveLength(0);
+  });
 });
 
 describe("layoutNetworkGraph (MC-D1)", () => {
@@ -189,6 +254,72 @@ describe("layoutNetworkGraph (MC-D1)", () => {
     expect(Math.abs(foreignHub.position.x - localHub.position.x)).toBe(
       RADIAL_LAYOUT.clusterStride,
     );
+  });
+
+  it("places an ABSENT federated peer at its OWN cluster cell, NOT on the local hub ring", () => {
+    // MC-D4 vis2: the peer node must land at a distinct position — neither the
+    // local cluster centre nor anywhere on the local hub's agent ring — so it
+    // reads as a separate federated presence, not a faint dot among local agents.
+    const graph = buildNetworkGraph(
+      [tile({ agent_id: "luna" }), tile({ agent_id: "echo" })],
+      [
+        membership({
+          network_id: "mfnet",
+          members: [member("andreas", ["research"]), member("jc")],
+        }),
+      ],
+    );
+    const peerId = federatedPeerIdForPrincipal("jc");
+    const { nodes } = layoutNetworkGraph(graph);
+
+    const localHub = nodes.find((n) => n.id === STACK_HUB_NODE_ID)!;
+    const peer = nodes.find((n) => n.id === peerId)!;
+    expect(peer.type).toBe("federatedPeer");
+
+    // Not co-located with the local hub centre.
+    expect(peer.position).not.toEqual(localHub.position);
+
+    // A distinct cluster (2 clusters: local + peer singleton) → a full stride
+    // away from the local hub, NOT on its (much smaller) agent ring radius.
+    const distFromLocalHub = Math.hypot(
+      peer.position.x - localHub.position.x,
+      peer.position.y - localHub.position.y,
+    );
+    expect(distFromLocalHub).toBe(RADIAL_LAYOUT.clusterStride);
+    // Sanity: a cluster stride is well beyond any local agent ring radius.
+    expect(distFromLocalHub).toBeGreaterThan(ringRadiusForCount(2));
+
+    // No LOCAL agent sits at the peer's position (it's off the local ring).
+    const localAgents = nodes.filter(
+      (n) => n.type === "agent" && n.id.startsWith("andreas/"),
+    );
+    for (const a of localAgents) {
+      expect(a.position).not.toEqual(peer.position);
+    }
+  });
+
+  it("still routes the dotted fed-absent edge local-hub → peer across the clusters", () => {
+    const graph = buildNetworkGraph(
+      [tile({ agent_id: "luna" })],
+      [
+        membership({
+          network_id: "mfnet",
+          members: [member("andreas", ["research"]), member("jc")],
+        }),
+      ],
+    );
+    const peerId = federatedPeerIdForPrincipal("jc");
+    const { nodes, edges } = layoutNetworkGraph(graph);
+    const fedEdge = edges.find((e) => e.target === peerId)!;
+    expect(fedEdge.source).toBe(STACK_HUB_NODE_ID);
+    expect(fedEdge.data?.federatedAbsent).toBe(true);
+    // The route is the long cross-cluster spoke (local hub centre → peer centre).
+    const localHub = nodes.find((n) => n.id === STACK_HUB_NODE_ID)!;
+    const peer = nodes.find((n) => n.id === peerId)!;
+    const pts = fedEdge.layout.elkPoints!;
+    expect(pts).toHaveLength(2);
+    expect(pts[0]).toEqual({ x: localHub.position.x, y: localHub.position.y });
+    expect(pts[1]).toEqual({ x: peer.position.x, y: peer.position.y });
   });
 
   it("preserves node data + type, only replacing position", () => {
