@@ -64,7 +64,8 @@ import {
   type DevGitInspector,
   type DevOfferAdmissionGate,
 } from "./dev-consumer";
-import { FileDevSessionStore, type DevSessionStore } from "./dev-session-store";
+import type { DevSessionStore } from "./dev-session-store";
+import { createDevSessionStore } from "./agent-state-dev-session-store";
 import { readCommitSignatures, type CommitSigningIO } from "./commit-signing";
 import {
   createWorktreeHandlingExistingBranch,
@@ -86,6 +87,16 @@ export { DevConsumer } from "./dev-consumer";
 export interface DevBootAgent {
   id: string;
   displayName?: string;
+  /**
+   * cortex#1720 S4b — OPT-IN per-instance durable state declaration (the SAME
+   * structural projection the brain-consumer boot gates on). Present ⇒ STATEFUL:
+   * the warm-session store is the AgentState-backed
+   * {@link AgentStateDevSessionStore} (durable via the bundle's `work_items`).
+   * Absent ⇒ stateless: the pre-S4b {@link FileDevSessionStore}, zero new code
+   * paths. The full Zod `Agent` carries this (added in S1); this projection
+   * re-declares it so the wiring can select the store without a cast.
+   */
+  state?: { blueprint: string; version: string };
   runtime?: {
     capabilities?: readonly string[];
     maxConcurrent?: number;
@@ -136,9 +147,13 @@ export interface WireDevConsumersOpts {
   /** Repo-root worktrees are cut from; defaults to `process.cwd()`. */
   repoRoot?: string;
   /**
-   * Warm-session store path. Defaults to
-   * `~/.config/cortex/dev-warm-sessions.json`. The file-backed store is the
-   * §3.6b durability bridge until F-3's agent-state store lands.
+   * BASE path for the FILE-store FALLBACK. Defaults to
+   * `~/.config/cortex/dev-warm-sessions.json`. cortex#1720 S4b retired the file
+   * bridge as the DEFAULT: a stateful agent's warm-session store is now the
+   * AgentState-backed store (durable via the bundle's `work_items`). This path
+   * only backs the fallback — a STATELESS agent, or a stateful agent on a
+   * machine WITHOUT the v0.3.0 bundle — and is made per-agent by
+   * {@link perAgentFileStorePath} so two agents never share one file.
    */
   sessionStorePath?: string;
   /** Env var name carrying the scoped forge token. Default `CORTEX_DEV_GH_TOKEN`. */
@@ -248,9 +263,6 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
     opts.seamsOverride ??
     buildShellSeams({
       repoRoot,
-      sessionStorePath:
-        opts.sessionStorePath ??
-        `${env.HOME ?? "."}/.config/cortex/dev-warm-sessions.json`,
       scopedToken,
       env,
     });
@@ -262,6 +274,26 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
       ? opts.offeringPatterns
       : [`local.${opts.principalId}.${opts.stack}.tasks.dev.implement`];
 
+  // cortex#1720 S4b — the base path for the FILE-store fallback (the pre-S4b
+  // JSON bridge). Per-agent file stores are derived from it so two agents never
+  // share one file; the AgentState store (stateful agents) instead scopes to the
+  // agent's own `~/.config/cortex/agents/<id>/state.sqlite` instance dir.
+  const baseSessionStorePath =
+    opts.sessionStorePath ?? `${env.HOME ?? "."}/.config/cortex/dev-warm-sessions.json`;
+
+  // cortex#1720 S4b — SELECT the warm-session store PER AGENT (constraint 5+6):
+  //   - a test `seamsOverride` wins wholesale (the injected store, unchanged);
+  //   - a STATEFUL agent → AgentStateDevSessionStore (durable via the bundle),
+  //     falling back to the file store (loud) when the bundle is absent;
+  //   - a STATELESS agent → FileDevSessionStore, zero new code paths.
+  const resolveSessionStore = (agent: DevBootAgent): DevSessionStore => {
+    if (opts.seamsOverride !== undefined) return opts.seamsOverride.sessionStore;
+    return createDevSessionStore(agent, {
+      // Per-agent file fallback path so two agents' file stores never collide.
+      fileStorePath: perAgentFileStorePath(baseSessionStorePath, agent.id),
+    });
+  };
+
   const wired: WiredDevConsumer[] = [];
   for (const agent of capable) {
     const consumerAgent: DevConsumerAgent = {
@@ -272,6 +304,9 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
       }),
     };
     const sessionOpts = buildDevSessionOpts(agent, opts.guardrails);
+    // ONE store per agent, shared across that agent's per-scope consumers (the
+    // map is chain-keyed, so all scopes of one agent read/write the same map).
+    const sessionStore = resolveSessionStore(agent);
     // NIT-fix (review): a NEW DevConsumer instance PER (agent × scope) so each
     // bound subject is its own pull consumer — never one instance `.start()`-ed
     // twice (the second `.start()` would silently drop the extra filter).
@@ -293,7 +328,7 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
           commandRunner: seams.commandRunner,
           forge: seams.forge,
           gitInspector: seams.gitInspector,
-          sessionStore: seams.sessionStore,
+          sessionStore,
           sessionOpts,
           ...(opts.offerAdmission !== undefined && {
             offerAdmission: opts.offerAdmission,
@@ -394,23 +429,45 @@ export function devDurableName(principalId: string, agentId: string): string {
   return `cortex-dev-consumer-${principalId}-${agentId}`;
 }
 
+/**
+ * cortex#1720 S4b — per-agent path for the FILE-store FALLBACK. Derived from the
+ * shared base path by inserting the agent id before the extension, so a
+ * bundle-less stack running two dev agents never shares one warm-session file.
+ * `~/.config/cortex/dev-warm-sessions.json` → `…/dev-warm-sessions.<agent>.json`.
+ */
+export function perAgentFileStorePath(basePath: string, agentId: string): string {
+  const slug = agentId.replace(/[^A-Za-z0-9_-]+/g, "-");
+  const dot = basePath.lastIndexOf(".");
+  const slash = basePath.lastIndexOf("/");
+  // Only treat a dot as an extension when it is in the final path segment.
+  if (dot > slash && dot !== -1) {
+    return `${basePath.slice(0, dot)}.${slug}${basePath.slice(dot)}`;
+  }
+  return `${basePath}.${slug}`;
+}
+
 // ---------------------------------------------------------------------------
 // Shell-backed production seams
 // ---------------------------------------------------------------------------
 
 interface ShellSeamsOpts {
   repoRoot: string;
-  sessionStorePath: string;
   scopedToken: string | undefined;
   env: Record<string, string | undefined>;
 }
 
+/**
+ * The shell-backed seams. cortex#1720 S4b — `sessionStore` is NO LONGER built
+ * here: the warm-session store is selected PER AGENT by `createDevSessionStore`
+ * (stateful → AgentState, stateless → file), so a single shared shell store
+ * would be both wrong (one store for N agents) and dead. Tests still inject a
+ * `sessionStore` via `seamsOverride`, which is a separate opts shape.
+ */
 interface BuiltSeams {
   workspace: DevWorkspace;
   commandRunner: DevCommandRunner;
   forge: DevForge;
   gitInspector: DevGitInspector;
-  sessionStore: DevSessionStore;
 }
 
 /**
@@ -638,8 +695,7 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
     },
   };
 
-  const sessionStore = new FileDevSessionStore(opts.sessionStorePath);
-  return { workspace, commandRunner, forge, gitInspector, sessionStore };
+  return { workspace, commandRunner, forge, gitInspector };
 }
 
 interface RunResult {

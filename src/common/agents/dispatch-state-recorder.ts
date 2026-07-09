@@ -50,9 +50,12 @@
  */
 
 import { existsSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { resolveInstanceDir } from "./agent-state-scaffold";
+import {
+  defaultAgentStateSpawn,
+  type AgentStateSpawnResult,
+} from "./agent-state-spawn";
 
 /** Default host label baked into cortex work_item env. */
 const DEFAULT_HOST = "cortex";
@@ -74,31 +77,17 @@ function defaultErrandsScript(): string {
   );
 }
 
-/**
- * Wall-clock ceiling for a bundle subprocess on the LIVE daemon. A hanging
- * `errands.ts` must never freeze the dispatch path; on timeout spawnSync
- * SIGTERMs the child and returns an error the caller logs + soft-skips.
- */
-const RECORDER_SPAWN_TIMEOUT_MS = 30_000;
-
-/**
- * stdout ceiling for the enqueue output read. The `{ inserted, row }` dump is
- * tiny, but an explicit 16MB cap (matching the S2 replay lib) is cheap insurance
- * against a wedged/verbose bundle overflowing Bun's 1MB default (ENOBUFS).
- */
-const RECORDER_MAX_BUFFER = 16 * 1024 * 1024;
-
 /** Terminal outcome an accepted dispatch resolves to. */
 export type DispatchResolveStatus = "done" | "failed";
 
-/** Result shape of the injectable spawn seam (captures stdout for the id). */
-export interface RecorderSpawnResult {
-  status: number | null;
-  error?: Error;
-  /** Captured stdout — the `enqueue` JSON row (for the work_item id). */
-  stdout?: Buffer | string;
-  stderr?: Buffer | string;
-}
+/**
+ * Result shape of the injectable spawn seam (captures stdout for the id). Now an
+ * alias of the shared {@link AgentStateSpawnResult} (cortex#1720 S4b extracted
+ * the hardened spawn into `agent-state-spawn.ts` so the S3/S4a recorder and the
+ * S4b session store share ONE wrapper). Re-exported here so existing importers
+ * (and the S3 tests) keep the `RecorderSpawnResult` name.
+ */
+export type RecorderSpawnResult = AgentStateSpawnResult;
 
 export type RecorderSpawn = (
   cmd: string,
@@ -208,7 +197,7 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
       opts.dashboardScript ??
       process.env.MF_AGENT_STATE_DASHBOARD_SCRIPT ??
       join(dirname(this.errandsScript), "dashboard.ts");
-    this.spawn = opts.spawn ?? defaultRecorderSpawn;
+    this.spawn = opts.spawn ?? defaultAgentStateSpawn;
     this.log = opts.log ?? ((line) => process.stderr.write(line));
   }
 
@@ -305,7 +294,7 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
         env: this.stdEnv(),
       });
     } catch (err) {
-      // A THROWING spawn (belt-and-braces — defaultRecorderSpawn returns an
+      // A THROWING spawn (belt-and-braces — defaultAgentStateSpawn returns an
       // error field rather than throwing, but a test seam might throw).
       this.log(
         `cortex: agent-state — dispatch "${args[0]}" FAILED for "${this.agent.id}" ` +
@@ -406,24 +395,4 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
       return null;
     }
   }
-}
-
-function defaultRecorderSpawn(
-  cmd: string,
-  args: string[],
-  opts: { env?: NodeJS.ProcessEnv },
-): RecorderSpawnResult {
-  // Live-daemon hardening (mirrors S2's replay spawn): stdin IGNORED so a
-  // bundle that blocks on stdin can't hang the dispatch path, a wall-clock
-  // `timeout` caps a wedged child (SIGTERM → error → run() logs + soft-skips),
-  // and an explicit 16MB `maxBuffer` avoids a spurious ENOBUFS on a verbose
-  // bundle. A timeout / ENOBUFS both surface via `r.error` → the caller's
-  // non-zero/error branch logs one line and never throws.
-  const r = spawnSync(cmd, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    env: opts.env,
-    timeout: RECORDER_SPAWN_TIMEOUT_MS,
-    maxBuffer: RECORDER_MAX_BUFFER,
-  });
-  return { status: r.status, error: r.error, stdout: r.stdout, stderr: r.stderr };
 }
