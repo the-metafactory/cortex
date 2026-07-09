@@ -89,7 +89,6 @@ import { NetworkFilterBar } from "./network-filter-bar";
 import "./constellation-canvas.css";
 import { NetworkSpotlight } from "./network-spotlight";
 import { NetworkRosterPanel } from "./network-roster-panel";
-import { PierQueue } from "./pier-queue";
 import { McShell } from "./mc-shell";
 import { McCockpit } from "./mc-cockpit";
 import {
@@ -718,10 +717,10 @@ export function NetworkView({
           presence → membership verdict). Renders nothing when none are joined. */}
       <NetworkRosterPanel networks={networks} localPrincipal={servingPrincipal} />
 
-      {/* MC-B1 (cortex#1278) — Pier queue: PENDING admission requests for the
-          networks this principal ADMINS (admin posture). Read-only; renders
-          nothing when the principal admins no networks. */}
-      <PierQueue networks={networks} />
+      {/* MC-B1 (cortex#1278) — the Pier queue (PENDING admission requests +
+          Tier-2 grant/reject) is an admin/onboarding control, relocated OUT of
+          the Network topology view into the Governance tab's "Admissions"
+          subsection to keep this view focused on topology (roster + graph). */}
 
       {mode === "error" && (
         <div className="network-view-error">⚠ {state.error}</div>

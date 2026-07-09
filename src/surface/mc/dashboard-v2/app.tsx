@@ -155,7 +155,10 @@ export function App() {
   // MC-A1 (cortex#1275) — joined networks + admitted roster ⋈ presence, for the
   // Network view's first-class trust-group panel. Fetched only when the tab is
   // visible; refreshes off the same `agent.presence` signal as `useAgents`.
-  const networks = useNetworks(ws, view === "network");
+  // Also enabled on the Governance tab: its "Admissions" subsection (the
+  // relocated Pier queue) reads the joined-networks roster to surface pending
+  // admission requests for networks the principal admins.
+  const networks = useNetworks(ws, view === "network" || view === "governance");
   // G-1115 — governance verdicts. Enabled on the legacy Governance tab AND on the
   // Network tab (CK-3): the cockpit's GOVERN lane folds this audit scoped to the
   // dived stack. Same single-snapshot rationale as `attention` above.
@@ -614,7 +617,7 @@ export function App() {
           /* G-1115 — read-only governance audit surface: verdicts from the
              governed-action stack (pulse P-702) read back off the bus. CK-3/D-1:
              folded into the stack cockpit; this whole-dashboard tab is `?legacy=1`. */
-          <GovernanceView state={governance} />
+          <GovernanceView state={governance} networks={networks.networks} />
         )}
 
         {view === "observability" && (

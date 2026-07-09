@@ -21,6 +21,13 @@ import type {
   GovernanceVerdictRow,
   GovernanceDenialRow,
 } from "../../db/governance";
+import type { NetworkMembershipDTO } from "../hooks/use-networks";
+// MC-B1/B2 (cortex#1278/#1279) — the Pier queue (pending admission requests +
+// Tier-2 grant/reject) lives here in Governance rather than cluttering the
+// Network topology view. Self-effacing under its own admin-posture gate: renders
+// nothing for a principal who admins no networks (§Posture in pier-queue.tsx).
+import { PierQueue } from "./pier-queue";
+import { selectPierQueue } from "../lib/pier-queue-adapter";
 
 const LAYER_LABEL: Record<string, string> = {
   l0: "L0 policy",
@@ -42,9 +49,16 @@ function when(createdAt: number): string {
 
 export interface GovernanceViewProps {
   state: GovernanceState;
+  /**
+   * Joined networks (admitted roster ⋈ presence). Feeds the "Admissions"
+   * subsection (the relocated Pier queue). Optional: the scoped cockpit mount
+   * omits it, so the admissions affordance appears only on the full Governance
+   * tab. `PierQueue` self-effaces when the principal admins no networks.
+   */
+  networks?: readonly NetworkMembershipDTO[];
 }
 
-export function GovernanceView({ state }: GovernanceViewProps) {
+export function GovernanceView({ state, networks }: GovernanceViewProps) {
   const { data, loaded, error } = state;
 
   const hasAnyData =
@@ -89,6 +103,18 @@ export function GovernanceView({ state }: GovernanceViewProps) {
           <DenialsSection data={data} />
         </>
       )}
+
+      {/* MC-B1/B2 — Admissions: the Pier queue (pending admission requests +
+          Tier-2 grant/reject), relocated here from the Network view. Rendered
+          independent of the verdict/denial window above; self-effaces (renders
+          nothing) when the principal admins no networks or no networks were
+          passed (the scoped cockpit mount). */}
+      {networks && selectPierQueue(networks).adminNetworkCount > 0 ? (
+        <div className="governance-subsection governance-admissions" aria-label="Admissions">
+          <h3>Admissions</h3>
+          <PierQueue networks={networks} />
+        </div>
+      ) : null}
     </section>
   );
 }
