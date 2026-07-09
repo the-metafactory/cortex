@@ -89,8 +89,27 @@ export interface FederatedMembershipOracleHandle {
   /**
    * True iff `principalId` is an ADMITTED member of ANY joined network per the
    * last authoritative admission-rows read. Pure, synchronous, hot-path-safe.
+   *
+   * FS-1 SECURITY NOTE (cortex#1825): this FLAT-UNION predicate must NOT be the
+   * membership-fold anchor — it can't tell WHICH network a principal is admitted
+   * to, so a member of Network B folds on Network A's leaf (cross-network
+   * spoof). The presence subscriber uses the network-SCOPED
+   * {@link isAdmittedMemberOfNetwork} instead, keyed off the delivering leaf.
+   * Retained for status/summary reads that legitimately want "admitted anywhere".
    */
   isAdmittedMember(principalId: string): boolean;
+  /**
+   * True iff `principalId` is an ADMITTED member of the SPECIFIC network
+   * `networkId` per the last authoritative admission-rows read. Pure,
+   * synchronous, hot-path-safe.
+   *
+   * FS-1 (cortex#1825) — this is the membership-fold anchor. The presence
+   * subscriber resolves the DELIVERING LEAF → its network(s) and requires the
+   * source principal to be an admitted member OF THAT network, so a principal
+   * admitted only on Network B can never be membership-folded when its envelope
+   * arrives on Network A's leaf.
+   */
+  isAdmittedMemberOfNetwork(principalId: string, networkId: string): boolean;
   /** Force one refresh pass now (test seam / warm-up). Never throws. */
   refresh(): Promise<void>;
   /** Start the periodic refresh loop (idempotent). */
@@ -199,6 +218,10 @@ export function createFederatedMembershipOracle(
   return {
     isAdmittedMember: (principalId: string): boolean =>
       flattened.has(principalId),
+    isAdmittedMemberOfNetwork: (
+      principalId: string,
+      networkId: string,
+    ): boolean => perNetwork.get(networkId)?.has(principalId) ?? false,
     refresh,
     start: (): void => {
       if (started || networkIds.length === 0) return;

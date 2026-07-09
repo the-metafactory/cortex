@@ -245,19 +245,30 @@ export interface StartFederatedAgentPresenceSubscriberOptions {
    */
   now?: () => number;
   /**
-   * FS-1 (cortex#1825, design §3 D-1) — **presence-by-membership** oracle. Pure,
-   * synchronous predicate: is `sourcePrincipal` an ADMITTED member of a joined
-   * network (per the authoritative admission-rows roster, ADR-0018 Q3)? When it
-   * returns true for a source that the accept-list gate would otherwise deny with
-   * the OFFERINGS precondition (`peer_not_in_accept_list`, incl.
-   * `unknown_network`), the presence is folded ANYWAY — membership IS the
-   * accept-list for presence (D-1). This drops the hand-pin/offerings precondition
-   * for folding, NOT the crypto: GATE 2 (`verifySignedByChain`) + source-binding
-   * are unchanged. Other deny kinds (deny_subjects, hop budget, leaf anti-spoof)
-   * are SAFETY checks and are NEVER overridden. Omitted ⇒ defaults to "never a
-   * member" ⇒ byte-identical to pre-FS-1 (peers[]-only) behaviour.
+   * FS-1 (cortex#1825, design §3 D-1) — **presence-by-membership** oracle,
+   * NETWORK-SCOPED. Pure, synchronous predicate: is `sourcePrincipal` an ADMITTED
+   * member of the SPECIFIC network `networkId` (per the authoritative
+   * admission-rows roster, ADR-0018 Q3)?
+   *
+   * The subscriber resolves the DELIVERING LEAF (`sourceLink`) → the network(s)
+   * that leaf serves, then requires the source to be an admitted member OF THAT
+   * network. This is the anti-spoof scoping (cortex#1825 review): a principal
+   * admitted only on Network B can NEVER be membership-folded when its envelope
+   * arrives on Network A's leaf, and a bare forgery on a leaf the source is not a
+   * member of is refused. The fold fires ONLY when the gate denied with the
+   * OFFERINGS precondition AND `unknown_network === true` (a source in NO
+   * configured `peers[]` — never a config-declared peer whose `accept_subjects`
+   * deliberately excludes presence). This drops the hand-pin/offerings
+   * precondition for folding, NOT the crypto: GATE 2 (`verifySignedByChain`) +
+   * source-binding are unchanged. Other deny kinds (deny_subjects, hop budget,
+   * leaf anti-spoof) are SAFETY checks and are NEVER overridden. Omitted ⇒
+   * defaults to "never a member" ⇒ byte-identical to pre-FS-1 (peers[]-only)
+   * behaviour.
    */
-  isAdmittedMember?: (sourcePrincipal: string) => boolean;
+  isAdmittedMemberOfNetwork?: (
+    sourcePrincipal: string,
+    networkId: string,
+  ) => boolean;
   /**
    * FS-1 (cortex#1825) — principals for which the operator HAND-PINNED a
    * `peers[].principal_pubkey` in the ORIGINAL config (pre-resolution). DD-11 is
@@ -307,7 +318,8 @@ export async function startFederatedAgentPresenceSubscriber(
   const cryptoVerify = opts.cryptoVerify ?? true;
   // FS-1 (cortex#1825) — presence-by-membership oracle + DD-11 hand-pin guard.
   // Defaults keep pre-FS-1 behaviour: no membership-fold, no hand-pins.
-  const isAdmittedMember = opts.isAdmittedMember ?? ((): boolean => false);
+  const isAdmittedMemberOfNetwork =
+    opts.isAdmittedMemberOfNetwork ?? ((): boolean => false);
   const handPinnedPrincipals = opts.handPinnedPrincipals ?? new Set<string>();
   // FS-6 — receiver clock for received-presence receipts.
   const now = opts.now ?? Date.now;
@@ -380,6 +392,44 @@ export async function startFederatedAgentPresenceSubscriber(
     federatedNetworksById.set(network.id, network);
   }
 
+  // FS-1 (cortex#1825 review) — DELIVERING-LEAF → network(s) index for the
+  // membership-fold anti-spoof scope. A physical leaf (`leaf_node`) may be POOLED
+  // by more than one network (config type: "two networks sharing a `leaf_node`
+  // share one physical link"), so map each leaf to EVERY network that rides it.
+  // The membership override requires the source to be admitted on one of the
+  // networks the DELIVERING leaf serves — never a flat union across all joined
+  // networks (which let a Network-B member fold on Network-A's leaf, cortex#1825
+  // PROBE 1). `primary` is deliberately NOT indexed: it is the shared local link,
+  // not a per-network isolation boundary (mirrors the F-3d gate's `primary` skip),
+  // so a source arriving on `primary` can never satisfy the membership scope.
+  const networkIdsByLeaf = new Map<string, string[]>();
+  for (const network of networks) {
+    if (network.leaf_node === "primary") continue;
+    const existing = networkIdsByLeaf.get(network.leaf_node);
+    if (existing !== undefined) existing.push(network.id);
+    else networkIdsByLeaf.set(network.leaf_node, [network.id]);
+  }
+
+  /**
+   * FS-1 (cortex#1825 review) — is `sourcePrincipal` an admitted member of a
+   * network served by the DELIVERING leaf `sourceLink`? Fail-closed: an absent /
+   * `primary` / unrecognised leaf yields false so the membership override never
+   * fires without a dedicated-leaf attribution (closes the cross-network spoof
+   * + the bare `signing:off` forgery on `primary`).
+   */
+  const isAdmittedOnDeliveringLeaf = (
+    sourcePrincipal: string,
+    sourceLink: string | undefined,
+  ): boolean => {
+    if (sourceLink === undefined || sourceLink === "primary") return false;
+    const candidateNetworkIds = networkIdsByLeaf.get(sourceLink);
+    if (candidateNetworkIds === undefined) return false;
+    for (const networkId of candidateNetworkIds) {
+      if (isAdmittedMemberOfNetwork(sourcePrincipal, networkId)) return true;
+    }
+    return false;
+  };
+
   const pattern = federatedAgentPresenceSubject();
 
   // The set of valid presence `envelope.type` literals — a fast membership
@@ -446,15 +496,20 @@ export async function startFederatedAgentPresenceSubscriber(
         sourceLink,
       );
       if (decision !== "allow") {
-        // FS-1 (cortex#1825, D-1) — PRESENCE-BY-MEMBERSHIP override. The OFFERINGS
-        // precondition — `peer_not_in_accept_list` (a source in no configured
-        // `peers[]`, incl. `unknown_network`, OR whose subtree is not on
-        // `accept_subjects`) — is DROPPED for presence: an ADMITTED member of the
-        // verified admission roster (ADR-0018 Q3) folds even with no `peers[]`
-        // offering. This drops the hand-pin/offerings precondition, NOT the crypto:
-        // GATE 2 (`verifySignedByChain`) + source-binding run UNCHANGED below.
+        // FS-1 (cortex#1825, D-1) — PRESENCE-BY-MEMBERSHIP override, LEAF-SCOPED.
+        // The OFFERINGS precondition — `peer_not_in_accept_list` with
+        // `unknown_network === true` (a source in NO configured `peers[]` at all) —
+        // is DROPPED for presence: an ADMITTED member of the verified admission
+        // roster (ADR-0018 Q3) folds even with no `peers[]` offering, PROVIDED it is
+        // admitted on a network served by the DELIVERING leaf. This drops the
+        // hand-pin/offerings precondition, NOT the crypto: GATE 2
+        // (`verifySignedByChain`) + source-binding run UNCHANGED below.
         //
-        // ONLY `peer_not_in_accept_list` is an offering precondition. `peer_deny_list`,
+        // ONLY the `unknown_network` variant of `peer_not_in_accept_list` is an
+        // offering precondition. The NON-`unknown_network` variant — a
+        // config-declared peer whose `accept_subjects` deliberately excludes the
+        // presence subtree — is the operator's EXPLICIT narrowing and is NEVER
+        // overridden by membership (cortex#1825 PROBE 2). `peer_deny_list`,
         // `max_hop_exceeded`, and `source_link_mismatch` are SAFETY / anti-spoof
         // checks — NEVER overridden by membership (a member on a deny-listed subject,
         // over the hop budget, or spoofed onto the wrong leaf is still hard-denied).
@@ -464,10 +519,25 @@ export async function startFederatedAgentPresenceSubscriber(
         // fail-closed drop). It is NEVER re-admitted by membership — that would
         // silently paper over a DD-11 pin-mismatch drop. Membership-fold is for
         // membership-ONLY peers (no local pin).
+        //
+        // cortex#1825 review — TWO anti-spoof scopes make membership no weaker
+        // than the pre-existing accept-list posture:
+        //   (a) `unknown_network === true` — the source resolved to NO configured
+        //       `peers[]` at all. A config-declared peer whose `accept_subjects`
+        //       deliberately excludes presence denies with the SAME `kind` but
+        //       WITHOUT `unknown_network`; its explicit narrowing must NEVER be
+        //       overridden by membership (PROBE 2).
+        //   (b) `isAdmittedOnDeliveringLeaf` — the source must be an admitted
+        //       member of a network served by the DELIVERING leaf (`sourceLink`),
+        //       not merely admitted on SOME joined network. This closes the
+        //       cross-network / cross-leaf impersonation (PROBE 1) and the bare
+        //       `signing:off` forgery attributed to `primary` (finding #2), which
+        //       the flat union + skipped F-3d check previously let through.
         const foldByMembership =
           decision.kind === "peer_not_in_accept_list" &&
-          isAdmittedMember(sourcePrincipal) &&
-          !handPinnedPrincipals.has(sourcePrincipal);
+          decision.unknown_network === true &&
+          !handPinnedPrincipals.has(sourcePrincipal) &&
+          isAdmittedOnDeliveringLeaf(sourcePrincipal, sourceLink);
         if (!foldByMembership) {
           emitDeny(
             {

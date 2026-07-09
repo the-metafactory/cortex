@@ -4733,12 +4733,20 @@ export async function startCortex(
           stackNKeyPub: stackNKeyPubForVerifier,
         }),
         ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
-        // FS-1 (cortex#1825, D-1) — presence-by-membership. The oracle is
-        // late-bound (assigned below once the admission-rows provider is built),
-        // so read it through the handle at FOLD time. `handPinnedPrincipals`
+        // FS-1 (cortex#1825, D-1) — presence-by-membership, NETWORK-SCOPED. The
+        // oracle is late-bound (assigned below once the admission-rows provider is
+        // built), so read it through the handle at FOLD time. The subscriber keys
+        // this off the DELIVERING leaf → network, so a member of Network B can't
+        // fold on Network A's leaf (cortex#1825 review). `handPinnedPrincipals`
         // keeps DD-11 fail-closed (a hand-pinned peer is never membership-folded).
-        isAdmittedMember: (sourcePrincipal: string): boolean =>
-          federatedMembershipHandle?.isAdmittedMember(sourcePrincipal) ?? false,
+        isAdmittedMemberOfNetwork: (
+          sourcePrincipal: string,
+          networkId: string,
+        ): boolean =>
+          federatedMembershipHandle?.isAdmittedMemberOfNetwork(
+            sourcePrincipal,
+            networkId,
+          ) ?? false,
         handPinnedPrincipals,
       });
 
