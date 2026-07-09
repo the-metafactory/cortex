@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync, statSync, readFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { dispatchProvisionStack } from "../provision-stack";
+import { dispatchProvisionStack, resolveRegistryPubkey } from "../provision-stack";
 // C-819 — seed an existing principal that ALREADY announces network caps (the
 // CLI register path announces none), so the add-stack preservation can be
 // asserted end-to-end. Same NKey root the CLI uses, so the rotation gate admits
@@ -549,13 +549,17 @@ describe("cortex provision-stack register — C-787 add-stack (no data loss)", (
       ]);
       expect(first.exitCode).toBe(0);
 
-      // Add-stack WITHOUT --registry-pubkey: the destructive merge-read cannot be
-      // verified, so the command MUST fail closed rather than re-attest off an
-      // unverifiable read. The existing meta-factory stack is preserved.
+      // Add-stack WITHOUT --registry-pubkey AND with a --config that carries no
+      // pin (cortex#1742 — the fallback source): the destructive merge-read
+      // cannot be verified, so the command MUST fail closed rather than re-attest
+      // off an unverifiable read. The existing meta-factory stack is preserved.
+      // (--config points at a nonexistent path so the fallback finds no pin AND
+      // the test never reads the real ~/.config/cortex/cortex.yaml — hermetic.)
       const add = await dispatchProvisionStack([
         "register", "andreas", "--seed-path", communitySeed,
         "--stack-id", "andreas/community", "--principal-seed", rootSeed,
         "--registry-url", "http://registry.test",
+        "--config", join(dir, "no-such-config.yaml"),
       ]);
       expect(add.exitCode).toBe(1);
       expect(add.stderr).toMatch(/no pinned registry pubkey|unverif/i);
@@ -1073,5 +1077,51 @@ describe("cortex provision-stack retire (C-1351 Slice 2 #1351)", () => {
     ]);
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toMatch(/--stack-id is required/);
+  });
+});
+
+// =============================================================================
+// cortex#1742 — resolveRegistryPubkey precedence (flag > config pin > none)
+// =============================================================================
+describe("cortex#1742 — resolveRegistryPubkey", () => {
+  const ctx = (flags: Record<string, string | boolean | undefined>) => ({
+    principalId: "andreas",
+    flags: flags as Parameters<typeof resolveRegistryPubkey>[0]["flags"],
+    json: false,
+  });
+  const CONFIG_PIN = "ErrjFoLzi4jw7TuTqjPMg5OnQCH0oKUClWgr8VyYHmk=";
+  const cfgWithPin = () => ({ policy: { federated: { registry: { pubkey: CONFIG_PIN } } } });
+  const cfgNoPin = () => ({ policy: { federated: {} } });
+  const cfgThrows = () => { throw new Error("ENOENT: no cortex.yaml"); };
+
+  test("flag WINS over the config pin", () => {
+    const r = resolveRegistryPubkey(ctx({ "--registry-pubkey": "FLAGPIN=" }), cfgWithPin);
+    expect(r).toEqual({ ok: true, pubkey: "FLAGPIN=" });
+  });
+
+  test("no flag → falls back to policy.federated.registry.pubkey from config", () => {
+    const r = resolveRegistryPubkey(ctx({}), cfgWithPin);
+    expect(r).toEqual({ ok: true, pubkey: CONFIG_PIN });
+  });
+
+  test("no flag + config has no pin → undefined (downstream fail-closed)", () => {
+    const r = resolveRegistryPubkey(ctx({}), cfgNoPin);
+    expect(r).toEqual({ ok: true, pubkey: undefined });
+  });
+
+  test("no flag + unreadable config → undefined, never throws (best-effort)", () => {
+    const r = resolveRegistryPubkey(ctx({}), cfgThrows);
+    expect(r).toEqual({ ok: true, pubkey: undefined });
+  });
+
+  test("malformed flag value (bare --registry-pubkey) → usage error", () => {
+    const r = resolveRegistryPubkey(ctx({ "--registry-pubkey": true }), cfgWithPin);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/requires a value/);
+  });
+
+  test("empty-string config pin is treated as absent (undefined)", () => {
+    const r = resolveRegistryPubkey(ctx({}), () => ({ policy: { federated: { registry: { pubkey: "" } } } }));
+    expect(r).toEqual({ ok: true, pubkey: undefined });
   });
 });

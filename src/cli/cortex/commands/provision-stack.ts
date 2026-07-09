@@ -49,7 +49,7 @@
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 
-import { expandTilde } from "../../../common/config/loader";
+import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import {
   resolveOwnAdmissionState,
@@ -148,6 +148,11 @@ const SPEC: SubcommandSpec<ProvisionSubcommand> = {
         // admission into. Signed into the claim; the register hook stamps it
         // onto the PENDING admission row (per-network idempotency).
         "--network": "value",
+        // C-1742 — override the config file resolveRegistryPubkey reads the
+        // pinned pubkey from when --registry-pubkey is omitted. Defaults to
+        // ~/.config/cortex/cortex.yaml; scoped per-stack deployments point it
+        // at their stack's config.
+        "--config": "value",
       },
     },
   },
@@ -253,6 +258,57 @@ interface HandlerCtx {
   principalId: string;
   flags: FlagMap;
   json: boolean;
+}
+
+/** Default cortex config path — mirrors `cortex network`'s DEFAULT_CONFIG_PATH. */
+const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
+
+/**
+ * cortex#1742 — resolve the pinned registry pubkey with precedence
+ * `--registry-pubkey` flag > `policy.federated.registry.pubkey` from the cortex
+ * config (the SAME pin `cortex network join` reads), so an add-stack register
+ * need not re-supply on the command line.
+ *
+ * Best-effort on the config read: a missing/unreadable config or an absent pin
+ * returns `undefined`, leaving the add-stack merge-read to FAIL CLOSED downstream
+ * (C-791 — abort rather than overwrite; the June cap-wipe guard is untouched).
+ * Never throws. Returns `{ ok:false }` only for a malformed FLAG value (a
+ * usage error the caller surfaces), never for a config-read failure.
+ */
+/** Minimal config shape this resolver needs — an injection seam for tests. */
+type RegistryPinConfigReader = (path: string) => {
+  policy?: { federated?: { registry?: { pubkey?: string } } };
+};
+
+export function resolveRegistryPubkey(
+  ctx: HandlerCtx,
+  // Injectable for tests; production uses the real loader (reads ~/.config/cortex).
+  loadConfig: RegistryPinConfigReader = loadConfigWithAgents,
+): { ok: true; pubkey: string | undefined } | { ok: false; reason: string } {
+  const pubkeyFlag = ctx.flags["--registry-pubkey"];
+  if (pubkeyFlag !== undefined) {
+    if (pubkeyFlag === true || typeof pubkeyFlag !== "string") {
+      return { ok: false, reason: "--registry-pubkey requires a value" };
+    }
+    return { ok: true, pubkey: pubkeyFlag };
+  }
+  // Flag absent — fall back to the config pin (best-effort).
+  const cfgFlag = ctx.flags["--config"];
+  const cfgPath = expandTilde(typeof cfgFlag === "string" ? cfgFlag : DEFAULT_CONFIG_PATH);
+  try {
+    const cfg = loadConfig(cfgPath);
+    const pin = cfg.policy?.federated?.registry?.pubkey;
+    return { ok: true, pubkey: typeof pin === "string" && pin.length > 0 ? pin : undefined };
+  } catch (err) {
+    // Config unreadable/absent → no fallback pin. The add-stack path fail-closes
+    // downstream with its own actionable message; log per the no-empty-catch rule.
+    process.stderr.write(
+      `provision-stack register: could not read policy.federated.registry.pubkey from ${cfgPath} ` +
+        `(${err instanceof Error ? err.message : String(err)}) — pass --registry-pubkey explicitly ` +
+        `if this add-stack register needs the pinned merge-read.\n`,
+    );
+    return { ok: true, pubkey: undefined };
+  }
 }
 
 async function runGenerate(ctx: HandlerCtx): Promise<ExitResult> {
@@ -403,16 +459,14 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
     rootMaterial = rootRes.material;
   }
 
-  // C-791 (security) — optional pinned registry pubkey. The add-stack merge-read
-  // is verified against it (fail closed when absent on the add-stack path).
-  const pubkeyFlag = ctx.flags["--registry-pubkey"];
-  let registryPubkey: string | undefined;
-  if (pubkeyFlag !== undefined) {
-    if (pubkeyFlag === true || typeof pubkeyFlag !== "string") {
-      return usageError("register", "--registry-pubkey requires a value", ctx.json);
-    }
-    registryPubkey = pubkeyFlag;
-  }
+  // C-791 (security) — the pinned registry pubkey verifies the add-stack
+  // merge-read (fail closed when absent on the add-stack path).
+  // cortex#1742 — precedence: --registry-pubkey flag > policy.federated.registry.pubkey
+  // from config, so the principal need not re-supply a pin their config already has.
+  // Absent from BOTH on the add-stack path stays fail-closed downstream.
+  const pubkeyRes = resolveRegistryPubkey(ctx);
+  if (!pubkeyRes.ok) return usageError("register", pubkeyRes.reason, ctx.json);
+  const registryPubkey = pubkeyRes.pubkey;
 
   // ADR-0018 Gap-A — optional target network for the admission request.
   const networkRes = resolveNetworkId(ctx.flags["--network"]);
