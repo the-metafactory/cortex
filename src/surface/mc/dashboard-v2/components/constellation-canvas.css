@@ -349,6 +349,87 @@
   color: var(--tide);
 }
 
+/* ── Fullscreen / expand ─────────────────────────────────────────────────────
+ * The canvas wrapper can expand to fill the whole viewport. Two paths land the
+ * SAME visual:
+ *   - the browser Fullscreen API — the native `:fullscreen` pseudo matches the
+ *     element the browser promoted; and
+ *   - a CSS fixed-overlay fallback — `.is-fullscreen` (position:fixed, inset:0),
+ *     used when the Fullscreen API is unavailable/denied.
+ * Both fill the viewport with the constellation atmosphere so the surrounding
+ * dashboard chrome is hidden, and the React Flow canvas re-fits inside them. */
+.mc-skin .network-canvas-fullscreen-target {
+  /* Boxed default — fills its parent panel; the flow canvas already sizes to it. */
+  width: 100%;
+  height: 100%;
+}
+.mc-skin .network-canvas-fullscreen-target.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
+  height: 100vh;
+  /* Match the constellation atmosphere so the fullscreen surface reads the same. */
+  background:
+    radial-gradient(
+      ellipse 120% 80% at 50% -10%,
+      color-mix(in oklch, var(--mer) 14%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--bg);
+}
+/* Native Fullscreen API path — the promoted element fills the screen; give it the
+ * same atmosphere + let the flow canvas fill it. */
+.mc-skin .network-canvas-fullscreen-target:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background:
+    radial-gradient(
+      ellipse 120% 80% at 50% -10%,
+      color-mix(in oklch, var(--mer) 14%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--bg);
+}
+/* In BOTH fullscreen paths the inner React Flow region must fill the promoted
+ * target (the boxed layout used the parent panel's height). */
+.mc-skin .network-canvas-fullscreen-target.is-fullscreen .react-flow,
+.mc-skin .network-canvas-fullscreen-target:fullscreen .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+/* The fullscreen toggle button — a React Flow Panel, top-right by the zoom
+ * controls. Low-ceremony pill; icon + label. */
+.mc-skin .network-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: color-mix(in oklch, var(--fg) 80%, var(--mer));
+  border: 1px solid color-mix(in oklch, var(--mer) 35%, var(--line));
+  background: color-mix(in oklch, var(--panel) 82%, var(--bg));
+  box-shadow: 0 0 12px -4px color-mix(in oklch, var(--mer) 45%, transparent);
+}
+.mc-skin .network-fullscreen-btn:hover {
+  border-color: color-mix(in oklch, var(--mer) 55%, var(--line));
+  color: var(--fg);
+}
+.mc-skin .network-fullscreen-btn[aria-pressed="true"] {
+  color: var(--bg);
+  background: color-mix(in oklch, var(--mer) 80%, var(--fg));
+  border-color: var(--mer);
+}
+.mc-skin .network-fullscreen-btn span[aria-hidden="true"] {
+  font-size: 13px;
+  line-height: 1;
+}
+
 /* ── On-canvas network header — `<NETWORK> · admin|member · N stacks` ─────────
  * Overlays the top of the star-map (the mockup's network header strip). */
 .mc-skin .mc-constellation-header {

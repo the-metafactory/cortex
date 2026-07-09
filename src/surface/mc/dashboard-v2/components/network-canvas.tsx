@@ -18,11 +18,13 @@
  * ADR-0007: nodes carry presence + lifecycle only — never session interiors.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Controls,
+  Panel,
   ReactFlowProvider,
+  useReactFlow,
   type Node as RfNode,
   type Edge as RfEdge,
   type NodeTypes,
@@ -90,12 +92,58 @@ export interface NetworkCanvasProps {
   live?: boolean;
 }
 
+/**
+ * MC — the fullscreen/expand control, rendered as a React Flow `Panel` in the
+ * top-right so it sits alongside the zoom controls (bottom-left). A real
+ * `<button>` with an `aria-label`, it toggles the canvas wrapper between boxed
+ * and viewport-filling. On EVERY toggle it re-fits the graph to the new size
+ * (`fitView`) after a paint so the constellation re-centers. Uses `useReactFlow`,
+ * so it must render INSIDE the `ReactFlowProvider`.
+ */
+function FullscreenToggle({
+  isFullscreen,
+  onToggle,
+}: {
+  isFullscreen: boolean;
+  onToggle: () => void;
+}) {
+  const { fitView } = useReactFlow();
+  // Re-fit whenever the fullscreen state flips: the viewport just resized, so the
+  // radial layout should re-center to the new bounds. Deferred to the next frame
+  // so the DOM has taken the new size before we measure + fit.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      void fitView({ duration: 200 });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isFullscreen, fitView]);
+  return (
+    <button
+      type="button"
+      className="network-fullscreen-btn"
+      onClick={onToggle}
+      aria-pressed={isFullscreen}
+      aria-label={
+        isFullscreen ? "Exit fullscreen network graph" : "Expand network graph to fullscreen"
+      }
+      title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+    >
+      <span aria-hidden="true">⛶</span>
+      <span className="network-fullscreen-btn-label">
+        {isFullscreen ? "Exit" : "Fullscreen"}
+      </span>
+    </button>
+  );
+}
+
 /** The React Flow canvas — rendered once ELK has positioned the nodes. */
 function FlowCanvas({
   nodes,
   laidOutEdges,
   onSelectAgent,
   live = false,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: {
   nodes: NetworkGraphNode[];
   laidOutEdges: LaidOutNetworkEdge[];
@@ -106,6 +154,10 @@ function FlowCanvas({
    * static dash (truth-not-theater — zero flow never animates).
    */
   live?: boolean;
+  /** MC — the canvas wrapper is currently viewport-filling. Drives the button label. */
+  isFullscreen?: boolean;
+  /** MC — toggle the canvas wrapper between boxed and fullscreen. */
+  onToggleFullscreen?: () => void;
 }) {
   // React Flow's node `data` is typed `Record<string, unknown>`; our discriminated
   // `NetworkNodeData` is structurally compatible but lacks the index signature, so
@@ -211,6 +263,16 @@ function FlowCanvas({
       {/* MC-D1 — no <Background>: the constellation reads against a clean
           near-black atmosphere (painted by `.network-canvas-wrap`), not a grid. */}
       <Controls position="bottom-left" showInteractive={false} />
+      {/* MC — the fullscreen/expand control, top-right by the zoom controls. Only
+          rendered when a toggle is wired (the host may omit it in a test). */}
+      {onToggleFullscreen && (
+        <Panel position="top-right">
+          <FullscreenToggle
+            isFullscreen={isFullscreen}
+            onToggle={onToggleFullscreen}
+          />
+        </Panel>
+      )}
       <NetworkLegend stacks={legendStacks} />
     </ReactFlow>
   );
@@ -237,10 +299,80 @@ export default function NetworkCanvas({
     [graph],
   );
 
-  if (positioned.length === 0) {
-    // No topology yet (empty snapshot) — nothing to constellate.
-    return <div className="network-view-empty">No agents on the network yet.</div>;
-  }
+  // MC — fullscreen/expand. The wrapper ref is the fullscreen target; we PREFER
+  // the browser Fullscreen API (`requestFullscreen`/`exitFullscreen`) and fall
+  // back to a CSS fixed-overlay when it's unavailable/denied (both drive the same
+  // `is-fullscreen` class the CSS keys off, so the visual is identical). The
+  // browser fires `fullscreenchange` on the API path (incl. the user pressing
+  // Esc), and we mirror Esc for the CSS-overlay path ourselves.
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // True while we're in the CSS-overlay fallback (no Fullscreen API), so Esc is
+  // handled by us rather than the browser.
+  const cssFallbackRef = useRef(false);
+
+  const enterFullscreen = useCallback(() => {
+    const el = wrapRef.current;
+    if (el && typeof el.requestFullscreen === "function") {
+      el.requestFullscreen().catch((err: unknown) => {
+        // Denied / unsupported → CSS-overlay fallback (still fills the viewport).
+        // eslint-disable-next-line no-console
+        console.warn("[network-canvas] requestFullscreen failed:", err);
+        cssFallbackRef.current = true;
+        setIsFullscreen(true);
+      });
+      return;
+    }
+    // No Fullscreen API at all → CSS-overlay fallback.
+    cssFallbackRef.current = true;
+    setIsFullscreen(true);
+  }, []);
+
+  const exitFullscreen = useCallback(() => {
+    if (cssFallbackRef.current) {
+      cssFallbackRef.current = false;
+      setIsFullscreen(false);
+      return;
+    }
+    if (
+      typeof document !== "undefined" &&
+      document.fullscreenElement &&
+      typeof document.exitFullscreen === "function"
+    ) {
+      void document.exitFullscreen();
+    }
+    // The `fullscreenchange` handler flips state for the API path.
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) exitFullscreen();
+    else enterFullscreen();
+  }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  // Fullscreen API path: mirror the browser's fullscreen state (covers the user
+  // pressing Esc or the browser exiting fullscreen for any reason).
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onChange = () => {
+      if (cssFallbackRef.current) return; // CSS fallback owns its own state
+      setIsFullscreen(document.fullscreenElement === wrapRef.current);
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  // CSS-overlay fallback path: Esc exits (the Fullscreen API handles Esc itself).
+  useEffect(() => {
+    if (!isFullscreen || !cssFallbackRef.current) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        exitFullscreen();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFullscreen, exitFullscreen]);
 
   const canvas = (
     <ReactFlowProvider>
@@ -249,17 +381,39 @@ export default function NetworkCanvas({
         laidOutEdges={laidOutEdges}
         onSelectAgent={onSelectAgent}
         live={live}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
     </ReactFlowProvider>
   );
 
-  // F.2 — bridge the view's hover-highlight into the node tree. When no hover
-  // value is supplied, the context's inert default applies (no highlight).
-  return hover ? (
-    <NetworkHoverContext.Provider value={hover}>
-      {canvas}
-    </NetworkHoverContext.Provider>
-  ) : (
-    canvas
+  // The fullscreen wrapper is ALWAYS mounted (so the ref is stable across the
+  // empty/non-empty transition and hooks run unconditionally). When there's no
+  // topology yet we render the empty state inside it.
+  const inner =
+    positioned.length === 0 ? (
+      // No topology yet (empty snapshot) — nothing to constellate.
+      <div className="network-view-empty">No agents on the network yet.</div>
+    ) : hover ? (
+      // F.2 — bridge the view's hover-highlight into the node tree. When no hover
+      // value is supplied, the context's inert default applies (no highlight).
+      <NetworkHoverContext.Provider value={hover}>
+        {canvas}
+      </NetworkHoverContext.Provider>
+    ) : (
+      canvas
+    );
+
+  return (
+    <div
+      ref={wrapRef}
+      className={
+        "network-canvas-fullscreen-target" +
+        (isFullscreen ? " is-fullscreen" : "")
+      }
+      data-fullscreen={isFullscreen ? "true" : undefined}
+    >
+      {inner}
+    </div>
   );
 }
