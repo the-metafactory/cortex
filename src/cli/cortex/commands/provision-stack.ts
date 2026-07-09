@@ -294,8 +294,12 @@ export function resolveRegistryPubkey(
   }
   // Flag absent — fall back to the config pin (best-effort).
   const cfgFlag = ctx.flags["--config"];
-  const cfgPath = expandTilde(typeof cfgFlag === "string" ? cfgFlag : DEFAULT_CONFIG_PATH);
+  const cfgRaw = typeof cfgFlag === "string" ? cfgFlag : DEFAULT_CONFIG_PATH;
+  // expandTilde inside the try: it throws when $HOME is unset (loader.ts), and
+  // the best-effort contract must hold there too — degrade to undefined, never throw.
+  let cfgPath = cfgRaw;
   try {
+    cfgPath = expandTilde(cfgRaw);
     const cfg = loadConfig(cfgPath);
     const pin = cfg.policy?.federated?.registry?.pubkey;
     return { ok: true, pubkey: typeof pin === "string" && pin.length > 0 ? pin : undefined };
