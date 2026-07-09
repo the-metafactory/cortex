@@ -18,11 +18,13 @@ import { createElement } from "react";
 import {
   AgentNodeCard,
   StackHubCard,
+  FederatedPeerCard,
 } from "../components/network-nodes";
 import { NetworkLegend } from "../components/network-legend";
 import type {
   AgentNodeData,
   StackHubNodeData,
+  FederatedPeerNodeData,
 } from "../lib/network-graph-adapter";
 
 function agentData(over: Partial<AgentNodeData> = {}): AgentNodeData {
@@ -463,5 +465,38 @@ describe("#1068 — hub-subtree selection (a11y + emphasis/dim)", () => {
     );
     expect(html).toContain('data-dimmed="true"');
     expect(html).toContain("network-node-dimmed");
+  });
+});
+
+describe("FederatedPeerCard (MC-D4 — absent admitted peer)", () => {
+  function render(over: Partial<FederatedPeerNodeData> = {}): string {
+    const data: FederatedPeerNodeData = {
+      kind: "federated-peer",
+      principal: "jc",
+      verdict: "admitted-absent",
+      networkId: "mfnet",
+      ...over,
+    };
+    return renderToStaticMarkup(createElement(FederatedPeerCard, { data }));
+  }
+
+  it("renders a dimmed federated-peer node labelled with the peer principal", () => {
+    const html = render();
+    expect(html).toContain('data-node-kind="federated-peer"');
+    expect(html).toContain('data-fed-peer-principal="jc"');
+    expect(html).toContain('data-fed-peer-absent="true"');
+    // The principal id is the visible label.
+    expect(html).toContain(">jc<");
+    // The `federated · absent` sublabel.
+    expect(html).toContain("federated · absent");
+    // The muted orb class (no glow — styled in CSS).
+    expect(html).toContain("network-node-orb-fed-peer");
+    // An accessible name marking it admitted + absent.
+    expect(html).toContain("federated peer (admitted, absent)");
+  });
+
+  it("carries the membership verdict as a data attribute", () => {
+    const html = render({ verdict: "admitted-absent" });
+    expect(html).toContain('data-fed-peer-verdict="admitted-absent"');
   });
 });
