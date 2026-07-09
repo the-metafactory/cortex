@@ -179,6 +179,7 @@ const CARVEOUT_PATHS: string[] = [
   "docs/design-own-operator-onboarding.md",
   "docs/adr/0013-sovereign-federation-model.md",
   "docs/adr/0015-two-tier-onboarding-and-admission-gate.md",
+  "docs/adr/0023-federation-leaf-credential-model.md",
   "docs/design-admission-gate-leaf-secret.md",
   "docs/design-federation-hub-mode-and-join.md",
   "docs/runbook-leaf-cred-issuance.md",
