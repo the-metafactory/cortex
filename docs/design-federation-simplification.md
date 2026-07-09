@@ -35,15 +35,18 @@ What the live session actually hit:
 
 ## 3. Decisions
 
-### D-1 — Presence-by-membership `[NEEDS PRINCIPAL RATIFICATION]`
+> **RATIFIED 2026-07-10** — reviewed on #1813 by JC (hub custodian) + Andreas. D-1, D-2, D-3 all adopted. D-1 carries two posture riders (below). Wave 0 (FS-5/6/7/8) merges regardless of ratification; FS-1 unblocks on D-1.
+
+### D-1 — Presence-by-membership `[RATIFIED — with posture riders]`
 Admission to a network ⇒ members see each other's presence (agent online/heartbeat/offline, stack-level aggregates) by default; acceptance offerings continue to gate **dispatch only**.
 **Security analysis:** presence is already the *only* federated class under ADR-0005 (no session interiors ever cross). Membership is itself the trust gate — admission is hub-admin-signed, sealed, and revocable; a principal you would not show presence to is a principal you should not admit. The federated-presence subscriber's chain verification + source-binding (an accept-listed peer can only announce agents under its own verified `{principal}/{stack}`) is unchanged — this drops the *offerings* precondition for presence folding, not the crypto.
-**Alternative (rejected as default):** per-peer `presence: allow` flag — recreates today's invisible-by-default trap; may return later as an opt-out (`presence: hidden`) for a member who wants to lurk.
+**Rider R1 (consent transparency):** the admit UX + docs must state plainly that **admission ⇒ your agent roster + declared capabilities become visible to co-members** (presence is not silent). This is the informed half of "membership is the trust gate."
+**Rider R2 (`presence: hidden` opt-out, day-one):** ship a per-stack `presence: hidden` from the first FS-1 release — a member (e.g. a headless stack) can be admitted for dispatch while withholding its presence broadcast. Default is visible; hidden is the explicit opt-out. (This supersedes the earlier "rejected as default" note — the opt-out ships alongside the default, not later.)
 
-### D-2 — Derive `accept_subjects`; audit single-value keys `[ADOPT — recommendation]`
+### D-2 — Derive `accept_subjects`; audit single-value keys `[RATIFIED]`
 Remove `accept_subjects` from user config (generate `federated.{principal}.{stack}.>` from the stack identity — the validator already pins it to exactly that). Loader accepts-and-warns on the legacy key for one release, then rejects. Audit `policy.federated.networks[]` for other keys with a single derivable value (e.g. `leaf_node` defaulting to the network id).
 
-### D-3 — Last-known-good boot fallback `[ADOPT — recommendation]`
+### D-3 — Last-known-good boot fallback `[RATIFIED]`
 On config-validation failure at boot, the daemon logs the precise error, loads the last successfully-booted config snapshot (written on every good boot), and marks itself DEGRADED (surfaced in MC + `status`). Keepalive crash-loops become impossible for config errors. A `--strict` flag preserves fail-hard for CI/provisioning.
 
 ## 4. Track FS — slices
@@ -69,6 +72,16 @@ The late joiner is the case that breaks join-time-only wiring; it is the FS-2/FS
 4. **Degraded honestly:** if either half lags (old hub, missed push), FS-6 renders `mia — absent (unheard: cred/import gap)` and FS-3 raises a named attention item ("hub reseal needed") instead of a silent forever-absent.
 
 The invariant: **cred half = hub authority, executed at admit, fanned to all members; import half = each member's own authority, reconciler-self-healed.** Membership changes propagate; humans never run `nsc`.
+
+## 4.2 FS-2 open seams — hub-custodian review (JC, before FS-2 is buildable)
+
+The cred-half (hub authority) / import-half (member authority) invariant is accepted; three seams must be pinned in FS-2's own design spike before implementation:
+
+1. **Reversal on revoke/leave.** The fan-out must **reverse**: on `revoke`/`leave`/`depart`, every remaining member's cred `allow-sub` for the departed peer's scope is removed and its account import dropped — else creds accumulate stale peer scopes indefinitely (a slow-growing over-grant + a revoked peer whose scope a member can still subscribe). FS-2 is not done until the reversal path is symmetric with the admit fan-out (and FS-3's reconciler self-heals a missed reversal the same way it self-heals a missed grant).
+2. **O(members) cost — per-peer vs network-scoped.** Admit is O(members) cred edits + pushes. The alternative — a single **network-scoped** grant (`allow-sub federated.*.>` bounded to network members) — is O(1) per admit but **breaks source-binding**: it would let any member subscribe any principal's scope, not just admitted co-members, collapsing the accept-list into a wildcard. FS-2 keeps **per-peer** for exactly this reason (each grant names one verified `{principal}/{stack}`); the O(members) cost is bounded (small networks, amortized over the reconcile tick) and is the price of source-bound least privilege. Document this trade explicitly so it isn't "fixed" into a wildcard later.
+3. **Least-privilege template composition.** Confirm the hub's scoped-user least-privilege template composes with **additive** `allow-sub` — i.e. adding a peer scope is a strictly additive edit to an existing scoped user's permissions, not a template regeneration that could drop other grants. This is the exact #1812 seam; FS-2's spike verifies the `nsc edit user --allow-sub` (or re-mint) path is additive and idempotent before wiring it into `admit`.
+
+These are FS-2 acceptance prerequisites, not W0 blockers.
 
 ## 5. Waves
 
