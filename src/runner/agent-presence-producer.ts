@@ -96,6 +96,25 @@ import type { Agent } from "../common/types/cortex-config";
 export const DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS = 60_000;
 
 /**
+ * FS-1 (cortex#1825, design §3 D-1 Rider R2) — decide whether THIS stack
+ * dual-emits the `classification: "federated"` presence copy (the
+ * {@link AgentPresenceProducerOptions.federate} flag).
+ *
+ * A stack federates its presence when it has joined ≥1 network — UNLESS it opts
+ * out with `policy.federated.presence: "hidden"`. A hidden stack stays admitted
+ * for DISPATCH but WITHHOLDS its presence broadcast (it never publishes the
+ * federated copy), so no co-member can fold it. Absence of the key ⇒ `"visible"`
+ * (the pre-FS-1 default): only an explicit `"hidden"` suppresses.
+ *
+ * Pure + exported so the R2 opt-out is unit-testable without a full boot.
+ */
+export function shouldFederatePresence(
+  federated: { networks?: readonly unknown[]; presence?: "visible" | "hidden" } | undefined,
+): boolean {
+  return (federated?.networks?.length ?? 0) > 0 && federated?.presence !== "hidden";
+}
+
+/**
  * One agent's presence descriptor — the identity + scope + capability set the
  * producer stamps onto its `agent.*` envelopes. Derived from an assembled
  * `Agent` by {@link presenceAgentFromAgent} at the boot site, kept as a narrow

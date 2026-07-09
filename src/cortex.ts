@@ -253,6 +253,7 @@ import { chatCapableAgents } from "./runner/chat-capable-agents";
 import {
   AgentPresenceProducer,
   presenceAgentFromAgent,
+  shouldFederatePresence,
   DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS,
   type PresenceAgent,
 } from "./runner/agent-presence-producer";
@@ -274,6 +275,13 @@ import {
   startFederationReconciler,
   type FederationReconcilerHandle,
 } from "./bus/agent-network/federation-reconciler";
+// FS-1 (cortex#1825, design §3 D-1) — presence-by-membership oracle: "is this
+// source principal an ADMITTED member?" resolved from the authoritative
+// admission-rows roster (ADR-0018 Q3 — the SAME source `/api/networks` uses).
+import {
+  createFederatedMembershipOracle,
+  type FederatedMembershipOracleHandle,
+} from "./bus/agent-network/federated-membership";
 // P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (the
 // observability sibling of the presence subscriber; same Option-D trust path +
 // the curation gate, origin-badged).
@@ -4518,6 +4526,24 @@ export async function startCortex(
   // reads) so a later-joining roster peer's presence is admitted within one
   // reconcile interval. INERT unless a network opts in (`reconcile.enabled`).
   let federationReconcilerHandle: FederationReconcilerHandle | null = null;
+  // FS-1 (cortex#1825, D-1) — presence-by-membership oracle. Late-bound: assigned
+  // inside the MC-gated block below once the admission-rows provider is built
+  // (it reuses the SAME provider `/api/networks` uses). The subscriber's
+  // `isAdmittedMember` closure reads this handle at FOLD time (runtime), so the
+  // late binding is safe — a member simply isn't membership-folded until the
+  // first refresh warms the snapshot (self-heals on the next heartbeat).
+  let federatedMembershipHandle: FederatedMembershipOracleHandle | null = null;
+  // FS-1 (cortex#1825) — principals the operator HAND-PINNED a `principal_pubkey`
+  // for in the ORIGINAL config (pre-resolution). DD-11 stays fail-closed for
+  // these: they are NEVER re-admitted by membership (see federated-subscriber.ts
+  // `handPinnedPrincipals`). Computed from the raw `options.policy`, not the
+  // post-`resolveFederatedPeers` set (which has already DROPPED a mismatched pin).
+  const handPinnedPrincipals = new Set<string>();
+  for (const n of options.policy?.federated?.networks ?? []) {
+    for (const p of n.peers) {
+      if (p.principal_pubkey !== undefined) handPinnedPrincipals.add(p.principal_id);
+    }
+  }
   // P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (folds peers'
   // curated+signed system.{transport,federation}.* into the observability
   // projection, ORIGIN-BADGED — the Option-D sibling of the presence subscriber).
@@ -4533,8 +4559,13 @@ export async function startCortex(
   // on, the producer dual-emits a `classification: "federated"` copy so peers'
   // E.2 subscribers can fold it (the existing federated-classification
   // mechanism, not a new toggle).
-  const federatePresence =
-    (resolvedPolicy?.federated?.networks ?? []).length > 0;
+  // FS-1 (cortex#1825, D-1 Rider R2) — a stack federates its presence when it has
+  // joined ≥1 network, UNLESS it opts out with `policy.federated.presence:
+  // hidden`. A hidden stack is still admitted for DISPATCH but never dual-emits
+  // the `federated.*` presence copy, so no co-member can fold it (the opt-out is
+  // enforced at the SOURCE, not as a subscriber-side filter — truly hidden). The
+  // decision is the pure `shouldFederatePresence` helper (unit-tested for R2).
+  const federatePresence = shouldFederatePresence(resolvedPolicy?.federated);
   // The onChange→WS-broadcast subscription handle, captured so shutdown can
   // unsubscribe it explicitly — making teardown order-independent rather than
   // relying on the registry stop severing the envelope feed first (#899 review).
@@ -4702,6 +4733,13 @@ export async function startCortex(
           stackNKeyPub: stackNKeyPubForVerifier,
         }),
         ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+        // FS-1 (cortex#1825, D-1) — presence-by-membership. The oracle is
+        // late-bound (assigned below once the admission-rows provider is built),
+        // so read it through the handle at FOLD time. `handPinnedPrincipals`
+        // keeps DD-11 fail-closed (a hand-pinned peer is never membership-folded).
+        isAdmittedMember: (sourcePrincipal: string): boolean =>
+          federatedMembershipHandle?.isAdmittedMember(sourcePrincipal) ?? false,
+        handPinnedPrincipals,
       });
 
       // P3 (cortex#1088, design §4/§7) — the continuous federation roster
@@ -4848,6 +4886,28 @@ export async function startCortex(
                           : "no stack signing identity (stack.nkey_seed_path) — cannot PoP-sign the member roster read",
                   }),
               };
+
+        // FS-1 (cortex#1825, D-1) — presence-by-membership oracle. Reuses the
+        // EXACT `admissionProvider` the `/api/networks` view uses (the
+        // authoritative ADR-0018 Q3 admission-rows source, PoP-signed +
+        // DD-9-verified) — NOT a second key/roster source. It refreshes an
+        // admitted-member snapshot on an interval; the presence subscriber's
+        // `isAdmittedMember` closure reads it synchronously at fold time so an
+        // admitted member folds even with no `peers[]` offering. A
+        // `not_configured` provider leaves the snapshot empty → no membership-fold
+        // (honest degradation, the existing `peers[]` gate still applies).
+        federatedMembershipHandle = createFederatedMembershipOracle({
+          networkIds: networksList.map((n) => n.id),
+          provider: admissionProvider,
+          onRefresh: (info) => {
+            if (info.admittedCount > 0) {
+              console.log(
+                `cortex: federated-membership — ${info.networkId}: ${info.admittedCount.toString()} admitted member(s) (presence-by-membership, D-1)`,
+              );
+            }
+          },
+        });
+        federatedMembershipHandle.start();
 
         // The accept-policy summary (the second trust layer), distilled ONCE
         // from this stack's offerings and queried per member.
@@ -5613,6 +5673,14 @@ export async function startCortex(
       await completeAsync(
         "federation roster reconciler stop",
         federationReconcilerHandle?.stop(),
+      );
+      // FS-1 (cortex#1825) — stop the presence-by-membership oracle poller
+      // (cancels the interval + awaits any in-flight admission-rows read). It
+      // only reads the registry into an in-memory snapshot, so ordering vs. the
+      // subscriber teardown is immaterial.
+      await completeAsync(
+        "federated membership oracle stop",
+        federatedMembershipHandle?.stop(),
       );
       // P-14 U3.3 — stop the federated observability fold (drains its push
       // subscriber + unregisters its fan-out handler). Projected observability

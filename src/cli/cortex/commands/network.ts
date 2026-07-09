@@ -3024,6 +3024,12 @@ async function runAdmit(
       `  registry:          ${registryUrl}`,
       `  admin_fingerprint: ${material.fingerprint}`,
       ...(discordMember !== undefined ? [`  discord_member:    ${discordMember}`] : []),
+      // FS-1 (cortex#1825, D-1 Rider R1) — consent transparency, surfaced BEFORE
+      // the admin commits: admission ⇒ the member's presence becomes visible to
+      // co-members (presence-by-membership); their `presence: hidden` opts out.
+      `  presence:          on admit, this member's agent roster + capabilities become`,
+      `                     VISIBLE to co-members (presence-by-membership, D-1); the`,
+      `                     member may withhold via \`policy.federated.presence: hidden\`.`,
       ``,
     ];
     return ok(lines.join("\n"));
@@ -3152,6 +3158,23 @@ async function runAdmit(
       lines.push(`  discord:     ${report.discordWarning}`);
     }
   }
+  // FS-1 (cortex#1825, D-1 Rider R1) — consent transparency. Admission ⇒
+  // co-presence: this member's agent roster + declared capabilities become
+  // visible to co-members by default (presence-by-membership). State it plainly
+  // at admit time; note the member's own `presence: hidden` opt-out.
+  lines.push("");
+  lines.push(
+    `  presence:    admission ⇒ ${report.principalId}'s agent roster + declared capabilities`,
+  );
+  lines.push(
+    `               become VISIBLE to co-members (presence-by-membership, D-1).`,
+  );
+  lines.push(
+    `               The member may withhold this with \`policy.federated.presence: hidden\``,
+  );
+  lines.push(
+    `               (still admitted for dispatch; presence not broadcast).`,
+  );
   lines.push("");
   return ok(lines.join("\n"));
 }

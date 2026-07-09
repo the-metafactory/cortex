@@ -2321,6 +2321,24 @@ export type PolicyFederatedRegistry = z.infer<typeof PolicyFederatedRegistrySche
 export const PolicyFederatedSchema = z.object({
   networks: z.array(PolicyFederatedNetworkSchema).default([]),
   registry: PolicyFederatedRegistrySchema.optional(),
+  /**
+   * FS-1 (cortex#1825, design-federation-simplification §3 D-1 Rider R2) —
+   * per-stack federated-presence visibility. Default `"visible"`: an admitted
+   * member's agent presence is dual-emitted onto `federated.{principal}.{stack}.
+   * agent.*` so co-members fold it (presence-by-membership). Setting `"hidden"`
+   * is the day-one opt-out: the stack is still admitted for DISPATCH but
+   * WITHHOLDS its presence broadcast — it never publishes the federated presence
+   * copy, so no co-member can fold it. This is enforced at the SOURCE (the
+   * producer's `federate` flag), not as a subscriber-side UI filter — a hidden
+   * member is truly absent from co-members' Network view. A network-less stack
+   * federates nothing regardless, so this key only bites once ≥1 network is
+   * joined.
+   *
+   * OPTIONAL (not `.default`): absence is treated as `"visible"` at the consumer
+   * (`presence !== "hidden"`), so existing configs + literals need no `presence`
+   * key and keep byte-identical behaviour. Only an explicit `"hidden"` opts out.
+   */
+  presence: z.enum(["visible", "hidden"]).optional(),
 });
 
 export type PolicyFederated = z.infer<typeof PolicyFederatedSchema>;

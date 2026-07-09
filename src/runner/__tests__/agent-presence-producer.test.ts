@@ -19,6 +19,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AgentPresenceProducer,
   presenceAgentFromAgent,
+  shouldFederatePresence,
   DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS,
   type PresenceAgent,
   type PresenceScheduler,
@@ -581,5 +582,35 @@ describe("AgentPresenceProducer federation opt-in (E.1)", () => {
     await producer.stop();
     const cls = classificationsFor(runtime.published, "agent.offline").sort();
     expect(cls).toEqual(["federated", "local"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FS-1 (cortex#1825, design §3 D-1 Rider R2) — presence: hidden opt-out
+// ---------------------------------------------------------------------------
+//
+// `shouldFederatePresence` is the boot decision that feeds the producer's
+// `federate` flag. Combined with the federate:true/false emit tests above, this
+// proves the full R2 chain: `presence: "hidden"` ⇒ federate false ⇒ the producer
+// emits ONLY local (no `federated.*` copy) ⇒ no co-member can fold a hidden
+// member (truly hidden, server-side — not a UI filter).
+
+describe("FS-1 R2 — shouldFederatePresence (presence: hidden opt-out)", () => {
+  test("no networks ⇒ never federates (nothing to federate to)", () => {
+    expect(shouldFederatePresence(undefined)).toBe(false);
+    expect(shouldFederatePresence({ networks: [] })).toBe(false);
+  });
+
+  test("networks joined, presence visible/absent ⇒ federates (default)", () => {
+    expect(shouldFederatePresence({ networks: [{}] })).toBe(true);
+    expect(shouldFederatePresence({ networks: [{}], presence: "visible" })).toBe(true);
+  });
+
+  test("networks joined but presence: hidden ⇒ does NOT federate (R2 opt-out)", () => {
+    expect(shouldFederatePresence({ networks: [{}], presence: "hidden" })).toBe(false);
+  });
+
+  test("presence: hidden with NO networks is still false (network gate first)", () => {
+    expect(shouldFederatePresence({ networks: [], presence: "hidden" })).toBe(false);
   });
 });

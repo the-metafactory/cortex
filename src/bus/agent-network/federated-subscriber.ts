@@ -244,6 +244,31 @@ export interface StartFederatedAgentPresenceSubscriberOptions {
    * a test can assert deterministic `lastAt` values. Defaults to `Date.now`.
    */
   now?: () => number;
+  /**
+   * FS-1 (cortex#1825, design §3 D-1) — **presence-by-membership** oracle. Pure,
+   * synchronous predicate: is `sourcePrincipal` an ADMITTED member of a joined
+   * network (per the authoritative admission-rows roster, ADR-0018 Q3)? When it
+   * returns true for a source that the accept-list gate would otherwise deny with
+   * the OFFERINGS precondition (`peer_not_in_accept_list`, incl.
+   * `unknown_network`), the presence is folded ANYWAY — membership IS the
+   * accept-list for presence (D-1). This drops the hand-pin/offerings precondition
+   * for folding, NOT the crypto: GATE 2 (`verifySignedByChain`) + source-binding
+   * are unchanged. Other deny kinds (deny_subjects, hop budget, leaf anti-spoof)
+   * are SAFETY checks and are NEVER overridden. Omitted ⇒ defaults to "never a
+   * member" ⇒ byte-identical to pre-FS-1 (peers[]-only) behaviour.
+   */
+  isAdmittedMember?: (sourcePrincipal: string) => boolean;
+  /**
+   * FS-1 (cortex#1825) — principals for which the operator HAND-PINNED a
+   * `peers[].principal_pubkey` in the ORIGINAL config (pre-resolution). DD-11 is
+   * UNCHANGED for these: a hand-pinned peer keeps the exact pre-FS-1 path
+   * (`resolveFederatedPeers`: matching pin → admit; mismatching pin → fail-closed
+   * DROP), so it is NEVER re-admitted by membership — a membership-fold of a
+   * hand-pinned peer would silently paper over a DD-11 pin-mismatch drop.
+   * Presence-by-membership is for membership-ONLY peers (no local pin). Omitted ⇒
+   * empty set (no hand-pins to exclude).
+   */
+  handPinnedPrincipals?: ReadonlySet<string>;
 }
 
 /** cortex#1213 — payload handed to {@link StartFederatedAgentPresenceSubscriberOptions.onDenialBubbleUp}. */
@@ -280,6 +305,10 @@ export async function startFederatedAgentPresenceSubscriber(
     receipts,
   } = opts;
   const cryptoVerify = opts.cryptoVerify ?? true;
+  // FS-1 (cortex#1825) — presence-by-membership oracle + DD-11 hand-pin guard.
+  // Defaults keep pre-FS-1 behaviour: no membership-fold, no hand-pins.
+  const isAdmittedMember = opts.isAdmittedMember ?? ((): boolean => false);
+  const handPinnedPrincipals = opts.handPinnedPrincipals ?? new Set<string>();
   // FS-6 — receiver clock for received-presence receipts.
   const now = opts.now ?? Date.now;
   // cortex#1213 — dedupe the `system.access.denied` audit emits. Default to a
@@ -417,18 +446,50 @@ export async function startFederatedAgentPresenceSubscriber(
         sourceLink,
       );
       if (decision !== "allow") {
-        emitDeny(
-          {
-            capability: "federated.subject_dispatch",
-            subject,
-            reason: decision.kind,
-            source: sourcePrincipal,
-          },
-          () => {
-            emitFederationDenied(runtime, source, envelope, subject, decision);
-          },
+        // FS-1 (cortex#1825, D-1) — PRESENCE-BY-MEMBERSHIP override. The OFFERINGS
+        // precondition — `peer_not_in_accept_list` (a source in no configured
+        // `peers[]`, incl. `unknown_network`, OR whose subtree is not on
+        // `accept_subjects`) — is DROPPED for presence: an ADMITTED member of the
+        // verified admission roster (ADR-0018 Q3) folds even with no `peers[]`
+        // offering. This drops the hand-pin/offerings precondition, NOT the crypto:
+        // GATE 2 (`verifySignedByChain`) + source-binding run UNCHANGED below.
+        //
+        // ONLY `peer_not_in_accept_list` is an offering precondition. `peer_deny_list`,
+        // `max_hop_exceeded`, and `source_link_mismatch` are SAFETY / anti-spoof
+        // checks — NEVER overridden by membership (a member on a deny-listed subject,
+        // over the hop budget, or spoofed onto the wrong leaf is still hard-denied).
+        //
+        // DD-11 UNCHANGED: a HAND-PINNED peer keeps the exact pre-FS-1 path
+        // (`resolveFederatedPeers`: matching pin → admit; mismatching pin →
+        // fail-closed drop). It is NEVER re-admitted by membership — that would
+        // silently paper over a DD-11 pin-mismatch drop. Membership-fold is for
+        // membership-ONLY peers (no local pin).
+        const foldByMembership =
+          decision.kind === "peer_not_in_accept_list" &&
+          isAdmittedMember(sourcePrincipal) &&
+          !handPinnedPrincipals.has(sourcePrincipal);
+        if (!foldByMembership) {
+          emitDeny(
+            {
+              capability: "federated.subject_dispatch",
+              subject,
+              reason: decision.kind,
+              source: sourcePrincipal,
+            },
+            () => {
+              emitFederationDenied(runtime, source, envelope, subject, decision);
+            },
+          );
+          return;
+        }
+        // Admitted member, no offering, no hand-pin → fold BY MEMBERSHIP. Fall
+        // through to GATE 2 (crypto/source-binding UNCHANGED). Grep-friendly line
+        // so the pilot loop / on-call can confirm the D-1 path fired.
+        process.stderr.write(
+          `federated-agent-presence: folding ${envelope.type} (id=${envelope.id}) ` +
+            `from ADMITTED member "${sourcePrincipal}" by MEMBERSHIP ` +
+            `(no peers[] offering; D-1 presence-by-membership)\n`,
         );
-        return;
       }
     }
 
