@@ -392,6 +392,89 @@ describe("runDoctorChecks — (c) no monitor configured", () => {
 });
 
 // ---------------------------------------------------------------------------
+// FS-5a (cortex#1814) — doctor DEFAULTS the monitor URL like status/C-797:
+// an UNCONFIGURED monitor is still PROBED (at DEFAULT_MONITOR_URL). A reachable
+// default now PASSES (leaf legs run → a healthy leaf reads healthy) instead of
+// short-circuiting to WARN + skip. A genuinely-down default still degrades to
+// WARN (never a hard `broken`, never a crash).
+// ---------------------------------------------------------------------------
+
+describe("runDoctorChecks — FS-5a monitor-URL default (status/C-797 parity)", () => {
+  test("absent --monitor-url but the DEFAULT monitor responds ⇒ monitor-reachable PASSES and leaf legs run", async () => {
+    // `configured: false` models "no explicit --monitor-url and no derivable
+    // http_port" — resolveMonitorBase's DEFAULT_MONITOR_URL fallback. The
+    // default `:8222` is reachable (leafz present), so the leaf on this healthy
+    // bus must be VISIBLE, not skipped.
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: false, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 33)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const monitorCheck = findCheck(res.checks, "monitor-reachable");
+    expect(monitorCheck.status).toBe("pass");
+    expect(monitorCheck.detail).toContain("127.0.0.1:8222");
+    // The leaf legs now RUN off the default-probed /leafz instead of skipping.
+    expect(findCheck(res.checks, "leaf-established").status).toBe("pass");
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("pass");
+    // The healthy leaf is no longer mislabelled broken.
+    expect(res.verdict).toBe("healthy");
+    expect(res.exitCode).toBe(0);
+  });
+
+  test("explicit --monitor-url is honored — a CONFIGURED reachable monitor PASSES", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({
+        configured: true,
+        url: "http://127.0.0.1:8224",
+        leafz: ESTABLISHED_LEAFZ,
+      }),
+      probe: fakeProbe((f) => echoReply(f, 27)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const monitorCheck = findCheck(res.checks, "monitor-reachable");
+    expect(monitorCheck.status).toBe("pass");
+    // The explicit URL (a community bus on :8224) is probed, not the default.
+    expect(monitorCheck.detail).toContain("127.0.0.1:8224");
+    expect(findCheck(res.checks, "leaf-established").status).toBe("pass");
+    expect(res.verdict).toBe("healthy");
+  });
+
+  test("a genuinely-down DEFAULT monitor degrades to WARN (not broken, not a crash)", async () => {
+    // `configured: false` + no leafz ⇒ we probed the default and it did not
+    // respond. That is INCONCLUSIVE — WARN + skip the leaf legs — never a hard
+    // FAIL/`broken`. (This is the acceptance's genuinely-down-monitor case; it
+    // shares the pre-FS-5a "(c)" assertions, kept here for FS-5a locality.)
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()]),
+      monitor: fakeMonitorPort({ configured: false }), // default probed, no response
+      probe: fakeProbe((f) => echoReply(f, 30)),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+
+    const monitorCheck = findCheck(res.checks, "monitor-reachable");
+    expect(monitorCheck.status).toBe("warn");
+    expect(monitorCheck.fix).toContain("http_port/monitor_port");
+    expect(findCheck(res.checks, "leaf-established").status).toBe("skip");
+    expect(findCheck(res.checks, "leaf-account-bound").status).toBe("skip");
+    // A warn never blocks healthy — the verdict must not be broken.
+    expect(res.verdict).not.toBe("broken");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (d) leaf down
 // ---------------------------------------------------------------------------
 

@@ -4920,18 +4920,31 @@ export async function startCortex(
               ...(options.stack !== undefined && { stack: options.stack }),
               ...(resolvedPolicy !== undefined && { policy: resolvedPolicy }),
             };
+            // FS-5a (cortex#1814) — thread the daemon's OWN nats-server config
+            // path so `resolveMonitorBase` config-derives the monitor URL (a
+            // community bus on `:8224`, not the wrong `:8222`) and, absent an
+            // `http_port`, falls back to `DEFAULT_MONITOR_URL` — the SAME
+            // resolution `status`/`buildLeafStatePort` use. Combined with the
+            // FS-5a `checkMonitorReachable` change (probe the default, not
+            // skip), the glass doctor now reaches the same verdict as the CLI
+            // for a healthy leaf instead of pessimistically warning + skipping.
+            const daemonNatsConfigPath = options.stack?.nats_infra?.config_path;
             const livePortsCfg: LivePortsConfig = {
               networkId,
               principalId,
               stackId: options.stack?.id ?? principalId,
+              ...(daemonNatsConfigPath !== undefined && daemonNatsConfigPath !== ""
+                ? { natsConfigPath: daemonNatsConfigPath }
+                : {}),
             };
             const ports: NetworkDoctorPorts = {
               // The composed networks (config-split-aware); `runDoctorChecks`
               // finds the one by id. Same adapter the CLI factory builds.
               config: buildDoctorConfigPort({ networks: fedNetworks }),
-              // No daemon-known monitor config path ⇒ monitor-reachable warns
-              // and the leaf legs skip (HONEST degradation) rather than guess a
-              // monitor URL and risk a false "unreachable" fail.
+              // FS-5a — resolve the monitor via `resolveMonitorBase` (explicit →
+              // config-derive from the threaded nats config → DEFAULT_MONITOR_URL)
+              // and PROBE it, matching `status`. A genuinely-down monitor still
+              // degrades to WARN/unknown (never a hard `broken`), never a crash.
               monitor: buildMonitorPort(livePortsCfg),
               probe: {
                 bus: wrapRuntimeAsProbeBus(runtime),

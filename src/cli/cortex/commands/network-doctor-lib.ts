@@ -414,37 +414,54 @@ async function checkMonitorReachable(
   const title = "local NATS monitor reachable";
   const resolved = ports.monitor.resolve();
 
-  // #831 — absent monitor is INCONCLUSIVE, not a failure: warn, and let
-  // downstream leaf checks skip (they have no /leafz to read).
+  // FS-5a (cortex#1814) — PROBE the resolved monitor even when it is the
+  // unconfigured `DEFAULT_MONITOR_URL` fallback, so `doctor` reaches the SAME
+  // verdict as `status`/C-797. `status`'s `buildLeafStatePort` always fetches
+  // `resolveMonitorBase(cfg).url` — default `127.0.0.1:8222` included — and only
+  // degrades to "unknown" on a genuine fetch failure; the pre-FS-5a doctor
+  // instead SHORT-CIRCUITED to WARN on `!configured` and never probed, so a
+  // HEALTHY leaf on a bus with no explicit monitor knob read `broken` (the leaf
+  // legs skipped for want of `/leafz`). We now always attempt the probe.
+  const leafz = await ports.monitor.fetchLeafz();
+  if (leafz !== undefined) {
+    return {
+      result: check(id, title, "pass", `${resolved.url}/leafz responded`, "member"),
+      leafz,
+    };
+  }
+
+  // Probe failed. #831 — an UNCONFIGURED monitor (bus declares no
+  // `--monitor-url` / `http_port` / `monitor_port`; we probed the upstream
+  // default) is INCONCLUSIVE, not a failure: WARN and let the leaf legs skip
+  // (they have no `/leafz`). This is the graceful path the FS-5a acceptance
+  // demands — a genuinely-down monitor ⇒ WARN/unknown, never `broken`-by-default
+  // and never a crash (the fetch catch already swallowed the error to
+  // `undefined`).
   if (!resolved.configured) {
     return {
       result: check(
         id,
         title,
         "warn",
-        "no monitor configured for this bus (no --monitor-url / http_port / monitor_port)",
+        `no monitor reachable for this bus (probed ${resolved.url}; no --monitor-url / http_port / monitor_port configured)`,
         "member",
         "enable http_port/monitor_port on the local bus for full leaf verification",
       ),
     };
   }
 
-  const leafz = await ports.monitor.fetchLeafz();
-  if (leafz === undefined) {
-    return {
-      result: check(
-        id,
-        title,
-        "fail",
-        `monitor at ${resolved.url} did not respond to /leafz`,
-        "member",
-        "confirm the local nats-server is running and its monitor port is reachable",
-      ),
-    };
-  }
+  // A CONFIGURED monitor (explicit flag or derived from the nats config) that
+  // did not respond is a genuine FAIL — the principal asked for this monitor and
+  // it is down.
   return {
-    result: check(id, title, "pass", `${resolved.url}/leafz responded`, "member"),
-    leafz,
+    result: check(
+      id,
+      title,
+      "fail",
+      `monitor at ${resolved.url} did not respond to /leafz`,
+      "member",
+      "confirm the local nats-server is running and its monitor port is reachable",
+    ),
   };
 }
 
