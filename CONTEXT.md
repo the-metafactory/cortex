@@ -48,6 +48,10 @@ _Avoid_: conflating the **leaf link** (live connection) with the **leaf remote**
 The metadata service of a federation (`network.meta-factory.ai`) — the **DNS of the federation**, and the third central component alongside the **Hub** (transport) and **Network** (logical roster). It holds each network's **descriptor** (`hub_url` / `leaf_port` / `hub_fed_account` / hub-mode attestation) + the **roster** (admitted principals, *derived* from ADMITTED admission rows), and hosts the **admission gate** (`register → PENDING → admit`, per-network admin per [ADR-0020](docs/adr/0020-per-network-admin-authority.md)). It stores the **one pubkey** a stack self-publishes and **signs nothing about identity**; cortex **pins + verifies** it (`policy.federated.registry.{url,pubkey}`). It mints **no** credential — admission is a roster decision; the transport **Leaf credential** is minted separately by the **seal** (hub-admin).
 _Avoid_: "the registry mints/signs my creds" (it stores metadata + gates admission — the hub-admin seals the transport cred); conflating it with the **hub** (server / transport) or the **network** (roster).
 
+**Network descriptor**:
+The registry's signed, per-network record that tells a joiner *where and how* to reach the hub: `hub_url` + `leaf_port` (the **Hub**), `hub_fed_account` (the **Hub federation account**), and the **hub-mode attestation** (`hub_mode: operator` + `resolver_mode: nats` — the operator-mode + push-capable-resolver facts the **seal** requires, [ADR-0023](docs/adr/0023-federation-leaf-credential-model.md)). `cortex network join` renders the **leaf remote** from it; cortex **pins + verifies** it against the registry pubkey. It is the *connection* half of the registry's data; the **roster** is the *membership* half — the descriptor is **how you reach the hub**, the roster is **who is on the network**.
+_Avoid_: conflating the **descriptor** (connection facts) with the **roster** (membership).
+
 ### Assistants & agents
 
 **Assistant**:
