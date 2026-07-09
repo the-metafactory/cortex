@@ -111,6 +111,65 @@ export interface MonitorPort {
 // The ports bundle
 // =============================================================================
 
+// =============================================================================
+// FS-5b (cortex#1842) — per-peer "can I hear X?" staged-chain seams
+// =============================================================================
+
+/**
+ * FS-5b (cortex#1842) — the four INJECTED data needs of the per-peer "can I hear
+ * X?" staged chain (`cred-perms → import → envelopes-arriving → …→ fold`). The
+ * FIFTH stage — `gate` — is NOT here: it is computed PURELY in the orchestrator
+ * by calling the real `evaluateFederationGate` (`surface-router.ts:1057`) against
+ * a representative presence envelope, so the doctor exercises the exact accept-
+ * list/deny/hop/anti-spoof logic the live subscriber runs (reuse, not reinvent).
+ *
+ * Every method is BEST-EFFORT: a `undefined` return means "could not determine
+ * from here" and the stage degrades to `warn` (never a false `fail`), exactly
+ * like the monitor-inconclusive and Pair-3-stub legs already do. A `false`
+ * return is a POSITIVE negative — the stage FAILs and the chain stops (later
+ * stages `skip`), because the first failing stage names the break.
+ *
+ * OPTIONAL on {@link NetworkDoctorPorts}: when the whole port is absent (no
+ * runtime wired), the four non-gate stages all `warn` and only the pure `gate`
+ * stage yields a hard verdict — a coherent, honest partial diagnosis.
+ */
+export interface PeerHearingPorts {
+  /**
+   * cred-perms — does my leaf credential's `allow-sub` permit `scope`
+   * (`federated.{X.principal}.{X.stack}.>`)? `true` = permitted, `false` = the
+   * cred cannot subscribe X's scope (widen `allow-sub`), `undefined` = the cred
+   * / its permissions could not be read (degrade to warn). Synchronous — a
+   * static file/JWT read.
+   */
+  credAllowsScope(scope: string): boolean | undefined;
+  /**
+   * import — is `scope` actually imported/subscribed on the live leaf named
+   * `leafNode`? Read from the nats-server monitor's subscription interest.
+   * `false` = the cred allows it but the leaf is not subscribed (import/reconnect
+   * gap); `undefined` = subscription interest could not be read (warn).
+   */
+  scopeImported(scope: string, leafNode: string): Promise<boolean | undefined>;
+  /**
+   * envelopes-arriving — are X's presence envelopes physically reaching my bus?
+   * A LIVE bounded subscribe on `federated.{X.principal}.{X.stack}.agent.>` for
+   * `timeoutMs` (the SAME runtime transport `ping`'s probe uses — the doctor's
+   * one bounded read-side probe per peer, matching Leg 5's read-only+one-probe
+   * contract). `true` = ≥1 envelope arrived, `false` = subscribed but silent
+   * (hub-side import/pub gap — the jc case), `undefined` = could not probe (no
+   * runtime; warn).
+   */
+  presenceArriving(scope: string, timeoutMs: number): Promise<boolean | undefined>;
+  /**
+   * fold — does X's presence actually fold onto the roster? Returns the peer
+   * principal's membership verdict (`admitted-present` when folded; an `absent-*`
+   * string when gate-passed-but-not-folding — FS-1 source-binding/pubkey
+   * territory). `undefined` = the roster verdict is not determinable from the CLI
+   * (it lives in the running daemon's memory — warn, "run on the daemon / check
+   * Mission Control").
+   */
+  foldVerdict(principal: string): string | undefined;
+}
+
 export interface NetworkDoctorPorts {
   config: DoctorConfigPort;
   monitor: MonitorPort;
@@ -121,4 +180,10 @@ export interface NetworkDoctorPorts {
    * check per configured peer instead of a `ping -c` report.
    */
   probe: NetworkPingPorts;
+  /**
+   * FS-5b (cortex#1842) — OPTIONAL per-peer "can I hear X?" staged-chain seams.
+   * Absent ⇒ the four non-gate stages degrade to `warn` and only the pure `gate`
+   * stage yields a hard verdict.
+   */
+  hearing?: PeerHearingPorts;
 }

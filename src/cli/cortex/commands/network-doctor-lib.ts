@@ -38,6 +38,11 @@
  * gracefully (warn/skip) rather than block downstream legs.
  */
 
+import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import {
+  evaluateFederationGate,
+  type FederationGateDecision,
+} from "../../../bus/surface-router";
 import type { LoadedConfig } from "../../../common/config/loader";
 import { stackSlugFromStackId } from "../../../common/stack-id";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
@@ -52,6 +57,7 @@ import type {
   LeafzEntry,
   LeafzResponse,
   NetworkDoctorPorts,
+  PeerHearingPorts,
 } from "./network-doctor-ports";
 
 // ---------------------------------------------------------------------------
@@ -720,6 +726,277 @@ async function checkPeerReachable(
 }
 
 // ---------------------------------------------------------------------------
+// Leg 5b — per-peer "can I hear X?" staged chain (FS-5b, cortex#1842)
+// ---------------------------------------------------------------------------
+
+/**
+ * FS-5b (cortex#1842) — decompose the one-directional presence path (X → me)
+ * into FIVE ordered stages so the FIRST failing stage names WHERE the break is,
+ * instead of a broken fold looking identical to a broken cred:
+ *
+ *   1. cred-perms          — my leaf cred's allow-sub permits X's scope?
+ *   2. import              — the live leaf is actually subscribed to X's scope?
+ *   3. envelopes-arriving  — X's presence physically reaches my bus? (the ONE
+ *                            bounded live subscribe per peer — see the seam note)
+ *   4. gate                — evaluateFederationGate ACCEPTS an envelope from X?
+ *   5. fold                — X's presence actually folds onto the roster?
+ *
+ * ## Stage-3 transport seam (option a — live bounded subscribe)
+ *
+ * envelopes-arriving PREFERS a live bounded subscribe on
+ * `federated.{X.principal}.{X.stack}.agent.>` for `probeTimeoutMs`, reusing the
+ * SAME runtime transport `ping`'s probe rides (`wrapRuntimeAsPresenceListener`,
+ * network-ping-adapters.ts) — self-contained (no daemon dependency), matching
+ * the doctor's read-only + one-probe-per-peer contract. The rejected
+ * alternative (option b) — querying a running daemon's
+ * `FederatedPresenceReceipts.everReceived(X)` via an MC endpoint — is more
+ * faithful to what the daemon actually heard but couples the CLI to a live
+ * daemon + a new read endpoint; option a keeps the doctor standalone. The
+ * `undefined` (no-runtime) path degrades to `warn`, never a false `fail`.
+ *
+ * ## Chain semantics
+ *
+ * A stage FAIL stops the chain — every later stage is `skip` (running a probe a
+ * broken prerequisite can't support is noise; the first failing stage IS the
+ * diagnosis). A `warn` (undeterminable, e.g. `hearing` port absent) does NOT
+ * stop the chain. The `gate` stage is computed PURELY (no injected port) via the
+ * real {@link evaluateFederationGate}; the other four ride {@link PeerHearingPorts}.
+ */
+type HearingStage =
+  | "cred-perms"
+  | "import"
+  | "envelopes-arriving"
+  | "gate"
+  | "fold";
+
+function hearingCheckId(stage: HearingStage, label: string): string {
+  return `peer-hearing:${stage}:${label}`;
+}
+
+function hearingTitle(stage: HearingStage, label: string): string {
+  return `can I hear ${label}? — ${stage}`;
+}
+
+/**
+ * The gate stage, computed PURELY by calling the REAL
+ * {@link evaluateFederationGate} against a representative presence envelope from
+ * peer X — the doctor exercises the exact accept-list/deny/hop logic the live
+ * federated subscriber runs (reuse, not reinvent).
+ *
+ * `sourceLink` is deliberately left undefined: the anti-spoof cross-check is a
+ * LIVE delivering-link property, not a config one — supplying a synthetic link
+ * would test something other than "would my posture accept X's presence". The
+ * gate skips that check when `sourceLink` is undefined, matching an
+ * un-attributed / primary-routed inbound.
+ */
+function evaluatePeerPresenceGate(
+  ports: NetworkDoctorPorts,
+  targetPrincipal: string,
+  targetStack: string,
+): FederationGateDecision {
+  const networksById = new Map<string, PolicyFederatedNetwork>();
+  for (const n of ports.config.readNetworks().networks) networksById.set(n.id, n);
+
+  const subject = `federated.${targetPrincipal}.${targetStack}.agent.presence`;
+  const envelope: Envelope = {
+    id: "00000000-0000-4000-8000-000000000000",
+    // `source` leads with the SOURCE PRINCIPAL — the gate resolves the source
+    // network from `principalFromEnvelope(envelope)` (the first `source` segment).
+    source: `${targetPrincipal}.${targetStack}.presence`,
+    type: "agent.presence.online",
+    timestamp: "1970-01-01T00:00:00.000Z",
+    sovereignty: {
+      classification: "federated",
+      data_residency: "NZ",
+      max_hop: 1,
+      frontier_ok: false,
+      model_class: "local-only",
+    },
+    payload: {},
+  };
+  return evaluateFederationGate(subject, envelope, networksById);
+}
+
+/**
+ * Run the five-stage "can I hear X?" chain for ONE configured peer, returning
+ * one {@link DoctorCheck} per stage (owner `"peer"`), in order. Read-only apart
+ * from the ONE bounded presence subscribe (stage 3), matching Leg 5's contract.
+ */
+async function checkPeerHearing(
+  ports: NetworkDoctorPorts,
+  opts: DoctorOptions,
+  network: PolicyFederatedNetwork,
+  peer: PolicyFederatedNetwork["peers"][number],
+): Promise<DoctorCheck[]> {
+  const targetStack = stackSlugFromStackId(peer.stack_id);
+  const label = `${peer.principal_id}/${targetStack}`;
+  const scope = `federated.${peer.principal_id}.${targetStack}.>`;
+  const timeoutMs = opts.probeTimeoutMs ?? DEFAULT_DOCTOR_PROBE_TIMEOUT_MS;
+  const hearing: PeerHearingPorts | undefined = ports.hearing;
+
+  const results: DoctorCheck[] = [];
+  // Once a stage FAILS, every later stage is `skip` — the first failing stage
+  // names the break. A `warn` (undeterminable) does NOT stop the chain.
+  let brokenBy: HearingStage | undefined;
+
+  const hc = (
+    stage: HearingStage,
+    status: DoctorCheckStatus,
+    detail: string,
+    fix?: string,
+  ): DoctorCheck =>
+    check(hearingCheckId(stage, label), hearingTitle(stage, label), status, detail, "peer", fix);
+
+  const skipStage = (stage: HearingStage): DoctorCheck =>
+    check(
+      hearingCheckId(stage, label),
+      hearingTitle(stage, label),
+      "skip",
+      `skipped — an earlier hearing stage (${brokenBy ?? "?"}) failed; fix that first`,
+      "peer",
+    );
+
+  // --- Stage 1: cred-perms ---------------------------------------------------
+  const allowed = hearing?.credAllowsScope(scope);
+  if (allowed === undefined) {
+    results.push(
+      hc(
+        "cred-perms",
+        "warn",
+        `could not read my leaf cred's allow-sub to verify it permits ${scope} (cred unreadable / not operator-mode / not wired)`,
+        "confirm the leaf cred named in leafnodes-<network>.conf permits sub on this peer's federated scope",
+      ),
+    );
+  } else if (!allowed) {
+    results.push(
+      hc(
+        "cred-perms",
+        "fail",
+        `my leaf credential's allow-sub does NOT permit ${scope} — I can never subscribe X's presence`,
+        "widen the leaf cred's allow-sub to include this peer's federated scope, then reconnect the leaf",
+      ),
+    );
+    brokenBy = "cred-perms";
+  } else {
+    results.push(hc("cred-perms", "pass", `leaf cred allow-sub permits ${scope}`));
+  }
+
+  // --- Stage 2: import -------------------------------------------------------
+  if (brokenBy !== undefined) {
+    results.push(skipStage("import"));
+  } else {
+    const imported =
+      hearing !== undefined ? await hearing.scopeImported(scope, network.leaf_node) : undefined;
+    if (imported === undefined) {
+      results.push(
+        hc(
+          "import",
+          "warn",
+          `could not read the leaf's subscription interest to confirm ${scope} is imported`,
+          "enable the nats-server monitor (http_port/monitor_port) so leaf import interest is visible to doctor",
+        ),
+      );
+    } else if (!imported) {
+      results.push(
+        hc(
+          "import",
+          "fail",
+          `the cred allows ${scope} but the live leaf "${network.leaf_node}" is NOT subscribed to it — an import/reconnect gap`,
+          "reconnect the leaf (or restart the daemon) so the federated presence interest is re-imported onto the leaf",
+        ),
+      );
+      brokenBy = "import";
+    } else {
+      results.push(hc("import", "pass", `${scope} is imported on leaf "${network.leaf_node}"`));
+    }
+  }
+
+  // --- Stage 3: envelopes-arriving (the ONE bounded live subscribe) ----------
+  if (brokenBy !== undefined) {
+    results.push(skipStage("envelopes-arriving"));
+  } else {
+    const arriving =
+      hearing !== undefined ? await hearing.presenceArriving(scope, timeoutMs) : undefined;
+    if (arriving === undefined) {
+      results.push(
+        hc(
+          "envelopes-arriving",
+          "warn",
+          `could not run the bounded presence subscribe on ${scope} (no runtime wired / bus disabled)`,
+          "run doctor against a reachable bus so it can subscribe this peer's presence scope",
+        ),
+      );
+    } else if (!arriving) {
+      results.push(
+        hc(
+          "envelopes-arriving",
+          "fail",
+          `subscribed ${scope} but NO presence envelope arrived within ${timeoutMs.toString()}ms — nothing is reaching my bus (hub-side import/pub gap; this was the jc case)`,
+          "check the HUB imports/exports X's scope onto my leaf, and that X's stack is actually publishing presence",
+        ),
+      );
+      brokenBy = "envelopes-arriving";
+    } else {
+      results.push(
+        hc("envelopes-arriving", "pass", `≥1 presence envelope from ${scope} arrived on my bus`),
+      );
+    }
+  }
+
+  // --- Stage 4: gate (PURE — the real evaluateFederationGate) ----------------
+  if (brokenBy !== undefined) {
+    results.push(skipStage("gate"));
+  } else {
+    const decision = evaluatePeerPresenceGate(ports, peer.principal_id, targetStack);
+    if (decision === "allow") {
+      results.push(
+        hc("gate", "pass", `evaluateFederationGate ACCEPTS a presence envelope from ${label}`),
+      );
+    } else {
+      results.push(
+        hc(
+          "gate",
+          "fail",
+          `a presence envelope from ${label} is DROPPED by evaluateFederationGate (${decision.kind}) under my current posture/accept-list/peers`,
+          "fix the accept_subjects/deny_subjects/peers[]/hop budget for this network so X's presence subject is accepted",
+        ),
+      );
+      brokenBy = "gate";
+    }
+  }
+
+  // --- Stage 5: fold ---------------------------------------------------------
+  if (brokenBy !== undefined) {
+    results.push(skipStage("fold"));
+  } else {
+    const verdict = hearing?.foldVerdict(peer.principal_id);
+    if (verdict === undefined) {
+      results.push(
+        hc(
+          "fold",
+          "warn",
+          `the roster fold verdict for ${peer.principal_id} is not determinable from the CLI (it lives in the running daemon's memory)`,
+          "check the daemon / Mission Control roster for this peer's membership verdict",
+        ),
+      );
+    } else if (verdict !== "admitted-present") {
+      results.push(
+        hc(
+          "fold",
+          "fail",
+          `${label} passes the gate but does NOT fold onto the roster (verdict "${verdict}", not "admitted-present") — source-binding/pubkey (FS-1 territory)`,
+          "verify X's presence is source-bound to a pubkey I trust (FS-1 #1825): the fold drops presence whose signer pubkey is missing/wrong",
+        ),
+      );
+    } else {
+      results.push(hc("fold", "pass", `${label} folds onto the roster (admitted-present)`));
+    }
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Verdict aggregation
 // ---------------------------------------------------------------------------
 
@@ -825,6 +1102,17 @@ export async function runDoctorChecks(
     network.peers.map((peer) => checkPeerReachable(ports, opts, peer)),
   );
   checks.push(...peerChecks);
+
+  // 5b. FS-5b (cortex#1842) — per-peer "can I hear X?" staged chain. One ordered
+  // five-stage sub-report per configured peer (cred-perms → import →
+  // envelopes-arriving → gate → fold), so the FIRST failing stage names WHERE
+  // the one-directional presence path (X → me) breaks. Read-only apart from the
+  // ONE bounded presence subscribe per peer (stage 3), matching Leg 5's
+  // read-only+one-probe contract. Concurrent per peer (each chain is independent).
+  const peerHearing = await Promise.all(
+    network.peers.map((peer) => checkPeerHearing(ports, opts, network, peer)),
+  );
+  for (const chain of peerHearing) checks.push(...chain);
 
   const verdict = aggregateVerdict(checks);
   return { checks, verdict, exitCode: DOCTOR_EXIT_CODE[verdict] };

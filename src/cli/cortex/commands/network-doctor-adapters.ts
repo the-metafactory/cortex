@@ -32,7 +32,9 @@ import type {
   DoctorNetworksSnapshot,
   LeafzResponse,
   MonitorPort,
+  PeerHearingPorts,
 } from "./network-doctor-ports";
+import type { PresenceListenerPort } from "./network-ping-adapters";
 import {
   resolveConfigIncludes,
   scanForLeafnodeAuthorizationBomb,
@@ -225,6 +227,53 @@ const doctorConfigFileReader: ConfigFileReader = {
     return join(dir, file);
   },
 };
+
+// =============================================================================
+// FS-5b (cortex#1842) — live per-peer "can I hear X?" hearing port.
+// =============================================================================
+
+/**
+ * The live {@link PeerHearingPorts}. Only the STAGE-3 seam (`presenceArriving`,
+ * the one bounded live subscribe — the headline diagnosis of the two-day
+ * zero-presence hunt) is fully wired here, via the injected
+ * {@link PresenceListenerPort} (`wrapRuntimeAsPresenceListener`, reusing `ping`'s
+ * runtime transport). The other three seams degrade to `undefined` ("could not
+ * determine from here" ⇒ the stage `warn`s, NEVER a false `fail`), each for an
+ * HONEST reason the pure orchestrator + unit tests already exercise fully with
+ * fakes:
+ *
+ *   - `credAllowsScope` — parsing the leaf cred's JWT `allow-sub` is a follow-up
+ *     (a false negative here would be a false alarm; a documented stub is more
+ *     honest than a half-parse, mirroring the Pair-3 sealed-secret leg).
+ *   - `scopeImported` — the federated presence interest is a SINGLE firehose
+ *     (`federated.*.*.agent.>`, per `federatedAgentPresenceSubject`), so live
+ *     leaf-import detection largely restates `leaf-established`; left as a
+ *     follow-up rather than risk a false negative from fuzzy subs matching.
+ *   - `foldVerdict` — the roster verdict lives in the RUNNING daemon's memory
+ *     (the `FederatedPresenceReceipts` ledger), unreadable from a standalone CLI
+ *     without a new daemon/MC read endpoint (the option-b coupling FS-5b's stage
+ *     3 deliberately avoids).
+ */
+export function buildPeerHearingPort(presence: PresenceListenerPort): PeerHearingPorts {
+  return {
+    // Follow-up: parse the leaf cred JWT allow-sub. Undeterminable ⇒ warn.
+    credAllowsScope(_scope: string): boolean | undefined {
+      return undefined;
+    },
+    // Follow-up: read leaf subscription interest. Undeterminable ⇒ warn.
+    scopeImported(_scope: string, _leafNode: string): Promise<boolean | undefined> {
+      return Promise.resolve(undefined);
+    },
+    // The live stage-3 probe: one bounded subscribe on X's presence scope.
+    presenceArriving(scope: string, timeoutMs: number): Promise<boolean | undefined> {
+      return presence.listen(scope, timeoutMs);
+    },
+    // The roster verdict is daemon-memory-resident; unreadable from the CLI.
+    foldVerdict(_principal: string): string | undefined {
+      return undefined;
+    },
+  };
+}
 
 /**
  * The live {@link MonitorPort}: resolves the monitor base via the SAME

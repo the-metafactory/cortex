@@ -64,6 +64,40 @@ export async function createLiveProbeBus(
 }
 
 /**
+ * FS-5b (cortex#1842) — a probe bus + presence listener sharing ONE runtime,
+ * so `doctor` opens a SINGLE NATS connection for BOTH read-sides (Leg 5's echo
+ * round-trip and Leg 5b stage-3's bounded presence subscribe). The shared
+ * {@link stop} drains that one runtime.
+ */
+export interface LiveProbeAndPresence {
+  bus: LiveProbeBus;
+  presence: PresenceListenerPort;
+  /** Arrow-typed (not a method) so destructuring `stop` never trips the
+   *  unbound-method lint — it captures the runtime, not `this`. */
+  stop: () => Promise<void>;
+}
+
+/**
+ * Start ONE runtime from the stack's `AgentConfig` and derive both the probe
+ * bus and the presence listener from it. Mirrors {@link createLiveProbeBus}'s
+ * signer handling; the runtime stays the single owner of the NATS connection.
+ */
+export async function createLiveProbeAndPresence(
+  config: AgentConfig,
+  signer?: BusEnvelopeSigner,
+): Promise<LiveProbeAndPresence> {
+  const runtime: MyelinRuntime = await startMyelinRuntime(
+    config,
+    signer !== undefined ? { signer } : undefined,
+  );
+  return {
+    bus: wrapRuntimeAsProbeBus(runtime),
+    presence: wrapRuntimeAsPresenceListener(runtime),
+    stop: () => runtime.stop(),
+  };
+}
+
+/**
  * Wrap an already-started runtime as a probe bus. Exported separately so an
  * integration test (or a future caller that already holds a runtime) can reuse
  * the fire/await logic without re-starting NATS.
@@ -139,6 +173,79 @@ export function wrapRuntimeAsProbeBus(runtime: MyelinRuntime): LiveProbeBus {
 
     async stop() {
       await runtime.stop();
+    },
+  };
+}
+
+// =============================================================================
+// FS-5b (cortex#1842) — live bounded presence listener (doctor stage 3)
+// =============================================================================
+
+/**
+ * FS-5b (cortex#1842) — a bounded, one-directional presence LISTENER, the live
+ * transport for the doctor's stage-3 "envelopes-arriving" probe. Reuses the
+ * SAME runtime primitives {@link wrapRuntimeAsProbeBus} rides (declare interest
+ * via `runtime.subscribe`, match on `runtime.onEnvelope`, race a timeout) but as
+ * a pure READ: no request goes on the wire — we only listen for X's presence.
+ */
+export interface PresenceListenerPort {
+  /**
+   * Subscribe `scope` (`federated.{X}.{stack}.>`) and resolve `true` on the
+   * FIRST envelope whose subject falls under it, else `false` after `timeoutMs`.
+   * Best-effort: a disabled runtime (or one lacking `subscribe`) resolves
+   * `undefined` so the stage warns rather than emitting a false `fail`.
+   */
+  listen(scope: string, timeoutMs: number): Promise<boolean | undefined>;
+}
+
+/**
+ * Wrap an already-started runtime as a {@link PresenceListenerPort}. Exported
+ * separately (like {@link wrapRuntimeAsProbeBus}) so the doctor factory can
+ * derive BOTH the probe bus and the presence listener from ONE runtime — a
+ * single NATS connection for the whole `doctor` run.
+ */
+export function wrapRuntimeAsPresenceListener(runtime: MyelinRuntime): PresenceListenerPort {
+  return {
+    async listen(scope: string, timeoutMs: number): Promise<boolean | undefined> {
+      // No bus / no self-subscribe seam ⇒ we cannot declare interest, so a
+      // silent timeout would be a FALSE negative. Report "undeterminable".
+      if (!runtime.enabled || typeof runtime.subscribe !== "function") return undefined;
+
+      // `scope` is `federated.{X}.{stack}.>`; the literal prefix (minus the `>`)
+      // is what an arriving subject must start with.
+      const prefix = scope.endsWith(".>") ? scope.slice(0, -1) : scope;
+
+      let resolveArrived: ((v: boolean) => void) | undefined;
+      const arrivedPromise = new Promise<boolean>((resolve) => {
+        resolveArrived = resolve;
+      });
+      const registration = runtime.onEnvelope((_env, subject) => {
+        if (subject.startsWith(prefix)) resolveArrived?.(true);
+      });
+
+      // Declare interest BEFORE racing the timeout so a fast heartbeat can't slip
+      // past our listener. May be null if the runtime declines — treat as
+      // undeterminable (we never declared interest, so a `false` would lie).
+      const sub = await runtime.subscribe(scope);
+      if (sub === null) {
+        registration.unregister();
+        return undefined;
+      }
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<false>((resolve) => {
+        timer = setTimeout(() => {
+          resolve(false);
+        }, timeoutMs);
+      });
+
+      try {
+        return await Promise.race([arrivedPromise, timeoutPromise]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        registration.unregister();
+        await sub.stop();
+      }
     },
   };
 }

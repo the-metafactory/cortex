@@ -491,6 +491,46 @@ describe("E.5 — TRUST: signed_by chain verification", () => {
     await handle.stop();
   });
 
+  test("FS-6 (cortex#1842) — a peer dropped at GATE 2 (chain-verify) STILL records a receipt", async () => {
+    // The receipt is recorded at federated-subscriber.ts:381, BEFORE both trust
+    // gates run — so a peer we can physically HEAR on the wire but whose chain
+    // fails verification (dropped at GATE 2, not GATE 1) is still "heard", never
+    // the misleading `absent-unheard`. Today only the GATE-1 drop path was
+    // receipt-tested; this locks the GATE-2 drop path too.
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const receipts = new FederatedPresenceReceipts();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      // joel IS accept-listed ⇒ passes GATE 1, so the drop is unambiguously GATE 2.
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      trustResolver: emptyTrustResolver(),
+      receivingAgentId: "luna",
+      principalId: "andreas",
+      cryptoVerify: false,
+      receipts,
+      now: () => 8888,
+    });
+    const signed = foreignOnline({
+      signedBy: [
+        { method: "ed25519", identity: "did:mf:stranger", signature: "x", timestamp: "t" } as unknown as SignedBy,
+      ],
+    });
+    runtime.fire(signed, FED_SUBJECT, "primary");
+    await flush();
+    // DROPPED at GATE 2 (chain-verify) — not folded…
+    expect(registry.getAgents().length).toBe(0);
+    const denied = runtime.published.find((e) => e.type === "system.access.denied");
+    expect(denied).toBeDefined();
+    expect((denied!.payload as { reason: { kind: string } }).reason.kind).toBe("chain_verify_failed");
+    // …yet the receipt WAS recorded (heard on the wire, before the gates).
+    expect(receipts.everReceived("joel")).toBe(true);
+    expect(receipts.get("joel")).toEqual({ count: 1, lastAt: 8888 });
+    await handle.stop();
+  });
+
   test("verifier THREW ⇒ DROPPED + system.access.denied chain_verify_fault (cortex#932)", async () => {
     const runtime = makeFakeRuntime();
     const registry = new AgentPresenceRegistry();

@@ -63,6 +63,18 @@ export interface FederatedPresenceReceipt {
  * semantics — "unheard" is about NEVER having heard, and a peer that goes stale
  * is "offline", surfaced by the ABSENCE of live presence, not by forgetting we
  * heard it).
+ *
+ * ## Daemon-restart transience (FS-6 review, cortex#1835 — accepted limitation)
+ *
+ * The ledger is PROCESS-LOCAL, so a freshly-booted daemon starts with an empty
+ * map: a genuinely-online peer reads `absent-unheard` (import/cred gap) until its
+ * NEXT presence heartbeat arrives and records the first receipt. This is
+ * transient and SELF-HEALS within one heartbeat interval — not a real import/cred
+ * gap — so a `absent-unheard` verdict on a just-restarted daemon should be read
+ * as "not heard YET this process", not "deaf to this peer". Persisting receipts
+ * across restarts was deliberately NOT done (it would resurrect stale "heard"
+ * claims for peers that departed while we were down); the momentary post-boot
+ * false-unheard is the accepted cost of the honest, memory-only tally.
  */
 export class FederatedPresenceReceipts {
   private readonly receipts = new Map<string, FederatedPresenceReceipt>();

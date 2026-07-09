@@ -161,6 +161,7 @@ import {
 import {
   createLiveLeafzSampler,
   createLiveProbeBus,
+  createLiveProbeAndPresence,
   type LiveProbeBus,
 } from "./network-ping-adapters";
 import { buildPingSignerFromConfig } from "./network-ping-signer";
@@ -173,6 +174,7 @@ import {
 import {
   buildDoctorConfigPort,
   buildMonitorPort,
+  buildPeerHearingPort,
 } from "./network-doctor-adapters";
 import type { NetworkDoctorPorts } from "./network-doctor-ports";
 import {
@@ -1819,8 +1821,11 @@ export type DoctorPortsFactory = (
 const DEFAULT_DOCTOR_PORTS_FACTORY: DoctorPortsFactory = async (cfg, livePortsCfg) => {
   // Reuse the SAME posture-gated signer + live probe bus `ping` uses, so
   // doctor's peer-reachable leg is byte-identical to `ping`'s round-trip.
+  // FS-5b (cortex#1842) — derive BOTH the probe bus (Leg 5 echo) and the
+  // presence listener (Leg 5b stage-3 bounded subscribe) from ONE runtime, so
+  // doctor opens a single NATS connection for both read-sides.
   const signer = await buildPingSignerFromConfig(cfg);
-  const bus: LiveProbeBus = await createLiveProbeBus(cfg.config, signer);
+  const { bus, presence, stop } = await createLiveProbeAndPresence(cfg.config, signer);
   const ports: NetworkDoctorPorts = {
     config: buildDoctorConfigPort({
       // Read the COMPOSED networks off the already-loaded config — NOT a raw
@@ -1840,8 +1845,12 @@ const DEFAULT_DOCTOR_PORTS_FACTORY: DoctorPortsFactory = async (cfg, livePortsCf
       // (our egress vs the peer's echo leg). Best-effort: a failed read omits it.
       leafz: createLiveLeafzSampler(cfg),
     },
+    // FS-5b (cortex#1842) — the per-peer "can I hear X?" staged chain. Only the
+    // stage-3 bounded live subscribe is wired here (via the shared runtime); the
+    // other seams degrade to warn (see buildPeerHearingPort).
+    hearing: buildPeerHearingPort(presence),
   };
-  return { ports, stop: () => bus.stop() };
+  return { ports, stop };
 };
 
 async function runDoctor(

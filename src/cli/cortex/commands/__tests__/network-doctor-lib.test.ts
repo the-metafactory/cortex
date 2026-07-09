@@ -35,6 +35,7 @@ import type {
   DoctorConfigPort,
   LeafzResponse,
   NetworkDoctorPorts,
+  PeerHearingPorts,
 } from "../network-doctor-ports";
 import type {
   LeafzCounters,
@@ -178,6 +179,36 @@ function echoReply(fired: ProbeFireInputs, rttMs: number): ProbeRoundTripResult 
   return { kind: "reply", rttMs, reply };
 }
 
+/**
+ * FS-5b (cortex#1842) — a fake {@link PeerHearingPorts}. Each field defaults to
+ * `undefined` ("undeterminable" ⇒ the stage warns); set a field to drive a
+ * pass/fail. A fully-`true` + `admitted-present` port makes all four non-gate
+ * hearing stages pass (the gate stage is pure — it passes on a healthy config).
+ */
+function fakeHearingPort(opts: {
+  credAllows?: boolean;
+  imported?: boolean;
+  arriving?: boolean;
+  fold?: string;
+} = {}): PeerHearingPorts {
+  return {
+    credAllowsScope: () => opts.credAllows,
+    scopeImported: async () => opts.imported,
+    presenceArriving: async () => opts.arriving,
+    foldVerdict: () => opts.fold,
+  };
+}
+
+/** A hearing port where every non-gate stage passes (healthy peer). */
+function healthyHearingPort(): PeerHearingPorts {
+  return fakeHearingPort({
+    credAllows: true,
+    imported: true,
+    arriving: true,
+    fold: "admitted-present",
+  });
+}
+
 function findCheck(checks: DoctorCheck[], id: string): DoctorCheck {
   const c = checks.find((x) => x.id === id);
   if (c === undefined) throw new Error(`no check with id "${id}" in ${JSON.stringify(checks.map((x) => x.id))}`);
@@ -198,6 +229,7 @@ describe("runDoctorChecks — (a) all-green", () => {
       config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
       monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
       probe: fakeProbe((f) => echoReply(f, 41)),
+      hearing: healthyHearingPort(),
     };
     const res = await runDoctorChecks(ports, {
       cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
@@ -209,8 +241,9 @@ describe("runDoctorChecks — (a) all-green", () => {
     expect(res.exitCode).toBe(DOCTOR_EXIT_CODE.healthy);
     // 5 pre-#1482 legs + registered-vs-fed-account + resolver-preload-account
     // + the sealed-secret-hub-authorized stub (always present, always skip)
-    // + the cortex#1728 leafnode-authorization-bomb leg.
-    expect(res.checks).toHaveLength(9);
+    // + the cortex#1728 leafnode-authorization-bomb leg + FS-5b's 5-stage
+    // "can I hear X?" chain for the single configured peer (9 + 5 = 14).
+    expect(res.checks).toHaveLength(14);
     expect(findCheck(res.checks, "config-network").status).toBe("pass");
     expect(findCheck(res.checks, "leafnode-authorization-bomb").status).toBe("pass");
     expect(findCheck(res.checks, "registered-vs-fed-account").status).toBe("pass");
@@ -223,6 +256,12 @@ describe("runDoctorChecks — (a) all-green", () => {
     expect(peerCheck.status).toBe("pass");
     expect(peerCheck.owner).toBe("peer");
     expect(peerCheck.detail).toContain("rtt=41ms");
+    // FS-5b — all five hearing stages pass on a healthy peer.
+    for (const stage of ["cred-perms", "import", "envelopes-arriving", "gate", "fold"]) {
+      const c = findCheck(res.checks, `peer-hearing:${stage}:jc/default`);
+      expect(c.status).toBe("pass");
+      expect(c.owner).toBe("peer");
+    }
     // A skip'd leg (Pair 3) is a valid outcome, not a broken/degraded verdict.
     expect(res.verdict).not.toBe("broken");
     // Every check carries a responsible owner.
@@ -880,5 +919,177 @@ describe("selectNetworkLeaf — multi-leaf attribution (cortex#1728)", () => {
   test("empty leafs ⇒ undefined", () => {
     expect(selectNetworkLeaf({ leafs: [] }, "hub")).toBeUndefined();
     expect(selectNetworkLeaf({}, "hub")).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// FS-5b (cortex#1842) — per-peer "can I hear X?" staged chain
+// ===========================================================================
+
+/** The FS-5b stage ids for the single fixture peer `jc/default`, in order. */
+const HEARING_IDS = [
+  "peer-hearing:cred-perms:jc/default",
+  "peer-hearing:import:jc/default",
+  "peer-hearing:envelopes-arriving:jc/default",
+  "peer-hearing:gate:jc/default",
+  "peer-hearing:fold:jc/default",
+];
+
+describe("runDoctorChecks — FS-5b hearing chain", () => {
+  test("healthy peer ⇒ all five stages pass, owner peer, in order", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      hearing: healthyHearingPort(),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    for (const id of HEARING_IDS) {
+      const c = findCheck(res.checks, id);
+      expect(c.status).toBe("pass");
+      expect(c.owner).toBe("peer");
+    }
+    // The five hearing checks appear in canonical stage order.
+    const emitted = res.checks.filter((c) => c.id.startsWith("peer-hearing:")).map((c) => c.id);
+    expect(emitted).toEqual(HEARING_IDS);
+    expect(res.verdict).toBe("healthy");
+  });
+
+  test("fold-broken peer (the jc case) ⇒ stages 1-4 pass, stage 5 (fold) FAILs pointing at source-binding/pubkey", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      // cred/import/arriving all pass, but the roster verdict is absent — the peer
+      // is heard + gate-accepted yet does not fold (missing/wrong pubkey).
+      hearing: fakeHearingPort({
+        credAllows: true,
+        imported: true,
+        arriving: true,
+        fold: "absent-unheard",
+      }),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "peer-hearing:cred-perms:jc/default").status).toBe("pass");
+    expect(findCheck(res.checks, "peer-hearing:import:jc/default").status).toBe("pass");
+    expect(findCheck(res.checks, "peer-hearing:envelopes-arriving:jc/default").status).toBe("pass");
+    expect(findCheck(res.checks, "peer-hearing:gate:jc/default").status).toBe("pass");
+    const fold = findCheck(res.checks, "peer-hearing:fold:jc/default");
+    expect(fold.status).toBe("fail");
+    expect(fold.detail).toContain("does NOT fold");
+    expect(fold.fix).toContain("source-bound");
+    expect(fold.fix).toContain("FS-1");
+    // A fold fail is non-critical ⇒ degraded (leaf + echo still work).
+    expect(res.verdict).toBe("degraded");
+  });
+
+  test("cred-broken peer ⇒ stage 1 FAILs and stages 2-5 SKIP (don't probe what can't work)", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      // credAllows:false ⇒ the leaf cred can't even subscribe X's scope. Later
+      // stages must NOT run (they'd probe a subscription that can't exist).
+      hearing: fakeHearingPort({
+        credAllows: false,
+        imported: true,
+        arriving: true,
+        fold: "admitted-present",
+      }),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const cred = findCheck(res.checks, "peer-hearing:cred-perms:jc/default");
+    expect(cred.status).toBe("fail");
+    expect(cred.fix).toContain("allow-sub");
+    for (const id of HEARING_IDS.slice(1)) {
+      const c = findCheck(res.checks, id);
+      expect(c.status).toBe("skip");
+      expect(c.detail).toContain("cred-perms");
+    }
+  });
+
+  test("envelopes-arriving silent (subscribed but nothing arrives) ⇒ stage 3 FAILs, gate+fold SKIP", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      hearing: fakeHearingPort({ credAllows: true, imported: true, arriving: false }),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "peer-hearing:cred-perms:jc/default").status).toBe("pass");
+    expect(findCheck(res.checks, "peer-hearing:import:jc/default").status).toBe("pass");
+    const arriving = findCheck(res.checks, "peer-hearing:envelopes-arriving:jc/default");
+    expect(arriving.status).toBe("fail");
+    expect(arriving.detail).toContain("jc case");
+    expect(findCheck(res.checks, "peer-hearing:gate:jc/default").status).toBe("skip");
+    expect(findCheck(res.checks, "peer-hearing:fold:jc/default").status).toBe("skip");
+  });
+
+  test("gate stage is PURE — a denied subject FAILs the gate stage", async () => {
+    // joel's presence subject is on the deny-list ⇒ evaluateFederationGate drops
+    // it ⇒ the gate stage fails (no injected port — the REAL gate runs).
+    const denyNet = network({
+      deny_subjects: ["federated.jc.default.agent.>"],
+    });
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([denyNet], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      hearing: fakeHearingPort({ credAllows: true, imported: true, arriving: true }),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    const gate = findCheck(res.checks, "peer-hearing:gate:jc/default");
+    expect(gate.status).toBe("fail");
+    expect(gate.detail).toContain("peer_deny_list");
+    expect(findCheck(res.checks, "peer-hearing:fold:jc/default").status).toBe("skip");
+  });
+
+  test("no hearing port wired ⇒ non-gate stages WARN, gate still yields a hard verdict, verdict stays healthy", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([network()], "ACCOUNT_A", (acct) => acct === "ACCOUNT_A"),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      // hearing omitted
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(findCheck(res.checks, "peer-hearing:cred-perms:jc/default").status).toBe("warn");
+    expect(findCheck(res.checks, "peer-hearing:import:jc/default").status).toBe("warn");
+    expect(findCheck(res.checks, "peer-hearing:envelopes-arriving:jc/default").status).toBe("warn");
+    expect(findCheck(res.checks, "peer-hearing:gate:jc/default").status).toBe("pass");
+    expect(findCheck(res.checks, "peer-hearing:fold:jc/default").status).toBe("warn");
+    // Warns never block healthy.
+    expect(res.verdict).toBe("healthy");
+  });
+
+  test("no peer-hearing checks are emitted when config-network fails (early return)", async () => {
+    const ports: NetworkDoctorPorts = {
+      config: fakeConfigPort([]),
+      monitor: fakeMonitorPort({ configured: true, leafz: ESTABLISHED_LEAFZ }),
+      probe: fakeProbe((f) => echoReply(f, 12)),
+      hearing: healthyHearingPort(),
+    };
+    const res = await runDoctorChecks(ports, {
+      cfg: loadedConfig([{ principal_id: "jc", stack_id: "jc/default" }]),
+      networkId: "metafactory-community",
+    });
+    expect(res.checks.some((c) => c.id.startsWith("peer-hearing:"))).toBe(false);
   });
 });
