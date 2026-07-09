@@ -16,7 +16,10 @@ import type { NetworkConfidentialityDTO, PeerAcceptance } from "../../api/networ
 describe("verdictBadge", () => {
   it("maps each verdict to a distinct tone", () => {
     expect(verdictBadge("admitted-present").tone).toBe("ok");
-    expect(verdictBadge("admitted-absent").tone).toBe("warn");
+    // FS-6 — the absent family split: offline is a warn, unheard is danger
+    // (we are deaf to it — an import/cred gap, the more serious signal).
+    expect(verdictBadge("absent-offline").tone).toBe("warn");
+    expect(verdictBadge("absent-unheard").tone).toBe("danger");
     expect(verdictBadge("present-but-unadmitted").tone).toBe("danger");
     expect(verdictBadge("pending").tone).toBe("pending");
   });
@@ -24,7 +27,8 @@ describe("verdictBadge", () => {
   it("gives every verdict a non-empty label + title", () => {
     for (const v of [
       "admitted-present",
-      "admitted-absent",
+      "absent-offline",
+      "absent-unheard",
       "present-but-unadmitted",
       "pending",
     ] as const) {
@@ -171,18 +175,20 @@ describe("summarizeMembership", () => {
     const summary = summarizeMembership({
       members: [
         { principal: "a", verdict: "admitted-present", present_stacks: ["s"], accepts: "accepted-network" },
-        { principal: "b", verdict: "admitted-absent", present_stacks: [], accepts: "not-accepted" },
+        { principal: "b", verdict: "absent-offline", present_stacks: [], accepts: "not-accepted" },
         { principal: "c", verdict: "admitted-present", present_stacks: ["s"], accepts: "accepted-named" },
         { principal: "d", verdict: "present-but-unadmitted", present_stacks: ["x"], accepts: "not-accepted" },
         { principal: "e", verdict: "pending", present_stacks: [], accepts: "not-accepted" },
+        // FS-6 — both absent-family verdicts roll into the single `absent` tally.
+        { principal: "f", verdict: "absent-unheard", present_stacks: [], accepts: "not-accepted" },
       ],
     });
     expect(summary).toEqual({
       present: 2,
-      absent: 1,
+      absent: 2,
       unadmitted: 1,
       pending: 1,
-      total: 5,
+      total: 6,
     });
   });
 

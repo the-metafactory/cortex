@@ -65,7 +65,7 @@ describe("buildConstellationHeader", () => {
           { principal: "andreas", verdict: "admitted-present", present_stacks: ["research", "work"], accepts: "self" },
           { principal: "jc", verdict: "admitted-present", present_stacks: ["research"], accepts: "accepted-network" },
           // duplicate principal/stack must not double-count
-          { principal: "andreas", verdict: "admitted-absent", present_stacks: ["research"], accepts: "self" },
+          { principal: "andreas", verdict: "absent-offline", present_stacks: ["research"], accepts: "self" },
         ],
       }),
     ]);
@@ -77,7 +77,7 @@ describe("buildConstellationHeader", () => {
     const [row] = buildConstellationHeader([
       net({
         members: [
-          { principal: "jc", verdict: "admitted-absent", present_stacks: [], accepts: "accepted-network" },
+          { principal: "jc", verdict: "absent-offline", present_stacks: [], accepts: "accepted-network" },
         ],
       }),
     ]);

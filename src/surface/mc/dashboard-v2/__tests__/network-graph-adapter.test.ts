@@ -635,7 +635,7 @@ function member(
   present_stacks: string[],
   verdict: NetworkMembershipDTO["members"][number]["verdict"] = present_stacks.length
     ? "admitted-present"
-    : "admitted-absent",
+    : "absent-offline",
 ): NetworkMembershipDTO["members"][number] {
   return { principal, verdict, present_stacks, accepts: "accepted-network" };
 }
@@ -665,7 +665,7 @@ describe("buildNetworkGraph — absent federated peers (MC-D4)", () => {
     expect(data.kind).toBe("federated-peer");
     expect(data.principal).toBe("jc");
     expect(data.networkId).toBe("mfnet");
-    expect(data.verdict).toBe("admitted-absent");
+    expect(data.verdict).toBe("absent-offline");
 
     // The dotted anchor edge: local hub → the peer placeholder, flagged absent.
     const edge = g.edges.find((e) => e.target === peerId);

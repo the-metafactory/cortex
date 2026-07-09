@@ -4,7 +4,7 @@
  * Fetches `GET /api/networks` (joined networks + their admitted roster ⋈
  * presence → membership verdict) and keeps it fresh off the same
  * `agent.presence` WebSocket refresh signal `use-agents` uses — a presence
- * mutation can flip a member between `admitted-present` / `admitted-absent`, so a
+ * mutation can flip a member between `admitted-present` / `absent-offline` / `absent-unheard`, so a
  * presence frame re-reads the membership too.
  *
  * Mirrors `use-agents` exactly (lifetime/race guard via `aliveRef` + `genRef` +

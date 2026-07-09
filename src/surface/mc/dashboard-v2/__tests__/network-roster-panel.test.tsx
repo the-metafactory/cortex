@@ -101,7 +101,7 @@ describe("NetworkRosterPanel — per-principal acceptance chip (MC-A2)", () => {
       netWithMembers([
         { principal: "andreas", verdict: "admitted-present", present_stacks: ["main"], accepts: "self" },
         { principal: "jc", verdict: "admitted-present", present_stacks: ["research"], accepts: "accepted-network" },
-        { principal: "mallory", verdict: "admitted-absent", present_stacks: [], accepts: "not-accepted" },
+        { principal: "mallory", verdict: "absent-offline", present_stacks: [], accepts: "not-accepted" },
       ]),
     ]);
     expect(html).toContain('data-acceptance="accepted-network"');

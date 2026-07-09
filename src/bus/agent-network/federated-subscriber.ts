@@ -112,6 +112,7 @@ import {
 } from "../access-denied-dedup";
 import { AgentPresenceRegistry } from "./registry";
 import { AGENT_PRESENCE_TYPES } from "./envelopes";
+import type { FederatedPresenceReceipts } from "./federated-presence-receipts";
 
 /**
  * Subject pattern the FEDERATED subscriber binds — every peer principal/stack's
@@ -226,6 +227,23 @@ export interface StartFederatedAgentPresenceSubscriberOptions {
    * rather than re-spamming the audit subject every tick.
    */
   onDenialBubbleUp?: (info: DenialBubbleUp) => void;
+  /**
+   * FS-6 (cortex#1821) — per-peer received-presence ledger. When supplied, EVERY
+   * `federated.{principal}.{stack}.agent.*` envelope that REACHES this subscriber
+   * is recorded against its source principal here — **folded OR gated** (recorded
+   * BEFORE the accept-list / chain-verify gates, so a peer we can physically hear
+   * on the wire but that the gate later drops still reads as "heard"). The MC
+   * verdict projection reads {@link FederatedPresenceReceipts.everReceived} to
+   * split an absent peer into `absent-offline` (heard, went stale) vs
+   * `absent-unheard` (never heard — an import/cred gap). OPTIONAL: omit it (tests
+   * that don't exercise the ledger) and the subscriber behaves byte-identically.
+   */
+  receipts?: FederatedPresenceReceipts;
+  /**
+   * FS-6 — receiver clock stamped onto a received-presence receipt. Injectable so
+   * a test can assert deterministic `lastAt` values. Defaults to `Date.now`.
+   */
+  now?: () => number;
 }
 
 /** cortex#1213 — payload handed to {@link StartFederatedAgentPresenceSubscriberOptions.onDenialBubbleUp}. */
@@ -259,8 +277,11 @@ export async function startFederatedAgentPresenceSubscriber(
     stackIdentity,
     stackNKeyPub,
     resolveFederatedPeer,
+    receipts,
   } = opts;
   const cryptoVerify = opts.cryptoVerify ?? true;
+  // FS-6 — receiver clock for received-presence receipts.
+  const now = opts.now ?? Date.now;
   // cortex#1213 — dedupe the `system.access.denied` audit emits. Default to a
   // fresh 60s-window deduper; tests inject one with an injected clock.
   const denialDeduper = opts.denialDeduper ?? new AccessDeniedDeduper();
@@ -346,6 +367,18 @@ export async function startFederatedAgentPresenceSubscriber(
     if (!presenceTypes.has(envelope.type)) return;
 
     const sourcePrincipal = envelope.source.split(".")[0] ?? envelope.source;
+
+    // === FS-6 (cortex#1821) — RECEIVED-PRESENCE RECEIPT ===================
+    // Record that we HEARD a federated-presence envelope from this source
+    // principal, BEFORE any gate runs — folded OR gated. This is the whole
+    // point: "unheard" must mean nothing arrived on the wire (an import/cred
+    // gap), not arrived-but-policy-dropped. A peer we can physically hear but
+    // whose envelope the accept-list gate later drops is still HEARD here, so
+    // the roster reports it `absent-offline` (a config choice, visible
+    // elsewhere), never the misleading `absent-unheard`. The self-loopback of
+    // our OWN presence is recorded too, but our own principal is never
+    // evaluated as an absent peer, so it is inert in the verdict.
+    receipts?.record(sourcePrincipal, now());
 
     // === SELF-LOOPBACK SHORT-CIRCUIT (cortex#1213, mirrors cortex#480) =====
     // A federated stack publishes its OWN presence onto `federated.{us}.agent.>`

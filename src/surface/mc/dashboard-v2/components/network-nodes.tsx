@@ -53,6 +53,7 @@ import {
   isInSubtreeHighlight,
 } from "../lib/network-subtree-highlight";
 import { verdictBadge, formatRtt } from "../lib/network-transport-overlay";
+import { federatedAbsenceReason } from "../lib/network-membership-adapter";
 
 // --- Stack hub -------------------------------------------------------------
 
@@ -495,14 +496,19 @@ export interface FederatedPeerCardProps {
  * inner/wrapper like the other nodes (the wrapper adds the xyflow `Handle`).
  */
 export function FederatedPeerCard({ data }: FederatedPeerCardProps) {
+  // FS-6 (cortex#1821) — the honest absence reason (offline vs unheard) drives
+  // the eyebrow + a tone class, so an admitted peer we are DEAF to (unheard —
+  // import/cred gap) reads distinct from a peer that merely went offline.
+  const reason = federatedAbsenceReason(data.verdict);
   return (
     <div
-      className="network-node network-node-fed-peer network-node-fed-peer-absent"
+      className={`network-node network-node-fed-peer network-node-fed-peer-absent tone-${reason.tone}`}
       data-node-kind="federated-peer"
       data-fed-peer-principal={data.principal}
       data-fed-peer-verdict={data.verdict}
       data-fed-peer-absent="true"
-      aria-label={`${data.principal} — federated peer (admitted, absent)`}
+      data-fed-peer-absence={reason.token}
+      aria-label={`${data.principal} — federated peer (admitted, ${reason.token})`}
     >
       {/* A dashed federation-accent ring with a cross-network glyph — visible and
           deliberately distinct from a local agent orb (which is a solid cyan
@@ -515,7 +521,7 @@ export function FederatedPeerCard({ data }: FederatedPeerCardProps) {
         <span className="network-fed-peer-glyph">⇄</span>
       </span>
       <span className="network-node-below">
-        <span className="network-fed-peer-eyebrow dim">federated · absent</span>
+        <span className="network-fed-peer-eyebrow dim">{reason.eyebrow}</span>
         <span className="network-fed-peer-label">{data.principal}</span>
       </span>
     </div>

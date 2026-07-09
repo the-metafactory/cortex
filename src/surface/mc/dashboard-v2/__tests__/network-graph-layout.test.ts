@@ -93,7 +93,7 @@ function member(
 ): NetworkMembershipDTO["members"][number] {
   return {
     principal,
-    verdict: present_stacks.length ? "admitted-present" : "admitted-absent",
+    verdict: present_stacks.length ? "admitted-present" : "absent-offline",
     present_stacks,
     accepts: "accepted-network",
   };

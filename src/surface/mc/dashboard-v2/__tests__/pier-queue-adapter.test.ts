@@ -82,7 +82,7 @@ describe("selectPierQueue", () => {
         network_id: "alpha",
         members: [
           member({ principal: "a", verdict: "admitted-present", present_stacks: ["s"] }),
-          member({ principal: "b", verdict: "admitted-absent" }),
+          member({ principal: "b", verdict: "absent-offline" }),
           member({ principal: "c", verdict: "present-but-unadmitted", present_stacks: ["x"] }),
           member({ principal: "d", verdict: "pending" }),
         ],

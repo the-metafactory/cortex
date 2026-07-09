@@ -119,7 +119,10 @@ describe("GET /api/networks (HTTP)", () => {
         m.verdict,
       ]),
     );
-    expect(byPrincipal).toEqual({ andreas: "admitted-present", jc: "admitted-absent" });
+    // FS-6 — the view stub exposes no `receivedPresenceFrom`, so the absent
+    // family collapses to the conservative `absent-offline` (never over-claim
+    // "unheard" without the receipt ledger).
+    expect(byPrincipal).toEqual({ andreas: "admitted-present", jc: "absent-offline" });
   });
 
   it("rejects non-GET methods", async () => {

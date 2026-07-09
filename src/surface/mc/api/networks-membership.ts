@@ -24,7 +24,17 @@
  *
  * The verdict per member:
  *   - `admitted-present`        — on the roster AND observed present.
- *   - `admitted-absent`         — on the roster but not observed present.
+ *   - `absent-offline`          — on the roster, not observed present, but we
+ *                                 HAVE received its federated presence before
+ *                                 (FS-6): we heard it, it went away. A real,
+ *                                 transient outage of the peer's stack.
+ *   - `absent-unheard`          — on the roster, not observed present, and we
+ *                                 have NEVER received a single federated-presence
+ *                                 envelope from it (FS-6): we are DEAF to it —
+ *                                 the peer may be healthy, but an import / cred /
+ *                                 accept-list gap (the cortex#1812 class) means
+ *                                 nothing reaches us. Actionable: "check
+ *                                 import/cred", not "wait for the peer".
  *   - `present-but-unadmitted`  — observed present (federated) but on no roster
  *                                 — an ANOMALY worth surfacing (e.g. a stale
  *                                 roster, or a hand-pinned static peer with no
@@ -34,6 +44,17 @@
  *                                 roster carries ADMITTED rows only — so the
  *                                 endpoint passes none; the verdict exists so
  *                                 A2/A3/B build on a complete model.)
+ *
+ * ## FS-6 (cortex#1821) — honest absence
+ *
+ * The absent family is SPLIT by whether we have ever received the peer's
+ * federated presence (the `everReceivedPresence` set, sourced from the
+ * federated-presence subscriber's per-peer receipt ledger). Never-received ⇒
+ * `absent-unheard`; previously-received-now-stale ⇒ `absent-offline`. When the
+ * set is not supplied (an older wiring / a self-only read that carries no
+ * federation receipts), the absent family collapses to `absent-offline` — the
+ * conservative default: we do not claim "unheard" (which asserts a config gap)
+ * unless we have the receipt ledger to prove we truly heard nothing.
  *
  * Pure + dependency-light: no I/O, no bus, no registry client. The only import
  * is the structural presence-record TYPE from the sibling `/api/agents`
@@ -49,7 +70,8 @@ import type { AgentPresenceSnapshotRecord } from "./agents";
  */
 export type MembershipVerdict =
   | "admitted-present"
-  | "admitted-absent"
+  | "absent-offline"
+  | "absent-unheard"
   | "present-but-unadmitted"
   | "pending";
 
@@ -96,6 +118,32 @@ export interface ReconcileMembershipInput {
    * `admitted` / `pending` is never an anomaly.
    */
   anomalyCandidates?: readonly string[];
+  /**
+   * FS-6 (cortex#1821) — the set of peer principals from whom we have EVER
+   * received a federated-presence envelope (folded OR gated), sourced from the
+   * federated-presence subscriber's per-peer receipt ledger. Splits the absent
+   * family: an admitted-but-absent principal IN this set ⇒ `absent-offline`
+   * (heard, went stale); NOT in it ⇒ `absent-unheard` (never heard — an
+   * import/cred gap). OMITTED (undefined) ⇒ the absent family collapses to
+   * `absent-offline`: without the receipt ledger we never assert "unheard" (the
+   * conservative default — do not claim a config gap we cannot prove).
+   */
+  everReceivedPresence?: ReadonlySet<string>;
+}
+
+/**
+ * FS-6 (cortex#1821) — the absent-family verdict for an admitted-but-not-present
+ * principal. Heard-before (in `everReceived`) ⇒ `absent-offline`; never-heard ⇒
+ * `absent-unheard`. When `everReceived` is undefined (no receipt ledger wired)
+ * the honest default is `absent-offline` — we do NOT assert "unheard" (a config
+ * gap) unless we can prove we truly heard nothing.
+ */
+function absentVerdict(
+  principal: string,
+  everReceived: ReadonlySet<string> | undefined,
+): "absent-offline" | "absent-unheard" {
+  if (everReceived === undefined) return "absent-offline";
+  return everReceived.has(principal) ? "absent-offline" : "absent-unheard";
 }
 
 /**
@@ -114,6 +162,7 @@ export function reconcileNetworkMembership(
   const { admitted, presentStacksByPrincipal } = input;
   const pending = input.pending ?? [];
   const anomalyCandidates = input.anomalyCandidates ?? [];
+  const everReceivedPresence = input.everReceivedPresence;
 
   const seen = new Set<string>();
   const members: MembershipMember[] = [];
@@ -127,14 +176,21 @@ export function reconcileNetworkMembership(
   const isPresent = (principal: string): boolean =>
     stacksOf(principal).length > 0;
 
-  // 1) Admitted roster (intent). Present → admitted-present, else admitted-absent.
+  // 1) Admitted roster (intent). Present → admitted-present; else FS-6 splits
+  //    absent by whether we have EVER received this peer's federated presence:
+  //    heard-before ⇒ absent-offline (it went away), never-heard ⇒ absent-unheard
+  //    (we are deaf to it — an import/cred gap). Without the receipt ledger the
+  //    absent family collapses to absent-offline (never over-claim "unheard").
   for (const principal of admitted) {
     if (seen.has(principal)) continue;
     seen.add(principal);
     const presentStacks = stacksOf(principal);
     members.push({
       principal,
-      verdict: presentStacks.length > 0 ? "admitted-present" : "admitted-absent",
+      verdict:
+        presentStacks.length > 0
+          ? "admitted-present"
+          : absentVerdict(principal, everReceivedPresence),
       presentStacks,
     });
   }

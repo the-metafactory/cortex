@@ -22,6 +22,7 @@ import {
   federatedAgentPresenceSubject,
 } from "../federated-subscriber";
 import { AgentPresenceRegistry, isForeignOrigin } from "../registry";
+import { FederatedPresenceReceipts } from "../federated-presence-receipts";
 import {
   createAgentOnlineEvent,
   type AgentPresenceSource,
@@ -291,6 +292,115 @@ describe("E.2 — fold accept-listed foreign presence", () => {
     const foreign = registry.getAgents().find((a) => a.agentId === "sage");
     expect(local?.origin).toBe("local");
     expect(foreign?.origin).toMatchObject({ kind: "foreign" });
+    await handle.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FS-6 (cortex#1821) — per-peer received-presence receipts (offline vs unheard)
+// ---------------------------------------------------------------------------
+
+describe("FS-6 — records received-presence receipts (folded OR gated)", () => {
+  test("a FOLDED accept-listed peer's presence records a receipt", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const receipts = new FederatedPresenceReceipts();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      receipts,
+      now: () => 4242,
+    });
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    await flush();
+    // Folded (accept-listed) AND recorded.
+    expect(registry.getAgents().length).toBe(1);
+    expect(receipts.everReceived("joel")).toBe(true);
+    expect(receipts.get("joel")).toEqual({ count: 1, lastAt: 4242 });
+    await handle.stop();
+  });
+
+  test("a GATED (non-accept-listed) peer's presence STILL records a receipt — heard on the wire, not unheard", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const receipts = new FederatedPresenceReceipts();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      // joel is NOT a peer here ⇒ the accept-list gate DROPS the envelope.
+      federated: federatedPolicy([networkWithoutJoel()]),
+      source: SYSTEM_SOURCE,
+      receipts,
+      now: () => 7000,
+    });
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    await flush();
+    // DROPPED (not folded) — but we DID hear it on the wire, so it is recorded.
+    // This is the FS-6 honesty invariant: "unheard" must mean nothing arrived,
+    // NOT arrived-but-policy-dropped. A gated peer is `absent-offline`, never the
+    // misleading `absent-unheard`.
+    expect(registry.getAgents().length).toBe(0);
+    expect(receipts.everReceived("joel")).toBe(true);
+    expect(receipts.get("joel")?.count).toBe(1);
+    await handle.stop();
+  });
+
+  test("a NEVER-heard peer has no receipt (⇒ absent-unheard downstream)", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const receipts = new FederatedPresenceReceipts();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      receipts,
+    });
+    // Fire nothing for `nyx` — never heard.
+    await flush();
+    expect(receipts.everReceived("nyx")).toBe(false);
+    await handle.stop();
+  });
+
+  test("a non-presence subject (local.*) does NOT record a federated receipt", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const receipts = new FederatedPresenceReceipts();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      receipts,
+    });
+    // A `local.*` presence envelope is B.3's, not the federated subscriber's —
+    // it must be ignored entirely (no fold, no receipt).
+    runtime.fire(foreignOnline(), "local.joel.research.agent.online", "primary");
+    await flush();
+    expect(receipts.everReceived("joel")).toBe(false);
+    await handle.stop();
+  });
+
+  test("repeated heartbeats bump the receipt count (monotonic)", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const receipts = new FederatedPresenceReceipts();
+    let clock = 1000;
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      receipts,
+      now: () => clock,
+    });
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    clock = 2000;
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    await flush();
+    expect(receipts.get("joel")).toEqual({ count: 2, lastAt: 2000 });
     await handle.stop();
   });
 });

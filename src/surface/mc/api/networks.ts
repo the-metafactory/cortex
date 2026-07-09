@@ -110,6 +110,16 @@ export interface NetworksView {
    * otherwise (default-deny). `cortex.ts` supplies the live resolver.
    */
   acceptsPeer?(networkId: string, memberPrincipal: string): PeerAcceptance;
+  /**
+   * FS-6 (cortex#1821) — have we EVER received a federated-presence envelope from
+   * this peer principal (folded OR gated)? Sourced from the federated-presence
+   * subscriber's per-peer receipt ledger. The handler uses it to split an
+   * admitted-but-absent member into `absent-offline` (true — heard, went stale)
+   * vs `absent-unheard` (false — never heard; an import/cred gap). OPTIONAL: when
+   * omitted (older wiring / a test stub / a stack with no federation) the absent
+   * family collapses to `absent-offline` — we never over-claim "unheard".
+   */
+  receivedPresenceFrom?: (memberPrincipal: string) => boolean;
 }
 
 /** Provenance/availability of a network's admission-rows read. */
@@ -284,6 +294,25 @@ function toRosterMemberStateDTO(s: {
 }
 
 /**
+ * FS-6 (cortex#1821) — build the "ever received federated presence" set for a
+ * network's roster, querying the view's receipt seam once per candidate
+ * principal. Covers admitted + pending members (the set the absent-family split
+ * evaluates). Pure; the predicate is the only side of the seam.
+ */
+function buildEverReceived(
+  admitted: readonly string[],
+  pending: readonly string[],
+  receivedPresenceFrom: (memberPrincipal: string) => boolean,
+): Set<string> {
+  const heard = new Set<string>();
+  for (const principal of [...admitted, ...pending]) {
+    if (heard.has(principal)) continue;
+    if (receivedPresenceFrom(principal)) heard.add(principal);
+  }
+  return heard;
+}
+
+/**
  * Handle `GET /api/networks`.
  *
  * `view === null` → empty list (no federation / no registry — graceful). Else,
@@ -377,11 +406,20 @@ export async function handleListNetworks(
       // Attach anomalies ONLY for an authoritative roster — a self-scoped or
       // failed read cannot prove a present peer is unadmitted.
       const authoritative = result.ok && result.roster.authoritative;
+      // FS-6 (cortex#1821) — the receipt-derived "ever heard" set for THIS
+      // network's roster members. Built ONLY when the view exposes the receipt
+      // seam; otherwise omitted so the reconciler collapses the absent family to
+      // `absent-offline` (never over-claim "unheard" without the ledger).
+      const everReceivedPresence =
+        view.receivedPresenceFrom !== undefined
+          ? buildEverReceived(admitted, pending, view.receivedPresenceFrom)
+          : undefined;
       const members = reconcileNetworkMembership({
         admitted,
         presentStacksByPrincipal,
         pending,
         ...(authoritative ? { anomalyCandidates: globalAnomalies } : {}),
+        ...(everReceivedPresence !== undefined ? { everReceivedPresence } : {}),
       });
 
       return {

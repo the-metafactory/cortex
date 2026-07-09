@@ -45,11 +45,19 @@ export function verdictBadge(verdict: MembershipVerdict): VerdictBadge {
         tone: "ok",
         title: "Admitted to the roster and observed present",
       };
-    case "admitted-absent":
+    case "absent-offline":
       return {
-        label: "absent",
+        label: "absent (offline)",
         tone: "warn",
-        title: "Admitted to the roster but not observed present",
+        title:
+          "Admitted to the roster but not observed present. We HAVE received this peer's federated presence before — it has since gone away (a transient outage of the peer's stack). Wait for it to return.",
+      };
+    case "absent-unheard":
+      return {
+        label: "absent (unheard — check import/cred)",
+        tone: "danger",
+        title:
+          "Admitted to the roster but not observed present, AND we have NEVER received a single federated-presence envelope from it. We are DEAF to this peer: the peer may be healthy, but an import / cred / accept-list gap means nothing reaches us. Actionable: check the import/cred wiring, not the peer.",
       };
     case "present-but-unadmitted":
       return {
@@ -64,6 +72,37 @@ export function verdictBadge(verdict: MembershipVerdict): VerdictBadge {
         tone: "pending",
         title: "Admission request pending — not yet admitted",
       };
+  }
+}
+
+/**
+ * FS-6 (cortex#1821) — the absent federated-peer NODE's eyebrow + tone, derived
+ * from its absent-family verdict. The constellation node can't fit the full
+ * roster badge, so this gives it a compact, HONEST sublabel:
+ *
+ *   - `absent-offline` → `federated · offline` (heard before, went away).
+ *   - `absent-unheard` → `federated · unheard` (never heard — an import/cred gap),
+ *     flagged `danger` so the deaf-to-peer case is visually distinct from a plain
+ *     transient outage.
+ *   - any other/legacy absent value → `federated · absent` (the pre-FS-6 label),
+ *     so an older server DTO still renders sensibly.
+ *
+ * `token` is a stable, non-localized `data-*` value for tests/automation.
+ */
+export interface FederatedAbsenceReason {
+  eyebrow: string;
+  tone: VerdictTone;
+  token: "offline" | "unheard" | "absent";
+}
+
+export function federatedAbsenceReason(verdict: string): FederatedAbsenceReason {
+  switch (verdict) {
+    case "absent-offline":
+      return { eyebrow: "federated · offline", tone: "warn", token: "offline" };
+    case "absent-unheard":
+      return { eyebrow: "federated · unheard", tone: "danger", token: "unheard" };
+    default:
+      return { eyebrow: "federated · absent", tone: "warn", token: "absent" };
   }
 }
 
@@ -493,7 +532,11 @@ export function summarizeMembership(
       case "admitted-present":
         summary.present += 1;
         break;
-      case "admitted-absent":
+      case "absent-offline":
+      case "absent-unheard":
+        // Both absent-family verdicts roll up into the single `absent` tally for
+        // the panel header summary (the row badge + node eyebrow carry the FS-6
+        // offline/unheard distinction; the header stays a coarse count).
         summary.absent += 1;
         break;
       case "present-but-unadmitted":

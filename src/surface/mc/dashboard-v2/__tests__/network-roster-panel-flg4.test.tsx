@@ -29,7 +29,7 @@ function net(states: RosterMemberStateDTO[]): NetworkMembershipDTO {
     confidentiality: CLEARTEXT,
     members: [
       { principal: "andreas", verdict: "admitted-present", present_stacks: ["main"], accepts: "self" },
-      { principal: "jc", verdict: "admitted-absent", present_stacks: [], accepts: "accepted-network" },
+      { principal: "jc", verdict: "absent-offline", present_stacks: [], accepts: "accepted-network" },
     ],
     roster_states: states,
   };

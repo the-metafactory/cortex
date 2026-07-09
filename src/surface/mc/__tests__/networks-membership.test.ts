@@ -51,13 +51,66 @@ describe("reconcileNetworkMembership — verdict semantics", () => {
     ]);
   });
 
-  it("admitted + absent → admitted-absent (no present stacks)", () => {
+  it("admitted + absent, no receipt ledger → absent-offline (conservative default)", () => {
+    // FS-6 — without `everReceivedPresence` the absent family collapses to
+    // absent-offline: we never over-claim "unheard" (a config gap) unless we can
+    // prove we truly heard nothing.
     const members = reconcileNetworkMembership({
       admitted: ["jc"],
       presentStacksByPrincipal: present({}),
     });
     expect(members).toEqual([
-      { principal: "jc", verdict: "admitted-absent", presentStacks: [] },
+      { principal: "jc", verdict: "absent-offline", presentStacks: [] },
+    ]);
+  });
+
+  // --- FS-6 (cortex#1821): honest absence — the 3 verdict cases -------------
+
+  it("FS-6 live: admitted + present → admitted-present (receipt ledger irrelevant)", () => {
+    const members = reconcileNetworkMembership({
+      admitted: ["jc"],
+      presentStacksByPrincipal: present({ jc: ["research"] }),
+      // Even with a receipt, a PRESENT peer is present — the ledger only splits
+      // the ABSENT family.
+      everReceivedPresence: new Set(["jc"]),
+    });
+    expect(members).toEqual([
+      { principal: "jc", verdict: "admitted-present", presentStacks: ["research"] },
+    ]);
+  });
+
+  it("FS-6 offline: admitted + absent + PREVIOUSLY-received → absent-offline (heard, went stale)", () => {
+    const members = reconcileNetworkMembership({
+      admitted: ["jc"],
+      presentStacksByPrincipal: present({}),
+      everReceivedPresence: new Set(["jc"]), // we HAVE heard jc before
+    });
+    expect(members).toEqual([
+      { principal: "jc", verdict: "absent-offline", presentStacks: [] },
+    ]);
+  });
+
+  it("FS-6 unheard: admitted + absent + NEVER-received → absent-unheard (deaf to it — import/cred gap)", () => {
+    const members = reconcileNetworkMembership({
+      admitted: ["jc"],
+      presentStacksByPrincipal: present({}),
+      everReceivedPresence: new Set<string>(), // never heard jc
+    });
+    expect(members).toEqual([
+      { principal: "jc", verdict: "absent-unheard", presentStacks: [] },
+    ]);
+  });
+
+  it("FS-6 mixed roster: splits offline vs unheard per-peer off the same ledger", () => {
+    const members = reconcileNetworkMembership({
+      admitted: ["heard-peer", "deaf-peer", "live-peer"],
+      presentStacksByPrincipal: present({ "live-peer": ["main"] }),
+      everReceivedPresence: new Set(["heard-peer", "live-peer"]),
+    });
+    expect(members).toEqual([
+      { principal: "heard-peer", verdict: "absent-offline", presentStacks: [] },
+      { principal: "deaf-peer", verdict: "absent-unheard", presentStacks: [] },
+      { principal: "live-peer", verdict: "admitted-present", presentStacks: ["main"] },
     ]);
   });
 
@@ -137,14 +190,14 @@ describe("reconcileNetworkMembership — precedence + determinism", () => {
     expect(members.find((m) => m.principal === "a")?.presentStacks).toEqual(["s1", "s2"]);
   });
 
-  it("capabilities never confer membership — an admitted-absent member with no presence stays absent regardless of any capability facet", () => {
+  it("capabilities never confer membership — an absent member with no presence stays absent regardless of any capability facet", () => {
     // The helper has no capability input at all; this asserts the contract by
     // construction — membership is roster ⋈ presence only.
     const members = reconcileNetworkMembership({
       admitted: ["offerer"],
       presentStacksByPrincipal: present({}),
     });
-    expect(members[0]?.verdict).toBe("admitted-absent");
+    expect(members[0]?.verdict).toBe("absent-offline");
   });
 });
 

@@ -473,7 +473,7 @@ describe("FederatedPeerCard (MC-D4 — absent admitted peer)", () => {
     const data: FederatedPeerNodeData = {
       kind: "federated-peer",
       principal: "jc",
-      verdict: "admitted-absent",
+      verdict: "absent-offline",
       networkId: "mfnet",
       ...over,
     };
@@ -487,17 +487,32 @@ describe("FederatedPeerCard (MC-D4 — absent admitted peer)", () => {
     expect(html).toContain('data-fed-peer-absent="true"');
     // The principal id is the visible label.
     expect(html).toContain(">jc<");
-    // The `federated · absent` sublabel.
-    expect(html).toContain("federated · absent");
+    // FS-6 — an offline peer carries the `federated · offline` sublabel + token.
+    expect(html).toContain("federated · offline");
+    expect(html).toContain('data-fed-peer-absence="offline"');
     // The muted orb class (no glow — styled in CSS).
     expect(html).toContain("network-node-orb-fed-peer");
-    // An accessible name marking it admitted + absent.
-    expect(html).toContain("federated peer (admitted, absent)");
+    // An accessible name marking it admitted + offline.
+    expect(html).toContain("federated peer (admitted, offline)");
   });
 
   it("carries the membership verdict as a data attribute", () => {
-    const html = render({ verdict: "admitted-absent" });
-    expect(html).toContain('data-fed-peer-verdict="admitted-absent"');
+    const html = render({ verdict: "absent-offline" });
+    expect(html).toContain('data-fed-peer-verdict="absent-offline"');
+  });
+
+  it("FS-6 — an UNHEARD peer renders the distinct check-import/cred reason", () => {
+    // The absent-unheard case: we are DEAF to this peer (never received its
+    // federated presence). It must read distinct from a plain offline peer —
+    // different eyebrow, different stable absence token, a danger tone class.
+    const html = render({ verdict: "absent-unheard" });
+    expect(html).toContain('data-fed-peer-verdict="absent-unheard"');
+    expect(html).toContain('data-fed-peer-absence="unheard"');
+    expect(html).toContain("federated · unheard");
+    expect(html).toContain("tone-danger");
+    expect(html).toContain("federated peer (admitted, unheard)");
+    // NOT the offline label.
+    expect(html).not.toContain("federated · offline");
   });
 
   it("renders a cross-network glyph so it reads as a federated (not local) node", () => {
@@ -524,7 +539,7 @@ describe("FederatedPeerCard (MC-D4 — absent admitted peer)", () => {
     const html = render();
     const eyebrows = html.match(/network-fed-peer-eyebrow/g) ?? [];
     expect(eyebrows).toHaveLength(1);
-    const sublabels = html.match(/federated · absent/g) ?? [];
+    const sublabels = html.match(/federated · offline/g) ?? [];
     expect(sublabels).toHaveLength(1);
     // The card must NOT hand React Flow a default `label` prop it would render
     // as a second (bordered, lowercase) label box.

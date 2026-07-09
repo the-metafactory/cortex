@@ -145,7 +145,7 @@ describe("handleListNetworks — graceful states", () => {
 });
 
 describe("handleListNetworks — authoritative reconciliation", () => {
-  it("admitted peer present → admitted-present; admitted peer absent → admitted-absent", async () => {
+  it("admitted peer present → admitted-present; admitted peer absent (no receipt seam) → absent-offline", async () => {
     const res = await handleListNetworks(
       view({
         "research-collab": {
@@ -167,7 +167,34 @@ describe("handleListNetworks — authoritative reconciliation", () => {
     expect(byPrincipal).toEqual({
       andreas: "admitted-present",
       jc: "admitted-present",
-      zeta: "admitted-absent",
+      zeta: "absent-offline",
+    });
+  });
+
+  it("FS-6 — splits absent into offline (heard) vs unheard (never heard) off the receipt seam", async () => {
+    // Two admitted peers, both absent. `zeta` we have HEARD before (a receipt);
+    // `nyx` we have NEVER heard. The verdict must honestly distinguish them.
+    const base = view({
+      "research-collab": {
+        ok: true,
+        roster: { admitted: ["zeta", "nyx"], pending: [], authoritative: true },
+      },
+    });
+    const heard = new Set(["zeta"]);
+    const withReceipts: NetworksView = {
+      ...base,
+      receivedPresenceFrom: (principal) => heard.has(principal),
+    };
+    const res = await handleListNetworks(
+      withReceipts,
+      presenceView([rec({ agentId: "luna" })]), // only andreas/main present
+    );
+    const net = (await body(res)).networks[0]!;
+    const byPrincipal = Object.fromEntries(net.members.map((m) => [m.principal, m.verdict]));
+    expect(byPrincipal).toEqual({
+      andreas: "admitted-present",
+      zeta: "absent-offline", // heard before → offline
+      nyx: "absent-unheard", // never heard → unheard (import/cred gap)
     });
   });
 

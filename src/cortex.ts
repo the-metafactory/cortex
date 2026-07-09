@@ -265,6 +265,8 @@ import {
   startFederatedAgentPresenceSubscriber,
   type FederatedAgentPresenceSubscriberHandle,
 } from "./bus/agent-network/federated-subscriber";
+// FS-6 (cortex#1821) — per-peer received-presence ledger (offline vs unheard split).
+import { FederatedPresenceReceipts } from "./bus/agent-network/federated-presence-receipts";
 // P3 (cortex#1088) — continuous federation roster reconciler. Mutates the LIVE
 // `policy.federated.networks[]` the gate reads so a later-joining roster peer is
 // admitted within one reconcile interval, no manual `network join`.
@@ -4484,6 +4486,14 @@ export async function startCortex(
   // G-1114.E.2 — trust-verified federated presence subscriber (folds peers'
   // agents into the SAME registry, tagged with foreign provenance).
   let federatedPresenceHandle: FederatedAgentPresenceSubscriberHandle | null = null;
+  // FS-6 (cortex#1821) — per-peer received-presence ledger. The federated-presence
+  // subscriber records every federated presence envelope it hears (folded OR
+  // gated) against its source principal here; the `/api/networks` view reads
+  // `everReceived` to split an absent peer into `absent-offline` (heard, went
+  // stale) vs `absent-unheard` (never heard — an import/cred gap). One instance
+  // shared subscriber→view; constructed unconditionally (inert until the
+  // subscriber records into it — a stack with no federation records nothing).
+  const federatedPresenceReceipts = new FederatedPresenceReceipts();
   // P3 (cortex#1088) — continuous federation roster reconciler. Mutates the
   // LIVE `resolvedPolicy.federated.networks[]` (the SAME objects the gate above
   // reads) so a later-joining roster peer's presence is admitted within one
@@ -4660,6 +4670,9 @@ export async function startCortex(
         registry: presenceRegistryHandle.registry,
         federated: resolvedPolicy?.federated,
         source: systemEventSource,
+        // FS-6 — the per-peer received-presence ledger the `/api/networks` view
+        // reads to split absent-offline vs absent-unheard.
+        receipts: federatedPresenceReceipts,
         trustResolver,
         receivingAgentId: mergedAgents[0]?.id,
         principalId,
@@ -4844,6 +4857,12 @@ export async function startCortex(
               memberPrincipal,
               principalId,
             ),
+          // FS-6 (cortex#1821) — have we EVER heard this peer's federated
+          // presence? Reads the subscriber's per-peer receipt ledger so the
+          // handler splits an absent peer into offline (heard, went stale) vs
+          // unheard (never heard — an import/cred gap).
+          receivedPresenceFrom: (memberPrincipal) =>
+            federatedPresenceReceipts.everReceived(memberPrincipal),
         };
         const live =
           resolvedRegistry?.pubkey !== undefined && stackMaterial !== undefined;
