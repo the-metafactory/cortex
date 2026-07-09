@@ -320,4 +320,32 @@ describe("SubprocessDispatchStateRecorder — soft-skip + non-fatal", () => {
     ).not.toThrow();
     expect(logs.join("")).toMatch(/spawn threw/);
   });
+
+  test("MF_AGENT_STATE_ERRANDS_SCRIPT is read PER CALL, not frozen at import", () => {
+    // A recorder with NO errandsScript opt resolves the path from the env at
+    // CONSTRUCTION via defaultErrandsScript(); set the env (to a real file)
+    // after module import and confirm it's honoured (proves it's not a frozen
+    // module const).
+    const lateScript = join(root, "late-errands.ts");
+    writeFileSync(lateScript, "// stub\n");
+    const savedEnv = process.env.MF_AGENT_STATE_ERRANDS_SCRIPT;
+    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT = lateScript;
+    let sawScript: string | undefined;
+    const spawn: RecorderSpawn = (_cmd, args) => {
+      sawScript = args[0];
+      return { status: 0, stdout: enqueueStdout("corr-env") };
+    };
+    try {
+      const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+        instanceDir,
+        spawn,
+        log: () => {},
+      });
+      recorder.onDispatchAccepted({ correlationId: "corr-env", capability: "c", subject: "s", acceptedAt: "t" });
+      expect(sawScript).toBe(lateScript);
+    } finally {
+      if (savedEnv !== undefined) process.env.MF_AGENT_STATE_ERRANDS_SCRIPT = savedEnv;
+      else delete process.env.MF_AGENT_STATE_ERRANDS_SCRIPT;
+    }
+  });
 });

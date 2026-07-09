@@ -42,9 +42,12 @@ import { spawnSync } from "node:child_process";
  * `scaffold.ts` (`bun scaffold.ts <instance-dir> --host=<h> --agent=<a>`).
  * `MF_AGENT_STATE_SCRIPT` overrides for non-standard installs.
  */
-const DEFAULT_AGENT_STATE_SCRIPT =
-  process.env.MF_AGENT_STATE_SCRIPT ??
-  `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/scaffold.ts`;
+function defaultScaffoldScript(): string {
+  return (
+    process.env.MF_AGENT_STATE_SCRIPT ??
+    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/scaffold.ts`
+  );
+}
 
 /**
  * cortex#1720 S2 — canonical AgentState bundle errands script.
@@ -52,19 +55,29 @@ const DEFAULT_AGENT_STATE_SCRIPT =
  * The `ReplayPending` workflow (`agent-state/skill/Workflows/ReplayPending.md`)
  * lists pending work via `bun <bundle>/skill/scripts/errands.ts pending` — a
  * SIBLING of `scaffold.ts` in the same `skill/scripts/` dir, NOT the scaffold
- * entrypoint. Kept as its own constant (rather than deriving from
- * `DEFAULT_AGENT_STATE_SCRIPT`) so a principal can install / override the two
+ * entrypoint. Kept as its own resolver (rather than deriving from
+ * `defaultScaffoldScript`) so a principal can install / override the two
  * independently. `MF_AGENT_STATE_ERRANDS_SCRIPT` overrides for non-standard
  * installs.
+ *
+ * Resolved PER CALL (not frozen at module import) so an env override set after
+ * import — e.g. by a test or a late-configured host — is honoured, matching the
+ * `opts ?? DEFAULT` pattern used throughout this module.
  */
-const DEFAULT_AGENT_STATE_ERRANDS_SCRIPT =
-  process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
-  `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`;
+function defaultErrandsScript(): string {
+  return (
+    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
+    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`
+  );
+}
 
 /** Default host label baked into cortex-scaffolded instance dirs. */
 const DEFAULT_HOST = "cortex";
 
-export type ScaffoldStrategy = "agent-state-bundle" | "fallback-manual";
+export type ScaffoldStrategy =
+  | "agent-state-bundle"
+  | "fallback-manual"
+  | "skipped-home-unset"; // $HOME unset + no explicit instanceDir → nothing scaffolded
 
 export interface ScaffoldResult {
   strategy: ScaffoldStrategy;
@@ -129,8 +142,26 @@ export function scaffoldInstance(
   opts: ScaffoldOptions = {},
 ): ScaffoldResult {
   const host = opts.host ?? DEFAULT_HOST;
+
+  // $HOME unset with no explicit instanceDir → `resolveInstanceDir` yields a
+  // CWD-relative path that we'd then `mkdir`. Rather than scatter a state dir
+  // into the daemon's cwd, soft-skip with one log line; the fragment still
+  // activates stateless (the caller's log surfaces the strategy).
+  if (opts.instanceDir === undefined && !process.env.HOME) {
+    process.stderr.write(
+      `agent-state-scaffold: $HOME unset for agent=${agent.id} — skipping scaffold ` +
+        `(cannot resolve ~/.config/${host}/agents/${agent.id} safely)\n`,
+    );
+    return { strategy: "skipped-home-unset", instanceDir: "", created: [], skipped: [] };
+  }
+
   const instanceDir = opts.instanceDir ?? resolveInstanceDir(agent.id, host);
-  const agentStateScript = opts.agentStateScript ?? DEFAULT_AGENT_STATE_SCRIPT;
+  // Resolve the bundle script PER CALL (not frozen at module import) so a late
+  // env override is honoured — matches the `opts ?? DEFAULT` pattern.
+  const agentStateScript =
+    opts.agentStateScript ??
+    process.env.MF_AGENT_STATE_SCRIPT ??
+    defaultScaffoldScript();
 
   const created: string[] = [];
   const skipped: string[] = [];
@@ -230,14 +261,32 @@ export function scaffoldInstance(
   return { strategy: "fallback-manual", instanceDir, created, skipped };
 }
 
+/**
+ * Wall-clock ceiling for a bundle subprocess. A hanging `scaffold.ts` (bad
+ * install, wedged bun) must NOT freeze the daemon — worst during a hot-reload
+ * where consumers are already drained. On timeout spawnSync SIGTERMs the child
+ * and returns `error` (code `ETIMEDOUT`) / a signal, which flows into the same
+ * non-zero-exit fallback the caller already handles.
+ */
+const SPAWN_TIMEOUT_MS = 30_000;
+
 function defaultSpawn(
   cmd: string,
   args: string[],
   opts: { stdio: "inherit" | "pipe"; env?: NodeJS.ProcessEnv },
 ): ScaffoldSpawnResult {
-  const r = spawnSync(cmd, args, opts);
+  // stdin is IGNORED (not an open pipe): a bundle that blocks on stdin would
+  // otherwise hang forever. stdout/stderr keep the caller's mode. `timeout`
+  // caps the wall clock so a wedged child can't freeze the daemon.
+  const r = spawnSync(cmd, args, {
+    ...opts,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: SPAWN_TIMEOUT_MS,
+  });
   // With stdio:"pipe" (the path this scaffolder always uses), r.stderr is a
-  // Buffer; TS narrows it non-null here, so we pass it straight through.
+  // Buffer; TS narrows it non-null here, so we pass it straight through. A
+  // timeout surfaces as a non-null `r.error` (ETIMEDOUT) — treated as a failed
+  // invocation by the caller (falls back to manual scaffold).
   return { status: r.status, error: r.error, stderr: r.stderr };
 }
 
@@ -318,8 +367,10 @@ export type ReplaySpawn = (
 
 /** Why a replay did no work (for structured logging / test assertions). */
 export type ReplaySkipReason =
+  | "home-unset" // $HOME unset → can't resolve the instance dir safely
   | "script-absent" // bundle errands.ts not installed → soft-skip
-  | "spawn-error" // spawn threw (ENOENT on bun, etc.)
+  | "spawn-error" // spawn threw (ENOENT on bun, timeout, etc.)
+  | "output-too-large" // stdout exceeded maxBuffer (ENOBUFS) — legit large backlog
   | "nonzero-exit"; // errands.ts exited non-zero
 
 export interface ReplayResult {
@@ -344,12 +395,23 @@ export interface ReplayOptions {
   spawn?: ReplaySpawn;
 }
 
-/** Count NDJSON rows in a `errands.ts pending` stdout dump (blank-line safe). */
+/**
+ * Count NDJSON rows in a `errands.ts pending` stdout dump. Blank-line safe, and
+ * counts ONLY lines that start with `{` — cheap insurance against a future
+ * diagnostic/banner line on stdout being miscounted as a work_item.
+ */
 function countPendingRows(stdout: Buffer | string | undefined): number {
   if (stdout === undefined) return 0;
   return String(stdout)
     .split("\n")
-    .filter((line) => line.trim().length > 0).length;
+    .filter((line) => line.trim().startsWith("{")).length;
+}
+
+/** True when a spawn error is a maxBuffer overflow (ENOBUFS). */
+function isEnobufs(err: Error | undefined): boolean {
+  return (
+    err !== undefined && (err as NodeJS.ErrnoException).code === "ENOBUFS"
+  );
 }
 
 /**
@@ -367,8 +429,20 @@ export function replayPending(
   opts: ReplayOptions = {},
 ): ReplayResult {
   const host = opts.host ?? DEFAULT_HOST;
+
+  // $HOME unset with no explicit instanceDir → `resolveInstanceDir` would return
+  // a CWD-relative path. Rather than replay against a stray dir, soft-skip.
+  if (opts.instanceDir === undefined && !process.env.HOME) {
+    return { ran: false, pendingCount: 0, instanceDir: "", skipReason: "home-unset" };
+  }
+
   const instanceDir = opts.instanceDir ?? resolveInstanceDir(agent.id, host);
-  const errandsScript = opts.errandsScript ?? DEFAULT_AGENT_STATE_ERRANDS_SCRIPT;
+  // Resolve the script path PER CALL (not frozen at module import) so an env
+  // override set after import is honoured — matches the `opts ?? DEFAULT` pattern.
+  const errandsScript =
+    opts.errandsScript ??
+    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
+    defaultErrandsScript();
 
   // Bundle not installed → soft-skip (S1 already logged this class of miss on
   // the scaffold side; here we degrade the onStart hook to a no-op).
@@ -387,7 +461,12 @@ export function replayPending(
   });
 
   if (result.error) {
-    return { ran: false, pendingCount: 0, instanceDir, skipReason: "spawn-error" };
+    // A legit large pending backlog overflows maxBuffer (ENOBUFS) — distinguish
+    // it from a broken install / wedged bun so the log is honest.
+    const skipReason: ReplaySkipReason = isEnobufs(result.error)
+      ? "output-too-large"
+      : "spawn-error";
+    return { ran: false, pendingCount: 0, instanceDir, skipReason };
   }
   if (result.status !== 0) {
     return { ran: false, pendingCount: 0, instanceDir, skipReason: "nonzero-exit" };
@@ -400,12 +479,23 @@ export function replayPending(
   };
 }
 
+/** stdout ceiling for the replay listing — a large pending backlog is legit. */
+const REPLAY_MAX_BUFFER = 16 * 1024 * 1024; // 16 MB
+
 function defaultReplaySpawn(
   cmd: string,
   args: string[],
   opts: { env?: NodeJS.ProcessEnv },
 ): ReplaySpawnResult {
-  const r = spawnSync(cmd, args, { stdio: "pipe", env: opts.env });
+  // stdin IGNORED (no open pipe to hang on), wall-clock `timeout`, and an
+  // explicit 16MB `maxBuffer` so a big-but-legitimate pending backlog doesn't
+  // ENOBUFS at Bun's 1MB default and get miscategorised as a broken install.
+  const r = spawnSync(cmd, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: opts.env,
+    timeout: SPAWN_TIMEOUT_MS,
+    maxBuffer: REPLAY_MAX_BUFFER,
+  });
   return { status: r.status, error: r.error, stdout: r.stdout, stderr: r.stderr };
 }
 

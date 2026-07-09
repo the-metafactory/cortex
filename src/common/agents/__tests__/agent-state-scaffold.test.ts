@@ -290,3 +290,119 @@ describe("replayPending — bundle-absent path", () => {
     expect(result.pendingCount).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#1720 stack-top hardening pass (S1/S2 review findings)
+// ---------------------------------------------------------------------------
+
+describe("replayPending — hardening", () => {
+  test("ENOBUFS (maxBuffer overflow) → distinct output-too-large skip, NOT spawn-error", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    const enobufs = Object.assign(new Error("stdout maxBuffer exceeded"), {
+      code: "ENOBUFS",
+    });
+    const spawn: ReplaySpawn = () => ({ status: null, error: enobufs });
+
+    const result = replayPending(AGENT, { instanceDir, errandsScript, spawn });
+
+    expect(result.ran).toBe(false);
+    // A legit large backlog is NOT a broken install — it gets its own reason.
+    expect(result.skipReason).toBe("output-too-large");
+  });
+
+  test("a non-ENOBUFS spawn error still maps to spawn-error", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    const timedOut = Object.assign(new Error("spawnSync bun ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    const spawn: ReplaySpawn = () => ({ status: null, error: timedOut });
+
+    const result = replayPending(AGENT, { instanceDir, errandsScript, spawn });
+
+    expect(result.skipReason).toBe("spawn-error");
+  });
+
+  test("only lines starting with `{` are counted (diagnostic banner ignored)", () => {
+    const errandsScript = join(root, "errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    const spawn: ReplaySpawn = () => ({
+      status: 0,
+      stdout:
+        "warning: bundle diagnostic line\n" +
+        JSON.stringify({ id: "wi-1", status: "pending" }) +
+        "\n" +
+        JSON.stringify({ id: "wi-2", status: "pending" }) +
+        "\n",
+    });
+
+    const result = replayPending(AGENT, { instanceDir, errandsScript, spawn });
+
+    expect(result.ran).toBe(true);
+    // 3 non-blank lines, but only 2 start with `{`.
+    expect(result.pendingCount).toBe(2);
+  });
+
+  test("$HOME unset + no explicit instanceDir → home-unset soft-skip, no spawn", () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    let spawned = false;
+    const spawn: ReplaySpawn = () => {
+      spawned = true;
+      return { status: 0 };
+    };
+    try {
+      // No instanceDir passed — forces the HOME-derived path resolution.
+      const result = replayPending(AGENT, { spawn });
+      expect(spawned).toBe(false);
+      expect(result.ran).toBe(false);
+      expect(result.skipReason).toBe("home-unset");
+    } finally {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+    }
+  });
+});
+
+describe("scaffoldInstance — hardening", () => {
+  test("$HOME unset + no explicit instanceDir → skipped-home-unset, no mkdir/spawn", () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    let spawned = false;
+    const spawn: ScaffoldSpawn = () => {
+      spawned = true;
+      return { status: 0 };
+    };
+    try {
+      const result = scaffoldInstance(AGENT, { spawn });
+      expect(spawned).toBe(false);
+      expect(result.strategy).toBe("skipped-home-unset");
+      expect(result.created).toEqual([]);
+    } finally {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+    }
+  });
+
+  test("MF_AGENT_STATE_ERRANDS_SCRIPT is read PER CALL, not frozen at import", () => {
+    // Point the errands resolver at a real file via env AFTER module import;
+    // replayPending must honour it (proves the resolver isn't a frozen const).
+    const errandsScript = join(root, "late-errands.ts");
+    writeFileSync(errandsScript, "// stub\n");
+    const savedEnv = process.env.MF_AGENT_STATE_ERRANDS_SCRIPT;
+    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT = errandsScript;
+    let sawScript: string | undefined;
+    const spawn: ReplaySpawn = (_cmd, args) => {
+      sawScript = args[0];
+      return { status: 0, stdout: "" };
+    };
+    try {
+      // No errandsScript in opts — forces the env/default resolution path.
+      const result = replayPending(AGENT, { instanceDir, spawn });
+      expect(result.ran).toBe(true);
+      expect(sawScript).toBe(errandsScript);
+    } finally {
+      if (savedEnv !== undefined) process.env.MF_AGENT_STATE_ERRANDS_SCRIPT = savedEnv;
+      else delete process.env.MF_AGENT_STATE_ERRANDS_SCRIPT;
+    }
+  });
+});

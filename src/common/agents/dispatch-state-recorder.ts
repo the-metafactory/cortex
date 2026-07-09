@@ -50,10 +50,30 @@ const DEFAULT_HOST = "cortex";
  * SAME `errands.ts` the S2 `pending` path uses. Kept as its own env override so
  * a principal can point the dispatch-wiring at a non-standard install
  * independently. `MF_AGENT_STATE_ERRANDS_SCRIPT` overrides.
+ *
+ * Resolved PER CALL (not frozen at module import) so a late env override is
+ * honoured — matches the `opts ?? DEFAULT` pattern used throughout.
  */
-const DEFAULT_ERRANDS_SCRIPT =
-  process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
-  `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`;
+function defaultErrandsScript(): string {
+  return (
+    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
+    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`
+  );
+}
+
+/**
+ * Wall-clock ceiling for a bundle subprocess on the LIVE daemon. A hanging
+ * `errands.ts` must never freeze the dispatch path; on timeout spawnSync
+ * SIGTERMs the child and returns an error the caller logs + soft-skips.
+ */
+const RECORDER_SPAWN_TIMEOUT_MS = 30_000;
+
+/**
+ * stdout ceiling for the enqueue output read. The `{ inserted, row }` dump is
+ * tiny, but an explicit 16MB cap (matching the S2 replay lib) is cheap insurance
+ * against a wedged/verbose bundle overflowing Bun's 1MB default (ENOBUFS).
+ */
+const RECORDER_MAX_BUFFER = 16 * 1024 * 1024;
 
 /** Terminal outcome an accepted dispatch resolves to. */
 export type DispatchResolveStatus = "done" | "failed";
@@ -156,7 +176,7 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
     this.agent = agent;
     this.host = opts.host ?? DEFAULT_HOST;
     this.instanceDir = opts.instanceDir ?? resolveInstanceDir(agent.id, this.host);
-    this.errandsScript = opts.errandsScript ?? DEFAULT_ERRANDS_SCRIPT;
+    this.errandsScript = opts.errandsScript ?? defaultErrandsScript();
     this.spawn = opts.spawn ?? defaultRecorderSpawn;
     this.log = opts.log ?? ((line) => process.stderr.write(line));
   }
@@ -296,6 +316,17 @@ function defaultRecorderSpawn(
   args: string[],
   opts: { env?: NodeJS.ProcessEnv },
 ): RecorderSpawnResult {
-  const r = spawnSync(cmd, args, { stdio: "pipe", env: opts.env });
+  // Live-daemon hardening (mirrors S2's replay spawn): stdin IGNORED so a
+  // bundle that blocks on stdin can't hang the dispatch path, a wall-clock
+  // `timeout` caps a wedged child (SIGTERM → error → run() logs + soft-skips),
+  // and an explicit 16MB `maxBuffer` avoids a spurious ENOBUFS on a verbose
+  // bundle. A timeout / ENOBUFS both surface via `r.error` → the caller's
+  // non-zero/error branch logs one line and never throws.
+  const r = spawnSync(cmd, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: opts.env,
+    timeout: RECORDER_SPAWN_TIMEOUT_MS,
+    maxBuffer: RECORDER_MAX_BUFFER,
+  });
   return { status: r.status, error: r.error, stdout: r.stdout, stderr: r.stderr };
 }

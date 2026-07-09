@@ -1383,7 +1383,13 @@ export async function startCortex(
       // exist). The next activation retries both from a clean footing.
       return;
     }
-    // cortex#1720 S2 — onStart replay, only after a clean scaffold.
+    // cortex#1720 S2 — onStart replay, reached only when scaffold did NOT throw.
+    // Note: a bundle that EXITS NON-ZERO does not throw — `scaffoldInstance`
+    // degrades to the manual fallback and returns `fallback-manual`, so replay
+    // still runs. That is benign: `errands.ts pending` creates `state.sqlite`
+    // itself (via the bundle's own `openState`), so a first-run replay against a
+    // fallback-scaffolded dir simply finds an empty, freshly-created queue. Only
+    // a THROWN scaffold (caught above) skips replay.
     replayStatefulAgent(agent);
   };
   for (const agent of mergedAgents) {
