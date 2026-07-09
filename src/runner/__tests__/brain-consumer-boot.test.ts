@@ -200,6 +200,73 @@ describe("wireBrainConsumers — daemon lifecycle", () => {
   });
 });
 
+describe("wireBrainConsumers — dispatch state recorder gating (cortex#1720 S3)", () => {
+  test("a STATEFUL agent (declares state) gets a dispatch state recorder", async () => {
+    const runtime = fakeRuntime();
+    const madeFor: string[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({
+        runtime,
+        makeDispatchStateRecorder: (a) => {
+          madeFor.push(a.id);
+          return { onDispatchAccepted() {}, onDispatchResolved() {} };
+        },
+      }),
+    );
+
+    await startForAgent({
+      ...agent("luna", ["soc.compose.flow"]),
+      state: { blueprint: "AgentState", version: ">=0.1.0" },
+    });
+
+    // The factory was consulted exactly once, for the stateful agent — proof the
+    // recorder is constructed behind `if (agent.state)`.
+    expect(madeFor).toEqual(["luna"]);
+  });
+
+  test("REGRESSION: a STATELESS agent (no state) gets NO recorder — zero new code paths", async () => {
+    const runtime = fakeRuntime();
+    const madeFor: string[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({
+        runtime,
+        makeDispatchStateRecorder: (a) => {
+          madeFor.push(a.id);
+          return { onDispatchAccepted() {}, onDispatchResolved() {} };
+        },
+      }),
+    );
+
+    // No `state` block — the stateless default.
+    await startForAgent(agent("yarrow", ["soc.compose.flow"]));
+
+    // The factory was NEVER consulted — the `if (agent.state)` guard short-circuits.
+    expect(madeFor).toEqual([]);
+  });
+
+  test("a mixed roster wires a recorder ONLY for the stateful fragment", async () => {
+    const runtime = fakeRuntime();
+    const madeFor: string[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({
+        runtime,
+        makeDispatchStateRecorder: (a) => {
+          madeFor.push(a.id);
+          return { onDispatchAccepted() {}, onDispatchResolved() {} };
+        },
+      }),
+    );
+
+    await startForAgent(agent("yarrow", ["soc.compose.flow"])); // stateless
+    await startForAgent({
+      ...agent("luna", ["soc.compose.flow"]),
+      state: { blueprint: "AgentState", version: ">=0.2.0" },
+    }); // stateful
+
+    expect(madeFor).toEqual(["luna"]);
+  });
+});
+
 describe("wireBrainConsumers — per-agent failure isolation", () => {
   test("a synchronous failure inside startForAgent is caught and logged, not thrown", async () => {
     // A runtime whose `subscribePull` throws synchronously — simulates the

@@ -171,6 +171,54 @@ function published(runtime: RecordingRuntime, type: string): Envelope[] {
 }
 
 // ---------------------------------------------------------------------------
+// cortex#1720 S3 — dispatch-lifecycle state recorder fixtures
+// ---------------------------------------------------------------------------
+
+import type {
+  DispatchStateRecorder,
+  DispatchWorkItemMeta,
+  DispatchResolveStatus,
+} from "../../common/agents/dispatch-state-recorder";
+
+interface RecorderCall {
+  op: "accept" | "resolve";
+  meta?: DispatchWorkItemMeta;
+  correlationId?: string;
+  status?: DispatchResolveStatus;
+}
+
+/** An in-memory fake recorder — records calls, spawns nothing. */
+function fakeRecorder(): { recorder: DispatchStateRecorder; calls: RecorderCall[] } {
+  const calls: RecorderCall[] = [];
+  const recorder: DispatchStateRecorder = {
+    onDispatchAccepted(meta) {
+      calls.push({ op: "accept", meta });
+    },
+    onDispatchResolved(correlationId, status) {
+      calls.push({ op: "resolve", correlationId, status });
+    },
+  };
+  return { recorder, calls };
+}
+
+/**
+ * A recorder whose methods THROW — proves the consumer's fire-and-forget call
+ * never lets a state-write failure fail the dispatch. (In production the
+ * SubprocessDispatchStateRecorder is itself total; this is the belt-and-braces
+ * probe that the consumer does not depend on that.)
+ */
+function throwingRecorder(): DispatchStateRecorder {
+  return {
+    onDispatchAccepted() {
+      throw new Error("state enqueue blew up");
+    },
+    onDispatchResolved() {
+      throw new Error("state resolve blew up");
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
 
@@ -828,6 +876,168 @@ describe("BrainConsumer — backpressure + failure", () => {
     const failed = published(runtime, "dispatch.task.failed");
     expect(failed.length).toBe(1);
     expect((failed[0]?.payload as { reason?: { kind?: string } }).reason?.kind).toBe("not_now");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#1720 S3 — dispatch lifecycle → AgentState work_items
+// ---------------------------------------------------------------------------
+
+describe("BrainConsumer — dispatch state recording (cortex#1720 S3)", () => {
+  test("STATEFUL: accepted dispatch enqueues+claims, completed resolves done", async () => {
+    const runtime = createRecordingRuntime();
+    const env = makeTaskEnvelope();
+    const { recorder, calls } = fakeRecorder();
+    const consumer = new BrainConsumer(
+      baseOpts({
+        runtime,
+        stateRecorder: recorder,
+        runBrainTask: stubRunner(completeResult(env.id, "done")),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(env, "local.jc.s.brain.soc.compose.flow", null, "soc.compose.flow");
+
+    expect(decision).toEqual({ kind: "ack" });
+    // Accept recorded once (enqueue+claim happen INSIDE the recorder), then a
+    // single done-resolve on the completed terminal.
+    expect(calls.length).toBe(2);
+    const accept = calls[0]!;
+    expect(accept.op).toBe("accept");
+    expect(accept.meta?.correlationId).toBe(env.id);
+    expect(accept.meta?.capability).toBe("soc.compose.flow");
+    expect(accept.meta?.subject).toBe("local.jc.s.brain.soc.compose.flow");
+    // Payload discipline is enforced in the recorder's own unit tests; here we
+    // assert the consumer hands it QUEUE METADATA (a timestamp, no payload body).
+    expect(typeof accept.meta?.acceptedAt).toBe("string");
+    const resolve = calls[1]!;
+    expect(resolve).toEqual({ op: "resolve", correlationId: env.id, status: "done" });
+  });
+
+  test("STATEFUL: genuinely-terminal failure (wont_do) resolves failed", async () => {
+    const runtime = createRecordingRuntime();
+    const env = makeTaskEnvelope();
+    const { recorder, calls } = fakeRecorder();
+    const consumer = new BrainConsumer(
+      baseOpts({
+        runtime,
+        stateRecorder: recorder,
+        runBrainTask: stubRunner({
+          v: 1,
+          type: "result",
+          task_id: env.id,
+          status: "failed",
+          reason: { kind: "wont_do", detail: "policy" },
+        }),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+    // wont_do → term (genuinely terminal) → resolve failed.
+    expect(decision.kind).toBe("term");
+    expect(calls[0]?.op).toBe("accept");
+    expect(calls[1]).toEqual({ op: "resolve", correlationId: env.id, status: "failed" });
+  });
+
+  test("STATEFUL: not_now failure is a RETRY (nak) — does NOT resolve the work_item", async () => {
+    const runtime = createRecordingRuntime();
+    const env = makeTaskEnvelope();
+    const { recorder, calls } = fakeRecorder();
+    const consumer = new BrainConsumer(
+      baseOpts({
+        runtime,
+        stateRecorder: recorder,
+        runBrainTask: stubRunner({
+          v: 1,
+          type: "result",
+          task_id: env.id,
+          status: "failed",
+          reason: { kind: "not_now", detail: "transient", retry_after_ms: 100 },
+        }),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+    // not_now → nak-with-redelivery: the row stays in_flight for the retry.
+    expect(decision.kind).toBe("nak");
+    expect(calls.length).toBe(1); // accept only, NO resolve.
+    expect(calls[0]?.op).toBe("accept");
+  });
+
+  test("STATELESS: no recorder → dispatch takes ZERO state code paths (never records)", async () => {
+    const runtime = createRecordingRuntime();
+    const env = makeTaskEnvelope();
+    // baseOpts with NO stateRecorder — the stateless default.
+    const consumer = new BrainConsumer(
+      baseOpts({ runtime, runBrainTask: stubRunner(completeResult(env.id, "done")) }),
+    );
+
+    // The proof that matters is at construction (recorder undefined); the
+    // behavioural check is simply that the dispatch completes normally with no
+    // recorder to consult. A throwing recorder test below covers the wired path.
+    const decision = await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+    expect(decision).toEqual({ kind: "ack" });
+    expect(published(runtime, "dispatch.task.completed").length).toBe(1);
+  });
+
+  test("backpressure-rejected dispatch is NEVER recorded (rejected before accept)", async () => {
+    const runtime = createRecordingRuntime();
+    const { recorder, calls } = fakeRecorder();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const env1 = makeTaskEnvelope();
+    const env2 = makeTaskEnvelope();
+    const consumer = new BrainConsumer(
+      baseOpts({
+        runtime,
+        stateRecorder: recorder,
+        agent: buildAgent({ maxConcurrent: 1 }),
+        runBrainTask: async (task): Promise<BrainTaskRunResult> => {
+          await gate;
+          return { result: completeResult(task.task_id), logs: [], stderrTail: "", exitCode: 0 };
+        },
+      }),
+    );
+
+    const first = consumer.processEnvelope(env1, "s", null, "soc.compose.flow");
+    await new Promise((r) => setTimeout(r, 20));
+    const second = await consumer.processEnvelope(env2, "s", null, "soc.compose.flow");
+
+    expect(second.kind).toBe("nak");
+    // The first task was accepted → exactly ONE accept for env1. The second was
+    // backpressure-rejected BEFORE the accept point → no accept for env2.
+    const accepts = calls.filter((c) => c.op === "accept");
+    expect(accepts.length).toBe(1);
+    expect(accepts[0]?.meta?.correlationId).toBe(env1.id);
+
+    release();
+    await first;
+    // After env1 completes, its done-resolve lands — still nothing for env2.
+    const acceptCorrIds = calls.filter((c) => c.op === "accept").map((c) => c.meta?.correlationId);
+    expect(acceptCorrIds).not.toContain(env2.id);
+  });
+
+  test("a state-write failure NEVER fails the dispatch (fire-and-forget, non-fatal)", async () => {
+    const runtime = createRecordingRuntime();
+    const env = makeTaskEnvelope();
+    const consumer = new BrainConsumer(
+      baseOpts({
+        runtime,
+        stateRecorder: throwingRecorder(),
+        runBrainTask: stubRunner(completeResult(env.id, "done")),
+      }),
+    );
+
+    // Both the accept-side and resolve-side recorder calls throw; the dispatch
+    // must still complete cleanly (ack + completed envelope published).
+    const decision = await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+    expect(decision).toEqual({ kind: "ack" });
+    expect(published(runtime, "dispatch.task.started").length).toBe(1);
+    expect(published(runtime, "dispatch.task.completed").length).toBe(1);
   });
 });
 

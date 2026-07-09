@@ -68,6 +68,10 @@ import {
   BRAIN_TASK_SUBJECT_FAMILY,
   type BrainConsumerAgent,
 } from "../bus/brain-consumer";
+import {
+  SubprocessDispatchStateRecorder,
+  type DispatchStateRecorder,
+} from "../common/agents/dispatch-state-recorder";
 import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
 import { makeExecBrainRunner } from "../brain/exec-brain-runner";
 import { DaemonBrainHost } from "../brain/daemon-brain-host";
@@ -91,6 +95,15 @@ export interface BrainBootAgent {
   id: string;
   /** Path to the agent's persona markdown file (Architecture §9.3). */
   persona: string;
+  /**
+   * cortex#1720 S1 — OPT-IN per-instance durable state declaration. Present ⇒
+   * this fragment is STATEFUL: the boot wiring constructs a
+   * {@link DispatchStateRecorder} (S3) so its dispatch lifecycle records
+   * AgentState work_items. Absent ⇒ stateless, zero new code paths. The full
+   * Zod `Agent` carries this (added in S1); this structural projection re-declares
+   * it so the wiring can gate on it without a cast.
+   */
+  state?: { blueprint: string; version: string };
   runtime?: {
     capabilities?: readonly string[];
     maxConcurrent?: number;
@@ -155,6 +168,16 @@ export interface WireBrainConsumersOpts {
   brainTasksStream: string;
   /** Durable max-deliver, shared with the review/release lanes. */
   reviewConsumerMaxDeliver: number;
+  /**
+   * cortex#1720 S3 — factory for the dispatch-lifecycle state recorder (test
+   * seam). Called ONLY for a `state:`-declaring (stateful) agent, behind the
+   * `if (agent.state)` guard below. Defaults to the real
+   * {@link SubprocessDispatchStateRecorder} (subprocesses to the bundle's
+   * `errands.ts`). A stateless agent never reaches this factory, so its consumer
+   * gets no recorder and takes zero new dispatch code paths. Injected so tests
+   * assert which agents are wired with a recorder without a real bundle.
+   */
+  makeDispatchStateRecorder?: (agent: { id: string }) => DispatchStateRecorder;
 }
 
 /** The callable `cortex.ts` invokes per agent, at both the boot loop and the `agents.d/` hot-reload sites. */
@@ -282,6 +305,18 @@ export function wireBrainConsumers(
       // Sovereignty audit-parity by default, mirroring ReviewConsumer (a
       // self-declared modelClass is spoofable until bound to the signing
       // identity, cortex#327).
+      // cortex#1720 S3 — OPT-IN dispatch-lifecycle state recorder. Constructed
+      // ONLY for a `state:`-declaring (STATEFUL) fragment, so the gate is at
+      // CONSTRUCTION (not a per-envelope string check inside the consumer). A
+      // stateless fragment leaves `stateRecorder` undefined and its consumer's
+      // `this.stateRecorder?.…` calls short-circuit — zero new dispatch paths.
+      const makeRecorder =
+        opts.makeDispatchStateRecorder ??
+        ((a: { id: string }) => new SubprocessDispatchStateRecorder(a));
+      const stateRecorder: DispatchStateRecorder | undefined = agent.state
+        ? makeRecorder({ id: agent.id })
+        : undefined;
+
       const baseConsumerOpts = {
         agent: consumerAgent,
         source: opts.systemEventSource,
@@ -290,6 +325,7 @@ export function wireBrainConsumers(
         ...(opts.surfacePrincipalGate !== undefined && {
           principalGate: opts.surfacePrincipalGate,
         }),
+        ...(stateRecorder !== undefined && { stateRecorder }),
       };
       let daemonHost: DaemonBrainHost | undefined;
       let consumer: BrainConsumer;

@@ -98,6 +98,7 @@ import type {
   BrainTaskHooks,
 } from "../brain/exec-brain-runner";
 import type { DaemonBrainHost } from "../brain/daemon-brain-host";
+import type { DispatchStateRecorder } from "../common/agents/dispatch-state-recorder";
 import type {
   TaskEvent,
   TaskSource,
@@ -241,6 +242,20 @@ export interface BrainConsumerBaseOpts {
   sovereigntyEnforce?: boolean;
   /** Test seam — clock. Defaults to `() => new Date()`. */
   clock?: () => Date;
+  /**
+   * cortex#1720 S3 — OPT-IN dispatch-lifecycle → AgentState work_items recorder.
+   *
+   * Present ONLY for a `state:`-declaring (STATEFUL) agent — the boot wiring
+   * constructs it behind `if (agent.state)` and threads it here. A stateless
+   * agent omits it, so the consumer's `this.stateRecorder?.…` calls short-circuit
+   * to undefined and stateless dispatch takes ZERO new code paths (the gate is at
+   * construction, not a per-envelope string check).
+   *
+   * The recorder is FIRE-AND-FORGET + NON-FATAL: the consumer never awaits it on
+   * the dispatch hot path and never fails a dispatch because a state write
+   * failed. See {@link DispatchStateRecorder}.
+   */
+  stateRecorder?: DispatchStateRecorder;
 }
 
 /**
@@ -336,6 +351,11 @@ export class BrainConsumer {
   private readonly principalGate: PrincipalGate;
   private readonly sovereigntyEnforce: boolean;
   private readonly clock: () => Date;
+  /**
+   * cortex#1720 S3 — the dispatch-lifecycle state recorder, or undefined for a
+   * stateless agent. Undefined ⇒ every `this.stateRecorder?.…` call is a no-op.
+   */
+  private readonly stateRecorder: DispatchStateRecorder | undefined;
 
   /** The manifest dispatch allow-list, as a Set for O(1) membership. */
   private readonly dispatchAllow: Set<string>;
@@ -368,6 +388,7 @@ export class BrainConsumer {
     this.principalGate = opts.principalGate ?? new DenyAllPrincipalGate();
     this.sovereigntyEnforce = opts.sovereigntyEnforce ?? false;
     this.clock = opts.clock ?? (() => new Date());
+    this.stateRecorder = opts.stateRecorder;
     this.dispatchAllow = new Set(opts.agent.dispatchCapabilities);
   }
 
@@ -444,13 +465,17 @@ export class BrainConsumer {
    * Pipeline:
    *   1. backpressure gate (over `maxConcurrent` → nak `not_now`);
    *   2. sovereignty gate (envelope demand vs. agent model class);
-   *   3. emit `dispatch.task.started`;
+   *   3. emit `dispatch.task.started` + (cortex#1720 S3, stateful only)
+   *      enqueue+claim the AgentState work_item — the ACCEPT point, AFTER the
+   *      gates, so a backpressure-rejected dispatch is never recorded;
    *   4. run the brain (effects routed to host hooks);
-   *   5. publish the terminal `dispatch.task.completed`/`failed` + map the ack.
+   *   5. publish the terminal `dispatch.task.completed`/`failed` + map the ack
+   *      + (S3, stateful only) resolve the work_item done/failed on a genuine
+   *      terminal (a nak-redelivery leaves the row `in_flight` for the retry).
    */
   async processEnvelope(
     envelope: Envelope,
-    _subject: string,
+    subject: string,
     msg: JsMsg | null,
     capability: string,
   ): Promise<AckDecision> {
@@ -515,6 +540,12 @@ export class BrainConsumer {
     }
 
     // 3. Emit dispatch.task.started — paired with the terminal via correlation.
+    //
+    //    This is the ACCEPT point: the task cleared backpressure, sovereignty,
+    //    and the shutdown guard, so we now durably owe a response. A `not_now`
+    //    backpressure rejection returned ABOVE (before this line), so a
+    //    backpressure-rejected dispatch is NEVER enqueued — there is no work item
+    //    to record for a task we did not accept (cortex#1720 S3 design decision).
     const startedAt = this.clock();
     await this.safePublish(
       createDispatchTaskStartedEvent({
@@ -525,6 +556,20 @@ export class BrainConsumer {
         startedAt,
       }),
       "dispatch.task.started",
+    );
+
+    // cortex#1720 S3 — record the accepted dispatch as an AgentState work_item
+    // (enqueue → claim). OPT-IN: `stateRecorder` is undefined for a stateless
+    // agent, so this is a no-op. NON-FATAL: wrapped so a state-write failure
+    // (even a synchronous throw from a mis-behaving recorder) NEVER fails the
+    // dispatch — the production recorder is itself total, this is belt-and-braces.
+    this.recordState(() =>
+      this.stateRecorder?.onDispatchAccepted({
+        correlationId,
+        capability,
+        subject,
+        acceptedAt: startedAt.toISOString(),
+      }),
     );
 
     // 4+5. Run the brain, then publish the terminal envelope + map the ack.
@@ -667,8 +712,15 @@ export class BrainConsumer {
       if (!ok) {
         // Terminal publish lost — redeliver so the result is not silently
         // dropped. `delayMs: 0` lets JetStream re-deliver on its own cadence.
+        // Deliberately DO NOT resolve the work_item here: the task is being
+        // redelivered, not finished — the row stays `in_flight` and S2's
+        // ReplayPending re-surfaces it if the daemon stops before the retry.
         return { kind: "nak", delayMs: 0 };
       }
+      // cortex#1720 S3 — GENUINE terminal success: the completed envelope
+      // published, so the work_item is done. Resolve (no-op for a stateless
+      // agent; non-fatal on any failure).
+      this.recordState(() => this.stateRecorder?.onDispatchResolved(correlationId, "done"));
       return { kind: "ack" };
     }
 
@@ -678,10 +730,44 @@ export class BrainConsumer {
     if (!failedOk) {
       // Same rule as the completed path: a dropped `dispatch.task.failed` is a
       // lost terminal result — nak-with-redelivery rather than ack the failure
-      // into the void.
+      // into the void. As above, leave the work_item `in_flight` for the retry.
       return { kind: "nak", delayMs: 0 };
     }
-    return failedReasonToAckDecision(reason);
+    // cortex#1720 S3 — resolve the work_item to `failed` ONLY on a GENUINELY
+    // terminal failure. A `not_now` reason maps to a nak-with-redelivery (the
+    // brain asked to be retried): the row must stay `in_flight` so the redelivery
+    // re-runs and S2's ReplayPending re-surfaces it across a restart — resolving
+    // it `failed` here would strand a task that is going to run again. Every
+    // other reason (`wont_do` / `cant_do` / `policy_denied` / …) maps to `term`
+    // (the task is done, unsuccessfully) → resolve `failed`.
+    const ackDecision = failedReasonToAckDecision(reason);
+    if (ackDecision.kind !== "nak") {
+      this.recordState(() => this.stateRecorder?.onDispatchResolved(correlationId, "failed"));
+    }
+    return ackDecision;
+  }
+
+  /**
+   * cortex#1720 S3 — run a state-recording call defensively. The dispatch hot
+   * path must NEVER see a state-write failure: a thrown recorder call is caught
+   * and logged, and the dispatch proceeds. The production
+   * `SubprocessDispatchStateRecorder` is itself total (it logs + returns on any
+   * bundle miss), so this is the belt-and-braces layer that also covers a
+   * mis-behaving injected recorder. Synchronous by design — the recorder's
+   * subprocesses are a few ms and off the awaited critical path (called after the
+   * lifecycle envelope is already published), so blocking the caller is not worth
+   * the added concurrency surface of an un-awaited promise here.
+   */
+  private recordState(fn: () => void): void {
+    if (this.stateRecorder === undefined) return;
+    try {
+      fn();
+    } catch (err) {
+      process.stderr.write(
+        `brain-consumer: dispatch state recording failed for agent=${this.agent.id} ` +
+          `(non-fatal): ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
   }
 
   /**
