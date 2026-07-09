@@ -14,7 +14,7 @@
  * `globalThis.fetch` and — S5 (cortex#1519) — an injected fake
  * {@link AdmitPortsFactory} for the Discord assign tests (replaces the old
  * `__setDiscordAdmitClientForTests` mutable-singleton seam). No arc binary is
- * called — ADR-0015 retires Model-A credential minting.
+ * called — ADR-0015 retires hub-minted-identity credential minting.
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
@@ -251,7 +251,7 @@ describe("cortex network admit — apply path", () => {
     expect(body.claim.admin_pubkey).toBe(adminPubkey);
     expect(body.signature).toBeTruthy();
 
-    // CRITICAL: No leaf_package in the body — Model-A retired
+    // CRITICAL: No leaf_package in the body — hub-minted identity retired
     const wireStr = JSON.stringify(body);
     expect(wireStr).not.toContain("leaf_package");
     expect(wireStr).not.toContain("credsPath");
@@ -1033,7 +1033,7 @@ describe("cortex network admit — signed claim shape", () => {
     expect(res.exitCode).toBe(0);
     expect(capturedClaim).not.toBeNull();
     expect(capturedClaim!.decision).toBe("admit");
-    // Explicitly NOT "grant" — the old Model-A vocabulary
+    // Explicitly NOT "grant" — the old hub-minted-identity vocabulary
     expect(capturedClaim!.decision).not.toBe("grant");
   });
 });

@@ -700,9 +700,9 @@ describe("cortex#1495 v2/v3 natsConfigClientListen", () => {
 });
 
 // =============================================================================
-// C-1224 (ADR-0013 Model B) — SECRET-AUTHENTICATED leaf rendering.
+// C-1224 (ADR-0013 sovereign model) — SECRET-AUTHENTICATED leaf rendering.
 //
-// The Model-B leaf is a secret-authenticated transport pipe: it binds the
+// The sovereign-model leaf is a secret-authenticated transport pipe: it binds the
 // principal's OWN local account (in their own operator-mode NSC store) + authenticates
 // to the hub with the shared leaf secret, presented via the dial URL's userinfo
 // (`tls://user:secret@host:port`) — the ONLY remote-side form nats-server v2.x
@@ -712,14 +712,14 @@ describe("cortex#1495 v2/v3 natsConfigClientListen", () => {
 // =============================================================================
 
 const SECRET_BINDING: StackLeafBinding = {
-  // Model B: NO creds file — the credential is the URL userinfo secret.
+  // Sovereign model: NO creds file — the credential is the URL userinfo secret.
   leafSecret: "s3cr3t-leaf-pipe",
   leafUser: "andreas",
   // The principal's OWN local federation account (provision writes this).
   account: "AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX",
 };
 
-describe("renderLeafRemote — C-1224 Model B secret-auth", () => {
+describe("renderLeafRemote — C-1224 sovereign-model secret-auth", () => {
   test("renders secretAuth + own account, NO credentials, clean url", () => {
     const remote = renderLeafRemote(DESCRIPTOR, SECRET_BINDING);
     // Clean dial URL — the secret is NOT spliced into the structured url
@@ -774,14 +774,14 @@ describe("renderLeafRemote — C-1224 Model B secret-auth", () => {
   });
 });
 
-describe("renderLeafIncludeFile — C-1224 Model B secret-auth serialization", () => {
+describe("renderLeafIncludeFile — C-1224 sovereign-model secret-auth serialization", () => {
   test("emits userinfo in the url, NO credentials line, with the account line", () => {
     const conf = renderLeafIncludeFile(DESCRIPTOR, SECRET_BINDING);
     // userinfo spliced into the dial URL (URL-encoded user:secret@host).
     expect(conf).toContain(
       'url: "tls://andreas:s3cr3t-leaf-pipe@nats.example.com:7422"',
     );
-    // No `.creds` file on a Model-B leaf.
+    // No `.creds` file on a sovereign-model leaf.
     expect(conf).not.toContain("credentials:");
     // Own local account still bound (operator-mode).
     expect(conf).toContain(

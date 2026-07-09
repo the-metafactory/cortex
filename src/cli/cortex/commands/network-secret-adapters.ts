@@ -424,7 +424,7 @@ function buildLiveSecretCrypto(): SecretCrypto {
 // cortex#1598 — SCOPED-USER MINT: shell `arc nats add-federated-user` (arc#269),
 // read the exported creds text back, hand it to the operator-mode admit seal.
 //
-// Modeled 1:1 on `network-federation-wiring.ts` (the ADR-0013 Model B arc-shell
+// Modeled 1:1 on `network-federation-wiring.ts` (the ADR-0013 sovereign model arc-shell
 // pattern): cortex → arc → nsc. Never throws — every failure surfaces as
 // `{ ok: false, reason, code }` so the orchestrator can `fail(...)` cleanly.
 //

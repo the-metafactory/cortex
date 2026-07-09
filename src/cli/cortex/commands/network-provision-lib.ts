@@ -1,5 +1,5 @@
 /**
- * G1d / T1 (cortex#1139, ADR-0013 Model B) — the pure orchestration behind
+ * G1d / T1 (cortex#1139, ADR-0013 sovereign model) — the pure orchestration behind
  * `cortex network provision <stack>`: the one-command sovereign account-topology
  * setup. Stands up a principal's OWN nsc account tree so a stack can federate.
  *

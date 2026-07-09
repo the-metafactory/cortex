@@ -43,7 +43,7 @@ import type { ServicePlatform } from "../../../common/nats/nats-service-manager"
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { deriveStackId } from "../../../common/types/stack";
 import { resolveRegistryAnchor } from "./default-registry";
-// network-leaf-package import removed — ADR-0015 retired O-4b / Model-A.
+// network-leaf-package import removed — ADR-0015 retired O-4b / hub-minted identity.
 
 // =============================================================================
 // Types
@@ -140,7 +140,7 @@ export interface DerivedJoinInputs {
   account?: string;
   credsPath: string;
   /**
-   * C-1224 (ADR-0013 Model B) — the **leaf shared secret** for a secret-
+   * C-1224 (ADR-0013 sovereign model) — the **leaf shared secret** for a secret-
    * authenticated transport-pipe leaf (`--leaf-secret` /
    * `stack.nats_infra.leaf_secret`). Present ⇒ the join renders a secret-auth
    * leaf (URL userinfo) binding the principal's OWN local account, instead of a
@@ -218,7 +218,7 @@ export interface JoinOverrides {
   unitPath?: string;
   account?: string;
   credsPath?: string;
-  /** C-1224 (ADR-0013 Model B) — `--leaf-secret` (the secret-auth pipe secret). */
+  /** C-1224 (ADR-0013 sovereign model) — `--leaf-secret` (the secret-auth pipe secret). */
   leafSecret?: string;
   /** C-1224 — `--leaf-user` (userinfo user; defaults to the principal id). */
   leafUser?: string;
@@ -237,7 +237,7 @@ export interface JoinOverrides {
    * (`operatorJwt`/`account`/`accountJwt`/`systemAccount*`/`credsPath`) wins, then
    * config, then convention.
    */
-  // leafPackage removed — ADR-0015 retired O-4b / --from-package / Model-A.
+  // leafPackage removed — ADR-0015 retired O-4b / --from-package / hub-minted identity.
 }
 
 /** A reader that loads + validates the cortex config from a path. */
@@ -500,11 +500,11 @@ export function deriveJoinInputs(
     accountRaw === undefined || accountRaw === "" ? undefined : accountRaw;
 
   // creds — flag wins, else stack.nats_infra.creds_path, else convention.
-  // (--from-package / pkg?.credsPath removed — ADR-0015 retired O-4b / Model-A)
+  // (--from-package / pkg?.credsPath removed — ADR-0015 retired O-4b / hub-minted identity)
   const credsPath =
     overrides.credsPath ?? natsInfra?.creds_path ?? defaultCredsPath(networkId);
 
-  // C-1224 (ADR-0013 Model B) — the leaf shared secret (secret-auth pipe). Flag
+  // C-1224 (ADR-0013 sovereign model) — the leaf shared secret (secret-auth pipe). Flag
   // wins, else `stack.nats_infra.leaf_secret`. When present, the join renders a
   // secret-auth leaf binding the principal's OWN local `account` instead of a
   // `.creds`-file leaf. The userinfo USER defaults to the principal id (the hub's

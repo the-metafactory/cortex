@@ -78,7 +78,7 @@ export interface StackLeafBinding {
    * Must be absolute — nats-server resolves it relative to its working
    * directory otherwise, which under launchd is unpredictable.
    *
-   * OPTIONAL since C-1224 (ADR-0013 Model B): a secret-authenticated leaf
+   * OPTIONAL since C-1224 (ADR-0013 sovereign model): a secret-authenticated leaf
    * ({@link StackLeafBinding.leafSecret}) presents its credential via the dial
    * URL's userinfo, NOT a `.creds` file — so the binding carries no creds path.
    * EITHER `credentials` OR `leafSecret` must be present; `renderLeafRemote`
@@ -86,7 +86,7 @@ export interface StackLeafBinding {
    */
   credentials?: string;
   /**
-   * C-1224 (ADR-0013 Model B, §Decision-1) — the **leaf shared secret** for a
+   * C-1224 (ADR-0013 sovereign model, §Decision-1) — the **leaf shared secret** for a
    * secret-authenticated transport-pipe leaf. When present, the leaf remote
    * authenticates to the hub with this secret (the hub's `leafnodes{}` accept
    * block carries the matching `authorization { user, password: <leaf-secret> }`)
@@ -168,13 +168,13 @@ export interface LeafRemote {
    * the account binding rides in the `.creds` JWT and an `account:` line would
    * crash nats-server. When absent, {@link serializeRemote} omits the line.
    *
-   * For a secret-authenticated leaf (C-1224, Model B) this is the principal's
+   * For a secret-authenticated leaf (C-1224, sovereign model) this is the principal's
    * OWN local federation account — the leaf binds it locally while the secret
    * authenticates the pipe. Present whenever the bus is operator-mode.
    */
   account?: string;
   /**
-   * C-1224 (ADR-0013 Model B) — secret-auth material for a transport-pipe leaf.
+   * C-1224 (ADR-0013 sovereign model) — secret-auth material for a transport-pipe leaf.
    * Present ⇒ {@link serializeRemote} splices `user:secret` (URL-encoded) into
    * the dial URL's userinfo and emits NO `credentials:` line. Absent ⇒ the
    * JWT-creds path. Mutually exclusive with {@link LeafRemote.credentials}.
@@ -285,11 +285,11 @@ export function renderLeafRemote(
     );
   }
 
-  // C-1224 (ADR-0013 Model B) — SECRET-AUTH path. When the binding carries a
+  // C-1224 (ADR-0013 sovereign model) — SECRET-AUTH path. When the binding carries a
   // leaf secret, the leaf authenticates via URL userinfo (the secret-auth pipe),
   // NOT a `.creds` file. It still binds the principal's OWN local `account` (when
   // operator-mode). Mutually exclusive with the creds path: the secret wins (a
-  // Model-B join carries no creds).
+  // sovereign-model join carries no creds).
   const leafSecret = binding.leafSecret?.trim();
   if (leafSecret !== undefined && leafSecret.length > 0) {
     const leafUser = binding.leafUser?.trim();
@@ -1627,7 +1627,7 @@ function monitorUrlForPort(port: string): string | undefined {
 }
 
 /**
- * C-1224 (ADR-0013 Model B) — splice `user:secret` into a clean dial URL's
+ * C-1224 (ADR-0013 sovereign model) — splice `user:secret` into a clean dial URL's
  * userinfo, URL-encoding both components so an `@`/`:`/`/`/space in the secret
  * cannot break the authority boundary (and so nats-server — Go `url.Parse`,
  * which DECODES userinfo — recovers the exact secret). This is the ONLY
@@ -1668,7 +1668,7 @@ function serializeRemote(remote: LeafRemote, indent: string): string {
   // account on the binding). A working hand-built `$G` leaf has no `account:`
   // line — the binding rides in the creds JWT — and emitting one would crash
   // nats-server (`cannot find local account "<A…>"`). Only an operator-mode
-  // remote (account present) carries the line. A Model-B secret-auth leaf on an
+  // remote (account present) carries the line. A sovereign-model secret-auth leaf on an
   // operator-mode bus carries BOTH the userinfo secret AND the local `account:`.
   if (remote.account !== undefined && remote.account.length > 0) {
     lines.push(`${indent}  account: ${remote.account}`);

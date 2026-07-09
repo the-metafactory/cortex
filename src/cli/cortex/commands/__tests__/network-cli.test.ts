@@ -137,13 +137,13 @@ describe("join usage", () => {
     expect(res.stderr).toContain("prefix matching");
   });
 
-  // ADR-0015 (R2) — the Model-A leaf-package INGESTION flag `--from-package`
+  // ADR-0015 (R2) — the hub-minted-identity leaf-package INGESTION flag `--from-package`
   // (O-4b) is retired. `cortex network join` no longer accepts an injected
-  // operator JWT + account JWT package; a Model-B stack mints its own and joins
+  // operator JWT + account JWT package; a sovereign-model stack mints its own and joins
   // via the sovereign secret-auth pipe (or the O-3 operator-mode flags for its
   // OWN NSC operator-mode bus). The flag must now be rejected as unknown rather
   // than silently consuming an injected hub-minted package.
-  test("ADR-0015 — `--from-package` (Model-A ingestion) is rejected as unknown (exit 2)", async () => {
+  test("ADR-0015 — `--from-package` (hub-minted-identity ingestion) is rejected as unknown (exit 2)", async () => {
     const res = await dispatchNetwork([
       "join", "metafactory",
       "--principal", "andreas",
@@ -805,7 +805,7 @@ describe("leave public", () => {
 // =============================================================================
 // C-1315 — joinBlockerMessage: the actionable admission-state message that
 // REPLACES the misleading legacy `.creds not found (#821)` preflight on a
-// Model-B join with no resolved leaf secret.
+// sovereign-model join with no resolved leaf secret.
 // =============================================================================
 
 describe("joinBlockerMessage (C-1315)", () => {
@@ -863,8 +863,8 @@ describe("joinBlockerMessage (C-1315)", () => {
 
 // =============================================================================
 // C-1315 (review major, #1397) — shouldReplaceCredsPreflightError: the #821
-// creds-preflight error is rewritten to the Model-B admission message ONLY on
-// the Model-B no-secret path, and NEVER on an explicit `--creds` / `--leaf-
+// creds-preflight error is rewritten to the sovereign-model admission message ONLY on
+// the sovereign-model no-secret path, and NEVER on an explicit `--creds` / `--leaf-
 // secret` join or a non-#821 failure.
 // =============================================================================
 
@@ -874,7 +874,7 @@ describe("shouldReplaceCredsPreflightError (C-1315 #821 guard, #1397)", () => {
     "that cannot authenticate to the hub. Set stack.nats_infra.creds_path (or pass --creds) " +
     "to an existing .creds file (cortex#821).";
 
-  test("Model-B no-secret path (no --creds, no leaf secret, #821) → replace", () => {
+  test("sovereign-model no-secret path (no --creds, no leaf secret, #821) → replace", () => {
     expect(
       shouldReplaceCredsPreflightError({
         joinOk: false,
@@ -885,7 +885,7 @@ describe("shouldReplaceCredsPreflightError (C-1315 #821 guard, #1397)", () => {
     ).toBe(true);
   });
 
-  test("explicit --creds <bad-path> join → KEEP the original creds-not-found error (NOT the Model-B rewrite)", () => {
+  test("explicit --creds <bad-path> join → KEEP the original creds-not-found error (NOT the sovereign-model rewrite)", () => {
     // The review-major regression: a user who opted into creds-file auth and
     // typo'd the path must see the genuine error, never "a .creds file is NOT the fix".
     expect(

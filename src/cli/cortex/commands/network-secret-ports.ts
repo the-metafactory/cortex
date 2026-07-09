@@ -107,7 +107,7 @@ export interface HubLocalityPort {
  * cortex#1598 (epic #1595 slice 2) — mint a subject-scoped hub-transport user
  * on an OPERATOR-MODE hub, returning its `.creds` TEXT for sealing. Backed by
  * the `arc nats add-federated-user` verb (arc#269): cortex shells arc → arc
- * calls nsc (the ADR-0013 Model B boundary; cortex NEVER calls nsc directly).
+ * calls nsc (the ADR-0013 sovereign model boundary; cortex NEVER calls nsc directly).
  *
  * The operator-mode admit path seals this scoped credential instead of writing
  * an inline PSK leaf user into the hub config — an operator hub has no inline

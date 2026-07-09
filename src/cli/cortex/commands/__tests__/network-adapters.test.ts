@@ -1174,7 +1174,7 @@ describe("#821 live leaf-file pre-flight + rollback adapters", () => {
 
     // Force a permissive umask so a bare `writeFileSync(..., mode: 0o600)` would
     // be masked to 0640/0644 without the explicit chmod-back. The write must
-    // still land 0600 (the secret lives inside the file for Model B).
+    // still land 0600 (the secret lives inside the file for the sovereign model).
     const prevUmask = process.umask(0o022);
     try {
       ports.leafFile.write({

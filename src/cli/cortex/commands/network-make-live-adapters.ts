@@ -6,7 +6,7 @@
  * orchestration is pure over the injected ports (`network-make-live-lib.ts`);
  * these adapters are constructed only on a real `--apply` (the dry-run path uses
  * read-only state probes built in the CLI). cortex NEVER runs nsc — the account
- * tree + JWT come from arc (ADR-0013 Model B invariant).
+ * tree + JWT come from arc (ADR-0013 sovereign model invariant).
  */
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync, mkdirSync, renameSync, rmSync } from "fs";

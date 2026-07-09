@@ -502,7 +502,7 @@ export interface LeafLinkState {
 }
 
 /**
- * G1c (#1117, ADR-0013 Model B) — the federation-wiring seam.
+ * G1c (#1117, ADR-0013 sovereign model) — the federation-wiring seam.
  *
  * Shells out to `arc nats add-federation-export` (arc#243 / G1b) to wire
  * the LOCAL-SIDE `federated.>` export/import between the stack's federation
@@ -510,7 +510,7 @@ export interface LeafLinkState {
  * `joinNetwork` — after bind-mode resolution (so the leaf account is known),
  * before the leaf file write (fail-fast before any mutation on arc failure).
  *
- * cortex NEVER calls nsc directly (ADR-0013 Model B invariant).
+ * cortex NEVER calls nsc directly (ADR-0013 sovereign model invariant).
  * cortex NEVER passes a peer account (local-only wiring).
  */
 export interface FederationWiringPort {
@@ -573,7 +573,7 @@ export interface NetworkPorts {
    */
   admission?: AdmissionStatePort;
   /**
-   * G1c (#1117, ADR-0013 Model B) — federation-wiring seam. Optional for
+   * G1c (#1117, ADR-0013 sovereign model) — federation-wiring seam. Optional for
    * backwards compatibility: when absent the wiring step is skipped (the
    * pre-G1c behaviour — the join still configures the leaf but does NOT wire
    * the local-side `federated.>` export/import). Present → step (b.4) runs

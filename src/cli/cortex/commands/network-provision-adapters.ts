@@ -7,7 +7,7 @@
  * `--apply` invocation. The arc account-tree seam reuses
  * `buildOperatorProvisioningAdapter` (operator-provisioning.ts) and the existing
  * `buildFederationWiringAdapter` (network-federation-wiring.ts) — cortex NEVER
- * runs nsc itself (ADR-0013 Model B invariant).
+ * runs nsc itself (ADR-0013 sovereign model invariant).
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";

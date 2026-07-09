@@ -284,7 +284,7 @@ app.use("/capabilities", readLimited);
 app.route("/", principalRoutes());
 app.route("/", networkRoutes());
 app.route("/", capabilityRoutes());
-// ADR-0015: admission gate routes (the canonical, only paths — the Model-A
+// ADR-0015: admission gate routes (the canonical, only paths — the hub-minted-identity
 // issuance-request routes were retired here; the registry is not yet deployed,
 // so there are no consumers to keep a compat shim for).
 app.route("/", admissionRequestRoutes());

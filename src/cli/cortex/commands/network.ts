@@ -76,7 +76,7 @@ import {
   type ConfigReader,
 } from "./network-derive";
 import { DEFAULT_REGISTRY } from "./default-registry";
-// network-leaf-package import removed — ADR-0015 retired O-4b / Model-A.
+// network-leaf-package import removed — ADR-0015 retired O-4b / hub-minted identity.
 
 /**
  * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
@@ -271,7 +271,7 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal-seed": "value",
         "--creds": "value",
         "--account": "value",
-        // C-1224 (ADR-0013 Model B) — the secret-authenticated leaf pipe. When
+        // C-1224 (ADR-0013 sovereign model) — the secret-authenticated leaf pipe. When
         // set, the join renders a leaf that authenticates to the hub via URL
         // userinfo (`tls://<user>:<secret>@host`) and binds the principal's OWN
         // local account, instead of a `.creds`-file leaf. Map to
@@ -517,7 +517,7 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--dry-run": "bool",
       },
     },
-    // C-1257 (PR7/#1225, ADR-0013 Model B) — the daemon-switch step. Lands a
+    // C-1257 (PR7/#1225, ADR-0013 sovereign model) — the daemon-switch step. Lands a
     // provisioned stack's daemon onto its own agents account: mints the bus
     // creds under ANDREAS_<STACK>_AGENTS at nats.credsPath, teaches the local
     // NATS server the account (resolver_preload), restarts the nats-server +
@@ -669,7 +669,7 @@ function readOverride(
   return { [resolvedKey]: v };
 }
 
-// readLeafPackageFlag removed — ADR-0015 retired O-4b / --from-package / Model-A.
+// readLeafPackageFlag removed — ADR-0015 retired O-4b / --from-package / hub-minted identity.
 
 /** Resolve the stack slug from `--stack` (`{principal}/{slug}`) or default. */
 function resolveStackSlug(
@@ -804,7 +804,7 @@ export function __setJoinLeafSecretFetcherForTests(f: LeafSecretFetcher | null):
 /**
  * #1597 — where a fetched v2 per-member `.creds` file is installed. Deliberately
  * the `-leaf` suffixed name, NOT `defaultCredsPath`'s `<network>.creds`: the
- * derive convention path may carry a hand-placed Model-A file we must never
+ * derive convention path may carry a hand-placed hub-minted-identity file we must never
  * clobber. Tests inject a tmp dir via {@link __setLeafCredsInstallDirForTests}.
  */
 const LEAF_CREDS_INSTALL_DIR = "~/.config/nats";
@@ -877,7 +877,7 @@ function installLeafCreds(
 /**
  * The join-side result of the auto-fetch, discriminated by which leaf-auth
  * shape the sealed envelope delivered (#1597):
- *   - `secret-auth` (v1) — the Model-B shared-string pipe; join renders the
+ *   - `secret-auth` (v1) — the sovereign-model shared-string pipe; join renders the
  *     URL-userinfo remote.
  *   - `creds-file` (v2)  — a per-member NSC user `.creds` was fetched and is
  *     ALREADY INSTALLED at `credsPath` (0600); join points the stack binding at
@@ -981,7 +981,7 @@ async function maybeAutoFetchLeafSecret(
 
 /**
  * C-1315 — turn a classified admission state into the actionable message a
- * Model-B joiner needs, REPLACING the misleading legacy `.creds not found (#821)`
+ * sovereign-model joiner needs, REPLACING the misleading legacy `.creds not found (#821)`
  * preflight. Returns `undefined` for states we can't explain (keep the original
  * error). Every message states plainly that a legacy `.creds` file is NOT the fix.
  */
@@ -992,7 +992,7 @@ export function joinBlockerMessage(networkId: string, s: OwnAdmissionState): str
       return (
         `no admission request exists for network "${networkId}" — register first with ` +
         `\`cortex provision-stack register <principal> --network ${networkId} --registry-url <url> --seed-path <seed>\`, ` +
-        `then have an admin admit + seal. (This is a Model-B secret-auth join; a legacy .creds file is NOT the fix.)`
+        `then have an admin admit + seal. (This is a sovereign secret-auth join; a legacy .creds file is NOT the fix.)`
       );
     case "pending":
       return (
@@ -1031,15 +1031,15 @@ export function joinBlockerMessage(networkId: string, s: OwnAdmissionState): str
 
 /**
  * C-1315 — decide whether a failed join's `#821` creds-preflight error should be
- * REPLACED with the actionable Model-B admission-state message. Pure + exported
- * so the invariant is unit-testable. The rewrite is confined to the Model-B
+ * REPLACED with the actionable sovereign-model admission-state message. Pure + exported
+ * so the invariant is unit-testable. The rewrite is confined to the sovereign-model
  * no-secret path; it must fire ONLY when ALL hold:
  *   - the join failed (`!joinOk`),
  *   - no leaf secret was resolved (flag/config/auto-fetch) — else it's not the
  *     no-secret path,
  *   - NO explicit `--creds` flag was given — an explicit `--creds` join opted
- *     into creds-file (Model-A) auth, so a missing/typo'd creds path is a genuine
- *     "creds not found" error, NOT a Model-B admission gap; keep it verbatim
+ *     into creds-file (hub-minted-identity) auth, so a missing/typo'd creds path is a genuine
+ *     "creds not found" error, NOT a sovereign-model admission gap; keep it verbatim
  *     (review major, #1397), and
  *   - the failure carries the `cortex#821` preflight marker.
  */
@@ -1059,13 +1059,13 @@ export function shouldReplaceCredsPreflightError(args: {
 }
 
 /**
- * C-1315 — when a join fails the Model-B creds preflight (#821) with no resolved
+ * C-1315 — when a join fails the sovereign-model creds preflight (#821) with no resolved
  * leaf secret, probe the joiner's OWN admission row (PoP `/mine` read) and return
  * the actionable state message. Best-effort: any inability to probe (no seed on
  * disk, unreadable seed, registry unreachable) returns `undefined` so the caller
  * keeps the original error rather than inventing a misleading one.
  */
-async function classifyModelBJoinBlocker(
+async function classifyJoinBlocker(
   networkId: string,
   inputs: { seedPath: string; registryUrl: string; principal: string },
 ): Promise<string | undefined> {
@@ -1153,7 +1153,7 @@ async function runJoin(
         ...readOverride(flags, "--unit", "unitPath"),
         ...readOverride(flags, "--account", "account"),
         ...readOverride(flags, "--creds", "credsPath"),
-        // C-1224 (ADR-0013 Model B) — secret-auth leaf overrides.
+        // C-1224 (ADR-0013 sovereign model) — secret-auth leaf overrides.
         ...readOverride(flags, "--leaf-secret", "leafSecret"),
         ...readOverride(flags, "--leaf-user", "leafUser"),
         // O-3 (cortex#1053) — operator-mode leaf-package overrides.
@@ -1161,7 +1161,7 @@ async function runJoin(
         ...readOverride(flags, "--account-jwt", "accountJwt"),
         ...readOverride(flags, "--system-account", "systemAccount"),
         ...readOverride(flags, "--system-account-jwt", "systemAccountJwt"),
-        // (--from-package removed — ADR-0015 retired O-4b / Model-A)
+        // (--from-package removed — ADR-0015 retired O-4b / hub-minted identity)
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -1272,7 +1272,7 @@ async function runJoin(
     stackSlug: inputs.bootStackSlug,
     credentials: resolvedCredsPath,
     account: inputs.account,
-    // C-1224 (ADR-0013 Model B) — pass the secret-auth leaf material (when
+    // C-1224 (ADR-0013 sovereign model) — pass the secret-auth leaf material (when
     // resolved, including PR5b's auto-fetched leaf PSK) so the join renders a
     // secret-auth pipe binding the principal's OWN local account instead of a
     // `.creds`-file leaf.
@@ -1329,12 +1329,12 @@ async function runJoin(
 
   const res = await joinNetwork(networkId, stack, ports);
 
-  // C-1315 — when the join fails the Model-B creds preflight (#821) and no leaf
+  // C-1315 — when the join fails the sovereign-model creds preflight (#821) and no leaf
   // secret was resolved (flag/config/auto-fetch), the REAL blocker is almost
   // always an admission-state gap (not yet admitted / sealed delivery missing /
   // revoked), NOT a missing legacy .creds file. Probe the joiner's own admission
   // row and REPLACE the misleading message with the actionable state. Only fires
-  // on the secret-auth (Model-B) no-secret path; an explicit --creds / --leaf-
+  // on the secret-auth (sovereign-model) no-secret path; an explicit --creds / --leaf-
   // secret join, or a registry we can't reach, keeps the original #821 error.
   let effectiveReason = res.reason;
   if (
@@ -1345,7 +1345,7 @@ async function runJoin(
       reason: res.reason,
     })
   ) {
-    const actionable = await classifyModelBJoinBlocker(networkId, {
+    const actionable = await classifyJoinBlocker(networkId, {
       seedPath: inputs.seedPath,
       registryUrl: inputs.registryUrl,
       principal: inputs.principal,
@@ -4477,7 +4477,7 @@ Subcommands:
           operator-mode bus conversion + restart are left to \`join\` (this verb is
           non-disruptive). Remaining two-party steps after provision: the leaf
           shared secret + hub topology agreement (out-of-band).
-  make-live (C-1257, ADR-0013 Model B) The daemon-switch — lands a PROVISIONED
+  make-live (C-1257, ADR-0013 sovereign model) The daemon-switch — lands a PROVISIONED
           stack's daemon onto its OWN agents account (ANDREAS_<STACK>_AGENTS).
           Mints the bus creds under the agents account at nats.credsPath (the
           file the daemon authenticates with), teaches the local NATS server the
@@ -4506,7 +4506,7 @@ Subcommands:
           seed (chmod-600 gated), builds a signed admission decision claim
           (decision: "admit"), and POSTs it to /admission-requests/:id/admit
           in the registry. The principal is ADMITTED to the network roster.
-          Mints nothing (no arc nats add-bot call — Model-A retired). Optionally
+          Mints nothing (no arc nats add-bot call — hub-minted identity retired). Optionally
           assigns the Discord community-fleet role (O-5) via --discord-member.
           DRY-RUN by default; pass --apply to execute.
           ADMIT-AND-SEAL (C-1316): on --apply, admit ALSO mints + seals + delivers

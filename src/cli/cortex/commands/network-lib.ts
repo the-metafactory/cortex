@@ -88,7 +88,7 @@ export interface JoiningStack {
    */
   credentials?: string;
   /**
-   * C-1224 (ADR-0013 Model B, §Decision-1) — the **leaf shared secret** for a
+   * C-1224 (ADR-0013 sovereign model, §Decision-1) — the **leaf shared secret** for a
    * secret-authenticated transport-pipe leaf. Present ⇒ `joinNetwork` renders a
    * leaf that authenticates via URL userinfo (`tls://user:secret@host`) and binds
    * the principal's OWN local {@link JoiningStack.account}, instead of a
@@ -143,7 +143,7 @@ export interface JoiningStack {
    */
   payloadKeyId?: string;
   /**
-   * G1c (#1117, ADR-0013 Model B) — the agents NSC account (nkey-A) where the
+   * G1c (#1117, ADR-0013 sovereign model) — the agents NSC account (nkey-A) where the
    * stack's dispatch-listener subscribes `federated.>`. This is the
    * `--to-account` for `arc nats add-federation-export`. Optional today: when
    * absent the wiring step uses `account` for both sides (same-account path —
@@ -348,7 +348,7 @@ export async function joinNetwork(
   // This is a READ (no mutation), so dry-run surfaces the same decision.
   const hasCreds =
     typeof stack.credentials === "string" && stack.credentials.trim().length > 0;
-  // C-1224 (ADR-0013 Model B) — a leaf SECRET is an auth method on par with a
+  // C-1224 (ADR-0013 sovereign model) — a leaf SECRET is an auth method on par with a
   // `.creds` file: it authenticates the secret-auth transport pipe via URL
   // userinfo. So it satisfies `resolveBindMode`'s "has an auth method" gate (the
   // function only uses this to refuse a bus with NO way to authenticate, and to
@@ -394,7 +394,7 @@ export async function joinNetwork(
         : `bus already operator-mode under this operator — no conversion needed (O-3, #1053)`,
     );
     // Re-resolve against the now-operator-mode bus. Use `hasLeafAuth` (not
-    // `hasCreds`) so a secret-only Model-B leaf (C-1224) that triggered the
+    // `hasCreds`) so a secret-only sovereign-model leaf (C-1224) that triggered the
     // auto-convert still passes the "has an auth method" gate — otherwise it
     // would abort with a misleading "no leaf creds available" despite a valid
     // secret. Mirrors the first resolve at line 275.
@@ -488,7 +488,7 @@ export async function joinNetwork(
     // file, and a decodable-but-accountless JWT should not block a join.
   }
 
-  // (b.4) G1c (#1117, ADR-0013 Model B) — WIRE the local-side `federated.>`
+  // (b.4) G1c (#1117, ADR-0013 sovereign model) — WIRE the local-side `federated.>`
   // export/import BEFORE writing the leaf file (fail-fast: an arc failure here
   // aborts before any mutation touches the live nats-server config). Skipped
   // when:
@@ -496,7 +496,7 @@ export async function joinNetwork(
   //   - OR the bus is not operator-mode (a $G/creds-only bus has no NSC account
   //     tree to add export/import to — no wiring is needed or possible).
   //
-  // ADR-0013 Model B invariant: LOCAL accounts only — `federationAccount` is
+  // ADR-0013 sovereign model invariant: LOCAL accounts only — `federationAccount` is
   // the leaf-bound nkey-A from `stack.account`; `agentsAccount` is the
   // stack's own agents account (optional today — G1d tracks the split).
   // cortex NEVER passes a peer account; no network id goes on the arc call.
@@ -536,7 +536,7 @@ export async function joinNetwork(
     steps.push(
       `wired local-side federated.> export/import ` +
       `(federation-account=${leafAccount}, ${wiringApply ? "applied" : "dry-run"}: ${wiringNote}) ` +
-      `(G1c ADR-0013 Model B)`,
+      `(G1c ADR-0013 sovereign model)`,
     );
   } else if (ports.federationWiring !== undefined && leafAccount === undefined) {
     // $G/creds-only bus: no NSC account — federation wiring is a no-op. Log
@@ -544,7 +544,7 @@ export async function joinNetwork(
     steps.push(
       "skipped federation-wiring step: $G/creds-only bus has no NSC account " +
       "(no export/import needed — the creds JWT binds the leaf directly) " +
-      "(G1c ADR-0013 Model B)",
+      "(G1c ADR-0013 sovereign model)",
     );
   }
 
@@ -556,7 +556,7 @@ export async function joinNetwork(
   // READ (identical in live + dry-run); refuse here rather than render a leaf
   // that can never connect.
   //
-  // C-1224 (ADR-0013 Model B) — SKIP this for a secret-auth leaf: it carries no
+  // C-1224 (ADR-0013 sovereign model) — SKIP this for a secret-auth leaf: it carries no
   // `.creds` file (its credential is the URL userinfo secret), so there is
   // nothing on disk to pre-flight here. The secret's presence was already
   // confirmed by `hasSecret` above.
@@ -582,7 +582,7 @@ export async function joinNetwork(
   try {
     ports.leafFile.write({
       descriptor: verified,
-      // C-1224 (ADR-0013 Model B) — render the SECRET-AUTH leaf when a leaf
+      // C-1224 (ADR-0013 sovereign model) — render the SECRET-AUTH leaf when a leaf
       // secret is present (URL userinfo, no creds file); else the legacy
       // `.creds`-file leaf. Both still carry the local `account:` (`leafAccount`)
       // when the bus is operator-mode (#799). Mutually exclusive: the renderer

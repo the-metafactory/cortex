@@ -131,7 +131,7 @@ export const StackNatsInfraSchema = z.object({
    */
   creds_path: z.string().min(1).optional(),
   /**
-   * C-1224 (ADR-0013 Model B, §Decision-1) — the **leaf shared secret** for a
+   * C-1224 (ADR-0013 sovereign model, §Decision-1) — the **leaf shared secret** for a
    * secret-authenticated transport-pipe leaf. When set, `cortex network join`
    * renders the network's leaf remote to authenticate to the hub with this
    * secret (URL userinfo — the hub's `leafnodes{}` accept block carries the
@@ -191,7 +191,7 @@ export type StackNatsInfra = z.infer<typeof StackNatsInfraSchema>;
  * optional for now — it will become required once Phase B (NKey-signed
  * bot↔bot) wires the stack-level signing material in.
  *
- * Grammar (IAW design §3.2 Model B, Q7 lock-in):
+ * Grammar (IAW design §3.2 sovereign model, Q7 lock-in):
  *
  *   stack:
  *     id: andreas/research

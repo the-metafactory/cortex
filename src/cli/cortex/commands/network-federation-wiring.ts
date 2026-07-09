@@ -7,7 +7,7 @@
  * pattern established in `creds.ts` (`callArcNats` / `ArcRunner`):
  *   cortex shells to arc → arc calls nsc → nsc mutates the local NSC store.
  *
- * cortex NEVER calls nsc directly (ADR-0013 Model B invariant).
+ * cortex NEVER calls nsc directly (ADR-0013 sovereign model invariant).
  * cortex NEVER references a peer account (local-only wiring).
  * cortex NEVER puts the network id on any NATS wire.
  *

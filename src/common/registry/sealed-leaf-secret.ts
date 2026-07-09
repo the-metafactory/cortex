@@ -19,7 +19,7 @@ export const LEAF_SECRET_ENVELOPE_VERSION = 1;
 
 /**
  * v2 (#1596, epic #1595) — the credential-file payload. Where v1 carries a
- * shared-string `leaf_psk` (Model-B / conf-mode hub), v2 carries the verbatim
+ * shared-string `leaf_psk` (sovereign model / conf-mode hub), v2 carries the verbatim
  * text of a per-member NSC user `.creds` file, so an operator-mode hub can seal
  * a real transport credential through the SAME sealed-delivery channel (the
  * #1526 design's core move). This is a DISCRIMINATED version, NOT a

@@ -22,7 +22,7 @@
   <rect width="1700" height="2200" fill="#EFE7D5"/>
 
   <!-- ============ TITLE ============ -->
-  <text x="60" y="80" font-size="50" font-weight="700" fill="#1d1c19" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Joining a Network &#8212; Sovereign &#8220;Model B&#8221; Federation</text>
+  <text x="60" y="80" font-size="50" font-weight="700" fill="#1d1c19" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Joining a Network &#8212; Sovereign Federation</text>
   <text x="62" y="118" font-size="23" fill="#3a3833">One signing root per principal, never cross-issued &#8212; and the one-command, plug-and-play join</text>
   <text x="62" y="146" font-size="15" fill="#6b665d" font-style="italic">Design ref: ADR-0013  &#183;  docs/sop-network-join.md  &#183;  cortex network join  &#183;  2026-06-27</text>
   <line x1="60" y1="166" x2="1640" y2="166" stroke="#1d1c19" stroke-width="2"/>
@@ -326,5 +326,5 @@
   <text x="1088" y="2110" font-size="15.5" fill="#2c2a26">like localhost / LAN / internet.</text>
 
   <!-- footer -->
-  <text x="60" y="2170" font-size="14" fill="#6b665d" font-style="italic">metafactory  &#183;  cortex M7 collaboration surface  &#183;  sovereign &#8220;Model B&#8221; federation  &#183;  docs/diagrams/cortex-network-join.png</text>
+  <text x="60" y="2170" font-size="14" fill="#6b665d" font-style="italic">metafactory  &#183;  cortex M7 collaboration surface  &#183;  sovereign federation  &#183;  docs/diagrams/cortex-network-join.png</text>
 </svg>

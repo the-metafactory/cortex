@@ -65,7 +65,7 @@ export interface FetchSealedLeafSecretInput {
 }
 
 export type FetchSealedLeafSecretResult =
-  /** v1 envelope — the Model-B shared-string secret-auth pipe (ADR-0013). */
+  /** v1 envelope — the sovereign-model shared-string secret-auth pipe (ADR-0013). */
   | { ok: true; kind: "psk"; leafPsk: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
   /**
    * v2 envelope (#1597, epic #1595) — the per-member NSC user `.creds` file

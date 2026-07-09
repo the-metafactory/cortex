@@ -2570,9 +2570,9 @@ describe("C-850 network lifecycle status", () => {
 });
 
 // =============================================================================
-// C-1224 (ADR-0013 Model B) — secret-authenticated leaf join.
+// C-1224 (ADR-0013 sovereign model) — secret-authenticated leaf join.
 //
-// A Model-B join carries a leaf SHARED SECRET (not a `.creds` file): the leaf
+// A sovereign-model join carries a leaf SHARED SECRET (not a `.creds` file): the leaf
 // authenticates the transport pipe via URL userinfo and binds the principal's
 // OWN local account. These assert the orchestration delta: the secret counts as
 // an auth method (bind-mode resolves), the `.creds` pre-flight is SKIPPED (no
@@ -2583,13 +2583,13 @@ describe("C-850 network lifecycle status", () => {
 const LOCAL_SECRET: JoiningStack = {
   principalId: "andreas",
   stackSlug: "meta-factory",
-  // Model B — NO creds file; the credential is the leaf secret (URL userinfo).
+  // Sovereign model — NO creds file; the credential is the leaf secret (URL userinfo).
   leafSecret: "s3cr3t-leaf-pipe",
   leafUser: "andreas",
   account: "A" + "B".repeat(55),
 };
 
-describe("C-1224 — secret-auth leaf join (Model B)", () => {
+describe("C-1224 — secret-auth leaf join (sovereign model)", () => {
   test("operator-mode bus + secret binds own account; SKIPS the creds pre-flight", async () => {
     const { ports, rec } = makeFakes({ busType: "operator-mode" });
     const res = await joinNetwork("metafactory", LOCAL_SECRET, ports);
@@ -2639,7 +2639,7 @@ describe("C-1224 — secret-auth leaf join (Model B)", () => {
     expect(binding.leafSecret).toBeUndefined();
   });
 
-  test("operator-mode auto-convert path is untouched by the secret delta (Model-B survivor)", async () => {
+  test("operator-mode auto-convert path is untouched by the secret delta (sovereign-model survivor)", async () => {
     // An anonymous bus + a leaf package still auto-converts (O-3) — the secret
     // delta did not disturb the operator-mode-package flow. Here we exercise the
     // creds-path join on an anonymous bus that converts, confirming no regression.
@@ -2652,7 +2652,7 @@ describe("C-1224 — secret-auth leaf join (Model B)", () => {
 
   test("secret-only leaf on an auto-converted anonymous bus binds the account (NOT a creds error)", async () => {
     // Regression guard for the post-auto-convert re-resolve (network-lib:310):
-    // a secret-only Model-B leaf (hasCreds === false, hasSecret === true) on an
+    // a secret-only sovereign-model leaf (hasCreds === false, hasSecret === true) on an
     // anonymous bus must auto-convert (O-3) and then RE-RESOLVE on `hasLeafAuth`
     // — not `hasCreds`. If it re-resolved on `hasCreds` the secret would be
     // invisible and the join would abort with a misleading "no leaf creds
@@ -2660,7 +2660,7 @@ describe("C-1224 — secret-auth leaf join (Model B)", () => {
     const secretWithPkg: JoiningStack = {
       principalId: "andreas",
       stackSlug: "community",
-      // Model B — NO creds file; the leaf secret is the only auth method.
+      // Sovereign model — NO creds file; the leaf secret is the only auth method.
       leafSecret: "s3cr3t-leaf-pipe",
       leafUser: "andreas",
       account: LOCAL_PACKAGE.account,

@@ -1,5 +1,5 @@
 /**
- * G1d (cortex#1139, ADR-0013 Model B) — the arc-shell driver for the
+ * G1d (cortex#1139, ADR-0013 sovereign model) — the arc-shell driver for the
  * sovereign account-topology primitives `arc nats init-operator` and
  * `arc nats add-account` (arc#252 / arc#253).
  *

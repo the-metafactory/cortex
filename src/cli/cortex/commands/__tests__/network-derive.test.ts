@@ -787,7 +787,7 @@ describe("deriveJoinInputs — operator-mode source precedence", () => {
 });
 
 // =============================================================================
-// C-1224 (ADR-0013 Model B) — leaf shared secret resolution.
+// C-1224 (ADR-0013 sovereign model) — leaf shared secret resolution.
 // =============================================================================
 
 describe("C-1224 — leaf-secret (secret-auth pipe) derivation", () => {

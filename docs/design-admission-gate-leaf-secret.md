@@ -4,7 +4,7 @@
 secret-distribution decision (§7, Q1) is made.
 **Feature:** cortex#1142 R1 — "repurpose O-4a `register→PENDING→grant` as the network-admission gate."
 **Authority:** [ADR-0015](adr/0015-two-tier-onboarding-and-admission-gate.md) (admission gate = identity-level
-approval, mints nothing) · [ADR-0013](adr/0013-sovereign-federation-model.md) (sovereign Model-B; leaf =
+approval, mints nothing) · [ADR-0013](adr/0013-sovereign-federation-model.md) (sovereign federation; leaf =
 secret-authenticated pipe) · `CONTEXT.md` §"Network-admission gate" + §"Joining a network".
 **Scope:** the two halves of R1 — (1) the admission gate, (2) leaf-secret distribution (the one net-new
 cross-party security surface).
@@ -34,7 +34,7 @@ cross-party security surface).
 
 ## 1. What R1 is (and is not)
 
-R1 repurposes the Model-A `register → PENDING → grant` machinery as an **identity-level admission gate** for a
+R1 repurposes the hub-minted-identity `register → PENDING → grant` machinery as an **identity-level admission gate** for a
 private network's roster. Per ADR-0015:
 
 > The `register → PENDING → grant` flow is repurposed as the network-admission gate. … It **mints nothing** — it
@@ -51,7 +51,7 @@ So R1 is two things:
    secret that must travel from the hub admin to the admitted joiner. Designing that hand-over safely is the
    substance of R1.
 
-R1 is **not**: minting accounts, issuing `.creds`, or any Model-A machinery (retired under R2). It is **not** the
+R1 is **not**: minting accounts, issuing `.creds`, or any hub-minted-identity machinery (retired under R2). It is **not** the
 NATS-server-side leaf topology config (that is hub-local, provisioned by the hub admin on their own infra) —
 except insofar as the secret the joiner receives must match what the hub's `authorization` block accepts (§5.3).
 
@@ -81,7 +81,7 @@ real because **federation is cleartext-over-TLS in v1** (M3 sealed-payload encry
 
 ### 3.1 What already exists (composes — file paths)
 
-All on this branch's base (lifted from the Model-A O-4a machinery, transformed by migration `0007`):
+All on this branch's base (lifted from the hub-minted-identity O-4a machinery, transformed by migration `0007`):
 
 | Concern | Where | State |
 |---|---|---|
@@ -91,7 +91,7 @@ All on this branch's base (lifted from the Model-A O-4a machinery, transformed b
 | Admin gate (503 not-configured → 401 sig-invalid → 403 not-authorized → nonce-replay → clock-skew) | `admission-requests.ts` `applyAdminGate` + `verifyAdminReadHeader`; reuses `parseAdminPubkeys` / `verifyEd25519` / `canonicalJSON` verbatim from network-create (#747) | EXISTS |
 | Admin-gated list/get (`GET /admission-requests?status=`, `GET /admission-requests/{id}`) | `admission-requests.ts` | EXISTS — admin-only (signed `x-admin-signed` header) |
 | Schema | `migrations/0007_admission_requests.sql` — `admission_requests(request_id, principal_id, peer_pubkey, requested_scope, network_id?, status, created_at, updated_at, granted_by)` | EXISTS |
-| CLI | `src/cli/cortex/commands/network.ts` — `cortex network admit` (signs an admit decision claim; explicitly **no `leaf_package`** — Model-A retired) | EXISTS |
+| CLI | `src/cli/cortex/commands/network.ts` — `cortex network admit` (signs an admit decision claim; explicitly **no `leaf_package`** — hub-minted-identity retired) | EXISTS |
 | Tests | `__tests__/admission-requests.test.ts`, `commands/__tests__/network-admit.test.ts` | EXISTS |
 
 The state machine, the admin gate, and the CLI verb are **done**. R1 does not rebuild them.

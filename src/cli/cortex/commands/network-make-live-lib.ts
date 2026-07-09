@@ -1,5 +1,5 @@
 /**
- * C-1257 (PR7/#1225, ADR-0013 Model B) — the pure orchestration behind
+ * C-1257 (PR7/#1225, ADR-0013 sovereign model) — the pure orchestration behind
  * `cortex network make-live <stack>`: the daemon-switch step that LANDS a
  * provisioned stack onto its own sovereign agents account.
  *

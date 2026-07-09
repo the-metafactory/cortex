@@ -6,7 +6,7 @@
  *   - after bind-mode resolution (so the federation/leaf account is known),
  *   - before the leaf file write (fail-fast before any mutation on arc failure).
  *
- * Model B (ADR-0013): each principal wires their OWN half, in their OWN store.
+ * Sovereign model (ADR-0013): each principal wires their OWN half, in their OWN store.
  * The call is LOCAL — no peer account, no network id on the wire.
  *
  * The arc-shell runner is NEVER called in tests — only the port method is.
@@ -206,7 +206,7 @@ function makeMinimalPorts(opts: {
 // Tests
 // =============================================================================
 
-describe("G1c — federation-wiring step in joinNetwork (ADR-0013 Model B)", () => {
+describe("G1c — federation-wiring step in joinNetwork (ADR-0013 sovereign model)", () => {
 
   // -------------------------------------------------------------------------
   // (b.4) step is called on a successful join with an operator-mode bus

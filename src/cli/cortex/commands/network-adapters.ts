@@ -579,7 +579,7 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       const content = renderLeafIncludeFile(inputs.descriptor, inputs.binding);
       if (!mutate) return; // dry-run: render to validate, but do not write.
       mkdirSync(dir, { recursive: true });
-      // C-1224 (ADR-0013 Model B): for a secret-auth leaf the secret bytes live
+      // C-1224 (ADR-0013 sovereign model): for a secret-auth leaf the secret bytes live
       // INSIDE this file (the `user:secret@host` userinfo of the rendered `url`),
       // so it is a secret-at-rest. Write it 0600 AND re-chmod explicitly — the
       // create `mode` is masked by the process umask, so a permissive umask
@@ -1485,7 +1485,7 @@ function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
     // absent registry-url / seed → the port returns `unavailable` (never throws),
     // and only `networkStatus` reads it, so join/leave are unaffected.
     admission: buildAdmissionStatePort(cfg),
-    // G1c (#1117, ADR-0013 Model B) — wire the local-side `federated.>`
+    // G1c (#1117, ADR-0013 sovereign model) — wire the local-side `federated.>`
     // export/import by shelling to `arc nats add-federation-export`. The port
     // is always wired; step (b.4) in joinNetwork uses it only when the bus is
     // operator-mode (leafAccount !== undefined). Dry-run ports set apply=false.
