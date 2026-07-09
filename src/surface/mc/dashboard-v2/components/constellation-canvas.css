@@ -63,82 +63,176 @@
   opacity: 0.35;
 }
 
-/* ── Agent orbs ─────────────────────────────────────────────────────────────
- * The agent card becomes a glowing orb-card keyed to its stack hue. The glow
- * tint is the inline `--stack-color` each node already carries. */
-.mc-skin .network-node-agent {
-  position: relative;
-  border: 1px solid color-mix(in oklch, var(--stack-color, var(--mer)) 45%, var(--line));
-  border-left-width: 3px;
-  border-left-color: var(--stack-color, var(--mer));
-  border-radius: 12px;
-  background:
-    radial-gradient(
-      circle at 18% 0%,
-      color-mix(in oklch, var(--stack-color, var(--mer)) 22%, transparent) 0%,
-      transparent 60%
-    ),
-    color-mix(in oklch, var(--panel) 86%, var(--bg));
-  box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 22%, transparent),
-    0 0 18px -2px color-mix(in oklch, var(--stack-color, var(--mer)) 30%, transparent);
+/* ══ MC-D1 (netui-constellation) — CIRCLE NODES ══════════════════════════════
+ * The nodes are glowing CIRCLES (an orb) with the label BELOW, not cards. The
+ * node root becomes a transparent flex-column that CENTRES its orb + label on
+ * the node's layout position; the orb carries the glow, the `.network-node-below`
+ * block holds the (small, dim, mono) label + chips underneath. All the presence
+ * data attributes + classes are unchanged — only the visual is a circle now.
+ *
+ * React Flow positions a node by its top-left corner; we translate the whole
+ * node up+left by half its own size so the ORB sits centred on the layout
+ * position (which the edges route to centre-to-centre). */
+.mc-skin .network-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  transform: translate(-50%, -50%);
+  font-family: var(--mono);
+  /* Let the (wider) label overflow the orb without clipping or reflowing it. */
+  width: max-content;
+  max-width: 220px;
 }
 
-/* Liveness glow — ONLY when the agent is actually online (truth, not theater).
- * Breathes the orb's halo; offline orbs are dimmed + static. */
-.mc-skin .network-node-agent.network-node-online {
+/* The orb — the glowing circle. Hue is the inline `--stack-color`. */
+.mc-skin .network-node-orb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklch, var(--stack-color, var(--mer)) 80%, var(--fg));
+  background:
+    radial-gradient(
+      circle at 50% 38%,
+      color-mix(in oklch, var(--stack-color, var(--mer)) 55%, transparent) 0%,
+      color-mix(in oklch, var(--stack-color, var(--mer)) 18%, transparent) 55%,
+      transparent 72%
+    ),
+    color-mix(in oklch, var(--stack-color, var(--mer)) 12%, var(--bg));
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 30%, transparent),
+    0 0 18px -2px color-mix(in oklch, var(--stack-color, var(--mer)) 55%, transparent);
+}
+
+/* Agent orb — small teal circle. */
+.mc-skin .network-node-orb-agent {
+  width: 24px;
+  height: 24px;
+}
+/* Hub orb — larger bright cyan core with a centred diamond glyph + brighter ring. */
+.mc-skin .network-node-orb-hub {
+  width: 56px;
+  height: 56px;
+  border-width: 2px;
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 45%, transparent),
+    0 0 34px -2px color-mix(in oklch, var(--stack-color, var(--mer)) 65%, transparent);
+}
+.mc-skin .network-node-orb-glyph {
+  font-size: 18px;
+  line-height: 1;
+  color: color-mix(in oklch, var(--fg) 92%, var(--stack-color, var(--mer)));
+  text-shadow: 0 0 8px color-mix(in oklch, var(--stack-color, var(--mer)) 70%, transparent);
+}
+
+/* The label block that sits UNDER the orb: dim mono, centred, small. */
+.mc-skin .network-node-below {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.mc-skin .network-node-below .network-node-caps,
+.mc-skin .network-node-below .network-node-liveness,
+.mc-skin .network-node-below .network-node-identity {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+}
+.mc-skin .network-node-name {
+  font-weight: 600;
+  color: var(--fg);
+}
+.mc-skin .network-node-id {
+  font-size: 9px;
+}
+
+/* Liveness — ONLY when the agent is actually online (truth, not theater).
+ * A bright cyan ring + a subtle breathing pulse; offline orbs are DIMMED (low
+ * opacity, no glow, grey ring), ttl-lapse gets an amber accent. */
+.mc-skin .network-node-agent.network-node-online .network-node-orb {
   animation: mcOrbBreathe 3.4s ease-in-out infinite;
 }
-.mc-skin .network-node-agent.network-node-offline {
-  opacity: 0.55;
-  filter: saturate(0.6);
+.mc-skin .network-node-agent.network-node-offline .network-node-orb {
+  opacity: 0.4;
+  filter: saturate(0.35);
+  border-color: color-mix(in oklch, var(--fg) 30%, var(--line));
+  background: color-mix(in oklch, var(--panel) 70%, var(--bg));
   box-shadow: none;
+}
+.mc-skin .network-node-agent.network-node-offline .network-node-below {
+  opacity: 0.6;
 }
 @keyframes mcOrbBreathe {
   0%, 100% {
     box-shadow:
-      0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 22%, transparent),
-      0 0 16px -3px color-mix(in oklch, var(--stack-color, var(--mer)) 26%, transparent);
+      0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 30%, transparent),
+      0 0 16px -3px color-mix(in oklch, var(--stack-color, var(--mer)) 45%, transparent);
   }
   50% {
     box-shadow:
-      0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 38%, transparent),
-      0 0 26px 0 color-mix(in oklch, var(--stack-color, var(--mer)) 42%, transparent);
+      0 0 0 2px color-mix(in oklch, var(--stack-color, var(--mer)) 45%, transparent),
+      0 0 28px 0 color-mix(in oklch, var(--stack-color, var(--mer)) 62%, transparent);
   }
 }
 
-/* TTL-lapse (silent drop) reads as a warn-tinted orb. */
-.mc-skin .network-node-agent.network-node-ttl-lapse {
-  border-color: color-mix(in oklch, var(--warn) 55%, var(--line));
+/* TTL-lapse (silent drop) reads as an AMBER-accented orb + a "!" attention dot. */
+.mc-skin .network-node-agent.network-node-ttl-lapse .network-node-orb {
+  border-color: color-mix(in oklch, var(--warn) 75%, var(--line));
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--warn) 40%, transparent),
+    0 0 16px -2px color-mix(in oklch, var(--warn) 50%, transparent);
+}
+/* The "!" attention dot, top-right of the orb. */
+.mc-skin .network-node-attention {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--bg);
+  background: var(--warn);
+  border-radius: 50%;
+  box-shadow: 0 0 8px -1px color-mix(in oklch, var(--warn) 70%, transparent);
 }
 
 /* ── Stack hubs (the cluster cores) ─────────────────────────────────────────
- * The hub is a brighter core glowing in its stack hue. */
-.mc-skin .network-node-hub {
-  border-radius: 14px;
-  border-color: var(--stack-color, var(--mer));
-  background:
-    radial-gradient(
-      circle at 50% 35%,
-      color-mix(in oklch, var(--stack-color, var(--mer)) 30%, transparent) 0%,
-      transparent 70%
-    ),
-    color-mix(in oklch, var(--panel) 80%, var(--bg));
-  box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--stack-color, var(--mer)) 40%, transparent),
-    0 0 28px -2px color-mix(in oklch, var(--stack-color, var(--mer)) 45%, transparent);
-}
+ * The hub label glows brighter in its stack hue; the orb styling is above. */
 .mc-skin .network-hub-label {
   color: var(--fg);
-  text-shadow: 0 0 10px color-mix(in oklch, var(--stack-color, var(--mer)) 50%, transparent);
+  font-weight: 600;
+  text-shadow: 0 0 10px color-mix(in oklch, var(--stack-color, var(--mer)) 55%, transparent);
+}
+.mc-skin .network-hub-eyebrow {
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-/* ● YOU ARE HERE — the serving (local) stack anchor. A glowing pill. */
+/* ◦ YOU ARE HERE — the serving (local) stack anchor pill, ABOVE the hub orb. */
 .mc-skin .network-hub-you-are-here {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin: 1px 0 2px 0;
+  margin: 0 0 2px 0;
   padding: 1px 8px;
   font-family: var(--mono);
   font-size: 9px;
@@ -161,10 +255,10 @@
  * badge reads its admitted `{principal}/{stack}`. This is the sovereignty
  * boundary made legible — these orbs show aggregate presence only and are not
  * drillable into sessions. */
-.mc-skin .network-node-foreign,
-.mc-skin .network-node-hub-foreign {
+.mc-skin .network-node-foreign .network-node-orb,
+.mc-skin .network-node-hub-foreign .network-node-orb {
   border-style: dashed;
-  border-color: color-mix(in oklch, var(--tide) 55%, var(--line));
+  border-color: color-mix(in oklch, var(--tide) 65%, var(--fg));
 }
 .mc-skin .network-node-provenance {
   color: color-mix(in oklch, var(--tide) 75%, var(--fg));
@@ -185,9 +279,15 @@
 .mc-skin .network-node-state.state-offline { color: var(--warn); }
 .mc-skin .network-node-reason-ttl-lapse { color: var(--warn); }
 
-/* ── Edges — glowing connectors; federated = dashed + flowing + labelled ─────*/
+/* ── Edges — thin, gently-curved teal spokes; federated = dashed + flowing ───
+ * MC-D1: hub→agent spokes are thin and softly glowing. Each edge strokes in its
+ * hub's hue (inline `stroke` from the edge component); the teal `--tide` is the
+ * fallback when no stack color is set. */
 .mc-skin .react-flow__edge-path {
-  filter: drop-shadow(0 0 3px color-mix(in oklch, var(--mer) 30%, transparent));
+  stroke: color-mix(in oklch, var(--tide) 70%, var(--mer));
+  stroke-width: 1.25;
+  opacity: 0.72;
+  filter: drop-shadow(0 0 3px color-mix(in oklch, var(--tide) 35%, transparent));
 }
 /* The federated edge label — `● federated · admitted peer`. */
 .mc-skin .mc-edge-fed-label {

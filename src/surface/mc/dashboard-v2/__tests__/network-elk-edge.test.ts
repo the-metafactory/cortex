@@ -12,6 +12,7 @@ import { describe, it, expect } from "bun:test";
 import {
   elkPointsToPath,
   clampElkPointsToFaces,
+  radialCurvePath,
 } from "../components/network-elk-edge";
 
 describe("elkPointsToPath (#1008)", () => {
@@ -55,6 +56,28 @@ describe("elkPointsToPath (#1008)", () => {
     );
     expect(path).toContain("L 0 100");
     expect(path).not.toContain("Q");
+  });
+});
+
+describe("radialCurvePath (MC-D1)", () => {
+  it("emits a single quadratic bezier from hub centre to agent centre", () => {
+    const p = radialCurvePath({ x: 0, y: 0 }, { x: 100, y: 0 });
+    expect(p.startsWith("M 0 0")).toBe(true);
+    // A quadratic (curved spoke) with one control point + the endpoint.
+    expect(p).toContain("Q ");
+    expect(p.endsWith("100 0")).toBe(true);
+  });
+
+  it("bows the chord — the control point is offset off the straight line", () => {
+    // A horizontal chord bows vertically (perpendicular), so the control point's
+    // y is non-zero even though both endpoints are at y=0.
+    const p = radialCurvePath({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.2);
+    const m = p.match(/Q ([\-0-9.]+) ([\-0-9.]+)/)!;
+    expect(Math.abs(parseFloat(m[2]!))).toBeGreaterThan(0);
+  });
+
+  it("falls back to a straight line for a zero-length route", () => {
+    expect(radialCurvePath({ x: 5, y: 5 }, { x: 5, y: 5 })).toBe("M 5 5 L 5 5");
   });
 });
 

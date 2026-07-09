@@ -1,17 +1,20 @@
 /**
- * #1008 (network-graph-rendering) — custom React Flow edge that renders ELK's
- * ORTHOGONAL route as a rounded-corner SVG polyline.
+ * #1008 (network-graph-rendering) — custom React Flow edge for the Network graph.
  *
- * Adapted from Strata's `ElkEdge.tsx` (`arc-library/strata/ui/src/components/`):
- * the layout step (`network-graph-layout.ts`) extracts ELK's bend points into
- * `data.elkPoints`; this edge converts them to a path with rounded corners
- * (`elkPointsToPath`) and clamps the endpoints to the source/target node faces
- * so a connector never starts inside a card. This is the key to the
- * non-crossing edges — ELK already routed the right angles; we just draw them.
+ * MC-D1 (netui-constellation) — the radial constellation layout hands this edge a
+ * 2-point centre-to-centre route (`data.elkPoints = [hubCentre, agentCentre]`).
+ * The edge draws that as a GENTLY CURVED teal spoke (`radialCurvePath`) from the
+ * hub core out to the orbiting agent — the organic star-map connector, not the
+ * boxy DAG elbow. For a multi-point route (defensive / legacy) it still renders
+ * the rounded-corner polyline (`elkPointsToPath`). No route at all → a straight
+ * chord.
+ *
+ * The pure geometry helpers (`elkPointsToPath`, `clampElkPointsToFaces`,
+ * `radialCurvePath`) are exported + unit-tested; the SVG component itself imports
+ * `@xyflow/react` so it can't mount under `renderToStaticMarkup`.
  *
  * Lives in the LAZY canvas chunk (it imports `@xyflow/react`), registered on the
- * canvas's `edgeTypes` as `elk`. Edges with no `elkPoints` (defensive — ELK
- * didn't route them) fall back to a straight line.
+ * canvas's `edgeTypes` as `elk`.
  */
 
 import { useMemo, type CSSProperties } from "react";
@@ -73,6 +76,37 @@ export function elkPointsToPath(points: Point[], radius = 8): string {
   const last = points[points.length - 1]!;
   parts.push(`L ${last.x} ${last.y}`);
   return parts.join(" ");
+}
+
+/**
+ * MC-D1 — a GENTLY CURVED spoke between two points (hub centre → agent centre),
+ * for the radial constellation. Bows the straight chord by offsetting its
+ * midpoint PERPENDICULARLY to the chord by `curvature × chordLength`, then draws
+ * a single quadratic bezier through the offset control point. The sign of the
+ * offset is derived deterministically from the endpoint geometry (so the same
+ * edge always bows the same way — no ambient state), giving the star-map its
+ * organic, non-straight spokes. A degenerate (<2 point or zero-length) route
+ * falls back to a straight line.
+ */
+export function radialCurvePath(
+  from: Point,
+  to: Point,
+  curvature = 0.12,
+): string {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+  // Unit perpendicular to the chord.
+  const px = -dy / len;
+  const py = dx / len;
+  // Deterministic bow direction: bow "outward" consistently by keying the sign
+  // off the chord orientation (dx >= 0), so mirror-image spokes fan apart rather
+  // than all bowing the same screen-direction.
+  const sign = dx >= 0 ? 1 : -1;
+  const mx = (from.x + to.x) / 2 + px * len * curvature * sign;
+  const my = (from.y + to.y) / 2 + py * len * curvature * sign;
+  return `M ${from.x} ${from.y} Q ${mx} ${my} ${to.x} ${to.y}`;
 }
 
 /**
@@ -154,6 +188,12 @@ export default function NetworkElkEdge(props: EdgeProps) {
   const targetBottomY = edgeData?.["targetBottomY"] as number | undefined;
 
   const path = useMemo(() => {
+    // MC-D1 — the radial layout emits a 2-point centre-to-centre route; draw it
+    // as a gently curved constellation spoke (hub core → orbiting agent). The
+    // circle nodes are centred on their position, so centre-to-centre is exact.
+    if (elkPoints && elkPoints.length === 2) {
+      return radialCurvePath(elkPoints[0]!, elkPoints[1]!);
+    }
     if (elkPoints && elkPoints.length >= 2) {
       // Detect a dragged node: large drift between the live handle and the
       // ELK-expected face → fall back to a live smoothstep.

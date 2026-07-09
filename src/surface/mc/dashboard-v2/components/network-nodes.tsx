@@ -1,12 +1,20 @@
 /**
  * G-1114.D.1 — custom React Flow node components for the Network graph.
  *
- * Two node types: the synthetic **stack-hub** (the layout centre, labelled
- * `{principal}/{stack}`) and the **agent** card (identity + capability chips +
+ * MC-D1 (netui-constellation) — these nodes render as glowing CIRCLES (an orb +
+ * a label BELOW it), not cards/boxes: the star-map aesthetic. The stack-hub is a
+ * larger bright cyan core with a "◦ YOU ARE HERE" pill on the serving stack; the
+ * agents are smaller teal orbs ringed around it. The circle + glow live in
+ * `constellation-canvas.css` (`.network-node-orb`, keyed by `data-state` /
+ * origin / attention). The DOM still carries EVERY data attribute + class + text
+ * the presence model needs (identity, capabilities, state, reason, heartbeat) —
+ * this is a restyle, not a re-model — so the C.4 display language + tests hold.
+ *
+ * Two node types: the synthetic **stack-hub** (the cluster core, labelled
+ * `{principal}/{stack}`) and the **agent** orb (identity + capability chips +
  * online/offline state with the TTL-lapse-vs-graceful distinction + last
- * heartbeat). The agent card reuses the SAME display helpers + class-name
- * language as the C.4 panel (`agents-display.ts`) so the graph and the legacy
- * panel read identically.
+ * heartbeat). Both reuse the SAME display helpers + class-name language as the
+ * C.4 panel (`agents-display.ts`).
  *
  * ## Why each node is split inner / wrapper
  *
@@ -166,27 +174,36 @@ export function StackHubCard({
           : undefined
       }
     >
-      <span className="network-hub-eyebrow dim">
-        {foreign ? "federated stack" : "stack"}
-      </span>
+      {/* MC-D1 — the "◦ YOU ARE HERE" pill floats ABOVE the hub orb. */}
       {isSelfStack && (
         <span className="network-hub-you-are-here" data-you-are-here="true">
-          <span aria-hidden="true">●</span> YOU ARE HERE
+          <span aria-hidden="true">◦</span> YOU ARE HERE
         </span>
       )}
-      <span className="network-hub-label">{label}</span>
-      {badge && (
-        <span
-          className={badge.className}
-          data-verdict={badge.verdict}
-          data-severity={badge.severity}
-          title={badge.title}
-        >
-          {badge.label}
+      {/* MC-D1 — the glowing hub core: a bright cyan circle with a thin ring and
+          a centred diamond glyph. The glow hue is the inline `--stack-color`. */}
+      <span className="network-node-orb network-node-orb-hub" aria-hidden="true">
+        <span className="network-node-orb-glyph">◆</span>
+      </span>
+      {/* MC-D1 — label block BELOW the orb: eyebrow · name · sub-count. */}
+      <span className="network-node-below">
+        <span className="network-hub-eyebrow dim">
+          {foreign ? "federated stack" : "stack"}
         </span>
-      )}
-      <span className="network-hub-count dim">
-        {data.agentCount} agent{data.agentCount === 1 ? "" : "s"}
+        <span className="network-hub-label">{label}</span>
+        {badge && (
+          <span
+            className={badge.className}
+            data-verdict={badge.verdict}
+            data-severity={badge.severity}
+            title={badge.title}
+          >
+            {badge.label}
+          </span>
+        )}
+        <span className="network-hub-count dim">
+          {data.agentCount} agent{data.agentCount === 1 ? "" : "s"}
+        </span>
       </span>
     </div>
   );
@@ -305,6 +322,14 @@ export function AgentNodeCard({
       onMouseEnter={onHoverAgent ? () => onHoverAgent(data.key) : undefined}
       onMouseLeave={onHoverAgent ? () => onHoverAgent(null) : undefined}
     >
+      {/* MC-D1 — the agent orb: a small teal circle with a thin glowing ring.
+          online = bright ring + pulse; offline/ttl-lapse = dimmed/amber (keyed
+          off the wrapper's `network-node-{state}` / `-ttl-lapse` classes in CSS).
+          The "!" attention dot surfaces a TTL-lapse (silent drop). */}
+      <span className="network-node-orb network-node-orb-agent" aria-hidden="true">
+        {ttlLapse && <span className="network-node-attention">!</span>}
+      </span>
+      <div className="network-node-below">
       <div className="network-node-identity">
         <span className="network-node-name">{name}</span>
         <span className="network-node-id dim">{data.agentId}</span>
@@ -404,6 +429,7 @@ export function AgentNodeCard({
               : "no leaf"}
           </span>
         )}
+      </div>
       </div>
     </div>
   );

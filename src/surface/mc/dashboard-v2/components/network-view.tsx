@@ -1,22 +1,23 @@
 /**
- * G-1114.D.1 — Network graph view (React Flow + ELK).
+ * G-1114.D.1 — Network graph view (React Flow constellation).
  *
  * Replaces the simple agents PANEL (the G-1114.B.4 `NetworkPreviewView`) with a
- * laid-out topology graph: the stack as a hub, every agent as a node fanned
- * around it (radial ELK layout). Same data source — `useAgents` → `/api/agents`
- * + the `agent.presence` WS frame — so the graph pops agents in on boot and
- * drops them off when they go offline, live.
+ * laid-out topology graph: each stack as a glowing hub core, every agent as an
+ * orb ringed around it (MC-D1 deterministic RADIAL layout — the constellation
+ * star-map). Same data source — `useAgents` → `/api/agents` + the
+ * `agent.presence` WS frame — so the graph pops agents in on boot and drops them
+ * off when they go offline, live.
  *
  * ## Code-split (PR #905 review)
  *
  * This module stays in the MAIN bundle: it's the chrome (heading + subtitle +
  * empty/loading/error states) plus the PURE `buildNetworkGraph` adapter — all
- * tiny and engine-free. The heavy half — `@xyflow/react` + `elkjs` (the
- * GWT-compiled ELK engine, +0.62 MB gzip) + the async layout effect — lives in
- * `./network-canvas`, which this view `React.lazy`-imports so the engine chunk
+ * tiny and engine-free. The heavy half — `@xyflow/react` — lives in
+ * `./network-canvas`, which this view `React.lazy`-imports so the graph chunk
  * downloads ONLY when the principal first opens the Network tab. The dashboard's
  * default view is the working grid, so the common load path never pays for the
- * graph engine. This is the dashboard's first code-split.
+ * graph engine. This is the dashboard's first code-split. (MC-D1 removed the
+ * `elkjs` WASM engine — the layout is now a pure synchronous function.)
  *
  * ## State precedence
  *
@@ -338,7 +339,7 @@ export function NetworkView({
 
   // Pure: filtered snapshot → React-Flow graph (re-derived when agents OR the
   // filter change). Tiny + engine-free, so it stays in the main bundle; the lazy
-  // canvas takes the built graph and runs ELK over it.
+  // canvas takes the built graph and runs the radial layout over it.
   const baseGraph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
 
   // U2.3 — fold signal's transport verdicts + leaf liveness/RTT into the overlay

@@ -1,24 +1,23 @@
 /**
- * G-1114.D.3 — ELK layout tests.
+ * MC-D1 (netui-constellation) — radial constellation layout tests.
  *
- * The real ELK engine is WASM-backed + async and non-trivial to assert
- * positions on, so we test the pure translation (`toElkGraph`) exactly and the
- * async `layoutNetworkGraph` against a deterministic ELK STUB — verifying the
- * orchestration (short-circuit on empty, apply returned positions, defensive
- * fallback for an unpositioned node) without depending on ELK's exact geometry.
- * A separate smoke test in network-view.test exercises the real elk import path.
+ * The old ELK layout was async + WASM-backed, so it was tested against a
+ * deterministic stub. The constellation layout is a PURE, SYNCHRONOUS function of
+ * the graph data, so we can assert exact positions directly: clustering (agents
+ * bucketed under their hub), ring geometry (agents evenly distributed around the
+ * hub centre at the count-scaled radius), cluster-grid placement, and the
+ * 2-point centre-to-centre edge routes.
  */
 
 import { describe, it, expect } from "bun:test";
 import {
-  toElkGraph,
   layoutNetworkGraph,
-  NETWORK_ELK_OPTIONS,
+  clusterNetworkGraph,
+  clusterCentre,
+  ringRadiusForCount,
+  RADIAL_LAYOUT,
   HUB_NODE_SIZE,
   AGENT_NODE_SIZE,
-  type ElkLike,
-  type ElkInputGraph,
-  type ElkLaidOutGraph,
 } from "../lib/network-graph-layout";
 import { buildNetworkGraph, STACK_HUB_NODE_ID } from "../lib/network-graph-adapter";
 import type { AgentPresenceTile } from "../hooks/use-agents";
@@ -62,173 +61,178 @@ function foreignTile(
   });
 }
 
-describe("toElkGraph (G-1114.D.3)", () => {
-  it("maps nodes to ELK children with the right footprints", () => {
-    const graph = buildNetworkGraph([tile({ agent_id: "luna" })]);
-    const elk = toElkGraph(graph);
-    expect(elk.id).toBe("root");
-    expect(elk.layoutOptions).toEqual(NETWORK_ELK_OPTIONS);
-
-    const hub = elk.children.find((c) => c.id === STACK_HUB_NODE_ID)!;
-    expect(hub.width).toBe(HUB_NODE_SIZE.width);
-    expect(hub.height).toBe(HUB_NODE_SIZE.height);
-
-    const agent = elk.children.find((c) => c.id !== STACK_HUB_NODE_ID)!;
-    expect(agent.width).toBe(AGENT_NODE_SIZE.width);
-    expect(agent.height).toBe(AGENT_NODE_SIZE.height);
+describe("ringRadiusForCount (MC-D1)", () => {
+  it("returns the base radius for a single-agent cluster", () => {
+    expect(ringRadiusForCount(1)).toBe(RADIAL_LAYOUT.baseRingRadius);
   });
 
-  it("maps each edge to an ELK source/target pair", () => {
+  it("grows the radius with the agent count", () => {
+    expect(ringRadiusForCount(3)).toBe(
+      RADIAL_LAYOUT.baseRingRadius + 2 * RADIAL_LAYOUT.radiusPerAgent,
+    );
+  });
+
+  it("clamps to the max radius for a very dense cluster", () => {
+    expect(ringRadiusForCount(1000)).toBe(RADIAL_LAYOUT.maxRingRadius);
+  });
+});
+
+describe("clusterCentre (MC-D1)", () => {
+  it("centres a single cluster on the origin", () => {
+    expect(clusterCentre(0, 1)).toEqual({ x: 0, y: 0 });
+  });
+
+  it("spreads two clusters symmetrically about the origin, one stride apart", () => {
+    const a = clusterCentre(0, 2);
+    const b = clusterCentre(1, 2);
+    expect(b.x - a.x).toBe(RADIAL_LAYOUT.clusterStride);
+    // Symmetric about x=0.
+    expect(a.x).toBe(-RADIAL_LAYOUT.clusterStride / 2);
+    expect(b.x).toBe(RADIAL_LAYOUT.clusterStride / 2);
+  });
+
+  it("lays four clusters out on a 2×2 grid", () => {
+    // cols = ceil(sqrt(4)) = 2 → indices 0,1 on row 0; 2,3 on row 1.
+    const c0 = clusterCentre(0, 4);
+    const c3 = clusterCentre(3, 4);
+    expect(c3.x - c0.x).toBe(RADIAL_LAYOUT.clusterStride);
+    expect(c3.y - c0.y).toBe(RADIAL_LAYOUT.clusterStride);
+  });
+});
+
+describe("clusterNetworkGraph (MC-D1)", () => {
+  it("buckets each agent under its hub", () => {
     const graph = buildNetworkGraph([
       tile({ agent_id: "luna" }),
       tile({ agent_id: "echo" }),
     ]);
-    const elk = toElkGraph(graph);
-    expect(elk.edges).toHaveLength(2);
-    for (const e of elk.edges) {
-      expect(e.sources).toEqual([STACK_HUB_NODE_ID]);
-      expect(e.targets).toHaveLength(1);
-    }
+    const clusters = clusterNetworkGraph(graph);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]!.hubId).toBe(STACK_HUB_NODE_ID);
+    expect(clusters[0]!.agentIds).toHaveLength(2);
   });
 
-  it("uses the layered algorithm + orthogonal routing with component separation (#1008)", () => {
-    // #1008: cortex's topology is a SET of hub→agents trees. `layered` (DOWN)
-    // places each hub above its agents (tidy per-stack tree), ORTHOGONAL routing
-    // gives right-angled bend points (rendered as rounded polylines, no diagonal
-    // crossings), and separateConnectedComponents packs each stack-tree apart.
-    expect(NETWORK_ELK_OPTIONS["elk.algorithm"]).toContain("layered");
-    expect(NETWORK_ELK_OPTIONS["elk.direction"]).toBe("DOWN");
-    expect(NETWORK_ELK_OPTIONS["elk.edgeRouting"]).toBe("ORTHOGONAL");
-    expect(NETWORK_ELK_OPTIONS["elk.separateConnectedComponents"]).toBe("true");
-  });
-
-  it("maps a multi-stack graph into ELK children + per-cluster edges (E.3)", () => {
+  it("emits one cluster per stack, local hub first", () => {
     const graph = buildNetworkGraph([
       tile({ agent_id: "luna" }),
       foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
     ]);
-    const elk = toElkGraph(graph);
-    // 2 hubs (local + jc/research) + 2 agents = 4 children
-    expect(elk.children).toHaveLength(4);
-    // 2 edges, each sourced from its own cluster's hub (disconnected components)
-    expect(elk.edges).toHaveLength(2);
-    const sources = elk.edges.flatMap((e) => e.sources).sort();
-    expect(sources).toContain(STACK_HUB_NODE_ID);
-    expect(sources).toContain("__stack__:jc/research");
+    const clusters = clusterNetworkGraph(graph);
+    expect(clusters).toHaveLength(2);
+    // Local hub cluster is first (the adapter emits the local hub first).
+    expect(clusters[0]!.hubId).toBe(STACK_HUB_NODE_ID);
+    expect(clusters[0]!.agentIds).toHaveLength(1);
+    expect(clusters[1]!.hubId).toBe("__stack__:jc/research");
+    expect(clusters[1]!.agentIds).toHaveLength(1);
   });
 });
 
-/**
- * Deterministic ELK stub: lays nodes out on a fixed grid, no WASM, and emits a
- * simple orthogonal `sections[0]` per edge (start → one bend → end) so the
- * edge-route extraction has something to read back.
- */
-function stubElk(): ElkLike {
-  return {
-    async layout(graph: ElkInputGraph): Promise<ElkLaidOutGraph> {
-      return {
-        children: graph.children.map((c, i) => ({
-          id: c.id,
-          x: i * 100,
-          y: i * 50,
-          width: c.width,
-          height: c.height,
-        })),
-        edges: graph.edges.map((e) => ({
-          id: e.id,
-          sections: [
-            {
-              startPoint: { x: 0, y: 0 },
-              bendPoints: [{ x: 0, y: 25 }],
-              endPoint: { x: 0, y: 50 },
-            },
-          ],
-        })),
-      };
-    },
-  };
-}
-
-describe("layoutNetworkGraph (G-1114.D.3)", () => {
-  it("short-circuits on an empty graph without calling ELK", async () => {
-    let called = false;
-    const spy: ElkLike = {
-      async layout() {
-        called = true;
-        return {};
-      },
-    };
-    const out = await layoutNetworkGraph(spy, { nodes: [], edges: [] });
-    expect(out).toEqual({ nodes: [], edges: [] });
-    expect(called).toBe(false);
+describe("layoutNetworkGraph (MC-D1)", () => {
+  it("short-circuits on an empty graph", () => {
+    expect(layoutNetworkGraph({ nodes: [], edges: [] })).toEqual({
+      nodes: [],
+      edges: [],
+    });
   });
 
-  it("applies ELK-returned positions to the nodes", async () => {
+  it("places the hub at the cluster centre and rings its agents around it", () => {
     const graph = buildNetworkGraph([
       tile({ agent_id: "luna" }),
       tile({ agent_id: "echo" }),
+      tile({ agent_id: "sage" }),
     ]);
-    const { nodes } = await layoutNetworkGraph(stubElk(), graph);
-    // 1 hub + 2 agents
-    expect(nodes).toHaveLength(3);
-    // The hub is index 0 in the adapter output → stub put it at (0,0).
+    const { nodes } = layoutNetworkGraph(graph);
+    // 1 hub + 3 agents.
+    expect(nodes).toHaveLength(4);
+
     const hub = nodes.find((n) => n.id === STACK_HUB_NODE_ID)!;
+    // Single cluster → centred on the origin.
     expect(hub.position).toEqual({ x: 0, y: 0 });
-    // The 2nd node got (100,50) from the stub.
-    expect(nodes[1]!.position).toEqual({ x: 100, y: 50 });
-    expect(nodes[2]!.position).toEqual({ x: 200, y: 100 });
+
+    const agents = nodes.filter((n) => n.type === "agent");
+    const radius = ringRadiusForCount(3);
+    for (const a of agents) {
+      // Every agent sits on the ring: distance from the hub centre == radius.
+      const dist = Math.hypot(a.position.x - 0, a.position.y - 0);
+      expect(dist).toBeCloseTo(radius, 6);
+    }
+    // The first agent sits at the deterministic start angle (straight up: the
+    // ring's -90° spoke, so x≈0, y≈-radius).
+    const first = agents[0]!;
+    expect(first.position.x).toBeCloseTo(0, 6);
+    expect(first.position.y).toBeCloseTo(-radius, 6);
   });
 
-  it("extracts ELK's edge bend points into each edge's layout payload (#1008)", async () => {
+  it("distributes agents evenly by angle (no two agents overlap)", () => {
+    const graph = buildNetworkGraph([
+      tile({ agent_id: "a" }),
+      tile({ agent_id: "b" }),
+      tile({ agent_id: "c" }),
+      tile({ agent_id: "d" }),
+    ]);
+    const { nodes } = layoutNetworkGraph(graph);
+    const agents = nodes.filter((n) => n.type === "agent");
+    const seen = new Set(agents.map((a) => `${a.position.x.toFixed(3)},${a.position.y.toFixed(3)}`));
+    // Four distinct positions on the ring.
+    expect(seen.size).toBe(4);
+  });
+
+  it("separates multiple stacks into their own cluster centres", () => {
     const graph = buildNetworkGraph([
       tile({ agent_id: "luna" }),
-      tile({ agent_id: "echo" }),
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
     ]);
-    const { edges } = await layoutNetworkGraph(stubElk(), graph);
-    expect(edges).toHaveLength(2);
-    for (const e of edges) {
-      // [startPoint, ...bendPoints, endPoint] — the stub emits 3 points.
-      expect(e.layout.elkPoints).toEqual([
-        { x: 0, y: 0 },
-        { x: 0, y: 25 },
-        { x: 0, y: 50 },
-      ]);
-      // Source/target face geometry is populated (for face-clamping).
-      expect(typeof e.layout.layoutSourceX).toBe("number");
-      expect(typeof e.layout.targetBottomY).toBe("number");
-    }
+    const { nodes } = layoutNetworkGraph(graph);
+    const localHub = nodes.find((n) => n.id === STACK_HUB_NODE_ID)!;
+    const foreignHub = nodes.find((n) => n.id === "__stack__:jc/research")!;
+    // Two clusters, one stride apart on the x axis.
+    expect(Math.abs(foreignHub.position.x - localHub.position.x)).toBe(
+      RADIAL_LAYOUT.clusterStride,
+    );
   });
 
-  it("preserves the origin-grouped edge id/source/target through layout (#1008)", async () => {
-    const graph = buildNetworkGraph([tile({ agent_id: "luna" })]);
-    const { edges } = await layoutNetworkGraph(stubElk(), graph);
-    expect(edges[0]!.id).toBe(graph.edges[0]!.id);
-    expect(edges[0]!.source).toBe(graph.edges[0]!.source);
-    expect(edges[0]!.target).toBe(graph.edges[0]!.target);
-  });
-
-  it("preserves node data while only replacing position", async () => {
+  it("preserves node data + type, only replacing position", () => {
     const graph = buildNetworkGraph([
       tile({ agent_id: "luna", assistant_name: "Luna" }),
     ]);
-    const { nodes } = await layoutNetworkGraph(stubElk(), graph);
+    const { nodes } = layoutNetworkGraph(graph);
     const agent = nodes.find((n) => n.type === "agent")!;
     expect(agent.data).toEqual(
       graph.nodes.find((n) => n.type === "agent")!.data,
     );
   });
 
-  it("falls back to the incoming position for a node ELK omitted", async () => {
+  it("routes each edge as a 2-point hub-centre → agent-centre spoke", () => {
+    const graph = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      tile({ agent_id: "echo" }),
+    ]);
+    const { nodes, edges } = layoutNetworkGraph(graph);
+    expect(edges).toHaveLength(2);
+    const hub = nodes.find((n) => n.id === STACK_HUB_NODE_ID)!;
+    for (const e of edges) {
+      const pts = e.layout.elkPoints!;
+      expect(pts).toHaveLength(2);
+      // First point is the hub centre.
+      expect(pts[0]).toEqual({ x: hub.position.x, y: hub.position.y });
+      // Second point is the target agent's centre.
+      const agent = nodes.find((n) => n.id === e.target)!;
+      expect(pts[1]).toEqual({ x: agent.position.x, y: agent.position.y });
+      // Face geometry is populated for the edge's dragged-node fallback.
+      expect(typeof e.layout.layoutSourceX).toBe("number");
+      expect(typeof e.layout.targetBottomY).toBe("number");
+    }
+  });
+
+  it("preserves the edge id/source/target through layout", () => {
     const graph = buildNetworkGraph([tile({ agent_id: "luna" })]);
-    const partial: ElkLike = {
-      async layout() {
-        // Return positions for nothing — every node should keep its {0,0}.
-        return { children: [] };
-      },
-    };
-    const { nodes, edges } = await layoutNetworkGraph(partial, graph);
-    for (const n of nodes) expect(n.position).toEqual({ x: 0, y: 0 });
-    // An edge ELK didn't route carries no elkPoints (the edge falls back).
-    expect(edges[0]!.layout.elkPoints).toBeUndefined();
+    const { edges } = layoutNetworkGraph(graph);
+    expect(edges[0]!.id).toBe(graph.edges[0]!.id);
+    expect(edges[0]!.source).toBe(graph.edges[0]!.source);
+    expect(edges[0]!.target).toBe(graph.edges[0]!.target);
+  });
+
+  it("exposes the circle-node footprints (hub larger than agent)", () => {
+    expect(HUB_NODE_SIZE.width).toBeGreaterThan(AGENT_NODE_SIZE.width);
   });
 });

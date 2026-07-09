@@ -1,27 +1,26 @@
 /**
  * G-1114.D.1 — Network graph CANVAS (the code-split heavy half).
  *
- * This module is the ONLY place `@xyflow/react` + `elkjs` are imported, so it
- * lands in a **lazily-loaded chunk** that the dashboard pulls only when the
- * principal first opens the Network tab (`network-view.tsx` `React.lazy`-imports
- * it). The default dashboard view is the working grid, not Network — splitting
- * the graph engine (+0.62 MB gzip) out of the entry bundle keeps it off the
- * common load path (PR #905 review: fold the code-split in). This is the
- * dashboard's first code-split; it establishes the pattern for D.4/D.5
- * (DetailPanel, SpotlightSearch) which will only add to this chunk.
+ * This module is the ONLY place `@xyflow/react` is imported, so it lands in a
+ * **lazily-loaded chunk** that the dashboard pulls only when the principal first
+ * opens the Network tab (`network-view.tsx` `React.lazy`-imports it). The default
+ * dashboard view is the working grid, not Network — splitting the graph engine
+ * out of the entry bundle keeps it off the common load path (PR #905 review:
+ * fold the code-split in). This is the dashboard's first code-split; it
+ * establishes the pattern for D.4/D.5 (DetailPanel, SpotlightSearch).
  *
- * It owns the ELK layout effect (ELK is async + WASM-Worker-backed, so it only
- * runs once this chunk is loaded and mounted) and renders the React Flow canvas.
- * The pure adapter/layout/legend/card-inners stay in the main bundle — they're
- * tiny + unit-tested and don't pull the engine.
+ * MC-D1 (netui-constellation) — the ELK dependency is GONE. The old canvas ran an
+ * async, WASM-Worker-backed ELK layout in an effect; the constellation redesign
+ * replaced it with a PURE, SYNCHRONOUS radial layout ({@link layoutNetworkGraph}),
+ * so the canvas positions the nodes inline with a `useMemo` — no effect, no
+ * generation guard, no "laying out…" placeholder. Simpler + no worker.
  *
  * ADR-0007: nodes carry presence + lifecycle only — never session interiors.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 import {
   ReactFlow,
-  Background,
   Controls,
   ReactFlowProvider,
   type Node as RfNode,
@@ -30,7 +29,6 @@ import {
   type EdgeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import ELK from "elkjs/lib/elk.bundled.js";
 import {
   collectLegendStacks,
   type NetworkGraph,
@@ -57,21 +55,13 @@ const nodeTypes: NodeTypes = {
   agent: AgentNode,
 };
 
-// #1008 — the custom ELK orthogonal edge (rounded-corner polyline from ELK's
-// bend points). Registered once at module scope, same as `nodeTypes`.
+// The custom constellation edge (MC-D1: a gently-curved teal spoke from the hub
+// core to each orbiting agent). Still keyed `elk` — the edge type name is a
+// stable registration key, not an engine reference. Registered once at module
+// scope, same as `nodeTypes`.
 const edgeTypes: EdgeTypes = {
   elk: NetworkElkEdge,
 };
-
-// One ELK engine for this chunk's lifetime, instantiated lazily on first layout.
-// Module-scope `new ELK()` spins up a Web Worker, which is unavailable in the
-// (DOM-less) unit-test env — deferring it keeps `import`ing this module safe in
-// tests while the browser bundle still gets a single shared engine.
-let elkSingleton: InstanceType<typeof ELK> | null = null;
-function getElk(): InstanceType<typeof ELK> {
-  if (!elkSingleton) elkSingleton = new ELK();
-  return elkSingleton;
-}
 
 export interface NetworkCanvasProps {
   /** The pre-built (un-positioned) graph from the main-bundle adapter. */
@@ -211,7 +201,8 @@ function FlowCanvas({
       onPaneClick={onPaneClick}
       proOptions={{ hideAttribution: true }}
     >
-      <Background gap={20} size={1} />
+      {/* MC-D1 — no <Background>: the constellation reads against a clean
+          near-black atmosphere (painted by `.network-canvas-wrap`), not a grid. */}
       <Controls position="bottom-left" showInteractive={false} />
       <NetworkLegend stacks={legendStacks} />
     </ReactFlow>
@@ -219,9 +210,12 @@ function FlowCanvas({
 }
 
 /**
- * The lazy canvas entry. Runs ELK over the incoming graph (async) and mounts the
- * React Flow canvas once positioned. A generation guard drops a stale layout if
- * the graph changed (a presence frame landed) while ELK was mid-flight.
+ * The lazy canvas entry. Positions the incoming graph with the SYNCHRONOUS
+ * radial layout ({@link layoutNetworkGraph}) and mounts the React Flow canvas.
+ *
+ * MC-D1: the layout is now a pure function of the graph, so a `useMemo` replaces
+ * the old async ELK effect + generation guard + "laying out…" placeholder. When
+ * the graph changes (a presence frame lands) the memo recomputes inline.
  *
  * Default export so `React.lazy(() => import("./network-canvas"))` resolves it.
  */
@@ -231,44 +225,14 @@ export default function NetworkCanvas({
   hover,
   live = false,
 }: NetworkCanvasProps) {
-  const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
-  const [laidOutEdges, setLaidOutEdges] = useState<LaidOutNetworkEdge[]>([]);
-  const genRef = useRef(0);
-
-  useEffect(() => {
-    const myGen = ++genRef.current;
-    if (graph.nodes.length === 0) {
-      setPositioned([]);
-      setLaidOutEdges([]);
-      return;
-    }
-    let cancelled = false;
-    void layoutNetworkGraph(getElk(), graph)
-      .then((result) => {
-        // Drop a stale layout: the graph changed (new gen) or the effect was
-        // torn down while ELK was mid-flight.
-        if (cancelled || genRef.current !== myGen) return;
-        setPositioned(result.nodes);
-        setLaidOutEdges(result.edges);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || genRef.current !== myGen) return;
-        // Layout failure shouldn't blank the tab — log and leave the last-good
-        // graph. `console.warn` is the only emit path in the bundle.
-        // eslint-disable-next-line no-console
-        console.warn(
-          "[network-canvas] ELK layout failed:",
-          err instanceof Error ? err.message : String(err),
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [graph]);
+  const { nodes: positioned, edges: laidOutEdges } = useMemo(
+    () => layoutNetworkGraph(graph),
+    [graph],
+  );
 
   if (positioned.length === 0) {
-    // Engine loaded + mounted, ELK still computing the first layout.
-    return <div className="network-view-empty">Laying out topology…</div>;
+    // No topology yet (empty snapshot) — nothing to constellate.
+    return <div className="network-view-empty">No agents on the network yet.</div>;
   }
 
   const canvas = (
