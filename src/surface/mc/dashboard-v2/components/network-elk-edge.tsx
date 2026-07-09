@@ -301,22 +301,10 @@ export default function NetworkElkEdge(props: EdgeProps) {
               : undefined
         }
       />
-      {federatedAbsent && (
-        <EdgeLabelRenderer>
-          <div
-            className="mc-edge-fed-label mc-edge-fed-absent-label"
-            data-edge-federated-absent="true"
-            style={{
-              position: "absolute",
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-              pointerEvents: "none",
-            }}
-            title="Federated peer — admitted to the network but not currently present"
-          >
-            <span aria-hidden="true">○</span> federated · absent
-          </div>
-        </EdgeLabelRenderer>
-      )}
+      {/* No edge label for the federated-absent spoke: the absent PEER NODE
+          already carries the canonical "federated · absent" eyebrow, so an edge
+          label here just double-prints it right next to the node. The dashed
+          `.edge-fed-absent` styling alone conveys "federated link". */}
       {federated && !federatedAbsent && (
         <EdgeLabelRenderer>
           <div
