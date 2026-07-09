@@ -38,6 +38,7 @@
  */
 
 import type { AgentPresenceTile, AgentOrigin } from "../hooks/use-agents";
+import type { NetworkMembershipDTO } from "../hooks/use-networks";
 import type {
   TransportOverlay,
   TransportVerdict,
@@ -51,6 +52,21 @@ export const STACK_HUB_NODE_ID = "__stack__";
 
 /** Prefix for a synthetic FOREIGN stack-hub id (`__stack__:{principal}/{stack}`). */
 export const FOREIGN_HUB_ID_PREFIX = "__stack__:";
+
+/**
+ * MC-D4 — prefix for a synthetic ABSENT-federated-peer placeholder node id
+ * (`__fed__:{principal}`). Namespaced under a reserved prefix so it can never
+ * collide with an agent key (`{principal}/{stack}/{agent_id}`) NOR a stack-hub id
+ * (`__stack__` / `__stack__:…`). One node per admitted-but-absent peer PRINCIPAL —
+ * an absent peer has no present stack/agent tile to derive a hub from, so it's
+ * keyed on the principal alone.
+ */
+export const FEDERATED_PEER_ID_PREFIX = "__fed__:";
+
+/** MC-D4 — the synthetic id for the absent-federated-peer node of `principal`. */
+export function federatedPeerIdForPrincipal(principal: string): string {
+  return `${FEDERATED_PEER_ID_PREFIX}${principal}`;
+}
 
 /**
  * Compute the hub node id for an agent's origin.
@@ -153,14 +169,42 @@ export interface AgentNodeData {
   transportLeaf?: { present: boolean; rttMs: number | null };
 }
 
+/**
+ * MC-D4 — React Flow node `data` payload for an ABSENT admitted federated peer.
+ *
+ * The principal is admitted to the network (an ADR-0018 roster member) but has NO
+ * present agent tile — `buildNetworkGraph` derives its hubs from present tiles, so
+ * without this the principal can't see the federation they're part of. This node
+ * is a DIMMED placeholder: a muted grey ring, no glow, labelled with the peer
+ * principal id and a `federated · absent` sublabel. Presence-level metadata only
+ * (ADR-0007) — it carries the principal and its membership verdict, never a
+ * session interior. It is never drillable (absent = nothing local to open).
+ */
+export interface FederatedPeerNodeData {
+  kind: "federated-peer";
+  /** The admitted-but-absent peer PRINCIPAL id (e.g. `jc`). The node label. */
+  principal: string;
+  /**
+   * The membership verdict for this peer on its network (from the roster ⋈
+   * presence reconciliation). Always an absent-family verdict here (the peer has
+   * no present stacks); carried so the card can nuance the sublabel if needed.
+   */
+  verdict: string;
+  /** The network id this peer is admitted to (first-seen when a peer spans several). */
+  networkId: string;
+}
+
 /** Discriminated union of every node `data` shape in the graph. */
-export type NetworkNodeData = StackHubNodeData | AgentNodeData;
+export type NetworkNodeData =
+  | StackHubNodeData
+  | AgentNodeData
+  | FederatedPeerNodeData;
 
 /** A React-Flow-shaped node BEFORE ELK assigns a position (position is 0,0). */
 export interface NetworkGraphNode {
   id: string;
-  /** Custom node type registered on the canvas (`stackHub` | `agent`). */
-  type: "stackHub" | "agent";
+  /** Custom node type registered on the canvas (`stackHub` | `agent` | `federatedPeer`). */
+  type: "stackHub" | "agent" | "federatedPeer";
   data: NetworkNodeData;
   position: { x: number; y: number };
 }
@@ -209,6 +253,14 @@ export interface NetworkGraphEdge {
   data?: {
     stackColor?: string;
     federated?: boolean;
+    /**
+     * MC-D4 — true when this edge wires the local stack hub to an ABSENT
+     * admitted-federated-peer placeholder node. Styled as a DOTTED federated link
+     * (distinct from the solid local hub→agent edge AND from the dashed present-
+     * peer `federated` edge), marking "admitted but no live presence". Never
+     * animates (absent = no flow).
+     */
+    federatedAbsent?: boolean;
     transport?: NetworkEdgeTransportData;
   };
 }
@@ -267,13 +319,29 @@ function originScope(a: AgentPresenceTile): { principal: string; stack: string }
  * roots up front; agent nodes follow in snapshot order. A local-only snapshot is
  * byte-identical to Phase D (a single `__stack__` hub).
  *
+ * ## MC-D4 — absent admitted federated peers
+ *
+ * `agents` derives hubs from PRESENT tiles only, so an admitted-but-ABSENT peer
+ * (a roster member with no `present_stacks`, e.g. `jc` before its stack comes up)
+ * draws NO node — the principal can't see the federation they belong to. When the
+ * optional `networks` roster is supplied, this ALSO emits a DIMMED
+ * "federated peer" placeholder node per admitted non-local peer that has NO
+ * present tile already in the graph, wired to the LOCAL stack hub by a DOTTED
+ * federated-absent edge. The present-peer folding (E.3) is untouched — a present
+ * foreign peer keeps rendering as its own stack hub; only truly-absent admitted
+ * peers get a placeholder. When `networks` is omitted (or carries no absent
+ * non-local member), the graph is byte-identical to the pre-D4 shape.
+ *
  * Pure and order-preserving for the agents within a snapshot, so the layout is
  * deterministic for a given snapshot.
  */
 export function buildNetworkGraph(
   agents: readonly AgentPresenceTile[],
+  networks: readonly NetworkMembershipDTO[] = [],
 ): NetworkGraph {
   if (agents.length === 0) {
+    // No present tiles → no LOCAL stack hub to anchor an absent-peer placeholder
+    // to. Render the empty state rather than floating unanchored placeholders.
     return { nodes: [], edges: [] };
   }
 
@@ -381,7 +449,97 @@ export function buildNetworkGraph(
     }
   }
 
+  // MC-D4 — emit a DIMMED placeholder per admitted-but-ABSENT federated peer:
+  // a roster member that is NOT the local principal AND has no present agent tile
+  // already in the graph. Anchored to the LOCAL stack hub by a DOTTED
+  // federated-absent edge, so the principal sees the federation they belong to
+  // even before the peer's stack comes up. No-op when `networks` is empty or every
+  // member is local/present — the graph stays byte-identical to the pre-D4 shape.
+  appendAbsentFederatedPeers(nodes, edges, networks, servingPrincipal);
+
   return { nodes, edges };
+}
+
+/**
+ * MC-D4 — the principal ids that ALREADY have a stack-hub OR agent node in the
+ * graph (present locally or as a present foreign peer). An admitted peer whose
+ * principal is in this set is NOT absent — it's already rendered as its stack —
+ * so no placeholder is emitted for it.
+ */
+function presentPrincipals(nodes: readonly NetworkGraphNode[]): Set<string> {
+  const present = new Set<string>();
+  for (const n of nodes) {
+    if (n.data.kind === "stack-hub") {
+      if (n.data.principal !== null) present.add(n.data.principal);
+    } else if (n.data.kind === "agent") {
+      // A local agent's principal is its origin scope; a foreign agent's is its
+      // origin's principal. `key` is `{principal}/{stack}/{agent_id}` — the first
+      // segment is the principal either way.
+      const principal = n.data.key.split("/")[0];
+      if (principal !== undefined && principal.length > 0) present.add(principal);
+    }
+  }
+  return present;
+}
+
+/**
+ * MC-D4 — mutate `nodes`/`edges` in place, appending one dimmed federated-peer
+ * placeholder node + one dotted anchor edge per admitted-but-absent non-local
+ * peer. The anchor is the LOCAL stack hub ({@link STACK_HUB_NODE_ID}); when the
+ * graph has no local hub (a foreign-only snapshot) there's nothing to anchor to,
+ * so no placeholders are emitted.
+ *
+ * A peer is a candidate when, across all supplied networks, its `principal` is
+ * NOT the serving principal AND NOT already present in the graph AND it has no
+ * `present_stacks` on that network membership row. De-duplicated by principal
+ * (first-seen network wins), and emitted in first-seen order, so the layout stays
+ * deterministic.
+ */
+function appendAbsentFederatedPeers(
+  nodes: NetworkGraphNode[],
+  edges: NetworkGraphEdge[],
+  networks: readonly NetworkMembershipDTO[],
+  servingPrincipal: string | null,
+): void {
+  if (networks.length === 0) return;
+  // The placeholder anchors to the LOCAL hub; without one there's nothing to
+  // connect to (a foreign-only snapshot) — skip rather than float unanchored.
+  const hasLocalHub = nodes.some(
+    (n) => n.data.kind === "stack-hub" && n.id === STACK_HUB_NODE_ID,
+  );
+  if (!hasLocalHub) return;
+
+  const present = presentPrincipals(nodes);
+  const emitted = new Set<string>();
+
+  for (const net of networks) {
+    for (const m of net.members) {
+      if (m.principal === servingPrincipal) continue; // the local principal
+      if (present.has(m.principal)) continue; // already a present stack/agent
+      if (m.present_stacks.length > 0) continue; // has live presence → not absent
+      if (emitted.has(m.principal)) continue; // de-dupe across networks
+      emitted.add(m.principal);
+
+      const id = federatedPeerIdForPrincipal(m.principal);
+      nodes.push({
+        id,
+        type: "federatedPeer",
+        position: { x: 0, y: 0 },
+        data: {
+          kind: "federated-peer",
+          principal: m.principal,
+          verdict: m.verdict,
+          networkId: net.network_id,
+        },
+      });
+      edges.push({
+        id: `fed-absent-${m.principal}`,
+        source: STACK_HUB_NODE_ID,
+        target: id,
+        data: { federatedAbsent: true },
+      });
+    }
+  }
 }
 
 /** #1068 — one legend entry: a stack's hub id, display label, and color. */
@@ -448,6 +606,9 @@ export function applyTransportOverlay(
         data: { ...node.data, transportVerdict: peer.verdict },
       };
     }
+    // MC-D4 — an absent-federated-peer placeholder carries no leaf/stack to
+    // overlay (it's admitted-but-absent, no live transport); return it unchanged.
+    if (node.data.kind === "federated-peer") return node;
     // An agent node's leaf liveness keys on the agent's ORIGIN stack (a foreign
     // peer's leaf lives on ITS stack, exactly like its hub grouping). originScope
     // resolves a foreign origin's {principal,stack}; a local agent's own.

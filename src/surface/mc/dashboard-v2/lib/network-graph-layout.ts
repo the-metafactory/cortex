@@ -164,16 +164,19 @@ export function clusterNetworkGraph(graph: NetworkGraph): Cluster[] {
     }
   }
 
-  // Map each agent to its hub via the (hub → agent) edge.
-  const hubOfAgent = new Map<string, string>();
+  // Map each orbiting node to its hub via the (hub → node) edge. This covers both
+  // agent nodes (`hub → agent`) and MC-D4 absent-federated-peer placeholders
+  // (`localHub → federatedPeer`) — both ring around their source hub.
+  const hubOfChild = new Map<string, string>();
   for (const e of graph.edges) {
-    if (agentsByHub.has(e.source)) hubOfAgent.set(e.target, e.source);
+    if (agentsByHub.has(e.source)) hubOfChild.set(e.target, e.source);
   }
 
   const orphanCluster: string[] = [];
   for (const n of graph.nodes) {
-    if (n.type !== "agent") continue;
-    const hub = hubOfAgent.get(n.id);
+    // Both agents and absent-federated-peer placeholders orbit a hub.
+    if (n.type !== "agent" && n.type !== "federatedPeer") continue;
+    const hub = hubOfChild.get(n.id);
     if (hub !== undefined) {
       agentsByHub.get(hub)!.push(n.id);
     } else {

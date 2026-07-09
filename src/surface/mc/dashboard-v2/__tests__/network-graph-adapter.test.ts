@@ -12,14 +12,18 @@ import {
   buildNetworkGraph,
   collectLegendStacks,
   deriveServingPrincipal,
+  federatedPeerIdForPrincipal,
   STACK_HUB_NODE_ID,
   FOREIGN_HUB_ID_PREFIX,
+  FEDERATED_PEER_ID_PREFIX,
   type AgentNodeData,
   type StackHubNodeData,
+  type FederatedPeerNodeData,
 } from "../lib/network-graph-adapter";
 import { classifyOrigin } from "../lib/agents-display";
 import { LOCAL_STACK_COLOR } from "../lib/stack-color";
 import type { AgentPresenceTile } from "../hooks/use-agents";
+import type { NetworkMembershipDTO } from "../hooks/use-networks";
 
 function tile(
   over: Partial<AgentPresenceTile> & { agent_id: string },
@@ -602,5 +606,142 @@ describe("buildNetworkGraph — federated edge flag (MC-D3 #1290)", () => {
       "foreign",
     );
     expect(foreignEdge?.data?.federated).toBe(true);
+  });
+});
+
+/**
+ * MC-D4 — a minimal `NetworkMembershipDTO` fixture. Only the fields the adapter
+ * reads (`network_id`, `members[].{principal,verdict,present_stacks}`) matter;
+ * the rest are filled with honest defaults.
+ */
+function membership(
+  over: Partial<NetworkMembershipDTO> & {
+    network_id: string;
+    members: NetworkMembershipDTO["members"];
+  },
+): NetworkMembershipDTO {
+  return {
+    leaf_node: "leaf-1",
+    roster_status: "ok",
+    roster_scope: "complete",
+    confidentiality: { mode: "off", key_present: false, key_id: null },
+    ...over,
+  };
+}
+
+/** One roster member DTO. */
+function member(
+  principal: string,
+  present_stacks: string[],
+  verdict: NetworkMembershipDTO["members"][number]["verdict"] = present_stacks.length
+    ? "admitted-present"
+    : "admitted-absent",
+): NetworkMembershipDTO["members"][number] {
+  return { principal, verdict, present_stacks, accepts: "accepted-network" };
+}
+
+describe("buildNetworkGraph — absent federated peers (MC-D4)", () => {
+  it("emits a dimmed federated-peer node + a dotted anchor edge for an absent non-local member", () => {
+    const g = buildNetworkGraph(
+      [tile({ agent_id: "luna" })], // one present LOCAL agent (⇒ a local hub exists)
+      [
+        membership({
+          network_id: "mfnet",
+          members: [
+            member("andreas", ["research"]), // the serving principal — present
+            member("jc", []), // admitted but ABSENT (no present stacks)
+          ],
+        }),
+      ],
+    );
+
+    const peerId = federatedPeerIdForPrincipal("jc");
+    expect(peerId.startsWith(FEDERATED_PEER_ID_PREFIX)).toBe(true);
+
+    const peerNode = g.nodes.find((n) => n.id === peerId);
+    expect(peerNode).toBeDefined();
+    expect(peerNode?.type).toBe("federatedPeer");
+    const data = peerNode?.data as FederatedPeerNodeData;
+    expect(data.kind).toBe("federated-peer");
+    expect(data.principal).toBe("jc");
+    expect(data.networkId).toBe("mfnet");
+    expect(data.verdict).toBe("admitted-absent");
+
+    // The dotted anchor edge: local hub → the peer placeholder, flagged absent.
+    const edge = g.edges.find((e) => e.target === peerId);
+    expect(edge).toBeDefined();
+    expect(edge?.source).toBe(STACK_HUB_NODE_ID);
+    expect(edge?.data?.federatedAbsent).toBe(true);
+    // It is NOT the present-peer `federated` (dashed) edge treatment.
+    expect(edge?.data?.federated ?? false).toBe(false);
+  });
+
+  it("produces nothing extra when an absent member has NO roster (networks omitted)", () => {
+    const withRoster = buildNetworkGraph([tile({ agent_id: "luna" })], []);
+    const withoutRoster = buildNetworkGraph([tile({ agent_id: "luna" })]);
+    // Byte-identical: no roster ⇒ no absent-peer nodes/edges (pre-D4 shape).
+    expect(withRoster).toEqual(withoutRoster);
+    expect(
+      withRoster.nodes.some((n) => n.type === "federatedPeer"),
+    ).toBe(false);
+    expect(
+      withRoster.edges.some((e) => e.data?.federatedAbsent === true),
+    ).toBe(false);
+  });
+
+  it("does NOT emit a placeholder for the serving (local) principal", () => {
+    const g = buildNetworkGraph(
+      [tile({ agent_id: "luna" })],
+      [membership({ network_id: "mfnet", members: [member("andreas", [])] })],
+    );
+    expect(g.nodes.some((n) => n.type === "federatedPeer")).toBe(false);
+  });
+
+  it("does NOT emit a placeholder for a PRESENT foreign peer (already a stack hub — E.3 folding preserved)", () => {
+    const g = buildNetworkGraph(
+      [
+        tile({ agent_id: "luna" }),
+        foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+      ],
+      [
+        membership({
+          network_id: "mfnet",
+          members: [member("andreas", ["research"]), member("jc", ["research"])],
+        }),
+      ],
+    );
+    // jc is present (has an agent tile ⇒ its own stack hub); no absent placeholder.
+    expect(g.nodes.some((n) => n.type === "federatedPeer")).toBe(false);
+    // The present foreign peer still renders as its stack hub (E.3 unchanged).
+    expect(
+      g.nodes.some(
+        (n) =>
+          n.type === "stackHub" &&
+          n.id === `${FOREIGN_HUB_ID_PREFIX}jc/research`,
+      ),
+    ).toBe(true);
+  });
+
+  it("de-duplicates an absent peer that appears on multiple networks (first-seen wins)", () => {
+    const g = buildNetworkGraph(
+      [tile({ agent_id: "luna" })],
+      [
+        membership({ network_id: "net-a", members: [member("jc", [])] }),
+        membership({ network_id: "net-b", members: [member("jc", [])] }),
+      ],
+    );
+    const peers = g.nodes.filter((n) => n.type === "federatedPeer");
+    expect(peers).toHaveLength(1);
+    expect((peers[0]?.data as FederatedPeerNodeData).networkId).toBe("net-a");
+  });
+
+  it("emits no placeholder when there is no LOCAL hub to anchor to (foreign-only snapshot)", () => {
+    // A snapshot of ONLY a foreign agent ⇒ no local `__stack__` hub. An absent
+    // peer would have nothing to anchor to, so none is emitted.
+    const g = buildNetworkGraph(
+      [foreignTile({ agent_id: "sage", principal: "jc", stack: "research" })],
+      [membership({ network_id: "mfnet", members: [member("kim", [])] })],
+    );
+    expect(g.nodes.some((n) => n.type === "federatedPeer")).toBe(false);
   });
 });

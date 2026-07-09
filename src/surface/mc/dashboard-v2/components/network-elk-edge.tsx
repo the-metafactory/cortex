@@ -173,6 +173,11 @@ export default function NetworkElkEdge(props: EdgeProps) {
   // flow here is the relationship treatment, not REAL bus traffic — binding the
   // dash-flow to live envelope flow is D5 (#1292).
   const federated = edgeData?.["federated"] === true;
+  // MC-D4 — the DOTTED anchor edge to an ABSENT admitted-federated-peer
+  // placeholder (`localHub → federatedPeer`). Distinct from the solid local edge
+  // AND the dashed present-peer `federated` edge; always static (absent = no
+  // flow). The constellation skin's `.edge-fed-absent` supplies the dotted dash.
+  const federatedAbsent = edgeData?.["federatedAbsent"] === true;
   // CK-5 (#1292) — bind the admitted-peer dash-flow to REAL bus flow. `live` is
   // true only when there IS envelope flow AND liveTraffic is on AND motion is
   // permitted; the canvas threads it through the edge `data`. When false the
@@ -287,14 +292,32 @@ export default function NetworkElkEdge(props: EdgeProps) {
         // (scoped under `.mc-skin`; inert in the un-skinned legacy render).
         // CK-5: animate ONLY on real flow; otherwise a static dash.
         className={
-          federated
-            ? live
-              ? "edge-live--fed"
-              : "edge-fed-static"
-            : undefined
+          federatedAbsent
+            ? "edge-fed-absent"
+            : federated
+              ? live
+                ? "edge-live--fed"
+                : "edge-fed-static"
+              : undefined
         }
       />
-      {federated && (
+      {federatedAbsent && (
+        <EdgeLabelRenderer>
+          <div
+            className="mc-edge-fed-label mc-edge-fed-absent-label"
+            data-edge-federated-absent="true"
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: "none",
+            }}
+            title="Federated peer — admitted to the network but not currently present"
+          >
+            <span aria-hidden="true">○</span> federated · absent
+          </div>
+        </EdgeLabelRenderer>
+      )}
+      {federated && !federatedAbsent && (
         <EdgeLabelRenderer>
           <div
             className="mc-edge-fed-label"

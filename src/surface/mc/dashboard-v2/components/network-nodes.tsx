@@ -44,6 +44,7 @@ import {
 import type {
   AgentNodeData,
   StackHubNodeData,
+  FederatedPeerNodeData,
 } from "../lib/network-graph-adapter";
 import { isAgentHighlighted } from "../lib/capability-highlight";
 import { useNetworkHover } from "../lib/network-hover-context";
@@ -467,6 +468,62 @@ export function AgentNode({ data }: NodeProps) {
           setHoverTarget(key === null ? null : { kind: "agent", agentKey: key })
         }
       />
+    </>
+  );
+}
+
+// --- Federated peer (MC-D4: absent admitted peer) --------------------------
+
+export interface FederatedPeerCardProps {
+  data: FederatedPeerNodeData;
+}
+
+/**
+ * MC-D4 — pure presentational card for an ABSENT admitted federated peer.
+ *
+ * The peer principal is on the network roster (admitted) but has NO present agent
+ * tile, so it draws as a DIMMED orb — a muted grey ring, NO glow — labelled with
+ * the peer principal and a `federated · absent` sublabel. It marks "you are
+ * federated with this principal; their stack just isn't live right now", so the
+ * principal can see the whole federation, not only the parts currently online.
+ *
+ * Presence-level only (ADR-0007): identity + membership verdict, never a session
+ * interior. Not interactive — an absent peer has nothing local to open. Split
+ * inner/wrapper like the other nodes (the wrapper adds the xyflow `Handle`).
+ */
+export function FederatedPeerCard({ data }: FederatedPeerCardProps) {
+  return (
+    <div
+      className="network-node network-node-fed-peer network-node-fed-peer-absent"
+      data-node-kind="federated-peer"
+      data-fed-peer-principal={data.principal}
+      data-fed-peer-verdict={data.verdict}
+      data-fed-peer-absent="true"
+      aria-label={`${data.principal} — federated peer (admitted, absent)`}
+    >
+      {/* A muted grey ring — deliberately NO glow, distinct from the live orbs. */}
+      <span
+        className="network-node-orb network-node-orb-fed-peer"
+        aria-hidden="true"
+      />
+      <span className="network-node-below">
+        <span className="network-fed-peer-eyebrow dim">federated · absent</span>
+        <span className="network-fed-peer-label">{data.principal}</span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * xyflow node wrapper for an absent federated peer — adds the target handle so
+ * the dotted anchor edge from the local hub lands on it. Purely presentational
+ * (no hover/selection wiring — an absent peer is inert).
+ */
+export function FederatedPeerNode({ data }: NodeProps) {
+  return (
+    <>
+      <Handle type="target" position={Position.Top} isConnectable={false} />
+      <FederatedPeerCard data={data as unknown as FederatedPeerNodeData} />
     </>
   );
 }

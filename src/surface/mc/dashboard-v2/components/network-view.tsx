@@ -337,10 +337,16 @@ export function NetworkView({
     [state.agents, filter],
   );
 
-  // Pure: filtered snapshot → React-Flow graph (re-derived when agents OR the
-  // filter change). Tiny + engine-free, so it stays in the main bundle; the lazy
-  // canvas takes the built graph and runs the radial layout over it.
-  const baseGraph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
+  // Pure: filtered snapshot → React-Flow graph (re-derived when agents, the
+  // filter, OR the roster change). Tiny + engine-free, so it stays in the main
+  // bundle; the lazy canvas takes the built graph and runs the radial layout over
+  // it. MC-D4 — the `networks` roster is threaded in so an admitted-but-ABSENT
+  // federated peer (no present tile) still draws a dimmed placeholder node, so the
+  // principal sees the federation they belong to, not only who's currently online.
+  const baseGraph = useMemo(
+    () => buildNetworkGraph(filteredAgents, networks),
+    [filteredAgents, networks],
+  );
 
   // U2.3 — fold signal's transport verdicts + leaf liveness/RTT into the overlay
   // model, then onto the base graph WHEN the overlay toggle is on. Built off the

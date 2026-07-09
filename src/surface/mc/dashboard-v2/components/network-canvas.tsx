@@ -39,7 +39,7 @@ import {
   layoutNetworkGraph,
   type LaidOutNetworkEdge,
 } from "../lib/network-graph-layout";
-import { AgentNode, StackHubNode } from "./network-nodes";
+import { AgentNode, StackHubNode, FederatedPeerNode } from "./network-nodes";
 import NetworkElkEdge from "./network-elk-edge";
 import { NetworkLegend } from "./network-legend";
 import {
@@ -53,6 +53,8 @@ import {
 const nodeTypes: NodeTypes = {
   stackHub: StackHubNode,
   agent: AgentNode,
+  // MC-D4 — the absent admitted-federated-peer placeholder (dimmed grey orb).
+  federatedPeer: FederatedPeerNode,
 };
 
 // The custom constellation edge (MC-D1: a gently-curved teal spoke from the hub
@@ -141,6 +143,11 @@ function FlowCanvas({
           // edge draws a federated (cross-principal admitted-peer) connector
           // dashed + flowing, and labels it. Local/sibling edges stay solid.
           federated: e.data?.federated ?? false,
+          // MC-D4 — the DOTTED anchor edge from the local hub to an ABSENT
+          // admitted-federated-peer placeholder. Rendered dotted + static
+          // (absent = no flow), distinct from the solid local edge and the dashed
+          // present-peer `federated` edge.
+          federatedAbsent: e.data?.federatedAbsent ?? false,
           // CK-5 (#1292) — bind the admitted-peer dash-flow to REAL bus flow.
           // The edge animates ONLY when `live`; otherwise it renders a static
           // dash (the relationship is still legible, but nothing pretends to
