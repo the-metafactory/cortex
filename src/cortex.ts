@@ -305,6 +305,7 @@ import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
+import { dispatchConfig } from "./cli/cortex/commands/config";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
 import { dispatchStepUp } from "./cli/cortex/commands/stepup";
 // #1352 — `agents` + `migrate-config` were complete standalone `import.meta.main`
@@ -6282,6 +6283,26 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // `config validate` — pre-flight config check. Same passthrough shape as
+  // `network` / `stack`: `dispatchConfig` owns its own arg parsing, so commander
+  // hands it the raw remaining argv untouched. Runs the daemon's boot-time
+  // config validation (compose config-split layers + CortexConfigSchema)
+  // standalone — WITHOUT booting NATS / MC / adapters / the daemon — so a bad
+  // edit is caught BEFORE a restart crash-loops the daemon.
+  program
+    .command("config")
+    .description("Inspect + validate cortex config (validate)")
+    .argument("[args...]", "config subcommand + flags (see `cortex config --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchConfig(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
