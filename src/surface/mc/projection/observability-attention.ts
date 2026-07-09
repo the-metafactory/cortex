@@ -28,9 +28,22 @@
 
 import type { Database } from "bun:sqlite";
 
-import { upsertAttentionItem, resolveAttentionItem } from "../db/attention";
+import {
+  upsertAttentionItem,
+  resolveAttentionItem,
+  getAttentionItem,
+} from "../db/attention";
 import { ADAPTER_ATTENTION_PREFIX } from "./adapter-lifecycle";
 import type { AttentionItem } from "../types";
+
+/**
+ * #1661 (MC folds) — attention id prefix for `system.access.denied`. Distinct
+ * from the substrate-health `att:adapter:` namespace: a denial is a governance
+ * event, not an adapter outage. The id COLLAPSES BY KEY on `{principal_id}:{
+ * capability}` (decision D) so a storm of denials for the same principal+
+ * capability is ONE high-severity item, not a flood.
+ */
+export const ACCESS_DENIED_ATTENTION_PREFIX = "att:access:denied:";
 
 export interface ProjectableObservabilityEnvelope {
   id?: string;
@@ -86,14 +99,29 @@ export function produceObservabilityAttention(
   db: Database,
   envelope: ProjectableObservabilityEnvelope,
 ): ObservabilityAttentionResult | null {
-  const mapping = classify(envelope.type);
-  if (mapping === null) return null;
-
   const rawPayload: unknown = envelope.payload;
   const payload: Record<string, unknown> =
     typeof rawPayload === "object" && rawPayload !== null
       ? (rawPayload as Record<string, unknown>)
       : {};
+
+  // #1661 — admission degraded/recovered lifecycle. Decision (D): ONE type
+  // (`system.admission.degraded`) carries a `mode` field, NOT a `.recovered`
+  // twin. Branch the open/resolve lifecycle on payload.mode, keyed by the
+  // admission KV `bucket` so a multi-stack view groups by store.
+  if (envelope.type === "system.admission.degraded") {
+    return admissionAttention(db, payload);
+  }
+
+  // #1661 — access.denied → high-severity, collapse-by-key, principal-acked,
+  // NO auto-resolve (decision D). No producer branch ever resolves it — only
+  // the principal (CK-6b resolve/dismiss) clears it.
+  if (envelope.type === "system.access.denied") {
+    return accessDeniedAttention(db, payload);
+  }
+
+  const mapping = classify(envelope.type);
+  if (mapping === null) return null;
 
   let originId: string | null = null;
   for (const key of mapping.idKeys) {
@@ -122,5 +150,70 @@ export function produceObservabilityAttention(
     status: "open",
   };
   upsertAttentionItem(db, item);
+  return { action: "opened", itemId };
+}
+
+/**
+ * #1661 — `system.admission.degraded` open/resolve, branched on payload.mode
+ * (decision D: ONE type + mode field, not a `.recovered` twin). `mode ===
+ * "recovered"` resolves the item; any other transition (`"degraded-local"`)
+ * opens it. Keyed by the admission KV `bucket` (falls back to `admission` so a
+ * payload missing the bucket still yields a deterministic, resolvable item).
+ */
+function admissionAttention(
+  db: Database,
+  payload: Record<string, unknown>,
+): ObservabilityAttentionResult | null {
+  const bucket = asString(payload.bucket) ?? "admission";
+  const itemId = `${ADAPTER_ATTENTION_PREFIX}admission:${bucket}`;
+
+  if (asString(payload.mode) === "recovered") {
+    resolveAttentionItem(db, itemId);
+    return { action: "resolved", itemId };
+  }
+
+  upsertAttentionItem(db, {
+    id: itemId,
+    stackId: `admission:${bucket}`,
+    workItemId: null,
+    sessionId: null,
+    kind: "blocked",
+    severity: "high",
+    status: "open",
+  });
+  return { action: "opened", itemId };
+}
+
+/**
+ * #1661 — `system.access.denied` → a HIGH-severity attention item that COLLAPSES
+ * BY KEY on `{principal_id}:{capability}` (decision D). Principal-acked with NO
+ * auto-resolve: no producer branch ever resolves it, and — unlike the collector
+ * health signals — a redelivered (or fresh) denial for a key the principal has
+ * already resolved/dismissed does NOT resurrect it. That divergence from the
+ * plain upsert is deliberate: a HIGH-severity item the principal cleared must not
+ * pop back on the next at-least-once redelivery. The denial always lands as an
+ * observability ROW regardless, so nothing is lost — only the queue stays quiet.
+ */
+function accessDeniedAttention(
+  db: Database,
+  payload: Record<string, unknown>,
+): ObservabilityAttentionResult | null {
+  const principalId = asString(payload.principal_id) ?? "unknown";
+  const capability = asString(payload.capability) ?? "unknown";
+  const itemId = `${ACCESS_DENIED_ATTENTION_PREFIX}${principalId}:${capability}`;
+
+  // Respect the principal's ack: never reopen a resolved/dismissed key.
+  const existing = getAttentionItem(db, itemId);
+  if (existing !== null && existing.status !== "open") return null;
+
+  upsertAttentionItem(db, {
+    id: itemId,
+    stackId: `access:${principalId}:${capability}`,
+    workItemId: null,
+    sessionId: null,
+    kind: "blocked",
+    severity: "high",
+    status: "open",
+  });
   return { action: "opened", itemId };
 }

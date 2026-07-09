@@ -16,14 +16,35 @@
 
 import type { Database } from "bun:sqlite";
 
-/** The four section families. `signal` + `collector` together are "signal health". */
-export type ObservabilityFamily = "signal" | "collector" | "federation" | "transport";
+/**
+ * The section families. `signal` + `collector` together are "signal health".
+ *
+ * The first four are signal-side. #1661 (MC folds) adds three cortex-LOCAL
+ * families for gateway/dispatch/reflex system envelopes:
+ *   - `access`   — `system.access.*` + `system.admission.*`
+ *   - `dispatch` — `system.dispatch.stage` + `system.inbound.aborted` + `system.bus.process`
+ *   - `reflex`   — `reflex.activation.*`
+ * The DB `family` CHECK is widened to match (schema.ts + the #1661 rebuild
+ * migration). Frontend sections for these families are a DEFERRED fast-follow
+ * (#1661 (C)) — the rows land and the API returns them regardless.
+ */
+export type ObservabilityFamily =
+  | "signal"
+  | "collector"
+  | "federation"
+  | "transport"
+  | "access"
+  | "dispatch"
+  | "reflex";
 
 export const OBSERVABILITY_FAMILIES: readonly ObservabilityFamily[] = [
   "signal",
   "collector",
   "federation",
   "transport",
+  "access",
+  "dispatch",
+  "reflex",
 ] as const;
 
 /**

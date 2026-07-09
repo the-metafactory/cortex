@@ -24,8 +24,12 @@ import {
   projectForeignObservability,
   familyForType,
 } from "../projection/observability-renderer";
-import { produceObservabilityAttention } from "../projection/observability-attention";
+import {
+  produceObservabilityAttention,
+  ACCESS_DENIED_ATTENTION_PREFIX,
+} from "../projection/observability-attention";
 import { ADAPTER_ATTENTION_PREFIX } from "../projection/adapter-lifecycle";
+import { resolveAttentionItem } from "../db/attention";
 import {
   listObservabilityEvents,
   countObservabilityByFamily,
@@ -345,5 +349,170 @@ describe("createObservabilityProjectionRenderer", () => {
     const r = createObservabilityProjectionRenderer(db);
     await r.render(envelope("system.signal.received", {}), undefined, "local.andreas.work.system.signal.received");
     expect(countObservabilityByFamily(db).signal).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1661 (MC folds) — the three cortex-LOCAL families (access/dispatch/reflex)
+// ---------------------------------------------------------------------------
+
+describe("#1661 — familyForType routes the cortex-local families", () => {
+  it("routes access (denied/filtered) + admission (throttled/degraded)", () => {
+    expect(familyForType("system.access.denied")).toBe("access");
+    expect(familyForType("system.access.filtered")).toBe("access");
+    expect(familyForType("system.admission.throttled")).toBe("access");
+    expect(familyForType("system.admission.degraded")).toBe("access");
+  });
+
+  it("routes dispatch (stage / inbound.aborted / bus.process)", () => {
+    expect(familyForType("system.dispatch.stage")).toBe("dispatch");
+    expect(familyForType("system.inbound.aborted")).toBe("dispatch");
+    expect(familyForType("system.bus.process")).toBe("dispatch");
+  });
+
+  it("routes reflex.activation.*", () => {
+    expect(familyForType("reflex.activation.fired")).toBe("reflex");
+    expect(familyForType("reflex.activation.decision")).toBe("reflex");
+  });
+
+  it("EXCLUDES high-volume siblings by design (narrow type set, not a prefix)", () => {
+    expect(familyForType("system.access.allowed")).toBeNull();
+    expect(familyForType("system.bus.peer_dispatch_received")).toBeNull();
+    expect(familyForType("system.bus.notify_discord")).toBeNull();
+    expect(familyForType("system.dispatch.dead_letter")).toBeNull();
+  });
+});
+
+describe("#1661 — projectObservability folds each new family into a row", () => {
+  let db: Database;
+  let broadcasts: WsServerMessage[];
+  let fakeRegistry: WsClientRegistry;
+
+  beforeEach(() => {
+    db = setupDb();
+    broadcasts = [];
+    fakeRegistry = {
+      broadcast: (msg: WsServerMessage) => broadcasts.push(msg),
+    } as unknown as WsClientRegistry;
+  });
+  afterEach(() => db.close());
+
+  it("a synthetic emit of EACH new family lands exactly one row", () => {
+    expect(
+      projectObservability(db, envelope("system.access.denied", { principal_id: "andreas", capability: "dispatch.task.received" }), fakeRegistry),
+    ).toBe("access");
+    expect(
+      projectObservability(db, envelope("system.dispatch.stage", { stack_id: "work" }), fakeRegistry),
+    ).toBe("dispatch");
+    expect(
+      projectObservability(db, envelope("reflex.activation.fired", { summary: "reflex ran" }), fakeRegistry),
+    ).toBe("reflex");
+
+    const counts = countObservabilityByFamily(db);
+    expect(counts.access).toBe(1);
+    expect(counts.dispatch).toBe(1);
+    expect(counts.reflex).toBe(1);
+    expect(listObservabilityEvents(db, 10, "reflex")[0]?.summary).toBe("reflex ran");
+  });
+});
+
+describe("#1661 — attention: admission lifecycle + access.denied", () => {
+  let db: Database;
+  beforeEach(() => (db = setupDb()));
+  afterEach(() => db.close());
+
+  it("admission.degraded OPENS (mode=degraded-local) and RESOLVES (mode=recovered) — ONE type", () => {
+    const open = produceObservabilityAttention(db, {
+      type: "system.admission.degraded",
+      payload: { mode: "degraded-local", bucket: "admission_andreas_work", detail: "kv down" },
+    });
+    expect(open).toMatchObject({ action: "opened" });
+    expect(open?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}admission:admission_andreas_work`);
+    expect(attentionRow(db, open!.itemId)?.status).toBe("open");
+
+    const recovered = produceObservabilityAttention(db, {
+      type: "system.admission.degraded",
+      payload: { mode: "recovered", bucket: "admission_andreas_work", detail: "kv back" },
+    });
+    expect(recovered).toMatchObject({ action: "resolved" });
+    expect(recovered?.itemId).toBe(open?.itemId);
+    expect(attentionRow(db, open!.itemId)?.status).toBe("resolved");
+  });
+
+  it("admission.degraded falls back to the 'admission' id when bucket is absent", () => {
+    const open = produceObservabilityAttention(db, {
+      type: "system.admission.degraded",
+      payload: { mode: "degraded-local", detail: "x" },
+    });
+    expect(open?.itemId).toBe(`${ADAPTER_ATTENTION_PREFIX}admission:admission`);
+  });
+
+  it("admission.throttled is history-only (no attention)", () => {
+    expect(
+      produceObservabilityAttention(db, { type: "system.admission.throttled", payload: { principal_id: "a", capability: "c" } }),
+    ).toBeNull();
+  });
+
+  it("access.denied opens a HIGH-severity item collapsed by (principal_id + capability)", () => {
+    const one = produceObservabilityAttention(db, {
+      type: "system.access.denied",
+      payload: { principal_id: "andreas", capability: "dispatch.task.received" },
+    });
+    expect(one).toMatchObject({ action: "opened" });
+    expect(one?.itemId).toBe(`${ACCESS_DENIED_ATTENTION_PREFIX}andreas:dispatch.task.received`);
+    const row = db.query(`SELECT severity, status FROM attention_items WHERE id = ?`).get(one!.itemId) as { severity: string; status: string };
+    expect(row.severity).toBe("high");
+    expect(row.status).toBe("open");
+
+    // A second denial for the SAME key collapses into the same one item.
+    const two = produceObservabilityAttention(db, {
+      type: "system.access.denied",
+      payload: { principal_id: "andreas", capability: "dispatch.task.received" },
+    });
+    expect(two?.itemId).toBe(one?.itemId);
+    expect((db.query(`SELECT COUNT(*) AS n FROM attention_items`).get() as { n: number }).n).toBe(1);
+
+    // A different capability is a DIFFERENT item (collapse key includes capability).
+    produceObservabilityAttention(db, {
+      type: "system.access.denied",
+      payload: { principal_id: "andreas", capability: "other.cap" },
+    });
+    expect((db.query(`SELECT COUNT(*) AS n FROM attention_items`).get() as { n: number }).n).toBe(2);
+  });
+
+  it("access.denied has NO auto-resolve and is principal-acked (a cleared key is never resurrected)", () => {
+    const payload = { principal_id: "andreas", capability: "dispatch.task.received" };
+    const open = produceObservabilityAttention(db, { type: "system.access.denied", payload });
+    expect(open).toMatchObject({ action: "opened" });
+    // The principal resolves it (CK-6b resolve/dismiss).
+    resolveAttentionItem(db, open!.itemId);
+    expect(attentionRow(db, open!.itemId)?.status).toBe("resolved");
+    // A redelivered (or fresh) denial for the same key does NOT reopen it.
+    const again = produceObservabilityAttention(db, { type: "system.access.denied", payload });
+    expect(again).toBeNull();
+    expect(attentionRow(db, open!.itemId)?.status).toBe("resolved");
+  });
+
+  it("dispatch + reflex families are fold-only (never attention)", () => {
+    expect(produceObservabilityAttention(db, { type: "system.dispatch.stage", payload: {} })).toBeNull();
+    expect(produceObservabilityAttention(db, { type: "system.inbound.aborted", payload: {} })).toBeNull();
+    expect(produceObservabilityAttention(db, { type: "system.bus.process", payload: {} })).toBeNull();
+    expect(produceObservabilityAttention(db, { type: "reflex.activation.fired", payload: {} })).toBeNull();
+  });
+});
+
+describe("#1661 — renderer subjects include the new families (still local-only)", () => {
+  it("subscribes to the exact access/dispatch/reflex local subjects", () => {
+    const db = setupDb();
+    const r = createObservabilityProjectionRenderer(db);
+    expect(r.subjects.some((s) => s.includes("system.access.denied"))).toBe(true);
+    expect(r.subjects.some((s) => s.includes("system.admission.degraded"))).toBe(true);
+    expect(r.subjects.some((s) => s.includes("system.dispatch.stage"))).toBe(true);
+    expect(r.subjects.some((s) => s.includes("system.bus.process"))).toBe(true);
+    expect(r.subjects.some((s) => s.includes("reflex.activation"))).toBe(true);
+    // The U3.3 local-only invariant still holds for the added subjects.
+    expect(r.subjects.every((s) => s.startsWith("local."))).toBe(true);
+    expect(r.subjects.some((s) => s.startsWith("federated."))).toBe(false);
+    db.close();
   });
 });

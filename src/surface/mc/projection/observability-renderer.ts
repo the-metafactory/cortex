@@ -92,6 +92,32 @@ export const OBSERVABILITY_PROJECTION_SUBJECTS: string[] = [
   // transport (hub-emitted; non-hub stacks just never see these)
   "local.*.system.transport.>",
   "local.*.*.system.transport.>",
+
+  // #1661 (MC folds) — the cortex-LOCAL families. Subscribed to the EXACT
+  // subjects the folded types publish on (`local.{principal}[.{stack}].{type}`),
+  // NOT broad `system.access.>` / `system.bus.>` prefixes — so high-volume
+  // sibling types (`system.access.allowed`, `system.bus.peer_dispatch_received`)
+  // never reach the renderer's dispatch loop at all. `familyForType` remains the
+  // authoritative belt-filter for anything that does arrive.
+  // access:
+  "local.*.system.access.denied",
+  "local.*.*.system.access.denied",
+  "local.*.system.access.filtered",
+  "local.*.*.system.access.filtered",
+  "local.*.system.admission.throttled",
+  "local.*.*.system.admission.throttled",
+  "local.*.system.admission.degraded",
+  "local.*.*.system.admission.degraded",
+  // dispatch:
+  "local.*.system.dispatch.stage",
+  "local.*.*.system.dispatch.stage",
+  "local.*.system.inbound.aborted",
+  "local.*.*.system.inbound.aborted",
+  "local.*.system.bus.process",
+  "local.*.*.system.bus.process",
+  // reflex:
+  "local.*.reflex.activation.>",
+  "local.*.*.reflex.activation.>",
 ];
 
 /** A structural view of an envelope the projection reads. */
@@ -112,6 +138,34 @@ export function familyForType(type: string): ObservabilityFamily | null {
   if (type.startsWith("system.signal.")) return "signal";
   if (type.startsWith("system.federation.")) return "federation";
   if (type.startsWith("system.transport.")) return "transport";
+
+  // #1661 (MC folds) — three cortex-LOCAL families. Consumer-side ONLY (#97):
+  // this renderer READS these system envelopes; the producer emit sites in
+  // bus/system-events.ts are OUT of scope and untouched. Routed by EXACT type,
+  // not broad prefix — sibling types like `system.access.allowed` (high-volume)
+  // or `system.bus.peer_dispatch_received` stay OUT of the fold by design
+  // (decision B is 3 SECTIONS, not "everything under the prefix"). Widening a
+  // family's type set is a deliberate follow-up, never an accidental default.
+  //   access   = system.access.{denied,filtered} + system.admission.{throttled,degraded}
+  if (
+    type === "system.access.denied" ||
+    type === "system.access.filtered" ||
+    type === "system.admission.throttled" ||
+    type === "system.admission.degraded"
+  ) {
+    return "access";
+  }
+  //   dispatch = system.dispatch.stage + system.inbound.aborted + system.bus.process
+  if (
+    type === "system.dispatch.stage" ||
+    type === "system.inbound.aborted" ||
+    type === "system.bus.process"
+  ) {
+    return "dispatch";
+  }
+  //   reflex   = reflex.activation.* (fired, decision, …)
+  if (type.startsWith("reflex.activation.")) return "reflex";
+
   return null;
 }
 
