@@ -14,6 +14,17 @@ import { legacyBootAllowed, RETIRED_POINTER } from "../index";
 
 const ENTRY = new URL("../index.ts", import.meta.url).pathname;
 
+/**
+ * A config path that EXISTS but cannot be read as a file — this test directory
+ * itself. `loadConfig` does `existsSync(path)` (true for a dir) then
+ * `readFileSync(path)`, which throws `EISDIR`; loadConfig rethrows and
+ * `bootLegacy` maps it to the `[mission-control] FATAL: <msg>` + exit-1 NFR
+ * contract. A *nonexistent* path would instead fall through to DEFAULT_CONFIG
+ * and boot a real long-lived server on :8767 — hanging the test until timeout.
+ * We want the boot path REACHED and then failed fast, not a live server.
+ */
+const UNREADABLE_CONFIG_DIR = new URL(".", import.meta.url).pathname;
+
 async function spawnEntry(
   argv: string[],
   env: Record<string, string>,
@@ -57,12 +68,13 @@ describe("mission-control legacy entry — production-entrypoint guard (FS-8a)",
   });
 
   it("attempts the legacy boot under the --legacy escape hatch (test-harness path unaffected)", async () => {
-    // With the hatch present, the guard hands off to the real boot. We give it
-    // no config, so it hits the NFR failure contract (FATAL + exit 1) rather
-    // than the retirement pointer — proving the boot path was reached, not the
-    // guard's refusal.
+    // With the hatch present, the guard hands off to the real boot. We point it
+    // at an unreadable config (a directory), so it hits the NFR failure contract
+    // (FATAL + exit 1) rather than the retirement pointer — proving the boot
+    // path was reached, not the guard's refusal, and without standing up a
+    // real long-lived server on :8767.
     const { exitCode, stderr } = await spawnEntry(["--legacy"], {
-      MC_CONFIG_PATH: "/nonexistent/definitely/not/here/mc.yaml",
+      MC_CONFIG_PATH: UNREADABLE_CONFIG_DIR,
     });
 
     expect(stderr).not.toContain("retired for production");
@@ -73,7 +85,7 @@ describe("mission-control legacy entry — production-entrypoint guard (FS-8a)",
   it("attempts the legacy boot under the MC_LEGACY_BOOT env escape hatch", async () => {
     const { exitCode, stderr } = await spawnEntry([], {
       MC_LEGACY_BOOT: "1",
-      MC_CONFIG_PATH: "/nonexistent/definitely/not/here/mc.yaml",
+      MC_CONFIG_PATH: UNREADABLE_CONFIG_DIR,
     });
 
     expect(stderr).not.toContain("retired for production");
