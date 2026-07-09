@@ -10,7 +10,7 @@
 
 ## 1. The model in one paragraph
 
-The federation model (ADR-0013) is **sovereign**: every principal runs their own NSC operator and signs the wire with their **own `SU` key** — nobody mints your identity. A leaf link is a **secret-authenticated transport pipe**: one side runs the hub, the other connects in as a remote. The **local** bind is to a **local NATS account in your own NSC operator** (operator-mode, the standard) or `$G` (the fallback). The **transport credential** that authenticates the pipe to the hub is a **hub-minted, sealed scoped `.creds`** the hub-admin mints under the hub's FED account ([ADR-0023](./adr/0023-federation-leaf-credential-model.md), which superseded the ADR-0018 PSK). What crosses `federated.>` is governed by an **export/import** each principal runs in their own store. Network isolation is by subject scope (`federated.{principal}.{stack}.>` plus per-network `accept_subjects`). **Model A — a hub minting your *identity* account (authenticating *as who you are* inside the hub's operator) — is not supported** ([ADR-0013](./adr/0013-sovereign-federation-model.md)); the hub minting your *transport* `.creds` is a different layer and **is** the delivered model (ADR-0023). If you have no NSC operator yet, standing one up is the first step, and the tooling makes it trivial.
+The federation model (ADR-0013) is **sovereign**: every principal runs their own NSC operator and signs the wire with their **own `SU` key** — nobody mints your identity. A leaf link is a **secret-authenticated transport pipe**: one side runs the hub, the other connects in as a remote. The **local** bind is to a **local NATS account in your own NSC operator** (operator-mode, the standard) or `$G` (the fallback). The **transport credential** that authenticates the pipe to the hub is a **hub-minted, sealed scoped `.creds`** the hub-admin mints under the hub's FED account ([ADR-0023](./adr/0023-federation-leaf-credential-model.md), which superseded the ADR-0018 PSK). What crosses `federated.>` is governed by an **export/import** each principal runs in their own store. Network isolation is by subject scope (`federated.{principal}.{stack}.>` plus per-network `accept_subjects`). **A hub minting your *identity* account (authenticating *as who you are* inside the hub's operator) is not supported** ([ADR-0013](./adr/0013-sovereign-federation-model.md)); the hub minting your *transport* `.creds` is a different layer and **is** the delivered model (ADR-0023). If you have no NSC operator yet, standing one up is the first step, and the tooling makes it trivial.
 
 ---
 
@@ -362,9 +362,9 @@ Each carries a supersede banner at the top pointing here. The banner text is:
 
 ---
 
-## 6. Model A is not supported
+## 6. Hub-minted identity is not supported
 
-Guest-account onboarding (hub-minted accounts, Model A) is not supported. The cost — a newcomer without an NSC operator cannot federate until they stand one up — is intentionally paid down by making "stand up your own NSC operator" trivial via tooling (`arc` + `cortex stack create`), not by hosting their identity in someone else's operator. See ADR-0013 §Alternatives considered for the full rejection rationale.
+Guest-account onboarding (a hub minting your identity account) is not supported. The cost — a newcomer without an NSC operator cannot federate until they stand one up — is intentionally paid down by making "stand up your own NSC operator" trivial via tooling (`arc` + `cortex stack create`), not by hosting their identity in someone else's operator. See ADR-0013 §Alternatives considered for the full rejection rationale.
 
 A newcomer's first action is always step 1 of this runbook: stand up their own stack with their own NSC operator. That is the only path.
 
