@@ -22,7 +22,7 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 import { buildSecurityPreamble } from "../runner/security-preamble";
-import type { AttachmentInfo } from "../adapters/discord/attachment-types";
+import type { AttachmentInfo } from "../runner/attachment-types";
 import { parseMessageKeywords } from "../runner/message-parser";
 import { buildPrompt } from "../runner/prompt-builder";
 import { scanPrompt } from "../runner/prompt-filter";
@@ -48,8 +48,8 @@ import {
   processInboundAttachments,
   collectOutputFiles,
   cleanupExpiredDirs,
-} from "../adapters/discord/attachments";
-import { resolveChannelContext, type ChannelContext } from "../adapters/discord/channel-context";
+} from "../runner/attachments";
+import { resolveChannelContext, type ChannelContext } from "../common/channel-context";
 import { getNetworkForGuild, getNetworkForChannel } from "./network-resolver";
 import type { MyelinRuntime } from "./myelin/runtime";
 import {

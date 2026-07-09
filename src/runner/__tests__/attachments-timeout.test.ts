@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "os";
 import { join } from "path";
 import { mkdirSync } from "fs";
-import { TimeoutSourceError } from "../../../common/timeout";
+import { TimeoutSourceError } from "../../common/timeout";
 import type { AttachmentInfo } from "../attachment-types";
 import { processAttachment, processInboundAttachments } from "../attachments";
 
