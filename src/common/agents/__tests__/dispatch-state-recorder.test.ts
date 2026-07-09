@@ -33,13 +33,19 @@ const AGENT = { id: "luna" };
 
 let root: string;
 let errandsScript: string;
+let dashboardScript: string;
 let instanceDir: string;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "cortex-recorder-"));
   errandsScript = join(root, "errands.ts");
+  // cortex#1720 S4a — the dashboard.ts sibling. Written by default so the
+  // regen path is exercised; individual tests point at a missing path to drive
+  // the soft-skip branch.
+  dashboardScript = join(root, "dashboard.ts");
   instanceDir = join(root, "agents", "luna");
   writeFileSync(errandsScript, "// stub errands.ts\n");
+  writeFileSync(dashboardScript, "// stub dashboard.ts\n");
 });
 
 afterEach(() => {
@@ -346,6 +352,202 @@ describe("SubprocessDispatchStateRecorder — soft-skip + non-fatal", () => {
     } finally {
       if (savedEnv !== undefined) process.env.MF_AGENT_STATE_ERRANDS_SCRIPT = savedEnv;
       else delete process.env.MF_AGENT_STATE_ERRANDS_SCRIPT;
+    }
+  });
+});
+
+// ===========================================================================
+// cortex#1720 S4a — RegenerateDashboard on terminal resolve.
+// ===========================================================================
+describe("SubprocessDispatchStateRecorder — S4a: dashboard regen on resolve", () => {
+  /** The `regen` spawn, if one fired. */
+  function regenCall(calls: SpawnCall[]): SpawnCall | undefined {
+    return calls.find((c) => c.args[1] === "regen");
+  }
+
+  test("completed resolve ALSO regenerates the dashboard (regen subcommand, std env)", () => {
+    const { spawn, calls } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d1") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+      regen: { status: 0 },
+    });
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      dashboardScript,
+      spawn,
+      log: () => {},
+    });
+
+    recorder.onDispatchAccepted({ correlationId: "corr-d1", capability: "c", subject: "s", acceptedAt: "t" });
+    recorder.onDispatchResolved("corr-d1", "done");
+
+    const regen = regenCall(calls);
+    expect(regen).toBeDefined();
+    // Invokes `bun <dashboardScript> regen` — the REQUIRED subcommand (agent-state#6).
+    expect(regen!.cmd).toBe("bun");
+    expect(regen!.args[0]).toBe(dashboardScript);
+    expect(regen!.args[1]).toBe("regen");
+    // Standard bundle env, same instance dir as the errands calls.
+    expect(regen!.env?.MF_AGENT_NAME).toBe(AGENT.id);
+    expect(regen!.env?.MF_HOST).toBe("cortex");
+    expect(regen!.env?.MF_INSTANCE_DIR).toBe(instanceDir);
+    // Ordering: regen fires AFTER the resolve (it reflects the transition).
+    const idxResolve = calls.findIndex((c) => c.args[1] === "resolve");
+    const idxRegen = calls.findIndex((c) => c.args[1] === "regen");
+    expect(idxRegen).toBeGreaterThan(idxResolve);
+  });
+
+  test("failed resolve ALSO regenerates the dashboard", () => {
+    const { spawn, calls } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d2") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+      regen: { status: 0 },
+    });
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      dashboardScript,
+      spawn,
+      log: () => {},
+    });
+
+    recorder.onDispatchAccepted({ correlationId: "corr-d2", capability: "c", subject: "s", acceptedAt: "t" });
+    recorder.onDispatchResolved("corr-d2", "failed");
+
+    expect(regenCall(calls)).toBeDefined();
+  });
+
+  test("a no-work-item resolve does NOT regenerate (no transition, no regen)", () => {
+    const { spawn, calls } = recordingSpawn({ regen: { status: 0 } });
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      dashboardScript,
+      spawn,
+      log: () => {},
+    });
+
+    recorder.onDispatchResolved("never-enqueued", "done");
+
+    expect(calls.length).toBe(0); // no resolve, and therefore no regen.
+  });
+
+  test("dashboard script ABSENT → regen SOFT-SKIPS (no regen spawn), resolve still runs, no throw", () => {
+    const { spawn, calls } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d3") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+    });
+    const logs: string[] = [];
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      dashboardScript: join(root, "no-dashboard.ts"), // missing
+      spawn,
+      log: (l) => logs.push(l),
+    });
+
+    recorder.onDispatchAccepted({ correlationId: "corr-d3", capability: "c", subject: "s", acceptedAt: "t" });
+    expect(() => recorder.onDispatchResolved("corr-d3", "done")).not.toThrow();
+
+    // resolve fired, regen did NOT (soft-skip logged).
+    expect(calls.find((c) => c.args[1] === "resolve")).toBeDefined();
+    expect(regenCall(calls)).toBeUndefined();
+    expect(logs.join("")).toMatch(/dashboard regen SKIPPED.*script-absent/);
+  });
+
+  test("regen non-zero exit → logged FAILED, never throws, resolve unaffected", () => {
+    const { spawn, calls } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d4") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+      regen: { status: 2, stderr: "usage: dashboard.ts regen" },
+    });
+    const logs: string[] = [];
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      dashboardScript,
+      spawn,
+      log: (l) => logs.push(l),
+    });
+
+    recorder.onDispatchAccepted({ correlationId: "corr-d4", capability: "c", subject: "s", acceptedAt: "t" });
+    expect(() => recorder.onDispatchResolved("corr-d4", "done")).not.toThrow();
+    expect(calls.find((c) => c.args[1] === "resolve")).toBeDefined();
+    expect(logs.join("")).toMatch(/dashboard regen FAILED.*nonzero-exit/);
+  });
+
+  test("regen spawn error → logged FAILED, never throws", () => {
+    const { spawn } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d5") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+      regen: { status: null, error: new Error("ENOENT bun") },
+    });
+    const logs: string[] = [];
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      dashboardScript,
+      spawn,
+      log: (l) => logs.push(l),
+    });
+
+    recorder.onDispatchAccepted({ correlationId: "corr-d5", capability: "c", subject: "s", acceptedAt: "t" });
+    expect(() => recorder.onDispatchResolved("corr-d5", "done")).not.toThrow();
+    expect(logs.join("")).toMatch(/dashboard regen FAILED.*spawn-error/);
+  });
+
+  test("dashboard script defaults to the errands.ts SIBLING when not overridden", () => {
+    // No `dashboardScript` opt → derived as dirname(errandsScript)/dashboard.ts,
+    // which beforeEach wrote — so regen fires and targets exactly that sibling.
+    const { spawn, calls } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d6") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+      regen: { status: 0 },
+    });
+    const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+      instanceDir,
+      errandsScript,
+      spawn,
+      log: () => {},
+    });
+
+    recorder.onDispatchAccepted({ correlationId: "corr-d6", capability: "c", subject: "s", acceptedAt: "t" });
+    recorder.onDispatchResolved("corr-d6", "done");
+
+    expect(regenCall(calls)?.args[0]).toBe(dashboardScript);
+  });
+
+  test("MF_AGENT_STATE_DASHBOARD_SCRIPT overrides the derived sibling", () => {
+    const overrideScript = join(root, "override-dashboard.ts");
+    writeFileSync(overrideScript, "// stub\n");
+    const saved = process.env.MF_AGENT_STATE_DASHBOARD_SCRIPT;
+    process.env.MF_AGENT_STATE_DASHBOARD_SCRIPT = overrideScript;
+    const { spawn, calls } = recordingSpawn({
+      enqueue: { status: 0, stdout: enqueueStdout("corr-d7") },
+      claim: { status: 0 },
+      resolve: { status: 0 },
+      regen: { status: 0 },
+    });
+    try {
+      const recorder = new SubprocessDispatchStateRecorder(AGENT, {
+        instanceDir,
+        errandsScript,
+        spawn,
+        log: () => {},
+      });
+      recorder.onDispatchAccepted({ correlationId: "corr-d7", capability: "c", subject: "s", acceptedAt: "t" });
+      recorder.onDispatchResolved("corr-d7", "done");
+      expect(regenCall(calls)?.args[0]).toBe(overrideScript);
+    } finally {
+      if (saved !== undefined) process.env.MF_AGENT_STATE_DASHBOARD_SCRIPT = saved;
+      else delete process.env.MF_AGENT_STATE_DASHBOARD_SCRIPT;
     }
   });
 });

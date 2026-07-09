@@ -7,8 +7,20 @@
  * host durably records "we owe a response to this task" as a `work_item`:
  *
  *   accepted  → `errands.ts enqueue` (status=pending) + `errands.ts claim` (→ in_flight)
- *   completed → `errands.ts resolve --status=done`
- *   failed    → `errands.ts resolve --status=failed`
+ *   completed → `errands.ts resolve --status=done`   → `dashboard.ts regen`
+ *   failed    → `errands.ts resolve --status=failed` → `dashboard.ts regen`
+ *
+ * cortex#1720 S4a — a terminal resolve is a state transition, so it also
+ * refreshes the derived `dashboard.md` by subprocessing to the bundle's
+ * `dashboard.ts regen` (the CLI REQUIRES the explicit `regen` subcommand —
+ * agent-state#6; a bare invocation prints usage and exits 2). The regen is
+ * fire-and-forget: the dashboard is a DERIVED snapshot (never the source of
+ * truth), so a miss just leaves the previous file, which the next terminal
+ * resolve rebuilds. NO debounce/coalesce for v1 — one regen per terminal
+ * resolve is acceptable (the resolve subprocesses already dominate the cost).
+ * It runs under the SAME soft-skip + non-fatal + hardening contract as the
+ * errands calls and is entirely inside this recorder — the BrainConsumer is
+ * untouched, and a STATELESS agent (which has no recorder) never regenerates.
  *
  * Same contract as the S1 scaffold + S2 replay libs:
  *   - SUBPROCESS ONLY — cortex imports NOTHING from the bundle (platform
@@ -39,6 +51,7 @@
 
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import { resolveInstanceDir } from "./agent-state-scaffold";
 
 /** Default host label baked into cortex work_item env. */
@@ -105,6 +118,14 @@ export interface DispatchStateRecorderOptions {
   host?: string;
   /** Override path to the bundle's errands.ts (test seam). */
   errandsScript?: string;
+  /**
+   * Override path to the bundle's dashboard.ts (test seam / non-standard
+   * install). Default: the `dashboard.ts` SIBLING of the resolved errands
+   * script — the two always co-locate in the bundle's `skill/scripts/` dir, so
+   * deriving it keeps a single install path to configure while still allowing
+   * an independent override via this seam or `MF_AGENT_STATE_DASHBOARD_SCRIPT`.
+   */
+  dashboardScript?: string;
   /** Override the spawn used to invoke the bundle (test seam). */
   spawn?: RecorderSpawn;
   /** Override the logger (test seam). Default: stderr. */
@@ -162,6 +183,7 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
   private readonly host: string;
   private readonly instanceDir: string;
   private readonly errandsScript: string;
+  private readonly dashboardScript: string;
   private readonly spawn: RecorderSpawn;
   private readonly log: (line: string) => void;
 
@@ -177,6 +199,15 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
     this.host = opts.host ?? DEFAULT_HOST;
     this.instanceDir = opts.instanceDir ?? resolveInstanceDir(agent.id, this.host);
     this.errandsScript = opts.errandsScript ?? defaultErrandsScript();
+    // cortex#1720 S4a — the dashboard script is the `dashboard.ts` SIBLING of
+    // the errands script (both live in the bundle's `skill/scripts/` dir).
+    // Deriving it from the resolved errands path means a principal who repoints
+    // the errands install automatically repoints the dashboard too, while the
+    // explicit opt / `MF_AGENT_STATE_DASHBOARD_SCRIPT` still allow decoupling.
+    this.dashboardScript =
+      opts.dashboardScript ??
+      process.env.MF_AGENT_STATE_DASHBOARD_SCRIPT ??
+      join(dirname(this.errandsScript), "dashboard.ts");
     this.spawn = opts.spawn ?? defaultRecorderSpawn;
     this.log = opts.log ?? ((line) => process.stderr.write(line));
   }
@@ -251,6 +282,14 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
     // resolve --id <workItemId> --status done|failed. Terminal; the bundle
     // emits `work_item_resolved` itself (no host-side event append).
     this.run(["resolve", "--id", workItemId, "--status", status]);
+
+    // cortex#1720 S4a — the resolve is a state transition; refresh the derived
+    // dashboard. Fire-and-forget (result ignored) and unconditional on the
+    // resolve's own outcome: `dashboard.ts regen` rebuilds from the CURRENT DB
+    // state, so it is truthful whether or not this resolve landed (a failed
+    // resolve leaves the row `in_flight`, which the regenerated dashboard then
+    // shows honestly). One regen per terminal resolve; no debounce for v1.
+    this.regenerateDashboard(correlationId);
   }
 
   /**
@@ -263,12 +302,7 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
     let result: RecorderSpawnResult;
     try {
       result = this.spawn("bun", [this.errandsScript, ...args], {
-        env: {
-          ...process.env,
-          MF_AGENT_NAME: this.agent.id,
-          MF_HOST: this.host,
-          MF_INSTANCE_DIR: this.instanceDir,
-        },
+        env: this.stdEnv(),
       });
     } catch (err) {
       // A THROWING spawn (belt-and-braces — defaultRecorderSpawn returns an
@@ -295,6 +329,69 @@ export class SubprocessDispatchStateRecorder implements DispatchStateRecorder {
       return null;
     }
     return result.stdout !== undefined ? String(result.stdout) : "";
+  }
+
+  /**
+   * The standard bundle env every subprocess carries (`MF_AGENT_NAME`,
+   * `MF_HOST`, `MF_INSTANCE_DIR`). Shared by the errands `run()` path and the
+   * S4a dashboard regen so both target the SAME instance dir.
+   */
+  private stdEnv(): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      MF_AGENT_NAME: this.agent.id,
+      MF_HOST: this.host,
+      MF_INSTANCE_DIR: this.instanceDir,
+    };
+  }
+
+  /**
+   * cortex#1720 S4a — regenerate the derived `dashboard.md` after a terminal
+   * state transition. TOTAL + NON-THROWING + fire-and-forget, mirroring the
+   * errands soft-skip contract:
+   *   - bundle `dashboard.ts` absent  → logged soft-skip, no spawn;
+   *   - spawn throws / errors / exits non-zero → one log line, no throw.
+   *
+   * The dashboard is a DERIVED snapshot — a miss just leaves the previous file
+   * for the next terminal resolve to rebuild, so failure is never fatal and
+   * never affects the dispatch outcome. Invokes the REQUIRED `regen`
+   * subcommand (agent-state#6): a bare invocation prints usage and exits 2.
+   */
+  private regenerateDashboard(correlationId: string): void {
+    if (!existsSync(this.dashboardScript)) {
+      this.log(
+        `cortex: agent-state — dashboard regen SKIPPED for "${this.agent.id}" ` +
+          `(reason=script-absent; correlation=${correlationId})\n`,
+      );
+      return;
+    }
+
+    let result: RecorderSpawnResult;
+    try {
+      result = this.spawn("bun", [this.dashboardScript, "regen"], {
+        env: this.stdEnv(),
+      });
+    } catch (err) {
+      this.log(
+        `cortex: agent-state — dashboard regen FAILED for "${this.agent.id}" ` +
+          `(non-fatal; spawn threw: ${err instanceof Error ? err.message : String(err)})\n`,
+      );
+      return;
+    }
+    if (result.error) {
+      this.log(
+        `cortex: agent-state — dashboard regen FAILED for "${this.agent.id}" ` +
+          `(non-fatal; spawn-error: ${result.error.message})\n`,
+      );
+      return;
+    }
+    if (result.status !== 0) {
+      const stderr = result.stderr ? String(result.stderr).slice(0, 200) : "";
+      this.log(
+        `cortex: agent-state — dashboard regen FAILED for "${this.agent.id}" ` +
+          `(non-fatal; nonzero-exit status=${result.status}${stderr ? `; stderr: ${stderr}` : ""})\n`,
+      );
+    }
   }
 
   /** Parse `row.id` out of an `enqueue` stdout dump. Null on any shape miss. */
