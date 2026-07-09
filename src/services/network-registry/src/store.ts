@@ -1304,6 +1304,12 @@ export function rosterFromAdmissions(
     const capabilities = record.capabilities
       .filter((cap) => (cap.networks ?? []).includes(networkId))
       .map((cap) => cap.id);
+    // cortex#1852 — project the member's DERIVED `stack_id` (same read-time join
+    // the admission reads use, cortex#1723). `undefined` ⇒ underivable (no live
+    // stack matches `peer_pubkey`, or more than one does): OMIT the key entirely.
+    // Never `null`, never a guessed `{principal}/default` — the client's silent
+    // fabrication of that default is precisely the defect this closes.
+    const stackId = deriveAdmissionStackId(row, principals);
     members.push({
       principal_id: record.principal_id,
       principal_pubkey: record.principal_pubkey,
@@ -1315,6 +1321,7 @@ export function rosterFromAdmissions(
       admission_state: "ADMITTED",
       sealed: row.sealed_secret !== null,
       hub_authorized_at: row.hub_authorized_at,
+      ...(stackId !== undefined && { stack_id: stackId }),
     });
   }
   members.sort((a, b) => a.principal_id.localeCompare(b.principal_id));

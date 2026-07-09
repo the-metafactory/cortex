@@ -211,6 +211,20 @@ export interface NetworkRoster {
     admission_state?: AdmissionStatus;
     sealed?: boolean;
     hub_authorized_at?: string | null;
+    /**
+     * cortex#1852 — the member's `{principal_id}/{stack_slug}` stack id, DERIVED
+     * at read time by joining the admission row's `peer_pubkey` against the
+     * principal record's LIVE stacks (see `deriveAdmissionStackId`, cortex#1723).
+     *
+     * ADDITIVE + OPTIONAL, and deliberately so: the field is **omitted** (never
+     * `null`, never a fabricated `{principal}/default`) when the pubkey matches
+     * no live stack or MORE than one. Absence means "underivable" — a consumer
+     * must treat it as a fault and drop the peer, not fill in a default. The
+     * silent `{principal}/default` fallback the client used to apply is exactly
+     * the bug this field closes: it mis-scoped `andreas/meta-factory` presence
+     * to `federated.andreas.default.agent.>` and dropped it at Gate 1.
+     */
+    stack_id?: string;
   }[];
 }
 
