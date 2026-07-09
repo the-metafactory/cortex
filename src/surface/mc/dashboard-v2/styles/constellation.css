@@ -62,6 +62,12 @@
   /* network accents — meridian / tide */
   --mer: oklch(0.76 0.13 224);
   --tide: oklch(0.72 0.13 288);
+  /* federation accent — desaturated violet/indigo for ABSENT admitted peers.
+     Distinct from the bright-cyan local hub (--mer) AND from the vivid present-
+     foreign tide (--tide, hue 288): pushed toward indigo (hue 300) and pulled
+     DOWN in chroma so an absent peer reads as a quiet-but-visible federation
+     marker, not a live orb. */
+  --fed: oklch(0.66 0.085 300);
 
   /* status */
   --ok: oklch(0.80 0.13 162);

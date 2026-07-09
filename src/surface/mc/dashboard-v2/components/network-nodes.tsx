@@ -482,10 +482,13 @@ export interface FederatedPeerCardProps {
  * MC-D4 — pure presentational card for an ABSENT admitted federated peer.
  *
  * The peer principal is on the network roster (admitted) but has NO present agent
- * tile, so it draws as a DIMMED orb — a muted grey ring, NO glow — labelled with
- * the peer principal and a `federated · absent` sublabel. It marks "you are
- * federated with this principal; their stack just isn't live right now", so the
- * principal can see the whole federation, not only the parts currently online.
+ * tile. MC-D4 vis2 makes it clearly VISIBLE + DISTINCT (its first cut was a faint
+ * ~0.6-opacity grey dot that vanished on the near-black canvas): the orb now
+ * carries a DASHED ring in a desaturated federation-accent (violet/indigo —
+ * distinct from the bright-cyan local hub and every per-stack color), a subtle
+ * glow, a cross-network glyph (`⇄`), and a `federated · absent` sublabel above the
+ * peer principal. It reads as "you are federated with this principal; their stack
+ * just isn't live right now" — deliberately NOT a local agent circle.
  *
  * Presence-level only (ADR-0007): identity + membership verdict, never a session
  * interior. Not interactive — an absent peer has nothing local to open. Split
@@ -501,11 +504,16 @@ export function FederatedPeerCard({ data }: FederatedPeerCardProps) {
       data-fed-peer-absent="true"
       aria-label={`${data.principal} — federated peer (admitted, absent)`}
     >
-      {/* A muted grey ring — deliberately NO glow, distinct from the live orbs. */}
+      {/* A dashed federation-accent ring with a cross-network glyph — visible and
+          deliberately distinct from a local agent orb (which is a solid cyan
+          circle). The subtle glow + dashed treatment live in
+          constellation-canvas.css. */}
       <span
         className="network-node-orb network-node-orb-fed-peer"
         aria-hidden="true"
-      />
+      >
+        <span className="network-fed-peer-glyph">⇄</span>
+      </span>
       <span className="network-node-below">
         <span className="network-fed-peer-eyebrow dim">federated · absent</span>
         <span className="network-fed-peer-label">{data.principal}</span>

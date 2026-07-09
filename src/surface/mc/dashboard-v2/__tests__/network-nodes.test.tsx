@@ -499,4 +499,19 @@ describe("FederatedPeerCard (MC-D4 — absent admitted peer)", () => {
     const html = render({ verdict: "admitted-absent" });
     expect(html).toContain('data-fed-peer-verdict="admitted-absent"');
   });
+
+  it("renders a cross-network glyph so it reads as a federated (not local) node", () => {
+    // MC-D4 vis2: the absent peer must look DELIBERATELY different from a local
+    // agent orb — a small cross-network glyph (⇄) marks the federation boundary.
+    const html = render();
+    expect(html).toContain("⇄");
+    // The glyph sits in its own decorative span, aria-hidden (label carries meaning).
+    expect(html).toContain("network-fed-peer-glyph");
+  });
+
+  it("keeps the peer principal as the primary label", () => {
+    const html = render({ principal: "vincent" });
+    expect(html).toContain(">vincent<");
+    expect(html).toContain('data-fed-peer-principal="vincent"');
+  });
 });

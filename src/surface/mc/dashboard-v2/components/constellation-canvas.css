@@ -264,47 +264,75 @@
   color: color-mix(in oklch, var(--tide) 75%, var(--fg));
 }
 
-/* ── MC-D4 — absent admitted federated peers ─────────────────────────────────
- * An admitted roster member with NO present tile: a DIMMED grey orb (muted ring,
- * NO glow) + a `federated · absent` eyebrow. It marks the federation you belong
- * to even before the peer's stack comes up. Deliberately low-contrast so it never
- * reads as a live node; a dotted anchor edge ties it to the local hub. */
+/* ── MC-D4 vis2 — absent admitted federated peers (VISIBLE + distinct) ────────
+ * An admitted roster member with NO present tile. The first cut rendered this as
+ * a ~0.6-opacity grey dot with no glow, which VANISHED on the near-black canvas.
+ * vis2 makes it clearly visible AND deliberately unlike a local agent orb: a
+ * DASHED ring in the desaturated federation accent (--fed, violet/indigo — apart
+ * from the bright-cyan local --mer and the vivid present-foreign --tide), a
+ * SUBTLE glow (present but quieter than a live orb's), a cross-network ⇄ glyph,
+ * and a `federated · absent` eyebrow above the peer principal. It reads as a real
+ * federation node that just isn't live — never a faint speck. */
 .mc-skin .network-node-orb-fed-peer {
-  width: 22px;
-  height: 22px;
-  border: 1.5px dotted color-mix(in oklch, var(--faint) 70%, var(--fg));
-  background: color-mix(in oklch, var(--panel) 70%, transparent);
-  /* No box-shadow: absent peers do not glow. */
-  box-shadow: none;
-  opacity: 0.6;
+  width: 30px;
+  height: 30px;
+  /* Dashed federation-accent ring — the "federated link" signature. */
+  border: 1.75px dashed color-mix(in oklch, var(--fed) 82%, var(--fg));
+  background:
+    radial-gradient(
+      circle at 50% 40%,
+      color-mix(in oklch, var(--fed) 30%, transparent) 0%,
+      color-mix(in oklch, var(--fed) 10%, transparent) 60%,
+      transparent 74%
+    ),
+    color-mix(in oklch, var(--fed) 10%, var(--bg));
+  /* Subtle glow — present so it's legible, quieter than a live orb's bloom. */
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--fed) 35%, transparent),
+    0 0 16px -3px color-mix(in oklch, var(--fed) 50%, transparent);
+  opacity: 1;
 }
+/* The cross-network glyph centred in the orb, in the federation accent. */
+.mc-skin .network-fed-peer-glyph {
+  font-size: 15px;
+  line-height: 1;
+  color: color-mix(in oklch, var(--fg) 80%, var(--fed));
+  text-shadow: 0 0 7px color-mix(in oklch, var(--fed) 65%, transparent);
+}
+/* Card-level opacity is now near-full — the node is meant to be seen. */
 .mc-skin .network-node-fed-peer-absent {
-  opacity: 0.72;
+  opacity: 0.9;
 }
 .mc-skin .network-fed-peer-eyebrow {
   font-size: 9px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: color-mix(in oklch, var(--faint) 60%, var(--fg));
+  color: color-mix(in oklch, var(--fed) 55%, var(--fg));
 }
 .mc-skin .network-fed-peer-label {
   font-family: var(--mono);
   font-size: 11px;
-  color: color-mix(in oklch, var(--fg) 60%, var(--faint));
+  font-weight: 600;
+  color: color-mix(in oklch, var(--fg) 82%, var(--fed));
+  text-shadow: 0 0 8px color-mix(in oklch, var(--fed) 45%, transparent);
 }
 
-/* The dotted anchor edge (local hub → absent peer) + its label. */
+/* The dotted anchor edge (local hub → absent peer) + its label. Raised opacity
+ * (was 0.5 → invisible) and coloured in the federation accent so the long
+ * cross-cluster spoke reads as the "federated link". Kept dotted + static (an
+ * absent peer carries no flow). */
 .mc-skin .edge-fed-absent {
+  stroke: var(--fed);
   stroke-dasharray: 2 5;
-  opacity: 0.5;
+  opacity: 0.75;
   /* Static — an absent peer carries no flow. */
 }
 .mc-skin .mc-edge-fed-absent-label {
-  color: color-mix(in oklch, var(--faint) 70%, var(--fg));
-  border-color: color-mix(in oklch, var(--faint) 45%, var(--line));
+  color: color-mix(in oklch, var(--fed) 70%, var(--fg));
+  border-color: color-mix(in oklch, var(--fed) 45%, var(--line));
 }
 .mc-skin .mc-edge-fed-absent-label span[aria-hidden="true"] {
-  color: var(--faint);
+  color: var(--fed);
 }
 
 /* ── Capability + state chips ───────────────────────────────────────────────*/
