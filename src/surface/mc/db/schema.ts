@@ -634,11 +634,18 @@ export const SCHEMA_SQL: string[] = [
   //     never from the attacker-controlled payload — so a peer row can NEVER be
   //     shown as local (the negative control's identity half).
   // Fresh DBs get them here; existing DBs backfill via COLUMN_ADD_MIGRATIONS.
+  // #1661 (MC folds) — three cortex-LOCAL families join the four signal-side
+  // ones: `access` (system.access.* + system.admission.*), `dispatch`
+  // (system.dispatch.stage + system.inbound.aborted + system.bus.process), and
+  // `reflex` (reflex.activation.*). The `family` CHECK below is widened for
+  // fresh DBs; existing DBs migrate via the guarded observability_events entry
+  // in REBUILD_MIGRATIONS (SQLite can't ALTER a CHECK). Grouping decision
+  // (3 families, not 6) is the principal's #1661 (B) call.
   `CREATE TABLE IF NOT EXISTS observability_events (
     id TEXT PRIMARY KEY,
     envelope_id TEXT NOT NULL UNIQUE,
     family TEXT NOT NULL
-      CHECK(family IN ('signal','collector','federation','transport')),
+      CHECK(family IN ('signal','collector','federation','transport','access','dispatch','reflex')),
     type TEXT NOT NULL,
     stack_id TEXT,
     summary TEXT,
@@ -908,6 +915,67 @@ export const REBUILD_MIGRATIONS: RebuildMigration[] = [
          ON tasks(status, priority, updated_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_tasks_iteration ON tasks(iteration_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tasks_work_item ON tasks(work_item_id)`,
+    ],
+  },
+
+  // #1661 (MC folds) — widen the observability_events `family` CHECK for
+  // EXISTING DBs. Fresh DBs already get the 7-family CHECK from SCHEMA_SQL;
+  // this rebuild relaxes the OLD 4-family CHECK the running U2.1/U3.3 stacks
+  // carry (SQLite can't `ALTER ... DROP CONSTRAINT`). Same recipe as tasks:
+  // new table → copy (explicit column list) → drop → rename → recreate indexes,
+  // run by init.ts AFTER COLUMN_ADD_MIGRATIONS with foreign_keys OFF, inside a
+  // transaction, verified by foreign_key_check.
+  //
+  // ⚠️ FULL-SHAPE: `steps` reproduces the table's ENTIRE current shape = base
+  // SCHEMA_SQL columns + every COLUMN_ADD_MIGRATIONS column (origin_kind,
+  // origin_peer — P-14 U3.3 / #937). Because init.ts runs COLUMN_ADD_MIGRATIONS
+  // before this rebuild, on a pre-U3.3 old-shape DB both origin columns already
+  // exist on the live table by the time the INSERT copies them. If a future
+  // column-add lands on observability_events, it MUST be added to the DDL below
+  // until this migration is retired. No table references observability_events
+  // (append-only projection), so foreign_key_check is trivially clean here.
+  {
+    table: "observability_events",
+    // Old shape carried exactly the 4-family CHECK. Match it precisely so the
+    // rebuild is idempotent: post-migration the CHECK lists 7 families and this
+    // regex no longer matches, so it never re-runs.
+    detect: (sql) =>
+      /CHECK\s*\(\s*family\s+IN\s*\(\s*'signal'\s*,\s*'collector'\s*,\s*'federation'\s*,\s*'transport'\s*\)\s*\)/i.test(
+        sql,
+      ),
+    steps: [
+      // New observability_events shape: identical to SCHEMA_SQL's CREATE TABLE
+      // (incl. origin_kind/origin_peer from U3.3) with the family CHECK widened
+      // to the 7 families. envelope_id keeps its UNIQUE (idempotent redelivery).
+      `CREATE TABLE observability_events_new (
+        id TEXT PRIMARY KEY,
+        envelope_id TEXT NOT NULL UNIQUE,
+        family TEXT NOT NULL
+          CHECK(family IN ('signal','collector','federation','transport','access','dispatch','reflex')),
+        type TEXT NOT NULL,
+        stack_id TEXT,
+        summary TEXT,
+        payload TEXT NOT NULL DEFAULT '{}',
+        origin_kind TEXT NOT NULL DEFAULT 'local'
+          CHECK(origin_kind IN ('local','foreign')),
+        origin_peer TEXT,
+        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      // Explicit column list (never SELECT *) so a shape mismatch errors loudly.
+      `INSERT INTO observability_events_new
+         (id, envelope_id, family, type, stack_id, summary, payload,
+          origin_kind, origin_peer, timestamp)
+       SELECT
+          id, envelope_id, family, type, stack_id, summary, payload,
+          origin_kind, origin_peer, timestamp
+       FROM observability_events`,
+      `DROP TABLE observability_events`,
+      `ALTER TABLE observability_events_new RENAME TO observability_events`,
+      // Recreate the indexes (SCHEMA_SQL's timestamp + family, and the U3.3
+      // origin composite that COLUMN_ADD_MIGRATIONS' post[] declares).
+      `CREATE INDEX IF NOT EXISTS idx_observability_timestamp ON observability_events(timestamp)`,
+      `CREATE INDEX IF NOT EXISTS idx_observability_family ON observability_events(family, timestamp DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
     ],
   },
 ];
