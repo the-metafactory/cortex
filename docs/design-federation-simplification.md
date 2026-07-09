@@ -6,7 +6,7 @@
 
 ## 1. Problem — the evidence
 
-To see one admitted peer's presence dot, a principal currently traverses **seven concepts across four config surfaces owned by two operators**: registry admission → `peers[]` → acceptance offerings → hub-minted cred `allow-sub` → NSC account import → signing posture → ADR-0001 subject grammar.
+To see one admitted peer's presence dot, a principal currently traverses **seven concepts across four config surfaces owned by two principals**: registry admission → `peers[]` → acceptance offerings → hub-minted cred `allow-sub` → NSC account import → signing posture → ADR-0001 subject grammar.
 
 What the live session actually hit:
 

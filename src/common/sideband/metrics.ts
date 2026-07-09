@@ -46,7 +46,7 @@ export interface SidebandMetricSample {
 }
 
 /**
- * Hook-latency p50 / p95 / p99 of `pai_duration_ms`, in milliseconds. A field
+ * Hook-latency p50 / p95 / p99 of `signal_duration_ms`, in milliseconds. A field
  * is `null` when the histogram had no samples in the window.
  *
  * Mirrors signal `SidebandLatencyPercentiles`.
@@ -61,8 +61,8 @@ export interface SidebandLatencyPercentiles {
  * The signal-overview panels as JSON. Rates are per-second over `window`.
  *
  * Mirrors signal `SidebandMetricsSummary`. Metric provenance (signal
- * `architecture.md` §3.2): `pai_tool_calls_total`, `pai_agent_spawns_total`,
- * `pai_events_total` (counters → rates), `pai_duration_ms` (histogram → p50/95/99).
+ * `architecture.md` §3.2): `signal_tool_calls_total`, `signal_agent_spawns_total`,
+ * `signal_events_total` (counters → rates), `signal_duration_ms` (histogram → p50/95/99).
  */
 export interface SidebandMetricsSummary {
   /** The rate window the panels were evaluated over (e.g. `5m`). */

@@ -5,7 +5,7 @@
  * (PromQL over VictoriaMetrics), proxied per U0.1:
  *   1. **Rates** — per-second tool-call rate (by tool), agent-spawn rate, and
  *      overall event rate, evaluated over the selected window.
- *   2. **Hook latency** — p50 / p95 / p99 of `pai_duration_ms`, in ms.
+ *   2. **Hook latency** — p50 / p95 / p99 of `signal_duration_ms`, in ms.
  *   3. **>14d history** — events past MC's 14-day local projection prune, sourced
  *      from VictoriaLogs via `/search?since=30d`. This is the HONEST source: the
  *      local `observability_events` table prunes at 14 days
