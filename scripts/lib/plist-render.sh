@@ -2,11 +2,11 @@
 # Cortex plist rendering helpers — sourced by postinstall.sh and postupgrade.sh.
 #
 # Both lifecycle scripts need to render the same launchd plists from the
-# in-repo `__CORTEX_DIR__` / `__BUN_PATH__` / `__HOME__` / `__AGENT_NAME__`
-# templates. Holly cortex#52 round 1 major: the sed block + awk extractor
-# were duplicated near-verbatim in two places, so an edit to one and not the
-# other would silently diverge install-vs-upgrade behaviour. Consolidated
-# here so the divergence class of bug can't happen.
+# in-repo `__CORTEX_DIR__` / `__BUN_PATH__` / `__HOME__` templates. Holly
+# cortex#52 round 1 major: the sed block + awk extractor were duplicated
+# near-verbatim in two places, so an edit to one and not the other would
+# silently diverge install-vs-upgrade behaviour. Consolidated here so the
+# divergence class of bug can't happen.
 #
 # Usage (in the calling script):
 #   source "${SCRIPT_DIR}/lib/plist-render.sh"
@@ -33,33 +33,6 @@ resolve_bun_path() {
   printf '%s' "${bun_path}"
 }
 
-# Extract the first agent id from a cortex.yaml file. Falls back to "cortex"
-# when the file is missing or the awk parse fails. Stays awk-only to avoid
-# dragging in a yaml lib at install time.
-#
-# Output is validated against `^[a-zA-Z0-9_-]+$` — the same regex shape the
-# cortex-config schema enforces on `agents[].id`. A name containing the sed
-# delimiter `|`, the XML special chars `<` / `&`, or whitespace would
-# silently emit a malformed plist when interpolated into the
-# `<string>__AGENT_NAME__</string>` slot. Bailing here surfaces the bad
-# config at install time with a pointed error message instead of letting
-# launchd crash-loop a half-rendered plist (Holly cortex#52 round 3
-# security warning).
-extract_agent_name() {
-  local cortex_yaml="$1"
-  local name="cortex"
-  if [ -f "${cortex_yaml}" ]; then
-    name=$(awk '/^agents:/{found=1; next} found && /^[ \-]*id:/{sub(/.*id:[ ]*/, ""); gsub(/["'\'']/, ""); gsub(/#.*/, ""); print; exit}' "${cortex_yaml}" | xargs || true)
-    name="${name:-cortex}"
-  fi
-  if ! [[ "${name}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "  ⚠ refusing to render plist: agent id \"${name}\" contains characters outside [a-zA-Z0-9_-]" >&2
-    echo "    Fix the first \`agents[].id\` in ${cortex_yaml} (cortex-config schema requires lowercase alphanumeric + hyphen)." >&2
-    return 1
-  fi
-  printf '%s' "${name}"
-}
-
 # Extract the CANONICAL stack slug from a cortex config's `stack.id`.
 #
 # `stack.id` is `{principal}/{slug}` (e.g. `andreas/community` → `community`).
@@ -69,8 +42,8 @@ extract_agent_name() {
 # lifecycle scripts use as a *locator* (config_file_to_slug / the dir basename)
 # is COSMETIC and MUST equal it; drift is surfaced by warn_stack_identity_drift.
 #
-# Stays awk-only (no yaml dep at install time), mirroring extract_agent_name.
-# Scans only inside the top-level `stack:` block so the sibling `principal.id`
+# Stays awk-only (no yaml dep at install time). Scans only inside the
+# top-level `stack:` block so the sibling `principal.id`
 # and `agents[].id` keys are never mistaken for `stack.id`. Prints the trailing
 # segment after the last slash. Returns non-zero (prints nothing) when
 # `stack.id` is absent/unparseable — callers fall back to the filename locator.
@@ -175,8 +148,9 @@ resolve_stack_config_path() {
 # carries no agents; `agents[].id` lives in <slug>/stacks/<slug>.yaml. Under
 # the legacy monolith the agents block is in the monolith itself.
 #
-# Prints the absolute path of the file to parse for the agent id. The caller
-# must tolerate a missing file (extract_agent_name falls back to "cortex").
+# Prints the absolute path of the file to parse for the agent id / stack.id.
+# Callers must tolerate a missing file (e.g. extract_stack_id_slug returns
+# non-zero and its caller falls back to the filename locator).
 #
 # Args:
 #   $1 CONFIG_DIR — cortex config dir
@@ -272,7 +246,7 @@ warn_stack_identity_drift() {
     [ -z "${slug}" ] && continue
     stack_cfg="$(resolve_stack_agent_config_path "${config_dir}" "${slug}")"
     # stack.id absent/unparseable → nothing to compare against, skip silently
-    # (the filename locator stands; extract_agent_name's own fallback applies).
+    # (the filename locator stands as the fallback identity).
     id_slug="$(extract_stack_id_slug "${stack_cfg}")" || continue
     # Slug-scoped by design: we compare only stack.id's trailing segment to the
     # locator slug, because the launchd/systemd label is ai.meta-factory.cortex
@@ -288,15 +262,20 @@ warn_stack_identity_drift() {
 # Render the plist for a single stack slug into LAUNCH_DIR. Idempotent —
 # overwrites any previous render of the same filename.
 #
-# Slug-to-template mapping:
-#   meta-factory → src/services/ai.meta-factory.cortex.meta-factory.plist
-#                  (has __AGENT_NAME__ + __CONFIG_PATH__)
-#   work         → src/services/ai.meta-factory.cortex.work.plist
-#                  (has __CONFIG_PATH__)
-#   <other>      → src/services/ai.meta-factory.cortex.stack.plist
-#                  (generic template; uses __STACK_SLUG__ + __CONFIG_PATH__)
+# Slug-to-template mapping: every slug (including meta-factory and work) is
+# rendered from the single generic template:
+#   src/services/ai.meta-factory.cortex.stack.plist
+#   (uses __STACK_SLUG__ + __CONFIG_PATH__)
 #
-# All templates carry __CONFIG_PATH__ — the layout-aware absolute --config
+# cortex#1848: this used to special-case `meta-factory` and `work` onto two
+# committed plists that hardcoded a real personal deployment's identity
+# (CORTEX_AGENT_NAME/CORTEX_AGENT_ID) into a public repo. Those templates and
+# the special-case branches are gone — CORTEX_AGENT_NAME/CORTEX_AGENT_ID are
+# vestigial in this unit anyway (src/runner/cc-session.ts derives them from
+# config-driven opts, not from the daemon's own env), so there is nothing to
+# re-parameterise; every slug just gets the generic template.
+#
+# The template carries __CONFIG_PATH__ — the layout-aware absolute --config
 # path (cortex#717): the per-stack sentinel under the directory layout, or the
 # legacy root monolith. This is what stops `arc upgrade` reverting the
 # config-split.
@@ -341,57 +320,19 @@ render_stack_plist() {
     return 0
   fi
 
-  # Choose the right template and render.
-  case "${slug}" in
-    meta-factory)
-      local src="${cortex_dir}/src/services/ai.meta-factory.cortex.meta-factory.plist"
-      if [ ! -f "${src}" ]; then
-        echo "  ⚠ Template missing: ${src}" >&2
-        return 1
-      fi
-      # Agent id lives in stacks/<slug>.yaml under the dir layout, or the
-      # monolith under the legacy layout (cortex#717).
-      local agent_config
-      agent_config="$(resolve_stack_agent_config_path "${config_dir}" "${slug}")"
-      local agent_name
-      agent_name="$(extract_agent_name "${agent_config}")" || return 1
-      sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
-          -e "s|__BUN_PATH__|${bun_path}|g" \
-          -e "s|__HOME__|${HOME}|g" \
-          -e "s|__CONFIG_PATH__|${config_yaml}|g" \
-          -e "s|__AGENT_NAME__|${agent_name}|g" \
-          "${src}" > "${dst}"
-      echo "  ✓ meta-factory plist rendered → ${dst} (agent=${agent_name}, config=${config_yaml})"
-      ;;
-    work)
-      local src="${cortex_dir}/src/services/ai.meta-factory.cortex.work.plist"
-      if [ ! -f "${src}" ]; then
-        echo "  ⚠ Template missing: ${src}" >&2
-        return 1
-      fi
-      sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
-          -e "s|__BUN_PATH__|${bun_path}|g" \
-          -e "s|__HOME__|${HOME}|g" \
-          -e "s|__CONFIG_PATH__|${config_yaml}|g" \
-          "${src}" > "${dst}"
-      echo "  ✓ work plist rendered → ${dst} (config=${config_yaml})"
-      ;;
-    *)
-      # Generic stack — use the parameterised stack template.
-      local src="${cortex_dir}/src/services/ai.meta-factory.cortex.stack.plist"
-      if [ ! -f "${src}" ]; then
-        echo "  ⚠ Template missing: ${src}" >&2
-        return 1
-      fi
-      sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
-          -e "s|__BUN_PATH__|${bun_path}|g" \
-          -e "s|__HOME__|${HOME}|g" \
-          -e "s|__STACK_SLUG__|${slug}|g" \
-          -e "s|__CONFIG_PATH__|${config_yaml}|g" \
-          "${src}" > "${dst}"
-      echo "  ✓ ${slug} plist rendered → ${dst} (config=${config_yaml})"
-      ;;
-  esac
+  # Every slug renders from the generic, parameterised stack template.
+  local src="${cortex_dir}/src/services/ai.meta-factory.cortex.stack.plist"
+  if [ ! -f "${src}" ]; then
+    echo "  ⚠ Template missing: ${src}" >&2
+    return 1
+  fi
+  sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
+      -e "s|__BUN_PATH__|${bun_path}|g" \
+      -e "s|__HOME__|${HOME}|g" \
+      -e "s|__STACK_SLUG__|${slug}|g" \
+      -e "s|__CONFIG_PATH__|${config_yaml}|g" \
+      "${src}" > "${dst}"
+  echo "  ✓ ${slug} plist rendered → ${dst} (config=${config_yaml})"
 }
 
 # Render plists for relay + all discovered stacks into ${LAUNCH_DIR}.

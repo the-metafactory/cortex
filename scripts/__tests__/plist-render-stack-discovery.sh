@@ -180,44 +180,51 @@ assert_not_contains "readme.txt not included" "readme" "${SLUGS}"
 SLUG_COUNT="$(discover_stack_slugs "${CONFIG_DIR}" | wc -l | tr -d ' ')"
 assert_eq "3 cortex*.yaml → 3 slugs" "3" "${SLUG_COUNT}"
 
-# ─── Section 3: render_stack_plist — meta-factory ─────────────────
-printf '\n=== render_stack_plist: meta-factory ===\n'
+# ─── Section 3: render_stack_plist — meta-factory (generic template) ──
+# cortex#1848: the personal ai.meta-factory.cortex.meta-factory.plist
+# template (which hardcoded a real agent name via __AGENT_NAME__) is gone.
+# meta-factory is just another slug now — it renders from the same generic
+# ai.meta-factory.cortex.stack.plist template as every other stack.
+printf '\n=== render_stack_plist: meta-factory (generic template) ===\n'
 
-# Write a minimal meta-factory config with an agents[].id field.
+# Write a minimal meta-factory config with an agents[].id field. The agent id
+# is no longer read into the plist at all (no more __AGENT_NAME__ slot), so
+# this just proves render_stack_plist doesn't choke on a config that has one.
 cat > "${CONFIG_DIR}/cortex.yaml" <<'EOF'
 agents:
   - id: my-test-agent
     token: "fake"
 EOF
 
-MF_TEMPLATE="${REPO_ROOT}/src/services/ai.meta-factory.cortex.meta-factory.plist"
 MF_DST="${LAUNCH_DIR}/ai.meta-factory.cortex.meta-factory.plist"
 
-if [ -f "${MF_TEMPLATE}" ]; then
-  render_stack_plist "${REPO_ROOT}" "${LAUNCH_DIR}" "${CONFIG_DIR}" "meta-factory" "${MOCK_BIN}/bun"
-  assert_file_exists "meta-factory plist rendered" "${MF_DST}"
-  assert_contains "meta-factory plist contains label" "ai.meta-factory.cortex.meta-factory" "$(cat "${MF_DST}")"
-  assert_contains "meta-factory plist agent name substituted" "my-test-agent" "$(cat "${MF_DST}")"
-  assert_not_contains "meta-factory plist has no leftover placeholder" "__AGENT_NAME__" "$(cat "${MF_DST}")"
-  assert_not_contains "meta-factory plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${MF_DST}")"
-else
-  printf '  ⊘ template %s not found — skipping meta-factory render tests\n' "${MF_TEMPLATE}"
-fi
+render_stack_plist "${REPO_ROOT}" "${LAUNCH_DIR}" "${CONFIG_DIR}" "meta-factory" "${MOCK_BIN}/bun"
+assert_file_exists "meta-factory plist rendered" "${MF_DST}"
+assert_contains "meta-factory plist contains label" "ai.meta-factory.cortex.meta-factory" "$(cat "${MF_DST}")"
+assert_contains "meta-factory plist CORTEX_CHANNEL substituted from slug" "meta-factory" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist has no leftover __STACK_SLUG__ placeholder" "__STACK_SLUG__" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist carries no CORTEX_AGENT_NAME (vestigial, removed)" "CORTEX_AGENT_NAME" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist carries no CORTEX_AGENT_ID (vestigial, removed)" "CORTEX_AGENT_ID" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist agent id NOT embedded (personal-identity template deleted)" "my-test-agent" "$(cat "${MF_DST}")"
 
-# ─── Section 4: render_stack_plist — work ─────────────────────────
-printf '\n=== render_stack_plist: work ===\n'
+# ─── Section 4: render_stack_plist — work (generic template) ─────────
+# cortex#1848: the personal ai.meta-factory.cortex.work.plist template (which
+# hardcoded CORTEX_AGENT_NAME=luna / CORTEX_AGENT_ID=luna-work) is gone. work
+# is just another slug now — same generic template as everything else.
+printf '\n=== render_stack_plist: work (generic template) ===\n'
 
-WORK_TEMPLATE="${REPO_ROOT}/src/services/ai.meta-factory.cortex.work.plist"
 WORK_DST="${LAUNCH_DIR}/ai.meta-factory.cortex.work.plist"
 
-if [ -f "${WORK_TEMPLATE}" ]; then
-  render_stack_plist "${REPO_ROOT}" "${LAUNCH_DIR}" "${CONFIG_DIR}" "work" "${MOCK_BIN}/bun"
-  assert_file_exists "work plist rendered" "${WORK_DST}"
-  assert_contains "work plist contains label" "ai.meta-factory.cortex.work" "$(cat "${WORK_DST}")"
-  assert_not_contains "work plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${WORK_DST}")"
-else
-  printf '  ⊘ template %s not found — skipping work render tests\n' "${WORK_TEMPLATE}"
-fi
+render_stack_plist "${REPO_ROOT}" "${LAUNCH_DIR}" "${CONFIG_DIR}" "work" "${MOCK_BIN}/bun"
+assert_file_exists "work plist rendered" "${WORK_DST}"
+assert_contains "work plist contains label" "ai.meta-factory.cortex.work" "$(cat "${WORK_DST}")"
+assert_contains "work plist CORTEX_CHANNEL substituted from slug" "work" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist has no leftover __STACK_SLUG__ placeholder" "__STACK_SLUG__" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist carries no CORTEX_AGENT_NAME (vestigial, removed)" "CORTEX_AGENT_NAME" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist carries no CORTEX_AGENT_ID=luna-work (personal identity, removed)" "luna-work" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist carries no luna identity (personal identity, removed)" "luna" "$(cat "${WORK_DST}")"
 
 # ─── Section 5: render_stack_plist — generic (halden) ─────────────
 printf '\n=== render_stack_plist: halden (generic template) ===\n'
@@ -333,7 +340,11 @@ assert_eq "split: meta-factory agent-config = stacks/<slug>.yaml" \
   "${SPLIT_DIR}/meta-factory/stacks/meta-factory.yaml" \
   "$(resolve_stack_agent_config_path "${SPLIT_DIR}" "meta-factory")"
 
-# --- render meta-factory: --config points at sentinel; agent id from stacks/ ---
+# --- render meta-factory (generic template): --config points at sentinel ---
+# cortex#1848: render_stack_plist no longer reads an agent id at all (the
+# __AGENT_NAME__ slot + extract_agent_name were removed with the personal
+# meta-factory.plist template), so this only proves the --config path
+# resolution stays layout-aware and no agent identity leaks into the output.
 render_stack_plist "${REPO_ROOT}" "${SPLIT_LAUNCH}" "${SPLIT_DIR}" "meta-factory" "${MOCK_BIN}/bun"
 MF_SPLIT="${SPLIT_LAUNCH}/ai.meta-factory.cortex.meta-factory.plist"
 assert_file_exists "split: meta-factory plist rendered" "${MF_SPLIT}"
@@ -341,7 +352,7 @@ assert_contains "split: meta-factory --config = sentinel" \
   "${SPLIT_DIR}/meta-factory/meta-factory.yaml" "$(cat "${MF_SPLIT}")"
 assert_not_contains "split: meta-factory --config is NOT the monolith" \
   "<string>${SPLIT_DIR}/cortex.yaml</string>" "$(cat "${MF_SPLIT}")"
-assert_contains "split: meta-factory agent id read from stacks/<slug>.yaml" \
+assert_not_contains "split: meta-factory plist carries no agent id (agent identity no longer rendered)" \
   "agent-meta-factory" "$(cat "${MF_SPLIT}")"
 assert_not_contains "split: meta-factory did NOT read monolith agent id" \
   "monolith-agent" "$(cat "${MF_SPLIT}")"

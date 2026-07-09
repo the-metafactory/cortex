@@ -51,8 +51,7 @@ echo "  ✓ Nested symlinks refreshed"
 # layout-aware. Under the directory layout that is stacks/<slug>.yaml (the
 # sentinel <slug>.yaml is a pointer with no stack block); under the legacy
 # monolith it is the monolith itself. resolve_stack_agent_config_path() gives
-# us that path — the same file extract_agent_name reads agents[].id from, and
-# the file where stack.id lives.
+# us that path — the file where agents[].id and stack.id live.
 echo "  Provisioning stack signing identity..."
 source "${SCRIPT_DIR}/lib/stack-identity-provision.sh"
 source "${SCRIPT_DIR}/lib/plist-render.sh"

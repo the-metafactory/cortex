@@ -44,7 +44,7 @@ Internal componentisation (per `docs/architecture.md` §8):
 - `src/cli/` — Principal CLIs: `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI). The Discord CLI is no longer here — it was extracted to the `metafactory-discord` arc bundle (ADR-0017, epic #1171); cortex consumes it as a dependency. Only the live Discord adapter (`src/adapters/discord/`) stays in cortex.
 - `src/renderers/` — Renderer interface + dashboard renderer + pagerduty renderer (the G-1111 §4.6 fail-safe pair).
 - `src/common/` — Shared types + utilities: agent-detection, event-processor, event-utils, github-events, agents/, config/, timeout, types/, usage.
-- `src/services/` — launchd plists: `ai.meta-factory.cortex.meta-factory.plist` (metafactory dev stack), `ai.meta-factory.cortex.work.plist` (parallel work stack — cortex#244), `ai.meta-factory.cortex.relay.plist` (shared relay).
+- `src/services/` — launchd plists: `ai.meta-factory.cortex.stack.plist` (generic template — every discovered stack, incl. `meta-factory`/`work`, renders from this one; cortex#1848 removed the two personal-slug templates), `ai.meta-factory.cortex.relay.plist` (shared relay).
 - `src/settings/` — `cortex-hooks.json` (CC hook registration).
 - Config: `~/.config/cortex/cortex.yaml` (post-MIG-7.9 — migrated from grove-v2 `~/.config/grove/bot.yaml` via `migrate-config`).
 
