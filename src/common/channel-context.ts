@@ -1,7 +1,10 @@
 /**
  * G-204c: Channel & Thread Context Routing
- * Maps Discord channel/thread names to GitHub repos and entities.
+ * Maps surface channel/thread names to GitHub repos and entities.
  * Channel naming IS the config — no bot.yaml changes needed.
+ *
+ * Platform-neutral: every surface that follows the channel-routing SOP
+ * (Discord, Mattermost, Slack, PAI sessions) resolves through here.
  *
  * Convention:
  *   #grove (channel)                → repo: the-metafactory/grove
@@ -22,10 +25,10 @@ export interface ChannelContext {
 }
 
 /**
- * Resolve a Discord channel + thread name to a repo/entity context.
+ * Resolve a surface channel + thread name to a repo/entity context.
  *
- * @param channelName - Discord channel name (e.g. "grove")
- * @param threadName - Discord thread name (e.g. "grove/issue/43"), or null
+ * @param channelName - Surface channel name (e.g. "grove")
+ * @param threadName - Surface thread name (e.g. "grove/issue/43"), or null
  * @param repos - Configured repo list in "owner/repo" format
  */
 export function resolveChannelContext(
@@ -77,7 +80,9 @@ export function resolveChannelContext(
 }
 
 /**
- * Resolve a GROVE_CHANNEL value (from PAI sessions) to a repo context.
+ * Resolve a CORTEX_CHANNEL value (from PAI sessions) to a repo context.
+ * (The legacy GROVE_CHANNEL name is accepted by the EventLogger shim
+ * until MIG-8; CORTEX_CHANNEL is canonical.)
  * Same logic as channel name resolution — if the channel name matches
  * a repo short name, it's scoped to that repo.
  */
