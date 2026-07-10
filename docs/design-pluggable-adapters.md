@@ -374,6 +374,12 @@ The renderer track runs **in parallel with, and behind, the adapter track**: it 
 
 ## 10. Open questions for the principal
 
+> **✅ ALL RATIFIED 2026-07-11.** The principal accepted D1–D5 and every recommendation below.
+> **OQ9 is resolved as (b) + (a):** boot **hard-fails** when `local.{principal}.system.>` coverage drops below two distinct platform classes, **and** first-party renderer bundles are exempt from the default-off `system.plugins.external` flag. The risk is deliberately moved from *silent no-page* to *loud no-boot* — a stack that cannot page refuses to start rather than running blind. See ADR-0024 §OQ9 for the implementation constraints (config-error vs install-state-error must be distinguished; "first-party" must be a checkable property, not a naming convention; inert `dashboard` must not satisfy coverage alone).
+> **S12b (pagerduty extraction) is unblocked**, but MUST land the boot-coverage hard-fail before or with the extraction, never after.
+> The questions are retained below as the decision record.
+
+
 - **OQ1 — compat gate (pinned #1):** confirm SDK-range-primary + loader-authoritative, or prefer cortex-version-range? (§4)
 - **OQ2 — fallback (pinned #2):** delete-on-extraction with mock-only anchor, or a time-boxed in-tree fallback? (§7)
 - **OQ3 — hot-reload bar (pinned #3):** boot-discovery-only v1, or runtime verbs in v1? (§5)

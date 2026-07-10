@@ -1,6 +1,6 @@
 # ADR-0024 — Pluggable surface plugins: adapters and renderers, out-of-tree, arc-installable, compat-gated, in-process
 
-**Status:** **proposed** (HOLD — awaiting principal ratification; do NOT merge as accepted) · **Date:** 2026-07-09 (renderer fold-in 2026-07-11) · **Lifts the deferral in:** [ADR-0017](0017-surface-tooling-arc-bundles.md) §Alternatives L64–67 (0017 itself is NOT edited) · **Reverses:** the *"renderers are static across hot-reload"* decision documented at `src/renderers/types.ts:45-57` · **Refs:** epic [#1784](https://github.com/the-metafactory/cortex/issues/1784), S0 [#1785](https://github.com/the-metafactory/cortex/issues/1785), `docs/design-pluggable-adapters.md`, [ADR-0005](0005-mission-control-integration-architecture.md) §4 (demotes the dashboard ring buffer), [ADR-0012](0012-external-operator-account-isolation.md) (process-isolation precedent), [ADR-0018](0018-admission-gate-and-leaf-secret-distribution.md)/[ADR-0023](0023-federation-leaf-credential-model.md) (signing precedent), `src/gateway/gateway-adapters.ts`, `src/common/types/surfaces.ts`, `src/adapters/types.ts`, `src/renderers/{types,index}.ts`, `src/bus/surface-router.ts`, F-092 (config hot-reload), C-110 (web adapter), G-1111 §4.6 (fail-safe renderer pairing)
+**Status:** **accepted** (ratified by the principal 2026-07-11) · **Date:** 2026-07-09 (renderer fold-in + ratification 2026-07-11) · **Lifts the deferral in:** [ADR-0017](0017-surface-tooling-arc-bundles.md) §Alternatives L64–67 (0017 itself is NOT edited) · **Reverses:** the *"renderers are static across hot-reload"* decision documented at `src/renderers/types.ts:45-57` · **Refs:** epic [#1784](https://github.com/the-metafactory/cortex/issues/1784), S0 [#1785](https://github.com/the-metafactory/cortex/issues/1785), `docs/design-pluggable-adapters.md`, [ADR-0005](0005-mission-control-integration-architecture.md) §4 (demotes the dashboard ring buffer), [ADR-0012](0012-external-operator-account-isolation.md) (process-isolation precedent), [ADR-0018](0018-admission-gate-and-leaf-secret-distribution.md)/[ADR-0023](0023-federation-leaf-credential-model.md) (signing precedent), `src/gateway/gateway-adapters.ts`, `src/common/types/surfaces.ts`, `src/adapters/types.ts`, `src/renderers/{types,index}.ts`, `src/bus/surface-router.ts`, F-092 (config hot-reload), C-110 (web adapter), G-1111 §4.6 (fail-safe renderer pairing)
 
 **Vocabulary (`CONTEXT.md` is authoritative).** A **platform adapter** ("adapter") is agent-bound, inbound *and* outbound, one live connection per surface. A **renderer** is non-agent-bound, outbound only, with a `start`/`stop` lifecycle. A **render target** is the surface-router's render-only subscriber contract — named `SurfaceAdapter` in code today, a misnomer, and **not an adapter**. A **surface plugin** ("plugin") is an adapter *or* a renderer packaged as a separately-installable unit; it declares its `kind`. A **bundle** is arc's delivery unit — a plugin ships *in* a bundle; they are not synonyms.
 
@@ -71,22 +71,41 @@ A **platform adapter** and a **renderer** remain distinct concepts — `CONTEXT.
 
 ## Pinned-decision status (the five the ADR must settle — HOLD)
 
-| # | Decision | Recommendation | Status |
-|---|---|---|---|
-| D1 | Compat gate + who refuses | SDK semver range; loader authoritative; arc install advisory. One SDK/one gate for both kinds | **awaiting principal** |
-| D2 | In-tree implementations after extraction | Delete on extraction; **mock adapter + dashboard renderer** are the permanent anchors; no fallback (OQ8) | **awaiting principal** |
-| D3 | Hot-reload MVP bar | Boot-time discovery in v1 (S6); runtime verbs separate (S8). Renderer half is small (`unregister()` exists) | **awaiting principal** |
-| D4 | Trust statement | In-process/full authority accepted for v1 + 4 mitigations; IPC is the named escalation. **No renderer carve-out** | **awaiting principal** |
-| D5 | Plugin classes | **Two classes, one SDK barrel + one loader.** Merged-class and adapters-only both rejected | **awaiting principal** |
+## Pinned-decision status — RATIFIED 2026-07-11
 
-**New open questions the renderer fold-in raises** (full text in `docs/design-pluggable-adapters.md` §10):
+All five pinned decisions and all outstanding open questions were ratified by the principal (Andreas) on 2026-07-11.
 
-| OQ | Question | Recommendation |
+| # | Decision | Ratified as |
 |---|---|---|
-| OQ8 | Does D2 need a `dashboard` exception? | **Yes** — reword D2 to "no plugin has two sources of truth"; dashboard + mock are the never-extracted anchors |
-| OQ9 | `pagerduty` extraction vs G-1111 §4.6 vs the OQ6 default-off flag (a *secure* default for adapters is *fail-open* for a pager) | Hard-fail boot when `system.>` coverage < 2 classes, **and** exempt first-party renderer bundles from the flag. **HOLD S12b until settled** |
-| OQ10 | Add optional `renderers[].id` (defaulting to `kind`) in S3? | **Yes** — required for a `(kind, id)` registry and a future `unload` verb |
-| OQ11 | `cli-tail`/`webhook-out`: delete from the enum, or born as bundles? | **Born as bundles**; ship `cli-tail` inside S6 as the loader's end-to-end proof |
+| D1 | Compat gate + who refuses | SDK semver range; loader authoritative; arc install advisory. One SDK/one gate for both kinds | **✅ accepted** |
+| D2 | In-tree implementations after extraction | "No plugin has two sources of truth" — a plugin that ships as a bundle has no in-tree copy; **mock adapter + dashboard renderer** are the permanent never-extracted anchors. No fallback | **✅ accepted (per OQ8)** |
+| D3 | Hot-reload MVP bar | Boot-time discovery in v1 (S6); runtime verbs separate (S8) | **✅ accepted** |
+| D4 | Trust statement | In-process/full authority accepted for v1 + 4 mitigations; IPC is the named escalation. **No renderer carve-out** — renderers hold real secrets (`routingKey`, `authHeader`) | **✅ accepted** |
+| D5 | Plugin classes | **Two classes, one SDK barrel + one loader.** Merged-class and adapters-only both rejected | **✅ accepted** |
+
+### OQ9 — RATIFIED: fail loud, never page into the void
+
+**Decision: (b) + (a).** A stack whose `local.{principal}.system.>` coverage drops below **two distinct platform classes** **hard-fails boot**, naming the missing bundle and the `arc install` that fixes it. **First-party renderer bundles are exempt from the default-off `system.plugins.external` flag**, so an installed first-party pager loads without the principal opting in.
+
+**Rationale.** A default that is *secure* for adapters ("don't load third-party code into the daemon") is **fail-open** for a pager ("don't page"). Between the two failure modes — a stack that refuses to start, and a stack that runs blind while believing it is monitored — the loud one is correct for an alerting sink. The risk is deliberately moved from *silent no-page* to *loud no-boot*.
+
+**Implementation constraints this imposes:**
+- The G-1111 §4.6 coverage check fires at **config-load** (`src/common/types/cortex-config.ts`), not in the Zod schema. It must learn to distinguish *"you configured one sink"* (a **config** error) from *"you configured two, one's bundle isn't loaded"* (an **install-state** error). Two distinct messages; the second names the bundle and the remedy.
+- "First-party" must be a checkable property of a bundle, not a naming convention. Define it where the loader can evaluate it (S6), and record it — an unchecked "first-party" exemption is a trust hole wearing a friendly name.
+- `DashboardRenderer` is **inert** (ADR-0005 §4): it counts toward the *class* pair but delivers nothing. Coverage counting must not be fooled into treating "dashboard alone" as adequate — that is the exact fail-open this decision closes.
+
+**Consequence for S12b:** the pagerduty renderer extraction is **unblocked**, but MUST land the boot-coverage hard-fail *before or with* the extraction, never after.
+
+### Remaining open questions — RATIFIED as recommended
+
+| OQ | Question | Ratified |
+|---|---|---|
+| OQ5 | SDK-versioning discipline / changelog ownership | as recommended |
+| OQ6 | External-plugin loading default-off | **Yes**, default-off, renamed `system.plugins.external` (it gates renderers too) — subject to OQ9's first-party renderer exemption |
+| OQ7 | Registry-by-name publication | stays a post-v1 HOLD |
+| OQ8 | Does D2 need a `dashboard` exception? | **Yes** — D2 reworded above; dashboard + mock are the never-extracted anchors, justified by config-compat + G-1111 §4.6, **not** by Mission Control |
+| OQ10 | Add optional `renderers[].id` (defaulting to `kind`) in S3? | **Yes** — lands in S3, additive and non-breaking |
+| OQ11 | `cli-tail`/`webhook-out`: delete from the enum, or born as bundles? | **Born as bundles**; ship `cli-tail` inside S6 as the loader's end-to-end **load-path** proof (zero deletion risk), complementing pagerduty's **deletion-path** proof. Run both |
 | OQ12 | Who rewrites `src/renderers/types.ts:45-57`? | The S8 renderer sub-slice, citing this ADR |
 
 Also pending from the original draft: OQ5 (SDK changelog ownership), **OQ6 (rename `system.adapters.external` → `system.plugins.external`; it gates renderers too)**, OQ7 (registry-by-name publication stays a HOLD).
