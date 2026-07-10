@@ -386,7 +386,7 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 | Aspect | Detail |
 |--------|--------|
 | Cortex is a metafactory bundle | Installable via `arc upgrade cortex` once MIG-7 lands. Pre-cutover the package name is `Grove`; the rename to `Cortex` happens at MIG-7.7. |
-| Cortex's `arc-manifest.yaml` | Declares `provides:` — `~/bin/cortex` (the bot binary), `~/bin/discord` (principal CLI), `~/bin/cldyo-live` (CC instrumentation wrapper), CC hooks, skills. The same shape grove-v2 has today. |
+| Cortex's `arc-manifest.yaml` | Declares `provides:` — `~/.local/bin/cortex` (the bot binary), `~/.local/bin/cortex-relay` (event relay), `~/.local/bin/cldyo-live` (CC instrumentation wrapper), CC hooks, skills. (The `discord` CLI moved to the separate `metafactory-discord` bundle.) |
 | Cortex consumes other bundles indirectly | Principals install `myelin` (via arc) for the bus protocol; `signal` (via arc) for the observability tap; `cortex` (via arc) for the surface. Each is independently rolled out. |
 | Cortex does NOT runtime-import arc | arc is a build/install-time tool. At runtime cortex doesn't know it was installed by arc — it just finds its config at the configured path and runs. |
 | Cross-bundle dependencies | Declared via the `arc-manifest.yaml` `dependsOn:` field. Cortex declares `myelin` (the schema is vendored, but principals need myelin's CLI for identity-key provisioning per MIG-7's `nats.identity` config). signal is *recommended* but not required (cortex tolerates absent collector). |
