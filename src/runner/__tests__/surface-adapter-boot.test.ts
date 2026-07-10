@@ -121,6 +121,8 @@ function makeFakeAdapter(
   const base: PlatformAdapter & Record<string, unknown> = {
     platform: opts.platform,
     instanceId: opts.instanceId,
+    // cortex#1853 — per-surface outbound ceiling; irrelevant here, any value.
+    maxUploadBytes: 8 * 1024 * 1024,
     start: async () => {
       record.started = true;
     },

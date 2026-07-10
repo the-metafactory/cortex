@@ -43,6 +43,8 @@ import type {
 class FakeAdapter implements PlatformAdapter {
   readonly platform: string;
   readonly instanceId: string;
+  /** cortex#1853 — per-surface outbound ceiling; irrelevant here, any value. */
+  readonly maxUploadBytes = 8 * 1024 * 1024;
   /** What `getPlatformUserId()` resolves to. */
   platformUserId: string;
   /** If non-null, `start()` rejects with this error. */

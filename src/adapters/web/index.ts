@@ -212,6 +212,15 @@ function deriveAuthorId(
  */
 export class WebAdapter implements PlatformAdapter {
   readonly platform = "web";
+  /**
+   * cortex#1853 — the web surface `postResponse`s a JSON payload
+   * (`{ adapter_instance, target, type, text }`) to `broadcastUrl` and does not
+   * upload files at all, so no platform ceiling applies. We mirror core's
+   * per-file inbound cap (`ATTACHMENT_LIMITS.maxFileSizeBytes`, 10 MB) as a sane,
+   * conservative default rather than an arbitrary large number — if this surface
+   * ever grows file delivery, the value is already sensible.
+   */
+  readonly maxUploadBytes = 10 * 1024 * 1024;
   readonly instanceId: string;
 
   private binding: WebBinding;

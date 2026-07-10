@@ -185,6 +185,23 @@ export interface PlatformAdapter {
   readonly platform: string;
   /** Unique instance ID across all adapters */
   readonly instanceId: string;
+  /**
+   * cortex#1853 — the maximum size (bytes) of a SINGLE outbound file this
+   * platform accepts. Platform-specific, so it **travels with the adapter**:
+   * platform-neutral core (`src/runner/attachments.ts`, `src/bus/`) must never
+   * name a platform's ceiling. `collectOutputFiles()` takes this as an argument
+   * rather than reading a `discordMaxUploadBytes` constant.
+   *
+   * This is the natural home for the value when S12 (#1797) extracts the Discord
+   * adapter into its own arc bundle — the constant leaves core with the adapter.
+   * (Coordinate with S3 #1788's `AdapterFactoryRegistry`; when an `AdapterModule`
+   * shape lands, this field moves onto it unchanged.)
+   *
+   * Adapters MUST source this from the platform's documented ceiling, not a
+   * guess, and SHOULD err low: an under-estimate only filters an extra file out,
+   * whereas an over-estimate makes the platform reject the upload at post time.
+   */
+  readonly maxUploadBytes: number;
 
   /** Connect to the platform and start listening for messages */
   start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void>;

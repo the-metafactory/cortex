@@ -99,6 +99,13 @@ export interface SlackAdapterInfra {
  */
 export class SlackAdapter implements PlatformAdapter {
   readonly platform = "slack";
+  /**
+   * cortex#1853 — Slack's single-file upload ceiling: 1 GB, per Slack's
+   * file-sharing docs ("share just about any file type up to 1GB"). Note the
+   * 1 MB cap applies only to files uploaded as *snippets*, which this adapter
+   * does not use.
+   */
+  readonly maxUploadBytes = 1024 * 1024 * 1024;
   readonly instanceId: string;
 
   // cortex#235 r1#5 — agent + presence are reassigned by

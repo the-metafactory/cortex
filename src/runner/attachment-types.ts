@@ -88,6 +88,8 @@ export const ATTACHMENT_LIMITS = {
   tempFileTtlMs: 10 * 60 * 1000,
   /** Max total temp directory size (100MB) */
   maxTempDirSizeBytes: 100 * 1024 * 1024,
-  /** Discord's upload limit for outbound files (8MB) */
-  discordMaxUploadBytes: 8 * 1024 * 1024,
+  // cortex#1853 — `discordMaxUploadBytes` REMOVED. A platform's outbound-upload
+  // ceiling is platform-specific and must not live in platform-neutral core; it
+  // is now `PlatformAdapter.maxUploadBytes`, supplied by each adapter and passed
+  // into `collectOutputFiles()`. Every limit remaining here is surface-agnostic.
 };

@@ -119,6 +119,20 @@ export function outboundRootId(
 
 export class MattermostAdapter implements PlatformAdapter {
   readonly platform = "mattermost";
+  /**
+   * cortex#1853 — Mattermost's single-file upload ceiling.
+   *
+   * 100 MB is the documented DEFAULT of the server's `FileSettings.MaxFileSize`
+   * (104857600 bytes). This is an ADMIN-CONFIGURABLE server setting, so a given
+   * deployment may allow less. We use the documented default rather than the old
+   * behaviour of applying Discord's 8 MB — which silently dropped files this
+   * platform would happily have accepted (the #1853 defect).
+   *
+   * If a deployment lowers `MaxFileSize`, an oversized file is rejected at post
+   * time by the server rather than filtered here; making this config-driven is a
+   * follow-up, not a regression of the previous (always-8 MB) behaviour.
+   */
+  readonly maxUploadBytes = 100 * 1024 * 1024;
   readonly instanceId: string;
 
   private stopPoller: (() => void) | null = null;

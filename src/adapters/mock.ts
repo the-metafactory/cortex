@@ -23,6 +23,13 @@ const ALLOW_ALL: AccessDecision = {
 
 export class MockAdapter implements PlatformAdapter {
   readonly platform = "mock";
+  /**
+   * cortex#1853 — test double. Mutable (the `PlatformAdapter` contract declares
+   * it `readonly`, which a mutable property satisfies) so a test can drive the
+   * per-surface `collectOutputFiles()` boundary without standing up a real
+   * adapter. Defaults generous so existing tests are never filtered.
+   */
+  maxUploadBytes = 100 * 1024 * 1024;
   readonly instanceId: string;
 
   /** Recorded postResponse calls */

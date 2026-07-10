@@ -146,6 +146,19 @@ interface PendingResult {
 
 export class DiscordAdapter implements PlatformAdapter {
   readonly platform = "discord";
+  /**
+   * cortex#1853 — Discord's single-file upload ceiling, moved here from core's
+   * `ATTACHMENT_LIMITS.discordMaxUploadBytes`.
+   *
+   * Held at the long-standing 8 MB deliberately. Discord's published ceiling for
+   * a non-boosted server is ambiguous (support docs cite both 8 MB and "more than
+   * 10 MB"), and it rises with Server Boost level (L2 = 50 MB, L3 = 100 MB). Per
+   * the `PlatformAdapter.maxUploadBytes` contract we err LOW: an under-estimate
+   * only filters an extra file out, while an over-estimate makes Discord reject
+   * the upload at post time. Raise this only against a confirmed doc + the boost
+   * tier of the target guild — do not guess.
+   */
+  readonly maxUploadBytes = 8 * 1024 * 1024;
   readonly instanceId: string;
 
   private client: Client | null = null;

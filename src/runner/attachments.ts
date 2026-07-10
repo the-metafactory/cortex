@@ -330,8 +330,17 @@ export function cleanupExpiredDirs(): number {
 /**
  * Collect outbound files from a session's output directory.
  * Returns file paths that Claude created for sending back.
+ *
+ * cortex#1853 — `maxUploadBytes` is supplied by the TARGET surface's adapter
+ * (`PlatformAdapter.maxUploadBytes`), never read from a platform-named constant
+ * here: this module is platform-neutral core and is shared by Discord,
+ * Mattermost, Slack and Web. Passing Discord's ceiling to a Mattermost-bound
+ * response silently dropped files Mattermost would have accepted.
+ *
+ * @param sessionId       the attachment session whose output dir to scan
+ * @param maxUploadBytes  the target platform's single-file ceiling, in bytes
  */
-export function collectOutputFiles(sessionId: string): string[] {
+export function collectOutputFiles(sessionId: string, maxUploadBytes: number): string[] {
   const outputDir = getOutputDir(sessionId);
   if (!existsSync(outputDir)) return [];
 
@@ -341,14 +350,14 @@ export function collectOutputFiles(sessionId: string): string[] {
       .filter((p) => {
         try {
           const stat = statSync(p);
-          return stat.isFile() && stat.size <= ATTACHMENT_LIMITS.discordMaxUploadBytes;
+          return stat.isFile() && stat.size <= maxUploadBytes;
         } catch (err) {
-          console.warn("discord-attachments: collectOutputFiles: failed to stat:", p, err instanceof Error ? err.message : err);
+          console.warn("attachments: collectOutputFiles: failed to stat:", p, err instanceof Error ? err.message : err);
           return false;
         }
       });
   } catch (err) {
-    console.warn("discord-attachments: collectOutputFiles: failed to read output dir:", err instanceof Error ? err.message : err);
+    console.warn("attachments: collectOutputFiles: failed to read output dir:", err instanceof Error ? err.message : err);
     return [];
   }
 }

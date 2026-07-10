@@ -688,6 +688,8 @@ describe("buildGatewayAdapters — web bindings", () => {
     const stub = (platform: string, instanceId: string): PlatformAdapter => ({
       platform,
       instanceId,
+      // cortex#1853 — per-surface outbound ceiling; irrelevant to this test.
+      maxUploadBytes: 8 * 1024 * 1024,
       start: async () => {},
       stop: async () => {},
       getPlatformUserId: async () => "x",
@@ -768,12 +770,12 @@ describe("buildGatewayAdapters — web bindings", () => {
   test("web binding gateway source is {principal}.gateway.{instanceId}", () => {
     let capturedSource: unknown;
     const factory: GatewayAdapterFactory = {
-      discord: (args) => { void args; return { platform: "discord", instanceId: "x", start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: "x", channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} }; },
-      slack: (args) => { void args; return { platform: "slack", instanceId: "x", start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: "x", channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} }; },
-      mattermost: (args) => { void args; return { platform: "mattermost", instanceId: "x", start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: "x", channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} }; },
+      discord: (args) => { void args; return { platform: "discord", instanceId: "x", maxUploadBytes: 8 * 1024 * 1024, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: "x", channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} }; },
+      slack: (args) => { void args; return { platform: "slack", instanceId: "x", maxUploadBytes: 8 * 1024 * 1024, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: "x", channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} }; },
+      mattermost: (args) => { void args; return { platform: "mattermost", instanceId: "x", maxUploadBytes: 8 * 1024 * 1024, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: "x", channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} }; },
       web: (args) => {
         capturedSource = args.source;
-        return { platform: "web", instanceId: args.instanceId, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: args.instanceId, channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} };
+        return { platform: "web", instanceId: args.instanceId, maxUploadBytes: 8 * 1024 * 1024, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: args.instanceId, channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} };
       },
     };
     buildGatewayAdapters(
@@ -795,7 +797,7 @@ describe("buildGatewayAdapters — web bindings", () => {
       mattermost: (args) => { void args; throw new Error("unexpected"); },
       web: (args) => {
         capturedWebBinding = args.webBinding;
-        return { platform: "web", instanceId: args.instanceId, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: args.instanceId, channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} };
+        return { platform: "web", instanceId: args.instanceId, maxUploadBytes: 8 * 1024 * 1024, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId: args.instanceId, channelId: "c" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {} };
       },
     };
     buildGatewayAdapters(
@@ -860,7 +862,7 @@ describe("WebAdapter — tenant agnosticism", () => {
     const { factory, calls } = (() => {
       const calls: { platform: string; instanceId: string }[] = [];
       const stub = (platform: string, instanceId: string): PlatformAdapter => ({
-        platform, instanceId, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId, channelId: "ch" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {},
+        platform, instanceId, maxUploadBytes: 8 * 1024 * 1024, start: async () => {}, stop: async () => {}, getPlatformUserId: async () => "x", fetchContext: async () => [], resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }), postResponse: async () => {}, sendTyping: async () => {}, sendProgress: async () => {}, clearProgress: async () => {}, createThread: async () => ({ instanceId, channelId: "ch" }), resolveLogicalTarget: async () => null, notifyPrincipal: async () => {},
       });
       const factory: GatewayAdapterFactory = {
         discord: (args) => stub("discord", args.instanceId),
