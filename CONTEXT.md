@@ -175,6 +175,27 @@ _Avoid_: session detail/telemetry (vague — say interior for the inside, lifecy
 The M6 runtime layer that executes a single **dispatch** on one execution substrate and yields lifecycle **envelopes**. Closed enum of `HarnessId` values: `claude-code`, `bus-peer`, `openai-codex`, `cursor`, `gemini`, `mistral`, `pi-dev`, `agent-team`. The harness boundary is what makes the runner substrate-agnostic — the same `DispatchRequest` flows into any harness; the same `dispatch.task.{action}` envelopes flow out. The `agent-team` harness composes other harnesses to fulfil **Delegate**-mode dispatches.
 _Avoid_: backend, executor, engine, runtime (overloaded with `MyelinRuntime`)
 
+**Platform adapter** (or just **adapter**):
+A live connection to ONE surface (Discord, Mattermost, Slack, web/SSE), holding that surface's credential and speaking its native protocol. An adapter is BOTH a **dispatch source** (inbound: platform message → envelope) and the driver of a **dispatch sink** (outbound: lifecycle envelope → `postResponse`/`sendProgress`). It is agent-bound: it acts as an **agent presence** on the surface. Contract: the `PlatformAdapter` interface.
+
+The unqualified word **adapter** always means this. The bus **surface-router**'s render-only subscriber contract is NOT an adapter — see **Render target**.
+_Avoid_: surface adapter (names the router's render-only subscriber — a different thing entirely), bot, integration, connector, driver.
+
+**Render target**:
+A render-only subscriber registered on the **surface-router**: it declares NATS subject patterns (plus optional payload/visibility filters) and a `render()` function, and the router does the matching, isolation, and timeout. It never publishes on the bus as a side effect of rendering. It is the in-code shape of the **dispatch sink** role. Contract: the interface at `src/bus/surface-router.ts` (named `SurfaceAdapter` for historical reasons — the rename to `RenderTarget` is tracked; do not read that name as "a kind of adapter").
+_Avoid_: surface adapter, sink (bare — say dispatch sink for the role, render target for the contract), listener, subscriber (too generic — every bus consumer subscribes).
+
+**Renderer**:
+A **render target** with a lifecycle (`start`/`stop`) and a `kind`, which is **not agent-bound**: it projects bus state to a destination that is not a conversational surface — the Mission Control dashboard, PagerDuty, a webhook. Three properties separate a renderer from an **adapter**: a renderer has no inbound path (it is never a **dispatch source**), carries no **agent presence**, and holds no chat-surface credential. Both are **dispatch sinks**; only the adapter is also a dispatch source.
+
+|  | inbound? | agent-bound? | lifecycle? |
+|---|---|---|---|
+| Platform adapter | yes | yes | yes |
+| Renderer | no | no | yes |
+| Render target | no | no | no |
+
+_Avoid_: using **renderer** for the architectural role — that role is **dispatch sink**, and a renderer is one kind of thing that plays it (an adapter's outbound half is another).
+
 **Dispatch source**:
 Anything that creates and publishes an inbound dispatch **envelope** onto the bus. A platform adapter (Discord, Mattermost, Slack) is a dispatch source: it turns a platform message into a `tasks.@{did-encoded-assistant}.{capability}` envelope (canonical) — adapter populates `originator.identity` with the resolved human/agent DID and `originator.attribution = "adapter-resolved"`; the **stack** then signs the envelope via `runtime.publish` using the stack NKey. The GitHub webhook tap is a dispatch source. The MC dashboard's "send task" action is a dispatch source. Future peer-stack agents publishing Offers cross-federation are dispatch sources. The dispatch source is the locus of policy-actor attribution (via `originator`); the **stack** is the cryptographic signer. The **Dispatch source** (this role) is distinct from the envelope **`source` field** (the originating-stack address — see §Provenance fields).
 
@@ -183,7 +204,17 @@ _Avoid_: producer, ingress, intake
 
 **Dispatch sink**:
 Anything that consumes lifecycle envelopes for one dispatch and renders them to a surface. A platform adapter is both a dispatch source (inbound) and a dispatch sink (outbound) — its outbound side subscribes to `dispatch.task.{started|completed|failed|aborted}` filtered by the dispatch's **response routing** and turns lifecycle events into platform calls (`postResponse`, `sendProgress`). The Mission Control dashboard is a dispatch sink; PagerDuty is a dispatch sink. A dispatch sink does NOT sign envelopes; it consumes them.
-_Avoid_: consumer, egress, renderer (renderer is the cortex-internal interface name in `src/renderers/types.ts`; **dispatch sink** is the architectural role)
+⚠ **Trap: a file named `*-sink.ts` is not necessarily a dispatch sink.** `dispatch-sink.ts` and `review-sink.ts` are (they are an adapter's outbound half). But `gateway/bus-inbound-sink.ts` PUBLISHES inbound envelopes — it is a **dispatch source**, and "sink" there means sink-of-the-gateway's-demux, an internal pipeline word that leaked into a filename and reads as the exact opposite of what the module does. `mc/notifications/discord-sink.ts` is a dedup/coalesce notification buffer, not a bus consumer at all. Both are being renamed (`bus-inbound-publisher.ts`, `discord-notifier.ts`); until then, read the module doc, not the filename.
+
+_Avoid_: consumer, egress, bare **sink** (always qualify: dispatch sink), renderer (a **renderer** is one kind of thing that PLAYS this role — an adapter's outbound half is another; **dispatch sink** is the role)
+
+**Surface plugin** (or just **plugin**):
+A **platform adapter** or a **renderer** packaged as a separately-installable unit that the running cortex loads at boot — rather than code compiled into the cortex binary. The two are distinct concepts (see their entries) but ONE plugin class: they share the manifest, the discovery/load path, the version-compat gate, and per-plugin fail-isolation, because those are properties of *loading code into the daemon*, not of what the code does. A plugin declares its `kind` (`adapter` | `renderer`). The load mechanism, the compat contract, and the trust posture are specified in **ADR-0024**, not here.
+_Avoid_: extension, module (overloaded), add-on, pack (a **bundle** is arc's delivery unit — a plugin ships IN a bundle; they are not synonyms).
+
+**Adapter/renderer SDK** (the **plugin SDK**):
+The stable, versioned contract surface a **surface plugin** compiles against — the one barrel of types (`PlatformAdapter`, `Renderer`, and the envelope/target types they need) plus the version constant the loader gates on. An out-of-tree plugin imports from here and nowhere else in cortex. Versioned independently of the cortex release so a plugin can declare "compatible with cortex" via one semver range. Shape and version discipline: **ADR-0024**.
+_Avoid_: API (too broad), adapter interface (it carries the renderer contract too), headers.
 
 **Response routing**:
 The payload field on an inbound dispatch envelope that tells the dispatch sink where to deliver lifecycle events. Carries the originating surface address — for a Discord-sourced dispatch: `{adapter_instance, channel_id, thread_id?}`. Echoed by the runner onto every `dispatch.task.{action}` lifecycle envelope so the originating dispatch sink can correlate completion → platform target without keeping state. Response routing is wire-level, not in-memory.
