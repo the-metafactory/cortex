@@ -118,14 +118,21 @@ function federatedPolicy(networks: PolicyFederatedNetwork[]): PolicyFederated {
   return { networks };
 }
 
-/** Beta's local receiving agent — the `receivingAgentId` whose trust list is consulted. */
+/**
+ * Beta's local receiving agent — the `receivingAgentId` whose trust list is
+ * consulted. `trust: []` is deliberate: a federated peer is never in a local
+ * trust list; its stamp is admitted via the registry resolve seam + the crypto
+ * bytes-check, not the local trust graph (`verify-signed-by-chain.ts:360-367`).
+ * `presence: {}` carries no surface bindings — none are needed and no test
+ * fixture should carry a platform id.
+ */
 function lunaAgent(): Agent {
   return {
     id: "luna",
     displayName: "Luna",
     persona: "./personas/luna.md",
-    roles: [],
     trust: [],
+    presence: {},
   } as unknown as Agent;
 }
 
@@ -329,8 +336,15 @@ async function alphaEmitsOnline(alpha: StackHandle): Promise<Envelope> {
 function peerResolverFor(
   peer: StackHandle,
 ): (principal: string, stack?: string) => Promise<FederatedPeerResolution> {
+  // NOTE (harness reality-check): the verifier threads `stackFromEnvelope()`
+  // into this seam's second argument, and that helper returns the QUALIFIED
+  // `{principal}/{stack}` (`envelope-validator.ts:639-645`) — NOT the bare
+  // stack slug. `MultiPrincipalIdentityRegistry.resolve` keys its per-stack
+  // cache on the same qualified string. Matching on the bare slug here silently
+  // yields `federated_peer_unresolved`.
+  const qualifiedStack = `${peer.signer.principal}/${peer.signer.stack}`;
   return (principal: string, stack?: string): Promise<FederatedPeerResolution> => {
-    if (principal !== peer.signer.principal || stack !== peer.signer.stack) {
+    if (principal !== peer.signer.principal || stack !== qualifiedStack) {
       return Promise.resolve({
         resolved: false,
         reason: `unknown peer ${principal}/${stack ?? "<none>"}`,
@@ -341,7 +355,8 @@ function peerResolverFor(
       throw new Error("test harness: peer NKey did not decode");
     }
     const identity: Identity = {
-      id: stackDid({ principal, stack }),
+      // The DID class production stamps on the wire — see `peer.signer.did`.
+      id: peer.signer.did,
       display_name: principal,
       network: principal,
       public_key: publicKey,
@@ -478,18 +493,29 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
 
   // ===========================================================================
   // Epic progress meter — each todo flips live when its gating slice merges.
+  //
+  // The empty bodies are a TYPE requirement, not a stub: bun-types declares
+  // `test.todo` as `Test<T>` (2-3 args), so a one-argument call fails
+  // `tsc --noEmit`. The repo's other progress-meter suite works around this with
+  // a cast alias (`e2e-lifecycle/lifecycle.test.ts:102`); an empty body is the
+  // same thing without the cast. Bun never executes a `.todo` body absent
+  // `--todo`, and reports these as 4 todo.
   // ===========================================================================
 
   test.todo(
     "WP-6: a peer's resolved identity DID class matches the wire stamp (did:mf:{p}-{s}), so chain verify does not return unknown_agent",
+    () => {},
   );
   test.todo(
     "WP-6: presence folds under signing:'permissive' (resolveFederatedPeer is enforce-only today — cortex.ts:2831)",
+    () => {},
   );
   test.todo(
     "WP-3/WP-4: a principal id containing '-' can never produce a DID equal to another (principal, stack) pair's stack DID",
+    () => {},
   );
   test.todo(
     "WP-3: deriveAcceptSubjects(self,[peer]) contains exactly the subject the presence producer emits for that peer",
+    () => {},
   );
 });
