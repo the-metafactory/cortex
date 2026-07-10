@@ -226,15 +226,49 @@ export async function resolveNetworkRoster(
  *
  * Exported for direct unit testing of the projection in isolation.
  */
+/**
+ * Called for each roster member DROPPED from the peer projection because its
+ * `stack_id` is absent or malformed. Default: a loud stderr warning. The
+ * reconciler passes its own sink so the drop reaches the event pipeline.
+ * cortex#1852 half B — fail loud, never fabricate `{principal}/default`.
+ */
+export type RosterPeerDropSink = (principalId: string, reason: string) => void;
+
+const warnDroppedPeer: RosterPeerDropSink = (principalId, reason) => {
+  process.stderr.write(
+    `WARNING federation roster: dropping peer "${principalId}" — ${reason}. ` +
+      "Its presence/dispatch will NOT be accepted until the registry roster carries a valid " +
+      "{principal}/{stack} stack_id. (cortex#1852)\n",
+  );
+};
+
 export function buildRosterPeers(
   localPrincipalId: string,
   roster: NetworkRosterResult,
+  onDrop: RosterPeerDropSink = warnDroppedPeer,
 ): RosterPeer[] {
   const peers: RosterPeer[] = [];
   for (const member of roster.members) {
     if (member.principal_id === localPrincipalId) continue; // never self
-    const stackId = member.stack_id ?? `${member.principal_id}/default`;
-    const stackSlug = stackSlugOf(stackId, member.principal_id);
+    // cortex#1852 half B — NEVER fabricate `{principal}/default`. A missing or
+    // malformed stack_id is a FAULT (registry roster projection gap / underivable
+    // stack), not a default: drop the peer and warn loudly rather than derive a
+    // wrong-but-plausible accept-subject that silently never matches. (Half A —
+    // #1854 — makes the registry project stack_id, so this path is now rare.)
+    const stackId = member.stack_id;
+    if (stackId === undefined) {
+      onDrop(member.principal_id, "roster carries no stack_id");
+      continue;
+    }
+    const slash = stackId.indexOf("/");
+    if (slash < 0 || slash >= stackId.length - 1) {
+      onDrop(
+        member.principal_id,
+        `malformed stack_id "${stackId}" (expected {principal}/{stack})`,
+      );
+      continue;
+    }
+    const stackSlug = stackId.slice(slash + 1);
     const nkey = base64PubkeyToNkey(member.principal_pubkey);
     const peer: RosterPeer = {
       principal: member.principal_id,
@@ -246,21 +280,4 @@ export function buildRosterPeers(
     peers.push(peer);
   }
   return peers;
-}
-
-/**
- * The `{stack}` wire segment — the part after the `/` in a `{principal}/{stack}`
- * stack id. Falls back to the whole id, then to `default`, for a malformed id
- * (defensive: the roster is registry-shaped, but a missing `/` should not throw
- * inside a long-running reconciler).
- */
-function stackSlugOf(stackId: string, principalId: string): string {
-  const slash = stackId.indexOf("/");
-  if (slash >= 0 && slash < stackId.length - 1) {
-    return stackId.slice(slash + 1);
-  }
-  // No usable slash — derive from `{principal}/default` shape if it matches,
-  // else fall back to `default`.
-  if (stackId === principalId || stackId.length === 0) return "default";
-  return stackId;
 }

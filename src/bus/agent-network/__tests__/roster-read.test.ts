@@ -121,7 +121,7 @@ describe("resolveNetworkRoster — resolve (happy path)", () => {
     expect(jc.principal_pubkey!.startsWith("U")).toBe(true);
   });
 
-  test("defaults stack to `{principal}/default` when the roster omits stack_id", async () => {
+  test("DROPS a member (never fabricates `{principal}/default`) when the roster omits stack_id (cortex#1852)", async () => {
     const client = fakeClient({
       fetch: {
         status: "ok",
@@ -137,9 +137,11 @@ describe("resolveNetworkRoster — resolve (happy path)", () => {
     const result = await resolveNetworkRoster(NET, LOCAL, client);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const jc = result.peers[0]!;
-    expect(jc.stack_id).toBe("jc/default");
-    expect(jc.stack).toBe("default");
+    // Fail loud, don't guess: a stack_id-less member is dropped, not projected
+    // as `jc/default` (which would be a wrong-but-plausible accept-subject).
+    expect(result.peers.some((p) => p.principal_id === "jc")).toBe(false);
+    expect(result.peers.length).toBe(0);
+    expect(result.emptyRoster).toBe(true);
   });
 
   test("leaves principal_pubkey OFF when the roster key is not re-encodable (DD-5: declare by id)", async () => {
@@ -308,5 +310,26 @@ describe("buildRosterPeers — projection", () => {
       ]),
     );
     expect(peers.map((p) => p.principal)).toEqual(["jc", "kim"]);
+  });
+
+  test("drops (with a named reason) a member whose stack_id is absent OR malformed — never fabricates default (cortex#1852)", () => {
+    const drops: { principal: string; reason: string }[] = [];
+    const peers = buildRosterPeers(
+      LOCAL,
+      roster(NET, [
+        { principal_id: "jc", stack_id: "jc/sage-host", principal_pubkey: VALID_B64_PUBKEY },
+        { principal_id: "noStack", principal_pubkey: VALID_B64_PUBKEY }, // absent
+        { principal_id: "bad", stack_id: "bad", principal_pubkey: VALID_B64_PUBKEY }, // no slash
+        { principal_id: "trailing", stack_id: "trailing/", principal_pubkey: VALID_B64_PUBKEY }, // slash at end
+      ]),
+      (principal, reason) => drops.push({ principal, reason }),
+    );
+    // Only the well-formed peer survives; no `noStack/default` etc. fabricated.
+    expect(peers.map((p) => p.principal)).toEqual(["jc"]);
+    expect(peers.some((p) => p.stack === "default")).toBe(false);
+    // Each dropped member is reported with its principal id and a reason.
+    expect(drops.map((d) => d.principal).sort()).toEqual(["bad", "noStack", "trailing"]);
+    expect(drops.find((d) => d.principal === "noStack")?.reason).toContain("no stack_id");
+    expect(drops.find((d) => d.principal === "bad")?.reason).toContain("malformed");
   });
 });
