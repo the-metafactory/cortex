@@ -159,12 +159,27 @@ describe("isIdentityGatedMutation", () => {
     expect(isIdentityGatedMutation("POST", "/api/attention/xyz/resolve")).toBe(true);
     expect(isIdentityGatedMutation("POST", "/api/attention/xyz/dismiss")).toBe(true);
   });
-  it("does NOT gate reads or non-governed routes", () => {
+  it("also gates the previously-unauthenticated tasks/iterations family (cortex#1640, invariant 3)", () => {
+    // These spawn principal-credentialed CC sessions / shell out to `gh` with
+    // the principal's creds, yet were rebind-guarded but NOT identity-gated.
+    expect(isIdentityGatedMutation("POST", "/api/tasks")).toBe(true);
+    expect(isIdentityGatedMutation("POST", "/api/tasks/t1/abandon")).toBe(true);
+    expect(isIdentityGatedMutation("POST", "/api/tasks/preview")).toBe(true);
+    expect(isIdentityGatedMutation("POST", "/api/iterations")).toBe(true);
+    expect(isIdentityGatedMutation("POST", "/api/iterations/from-github")).toBe(true);
+    expect(isIdentityGatedMutation("PATCH", "/api/iterations/i1")).toBe(true);
+    expect(isIdentityGatedMutation("POST", "/api/iterations/i1/tasks")).toBe(true);
+    expect(isIdentityGatedMutation("DELETE", "/api/iterations/i1/tasks/t1")).toBe(true);
+  });
+  it("does NOT gate reads, or the HMAC-authed M2M webhook (no CF principal)", () => {
     expect(isIdentityGatedMutation("GET", "/api/sessions")).toBe(false);
     expect(isIdentityGatedMutation("GET", "/api/assignments/abc/requeue")).toBe(false);
-    expect(isIdentityGatedMutation("POST", "/api/tasks")).toBe(false);
-    expect(isIdentityGatedMutation("POST", "/api/github/webhook")).toBe(false);
+    expect(isIdentityGatedMutation("GET", "/api/tasks")).toBe(false);
     expect(isIdentityGatedMutation("GET", "/api/attention")).toBe(false);
+    // The webhook is the ONE mutating route left un-identity-gated — it
+    // authenticates by HMAC, which a browser cannot forge, and carries no
+    // CF-Access principal.
+    expect(isIdentityGatedMutation("POST", "/api/github/webhook")).toBe(false);
   });
 });
 

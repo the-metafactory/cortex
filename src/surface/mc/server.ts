@@ -328,6 +328,9 @@ export function startServer(
     principals: new Set(
       (config.governance?.principals ?? []).map((p) => p.trim().toLowerCase()),
     ),
+    ...(config.governance?.localPrincipal
+      ? { localPrincipal: config.governance.localPrincipal }
+      : {}),
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
 
@@ -980,6 +983,7 @@ async function handleApi(
       isLoopback: guard.isLoopback,
       emailHeader,
       jwtAssertion,
+      ...(guard.localPrincipal ? { localPrincipal: guard.localPrincipal } : {}),
       ...(guard.verifyJwt ? { verifyJwt: guard.verifyJwt } : {}),
     };
     return handleAdmissionDecision(admissionDecider, auth, body.value);

@@ -45,14 +45,21 @@ interface Ctx {
   tmpDir: string;
 }
 
-function start(governance?: string[]): Ctx {
+function start(principals?: string[], localPrincipal?: string): Ctx {
   const tmpDir = join(tmpdir(), `mc-fnd6-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
   const pm = new ProcessManager();
   const config: Config = {
     ...DEFAULT_CONFIG,
     port: 0, // ephemeral — bound port read back from ctx.server.port
-    ...(governance ? { governance: { principals: governance } } : {}),
+    ...(principals || localPrincipal
+      ? {
+          governance: {
+            principals: principals ?? [],
+            ...(localPrincipal ? { localPrincipal } : {}),
+          },
+        }
+      : {}),
   };
   const ctx = startServer(config, db, { processManager: pm, spawn: fakeCatSpawn });
   const port = ctx.server.port;
@@ -187,39 +194,108 @@ describe("FND-6 — foreign-Origin rejection", () => {
   });
 });
 
-describe("FND-6 — identity gate on the session-control routes", () => {
+describe("FND-6 posture A — legitimate loopback dashboard requests succeed (headerless, same-origin)", () => {
+  // The regression FND-6 shipped: the dashboard calls the daemon over loopback
+  // with a same-origin Origin, the correct Host, and NO CF-Access header (there
+  // is no CF Access in front of a bare loopback daemon). On main every mutating
+  // route 401s. Posture A resolves the headerless loopback caller to the local
+  // principal so these succeed — the Host+Origin allowlist is the real boundary.
   let c: Ctx;
   afterEach(() => teardown(c));
 
-  it("REJECTS unauthenticated POST /api/sessions — 401 (no unauthenticated mutation tier)", async () => {
+  it("ALLOWS a headerless, same-origin POST /api/sessions on loopback — 201 (was 401 on main)", async () => {
     c = start();
-    // fetch → Host is the valid loopback authority; NO CF-Access identity header.
     const res = await fetch(`${c.baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", origin: c.baseUrl },
       body: SESSION_BODY,
     });
-    expect(res.status).toBe(401);
-    expect((await res.json()).error).toBe("unauthenticated");
-    expect(c.pm.size).toBe(0);
+    expect(res.status).toBe(201); // NOT 401 — the regression is fixed.
   });
 
-  it("ALLOWS an authenticated POST /api/sessions on loopback (unset allowlist) — 201", async () => {
+  it("ALLOWS a headerless attention resolve on loopback — 200 (auth-pass, not 401)", async () => {
+    c = start();
+    upsertAttentionItem(c.db, {
+      id: "dash-att",
+      stackId: "s",
+      workItemId: null,
+      sessionId: null,
+      kind: "review",
+      severity: "normal",
+      status: "open",
+    });
+    const res = await fetch(`${c.baseUrl}/api/attention/dash-att/resolve`, {
+      method: "POST",
+      headers: { origin: c.baseUrl },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("does NOT 401 a headerless requeue/abandon on loopback (auth-pass; handler-level status only)", async () => {
+    c = start();
+    for (const route of ["requeue", "abandon"] as const) {
+      const res = await fetch(
+        `${c.baseUrl}/api/assignments/nonexistent/${route}`,
+        { method: "POST", headers: { "content-type": "application/json", origin: c.baseUrl }, body: "{}" },
+      );
+      // Auth passed → the handler runs; it may 4xx on the unknown assignment,
+      // but it must NOT be the 401 the pre-posture-A gate produced.
+      expect(res.status).not.toBe(401);
+    }
+  });
+
+  it("uses the header for audit attribution when present (still 201)", async () => {
     c = start();
     const res = await fetch(`${c.baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...AUTH_HEADER },
+      headers: { "content-type": "application/json", origin: c.baseUrl, ...AUTH_HEADER },
       body: SESSION_BODY,
     });
     expect(res.status).toBe(201);
   });
+});
 
-  it("REJECTS unauthenticated POST /api/assignments/:id/requeue — 401", async () => {
-    c = start();
-    const res = await fetch(`${c.baseUrl}/api/assignments/does-not-matter/requeue`, {
+describe("FND-6 — the tasks/iterations family is now identity-gated (cortex#1640, invariant 3)", () => {
+  // These reach their handlers on main (400/404, not 401) — unauthenticated.
+  // `POST /api/tasks` enqueues work the runner spawns as a principal-credentialed
+  // CC session; `/api/iterations/from-github` shells out to `gh`. Posture A keeps
+  // the headerless local dashboard working (unset allowlist ⇒ permissive on
+  // loopback), while the authorization binding below proves the gate is real.
+  let c: Ctx;
+  afterEach(() => teardown(c));
+
+  it("403s a headerless POST /api/tasks when the local-principal fallback is unlisted", async () => {
+    // Allowlist set + local_principal deliberately NOT in it → the headerless
+    // fallback identity is refused. This is the gate the family lacked entirely.
+    c = start(["allowed@principal.test"], "unlisted@local.box");
+    const res = await fetch(`${c.baseUrl}/api/tasks`, {
       method: "POST",
+      headers: { "content-type": "application/json", origin: c.baseUrl },
+      body: JSON.stringify({ source: "x" }),
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("not_authorized");
+  });
+
+  it("403s a headerless POST /api/iterations/from-github when the fallback is unlisted", async () => {
+    c = start(["allowed@principal.test"], "unlisted@local.box");
+    const res = await fetch(`${c.baseUrl}/api/iterations/from-github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: c.baseUrl },
+      body: JSON.stringify({ url: "https://github.com/x/y/issues/1" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("REJECTS a foreign Host on POST /api/tasks — 403 (rebind guard still applies)", async () => {
+    c = start();
+    const status = await rawHttp(c.port, {
+      path: "/api/tasks",
+      host: "evil.attacker.example",
+      email: PRINCIPAL,
+      body: JSON.stringify({ source: "x" }),
+    });
+    expect(status).toBe(403);
   });
 });
 
@@ -266,13 +342,13 @@ describe("FND-6 — CK-6a attention lifecycle rides the same gate", () => {
     });
   }
 
-  it("REJECTS unauthenticated resolve — 401", async () => {
+  it("resolves the headerless loopback caller to the local principal — 200 (posture A), not 401", async () => {
     c = start();
     seedAttention(c.db, "att-1");
     const res = await fetch(`${c.baseUrl}/api/attention/att-1/resolve`, {
       method: "POST",
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(200);
   });
 
   it("ALLOWS an authenticated resolve — 200 and flips db status", async () => {

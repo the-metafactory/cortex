@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 import {
   handleAdmissionDecision,
+  DEFAULT_LOCAL_PRINCIPAL,
   type AdmissionDecider,
   type AdmissionDecisionInput,
   type AdmissionDecisionResult,
@@ -58,9 +59,21 @@ const OK_BODY = {
   confirm: "req-abc-123",
 };
 
-/** Loopback auth context (current behavior): trusts the email header. */
-function loopbackAuth(email: string | undefined): AdmissionAuthContext {
-  return { isLoopback: true, emailHeader: email, jwtAssertion: undefined };
+/**
+ * Loopback auth context. The email header is audit metadata on loopback (FND-6
+ * posture A); when absent the request resolves to `localPrincipal` (or the
+ * built-in `DEFAULT_LOCAL_PRINCIPAL` sentinel), never 401.
+ */
+function loopbackAuth(
+  email: string | undefined,
+  localPrincipal?: string,
+): AdmissionAuthContext {
+  return {
+    isLoopback: true,
+    emailHeader: email,
+    jwtAssertion: undefined,
+    ...(localPrincipal ? { localPrincipal } : {}),
+  };
 }
 
 /**
@@ -152,21 +165,28 @@ beforeEach(() => {
   resetCfAccessJwksCache();
 });
 
-describe("handleAdmissionDecision — gate 1 (loopback): CF-Access email header", () => {
-  it("401 when the principal identity is absent", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth(undefined), OK_BODY);
-    expect(res.status).toBe(401);
-    expect((await body(res)).error).toBe("unauthenticated");
-  });
-
-  it("401 when the principal identity is blank/whitespace", async () => {
-    const res = await handleAdmissionDecision(throwingDecider, loopbackAuth("   "), OK_BODY);
-    expect(res.status).toBe(401);
-  });
-
-  it("trusts the email header on loopback (no JWT needed) — reaches the decider", async () => {
+describe("handleAdmissionDecision — gate 1 (loopback): audit-metadata email + local-principal fallback (FND-6 posture A)", () => {
+  it("falls back to the configured local principal when the header is absent — reaches the decider (no 401)", async () => {
     const { decider: d, calls } = recordingDecider();
-    const res = await handleAdmissionDecision(d, loopbackAuth("op@x.io"), OK_BODY);
+    const res = await handleAdmissionDecision(
+      d,
+      loopbackAuth(undefined, "local@dev.box"),
+      OK_BODY,
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]?.principal).toBe("local@dev.box");
+  });
+
+  it("falls back to the DEFAULT_LOCAL_PRINCIPAL sentinel when neither header nor local_principal is set", async () => {
+    const { decider: d, calls } = recordingDecider();
+    const res = await handleAdmissionDecision(d, loopbackAuth("   "), OK_BODY);
+    expect(res.status).toBe(200);
+    expect(calls[0]?.principal).toBe(DEFAULT_LOCAL_PRINCIPAL);
+  });
+
+  it("uses the email header when present (audit attribution), ignoring the local-principal fallback", async () => {
+    const { decider: d, calls } = recordingDecider();
+    const res = await handleAdmissionDecision(d, loopbackAuth("op@x.io", "local@dev.box"), OK_BODY);
     expect(res.status).toBe(200);
     expect(calls[0]?.principal).toBe("op@x.io");
   });

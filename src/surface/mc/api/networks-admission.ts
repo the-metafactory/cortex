@@ -87,6 +87,17 @@ export const CF_ACCESS_EMAIL_HEADER = "Cf-Access-Authenticated-User-Email";
 /** The signed `Cf-Access-Jwt-Assertion` header (the JWT CF Access injects at the edge). */
 export const CF_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
 
+/**
+ * FND-6 posture A — the identity a headerless loopback mutation is attributed
+ * to when `mc.governance.local_principal` is unset. On a loopback bind the
+ * CF-Access email header is self-asserted (audit metadata, not authentication —
+ * Host+Origin is the boundary), so its ABSENCE is not an auth failure; the
+ * request resolves to this sentinel and is still enforced against
+ * `mc.governance.principals`. A principal exposing MC off loopback never reaches
+ * this path (a verified JWT is mandatory there).
+ */
+export const DEFAULT_LOCAL_PRINCIPAL = "local-principal@loopback";
+
 /** Hostnames that denote a loopback bind. Single source of "is this loopback". */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
 
@@ -111,8 +122,20 @@ export function isLoopbackBind(hostname: string): boolean {
 export interface AdmissionAuthContext {
   /** True when MC is bound to a loopback interface. */
   isLoopback: boolean;
-  /** Raw `Cf-Access-Authenticated-User-Email` — trusted ONLY on a loopback bind. */
+  /**
+   * Raw `Cf-Access-Authenticated-User-Email`. On a loopback bind this is
+   * self-asserted AUDIT METADATA — used when present, but its absence is not an
+   * auth failure (see `localPrincipal`). Off loopback it is ignored entirely (a
+   * verified JWT is the only accepted identity).
+   */
   emailHeader: string | undefined;
+  /**
+   * FND-6 posture A — the loopback fallback identity when `emailHeader` is
+   * absent (`mc.governance.local_principal`; defaults to
+   * `DEFAULT_LOCAL_PRINCIPAL`). Only consulted on a loopback bind. The resolved
+   * identity is still enforced against `mc.governance.principals`.
+   */
+  localPrincipal?: string;
   /** Raw `Cf-Access-Jwt-Assertion` — verified on a non-loopback bind. */
   jwtAssertion: string | undefined;
   /**
@@ -217,9 +240,15 @@ function parseBody(
 /**
  * Resolve the CF-Access principal for Gate 1 — bind-conditioned (#1410):
  *
- *  - **Loopback bind:** trust the `Cf-Access-Authenticated-User-Email` header
- *    as-is (unchanged pre-#1410 behavior; the loopback boundary is the gate,
- *    locked by the #1279 http test). Empty ⇒ 401.
+ *  - **Loopback bind (FND-6 posture A):** the `Cf-Access-Authenticated-User-Email`
+ *    header is self-asserted here (any local process can set an arbitrary value),
+ *    so it is AUDIT METADATA, not authentication — Host+Origin (enforced in
+ *    `mutation-guard.ts`) is the real loopback boundary. Used as the identity
+ *    when present; when ABSENT the request resolves to `auth.localPrincipal`
+ *    (`mc.governance.local_principal`, default {@link DEFAULT_LOCAL_PRINCIPAL})
+ *    rather than 401 — so the headerless local dashboard is not refused. Either
+ *    way the resolved identity is still enforced against `mc.governance.principals`
+ *    downstream (`checkAuthorization`).
  *  - **Non-loopback bind:** the raw email header is forgeable, so REQUIRE a
  *    CF-Access JWT verified against the team JWKS; the principal comes from the
  *    verified `email` claim. Fails closed on every branch:
@@ -241,19 +270,14 @@ export async function resolveRequestPrincipal(
   auth: AdmissionAuthContext,
 ): Promise<string | Response> {
   if (auth.isLoopback) {
-    const who = (auth.emailHeader ?? "").trim();
-    if (who.length === 0) {
-      return json(
-        {
-          error: "unauthenticated",
-          detail:
-            "a CF-Access authenticated principal identity is required for this mutation " +
-            `(missing/empty ${CF_ACCESS_EMAIL_HEADER}). This control-plane mutation is not available on an unauthenticated request.`,
-        },
-        401,
-      );
-    }
-    return who;
+    // Header present → attribute to it (audit metadata). Absent → fall back to
+    // the configured local principal (posture A); NEVER 401 on loopback for a
+    // missing header — Host+Origin is the boundary, and the resolved identity is
+    // still authorization-checked against `mc.governance.principals`.
+    const header = (auth.emailHeader ?? "").trim();
+    if (header.length > 0) return header;
+    const fallback = (auth.localPrincipal ?? "").trim();
+    return fallback.length > 0 ? fallback : DEFAULT_LOCAL_PRINCIPAL;
   }
 
   // Non-loopback: do NOT trust the raw email header — verify the JWT.

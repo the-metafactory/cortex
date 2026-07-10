@@ -145,6 +145,20 @@ export function loadConfig(configPath?: string): Readonly<Config> {
       }
       principals.push(entry.trim());
     }
+    // FND-6 posture A — optional `local_principal`: the identity a headerless
+    // loopback mutation is attributed to (the CF-Access email header is
+    // self-asserted on loopback → audit metadata, not authentication). A
+    // malformed value throws rather than silently defaulting.
+    const localPrincipalRaw: unknown = governanceRaw.local_principal;
+    let localPrincipal: string | undefined;
+    if (localPrincipalRaw !== undefined) {
+      if (typeof localPrincipalRaw !== "string" || localPrincipalRaw.trim() === "") {
+        throw new Error(
+          `governance.local_principal must be a non-empty string in ${resolvedPath}`,
+        );
+      }
+      localPrincipal = localPrincipalRaw.trim();
+    }
     // FND-3 — optional step-up MFA knobs. Only `secretPath` (a string) is
     // accepted today; a malformed block throws rather than silently ignoring a
     // security-relevant override.
@@ -166,7 +180,11 @@ export function loadConfig(configPath?: string): Readonly<Config> {
         stepUp = {};
       }
     }
-    governance = stepUp ? { principals, stepUp } : { principals };
+    governance = {
+      principals,
+      ...(stepUp ? { stepUp } : {}),
+      ...(localPrincipal ? { localPrincipal } : {}),
+    };
   }
 
   let level: LogLevel = DEFAULT_CONFIG.log.level;

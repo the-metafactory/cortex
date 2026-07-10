@@ -27,6 +27,7 @@ import { rmSync } from "fs";
 import { startServer, type ServerContext } from "../server";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
+import { DEFAULT_LOCAL_PRINCIPAL } from "../api/networks-admission";
 import type {
   AdmissionDecider,
   AdmissionDecisionInput,
@@ -92,7 +93,13 @@ describe("POST /api/networks/admission-decision — loopback invariant", () => {
     expect(DEFAULT_CONFIG.hostname).toBe("127.0.0.1");
   });
 
-  it("enforces Gate 1 (401 without the CF-Access header) on the loopback bind", async () => {
+  it("resolves to the local principal (FND-6 posture A) when the CF-Access header is absent on loopback — reaches the signer, no 401", async () => {
+    // Posture A: on loopback the CF-Access email header is audit metadata, not
+    // authentication (a local process can forge it; Host+Origin is the
+    // boundary). A headerless request therefore resolves to the default local
+    // principal and reaches the signer rather than 401ing — this is what keeps
+    // the headerless local dashboard working. Authorization is still enforced
+    // (principals unset here → permissive on loopback).
     c = startWithDecider();
     const res = await fetch(`${c.baseUrl}/api/networks/admission-decision`, {
       method: "POST",
@@ -104,9 +111,9 @@ describe("POST /api/networks/admission-decision — loopback invariant", () => {
         confirm: "req-abc-123",
       }),
     });
-    expect(res.status).toBe(401);
-    // The signer must NOT run when the identity header is absent.
-    expect(c.calls).toHaveLength(0);
+    expect(res.status).toBe(200);
+    expect(c.calls).toHaveLength(1);
+    expect(c.calls[0]?.principal).toBe(DEFAULT_LOCAL_PRINCIPAL);
   });
 
   it("reaches the wired signer over loopback when the CF-Access header is present", async () => {

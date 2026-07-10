@@ -591,6 +591,19 @@ export interface GovernanceConfig {
   /** Principal emails (CF-Access identities) allowed to run glass mutations. */
   principals: string[];
   /**
+   * FND-6 posture A (loopback: audit-vs-authentication) — the principal a
+   * loopback mutation is ATTRIBUTED to when the request carries no
+   * `Cf-Access-Authenticated-User-Email` header. On a loopback bind that header
+   * is self-asserted (any local process can set an arbitrary value), so it is
+   * AUDIT METADATA, not authentication — Host+Origin is the real loopback
+   * boundary. When the header is absent the resolved identity falls back to
+   * this value (default `DEFAULT_LOCAL_PRINCIPAL`) and is STILL enforced against
+   * `principals`. If you configure `principals` on a loopback bind, set this to
+   * a listed principal or the headerless local dashboard is refused (403).
+   * Ignored off loopback, where a verified CF-Access JWT is mandatory.
+   */
+  localPrincipal?: string;
+  /**
    * FND-3 — step-up MFA (LOCAL TOTP) knobs. Optional; when omitted the daemon
    * reads the enrolled secret from the default path
    * (`~/.config/cortex/step-up-totp.json`). Absent enrollment fails high-blast

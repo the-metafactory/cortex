@@ -87,6 +87,13 @@ export interface MutationGuardContext {
    * EMPTY = unset (fail-closed off loopback; permissive on loopback).
    */
   principals: ReadonlySet<string>;
+  /**
+   * FND-6 posture A — `mc.governance.local_principal`: the identity a headerless
+   * loopback mutation resolves to (the CF-Access email header is self-asserted
+   * on loopback → audit metadata). Undefined ⇒ the resolver's built-in
+   * `DEFAULT_LOCAL_PRINCIPAL` sentinel. Only consulted on a loopback bind.
+   */
+  localPrincipal?: string;
   /** CF-Access JWT verifier, present iff `cfAccess.aud` is configured. */
   verifyJwt?: AdmissionAuthContext["verifyJwt"];
 }
@@ -277,6 +284,7 @@ export async function enforceMutationAuth(
     isLoopback: ctx.isLoopback,
     emailHeader: req.headers.get(CF_ACCESS_EMAIL_HEADER) ?? undefined,
     jwtAssertion: req.headers.get(CF_ACCESS_JWT_HEADER) ?? undefined,
+    ...(ctx.localPrincipal ? { localPrincipal: ctx.localPrincipal } : {}),
     ...(ctx.verifyJwt ? { verifyJwt: ctx.verifyJwt } : {}),
   };
   const who = await resolveRequestPrincipal(auth);
@@ -290,24 +298,27 @@ export async function enforceMutationAuth(
 
 /**
  * Which mutating routes carry the full identity+authorization gate (c)+(d).
- * The governed glass-mutation set: local session spawn/control (strictly higher
- * blast than dispatch-to-peer — must not be the least-gated route), the Tier-2
- * federation admission decision, and the attention lifecycle (CK-6a).
+ *
+ * Invariant 3 (docs/plan-mc-future-state.md §6): "there is no unauthenticated
+ * mutation tier." So EVERY mutating route is identity-gated — except the
+ * HMAC-authed M2M webhook ({@link isRebindExempt}), which authenticates by a
+ * signature no browser can forge and carries no CF-Access principal.
+ *
+ * This is deliberately a single predicate (all mutating non-exempt routes)
+ * rather than a hand-maintained allowlist: the allowlist is exactly how the
+ * `tasks`/`iterations` family (`POST /api/tasks` spawns a principal-credentialed
+ * CC session; `/api/iterations/from-github` shells out to `gh` with the
+ * principal's creds) slipped through rebind-guarded-but-not-identity-gated
+ * (cortex#1640). A new mutating route is gated by default, never by remembering
+ * to add it here. Posture A makes this safe on loopback — a headerless local
+ * caller resolves to `mc.governance.local_principal` rather than 401.
  */
 export function isIdentityGatedMutation(
   method: string,
   pathname: string,
 ): boolean {
   if (!MUTATING_METHODS.has(method)) return false;
-  if (pathname === "/api/sessions") return true;
-  if (pathname === "/api/networks/admission-decision") return true;
-  if (/^\/api\/assignments\/[^/]+\/(requeue|abandon|handoff|input)$/.test(pathname)) {
-    return true;
-  }
-  if (/^\/api\/attention\/[^/]+\/(resolve|dismiss)$/.test(pathname)) {
-    return true;
-  }
-  return false;
+  return !isRebindExempt(pathname);
 }
 
 /**
