@@ -39,6 +39,7 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { SurfaceAdapter } from "../bus/surface-router";
 import type { PagerDutyRendererConfig } from "../common/types/cortex-config";
 import type { Renderer } from "./types";
+import type { RendererPlugin } from "../adapters/registry";
 
 const EVENTS_V2_URL = "https://events.pagerduty.com/v2/enqueue";
 const SUMMARY_MAX_LEN = 1024;
@@ -65,12 +66,13 @@ export class PagerDutyRenderer implements Renderer {
   private readonly visibility: PagerDutyRendererConfig["visibility"];
 
   constructor(config: PagerDutyRendererConfig, options: PagerDutyRendererOptions = {}) {
-    // The surface-router uses `id` as the metrics key and error-reporting
-    // tag. Renderer kinds are unique per cortex deployment so the bare
-    // kind is a stable id; only one PagerDuty integration runs at a time
-    // (a deployment with multiple PD integrations should split into
-    // multiple cortex instances per separation-of-concerns).
-    this.id = "pagerduty";
+    // cortex#1788 (S3, ADR-0024 OQ10) — `config.id` defaults to `kind`,
+    // preserving the pre-OQ10 single-integration-per-deployment id exactly
+    // when unset. Two `kind: pagerduty` entries (different routing keys)
+    // now need distinct `id:` values in config to avoid colliding in
+    // router metrics and to be independently addressable by a future
+    // `unload` verb.
+    this.id = config.id ?? "pagerduty";
     this.subjects = config.subscribe;
     this.routingKey = config.routingKey;
     this.endpoint = options.endpoint ?? EVENTS_V2_URL;
@@ -183,3 +185,19 @@ export class PagerDutyRenderer implements Renderer {
     return "warning";
   }
 }
+
+/**
+ * cortex#1788 (S3, ADR-0024 §8.1) — `pagerduty`'s `RendererPlugin`. The
+ * renderer track's extraction pilot (leaf-y, zero npm deps, R10) — it
+ * registers through the registry now (dogfooding, ADR-0024 §3.3) and stays
+ * in-tree until S12b extracts it (gated on OQ9, the boot-coverage hard-fail).
+ */
+export const pagerdutyRendererPlugin: RendererPlugin = {
+  kind: "renderer",
+  id: "pagerduty",
+  rendererKind: "pagerduty",
+  // S4 inert placeholder — RendererSchema stays the fixed discriminated
+  // union it is today until then.
+  configSchema: undefined,
+  createRenderer: (config) => new PagerDutyRenderer(config as PagerDutyRendererConfig),
+};

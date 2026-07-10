@@ -111,6 +111,7 @@ import {
   defaultGatewayAdapterFactory,
   type GatewayAdapterFactory,
 } from "../gateway/gateway-adapters";
+import { registryToLegacyFactory, type SurfacePluginRegistry } from "../adapters/registry";
 
 // =============================================================================
 // Per-platform boot descriptor — the divergent bits `bootPlatformAdapters` needs
@@ -525,8 +526,17 @@ export interface WireSurfaceAdaptersOpts {
   adapterCleanup: (() => void)[];
   /** Shared, NOT owned. */
   liveSurfaces: Set<string>;
-  /** Adapter-construction seam. Production omits this and gets {@link defaultGatewayAdapterFactory}; tests inject a recording fake. */
+  /** Adapter-construction seam. Production omits this and gets {@link defaultGatewayAdapterFactory}; tests inject a recording fake. Superseded by {@link registry} when both are supplied. */
   factory?: GatewayAdapterFactory;
+  /**
+   * cortex#1788 (S3, ADR-0024 D5) — the `(kind, id)`-keyed registry
+   * (`src/adapters/registry.ts`). cortex.ts composes ONE registry and
+   * threads it to both this boot path and the gateway path
+   * (`buildGatewayAdapters`). Takes priority over {@link factory} when both
+   * are supplied; existing `factory`-based test doubles keep working
+   * unchanged via {@link registryToLegacyFactory}.
+   */
+  registry?: SurfacePluginRegistry;
 }
 
 /**
@@ -543,7 +553,9 @@ export interface WireSurfaceAdaptersOpts {
  * doc's "PRESERVE ORDER" section.
  */
 export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promise<void> {
-  const factory = opts.factory ?? defaultGatewayAdapterFactory;
+  const factory = opts.registry
+    ? registryToLegacyFactory(opts.registry)
+    : (opts.factory ?? defaultGatewayAdapterFactory);
   const ctx: BootCtx = {
     gatewayOwned: opts.gatewayOwned,
     router: opts.router,

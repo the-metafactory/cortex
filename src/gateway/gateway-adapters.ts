@@ -69,27 +69,28 @@
  * inline construction.
  */
 
-import { DiscordAdapter } from "../adapters/discord";
-import { SlackAdapter } from "../adapters/slack";
-import { MattermostAdapter } from "../adapters/mattermost";
-import { WebAdapter } from "../adapters/web";
 import type { PlatformAdapter } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
 import type { WebBinding } from "../common/types/surfaces";
-import {
-  DiscordPresenceSchema,
-  SlackPresenceSchema,
-  MattermostPresenceSchema,
-  type DiscordPresence,
-  type SlackPresence,
-  type MattermostPresence,
-  type Agent,
+import type {
+  DiscordPresence,
+  SlackPresence,
+  MattermostPresence,
+  Agent,
 } from "../common/types/cortex-config";
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../common/policy";
 import { assertNoUnresolvedPlaceholder } from "../common/config/resolve-env-placeholders";
-import { groupDiscordBindingsByToken } from "./discord-token-groups";
+import type {
+  BindingGroup,
+  SurfaceBindingEntry,
+  SurfacePluginRegistry,
+} from "../adapters/registry";
+import { discordAdapterPlugin } from "../adapters/discord/plugin";
+import { slackAdapterPlugin } from "../adapters/slack/plugin";
+import { mattermostAdapterPlugin } from "../adapters/mattermost/plugin";
+import { webAdapterPlugin } from "../adapters/web/plugin";
 // Back-compat re-export for callers that still import the old suppression helper here.
 export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
 
@@ -200,150 +201,36 @@ export interface GatewayAdapterDeps {
   principal: string;
   /** Myelin runtime (may be dormant — adapters track state locally either way). */
   runtime: MyelinRuntime | undefined;
-  /** Adapter-construction seam. Defaults to {@link defaultGatewayAdapterFactory}. */
-  factory: GatewayAdapterFactory;
+  /**
+   * cortex#1788 (S3, ADR-0024 D5) — the `(kind, id)`-keyed adapter/renderer
+   * registry. Replaces the pre-registry `factory: GatewayAdapterFactory`
+   * field: `buildGatewayAdapters` no longer hardcodes 4 platform methods, it
+   * iterates `registry.listAdapters()`. Production passes
+   * `createDefaultSurfacePluginRegistry()` (`src/adapters/registry.ts`);
+   * tests build one from a recording fake via `registryFromFactory`.
+   */
+  registry: SurfacePluginRegistry;
 }
 
 // =============================================================================
-// Synthetic agent for gateway-owned adapters
+// Legacy back-compat shim — `defaultGatewayAdapterFactory`
 // =============================================================================
 
 /**
- * The gateway owns one connection per binding but is NOT a stack — it has no
- * persona file and dispatches nothing locally (inbound is rebound to the
- * gateway's sink, bypassing `dispatchHandler.handleMessage`). The adapter
- * constructor still requires an `Agent`; build a minimal synthetic one keyed
- * to the binding's `agent` id so log lines and the trust set are coherent.
- *
- * `persona` is a sentinel — the gateway never spawns a CC session through this
- * adapter, so the persona file is never read.
- */
-function syntheticGatewayAgent(
-  agentId: string,
-  presence: Agent["presence"],
-): Agent {
-  return {
-    id: agentId,
-    displayName: agentId,
-    persona: "(gateway-owned — no local dispatch)",
-    trust: [],
-    presence,
-  };
-}
-
-/**
- * S9 (cortex#1523) — resolve the `Agent` a factory call constructs the
- * adapter with. `args.agent` (the per-stack boot path always supplies it)
- * wins; the gateway never supplies `agent`, so it falls through to the
- * synthetic gateway-owned placeholder keyed off `args.source`. Throws if
- * NEITHER is present — a caller must supply one or the other so the
- * constructed adapter always has a real identity.
- */
-function resolveFactoryAgent(
-  args: Pick<FactoryArgsBase, "agent" | "source">,
-  presence: Agent["presence"],
-): Agent {
-  if (args.agent) return args.agent;
-  if (!args.source) {
-    throw new Error(
-      "GatewayAdapterFactory: constructing an adapter requires either `agent` or `source` (neither was supplied)",
-    );
-  }
-  return syntheticGatewayAgent(args.source.agent, presence);
-}
-
-// =============================================================================
-// Default (production) factory — constructs the real adapters
-// =============================================================================
-
-/**
- * Production factory. Constructs the concrete platform adapters with an empty
- * principal-DM block (the gateway is shadow/log-only; see module doc). The
- * adapters are CONSTRUCTED only — `buildGatewayAdapters` does not start them.
+ * cortex#1788 (S3) — pre-registry construction seam, RETAINED so existing
+ * imports (`start-gateway.ts`, `surface-adapter-boot.ts`, and their tests'
+ * recording/counting fakes) keep resolving. The actual construction logic
+ * moved verbatim into each platform's `AdapterPlugin.createAdapter`
+ * (`src/adapters/{discord,slack,mattermost,web}/plugin.ts`) — this object is
+ * now a thin delegating shim, not the source of truth. New code should
+ * thread a {@link SurfacePluginRegistry} (`createDefaultSurfacePluginRegistry`)
+ * instead of this factory.
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
-  discord: (args) => {
-    const {
-      instanceId, source, presence, runtime, allowedGuildIds, presenceByGuildId,
-      principal, policyEngine, policyLookup, policyRegistry,
-      trustedBotIds, surfaceSubjects, surfaceFallbackChannelId,
-    } = args;
-    return new DiscordAdapter(
-      resolveFactoryAgent(args, { discord: presence }),
-      presence,
-      {
-        instanceId,
-        principal: principal ?? {},
-        ...(runtime !== undefined && { runtime }),
-        ...(source !== undefined && { systemEventSource: source }),
-        allowedGuildIds,
-        presenceByGuildId,
-        ...(trustedBotIds !== undefined && { trustedBotIds }),
-        ...(policyEngine !== undefined && { policyEngine }),
-        ...(policyLookup !== undefined && { policyLookup }),
-        ...(policyRegistry !== undefined && { policyRegistry }),
-        ...(surfaceSubjects !== undefined && { surfaceSubjects }),
-        ...(surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId }),
-      },
-    );
-  },
-
-  slack: (args) => {
-    const {
-      instanceId, source, presence, runtime,
-      principal, policyEngine, policyLookup, policyRegistry,
-      trustedBotIds, surfaceSubjects, surfaceFallbackChannelId,
-    } = args;
-    return new SlackAdapter(
-      resolveFactoryAgent(args, { slack: presence }),
-      presence,
-      {
-        instanceId,
-        principal: principal ?? {},
-        ...(runtime !== undefined && { runtime }),
-        ...(source !== undefined && { systemEventSource: source }),
-        ...(trustedBotIds !== undefined && { trustedBotIds }),
-        ...(policyEngine !== undefined && { policyEngine }),
-        ...(policyLookup !== undefined && { policyLookup }),
-        ...(policyRegistry !== undefined && { policyRegistry }),
-        ...(surfaceSubjects !== undefined && { surfaceSubjects }),
-        ...(surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId }),
-      },
-    );
-  },
-
-  mattermost: (args) => {
-    const { instanceId, source, presence, runtime, principal, policyEngine, policyLookup, policyRegistry } = args;
-    return new MattermostAdapter(
-      resolveFactoryAgent(args, { mattermost: presence }),
-      presence,
-      {
-        instanceId,
-        principal: principal ?? {},
-        ...(runtime !== undefined && { runtime }),
-        ...(source !== undefined && { systemEventSource: source }),
-        ...(policyEngine !== undefined && { policyEngine }),
-        ...(policyLookup !== undefined && { policyLookup }),
-        ...(policyRegistry !== undefined && { policyRegistry }),
-      },
-    );
-  },
-
-  /**
-   * C-110: Generic web/SSE surface adapter. No presence schema re-parse
-   * needed — the WebBinding carries everything the adapter needs directly.
-   * No reconnect credentials to guard (no bot token); the binding's
-   * `broadcastUrl` is already validated by `WebBindingSchema`.
-   */
-  web: (args) =>
-    new WebAdapter(
-      resolveFactoryAgent(args, {}),
-      args.webBinding,
-      {
-        instanceId: args.instanceId,
-        principal: {},
-      },
-    ),
+  discord: (args) => discordAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
+  slack: (args) => slackAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
+  mattermost: (args) => mattermostAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
+  web: (args) => webAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
 };
 
 // =============================================================================
@@ -356,12 +243,21 @@ function gatewaySource(principal: string, instance: string): SystemEventSource {
 }
 
 /**
+ * cortex#1788 (S3, ADR-0024 D5 / design-pluggable-adapters.md §3.3) — ONE
+ * generic loop over `deps.registry.listAdapters()`, replacing the four
+ * near-identical per-platform loops this function used to hardcode. No
+ * platform-specific branching survives here: grouping (Discord's token
+ * grouping), demuxing, and the secret-placeholder guard are all plugin-owned
+ * (`AdapterPlugin.groupBindings` / `.demuxKey` / `.secretFields`).
+ *
  * Construct ONE {@link PlatformAdapter} per surface binding.
  *
  * Synchronous + construct-only: it never calls `adapter.start()` (that is the
- * {@link SurfaceGateway}'s responsibility). Returns the adapters in
- * discord→slack→mattermost order. An empty/absent `Surfaces` map yields `[]`
- * and never touches the factory.
+ * {@link SurfaceGateway}'s responsibility). Returns the adapters in the
+ * registry's platform order (discord→slack→mattermost→web, matching the
+ * pre-registry fixed order — `createDefaultSurfacePluginRegistry` registers
+ * in that sequence). An empty/absent `Surfaces` map yields `[]` and never
+ * touches a plugin's `createAdapter`.
  *
  * @throws re-throws any error from the canonical presence parse (a binding
  *   that the binding-schema admitted but the presence-schema rejects) or from
@@ -373,99 +269,42 @@ export function buildGatewayAdapters(
   surfaces: Surfaces,
   deps: GatewayAdapterDeps,
 ): PlatformAdapter[] {
-  const { principal, runtime, factory } = deps;
+  const { principal, runtime, registry } = deps;
   const adapters: PlatformAdapter[] = [];
+  const surfacesByPlatform = surfaces as unknown as Record<string, SurfaceBindingEntry[] | undefined>;
 
-  // ── Discord — one gateway connection per bot token ────────────────────────
-  //
-  // Discord delivers every guild event for a bot token over that token's one
-  // gateway session. Surface routing remains guild-keyed, but the platform
-  // connection is token-keyed so one assistant can serve multiple guilds
-  // without opening duplicate sessions for the same bot identity.
-  for (const group of groupDiscordBindingsByToken(surfaces.discord ?? [])) {
-    const presences = group.entries.map((entry) => DiscordPresenceSchema.parse(entry.binding));
-    const presence = presences[0];
-    const firstBinding = group.entries[0]?.binding;
-    if (!presence || !firstBinding) continue;
-    // cortex#1209 belt-and-suspenders — a resolved binding can never carry a
-    // literal `__X__` token; fail-fast if one slipped past the load-time
-    // resolver before it reaches Discord `connect()`.
-    for (const p of presences) {
-      assertNoUnresolvedPlaceholder(p.token, "surfaces.discord[].binding.token");
+  for (const plugin of registry.listAdapters()) {
+    const bindings = surfacesByPlatform[plugin.platform] ?? [];
+    if (bindings.length === 0) continue;
+
+    const groups: BindingGroup[] = plugin.groupBindings
+      ? plugin.groupBindings(bindings)
+      : bindings.map((entry) => ({
+          entries: [entry],
+          instanceId: `${plugin.platform}:${plugin.demuxKey(entry.binding)}`,
+        }));
+
+    for (const group of groups) {
+      const firstEntry = group.entries[0];
+      if (!firstEntry) continue;
+
+      // cortex#1209 belt-and-suspenders — a resolved binding can never carry
+      // a literal `__X__` token; fail-fast if one slipped past the
+      // load-time resolver before it reaches the platform's `connect()`.
+      // Checked against every entry in the group (matches the pre-registry
+      // Discord loop, which checked every grouped presence, not just the
+      // first) — the RAW binding value, equivalent to the parsed presence's
+      // value since schema parsing never rewrites a required string field.
+      for (const field of plugin.secretFields) {
+        for (const entry of group.entries) {
+          assertNoUnresolvedPlaceholder(entry.binding[field], `surfaces.${plugin.platform}[].binding.${field}`);
+        }
+      }
+
+      const source = gatewaySource(principal, group.instanceId);
+      const args = plugin.buildGatewayConstructArgs(group, { instanceId: group.instanceId, source, runtime });
+      adapters.push(plugin.createAdapter(args));
     }
-    const presenceByGuildId = new Map(presences.map((p) => [p.guildId, p] as const));
-    const allowedGuildIds = new Set(presenceByGuildId.keys());
-    adapters.push(
-      factory.discord({
-        instanceId: group.instanceId,
-        source: gatewaySource(principal, group.instanceId),
-        binding: firstBinding,
-        runtime,
-        presence,
-        allowedGuildIds,
-        presenceByGuildId,
-      }),
-    );
-  }
-
-  // ── Slack — demux key = workspaceId ───────────────────────────────────────
-  for (const entry of surfaces.slack ?? []) {
-    const presence = SlackPresenceSchema.parse(entry.binding);
-    assertNoUnresolvedPlaceholder(presence.botToken, "surfaces.slack[].binding.botToken");
-    assertNoUnresolvedPlaceholder(presence.appToken, "surfaces.slack[].binding.appToken");
-    const instanceId = `slack:${presence.workspaceId}`;
-    adapters.push(
-      factory.slack({
-        instanceId,
-        source: gatewaySource(principal, instanceId),
-        binding: entry.binding,
-        runtime,
-        presence,
-      }),
-    );
-  }
-
-  // ── Mattermost — demux key = apiUrl (single-binding fallback) ─────────────
-  for (const entry of surfaces.mattermost ?? []) {
-    const presence = MattermostPresenceSchema.parse(entry.binding);
-    assertNoUnresolvedPlaceholder(presence.apiToken, "surfaces.mattermost[].binding.apiToken");
-    // apiUrl is optional on the presence schema but required on the binding
-    // schema; the binding-resolver keys the interim instance on it too.
-    const instanceId = `mattermost:${presence.apiUrl ?? "<unset>"}`;
-    adapters.push(
-      factory.mattermost({
-        instanceId,
-        source: gatewaySource(principal, instanceId),
-        binding: entry.binding,
-        runtime,
-        presence,
-      }),
-    );
-  }
-
-  // ── Web/SSE — demux key = binding.instanceId ──────────────────────────────
-  //
-  // C-110: generic web/SSE surface. No presence schema re-parse (the
-  // WebBinding already carries all runtime fields via WebBindingSchema). The
-  // instanceId is `web:{binding.instanceId}` — the tenant slug the binding
-  // declares. Unlike Discord (token-keyed) or Slack/Mattermost (URL-keyed),
-  // the web binding carries an explicit `instanceId` so multi-tenant
-  // deployments can give each surface a stable, configured name.
-  //
-  // No placeholder guard: the web binding carries no secrets (broadcastUrl
-  // is a non-secret endpoint; auth is CF Access at the edge, not a bot token).
-  for (const entry of surfaces.web ?? []) {
-    const webBinding: WebBinding = entry.binding;
-    const instanceId = `web:${webBinding.instanceId}`;
-    adapters.push(
-      factory.web({
-        instanceId,
-        source: gatewaySource(principal, instanceId),
-        binding: entry.binding,
-        runtime,
-        webBinding,
-      }),
-    );
   }
 
   return adapters;

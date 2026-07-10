@@ -36,6 +36,7 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { SurfaceAdapter } from "../bus/surface-router";
 import type { DashboardRendererConfig } from "../common/types/cortex-config";
 import type { Renderer } from "./types";
+import type { RendererPlugin } from "../adapters/registry";
 
 export interface DashboardRendererOptions {
   /** Max envelopes retained in the ring buffer. Default 1000 — generous
@@ -54,9 +55,11 @@ export class DashboardRenderer implements Renderer {
   private readonly visibility: DashboardRendererConfig["visibility"];
 
   constructor(config: DashboardRendererConfig, options: DashboardRendererOptions = {}) {
-    // Single dashboard per cortex deployment; the bare kind is a stable
-    // surface-router id without needing per-port disambiguation.
-    this.id = "dashboard";
+    // cortex#1788 (S3, ADR-0024 OQ10) — `config.id` defaults to `kind`,
+    // preserving the pre-OQ10 single-dashboard-per-deployment id exactly
+    // when unset. Two `kind: dashboard` entries now need distinct
+    // `id:` values in config to avoid colliding in router metrics.
+    this.id = config.id ?? "dashboard";
     this.subjects = config.subscribe;
     this.bufferSize = options.bufferSize ?? 1000;
     // IAW Phase A.4 — capture the optional visibility block. Forwarded to
@@ -138,3 +141,21 @@ export class DashboardRenderer implements Renderer {
     return [...this.buffer];
   }
 }
+
+/**
+ * cortex#1788 (S3, ADR-0024 D2/OQ8) — `dashboard`'s `RendererPlugin`.
+ * `dashboard` is a permanent in-tree contract anchor (never extracts — D2,
+ * design-pluggable-adapters.md §7.1): removing `kind: dashboard` from the
+ * registered set is config-breaking, and it is one half of the G-1111 §4.6
+ * fail-safe pair. It registers through the SAME registry a bundle would
+ * (dogfooding, ADR-0024 §3.3) even though it never ships as one.
+ */
+export const dashboardRendererPlugin: RendererPlugin = {
+  kind: "renderer",
+  id: "dashboard",
+  rendererKind: "dashboard",
+  // S4 inert placeholder — RendererSchema stays the fixed discriminated
+  // union it is today until then.
+  configSchema: undefined,
+  createRenderer: (config) => new DashboardRenderer(config as DashboardRendererConfig),
+};

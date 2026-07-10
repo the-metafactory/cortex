@@ -53,6 +53,7 @@ import {
   defaultGatewayAdapterFactory,
   type GatewayAdapterFactory,
 } from "./gateway-adapters";
+import { registryFromFactory, type SurfacePluginRegistry } from "../adapters/registry";
 import { BusInboundSink } from "./bus-inbound-sink";
 import { defaultUnroutableWarn } from "./surface-gateway";
 import { makeEmittingUnroutable } from "./gateway-unroutable-emit";
@@ -97,9 +98,19 @@ export interface StartGatewayOpts {
   /**
    * Adapter-construction seam. Production omits this and gets
    * {@link defaultGatewayAdapterFactory}; tests inject a recording fake that
-   * returns construct-only stubs (no platform connection).
+   * returns construct-only stubs (no platform connection). Superseded by
+   * {@link registry} when both are supplied.
    */
   factory?: GatewayAdapterFactory;
+  /**
+   * cortex#1788 (S3, ADR-0024 D5) — the `(kind, id)`-keyed registry
+   * (`src/adapters/registry.ts`). cortex.ts composes ONE registry and
+   * threads it here and to the per-stack boot path
+   * (`wireSurfaceAdapters`). Takes priority over {@link factory} when both
+   * are supplied; existing `factory`-based test doubles keep working
+   * unchanged via {@link registryFromFactory}.
+   */
+  registry?: SurfacePluginRegistry;
   /** Optional unroutable-message hook forwarded to the gateway. */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
   /**
@@ -225,7 +236,7 @@ export async function startGatewayIfEnabled(
   const adapters = buildGatewayAdapters(surfaces, {
     principal: opts.principal,
     runtime: opts.runtime,
-    factory: opts.factory ?? defaultGatewayAdapterFactory,
+    registry: opts.registry ?? registryFromFactory(opts.factory ?? defaultGatewayAdapterFactory),
   });
 
   // Sink selection — the SECOND opt-in gate.

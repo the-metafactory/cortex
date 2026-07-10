@@ -20,6 +20,7 @@ import {
   type GatewayAdapterDeps,
   type GatewayAdapterFactory,
 } from "../gateway-adapters";
+import { registryFromFactory } from "../../adapters/registry";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
@@ -147,7 +148,7 @@ function makeDeps(factory: GatewayAdapterFactory): GatewayAdapterDeps {
   return {
     principal: "andreas",
     runtime: RUNTIME_STUB,
-    factory,
+    registry: registryFromFactory(factory),
   };
 }
 
@@ -394,7 +395,7 @@ describe("buildGatewayAdapters", () => {
     buildGatewayAdapters(DISCORD_SURFACES, {
       principal: "andreas",
       runtime: RUNTIME_STUB,
-      factory,
+      registry: registryFromFactory(factory),
     });
     // builder is synchronous + construct-only
     expect(started).toEqual([]);

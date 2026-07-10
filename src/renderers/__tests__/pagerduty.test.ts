@@ -66,6 +66,19 @@ function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {
 }
 
 describe("PagerDutyRenderer", () => {
+  // cortex#1788 (S3, ADR-0024 OQ10) — id defaults to kind; two `kind:
+  // pagerduty` entries (different routing keys) need distinct configured
+  // ids to avoid colliding in router metrics / a future `unload` verb.
+  test("id defaults to \"pagerduty\" when config.id is unset", () => {
+    const renderer = new PagerDutyRenderer({ kind: "pagerduty", routingKey: "rk", subscribe: [] });
+    expect(renderer.id).toBe("pagerduty");
+  });
+
+  test("id honors config.id when set (OQ10)", () => {
+    const renderer = new PagerDutyRenderer({ kind: "pagerduty", id: "pagerduty-secondary", routingKey: "rk-2", subscribe: [] });
+    expect(renderer.id).toBe("pagerduty-secondary");
+  });
+
   test("POSTs to the events-v2 endpoint with the routing key in the body", async () => {
     const { fetchImpl, calls } = makeFetch(() => new Response("", { status: 202 }));
     const renderer = new PagerDutyRenderer(

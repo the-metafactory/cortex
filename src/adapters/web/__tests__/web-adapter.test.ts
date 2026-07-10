@@ -15,6 +15,7 @@ import type { WebBinding } from "../../../common/types/surfaces";
 import type { InboundMessage } from "../../types";
 import { buildGatewayAdapters } from "../../../gateway/gateway-adapters";
 import type { GatewayAdapterFactory } from "../../../gateway/gateway-adapters";
+import { registryFromFactory } from "../../registry";
 import type { Surfaces } from "../../../common/types/surfaces";
 import type { PlatformAdapter } from "../../types";
 
@@ -730,7 +731,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     const adapters = buildGatewayAdapters(surfaces, {
       principal: "andreas",
       runtime: RUNTIME_STUB,
-      factory,
+      registry: registryFromFactory(factory),
     });
     expect(adapters).toHaveLength(1);
     expect(calls[0]?.instanceId).toBe("web:acme");
@@ -748,7 +749,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     const adapters = buildGatewayAdapters(surfaces, {
       principal: "andreas",
       runtime: RUNTIME_STUB,
-      factory,
+      registry: registryFromFactory(factory),
     });
     expect(adapters).toHaveLength(2);
     expect(calls.map((c) => c.instanceId)).toEqual(["web:app-a", "web:app-b"]);
@@ -759,7 +760,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     const adapters = buildGatewayAdapters({}, {
       principal: "andreas",
       runtime: RUNTIME_STUB,
-      factory,
+      registry: registryFromFactory(factory),
     });
     expect(adapters).toHaveLength(0);
     expect(calls.filter((c) => c.platform === "web")).toHaveLength(0);
@@ -778,7 +779,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     };
     buildGatewayAdapters(
       { web: [{ agent: "ivy", binding: { host: "127.0.0.1", instanceId: "acme", broadcastUrl: "http://x.com", port: 8090, transport: "ws", authScheme: "none" } }] },
-      { principal: "andreas", runtime: RUNTIME_STUB, factory },
+      { principal: "andreas", runtime: RUNTIME_STUB, registry: registryFromFactory(factory) },
     );
     expect(capturedSource).toMatchObject({
       principal: "andreas",
@@ -800,7 +801,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     };
     buildGatewayAdapters(
       { web: [{ agent: "ivy", binding: { host: "127.0.0.1", instanceId: "acme", broadcastUrl: "http://x.com/b", port: 8090, transport: "sse", authScheme: "header", authHeader: "X-User" } }] },
-      { principal: "andreas", runtime: RUNTIME_STUB, factory },
+      { principal: "andreas", runtime: RUNTIME_STUB, registry: registryFromFactory(factory) },
     );
     const b = capturedWebBinding as Record<string, unknown>;
     expect(b.instanceId).toBe("acme");
@@ -820,7 +821,7 @@ describe("buildGatewayAdapters — web bindings", () => {
     const adapters = buildGatewayAdapters(surfaces, {
       principal: "p",
       runtime: RUNTIME_STUB,
-      factory,
+      registry: registryFromFactory(factory),
     });
     // The WebAdapter produced by the default factory has no surfaceConfig getter
     // (no surfaceSubjects field). Verify the interface contract only exposes
@@ -879,7 +880,7 @@ describe("WebAdapter — tenant agnosticism", () => {
     };
 
     const RUNTIME_STUB = { enabled: false, publish: async () => {}, publishFederated: async () => {}, subscribe: undefined, onEnvelope: () => ({ unregister: () => {} }), stop: async () => {} } as unknown as Parameters<typeof buildGatewayAdapters>[1]["runtime"];
-    buildGatewayAdapters(surfaces, { principal: "p", runtime: RUNTIME_STUB, factory });
+    buildGatewayAdapters(surfaces, { principal: "p", runtime: RUNTIME_STUB, registry: registryFromFactory(factory) });
 
     const webCalls = calls.filter((c) => c.platform === "web");
     expect(webCalls).toHaveLength(2);

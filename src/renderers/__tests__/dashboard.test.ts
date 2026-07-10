@@ -30,6 +30,19 @@ function makeEnvelope(id: string): Envelope {
 }
 
 describe("DashboardRenderer", () => {
+  // cortex#1788 (S3, ADR-0024 OQ10) — id defaults to kind; two `kind:
+  // dashboard` instances need distinct configured ids to avoid colliding in
+  // router metrics.
+  test("id defaults to \"dashboard\" when config.id is unset", () => {
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: [], projections: [] });
+    expect(r.id).toBe("dashboard");
+  });
+
+  test("id honors config.id when set (OQ10)", () => {
+    const r = new DashboardRenderer({ kind: "dashboard", id: "dashboard-2", port: 8768, subscribe: [], projections: [] });
+    expect(r.id).toBe("dashboard-2");
+  });
+
   test("buffers rendered envelopes in insertion order", async () => {
     const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.render(makeEnvelope("e1"));

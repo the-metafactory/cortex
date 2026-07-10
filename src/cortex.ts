@@ -132,6 +132,7 @@ import {
 
 import { attachLegacyOutboundLog } from "./adapters/discord";
 import { createRenderer, type Renderer } from "./renderers";
+import { createDefaultSurfacePluginRegistry } from "./adapters/registry";
 import { RendererSchema, deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
 import type {
   Agent,
@@ -3103,6 +3104,15 @@ export async function startCortex(
   const adapters: PlatformAdapter[] = [];
   const adapterCleanup: (() => void)[] = [];
 
+  // cortex#1788 (S3, ADR-0024 D5) — compose ONE `(kind, id)`-keyed
+  // adapter/renderer registry for this boot and thread it to every
+  // construction site below: the per-stack boot path (`wireSurfaceAdapters`),
+  // the renderer boot loop (`createRenderer`), and the shared surface
+  // gateway (`startGatewayIfEnabled`). All three paths dogfood the SAME
+  // in-tree registrations (ADR-0024 §3.3) — extraction later moves a plugin
+  // out, it never rewires this composition.
+  const surfacePluginRegistry = createDefaultSurfacePluginRegistry();
+
   // GW.a.3b.2c (cortex#524) — the surface ownership plan. When
   // `CORTEX_GATEWAY` is set, the shared surface gateway (constructed below via
   // `startGatewayIfEnabled`) builds ONE adapter per `surfaces:` binding on the
@@ -3198,6 +3208,7 @@ export async function startCortex(
     adapters,
     adapterCleanup,
     liveSurfaces,
+    registry: surfacePluginRegistry,
   });
 
   // MIG-7.2d: non-agent-bound renderers (dashboard, pagerduty, …).
@@ -3252,7 +3263,7 @@ export async function startCortex(
       subscribe: subjectPlaceholderSubstituter(parseResult.data.subscribe),
     };
     try {
-      const renderer = createRenderer(rendererConfig);
+      const renderer = createRenderer(rendererConfig, surfacePluginRegistry);
       await renderer.start();
       router.register(renderer.surfaceConfig);
       renderers.push(renderer);
@@ -5494,6 +5505,7 @@ export async function startCortex(
     source: systemEventSource,
     policyEngine: adapterPolicyEngine,
     ownershipPlan: surfaceOwnershipPlan,
+    registry: surfacePluginRegistry,
   });
   const gw: SurfaceGateway | undefined = startedGateway?.gateway;
 

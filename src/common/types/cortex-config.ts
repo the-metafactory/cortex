@@ -1108,6 +1108,14 @@ export type RendererVisibility = z.infer<typeof RendererVisibilitySchema>;
  */
 export const DashboardRendererSchema = z.object({
   kind: z.literal("dashboard"),
+  /**
+   * cortex#1788 (S3, ADR-0024 OQ10) — optional instance id, defaulting to
+   * `kind`. `renderers[]` is an array; two `kind: dashboard` entries would
+   * otherwise both construct with the same hardcoded id, colliding in
+   * router metrics and making a future `unload` verb ambiguous. Additive,
+   * non-breaking — an unset `id` preserves today's behaviour exactly.
+   */
+  id: z.string().min(1).optional(),
   port: z.number().int().positive().default(8767),
   publicUrl: z.url().optional(),
   subscribe: z.array(z.string().min(1)).default(["local.{principal}.>"]),
@@ -1138,6 +1146,13 @@ export type DashboardRendererConfig = z.infer<typeof DashboardRendererSchema>;
  */
 export const PagerDutyRendererSchema = z.object({
   kind: z.literal("pagerduty"),
+  /**
+   * cortex#1788 (S3, ADR-0024 OQ10) — optional instance id, defaulting to
+   * `kind`. See {@link DashboardRendererSchema.id} for the rationale; the
+   * pagerduty case is the one OQ10 names explicitly (two `kind: pagerduty`
+   * entries with different routing keys are otherwise indistinguishable).
+   */
+  id: z.string().min(1).optional(),
   /** Integration / routing key for PagerDuty events-v2. */
   routingKey: z.string().min(1),
   /** Subject patterns to subscribe to. Principal chooses what counts as page-worthy. */
@@ -1157,6 +1172,9 @@ export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
  */
 export const CliTailRendererSchema = z.object({
   kind: z.literal("cli-tail"),
+  /** cortex#1788 (S3, ADR-0024 OQ10) — optional instance id, defaulting to
+   *  `kind`. See {@link DashboardRendererSchema.id}. */
+  id: z.string().min(1).optional(),
   subscribe: z.array(z.string().min(1)).default(["local.{principal}.>"]),
   /**
    * IAW Phase A.4 — optional visibility guardrails. See
@@ -1173,6 +1191,9 @@ export type CliTailRendererConfig = z.infer<typeof CliTailRendererSchema>;
  */
 export const WebhookOutRendererSchema = z.object({
   kind: z.literal("webhook-out"),
+  /** cortex#1788 (S3, ADR-0024 OQ10) — optional instance id, defaulting to
+   *  `kind`. See {@link DashboardRendererSchema.id}. */
+  id: z.string().min(1).optional(),
   url: z.url(),
   subscribe: z.array(z.string().min(1)).default([]),
   /** Optional auth header (e.g. `Bearer <token>`). */
