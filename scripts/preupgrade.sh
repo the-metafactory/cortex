@@ -19,8 +19,11 @@ if [ "$(uname)" = "Darwin" ]; then
   # Holly cortex#52 round 1 nit-3: previous `pgrep -f "cortex start"` matched
   # any commandline containing that substring (`grep cortex start`, vim
   # buffers, other users' editors on shared hosts). Constrain to the
-  # `~/bin/cortex` symlink path so only the actual daemon is matched.
-  CORTEX_PIDS=$(pgrep -f "${HOME}/bin/cortex start" 2>/dev/null || true)
+  # `cortex` symlink path so only the actual daemon is matched. cortex#1866:
+  # the symlink target moved from `~/bin/cortex` to `~/.local/bin/cortex`;
+  # match both so a host mid-upgrade (daemon still running from the old
+  # location) is still caught.
+  CORTEX_PIDS=$(pgrep -f "${HOME}/(bin|\.local/bin)/cortex start" 2>/dev/null || true)
   if [ -n "${CORTEX_PIDS}" ]; then
     echo "  Killing existing cortex processes: ${CORTEX_PIDS}"
     kill ${CORTEX_PIDS} 2>/dev/null || true
@@ -29,10 +32,11 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  ✓ Old cortex agent processes terminated"
   fi
 
-  # Kill running cortex-relay processes — anchor to ~/bin path for the same
+  # Kill running cortex-relay processes — anchor to the bin path for the same
   # specificity reason. Also catches the legacy grove-relay binary path
-  # (`~/bin/grove-relay`) during the cutover window.
-  RELAY_PIDS=$(pgrep -f "${HOME}/bin/(cortex-relay|grove-relay)" 2>/dev/null || true)
+  # (`~/bin/grove-relay`) during the cutover window. cortex#1866: cortex-relay
+  # moved from `~/bin` to `~/.local/bin`; match both locations.
+  RELAY_PIDS=$(pgrep -f "${HOME}/(bin/(cortex-relay|grove-relay)|\.local/bin/cortex-relay)" 2>/dev/null || true)
   if [ -n "${RELAY_PIDS}" ]; then
     echo "  Killing existing relay processes: ${RELAY_PIDS}"
     kill ${RELAY_PIDS} 2>/dev/null || true

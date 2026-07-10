@@ -28,7 +28,7 @@ echo "Running Cortex postinstall..."
 mkdir -p "${EVENTS_DIR}/raw" "${EVENTS_DIR}/published" \
          "${CLAUDE_DIR}/logs" "${CLAUDE_DIR}/relay" \
          "${CONFIG_DIR}/logs" "${CONFIG_DIR}/state" \
-         "${HOME}/bin"
+         "${HOME}/.local/bin"
 chmod 700 "${EVENTS_DIR}/raw"
 chmod 755 "${EVENTS_DIR}/published"
 echo "  ✓ Runtime directories created (~/.claude/events — hook event buffer; ~/.config/cortex/{logs,state} — daemon logs + state)"

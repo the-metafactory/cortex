@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="${HOME}/.claude"
 CONFIG_DIR="${HOME}/.config/cortex"
 
-mkdir -p "${HOME}/bin" "${CLAUDE_DIR}/relay" \
+mkdir -p "${HOME}/.local/bin" "${CLAUDE_DIR}/relay" \
          "${CLAUDE_DIR}/skills" "${CONFIG_DIR}/logs"
 
 echo "Upgrading Cortex (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."

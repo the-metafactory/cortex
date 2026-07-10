@@ -29,7 +29,7 @@ set -uo pipefail
 # ── Layout & ports (all high, isolated) ──────────────────────────────────────
 ROOT="${CORTEX_SELFTEST_DIR:-$HOME/.cache/cortex-selftest}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORTEX="${CORTEX_BIN:-$HOME/bin/cortex}"
+CORTEX="${CORTEX_BIN:-$HOME/.local/bin/cortex}"
 
 NET="selftest"                       # throwaway network id
 # Two PRINCIPALS (mirrors the real cross-principal jc↔andreas scenario), each one
@@ -246,7 +246,7 @@ EOF
 #      makes cortex refuse with a clear ARC_TOO_OLD error (by design).
 #   2. cortex's `--hub-mode`/`--resolver-mode`/`--hub-fed-account` flags + the
 #      operator-mode admit branch are on THIS branch but not in the deployed
-#      `~/bin/cortex` — so $CORTEX (CORTEX_BIN) must point at a worktree build.
+#      `~/.local/bin/cortex` — so $CORTEX (CORTEX_BIN) must point at a worktree build.
 # Until both land, `operator` preflights and SKIPS with the gate reason — it
 # never false-fails. Set CORTEX_BIN to a worktree cortex to exercise the flags.
 # =============================================================================

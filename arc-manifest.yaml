@@ -8,7 +8,7 @@ name: "cortex"
 # now fail to load (strict canonical-only schemas). Run `cortex migrate-config`
 # to rewrite a pre-v4 config to the canonical `principal:` / `principalId` /
 # `principal_id` shape.
-version: "6.7.1"
+version: "6.7.2"
 type: component
 tier: community
 description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin stack"
@@ -27,11 +27,11 @@ repository: "the-metafactory/cortex"
 #     does NOT touch them while grove is installed. Sequence:
 #       1. `arc uninstall Grove` (legacy)
 #       2. `arc upgrade cortex`
-#       3. Verify `~/bin/cortex` resolves and `~/bin/grove-bot` is gone.
+#       3. Verify `~/.local/bin/cortex` resolves and `~/bin/grove-bot` is gone.
 #
 # Deprecation shim (separate manual step, not part of this manifest):
 #   - Install `scripts/grove-bot-shim.sh` as `~/bin/grove-bot`. It prints
-#     "use cortex instead" and execs `~/bin/cortex "$@"`. Operator can keep
+#     "use cortex instead" and execs `~/.local/bin/cortex "$@"`. Operator can keep
 #     this in place during cutover so old aliases keep working. Removed in
 #     MIG-8.4.
 #
@@ -41,9 +41,9 @@ provides:
   files:
     # ─── Bot + relay binaries ─────────────────────────────────
     - source: src/cortex.ts
-      target: ~/bin/cortex
+      target: ~/.local/bin/cortex
     - source: src/taps/cc-events/relay.ts
-      target: ~/bin/cortex-relay
+      target: ~/.local/bin/cortex-relay
 
     # ─── Operator CLIs (carried forward from MIG-6) ──────────
     # The Discord CLI + its wrapping skill (formerly src/cli/discord/discord.ts →
@@ -53,7 +53,7 @@ provides:
     # cortex declares it under `dependencies:` below. The live Discord ADAPTER
     # (src/adapters/discord/) STAYS in cortex — only the tooling moved.
     - source: src/cli/cldyo-live
-      target: ~/bin/cldyo-live
+      target: ~/.local/bin/cldyo-live
 
     # ─── Claude Code hooks ────────────────────────────────────
     # Hook source filenames are kebab-case (event-logger.hook.ts,

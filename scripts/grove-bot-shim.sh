@@ -25,4 +25,4 @@
 # Removal: deleted at MIG-8.4 (`rm ~/bin/grove-bot`).
 
 echo "warning: grove-bot is a deprecation shim — use 'cortex' directly. See cortex#9 MIG-7." >&2
-exec "${HOME}/bin/cortex" "$@"
+exec "${HOME}/.local/bin/cortex" "$@"

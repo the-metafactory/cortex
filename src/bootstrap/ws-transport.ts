@@ -19,7 +19,7 @@
  *
  * Placement contract: this module MUST be imported before any transitive
  * `discord.js` import. cortex runs UNBUNDLED from source under Bun
- * (`~/bin/cortex` → `src/cortex.ts`), so there is no tree-shake/bundle step
+ * (`~/.local/bin/cortex` → `src/cortex.ts`), so there is no tree-shake/bundle step
  * to defeat the override — being the first import of the entry module is
  * sufficient. ESM evaluates imported modules depth-first in source order, so
  * `import "./bootstrap/ws-transport"` on line 1 runs its side effect before

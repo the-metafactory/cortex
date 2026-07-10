@@ -6,7 +6,7 @@
     <string>ai.meta-factory.cortex.__STACK_SLUG__</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/bin/cortex</string>
+        <string>__HOME__/.local/bin/cortex</string>
         <string>start</string>
         <string>--config</string>
         <string>__CONFIG_PATH__</string>
@@ -26,7 +26,7 @@
         <key>HOME</key>
         <string>__HOME__</string>
         <key>PATH</key>
-        <string>__HOME__/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.local/bin:__HOME__/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>CORTEX_CHANNEL</key>
         <string>__STACK_SLUG__</string>
     </dict>

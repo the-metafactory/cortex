@@ -175,7 +175,7 @@ presence:
 
 ### Step 4 — Write + load the cortex plist
 
-`~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` → `/Users/<you>/bin/cortex start --config ~/.config/cortex/<slug>/<slug>.yaml`, `WorkingDirectory` = the installed pkg, `CORTEX_CHANNEL=<slug>`, logs to `~/.config/cortex/logs/cortex-<slug>.{log,error.log}`. Then `launchctl load …`.
+`~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` → `/Users/<you>/.local/bin/cortex start --config ~/.config/cortex/<slug>/<slug>.yaml`, `WorkingDirectory` = the installed pkg, `CORTEX_CHANNEL=<slug>`, logs to `~/.config/cortex/logs/cortex-<slug>.{log,error.log}`. Then `launchctl load …`.
 
 ### Step 5 — Verify
 
