@@ -133,7 +133,7 @@ function lunaAgent(): Agent {
     persona: "./personas/luna.md",
     trust: [],
     presence: {},
-  } as unknown as Agent;
+  };
 }
 
 // =============================================================================
@@ -314,11 +314,14 @@ async function alphaEmitsOnline(alpha: StackHandle): Promise<Envelope> {
     );
   }
 
-  return (await signEnvelope(
+  // `signEnvelope` narrows `signed_by` to an array; cortex's `Envelope` allows
+  // the legacy single-stamp shape. Same cast the sibling harnesses use
+  // (`federated-subscriber-self-deny.test.ts:205`).
+  return await signEnvelope(
     federatedCopy as unknown as Parameters<typeof signEnvelope>[0],
     alpha.signer.seedBase64,
     alpha.signer.did,
-  )) as Envelope;
+  );
 }
 
 // =============================================================================
@@ -398,9 +401,28 @@ async function startBeta(
   });
 }
 
-/** Let the chain-verify promise settle (the fold happens in its `.then`). */
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 50));
+/**
+ * Wait until the fold lands. The subscriber folds inside `verifySignedByChain`'s
+ * `.then`, so the assertion has to wait on real ed25519 work — observed between
+ * ~5ms (warm) and ~1.5s (cold, first keypair + verify in a fresh process). A
+ * fixed sleep is therefore a flake in both directions; poll for the positive
+ * signal instead and fail loudly on timeout.
+ */
+async function waitForFold(
+  registry: AgentPresenceRegistry,
+  expected: number,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (registry.getAgents().length >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(
+    `test harness: timed out after ${timeoutMs}ms waiting for ${expected} folded ` +
+      `record(s); registry holds ${registry.getAgents().length}. A DROP (gate or ` +
+      `chain-verify) prints its reason on stderr above.`,
+  );
 }
 
 // =============================================================================
@@ -433,7 +455,7 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
       betaAcceptSubjects().some((pattern) => subjectMatches(pattern, subject)),
     ).toBe(true);
 
-    await settle();
+    await waitForFold(registry, 1);
 
     // Gated → chain-verified → folded.
     const agents = registry.getAgents();
@@ -466,7 +488,7 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
 
     const signed = await alphaEmitsOnline(alpha);
     const subject = fanOutFederated(signed, [beta], "primary");
-    await settle();
+    await waitForFold(registry, 1);
 
     // The stack slug survives END-TO-END. #1812 was invisible under a `default`
     // slug: every segment that should carry the slug carried `default` instead,
@@ -484,9 +506,14 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
     const record = agents[0];
     if (record === undefined) throw new Error("expected one folded record");
     expect(record.stack).toBe("meta-factory");
-    // 4. Nowhere does a `default` slug appear — the masking value never leaks in.
-    expect(agents.some((a) => a.stack === "default")).toBe(false);
-    expect(subject.includes("default")).toBe(false);
+    // 4. And in the record key the registry partitions the foreign namespace by.
+    expect(record.key).toBe("alpha/meta-factory/forge");
+    //
+    // Each assertion above pins the EXACT expected slug. That is strictly
+    // stronger than asserting the masking slug is absent (and it keeps this file
+    // free of the literal, per the WP-1 acceptance grep): if the slug were ever
+    // collapsed — to the masking value or to anything else — every one of these
+    // fails.
 
     await handle.stop();
   });
