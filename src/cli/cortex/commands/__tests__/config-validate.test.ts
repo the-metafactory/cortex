@@ -102,6 +102,59 @@ describe("cortex config validate — valid config", () => {
   });
 });
 
+describe("cortex config validate — FND-6 governance drift (posture A, warning-level)", () => {
+  /** Cortex config that enables MC and points at a sibling MC yaml. */
+  function configWithMc(mcConfigPath: string): Record<string, unknown> {
+    const cfg = validConfig();
+    cfg.claude = {};
+    cfg.mc = { enabled: true, configPath: mcConfigPath };
+    return cfg;
+  }
+
+  function writeMcYaml(body: string): string {
+    const path = join(testDir, "mission-control.yaml");
+    writeFileSync(path, body);
+    return path;
+  }
+
+  test("surfaces a WARNING (exit 0) when the MC yaml sets principals without a listed local_principal", async () => {
+    const mcPath = writeMcYaml("governance:\n  principals:\n    - andreas@x.io\n");
+    const path = writeConfig(configWithMc(mcPath));
+    const result = await dispatchConfig(["validate", "--config", path]);
+
+    // The cortex config is VALID → exit 0, ✓ line still printed …
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("✓ config valid:");
+    // … but the governance footgun is surfaced pre-write on stderr.
+    expect(result.stderr).toContain("mc.governance");
+    expect(result.stderr).toContain("local_principal is unset");
+    expect(result.stderr).toContain("403");
+  });
+
+  test("--json carries the warning under a warnings[] key (still ok:true)", async () => {
+    const mcPath = writeMcYaml("governance:\n  principals:\n    - andreas@x.io\n");
+    const path = writeConfig(configWithMc(mcPath));
+    const result = await dispatchConfig(["validate", "--config", path, "--json"]);
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { ok: boolean; warnings?: string[] };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.warnings?.length).toBe(1);
+    expect(parsed.warnings?.[0]).toContain("mc.governance");
+  });
+
+  test("NO warning (clean stderr) when local_principal is a listed principal", async () => {
+    const mcPath = writeMcYaml(
+      "governance:\n  principals:\n    - andreas@x.io\n  local_principal: andreas@x.io\n",
+    );
+    const path = writeConfig(configWithMc(mcPath));
+    const result = await dispatchConfig(["validate", "--config", path]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+});
+
 describe("cortex config validate — invalid config", () => {
   /**
    * Take the valid config and add an OUT-OF-SCOPE second accept_subject at

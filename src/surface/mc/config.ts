@@ -51,7 +51,49 @@ export const DEFAULT_CONFIG: Config = {
  * - If the file is partial, missing fields get defaults.
  * - If the file is malformed YAML, throws with a clear message.
  */
-export function loadConfig(configPath?: string): Readonly<Config> {
+/**
+ * FND-6 posture A — detect the misconfiguration that silently re-breaks the
+ * headerless local dashboard: `mc.governance.principals` is set (authorization
+ * binding active) but `mc.governance.local_principal` is unset OR set to a value
+ * NOT in `principals`. In that state a headerless loopback request resolves to
+ * `DEFAULT_LOCAL_PRINCIPAL` (or the unlisted local principal), which is not in
+ * the allowlist → 403 on every control — the exact regression posture A fixes,
+ * reintroduced the moment a principal hardens with an allowlist (the natural
+ * post-#1640 step).
+ *
+ * Pure (no I/O) so both the loader (boot warning) and `cortex config validate`
+ * (pre-write finding) share ONE detection. Returns the warning text, or `null`
+ * when the config is fine. Comparison is case-insensitive, matching
+ * `checkAuthorization` (which lowercases both sides).
+ */
+export function detectLocalPrincipalDrift(
+  governance: GovernanceConfig | undefined,
+): string | null {
+  if (!governance || governance.principals.length === 0) return null;
+  const listed = new Set(governance.principals.map((p) => p.trim().toLowerCase()));
+  const local = (governance.localPrincipal ?? "").trim().toLowerCase();
+  if (local.length > 0 && listed.has(local)) return null;
+  const cause =
+    local.length === 0
+      ? "unset"
+      : `set to "${governance.localPrincipal}", which is not one of the listed principals`;
+  return (
+    `WARNING mc.governance: principals is set but local_principal is ${cause} — ` +
+    "the headerless local dashboard will be refused (403 on every mutating control). " +
+    "Set mc.governance.local_principal to one of the listed principals."
+  );
+}
+
+/** Default warning sink for {@link loadConfig} — one line to stderr. */
+function defaultWarn(message: string): void {
+  process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
+}
+
+export function loadConfig(
+  configPath?: string,
+  opts?: { onWarning?: (message: string) => void },
+): Readonly<Config> {
+  const warn = opts?.onWarning ?? defaultWarn;
   // GV-1: cortex-first, grove-fallback for the default mission-control.yaml.
   const resolvedPath =
     configPath ??
@@ -242,6 +284,13 @@ export function loadConfig(configPath?: string): Readonly<Config> {
     ...(cfAccess ? { cfAccess } : {}),
     ...(governance ? { governance } : {}),
   };
+
+  // FND-6 posture A — loud, non-fatal warning when an allowlist is set without a
+  // listed local_principal (would silently 403 the headerless local dashboard).
+  // Warn, never hard-fail: bricking an existing deployment over this is worse
+  // than the 403 it predicts.
+  const drift = detectLocalPrincipalDrift(governance);
+  if (drift) warn(drift);
 
   return Object.freeze(config);
 }

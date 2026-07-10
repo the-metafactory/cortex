@@ -231,9 +231,11 @@ describe("FND-6 posture A — legitimate loopback dashboard requests succeed (he
     expect(res.status).toBe(200);
   });
 
-  it("does NOT 401 a headerless requeue/abandon on loopback (auth-pass; handler-level status only)", async () => {
+  it("does NOT 401 a headerless requeue/abandon/input on loopback (auth-pass; handler-level status only)", async () => {
     c = start();
-    for (const route of ["requeue", "abandon"] as const) {
+    // Send-input (`/input`) is a dashboard control too — cover it here so the
+    // "every mutating control" claim is real (finding #2).
+    for (const route of ["requeue", "abandon", "input"] as const) {
       const res = await fetch(
         `${c.baseUrl}/api/assignments/nonexistent/${route}`,
         { method: "POST", headers: { "content-type": "application/json", origin: c.baseUrl }, body: "{}" },
@@ -242,6 +244,24 @@ describe("FND-6 posture A — legitimate loopback dashboard requests succeed (he
       // but it must NOT be the 401 the pre-posture-A gate produced.
       expect(res.status).not.toBe(401);
     }
+  });
+
+  it("ALLOWS a headerless attention DISMISS on loopback — 200 (auth-pass, not 401)", async () => {
+    c = start();
+    upsertAttentionItem(c.db, {
+      id: "dash-att-dismiss",
+      stackId: "s",
+      workItemId: null,
+      sessionId: null,
+      kind: "review",
+      severity: "normal",
+      status: "open",
+    });
+    const res = await fetch(`${c.baseUrl}/api/attention/dash-att-dismiss/dismiss`, {
+      method: "POST",
+      headers: { origin: c.baseUrl },
+    });
+    expect(res.status).toBe(200);
   });
 
   it("uses the header for audit attribution when present (still 201)", async () => {

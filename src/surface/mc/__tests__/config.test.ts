@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { loadConfig, DEFAULT_CONFIG } from "../config";
+import { loadConfig, detectLocalPrincipalDrift, DEFAULT_CONFIG } from "../config";
+import { DEFAULT_LOCAL_PRINCIPAL } from "../api/networks-admission";
 import { mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -103,5 +104,109 @@ describe("mission-control config", () => {
     expect(config.ws.maxClients).toBe(50);
     expect(config.ws.idleTimeoutSec).toBe(30);
     expect(config.ws.maxPayloadLength).toBe(DEFAULT_CONFIG.ws.maxPayloadLength);
+  });
+
+  // ── FND-6 posture A — governance.local_principal parsing + drift warning ──
+
+  it("parses governance.local_principal from YAML", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(
+      configPath,
+      "governance:\n  principals:\n    - andreas@x.io\n  local_principal: andreas@x.io\n",
+    );
+    const config = loadConfig(configPath, { onWarning: () => {} });
+    expect(config.governance?.localPrincipal).toBe("andreas@x.io");
+    expect(config.governance?.principals).toEqual(["andreas@x.io"]);
+  });
+
+  it("throws when governance.local_principal is an empty string", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "governance:\n  principals: []\n  local_principal: ''\n");
+    expect(() => loadConfig(configPath)).toThrow(/local_principal must be a non-empty string/);
+  });
+
+  it("throws when governance.local_principal is whitespace-only", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "governance:\n  principals: []\n  local_principal: '   '\n");
+    expect(() => loadConfig(configPath)).toThrow(/local_principal must be a non-empty string/);
+  });
+
+  it("throws when governance.local_principal is a number", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "governance:\n  principals: []\n  local_principal: 42\n");
+    expect(() => loadConfig(configPath)).toThrow(/local_principal must be a non-empty string/);
+  });
+
+  it("throws when governance.local_principal is an array", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "governance:\n  principals: []\n  local_principal:\n    - a@b.io\n");
+    expect(() => loadConfig(configPath)).toThrow(/local_principal must be a non-empty string/);
+  });
+
+  it("WARNS (via onWarning) when principals is set but local_principal is unset", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "governance:\n  principals:\n    - andreas@x.io\n");
+    const warnings: string[] = [];
+    loadConfig(configPath, { onWarning: (m) => warnings.push(m) });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("mc.governance");
+    expect(warnings[0]).toContain("local_principal is unset");
+    expect(warnings[0]).toContain("403");
+  });
+
+  it("does NOT warn when principals is set and local_principal is a listed value", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(
+      configPath,
+      "governance:\n  principals:\n    - andreas@x.io\n  local_principal: andreas@x.io\n",
+    );
+    const warnings: string[] = [];
+    loadConfig(configPath, { onWarning: (m) => warnings.push(m) });
+    expect(warnings).toHaveLength(0);
+  });
+});
+
+describe("detectLocalPrincipalDrift (FND-6 posture A, pure)", () => {
+  it("returns null when governance is undefined", () => {
+    expect(detectLocalPrincipalDrift(undefined)).toBeNull();
+  });
+
+  it("returns null when principals is empty (permissive-on-loopback path)", () => {
+    expect(detectLocalPrincipalDrift({ principals: [] })).toBeNull();
+    expect(detectLocalPrincipalDrift({ principals: [], localPrincipal: "x@y.io" })).toBeNull();
+  });
+
+  it("warns when principals set + local_principal unset (would 403 the sentinel)", () => {
+    const msg = detectLocalPrincipalDrift({ principals: ["andreas@x.io"] });
+    expect(msg).toContain("unset");
+    expect(msg).toContain("403");
+    // The sentinel the headerless caller would resolve to is not in the allowlist.
+    expect(DEFAULT_LOCAL_PRINCIPAL).not.toBe("andreas@x.io");
+  });
+
+  it("warns when local_principal is set but NOT in principals", () => {
+    const msg = detectLocalPrincipalDrift({
+      principals: ["andreas@x.io"],
+      localPrincipal: "someone@else.io",
+    });
+    expect(msg).toContain("not one of the listed principals");
+  });
+
+  it("is case-insensitive when matching local_principal against principals", () => {
+    expect(
+      detectLocalPrincipalDrift({
+        principals: ["Andreas@X.io"],
+        localPrincipal: "andreas@x.io",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when local_principal IS a listed principal", () => {
+    expect(
+      detectLocalPrincipalDrift({
+        principals: ["a@b.io", "andreas@x.io"],
+        localPrincipal: "andreas@x.io",
+      }),
+    ).toBeNull();
   });
 });

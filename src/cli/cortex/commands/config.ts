@@ -47,6 +47,7 @@
 
 import { loadConfigWithAgents, expandTilde } from "../../../common/config/loader";
 import { formatConfigLoadError } from "../../../common/config/validate-on-write";
+import { loadConfig as loadMcConfig } from "../../../surface/mc/config";
 import { DEFAULT_CONFIG } from "../../../common/pidfile";
 
 import { CliArgsError } from "./_shared/arg-error";
@@ -124,14 +125,43 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
     const networks = loaded.policy?.federated?.networks.length ?? 0;
     const summary: ValidateSummary = { path: resolvedPath, stacks, networks };
 
+    // FND-6 posture A — surface the mc.governance local_principal drift pre-write
+    // (the misconfig that silently 403s the headerless local dashboard). The
+    // governance block lives in the Mission Control yaml (`mc.configPath`), NOT
+    // the cortex schema, so we load that file and reuse the SAME pure detector
+    // the daemon runs at boot. Only when `mc.configPath` is explicitly set — an
+    // empty path resolves to the daemon's default MC yaml, which we must not read
+    // for an unrelated `validate` (it would make the finding environment-
+    // dependent). Warning-level: it never flips exit code (the cortex config is
+    // valid); it is a heads-up, not a rejection.
+    const warnings: string[] = [];
+    const mcConfigPath = loaded.config.mc.configPath.trim();
+    if (loaded.config.mc.enabled && mcConfigPath !== "") {
+      try {
+        loadMcConfig(expandTilde(mcConfigPath), {
+          onWarning: (m) => warnings.push(m),
+        });
+      } catch (err) {
+        // The MC yaml itself is malformed/unreadable — surfaced at daemon boot
+        // (MC loadConfig throws there too); `cortex config validate`'s contract
+        // is the cortex config, so we note it without failing validation.
+        warnings.push(
+          `NOTE mc: could not read the Mission Control config at ${mcConfigPath} to check governance ` +
+            `(${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
+    }
+    const warnStderr = warnings.length > 0 ? warnings.map((w) => `${w}\n`).join("") : "";
+
     if (json) {
       const payload = {
         ok: true,
         path: summary.path,
         stacks: summary.stacks,
         networks: summary.networks,
+        ...(warnings.length > 0 ? { warnings } : {}),
       };
-      return { exitCode: 0, stdout: JSON.stringify(payload) + "\n", stderr: "" };
+      return { exitCode: 0, stdout: JSON.stringify(payload) + "\n", stderr: warnStderr };
     }
 
     const stackWord = stacks === 1 ? "stack" : "stacks";
@@ -141,7 +171,7 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
       stdout:
         `✓ config valid: ${summary.path}\n` +
         `  ${stacks} ${stackWord}, ${networks} ${networkWord}\n`,
-      stderr: "",
+      stderr: warnStderr,
     };
   } catch (err) {
     const errors = formatConfigLoadError(err);
