@@ -501,10 +501,20 @@ reload_plist() {
 #     it is not launchctl-unloaded), so it keeps running on its live process;
 #   - has its binary moved + forward-symlink bridged + plist re-rendered as
 #     normal, but is NOT bootout/bootstrapped by postupgrade;
-#   - migrates to ~/.local/bin at its NEXT natural restart / a maintenance
-#     window (the re-rendered plist takes effect then); until then the
-#     forward-symlink (forward_link_legacy_bin) keeps ~/bin valid.
+#   - migrates to ~/.local/bin on its NEXT bootout+bootstrap (reboot / logout /
+#     manual `launchctl` reload / maintenance window), when the re-rendered plist
+#     takes effect. A KeepAlive relaunch of the SAME job does NOT migrate it — a
+#     relaunched process keeps launchd's in-memory ProgramArguments (the OLD
+#     ~/bin exec path); the forward-symlink (forward_link_legacy_bin) keeps that
+#     ~/bin path valid until the job is bootstrapped from the new plist on disk.
 # Relay is never routed through the skip check — it always reloads.
+#
+# KEY UNIFICATION (advw3b 3a): BOTH sides key on SLUG. preupgrade's kill-filter
+# resolves each running daemon's slug from its argv `--config` (canonicalized
+# via realpath, then the repo's filename→slug map), NOT by path-substring — so a
+# daemon whose argv spells its config differently (relative path, or the
+# cortex#717 monolith-vs-dir-layout coexistence) can't desync the kill side from
+# postupgrade's slug-keyed reload side and get killed-but-never-restarted.
 
 # True if $1 (a slug) is in CORTEX_UPGRADE_SKIP_RESTART. Word-splitting on the
 # comma-normalized list trims incidental whitespace; slugs are [a-zA-Z0-9_-] so
@@ -533,41 +543,96 @@ reload_stack_unless_skipped() {
     return 0
   fi
   if stack_restart_skipped "${slug}"; then
-    echo "  ⏸ ${slug} left running on its live process (CORTEX_UPGRADE_SKIP_RESTART) — plist re-rendered to ~/.local/bin; migrates at next natural restart"
+    echo "  ⏸ ${slug} left running on its live process (CORTEX_UPGRADE_SKIP_RESTART) — plist re-rendered to ~/.local/bin; migrates on its next bootout+bootstrap (reboot / logout / manual reload)"
     return 0
   fi
   reload_plist "${plist}"
   echo "  ✓ ${slug} daemon reloaded"
 }
 
-# Drop from a PID list any cortex daemon whose --config path belongs to a
-# skip-listed stack, so preupgrade's kill never stops a spared production stack.
-# Matches each skip slug's resolved --config path (resolve_stack_config_path —
-# the SAME path render_stack_plist stamps into the plist) as a substring of the
-# process command line. Prints the surviving PIDs (space-separated).
+# Extract the `--config` argument value from a process command line. Handles
+# both `--config <path>` (two tokens) and `--config=<path>`. Prints the value,
+# or nothing if there is no --config. Word-splits on whitespace — cortex config
+# paths live under ~/.config/cortex and contain no spaces.
+extract_config_arg() {
+  local cmdline="$1" tok take_next=0
+  for tok in ${cmdline}; do
+    if [ "${take_next}" = "1" ]; then printf '%s' "${tok}"; return 0; fi
+    case "${tok}" in
+      --config=*) printf '%s' "${tok#--config=}"; return 0 ;;
+      --config)   take_next=1 ;;
+    esac
+  done
+  return 0
+}
+
+# Resolve the canonical stack SLUG from a daemon's argv `--config` value.
 #
-# Args: $1 space/newline-separated pid list  $2 config_dir
+# Canonicalizes with realpath (so a relative / non-canonical / symlinked argv
+# path resolves to the same absolute path discover_stack_slugs sees), then maps
+# filename → slug the SAME way discovery does:
+#   - monolith: cortex.yaml → meta-factory, cortex.<slug>.yaml → <slug>
+#     (config_file_to_slug — the repo's canonical filename map);
+#   - dir-layout sentinel <config_dir>/<slug>/<slug>.yaml → <slug>, validated by
+#     requiring the parent-dir basename to equal the file stem (the exact shape
+#     resolve_stack_config_path stamps and discover_stack_slugs derives from).
+# Returns non-zero (prints nothing) when the path is empty or unclassifiable —
+# the caller treats that as a fail-safe abort when a skip-list is set.
+slug_from_config_arg() {
+  local raw="$1" path base slug parent
+  [ -n "${raw}" ] || return 1
+  path="$(realpath "${raw}" 2>/dev/null || printf '%s' "${raw}")"
+  base="$(basename "${path}")"
+  if slug="$(config_file_to_slug "${base}")"; then
+    printf '%s' "${slug}"
+    return 0
+  fi
+  slug="${base%.yaml}"
+  parent="$(basename "$(dirname "${path}")")"
+  if [ -n "${slug}" ] && [ "${base}" != "${slug}" ] && [ "${slug}" = "${parent}" ]; then
+    printf '%s' "${slug}"
+    return 0
+  fi
+  return 1
+}
+
+# Reclassify a kill-list by SLUG and drop skip-listed stacks, so preupgrade's
+# kill never stops a spared production stack. For each PID, the slug is resolved
+# from the LIVE daemon's argv `--config` (slug_from_config_arg) — identical
+# keying to postupgrade's reload side.
+#
+# FAIL-SAFE (advw3b 3a): when CORTEX_UPGRADE_SKIP_RESTART is non-empty and a
+# running daemon's slug cannot be resolved from its argv, this returns 2 (abort)
+# WITHOUT printing survivors — the caller must abort the upgrade before any kill,
+# rather than risk killing an unclassifiable stack that might be the spare.
+#
+# Prints surviving PIDs (space-separated) on stdout on success.
+# Returns: 0 = ok, 2 = abort (reason on stderr).
+#
+# Args: $1 space/newline-separated pid list  $2 config_dir (accepted for symmetry
+#       with the discovery callers; slug resolution is argv-driven).
 filter_out_skipped_pids() {
-  local pids="$1" config_dir="$2"
+  local pids="$1"
   local list="${CORTEX_UPGRADE_SKIP_RESTART:-}"
+  # No skip-list requested → no reclassification, no abort: pass through so a
+  # normal upgrade is never blocked and behaviour matches the pre-feature path.
   if [ -z "${list}" ] || [ -z "${pids}" ]; then
     printf '%s' "${pids}"
     return 0
   fi
-  local kept="" pid cmdline skip_slug skip_cfg drop
+  local kept="" pid cmdline cfg slug
   for pid in ${pids}; do
     cmdline="$(ps -o command= -p "${pid}" 2>/dev/null || true)"
-    drop=0
-    for skip_slug in $(printf '%s' "${list}" | tr ',' ' '); do
-      [ -n "${skip_slug}" ] || continue
-      skip_cfg="$(resolve_stack_config_path "${config_dir}" "${skip_slug}")"
-      case "${cmdline}" in
-        *"${skip_cfg}"*) drop=1; break ;;
-      esac
-    done
-    [ "${drop}" -eq 0 ] && kept="${kept}${kept:+ }${pid}"
+    cfg="$(extract_config_arg "${cmdline}")"
+    if ! slug="$(slug_from_config_arg "${cfg}")"; then
+      echo "  ✗ cannot determine slug for running daemon PID ${pid} (config: ${cfg:-${cmdline:-<none>}}); refusing to proceed with a skip-list set, to avoid killing an unclassifiable stack — resolve or unset CORTEX_UPGRADE_SKIP_RESTART" >&2
+      return 2
+    fi
+    stack_restart_skipped "${slug}" && continue   # spare the skip-listed stack
+    kept="${kept}${kept:+ }${pid}"
   done
   printf '%s' "${kept}"
+  return 0
 }
 
 # ── Arc-version guard: refuse the cutover on an arc without arc#295 ──────────
@@ -599,6 +664,9 @@ arc_version_ge() {
     ai="${av[i]:-0}"; bi="${bv[i]:-0}"
     [[ "${ai}" =~ ^[0-9]+$ ]] || ai=0
     [[ "${bi}" =~ ^[0-9]+$ ]] || bi=0
+    # Force base-10 so a hypothetical zero-padded component (e.g. "08") can't be
+    # read as octal and fail open. Unreachable with today's tags — free hardening.
+    ai=$((10#${ai})); bi=$((10#${bi}))
     if (( ai > bi )); then return 0; fi
     if (( ai < bi )); then return 1; fi
   done

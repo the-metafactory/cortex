@@ -39,11 +39,18 @@ if [ "$(uname)" = "Darwin" ]; then
   # match both so a host mid-upgrade (daemon still running from the old
   # location) is still caught.
   CORTEX_PIDS=$(pgrep -f "${HOME}/(bin|\.local/bin)/cortex start" 2>/dev/null || true)
-  # cortex#1866 skip-restart: drop any skip-listed stack's PID from the blanket
-  # kill so a spared production stack (e.g. `work`) keeps running on its live
-  # process. Matching is by the daemon's --config path (the same path the plist
-  # stamps), so only the intended stack is spared.
-  CORTEX_PIDS=$(filter_out_skipped_pids "${CORTEX_PIDS}" "${CONFIG_DIR}")
+  # cortex#1866 skip-restart (advw3b 3a): reclassify the kill-list by SLUG —
+  # resolved from each live daemon's argv --config — and drop any skip-listed
+  # stack's PID so a spared production stack (e.g. `work`) keeps running. Keying
+  # by slug (not path substring) matches postupgrade's reload side exactly, so
+  # config-path drift can't kill a daemon here that postupgrade then skips.
+  # FAIL-SAFE: if a running daemon's slug is unresolvable while a skip-list is
+  # set, filter_out_skipped_pids returns non-zero → abort BEFORE any kill rather
+  # than risk stopping an unclassifiable stack. (`if !` keeps set -e happy and
+  # still captures the survivors on the success path.)
+  if ! CORTEX_PIDS=$(filter_out_skipped_pids "${CORTEX_PIDS}" "${CONFIG_DIR}"); then
+    exit 1
+  fi
   if [ -n "${CORTEX_PIDS}" ]; then
     echo "  Killing existing cortex processes: ${CORTEX_PIDS}"
     kill ${CORTEX_PIDS} 2>/dev/null || true
@@ -149,7 +156,9 @@ if [ "$(uname)" = "Darwin" ]; then
         # cortex#1866 skip-restart: record it as running (so postupgrade knows
         # it was up) but do NOT unload it — it keeps serving on its live
         # process. postupgrade re-renders its plist but skips the reload; the
-        # stack migrates to ~/.local/bin on its next natural restart.
+        # stack migrates to ~/.local/bin on its next bootout+bootstrap (reboot /
+        # logout / manual reload) — NOT on a KeepAlive relaunch, which keeps the
+        # old in-memory exec path.
         printf '%s\n' "${slug}" >> "${RUNNING_STACKS_FILE}"
         echo "  ⏸ ${slug} daemon left running (CORTEX_UPGRADE_SKIP_RESTART) — recorded, not stopped"
       else

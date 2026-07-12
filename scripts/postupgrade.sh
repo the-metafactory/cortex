@@ -112,12 +112,13 @@ if [ "$(uname)" = "Darwin" ]; then
 
   # Read the running-stacks state file written by preupgrade.sh.
   RUNNING_STACKS_FILE="${TMPDIR:-/tmp}/cortex-upgrade-running-stacks"
-  # cortex#1866 skip-restart: reload_stack_unless_skipped re-renders honor the
+  # cortex#1866 skip-restart: reload_stack_unless_skipped honors the
   # CORTEX_UPGRADE_SKIP_RESTART list — a skip-listed slug's plist was already
   # re-rendered above (via render_cortex_plists), but it is NOT bootout/
   # bootstrapped here, so it keeps running on its live process and migrates to
-  # ~/.local/bin on its next natural restart. All other recorded-running stacks
-  # (and the relay, above) reload normally.
+  # ~/.local/bin on its next bootout+bootstrap (reboot / logout / manual reload),
+  # NOT on a KeepAlive relaunch (which keeps the old in-memory exec path). All
+  # other recorded-running stacks (and the relay, above) reload normally.
   if [ -f "${RUNNING_STACKS_FILE}" ]; then
     while IFS= read -r slug; do
       [ -z "${slug}" ] && continue

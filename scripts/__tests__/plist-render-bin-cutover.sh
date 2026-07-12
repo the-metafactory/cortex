@@ -315,17 +315,54 @@ assert_eq "skip: non-listed slug 'meta-factory' IS reloaded (2 launchctl calls)"
 
 unset CORTEX_UPGRADE_SKIP_RESTART
 
-# filter_out_skipped_pids: drop the skip-listed stack's PID from a kill list,
-# matched by the daemon's --config path. Mock `ps -o command= -p <pid>` from a
-# pid→cmdline map so no real process table is consulted.
-SKIP_CONFIG_DIR="${TMPHOME}/skip-config"
-mkdir -p "${SKIP_CONFIG_DIR}"
-WORK_CFG="$(resolve_stack_config_path "${SKIP_CONFIG_DIR}" work)"
-MF_CFG="$(resolve_stack_config_path "${SKIP_CONFIG_DIR}" meta-factory)"
+# ── slug unification (advw3b 3a): argv --config → slug ──
+printf '\n=== slug resolution (kill/reload key unification) ===\n'
+
+# extract_config_arg — both `--config X` and `--config=X` and none.
+assert_eq "extract: '--config X' → X" "/a/b.yaml" \
+  "$(extract_config_arg 'cortex start --config /a/b.yaml')"
+assert_eq "extract: '--config=X' → X" "/a/b.yaml" \
+  "$(extract_config_arg 'cortex start --config=/a/b.yaml')"
+assert_eq "extract: no --config → empty" "" \
+  "$(extract_config_arg 'cortex start')"
+
+# Real on-disk config fixtures so realpath canonicalizes (dir-layout sentinel +
+# a monolith). slug_from_config_arg must key IDENTICALLY to discover_stack_slugs.
+REAL_CFG="${TMPHOME}/real-config"
+mkdir -p "${REAL_CFG}/work/system"
+: > "${REAL_CFG}/work/work.yaml"           # dir-layout sentinel <slug>/<slug>.yaml
+: > "${REAL_CFG}/work/system/system.yaml"  # dir-layout marker
+: > "${REAL_CFG}/cortex.yaml"              # monolith default (meta-factory)
+
+assert_eq "slug: monolith cortex.yaml → meta-factory" "meta-factory" \
+  "$(slug_from_config_arg "${REAL_CFG}/cortex.yaml")"
+assert_eq "slug: monolith cortex.work.yaml → work" "work" \
+  "$(slug_from_config_arg "${REAL_CFG}/cortex.work.yaml")"
+assert_eq "slug: dir-layout sentinel work/work.yaml → work" "work" \
+  "$(slug_from_config_arg "${REAL_CFG}/work/work.yaml")"
+# The 3a case: a NON-CANONICAL argv path (with ..) still resolves to the slug.
+assert_eq "slug: non-canonical path (realpath) → work" "work" \
+  "$(slug_from_config_arg "${REAL_CFG}/work/../work/work.yaml")"
+assert_false "slug: unclassifiable path → non-zero" \
+  slug_from_config_arg "${REAL_CFG}/random/other.yaml"
+assert_false "slug: empty --config → non-zero" \
+  slug_from_config_arg ""
+
+# filter_out_skipped_pids: reclassify a kill-list by SLUG and drop skip-listed
+# stacks. Mock `ps -o command= -p <pid>` from a pid→cmdline map (no real process
+# table consulted). Every mapped cmdline points at a REAL fixture path so slug
+# resolution exercises the actual realpath + filename→slug logic.
+printf '\n=== skip-restart: kill-filter (slug-keyed + fail-safe) ===\n'
 export PSMAP="${TMPHOME}/psmap"
 {
-  printf '1001 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${WORK_CFG}"
-  printf '1002 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${MF_CFG}"
+  printf '1001 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${REAL_CFG}/work/work.yaml"
+  printf '1002 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${REAL_CFG}/cortex.yaml"
+  # 1003: SAME work stack, but argv spells its --config non-canonically (..).
+  printf '1003 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${REAL_CFG}/work/../work/work.yaml"
+  # 1004: unclassifiable --config (parent≠stem, not a cortex.* monolith).
+  printf '1004 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${REAL_CFG}/random/other.yaml"
+  # 1005: no --config at all.
+  printf '1005 %s/.local/bin/cortex start\n' "${HOME}"
 } > "${PSMAP}"
 cat > "${MOCK_BIN}/ps" <<'EOF'
 #!/bin/sh
@@ -341,15 +378,112 @@ exit 0
 EOF
 chmod +x "${MOCK_BIN}/ps"
 
+# (c) existing behaviour preserved — drop the skip-listed slug, keep the rest.
 ( export CORTEX_UPGRADE_SKIP_RESTART="work"
-  KEPT="$(filter_out_skipped_pids "1001 1002" "${SKIP_CONFIG_DIR}")"
+  KEPT="$(filter_out_skipped_pids "1001 1002" "${REAL_CFG}")"
   assert_eq "filter: skip-listed 'work' PID 1001 dropped; 1002 kept" "1002" "${KEPT}" )
 ( export CORTEX_UPGRADE_SKIP_RESTART="meta-factory"
-  KEPT="$(filter_out_skipped_pids "1001 1002" "${SKIP_CONFIG_DIR}")"
+  KEPT="$(filter_out_skipped_pids "1001 1002" "${REAL_CFG}")"
   assert_eq "filter: skip-listed 'meta-factory' PID 1002 dropped; 1001 kept" "1001" "${KEPT}" )
 ( unset CORTEX_UPGRADE_SKIP_RESTART
-  KEPT="$(filter_out_skipped_pids "1001 1002" "${SKIP_CONFIG_DIR}")"
+  KEPT="$(filter_out_skipped_pids "1001 1002" "${REAL_CFG}")"
   assert_eq "filter: empty skip list → both PIDs kept" "1001 1002" "${KEPT}" )
+
+# (a) drift: the work daemon's argv --config is non-canonical, but slug keying
+# still spares it (path-substring keying would have MISSED and killed it).
+( export CORTEX_UPGRADE_SKIP_RESTART="work"
+  KEPT="$(filter_out_skipped_pids "1003 1002" "${REAL_CFG}")"
+  assert_eq "filter: drift — non-canonical --config work PID 1003 still spared" "1002" "${KEPT}" )
+
+# (b) fail-safe: an unresolvable slug while a skip-list is set → ABORT (rc 2),
+# no survivors printed, reason on stderr.
+( export CORTEX_UPGRADE_SKIP_RESTART="work"
+  ERR="$(mktemp)"
+  set +e
+  filter_out_skipped_pids "1001 1004" "${REAL_CFG}" >/dev/null 2>"${ERR}"
+  RC=$?
+  set -e
+  assert_eq "filter: unclassifiable daemon + skip-list → abort rc 2" "2" "${RC}"
+  assert_grep_file "filter: abort names the PID + remediation" "${ERR}" \
+    'cannot determine slug for running daemon PID 1004'
+  assert_grep_file "filter: abort tells how to recover" "${ERR}" \
+    'resolve or unset CORTEX_UPGRADE_SKIP_RESTART'
+  rm -f "${ERR}" )
+
+# (b) no --config at all + skip-list → also aborts.
+( export CORTEX_UPGRADE_SKIP_RESTART="work"
+  set +e
+  filter_out_skipped_pids "1005" "${REAL_CFG}" >/dev/null 2>/dev/null
+  RC=$?
+  set -e
+  assert_eq "filter: daemon with no --config + skip-list → abort rc 2" "2" "${RC}" )
+
+# No skip-list requested → an unclassifiable daemon is NOT an abort (a normal
+# upgrade must never be blocked); pass through unchanged.
+( unset CORTEX_UPGRADE_SKIP_RESTART
+  set +e
+  KEPT="$(filter_out_skipped_pids "1004" "${REAL_CFG}")"
+  RC=$?
+  set -e
+  assert_eq "filter: unclassifiable daemon, NO skip-list → rc 0 (pass-through)" "0" "${RC}"
+  assert_eq "filter: unclassifiable daemon, NO skip-list → PID kept" "1004" "${KEPT}" )
+
+# ── Integration: preupgrade ABORTS before any kill on an unclassifiable daemon
+# when a skip-list is set (advw3b 3a fail-safe, end-to-end). ──
+printf '\n=== skip-restart: preupgrade fail-safe abort (integration) ===\n'
+ABORT_BIN="$(mktemp -d)"
+cat > "${ABORT_BIN}/arc" <<'EOF'
+#!/bin/sh
+[ "$1" = "--version" ] && echo "arc 0.38.0"
+exit 0
+EOF
+# pgrep: return a fake PID ONLY for the cortex-start match; nothing else.
+cat > "${ABORT_BIN}/pgrep" <<'EOF'
+#!/bin/sh
+printf 'pgrep %s\n' "$*" >> "${STOP_LOG:-/dev/null}"
+case "$*" in
+  *"cortex start"*) echo 4242; exit 0 ;;
+  *) exit 1 ;;
+esac
+EOF
+# ps: PID 4242 has an UNCLASSIFIABLE --config.
+cat > "${ABORT_BIN}/ps" <<'EOF'
+#!/bin/sh
+pid=""
+while [ $# -gt 0 ]; do
+  case "$1" in -p) pid="$2"; shift 2 ;; *) shift ;; esac
+done
+[ "${pid}" = "4242" ] && echo "/x/.local/bin/cortex start --config /tmp/garbage/nope.yaml"
+exit 0
+EOF
+cat > "${ABORT_BIN}/kill" <<'EOF'
+#!/bin/sh
+printf 'kill %s\n' "$*" >> "${STOP_LOG:-/dev/null}"
+EOF
+cat > "${ABORT_BIN}/launchctl" <<'EOF'
+#!/bin/sh
+printf 'launchctl %s\n' "$*" >> "${STOP_LOG:-/dev/null}"
+EOF
+printf '#!/bin/sh\nexit 0\n' > "${ABORT_BIN}/sleep"
+chmod +x "${ABORT_BIN}"/arc "${ABORT_BIN}"/pgrep "${ABORT_BIN}"/ps "${ABORT_BIN}"/kill "${ABORT_BIN}"/launchctl "${ABORT_BIN}"/sleep
+
+ABORT_HOME="$(mktemp -d)"
+mkdir -p "${ABORT_HOME}/.config/cortex" "${ABORT_HOME}/Library/LaunchAgents"
+STOP_LOG_ABORT="$(mktemp)"
+ABORT_ERR="$(mktemp)"
+set +e
+STOP_LOG="${STOP_LOG_ABORT}" HOME="${ABORT_HOME}" CORTEX_UPGRADE_SKIP_RESTART="work" \
+  PATH="${ABORT_BIN}:${PATH}" bash "${PREUP}" >"${ABORT_ERR}" 2>&1
+ABORT_CODE=$?
+set -e
+assert_eq "abort: preupgrade exits non-zero on unclassifiable daemon + skip-list" "1" "${ABORT_CODE}"
+assert_eq "abort: NO kill ran before the abort" "0" \
+  "$(grep -c '^kill' "${STOP_LOG_ABORT}" || true)"
+assert_eq "abort: NO launchctl unload ran before the abort" "0" \
+  "$(grep -c '^launchctl' "${STOP_LOG_ABORT}" || true)"
+assert_grep_file "abort: reason printed (names PID 4242)" "${ABORT_ERR}" \
+  'cannot determine slug for running daemon PID 4242'
+rm -rf "${ABORT_BIN}" "${ABORT_HOME}" "${STOP_LOG_ABORT}" "${ABORT_ERR}"
 
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"
