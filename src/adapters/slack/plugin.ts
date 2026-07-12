@@ -17,7 +17,7 @@ import { SlackBindingSchema } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../../common/policy";
-import type { AdapterPlugin } from "../registry";
+import type { AdapterPlugin } from "../../surface-sdk";
 import { resolveFactoryAgent, stringBindingField } from "../plugin-support";
 
 /** Construction args `createAdapter` accepts — the same shape

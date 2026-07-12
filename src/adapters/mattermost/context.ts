@@ -4,7 +4,7 @@
  */
 
 import type { MattermostPresence } from "../../common/types/cortex-config";
-import type { ContextMessage } from "../../common/types/context";
+import type { ContextMessage } from "../../surface-sdk";
 import { formatContextForClaude } from "../../common/types/context";
 
 export interface MattermostPost {

@@ -32,11 +32,9 @@
  * activity-centric, not agent-centric.
  */
 
-import type { Envelope } from "../bus/myelin/envelope-validator";
-import type { SurfaceAdapter } from "../bus/surface-router";
+import type { Envelope, SurfaceAdapter, RendererPlugin } from "../surface-sdk";
 import { DashboardRendererSchema, type DashboardRendererConfig } from "../common/types/cortex-config";
 import type { Renderer } from "./types";
-import type { RendererPlugin } from "../adapters/registry";
 
 export interface DashboardRendererOptions {
   /** Max envelopes retained in the ring buffer. Default 1000 — generous

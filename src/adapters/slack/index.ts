@@ -20,12 +20,12 @@ import type {
   ResponseTarget,
   OutboundFile,
   ContextMessage,
-} from "../types";
+  Envelope,
+  SurfaceAdapter,
+} from "../../surface-sdk";
 import type { Agent, SlackPresence } from "../../common/types/cortex-config";
 import type { AgentConfig } from "../../common/types/config";
-import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
-import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
 import {
   type SystemEventSource,

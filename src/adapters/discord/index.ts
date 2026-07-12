@@ -13,16 +13,16 @@ import type {
   ResponseTarget,
   OutboundFile,
   ContextMessage,
-} from "../types";
+  Envelope,
+  SurfaceAdapter,
+} from "../../surface-sdk";
 import type { AgentConfig } from "../../common/types/config";
 import type { Agent, DiscordPresence } from "../../common/types/cortex-config";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
 import { fetchContext } from "./context-fetcher";
 import { postToDiscord } from "./response-poster";
 import { isRetryableError } from "./retry";
-import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
-import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
 import {
   type SystemEventSource,

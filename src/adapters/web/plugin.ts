@@ -13,7 +13,7 @@ import { WebAdapter } from "./index";
 import { WebBindingSchema, type WebBinding } from "../../common/types/surfaces";
 import type { Agent } from "../../common/types/cortex-config";
 import type { SystemEventSource } from "../../bus/system-events";
-import type { AdapterPlugin } from "../registry";
+import type { AdapterPlugin } from "../../surface-sdk";
 import { resolveFactoryAgent, stringBindingField } from "../plugin-support";
 
 /** Construction args `createAdapter` accepts — the same shape

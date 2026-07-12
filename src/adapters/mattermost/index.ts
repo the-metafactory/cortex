@@ -12,7 +12,9 @@ import type {
   ResponseTarget,
   OutboundFile,
   ContextMessage,
-} from "../types";
+  Envelope,
+  SurfaceAdapter,
+} from "../../surface-sdk";
 import type { AgentConfig } from "../../common/types/config";
 import type { Agent, MattermostPresence } from "../../common/types/cortex-config";
 import type { MattermostInboundMessage } from "./server";
@@ -24,9 +26,7 @@ import {
 } from "./poller";
 import { fetchMattermostContext } from "./context";
 import { fetchBotUserId } from "./bot-user";
-import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
-import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 import { type SystemEventSource } from "../../bus/system-events";

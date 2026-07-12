@@ -74,7 +74,7 @@ import type {
   ResponseTarget,
   OutboundFile,
   ContextMessage,
-} from "../types";
+} from "../../surface-sdk";
 import type { Agent } from "../../common/types/cortex-config";
 import type { WebBinding } from "../../common/types/surfaces";
 import {

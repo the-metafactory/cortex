@@ -27,7 +27,7 @@ import type {
   AdapterPlugin,
   BindingGroup,
   GatewayConstructBase,
-} from "../registry";
+} from "../../surface-sdk";
 import { resolveFactoryAgent, stringBindingField } from "../plugin-support";
 import { groupDiscordBindingsByToken } from "../../gateway/discord-token-groups";
 

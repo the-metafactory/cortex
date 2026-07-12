@@ -24,8 +24,7 @@ import { detectProject, extractGitHubIssue } from "./event-utils";
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
-import type { Envelope } from "../../bus/myelin/envelope-validator";
-import type { SurfaceAdapter } from "../../bus/surface-router";
+import type { Envelope, SurfaceAdapter } from "../../surface-sdk";
 
 export class WorklogManager {
   private client: Client;

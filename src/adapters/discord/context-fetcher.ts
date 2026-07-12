@@ -4,7 +4,7 @@
  */
 
 import type { TextChannel, ThreadChannel, Message, Collection, Snowflake } from "discord.js";
-import type { ContextMessage, ContextAttachment } from "../../common/types/context";
+import type { ContextMessage, ContextAttachment } from "../../surface-sdk";
 import { formatContextForClaude } from "../../common/types/context";
 
 /**
