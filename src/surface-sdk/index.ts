@@ -75,6 +75,11 @@ export type {
   ContextMessage,
 } from "../adapters/types";
 
+// Local (non-re-exporting) type import — `AdapterPolicyPort` below needs
+// `InboundMessage`/`AccessDecision` in scope; the `export type {...} from`
+// statement above re-exports them but does not bind a local name.
+import type { InboundMessage, AccessDecision } from "../adapters/types";
+
 // `ContextAttachment` is referenced by `ContextMessage.attachments` and is
 // imported directly by adapter context-fetchers (discord/context-fetcher.ts,
 // mattermost/context.ts) alongside `ContextMessage` — part of the same
@@ -120,3 +125,40 @@ export type {
   BindingGroup,
   GatewayConstructBase,
 } from "../adapters/registry";
+
+// =============================================================================
+// Host-injected policy port (cortex#1794 S9b — ADR-0024 D5 extraction lane)
+// =============================================================================
+
+/**
+ * cortex#1794 (S9b) — the narrow, TYPE-ONLY behavioral contract an adapter
+ * uses to authorise an inbound message, in place of importing cortex's
+ * `PolicyEngine` / `PlatformPrincipalIndex` / `PrincipalRegistry`
+ * (`common/policy`) directly. Those three types are cortex-internal runtime
+ * machinery — genuinely out of scope for the SDK barrel (same reasoning as
+ * `MyelinRuntime`/`SystemEventSource`, see the module doc above) — so rather
+ * than re-export them, the SDK exposes only the SHAPE an adapter needs: given
+ * an inbound message (or a `(platform, platformId)` pair), decide access.
+ *
+ * The host binds both closures over its real `PolicyEngine` + index +
+ * registry at adapter-construction time (`adapters/plugin-support.ts`'s
+ * `buildAdapterPolicyPort`, cortex-side) and hands the bound port through
+ * `AdapterPlugin.createAdapter`'s `args` — the adapter body never imports
+ * `common/policy` itself, so it stays compilable against `surface-sdk` alone
+ * whether it lives in-tree or, after extraction, in its own package. This is
+ * a dependency-inversion PORT (Hexagonal architecture sense), not a data
+ * type: no `PolicyEngine`-shaped value crosses the barrel, only a bound
+ * behavior.
+ *
+ * First consumer: `WebAdapterInfra.policy` (`src/adapters/web/index.ts`).
+ * Discord/Slack/Mattermost still import `common/policy` directly — their
+ * dependency-inversion pass is a later slice (cortex#1896).
+ */
+export interface AdapterPolicyPort {
+  /** Resolve `msg` to an `AccessDecision` via the host's bound policy engine
+   *  (mirrors `common/policy`'s `resolvePolicyAccess`). */
+  resolveAccess(msg: InboundMessage): AccessDecision;
+  /** Whether `(platform, platformId)` maps to a principal holding the
+   *  `operator` capability (mirrors `common/policy`'s `isOperatorPrincipal`). */
+  isOperatorPrincipal(platform: string, platformId: string): boolean;
+}

@@ -18,6 +18,11 @@ import type { GatewayAdapterFactory } from "../../../gateway/gateway-adapters";
 import { registryFromFactory } from "../../registry";
 import type { Surfaces } from "../../../common/types/surfaces";
 import type { PlatformAdapter } from "../../types";
+// cortex#1794 (S9b) — `WebAdapterInfra.policy` is now REQUIRED (see
+// `../index`'s doc); reuse the SAME production helper `webAdapterPlugin
+// .createAdapter` defaults to (`buildAdapterPolicyPort()` with no triad),
+// rather than hand-rolling a "no policy" literal that could drift from it.
+import { buildAdapterPolicyPort } from "../../plugin-support";
 
 // =============================================================================
 // Fixtures
@@ -65,6 +70,10 @@ function makeInfra(overrides: Partial<WebAdapterInfra> = {}): WebAdapterInfra {
   return {
     instanceId: "web:acme",
     principal: {},
+    // Default: "no policy configured" (deny-by-default) — matches what
+    // `webAdapterPlugin.createAdapter` defaults to when no host port is
+    // supplied. Tests exercising a real engine pass their own `policy`.
+    policy: buildAdapterPolicyPort(),
     ...overrides,
   };
 }

@@ -10,6 +10,14 @@
 
 import type { Agent } from "../common/types/cortex-config";
 import type { SystemEventSource } from "../bus/system-events";
+import {
+  resolvePolicyAccess,
+  isOperatorPrincipal,
+  type PolicyEngine,
+  type PlatformPrincipalIndex,
+  type PrincipalRegistry,
+} from "../common/policy";
+import type { AdapterPolicyPort } from "../surface-sdk";
 
 /**
  * The gateway owns one connection per binding but is NOT a stack — it has no
@@ -66,4 +74,52 @@ export function resolveFactoryAgent(
 export function stringBindingField(binding: Record<string, unknown>, field: string, fallback = ""): string {
   const value = binding[field];
   return typeof value === "string" ? value : fallback;
+}
+
+// =============================================================================
+// cortex#1794 (S9b) — host-bound AdapterPolicyPort
+// =============================================================================
+
+/**
+ * The v2.0.0 (cortex#297) policy triad a host may have in hand when
+ * constructing an adapter. All three optional — absent means "no policy
+ * configured", the same deny-by-default posture `resolvePolicyAccess` /
+ * `isOperatorPrincipal` already implement (see `common/policy/resolve-access.ts`).
+ */
+export interface AdapterPolicyTriad {
+  policyEngine?: PolicyEngine;
+  policyLookup?: PlatformPrincipalIndex;
+  policyRegistry?: PrincipalRegistry;
+}
+
+/**
+ * cortex#1794 (S9b) — bind cortex's real policy-resolution functions
+ * (`common/policy`) into the narrow {@link AdapterPolicyPort} shape
+ * `surface-sdk` exposes. The host (today: `gateway-adapters.ts`'s
+ * `buildGatewayAdapters`) calls this ONCE per construction with whatever
+ * triad it has — possibly none, e.g. the shared surface-gateway's
+ * shadow-stage build, which never wires a live `PolicyEngine` for ANY
+ * platform — and forwards the returned port through `createAdapter`'s args.
+ * The adapter body (`src/adapters/web/index.ts`) never imports
+ * `common/policy` itself; it only calls the injected port.
+ *
+ * Called with no triad (or an all-undefined one), this reproduces EXACTLY
+ * the behaviour a direct `resolvePolicyAccess({msg, engine: undefined, ...})`
+ * / `isOperatorPrincipal(platform, id, undefined, undefined)` call gave
+ * pre-S9b: `resolveAccess` denies with `denyCode: "no_policy"`,
+ * `isOperatorPrincipal` returns `false`.
+ */
+export function buildAdapterPolicyPort(triad: AdapterPolicyTriad = {}): AdapterPolicyPort {
+  const { policyEngine, policyLookup, policyRegistry } = triad;
+  return {
+    resolveAccess: (msg) =>
+      resolvePolicyAccess({
+        msg,
+        engine: policyEngine,
+        index: policyLookup,
+        registry: policyRegistry,
+      }),
+    isOperatorPrincipal: (platform, platformId) =>
+      isOperatorPrincipal(platform, platformId, policyEngine, policyLookup),
+  };
 }

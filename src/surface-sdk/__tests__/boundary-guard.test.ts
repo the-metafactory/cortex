@@ -201,3 +201,37 @@ describe("plugin SDK boundary guard (cortex#1790, ADR-0024 D5)", () => {
     }
   });
 });
+
+/**
+ * cortex#1794 (S9b) — the web adapter's dependency-inversion pass. Stricter
+ * than the guard above: rather than checking a fixed symbol allowlist, this
+ * asserts NO `../../` (cross-`src/adapters/`-boundary) import survives in
+ * `src/adapters/web/*.ts` UNLESS its specifier resolves to `surface-sdk`.
+ * `src/adapters/web/` is the one adapter directory (of the four) that no
+ * longer needs `common/policy`, `common/types/surfaces`, or
+ * `common/types/cortex-config` at all — everything it needs crosses the
+ * boundary through the SDK barrel or a same-directory sibling (`./schema`,
+ * `./index`). Discord/Slack/Mattermost are NOT held to this bar yet (their
+ * dependency-inversion pass is cortex#1896) — this test is scoped to `web/`
+ * only, on purpose.
+ */
+describe("web adapter dependency inversion (cortex#1794, S9b)", () => {
+  test("src/adapters/web/*.ts's only cross-boundary (../../) imports are surface-sdk", () => {
+    const webDir = resolve(SRC_ROOT, "adapters", "web");
+    const files = readdirSync(webDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+      .map((entry) => join(webDir, entry.name));
+    expect(files.length).toBeGreaterThan(0);
+
+    const violations: string[] = [];
+    for (const file of files) {
+      const source = readFileSync(file, "utf-8");
+      for (const { specifier } of extractImports(source)) {
+        if (!specifier.startsWith("../../")) continue;
+        if (specifier === "../../surface-sdk" || specifier.startsWith("../../surface-sdk/")) continue;
+        violations.push(`${file}: cross-boundary import "${specifier}" is not surface-sdk`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});

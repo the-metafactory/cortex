@@ -92,12 +92,22 @@ export interface BindingGroup {
   readonly instanceId: string;
 }
 
-/** The three fields `buildGatewayAdapters`' generic loop threads into
+/** The fields `buildGatewayAdapters`' generic loop threads into
  *  {@link AdapterPlugin.buildGatewayConstructArgs} for every platform. */
 export interface GatewayConstructBase {
   readonly instanceId: string;
   readonly source: unknown;
   readonly runtime: unknown;
+  /**
+   * cortex#1794 (S9b) — a host-bound `AdapterPolicyPort` (`surface-sdk`),
+   * typed `unknown` here for the SAME reason `source`/`runtime` are: this
+   * registry module has no compile-time dependency on `surface-sdk` or
+   * `common/policy`, so each plugin's `buildGatewayConstructArgs` casts
+   * internally (the convention `AdapterPlugin`'s docstring already
+   * establishes for `createAdapter`'s args). Currently only the web plugin
+   * forwards it — see `adapters/web/plugin.ts`.
+   */
+  readonly policy?: unknown;
 }
 
 /**

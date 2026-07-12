@@ -91,6 +91,7 @@ import { discordAdapterPlugin } from "../adapters/discord/plugin";
 import { slackAdapterPlugin } from "../adapters/slack/plugin";
 import { mattermostAdapterPlugin } from "../adapters/mattermost/plugin";
 import { webAdapterPlugin } from "../adapters/web/plugin";
+import { buildAdapterPolicyPort } from "../adapters/plugin-support";
 // Back-compat re-export for callers that still import the old suppression helper here.
 export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
 
@@ -272,6 +273,15 @@ export function buildGatewayAdapters(
   const { principal, runtime, registry } = deps;
   const adapters: PlatformAdapter[] = [];
   const surfacesByPlatform = surfaces as unknown as Record<string, SurfaceBindingEntry[] | undefined>;
+  // cortex#1794 (S9b) — the gateway path is shadow/log-only (see this
+  // function's own doc + `cortex.ts`'s module doc): it never has a live
+  // `PolicyEngine`/index/registry in hand for ANY platform, gateway-owned or
+  // not. Built ONCE (stateless closures over an all-undefined triad) and
+  // forwarded generically via `GatewayConstructBase.policy` — today only the
+  // web plugin reads it (`buildAdapterPolicyPort()` reproduces EXACTLY the
+  // `denyCode: "no_policy"` / `isOperatorPrincipal === false` behaviour a
+  // direct call with no engine always gave pre-S9b).
+  const policy = buildAdapterPolicyPort();
 
   for (const plugin of registry.listAdapters()) {
     // `Object.hasOwn` guard: a bundle-loaded plugin's `platform` is an
@@ -310,7 +320,12 @@ export function buildGatewayAdapters(
       }
 
       const source = gatewaySource(principal, group.instanceId);
-      const args = plugin.buildGatewayConstructArgs(group, { instanceId: group.instanceId, source, runtime });
+      const args = plugin.buildGatewayConstructArgs(group, {
+        instanceId: group.instanceId,
+        source,
+        runtime,
+        policy,
+      });
       adapters.push(plugin.createAdapter(args));
     }
   }

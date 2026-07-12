@@ -74,16 +74,28 @@ import type {
   ResponseTarget,
   OutboundFile,
   ContextMessage,
+  AdapterPolicyPort,
 } from "../../surface-sdk";
-import type { Agent } from "../../common/types/cortex-config";
-import type { WebBinding } from "../../common/types/surfaces";
-import {
-  isOperatorPrincipal,
-  resolvePolicyAccess,
-  type PlatformPrincipalIndex,
-  type PolicyEngine,
-  type PrincipalRegistry,
-} from "../../common/policy";
+import type { WebBinding } from "./schema";
+
+// =============================================================================
+// Agent identity — the minimal shape WebAdapter actually reads
+// =============================================================================
+
+/**
+ * cortex#1794 (S9b) — the minimal agent-identity shape `WebAdapter` reads
+ * (`agent.id`, for log correlation only — see the constructor below). Kept
+ * narrower than cortex's full `Agent` (`common/types/cortex-config` —
+ * persona/trust/presence config) DELIBERATELY: `Agent` is a residual
+ * coupling `surface-sdk` does not re-export (see that module's doc — same
+ * reasoning as `SystemEventSource`/`MyelinRuntime`), and `WebAdapter` never
+ * needed more than the id. A real `Agent` satisfies this structurally, so
+ * every existing caller (`webAdapterPlugin.createAdapter`, tests) keeps
+ * working unchanged.
+ */
+export interface AdapterAgentIdentity {
+  readonly id: string;
+}
 
 // =============================================================================
 // Inbound body shape
@@ -134,12 +146,18 @@ export interface WebAdapterInfra {
   instanceId: string;
   /** Principal identity (unused for push but required by the interface). */
   principal: { id?: string };
-  /** Policy engine for access control (optional — allow-all when absent). */
-  policyEngine?: PolicyEngine;
-  /** Platform principal index for (platform, authorId) → principalId resolution. */
-  policyLookup?: PlatformPrincipalIndex;
-  /** Principal registry for principalId → PolicyPrincipal. */
-  policyRegistry?: PrincipalRegistry;
+  /**
+   * cortex#1794 (S9b) — the host-injected policy-resolution port (see
+   * `AdapterPolicyPort` in `../../surface-sdk`). REQUIRED: `webAdapterPlugin
+   * .createAdapter` always supplies a bound port — a "no policy configured"
+   * port (deny-by-default) when the host has no live `PolicyEngine` yet, e.g.
+   * the shared surface-gateway's shadow-stage construction — so
+   * `resolveAccess()`/`isOperator()` below never need a null-check fallback
+   * of their own. Replaces the pre-S9b `policyEngine?`/`policyLookup?`/
+   * `policyRegistry?` triad this adapter used to call `common/policy`
+   * directly with.
+   */
+  policy: AdapterPolicyPort;
 }
 
 // =============================================================================
@@ -223,7 +241,7 @@ export class WebAdapter implements PlatformAdapter {
   /** The actual TCP port the server bound to (may differ from binding.port when port=0). */
   private _serverPort: number | null = null;
 
-  constructor(agent: Agent, binding: WebBinding, infra: WebAdapterInfra) {
+  constructor(agent: AdapterAgentIdentity, binding: WebBinding, infra: WebAdapterInfra) {
     this.agentId = agent.id;
     this.binding = binding;
     this.infra = infra;
@@ -284,12 +302,7 @@ export class WebAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   resolveAccess(msg: InboundMessage): AccessDecision {
-    return resolvePolicyAccess({
-      msg,
-      engine: this.infra.policyEngine,
-      index: this.infra.policyLookup,
-      registry: this.infra.policyRegistry,
-    });
+    return this.infra.policy.resolveAccess(msg);
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -525,11 +538,6 @@ export class WebAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   protected isOperator(authorId: string): boolean {
-    return isOperatorPrincipal(
-      "web",
-      authorId,
-      this.infra.policyEngine,
-      this.infra.policyLookup,
-    );
+    return this.infra.policy.isOperatorPrincipal("web", authorId);
   }
 }
