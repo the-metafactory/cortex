@@ -1345,7 +1345,12 @@ export function convertBotYaml(
   if (legacy.attachments !== undefined) cortex.attachments = legacy.attachments;
   if (legacy.execution !== undefined) cortex.execution = legacy.execution;
   if (legacy.github !== undefined) cortex.github = legacy.github;
-  if (legacy.paths !== undefined) cortex.paths = rewritePaths(legacy.paths, warnings);
+  // cortex#1898 (XDG P0.5) — pass the operator's `paths:` block through
+  // verbatim. The old grove→cortex rewrite (cortex#88 item 1) was deleted:
+  // minting the deprecated intermediate under the config dir let the plist
+  // renderer's discovery walk resurrect a dead stack (trap T11). Moving
+  // config to the metafactory tree is X-07/#1869; here we only stop minting.
+  if (legacy.paths !== undefined) cortex.paths = legacy.paths;
   if (legacy.networksDir !== undefined) cortex.networksDir = legacy.networksDir;
   if (legacy.networks !== undefined) cortex.networks = legacy.networks;
   if (legacy.nats !== undefined) cortex.nats = convertNats(legacy.nats, warnings);
@@ -1705,44 +1710,6 @@ function buildAgentsFromCortexShape(
     out.push(agentOut);
   }
   return out;
-}
-
-/**
- * Rewrite grove-era path strings (`~/.config/grove/...`) under the legacy
- * `paths:` block to their cortex equivalents (`~/.config/cortex/...`).
- *
- * cortex#88 item 1: legacy `bot.yaml` carries `paths.logDir:
- * ~/.config/grove/logs` (the AgentConfigSchema default in production grove-v2).
- * Without rewriting, the emitted cortex.yaml ships a stale grove path that
- * any consumer of `config.paths.logDir` will then write to — even though
- * the launchd plist's `StandardOutPath` already points at
- * `~/.config/cortex/logs` (per scripts/postinstall.sh). The two diverge,
- * and operators chasing missing logs get sent on a wild grove chase.
- *
- * Strategy: shallow substring rewrite over string-valued fields. Non-string
- * fields (rare, but `unknown` shape leaves the door open) pass through
- * unchanged. A warning surfaces whenever any rewrite fired so the operator
- * sees the substitution in the migrate-config report.
- */
-function rewritePaths(legacyPaths: unknown, warnings: ConversionWarning[]): unknown {
-  if (!legacyPaths || typeof legacyPaths !== "object") return legacyPaths;
-  const paths = { ...(legacyPaths as Record<string, unknown>) };
-  const rewrites: string[] = [];
-  for (const [key, value] of Object.entries(paths)) {
-    if (typeof value !== "string") continue;
-    if (value.includes("/.config/grove/")) {
-      const next = value.replace("/.config/grove/", "/.config/cortex/");
-      paths[key] = next;
-      rewrites.push(`paths.${key}: "${value}" → "${next}"`);
-    }
-  }
-  if (rewrites.length > 0) {
-    warnings.push({
-      field: "paths",
-      message: `rewrote grove path(s) to cortex equivalents: ${rewrites.join("; ")}`,
-    });
-  }
-  return paths;
 }
 
 /**

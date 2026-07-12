@@ -703,11 +703,18 @@ describe("convertBotYaml — schema-sourced defaults", () => {
 });
 
 // ---------------------------------------------------------------------------
-// cortex#88 item 1 — paths.* grove → cortex rewrite
+// XDG P0.5 (cortex#1898) — migration no longer mints ~/.config/cortex
+//
+// The grove→cortex `paths:` rewrite (old cortex#88 item 1) was deleted. The
+// plist renderer discovers stacks by walking the config dir; minting the
+// deprecated intermediate `~/.config/cortex/<slug>/` let discovery resurrect
+// a dead stack and render a plist pointing at a config the resolver no longer
+// reads (trap T11). Migration now passes `paths:` through verbatim — moving
+// config to the metafactory tree is X-07/#1869, out of scope here.
 // ---------------------------------------------------------------------------
 
-describe("convertBotYaml — paths rewrite (cortex#88 item 1)", () => {
-  test("rewrites grove path defaults under paths.* to cortex equivalents", () => {
+describe("convertBotYaml — no ~/.config/cortex minting (cortex#1898)", () => {
+  test("passes a grove paths block through verbatim — never mints a cortex path", () => {
     const legacy: LegacyBotYaml = {
       agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
@@ -718,12 +725,31 @@ describe("convertBotYaml — paths rewrite (cortex#88 item 1)", () => {
     };
     const result = convertBotYaml(legacy, {});
     const paths = (result.cortex.paths ?? {}) as Record<string, string>;
-    expect(paths.logDir).toBe("~/.config/cortex/logs");
+    // The grove path is preserved untouched — NOT rewritten/minted to cortex.
+    expect(paths.logDir).toBe("~/.config/grove/logs");
     // Non-grove paths pass through unchanged
     expect(paths.publishedEventsDir).toBe("~/.claude/events/published");
-    // Operator sees a warning surfacing the substitution
-    const pathsWarn = result.warnings.find((w) => w.field === "paths");
-    expect(pathsWarn?.message).toMatch(/grove path\(s\)/);
+    // Behavioural inverse assertion (covers migrate-config-lib + anything it
+    // calls): no emitted path targets the deprecated cortex intermediate.
+    for (const value of Object.values(paths)) {
+      expect(value).not.toContain(".config/cortex");
+    }
+    // The old "paths rewrite" warning is gone — nothing was rewritten.
+    expect(result.warnings.find((w) => w.field === "paths")).toBeUndefined();
+  });
+
+  test("no migration code path mints ~/.config/cortex (static, comment-stripped)", () => {
+    // Static inverse assertion: fail if the minting literal is reintroduced
+    // anywhere in the migration lib. Assert on CODE, not comments — a doc
+    // comment at migrate-config-lib.ts:124 legitimately names the operator's
+    // own ~/.config/cortex/cortex.yaml, and the resolver root stays there
+    // until X-07. Strip comments first so only a real minting literal trips it.
+    const libPath = join(import.meta.dir, "..", "migrate-config-lib.ts");
+    const src = readFileSync(libPath, "utf-8");
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+      .replace(/(^|[^:])\/\/.*$/gm, "$1"); // line comments (leave URLs intact)
+    expect(codeOnly).not.toMatch(/\.config\/cortex/);
   });
 
   test("leaves a paths block that already targets cortex unchanged", () => {
