@@ -131,10 +131,12 @@ import {
 } from "./bus/myelin/envelope-validator";
 
 import { attachLegacyOutboundLog } from "./adapters/discord";
-import { resolveRendererPluginAndConfig, type Renderer } from "./renderers";
+import { resolveRendererPluginAndConfig, UnimplementedRendererKindError, type Renderer } from "./renderers";
 import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "./adapters/registry";
 import { loadExternalPlugins } from "./adapters/loader";
 import { createSystemPluginLoadFailedEvent, createSystemPluginLoadedEvent } from "./bus/system-events";
+import { startPluginControlServer } from "./gateway/plugin-control-server";
+import type { PluginRuntimeDeps, RendererHandle } from "./gateway/plugin-runtime";
 import { deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
 import type {
   Agent,
@@ -316,6 +318,7 @@ import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
+import { dispatchPlugin } from "./cli/cortex/commands/plugin";
 import { dispatchConfig } from "./cli/cortex/commands/config";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
 import { dispatchStepUp } from "./cli/cortex/commands/stepup";
@@ -3331,6 +3334,28 @@ export async function startCortex(
   });
 
   const renderers: Renderer[] = [];
+  // cortex#1793 (S8, ADR-0024 D3) — the renderer instance-handle map runtime
+  // attach/detach/reload reads and mutates (`src/gateway/plugin-runtime.ts`).
+  // Retains what `SurfaceRouter.register()`'s `{ unregister }` return value
+  // used to be discarded here (ADR-0024's "the renderer boot loop simply
+  // discards it" finding) — S8 keeps it, so a live renderer can leave the
+  // router's dispatch list before teardown instead of only at full `stop()`.
+  const rendererHandles = new Map<string, RendererHandle>();
+  // `pluginLoadResult.loaded` (composed above, S6) tells us which renderer
+  // ids came from an arc-installed bundle vs an in-tree registration — the
+  // `bundleName` a `cortex plugin reload` needs to find the bundle again.
+  const loadedRendererBundleById = new Map<string, string>(
+    pluginLoadResult.loaded
+      .filter((p) => p.kind === "renderer")
+      .map((p) => [p.id, p.bundleName]),
+  );
+  // cortex#1793 (S8) — `renderers[]` entries whose `kind` wasn't registered
+  // at boot time (`UnimplementedRendererKindError` specifically — a plugin
+  // that hasn't loaded yet, NOT a malformed entry), keyed by the declared
+  // kind. `cortex plugin load <bundleName>` reuses the retained raw entry
+  // verbatim once its bundle becomes loadable, so `load` constructs EXACTLY
+  // what boot would have — never a runtime-improvised config.
+  const skippedRendererConfigs = new Map<string, unknown[]>();
   for (const raw of config.renderers ?? []) {
     // AgentConfig types renderers as z.unknown() so legacy bot.yaml loads
     // without breakage (the canonical shape lives on cortex-config's
@@ -3356,8 +3381,15 @@ export async function startCortex(
       };
       const renderer = plugin.createRenderer(rendererConfig);
       await renderer.start();
-      router.register(renderer.surfaceConfig);
+      const registration = router.register(renderer.surfaceConfig);
       renderers.push(renderer);
+      rendererHandles.set(renderer.id, {
+        renderer,
+        unregister: registration.unregister,
+        bundleName: loadedRendererBundleById.get(plugin.id) ?? "in-tree",
+        rendererKind: renderer.kind,
+        config: rendererConfig,
+      });
       console.log(`cortex: ${kindForLog} renderer started (id: ${renderer.id})`);
     } catch (err) {
       // Parse failure (structural or registry pass), construction failure,
@@ -3367,6 +3399,19 @@ export async function startCortex(
         `cortex: ${kindForLog} renderer failed to start:`,
         err instanceof Error ? err.message : err,
       );
+      // cortex#1793 (S8) — retain the raw entry ONLY for the "plugin hasn't
+      // loaded yet" case, keyed by its declared kind, so `cortex plugin
+      // load` can find it later. A structurally-invalid entry (caught by
+      // `RendererSchema.parse` before the kind is even resolved) is a config
+      // bug, not a load-order gap — never retained.
+      if (err instanceof UnimplementedRendererKindError) {
+        const declaredKind = (raw as { kind?: unknown }).kind;
+        if (typeof declaredKind === "string") {
+          const existing = skippedRendererConfigs.get(declaredKind) ?? [];
+          existing.push(raw);
+          skippedRendererConfigs.set(declaredKind, existing);
+        }
+      }
     }
   }
 
@@ -5600,6 +5645,23 @@ export async function startCortex(
   });
   const gw: SurfaceGateway | undefined = startedGateway?.gateway;
 
+  // cortex#1793 (S8, ADR-0024 D3) — the `cortex plugin list|unload|reload|load`
+  // control channel. `deps` is the SAME live `adapters`/`rendererHandles`/
+  // `skippedRendererConfigs` this boot populated above — every control
+  // request reads/mutates the running daemon's actual state, never a
+  // snapshot. `gw` may be `undefined` (CORTEX_GATEWAY unset, every live
+  // stack today) — `plugin-runtime.ts` degrades adapter `unload`/`reload` to
+  // a clear refusal in that case rather than silently no-opping.
+  const pluginRuntimeDeps: PluginRuntimeDeps = {
+    adapters,
+    rendererHandles,
+    router,
+    ...(gw !== undefined && { gateway: gw }),
+    skippedRendererConfigs,
+    registry: surfacePluginRegistry,
+  };
+  const pluginControlServer = await startPluginControlServer(runtime, pluginRuntimeDeps, systemEventSource);
+
   // a.3d (cortex#524) — gateway OUTBOUND reply round-trip. Reuse the per-stack
   // `createDispatchSink` (cortex#491) over the GATEWAY's own adapters instead
   // of building a second mux. The sink subscribes to every bound stack's
@@ -5703,6 +5765,11 @@ export async function startCortex(
       ...daemonBrainHosts.map((h, i) => `daemon-brain-host stop[${i}] (agent=${h.agentId})`),
       ...releaseConsumers.map((c, i) => `release-consumer stop[${i}] (agent=${c.agent.id})`),
       ...devConsumers.map((c, i) => `dev-consumer stop[${i}] (agent=${c.agent.id})`),
+      // cortex#1793 (S8) — the `cortex plugin` control-channel listener.
+      // No-op when the runtime never enabled (fake-runtime tests / a
+      // no-NATS stack) — `pluginControlServer.stop()` is always defined
+      // (a no-op handle in that case), so this slot always self-completes.
+      "plugin-control-server stop",
       "dispatch-listener stop",
       "dispatch-sink stop",
       "review-sink stop",
@@ -5919,6 +5986,11 @@ export async function startCortex(
       // signal#113 P-11 (#56) — drain the echo responder on the same boundary
       // as the dispatch listener. `stop()` is idempotent (no-op when dormant).
       await completeAsync("probe-responder stop", probeResponder.stop());
+      // cortex#1793 (S8) — stop accepting new `cortex plugin` control
+      // requests before the renderer/adapter state those requests mutate
+      // starts tearing down below. `stop()` is idempotent (no-op handle when
+      // the runtime never enabled).
+      await completeAsync("plugin-control-server stop", pluginControlServer.stop());
       // cortex#491 — drain the dispatch sink after the runner stops
       // publishing lifecycle envelopes but before the surface-router /
       // adapters stop, so no late `postResponse` lands after the
@@ -6513,6 +6585,24 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // cortex#1793 (S8) — runtime plugin attach/detach/reload. Same passthrough
+  // shape as `network` / `stack` / `provision-stack`: `dispatchPlugin` owns
+  // its own arg parsing, so commander hands it the raw remaining argv
+  // untouched. Talks to a RUNNING daemon over the bus — does not boot one.
+  program
+    .command("plugin")
+    .description("Runtime adapter/renderer attach/detach/reload (list / unload / reload / load)")
+    .argument("[args...]", "plugin subcommand + flags (see `cortex plugin --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchPlugin(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);

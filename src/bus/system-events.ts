@@ -1907,3 +1907,129 @@ export function createSystemPluginReloadFailedEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.plugin.control_request / control_response — cortex#1793 (S8)
+// CLI-to-daemon runtime plugin control channel
+// ---------------------------------------------------------------------------
+
+/**
+ * `cortex plugin list|unload|reload|load` (S8) needs to read + mutate LIVE
+ * in-process daemon state (attached adapters, registered renderers) from a
+ * separate, short-lived CLI process. No admin/control channel for this
+ * existed before S8 — `cortex network status` (the precedent the S8 brief
+ * says to verify) reads config files + the nats-server's own `/leafz`
+ * monitor HTTP endpoint, NEITHER of which reaches into the cortex daemon
+ * process's memory. `SurfaceGateway`'s in-memory `adapters`/`attachedSeeds`
+ * and the renderer boot loop's `Renderer` instances exist ONLY inside the
+ * running daemon.
+ *
+ * Rather than open a second raw NATS connection with core request/reply
+ * (bypassing the myelin envelope/sovereignty pipeline `runtime.publish`/
+ * `runtime.subscribe`/`onEnvelope` already provide — and the pattern
+ * `cortex network ping` already establishes for a short-lived CLI process:
+ * `startMyelinRuntime(config, …)` against the SAME `cortex.yaml`), this pair
+ * of `system.plugin.*` events implements request/reply ON TOP of the
+ * existing publish/subscribe primitives:
+ *
+ *   1. The CLI opens its own `MyelinRuntime` against the principal's
+ *      `cortex.yaml`, subscribes to `local.{principal}.system.plugin.control_response`,
+ *      publishes a `control_request` envelope carrying a fresh UUID
+ *      `correlation_id`, and awaits a `control_response` bearing the SAME
+ *      `correlation_id` (bounded timeout).
+ *   2. The running daemon subscribes to `control_request` at boot
+ *      (`src/gateway/plugin-control-server.ts`), executes the requested
+ *      `list`/`unload`/`reload`/`load` action against its own live
+ *      `adapters[]` / renderer-handle map / `SurfaceGateway`
+ *      (`src/gateway/plugin-runtime.ts`), and replies with a
+ *      `control_response` carrying the same `correlation_id`.
+ *
+ * Local-only by construction: `local.{principal}.system.plugin.control_*`
+ * is never a `federated.*` subject, so it structurally cannot cross a leaf
+ * to a peer stack (leaf export/import lists only ever name `local.`/
+ * `federated.` prefixed patterns elsewhere in this codebase — a plugin
+ * control channel reaching across a federation boundary would let one
+ * principal unload another principal's adapters, which must never be
+ * possible). `classification: "local"` (the `system.*` default) matches.
+ *
+ * Payload is intentionally a thin, generic RPC envelope (`action` +
+ * loosely-typed `args`/`result`) rather than one dedicated event type per
+ * verb — this is administrative RPC, not a domain/audit event stream, and
+ * the four verbs share one request/response shape.
+ */
+export interface SystemPluginControlRequestOpts {
+  source: SystemEventSource;
+  /** Fresh UUID this request's response must echo back. */
+  requestId: string;
+  action: "list" | "unload" | "reload" | "load";
+  /** `unload`/`reload` target a live instance id; `load` targets a bundle name. */
+  instanceId?: string;
+  bundleName?: string;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.plugin.control_request` envelope. Subject convention:
+ * `local.{principal}.system.plugin.control_request` — the daemon-side
+ * listener subscribes here; the CLI publishes here.
+ */
+export function createSystemPluginControlRequestEvent(
+  opts: SystemPluginControlRequestOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.plugin.control_request",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.requestId,
+    payload: {
+      request_id: opts.requestId,
+      action: opts.action,
+      ...(opts.instanceId !== undefined && { instance_id: opts.instanceId }),
+      ...(opts.bundleName !== undefined && { bundle_name: opts.bundleName }),
+    },
+  });
+}
+
+/** One row of `cortex plugin list` output — see `src/gateway/plugin-runtime.ts`. */
+export interface SystemPluginControlListRow {
+  kind: "adapter" | "renderer";
+  platformOrKind: string;
+  instanceId: string;
+  bundleName: string;
+  running: boolean;
+}
+
+export interface SystemPluginControlResponseOpts {
+  source: SystemEventSource;
+  /** Echoes the request's `requestId` — how the CLI matches reply to call. */
+  requestId: string;
+  ok: boolean;
+  /** Populated for a successful `list`; omitted otherwise. */
+  rows?: SystemPluginControlListRow[];
+  /** Human-readable outcome — populated for `unload`/`reload`/`load` (both
+   *  success and failure) and for a failed `list`. */
+  detail?: string;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.plugin.control_response` envelope — the daemon's reply
+ * to a `control_request`. Subject convention:
+ * `local.{principal}.system.plugin.control_response`.
+ */
+export function createSystemPluginControlResponseEvent(
+  opts: SystemPluginControlResponseOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.plugin.control_response",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.requestId,
+    payload: {
+      request_id: opts.requestId,
+      ok: opts.ok,
+      ...(opts.rows !== undefined && { rows: opts.rows }),
+      ...(opts.detail !== undefined && { detail: opts.detail }),
+    },
+  });
+}

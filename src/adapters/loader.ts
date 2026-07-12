@@ -842,3 +842,100 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
     `cortex plugin-loader: loaded ${manifest.kind} "${manifest.id}" from bundle "${bundleName}"${firstParty ? " (first-party renderer exemption)" : ""}\n`,
   );
 }
+
+// =============================================================================
+// Runtime re-import — cortex#1793 (S8, ADR-0024 D3) reload support
+// =============================================================================
+
+/** Result of {@link reimportRendererPlugin}. */
+export type ReimportRendererResult =
+  | { ok: true; plugin: RendererPlugin }
+  | { ok: false; stage: string; reason: string };
+
+/**
+ * Re-`import()` a bundle's entry module and re-validate its default export
+ * as a {@link RendererPlugin} — the re-import half of `cortex plugin reload`
+ * (S8). Deliberately reuses the SAME entry-containment (stage e) and
+ * shape-validate/id-pin/freeze (stage f) logic `loadOneBundle` applies at
+ * boot, applied to the SAME bundle a second time, so a reload is held to the
+ * identical trust bar as a fresh boot-time load — no relaxed re-import path.
+ *
+ * Does NOT touch the {@link SurfacePluginRegistry} — the registry is a
+ * `(kind, id)`-keyed CLASS registry (ADR-0024 D5), and a reload replaces a
+ * live INSTANCE, not the class binding config-parsing resolves against. The
+ * caller (`src/gateway/plugin-runtime.ts`) uses the returned plugin's
+ * `createRenderer(config)` factory directly with the instance's ORIGINAL
+ * parsed config, then discards this frozen plugin object — never registers
+ * it.
+ *
+ * cortex#1793 (S8) scratch-verified finding: bun's dynamic `import()` only
+ * honors a `?v=` cache-busting query string when the specifier is a PLAIN
+ * filesystem path — the SAME query string on a `file://` URL (what
+ * `loadOneBundle`'s boot-time import uses, `pathToFileURL(...).href`)
+ * resolves to the SAME cached module every time (bun 1.3.2). `opts.bust`
+ * therefore imports via the plain `resolved.absPath`, not a `file://` URL,
+ * when re-importing for a reload; `loadOneBundle` is UNCHANGED (boot-time
+ * imports never need busting — they're each bundle's first and only import
+ * for that process lifetime).
+ *
+ * Renderer-only (adapters are out of scope for `cortex plugin reload` in
+ * this slice — see `docs/plugin-sdk.md` §Runtime lifecycle for the
+ * rationale: adapter re-construction needs binding-seed + demux-key inputs
+ * `GatewayAdapterFactory` owns today, tracked separately at cortex#1896).
+ */
+export async function reimportRendererPlugin(
+  bundle: DiscoveredBundle,
+  opts: { bust: boolean },
+): Promise<ReimportRendererResult> {
+  const { manifest, bundleName } = bundle;
+  const fail = (stage: string, reason: string): ReimportRendererResult => {
+    process.stderr.write(
+      `cortex plugin-loader: reload of ${bundleName} (renderer:${manifest.id}) refused at ${stage}: ${reason}\n`,
+    );
+    return { ok: false, stage, reason };
+  };
+
+  if (manifest.kind !== "renderer") {
+    return fail("kind_check", `reimportRendererPlugin only supports renderer bundles; "${bundleName}" is kind "${manifest.kind}"`);
+  }
+
+  const resolved = resolveEntryWithinBundle(bundle.installPath, manifest.entry);
+  if (!resolved.ok) {
+    return fail("entry_containment", resolved.reason);
+  }
+
+  let imported: unknown;
+  try {
+    // See doc comment: plain path + query-bust for reload; file:// URL never
+    // busts in bun 1.3.2 (scratch-verified cortex#1793).
+    const specifier = opts.bust ? `${resolved.absPath}?v=${Date.now()}` : pathToFileURL(resolved.absPath).href;
+    const mod: unknown = await import(specifier);
+    imported = isRecord(mod) ? mod.default : undefined;
+  } catch (err) {
+    return fail("import", `entry module threw at re-import: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (!isRendererPluginShape(imported)) {
+    return fail("shape_validate", "default export does not satisfy the RendererPlugin shape");
+  }
+  const id = imported.id;
+  const rendererKind = imported.rendererKind;
+  if (id !== manifest.id) {
+    return fail("shape_validate", `default export's id ("${id}") does not match the manifest ("${manifest.id}")`);
+  }
+  if (rendererKind !== manifest.id) {
+    return fail(
+      "shape_validate",
+      `default export's rendererKind ("${rendererKind}") does not match its own id ("${manifest.id}")`,
+    );
+  }
+  // Same TOCTOU closure as `loadOneBundle`'s renderer branch — a frozen,
+  // decoupled copy pinned to the trusted `manifest` values.
+  const plugin: RendererPlugin = Object.freeze({
+    ...imported,
+    kind: manifest.kind,
+    id: manifest.id,
+    rendererKind: manifest.id,
+  });
+  return { ok: true, plugin };
+}
