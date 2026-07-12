@@ -29,6 +29,13 @@ and [§4](../README-AGENTS.md#4-stand-up-the-bus) are the authoritative
 reference for the full prerequisite list and the isolated per-stack bus
 config; this page only orders the steps.
 
+**Manual `git clone` installs — run `./scripts/postinstall.sh` first.** `arc
+install cortex` runs it for you via the manifest lifecycle; a raw clone does not,
+so run it once from the repo root before the steps below. It creates the runtime
+dirs (`~/.claude/events/{raw,published}`, `~/.config/cortex/{logs,state}`),
+installs the default relay policy, and on macOS renders the launchd plists. See
+[`README-AGENTS.md` §2 Path B](../README-AGENTS.md#2-install).
+
 The fresh-install happy path, in order:
 
 0. **Stand up the bus** — run an isolated NATS server for this stack (one

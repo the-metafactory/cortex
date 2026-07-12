@@ -88,17 +88,30 @@ the managed path for normal operation):
 git clone https://github.com/the-metafactory/cortex
 cd cortex
 bun install
-bun link          # puts `cortex` on PATH via ~/.bun/bin
-cortex --version  # confirm it resolves
+bun link                  # puts `cortex` on PATH via ~/.bun/bin
+cortex --version          # confirm it resolves
+./scripts/postinstall.sh  # scaffold runtime dirs, relay policy, launchd plists
 ```
+
+**Do not skip `./scripts/postinstall.sh`.** Path A runs it automatically via the
+manifest lifecycle (`scripts.postinstall`); a manual clone does not, so without
+this step the daemon starts against missing scaffolding. It creates the runtime
+directories (`~/.claude/events/{raw,published}`, `~/.claude/{logs,relay}`,
+`~/.config/cortex/{logs,state}`), installs the default relay policy (never
+clobbering an existing `~/.claude/relay/relay-policy.yaml`), marks the entry-point
+scripts executable, and on macOS renders the launchd plists.
 
 Run the daemon with `cortex start --config <pointer>` (or directly with
 `bun src/cortex.ts start --config <pointer>`). Verify with `bun test` and
 `bun run lint`.
 
 **Updating a from-source clone:** `cd cortex && git pull && bun install` — a clean
-fast-forward if you haven't modified anything. For an arc-managed install, update
-with `arc upgrade cortex` instead (Path A).
+fast-forward if you haven't modified anything. Note this skips the manifest's
+`preupgrade`/`postupgrade` lifecycle that Path A gets from `arc upgrade cortex`
+(stop the running daemon → refresh symlinks → re-render plists → restart the
+previously-running stacks). After a manual pull, restart the daemon yourself, and
+re-run `./scripts/postinstall.sh` if the plist templates or runtime dirs changed.
+For an arc-managed install, update with `arc upgrade cortex` instead (Path A).
 
 ## 3. Configure a stack
 
