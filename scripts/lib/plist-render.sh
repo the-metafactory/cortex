@@ -492,6 +492,84 @@ reload_plist() {
   launchctl bootstrap "${domain}" "${plist}" 2>/dev/null || true
 }
 
+# ── Skip-restart: spare a production stack (cortex#1866 principal req.) ──────
+#
+# CORTEX_UPGRADE_SKIP_RESTART is a comma-list of stack slugs whose LIVE daemon
+# must NOT be force-restarted by `arc upgrade cortex` (verified live: the `work`
+# stack serves production). A skipped stack:
+#   - is NOT stopped by preupgrade (its PID is excluded from the pgrep kill and
+#     it is not launchctl-unloaded), so it keeps running on its live process;
+#   - has its binary moved + forward-symlink bridged + plist re-rendered as
+#     normal, but is NOT bootout/bootstrapped by postupgrade;
+#   - migrates to ~/.local/bin at its NEXT natural restart / a maintenance
+#     window (the re-rendered plist takes effect then); until then the
+#     forward-symlink (forward_link_legacy_bin) keeps ~/bin valid.
+# Relay is never routed through the skip check — it always reloads.
+
+# True if $1 (a slug) is in CORTEX_UPGRADE_SKIP_RESTART. Word-splitting on the
+# comma-normalized list trims incidental whitespace; slugs are [a-zA-Z0-9_-] so
+# there is no quoting hazard.
+stack_restart_skipped() {
+  local slug="$1"
+  local list="${CORTEX_UPGRADE_SKIP_RESTART:-}"
+  [ -n "${list}" ] || return 1
+  local entry
+  for entry in $(printf '%s' "${list}" | tr ',' ' '); do
+    [ "${entry}" = "${slug}" ] && return 0
+  done
+  return 1
+}
+
+# Reload ONE stack's plist unless its slug is skip-listed. Encapsulates the
+# postupgrade reload decision so the recorded-running loop and the discover-all
+# fallback loop stay identical (and both honor the skip list).
+#
+# Args: $1 launch_dir  $2 slug
+reload_stack_unless_skipped() {
+  local launch_dir="$1" slug="$2"
+  local plist="${launch_dir}/ai.meta-factory.cortex.${slug}.plist"
+  if [ ! -f "${plist}" ]; then
+    echo "  ⚠ ${slug} plist not found after render — skipping restart" >&2
+    return 0
+  fi
+  if stack_restart_skipped "${slug}"; then
+    echo "  ⏸ ${slug} left running on its live process (CORTEX_UPGRADE_SKIP_RESTART) — plist re-rendered to ~/.local/bin; migrates at next natural restart"
+    return 0
+  fi
+  reload_plist "${plist}"
+  echo "  ✓ ${slug} daemon reloaded"
+}
+
+# Drop from a PID list any cortex daemon whose --config path belongs to a
+# skip-listed stack, so preupgrade's kill never stops a spared production stack.
+# Matches each skip slug's resolved --config path (resolve_stack_config_path —
+# the SAME path render_stack_plist stamps into the plist) as a substring of the
+# process command line. Prints the surviving PIDs (space-separated).
+#
+# Args: $1 space/newline-separated pid list  $2 config_dir
+filter_out_skipped_pids() {
+  local pids="$1" config_dir="$2"
+  local list="${CORTEX_UPGRADE_SKIP_RESTART:-}"
+  if [ -z "${list}" ] || [ -z "${pids}" ]; then
+    printf '%s' "${pids}"
+    return 0
+  fi
+  local kept="" pid cmdline skip_slug skip_cfg drop
+  for pid in ${pids}; do
+    cmdline="$(ps -o command= -p "${pid}" 2>/dev/null || true)"
+    drop=0
+    for skip_slug in $(printf '%s' "${list}" | tr ',' ' '); do
+      [ -n "${skip_slug}" ] || continue
+      skip_cfg="$(resolve_stack_config_path "${config_dir}" "${skip_slug}")"
+      case "${cmdline}" in
+        *"${skip_cfg}"*) drop=1; break ;;
+      esac
+    done
+    [ "${drop}" -eq 0 ] && kept="${kept}${kept:+ }${pid}"
+  done
+  printf '%s' "${kept}"
+}
+
 # ── Arc-version guard: refuse the cutover on an arc without arc#295 ──────────
 #
 # The bin cutover moves cortex/cortex-relay/cldyo-live to ~/.local/bin, where

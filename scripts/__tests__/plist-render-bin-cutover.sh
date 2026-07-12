@@ -272,6 +272,85 @@ assert_grep_file "guard: new arc → guard-pass line printed" "${GOOD_OUT_FILE}"
   'no-throw symlink installer present (arc#295)'
 rm -rf "${NEW_BIN}" "${NEW_HOME}" "${STOP_LOG_NEW}" "${GOOD_OUT_FILE}"
 
+# ─── Section 4: skip-restart (CORTEX_UPGRADE_SKIP_RESTART) ────────
+printf '\n=== skip-restart ===\n'
+
+# Membership predicate.
+( export CORTEX_UPGRADE_SKIP_RESTART="work,halden"
+  assert_true  "member: 'work' is in the skip list"        stack_restart_skipped work
+  assert_true  "member: 'halden' is in the skip list"      stack_restart_skipped halden
+  assert_false "member: 'meta-factory' is NOT in the list"  stack_restart_skipped meta-factory )
+( unset CORTEX_UPGRADE_SKIP_RESTART
+  assert_false "member: empty list → nothing skipped"       stack_restart_skipped work )
+
+# reload_stack_unless_skipped: a skip-listed slug is NOT bootout/bootstrapped;
+# a non-listed slug IS; the relay is never routed through this predicate.
+SKIP_LAUNCH_DIR="${TMPHOME}/skip-launch"
+mkdir -p "${SKIP_LAUNCH_DIR}"
+for s in work meta-factory relay; do
+  printf '<plist/>\n' > "${SKIP_LAUNCH_DIR}/ai.meta-factory.cortex.${s}.plist"
+done
+
+export CORTEX_UPGRADE_SKIP_RESTART="work"
+
+# Skip-listed 'work' → zero launchctl calls (kept on its live process).
+: > "${LAUNCHCTL_LOG}"
+reload_stack_unless_skipped "${SKIP_LAUNCH_DIR}" work >/dev/null
+assert_eq "skip: listed slug 'work' NOT passed to reload_plist (0 launchctl calls)" \
+  "0" "$(wc -l < "${LAUNCHCTL_LOG}" | tr -d ' ')"
+
+# Non-listed 'meta-factory' → bootout+bootstrap (2 launchctl calls).
+: > "${LAUNCHCTL_LOG}"
+reload_stack_unless_skipped "${SKIP_LAUNCH_DIR}" meta-factory >/dev/null
+assert_eq "skip: non-listed slug 'meta-factory' IS reloaded (2 launchctl calls)" \
+  "2" "$(wc -l < "${LAUNCHCTL_LOG}" | tr -d ' ')"
+
+# Relay bypasses the skip check entirely: even were 'relay' skip-listed,
+# postupgrade reloads it via reload_plist directly (not the predicate).
+( export CORTEX_UPGRADE_SKIP_RESTART="relay"
+  : > "${LAUNCHCTL_LOG}"
+  reload_plist "${SKIP_LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist"
+  assert_eq "skip: relay always reloads (2 launchctl calls, never skip-checked)" \
+    "2" "$(wc -l < "${LAUNCHCTL_LOG}" | tr -d ' ')" )
+
+unset CORTEX_UPGRADE_SKIP_RESTART
+
+# filter_out_skipped_pids: drop the skip-listed stack's PID from a kill list,
+# matched by the daemon's --config path. Mock `ps -o command= -p <pid>` from a
+# pid→cmdline map so no real process table is consulted.
+SKIP_CONFIG_DIR="${TMPHOME}/skip-config"
+mkdir -p "${SKIP_CONFIG_DIR}"
+WORK_CFG="$(resolve_stack_config_path "${SKIP_CONFIG_DIR}" work)"
+MF_CFG="$(resolve_stack_config_path "${SKIP_CONFIG_DIR}" meta-factory)"
+export PSMAP="${TMPHOME}/psmap"
+{
+  printf '1001 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${WORK_CFG}"
+  printf '1002 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${MF_CFG}"
+} > "${PSMAP}"
+cat > "${MOCK_BIN}/ps" <<'EOF'
+#!/bin/sh
+pid=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p) pid="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "${pid}" ] && sed -n "s/^${pid} //p" "${PSMAP:-/dev/null}"
+exit 0
+EOF
+chmod +x "${MOCK_BIN}/ps"
+
+( export CORTEX_UPGRADE_SKIP_RESTART="work"
+  KEPT="$(filter_out_skipped_pids "1001 1002" "${SKIP_CONFIG_DIR}")"
+  assert_eq "filter: skip-listed 'work' PID 1001 dropped; 1002 kept" "1002" "${KEPT}" )
+( export CORTEX_UPGRADE_SKIP_RESTART="meta-factory"
+  KEPT="$(filter_out_skipped_pids "1001 1002" "${SKIP_CONFIG_DIR}")"
+  assert_eq "filter: skip-listed 'meta-factory' PID 1002 dropped; 1001 kept" "1001" "${KEPT}" )
+( unset CORTEX_UPGRADE_SKIP_RESTART
+  KEPT="$(filter_out_skipped_pids "1001 1002" "${SKIP_CONFIG_DIR}")"
+  assert_eq "filter: empty skip list → both PIDs kept" "1001 1002" "${KEPT}" )
+
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

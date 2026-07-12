@@ -10,9 +10,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# cortex#700 / cortex#1866: source the shared lib for slug discovery AND the
-# arc-version guard. Sourced up-front (before ANY daemon is stopped) so the
-# guard below can abort as a safe no-op.
+# cortex#700 / cortex#1866: source the shared lib for slug discovery, the
+# skip-restart PID filter, AND the arc-version guard. Sourced up-front (before
+# ANY daemon is stopped) so the guard below can abort as a safe no-op.
 source "${SCRIPT_DIR}/lib/plist-render.sh"
 
 # ── Arc-version guard (cortex#1866 / arc#295) — MUST run before any stop/kill/
@@ -39,6 +39,11 @@ if [ "$(uname)" = "Darwin" ]; then
   # match both so a host mid-upgrade (daemon still running from the old
   # location) is still caught.
   CORTEX_PIDS=$(pgrep -f "${HOME}/(bin|\.local/bin)/cortex start" 2>/dev/null || true)
+  # cortex#1866 skip-restart: drop any skip-listed stack's PID from the blanket
+  # kill so a spared production stack (e.g. `work`) keeps running on its live
+  # process. Matching is by the daemon's --config path (the same path the plist
+  # stamps), so only the intended stack is spared.
+  CORTEX_PIDS=$(filter_out_skipped_pids "${CORTEX_PIDS}" "${CONFIG_DIR}")
   if [ -n "${CORTEX_PIDS}" ]; then
     echo "  Killing existing cortex processes: ${CORTEX_PIDS}"
     kill ${CORTEX_PIDS} 2>/dev/null || true
@@ -112,8 +117,8 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  ✓ Removed legacy ${legacy_plist}"
   done
 
-  # cortex#700: slug-discovery helpers come from plist-render.sh, already
-  # sourced at the top of this script (before the arc-version guard).
+  # cortex#700: slug-discovery + skip-restart helpers come from plist-render.sh,
+  # already sourced at the top of this script (before the arc-version guard).
 
   # Write running-stacks state to a well-known temp path so postupgrade.sh
   # can restore exactly the stacks that were running before the upgrade.
@@ -140,9 +145,18 @@ if [ "$(uname)" = "Darwin" ]; then
     label="ai.meta-factory.cortex.${slug}"
     plist="${LAUNCH_DIR}/${label}.plist"
     if launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "${label}"; then
-      launchctl unload "${plist}" 2>/dev/null || true
-      printf '%s\n' "${slug}" >> "${RUNNING_STACKS_FILE}"
-      echo "  ✓ ${slug} daemon stopped (recorded for restart)"
+      if stack_restart_skipped "${slug}"; then
+        # cortex#1866 skip-restart: record it as running (so postupgrade knows
+        # it was up) but do NOT unload it — it keeps serving on its live
+        # process. postupgrade re-renders its plist but skips the reload; the
+        # stack migrates to ~/.local/bin on its next natural restart.
+        printf '%s\n' "${slug}" >> "${RUNNING_STACKS_FILE}"
+        echo "  ⏸ ${slug} daemon left running (CORTEX_UPGRADE_SKIP_RESTART) — recorded, not stopped"
+      else
+        launchctl unload "${plist}" 2>/dev/null || true
+        printf '%s\n' "${slug}" >> "${RUNNING_STACKS_FILE}"
+        echo "  ✓ ${slug} daemon stopped (recorded for restart)"
+      fi
     else
       echo "  ⊘ ${slug} daemon not running — will not be restarted by postupgrade"
     fi
