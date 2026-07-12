@@ -6247,11 +6247,15 @@ if (import.meta.main) {
 
       mkdirSync(STATE_DIR, { recursive: true });
       const pidFile = pidFileFor(options.config);
-      // cortex#1900 continuity AC — adopt a pre-hash `cortex-<basename>.pid`
-      // if this config still owns one, so an existing fleet upgrading across
-      // the path-hash naming change is not orphaned. Runs BEFORE the singleton
-      // check so a still-live daemon's PID travels with the renamed file and
-      // checkSingleton correctly blocks the duplicate (or reaps it if stale).
+      // cortex#1900 continuity AC — adopt a pre-hash `cortex-<basename>.pid` iff
+      // this config still owns one AND it names a DEAD/stale PID, so an existing
+      // fleet upgrading across the path-hash naming change is not orphaned.
+      // adv PR#1923: a LIVE legacy pidfile is REFUSED inside migrateLegacyPidFile
+      // (it may belong to a different tree sharing the basename — adopting it
+      // would let a later `stop` SIGTERM that foreign daemon; the warning is
+      // emitted there). Runs BEFORE the singleton check; on a dead-PID adoption
+      // checkSingleton then reaps the stale entry. The migration is internally
+      // guarded and never throws, so a lost race can't abort boot.
       const adopted = migrateLegacyPidFile(options.config);
       if (adopted !== undefined) {
         console.error(`cortex: migrated PID file ${adopted} → ${pidFile} (cortex#1900 path-hash naming)`);

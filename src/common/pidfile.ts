@@ -31,7 +31,7 @@
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { join, basename } from "path";
-import { realpathSync, existsSync, renameSync } from "fs";
+import { realpathSync, existsSync, renameSync, readFileSync } from "fs";
 
 /**
  * State directory holding every pidfile (and the degraded-state markers derived
@@ -147,36 +147,81 @@ export function pidFileFor(configPath: string | undefined): string {
 }
 
 /**
+ * If `legacyPath` names a process that is still ALIVE, return that PID;
+ * otherwise (dead/stale PID, or the file is unreadable / unparseable) return
+ * `undefined`. A LIVE PID is the adoption hazard (see
+ * {@link migrateLegacyPidFile}): it means a daemon is running RIGHT NOW under
+ * the tree-ambiguous old name, and we must not rename its pidfile out from
+ * under it. A dead/stale/unreadable PID is the legitimate restart-to-migrate
+ * signature and is safe to adopt.
+ *
+ * `EPERM` (a process with that PID exists but is owned by another user) counts
+ * as alive — conservatively refuse to adopt. Only `ESRCH` (no such process) is
+ * treated as dead.
+ */
+function legacyLivePid(legacyPath: string): number | undefined {
+  let pid: number;
+  try {
+    pid = parseInt(readFileSync(legacyPath, "utf-8").trim(), 10);
+  } catch {
+    return undefined; // unreadable → treat as stale → safe to adopt
+  }
+  if (Number.isNaN(pid)) return undefined; // unparseable → stale → safe to adopt
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe, delivers nothing
+    return pid; // delivered → alive → hazard
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined;
+  }
+}
+
+/**
  * Continuity migration (cortex#1900 continuity AC) — adopt an existing
  * old-format pidfile so a live fleet is not orphaned mid-upgrade.
  *
  * Called once at daemon start, BEFORE the singleton check. If the NEW-format
  * pidfile is absent but the OLD-format one (`cortex-<basename>.pid`) exists in
- * `stateDir`, rename old → new. The running daemon's recorded PID travels with
- * the file, so the subsequent singleton check sees it (and correctly blocks a
- * duplicate if that PID is still alive, or reaps it if stale), and every reader
- * (`stop`/`status`/`reload`) now resolves the daemon under its new identity.
+ * `stateDir` AND names a DEAD/stale PID, rename old → new. Every reader
+ * (`stop`/`status`/`reload`) then resolves the daemon under its new identity.
+ *
+ * **Liveness gate (adv PR#1923, blocking).** The old name is tree-ambiguous —
+ * two config trees that share a basename (a manual `cp -r` of a config tree +
+ * an in-place binary upgrade reaches this with NO X-07 involved) both derive
+ * `cortex-<basename>.pid`. If that file names a LIVE process, adopting it would
+ * rename a *foreign, running* daemon's pidfile under THIS config's identity —
+ * so a later `stop <this>` would SIGTERM the other tree's daemon while
+ * `stop <other>` reports "not running". So: a live legacy PID is REFUSED
+ * (warn + return `undefined`); only a dead/stale/unreadable PID is adopted.
+ * This is sound because the legit restart-to-migrate path never presents a live
+ * legacy PID: a clean shutdown unlinks its own pidfile, and an unclean exit
+ * leaves a DEAD pid — a LIVE pid is the hazard's signature, nothing else.
+ *
+ * **Accepted trade-off (documented).** Restarting the SAME config while its old
+ * daemon is still live now boots toward `checkSingleton` on the NEW name (which
+ * is absent) and may spawn a DUPLICATE rather than block on the old name. That
+ * is strictly less catastrophic than a cross-tree SIGTERM, and the operator is
+ * told to stop the old daemon first.
+ *
+ * **Guarded rename.** The rename is wrapped: `ENOENT`/`EEXIST` = a benign
+ * migration race we lost (a concurrent start already migrated / removed the
+ * file) → nothing to do. Any other error → warn and continue. A continuity
+ * nicety must NEVER abort daemon boot — a throw here becomes `exit(1)` under
+ * launchd KeepAlive, i.e. an invisible crash-loop.
  *
  * No-op — returns `undefined` — when: the config is default/unspecified (never
- * suffixed), the new-format file already exists (already migrated / fresh
- * install), or no old-format file is present. Returns the adopted old path (for
- * the caller to log) when a rename happened.
+ * suffixed), the new-format file already exists, no old-format file is present,
+ * the old-format file names a LIVE process, or the rename lost a race. Returns
+ * the adopted old path (for the caller to log) only when a rename succeeded.
  *
- * `stateDir` defaults to {@link STATE_DIR}; it is overridable purely for
- * test isolation (the rename is a real filesystem mutation).
- *
- * Safety: this deliberately does NOT run inside `pidFileFor` (a pure resolver
- * with many read-only callers) — only `start` mutates the filesystem. And ONLY
- * `start` consults the old name; readers never do, so two trees sharing a
- * basename can never both be steered back onto the shared `cortex-<basename>.pid`.
- * The old name is inherently tree-ambiguous (that is the bug #1900 fixes), so
- * the FIRST tree to start after upgrade claims it. That is safe under the
- * epic's ordering — #1900 lands BEFORE the X-07 config copy, so at migration
- * time only ONE tree (hence one old-format pidfile) exists.
+ * `stateDir` defaults to {@link STATE_DIR} (which now honours `CORTEX_STATE_DIR`)
+ * and is overridable purely for test isolation. `onBeforeRename` is a
+ * test-only seam invoked after the pre-flight checks and immediately before the
+ * rename, so a test can simulate a lost race; never passed in production.
  */
 export function migrateLegacyPidFile(
   configPath: string | undefined,
   stateDir: string = STATE_DIR,
+  onBeforeRename?: () => void,
 ): string | undefined {
   const target = pidFileForIn(stateDir, configPath);
   const legacy = legacyPidFileForIn(stateDir, configPath);
@@ -184,7 +229,31 @@ export function migrateLegacyPidFile(
   if (legacy === target) return undefined; // defensive: nothing to rename
   if (existsSync(target)) return undefined; // already on the new format
   if (!existsSync(legacy)) return undefined; // nothing to adopt
-  renameSync(legacy, target);
+
+  // Liveness gate: refuse to adopt a pidfile whose daemon is still running.
+  const alivePid = legacyLivePid(legacy);
+  if (alivePid !== undefined) {
+    console.error(
+      `cortex: live legacy pidfile ${legacy} (pid ${alivePid}) — not adopting; ` +
+        `stop that daemon first or restart it under the new binary`,
+    );
+    return undefined;
+  }
+
+  onBeforeRename?.(); // test seam only
+  try {
+    renameSync(legacy, target);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "EEXIST") {
+      // Non-race failure (e.g. EACCES): don't crash boot — the daemon still
+      // starts on the new-format name; it just didn't inherit the old file.
+      console.error(
+        `cortex: could not migrate legacy pidfile ${legacy} → ${target}: ${(err as Error).message}`,
+      );
+    }
+    return undefined;
+  }
   return legacy;
 }
 

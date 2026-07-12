@@ -1072,8 +1072,13 @@ describe("pidFileFor — per-config PID file derivation", () => {
     let cfg: string;
     let legacyName: string;
     let newName: string;
+    // A guaranteed-DEAD pid — a real process spawned then reaped. The liveness
+    // gate (adv PR#1923) probes process.kill(pid, 0), so adoption cases must use
+    // a pid that is provably not alive rather than a synthetic literal (which
+    // could collide with a live process on the host and flakily be refused).
+    let deadPid: number;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       stateDir = mkdtempSync(join(tmpdir(), "cortex-pidmig-state-"));
       dir = mkdtempSync(join(tmpdir(), "cortex-pidmig-tree-"));
       cfg = join(dir, "work.yaml");
@@ -1081,6 +1086,9 @@ describe("pidFileFor — per-config PID file derivation", () => {
       newName = basename(pidFileFor(cfg)); // cortex-work-<hash>.pid
       legacyName = `cortex-${basename(cfg).replace(/\.ya?ml$/i, "")}.pid`; // cortex-work.pid
       mkdirSync(stateDir, { recursive: true });
+      const reaped = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+      deadPid = reaped.pid;
+      await reaped.exited; // exits + is reaped → process.kill(deadPid, 0) throws ESRCH
     });
 
     afterEach(() => {
@@ -1088,17 +1096,74 @@ describe("pidFileFor — per-config PID file derivation", () => {
       rmSync(dir, { recursive: true, force: true });
     });
 
-    test("adopts an existing old-format pidfile → renames to new-format, PID preserved", () => {
+    // Capture console.error so the liveness-gate / guard warnings are assertable.
+    function captureStderr(): { lines: string[]; restore: () => void } {
+      const lines: string[] = [];
+      const orig = console.error;
+      console.error = (...args: unknown[]) => {
+        lines.push(args.map(String).join(" "));
+      };
+      return { lines, restore: () => { console.error = orig; } };
+    }
+
+    test("adopts a DEAD-pid old-format pidfile → renames to new-format, PID preserved", () => {
       const legacyPath = join(stateDir, legacyName);
       const newPath = join(stateDir, newName);
-      writeFileSync(legacyPath, "12345");
+      writeFileSync(legacyPath, String(deadPid));
 
       const adopted = migrateLegacyPidFile(cfg, stateDir);
 
       expect(adopted).toBe(legacyPath);
       expect(existsSync(legacyPath)).toBe(false); // old name gone
       expect(existsSync(newPath)).toBe(true); // adopted under new name
-      expect(readFileSync(newPath, "utf-8")).toBe("12345"); // live PID carried over
+      expect(readFileSync(newPath, "utf-8")).toBe(String(deadPid)); // PID carried over
+    });
+
+    // adv PR#1923 (blocking): a LIVE legacy pidfile is the cross-tree-kill
+    // hazard signature — refuse it. Stand up a real live process, record its PID
+    // under the old name, and assert migration does NOT adopt it.
+    test("LIVE-pid old-format pidfile → NOT adopted, file untouched, warns", () => {
+      const legacyPath = join(stateDir, legacyName);
+      const newPath = join(stateDir, newName);
+      const sleeper = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+      const livePid = sleeper.pid;
+      const cap = captureStderr();
+      let result: string | undefined;
+      try {
+        writeFileSync(legacyPath, String(livePid));
+        result = migrateLegacyPidFile(cfg, stateDir);
+      } finally {
+        cap.restore();
+        try { sleeper.kill("SIGKILL"); } catch { /* already gone */ }
+      }
+      expect(result).toBeUndefined(); // refused adoption
+      expect(existsSync(legacyPath)).toBe(true); // old file left exactly as-is
+      expect(existsSync(newPath)).toBe(false); // nothing created under the new name
+      expect(
+        cap.lines.some((l) => l.includes("not adopting") && l.includes(String(livePid))),
+      ).toBe(true);
+    });
+
+    // adv PR#1923 / both reviewers: the rename must never abort boot. Simulate a
+    // lost migration race — the legacy file vanishes between the pre-flight
+    // checks and renameSync (via the test-only onBeforeRename seam) → ENOENT.
+    test("lost migration race (legacy vanishes before rename) → no throw, boot continues", () => {
+      const legacyPath = join(stateDir, legacyName);
+      writeFileSync(legacyPath, String(deadPid));
+      const cap = captureStderr();
+      let result: string | undefined;
+      try {
+        expect(() => {
+          result = migrateLegacyPidFile(cfg, stateDir, () => {
+            unlinkSync(legacyPath); // pre-delete → renameSync sees ENOENT
+          });
+        }).not.toThrow();
+      } finally {
+        cap.restore();
+      }
+      expect(result).toBeUndefined(); // benign race → nothing adopted
+      expect(existsSync(join(stateDir, newName))).toBe(false); // no partial new file
+      expect(cap.lines.some((l) => l.includes("could not migrate"))).toBe(false); // ENOENT is silent
     });
 
     test("no-op when the new-format pidfile already exists (already migrated)", () => {
@@ -1127,7 +1192,7 @@ describe("pidFileFor — per-config PID file derivation", () => {
 
     test("migrated file IS the identity stop/status later resolve", () => {
       const legacyPath = join(stateDir, legacyName);
-      writeFileSync(legacyPath, "999");
+      writeFileSync(legacyPath, String(deadPid));
       migrateLegacyPidFile(cfg, stateDir);
       // readers key on basename(pidFileFor(cfg)); it must now exist.
       expect(existsSync(join(stateDir, basename(pidFileFor(cfg))))).toBe(true);
@@ -1204,15 +1269,19 @@ describe("STATE_DIR — CORTEX_STATE_DIR env seam", () => {
     try {
       const src = [
         `import { pidFileFor, migrateLegacyPidFile } from ${JSON.stringify(modPath)};`,
-        `import { writeFileSync, existsSync } from "fs";`,
+        `import { writeFileSync, existsSync, readFileSync } from "fs";`,
         `import { join } from "path";`,
+        // reap a real child → a guaranteed-DEAD pid the liveness gate will adopt
+        `const reaped = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });`,
+        `await reaped.exited;`,
+        `const wrote = String(reaped.pid);`,
         `const cfg = ${JSON.stringify(CFG)};`,
         // seed the pre-#1900 old-format pidfile INSIDE the override dir
         `const legacy = join(process.env.CORTEX_STATE_DIR, "cortex-stack.pid");`,
-        `writeFileSync(legacy, "4242");`,
+        `writeFileSync(legacy, wrote);`,
         `const adopted = migrateLegacyPidFile(cfg);`, // DEFAULT stateDir = env-aware STATE_DIR
         `const target = pidFileFor(cfg);`,
-        `process.stdout.write(JSON.stringify({ adopted, target, targetExists: existsSync(target), legacyGone: !existsSync(legacy), pid: existsSync(target) ? require("fs").readFileSync(target,"utf-8") : null }));`,
+        `process.stdout.write(JSON.stringify({ adopted, target, targetExists: existsSync(target), legacyGone: !existsSync(legacy), wrote, read: existsSync(target) ? readFileSync(target,"utf-8") : null }));`,
       ].join("\n");
       const proc = Bun.spawnSync([process.execPath, "-e", src], {
         env: { ...process.env, CORTEX_STATE_DIR: dir },
@@ -1228,7 +1297,7 @@ describe("STATE_DIR — CORTEX_STATE_DIR env seam", () => {
       expect(basename(r.target)).toMatch(/^cortex-stack-[0-9a-f]{8}\.pid$/);
       expect(r.targetExists).toBe(true);
       expect(r.legacyGone).toBe(true);
-      expect(r.pid).toBe("4242"); // live PID carried across the rename
+      expect(r.read).toBe(r.wrote); // PID carried across the rename
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
