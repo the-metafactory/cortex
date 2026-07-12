@@ -67,6 +67,16 @@ describe("crossBoundaryImports (cortex#1949)", () => {
     expect(crossBoundaryImports(pluginDir, sdkDir)).toEqual([]);
   });
 
+  test("catches a DYNAMIC `import(\"../x\")` crossing the boundary (#1953 review blocker)", () => {
+    const { pluginDir, sdkDir } = scaffold({
+      "src/adapters/acme/index.ts":
+        `export async function load() { const m = await import("../plugin-support"); return m; }\n`,
+      "src/adapters/plugin-support.ts": `export const helper = 1;\n`,
+    });
+    const v = crossBoundaryImports(pluginDir, sdkDir);
+    expect(v.map((x) => x.specifier)).toContain("../plugin-support");
+  });
+
   test("ignores bare/package imports (e.g. zod)", () => {
     const { pluginDir, sdkDir } = scaffold({
       "src/adapters/acme/index.ts": `import { z } from "zod";\nexport const s = z;\n`,

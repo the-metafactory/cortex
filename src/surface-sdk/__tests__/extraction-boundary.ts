@@ -39,6 +39,11 @@ export interface CrossBoundaryImport {
 
 const IMPORT_RE = /(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g;
 const BARE_IMPORT_RE = /import\s*["']([^"']+)["']/g;
+// Dynamic `import("../x")` / `await import("../x")` — a lazy-loaded boundary
+// import is exactly the class this guard exists to catch (#1953 review): a
+// lazy `import("../plugin-support")` would extract broken just like a static
+// one, so a guard blind to it is false confidence.
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']/g;
 
 /** Recursively list `*.ts` files under `dir`, skipping `__tests__` + `.d.ts`. */
 function tsFiles(dir: string): string[] {
@@ -70,6 +75,7 @@ export function crossBoundaryImports(pluginDir: string, sdkDir: string): CrossBo
     const specifiers = new Set<string>();
     for (const m of src.matchAll(IMPORT_RE)) specifiers.add(m[1]!);
     for (const m of src.matchAll(BARE_IMPORT_RE)) specifiers.add(m[1]!);
+    for (const m of src.matchAll(DYNAMIC_IMPORT_RE)) specifiers.add(m[1]!);
 
     for (const spec of specifiers) {
       if (!spec.startsWith(".")) continue; // package/bare import — not a boundary concern
