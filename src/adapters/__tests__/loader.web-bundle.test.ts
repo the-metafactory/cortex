@@ -314,10 +314,13 @@ describe("config-path E2E — a REAL surfaces.web[] config survives validate →
   });
 
   test("buildBindingIndex + resolveBinding demux a real web binding to the right agent (proves the B1 fix: instanceId reads correctly post-extraction)", async () => {
-    await loadWebRegistry(); // not consumed by the resolver, but mirrors real boot order
+    // cortex#1951 — now genuinely consumed: buildBindingIndex derives the web
+    // demux key via this registry's registered `web` plugin `demuxKey`, not a
+    // hardcoded `binding.instanceId` read.
+    const registry = await loadWebRegistry();
     const surfaces = webSurfacesConfig("acme");
 
-    const index = buildBindingIndex(surfaces);
+    const index = buildBindingIndex(surfaces, registry);
     expect(index.web.size).toBe(1);
     expect(index.web.get("web:acme")?.agent).toBe("ivy");
 
@@ -366,7 +369,7 @@ describe("config-path E2E — a REAL surfaces.web[] config survives validate →
     };
     expect(() => validateSurfacesAgainstRegistry(surfaces, registry)).not.toThrow();
 
-    const index = buildBindingIndex(surfaces);
+    const index = buildBindingIndex(surfaces, registry);
     expect([...index.web.keys()].sort()).toEqual(["web:tenant-a", "web:tenant-b"]);
 
     const adapters = buildGatewayAdapters(surfaces, {

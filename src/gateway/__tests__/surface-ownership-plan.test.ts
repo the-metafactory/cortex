@@ -4,6 +4,7 @@ import {
   planSurfaceOwnership,
 } from "../surface-ownership-plan";
 import type { Surfaces } from "../../common/types/surfaces";
+import { testRegistryWithWeb } from "./test-registry-support";
 
 const SURFACES: Surfaces = {
   discord: [
@@ -260,6 +261,7 @@ describe("planSurfaceOwnership — web surfaces", () => {
       surfaces: WEB_SURFACES,
       gatewayEnabled: true,
       principal: "andreas",
+      registry: testRegistryWithWeb(),
     });
     expect(plan.hasSurfaceBindings).toBe(true);
     expect(plan.gatewayStartEligible).toBe(true);
@@ -270,6 +272,7 @@ describe("planSurfaceOwnership — web surfaces", () => {
       surfaces: WEB_SURFACES,
       gatewayEnabled: true,
       principal: "andreas",
+      registry: testRegistryWithWeb(),
     });
     expect([...plan.ownedSurfaceKeys]).toContain("web:pylon");
   });
@@ -279,6 +282,7 @@ describe("planSurfaceOwnership — web surfaces", () => {
       surfaces: WEB_SURFACES,
       gatewayEnabled: true,
       principal: "andreas",
+      registry: testRegistryWithWeb(),
     });
     expect(plan.gatewayAdapterInstanceIds).toContain("web:acme");
   });
@@ -288,6 +292,7 @@ describe("planSurfaceOwnership — web surfaces", () => {
       surfaces: WEB_SURFACES,
       gatewayEnabled: true,
       principal: "andreas",
+      registry: testRegistryWithWeb(),
     });
     expect(plan.outboundStacks).toContain("acme");
   });

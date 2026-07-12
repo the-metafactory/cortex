@@ -11,14 +11,17 @@
 
 import type { PlatformAdapter } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
-import { requireStringBindingField } from "../common/types/object-guards";
+import {
+  createDefaultSurfacePluginRegistry,
+  resolveAdapterPluginOrThrow,
+  type SurfacePluginRegistry,
+} from "../adapters/registry";
 import {
   crossPrincipalBindings,
   distinctBoundPrincipalStacks,
   distinctBoundStacks,
   type BoundPrincipalStack,
 } from "./binding-resolver";
-import { groupDiscordBindingsByToken } from "./discord-token-groups";
 
 export interface SurfaceOwnershipPlan {
   /** True when `CORTEX_GATEWAY` selected the Gateway path. */
@@ -46,6 +49,15 @@ export interface SurfaceOwnershipPlanOpts {
   surfaces: Surfaces | undefined;
   gatewayEnabled: boolean;
   principal: string;
+  /**
+   * cortex#1951 — the `(kind, id)`-keyed plugin registry `gatewayInstanceIds`
+   * derives each platform's demux key from (`plugin.demuxKey(binding)`)
+   * instead of a hardcoded field read. Defaults to
+   * {@link createDefaultSurfacePluginRegistry} (in-tree discord/slack/
+   * mattermost only) when omitted — a back-compat/test convenience;
+   * production boot always threads its own composed registry explicitly.
+   */
+  registry?: SurfacePluginRegistry;
 }
 
 function countSurfaceBindings(surfaces: Surfaces | undefined): number {
@@ -68,24 +80,65 @@ function ownedKeys(surfaces: Surfaces | undefined): Set<string> {
   return keys;
 }
 
-function gatewayInstanceIds(surfaces: Surfaces | undefined): string[] {
+/**
+ * cortex#1951 — registry-driven Gateway adapter instance ids. Each platform's
+ * id is derived via `registry.getAdapter(platform)` instead of a hardcoded
+ * field read, so no gateway code knows any platform's binding shape.
+ *
+ * Discord is the one platform with non-default grouping: bindings are
+ * token-keyed (one gateway session per bot token — Discord delivers every
+ * guild event for a token over ONE gateway connection), so its ids come from
+ * `discordPlugin.groupBindings` — the SAME token-grouping rule
+ * `buildGatewayAdapters` uses to construct the live adapters, byte-identical
+ * to calling `groupDiscordBindingsByToken` directly (that's exactly what the
+ * plugin's `groupBindings` does under the hood). Slack/Mattermost/Web have no
+ * grouping — one instance id per binding, `${platform}:${demuxKey}`.
+ */
+function gatewayInstanceIds(
+  surfaces: Surfaces | undefined,
+  registry: SurfacePluginRegistry,
+): string[] {
   const ids: string[] = [];
   if (surfaces === undefined) return ids;
-  for (const group of groupDiscordBindingsByToken(surfaces.discord ?? [])) {
-    ids.push(group.instanceId);
+
+  const discordEntries = surfaces.discord ?? [];
+  if (discordEntries.length > 0) {
+    const discordPlugin = resolveAdapterPluginOrThrow("discord", registry);
+    const groups = discordPlugin.groupBindings
+      ? discordPlugin.groupBindings(discordEntries)
+      : discordEntries.map((entry) => ({
+          entries: [entry],
+          instanceId: `discord:${discordPlugin.demuxKey(entry.binding)}`,
+        }));
+    for (const group of groups) {
+      ids.push(group.instanceId);
+    }
   }
-  for (const entry of surfaces.slack ?? []) {
-    ids.push(`slack:${entry.binding.workspaceId}`);
+
+  const slackEntries = surfaces.slack ?? [];
+  if (slackEntries.length > 0) {
+    const slackPlugin = resolveAdapterPluginOrThrow("slack", registry);
+    for (const entry of slackEntries) {
+      ids.push(`slack:${slackPlugin.demuxKey(entry.binding)}`);
+    }
   }
-  for (const entry of surfaces.mattermost ?? []) {
-    ids.push(`mattermost:${entry.binding.apiUrl}`);
+
+  const mattermostEntries = surfaces.mattermost ?? [];
+  if (mattermostEntries.length > 0) {
+    const mattermostPlugin = resolveAdapterPluginOrThrow("mattermost", registry);
+    for (const entry of mattermostEntries) {
+      ids.push(`mattermost:${mattermostPlugin.demuxKey(entry.binding)}`);
+    }
   }
-  for (const entry of surfaces.web ?? []) {
-    // cortex#1794 (S9 MOVE) — see `object-guards.ts`'s
-    // `requireStringBindingField` doc: `entry.binding` is now
-    // `Record<string, unknown>` for the generically-validated `web` platform.
-    ids.push(`web:${requireStringBindingField(entry.binding, "instanceId", "gateway surface-ownership-plan: surfaces.web[].binding")}`);
+
+  const webEntries = surfaces.web ?? [];
+  if (webEntries.length > 0) {
+    const webPlugin = resolveAdapterPluginOrThrow("web", registry);
+    for (const entry of webEntries) {
+      ids.push(`web:${webPlugin.demuxKey(entry.binding)}`);
+    }
   }
+
   return ids;
 }
 
@@ -120,12 +173,14 @@ export function planSurfaceOwnership(
     return emptyPlan(opts, hasSurfaceBindings);
   }
 
+  const registry = opts.registry ?? createDefaultSurfacePluginRegistry();
+
   return {
     gatewayEnabled: true,
     hasSurfaceBindings,
     gatewayStartEligible: true,
     ownedSurfaceKeys: ownedKeys(opts.surfaces),
-    gatewayAdapterInstanceIds: gatewayInstanceIds(opts.surfaces),
+    gatewayAdapterInstanceIds: gatewayInstanceIds(opts.surfaces, registry),
     outboundStacks: distinctBoundStacks(opts.surfaces),
     outboundPrincipalStacks: distinctBoundPrincipalStacks(
       opts.surfaces,

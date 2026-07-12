@@ -60,6 +60,10 @@ import type { PlatformAdapter, InboundMessage } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
 import { buildBindingIndex } from "./binding-resolver";
 import {
+  createDefaultSurfacePluginRegistry,
+  type SurfacePluginRegistry,
+} from "../adapters/registry";
+import {
   SurfaceGateway,
   LoggingInboundSink,
   type GatewayInboundSink,
@@ -106,6 +110,15 @@ export interface GatewayBootstrapOpts {
    * When absent the gateway's default `console.warn` fires.
    */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
+  /**
+   * cortex#1951 — the `(kind, id)`-keyed plugin registry `buildBindingIndex`
+   * derives each platform's demux key from. Defaults to
+   * {@link createDefaultSurfacePluginRegistry} (in-tree discord/slack/
+   * mattermost only) when omitted — a back-compat/test convenience.
+   * `startGatewayIfEnabled` always threads its own composed registry (the
+   * SAME one it hands `buildGatewayAdapters`) explicitly.
+   */
+  registry?: SurfacePluginRegistry;
 }
 
 // =============================================================================
@@ -225,7 +238,10 @@ export function maybeCreateSurfaceGateway(
   //
   // buildBindingIndex throws on duplicate demux keys — that is intentional
   // (loud startup failure on bad config). The throw propagates to the caller.
-  const index = buildBindingIndex(surfaces);
+  const index = buildBindingIndex(
+    surfaces,
+    opts.registry ?? createDefaultSurfacePluginRegistry(),
+  );
 
   // Sink selection: defaults to LoggingInboundSink (SHADOW — no bus publish)
   // when the caller omits `sink`, so every existing caller and the default

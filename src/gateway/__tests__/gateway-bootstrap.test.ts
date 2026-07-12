@@ -33,6 +33,7 @@ import {
 } from "../surface-gateway";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
+import { testRegistryWithWeb } from "./test-registry-support";
 
 // =============================================================================
 // Minimal fake PlatformAdapter (no real platform connection needed)
@@ -536,6 +537,7 @@ describe("maybeCreateSurfaceGateway — web surfaces", () => {
       enabled: true,
       surfaces: WEB_SURFACES,
       adapters: [makeFakeAdapter("fake-web-1")],
+      registry: testRegistryWithWeb(),
     });
     expect(result).toBeInstanceOf(SurfaceGateway);
   });
@@ -551,6 +553,7 @@ describe("maybeCreateSurfaceGateway — web surfaces", () => {
         enabled: true,
         surfaces: WEB_SURFACES,
         adapters: [makeFakeAdapter("fake-web-2")],
+        registry: testRegistryWithWeb(),
       });
       // Must have created the gateway, not hit the "no bindings" early-exit
       expect(result).toBeInstanceOf(SurfaceGateway);

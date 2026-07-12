@@ -57,11 +57,47 @@
  *   fallback and is used unconditionally; if more than one binding exists the
  *   inbound cannot be demuxed, and `resolveBinding` returns `null` with the
  *   ambiguity recorded in the index.
+ *
+ * ## cortex#1951 — demux keys are registry-driven, not hardcoded
+ *
+ * `buildBindingIndex` used to read each platform's demux field by name
+ * (`entry.binding.guildId` / `.workspaceId` / `.apiUrl`) directly off the
+ * binding. That hardcoded every platform's binding shape into gateway code —
+ * fine while adapters were all in-tree, but it broke lint the moment `web`
+ * extracted out-of-tree (cortex#1794 S9) and its binding collapsed to
+ * `Record<string, unknown>` (patched with the `requireStringBindingField`
+ * band-aid, cortex#1948 B1). ADR-0024 already made adapter CONSTRUCTION
+ * registry-driven (`buildGatewayAdapters` calls `plugin.demuxKey(binding)`);
+ * this file now does the same for INBOUND routing — every per-binding demux
+ * key here is `registry.getAdapter(platform).demuxKey(binding)`, so no
+ * gateway code knows any platform's binding shape and a future extraction
+ * (slack/mattermost/discord, cortex#1896) touches nothing here.
+ *
+ * **Discord is the one deliberate divergence from the construction path.**
+ * `discordAdapterPlugin.demuxKey` (per-binding `guildId`) is a
+ * spec-completeness fallback for construction — `buildGatewayAdapters` always
+ * groups discord bindings by bot TOKEN (`groupBindings`, one gateway session
+ * per token) because that's how Discord actually delivers events. But
+ * `InboundMessage` for a live Discord event carries `guildId`, not the bot
+ * token, so the INBOUND demux index below keys per-binding on `guildId` via
+ * `demuxKey` — the same field, just not grouped. This is intentional, not a
+ * missed generalisation: routing an inbound message requires the key that's
+ * actually present on the message.
+ *
+ * `registry` defaults to {@link createDefaultSurfacePluginRegistry} (in-tree
+ * discord/slack/mattermost) when the caller omits it — a back-compat/test
+ * convenience. Production boot (`gateway-bootstrap.ts` /
+ * `startGatewayIfEnabled`) always threads its own composed registry
+ * explicitly, so the default is dead code on the real boot path.
  */
 
 import type { Surfaces } from "../common/types/surfaces";
 import type { InboundMessage } from "../adapters/types";
-import { requireStringBindingField } from "../common/types/object-guards";
+import {
+  createDefaultSurfacePluginRegistry,
+  resolveAdapterPluginOrThrow,
+  type SurfacePluginRegistry,
+} from "../adapters/registry";
 
 // =============================================================================
 // Public types
@@ -387,9 +423,19 @@ export function crossPrincipalBindings(
  * as `foldSurfaceBindings` in `surfaces.ts`.  `resolveBinding` (the per-message
  * hot path) never throws; index build is where we fail fast at startup.
  *
- * @throws `Error` when two bindings collide on the same `(platform, demuxKey)`.
+ * @param registry cortex#1951 — the `(kind, id)`-keyed plugin registry each
+ *   platform's demux key is now derived from (`plugin.demuxKey(binding)`).
+ *   Defaults to {@link createDefaultSurfacePluginRegistry} (in-tree
+ *   discord/slack/mattermost only) when omitted — see the module doc's
+ *   "demux keys are registry-driven" section.
+ * @throws `Error` when two bindings collide on the same `(platform, demuxKey)`,
+ *   or when a platform has bindings but no matching plugin is registered
+ *   ({@link resolveAdapterPluginOrThrow}).
  */
-export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
+export function buildBindingIndex(
+  surfaces: Surfaces,
+  registry: SurfacePluginRegistry = createDefaultSurfacePluginRegistry(),
+): GatewayBindingIndex {
   const discord = new Map<string, IndexEntry>();
   const slack = new Map<string, IndexEntry>();
   const web = new Map<string, IndexEntry>();
@@ -397,41 +443,52 @@ export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
   let mattermostMulti = false;
 
   // ── Discord ─────────────────────────────────────────────────────────────
-  for (const entry of surfaces.discord ?? []) {
-    const demuxKey = entry.binding.guildId;
-    if (discord.has(demuxKey)) {
-      throw new Error(
-        `gateway binding-resolver: ambiguous discord config — two bindings share guildId "${demuxKey}". ` +
-          `Each (platform, guildId) pair must map to exactly one binding. ` +
-          `Fix the surfaces.yaml discord bindings to remove the duplicate.`,
-      );
+  // Per-binding guildId demux — see the module doc's "Discord is the one
+  // deliberate divergence" note for why this does NOT use the token-grouped
+  // instance ids `buildGatewayAdapters`/`gatewayInstanceIds` compute.
+  const discordEntries = surfaces.discord ?? [];
+  if (discordEntries.length > 0) {
+    const discordPlugin = resolveAdapterPluginOrThrow("discord", registry);
+    for (const entry of discordEntries) {
+      const demuxKey = discordPlugin.demuxKey(entry.binding);
+      if (discord.has(demuxKey)) {
+        throw new Error(
+          `gateway binding-resolver: ambiguous discord config — two bindings share guildId "${demuxKey}". ` +
+            `Each (platform, guildId) pair must map to exactly one binding. ` +
+            `Fix the surfaces.yaml discord bindings to remove the duplicate.`,
+        );
+      }
+      const { principal, stack } = parseStack(entry.stack);
+      discord.set(demuxKey, {
+        agent: entry.agent,
+        principal,
+        stack,
+        instance: `discord:${demuxKey}`,
+      });
     }
-    const { principal, stack } = parseStack(entry.stack);
-    discord.set(demuxKey, {
-      agent: entry.agent,
-      principal,
-      stack,
-      instance: `discord:${demuxKey}`,
-    });
   }
 
   // ── Slack ────────────────────────────────────────────────────────────────
-  for (const entry of surfaces.slack ?? []) {
-    const demuxKey = entry.binding.workspaceId;
-    if (slack.has(demuxKey)) {
-      throw new Error(
-        `gateway binding-resolver: ambiguous slack config — two bindings share workspaceId "${demuxKey}". ` +
-          `Each (platform, workspaceId) pair must map to exactly one binding. ` +
-          `Fix the surfaces.yaml slack bindings to remove the duplicate.`,
-      );
+  const slackEntries = surfaces.slack ?? [];
+  if (slackEntries.length > 0) {
+    const slackPlugin = resolveAdapterPluginOrThrow("slack", registry);
+    for (const entry of slackEntries) {
+      const demuxKey = slackPlugin.demuxKey(entry.binding);
+      if (slack.has(demuxKey)) {
+        throw new Error(
+          `gateway binding-resolver: ambiguous slack config — two bindings share workspaceId "${demuxKey}". ` +
+            `Each (platform, workspaceId) pair must map to exactly one binding. ` +
+            `Fix the surfaces.yaml slack bindings to remove the duplicate.`,
+        );
+      }
+      const { principal, stack } = parseStack(entry.stack);
+      slack.set(demuxKey, {
+        agent: entry.agent,
+        principal,
+        stack,
+        instance: `slack:${demuxKey}`,
+      });
     }
-    const { principal, stack } = parseStack(entry.stack);
-    slack.set(demuxKey, {
-      agent: entry.agent,
-      principal,
-      stack,
-      instance: `slack:${demuxKey}`,
-    });
   }
 
   // ── Mattermost ───────────────────────────────────────────────────────────
@@ -454,14 +511,16 @@ export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
   // non-null assertion under noUncheckedIndexedAccess).
   const soleMm = mmEntries.length === 1 ? mmEntries[0] : undefined;
   if (soleMm) {
+    const mattermostPlugin = resolveAdapterPluginOrThrow("mattermost", registry);
+    const demuxKey = mattermostPlugin.demuxKey(soleMm.binding);
     const { principal, stack } = parseStack(soleMm.stack);
-    // Use apiUrl as the demux key for the interim instance id (the only stable
-    // per-binding identifier Mattermost surfaces carry).
+    // demuxKey (apiUrl) is the interim instance id — the only stable
+    // per-binding identifier Mattermost surfaces carry.
     mattermostSingle = {
       agent: soleMm.agent,
       principal,
       stack,
-      instance: `mattermost:${soleMm.binding.apiUrl}`,
+      instance: `mattermost:${demuxKey}`,
     };
   } else if (mmEntries.length > 1) {
     mattermostMulti = true;
@@ -473,30 +532,27 @@ export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
   // Demux key = the adapter instanceId the WebAdapter stamps on every
   // InboundMessage (`web:${binding.instanceId}`), matched verbatim in
   // resolveBinding. Web carries no platform-native guild/server id.
-  for (const entry of surfaces.web ?? []) {
-    // cortex#1794 (S9 MOVE) — `entry.binding` is `Record<string, unknown>`
-    // now that `web` validates via the generic catchall (see
-    // `object-guards.ts`'s `requireStringBindingField` doc).
-    const instanceId = requireStringBindingField(
-      entry.binding,
-      "instanceId",
-      "gateway binding-resolver: surfaces.web[].binding",
-    );
-    const demuxKey = `web:${instanceId}`;
-    if (web.has(demuxKey)) {
-      throw new Error(
-        `gateway binding-resolver: ambiguous web config — two bindings share instanceId "${instanceId}". ` +
-          `Each (platform, instanceId) pair must map to exactly one binding. ` +
-          `Fix the surfaces.yaml web bindings to remove the duplicate.`,
-      );
+  const webEntries = surfaces.web ?? [];
+  if (webEntries.length > 0) {
+    const webPlugin = resolveAdapterPluginOrThrow("web", registry);
+    for (const entry of webEntries) {
+      const instanceId = webPlugin.demuxKey(entry.binding);
+      const demuxKey = `web:${instanceId}`;
+      if (web.has(demuxKey)) {
+        throw new Error(
+          `gateway binding-resolver: ambiguous web config — two bindings share instanceId "${instanceId}". ` +
+            `Each (platform, instanceId) pair must map to exactly one binding. ` +
+            `Fix the surfaces.yaml web bindings to remove the duplicate.`,
+        );
+      }
+      const { principal, stack } = parseStack(entry.stack);
+      web.set(demuxKey, {
+        agent: entry.agent,
+        principal,
+        stack,
+        instance: demuxKey,
+      });
     }
-    const { principal, stack } = parseStack(entry.stack);
-    web.set(demuxKey, {
-      agent: entry.agent,
-      principal,
-      stack,
-      instance: demuxKey,
-    });
   }
 
   return { discord, slack, web, mattermostSingle, mattermostMulti };

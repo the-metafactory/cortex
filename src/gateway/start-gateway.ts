@@ -183,6 +183,13 @@ export async function startGatewayIfEnabled(
     return undefined;
   }
 
+  // cortex#1951 — resolve ONCE, thread the SAME registry to both
+  // `maybeCreateSurfaceGateway` calls below (inbound demux) AND
+  // `buildGatewayAdapters` (construction) — one registry, no drift between
+  // how a binding's demux key and its live adapter are derived.
+  const registry =
+    opts.registry ?? registryFromFactory(opts.factory ?? defaultGatewayAdapterFactory);
+
   // ── Path 2: flag on but no bindings → degrade gracefully. ─────────────────
   // Short-circuit BEFORE buildGatewayAdapters so the factory is never called
   // when there is nothing to demux (keeps the no-binding invariant crisp).
@@ -196,6 +203,7 @@ export async function startGatewayIfEnabled(
       enabled: true,
       surfaces,
       adapters: [],
+      registry,
       ...(opts.onUnroutable !== undefined && { onUnroutable: opts.onUnroutable }),
     });
     return undefined;
@@ -236,7 +244,7 @@ export async function startGatewayIfEnabled(
   const adapters = buildGatewayAdapters(surfaces, {
     principal: opts.principal,
     runtime: opts.runtime,
-    registry: opts.registry ?? registryFromFactory(opts.factory ?? defaultGatewayAdapterFactory),
+    registry,
   });
 
   // Sink selection — the SECOND opt-in gate.
@@ -296,6 +304,7 @@ export async function startGatewayIfEnabled(
     enabled: true,
     surfaces,
     adapters,
+    registry,
     ...(sink !== undefined && { sink }),
     ...(onUnroutable !== undefined && { onUnroutable }),
   });

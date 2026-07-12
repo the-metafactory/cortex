@@ -3231,6 +3231,11 @@ export async function startCortex(
     surfaces: options.surfaces,
     gatewayEnabled: isGatewayEnabled(process.env),
     principal: principalId,
+    // cortex#1951 — thread the SAME boot-composed registry `buildGatewayAdapters`
+    // consumes below, so the ownership plan's Gateway adapter instance ids are
+    // derived via each platform's real registered `demuxKey`, not a hardcoded
+    // per-platform field read.
+    registry: surfacePluginRegistry,
   });
   const gatewayOwned = surfaceOwnershipPlan.ownedSurfaceKeys;
 

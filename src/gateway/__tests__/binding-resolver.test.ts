@@ -27,6 +27,7 @@ import {
 } from "../binding-resolver";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { InboundMessage } from "../../adapters/types";
+import { testRegistryWithWeb } from "./test-registry-support";
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -813,13 +814,13 @@ const WEB_SURFACES: Surfaces = {
 
 describe("buildBindingIndex — web happy path", () => {
   test("web: indexes by instanceId prefixed with 'web:'", () => {
-    const index = buildBindingIndex(WEB_SURFACES);
+    const index = buildBindingIndex(WEB_SURFACES, testRegistryWithWeb());
     expect(index.web.size).toBe(1);
     expect(index.web.has("web:acme")).toBe(true);
   });
 
   test("web entry carries agent, principal, stack, and instance from fixture", () => {
-    const index = buildBindingIndex(WEB_SURFACES);
+    const index = buildBindingIndex(WEB_SURFACES, testRegistryWithWeb());
     const entry = index.web.get("web:acme");
     expect(entry).toBeDefined();
     expect(entry!.agent).toBe("pylon");
@@ -864,13 +865,13 @@ describe("buildBindingIndex — web collision throws", () => {
         },
       ],
     };
-    expect(() => buildBindingIndex(ambiguous)).toThrow(/web.*acme/i);
+    expect(() => buildBindingIndex(ambiguous, testRegistryWithWeb())).toThrow(/web.*acme/i);
   });
 });
 
 describe("resolveBinding — web happy path", () => {
   test("web: resolves by instanceId (full 'web:<id>' key stamped by the WebAdapter)", () => {
-    const index = buildBindingIndex(WEB_SURFACES);
+    const index = buildBindingIndex(WEB_SURFACES, testRegistryWithWeb());
     // The WebAdapter stamps instanceId="web:acme" on every inbound message
     const inbound = msg({ platform: "web", instanceId: "web:acme" });
     const match = resolveBinding(index, inbound);
@@ -883,7 +884,7 @@ describe("resolveBinding — web happy path", () => {
   });
 
   test("web: instanceId not in index → null", () => {
-    const index = buildBindingIndex(WEB_SURFACES);
+    const index = buildBindingIndex(WEB_SURFACES, testRegistryWithWeb());
     const inbound = msg({ platform: "web", instanceId: "web:unknown" });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
