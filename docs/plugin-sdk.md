@@ -30,7 +30,7 @@ import type {
   PlatformAdapter, InboundMessage, InboundAttachment, AccessDecision,
   ResponseTarget, OutboundFile, ContextMessage, ContextAttachment,
   // Renderer contract
-  Renderer, SurfaceAdapter /* the render-target contract */, Envelope, RendererKind,
+  Renderer, RenderTarget /* the render-target contract */, Envelope, RendererKind,
   // Plugin descriptor contract
   PluginKind, SurfacePlugin, AdapterPlugin, RendererPlugin,
   SurfaceBindingEntry, BindingGroup, GatewayConstructBase,
@@ -73,7 +73,7 @@ grep -rhn "^import" src/renderers/*.ts | grep -E '"\.\./' | sort -u
 ```
 
 Cross-reference against `src/surface-sdk/index.ts`'s export list: anything
-that maps onto `PlatformAdapter`/`Renderer`/`SurfaceAdapter`/`Envelope`/the
+that maps onto `PlatformAdapter`/`Renderer`/`RenderTarget`/`Envelope`/the
 `SurfacePlugin` descriptor family should be imported from the barrel;
 everything else on that list is an acknowledged, intentional exclusion.
 
@@ -176,7 +176,11 @@ export const acmeChatAdapterPlugin: AdapterPlugin = {
 };
 
 // cortex-plugin.yaml declares: kind: adapter, sdkRange: "^1"
-export default { plugin: acmeChatAdapterPlugin, sdkRange: "^1" as const, sdkVersionAtBuild: SURFACE_SDK_VERSION };
+// The default export IS the SurfacePlugin, carrying `sdkRange` as a field
+// (ADR-0024 D1: "sdkRange in its default-exported SurfacePlugin"). The S6
+// loader reads `defaultExport.sdkRange`; the exact default-export contract
+// (this field-on-plugin shape vs a wrapper) is finalized by the S6 loader.
+export default { ...acmeChatAdapterPlugin, sdkRange: "^1" as const };
 ```
 
 ## Compilable skeleton — a renderer plugin
@@ -188,7 +192,7 @@ to stdout):
 
 ```ts
 // log-line-renderer/src/renderer.ts
-import type { Renderer, Envelope, SurfaceAdapter } from "../../surface-sdk";
+import type { Renderer, Envelope, RenderTarget } from "../../surface-sdk";
 
 export interface LogLineRendererConfig {
   id?: string;
@@ -214,7 +218,7 @@ export class LogLineRenderer implements Renderer {
     process.stdout.write(`${envelope.type} <- ${envelope.source}\n`);
   }
 
-  get surfaceConfig(): SurfaceAdapter {
+  get surfaceConfig(): RenderTarget {
     return { id: this.id, subjects: this.subjects, render: (envelope) => this.render(envelope) };
   }
 }
@@ -241,7 +245,7 @@ export const logLineRendererPlugin: RendererPlugin = {
 };
 
 // cortex-plugin.yaml declares: kind: renderer, sdkRange: "^1"
-export default { plugin: logLineRendererPlugin, sdkRange: "^1" as const };
+export default { ...logLineRendererPlugin, sdkRange: "^1" as const };
 ```
 
 ## Boundary-guard test

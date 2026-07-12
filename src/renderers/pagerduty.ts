@@ -35,7 +35,7 @@
  * are out-of-band (re-trigger on subsequent envelopes).
  */
 
-import type { Envelope, SurfaceAdapter, RendererPlugin } from "../surface-sdk";
+import type { Envelope, RenderTarget, RendererPlugin } from "../surface-sdk";
 import { PagerDutyRendererSchema, type PagerDutyRendererConfig } from "../common/types/cortex-config";
 import type { Renderer } from "./types";
 
@@ -92,7 +92,7 @@ export class PagerDutyRenderer implements Renderer {
     // in-flight requests; stop() doesn't need to drain them.
   }
 
-  get surfaceConfig(): SurfaceAdapter {
+  get surfaceConfig(): RenderTarget {
     return {
       id: this.id,
       subjects: this.subjects,

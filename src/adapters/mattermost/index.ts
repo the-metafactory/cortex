@@ -13,7 +13,7 @@ import type {
   OutboundFile,
   ContextMessage,
   Envelope,
-  SurfaceAdapter,
+  RenderTarget,
 } from "../../surface-sdk";
 import type { AgentConfig } from "../../common/types/config";
 import type { Agent, MattermostPresence } from "../../common/types/cortex-config";
@@ -461,7 +461,7 @@ export class MattermostAdapter implements PlatformAdapter {
    * failure mode is "log + drop" rather than "buffer for retry". JetStream
    * replay covers the recovery path per design-cortex.md §3.3.
    */
-  get surfaceConfig(): SurfaceAdapter {
+  get surfaceConfig(): RenderTarget {
     return {
       id: this.instanceId,
       subjects: this.infra.surfaceSubjects ?? [],

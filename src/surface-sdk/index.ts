@@ -88,16 +88,17 @@ export type { ContextAttachment } from "../common/types/context";
 export type { Renderer } from "../renderers/types";
 
 /**
- * The surface-router's render-only subscriber contract (`SurfaceAdapter` in
- * code — a historical misnomer, NOT an adapter; `CONTEXT.md` §Render target
- * tracks the rename to `RenderTarget`). Every `Renderer.surfaceConfig`
- * value is one of these; re-exported here under its current code name so
- * the barrel doesn't invent a second name for the same type ahead of the
- * tracked rename.
+ * The surface-router's render-only subscriber contract — `CONTEXT.md`'s
+ * canonical **Render target** (NOT an adapter). The underlying type is still
+ * named `SurfaceAdapter` in `bus/surface-router.ts` (a historical misnomer
+ * whose full-codebase rename is tracked separately), but the SDK is a NEW
+ * versioned public surface with zero consumers, so it ships the canonical
+ * name `RenderTarget` from v1 — a later internal rename then never touches
+ * this contract, and never forces a cosmetic `SURFACE_SDK_VERSION` major.
  */
-export type { SurfaceAdapter } from "../bus/surface-router";
+export type { SurfaceAdapter as RenderTarget } from "../bus/surface-router";
 
-/** The envelope type both `Renderer.render()` and `SurfaceAdapter.render()`
+/** The envelope type both `Renderer.render()` and `RenderTarget.render()`
  *  operate on. */
 export type { Envelope } from "../bus/myelin/envelope-validator";
 

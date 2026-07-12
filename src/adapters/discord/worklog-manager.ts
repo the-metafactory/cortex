@@ -24,7 +24,7 @@ import { detectProject, extractGitHubIssue } from "./event-utils";
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
-import type { Envelope, SurfaceAdapter } from "../../surface-sdk";
+import type { Envelope, RenderTarget } from "../../surface-sdk";
 
 export class WorklogManager {
   private client: Client;
@@ -287,7 +287,7 @@ export class WorklogManager {
     principal: string;
     adapterId?: string;
     stack?: string;
-  }): SurfaceAdapter {
+  }): RenderTarget {
     // cortex#268 — stack-aware subscription. When the caller supplies
     // `stack` (sourced from `deriveStackId(loadedConfig).stack` at boot),
     // emit the 6-segment subject grammar. Otherwise, fall through to the

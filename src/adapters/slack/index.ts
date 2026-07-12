@@ -21,7 +21,7 @@ import type {
   OutboundFile,
   ContextMessage,
   Envelope,
-  SurfaceAdapter,
+  RenderTarget,
 } from "../../surface-sdk";
 import type { Agent, SlackPresence } from "../../common/types/cortex-config";
 import type { AgentConfig } from "../../common/types/config";
@@ -645,7 +645,7 @@ export class SlackAdapter implements PlatformAdapter {
    * same shape, same render contract, same failure mode (log + drop;
    * JetStream replay handles recovery per architecture §3.3).
    */
-  get surfaceConfig(): SurfaceAdapter {
+  get surfaceConfig(): RenderTarget {
     return {
       id: this.instanceId,
       subjects: this.infra.surfaceSubjects ?? [],

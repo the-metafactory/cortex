@@ -14,7 +14,7 @@ import type {
   OutboundFile,
   ContextMessage,
   Envelope,
-  SurfaceAdapter,
+  RenderTarget,
 } from "../../surface-sdk";
 import type { AgentConfig } from "../../common/types/config";
 import type { Agent, DiscordPresence } from "../../common/types/cortex-config";
@@ -1300,7 +1300,7 @@ export class DiscordAdapter implements PlatformAdapter {
   /**
    * MIG-3b — Surface-adapter face for the surface-router (G-1111.A).
    *
-   * Returns a fresh `SurfaceAdapter` describing the bus-envelope-rendering
+   * Returns a fresh `RenderTarget` describing the bus-envelope-rendering
    * side of this Discord adapter:
    *
    *   - `id`        — the adapter instance ID (matches `this.instanceId`)
@@ -1313,7 +1313,7 @@ export class DiscordAdapter implements PlatformAdapter {
    * a NATS subscription — that's MyelinRuntime's job (per spec §5.1) — so this
    * face is purely the rendering hook.
    */
-  get surfaceConfig(): SurfaceAdapter {
+  get surfaceConfig(): RenderTarget {
     return {
       id: this.instanceId,
       subjects: this.infra.surfaceSubjects ?? [],
