@@ -90,7 +90,7 @@ function customPidComponents(
  * derivation in a temp dir (test-isolation rule: never write into the real
  * `~/.config/grove/state`); production always uses {@link STATE_DIR}.
  */
-function pidFileForIn(stateDir: string, configPath: string | undefined): string {
+export function pidFileForIn(stateDir: string, configPath: string | undefined): string {
   const c = customPidComponents(configPath);
   if (c === undefined) return join(stateDir, "cortex.pid");
   const hash = createHash("sha256").update(c.canonical).digest("hex").slice(0, 8);

@@ -38,6 +38,8 @@
 import { copyFileSync, existsSync, mkdirSync, statSync, chmodSync } from "fs";
 import { dirname, join } from "path";
 
+import { noteXdgFallback, readDirEnv } from "../xdg";
+
 /** The canonical config directory name. */
 export const CORTEX_CONFIG_DIRNAME = "cortex";
 /** The legacy config directory name (read-fallback only during transition). */
@@ -71,8 +73,11 @@ function homeDir(home?: string): string {
  * that exports `CORTEX_CONFIG_DIR=` (blank) gets today's behavior, not `/`.
  */
 export function cortexConfigDirOverride(): string | undefined {
-  const v = process.env.CORTEX_CONFIG_DIR;
-  return v !== undefined && v.length > 0 ? v : undefined;
+  // Shared with `eventsDirOverride` via `readDirEnv` (PR#1920 nit b): trims,
+  // and a blank/whitespace-only value reads as unset (not a literal relative
+  // dir), so `CORTEX_CONFIG_DIR=` and `CORTEX_CONFIG_DIR="  "` keep today's
+  // `~/.config/cortex` default.
+  return readDirEnv("CORTEX_CONFIG_DIR");
 }
 
 /**
@@ -114,7 +119,14 @@ export function resolveConfigFile(filename: string, home?: string): ResolvedConf
   // and be meaningless (grove has no counterpart under an explicit root).
   if (cortexConfigDirOverride() === undefined) {
     const grove = groveConfigPath(filename, home);
-    if (existsSync(grove)) return { path: grove, source: "grove" };
+    if (existsSync(grove)) {
+      // Legacy-fallback site (#1908 kept this ~/.config/grove read-fallback).
+      // Under CORTEX_XDG_STRICT this emits the one grep-able `xdg-fallback:`
+      // line the #1870 guard asserts ZERO of on a fresh install; non-strict
+      // stays silent/byte-identical.
+      noteXdgFallback("config", `${filename} resolved from legacy ~/.config/grove`);
+      return { path: grove, source: "grove" };
+    }
   }
 
   return { path: cortex, source: "default" };
@@ -157,6 +169,8 @@ export function migrateGroveConfigFile(filename: string, home?: string): boolean
   const grove = groveConfigPath(filename, home);
   if (!existsSync(grove)) return false; // nothing to migrate
 
+  // A migration copy IS a legacy-tree read — surface it under strict mode too.
+  noteXdgFallback("config", `${filename} migrated from legacy ~/.config/grove`);
   const mode = statSync(grove).mode & 0o777;
   mkdirSync(dirname(cortex), { recursive: true });
   copyFileSync(grove, cortex);

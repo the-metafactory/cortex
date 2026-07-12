@@ -24,18 +24,21 @@
 
 import { join } from "path";
 
+import { readDirEnv } from "./xdg";
+
 function homeDir(home?: string): string {
   return home ?? process.env.HOME ?? "~";
 }
 
 /**
- * The `CORTEX_EVENTS_DIR` override, or `undefined` when unset/empty. An empty
- * string is treated as unset so `CORTEX_EVENTS_DIR=` (blank) keeps today's
- * behavior rather than resolving to `/`.
+ * The `CORTEX_EVENTS_DIR` override, or `undefined` when unset/empty. A blank OR
+ * whitespace-only value is treated as unset (via {@link readDirEnv}) so
+ * `CORTEX_EVENTS_DIR=` and `CORTEX_EVENTS_DIR="  "` both keep today's behavior
+ * rather than resolving to `/` or a literal relative `"  "` directory
+ * (PR#1920 nit a).
  */
 export function eventsDirOverride(): string | undefined {
-  const v = process.env.CORTEX_EVENTS_DIR;
-  return v !== undefined && v.length > 0 ? v : undefined;
+  return readDirEnv("CORTEX_EVENTS_DIR");
 }
 
 /**
