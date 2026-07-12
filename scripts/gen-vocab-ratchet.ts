@@ -136,6 +136,12 @@ const CARVEOUT_PATHS: string[] = [
   // The gate's own source + CI definition necessarily NAME the deprecated terms
   "scripts/check-carveouts.sh",
   ".github/workflows/",
+  // cortex#1950 — GENERATED plugin-SDK .d.ts (bun run sdk:dts). Rolls up JSDoc
+  // verbatim from already-allowlisted sources (e.g. src/bus/payload-filter.ts's
+  // "EventBridge-style operators"), so it inherits their carve-out status; it
+  // is never hand-edited and its drift guard is surface-sdk-dts-sync, not this
+  // gate.
+  "src/surface-sdk/generated/",
   // Policy authorization-role cluster — `operator` = reserved authz ROLE/capability literal
   "src/common/policy/",
   "docs/design-policy-cutover.md",

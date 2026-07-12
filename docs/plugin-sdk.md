@@ -35,13 +35,13 @@ import type {
   SurfaceBindingEntry, BindingGroup, GatewayConstructBase,
   // Host-injected policy port (cortex#1794 S9b)
   AdapterPolicyPort,
-} from "@cortex/surface-sdk"; // in-tree: "../../surface-sdk" (adapters) / "../surface-sdk" (renderers)
-import { SURFACE_SDK_VERSION } from "@cortex/surface-sdk";
+} from "@the-metafactory/cortex/surface-sdk"; // in-tree: "../../surface-sdk" (adapters) / "../surface-sdk" (renderers)
+import type { SURFACE_SDK_VERSION } from "@the-metafactory/cortex/surface-sdk";
 ```
 
-*(The `@cortex/surface-sdk` specifier is illustrative of how an out-of-tree
-bundle resolves the SDK once S6's loader ships it; in-tree code today uses
-the plain relative path shown above and in the skeletons below.)*
+*(In-tree code uses the plain relative path shown above and in the skeletons
+below. An out-of-tree bundle resolves the `@the-metafactory/cortex/surface-sdk`
+specifier per §Resolving the SDK in an out-of-tree bundle, below.)*
 
 `AdapterPolicyPort` (cortex#1794 S9b) is a dependency-inversion PORT, not a
 data type: it describes `resolveAccess(msg)` / `isOperatorPrincipal(platform,
@@ -443,12 +443,68 @@ destroy-and-reconstruct safe"), but every plugin author must design for it:
   does not break REPLIES — only best-effort UX affordances (a "typing…"
   placeholder update, a cached thread lookup) are lost.
 
+## Resolving the SDK in an out-of-tree bundle (cortex#1950)
+
+An out-of-tree bundle imports the contract as `import type` — so at RUNTIME the
+loader's dynamic `import()` never resolves the SDK (the types are erased). The
+bundle only needs the SDK types RESOLVABLE at TYPE-CHECK time, so its standalone
+`bunx tsc --noEmit` passes. cortex makes that resolvable **without publishing a
+package and without a bundle vendoring a hand-copied subset** (which drifts on
+every `SURFACE_SDK_VERSION` bump and does not scale past one bundle):
+
+**cortex ships a self-contained, generated `.d.ts`.** `bun run sdk:dts`
+(`scripts/gen-surface-sdk-dts.ts`) rolls the barrel up into ONE flat file,
+`src/surface-sdk/generated/surface-sdk.d.ts`, with every transitive contract
+type inlined and the *only* external import being `zod/v4` (which every plugin
+already depends on — the binding/config schemas are zod). `package.json`
+exposes it:
+
+```jsonc
+"exports": {
+  "./surface-sdk": {
+    "types": "./src/surface-sdk/generated/surface-sdk.d.ts", // ← the flat artifact
+    "default": "./src/surface-sdk/index.ts"
+  }
+}
+```
+
+Pointing a consumer at the raw `src/surface-sdk/index.ts` does **not** work — it
+transitively drags cortex's whole source tree + dev-deps into the bundle's `tsc`.
+The flat `.d.ts` pulls none of it.
+
+**The artifact cannot drift.** It is generated from the barrel, never
+hand-edited, and CI (`.github/workflows/ci.yml` → `surface-sdk-dts-sync`)
+regenerates it and fails on any diff. Because `SURFACE_SDK_VERSION` is inlined
+into the artifact, the shipped types always track the contract version.
+
+**A bundle resolves the artifact via a pinned single-file sync** (the reference
+implementation is `metafactory-cortex-adapter-web`):
+
+- a `postinstall` step fetches just `surface-sdk.d.ts` from cortex at a **pinned
+  ref** into a gitignored `sdk/` dir (no cortex dependency tree, no clone — one
+  file);
+- `tsconfig.json` `paths` maps `@the-metafactory/cortex/surface-sdk` → that
+  local file. Since the file lands in the bundle's own tree, its `zod/v4` import
+  resolves the bundle's OWN single zod — no cross-instance zod-type skew.
+
+*(A bundle that would rather take a real package dependency can instead
+`bun add github:the-metafactory/cortex#<ref>` and import the same specifier via
+the `exports` map above — but that pulls cortex's entire runtime dep tree
+(react, discord.js, …) into the bundle for types alone, so the single-file sync
+is preferred for a lean adapter/renderer bundle.)*
+
+**Versioning — staleness is never silent.** The bundle pins a cortex ref, so a
+`SURFACE_SDK_VERSION` major bump in cortex does not silently re-type the bundle
+— it stays on the pinned types until its maintainer bumps the ref (an explicit,
+reviewable change). If a bundle is left on types too old for the running daemon,
+the **S6 loader's `satisfies(SURFACE_SDK_VERSION, sdkRange)` gate refuses it at
+`import()` with a `system.error`** — staleness fails loud at load, never silently
+mis-compiles against a contract the daemon no longer honours.
+
 ## Out of scope for this doc
 
 - Dynamic bundle loading / the compat-gate loader implementation (S6) — see
   `src/adapters/loader.ts`.
-- Publishing an npm package for the SDK — a bundle resolves it via S6's
-  loader import mechanism, not `npm install`.
 - Zero-downtime handover between old+new instance of the SAME platform
   (v2 — the S8 issue's explicit out-of-scope line).
 - Retiring `GatewayAdapterFactory` and the adapter `reload`/`load` verbs that

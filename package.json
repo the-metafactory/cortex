@@ -8,6 +8,10 @@
   "license": "AGPL-3.0-only",
   "private": true,
   "exports": {
+    "./surface-sdk": {
+      "types": "./src/surface-sdk/generated/surface-sdk.d.ts",
+      "default": "./src/surface-sdk/index.ts"
+    },
     "./bus": {
       "types": "./src/bus/index.ts",
       "default": "./src/bus/index.ts"
@@ -25,7 +29,9 @@
     "db:migrate:safe": "bun scripts/scan-deploy-surface.ts d1 --advisory && bun --cwd src/surface/mc/worker run db:migrate",
     "lint": "eslint .",
     "lint:errors": "eslint --quiet .",
-    "lint:fix": "eslint --fix ."
+    "lint:fix": "eslint --fix .",
+    "sdk:dts": "bun scripts/gen-surface-sdk-dts.ts",
+    "sdk:dts:check": "bun scripts/gen-surface-sdk-dts.ts --check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -33,7 +39,9 @@
     "@types/libsodium-wrappers": "^0.8.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "dts-bundle-generator": "^9",
     "eslint": "^10.3.0",
+    "typescript": "^5",
     "typescript-eslint": "^8.59.3"
   },
   "peerDependencies": {

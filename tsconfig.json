@@ -27,6 +27,7 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "exclude": [
+    "src/surface-sdk/generated",
     "src/worker",
     "src/webhook-proxy",
     "src/surface/mc/worker",

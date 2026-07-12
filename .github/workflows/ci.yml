@@ -143,6 +143,31 @@ jobs:
         run: bun test
 
   # ──────────────────────────────────────────────────────────────────
+  # Surface-SDK .d.ts drift guard (cortex#1950). The shippable, self-contained
+  # plugin-SDK type artifact (src/surface-sdk/generated/surface-sdk.d.ts) is
+  # GENERATED from the barrel (src/surface-sdk/index.ts) by `bun run sdk:dts`.
+  # Out-of-tree bundles resolve it via package.json exports["./surface-sdk"];
+  # if it drifts from the barrel, a bundle compiles against stale types. This
+  # job regenerates it and fails on any diff — so a merged artifact is always
+  # byte-identical to what the current barrel produces, and it can never go
+  # stale the way the old per-bundle hand-vendored copies did.
+  # ──────────────────────────────────────────────────────────────────
+  surface-sdk-dts-sync:
+    name: Surface-SDK .d.ts sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: regenerate + diff (bun run sdk:dts:check)
+        run: bun run sdk:dts:check
+
+  # ──────────────────────────────────────────────────────────────────
   # Shippable-config hygiene gate — L2 of the confidentiality program
   # (design doc §4 L2, compass#81/#87). A DETERMINISTIC whole-tree check
   # that FAILS if deployment-specific content lands in a shippable path:

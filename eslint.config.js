@@ -125,6 +125,10 @@ export default tseslint.config(
       "dist/",
       "node_modules/",
       "docs/mockups/",
+      // cortex#1950 — GENERATED, self-contained plugin-SDK .d.ts shipped for
+      // out-of-tree bundles (bun run sdk:dts). Excluded from tsconfig too;
+      // not part of the typed project.
+      "src/surface-sdk/generated/",
       "src/bus/myelin/vendor/",
       "src/worker/",
       "src/webhook-proxy/",

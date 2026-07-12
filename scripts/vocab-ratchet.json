@@ -86,6 +86,7 @@
       "CONTEXT.md",
       "scripts/check-carveouts.sh",
       ".github/workflows/",
+      "src/surface-sdk/generated/",
       "src/common/policy/",
       "docs/design-policy-cutover.md",
       "cortex.yaml.example",
