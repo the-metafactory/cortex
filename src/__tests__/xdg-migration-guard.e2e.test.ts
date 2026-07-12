@@ -49,6 +49,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "fs";
 import { tmpdir } from "os";
@@ -176,8 +177,18 @@ function renderFleet(): {
 
   // Materialize every path the templates reference so a correctly-installed
   // fleet verifies fully extant.
+  // cortex#1866 (XDG wave 3): the stack plist now execs ~/.local/bin/cortex.
+  // Materialize it there as the real binary, and leave ~/bin/cortex as the
+  // forward-symlink → ~/.local/bin/cortex that the cutover installs and never
+  // deletes (deletion is wave 6, #1904). This mirrors the post-cutover on-disk
+  // shape so invariant (iii) verifies the exec path the daemon actually runs.
+  mkdirSync(join(home, ".local", "bin"), { recursive: true });
   mkdirSync(join(home, "bin"), { recursive: true });
-  writeFileSync(join(home, "bin", "cortex"), "#!/bin/sh\n", { mode: 0o755 });
+  const cortexBin = join(home, ".local", "bin", "cortex");
+  writeFileSync(cortexBin, "#!/bin/sh\n", { mode: 0o755 });
+  symlinkSync(cortexBin, join(home, "bin", "cortex"));
+  // bun stays a system binary resolved via `command -v bun` (BUN_PATH token);
+  // the cutover does not move it.
   const bunPath = join(home, "bin", "bun");
   writeFileSync(bunPath, "#!/bin/sh\n", { mode: 0o755 });
   mkdirSync(join(cortexDir, "src", "taps", "cc-events"), { recursive: true });

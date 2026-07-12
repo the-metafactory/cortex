@@ -38,6 +38,20 @@ ln -sf "${CORTEX_DIR}/src/taps/cc-events"          "${CLAUDE_DIR}/relay/cortex"
 # Discord skill; cortex declares it as a dependency in arc-manifest.yaml.
 echo "  ✓ Nested symlinks refreshed"
 
+# ─── 1b. Forward-symlink bridge for the bin cutover (cortex#1866 T13) ──────
+# arc's provides.files now installs cortex/cortex-relay/cldyo-live at
+# ~/.local/bin (was ~/bin). Any plist not yet re-rendered below still execs
+# ~/bin/<name>, so we leave ~/bin/<name> as a forward-symlink → ~/.local/bin so
+# it keeps resolving through any interrupt in the render+reload window. We NEVER
+# delete ~/bin/<name> here — deletion is wave 6 (#1904). Host-independent (both
+# launchd and systemd exec ~/.local/bin now); source of the helper is the shared
+# plist-render lib (loaded in §2 below, but we need it here first).
+source "${SCRIPT_DIR}/lib/plist-render.sh"
+echo "  Bridging legacy ~/bin entries → ~/.local/bin (forward-symlinks)..."
+for bin_name in cortex cortex-relay cldyo-live; do
+  forward_link_legacy_bin "${bin_name}"
+done
+
 # ─── 2. Auto-provision stack signing identity ─────────────────────
 # cortex#324 / v2.0.3: stack signing is ON by default. When a config file
 # lacks `stack.nkey_seed_path`, the helper generates an NKey and wires it
@@ -54,7 +68,7 @@ echo "  ✓ Nested symlinks refreshed"
 # us that path — the file where agents[].id and stack.id live.
 echo "  Provisioning stack signing identity..."
 source "${SCRIPT_DIR}/lib/stack-identity-provision.sh"
-source "${SCRIPT_DIR}/lib/plist-render.sh"
+# plist-render.sh already sourced in §1b (forward-symlink bridge).
 
 while IFS= read -r slug; do
   stack_config="$(resolve_stack_agent_config_path "${CONFIG_DIR}" "${slug}")"
@@ -87,11 +101,14 @@ if [ "$(uname)" = "Darwin" ]; then
   # Stacks are restarted based on the running-set recorded by preupgrade.sh.
   # This gives symmetry: no stack left down; none started that wasn't running.
   #
-  # `|| true` keeps a partial upgrade non-fatal — if a daemon was already
-  # unloaded by preupgrade.sh, load just re-loads cleanly.
+  # cortex#1866: reload via bootout+bootstrap (reload_plist), NOT `launchctl
+  # load`. The plists were just re-rendered to exec ~/.local/bin/<name> instead
+  # of ~/bin/<name>; `load` can silently no-op on an already-registered label
+  # and leave the OLD exec path live. bootout+bootstrap forces launchd to re-read
+  # from disk so the daemon comes back on the new binary path.
 
-  launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist" 2>/dev/null || true
-  echo "  ✓ Relay daemon started"
+  reload_plist "${LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist"
+  echo "  ✓ Relay daemon reloaded"
 
   # Read the running-stacks state file written by preupgrade.sh.
   RUNNING_STACKS_FILE="${TMPDIR:-/tmp}/cortex-upgrade-running-stacks"
@@ -100,8 +117,8 @@ if [ "$(uname)" = "Darwin" ]; then
       [ -z "${slug}" ] && continue
       plist="${LAUNCH_DIR}/ai.meta-factory.cortex.${slug}.plist"
       if [ -f "${plist}" ]; then
-        launchctl load "${plist}" 2>/dev/null || true
-        echo "  ✓ ${slug} daemon started"
+        reload_plist "${plist}"
+        echo "  ✓ ${slug} daemon reloaded"
       else
         echo "  ⚠ ${slug} plist not found after render — skipping restart" >&2
       fi
@@ -115,8 +132,8 @@ if [ "$(uname)" = "Darwin" ]; then
     while IFS= read -r slug; do
       plist="${LAUNCH_DIR}/ai.meta-factory.cortex.${slug}.plist"
       if [ -f "${plist}" ]; then
-        launchctl load "${plist}" 2>/dev/null || true
-        echo "  ✓ ${slug} daemon started (fallback)"
+        reload_plist "${plist}"
+        echo "  ✓ ${slug} daemon reloaded (fallback)"
       fi
     done < <(discover_stack_slugs "${CONFIG_DIR}")
   fi

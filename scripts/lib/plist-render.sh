@@ -326,12 +326,18 @@ render_stack_plist() {
     echo "  ⚠ Template missing: ${src}" >&2
     return 1
   fi
+  # G-30 (cortex#1866, XDG wave 3): render atomically. A bare `sed > dst`
+  # onto a live LaunchAgents path leaves a truncated/partial plist visible if
+  # the render is interrupted — launchd would then load garbage. Render to a
+  # same-dir temp and `mv` (atomic rename within one filesystem) so the
+  # installed plist only ever transitions whole-old → whole-new.
   sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
       -e "s|__BUN_PATH__|${bun_path}|g" \
       -e "s|__HOME__|${HOME}|g" \
       -e "s|__STACK_SLUG__|${slug}|g" \
       -e "s|__CONFIG_PATH__|${config_yaml}|g" \
-      "${src}" > "${dst}"
+      "${src}" > "${dst}.tmp"
+  mv -f "${dst}.tmp" "${dst}"
   echo "  ✓ ${slug} plist rendered → ${dst} (config=${config_yaml})"
 }
 
@@ -365,10 +371,12 @@ render_cortex_plists() {
   local relay_src="${cortex_dir}/src/services/ai.meta-factory.cortex.relay.plist"
   local relay_dst="${launch_dir}/ai.meta-factory.cortex.relay.plist"
   if [ -f "${relay_src}" ]; then
+    # G-30: atomic render (same rationale as render_stack_plist).
     sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
         -e "s|__BUN_PATH__|${bun_path}|g" \
         -e "s|__HOME__|${HOME}|g" \
-        "${relay_src}" > "${relay_dst}"
+        "${relay_src}" > "${relay_dst}.tmp"
+    mv -f "${relay_dst}.tmp" "${relay_dst}"
     echo "  ✓ Relay plist rendered → ${relay_dst}"
   fi
 
@@ -383,4 +391,79 @@ render_cortex_plists() {
   if [ "${rendered_count}" -eq 0 ]; then
     echo "  ⚠ No stacks discovered in ${config_dir} (no per-stack dirs or cortex*.yaml) — no stack plists rendered" >&2
   fi
+}
+
+# ── Bin cutover helpers (cortex#1866, XDG wave 3) ────────────────────────────
+
+# Leave a legacy ~/bin/<name> in place as a forward-symlink → ~/.local/bin/<name>.
+#
+# The bin cutover moved cortex/cortex-relay/cldyo-live from ~/bin to
+# ~/.local/bin (arc-manifest provides.files + arc#293 host-adapter defaults).
+# Already-installed launchd plists may still exec ~/bin/<name> until they are
+# re-rendered + reloaded. To guarantee ~/bin/<name> keeps resolving through ANY
+# interrupt in that window, the legacy path is converted to a forward-symlink
+# pointing at the new location.
+#
+# INTERRUPT-WINDOW RULE (cortex#1866 T13, non-negotiable): we NEVER delete
+# ~/bin/<name> here — deletion is wave 6 (#1904). Deleting it in the same
+# operation that re-renders plists would, on any interrupt (pull conflict,
+# missing bun, reboot), leave every plist execing a missing binary under
+# KeepAlive:true → throttled respawn forever.
+#
+# Safety:
+#   - Only bridge when the ~/.local/bin target exists — never create a dangling
+#     forward-symlink.
+#   - An existing symlink at ~/bin/<name> is replaced atomically (`ln -sfn`).
+#   - A REAL file/dir at ~/bin/<name> is backed up to <path>.pre-arc rather than
+#     clobbered (mirrors arc's occupied-destination preflight, arc#293).
+#
+# Host-independent: both macOS (launchd) and Linux (systemd) now exec
+# ~/.local/bin, so the bridge is created regardless of platform.
+#
+# Args: $1 binary basename (e.g. cortex, cortex-relay, cldyo-live)
+forward_link_legacy_bin() {
+  local name="$1"
+  local target="${HOME}/.local/bin/${name}"
+  local link="${HOME}/bin/${name}"
+
+  # Nothing to point at → do not create a dangling forward-symlink.
+  [ -e "${target}" ] || return 0
+
+  mkdir -p "${HOME}/bin"
+
+  if [ -L "${link}" ]; then
+    : # existing symlink (possibly stale) — ln -sfn replaces it atomically
+  elif [ -e "${link}" ]; then
+    # A real regular file / directory occupies the legacy path — preserve it.
+    mv -f "${link}" "${link}.pre-arc"
+    echo "  ↪ backed up existing ${link} → ${link}.pre-arc"
+  fi
+
+  ln -sfn "${target}" "${link}"
+  echo "  ✓ forward-symlink ${link} → ${target}"
+}
+
+# Reload a (freshly re-rendered) installed plist so a CHANGED ProgramArguments
+# actually takes effect — specifically the ~/bin → ~/.local/bin exec-path move.
+#
+# Uses the modern launchctl domain API: `bootout` the plist if currently
+# loaded, then `bootstrap` it back from disk. The legacy `launchctl load`/
+# `unload` pair is unreliable for a repoint — `load` can silently no-op when the
+# label is already registered, leaving the OLD exec path live under launchd.
+# bootout+bootstrap forces launchd to re-read the plist, so the daemon comes
+# back on the new binary path. Also self-healing: if preupgrade's stop somehow
+# left the old service registered, bootout evicts it before bootstrap.
+#
+# Domain: gui/<uid> — the per-user Aqua session that owns ~/Library/LaunchAgents.
+# Both calls are `|| true`: bootout errors when the label isn't loaded (fine),
+# bootstrap errors (code 5) when it somehow already is (harmless).
+#
+# Args: $1 plist path
+reload_plist() {
+  local plist="$1"
+  [ -f "${plist}" ] || return 0
+  local domain
+  domain="gui/$(id -u)"
+  launchctl bootout "${domain}" "${plist}" 2>/dev/null || true
+  launchctl bootstrap "${domain}" "${plist}" 2>/dev/null || true
 }
