@@ -1810,7 +1810,7 @@ export function createSystemPluginLoadedEvent(
 }
 
 // ---------------------------------------------------------------------------
-// system.plugin.unloaded / system.plugin.reload_failed — cortex#1793 (S8,
+// system.plugin.unloaded / system.plugin.reload-failed — cortex#1793 (S8,
 // ADR-0024 D3)
 // ---------------------------------------------------------------------------
 
@@ -1822,6 +1822,27 @@ export function createSystemPluginLoadedEvent(
  * with S6's naming rather than forking one), same secret-free reason-string
  * discipline, same per-plugin fail-isolation posture: one detach/reload
  * outcome never blocks or masks another's.
+ *
+ * **Leaf segment is `reload-failed` (hyphen), NOT `reload_failed`.** The
+ * vendored envelope schema's `/type` pattern
+ * (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$`, `envelope.schema.json`)
+ * forbids underscores in a type segment. `system.plugin.load_failed` (S6,
+ * already on `main`) and several older `system.*` families
+ * (`system.bus.notify_discord`, `system.bus.reflex_activation_failed`,
+ * `system.gateway.routing_decision`, …) violate this pattern — the schema
+ * check only runs on the SUBSCRIBER side (`myelin/subscriber.ts`), so a
+ * violating envelope publishes without error and is then **silently
+ * dropped by every standard push-mode subscriber** (`runtime.subscribe()` +
+ * `onEnvelope`) — confirmed via a live NATS round-trip while building S8's
+ * `system.plugin.control-request`/`-response` pair (the exact bug this
+ * comment documents: the first draft used `control_request`/`control_response`
+ * and every response silently vanished). `unloaded` has no segment needing
+ * a separator fix; `reload-failed` is spelled correctly here rather than
+ * inheriting the sibling's already-broken convention. `load_failed` is left
+ * as-is — it already shipped on `main` via S6/#1927, and renaming a shipped
+ * wire type is a separate, coordinated fix (flagged, not bundled into this
+ * unrelated slice); every OTHER pre-existing underscore violation across
+ * `system.*` is the same systemic gap and is out of scope here too.
  *
  * `createSystemPluginUnloadedEvent` fires on a SUCCESSFUL runtime detach
  * (`cortex plugin unload`, or a reconcile-driven detach of a bundle removed
@@ -1886,15 +1907,15 @@ export interface SystemPluginReloadFailedOpts {
 }
 
 /**
- * Construct a `system.plugin.reload_failed` envelope. Subject convention:
- * `local.{principal}.system.plugin.reload_failed`. The old instance is left
+ * Construct a `system.plugin.reload-failed` envelope. Subject convention:
+ * `local.{principal}.system.plugin.reload-failed`. The old instance is left
  * running — this event reports a FAILED reload attempt, never a detach.
  */
 export function createSystemPluginReloadFailedEvent(
   opts: SystemPluginReloadFailedOpts,
 ): Envelope {
   return buildBaseEnvelope({
-    type: "system.plugin.reload_failed",
+    type: "system.plugin.reload-failed",
     source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     payload: {
@@ -1909,7 +1930,7 @@ export function createSystemPluginReloadFailedEvent(
 }
 
 // ---------------------------------------------------------------------------
-// system.plugin.control_request / control_response — cortex#1793 (S8)
+// system.plugin.control-request / control-response — cortex#1793 (S8)
 // CLI-to-daemon runtime plugin control channel
 // ---------------------------------------------------------------------------
 
@@ -1933,18 +1954,18 @@ export function createSystemPluginReloadFailedEvent(
  * existing publish/subscribe primitives:
  *
  *   1. The CLI opens its own `MyelinRuntime` against the principal's
- *      `cortex.yaml`, subscribes to `local.{principal}.system.plugin.control_response`,
- *      publishes a `control_request` envelope carrying a fresh UUID
- *      `correlation_id`, and awaits a `control_response` bearing the SAME
+ *      `cortex.yaml`, subscribes to `local.{principal}.system.plugin.control-response`,
+ *      publishes a `control-request` envelope carrying a fresh UUID
+ *      `correlation_id`, and awaits a `control-response` bearing the SAME
  *      `correlation_id` (bounded timeout).
- *   2. The running daemon subscribes to `control_request` at boot
+ *   2. The running daemon subscribes to `control-request` at boot
  *      (`src/gateway/plugin-control-server.ts`), executes the requested
  *      `list`/`unload`/`reload`/`load` action against its own live
  *      `adapters[]` / renderer-handle map / `SurfaceGateway`
  *      (`src/gateway/plugin-runtime.ts`), and replies with a
- *      `control_response` carrying the same `correlation_id`.
+ *      `control-response` carrying the same `correlation_id`.
  *
- * Local-only by construction: `local.{principal}.system.plugin.control_*`
+ * Local-only by construction: `local.{principal}.system.plugin.control-*`
  * is never a `federated.*` subject, so it structurally cannot cross a leaf
  * to a peer stack (leaf export/import lists only ever name `local.`/
  * `federated.` prefixed patterns elsewhere in this codebase — a plugin
@@ -1969,15 +1990,15 @@ export interface SystemPluginControlRequestOpts {
 }
 
 /**
- * Construct a `system.plugin.control_request` envelope. Subject convention:
- * `local.{principal}.system.plugin.control_request` — the daemon-side
+ * Construct a `system.plugin.control-request` envelope. Subject convention:
+ * `local.{principal}.system.plugin.control-request` — the daemon-side
  * listener subscribes here; the CLI publishes here.
  */
 export function createSystemPluginControlRequestEvent(
   opts: SystemPluginControlRequestOpts,
 ): Envelope {
   return buildBaseEnvelope({
-    type: "system.plugin.control_request",
+    type: "system.plugin.control-request",
     source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     correlationId: opts.requestId,
@@ -2013,15 +2034,15 @@ export interface SystemPluginControlResponseOpts {
 }
 
 /**
- * Construct a `system.plugin.control_response` envelope — the daemon's reply
- * to a `control_request`. Subject convention:
- * `local.{principal}.system.plugin.control_response`.
+ * Construct a `system.plugin.control-response` envelope — the daemon's reply
+ * to a `control-request`. Subject convention:
+ * `local.{principal}.system.plugin.control-response`.
  */
 export function createSystemPluginControlResponseEvent(
   opts: SystemPluginControlResponseOpts,
 ): Envelope {
   return buildBaseEnvelope({
-    type: "system.plugin.control_response",
+    type: "system.plugin.control-response",
     source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     correlationId: opts.requestId,

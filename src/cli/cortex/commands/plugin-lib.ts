@@ -6,7 +6,7 @@
  * the live daemon over the bus (`network-ping-adapters.ts`:
  * `startMyelinRuntime(config, …)` against the SAME `cortex.yaml` the daemon
  * booted from) — see `src/bus/system-events.ts`'s
- * `system.plugin.control_request`/`_response` doc comment for why this rides
+ * `system.plugin.control-request`/`_response` doc comment for why this rides
  * `runtime.publish`/`subscribe`/`onEnvelope` rather than a raw NATS
  * request/reply connection.
  *
@@ -84,7 +84,7 @@ export async function sendPluginControlRequest(
     }
 
     const requestId = crypto.randomUUID();
-    const responseSubject = `local.${principalId}.system.plugin.control_response`;
+    const responseSubject = `local.${principalId}.system.plugin.control-response`;
     const subscriber = await runtime.subscribe(responseSubject);
     if (!subscriber) {
       return { ok: false, reason: "cortex plugin: failed to subscribe for the daemon's response." };
@@ -110,7 +110,7 @@ export async function sendPluginControlRequest(
       }, timeoutMs);
       const { unregister } = runtime.onEnvelope((envelope, matchedSubject) => {
         if (matchedSubject !== responseSubject) return;
-        if (envelope.type !== "system.plugin.control_response") return;
+        if (envelope.type !== "system.plugin.control-response") return;
         const payload = envelope.payload as {
           request_id?: unknown;
           ok?: unknown;

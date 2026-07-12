@@ -1,12 +1,12 @@
 /**
  * cortex#1793 (S8) — the daemon-side half of the `cortex plugin` control
- * channel. Subscribes to `local.{principal}.system.plugin.control_request`
+ * channel. Subscribes to `local.{principal}.system.plugin.control-request`
  * (via the running `MyelinRuntime` — see `src/bus/system-events.ts`'s
- * `system.plugin.control_request`/`_response` doc comment for the full
+ * `system.plugin.control-request`/`_response` doc comment for the full
  * rationale on why this rides `runtime.publish`/`subscribe`/`onEnvelope`
  * rather than a raw NATS request/reply connection), executes the requested
  * action against {@link PluginRuntimeDeps} (`src/gateway/plugin-runtime.ts`),
- * and replies with a `control_response` carrying the same `correlation_id`.
+ * and replies with a `control-response` carrying the same `correlation_id`.
  *
  * Wired into `src/cortex.ts` right after the renderer boot loop (once
  * `rendererHandles`/`skippedRendererConfigs` exist) and torn down in the
@@ -59,12 +59,12 @@ export async function startPluginControlServer(
     return noop;
   }
 
-  const subject = `local.${systemEventSource.principal}.system.plugin.control_request`;
+  const subject = `local.${systemEventSource.principal}.system.plugin.control-request`;
   const subscriber = await runtime.subscribe(subject);
   if (!subscriber) return noop;
 
   const { unregister } = runtime.onEnvelope((envelope, matchedSubject) => {
-    if (envelope.type !== "system.plugin.control_request") return;
+    if (envelope.type !== "system.plugin.control-request") return;
     if (matchedSubject !== subject) return;
     // Fire-and-forget: `onEnvelope` handlers are synchronous per the
     // `EnvelopeHandler` type, so the async body runs detached. Every
@@ -117,7 +117,7 @@ async function handleOneRequest(
     // rather than getting the underlying reason. Logged for the daemon
     // principal; never thrown (this runs detached from any caller).
     process.stderr.write(
-      `cortex plugin-control-server: failed to publish control_response for request "${requestId}": ${err instanceof Error ? err.message : String(err)}\n`,
+      `cortex plugin-control-server: failed to publish control-response for request "${requestId}": ${err instanceof Error ? err.message : String(err)}\n`,
     );
   }
 }

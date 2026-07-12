@@ -24,6 +24,8 @@ import {
   createSystemAdapterRecoveredEvent,
   createSystemDispatchStageEvent,
   createSystemInboundAbortedEvent,
+  createSystemPluginControlRequestEvent,
+  createSystemPluginControlResponseEvent,
   createSystemPluginReloadFailedEvent,
   createSystemPluginUnloadedEvent,
   type SystemEventSource,
@@ -975,7 +977,7 @@ describe("createSystemPluginReloadFailedEvent (cortex#1793, S8)", () => {
       stage: "cache_bust_reimport",
       reason: "import() threw: SyntaxError",
     });
-    expect(env.type).toBe("system.plugin.reload_failed");
+    expect(env.type).toBe("system.plugin.reload-failed");
     expect(env.payload).toEqual({
       bundle_name: "cli-tail-renderer",
       stage: "cache_bust_reimport",
@@ -984,20 +986,19 @@ describe("createSystemPluginReloadFailedEvent (cortex#1793, S8)", () => {
     expect(env.payload).not.toHaveProperty("kind");
     expect(env.payload).not.toHaveProperty("plugin_id");
     expect(env.payload).not.toHaveProperty("instance_id");
-    // NOTE: NOT asserting `validateEnvelope(env).ok` here — deliberately.
-    // `envelope-validator.ts`'s `/type` pattern
-    // (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$`) does not admit
-    // underscores within a segment, and `reload_failed` (like the
-    // already-shipped sibling `load_failed`, plus `system.bus.notify_discord`,
+    // `reload-failed` (hyphen) — NOT `reload_failed`. Confirmed via a live
+    // NATS round trip (S8 completion pass) that a type violating the
+    // vendored `/type` pattern (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$`
+    // — no underscores) publishes without error but is SILENTLY DROPPED by
+    // every standard push-mode subscriber (`runtime.subscribe()` +
+    // `onEnvelope`, via `myelin/subscriber.ts`'s schema check). The
+    // already-shipped sibling `system.plugin.load_failed` (S6, on `main`)
+    // and several older `system.*` families (`system.bus.notify_discord`,
     // `system.bus.reflex_activation_failed`, `system.gateway.routing_decision`,
-    // …) uses one. This is a PRE-EXISTING gap in the schema pattern vs. the
-    // established `snake_case` leaf-segment convention across MANY `system.*`
-    // event families already in production — not introduced by this event,
-    // and out of this slice's scope to fix (the pattern is only enforced on
-    // the SUBSCRIBER side, `myelin/subscriber.ts`, not at publish time, so it
-    // has never blocked these events from actually flowing). Flagged as a
-    // residual finding rather than silently renamed to dodge the regex.
-    expect(env.type).toBe("system.plugin.reload_failed");
+    // …) still carry this bug — out of scope to mass-fix here (separate,
+    // coordinated change), but `reload-failed` is spelled correctly since
+    // it ships in THIS slice.
+    expect(validateEnvelope(env).ok).toBe(true);
   });
 
   test("all optional fields populated", () => {
@@ -1018,9 +1019,80 @@ describe("createSystemPluginReloadFailedEvent (cortex#1793, S8)", () => {
       stage: "construct",
       reason: "createRenderer threw",
     });
-    // See the note above — `reload_failed` matches the established (if
-    // schema-pattern-noncompliant) `system.*` snake_case convention;
-    // `validateEnvelope` is not asserted here for the same pre-existing-gap
-    // reason.
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+});
+
+describe("createSystemPluginControlRequestEvent / createSystemPluginControlResponseEvent (cortex#1793, S8)", () => {
+  const SOURCE: SystemEventSource = {
+    principal: "andreas",
+    agent: "cortex",
+    instance: "cli",
+  };
+
+  test("control-request: schema-valid, correlation_id echoes requestId", () => {
+    const requestId = "072670f4-6128-4781-b82b-17a36af6060a";
+    const env = createSystemPluginControlRequestEvent({
+      source: SOURCE,
+      requestId,
+      action: "unload",
+      instanceId: "discord:guild1",
+    });
+    expect(env.type).toBe("system.plugin.control-request");
+    expect(env.correlation_id).toBe(requestId);
+    expect(env.payload).toEqual({
+      request_id: requestId,
+      action: "unload",
+      instance_id: "discord:guild1",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("control-request: bundleName-only (load) omits instance_id", () => {
+    const env = createSystemPluginControlRequestEvent({
+      source: SOURCE,
+      requestId: "072670f4-6128-4781-b82b-17a36af6060a",
+      action: "load",
+      bundleName: "acme-bundle",
+    });
+    expect(env.payload).toEqual({
+      request_id: "072670f4-6128-4781-b82b-17a36af6060a",
+      action: "load",
+      bundle_name: "acme-bundle",
+    });
+    expect(env.payload).not.toHaveProperty("instance_id");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("control-response: success carries rows, schema-valid", () => {
+    const requestId = "072670f4-6128-4781-b82b-17a36af6060a";
+    const env = createSystemPluginControlResponseEvent({
+      source: SOURCE,
+      requestId,
+      ok: true,
+      rows: [{ kind: "renderer", platformOrKind: "pagerduty", instanceId: "pagerduty", bundleName: "in-tree", running: true }],
+    });
+    expect(env.type).toBe("system.plugin.control-response");
+    expect(env.correlation_id).toBe(requestId);
+    expect(env.payload.ok).toBe(true);
+    expect(env.payload.rows).toEqual([
+      { kind: "renderer", platformOrKind: "pagerduty", instanceId: "pagerduty", bundleName: "in-tree", running: true },
+    ]);
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("control-response: failure carries detail, no rows", () => {
+    const env = createSystemPluginControlResponseEvent({
+      source: SOURCE,
+      requestId: "072670f4-6128-4781-b82b-17a36af6060a",
+      ok: false,
+      detail: "no plugin instance \"ghost\" is currently live",
+    });
+    expect(env.payload).toEqual({
+      request_id: "072670f4-6128-4781-b82b-17a36af6060a",
+      ok: false,
+      detail: 'no plugin instance "ghost" is currently live',
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
   });
 });
