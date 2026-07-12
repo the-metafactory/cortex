@@ -199,7 +199,7 @@ function legacyLivePid(legacyPath: string): number | undefined {
  * **Accepted trade-off (documented).** Restarting the SAME config while its old
  * daemon is still live now boots toward `checkSingleton` on the NEW name (which
  * is absent) and may spawn a DUPLICATE rather than block on the old name. That
- * is strictly less catastrophic than a cross-tree SIGTERM, and the operator is
+ * is strictly less catastrophic than a cross-tree SIGTERM, and the principal is
  * told to stop the old daemon first.
  *
  * **Guarded rename.** The rename is wrapped: `ENOENT`/`EEXIST` = a benign
