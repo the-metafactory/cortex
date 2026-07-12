@@ -3,7 +3,7 @@
  * list|unload|reload|load` reads and mutates. Pure, injected-dependency
  * logic: no NATS, no CLI parsing — `src/gateway/plugin-control-server.ts`
  * wires this to the bus-side request/response envelopes
- * (`system.plugin.control_request`/`_response`, `src/bus/system-events.ts`),
+ * (`system.plugin.control-request`/`-response`, `src/bus/system-events.ts`),
  * and `src/cli/cortex/commands/plugin-lib.ts` is the CLI-side caller.
  *
  * ## Scope (deliberately asymmetric — "the renderer half is cheaper")

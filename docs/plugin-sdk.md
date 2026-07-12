@@ -262,7 +262,7 @@ one extracts (S9–S12).
 
 cortex#1793 (S8, ADR-0024 D3) adds `cortex plugin list|unload|reload|load` —
 activating/deactivating a plugin **without restarting the daemon**. Talks to
-a running daemon over the bus (`system.plugin.control_request`/`_response`,
+a running daemon over the bus (`system.plugin.control-request`/`-response`,
 `src/bus/system-events.ts`; the daemon-side handler is
 `src/gateway/plugin-control-server.ts`; the domain logic is
 `src/gateway/plugin-runtime.ts`). Every mutating verb is **dry-run by
