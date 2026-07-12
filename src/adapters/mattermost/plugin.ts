@@ -13,6 +13,7 @@ import {
   type MattermostPresence,
   type Agent,
 } from "../../common/types/cortex-config";
+import { MattermostBindingSchema } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../../common/policy";
@@ -38,7 +39,12 @@ export const mattermostAdapterPlugin: AdapterPlugin = {
   kind: "adapter",
   id: "mattermost",
   platform: "mattermost",
-  bindingSchema: MattermostPresenceSchema,
+  // cortex#1789 (S4) — `MattermostBindingSchema`, the exact schema
+  // `surfaces.mattermost[].binding` validated pre-S4 (see discord/plugin.ts's
+  // comment for the full rationale). `MattermostPresenceSchema` stays in use
+  // below, in `buildGatewayConstructArgs`, for the gateway-path parse.
+  bindingSchema: MattermostBindingSchema,
+  foldsIntoPresence: true,
   secretFields: ["apiToken"],
   // apiUrl is optional on the presence schema but required on the binding
   // schema; the binding-resolver keys the interim instance on it too.

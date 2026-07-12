@@ -131,9 +131,9 @@ import {
 } from "./bus/myelin/envelope-validator";
 
 import { attachLegacyOutboundLog } from "./adapters/discord";
-import { createRenderer, type Renderer } from "./renderers";
-import { createDefaultSurfacePluginRegistry } from "./adapters/registry";
-import { RendererSchema, deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
+import { resolveRendererPluginAndConfig, type Renderer } from "./renderers";
+import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "./adapters/registry";
+import { deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
 import type {
   Agent,
   BusConfig,
@@ -3113,6 +3113,20 @@ export async function startCortex(
   // out, it never rewires this composition.
   const surfacePluginRegistry = createDefaultSurfacePluginRegistry();
 
+  // cortex#1789 (S4, ADR-0024 D5) — the REGISTRY pass for `surfaces:`
+  // bindings, run here because this is the first point in boot where BOTH
+  // the composed `Surfaces` (`options.surfaces`, structurally validated
+  // already by `SurfacesSchema` at config-load) and a live
+  // `SurfacePluginRegistry` are in hand — symmetric to the renderer boot
+  // loop below. `loader.ts`'s `parseSurfaces` already runs this SAME check
+  // against a freshly-constructed default registry at config-load time (so
+  // `cortex config validate`/dry-run/migrate-config callers that never reach
+  // this boot function still get the loud typo guard); this call is
+  // therefore redundant-but-harmless for the in-tree-only plugin set S4
+  // ships with, and becomes load-bearing once S6 lets a stack opt into
+  // plugins the config-load-time default registry doesn't know about.
+  validateSurfacesAgainstRegistry(options.surfaces, surfacePluginRegistry);
+
   // GW.a.3b.2c (cortex#524) — the surface ownership plan. When
   // `CORTEX_GATEWAY` is set, the shared surface gateway (constructed below via
   // `startGatewayIfEnabled`) builds ONE adapter per `surfaces:` binding on the
@@ -3247,33 +3261,37 @@ export async function startCortex(
   for (const raw of config.renderers ?? []) {
     // AgentConfig types renderers as z.unknown() so legacy bot.yaml loads
     // without breakage (the canonical shape lives on cortex-config's
-    // RendererSchema). Parse each entry strictly here — a typo fails fast
-    // with a Zod error rather than surfacing as a runtime cast failure
-    // inside the factory.
-    const parseResult = RendererSchema.safeParse(raw);
-    if (!parseResult.success) {
-      console.error(
-        `cortex: renderer config rejected by schema:`,
-        parseResult.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
-      );
-      continue;
-    }
-    const rendererConfig = {
-      ...parseResult.data,
-      subscribe: subjectPlaceholderSubstituter(parseResult.data.subscribe),
-    };
+    // RendererSchema). cortex#1789 (S4) — this is now a TWO-STAGE parse:
+    // `resolveRendererPluginAndConfig` runs the structural pass
+    // (`RendererSchema` — `{kind, ...}`) AND the registry pass (kind must
+    // name an INSTALLED renderer plugin; the raw entry must satisfy that
+    // plugin's real `configSchema`) in one call, using the SAME
+    // `surfacePluginRegistry` this boot composed above. A typo or
+    // unregistered kind fails here with a Zod/UnimplementedRendererKindError
+    // — same "log + skip, other renderers still boot" fail-isolation as
+    // before, just resolved through the registry instead of a closed enum.
+    let kindForLog = "(unknown)";
     try {
-      const renderer = createRenderer(rendererConfig, surfacePluginRegistry);
+      const { plugin, config: parsedConfig } = resolveRendererPluginAndConfig(raw, surfacePluginRegistry);
+      kindForLog = plugin.rendererKind;
+      const rawSubscribe = (parsedConfig as { subscribe?: unknown }).subscribe;
+      const rendererConfig = {
+        ...parsedConfig,
+        ...(Array.isArray(rawSubscribe) && {
+          subscribe: subjectPlaceholderSubstituter(rawSubscribe as string[]),
+        }),
+      };
+      const renderer = plugin.createRenderer(rendererConfig);
       await renderer.start();
       router.register(renderer.surfaceConfig);
       renderers.push(renderer);
-      console.log(`cortex: ${rendererConfig.kind} renderer started (id: ${renderer.id})`);
+      console.log(`cortex: ${kindForLog} renderer started (id: ${renderer.id})`);
     } catch (err) {
-      // Renderer construction can throw (UnimplementedRendererKindError)
-      // or `start()` can fail. Per the G-1111 fail-safe rule, ONE broken
+      // Parse failure (structural or registry pass), construction failure,
+      // or `start()` failure. Per the G-1111 fail-safe rule, ONE broken
       // renderer must not prevent the others from coming up — log + skip.
       console.error(
-        `cortex: ${rendererConfig.kind} renderer failed to start:`,
+        `cortex: ${kindForLog} renderer failed to start:`,
         err instanceof Error ? err.message : err,
       );
     }

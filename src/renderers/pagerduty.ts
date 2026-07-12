@@ -37,7 +37,7 @@
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { SurfaceAdapter } from "../bus/surface-router";
-import type { PagerDutyRendererConfig } from "../common/types/cortex-config";
+import { PagerDutyRendererSchema, type PagerDutyRendererConfig } from "../common/types/cortex-config";
 import type { Renderer } from "./types";
 import type { RendererPlugin } from "../adapters/registry";
 
@@ -196,8 +196,11 @@ export const pagerdutyRendererPlugin: RendererPlugin = {
   kind: "renderer",
   id: "pagerduty",
   rendererKind: "pagerduty",
-  // S4 inert placeholder — RendererSchema stays the fixed discriminated
-  // union it is today until then.
-  configSchema: undefined,
+  // cortex#1789 (S4) — the real per-kind schema, incl. the REQUIRED
+  // `routingKey` secret field. `createRenderer` parses the raw entry through
+  // this before construction; a Zod validation failure never echoes the
+  // rejected value (only the field path + message), so a malformed
+  // `routingKey` is never leaked into the thrown error.
+  configSchema: PagerDutyRendererSchema,
   createRenderer: (config) => new PagerDutyRenderer(config as PagerDutyRendererConfig),
 };

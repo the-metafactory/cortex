@@ -310,6 +310,27 @@ export const WebSurfaceBindingSchema = z.object({
   binding: WebBindingSchema,
 });
 
+/**
+ * cortex#1789 (S4, ADR-0024 D5) — the generic STRUCTURAL binding entry.
+ * Every `surfaces.{platform}[]` entry is `{agent, stack?, binding}` — this is
+ * the shape any REGISTERED-OR-NOT platform key must satisfy at the structural
+ * pass. `binding` is intentionally a loose record here (not one of the
+ * per-platform binding schemas above): the structural pass's job is "is this
+ * shaped like a binding entry", not "is this a valid Discord/Slack/Mattermost/
+ * Web binding" — that per-platform check is the REGISTRY pass
+ * ({@link resolveAdapterPluginOrThrow} in `src/adapters/registry.ts`), which
+ * runs once a `SurfacePluginRegistry` is in hand and knows which plugin's
+ * `bindingSchema` applies to which key.
+ */
+export const SurfaceBindingEntrySchema = z
+  .object({
+    ...bindingEntryBase,
+    binding: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+export type SurfaceBindingEntry = z.infer<typeof SurfaceBindingEntrySchema>;
+
 // =============================================================================
 // Top-level `surfaces:` block
 // =============================================================================
@@ -317,9 +338,24 @@ export const WebSurfaceBindingSchema = z.object({
 /**
  * The `surfaces:` block — the binding map. Keyed by platform; each platform
  * holds a list of `{agent, stack?, binding}` entries. All platforms are
- * optional (a deployment may bind only Discord). `.strict()` rejects an
- * unknown platform key loudly so a typo (`discrod:`) surfaces at load rather
- * than silently contributing nothing to the fold.
+ * optional (a deployment may bind only Discord).
+ *
+ * cortex#1789 (S4, ADR-0024 D5) — two-stage validation. This schema is the
+ * STRUCTURAL pass ONLY: the four in-tree platforms keep their full,
+ * strongly-typed binding schemas (byte-identical validation, zero ripple to
+ * every consumer typed against `Surfaces["discord"]` etc. — `discord-token-
+ * groups.ts`, `gateway-adapters.ts`, the web adapter); any OTHER top-level key
+ * is accepted structurally as a generic {@link SurfaceBindingEntrySchema}
+ * array via `.catchall(...)`, because a registry-contributed platform's key
+ * is not known to this static schema. `.catchall()` replaces the old
+ * `.strict()` — the "is this a REAL platform" check moves to the REGISTRY
+ * pass (`resolveAdapterPluginOrThrow` / `validateSurfacesAgainstRegistry`,
+ * `src/adapters/registry.ts`), which runs wherever a `SurfacePluginRegistry`
+ * is in hand (today: always the in-tree `createDefaultSurfacePluginRegistry`,
+ * since S6's out-of-tree bundle loading hasn't landed) and produces the SAME
+ * loud "no adapter installed for platform …" failure a typo (`discrod:`)
+ * used to get from `.strict()` — see `loader.ts`'s `parseSurfaces` and
+ * `cortex.ts` boot for the two call sites.
  *
  * Note: `web[]` bindings are NOT folded by `foldSurfaceBindings` (there is no
  * legacy presence shape). The gateway factory consumes them directly.
@@ -336,9 +372,16 @@ export const SurfacesSchema = z
      */
     web: z.array(WebSurfaceBindingSchema).optional(),
   })
-  // `.strict()` rejects an unknown platform key loudly so a typo (`discrod:`)
-  // surfaces at load rather than silently contributing nothing to the fold.
-  .strict();
+  // `.optional()` on the catchall element too — NOT a behavior change (a
+  // catchall key, when actually present in the input, is never `undefined`
+  // at runtime; Zod simply omits an absent key rather than storing
+  // `undefined` under it). This is purely so the inferred TS type's index
+  // signature (`X[] | undefined`) matches the four explicit `.optional()`
+  // keys above — TypeScript requires an object's named-optional-property
+  // type to be assignable to its own index-signature type, and `X[] | undefined`
+  // vs a non-optional `X[]` catchall would otherwise conflict
+  // ("Property 'discord' is incompatible with index signature").
+  .catchall(z.array(SurfaceBindingEntrySchema).optional());
 
 export type Surfaces = z.infer<typeof SurfacesSchema>;
 export type DiscordSurfaceBinding = z.infer<typeof DiscordSurfaceBindingSchema>;
@@ -351,7 +394,24 @@ export type WebBinding = z.infer<typeof WebBindingSchema>;
 // The fold — surfaces.yaml bindings → agents[*].presence.{platform}
 // =============================================================================
 
-const PLATFORMS = ["discord", "slack", "mattermost"] as const;
+/**
+ * cortex#1789 (S4, ADR-0024 D5) — the default fold-platform list, byte-
+ * identical to the pre-S4 hardcoded `PLATFORMS` const. `web` is deliberately
+ * absent (it never folds — no legacy presence shape exists for it, see
+ * `WebSurfaceBindingSchema`'s docstring). This is the FALLBACK `foldSurfaceBindings`
+ * uses when called with no explicit `foldPlatforms` — every existing call
+ * site (both `loader.ts` composer paths, every test) keeps this exact
+ * behavior. `loader.ts` additionally computes this list from the registry
+ * (`registry.listAdapters().filter(p => p.foldsIntoPresence)`) and passes it
+ * explicitly — the registry-derived list and this constant agree today
+ * because all four in-tree `AdapterPlugin`s set `foldsIntoPresence` to match
+ * (discord/slack/mattermost `true`, web `false`). `surfaces.ts` itself does
+ * NOT import the registry (`src/adapters/registry.ts` transitively imports
+ * this module for `WebBindingSchema`/`DiscordBindingSchema`/etc — importing
+ * the registry back here would cycle), so this constant is the registry-free
+ * anchor the registry-derived list is checked against.
+ */
+export const DEFAULT_FOLD_PLATFORMS = ["discord", "slack", "mattermost"] as const;
 
 /**
  * CFG.c.1/CFG.c.2 — fold a `surfaces:` block into the composed raw config's
@@ -362,6 +422,14 @@ const PLATFORMS = ["discord", "slack", "mattermost"] as const;
  * BEFORE the result is handed to the parse/flatten path. The result is the
  * exact shape the inline (pre-CFG.c) config produced — so `LoadedConfig` is
  * unchanged and no consumer is touched.
+ *
+ * `foldPlatforms` — cortex#1789 (S4): the set of platform keys that fold into
+ * `agents[*].presence.{platform}`. Defaults to {@link DEFAULT_FOLD_PLATFORMS}
+ * (byte-identical to the pre-S4 hardcoded list) so every existing caller is
+ * unaffected; `loader.ts` passes the REGISTRY-DERIVED list explicitly
+ * (`AdapterPlugin.foldsIntoPresence`), making "which platforms fold" a
+ * property each plugin declares rather than a second hardcoded list that can
+ * drift from the registry (`web` NOT folding is preserved exactly either way).
  *
  * Resolution / precedence (the design fork called out in CFG.c):
  *
@@ -388,6 +456,7 @@ const PLATFORMS = ["discord", "slack", "mattermost"] as const;
  */
 export function foldSurfaceBindings(
   raw: Record<string, unknown>,
+  foldPlatforms: readonly string[] = DEFAULT_FOLD_PLATFORMS,
 ): Record<string, unknown> {
   const surfacesRaw = raw.surfaces;
   if (surfacesRaw === undefined || surfacesRaw === null) {
@@ -419,8 +488,12 @@ export function foldSurfaceBindings(
     }
   }
 
-  for (const platform of PLATFORMS) {
-    const entries = surfaces[platform];
+  // Indexed generically — `foldPlatforms` is a plain `string[]` (registry-
+  // derived by `loader.ts`, or the {@link DEFAULT_FOLD_PLATFORMS} fallback),
+  // not the narrow literal union `SurfacesSchema`'s explicit keys infer to.
+  const surfacesByKey = surfaces as Record<string, readonly SurfaceBindingEntry[] | undefined>;
+  for (const platform of foldPlatforms) {
+    const entries = surfacesByKey[platform];
     if (!entries) continue;
     for (const entry of entries) {
       const agent = agentById.get(entry.agent);

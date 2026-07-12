@@ -13,6 +13,7 @@ import {
   type SlackPresence,
   type Agent,
 } from "../../common/types/cortex-config";
+import { SlackBindingSchema } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../../common/policy";
@@ -41,7 +42,12 @@ export const slackAdapterPlugin: AdapterPlugin = {
   kind: "adapter",
   id: "slack",
   platform: "slack",
-  bindingSchema: SlackPresenceSchema,
+  // cortex#1789 (S4) — `SlackBindingSchema`, the exact schema
+  // `surfaces.slack[].binding` validated pre-S4 (see discord/plugin.ts's
+  // comment for the full rationale). `SlackPresenceSchema` stays in use
+  // below, in `buildGatewayConstructArgs`, for the gateway-path parse.
+  bindingSchema: SlackBindingSchema,
+  foldsIntoPresence: true,
   secretFields: ["botToken", "appToken"],
   demuxKey: (binding) => stringBindingField(binding, "workspaceId"),
   // No groupBindings — one adapter per binding, demuxed on workspaceId.

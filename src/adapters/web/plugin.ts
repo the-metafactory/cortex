@@ -10,7 +10,7 @@
  */
 
 import { WebAdapter } from "./index";
-import type { WebBinding } from "../../common/types/surfaces";
+import { WebBindingSchema, type WebBinding } from "../../common/types/surfaces";
 import type { Agent } from "../../common/types/cortex-config";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { AdapterPlugin } from "../registry";
@@ -32,7 +32,13 @@ export const webAdapterPlugin: AdapterPlugin = {
   kind: "adapter",
   id: "web",
   platform: "web",
-  bindingSchema: undefined,
+  // cortex#1789 (S4) — the exact schema `surfaces.web[].binding` validated
+  // pre-S4 (`WebSurfaceBindingSchema` in `common/types/surfaces.ts`).
+  bindingSchema: WebBindingSchema,
+  // Unlike discord/slack/mattermost, web has no legacy inline-presence shape
+  // to fold into — the gateway factory consumes `surfaces.web[]` directly
+  // (see `WebSurfaceBindingSchema`'s docstring). PRESERVE: web does NOT fold.
+  foldsIntoPresence: false,
   // No secrets in a web binding — auth is CF Access at the edge, not a bot
   // token (`broadcastUrl` is a non-secret endpoint).
   secretFields: [],

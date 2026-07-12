@@ -25,6 +25,11 @@ import {
   type StackConfig,
 } from "../types/cortex-config";
 import { foldSurfaceBindings, SurfacesSchema, type Surfaces } from "../types/surfaces";
+import {
+  createDefaultSurfacePluginRegistry,
+  validateSurfacesAgainstRegistry,
+} from "../../adapters/registry";
+import { resolveRendererPluginAndConfig } from "../../renderers";
 import { enforceChmod600 } from "./file-permissions";
 import {
   resolveAgentPresenceTokens,
@@ -429,7 +434,7 @@ function composeRawConfigWithSurfaces(configPath: string): {
     const content = readFileSync(expandedPath, "utf-8");
     const single = (parseYaml(content) ?? {}) as Record<string, unknown>;
     const surfaces = parseSurfaces(single.surfaces);
-    return { raw: foldSurfaceBindings(single), surfaces };
+    return { raw: foldSurfaceBindings(single, defaultFoldPlatforms()), surfaces };
   }
 
   // CFG.a.1 — directory layout. Fixed precedence: system → network → surfaces
@@ -452,19 +457,49 @@ function composeRawConfigWithSurfaces(configPath: string): {
   // internally — `parseSurfaces` re-uses the same schema so the parse is
   // redundant but cheap (no I/O). Both share the same validated result shape.
   const surfaces = parseSurfaces(merged.surfaces);
-  return { raw: foldSurfaceBindings(merged), surfaces };
+  return { raw: foldSurfaceBindings(merged, defaultFoldPlatforms()), surfaces };
 }
 
 /**
- * Parse the raw `surfaces:` value against `SurfacesSchema`. Returns `undefined`
- * when the value is absent or null (no surfaces declared). Throws on malformed
- * input — the caller (`composeRawConfigWithSurfaces`) lets this propagate so
- * a bad surfaces.yaml fails loudly at load, matching `foldSurfaceBindings`'s
- * own validation contract.
+ * cortex#1789 (S4, ADR-0024 D5 scope item 3) — the registry-derived
+ * fold-platform list: every registered `AdapterPlugin` that opts into
+ * `foldsIntoPresence`. Replaces the hardcoded `PLATFORMS` const that used to
+ * live in `surfaces.ts` — "which platforms fold" is now a property each
+ * plugin declares (discord/slack/mattermost `true`, web `false` — PRESERVED
+ * exactly) rather than a second list that could drift from the registry.
+ * `surfaces.ts` itself cannot import the registry (would cycle — the
+ * registry's in-tree adapter plugins import `surfaces.ts` for their binding
+ * schemas), so `loader.ts` — which already imports the registry for the
+ * registry-pass validation below — computes this list and passes it down
+ * explicitly. Constructing a fresh `SurfacePluginRegistry` per call is cheap
+ * (pure in-memory registration, no I/O); this is the same "default registry"
+ * every other config-load-time registry check in this file uses.
+ */
+function defaultFoldPlatforms(): readonly string[] {
+  return createDefaultSurfacePluginRegistry()
+    .listAdapters()
+    .filter((p) => p.foldsIntoPresence)
+    .map((p) => p.platform);
+}
+
+/**
+ * Parse the raw `surfaces:` value against `SurfacesSchema` (the STRUCTURAL
+ * pass), then run the REGISTRY pass (cortex#1789, S4) — every top-level key
+ * must name an installed adapter plugin, and every entry's `binding` must
+ * satisfy that plugin's `bindingSchema`. Returns `undefined` when the value
+ * is absent or null (no surfaces declared). Throws on malformed input or an
+ * unregistered platform — the caller (`composeRawConfigWithSurfaces`) lets
+ * this propagate so a bad surfaces.yaml (or a typo'd platform key) fails
+ * loudly at load, matching `foldSurfaceBindings`'s own validation contract
+ * and giving `cortex config validate`/dry-run/`migrate-config` callers (who
+ * never reach `cortex.ts`'s boot-time registry check) the same loud typo
+ * guard `.strict()` used to give directly.
  */
 function parseSurfaces(value: unknown): Surfaces | undefined {
   if (value === undefined || value === null) return undefined;
-  return SurfacesSchema.parse(value);
+  const surfaces = SurfacesSchema.parse(value);
+  validateSurfacesAgainstRegistry(surfaces, createDefaultSurfacePluginRegistry());
+  return surfaces;
 }
 
 /**
@@ -826,6 +861,22 @@ function loadCortexShape(
   // Schema-strict parse. Any legacy field at the top level fails here with
   // the principal-friendly migration message baked into CortexConfigSchema.
   const cortexConfig: CortexConfig = CortexConfigSchema.parse(normalised);
+
+  // cortex#1789 (S4, ADR-0024 D5) — REGISTRY pass for `renderers:`.
+  // Cortex-shape configs are the only shape whose `renderers[]` got STRICT
+  // per-kind validation pre-S4 (`CortexConfigSchema.renderers` used the
+  // closed discriminated union); `RendererSchema` is now the loose
+  // STRUCTURAL pass only (see its docstring in `cortex-config.ts`), so this
+  // restores byte-identical loud-on-typo behavior for cortex.yaml at
+  // config-load — using the same default in-tree registry `parseSurfaces`
+  // uses above. Legacy bot.yaml `renderers[]` stays UNCHECKED here
+  // (unchanged from pre-S4 — see `AgentConfigSchema.renderers`'s docstring in
+  // `common/types/config.ts`): it only ever validated at `cortex.ts` boot,
+  // and that asymmetry is preserved rather than newly tightened.
+  const rendererRegistry = createDefaultSurfacePluginRegistry();
+  for (const entry of cortexConfig.renderers) {
+    resolveRendererPluginAndConfig(entry, rendererRegistry);
+  }
 
   // CortexConfigSchema guarantees `agents.min(1)`, so [0] is always defined
   // at runtime; noUncheckedIndexedAccess still types it as possibly undefined.

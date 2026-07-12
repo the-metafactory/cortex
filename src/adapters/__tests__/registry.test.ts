@@ -13,11 +13,15 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { z } from "zod/v4";
 import {
   SurfacePluginRegistry,
   createDefaultSurfacePluginRegistry,
   registryFromFactory,
   registryToLegacyFactory,
+  validateSurfacesAgainstRegistry,
+  resolveAdapterPluginOrThrow,
+  resolveRendererPluginOrThrow,
   type AdapterPlugin,
   type RendererPlugin,
 } from "../registry";
@@ -25,13 +29,18 @@ import { discordAdapterPlugin } from "../discord/plugin";
 import { slackAdapterPlugin } from "../slack/plugin";
 import { mattermostAdapterPlugin } from "../mattermost/plugin";
 import { webAdapterPlugin } from "../web/plugin";
+import type { Surfaces } from "../../common/types/surfaces";
 
+// cortex#1789 (S4) — `bindingSchema`/`configSchema` are real `z.ZodType`s
+// now, not inert `unknown` placeholders; stubs use a permissive `z.unknown()`
+// since these tests exercise registry primitives, not schema validation.
 function makeStubAdapterPlugin(id: string): AdapterPlugin {
   return {
     kind: "adapter",
     id,
     platform: id,
-    bindingSchema: undefined,
+    bindingSchema: z.unknown(),
+    foldsIntoPresence: false,
     secretFields: [],
     demuxKey: () => id,
     buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
@@ -46,7 +55,7 @@ function makeStubRendererPlugin(id: string): RendererPlugin {
     kind: "renderer",
     id,
     rendererKind: id,
-    configSchema: undefined,
+    configSchema: z.unknown(),
     createRenderer: () => {
       throw new Error("stub — never constructed in this test");
     },
@@ -204,5 +213,110 @@ describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
     factory.mattermost({});
     factory.web({});
     expect(calls).toEqual(["discord", "slack", "mattermost", "web"]);
+  });
+});
+
+// =============================================================================
+// cortex#1789 (S4, ADR-0024 D5) — registry-pass validation
+// =============================================================================
+
+describe("in-tree AdapterPlugin descriptors — foldsIntoPresence (ADR-0024 D5 scope item 3)", () => {
+  test("discord/slack/mattermost fold into agents[*].presence.{platform}", () => {
+    expect(discordAdapterPlugin.foldsIntoPresence).toBe(true);
+    expect(slackAdapterPlugin.foldsIntoPresence).toBe(true);
+    expect(mattermostAdapterPlugin.foldsIntoPresence).toBe(true);
+  });
+
+  test("web does NOT fold — preserved exactly (no legacy web presence shape)", () => {
+    expect(webAdapterPlugin.foldsIntoPresence).toBe(false);
+  });
+});
+
+describe("resolveAdapterPluginOrThrow", () => {
+  test("resolves an installed platform", () => {
+    const registry = createDefaultSurfacePluginRegistry();
+    expect(resolveAdapterPluginOrThrow("discord", registry)).toBe(discordAdapterPlugin);
+  });
+
+  test("unknown platform throws, naming the key and the installed set", () => {
+    const registry = createDefaultSurfacePluginRegistry();
+    expect(() => resolveAdapterPluginOrThrow("discrod", registry)).toThrow(
+      /no adapter installed for platform "discrod".*installed: discord, mattermost, slack, web/,
+    );
+  });
+});
+
+describe("resolveRendererPluginOrThrow", () => {
+  test("resolves an installed renderer kind", () => {
+    const registry = createDefaultSurfacePluginRegistry();
+    expect(resolveRendererPluginOrThrow("pagerduty", registry).id).toBe("pagerduty");
+  });
+
+  test("unregistered kind (cli-tail — S6 territory) throws, naming the kind and the installed set", () => {
+    const registry = createDefaultSurfacePluginRegistry();
+    expect(() => resolveRendererPluginOrThrow("cli-tail", registry)).toThrow(
+      /no renderer installed for kind "cli-tail".*installed: dashboard, pagerduty/,
+    );
+  });
+});
+
+describe("validateSurfacesAgainstRegistry", () => {
+  const registry = createDefaultSurfacePluginRegistry();
+
+  test("undefined surfaces is a no-op", () => {
+    expect(() => validateSurfacesAgainstRegistry(undefined, registry)).not.toThrow();
+  });
+
+  test("a valid discord binding passes", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "ivy",
+          binding: { token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" },
+        },
+      ],
+    };
+    expect(() => validateSurfacesAgainstRegistry(surfaces, registry)).not.toThrow();
+  });
+
+  test("an unknown top-level platform key throws — same loudness as the old .strict()", () => {
+    // The STRUCTURAL schema (`SurfacesSchema`) no longer rejects this key on
+    // its own (cortex#1789 catchall change) — this is the seam that now does.
+    const surfaces = { discrod: [{ agent: "ivy", binding: {} }] } as unknown as Surfaces;
+    expect(() => validateSurfacesAgainstRegistry(surfaces, registry)).toThrow(
+      /no adapter installed for platform "discrod"/,
+    );
+  });
+
+  test("a structurally-valid but field-invalid discord binding throws, and never echoes the secret", () => {
+    // Deliberately WRONG TYPE on `token` (a number, not a string) — a cast
+    // is needed since `Surfaces["discord"]` is strongly typed
+    // (DiscordSurfaceBinding) and would reject this at compile time; this
+    // simulates a raw value that has already cleared the STRUCTURAL pass
+    // (any record satisfies `binding: z.record(...)`) but not the REGISTRY
+    // pass this test exercises. NOTE: `guildId`/`agentChannelId`/
+    // `logChannelId` use `z.coerce.string()` on `DiscordBindingSchema` — an
+    // absent value coerces to the (non-empty!) string `"undefined"` rather
+    // than failing requiredness, so a MISSING field doesn't reliably fail
+    // here; `token` (plain `z.string()`, no coerce) is the reliable failure
+    // trigger, and its would-be-secret value (a number, so certainly not the
+    // real secret string) lets this test also confirm the thrown message
+    // never echoes the offending value.
+    const surfaces = {
+      discord: [
+        {
+          agent: "ivy",
+          binding: { token: 999999, guildId: "1", agentChannelId: "2", logChannelId: "3" },
+        },
+      ],
+    } as unknown as Surfaces;
+    expect(() => validateSurfacesAgainstRegistry(surfaces, registry)).toThrow(
+      /surfaces\.discord\[0\]\.binding is invalid/,
+    );
+    try {
+      validateSurfacesAgainstRegistry(surfaces, registry);
+    } catch (err) {
+      expect(err instanceof Error ? err.message : String(err)).not.toContain("999999");
+    }
   });
 });

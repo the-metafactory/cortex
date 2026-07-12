@@ -19,6 +19,7 @@ import {
   type DiscordPresence,
   type Agent,
 } from "../../common/types/cortex-config";
+import { DiscordBindingSchema } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../../common/policy";
@@ -57,9 +58,16 @@ export const discordAdapterPlugin: AdapterPlugin = {
   kind: "adapter",
   id: "discord",
   platform: "discord",
-  // Nearest available schema — S4 decides whether SurfacesSchema composes
-  // from this or a dedicated looser binding schema. Inert in this slice.
-  bindingSchema: DiscordPresenceSchema,
+  // cortex#1789 (S4) — `DiscordBindingSchema`, NOT `DiscordPresenceSchema`:
+  // this is the EXACT schema `surfaces.discord[].binding` validated pre-S4
+  // (`DiscordSurfaceBindingSchema` in `common/types/surfaces.ts`), so the
+  // registry pass is byte-identical to the old `.strict()`-object validation.
+  // `DiscordPresenceSchema` (the fuller presence shape) stays in use below,
+  // in `buildGatewayConstructArgs`, for the separate gateway-path parse.
+  bindingSchema: DiscordBindingSchema,
+  // Discord/Slack/Mattermost fold into `agents[*].presence.{platform}` at
+  // config-compose time (legacy inline-presence shape exists to fold into).
+  foldsIntoPresence: true,
   secretFields: ["token"],
   // Used only as the ungrouped-fallback demux key; `groupBindings` below
   // always runs for discord, so this is a spec-completeness fallback, not a

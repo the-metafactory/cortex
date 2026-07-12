@@ -1009,22 +1009,58 @@ export type Agent = z.infer<typeof AgentSchema>;
 // =============================================================================
 
 /**
- * Renderer kinds enumerated explicitly. Architecture §9.3: renderers never
- * publish on the bus; they're pure sinks. The enum constrains the choice set
- * to known platform classes (dashboard, pagerduty, cli-tail, webhook-out).
+ * cortex#1789 (S4, ADR-0024 D5) — `RendererKindSchema` stops being a closed
+ * `z.enum` over the four in-tree kinds and becomes "any non-empty string" —
+ * the STRUCTURAL half of the two-stage validation this slice introduces.
+ * Architecture §9.3 still holds (renderers never publish on the bus; they're
+ * pure sinks) but "which kinds exist" is now a registry property
+ * (`SurfacePluginRegistry.listRenderers()`), not a schema-closed set: a
+ * registry-contributed renderer's `kind` can't be enumerated here without
+ * importing the registry (`src/adapters/registry.ts` transitively imports
+ * THIS file for `DashboardRendererConfig`/etc, so the reverse import would
+ * cycle). The REGISTRY pass — `resolveRendererPluginOrThrow` /
+ * `resolveRendererPluginAndConfig` (`src/renderers/index.ts`) — is where "is
+ * this kind actually installed" is checked, with the same loud failure shape
+ * the closed enum used to give a typo.
  *
  * The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform classes
  * covering `local.{principal}.system.>` — that check fires at config-load (MIG-1.10),
- * not in the Zod schema.
+ * not in the Zod schema. Unchanged by S4 (ADR-0024 D5, explicitly out of
+ * scope for this slice — S6 extends it to distinguish a config error from an
+ * install-state error, OQ9).
  */
-export const RendererKindSchema = z.enum([
-  "dashboard",
-  "pagerduty",
-  "cli-tail",
-  "webhook-out",
-]);
+export const RendererKindSchema = z.string().min(1, "renderers[].kind is required");
 
 export type RendererKind = z.infer<typeof RendererKindSchema>;
+
+/**
+ * cortex#1789 (S4) — the generic STRUCTURAL renderer entry: every
+ * `renderers[]` array element must be shaped `{kind, ...}` — `kind` a
+ * non-empty string, everything else passed through untouched. This is what
+ * `CortexConfigSchema.renderers` validates at config-LOAD time, before any
+ * `SurfacePluginRegistry` is in hand (`src/common/config/loader.ts`'s
+ * `loadCortexShape` — see that file for where the REGISTRY pass runs
+ * immediately afterward). Per-kind field validation
+ * (`DashboardRendererSchema`/`PagerDutyRendererSchema`/etc, below) now runs
+ * ONLY at the registry pass, via each `RendererPlugin.configSchema`
+ * (`src/adapters/registry.ts`) — this schema intentionally does NOT
+ * discriminate on `kind`, so an out-of-tree kind is structurally welcome
+ * even though nothing in this file (or anywhere pre-S6) can validate its
+ * fields.
+ */
+export const RendererSchema = z.object({
+  kind: RendererKindSchema,
+}).catchall(z.unknown());
+
+/**
+ * MIG-7.2d: renamed from `Renderer` → `RendererConfig` so the unprefixed
+ * `Renderer` name can refer to the runtime class hierarchy in
+ * `src/renderers/`. cortex#1789 (S4) — this is now the LOOSE structural
+ * type (`{kind: string} & Record<string, unknown>`), not a discriminated
+ * union; per-kind typed configs (`DashboardRendererConfig` etc, below) are
+ * what runtime code should reach for when it already knows the kind.
+ */
+export type RendererConfig = z.infer<typeof RendererSchema>;
 
 // ---------------------------------------------------------------------------
 // Renderer visibility — IAW Phase A.4 (cortex#113, cortex#109 §B)
@@ -1208,24 +1244,17 @@ export const WebhookOutRendererSchema = z.object({
 export type WebhookOutRendererConfig = z.infer<typeof WebhookOutRendererSchema>;
 
 /**
- * Discriminated union over renderer kinds. Each variant carries `kind` as a
- * literal so callers can switch on it.
+ * cortex#1789 (S4, ADR-0024 D5) — the pre-S4 discriminated union
+ * (`z.discriminatedUnion("kind", [Dashboard, PagerDuty, CliTail, WebhookOut])`)
+ * lived HERE, exported as `RendererSchema`/`RendererConfig`. It moved to the
+ * top of this section (next to `RendererKindSchema`) and is now the LOOSE
+ * structural `{kind: string} & Record<string, unknown>` schema — see that
+ * definition's docstring for the two-stage-validation rationale. The four
+ * schemas above (`DashboardRendererSchema` etc.) are unchanged and are what
+ * each in-tree `RendererPlugin.configSchema` (`src/adapters/registry.ts`)
+ * now points at for the REGISTRY-pass validation `RendererSchema` no longer
+ * performs on its own.
  */
-export const RendererSchema = z.discriminatedUnion("kind", [
-  DashboardRendererSchema,
-  PagerDutyRendererSchema,
-  CliTailRendererSchema,
-  WebhookOutRendererSchema,
-]);
-
-/**
- * MIG-7.2d: renamed from `Renderer` → `RendererConfig` so the unprefixed
- * `Renderer` name can refer to the runtime class hierarchy in
- * `src/renderers/`. The schema-inferred type represents the CONFIG block
- * for a renderer, not the renderer instance itself, so the new name is
- * more accurate as well.
- */
-export type RendererConfig = z.infer<typeof RendererSchema>;
 
 // =============================================================================
 // NATS — bus runtime config

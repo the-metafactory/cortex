@@ -34,7 +34,7 @@
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { SurfaceAdapter } from "../bus/surface-router";
-import type { DashboardRendererConfig } from "../common/types/cortex-config";
+import { DashboardRendererSchema, type DashboardRendererConfig } from "../common/types/cortex-config";
 import type { Renderer } from "./types";
 import type { RendererPlugin } from "../adapters/registry";
 
@@ -154,8 +154,11 @@ export const dashboardRendererPlugin: RendererPlugin = {
   kind: "renderer",
   id: "dashboard",
   rendererKind: "dashboard",
-  // S4 inert placeholder — RendererSchema stays the fixed discriminated
-  // union it is today until then.
-  configSchema: undefined,
+  // cortex#1789 (S4) — the real per-kind schema. `createRenderer`
+  // (`src/renderers/index.ts`) now parses the RAW `renderers[]` entry
+  // through this before construction (registry pass), applying `port`/
+  // `subscribe`/`projections` defaults exactly as the old discriminated
+  // union did.
+  configSchema: DashboardRendererSchema,
   createRenderer: (config) => new DashboardRenderer(config as DashboardRendererConfig),
 };

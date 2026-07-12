@@ -24,9 +24,10 @@ import {
   MattermostPresenceSchema,
   type PolicyPrincipal,
   type PolicyRole,
-  RendererSchema,
   deriveStackId,
 } from "../../../common/types/cortex-config";
+import { createDefaultSurfacePluginRegistry } from "../../../adapters/registry";
+import { resolveRendererPluginAndConfig } from "../../../renderers";
 import {
   buildPolicy,
   policyPreflight,
@@ -810,20 +811,28 @@ function buildAgents(
  */
 function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): CortexConfig["renderers"] {
   const renderers: CortexConfig["renderers"] = [];
+  // cortex#1789 (S4, ADR-0024 D5) — `RendererSchema` is now the loose
+  // STRUCTURAL pass only (`{kind: string, ...}`); it no longer rejects an
+  // unregistered kind (`kind: "dashbord"` parses fine structurally — any
+  // non-empty string is a valid `kind`). The REGISTRY pass —
+  // `resolveRendererPluginAndConfig`, which resolves the plugin for `kind`
+  // and parses the raw entry through that plugin's real `configSchema` — is
+  // what now gives the same "typo surfaces here with field path renderers[i].kind"
+  // (or, for a genuinely unregistered kind, "no renderer installed for kind …")
+  // guarantee this function has always documented.
+  const rendererRegistry = createDefaultSurfacePluginRegistry();
 
   if (Array.isArray(legacy.renderers)) {
     for (const r of legacy.renderers) {
-      // Parse each entry through the discriminated-union schema rather than
-      // an `as` cast — a typo (`kind: "dashbord"`) surfaces here with field
-      // path "renderers[i].kind" instead of the opaque top-level Zod error
-      // emitted by CortexConfigSchema.parse() at the end of conversion.
-      renderers.push(RendererSchema.parse(r));
+      const { config } = resolveRendererPluginAndConfig(r, rendererRegistry);
+      renderers.push(config);
     }
   }
 
   if (legacy.api?.enabled === true) {
     const port = typeof legacy.api.port === "number" ? legacy.api.port : 8767;
-    renderers.push(RendererSchema.parse({ kind: "dashboard", port }));
+    const { config } = resolveRendererPluginAndConfig({ kind: "dashboard", port }, rendererRegistry);
+    renderers.push(config);
     warnings.push({
       field: "api",
       message: `legacy api.enabled=true synthesized as renderers[].kind=dashboard (port ${port}); cloud-mode api fields (endpoint, apiKey, …) are NOT carried — re-add via networks/`,

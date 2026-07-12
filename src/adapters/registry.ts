@@ -24,6 +24,29 @@
  * is "delete the in-tree registration + move the module out," not "rewire
  * the core."
  *
+ * ## Scope of THIS slice (S4, cortex#1789)
+ *
+ * S4 wires the registry into config validation (ADR-0024 D5, SCOPE AMENDED
+ * comment on #1789). `bindingSchema`/`configSchema` stop being inert `unknown`
+ * placeholders and become real `z.ZodType`s; two-stage validation lands:
+ *
+ *   1. STRUCTURAL pass (loader, no registry in hand) — `SurfacesSchema`
+ *      (`src/common/types/surfaces.ts`) and the renderer entry schema
+ *      (`RendererSchema`, `src/common/types/cortex-config.ts`) validate only
+ *      the generic shape (`{agent, stack?, binding}` / `{kind, ...}`). A
+ *      genuinely unknown platform/kind key is NOT rejected here — it can't
+ *      be, structurally, without knowing what's registered.
+ *   2. REGISTRY pass (wherever config + registry are both in hand —
+ *      `loader.ts`'s `parseSurfaces`/`loadCortexShape` for the default
+ *      in-tree registry, `cortex.ts` boot for the live boot registry,
+ *      `migrate-config-lib.ts` for the synthesis path) — this file's
+ *      {@link resolveAdapterPluginOrThrow} / {@link validateSurfacesAgainstRegistry}
+ *      and `src/renderers/index.ts`'s `resolveRendererPluginAndConfig`
+ *      resolve the plugin by key and parse the RAW entry against its real
+ *      `bindingSchema`/`configSchema`, throwing the same loud "no adapter/
+ *      renderer installed for …" shape a typo used to get from `.strict()`/
+ *      the closed enum.
+ *
  * ## The registry keys plugin CLASSES, not instances
  *
  * `(kind, id)` identifies the *code* — `("adapter", "discord")`,
@@ -35,8 +58,11 @@
  * construct two distinct renderer INSTANCES with distinct `id`s.
  */
 
+import type { z } from "zod/v4";
+
 import type { PlatformAdapter } from "./types";
 import type { Renderer } from "../renderers/types";
+import type { Surfaces } from "../common/types/surfaces";
 
 export type PluginKind = "adapter" | "renderer";
 
@@ -92,13 +118,31 @@ export interface AdapterPlugin {
   /** `surfaces.{platform}` key (e.g. "discord"). */
   readonly platform: string;
   /**
-   * The schema this platform would contribute to `SurfacesSchema` once S4
-   * composes it from the registry instead of 4 hardcoded keys. Carried here
-   * so S4 has somewhere to read from — **inert in this slice**:
-   * `SurfacesSchema` stays `.strict()` over its 4 hardcoded platform keys
-   * (`src/common/types/surfaces.ts:327-341`) until then.
+   * cortex#1789 (S4) — the schema this platform's `surfaces.{platform}[].binding`
+   * must satisfy. Consumed by {@link resolveAdapterPluginOrThrow} /
+   * {@link validateSurfacesAgainstRegistry} (the REGISTRY pass) — the
+   * structural pass (`SurfacesSchema`) only checks the generic
+   * `{agent, stack?, binding}` shape; this schema is where the real
+   * per-platform field validation (required tokens, regex-checked ids, …)
+   * happens. For the four in-tree platforms this is the EXACT schema
+   * `SurfacesSchema`'s old `.strict()` object used pre-S4
+   * (`DiscordBindingSchema`/`SlackBindingSchema`/`MattermostBindingSchema`/
+   * `WebBindingSchema`, `src/common/types/surfaces.ts`) — byte-identical
+   * validation, only the call site moved.
    */
-  readonly bindingSchema: unknown;
+  readonly bindingSchema: z.ZodType;
+  /**
+   * cortex#1789 (S4, ADR-0024 D5 scope item 3) — does this platform's
+   * `surfaces.{platform}[]` fold into `agents[*].presence.{platform}` at
+   * config-compose time (`foldSurfaceBindings`)? `true` for discord/slack/
+   * mattermost (a legacy inline-presence shape exists to fold into); `false`
+   * for web (there is no legacy web presence shape — the gateway factory
+   * consumes `surfaces.web[]` directly). Replaces the hardcoded `PLATFORMS`
+   * fold-list constant in `surfaces.ts` — `loader.ts` derives the fold list
+   * from `registry.listAdapters().filter(p => p.foldsIntoPresence)` instead
+   * of a second list that could drift from the registry.
+   */
+  readonly foldsIntoPresence: boolean;
   /**
    * Binding fields that must be free of unresolved `__ENV__` placeholders
    * before construction (cortex#1209 belt-and-suspenders) — checked against
@@ -141,9 +185,17 @@ export interface RendererPlugin {
   readonly id: string;
   /** `renderers[].kind` discriminant (e.g. "pagerduty"). */
   readonly rendererKind: string;
-  /** The config schema this kind would contribute to `RendererSchema` (S4).
-   *  Inert in this slice. */
-  readonly configSchema: unknown;
+  /**
+   * cortex#1789 (S4) — the schema a `renderers[]` entry of this kind must
+   * satisfy. Consumed by `src/renderers/index.ts`'s `resolveRendererPluginAndConfig`
+   * (the REGISTRY pass) — the structural pass (`RendererSchema` in
+   * `cortex-config.ts`) only checks `{kind, ...}`; this is the real per-kind
+   * schema (`DashboardRendererSchema`/`PagerDutyRendererSchema`/etc,
+   * `src/common/types/cortex-config.ts`) — byte-identical to what the old
+   * discriminated union validated, only the call site moved (and now runs
+   * with the RAW entry, so `parse()` still applies field defaults).
+   */
+  readonly configSchema: z.ZodType;
   /** Construct (never start) the renderer. */
   createRenderer(config: unknown): Renderer;
 }
@@ -226,6 +278,95 @@ export function createDefaultSurfacePluginRegistry(): SurfacePluginRegistry {
   registry.registerRenderer(dashboardRendererPlugin);
   registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;
+}
+
+// =============================================================================
+// cortex#1789 (S4) — registry-pass validation (ADR-0024 D5)
+// =============================================================================
+
+/**
+ * Resolve the `AdapterPlugin` registered for `platform`, or throw the SAME
+ * shape of loud, actionable error the pre-S4 `SurfacesSchema.strict()` gave
+ * on an unknown top-level key — naming the offending key AND every
+ * currently-installed platform, so a typo (`discrod:`) is as debuggable as
+ * it was before the schema became structurally permissive.
+ */
+export function resolveAdapterPluginOrThrow(
+  platform: string,
+  registry: SurfacePluginRegistry,
+): AdapterPlugin {
+  const plugin = registry.getAdapter(platform);
+  if (!plugin) {
+    const installed = registry.listAdapters().map((p) => p.id).sort().join(", ") || "(none)";
+    throw new Error(
+      `no adapter installed for platform "${platform}" (installed: ${installed}). ` +
+        `Check surfaces.${platform} for a typo, or install the plugin that provides it.`,
+    );
+  }
+  return plugin;
+}
+
+/**
+ * Resolve the `RendererPlugin` registered for `kind`, or throw the SAME loud
+ * shape {@link resolveAdapterPluginOrThrow} does for adapters — naming the
+ * offending kind AND every currently-installed renderer kind. Used by
+ * `src/renderers/index.ts` (`createRenderer` / `resolveRendererPluginAndConfig`)
+ * — the renderer-side twin of the adapter registry pass.
+ */
+export function resolveRendererPluginOrThrow(
+  kind: string,
+  registry: SurfacePluginRegistry,
+): RendererPlugin {
+  const plugin = registry.getRenderer(kind);
+  if (!plugin) {
+    const installed = registry.listRenderers().map((p) => p.id).sort().join(", ") || "(none)";
+    throw new Error(
+      `no renderer installed for kind "${kind}" (installed: ${installed}). ` +
+        `Check renderers[].kind for a typo, or install the plugin that provides it.`,
+    );
+  }
+  return plugin;
+}
+
+/**
+ * cortex#1789 (S4) — the REGISTRY pass for `surfaces:` bindings. Structural
+ * validity (`{agent, stack?, binding}` shape) is already established by
+ * `SurfacesSchema` (the structural pass) before this runs; this function
+ * checks the two things only a live registry can check:
+ *
+ *   1. every top-level key names an INSTALLED adapter plugin
+ *      ({@link resolveAdapterPluginOrThrow} — same loudness as the old
+ *      `.strict()`);
+ *   2. every entry's `binding` satisfies THAT plugin's `bindingSchema`
+ *      (the exact per-platform field validation `SurfacesSchema`'s old
+ *      hardcoded schemas used to do inline).
+ *
+ * Throws on the first failure — the same fail-fast contract `.strict()` and
+ * the per-platform binding schemas had pre-S4. Zod issue messages never
+ * include the raw field VALUE (only the path + a static/regex-derived
+ * message), so a rejected `token`/`apiToken`/`botToken` binding never echoes
+ * the secret into the thrown error.
+ *
+ * No-op when `surfaces` is `undefined` (no `surfaces:` block declared).
+ */
+export function validateSurfacesAgainstRegistry(
+  surfaces: Surfaces | undefined,
+  registry: SurfacePluginRegistry,
+): void {
+  if (!surfaces) return;
+  for (const [platform, entries] of Object.entries(surfaces)) {
+    if (!entries) continue;
+    const plugin = resolveAdapterPluginOrThrow(platform, registry);
+    entries.forEach((entry: { readonly binding: Record<string, unknown> }, index: number) => {
+      const result = plugin.bindingSchema.safeParse(entry.binding);
+      if (!result.success) {
+        const issues = result.error.issues
+          .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+          .join("; ");
+        throw new Error(`surfaces.${platform}[${index}].binding is invalid: ${issues}`);
+      }
+    });
+  }
 }
 
 // =============================================================================

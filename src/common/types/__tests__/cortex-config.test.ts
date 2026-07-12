@@ -39,6 +39,7 @@ import {
   PolicyPublicSchema,
   PolicySchema,
   RendererSchema,
+  WebhookOutRendererSchema,
   isFederatedSubjectInOwnScope,
   ownFederatedSubjectScopePrefix,
 } from "../cortex-config";
@@ -540,7 +541,16 @@ describe("RendererSchema", () => {
     expect(parsed.routingKey).toBe("PD-ROUTING-KEY");
   });
 
-  test("discriminated union dispatches on kind", () => {
+  // cortex#1789 (S4, ADR-0024 D5) — `RendererSchema` stopped being a closed
+  // discriminated union and became the loose STRUCTURAL pass
+  // (`{kind: string, ...}`). Per-kind field validation (routingKey required,
+  // url required, port/subscribe defaults, …) now lives ONLY on the
+  // per-kind schemas above (`DashboardRendererSchema` etc, exercised
+  // directly) and is enforced at the REGISTRY pass
+  // (`resolveRendererPluginAndConfig`, `src/renderers/index.ts` —
+  // `factory.test.ts` covers that dispatch). These tests pin the STRUCTURAL
+  // schema's own, deliberately weaker, contract.
+  test("structural pass preserves an arbitrary kind — no per-kind field enforcement", () => {
     const dashboard = RendererSchema.parse({ kind: "dashboard" });
     expect(dashboard.kind).toBe("dashboard");
 
@@ -548,17 +558,36 @@ describe("RendererSchema", () => {
     expect(cliTail.kind).toBe("cli-tail");
   });
 
-  test("unknown kind is rejected", () => {
-    expect(() => RendererSchema.parse({ kind: "telegram" })).toThrow();
+  test("an out-of-tree kind is NOT rejected structurally — registry-contributed kinds must be admissible", () => {
+    // Pre-S4 this threw (closed z.enum). It must NOT throw now: a
+    // registry-contributed (post-S6) kind this static schema has never
+    // heard of has to structurally parse so the REGISTRY pass — not this
+    // schema — gets the chance to say "installed" or "not installed".
+    expect(() => RendererSchema.parse({ kind: "telegram" })).not.toThrow();
+  });
+
+  test("kind is still required and must be a non-empty string", () => {
+    expect(() => RendererSchema.parse({})).toThrow();
+    expect(() => RendererSchema.parse({ kind: "" })).toThrow();
   });
 
   test("webhook-out renderer requires url", () => {
-    expect(() => RendererSchema.parse({ kind: "webhook-out" })).toThrow();
-    const parsed = RendererSchema.parse({
+    expect(() => WebhookOutRendererSchema.parse({ kind: "webhook-out" })).toThrow();
+    const parsed = WebhookOutRendererSchema.parse({
       kind: "webhook-out",
       url: "https://example.com/cortex-hook",
     });
     expect(parsed.kind).toBe("webhook-out");
+  });
+
+  test("webhook-out's missing url is NOT caught by the structural pass — only by the per-kind schema", () => {
+    // Documents the deliberate gap: `RendererSchema` alone will happily
+    // parse `{kind: "webhook-out"}` even though the real
+    // `WebhookOutRendererSchema` requires `url`. This is why the registry
+    // pass exists — see `resolveRendererPluginAndConfig`.
+    const parsed = RendererSchema.parse({ kind: "webhook-out" });
+    expect(parsed.kind).toBe("webhook-out");
+    expect(() => WebhookOutRendererSchema.parse(parsed)).toThrow();
   });
 });
 
@@ -1000,7 +1029,10 @@ describe("DashboardRendererSchema.publicUrl", () => {
 
 describe("WebhookOutRenderer.url", () => {
   test("rejects a non-URL string", () => {
-    expect(() => RendererSchema.parse({
+    // cortex#1789 (S4) — `RendererSchema` (the structural pass) no longer
+    // validates `url`'s format; that's `WebhookOutRendererSchema`'s job now
+    // (the registry pass's per-kind schema — see `resolveRendererPluginAndConfig`).
+    expect(() => WebhookOutRendererSchema.parse({
       kind: "webhook-out",
       url: "not-a-url",
     })).toThrow();

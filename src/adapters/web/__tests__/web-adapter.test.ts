@@ -646,10 +646,15 @@ describe("SurfacesSchema — web bindings", () => {
     expect(result.web?.[0]?.binding.instanceId).toBe("acme");
   });
 
-  test("unknown top-level key still rejects (strict mode preserved)", () => {
-    expect(() =>
-      SurfacesSchema.parse({ discrod: [] }), // typo
-    ).toThrow();
+  test("unknown top-level key structurally parses (cortex#1789, S4) — the typo guard moved to the registry pass", () => {
+    // cortex#1789 (S4, ADR-0024 D5) — `SurfacesSchema` is now the STRUCTURAL
+    // pass only; a genuinely unregistered platform key is admitted here so a
+    // registry-contributed platform (post-S6) isn't rejected before a
+    // registry can even be consulted. `validateSurfacesAgainstRegistry`
+    // (`src/adapters/registry.ts`) is where "discrod" now fails loudly — see
+    // `registry.test.ts`'s "unknown top-level platform key throws" test.
+    const result = SurfacesSchema.parse({ discrod: [] }); // typo
+    expect(result).toEqual({ discrod: [] });
   });
 
   test("discord + web coexist without error", () => {

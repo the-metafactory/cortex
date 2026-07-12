@@ -308,12 +308,28 @@ describe("CFG.c.4 — surfaces.yaml schema validates required binding fields", (
     ).toThrow();
   });
 
-  test("unknown top-level platform key fails loudly (typo guard)", () => {
+  test("unknown top-level platform key structurally parses (cortex#1789, S4)", () => {
+    // cortex#1789 (S4, ADR-0024 D5) — `SurfacesSchema` alone is now only the
+    // STRUCTURAL pass; it admits any top-level key shaped like
+    // `{agent, stack?, binding}`. The typo guard moved to the REGISTRY pass
+    // — see the next test, which drives the SAME input through
+    // `loadConfigWithAgents` (the real load path, which runs the registry
+    // check via `parseSurfaces`) and confirms it still fails loudly.
     expect(() =>
       SurfacesSchema.parse({
         discrod: [{ agent: "ivy", binding: { ...DISCORD_BINDING } }],
       }),
-    ).toThrow();
+    ).not.toThrow();
+  });
+
+  test("unknown top-level platform key fails loudly at load (typo guard, registry pass)", () => {
+    const path = writeSurfacesLayout(
+      join(testDir, "typo"),
+      systemBlocks(),
+      { surfaces: { discrod: [{ agent: "ivy", binding: { ...DISCORD_BINDING } }] } },
+      stackNoBindings(),
+    );
+    expect(() => loadConfigWithAgents(path)).toThrow(/no adapter installed for platform "discrod"/);
   });
 
   test("malformed surfaces.yaml fails at load via the composer", () => {
