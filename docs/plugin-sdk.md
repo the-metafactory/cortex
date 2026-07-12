@@ -1,12 +1,11 @@
 # Plugin SDK — authoring a surface plugin
 
-**Status:** describes the v1 (S5, cortex#1790) contract surface. Boot-time
-discovery/loading of OUT-OF-TREE bundles is a later slice (S6) — today every
-plugin registered against this SDK is still in-tree (`createDefaultSurfacePluginRegistry`,
-`src/adapters/registry.ts`), dogfooding the same contract an out-of-tree
-bundle will compile against. See [ADR-0024](adr/0024-pluggable-surface-adapters.md)
-for the full decision record and `CONTEXT.md` §Adapter/renderer SDK for the
-canonical vocabulary this doc uses.
+**Status:** describes the v1 (S5, cortex#1790) contract surface, boot-time
+out-of-tree bundle discovery/loading (S6, cortex#1792), and the runtime
+attach/detach/reload lifecycle (S8, cortex#1793 — see §Runtime lifecycle
+below). See [ADR-0024](adr/0024-pluggable-surface-adapters.md) for the full
+decision record and `CONTEXT.md` §Adapter/renderer SDK for the canonical
+vocabulary this doc uses.
 
 ## What a surface plugin is
 
@@ -259,10 +258,109 @@ to) forbid the other cross-boundary imports discussed above; those are
 tracked as ADR-0024's residual couplings, resolved plugin-by-plugin as each
 one extracts (S9–S12).
 
+## Runtime lifecycle (S8) — attach/detach/reload + state loss
+
+cortex#1793 (S8, ADR-0024 D3) adds `cortex plugin list|unload|reload|load` —
+activating/deactivating a plugin **without restarting the daemon**. Talks to
+a running daemon over the bus (`system.plugin.control_request`/`_response`,
+`src/bus/system-events.ts`; the daemon-side handler is
+`src/gateway/plugin-control-server.ts`; the domain logic is
+`src/gateway/plugin-runtime.ts`). Every mutating verb is **dry-run by
+default** — `--apply` is required to actually send the mutation (repo
+convention, mirrors `cortex network`/`cortex stack`).
+
+### Renderers are the cheap half; adapters are the hard half
+
+Per-instance detach for **renderers** already existed before S8:
+`SurfaceRouter.register()` returns an `{ unregister }` handle
+(`src/bus/surface-router.ts:262`) — the renderer boot loop in `cortex.ts`
+used to discard it; S8 retains it. A renderer has no inbound connection and
+no drain machinery is needed (the router already bounds every `render()`
+call with a timeout + `Promise.allSettled` isolation), so renderer
+`unload`/`reload`/`load` are all fully supported:
+
+- **`unload`** — `unregister()` (leaves the router's dispatch list) then
+  `stop()`. Always available.
+- **`reload`** — cache-bust re-`import()` of the SAME arc bundle, construct
+  a fresh instance from the ORIGINAL parsed config, **attach the new
+  instance before detaching the old one** (ADR-0024 D3: "duplicate delivery
+  is strictly safer than a blind window for a pager" — reloading `pagerduty`
+  must never leave a transient gap in `local.{principal}.system.>`
+  coverage). Only supported for a renderer that was constructed from an
+  **arc-installed bundle** — an in-tree renderer (`dashboard`, `pagerduty`)
+  has no bundle to re-import and refuses with a clear "restart required"
+  message.
+- **`load`** — activates a renderer whose `renderers[]` config entry existed
+  at boot but failed to construct because the plugin hadn't loaded yet
+  (`plugins.external` was off, or the bundle failed a transient gate). The
+  ORIGINAL raw config entry is reused verbatim, so `load` constructs exactly
+  what boot would have — never a runtime-improvised config.
+
+**Adapters** have no per-instance detach outside the (env-gated,
+off-by-default) shared `SurfaceGateway` — see
+`src/gateway/surface-gateway.ts`'s `attachAdapter`/`detachAdapter`. Every
+live stack today runs the classic per-stack boot path
+(`wireSurfaceAdapters`), which has no live detach at all (ADR-0024 blocker
+#13). So:
+
+- **`unload`** — works only when the daemon is running with
+  `CORTEX_GATEWAY=1`; otherwise refused with a clear reason (never a silent
+  no-op).
+- **`reload`** / **`load`** — out of scope for this slice for ADAPTERS.
+  Re-constructing an adapter instance needs the binding-seed + demux-key
+  inputs `GatewayAdapterFactory` owns today; that shim is tracked separately
+  at cortex#1896. `cortex plugin unload` + a config-driven restart is the v1
+  path for picking up an adapter code change.
+
+### The bun cache-bust finding
+
+`cortex#1793`'s scratch verification: bun 1.3.2's dynamic `import()` only
+honors a `?v=` cache-busting query string when the specifier is a **plain
+filesystem path**. The identical query string on a **`file://` URL** —
+which is what the S6 loader's boot-time import uses
+(`pathToFileURL(resolved.absPath).href`, `src/adapters/loader.ts`) —
+resolves to the SAME cached module every time, no matter how many distinct
+`?v=` values are tried. `reimportRendererPlugin` (`src/adapters/loader.ts`)
+therefore imports via the plain absolute path for a `bust: true` re-import;
+`loadOneBundle`'s boot-time import is unchanged (a bundle's first import for
+the process lifetime never needs busting). Re-verify this against any future
+bun upgrade before assuming reload still works — it is a bun implementation
+detail, not a documented guarantee.
+
+### State loss on detach/reload — by design, plugin authors must design for it
+
+Detaching (or reloading — detach is half of reload) a live instance
+discards ALL of its in-memory state. This is intentional (ADR-0024's
+renderer-delta consequence: "a renderer's resources are scoped to its
+lifetime… still true, and it's exactly what makes per-instance
+destroy-and-reconstruct safe"), but every plugin author must design for it:
+
+- **Renderers**: a ring buffer / dedup cache resets to empty on
+  detach/reload. Design any per-envelope derivation to be **reload-stable**
+  — e.g. `PagerDutyRenderer`'s `dedup_key` is derived per-envelope from
+  `${envelope.source}:${envelope.type}` (`src/renderers/pagerduty.ts`), not
+  from in-memory state, so a duplicate delivery across a reload is
+  correctly deduped by the PROVIDER (PagerDuty), not by cortex.
+- **Adapters** (when gateway-attached `unload`/future `reload` applies):
+  progress placeholders (`sendProgress`/`clearProgress` state), thread
+  caches, and the live platform websocket/HTTP connection are ALL lost on
+  detach. A re-attached adapter instance starts cold — it does NOT resume
+  mid-conversation state from before the detach. Adapter authors MUST
+  tolerate a cold re-attach: never assume `postResponse`/`sendProgress` will
+  land against a placeholder created by a PRIOR instance, and treat every
+  `start()` as a fresh connection with no memory of what came before.
+  Response routing itself is wire-level (`response_routing.adapter_instance`
+  + `channel_id`/`thread_id` echoed on the envelope), so a cold re-attach
+  does not break REPLIES — only best-effort UX affordances (a "typing…"
+  placeholder update, a cached thread lookup) are lost.
+
 ## Out of scope for this doc
 
-- Dynamic bundle loading / the compat-gate loader implementation (S6).
-- Runtime `cortex plugin list|load|unload|reload` verbs (S8).
+- Dynamic bundle loading / the compat-gate loader implementation (S6) — see
+  `src/adapters/loader.ts`.
 - Publishing an npm package for the SDK — a bundle resolves it via S6's
   loader import mechanism, not `npm install`.
-- Retiring `GatewayAdapterFactory` (tracked separately, cortex#1896).
+- Zero-downtime handover between old+new instance of the SAME platform
+  (v2 — the S8 issue's explicit out-of-scope line).
+- Retiring `GatewayAdapterFactory` and the adapter `reload`/`load` verbs that
+  depend on it (tracked separately, cortex#1896).
