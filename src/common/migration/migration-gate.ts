@@ -44,8 +44,30 @@
  *
  * Any leg unproven → the target is PRESENT and the gate REFUSES to clear. There
  * is NO path that returns `cleared:true` without every target passing all three.
- * An empty target set is a FOOTGUN (discovery failure), not a vacuous clear — it
- * throws.
+ * An empty target set with no live pidfile is a FOOTGUN (discovery failure), not
+ * a vacuous clear — it throws.
+ *
+ * A note on leg 3 (KillMode): cortex ships NO systemd unit with a `KillMode`
+ * override, so systemd's default `KillMode=control-group` tears down the whole
+ * cgroup on `stop` — tracking `MainPID` for the death poll is sufficient. If a
+ * deployment hand-authors a unit with `KillMode=process`, a child forked outside
+ * `MainPID` is a documented residual (the config-tree belt below still catches it
+ * if it wrote a pidfile).
+ *
+ * ## The pidfile-liveness belt — making "DEAD" TRUE, not "service-discovered dead"
+ *
+ * The three legs only see daemons the SERVICE MANAGER knows about. A daemon
+ * hand-started as `cortex start --config …` (how the principal runs cortex on a
+ * dev checkout) has no launchd label / systemd unit — invisible to the legs, so
+ * clearing would be fail-open. The belt closes this out-of-model hole with
+ * INDEPENDENT positive proof of LIFE: for every EXPECTED stack (enumerated from
+ * the config tree), read the pidfile it would write — via the #1900
+ * {@link pidFileFor} verbatim, so the belt can't drift from the daemon — and if
+ * the pid is LIVE (`kill(pid,0)`), REFUSE. It is presence→refuse (no absence-
+ * TOCTOU) and catches BOTH out-of-model cases: hand-started daemons and
+ * system-scope units (both write pidfiles). A target clears only when it is
+ * service-down AND pid-dead AND has no live pidfile — which is what lets the
+ * top-line "proves the fleet is DEAD" claim actually hold.
  *
  * ## Restore-on-failure (G-36 / A-RESTORE)
  *
@@ -85,6 +107,7 @@ import {
 import { discoverStacks } from "../../cli/cortex/commands/stack-lib";
 import { cortexConfigDir } from "../config/config-path";
 import { expandTilde } from "../config/loader";
+import { pidFileFor } from "../pidfile";
 
 // =============================================================================
 // Public types + injected seams
@@ -194,8 +217,12 @@ function defaultLaunchAgentsDir(home?: string): string {
   return join(homeDir(home), "Library", "LaunchAgents");
 }
 
+/** `$XDG_CONFIG_HOME/systemd/user`, or `~/.config/systemd/user` when unset — the
+ *  XDG-honest systemd user-unit dir (this IS the XDG epic; #1867 G-38). */
 function defaultSystemdUserDir(home?: string): string {
-  return join(homeDir(home), ".config", "systemd", "user");
+  const xdg = process.env.XDG_CONFIG_HOME?.trim();
+  const base = xdg !== undefined && xdg.length > 0 ? xdg : join(homeDir(home), ".config");
+  return join(base, "systemd", "user");
 }
 
 /** Real-fs {@link DaemonLocatorIO} for production Linux discovery. */
@@ -338,6 +365,96 @@ function slugFromConfigPath(cfgPath: string): string {
 }
 
 // =============================================================================
+// Pidfile-liveness belt (out-of-model positive proof of LIFE)
+// =============================================================================
+//
+// Service discovery only sees daemons the service manager knows about. A daemon
+// hand-started as `cortex start --config …` (exactly how the principal runs
+// cortex on a dev checkout) has NO launchd label / systemd unit — so the 3-leg
+// service proof is blind to it, and clearing would be fail-open. This belt makes
+// the "fleet is DEAD" claim TRUE independently of service discovery: it reads the
+// pidfile every EXPECTED stack would write (via the #1900 `pidFileFor`) and, if
+// the pid is LIVE, REFUSES. It is presence→refuse (positive proof of life, no
+// absence-TOCTOU), so it catches both out-of-model cases: hand-started daemons
+// (which wrote a pidfile via checkSingleton) AND system-scope units (also write
+// pidfiles). Run AFTER the service stop, so a unit-managed daemon we just killed
+// (dead pid) is NOT a false refusal, while an un-managed live daemon still is.
+
+/** A stack whose pidfile currently holds a LIVE pid. Presence → refuse. */
+export interface LivePidfile {
+  /** The daemon `--config` path this pidfile belongs to (`"(default)"` for the
+   *  single-instance `cortex.pid`). */
+  configPath: string;
+  pidPath: string;
+  pid: number;
+}
+
+/** Belt configuration — every input is seam-injected for hermetic tests. */
+export interface PidfileBeltConfig {
+  configDir?: string;
+  home?: string;
+  /** Daemon `--config` paths of EXPECTED stacks. Default: derived from
+   *  discoverStacks (pointer path for split, monolith file for monolith). */
+  stackConfigPaths?: string[];
+  /** config path → pidfile path. Default: the #1900 {@link pidFileFor} VERBATIM,
+   *  so the belt's derivation can never drift from the daemon's own. */
+  pidFilePathFor?: (configPath: string | undefined) => string;
+  /** pidfile path → pid (or undefined when absent/unreadable/unparseable).
+   *  Default: real fs read + parse. */
+  readPidFile?: (path: string) => number | undefined;
+}
+
+/**
+ * The pidfile-liveness belt. Enumerate the expected stacks from the config tree,
+ * resolve each daemon's pidfile via {@link pidFileFor}, and report every one
+ * whose pid is LIVE (kill(pid,0) via the injected {@link GateEnv.procAlive},
+ * EPERM-as-alive). The default single-instance `cortex.pid` is checked too (a
+ * hand-started default daemon). No absence is ever inferred — a hit is a daemon
+ * that is *provably running right now*.
+ */
+export function pidfileLivenessBelt(env: GateEnv, cfg: PidfileBeltConfig = {}): LivePidfile[] {
+  const pidPathFor = cfg.pidFilePathFor ?? pidFileFor;
+  const readPid = cfg.readPidFile ?? defaultReadPidFile;
+  const stackConfigs =
+    cfg.stackConfigPaths ?? expectedDaemonConfigPaths(cfg.configDir ?? cortexConfigDir(cfg.home));
+
+  const live: LivePidfile[] = [];
+  const seenPidPath = new Set<string>();
+  // Every expected stack's daemon config, PLUS the default single-instance case.
+  const candidates: (string | undefined)[] = [...stackConfigs, undefined];
+  for (const configPath of candidates) {
+    const pidPath = pidPathFor(configPath);
+    if (seenPidPath.has(pidPath)) continue;
+    seenPidPath.add(pidPath);
+    const pid = readPid(pidPath);
+    if (pid !== undefined && env.procAlive(pid)) {
+      live.push({ configPath: configPath ?? "(default)", pidPath, pid });
+    }
+  }
+  return live;
+}
+
+/** Daemon `--config` paths for every discovered stack (pointer for split layout,
+ *  the monolith file for monolith — the path the daemon's `--config` carries). */
+function expectedDaemonConfigPaths(configDir: string): string[] {
+  return discoverStacks(configDir).map((s) =>
+    s.layout === "split" ? join(configDir, s.slugLocator, `${s.slugLocator}.yaml`) : s.configPath,
+  );
+}
+
+/** Read a pidfile → its pid, or undefined when absent/unreadable/unparseable. */
+function defaultReadPidFile(path: string): number | undefined {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch {
+    return undefined;
+  }
+  const pid = parseInt(text.trim(), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+// =============================================================================
 // The gate
 // =============================================================================
 
@@ -350,6 +467,10 @@ export interface MigrationGateOptions {
   targets: ServiceTarget[];
   /** Death-wait policy. Defaults to {@link DEFAULT_DRAIN}. */
   drain?: DrainPolicy;
+  /** Config-tree pidfile-liveness belt. When provided, a LIVE pidfile for any
+   *  expected stack refuses the gate even with NO service unit discovered for it
+   *  (clearFleetForMigration / withMigrationGate always provide it). */
+  belt?: PidfileBeltConfig;
 }
 
 /** Outcome of a `restore()` call — which targets came back, and which didn't. */
@@ -367,8 +488,11 @@ export interface MigrationGateResult {
   targets: ServiceTarget[];
   /** Targets UP at pre-check — the exact set `restore()` brings back (symmetry). */
   running: ServiceTarget[];
-  /** Targets not proven dead — the fail-closed evidence. */
+  /** Targets not proven dead — the service-discovery fail-closed evidence. */
   stillPresent: ServiceTarget[];
+  /** Expected stacks with a LIVE pidfile — the out-of-model belt evidence (a
+   *  running daemon with no service unit). Cleared requires this empty too. */
+  livePidfiles: LivePidfile[];
   /** Re-`bootstrap`/`start` the pre-running set + verify each. Callers MUST call
    *  this on any failure path — `bootout`/`stop` are persistent. */
   restore: () => Promise<RestoreResult>;
@@ -396,14 +520,30 @@ export async function runMigrationGate(
   opts: MigrationGateOptions,
 ): Promise<MigrationGateResult> {
   const { targets } = opts;
-  if (targets.length === 0) {
-    throw new Error(
-      "migration gate: refusing to run with an EMPTY target set — enumeration returned " +
-        "nothing (unreadable systemd dir / no discovered units / no fleet). Clearing an empty " +
-        "set would be fail-open; this is a discovery failure, not a clear.",
-    );
-  }
   const drain = opts.drain ?? DEFAULT_DRAIN;
+
+  // Empty target set: NOT a vacuous clear. If the belt still finds a LIVE daemon
+  // (a hand-started stack with no unit), refuse and report it; otherwise throw —
+  // an empty set with no belt hit is a discovery failure, never a clear.
+  if (targets.length === 0) {
+    const livePidfiles = opts.belt ? pidfileLivenessBelt(opts.env, opts.belt) : [];
+    if (livePidfiles.length === 0) {
+      throw new Error(
+        "migration gate: refusing to run with an EMPTY target set and no live pidfile — " +
+          "enumeration returned nothing (unreadable systemd dir / no discovered units / no fleet). " +
+          "Clearing an empty set would be fail-open; this is a discovery failure, not a clear.",
+      );
+    }
+    return {
+      cleared: false,
+      reason: notClearedReason(opts.platform, [], livePidfiles),
+      targets,
+      running: [],
+      stillPresent: [],
+      livePidfiles,
+      restore: makeRestore(opts, []),
+    };
+  }
 
   // 1. Probe — capture up-state + PID while the daemon is still alive.
   const probes: TargetProbe[] = [];
@@ -412,22 +552,27 @@ export async function runMigrationGate(
   // 2. Authoritatively stop every target (defeat KeepAlive / Restart=always).
   for (const t of targets) await stopTarget(opts, t);
 
-  // 3. Positive death proof for every target.
+  // 3. Positive death proof for every service-discovered target.
   const stillPresent: ServiceTarget[] = [];
   for (const p of probes) {
     if (!(await proveDead(opts, p, drain))) stillPresent.push(p.target);
   }
 
+  // 4. Belt — AFTER the stop, so a unit-managed daemon we just killed (dead pid)
+  //    is not a false refusal, while a live daemon with no service unit still is.
+  const livePidfiles = opts.belt ? pidfileLivenessBelt(opts.env, opts.belt) : [];
+
   const running = probes.filter((p) => p.running).map((p) => p.target);
-  const cleared = stillPresent.length === 0;
+  const cleared = stillPresent.length === 0 && livePidfiles.length === 0;
   const restore = makeRestore(opts, running);
 
   return {
     cleared,
-    ...(cleared ? {} : { reason: notClearedReason(opts.platform, stillPresent) }),
+    ...(cleared ? {} : { reason: notClearedReason(opts.platform, stillPresent, livePidfiles) }),
     targets,
     running,
     stillPresent,
+    livePidfiles,
     restore,
   };
 }
@@ -597,14 +742,29 @@ async function restoreLinux(
   };
 }
 
-/** Human-readable fail-closed reason naming the not-proven-dead targets. */
-function notClearedReason(platform: GatePlatform, stillPresent: readonly ServiceTarget[]): string {
-  const how =
-    platform === "darwin"
-      ? "`launchctl print` still resolves them, or the PID is still draining, or launchctl is unavailable"
-      : "`systemctl --user is-active` is not a clean down word, or the PID is still draining, or systemctl is unavailable";
-  const which = stillPresent.map((t) => (platform === "darwin" ? t.label : t.unit)).join(", ");
-  return `migration gate REFUSED to clear (fail-closed): ${stillPresent.length.toString()} target(s) not proven dead — ${how}: ${which}`;
+/** Human-readable fail-closed reason naming the not-proven-dead targets + any
+ *  live-pidfile belt hits. */
+function notClearedReason(
+  platform: GatePlatform,
+  stillPresent: readonly ServiceTarget[],
+  livePidfiles: readonly LivePidfile[],
+): string {
+  const parts: string[] = [];
+  if (stillPresent.length > 0) {
+    const how =
+      platform === "darwin"
+        ? "`launchctl print` still resolves them, or the PID is still draining, or launchctl is unavailable"
+        : "`systemctl --user is-active` is not a clean down word, or the PID is still draining, or systemctl is unavailable";
+    const which = stillPresent.map((t) => (platform === "darwin" ? t.label : t.unit)).join(", ");
+    parts.push(`${stillPresent.length.toString()} service target(s) not proven dead (${how}): ${which}`);
+  }
+  if (livePidfiles.length > 0) {
+    const which = livePidfiles.map((l) => `${l.configPath} → pid ${l.pid.toString()}`).join(", ");
+    parts.push(
+      `${livePidfiles.length.toString()} stack(s) with a LIVE pidfile (running daemon, no service unit needed): ${which}`,
+    );
+  }
+  return `migration gate REFUSED to clear (fail-closed): ${parts.join("; ")}`;
 }
 
 // =============================================================================
@@ -661,9 +821,14 @@ export interface ClearFleetOptions {
   io?: DaemonLocatorIO;
   discoverSlugs?: (configDir: string) => string[];
   home?: string;
+  /** Belt seams (tests inject stackConfigPaths / pidFilePathFor / readPidFile).
+   *  `configDir` + `home` are folded in automatically. */
+  belt?: PidfileBeltConfig;
 }
 
-/** Enumerate the fleet + run the gate with host-derived defaults. */
+/** Enumerate the fleet + run the gate with host-derived defaults. The belt is
+ *  ALWAYS wired here, so the production path can never clear a hand-started
+ *  daemon that has no service unit. */
 export async function clearFleetForMigration(
   opts: ClearFleetOptions = {},
 ): Promise<MigrationGateResult> {
@@ -677,11 +842,17 @@ export async function clearFleetForMigration(
     ...(opts.discoverSlugs !== undefined && { discoverSlugs: opts.discoverSlugs }),
     ...(opts.home !== undefined && { home: opts.home }),
   });
+  const belt: PidfileBeltConfig = {
+    ...(opts.configDir !== undefined && { configDir: opts.configDir }),
+    ...(opts.home !== undefined && { home: opts.home }),
+    ...opts.belt,
+  };
   return runMigrationGate({
     platform,
     uid: resolveGateUid(opts.uid),
     env: opts.env ?? bunGateEnv,
     targets,
+    belt,
     ...(opts.drain !== undefined && { drain: opts.drain }),
   });
 }

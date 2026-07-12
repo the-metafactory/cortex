@@ -487,3 +487,151 @@ describe("migration gate — guards + restore mechanics", () => {
     expect(restore.failed.map((f) => f.id)).toContain("meta-factory");
   });
 });
+
+// =============================================================================
+// Pidfile-liveness belt — the DEAD claim holds even for hand-started daemons
+// =============================================================================
+
+describe("migration gate — pidfile-liveness belt (out-of-model daemons)", () => {
+  const HAND_CFG = `${CFG_DIR}/meta-factory/meta-factory.yaml`;
+  const HAND_PID_PATH = "/state/cortex-meta-factory-abc12345.pid";
+
+  test("migration gate belt REFUSES when a hand-started stack has a LIVE pidfile and NO service unit", async () => {
+    const targets = darwinTargets(["meta-factory"]);
+    // Every service target is up and cleanly killed by the gate...
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 500, [RELAY_LABEL]: 501 }, killsProcess: true });
+    // ...but a hand-started daemon (pid 9999) runs with NO unit/label — never killed.
+    ld.alive.add(9999);
+    const env = envOver(ld.exec, ld.alive);
+
+    const res = await runMigrationGate({
+      platform: "darwin",
+      uid: 501,
+      env,
+      targets,
+      drain: FAST_DRAIN,
+      belt: {
+        stackConfigPaths: [HAND_CFG],
+        pidFilePathFor: () => HAND_PID_PATH,
+        readPidFile: (p) => (p === HAND_PID_PATH ? 9999 : undefined),
+      },
+    });
+
+    expect(res.stillPresent).toHaveLength(0); // all service targets proven dead
+    expect(res.cleared).toBe(false); // ...yet the gate refuses — the belt caught it
+    expect(res.livePidfiles.map((l) => l.pid)).toEqual([9999]);
+    expect(res.reason).toContain("LIVE pidfile");
+  });
+
+  test("migration gate belt does NOT false-refuse a unit-managed daemon it just killed", async () => {
+    const targets = darwinTargets(["meta-factory"]);
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    // The stack's pidfile holds pid 500 — the SAME process the unit runs. The gate
+    // kills 500 via bootout; the belt (run AFTER the stop) must see it dead.
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 500, [RELAY_LABEL]: 501 }, killsProcess: true });
+    const env = envOver(ld.exec, ld.alive);
+
+    const res = await runMigrationGate({
+      platform: "darwin",
+      uid: 501,
+      env,
+      targets,
+      drain: FAST_DRAIN,
+      belt: {
+        stackConfigPaths: [HAND_CFG],
+        pidFilePathFor: () => HAND_PID_PATH,
+        readPidFile: () => 500, // same pid the gate just killed
+      },
+    });
+
+    expect(res.livePidfiles).toHaveLength(0); // 500 is dead post-stop → no false refusal
+    expect(res.cleared).toBe(true);
+  });
+
+  test("migration gate belt clears when every pidfile is dead + service is down", async () => {
+    const targets = darwinTargets(["meta-factory"]);
+    const ld = makeLaunchd({ loaded: {} }); // nothing loaded → service side trivially clear
+    const env = envOver(ld.exec, ld.alive);
+
+    const res = await runMigrationGate({
+      platform: "darwin",
+      uid: 501,
+      env,
+      targets,
+      drain: FAST_DRAIN,
+      belt: {
+        stackConfigPaths: [HAND_CFG],
+        pidFilePathFor: () => HAND_PID_PATH,
+        readPidFile: () => 4242, // pid exists in the file but is NOT alive (not in `alive`)
+      },
+    });
+
+    expect(res.cleared).toBe(true);
+    expect(res.livePidfiles).toHaveLength(0);
+  });
+
+  test("migration gate belt refuses an EMPTY target set when a live pidfile exists (not a throw)", async () => {
+    const alive = new Set<number>([7777]);
+    const noop: GateExec = () => Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    const res = await runMigrationGate({
+      platform: "linux",
+      uid: 1000,
+      env: envOver(noop, alive),
+      targets: [],
+      drain: FAST_DRAIN,
+      belt: {
+        stackConfigPaths: [HAND_CFG],
+        pidFilePathFor: () => HAND_PID_PATH,
+        readPidFile: () => 7777,
+      },
+    });
+    expect(res.cleared).toBe(false);
+    expect(res.livePidfiles.map((l) => l.pid)).toEqual([7777]);
+  });
+
+  test("migration gate belt reuses pidFileFor semantics: '(default)' cortex.pid is checked too", async () => {
+    // No expected stacks, but the single-instance default daemon (cortex.pid) is live.
+    const alive = new Set<number>([333]);
+    const noop: GateExec = () => Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    const targets = darwinTargets([]); // relay + legacy only
+    const res = await runMigrationGate({
+      platform: "darwin",
+      uid: 501,
+      env: envOver(noop, alive),
+      targets,
+      drain: FAST_DRAIN,
+      belt: {
+        stackConfigPaths: [], // no stacks
+        pidFilePathFor: (cfg) => (cfg === undefined ? "/state/cortex.pid" : `/state/${cfg}.pid`),
+        readPidFile: (p) => (p === "/state/cortex.pid" ? 333 : undefined),
+      },
+    });
+    expect(res.cleared).toBe(false);
+    expect(res.livePidfiles[0]?.configPath).toBe("(default)");
+  });
+});
+
+// =============================================================================
+// XDG — the systemd user dir honours $XDG_CONFIG_HOME (G-38)
+// =============================================================================
+
+describe("migration gate — XDG systemd dir", () => {
+  test("migration gate (linux) discovery honours $XDG_CONFIG_HOME for the systemd user dir", () => {
+    const prev = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "/xdg";
+    try {
+      const files = {
+        [`/xdg/systemd/user/cortex-bot.service`]: unit(`/usr/bin/bun /opt/cortex/src/cortex.ts --config ${CFG_DIR}/meta-factory/meta-factory.yaml`),
+      };
+      const io = fakeIO(files, ["/xdg/systemd/user"]);
+      // NOTE: systemdUserDir intentionally omitted → default must resolve under $XDG_CONFIG_HOME.
+      const targets = enumerateServiceTargets({ platform: "linux", configDir: CFG_DIR, io });
+      expect(targets.map((t) => t.unit)).toContain("cortex-bot.service");
+      expect(targets.find((t) => t.unit === "cortex-bot.service")?.plistPath).toBe("/xdg/systemd/user/cortex-bot.service");
+    } finally {
+      if (prev === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prev;
+    }
+  });
+});
