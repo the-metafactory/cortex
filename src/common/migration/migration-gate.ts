@@ -22,7 +22,7 @@
  *     (supervisor races) but bootout-absence is safe (supervisor is out of it).
  *   - **Linux:** `systemctl --user stop <unit>` — an EXPLICIT stop, which
  *     `Restart=always` does NOT override (Restart fires on unexpected exit, not
- *     on an operator stop) — then prove absence with `systemctl --user is-active`
+ *     on a deliberate stop) — then prove absence with `systemctl --user is-active`
  *     returning a non-"up" state. REQUIRED + FAIL-CLOSED (G-08): the epic exists
  *     for a Linux user and CI is ubuntu, so the Linux path is a first-class
  *     implementation, not a stub.
