@@ -15,6 +15,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  cortexConfigDir,
+  cortexConfigDirOverride,
   cortexConfigPath,
   groveConfigPath,
   migrateGroveConfigFile,
@@ -22,6 +24,7 @@ import {
 } from "../config-path";
 
 let home: string;
+let savedConfigDirEnv: string | undefined;
 const FILE = "cli.yaml";
 
 function cortexFile() {
@@ -32,10 +35,18 @@ function groveFile() {
 }
 
 beforeEach(() => {
+  // Isolate the default-behavior tests from an ambient `CORTEX_CONFIG_DIR`
+  // (cortex#1908): the issue's own verification command exports it globally
+  // (`CORTEX_CONFIG_DIR=/tmp/x bun test src/common/config`), which would
+  // otherwise redirect these home-injected assertions off `~/.config/cortex`.
+  savedConfigDirEnv = process.env.CORTEX_CONFIG_DIR;
+  delete process.env.CORTEX_CONFIG_DIR;
   home = mkdtempSync(join(tmpdir(), "gv1-home-"));
 });
 
 afterEach(() => {
+  if (savedConfigDirEnv === undefined) delete process.env.CORTEX_CONFIG_DIR;
+  else process.env.CORTEX_CONFIG_DIR = savedConfigDirEnv;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -140,5 +151,82 @@ describe("migrateGroveConfigFile — auto-migrate preserving mode", () => {
   test("no-op (returns false) when neither exists", () => {
     expect(migrateGroveConfigFile(FILE, home)).toBe(false);
     expect(existsSync(cortexFile())).toBe(false);
+  });
+});
+
+// XDG wave-1 (cortex#1908, EPIC cortex#1867 X-03) — CORTEX_CONFIG_DIR env seam.
+// When set it relocates the whole config tree; when unset, everything above
+// this block already proves byte-identical `~/.config/{cortex,grove}` behavior.
+describe("CORTEX_CONFIG_DIR override (XDG wave-1 cortex#1908)", () => {
+  let scratch: string;
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.CORTEX_CONFIG_DIR;
+    delete process.env.CORTEX_CONFIG_DIR; // start from a known-unset baseline
+    scratch = mkdtempSync(join(tmpdir(), "x1908-cfg-"));
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.CORTEX_CONFIG_DIR;
+    else process.env.CORTEX_CONFIG_DIR = savedEnv;
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  test("unset ⇒ default dir is ~/.config/cortex (byte-identical) and override is undefined", () => {
+    expect(cortexConfigDirOverride()).toBeUndefined();
+    expect(cortexConfigDir(home)).toBe(join(home, ".config", "cortex"));
+    expect(cortexConfigPath(FILE, home)).toBe(cortexFile());
+  });
+
+  test("set ⇒ config dir is the override verbatim, ignoring home", () => {
+    process.env.CORTEX_CONFIG_DIR = scratch;
+    expect(cortexConfigDirOverride()).toBe(scratch);
+    expect(cortexConfigDir(home)).toBe(scratch);
+    expect(cortexConfigPath(FILE, home)).toBe(join(scratch, FILE));
+  });
+
+  test("empty CORTEX_CONFIG_DIR is treated as unset (not '/')", () => {
+    process.env.CORTEX_CONFIG_DIR = "";
+    expect(cortexConfigDirOverride()).toBeUndefined();
+    expect(cortexConfigDir(home)).toBe(join(home, ".config", "cortex"));
+  });
+
+  test("resolveConfigFile returns the in-override file when it exists", () => {
+    process.env.CORTEX_CONFIG_DIR = scratch;
+    writeFileSync(join(scratch, FILE), "from-override");
+    const r = resolveConfigFile(FILE, home);
+    expect(r.path).toBe(join(scratch, FILE));
+    expect(r.source).toBe("cortex");
+    expect(r.path.startsWith(scratch)).toBe(true);
+  });
+
+  // The acceptance criterion: with the override set, resolution lands ENTIRELY
+  // inside it with ZERO real-home access. A grove copy under the (fake) home is
+  // planted precisely to prove the legacy fallback is NOT probed.
+  test("hermetic: absent file ⇒ default target inside override, grove/home never probed", () => {
+    process.env.CORTEX_CONFIG_DIR = scratch;
+    mkdirSync(join(home, ".config", "grove"), { recursive: true });
+    writeFileSync(groveFile(), "from-grove"); // MUST be ignored under the override
+    const r = resolveConfigFile(FILE, home);
+    expect(r.path).toBe(join(scratch, FILE));
+    expect(r.source).toBe("default"); // grove skipped → default, never "grove"
+    expect(r.path.startsWith(scratch)).toBe(true);
+  });
+
+  test("migrateGroveConfigFile is a no-op under the override (never reads real grove)", () => {
+    process.env.CORTEX_CONFIG_DIR = scratch;
+    mkdirSync(join(home, ".config", "grove"), { recursive: true });
+    writeFileSync(groveFile(), "from-grove");
+    expect(migrateGroveConfigFile(FILE, home)).toBe(false);
+    expect(existsSync(join(scratch, FILE))).toBe(false);
+  });
+
+  test("unset restores the grove read-fallback (regression guard for the skip)", () => {
+    // env already deleted in beforeEach
+    mkdirSync(join(home, ".config", "grove"), { recursive: true });
+    writeFileSync(groveFile(), "from-grove");
+    const r = resolveConfigFile(FILE, home);
+    expect(r.path).toBe(groveFile());
+    expect(r.source).toBe("grove");
   });
 });

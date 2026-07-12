@@ -9,6 +9,7 @@
 import { appendFileSync, mkdirSync, chmodSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { createRawEvent, type RawEvent } from "./lib/event-types";
+import { eventsDir } from "../../../common/events-path";
 import { mapHookToEventType, EVENT_TYPES } from "./lib/event-taxonomy";
 import { resolvePrincipalEnv } from "./lib/principal-env";
 import { resolveSurfaceEnv } from "./lib/surface-env";
@@ -79,7 +80,9 @@ function isHookEventName(v: string): v is HookEventName {
 // Configuration
 // =============================================================================
 
-const EVENTS_DIR = join(process.env.HOME ?? "~", ".claude", "events");
+// cortex#1908: single seam for the events buffer root — honors
+// CORTEX_EVENTS_DIR, else `~/.claude/events` (byte-identical when unset).
+const EVENTS_DIR = eventsDir();
 const RAW_DIR = join(EVENTS_DIR, "raw");
 // cortex#1677: the relay is OPTIONAL. The env var below overrides the
 // default target for a moved/rebound relay; when unset, the literal

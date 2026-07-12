@@ -13,6 +13,7 @@ import { processEvent } from "./lib/policy-engine";
 import { EventProcessor } from "./lib/event-processor";
 import { watchRawEvents } from "./lib/file-watcher";
 import { RawEventSchema } from "./hooks/lib/event-types";
+import { eventsDir } from "../../common/events-path";
 import { resolvePrincipalEnv } from "./hooks/lib/principal-env";
 import { NatsLink } from "../../bus/nats/connection";
 import { createCcEventPublisher } from "./cc-events";
@@ -46,7 +47,9 @@ interface TestOptions {
 // Paths
 // =============================================================================
 
-const EVENTS_DIR = join(process.env.HOME ?? "~", ".claude", "events");
+// cortex#1908: single seam for the events buffer root — honors
+// CORTEX_EVENTS_DIR, else `~/.claude/events` (byte-identical when unset).
+const EVENTS_DIR = eventsDir();
 const RAW_DIR = join(EVENTS_DIR, "raw");
 const PUBLISHED_DIR = join(EVENTS_DIR, "published");
 const DEFAULT_POLICY = join(

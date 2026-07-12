@@ -22,6 +22,17 @@
  *
  * Also out of scope: the `GROVE_*` → `CORTEX_*` ENV-VAR tier (separate shim,
  * cortex#774) and any `grove`-as-guild-name / `the-metafactory/grove` repo refs.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * XDG wave-1 (cortex#1908, EPIC cortex#1867 X-03) — CONFIG_DIR env seam.
+ *
+ * `CORTEX_CONFIG_DIR`, when set, is the cortex config directory VERBATIM (the
+ * `~/.config/cortex` default is bypassed), so a hermetic guard (#1870) can
+ * point config resolution at a scratch dir with ZERO real-home access. When
+ * UNSET, every path here is byte-identical to before. This is JUST the env
+ * read; honoring `$XDG_CONFIG_HOME` and moving files is #1869/#1903 — out of
+ * scope. `CORTEX_STATE_DIR` (the `pidfile.ts` state dir) is owned by #1900
+ * this wave (G-21 serialization); `CORTEX_EVENTS_DIR` lives in `events-path.ts`.
  */
 
 import { copyFileSync, existsSync, mkdirSync, statSync, chmodSync } from "fs";
@@ -51,9 +62,31 @@ function homeDir(home?: string): string {
   return home ?? process.env.HOME ?? "~";
 }
 
-/** Build `~/.config/cortex/<filename>` (canonical). */
+/**
+ * The `CORTEX_CONFIG_DIR` override, or `undefined` when unset/empty.
+ *
+ * When set it is the config directory verbatim (an absolute or relative path
+ * the caller controls) — it wins over both the `~/.config/cortex` default and
+ * any `home` test override. An empty string is treated as unset so a caller
+ * that exports `CORTEX_CONFIG_DIR=` (blank) gets today's behavior, not `/`.
+ */
+export function cortexConfigDirOverride(): string | undefined {
+  const v = process.env.CORTEX_CONFIG_DIR;
+  return v !== undefined && v.length > 0 ? v : undefined;
+}
+
+/**
+ * The cortex config DIRECTORY: `$CORTEX_CONFIG_DIR` if set, else the canonical
+ * `~/.config/cortex`. This is the single seam every config-file path is built
+ * on, so overriding the env var relocates the whole config tree at once.
+ */
+export function cortexConfigDir(home?: string): string {
+  return cortexConfigDirOverride() ?? join(homeDir(home), ".config", CORTEX_CONFIG_DIRNAME);
+}
+
+/** Build `~/.config/cortex/<filename>` (canonical, or under `$CORTEX_CONFIG_DIR`). */
 export function cortexConfigPath(filename: string, home?: string): string {
-  return join(homeDir(home), ".config", CORTEX_CONFIG_DIRNAME, filename);
+  return join(cortexConfigDir(home), filename);
 }
 
 /** Build `~/.config/grove/<filename>` (legacy / fallback). */
@@ -75,8 +108,14 @@ export function resolveConfigFile(filename: string, home?: string): ResolvedConf
   const cortex = cortexConfigPath(filename, home);
   if (existsSync(cortex)) return { path: cortex, source: "cortex" };
 
-  const grove = groveConfigPath(filename, home);
-  if (existsSync(grove)) return { path: grove, source: "grove" };
+  // With an explicit `CORTEX_CONFIG_DIR` the legacy grove read-fallback is
+  // SKIPPED: the override is a self-contained config root, and probing the
+  // real `~/.config/grove` would both break hermeticity (a real-home stat)
+  // and be meaningless (grove has no counterpart under an explicit root).
+  if (cortexConfigDirOverride() === undefined) {
+    const grove = groveConfigPath(filename, home);
+    if (existsSync(grove)) return { path: grove, source: "grove" };
+  }
 
   return { path: cortex, source: "default" };
 }
@@ -110,6 +149,10 @@ export function resolveConfigFilePath(filename: string, home?: string): string {
 export function migrateGroveConfigFile(filename: string, home?: string): boolean {
   const cortex = cortexConfigPath(filename, home);
   if (existsSync(cortex)) return false; // cortex copy is canonical — never clobber
+
+  // An explicit `CORTEX_CONFIG_DIR` root has no grove side — never reach into
+  // the real `~/.config/grove` to migrate (would break the hermetic guard).
+  if (cortexConfigDirOverride() !== undefined) return false;
 
   const grove = groveConfigPath(filename, home);
   if (!existsSync(grove)) return false; // nothing to migrate

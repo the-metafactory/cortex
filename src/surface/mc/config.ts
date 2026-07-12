@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from "fs";
 import { parse as parseYaml } from "yaml";
 import { join } from "path";
 import { homedir } from "os";
+import { rawEventsDir as resolveRawEventsDir } from "../../common/events-path";
 import type { Config, LogLevel, CfAccessConfig, GovernanceConfig } from "./types";
 import { resolveConfigFilePath } from "../../common/config/config-path";
 
@@ -26,7 +27,9 @@ export const DEFAULT_CONFIG: Config = {
     level: "info",
   },
   hooks: {
-    rawEventsDir: join(homedir(), ".claude", "events", "raw"),
+    // cortex#1908: honors CORTEX_EVENTS_DIR; passing `homedir()` keeps the
+    // unset default byte-identical to the previous `join(homedir(), …)`.
+    rawEventsDir: resolveRawEventsDir(homedir()),
     cursorPath: join(
       homedir(),
       ".local",

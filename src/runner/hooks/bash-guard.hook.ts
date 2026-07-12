@@ -28,6 +28,7 @@
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
 import { join } from "path";
 import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
+import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
 
@@ -287,7 +288,9 @@ function deny(reason: string): void {
 // full test run). Production leaves the env unset → unchanged behaviour.
 const INGEST_URL =
   process.env.CORTEX_INGEST_URL ?? "http://localhost:8766/api/events/ingest";
-const EVENTS_DIR = join(process.env.HOME ?? "~", ".claude", "events");
+// cortex#1908: single seam for the events buffer root — honors
+// CORTEX_EVENTS_DIR, else `~/.claude/events` (byte-identical when unset).
+const EVENTS_DIR = eventsDir();
 const RAW_DIR = join(EVENTS_DIR, "raw");
 
 /** Shape mirrors `RawEvent` from src/taps/cc-events/hooks/lib/event-types.ts. */
