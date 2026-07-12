@@ -285,12 +285,22 @@ see `isFirstPartyRendererBundle`'s doc comment in `loader.ts`):
   cortex's OWN `arc-manifest.yaml` `dependencies:` block, read fresh at
   every boot (`readCortexDeclaredAdapterRepos`) — NOT a hardcoded allowlist,
   so declaring a new first-party adapter bundle is a plain `arc-manifest.yaml`
-  PR, no loader code change. This is what makes extracting an in-tree
-  adapter (e.g. `web`) into its own bundle a *transparent* repackage:
-  `arc upgrade cortex` auto-installs the declared bundle, this exemption
-  loads it, and the surface keeps working with zero config change on any
-  existing stack — `external` never has to be flipped for a repackage that
-  isn't adding new third-party capability, only relocating cortex's own code.
+  PR, no loader code change. **Narrowed** (PR #1942 code-review fix): a
+  dependency only counts if its `name` ALSO follows the compass#115
+  `metafactory-cortex-adapter-<name>` repo-naming standard — being declared
+  as a cortex dependency for some OTHER reason (`arc`, the package manager;
+  `metafactory-discord`, ADR-0017 CLI/skill tooling) never grants the
+  exemption, even though both are real, org-trusted, cortex-declared
+  dependencies. This is what makes extracting an in-tree adapter (e.g.
+  `web`) into its own bundle a *transparent* repackage: once cortex declares
+  `metafactory-cortex-adapter-web`, `arc upgrade cortex` auto-installs it,
+  this exemption loads it, and the surface keeps working with zero config
+  change on any existing stack — `external` never has to be flipped for a
+  repackage that isn't adding new third-party capability, only relocating
+  cortex's own code. **Today the narrowed set is genuinely empty** — no
+  declared cortex dependency currently has an adapter-shaped name — so the
+  exemption is a real no-op until the first such bundle is declared, not an
+  accident of the raw dependency list happening to be empty (it isn't).
 
 Both exemptions compose with (never replace) the org-trust gate — an
 exempt-looking bundle from outside `the-metafactory` is still refused before
@@ -298,6 +308,15 @@ either allowlist is even consulted. If your bundle isn't declared as a
 cortex dependency and isn't loading, that's `system.plugins.external: false`
 doing its job; a principal opts in per-stack, or cortex's maintainers add
 your repo to the appropriate anchor once it's reviewed as truly first-party.
+
+**Threat-model note:** both exemptions, and the unconditional org-trust
+gate underneath them, ultimately rest on arc recording `repoUrl` as a
+package's real git clone source (verified empirically against a live
+`arc list --json`, S6). If a future arc version decoupled `repoUrl` from the
+actual clone source (e.g. an unauthenticated `--repo-url` override), every
+trust gate in this file would fall together — that is an explicit, named
+cross-repo (arc) dependency of cortex's entire plugin trust model, not
+something `loader.ts` can independently verify or defend against on its own.
 
 ## Runtime lifecycle (S8) — attach/detach/reload + state loss
 

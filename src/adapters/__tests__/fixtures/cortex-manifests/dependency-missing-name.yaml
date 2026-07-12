@@ -1,0 +1,11 @@
+# cortex#1794 (S9a) — valid YAML, valid `dependencies:` array, but the ONLY
+# entry has no `name` field at all (just a `version`) — exercises
+# `readCortexDeclaredAdapterRepos`'s per-entry `typeof dep.name !== "string"`
+# skip. A malformed entry must be skipped, never thrown on, and must never
+# contribute a spurious "undefined" repo to the derived set.
+name: "cortex-fixture"
+version: "0.0.0-test"
+dependencies:
+  - version: ">=1.0.0"
+  - name: "metafactory-cortex-adapter-fixture"
+    version: ">=0.1.0"

@@ -3127,13 +3127,17 @@ export async function startCortex(
   // behind an opt-in flag nobody flipped), or, since cortex#1794 (S9a, epic
   // #1784 "transparent repackaging" decision), a first-party ADAPTER whose
   // repoUrl is declared under THIS repo's own `arc-manifest.yaml`
-  // `dependencies:` — read fresh each boot via `defaultCortexManifestPath()`
-  // (the default here; no options passed), so an extracted in-tree adapter
-  // (e.g. `web`) keeps loading with zero config change on any existing
-  // stack once its bundle is declared as a dependency. The runtime-hard-fail
-  // half of OQ9 (does `system.>` coverage still hold two classes after
-  // this?) is cortex#1893, a separate issue; this loop only SURFACES what
-  // loaded so that check has something to read.
+  // `dependencies:` AND whose declared name follows the compass#115
+  // `metafactory-cortex-adapter-<name>` naming standard (PR #1942 fix — a
+  // dependency declared for an unrelated reason, e.g. `arc` or
+  // `metafactory-discord`, must NOT get the exemption) — read fresh each
+  // boot via `defaultCortexManifestPath()` (the default here; no options
+  // passed), so an extracted in-tree adapter (e.g. `web`) keeps loading with
+  // zero config change on any existing stack once its bundle is declared as
+  // a `metafactory-cortex-adapter-web`-named dependency. The
+  // runtime-hard-fail half of OQ9 (does `system.>` coverage still hold two
+  // classes after this?) is cortex#1893, a separate issue; this loop only
+  // SURFACES what loaded so that check has something to read.
   const pluginLoadResult = await loadExternalPlugins({
     registry: surfacePluginRegistry,
     externalEnabled: config.plugins.external,

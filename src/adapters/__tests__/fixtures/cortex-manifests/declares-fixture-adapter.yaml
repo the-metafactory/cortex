@@ -3,18 +3,34 @@
 # (`src/adapters/loader.ts`'s `LoadPluginsOptions.cortexManifestPath`) to
 # exercise `readCortexDeclaredAdapterRepos` end-to-end without touching the
 # real repo-root arc-manifest.yaml. Shape mirrors the real file's
-# `dependencies:` block exactly (only `name` is read).
+# `dependencies:` block exactly (only `name` is read) AND deliberately
+# mirrors its MIX of dependency kinds (PR #1942 code-review MAJOR fix) — not
+# every declared dependency is an adapter bundle, so this fixture proves the
+# narrowing (`ADAPTER_BUNDLE_DEP_NAME_RE`), not just the happy path.
 name: "cortex-fixture"
 version: "0.0.0-test"
 type: component
 tier: community
 description: "Fixture stand-in for cortex's own arc-manifest.yaml (test-only)"
 dependencies:
+  # Non-adapter dependency #1 — the package manager itself. Declared for an
+  # unrelated reason; must NEVER grant the adapter exemption.
   - name: "arc"
     version: ">=0.25.0"
-  # This is the fixture ADAPTER bundle's repoUrl (see
-  # ../adapter-declared-bundle/) declared as a dependency, exactly the way
-  # a real first-party adapter bundle (e.g. metafactory-cortex-adapter-web)
+  # Non-adapter dependency #2 — mirrors the REAL manifest's
+  # `metafactory-discord` entry exactly: a legitimately cortex-declared,
+  # org-trusted dependency that is CLI/skill tooling (ADR-0017), not an
+  # adapter. This is the exact case PR #1942's MAJOR finding was about — a
+  # pre-narrowing version of this anchor would have granted this name the
+  # adapter exemption the moment it ever shipped a `kind: adapter` manifest.
+  # Post-narrowing it never matches `metafactory-cortex-adapter-*`, so it
+  # never can.
+  - name: "metafactory-discord"
+    version: ">=0.1.0"
+  # The ONE dependency that DOES self-identify as a cortex-owned adapter
+  # component by name (compass#115 naming standard) — this is the fixture
+  # ADAPTER bundle's repoUrl (see ../adapter-declared-bundle/), declared the
+  # way a real first-party adapter bundle (e.g. metafactory-cortex-adapter-web)
   # is expected to be declared under cortex's real arc-manifest.yaml.
-  - name: "metafactory-fixture-declared-adapter"
+  - name: "metafactory-cortex-adapter-fixture"
     version: ">=0.1.0"

@@ -82,15 +82,21 @@ paths:
 # EXCEPTION, extended (cortex#1794 S9a, epic #1784 "transparent repackaging"
 # decision, 2026-07-12): a first-party ADAPTER bundle — one whose repoUrl is
 # declared under CORTEX's OWN, PR-reviewed `arc-manifest.yaml` `dependencies:`
+# AND whose dependency name follows the compass#115
+# `metafactory-cortex-adapter-<name>` naming standard
 # (`src/adapters/loader.ts`'s `isFirstPartyBundle` / `readCortexDeclaredAdapterRepos`;
 # again never the bundle's own manifest, `tier`, or any other bundle-author-
-# controlled signal) — ALSO loads even when `external` is off. Rationale:
-# extracting an in-tree adapter (e.g. `web`) into its own arc bundle must be
-# a transparent, non-breaking repackage — `arc upgrade cortex` auto-installs
-# the declared bundle and the surface keeps working with ZERO config change,
-# not a silent surface outage behind a flag nobody flipped. `external` keeps
-# its real job of gating genuinely THIRD-party plugins — nothing cortex
-# itself declares as a dependency.
+# controlled signal) — ALSO loads even when `external` is off. The naming
+# check matters: cortex declares OTHER dependencies too (`arc`, the package
+# manager; `metafactory-discord`, ADR-0017 CLI/skill tooling) that must NOT
+# get an adapter's flag-off exemption just because they're declared for some
+# unrelated reason (PR #1942 code-review fix). Rationale: extracting an
+# in-tree adapter (e.g. `web`) into its own arc bundle must be a transparent,
+# non-breaking repackage — `arc upgrade cortex` auto-installs the declared
+# bundle and the surface keeps working with ZERO config change, not a silent
+# surface outage behind a flag nobody flipped. `external` keeps its real job
+# of gating genuinely THIRD-party plugins — nothing cortex itself declares as
+# a first-party adapter bundle by name.
 plugins:
   external: false
 

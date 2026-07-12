@@ -1,0 +1,8 @@
+# cortex#1794 (S9a) — valid YAML, valid object, `dependencies:` key present
+# but its VALUE is not an array (a plain string) — exercises
+# `readCortexDeclaredAdapterRepos`'s `if (!Array.isArray(deps)) return new
+# Set()` fail-closed branch specifically (distinct from "key entirely
+# absent", already covered by no-dependencies-key.yaml).
+name: "cortex-fixture"
+version: "0.0.0-test"
+dependencies: "not-a-list"

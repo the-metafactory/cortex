@@ -256,7 +256,16 @@ describe("isTrustedOrgRepo / isFirstPartyRendererBundle (cortex#1792, ADR-0024 D
 // real repo-root file, except in the one test that deliberately reads it to
 // prove the real file doesn't accidentally widen trust.
 const CORTEX_MANIFESTS_ROOT = join(FIXTURES_ROOT, "cortex-manifests");
-const DECLARED_ADAPTER_REPO = "https://github.com/the-metafactory/metafactory-fixture-declared-adapter";
+// PR #1942 MAJOR fix — the repo name MUST follow the compass#115
+// `metafactory-cortex-adapter-<name>` naming standard, or
+// `readCortexDeclaredAdapterRepos`'s narrowing filter drops it even though
+// it's a legitimately declared cortex dependency (see
+// `ADAPTER_BUNDLE_DEP_NAME_RE` in loader.ts).
+const DECLARED_ADAPTER_REPO = "https://github.com/the-metafactory/metafactory-cortex-adapter-fixture";
+// Mirrors the REAL manifest's `metafactory-discord` entry: a genuinely
+// cortex-declared, org-trusted dependency that is NOT an adapter bundle by
+// name shape (tooling, ADR-0017) — must never grant the adapter exemption.
+const NON_ADAPTER_DECLARED_REPO = "https://github.com/the-metafactory/metafactory-discord";
 const CORTEX_MANIFEST_DECLARES_FIXTURE = join(CORTEX_MANIFESTS_ROOT, "declares-fixture-adapter.yaml");
 
 describe("isFirstPartyAdapterBundle / isFirstPartyBundle (cortex#1794 S9a, epic #1784 decision)", () => {
@@ -300,13 +309,23 @@ describe("isFirstPartyAdapterBundle / isFirstPartyBundle (cortex#1794 S9a, epic 
 });
 
 describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable anchor source", () => {
-  test("reads dependency names from a fixture arc-manifest.yaml and derives the-metafactory repo URLs", () => {
+  test("reads dependency names from a fixture arc-manifest.yaml and derives EXACTLY the adapter-shaped repo URL — nothing else", () => {
+    // PR #1942 MAJOR regression test: the fixture manifest declares THREE
+    // dependencies (arc, metafactory-discord, metafactory-cortex-adapter-fixture)
+    // — asserting the EXACT resulting set (not just "contains X") proves the
+    // narrowing filter, not merely the happy path.
     const repos = readCortexDeclaredAdapterRepos(CORTEX_MANIFEST_DECLARES_FIXTURE);
-    expect(repos.has(DECLARED_ADAPTER_REPO.toLowerCase())).toBe(true);
-    // "arc" is also declared (mirrors the real manifest's shape) but it has
-    // no cortex-plugin.yaml anywhere, so it can never become a discovered
-    // bundle — being IN this set is harmless; it just never matches anything.
-    expect(repos.has("https://github.com/the-metafactory/arc")).toBe(true);
+    expect([...repos]).toEqual([DECLARED_ADAPTER_REPO.toLowerCase()]);
+    // Spelled out explicitly too, so a future refactor that silently widens
+    // the set (e.g. reverting the filter) fails loudly on BOTH assertions.
+    expect(repos.has("https://github.com/the-metafactory/arc")).toBe(false);
+    expect(repos.has(NON_ADAPTER_DECLARED_REPO.toLowerCase())).toBe(false);
+  });
+
+  test("PR #1942 MAJOR: a legitimately-declared but non-adapter-named dependency (mirrors the real metafactory-discord entry) never grants the exemption", () => {
+    const repos = readCortexDeclaredAdapterRepos(CORTEX_MANIFEST_DECLARES_FIXTURE);
+    expect(repos.has(NON_ADAPTER_DECLARED_REPO.toLowerCase())).toBe(false);
+    expect(isFirstPartyAdapterBundle({ repoUrl: NON_ADAPTER_DECLARED_REPO }, "adapter", repos)).toBe(false);
   });
 
   test("fail-closed: a missing manifest file returns an empty set, never throws", () => {
@@ -326,10 +345,32 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
     expect(readCortexDeclaredAdapterRepos(noDeps).size).toBe(0);
   });
 
-  test("cortex's REAL arc-manifest.yaml is readable and does NOT declare the fixture repo — proves the mechanism doesn't accidentally widen trust", () => {
+  // PR #1942 nit/test-coverage — the two fail-closed branches below were
+  // promised in the doc comment but previously untested.
+  test("fail-closed: `dependencies:` present but NOT an array returns an empty set, never throws", () => {
+    const notArray = join(CORTEX_MANIFESTS_ROOT, "dependencies-not-array.yaml");
+    expect(() => readCortexDeclaredAdapterRepos(notArray)).not.toThrow();
+    expect(readCortexDeclaredAdapterRepos(notArray).size).toBe(0);
+  });
+
+  test("fail-closed: a dependency entry with no `name` field is skipped, not thrown on — the OTHER valid entry still resolves", () => {
+    const missingName = join(CORTEX_MANIFESTS_ROOT, "dependency-missing-name.yaml");
+    const repos = readCortexDeclaredAdapterRepos(missingName);
+    expect([...repos]).toEqual([DECLARED_ADAPTER_REPO.toLowerCase()]);
+  });
+
+  test("cortex's REAL arc-manifest.yaml is readable, and its NARROWED adapter-exemption set is genuinely EMPTY today — the no-op claim is exact, not accidental", () => {
+    // PR #1942 MAJOR: the real manifest's raw `dependencies:` is
+    // `{arc, metafactory-discord}` — NEITHER matches
+    // `metafactory-cortex-adapter-*`, so the CORRECT claim is "the narrowed
+    // set is empty because no dependency asserts itself as an adapter bundle
+    // by name", not "the raw dependency list happens to be empty" (it isn't).
     const repos = readCortexDeclaredAdapterRepos(defaultCortexManifestPath());
+    expect(repos.size).toBe(0);
     expect(repos.has(DECLARED_ADAPTER_REPO.toLowerCase())).toBe(false);
     expect(repos.has(TRUSTED_REPO.toLowerCase())).toBe(false);
+    expect(repos.has("https://github.com/the-metafactory/arc")).toBe(false);
+    expect(repos.has("https://github.com/the-metafactory/metafactory-discord")).toBe(false);
   });
 });
 
@@ -836,6 +877,29 @@ describe("loadExternalPlugins — first-party ADAPTER exemption (cortex#1794 S9a
     expect(registry.getAdapter("fixture-declared-adapter")).toBeDefined();
   });
 
+  // PR #1942 MAJOR regression, end-to-end: a dependency that mirrors the
+  // REAL `metafactory-discord` entry (genuinely declared by cortex,
+  // org-trusted, but NOT an adapter-shaped name) must not grant the
+  // exemption even if a `kind: adapter` bundle is later installed at that
+  // exact repo. Uses `echo-adapter-bundle`'s manifest/export (any valid
+  // adapter shape works) with its repoUrl overridden to the non-adapter
+  // declared repo.
+  test("PR #1942 MAJOR: an adapter bundle at a legitimately-declared but non-adapter-shaped repo (metafactory-discord) does NOT get the exemption", async () => {
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("echo-adapter-bundle", { repoUrl: NON_ADAPTER_DECLARED_REPO })]),
+      cortexManifestPath: CORTEX_MANIFEST_DECLARES_FIXTURE,
+    });
+    expect(result.loaded).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]?.bundleName).toBe("echo-adapter-bundle");
+    expect(registry.getAdapter("fixture-echo")).toBeUndefined();
+  });
+
   test("an adapter bundle whose repoUrl is NOT declared does not load with the flag off, but WOULD with it on (org-trust already satisfied)", async () => {
     const registryOff = new SurfacePluginRegistry();
     const offResult = await loadExternalPlugins({
@@ -930,12 +994,12 @@ describe("loadExternalPlugins — first-party ADAPTER exemption (cortex#1794 S9a
       externalEnabled: false,
       pkgRoot: FIXTURES_ROOT,
       runner: runnerFor([
-        fixturePkg("adapter-declared-bundle", { repoUrl: "https://github.com/attacker/metafactory-fixture-declared-adapter" }),
+        fixturePkg("adapter-declared-bundle", { repoUrl: "https://github.com/attacker/metafactory-cortex-adapter-fixture" }),
       ]),
       // Allowlist derived from the ATTACKER url directly (simulating a bug
       // elsewhere) — org-trust must still refuse it BEFORE the first-party
       // gate is ever consulted (D4 mitigation #1 is unconditional).
-      firstPartyAdapterRepos: new Set(["https://github.com/attacker/metafactory-fixture-declared-adapter"]),
+      firstPartyAdapterRepos: new Set(["https://github.com/attacker/metafactory-cortex-adapter-fixture"]),
     });
     expect(result.loaded).toEqual([]);
     expect(result.failed).toHaveLength(1);

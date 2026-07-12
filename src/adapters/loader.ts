@@ -469,13 +469,57 @@ export function isFirstPartyBundle(
 }
 
 /**
+ * cortex#1794 (S9a) — a dependency `name` in cortex's OWN `arc-manifest.yaml`
+ * grants the adapter exemption ONLY if it also asserts, by its OWN name
+ * shape, that it IS a cortex-owned adapter-type component — never merely
+ * "cortex depends on it for some reason". This is the fix for a code-review
+ * MAJOR (PR #1942): an earlier version of this anchor treated cortex's
+ * ENTIRE `dependencies:` list as adapter-exempt, so `arc` (the package
+ * manager) and `metafactory-discord` (ADR-0017 CLI/skill *tooling* —
+ * explicitly NOT the adapter, per ADR-0024's own migration provenance
+ * section) would BOTH have granted the exemption to any `kind: adapter`
+ * plugin they ever happened to ship, despite neither being declared FOR
+ * adapter-trust reasons. That is exactly the failure ADR-0024 §OQ9 names:
+ * *"'First-party' must be a checkable property of a bundle, not a naming
+ * convention… an unchecked 'first-party' exemption is a trust hole wearing
+ * a friendly name."* — the naming convention there is about a BUNDLE
+ * claiming its own trust; here the risk was the REVERSE mistake, reading
+ * "listed as a dependency" as "trusted as an adapter" when a dependency can
+ * be declared for any number of unrelated reasons.
+ *
+ * The fix narrows to the **ecosystem-wide, structurally-checkable**
+ * repo-naming standard (compass `standards/component-repo-naming.md`, PR
+ * the-metafactory/compass#115, adopted the same day as the epic #1784
+ * decision this anchor implements): a cortex-owned adapter bundle's repo
+ * name is ALWAYS `metafactory-cortex-adapter-<name>` (`<owner>` = `cortex`,
+ * `<type>` = `adapter`) — locked BEFORE the first such repo is created
+ * specifically so this epic's extractions have a stable name to check
+ * against ("Requested by Andreas 2026-07-12", same standard doc). This is
+ * still un-spoofable for the same reason as before — the NAME is read out
+ * of cortex's own PR-reviewed manifest, never anything the bundle
+ * self-declares — the narrowing only adds a SECOND, independently-checkable
+ * requirement on TOP of "declared by cortex": the declared name must also
+ * self-identify, in a fixed and enforced shape, as a cortex-adapter
+ * component. `arc` and `metafactory-discord` (or its scheduled rename,
+ * `metafactory-bundle-discord` — compass#116) never match this shape, by
+ * construction: neither is a `metafactory-cortex-adapter-*` name, so
+ * neither is EVER treated as first-party for the adapter exemption, no
+ * matter what kind of `cortex-plugin.yaml` a bundle at that name might one
+ * day ship. See {@link ADAPTER_BUNDLE_DEP_NAME_RE}.
+ */
+const ADAPTER_BUNDLE_DEP_NAME_RE = /^metafactory-cortex-adapter-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
  * cortex#1794 (S9a, epic #1784 "Andreas decision 2026-07-12") — the
  * un-spoofable first-party ADAPTER anchor: cortex's OWN, PR-reviewed
- * `arc-manifest.yaml` `dependencies:` block. This is deliberately NOT a
- * hardcoded allowlist like {@link FIRST_PARTY_RENDERER_REPOS} — it is read
- * fresh at every load, so declaring a new first-party adapter bundle (e.g.
- * the planned `metafactory-cortex-adapter-web`) is a plain `arc-manifest.yaml`
- * PR, never a `loader.ts` code change.
+ * `arc-manifest.yaml` `dependencies:` block, NARROWED to only the entries
+ * whose `name` matches {@link ADAPTER_BUNDLE_DEP_NAME_RE} (see that
+ * constant's doc comment for why the narrowing is required — PR #1942
+ * code-review MAJOR). This is deliberately NOT a hardcoded allowlist like
+ * {@link FIRST_PARTY_RENDERER_REPOS} — it is read fresh at every load, so
+ * declaring a new first-party adapter bundle (e.g. the planned
+ * `metafactory-cortex-adapter-web`) is a plain `arc-manifest.yaml` PR, never
+ * a `loader.ts` code change.
  *
  * Why this is un-spoofable: a bundle's OWN manifest (`cortex-plugin.yaml`)
  * and arc's `tier` field were already rejected as trust anchors for the
@@ -485,22 +529,52 @@ export function isFirstPartyBundle(
  * un-spoofability: it is CORTEX's manifest, shipped in CORTEX's repo, only
  * ever changed by a PR against CORTEX — a bundle author publishing
  * `metafactory-evil-adapter` cannot make cortex's own dependency list
- * declare their repo. The declaration is the review event (mirrors D4
- * mitigation #3 — "a bundle upgrade is a code-review event, not a passive
- * fetch" — applied one level up, to the act of TRUSTING the bundle at all).
+ * declare their repo, AND (post-narrowing) could not even self-select into
+ * the exemption by picking a matching name for their OWN repo — membership
+ * requires appearing, under that exact name, in CORTEX's manifest, which
+ * only a cortex-repo PR controls either way.
  *
  * Deriving a repo URL from a dependency `name`: `arc-manifest.yaml`
  * dependency names in this ecosystem ARE the GitHub repo name under the
  * trusted `the-metafactory` org, by the repo-first install convention
  * (ADR-0017 — see cortex's own `arc-manifest.yaml`, the `metafactory-discord`
  * entry: "the bundle is `arc install`-able from the
- * the-metafactory/metafactory-discord repo"). So `name: "metafactory-foo"`
- * derives `https://github.com/the-metafactory/metafactory-foo`, normalized
- * the same way {@link normalizeRepoUrl} normalizes an installed bundle's
- * `arc list`-recorded `repoUrl`, making membership a plain set-lookup. Every
- * derived URL is by construction inside `the-metafactory` — this composes
- * with (never replaces) the unconditional {@link isTrustedOrgRepo} gate,
- * which still runs first and independently for every bundle.
+ * the-metafactory/metafactory-discord repo"). So `name:
+ * "metafactory-cortex-adapter-web"` derives
+ * `https://github.com/the-metafactory/metafactory-cortex-adapter-web`,
+ * normalized the same way {@link normalizeRepoUrl} normalizes an installed
+ * bundle's `arc list`-recorded `repoUrl`, making membership a plain
+ * set-lookup. Every derived URL is by construction inside `the-metafactory`
+ * — this composes with (never replaces) the unconditional
+ * {@link isTrustedOrgRepo} gate, which still runs first and independently
+ * for every bundle.
+ *
+ * **Threat-model note (both this anchor AND {@link isTrustedOrgRepo}):**
+ * un-spoofability here ultimately rests on arc recording `repoUrl` as the
+ * package's actual git clone source (confirmed empirically against a live
+ * `arc list --json` — S6). If a future arc version ever added a `--repo-url`
+ * override decoupled from the real clone source, BOTH gates would fall
+ * together — this is an explicit cross-repo (arc) dependency of cortex's
+ * entire plugin trust model, not something this module can independently
+ * verify or defend against; it is recorded here so a future arc change is
+ * evaluated against it.
+ *
+ * **Persistence-via-self-rewrite (author-flagged, PR #1942 nit):** an
+ * already-loaded bundle — which, under D4's accepted full-daemon-authority
+ * model, already has filesystem access equivalent to the daemon — could
+ * rewrite cortex's OWN `arc-manifest.yaml` on disk to grant a FUTURE bundle
+ * this exemption on the next boot. This is NOT symmetric with the renderer
+ * allowlist's equivalent risk, only equivalent UNDER D4's full-compromise
+ * assumption: {@link FIRST_PARTY_RENDERER_REPOS} is a compiled-in TS
+ * constant, so self-granting via it means editing `loader.ts` source AND
+ * getting a rebuild to pick it up; this anchor is a plain YAML data file,
+ * read fresh every boot, no rebuild required — a strictly CHEAPER edit for
+ * an attacker who already has arbitrary file write. Under D4 (arbitrary
+ * code exec inside an already-loaded plugin = full compromise) neither
+ * barrier stops the attacker; the difference is defense-in-depth cost, not
+ * whether the barrier holds — recorded here, not fixed here, because D4
+ * already accepts this class of risk for v1 (named future escalation:
+ * registry signing / separate-process-over-IPC, ADR-0024 D4).
  *
  * Fail-closed by design: ANY read/parse failure — missing file, invalid
  * YAML, no `dependencies:` key, non-array `dependencies:`, a dependency
@@ -518,9 +592,15 @@ export function readCortexDeclaredAdapterRepos(manifestPath: string): ReadonlySe
     if (!Array.isArray(deps)) return new Set();
     const repos = new Set<string>();
     for (const dep of deps) {
-      if (isRecord(dep) && typeof dep.name === "string" && dep.name.trim().length > 0) {
-        repos.add(normalizeRepoUrl(`https://github.com/the-metafactory/${dep.name.trim()}`));
-      }
+      if (!isRecord(dep) || typeof dep.name !== "string") continue;
+      const name = dep.name.trim();
+      // PR #1942 MAJOR fix — only a dependency name that self-identifies as
+      // a cortex-owned ADAPTER component (the compass#115 naming standard)
+      // grants the exemption. `arc`, `metafactory-discord`, and any other
+      // legitimately-declared-but-unrelated dependency never match, no
+      // matter what they ship.
+      if (!ADAPTER_BUNDLE_DEP_NAME_RE.test(name)) continue;
+      repos.add(normalizeRepoUrl(`https://github.com/the-metafactory/${name}`));
     }
     return repos;
   } catch {
