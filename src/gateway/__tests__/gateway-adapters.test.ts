@@ -20,7 +20,11 @@ import {
   type GatewayAdapterDeps,
   type GatewayAdapterFactory,
 } from "../gateway-adapters";
-import { registryFromFactory } from "../../adapters/registry";
+import {
+  registryFromFactory,
+  SurfacePluginRegistry,
+  type AdapterPlugin,
+} from "../../adapters/registry";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
@@ -263,6 +267,40 @@ describe("buildGatewayAdapters", () => {
     const adapters = buildGatewayAdapters({}, makeDeps(factory));
     expect(adapters).toEqual([]);
     expect(calls.length).toBe(0);
+  });
+
+  test("reserved prototype name as platform → no prototype-chain lookup, no crash, zero adapters (#1792 final adversarial pass)", () => {
+    // A bundle-loaded plugin's `platform` passes the manifest id regex
+    // `^[a-z][a-z0-9-]*$`, which permits reserved property names like
+    // `constructor`. A bare `surfacesByPlatform[plugin.platform]` would then
+    // resolve up the prototype chain to `Object` and crash the gateway build.
+    // The `Object.hasOwn` guard must treat it as "no bindings".
+    let createCalled = false;
+    const evil: AdapterPlugin = {
+      kind: "adapter",
+      id: "constructor",
+      platform: "constructor",
+      foldsIntoPresence: false,
+      secretFields: [],
+      bindingSchema: { parse: (v: unknown) => v } as unknown as AdapterPlugin["bindingSchema"],
+      demuxKey: () => "x",
+      buildGatewayConstructArgs: () => ({}),
+      createAdapter: () => {
+        createCalled = true;
+        throw new Error("createAdapter must never be reached for a reserved-name platform");
+      },
+    };
+    const registry = new SurfacePluginRegistry();
+    registry.registerAdapter(evil);
+    // `surfaces` has NO own `constructor` key — the only way to reach the
+    // guard is an inherited property, which must be ignored.
+    const built = buildGatewayAdapters({}, {
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      registry,
+    });
+    expect(built).toEqual([]);
+    expect(createCalled).toBe(false);
   });
 
   test("one discord binding → one discord adapter", () => {

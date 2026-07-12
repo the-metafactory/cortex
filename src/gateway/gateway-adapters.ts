@@ -274,7 +274,15 @@ export function buildGatewayAdapters(
   const surfacesByPlatform = surfaces as unknown as Record<string, SurfaceBindingEntry[] | undefined>;
 
   for (const plugin of registry.listAdapters()) {
-    const bindings = surfacesByPlatform[plugin.platform] ?? [];
+    // `Object.hasOwn` guard: a bundle-loaded plugin's `platform` is an
+    // untrusted (if manifest-validated) string. The id regex permits
+    // reserved property names (`constructor`, `toString`, …), so a bare
+    // `surfacesByPlatform[plugin.platform]` could resolve up the prototype
+    // chain to e.g. `Object` and crash the gateway build. Only own,
+    // enumerable surface keys are real bindings. (#1792 final adversarial pass.)
+    const bindings = Object.hasOwn(surfacesByPlatform, plugin.platform)
+      ? surfacesByPlatform[plugin.platform] ?? []
+      : [];
     if (bindings.length === 0) continue;
 
     const groups: BindingGroup[] = plugin.groupBindings
