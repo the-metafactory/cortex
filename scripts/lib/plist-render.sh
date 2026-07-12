@@ -435,8 +435,22 @@ forward_link_legacy_bin() {
     : # existing symlink (possibly stale) — ln -sfn replaces it atomically
   elif [ -e "${link}" ]; then
     # A real regular file / directory occupies the legacy path — preserve it.
-    mv -f "${link}" "${link}.pre-arc"
-    echo "  ↪ backed up existing ${link} → ${link}.pre-arc"
+    # Never clobber an earlier backup: if `<link>.pre-arc` already holds a prior
+    # preserved file, fall back to a timestamped `<link>.pre-arc.<epoch>[.n]`
+    # sidecar (mirrors arc createSymlink's resolveBackupPath — data-loss nit).
+    local sidecar="${link}.pre-arc"
+    if [ -e "${sidecar}" ]; then
+      local stamp
+      stamp="$(date +%s)"
+      sidecar="${link}.pre-arc.${stamp}"
+      local n=1
+      while [ -e "${sidecar}" ]; do
+        sidecar="${link}.pre-arc.${stamp}.${n}"
+        n=$((n + 1))
+      done
+    fi
+    mv -f "${link}" "${sidecar}"
+    echo "  ↪ backed up existing ${link} → ${sidecar}"
   fi
 
   ln -sfn "${target}" "${link}"
@@ -456,7 +470,17 @@ forward_link_legacy_bin() {
 #
 # Domain: gui/<uid> — the per-user Aqua session that owns ~/Library/LaunchAgents.
 # Both calls are `|| true`: bootout errors when the label isn't loaded (fine),
-# bootstrap errors (code 5) when it somehow already is (harmless).
+# bootstrap errors (code 5) when it somehow already is.
+#
+# ⚠ #1904 PREREQUISITE: the `bootstrap … || true` swallows a code-5 ("service
+# already loaded") failure. That failure would leave the daemon on its OLD
+# ~/bin exec path — harmless TODAY *only* because the forward-symlink bridge
+# (forward_link_legacy_bin) keeps ~/bin/<name> resolving. When wave 6 (#1904)
+# DELETES ~/bin, that masking disappears and a swallowed code-5 becomes a
+# daemon execing a missing binary. Before #1904 prunes ~/bin, this needs a
+# settle-then-verify/retry here (bootout, wait for teardown, bootstrap, assert
+# the new exec path is live) — NOT built now, deliberately, to keep this wave's
+# blast radius minimal. Tracked as a #1904 gate.
 #
 # Args: $1 plist path
 reload_plist() {
