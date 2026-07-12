@@ -1191,4 +1191,46 @@ describe("STATE_DIR — CORTEX_STATE_DIR env seam", () => {
     );
     expect(out).toBe(expectedDefault);
   });
+
+  // Interaction: migrateLegacyPidFile's DEFAULT stateDir is STATE_DIR, which now
+  // honors CORTEX_STATE_DIR — so in production (`start` calls it with no 2nd
+  // arg) the continuity rename lands in the SAME env-overridden dir as
+  // pidFileFor + cortex.ts's mkdirSync(STATE_DIR). Runs in a child (env fixed at
+  // import), seeds the old-format pidfile in the override dir, and migrates with
+  // the default stateDir. (The explicit-stateDir test-isolation seam — used by
+  // the continuity suite above — is unaffected: an explicit arg always wins.)
+  test("migrateLegacyPidFile default stateDir honors CORTEX_STATE_DIR (env seam × continuity)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cortex-statedir-migrate-"));
+    try {
+      const src = [
+        `import { pidFileFor, migrateLegacyPidFile } from ${JSON.stringify(modPath)};`,
+        `import { writeFileSync, existsSync } from "fs";`,
+        `import { join } from "path";`,
+        `const cfg = ${JSON.stringify(CFG)};`,
+        // seed the pre-#1900 old-format pidfile INSIDE the override dir
+        `const legacy = join(process.env.CORTEX_STATE_DIR, "cortex-stack.pid");`,
+        `writeFileSync(legacy, "4242");`,
+        `const adopted = migrateLegacyPidFile(cfg);`, // DEFAULT stateDir = env-aware STATE_DIR
+        `const target = pidFileFor(cfg);`,
+        `process.stdout.write(JSON.stringify({ adopted, target, targetExists: existsSync(target), legacyGone: !existsSync(legacy), pid: existsSync(target) ? require("fs").readFileSync(target,"utf-8") : null }));`,
+      ].join("\n");
+      const proc = Bun.spawnSync([process.execPath, "-e", src], {
+        env: { ...process.env, CORTEX_STATE_DIR: dir },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode !== 0) {
+        throw new Error(`migrate probe failed (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
+      }
+      const r = JSON.parse(proc.stdout.toString());
+      expect(r.adopted).toBe(join(dir, "cortex-stack.pid")); // adopted the old file in the ENV dir
+      expect(r.target.startsWith(`${dir}/`)).toBe(true); // new-format also lands in the ENV dir
+      expect(basename(r.target)).toMatch(/^cortex-stack-[0-9a-f]{8}\.pid$/);
+      expect(r.targetExists).toBe(true);
+      expect(r.legacyGone).toBe(true);
+      expect(r.pid).toBe("4242"); // live PID carried across the rename
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
