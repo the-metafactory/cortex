@@ -120,12 +120,28 @@ export class NetworkCache {
     try {
       mkdirSync(this.cacheDir, { recursive: true });
       const livePath = this.pathFor(networkId);
-      const tmpPath = `${livePath}.tmp`;
-      // Atomic write (G-28 / epic X-02: write → fsync → rename). A daemon
-      // respawn or crash mid-write can only ever truncate the .tmp; the live
-      // path holds either the previous good record or the complete new one,
-      // never a half-written file `load()` would swallow as a parse error and
-      // silently lose the DD-10 last-known-good roster.
+      // Per-pid tmp name. A cortex daemon and a CLI can both call store() for
+      // the same networkId at once (daemons in this repo demonstrably race
+      // CLIs — cf. the T18 gate saga). A shared `${live}.tmp` would let writer
+      // B's openSync("w") truncate the tmp writer A is mid-writing, and A would
+      // then rename B's partial file live — the exact corruption this fix must
+      // prevent. A unique `${live}.<pid>.tmp` gives each process its own tmp,
+      // so concurrent writers never touch each other's bytes; the final rename
+      // stays atomic and last-writer-wins is safe (both wrote a fully verified
+      // record).
+      const tmpPath = `${livePath}.${process.pid}.tmp`;
+      // Atomic write (G-28 / epic X-02: write → fsync → rename). A crash
+      // mid-write can only ever truncate this pid's tmp; the live path holds
+      // either the previous good record or a complete new one, never a
+      // half-written file `load()` would swallow as a parse error and silently
+      // lose the DD-10 last-known-good roster.
+      // Crashed-process residue is bounded (at most one stale tmp per crashed
+      // pid) and inert: readers never observe it — `load()` reads only the live
+      // path and `list()` filters to `*.json`, so a `.<pid>.tmp` is never
+      // surfaced. We deliberately DO NOT sweep foreign tmps: a sweep can't tell
+      // a dead pid's leftover from a live peer's in-flight tmp without
+      // reintroducing the cross-process race we just removed, so inert bytes on
+      // disk are the cheaper trade.
       // Pretty-print: these files are human-inspectable during ops triage of
       // a registry outage, and the size is trivial (a handful of peers).
       const fd = openSync(tmpPath, "w");

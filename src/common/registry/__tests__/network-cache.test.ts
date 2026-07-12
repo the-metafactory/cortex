@@ -165,14 +165,19 @@ describe("NetworkCache", () => {
       expect(cache.load("iaw")).toBeUndefined();
       // list() skips non-.json files, so the tmp never surfaces there either.
       expect(cache.list()).toEqual([]);
-      // A subsequent successful store overwrites the stale tmp and lands a
-      // complete, valid live record.
+      // A subsequent successful store lands a complete, valid live record. It
+      // does NOT sweep the foreign tmp: with unique per-pid tmp names a live
+      // writer never touches another process's tmp, so a dead pid's leftover
+      // is deliberately left as bounded, inert residue.
       expect(cache.store("iaw", descriptor, roster)).toBe(true);
       expect(cache.load("iaw")?.roster).toEqual(roster);
-      expect(readdirSync(tmp).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+      // The foreign tmp is still on disk (not swept) yet remains inert —
+      // absent from both load() (checked above) and list().
+      expect(readdirSync(tmp)).toContain("iaw.json.tmp");
+      expect(cache.list().map((r) => r.descriptor.network_id)).toEqual(["iaw"]);
     });
 
-    test("interleaved stores and loads of a large record never observe invalid JSON", async () => {
+    test("documents interleaved store/load intent (sync fs cannot preempt mid-write — the guarantee is pinned by the truncated-.tmp test above)", async () => {
       const big = bigRoster(3000);
       // Seed one good record so every reader has something to read.
       expect(cache.store("iaw", descriptor, big)).toBe(true);
