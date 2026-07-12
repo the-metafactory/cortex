@@ -352,6 +352,25 @@ assert_false "slug: unclassifiable path → non-zero" \
 assert_false "slug: empty --config → non-zero" \
   slug_from_config_arg ""
 
+# advw3c Attack 1 — marker-precedence: a dir-layout stack literally slugged
+# `cortex` must resolve to `cortex` (its system/system.yaml marker wins), NOT be
+# hijacked to meta-factory by config_file_to_slug. BOTH sides (argv-side
+# slug_from_config_arg + disk-side discover_stack_slugs) must agree, or the
+# 3a kill/reload desync re-opens.
+CORTEX_STACK_CFG="${TMPHOME}/cortex-slug-config"
+mkdir -p "${CORTEX_STACK_CFG}/cortex/system"
+: > "${CORTEX_STACK_CFG}/cortex/cortex.yaml"           # sentinel <slug>/<slug>.yaml
+: > "${CORTEX_STACK_CFG}/cortex/system/system.yaml"    # dir-layout marker
+assert_eq "slug(marker): argv-side dir-layout 'cortex' → cortex (not meta-factory)" \
+  "cortex" "$(slug_from_config_arg "${CORTEX_STACK_CFG}/cortex/cortex.yaml")"
+# disk-side authority agrees (run in-process; discover_stack_slugs is sourced).
+assert_eq "slug(marker): disk-side discover_stack_slugs yields 'cortex'" \
+  "cortex" "$(discover_stack_slugs "${CORTEX_STACK_CFG}" | grep -x cortex || true)"
+# The real meta-factory monolith (no sibling marker) still maps to meta-factory.
+: > "${CORTEX_STACK_CFG}/cortex.yaml"
+assert_eq "slug(marker): monolith cortex.yaml (no marker) still → meta-factory" \
+  "meta-factory" "$(slug_from_config_arg "${CORTEX_STACK_CFG}/cortex.yaml")"
+
 # filter_out_skipped_pids: reclassify a kill-list by SLUG and drop skip-listed
 # stacks. Mock `ps -o command= -p <pid>` from a pid→cmdline map (no real process
 # table consulted). Every mapped cmdline points at a REAL fixture path so slug
@@ -367,6 +386,8 @@ export PSMAP="${TMPHOME}/psmap"
   printf '1004 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${REAL_CFG}/random/other.yaml"
   # 1005: no --config at all.
   printf '1005 %s/.local/bin/cortex start\n' "${HOME}"
+  # 1006: a dir-layout stack literally slugged `cortex` (advw3c A1).
+  printf '1006 %s/.local/bin/cortex start --config %s\n' "${HOME}" "${CORTEX_STACK_CFG}/cortex/cortex.yaml"
 } > "${PSMAP}"
 cat > "${MOCK_BIN}/ps" <<'EOF'
 #!/bin/sh
@@ -392,6 +413,14 @@ chmod +x "${MOCK_BIN}/ps"
 ( unset CORTEX_UPGRADE_SKIP_RESTART
   KEPT="$(filter_out_skipped_pids "1001 1002" "${REAL_CFG}")"
   assert_eq "filter: empty skip list → both PIDs kept" "1001 1002" "${KEPT}" )
+
+# advw3c A1: a skip-listed dir-layout stack named `cortex` is correctly spared
+# (marker precedence → slug `cortex`, matches the skip list), while the real
+# meta-factory monolith daemon (1002) is untouched.
+( export CORTEX_UPGRADE_SKIP_RESTART="cortex"
+  KEPT="$(filter_out_skipped_pids "1006 1002" "${REAL_CFG}")"
+  assert_eq "filter: dir-layout 'cortex' stack (PID 1006) spared; meta-factory 1002 kept" \
+    "1002" "${KEPT}" )
 
 # (a) drift: the work daemon's argv --config is non-canonical, but slug keying
 # still spares it (path-substring keying would have MISSED and killed it).

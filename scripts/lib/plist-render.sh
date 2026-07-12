@@ -579,23 +579,41 @@ extract_config_arg() {
 # Returns non-zero (prints nothing) when the path is empty or unclassifiable —
 # the caller treats that as a fail-safe abort when a skip-list is set.
 #
-# Known pathological corner (revw3c, non-deployment): a stack literally slugged
-# `cortex` in the dir layout has sentinel <config_dir>/cortex/cortex.yaml, whose
-# basename `cortex.yaml` hits the monolith special-case → meta-factory, while
-# discover_stack_slugs (dir basename) would call it `cortex`. This is a
-# pre-existing repo-wide ambiguity in config_file_to_slug's meta-factory
-# special-case, not introduced here; `cortex` is not a real deployed slug.
+# PRECEDENCE MIRROR (advw3c Attack 1): discover_stack_slugs treats the DIRECTORY
+# LAYOUT as authoritative — the presence of the <config_dir>/<slug>/system/
+# system.yaml marker means slug == the dir basename, and dir wins over any root
+# monolith. This function must mirror that precedence: check the marker FIRST,
+# BEFORE config_file_to_slug's filename map. Without it, a dir-layout stack
+# literally slugged `cortex` (sentinel <config_dir>/cortex/cortex.yaml) would be
+# argv-hijacked to `meta-factory` by the cortex.yaml special-case while discovery
+# calls it `cortex` — re-opening the exact kill/reload desync 3a closed. The
+# marker disambiguates cleanly because `~/.config/cortex/cortex.yaml` (the real
+# meta-factory monolith) has NO sibling system/system.yaml, so it still maps to
+# meta-factory.
 slug_from_config_arg() {
-  local raw="$1" path base slug parent
+  local raw="$1" path base slug parent dir
   [ -n "${raw}" ] || return 1
   path="$(realpath "${raw}" 2>/dev/null || printf '%s' "${raw}")"
+  dir="$(dirname "${path}")"
+  # 1. Dir-layout marker wins (mirrors discover_stack_slugs precedence). The
+  #    argv --config is the sentinel <config_dir>/<slug>/<slug>.yaml, whose
+  #    sibling system/system.yaml is the layout marker; slug = the dir basename.
+  if [ -f "${dir}/system/system.yaml" ]; then
+    printf '%s' "$(basename "${dir}")"
+    return 0
+  fi
   base="$(basename "${path}")"
+  # 2. Monolith: the repo's canonical filename→slug map (cortex.yaml → meta-
+  #    factory, cortex.<slug>.yaml → <slug>).
   if slug="$(config_file_to_slug "${base}")"; then
     printf '%s' "${slug}"
     return 0
   fi
+  # 3. Dir-layout sentinel whose marker is not on disk (transient / partially
+  #    removed config): accept the <slug>/<slug>.yaml shape (parent basename ==
+  #    file stem) as a weaker signal.
   slug="${base%.yaml}"
-  parent="$(basename "$(dirname "${path}")")"
+  parent="$(basename "${dir}")"
   if [ -n "${slug}" ] && [ "${base}" != "${slug}" ] && [ "${slug}" = "${parent}" ]; then
     printf '%s' "${slug}"
     return 0
