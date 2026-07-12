@@ -45,6 +45,15 @@ assert_true() {
   if "$@"; then pass "${label}"; else fail "${label}"; fi
 }
 
+# assert_grep_file LABEL FILE FIXED_STRING — pass iff FIXED_STRING (a literal,
+# -F) occurs in FILE. Greps a file rather than re-parsing captured output
+# through `bash -c`, so backticks in the captured text can never be
+# command-substituted (the mandated refuse message contains backticks).
+assert_grep_file() {
+  local label="$1" file="$2" needle="$3"
+  if grep -qF -- "${needle}" "${file}"; then pass "${label}"; else fail "${label}"; fi
+}
+
 assert_false() {
   local label="$1"; shift
   if "$@"; then fail "${label}"; else pass "${label}"; fi
@@ -175,6 +184,93 @@ assert_eq "reload: exactly two launchctl calls" "2" "$(wc -l < "${LAUNCHCTL_LOG}
 : > "${LAUNCHCTL_LOG}"
 reload_plist "${TMPHOME}/does-not-exist.plist"
 assert_eq "reload: missing plist → no launchctl calls" "0" "$(wc -l < "${LAUNCHCTL_LOG}" | tr -d ' ')"
+
+# ─── Section 3: arc-version guard (cortex#1866 / arc#295) ─────────
+printf '\n=== arc-version guard ===\n'
+
+# Unit — semver comparison (pure bash, no sort -V).
+assert_true  "ge: 0.38.0 >= 0.38.0"        arc_version_ge 0.38.0 0.38.0
+assert_true  "ge: 0.38.1 >= 0.38.0"        arc_version_ge 0.38.1 0.38.0
+assert_true  "ge: 1.0.0  >= 0.38.0"        arc_version_ge 1.0.0  0.38.0
+assert_false "ge: 0.37.9 >= 0.38.0"        arc_version_ge 0.37.9 0.38.0
+assert_false "ge: 0.9.0  >= 0.38.0"        arc_version_ge 0.9.0  0.38.0
+assert_true  "ge: 0.38.0-rc.1 >= 0.38.0 (prerelease core equal)" \
+  arc_version_ge 0.38.0-rc.1 0.38.0
+
+# Integration — drive the real preupgrade.sh with a fake `arc` on PATH and
+# mocked stop primitives, and assert the guard aborts BEFORE any stop/kill.
+PREUP="${SCRIPT_DIR}/preupgrade.sh"
+
+# Build a scratch bin dir that fakes `arc --version` (arg $1) and mocks every
+# stop primitive preupgrade might reach (pgrep/kill/launchctl/sleep) so a real
+# fleet is never touched. Each stop primitive appends to STOP_LOG; an empty
+# STOP_LOG proves nothing was stopped.
+make_preupgrade_env() {
+  local ver="$1" dir
+  dir="$(mktemp -d)"
+  cat > "${dir}/arc" <<EOF
+#!/bin/sh
+[ "\$1" = "--version" ] && echo "arc ${ver}"
+exit 0
+EOF
+  # pgrep: emit nothing (no matching processes) but log that it was consulted.
+  cat > "${dir}/pgrep" <<'EOF'
+#!/bin/sh
+printf 'pgrep %s\n' "$*" >> "${STOP_LOG:-/dev/null}"
+exit 1
+EOF
+  cat > "${dir}/kill" <<'EOF'
+#!/bin/sh
+printf 'kill %s\n' "$*" >> "${STOP_LOG:-/dev/null}"
+EOF
+  cat > "${dir}/launchctl" <<'EOF'
+#!/bin/sh
+printf 'launchctl %s\n' "$*" >> "${STOP_LOG:-/dev/null}"
+EOF
+  cat > "${dir}/sleep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "${dir}"/arc "${dir}"/pgrep "${dir}"/kill "${dir}"/launchctl "${dir}"/sleep
+  printf '%s' "${dir}"
+}
+
+# arc too old → exit 1, refuse message on stderr, and NOTHING stopped.
+OLD_BIN="$(make_preupgrade_env 0.37.9)"
+OLD_HOME="$(mktemp -d)"
+STOP_LOG_OLD="$(mktemp)"
+GUARD_OUT_FILE="$(mktemp)"
+set +e
+STOP_LOG="${STOP_LOG_OLD}" HOME="${OLD_HOME}" \
+  PATH="${OLD_BIN}:${PATH}" bash "${PREUP}" > "${GUARD_OUT_FILE}" 2>&1
+GUARD_CODE=$?
+set -e
+assert_eq "guard: old arc (0.37.9) → preupgrade exits 1" "1" "${GUARD_CODE}"
+assert_grep_file "guard: old arc → refuse message printed" "${GUARD_OUT_FILE}" \
+  'cortex bin cutover requires arc >= 0.38.0 (no-throw symlink installer, arc#295).'
+assert_grep_file "guard: old arc → self-update remediation printed" "${GUARD_OUT_FILE}" \
+  'Run `arc self-update` first, then retry `arc upgrade cortex`.'
+assert_eq "guard: old arc → NO stop/kill/unload ran (STOP_LOG empty)" \
+  "0" "$(wc -l < "${STOP_LOG_OLD}" | tr -d ' ')"
+rm -rf "${OLD_BIN}" "${OLD_HOME}" "${STOP_LOG_OLD}" "${GUARD_OUT_FILE}"
+
+# arc new enough → guard passes; preupgrade proceeds to completion (exit 0).
+# Scratch HOME has no stacks + mocked launchctl, so it stops nothing and exits
+# cleanly — proving the guard did not abort.
+NEW_BIN="$(make_preupgrade_env 0.38.0)"
+NEW_HOME="$(mktemp -d)"
+mkdir -p "${NEW_HOME}/.config/cortex" "${NEW_HOME}/Library/LaunchAgents"
+STOP_LOG_NEW="$(mktemp)"
+GOOD_OUT_FILE="$(mktemp)"
+set +e
+STOP_LOG="${STOP_LOG_NEW}" HOME="${NEW_HOME}" \
+  PATH="${NEW_BIN}:${PATH}" bash "${PREUP}" > "${GOOD_OUT_FILE}" 2>&1
+GOOD_CODE=$?
+set -e
+assert_eq "guard: new arc (0.38.0) → preupgrade proceeds (exit 0)" "0" "${GOOD_CODE}"
+assert_grep_file "guard: new arc → guard-pass line printed" "${GOOD_OUT_FILE}" \
+  'no-throw symlink installer present (arc#295)'
+rm -rf "${NEW_BIN}" "${NEW_HOME}" "${STOP_LOG_NEW}" "${GOOD_OUT_FILE}"
 
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"

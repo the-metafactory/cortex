@@ -8,12 +8,27 @@ set -e
 # file so postupgrade.sh can restore exactly that set (no stack left down;
 # none started that wasn't running before the upgrade).
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# cortex#700 / cortex#1866: source the shared lib for slug discovery AND the
+# arc-version guard. Sourced up-front (before ANY daemon is stopped) so the
+# guard below can abort as a safe no-op.
+source "${SCRIPT_DIR}/lib/plist-render.sh"
+
+# ── Arc-version guard (cortex#1866 / arc#295) — MUST run before any stop/kill/
+# unload. The bin cutover moves cortex/cortex-relay/cldyo-live to ~/.local/bin,
+# where regular files (~/.local/bin/{cldyo-live,lucid}) already live. arc#295's
+# no-throw createSymlink backs those up to a .pre-arc sidecar; an OLDER arc's
+# createSymlink THROWS on them → provides.files aborts the upgrade AFTER this
+# script has already stopped the fleet → box left DOWN. Refusing up-front makes
+# an old-arc upgrade a safe no-op abort instead of a fleet-down.
+require_min_arc_version 0.38.0 || exit 1
+
 echo "Stopping Cortex services for upgrade (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
   CONFIG_DIR="${HOME}/.config/cortex"
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
   # Kill running cortex agent processes before upgrading symlinks.
   # Holly cortex#52 round 1 nit-3: previous `pgrep -f "cortex start"` matched
@@ -59,7 +74,7 @@ if [ "$(uname)" = "Darwin" ]; then
   fi
 
   # Clean up legacy grove-bot symlink if it's still owned by a stale install
-  # (operator pre-flight should have run `arc uninstall Grove` already; this
+  # (principal pre-flight should have run `arc uninstall Grove` already; this
   # is a belt-and-braces clean-up so the deprecation shim install step has a
   # clean slate to work with).
   if [ -L "${HOME}/bin/grove-bot" ]; then
@@ -97,9 +112,8 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  ✓ Removed legacy ${legacy_plist}"
   done
 
-  # cortex#700: source slug-discovery helpers from plist-render.sh.
-  # Only the discovery functions are used here — no plist is rendered.
-  source "${SCRIPT_DIR}/lib/plist-render.sh"
+  # cortex#700: slug-discovery helpers come from plist-render.sh, already
+  # sourced at the top of this script (before the arc-version guard).
 
   # Write running-stacks state to a well-known temp path so postupgrade.sh
   # can restore exactly the stacks that were running before the upgrade.

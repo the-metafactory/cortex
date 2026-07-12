@@ -74,7 +74,7 @@ extract_stack_id_slug() {
 # this filename/dirname convention MUST equal it. We deliberately do NOT
 # re-derive the locator from stack.id here: the on-disk files (the sentinel,
 # stacks/<slug>.yaml, the dir itself) are keyed on this name, so reconciling a
-# drifted stack is an operator rename, not an automatic rewrite (high blast
+# drifted stack is a principal rename, not an automatic rewrite (high blast
 # radius on a live pipeline — see cortex#810). cortex#700: centralised so
 # preupgrade/postupgrade/plist-render all agree on the locator.
 config_file_to_slug() {
@@ -230,7 +230,7 @@ discover_stack_slugs() {
 #
 # WARN, do not fail: a hard error would brick `arc upgrade` for a drifted stack
 # (high blast radius on a live review pipeline — #810). The fix is a one-time
-# operator rename of the dir/file to match stack.id; we surface it loudly every
+# principal rename of the dir/file to match stack.id; we surface it loudly every
 # upgrade until reconciled. Emitted to STDERR so it never pollutes the slug list
 # that discover_stack_slugs streams on stdout to its callers.
 #
@@ -490,4 +490,62 @@ reload_plist() {
   domain="gui/$(id -u)"
   launchctl bootout "${domain}" "${plist}" 2>/dev/null || true
   launchctl bootstrap "${domain}" "${plist}" 2>/dev/null || true
+}
+
+# ── Arc-version guard: refuse the cutover on an arc without arc#295 ──────────
+#
+# The bin cutover moves cortex/cortex-relay/cldyo-live to ~/.local/bin, where
+# regular files (`~/.local/bin/{cldyo-live,lucid}`) already live. arc#295's
+# no-throw createSymlink backs those up to a `.pre-arc` sidecar; an OLDER arc's
+# createSymlink THROWS on them and aborts the upgrade — and preupgrade has by
+# then already stopped the fleet, so the box is left DOWN. This guard refuses
+# up-front (BEFORE any daemon is stopped) unless the installed arc is new enough.
+
+# Print the installed arc CLI version (bare semver), or nothing if undetectable.
+detect_arc_version() {
+  command -v arc >/dev/null 2>&1 || return 0
+  arc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1
+}
+
+# True if semver $1 >= semver $2 (numeric major.minor.patch; any pre-release /
+# build suffix is ignored). Pure bash — no `sort -V` (BSD/macOS sort lacks it).
+arc_version_ge() {
+  local a b i ai bi
+  local -a av=() bv=()
+  # Strip anything after the numeric.dotted core (e.g. "-rc.1", "+build").
+  a="${1%%[!0-9.]*}"
+  b="${2%%[!0-9.]*}"
+  IFS='.' read -ra av <<< "${a}"
+  IFS='.' read -ra bv <<< "${b}"
+  for i in 0 1 2; do
+    ai="${av[i]:-0}"; bi="${bv[i]:-0}"
+    [[ "${ai}" =~ ^[0-9]+$ ]] || ai=0
+    [[ "${bi}" =~ ^[0-9]+$ ]] || bi=0
+    if (( ai > bi )); then return 0; fi
+    if (( ai < bi )); then return 1; fi
+  done
+  return 0  # equal
+}
+
+# Preflight: REFUSE (return non-zero, clear message) unless the installed arc is
+# >= $1. Call at the VERY TOP of preupgrade, BEFORE stopping any daemon.
+# Args: $1 minimum arc semver (e.g. 0.38.0)
+require_min_arc_version() {
+  local min="$1"
+  local ver
+  ver="$(detect_arc_version)"
+  # The mandated refuse line (verbatim; message contract for the deploy gate).
+  local refuse="cortex bin cutover requires arc >= ${min} (no-throw symlink installer, arc#295). Run \`arc self-update\` first, then retry \`arc upgrade cortex\`."
+  if [ -z "${ver}" ]; then
+    echo "  ✗ arc not found or its version was unparseable." >&2
+    echo "${refuse}" >&2
+    return 1
+  fi
+  if ! arc_version_ge "${ver}" "${min}"; then
+    echo "  ✗ installed arc is ${ver}." >&2
+    echo "${refuse}" >&2
+    return 1
+  fi
+  echo "  ✓ arc ${ver} >= ${min} — no-throw symlink installer present (arc#295)"
+  return 0
 }
