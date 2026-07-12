@@ -1,346 +1,489 @@
 /**
  * cortex#1901 — migration gate tests (XDG epic #1867, P3c).
  *
- * The gate proves a stack fleet is stopped before a config/state move, using the
- * SERVICE MANAGER as the oracle (never a pidfile). Every launchctl/systemctl call
- * is faked via an injected {@link GateExec}, so the darwin AND linux paths run on
- * any POSIX CI host (cortex CI is ubuntu) with no real launchd/systemd.
+ * The gate proves a stack fleet is DEAD (not merely deregistered) before a
+ * config/state move, using the SERVICE MANAGER as the oracle and a three-leg
+ * POSITIVE death proof: (1) the RIGHT service — discovered on Linux, never a
+ * derived name; (2) a manager-REACHED down verdict; (3) confirmed PID death via
+ * kill(pid,0). Every subprocess, the liveness probe, sleep, and the clock are
+ * injected, so both platform paths run on ubuntu CI with no real launchd/systemd
+ * and no real processes.
  *
- * The fakes model the two properties that make this issue exist:
- *   - a launchd job stays loaded (`print` → 0) until `bootout`, and a "stubborn"
- *     job models KeepAlive/TOCTOU — it stays loaded even after a bootout attempt,
- *     which the gate MUST catch via its post-stop verify and refuse to clear;
- *   - a systemd unit stays `active` until `stop`, and `is-active` is the oracle.
+ * These tests are the adversarial re-verdict surface for PR#1929's four
+ * fail-opens: A-UNIT (wrong Linux unit), A-ISACTIVE (manager-unreachable),
+ * A-TOCTOU (deregistration ≠ death), A-RESTORE (unpaired stop strands the fleet).
  *
- * Test/describe names all contain "migration gate" so the epic's
- * `bun test … -t "migration gate"` selector picks them up.
+ * All test/describe names contain "migration gate" for `bun test … -t`.
  */
 
 import { describe, test, expect } from "bun:test";
 
+import type { DaemonLocatorIO } from "../../../cli/cortex/commands/daemon-locator";
 import {
   enumerateServiceTargets,
   runMigrationGate,
+  withMigrationGate,
   CORTEX_LABEL_PREFIX,
   RELAY_LABEL,
-  LEGACY_LABELS,
+  type GateEnv,
   type GateExec,
+  type GateExecResult,
+  type DrainPolicy,
   type ServiceTarget,
 } from "../migration-gate";
 
-// =============================================================================
-// Fakes — in-memory launchd + systemd that capture every argv
-// =============================================================================
-
+// A fast drain so the death poll can't hold the runner hostage.
+const FAST_DRAIN: DrainPolicy = { drainTimeoutMs: 100, pollIntervalMs: 10 };
 const LAUNCH_DIR = "/tmp/x1901-LaunchAgents";
+const SYSTEMD_DIR = "/tmp/x1901-systemd-user";
+const CFG_DIR = "/tmp/x1901-config/cortex";
 
-/** Build the gate's target set from a slug list without touching the filesystem. */
-function targetsFor(slugs: string[]): ServiceTarget[] {
-  return enumerateServiceTargets({
-    launchAgentsDir: LAUNCH_DIR,
-    configDir: "/unused",
-    discoverSlugs: () => slugs,
-  });
+// =============================================================================
+// Fakes — in-memory launchd + systemd, plus a controllable GateEnv
+// =============================================================================
+
+/** A GateEnv over a fake exec whose `procAlive` reads a shared `alive` set. The
+ *  clock advances by each `sleep`, so the drain deadline is deterministic. */
+function envOver(exec: GateExec, alive: Set<number>): GateEnv {
+  let clock = 0;
+  return {
+    exec,
+    procAlive: (pid) => alive.has(pid),
+    sleep: (ms) => {
+      clock += ms;
+      return Promise.resolve();
+    },
+    now: () => clock,
+  };
 }
 
-/** launchd fake. `loaded` = jobs currently in the domain; `stubborn` = jobs a
- *  bootout can NOT unload (models KeepAlive / a supervisor respawn / TOCTOU). */
-function makeLaunchd(init?: { loaded?: string[]; stubborn?: string[] }): {
+/** launchd fake. `loaded` = label→pid; `killsProcess` = whether bootout also
+ *  ends the process (true = clean death; false = the PID lingers = A-TOCTOU). */
+function makeLaunchd(init: { loaded?: Record<string, number>; killsProcess?: boolean }): {
   exec: GateExec;
   calls: string[][];
-  loaded: Set<string>;
+  loaded: Map<string, number>;
+  alive: Set<number>;
 } {
-  const loaded = new Set(init?.loaded ?? []);
-  const stubborn = new Set(init?.stubborn ?? []);
+  const loaded = new Map<string, number>(Object.entries(init.loaded ?? {}));
+  const alive = new Set<number>(loaded.values());
+  const killsProcess = init.killsProcess ?? true;
   const calls: string[][] = [];
-  const labelOf = (target: string): string => target.split("/").pop() ?? "";
+  const labelOf = (t: string | undefined): string => (t ?? "").split("/").pop() ?? "";
   const exec: GateExec = (argv) => {
     calls.push(argv);
     const sub = argv[1];
-    if (argv[0] !== "launchctl") throw new Error(`unexpected cmd ${String(argv[0])}`);
     if (sub === "print") {
-      const label = labelOf(argv[2] ?? "");
+      const pid = loaded.get(labelOf(argv[2]));
       return Promise.resolve(
-        loaded.has(label)
-          ? { code: 0, stdout: `${label} = { state = running }`, stderr: "" }
+        pid !== undefined
+          ? { code: 0, stdout: `\tstate = running\n\tpid = ${pid.toString()}\n`, stderr: "" }
           : { code: 113, stdout: "", stderr: "Could not find service" },
       );
     }
     if (sub === "bootout") {
-      const label = labelOf(argv[2] ?? "");
-      const was = loaded.has(label);
-      if (!stubborn.has(label)) loaded.delete(label);
-      return Promise.resolve({ code: was ? 0 : 3, stdout: "", stderr: "" });
+      const label = labelOf(argv[2]);
+      const pid = loaded.get(label);
+      loaded.delete(label);
+      if (killsProcess && pid !== undefined) alive.delete(pid);
+      return Promise.resolve({ code: pid !== undefined ? 0 : 3, stdout: "", stderr: "" });
     }
     if (sub === "bootstrap") {
-      // launchctl bootstrap gui/<uid> <plistPath>
       const label = (argv[3] ?? "").split("/").pop()?.replace(/\.plist$/, "") ?? "";
-      loaded.add(label);
+      const pid = 90000 + loaded.size;
+      loaded.set(label, pid);
+      alive.add(pid);
       return Promise.resolve({ code: 0, stdout: "", stderr: "" });
     }
     if (sub === "kickstart") return Promise.resolve({ code: 0, stdout: "", stderr: "" });
     return Promise.resolve({ code: 1, stdout: "", stderr: `unknown launchctl ${String(sub)}` });
   };
-  return { exec, calls, loaded };
+  return { exec, calls, loaded, alive };
 }
 
-/** systemd fake. `active` = units currently up; `stubborn` = units `stop` can NOT
- *  bring down (models Restart=always defeating a naive stop). */
-function makeSystemd(init?: { active?: string[]; stubborn?: string[] }): {
+/** systemd fake. `active` = unit→MainPID. `isActiveOverride` lets a test force a
+ *  manager-unreachable / weird `is-active` result (A-ISACTIVE). */
+function makeSystemd(init: {
+  active?: Record<string, number>;
+  killsProcess?: boolean;
+  isActiveOverride?: (unit: string) => GateExecResult;
+}): {
   exec: GateExec;
   calls: string[][];
-  active: Set<string>;
+  active: Map<string, number>;
+  alive: Set<number>;
 } {
-  const active = new Set(init?.active ?? []);
-  const stubborn = new Set(init?.stubborn ?? []);
+  const active = new Map<string, number>(Object.entries(init.active ?? {}));
+  const alive = new Set<number>(active.values());
+  const killsProcess = init.killsProcess ?? true;
   const calls: string[][] = [];
   const exec: GateExec = (argv) => {
     calls.push(argv);
-    // systemctl --user <verb> <unit>
     const verb = argv[2];
     const unit = argv[3] ?? "";
     if (verb === "is-active") {
+      if (init.isActiveOverride) return Promise.resolve(init.isActiveOverride(unit));
       return Promise.resolve(
         active.has(unit)
           ? { code: 0, stdout: "active\n", stderr: "" }
           : { code: 3, stdout: "inactive\n", stderr: "" },
       );
     }
+    if (verb === "show") {
+      const pid = active.get(unit) ?? 0;
+      return Promise.resolve({ code: 0, stdout: `${pid.toString()}\n`, stderr: "" });
+    }
     if (verb === "stop") {
-      if (!stubborn.has(unit)) active.delete(unit);
+      const pid = active.get(unit);
+      active.delete(unit);
+      if (killsProcess && pid !== undefined) alive.delete(pid);
       return Promise.resolve({ code: 0, stdout: "", stderr: "" });
     }
     if (verb === "start") {
-      active.add(unit);
+      const pid = 70000 + active.size;
+      active.set(unit, pid);
+      alive.add(pid);
       return Promise.resolve({ code: 0, stdout: "", stderr: "" });
     }
     return Promise.resolve({ code: 1, stdout: "", stderr: `unknown systemctl ${String(verb)}` });
   };
-  return { exec, calls, active };
+  return { exec, calls, active, alive };
 }
 
-/** An exec that always throws — models the service-manager binary being absent
- *  (ENOENT). The gate must FAIL CLOSED against this. */
-const throwingExec: GateExec = () => {
-  throw new Error("spawn systemctl ENOENT");
-};
+/** An in-memory {@link DaemonLocatorIO} over a { path: contents } map. */
+function fakeIO(files: Record<string, string>, dirs: string[]): DaemonLocatorIO {
+  return {
+    exists: (p) => p in files || dirs.includes(p),
+    listDir: (dir) =>
+      Object.keys(files)
+        .filter((p) => p.startsWith(dir + "/"))
+        .map((p) => p.slice(dir.length + 1))
+        .filter((rest) => !rest.includes("/")),
+    readFile: (p) => {
+      const v = files[p];
+      if (v === undefined) throw new Error(`ENOENT ${p}`);
+      return v;
+    },
+  };
+}
+
+/** A systemd `.service` unit body with a given ExecStart. */
+function unit(execStart: string): string {
+  return `[Unit]\nDescription=x\n[Service]\nExecStart=${execStart}\nRestart=always\n[Install]\nWantedBy=default.target\n`;
+}
+
+// Convenience: darwin targets from a slug list (label-by-convention).
+function darwinTargets(slugs: string[]): ServiceTarget[] {
+  return enumerateServiceTargets({
+    platform: "darwin",
+    launchAgentsDir: LAUNCH_DIR,
+    configDir: CFG_DIR,
+    discoverSlugs: () => slugs,
+  });
+}
 
 // =============================================================================
-// Enumeration
+// Enumeration — Linux discovers REAL units (A-UNIT), darwin stays by-convention
 // =============================================================================
 
-describe("migration gate — enumeration (slugs + relay + legacy)", () => {
-  test("migration gate enumerates every stack slug, the relay, and the legacy labels", () => {
-    const targets = targetsFor(["meta-factory", "work"]);
+describe("migration gate — enumeration", () => {
+  test("migration gate (linux) discovers REAL unit ids from ExecStart, not <label>.service", () => {
+    const files = {
+      // Real stack daemon — NON-conventional name, matched by --config.
+      [`${SYSTEMD_DIR}/cortex-bot.service`]: unit(`/usr/bin/bun /opt/cortex/src/cortex.ts --config ${CFG_DIR}/meta-factory/meta-factory.yaml`),
+      // Real relay — matched by the relay.ts entrypoint (no --config).
+      [`${SYSTEMD_DIR}/cortex-relay.service`]: unit(`/usr/bin/bun /opt/cortex/src/taps/cc-events/relay.ts start`),
+      // A non-cortex unit — must be ignored.
+      [`${SYSTEMD_DIR}/postgresql.service`]: unit(`/usr/bin/postgres -D /var/lib/pg`),
+    };
+    const io = fakeIO(files, [SYSTEMD_DIR]);
+    const targets = enumerateServiceTargets({
+      platform: "linux",
+      systemdUserDir: SYSTEMD_DIR,
+      configDir: CFG_DIR,
+      io,
+    });
+    const units = targets.map((t) => t.unit);
+
+    expect(units).toContain("cortex-bot.service"); // the REAL name, discovered
+    expect(units).toContain("cortex-relay.service");
+    expect(units).not.toContain("ai.meta-factory.cortex.meta-factory.service"); // never derived
+    expect(units).not.toContain("postgresql.service"); // non-cortex ignored
+    expect(targets.find((t) => t.unit === "cortex-relay.service")?.kind).toBe("relay");
+    expect(targets.find((t) => t.unit === "cortex-bot.service")?.kind).toBe("stack");
+  });
+
+  test("migration gate (linux) unions legacy units by-name only when the file exists", () => {
+    const files = {
+      [`${SYSTEMD_DIR}/com.grove.bot.service`]: unit(`/usr/bin/bun /opt/grove/bot.ts`),
+    };
+    const io = fakeIO(files, [SYSTEMD_DIR]);
+    const targets = enumerateServiceTargets({
+      platform: "linux",
+      systemdUserDir: SYSTEMD_DIR,
+      configDir: CFG_DIR,
+      io,
+    });
+    const units = targets.map((t) => t.unit);
+    // Present legacy file → unioned; absent legacy files → NOT enumerated.
+    expect(units).toContain("com.grove.bot.service");
+    expect(units).not.toContain("com.grove.relay.service");
+  });
+
+  test("migration gate (darwin) enumerates labels by convention + relay + legacy", () => {
+    const targets = darwinTargets(["meta-factory", "work"]);
     const labels = targets.map((t) => t.label);
-
     expect(labels).toContain(`${CORTEX_LABEL_PREFIX}meta-factory`);
-    expect(labels).toContain(`${CORTEX_LABEL_PREFIX}work`);
     expect(labels).toContain(RELAY_LABEL);
-    for (const legacy of LEGACY_LABELS) expect(labels).toContain(legacy);
-    // com.grove.* legacy set is present (G-35).
     expect(labels).toContain("com.grove.bot");
     expect(labels).toContain("com.grove.relay");
-
-    // Each target carries both platform identities + a bootstrap path.
-    const relay = targets.find((t) => t.label === RELAY_LABEL)!;
-    expect(relay.unit).toBe(`${RELAY_LABEL}.service`);
-    expect(relay.plistPath).toBe(`${LAUNCH_DIR}/${RELAY_LABEL}.plist`);
-    expect(relay.kind).toBe("relay");
-  });
-
-  test("migration gate dedupes a stack slug colliding with relay/bot", () => {
-    const targets = targetsFor(["relay", "bot"]);
-    const labels = targets.map((t) => t.label);
-    const relayCount = labels.filter((l) => l === RELAY_LABEL).length;
-    const botCount = labels.filter((l) => l === `${CORTEX_LABEL_PREFIX}bot`).length;
-    expect(relayCount).toBe(1);
-    expect(botCount).toBe(1);
+    expect(labels).toContain(`${CORTEX_LABEL_PREFIX}bot`);
   });
 });
 
 // =============================================================================
-// macOS — clear vs block, oracle is the service manager
+// A-UNIT — Linux queries the discovered unit, so a name mismatch can't fail-open
 // =============================================================================
 
-describe("migration gate — darwin oracle (launchctl bootout, not pidfile)", () => {
-  test("migration gate (darwin) clears only after bootout of every slug + relay", async () => {
-    const targets = targetsFor(["meta-factory", "work"]);
-    const ld = makeLaunchd({ loaded: targets.map((t) => t.label) });
+describe("migration gate — A-UNIT (right service)", () => {
+  test("migration gate (linux) stops the DISCOVERED unit name, not a derived one", async () => {
+    const files = {
+      [`${SYSTEMD_DIR}/cortex-bot.service`]: unit(`/usr/bin/bun /opt/cortex/src/cortex.ts --config ${CFG_DIR}/meta-factory/meta-factory.yaml`),
+    };
+    const io = fakeIO(files, [SYSTEMD_DIR]);
+    const targets = enumerateServiceTargets({ platform: "linux", systemdUserDir: SYSTEMD_DIR, configDir: CFG_DIR, io });
 
-    const res = await runMigrationGate({ platform: "darwin", uid: 501, exec: ld.exec, targets });
-
-    expect(res.cleared).toBe(true);
-    expect(res.stillPresent).toHaveLength(0);
-    // Every stack label + relay + legacy was booted out.
-    const bootouts = ld.calls.filter((c) => c[1] === "bootout").map((c) => c[2]);
-    for (const t of targets) expect(bootouts).toContain(`gui/501/${t.label}`);
-    // Oracle is the service manager — every call is launchctl, nothing filesystem.
-    expect(ld.calls.every((c) => c[0] === "launchctl")).toBe(true);
-    // Verification uses `print` (never a pidfile check).
-    expect(ld.calls.some((c) => c[1] === "print")).toBe(true);
-  });
-
-  test("migration gate (darwin) BLOCKS while a KeepAlive daemon stays loaded (pidfile absent is irrelevant)", async () => {
-    const targets = targetsFor(["meta-factory", "work"]);
-    const stubborn = `${CORTEX_LABEL_PREFIX}work`; // KeepAlive: bootout can't unload it
-    const ld = makeLaunchd({ loaded: targets.map((t) => t.label), stubborn: [stubborn] });
-
-    const res = await runMigrationGate({ platform: "darwin", uid: 501, exec: ld.exec, targets });
-
-    expect(res.cleared).toBe(false);
-    expect(res.stillPresent.map((t) => t.label)).toEqual([stubborn]);
-    expect(res.reason).toContain("fail-closed");
-    expect(res.reason).toContain(stubborn);
-    // The gate DID try to bootout it — the daemon simply survived, so the gate
-    // (correctly) refuses to clear rather than trusting the stop succeeded.
-    expect(ld.calls.some((c) => c[1] === "bootout" && c[2] === `gui/501/${stubborn}`)).toBe(true);
-  });
-
-  test("migration gate (darwin) clears when nothing is loaded (bootout is idempotent)", async () => {
-    const targets = targetsFor(["meta-factory"]);
-    const ld = makeLaunchd({ loaded: [] });
-
-    const res = await runMigrationGate({ platform: "darwin", uid: 501, exec: ld.exec, targets });
-
-    expect(res.cleared).toBe(true);
-    expect(res.running).toHaveLength(0); // nothing was up → nothing to restore
-  });
-});
-
-// =============================================================================
-// Linux — REQUIRED path + FAIL-CLOSED (G-08). Runs on ubuntu CI via fakes.
-// =============================================================================
-
-describe("migration gate — linux oracle (systemctl stop + is-active)", () => {
-  test("migration gate (linux) stops via systemctl and clears when is-active reports inactive", async () => {
-    const targets = targetsFor(["meta-factory", "work"]);
-    const sd = makeSystemd({ active: targets.map((t) => t.unit) });
-
-    const res = await runMigrationGate({ platform: "linux", uid: 1000, exec: sd.exec, targets });
+    const sd = makeSystemd({ active: { "cortex-bot.service": 4321 } });
+    const res = await runMigrationGate({ platform: "linux", uid: 1000, env: envOver(sd.exec, sd.alive), targets, drain: FAST_DRAIN });
 
     expect(res.cleared).toBe(true);
     const stops = sd.calls.filter((c) => c[2] === "stop").map((c) => c[3]);
-    for (const t of targets) expect(stops).toContain(t.unit);
-    // Oracle is `systemctl --user is-active`, never launchctl or a pidfile.
-    expect(sd.calls.every((c) => c[0] === "systemctl" && c[1] === "--user")).toBe(true);
-    expect(sd.calls.some((c) => c[2] === "is-active")).toBe(true);
-  });
-
-  test("migration gate (linux) FAILS CLOSED when systemctl is unavailable (exec throws)", async () => {
-    const targets = targetsFor(["meta-factory"]);
-
-    const res = await runMigrationGate({ platform: "linux", uid: 1000, exec: throwingExec, targets });
-
-    // Cannot prove anything down → must refuse to clear (never silently pass).
-    expect(res.cleared).toBe(false);
-    expect(res.stillPresent).toHaveLength(targets.length);
-    expect(res.reason).toContain("fail-closed");
-    // Pre-check also couldn't prove absence, so the whole set is the restore set.
-    expect(res.running).toHaveLength(targets.length);
-  });
-
-  test("migration gate (linux) BLOCKS while a Restart=always unit stays active after stop", async () => {
-    const targets = targetsFor(["meta-factory", "work"]);
-    const stubborn = targets[0]!.unit; // stop can't bring it down
-    const sd = makeSystemd({ active: targets.map((t) => t.unit), stubborn: [stubborn] });
-
-    const res = await runMigrationGate({ platform: "linux", uid: 1000, exec: sd.exec, targets });
-
-    expect(res.cleared).toBe(false);
-    expect(res.stillPresent.map((t) => t.unit)).toEqual([stubborn]);
+    expect(stops).toContain("cortex-bot.service"); // real unit — the fail-open fix
+    expect(stops).not.toContain("ai.meta-factory.cortex.meta-factory.service");
   });
 });
 
 // =============================================================================
-// Restore-on-failure (G-36) — bootout is persistent; an abort must bring the fleet back
+// A-ISACTIVE — manager-unreachable must read PRESENT (key on the stdout WORD)
 // =============================================================================
 
-describe("migration gate — restore-on-failure (G-36)", () => {
-  test("migration gate restore brings daemons back after a mid-migration failure (darwin)", async () => {
-    const targets = targetsFor(["meta-factory", "work"]);
-    const originallyUp = targets.map((t) => t.label);
-    const ld = makeLaunchd({ loaded: [...originallyUp] });
+describe("migration gate — A-ISACTIVE (manager-reached verdict)", () => {
+  test("migration gate (linux) FAILS CLOSED when systemctl runs but can't reach the manager (non-zero + empty stdout)", async () => {
+    const targets: ServiceTarget[] = [
+      { id: "meta-factory", kind: "stack", label: "cortex-bot.service", unit: "cortex-bot.service", plistPath: `${SYSTEMD_DIR}/cortex-bot.service` },
+    ];
+    // is-active returns non-zero + EMPTY stdout — the D-Bus-unreachable signature.
+    // An exit-code-keyed impl would wrongly treat this as "down".
+    const sd = makeSystemd({
+      active: { "cortex-bot.service": 555 },
+      isActiveOverride: () => ({ code: 1, stdout: "", stderr: "Failed to connect to bus: No such file or directory" }),
+    });
+    const res = await runMigrationGate({ platform: "linux", uid: 1000, env: envOver(sd.exec, sd.alive), targets, drain: FAST_DRAIN });
 
-    const res = await runMigrationGate({ platform: "darwin", uid: 501, exec: ld.exec, targets });
+    expect(res.cleared).toBe(false);
+    expect(res.stillPresent.map((t) => t.unit)).toEqual(["cortex-bot.service"]);
+    expect(res.reason).toContain("fail-closed");
+  });
+
+  test("migration gate (linux) treats is-active 'unknown' as PRESENT (not a clean down word)", async () => {
+    const targets: ServiceTarget[] = [
+      { id: "s", kind: "stack", label: "cortex-bot.service", unit: "cortex-bot.service", plistPath: "" },
+    ];
+    const sd = makeSystemd({
+      active: {},
+      isActiveOverride: () => ({ code: 4, stdout: "unknown\n", stderr: "" }),
+    });
+    const res = await runMigrationGate({ platform: "linux", uid: 1000, env: envOver(sd.exec, sd.alive), targets, drain: FAST_DRAIN });
+    expect(res.cleared).toBe(false);
+  });
+
+  test("migration gate (linux) 'activating' + non-zero exit is PRESENT (stdout-property lock)", async () => {
+    // Correlated-fakes gap guard: an exit-code-keyed impl would pass this because
+    // exit is non-zero, but the WORD says the unit is (re)starting → must be PRESENT.
+    const targets: ServiceTarget[] = [
+      { id: "s", kind: "stack", label: "cortex-bot.service", unit: "cortex-bot.service", plistPath: "" },
+    ];
+    const sd = makeSystemd({
+      active: {},
+      isActiveOverride: () => ({ code: 3, stdout: "activating\n", stderr: "" }),
+    });
+    const res = await runMigrationGate({ platform: "linux", uid: 1000, env: envOver(sd.exec, sd.alive), targets, drain: FAST_DRAIN });
+    expect(res.cleared).toBe(false);
+  });
+
+  test("migration gate (linux) clears on a clean 'inactive' word + PID death", async () => {
+    const targets: ServiceTarget[] = [
+      { id: "s", kind: "stack", label: "cortex-bot.service", unit: "cortex-bot.service", plistPath: "" },
+    ];
+    const sd = makeSystemd({ active: { "cortex-bot.service": 999 } }); // stop → inactive + pid dies
+    const res = await runMigrationGate({ platform: "linux", uid: 1000, env: envOver(sd.exec, sd.alive), targets, drain: FAST_DRAIN });
     expect(res.cleared).toBe(true);
-    // After the gate, the whole fleet is DOWN (bootout is persistent).
-    expect(ld.loaded.size).toBe(0);
+  });
+});
 
-    // Caller starts the migration and it THROWS midway — the restore contract.
-    let restoreResult;
+// =============================================================================
+// A-TOCTOU — deregistration ≠ death; the PID must reach ESRCH
+// =============================================================================
+
+describe("migration gate — A-TOCTOU (confirmed process death)", () => {
+  test("migration gate (darwin) does NOT clear while the booted-out PID is still draining", async () => {
+    const targets = darwinTargets(["meta-factory"]);
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    // bootout deregisters (print goes non-zero) but the process LINGERS (drain).
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 4242, [RELAY_LABEL]: 4243, "com.grove.bot": 0 }, killsProcess: false });
+    const res = await runMigrationGate({ platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), targets, drain: FAST_DRAIN });
+
+    expect(res.cleared).toBe(false); // print said gone, but kill(pid,0) still alive
+    expect(res.stillPresent.map((t) => t.label)).toContain(stackLabel);
+  });
+
+  test("migration gate (darwin) clears once the PID reaches ESRCH after drain", async () => {
+    const targets = darwinTargets(["meta-factory"]);
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 4242, [RELAY_LABEL]: 4243 }, killsProcess: true });
+    const res = await runMigrationGate({ platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), targets, drain: FAST_DRAIN });
+    expect(res.cleared).toBe(true);
+  });
+
+  test("migration gate (linux) requires PID death (from MainPID), not just is-active inactive", async () => {
+    const targets: ServiceTarget[] = [
+      { id: "s", kind: "stack", label: "cortex-bot.service", unit: "cortex-bot.service", plistPath: "" },
+    ];
+    // stop → is-active inactive, but the forked child LINGERS (KillMode=process).
+    const sd = makeSystemd({ active: { "cortex-bot.service": 8080 }, killsProcess: false });
+    const res = await runMigrationGate({ platform: "linux", uid: 1000, env: envOver(sd.exec, sd.alive), targets, drain: FAST_DRAIN });
+    expect(res.cleared).toBe(false);
+    expect(res.stillPresent.map((t) => t.unit)).toEqual(["cortex-bot.service"]);
+  });
+});
+
+// =============================================================================
+// A-RESTORE — withMigrationGate try/finally ALWAYS restores the pre-running set
+// =============================================================================
+
+describe("migration gate — A-RESTORE (finally-guaranteed restore)", () => {
+  test("migration gate withMigrationGate runs the migration after clear and restores in finally", async () => {
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 100, [RELAY_LABEL]: 101 } });
+    let migrated = false;
+
+    const run = await withMigrationGate(
+      { platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), launchAgentsDir: LAUNCH_DIR, configDir: CFG_DIR, discoverSlugs: () => ["meta-factory"], drain: FAST_DRAIN },
+      () => {
+        migrated = true;
+        return Promise.resolve("moved");
+      },
+    );
+
+    expect(run.cleared).toBe(true);
+    expect(migrated).toBe(true);
+    expect(run.result).toBe("moved");
+    // Fleet is back up after the (successful) migration — nothing stranded.
+    expect(ld.loaded.has(stackLabel)).toBe(true);
+    expect(ld.loaded.has(RELAY_LABEL)).toBe(true);
+    expect(run.restore.failed).toHaveLength(0);
+  });
+
+  test("migration gate withMigrationGate restores the fleet even when the migration THROWS", async () => {
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 100, [RELAY_LABEL]: 101 } });
+
+    let threw = false;
     try {
-      throw new Error("state move failed midway");
-    } catch {
-      restoreResult = await res.restore();
+      await withMigrationGate(
+        { platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), launchAgentsDir: LAUNCH_DIR, configDir: CFG_DIR, discoverSlugs: () => ["meta-factory"], drain: FAST_DRAIN },
+        () => {
+          throw new Error("state move failed midway");
+        },
+      );
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).toContain("state move failed");
     }
 
-    // Every daemon that was up is loaded again — symmetry preserved.
-    expect(restoreResult.failed).toHaveLength(0);
-    expect(restoreResult.restored.sort()).toEqual([...targets.map((t) => t.id)].sort());
-    for (const label of originallyUp) expect(ld.loaded.has(label)).toBe(true);
+    expect(threw).toBe(true);
+    // The finally restored the fleet despite the throw — the G-36 guarantee.
+    expect(ld.loaded.has(stackLabel)).toBe(true);
+    expect(ld.loaded.has(RELAY_LABEL)).toBe(true);
+  });
+
+  test("migration gate withMigrationGate does NOT run the migration when the gate refuses", async () => {
+    const stackLabel = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    // Draining PID → gate refuses to clear.
+    const ld = makeLaunchd({ loaded: { [stackLabel]: 100, [RELAY_LABEL]: 101 }, killsProcess: false });
+    let migrated = false;
+
+    const run = await withMigrationGate(
+      { platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), launchAgentsDir: LAUNCH_DIR, configDir: CFG_DIR, discoverSlugs: () => ["meta-factory"], drain: FAST_DRAIN },
+      () => {
+        migrated = true;
+        return Promise.resolve("nope");
+      },
+    );
+
+    expect(run.cleared).toBe(false);
+    expect(migrated).toBe(false); // migration NEVER ran under a red gate
+    // The pre-running set the gate stopped was restored.
+    expect(ld.loaded.has(stackLabel)).toBe(true);
+  });
+});
+
+// =============================================================================
+// Empty-target guard + restore mechanics
+// =============================================================================
+
+describe("migration gate — guards + restore mechanics", () => {
+  test("migration gate refuses an EMPTY target set (fail-closed, not a vacuous clear)", async () => {
+    const ld = makeLaunchd({ loaded: {} });
+    let threw = false;
+    let msg = "";
+    try {
+      await runMigrationGate({ platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), targets: [], drain: FAST_DRAIN });
+    } catch (err) {
+      threw = true;
+      msg = err instanceof Error ? err.message : String(err);
+    }
+    expect(threw).toBe(true);
+    expect(msg).toContain("EMPTY target set");
   });
 
   test("migration gate restore re-bootstraps ONLY the pre-running set (symmetry)", async () => {
-    const targets = targetsFor(["meta-factory", "work"]);
-    const upLabel = `${CORTEX_LABEL_PREFIX}meta-factory`; // only this one is up
-    const ld = makeLaunchd({ loaded: [upLabel] });
-
-    const res = await runMigrationGate({ platform: "darwin", uid: 501, exec: ld.exec, targets });
+    const targets = darwinTargets(["meta-factory", "work"]);
+    const up = `${CORTEX_LABEL_PREFIX}meta-factory`;
+    const ld = makeLaunchd({ loaded: { [up]: 200, [RELAY_LABEL]: 201 } }); // 'work' is down
+    const res = await runMigrationGate({ platform: "darwin", uid: 501, env: envOver(ld.exec, ld.alive), targets, drain: FAST_DRAIN });
     expect(res.cleared).toBe(true);
-    expect(res.running.map((t) => t.label)).toEqual([upLabel]);
+    expect(res.running.map((t) => t.label).sort()).toEqual([RELAY_LABEL, up].sort());
 
-    const restoreResult = await res.restore();
-
-    // Only the pre-running stack is brought back; the one that was already down
-    // is NOT started (nothing that was down is started).
-    expect(ld.loaded.has(upLabel)).toBe(true);
-    expect(ld.loaded.has(`${CORTEX_LABEL_PREFIX}work`)).toBe(false);
-    expect(restoreResult.restored).toEqual([targets.find((t) => t.label === upLabel)!.id]);
-    // bootstrap targeted the correct plist path.
-    const bootstraps = ld.calls.filter((c) => c[1] === "bootstrap").map((c) => c[3]);
-    expect(bootstraps).toContain(`${LAUNCH_DIR}/${upLabel}.plist`);
+    const restore = await res.restore();
+    expect(restore.failed).toHaveLength(0);
+    expect(ld.loaded.has(up)).toBe(true);
+    expect(ld.loaded.has(RELAY_LABEL)).toBe(true);
+    expect(ld.loaded.has(`${CORTEX_LABEL_PREFIX}work`)).toBe(false); // was down → stays down
   });
 
-  test("migration gate restore restarts the pre-running linux set via systemctl start", async () => {
-    const targets = targetsFor(["meta-factory"]);
-    const sd = makeSystemd({ active: targets.map((t) => t.unit) });
-
-    const res = await runMigrationGate({ platform: "linux", uid: 1000, exec: sd.exec, targets });
-    expect(res.cleared).toBe(true);
-
-    const restoreResult = await res.restore();
-    expect(restoreResult.failed).toHaveLength(0);
-    expect(restoreResult.restored).toEqual(targets.map((t) => t.id));
-    for (const t of targets) expect(sd.active.has(t.unit)).toBe(true);
-    // restore used `systemctl --user start` + verified with `is-active`.
-    expect(sd.calls.some((c) => c[2] === "start")).toBe(true);
-  });
-
-  test("migration gate restore reports failure when a daemon refuses to come back (darwin)", async () => {
-    const targets = targetsFor(["meta-factory"]);
+  test("migration gate restore reports failure when a daemon refuses to come back", async () => {
+    const targets = darwinTargets(["meta-factory"]);
     const label = `${CORTEX_LABEL_PREFIX}meta-factory`;
-    // Custom exec: bootout works, but bootstrap does NOT re-load (print stays non-zero).
-    const calls: string[][] = [];
-    const loaded = new Set([label]);
+    const alive = new Set<number>([300]);
+    const loaded = new Map<string, number>([[label, 300]]);
     const exec: GateExec = (argv) => {
-      calls.push(argv);
       const sub = argv[1];
       const lbl = (argv[2] ?? "").split("/").pop() ?? "";
-      if (sub === "print") return Promise.resolve(loaded.has(lbl) ? { code: 0, stdout: "running", stderr: "" } : { code: 113, stdout: "", stderr: "" });
-      if (sub === "bootout") { loaded.delete(lbl); return Promise.resolve({ code: 0, stdout: "", stderr: "" }); }
-      if (sub === "bootstrap") return Promise.resolve({ code: 5, stdout: "", stderr: "Input/output error" }); // fails to load
+      if (sub === "print") {
+        const pid = loaded.get(lbl);
+        return Promise.resolve(pid !== undefined ? { code: 0, stdout: `pid = ${pid.toString()}`, stderr: "" } : { code: 113, stdout: "", stderr: "" });
+      }
+      if (sub === "bootout") { const pid = loaded.get(lbl); loaded.delete(lbl); if (pid !== undefined) alive.delete(pid); return Promise.resolve({ code: 0, stdout: "", stderr: "" }); }
+      if (sub === "bootstrap") return Promise.resolve({ code: 5, stdout: "", stderr: "Input/output error" }); // never re-loads
       if (sub === "kickstart") return Promise.resolve({ code: 3, stdout: "", stderr: "" });
       return Promise.resolve({ code: 1, stdout: "", stderr: "" });
     };
-
-    const res = await runMigrationGate({ platform: "darwin", uid: 501, exec, targets });
+    const res = await runMigrationGate({ platform: "darwin", uid: 501, env: envOver(exec, alive), targets, drain: FAST_DRAIN });
     expect(res.cleared).toBe(true);
 
-    const restoreResult = await res.restore();
-    // The restore is HONEST about not bringing it back — a caller can escalate.
-    expect(restoreResult.restored).toHaveLength(0);
-    expect(restoreResult.failed).toHaveLength(1);
-    expect(restoreResult.failed[0]!.id).toBe(targets[0]!.id);
+    const restore = await res.restore();
+    expect(restore.restored).toHaveLength(0);
+    expect(restore.failed.map((f) => f.id)).toContain("meta-factory");
   });
 });

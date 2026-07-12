@@ -1,104 +1,144 @@
 /**
  * cortex#1901 (XDG epic #1867, phase P3c gate) — the migration gate that PROVES
- * a stack fleet is stopped before X-07 (config move) / X-11 (state move) relocate
- * a running daemon's directories. This issue delivers the REUSABLE gate; the
- * moves themselves are out of scope (they consume it).
+ * a stack fleet is DEAD before X-07 (config move) / X-11 (state move) relocate a
+ * running daemon's directories. This issue delivers the REUSABLE gate; the moves
+ * consume it. X-11 TRUSTS this verdict, so a gate that fail-OPENS is worse than
+ * no gate — every predicate here is built around POSITIVE proof of death.
  *
  * ## Why the oracle is the SERVICE MANAGER, never a pidfile
  *
- * A filesystem/pidfile oracle is wrong on two counts, and both are load-bearing:
+ * A filesystem/pidfile oracle is wrong on two counts:
  *   - Stack plists carry `RunAtLoad:true` AND `KeepAlive:true`, so a daemon is
  *     ALWAYS alive → an "abort if pidfile present" gate is a permanent no-op.
- *   - `cortex stop` and the singleton check UNLINK the pidfile (seven sites in
+ *   - `cortex stop` + the singleton check UNLINK the pidfile (seven sites in
  *     `cortex.ts` — grep `unlinkSync(pidFile)`) while KeepAlive respawns inside
  *     the throttle window, so "no pidfile" NEVER means "no daemon" (a TOCTOU).
  *
- * So the gate drives the service manager and proves absence THROUGH it:
- *   - **macOS:** `launchctl bootout gui/<uid>/<label>` — the only primitive that
- *     defeats KeepAlive — then prove absence with `launchctl print …` returning
- *     NON-ZERO. `bootout` removes the service from the domain, so the supervisor
- *     will NOT respawn until a matching `bootstrap`. The stop→verify window is
- *     race-free BY CONSTRUCTION — which is exactly why pidfile-absence is unsafe
- *     (supervisor races) but bootout-absence is safe (supervisor is out of it).
- *   - **Linux:** `systemctl --user stop <unit>` — an EXPLICIT stop, which
- *     `Restart=always` does NOT override (Restart fires on unexpected exit, not
- *     on a deliberate stop) — then prove absence with `systemctl --user is-active`
- *     returning a non-"up" state. REQUIRED + FAIL-CLOSED (G-08): the epic exists
- *     for a Linux user and CI is ubuntu, so the Linux path is a first-class
- *     implementation, not a stub.
+ * ## The three legs of a POSITIVE death proof (adversary root-cause, PR#1929)
  *
- * ## Fail-closed by construction
+ * "Absence inferred from a non-up / non-zero signal is ALSO produced by wrong-
+ * unit, manager-unreachable, wrong-domain, and process-still-draining — only one
+ * of which is safe." So a target is declared DEAD only when ALL THREE hold:
  *
- * A target is deemed absent ONLY on POSITIVE PROOF (`print` non-zero on macOS /
- * a definitive down-state from a clean `is-active` on Linux). If the service
- * manager binary is missing (the injected exec throws), or `print` still
- * resolves the job, or `is-active` reports an up-state, the target counts as
- * PRESENT and the gate REFUSES to clear. Absence is proven; it is never assumed.
- * There is no code path that returns `cleared:true` without every target having
- * been positively proven down.
+ *   1. **Right service.** macOS: launchd is name-by-convention, so the label
+ *      `ai.meta-factory.cortex.<slug>` IS the service (verified live by `print`).
+ *      Linux: the unit name is NOT conventional (real units are `cortex-bot.
+ *      service`, not `ai.meta-factory.cortex.bot.service` — see
+ *      daemon-locator.ts:126-127), so we DISCOVER the real unit id by scanning
+ *      `~/.config/systemd/user` for a `.service` whose `ExecStart` carries a
+ *      `--config` under the cortex config dir (or the relay entrypoint). A
+ *      derived name would query the WRONG unit → `is-active` "inactive" → a false
+ *      clear (A-UNIT).
+ *   2. **Manager-reached down verdict.** macOS: `launchctl print` returns
+ *      NON-ZERO (left the domain) from a call that did not throw. Linux:
+ *      `systemctl --user is-active` returns a CLEAN, definitive down word —
+ *      exactly `inactive` or `failed`. A `systemctl` that runs but cannot reach
+ *      its manager (no D-Bus / unset `XDG_RUNTIME_DIR`) yields non-zero + empty/
+ *      `unknown` stdout — that is NOT proof, it is PRESENT (A-ISACTIVE). We key
+ *      on the stdout WORD, never the exit code alone.
+ *   3. **Confirmed process death.** Deregistration ≠ death: cortex shutdown
+ *      drains up to ~15s (cortex.ts:443), so a booted-out daemon still holds the
+ *      state dir + locks after `print`/`is-active` report it gone. We capture the
+ *      job's PID BEFORE the stop, then poll `kill(pid,0)` until `ESRCH`, bounded
+ *      by a drain window ≥ 15s (A-TOCTOU).
  *
- * ## Restore-on-failure (G-36)
+ * Any leg unproven → the target is PRESENT and the gate REFUSES to clear. There
+ * is NO path that returns `cleared:true` without every target passing all three.
+ * An empty target set is a FOOTGUN (discovery failure), not a vacuous clear — it
+ * throws.
  *
- * `bootout` is PERSISTENT — an aborted migration would otherwise leave the fleet
- * down with KeepAlive defeated. {@link runMigrationGate} therefore returns a
- * `restore()` handle that `bootstrap`s (macOS) / `start`s (Linux) exactly the
- * targets that were UP when the gate ran, and verifies each came back. Callers
- * MUST invoke `restore()` on ANY failure path — the gate's own non-clear, or
- * their own migration throwing after a clear. Symmetry (the preupgrade/
- * postupgrade guarantee): nothing that was down is started; nothing that was up
- * is left down.
+ * ## Restore-on-failure (G-36 / A-RESTORE)
+ *
+ * `bootout`/`stop` leave the fleet DOWN, so a gate run that isn't paired with a
+ * restore strands the fleet. {@link withMigrationGate} is the BLESSED entry
+ * X-07/X-11 use: it runs the migration inside a `try/finally` that ALWAYS
+ * restores the exact pre-running set (nothing down is started; nothing up is left
+ * down). The raw {@link runMigrationGate} returns the same `restore()` handle for
+ * tests + advanced callers, but the wrapper makes the guarantee structural.
  *
  * ## Legacy labels (G-35)
  *
- * Enumeration covers not just live stack slugs + the relay, but the legacy label
- * set `scripts/preupgrade.sh` already boots out (`com.grove.bot`,
- * `com.grove.relay`, `ai.meta-factory.cortex.bot`) — a `com.grove.*` daemon left
- * from the grove-v2 era is exactly the KeepAlive process a state move must not
- * race.
+ * Enumeration covers stack slugs + relay + the legacy set `scripts/preupgrade.sh`
+ * boots out (`com.grove.bot`, `com.grove.relay`, `ai.meta-factory.cortex.bot`).
+ * On Linux the legacy set is unioned by-name but only when the `.service` file
+ * actually exists (a KeepAlive grove-v2 remnant a state move must not race).
  *
  * ## Seams
  *
- * Every side effect (the launchctl/systemctl exec), the `platform`, and the
- * `uid` are injected so the gate is unit-testable on a POSIX CI host with no
- * real launchd/systemd — mirroring the #763 `NatsServiceManager` ExecRunner seam.
+ * Exec, process-liveness (`kill(pid,0)`), sleep, and clock are all injected
+ * ({@link GateEnv}), plus platform + uid, so both the darwin and linux paths run
+ * on a POSIX CI host with no real launchd/systemd and no real subprocesses —
+ * mirroring the #763 `NatsServiceManager` ExecRunner seam. The Linux discovery
+ * reuses daemon-locator's `parseUnitExecStartArgs` + `configArgValue` (DRY — that
+ * IS the drift-proof matcher `network join`/`leave` already trust).
  */
 
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, resolve, sep } from "path";
 
+import {
+  configArgValue,
+  parseUnitExecStartArgs,
+  type DaemonLocatorIO,
+} from "../../cli/cortex/commands/daemon-locator";
 import { discoverStacks } from "../../cli/cortex/commands/stack-lib";
 import { cortexConfigDir } from "../config/config-path";
+import { expandTilde } from "../config/loader";
 
 // =============================================================================
-// Public types + the injected exec seam
+// Public types + injected seams
 // =============================================================================
 
 /** macOS (`darwin`) vs Linux — the only two platforms the fleet runs on. */
 export type GatePlatform = "darwin" | "linux";
 
 /** Result of one launchctl/systemctl subprocess. `stdout` is load-bearing on
- *  Linux (`is-active` prints the state word there). */
+ *  Linux (`is-active` prints the state WORD there) — we key on it, not the code. */
 export interface GateExecResult {
   code: number;
   stdout: string;
   stderr: string;
 }
 
-/** Injected process runner — captured in tests, real `Bun.spawn` in prod. May
- *  THROW synchronously on ENOENT (binary not on PATH); the gate treats a throw
- *  as "cannot prove absence" (fail-closed), never letting it escape. */
+/** Injected process runner. May THROW synchronously on ENOENT (binary not on
+ *  PATH); the gate treats a throw as "cannot prove" (fail-closed), never letting
+ *  it escape. */
 export type GateExec = (argv: string[]) => Promise<GateExecResult>;
+
+/**
+ * The full effect surface, injected so the gate is unit-testable with no real
+ * subprocesses/processes/wall-clock:
+ *   - `exec`      — launchctl/systemctl.
+ *   - `procAlive` — `kill(pid,0)` liveness probe (the confirmed-death leg).
+ *   - `sleep`     — the drain poll delay.
+ *   - `now`       — the drain deadline clock.
+ */
+export interface GateEnv {
+  exec: GateExec;
+  procAlive: (pid: number) => boolean;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+}
+
+/** How long to wait for a booted-out PID to actually exit (≥ the 15s cortex
+ *  shutdown drain) and how often to re-probe. */
+export interface DrainPolicy {
+  drainTimeoutMs: number;
+  pollIntervalMs: number;
+}
+
+/** Default drain: 20s ceiling (> the 15s cortex.ts:443 cap) polled every 250ms. */
+export const DEFAULT_DRAIN: DrainPolicy = { drainTimeoutMs: 20_000, pollIntervalMs: 250 };
 
 /** Which family a target belongs to — for logging + restore reasoning. */
 export type ServiceTargetKind = "stack" | "relay" | "legacy";
 
 /**
- * One service the gate must prove stopped, carrying BOTH platform identities so
- * a single enumerated target is usable on either OS:
- *   - `label` — the launchd label (`launchctl bootout/print gui/<uid>/<label>`).
- *   - `unit`  — the systemd unit id (`systemctl --user stop/is-active <unit>`),
- *      the `<label>.service` analogue of the launchd Label.
- *   - `plistPath` — where `launchctl bootstrap` reloads it from on restore.
+ * One service the gate must prove DEAD. Carries both platform identities:
+ *   - `label`    — launchd label (macOS authoritative; name-by-convention).
+ *   - `unit`     — systemd unit id (Linux authoritative; DISCOVERED, not derived).
+ *   - `plistPath`— where `launchctl bootstrap` reloads it from on restore (macOS).
  */
 export interface ServiceTarget {
   id: string;
@@ -112,17 +152,16 @@ export interface ServiceTarget {
 // Label / unit conventions (kept in lockstep with preupgrade.sh)
 // =============================================================================
 
-/** The launchd label prefix every cortex stack + the relay share. */
+/** The launchd label prefix every cortex stack + the relay share (macOS). */
 export const CORTEX_LABEL_PREFIX = "ai.meta-factory.cortex.";
 
-/** The relay's launchd label — enumerated alongside stack slugs (issue step 1). */
+/** The relay's launchd label (macOS). */
 export const RELAY_LABEL = `${CORTEX_LABEL_PREFIX}relay`;
 
 /**
  * The legacy label set `scripts/preupgrade.sh:80` already knows (G-35):
  *   - `com.grove.bot` / `com.grove.relay` — grove-v2 era plists that may linger.
  *   - `ai.meta-factory.cortex.bot` — the pre-cortex#251 dev-stack plist name.
- * A KeepAlive daemon under any of these is a process a state move must not race.
  */
 export const LEGACY_LABELS: readonly string[] = [
   "com.grove.bot",
@@ -130,8 +169,7 @@ export const LEGACY_LABELS: readonly string[] = [
   `${CORTEX_LABEL_PREFIX}bot`,
 ];
 
-/** systemd `is-active` states that mean the unit is (still) UP. Everything else
- *  a clean `is-active` can print (`inactive`/`failed`/`unknown`/`""`) is DOWN. */
+/** systemd `is-active` states that mean the unit is (still) UP. */
 const SYSTEMD_UP_STATES: ReadonlySet<string> = new Set([
   "active",
   "activating",
@@ -139,33 +177,78 @@ const SYSTEMD_UP_STATES: ReadonlySet<string> = new Set([
   "deactivating",
 ]);
 
+/** The ONLY `is-active` words that positively prove a reached-manager DOWN unit.
+ *  Note the deliberate exclusion of `""`/`unknown` — those are the
+ *  manager-unreachable signature (A-ISACTIVE), which must read as PRESENT. */
+const SYSTEMD_DOWN_WORDS: ReadonlySet<string> = new Set(["inactive", "failed"]);
+
+// =============================================================================
+// Filesystem defaults + helpers
+// =============================================================================
+
+function homeDir(home?: string): string {
+  return home ?? process.env.HOME ?? homedir();
+}
+
+function defaultLaunchAgentsDir(home?: string): string {
+  return join(homeDir(home), "Library", "LaunchAgents");
+}
+
+function defaultSystemdUserDir(home?: string): string {
+  return join(homeDir(home), ".config", "systemd", "user");
+}
+
+/** Real-fs {@link DaemonLocatorIO} for production Linux discovery. */
+const realIO: DaemonLocatorIO = {
+  listDir: (dir) => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  },
+  readFile: (path) => readFileSync(path, "utf-8"),
+  exists: (path) => existsSync(path),
+};
+
 // =============================================================================
 // Enumeration
 // =============================================================================
 
 /** Options for {@link enumerateServiceTargets}. */
 export interface EnumerateTargetsOptions {
-  /** Cortex config dir to discover stack slugs under. Defaults to
-   *  {@link cortexConfigDir} (honours `$CORTEX_CONFIG_DIR`). */
+  platform: GatePlatform;
   configDir?: string;
-  /** launchd `~/Library/LaunchAgents` (or the tmp dir a test points it at) —
-   *  where each label's `<label>.plist` lives, used by restore's `bootstrap`. */
-  launchAgentsDir: string;
-  /** Slug discovery seam. Defaults to `discoverStacks(dir).map(slugLocator)`. */
+  /** launchd `~/Library/LaunchAgents` (macOS). */
+  launchAgentsDir?: string;
+  /** systemd `~/.config/systemd/user` (Linux). */
+  systemdUserDir?: string;
+  /** fs seam for Linux discovery + legacy existence checks. Default = real fs. */
+  io?: DaemonLocatorIO;
+  /** Stack-slug discovery seam (macOS label derivation). */
   discoverSlugs?: (configDir: string) => string[];
-  /** `$HOME` override (tests). */
   home?: string;
 }
 
 /**
- * Enumerate every service the gate must prove stopped: one per discovered stack
- * slug (`ai.meta-factory.cortex.<slug>`), the relay ({@link RELAY_LABEL}), and
- * the {@link LEGACY_LABELS}. Deduplicated by label (so a stack whose slug is
- * literally `relay`/`bot` can't double-enumerate). Pure — the only I/O is the
- * injected slug discovery.
+ * Enumerate every service the gate must prove dead.
+ *
+ * macOS — labels by convention (launchd IS name-by-convention, `print`-verified):
+ * one per discovered stack slug + relay + legacy set.
+ *
+ * Linux — REAL unit ids DISCOVERED from `~/.config/systemd/user` (a derived name
+ * would query the wrong unit; A-UNIT). A `.service` is a cortex daemon when its
+ * `ExecStart` carries a `--config` under the cortex config dir (a stack) or names
+ * the relay entrypoint (`relay.ts`). The legacy set is unioned by-name, but only
+ * when its `.service` file actually exists.
  */
 export function enumerateServiceTargets(opts: EnumerateTargetsOptions): ServiceTarget[] {
+  return opts.platform === "linux" ? enumerateLinux(opts) : enumerateDarwin(opts);
+}
+
+function enumerateDarwin(opts: EnumerateTargetsOptions): ServiceTarget[] {
   const configDir = opts.configDir ?? cortexConfigDir(opts.home);
+  const launchAgentsDir = opts.launchAgentsDir ?? defaultLaunchAgentsDir(opts.home);
   const discover =
     opts.discoverSlugs ?? ((dir: string) => discoverStacks(dir).map((s) => s.slugLocator));
 
@@ -178,8 +261,8 @@ export function enumerateServiceTargets(opts: EnumerateTargetsOptions): ServiceT
       id,
       kind,
       label,
-      unit: `${label}.service`,
-      plistPath: join(opts.launchAgentsDir, `${label}.plist`),
+      unit: `${label}.service`, // unused on darwin; kept for shape symmetry
+      plistPath: join(launchAgentsDir, `${label}.plist`),
     });
   };
 
@@ -190,18 +273,83 @@ export function enumerateServiceTargets(opts: EnumerateTargetsOptions): ServiceT
   return targets;
 }
 
+function enumerateLinux(opts: EnumerateTargetsOptions): ServiceTarget[] {
+  const configDir = opts.configDir ?? cortexConfigDir(opts.home);
+  const systemdUserDir = opts.systemdUserDir ?? defaultSystemdUserDir(opts.home);
+  const io = opts.io ?? realIO;
+  const cfgRoot = resolve(expandTilde(configDir));
+
+  const targets: ServiceTarget[] = [];
+  const seen = new Set<string>();
+  const push = (id: string, kind: ServiceTargetKind, unit: string): void => {
+    if (seen.has(unit)) return;
+    seen.add(unit);
+    targets.push({ id, kind, label: unit, unit, plistPath: join(systemdUserDir, unit) });
+  };
+
+  // 1. Discover real cortex units by ExecStart (name-agnostic — A-UNIT fix).
+  if (io.exists(systemdUserDir)) {
+    for (const name of io.listDir(systemdUserDir).sort()) {
+      if (!name.endsWith(".service")) continue;
+      let text: string;
+      try {
+        text = io.readFile(join(systemdUserDir, name));
+      } catch {
+        // Unreadable unit — cannot classify; skip. (A present-but-unreadable
+        // cortex unit is an install anomaly; documented residual.)
+        continue;
+      }
+      const argv = parseUnitExecStartArgs(text);
+      if (argv.length === 0) continue;
+      if (argv.some(isRelayEntrypoint)) {
+        push("relay", "relay", name);
+        continue;
+      }
+      const cfg = configArgValue(argv);
+      if (cfg === undefined) continue;
+      const resolved = resolve(expandTilde(cfg));
+      if (resolved === cfgRoot || resolved.startsWith(cfgRoot + sep)) {
+        push(slugFromConfigPath(resolved), "stack", name);
+      }
+    }
+  }
+
+  // 2. UNION the legacy set by-name, but only when the unit file EXISTS (G-35).
+  for (const legacy of LEGACY_LABELS) {
+    const unit = `${legacy}.service`;
+    if (io.exists(join(systemdUserDir, unit))) push(legacy, "legacy", unit);
+  }
+
+  return targets;
+}
+
+/** An ExecStart token that names the relay entrypoint (`…/relay.ts` / `cortex-relay`). */
+function isRelayEntrypoint(token: string): boolean {
+  return /(^|\/)relay\.ts$/.test(token) || /(^|\/)cortex-relay$/.test(token);
+}
+
+/** Derive a stack slug from a daemon `--config` path (for the target id only). */
+function slugFromConfigPath(cfgPath: string): string {
+  const base = cfgPath.split("/").pop() ?? cfgPath;
+  const noext = base.replace(/\.ya?ml$/i, "");
+  if (noext === "cortex") return "meta-factory";
+  const m = /^cortex\.(.+)$/.exec(noext);
+  return m?.[1] ?? noext;
+}
+
 // =============================================================================
 // The gate
 // =============================================================================
 
-/** Inputs to {@link runMigrationGate}. All side effects are injected. */
+/** Inputs to {@link runMigrationGate}. All effects are injected via {@link GateEnv}. */
 export interface MigrationGateOptions {
   platform: GatePlatform;
   /** launchd `gui/<uid>` target uid (ignored on Linux). */
   uid: number;
-  exec: GateExec;
-  /** Enumerated by {@link enumerateServiceTargets}. */
+  env: GateEnv;
   targets: ServiceTarget[];
+  /** Death-wait policy. Defaults to {@link DEFAULT_DRAIN}. */
+  drain?: DrainPolicy;
 }
 
 /** Outcome of a `restore()` call — which targets came back, and which didn't. */
@@ -212,91 +360,65 @@ export interface RestoreResult {
 
 /** The gate's verdict + the restore handle callers MUST use on any failure. */
 export interface MigrationGateResult {
-  /** `true` ONLY when every target was positively proven down. */
+  /** `true` ONLY when every target passed all three legs of the death proof. */
   cleared: boolean;
-  /** Present when `cleared === false` — which targets refused to prove down. */
+  /** Present when `cleared === false` — which targets refused to prove dead. */
   reason?: string;
-  /** Everything the gate reasoned about. */
   targets: ServiceTarget[];
   /** Targets UP at pre-check — the exact set `restore()` brings back (symmetry). */
   running: ServiceTarget[];
-  /** Targets not proven down AFTER the stop — the fail-closed evidence. */
+  /** Targets not proven dead — the fail-closed evidence. */
   stillPresent: ServiceTarget[];
-  /** Re-`bootstrap`/`start` the `running` set and verify each returns. Callers
-   *  MUST invoke this on ANY failure path — `bootout` is persistent. */
+  /** Re-`bootstrap`/`start` the pre-running set + verify each. Callers MUST call
+   *  this on any failure path — `bootout`/`stop` are persistent. */
   restore: () => Promise<RestoreResult>;
 }
 
-/**
- * Prove a single target is DOWN via the service manager. Returns `true` ONLY on
- * positive proof of absence; a thrown exec (binary missing) or any up-signal
- * returns `false` (fail-closed — the caller then treats it as still present).
- */
-async function proveAbsent(opts: MigrationGateOptions, t: ServiceTarget): Promise<boolean> {
-  try {
-    if (opts.platform === "darwin") {
-      // `launchctl print` exits 0 while the job is in the domain, non-zero once
-      // booted out. Non-zero is the positive proof of absence.
-      const r = await opts.exec(["launchctl", "print", `gui/${opts.uid.toString()}/${t.label}`]);
-      return r.code !== 0;
-    }
-    // Linux: `is-active` prints the state word; a non-"up" state is proof-of-down.
-    const r = await opts.exec(["systemctl", "--user", "is-active", t.unit]);
-    return !SYSTEMD_UP_STATES.has(r.stdout.trim());
-  } catch {
-    // Exec threw (e.g. systemctl/launchctl ENOENT): we CANNOT prove absence, so
-    // the target is treated as present. This is the fail-closed spine.
-    return false;
-  }
-}
-
-/** Issue the authoritative stop for one target (defeats KeepAlive/Restart). Never
- *  throws — a stop failure surfaces later as a failed absence proof. */
-async function stopTarget(opts: MigrationGateOptions, t: ServiceTarget): Promise<void> {
-  try {
-    if (opts.platform === "darwin") {
-      await opts.exec(["launchctl", "bootout", `gui/${opts.uid.toString()}/${t.label}`]);
-    } else {
-      await opts.exec(["systemctl", "--user", "stop", t.unit]);
-    }
-  } catch {
-    // Swallow — a stop that couldn't run leaves the target UP, which the verify
-    // pass below will catch as `stillPresent` (fail-closed), so nothing clears.
-  }
+/** Per-target probe captured BEFORE any stop (so we hold the live PID). */
+interface TargetProbe {
+  target: ServiceTarget;
+  running: boolean;
+  pid?: number;
 }
 
 /**
  * Run the migration gate over `targets`:
- *   1. Pre-check which targets are UP (the restore set — symmetry anchor).
- *   2. Stop EVERY target (idempotent; also catches a target that raced up after
- *      the pre-check — it is booted out regardless).
- *   3. Prove EVERY target is now down. `cleared` iff all are proven down.
+ *   1. PROBE every target — record up-state + the live PID (before any stop).
+ *   2. STOP every target authoritatively (bootout / systemctl stop).
+ *   3. PROVE-DEAD every target via all three legs. `cleared` iff every target
+ *      is positively proven dead.
  *
- * Always returns a `restore()` handle bound to the pre-check UP set — usable
- * whether the gate cleared (caller migrates, then restores) or refused (caller
- * restores immediately).
+ * Throws on an EMPTY target set (a footgun: discovery returned nothing, and a
+ * vacuous "clear" would be fail-open). Always returns a `restore()` handle bound
+ * to the pre-check UP set.
  */
 export async function runMigrationGate(
   opts: MigrationGateOptions,
 ): Promise<MigrationGateResult> {
   const { targets } = opts;
-
-  // 1. Pre-check: UP == "not proven absent". A target whose proof throws (binary
-  //    missing) counts as UP, so restore is attempted and the gate won't clear.
-  const running: ServiceTarget[] = [];
-  for (const t of targets) {
-    if (!(await proveAbsent(opts, t))) running.push(t);
+  if (targets.length === 0) {
+    throw new Error(
+      "migration gate: refusing to run with an EMPTY target set — enumeration returned " +
+        "nothing (unreadable systemd dir / no discovered units / no fleet). Clearing an empty " +
+        "set would be fail-open; this is a discovery failure, not a clear.",
+    );
   }
+  const drain = opts.drain ?? DEFAULT_DRAIN;
 
-  // 2. Authoritatively stop every enumerated target (defeat KeepAlive/Restart).
+  // 1. Probe — capture up-state + PID while the daemon is still alive.
+  const probes: TargetProbe[] = [];
+  for (const t of targets) probes.push(await probeTarget(opts, t));
+
+  // 2. Authoritatively stop every target (defeat KeepAlive / Restart=always).
   for (const t of targets) await stopTarget(opts, t);
 
-  // 3. Positive-proof verification. Absence must be proven for ALL to clear.
+  // 3. Positive death proof for every target.
   const stillPresent: ServiceTarget[] = [];
-  for (const t of targets) {
-    if (!(await proveAbsent(opts, t))) stillPresent.push(t);
+  for (const p of probes) {
+    if (!(await proveDead(opts, p, drain))) stillPresent.push(p.target);
   }
 
+  const running = probes.filter((p) => p.running).map((p) => p.target);
   const cleared = stillPresent.length === 0;
   const restore = makeRestore(opts, running);
 
@@ -308,6 +430,117 @@ export async function runMigrationGate(
     stillPresent,
     restore,
   };
+}
+
+/** Probe a target's up-state + live PID BEFORE any stop (leg-3 needs the PID). */
+async function probeTarget(opts: MigrationGateOptions, t: ServiceTarget): Promise<TargetProbe> {
+  if (opts.platform === "darwin") {
+    let r: GateExecResult;
+    try {
+      r = await opts.env.exec(["launchctl", "print", `gui/${opts.uid.toString()}/${t.label}`]);
+    } catch {
+      // launchctl unreachable — assume UP, no PID (fail-closed downstream).
+      return { target: t, running: true };
+    }
+    if (r.code !== 0) return { target: t, running: false };
+    const pid = parseLaunchctlPid(r.stdout);
+    return { target: t, running: true, ...(pid !== undefined && { pid }) };
+  }
+  // Linux: is-active for up-state, `show MainPID` for the PID.
+  let up: boolean;
+  try {
+    const r = await opts.env.exec(["systemctl", "--user", "is-active", t.unit]);
+    up = SYSTEMD_UP_STATES.has(r.stdout.trim());
+  } catch {
+    return { target: t, running: true }; // manager unreachable — assume UP, no PID
+  }
+  const pid = await linuxMainPid(opts, t);
+  const running = up || pid !== undefined;
+  return { target: t, running, ...(pid !== undefined && { pid }) };
+}
+
+/** Read a systemd unit's `MainPID` (0/absent → undefined). */
+async function linuxMainPid(opts: MigrationGateOptions, t: ServiceTarget): Promise<number | undefined> {
+  try {
+    const r = await opts.env.exec([
+      "systemctl",
+      "--user",
+      "show",
+      t.unit,
+      "--property=MainPID",
+      "--value",
+    ]);
+    const n = parseInt(r.stdout.trim(), 10);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse `pid = <n>` out of a `launchctl print` dump. */
+function parseLaunchctlPid(stdout: string): number | undefined {
+  const m = /^\s*pid = (\d+)/m.exec(stdout);
+  if (m?.[1] === undefined) return undefined;
+  const n = parseInt(m[1], 10);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** Issue the authoritative stop for one target. Never throws — a stop that
+ *  couldn't run surfaces as a failed death proof (fail-closed). */
+async function stopTarget(opts: MigrationGateOptions, t: ServiceTarget): Promise<void> {
+  try {
+    if (opts.platform === "darwin") {
+      await opts.env.exec(["launchctl", "bootout", `gui/${opts.uid.toString()}/${t.label}`]);
+    } else {
+      await opts.env.exec(["systemctl", "--user", "stop", t.unit]);
+    }
+  } catch {
+    // Swallow — a stop that couldn't run leaves the target UP, which the death
+    // proof below catches as stillPresent.
+  }
+}
+
+/**
+ * The three-leg death proof. Returns `true` ONLY when the manager reports the
+ * service down AND the pre-stop PID has exited. A target that was down at
+ * pre-check with no PID passes on the manager verdict alone (nothing to bury).
+ */
+async function proveDead(
+  opts: MigrationGateOptions,
+  p: TargetProbe,
+  drain: DrainPolicy,
+): Promise<boolean> {
+  if (!(await verifyManagerDown(opts, p.target))) return false; // leg 2
+  if (p.pid === undefined) {
+    // No PID to confirm. Safe ONLY if it was never up (else we can't prove death).
+    return !p.running;
+  }
+  return waitForDeath(opts.env, p.pid, drain); // leg 3
+}
+
+/** Leg 2: a manager-REACHED down verdict. A throw or a non-definitive word (the
+ *  manager-unreachable signature) is NOT proof → returns `false` (present). */
+async function verifyManagerDown(opts: MigrationGateOptions, t: ServiceTarget): Promise<boolean> {
+  try {
+    if (opts.platform === "darwin") {
+      const r = await opts.env.exec(["launchctl", "print", `gui/${opts.uid.toString()}/${t.label}`]);
+      return r.code !== 0; // left the domain (from a call that did not throw)
+    }
+    const r = await opts.env.exec(["systemctl", "--user", "is-active", t.unit]);
+    return SYSTEMD_DOWN_WORDS.has(r.stdout.trim()); // exactly inactive|failed
+  } catch {
+    return false; // manager unreachable → cannot prove → present
+  }
+}
+
+/** Leg 3: poll `kill(pid,0)` until `ESRCH`, bounded by the drain window. */
+async function waitForDeath(env: GateEnv, pid: number, drain: DrainPolicy): Promise<boolean> {
+  const deadline = env.now() + drain.drainTimeoutMs;
+  while (env.procAlive(pid)) {
+    if (env.now() >= deadline) return false; // still draining past the window → present
+    await env.sleep(drain.pollIntervalMs);
+  }
+  return true;
 }
 
 /** Build the `restore()` closure bound to the pre-check UP set. */
@@ -334,16 +567,15 @@ function makeRestore(
   };
 }
 
-/** macOS restore: `bootstrap` the plist back into the domain, `kickstart` it,
- *  then confirm with `print` that it is loaded again. */
+/** macOS restore: `bootstrap` the plist back, `kickstart`, confirm with `print`. */
 async function restoreDarwin(
   opts: MigrationGateOptions,
   t: ServiceTarget,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const gui = `gui/${opts.uid.toString()}`;
-  await opts.exec(["launchctl", "bootstrap", gui, t.plistPath]);
-  await opts.exec(["launchctl", "kickstart", "-k", `${gui}/${t.label}`]);
-  const check = await opts.exec(["launchctl", "print", `${gui}/${t.label}`]);
+  await opts.env.exec(["launchctl", "bootstrap", gui, t.plistPath]);
+  await opts.env.exec(["launchctl", "kickstart", "-k", `${gui}/${t.label}`]);
+  const check = await opts.env.exec(["launchctl", "print", `${gui}/${t.label}`]);
   if (check.code === 0) return { ok: true };
   return {
     ok: false,
@@ -351,13 +583,13 @@ async function restoreDarwin(
   };
 }
 
-/** Linux restore: `systemctl --user start`, then confirm with `is-active`. */
+/** Linux restore: `systemctl --user start`, confirm with `is-active`. */
 async function restoreLinux(
   opts: MigrationGateOptions,
   t: ServiceTarget,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  await opts.exec(["systemctl", "--user", "start", t.unit]);
-  const check = await opts.exec(["systemctl", "--user", "is-active", t.unit]);
+  await opts.env.exec(["systemctl", "--user", "start", t.unit]);
+  const check = await opts.env.exec(["systemctl", "--user", "is-active", t.unit]);
   if (SYSTEMD_UP_STATES.has(check.stdout.trim())) return { ok: true };
   return {
     ok: false,
@@ -365,24 +597,21 @@ async function restoreLinux(
   };
 }
 
-/** Human-readable fail-closed reason naming the not-proven-down targets. */
+/** Human-readable fail-closed reason naming the not-proven-dead targets. */
 function notClearedReason(platform: GatePlatform, stillPresent: readonly ServiceTarget[]): string {
   const how =
     platform === "darwin"
-      ? "`launchctl print` still resolves them (or launchctl is unavailable)"
-      : "`systemctl --user is-active` reports an up-state (or systemctl is unavailable)";
-  const which = stillPresent
-    .map((t) => (platform === "darwin" ? t.label : t.unit))
-    .join(", ");
-  return `migration gate REFUSED to clear (fail-closed): ${stillPresent.length.toString()} target(s) not proven stopped — ${how}: ${which}`;
+      ? "`launchctl print` still resolves them, or the PID is still draining, or launchctl is unavailable"
+      : "`systemctl --user is-active` is not a clean down word, or the PID is still draining, or systemctl is unavailable";
+  const which = stillPresent.map((t) => (platform === "darwin" ? t.label : t.unit)).join(", ");
+  return `migration gate REFUSED to clear (fail-closed): ${stillPresent.length.toString()} target(s) not proven dead — ${how}: ${which}`;
 }
 
 // =============================================================================
 // Production wiring
 // =============================================================================
 
-/** A real `Bun.spawn`-backed {@link GateExec}. Captures stdout (Linux `is-active`
- *  needs it) + stderr + exit code. */
+/** A real `Bun.spawn`-backed {@link GateExec}. */
 export const bunGateExec: GateExec = async (argv) => {
   const [cmd, ...rest] = argv;
   const proc = Bun.spawn([cmd ?? "", ...rest], { stdout: "pipe", stderr: "pipe" });
@@ -392,45 +621,107 @@ export const bunGateExec: GateExec = async (argv) => {
   return { code, stdout, stderr };
 };
 
+/** The default {@link GateEnv}: real subprocess, real `kill(pid,0)`, real clock. */
+export const bunGateEnv: GateEnv = {
+  exec: bunGateExec,
+  procAlive: (pid) => {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0); // signal 0 = liveness probe, delivers nothing
+      return true;
+    } catch (err) {
+      // ESRCH = no such process (dead). Anything else (EPERM/…) = exists but not
+      // ours → assume ALIVE (fail-closed).
+      return (err as { code?: string }).code !== "ESRCH";
+    }
+  },
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  now: () => Date.now(),
+};
+
 /** Map `process.platform` onto the supported {@link GatePlatform} set. */
 export function currentGatePlatform(): GatePlatform {
   return process.platform === "darwin" ? "darwin" : "linux";
 }
 
-/** Resolve the launchd `gui/<uid>` target: explicit override, else the process
- *  uid, else the macOS default 501. */
+/** Resolve the launchd `gui/<uid>` target uid. */
 export function resolveGateUid(uid?: number): number {
   return uid ?? process.getuid?.() ?? 501;
 }
 
-/** `~/Library/LaunchAgents` (or under a `home` override). */
-function defaultLaunchAgentsDir(home?: string): string {
-  return join(home ?? process.env.HOME ?? homedir(), "Library", "LaunchAgents");
+/** Shared options for the batteries-included entry points. */
+export interface ClearFleetOptions {
+  platform?: GatePlatform;
+  uid?: number;
+  env?: GateEnv;
+  drain?: DrainPolicy;
+  configDir?: string;
+  launchAgentsDir?: string;
+  systemdUserDir?: string;
+  io?: DaemonLocatorIO;
+  discoverSlugs?: (configDir: string) => string[];
+  home?: string;
+}
+
+/** Enumerate the fleet + run the gate with host-derived defaults. */
+export async function clearFleetForMigration(
+  opts: ClearFleetOptions = {},
+): Promise<MigrationGateResult> {
+  const platform = opts.platform ?? currentGatePlatform();
+  const targets = enumerateServiceTargets({
+    platform,
+    ...(opts.configDir !== undefined && { configDir: opts.configDir }),
+    ...(opts.launchAgentsDir !== undefined && { launchAgentsDir: opts.launchAgentsDir }),
+    ...(opts.systemdUserDir !== undefined && { systemdUserDir: opts.systemdUserDir }),
+    ...(opts.io !== undefined && { io: opts.io }),
+    ...(opts.discoverSlugs !== undefined && { discoverSlugs: opts.discoverSlugs }),
+    ...(opts.home !== undefined && { home: opts.home }),
+  });
+  return runMigrationGate({
+    platform,
+    uid: resolveGateUid(opts.uid),
+    env: opts.env ?? bunGateEnv,
+    targets,
+    ...(opts.drain !== undefined && { drain: opts.drain }),
+  });
+}
+
+/** The result of {@link withMigrationGate}. */
+export interface MigrationRunResult<T> {
+  /** Whether the gate cleared (and therefore the migration ran). */
+  cleared: boolean;
+  gate: MigrationGateResult;
+  /** The finally-guaranteed restore outcome (present whenever the fleet was
+   *  brought back — i.e. every path except a migration that itself threw, where
+   *  the restore still ran but the throw propagates to the caller). */
+  restore: RestoreResult;
+  /** The migration fn's return value (only on the cleared + no-throw path). */
+  result?: T;
 }
 
 /**
- * The one-call production entry point X-07/X-11 use: enumerate the fleet + run
- * the gate with real `Bun.spawn` exec and host-derived platform/uid/dirs. Every
- * default is overridable for tests + non-standard installs.
+ * The BLESSED entry X-07/X-11 use (A-RESTORE). Runs `migrate` ONLY after the gate
+ * clears, inside a `try/finally` that ALWAYS restores the pre-running fleet — so a
+ * migration that throws can never strand the fleet down (bootout/stop persist).
+ * When the gate REFUSES, `migrate` is not called and the fleet is restored
+ * immediately (the gate had already stopped everything to probe it).
  */
-export async function clearFleetForMigration(opts?: {
-  platform?: GatePlatform;
-  uid?: number;
-  exec?: GateExec;
-  configDir?: string;
-  launchAgentsDir?: string;
-  home?: string;
-}): Promise<MigrationGateResult> {
-  const launchAgentsDir = opts?.launchAgentsDir ?? defaultLaunchAgentsDir(opts?.home);
-  const targets = enumerateServiceTargets({
-    ...(opts?.configDir !== undefined && { configDir: opts.configDir }),
-    launchAgentsDir,
-    ...(opts?.home !== undefined && { home: opts.home }),
-  });
-  return runMigrationGate({
-    platform: opts?.platform ?? currentGatePlatform(),
-    uid: resolveGateUid(opts?.uid),
-    exec: opts?.exec ?? bunGateExec,
-    targets,
-  });
+export async function withMigrationGate<T>(
+  opts: ClearFleetOptions,
+  migrate: (gate: MigrationGateResult) => Promise<T>,
+): Promise<MigrationRunResult<T>> {
+  const gate = await clearFleetForMigration(opts);
+  if (!gate.cleared) {
+    const restore = await gate.restore();
+    return { cleared: false, gate, restore };
+  }
+  let result: T | undefined;
+  let restore!: RestoreResult;
+  try {
+    result = await migrate(gate);
+  } finally {
+    // GUARANTEE: whether migrate returned or threw, the fleet comes back.
+    restore = await gate.restore();
+  }
+  return { cleared: true, gate, restore, ...(result !== undefined && { result }) };
 }
