@@ -1584,6 +1584,34 @@ export const ExecutionConfigSchema = z.object({
 export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
 
 /**
+ * cortex#1792 (S6, ADR-0024 D3/OQ6/OQ9) — the `system.plugins.external` gate.
+ * Lives in the `system/system.yaml` config layer (repo CLAUDE.md's config-
+ * split table — substrate/machine-wide, whole-stack blast radius), alongside
+ * `execution`/`attachments`/`nats`/`bus`.
+ *
+ * Renamed from the wave plan's `system.adapters.external` (ADR-0024's
+ * "SCOPE AMENDED" ratification, 2026-07-11) — the flag gates renderer
+ * bundles too, so an adapter-scoped name would be a lie (it gates BOTH
+ * plugin kinds, D5).
+ *
+ * `external: false` (default) is the secure posture: only in-tree plugin
+ * registrations (`createDefaultSurfacePluginRegistry`) load. Flipping it on
+ * opts a stack into `await import()`-ing arbitrary installed bundle code at
+ * boot (`src/adapters/loader.ts`) — full daemon authority, no sandbox
+ * (ADR-0024 D4). **Exception (OQ9, ratified):** a first-party RENDERER
+ * bundle (checkable via `loader.ts`'s `isFirstPartyRendererBundle` — an
+ * in-tree allowlist, never the bundle's own manifest/tier) loads even when
+ * this flag is off, because "don't load third-party code" (secure for
+ * adapters) is fail-open for a paging sink (a stack with an uninstalled or
+ * unloaded pager silently never pages).
+ */
+export const PluginsConfigSchema = z.object({
+  external: z.boolean().default(false),
+});
+
+export type PluginsConfig = z.infer<typeof PluginsConfigSchema>;
+
+/**
  * GitHub agent-detection heuristics — extracted from `GithubConfigSchema` so
  * it can use `emptyDefault` cleanly when nested. Identical defaults to grove-v2.
  *
@@ -3206,6 +3234,11 @@ export const CortexConfigSchema = z.object({
 
   /** Execution backends — local default, plus optional remotes. */
   execution: emptyDefault(ExecutionConfigSchema),
+
+  /** cortex#1792 (S6, ADR-0024 D3/OQ6/OQ9) — external plugin-bundle loading
+   *  gate. Default-off; see {@link PluginsConfigSchema} for the full
+   *  rationale + the first-party-renderer exemption. */
+  plugins: emptyDefault(PluginsConfigSchema),
 
   /** GitHub webhook ingestion (the taps side). */
   github: emptyDefault(GithubConfigSchema),

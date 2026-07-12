@@ -1,0 +1,8 @@
+# cortex#1792 (S6) — a structurally VALID adapter bundle that attempts to
+# claim id "discord", already occupied by the in-tree discord AdapterPlugin.
+# Proves the duplicate-platform gate refuses the shadow attempt (checked
+# BEFORE import — this bundle's index.ts is never executed).
+kind: adapter
+id: discord
+entry: ./index.ts
+sdkRange: "^1"

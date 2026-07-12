@@ -133,6 +133,8 @@ import {
 import { attachLegacyOutboundLog } from "./adapters/discord";
 import { resolveRendererPluginAndConfig, type Renderer } from "./renderers";
 import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "./adapters/registry";
+import { loadExternalPlugins } from "./adapters/loader";
+import { createSystemPluginLoadFailedEvent, createSystemPluginLoadedEvent } from "./bus/system-events";
 import { deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
 import type {
   Agent,
@@ -3108,6 +3110,60 @@ export async function startCortex(
   // in-tree registrations (ADR-0024 §3.3) — extraction later moves a plugin
   // out, it never rewires this composition.
   const surfacePluginRegistry = createDefaultSurfacePluginRegistry();
+
+  // cortex#1792 (S6, ADR-0024 D1/D3/D4/D5, OQ9/OQ11) — discover, compat-gate,
+  // import, and register out-of-tree plugin bundles into the SAME registry,
+  // BEFORE anything below consumes it (surfaces validation, the per-stack
+  // adapter loop, the renderer boot loop, the gateway). `loadExternalPlugins`
+  // never throws: a bad bundle (bad manifest, incompatible sdkRange, a
+  // throwing import, a duplicate-platform shadow attempt, …) is skipped,
+  // logged, and returned in `.failed` — every other in-tree AND bundle
+  // plugin still loads. `config.plugins.external` (default off) gates every
+  // bundle except an OQ9-exempt first-party renderer, which loads
+  // regardless — a stack's paging sink must not silently vanish behind an
+  // opt-in flag nobody flipped. The runtime-hard-fail half of OQ9 (does
+  // `system.>` coverage still hold two classes after this?) is cortex#1893,
+  // a separate issue; this loop only SURFACES what loaded so that check has
+  // something to read.
+  const pluginLoadResult = await loadExternalPlugins({
+    registry: surfacePluginRegistry,
+    externalEnabled: config.plugins.external,
+  });
+  for (const failure of pluginLoadResult.failed) {
+    console.error(
+      `cortex: plugin "${failure.bundleName}" failed to load at ${failure.stage}: ${failure.reason}`,
+    );
+    void runtime.publish(
+      createSystemPluginLoadFailedEvent({
+        source: systemEventSource,
+        bundleName: failure.bundleName,
+        kind: failure.kind,
+        pluginId: failure.pluginId,
+        stage: failure.stage,
+        reason: failure.reason,
+      }),
+    );
+  }
+  for (const skippedPlugin of pluginLoadResult.skipped) {
+    console.log(
+      `cortex: plugin "${skippedPlugin.bundleName}" (${skippedPlugin.kind}:${skippedPlugin.id}) skipped: ${skippedPlugin.reason}`,
+    );
+  }
+  for (const loadedPlugin of pluginLoadResult.loaded) {
+    console.log(
+      `cortex: plugin ${loadedPlugin.kind} "${loadedPlugin.id}" loaded from bundle "${loadedPlugin.bundleName}"` +
+        (loadedPlugin.firstParty ? " (first-party renderer exemption)" : ""),
+    );
+    void runtime.publish(
+      createSystemPluginLoadedEvent({
+        source: systemEventSource,
+        bundleName: loadedPlugin.bundleName,
+        kind: loadedPlugin.kind,
+        pluginId: loadedPlugin.id,
+        firstParty: loadedPlugin.firstParty,
+      }),
+    );
+  }
 
   // cortex#1789 (S4, ADR-0024 D5) — the REGISTRY pass for `surfaces:`
   // bindings, run here because this is the first point in boot where BOTH

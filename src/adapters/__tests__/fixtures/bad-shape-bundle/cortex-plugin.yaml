@@ -1,0 +1,8 @@
+# cortex#1792 (S6) — manifest is valid and the entry module imports
+# cleanly, but its default export does NOT satisfy the RendererPlugin
+# shape (missing `createRenderer`/`configSchema`). Proves the loader's
+# runtime structural shape-validation stage.
+kind: renderer
+id: bad-shape
+entry: ./index.ts
+sdkRange: "^1"

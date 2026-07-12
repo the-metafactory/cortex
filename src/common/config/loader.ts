@@ -931,6 +931,14 @@ function loadCortexShape(
     claude: cortexConfig.claude,
     attachments: cortexConfig.attachments,
     execution: cortexConfig.execution,
+    // cortex#1792 (S6, ADR-0024 D3/OQ6/OQ9) — carry `plugins.external`
+    // through to the synthesized AgentConfig. Same failure class the
+    // `security`/`mc`/`cockpit`/`grove` comments above warn about: omitting
+    // this passthrough would silently re-default `plugins.external` to
+    // `false` for every cortex-shape deployment even when the principal
+    // explicitly declared `plugins: {external: true}` in `cortex.yaml` —
+    // masking, not just defaulting, the principal's own opt-in.
+    plugins: cortexConfig.plugins,
     github: cortexConfig.github,
     paths: cortexConfig.paths,
     // TC-0 (#628) — carry the principal-declared security posture through to

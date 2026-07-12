@@ -1,0 +1,7 @@
+# cortex#1792 (S6) — declares an sdkRange no running SURFACE_SDK_VERSION
+# (1.x today) can ever satisfy. Proves the compat gate refuses BEFORE
+# importing the entry module (index.ts deliberately does not exist).
+kind: renderer
+id: sdk-mismatch
+entry: ./index.ts
+sdkRange: "^99"

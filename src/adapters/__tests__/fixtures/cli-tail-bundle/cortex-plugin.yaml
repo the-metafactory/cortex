@@ -1,0 +1,13 @@
+# cortex#1792 (S6, ADR-0024 OQ11) — the cli-tail load-path proof fixture.
+#
+# Simulates the manifest a real out-of-tree `metafactory-cli-tail` bundle
+# would ship. Not installed via a real `arc install` (no such repo exists
+# yet) — tests inject an `arc list --json`-shaped package record whose
+# `installPath` points at this directory, so discovery exercises the exact
+# same manifest-parse + compat-gate + import + register path a real bundle
+# would go through.
+kind: renderer
+id: cli-tail
+entry: ./index.ts
+sdkRange: "^1"
+cortex: ">=6.0.0"

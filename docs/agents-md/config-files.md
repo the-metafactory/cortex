@@ -9,7 +9,7 @@ fixed precedence (later layers win on leaf keys), producing the SAME
 
 | Layer | Owns | Blast radius |
 |---|---|---|
-| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, **`nats` (incl. the `nats.subjects` landmine — ONE place), `bus`** | whole stack |
+| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, `plugins`, **`nats` (incl. the `nats.subjects` landmine — ONE place), `bus`** | whole stack |
 | `network/*.yaml` | federation roster (`policy.federated.{registry, networks[]}`) — OPTIONAL | cross-principal |
 | `surfaces/surfaces.yaml` | shared surface-gateway bindings (Discord/Slack/Mattermost tokens) — OPTIONAL | cross-stack |
 | `stacks/*.yaml` | per-deployment `principal` / `stack` / `policy` / `capabilities` / `agents` / `github` | one stack |

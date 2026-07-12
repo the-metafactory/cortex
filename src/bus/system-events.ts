@@ -1706,3 +1706,105 @@ export function createSystemGatewayRoutingDecisionEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.plugin.load_failed / system.plugin.loaded — cortex#1792 (S6,
+// ADR-0024 D1/D3/D5)
+// ---------------------------------------------------------------------------
+
+/**
+ * New `system.plugin.*` family — the plugin loader's (`src/adapters/loader.ts`)
+ * per-bundle outcome events. A new leaf, not folded into `system.adapter.*`
+ * (adapter CONNECTION lifecycle, not plugin LOAD lifecycle — a plugin failure
+ * can be a renderer, which has no adapter-connection concept at all) or
+ * `system.bus.*` (listener/handler visibility, not code-loading visibility).
+ * `git grep system.plugin` was empty before this event.
+ *
+ * ADR-0024 §3.3 / D3 requires per-plugin fail-isolation: ONE bad bundle
+ * (bad manifest, incompatible `sdkRange`, a throwing `import()`, a
+ * malformed default export, a duplicate-platform shadow attempt) is skipped
+ * with a `system.error`-class event; the daemon and every other plugin stay
+ * live. `createSystemPluginLoadFailedEvent` is that event. Reason strings
+ * NEVER echo a manifest or bundle config VALUE (only field paths / static
+ * messages) — a plugin bundle load failure must not leak a secret a
+ * misconfigured renderer manifest happened to carry.
+ *
+ * `createSystemPluginLoadedEvent` is the success twin — cortex#1893 (the
+ * separate boot-coverage hard-fail slice, ADR-0024 §OQ9) consumes "which
+ * plugins loaded" to decide whether `local.{principal}.system.>` coverage
+ * holds; this event (plus the loader's own structured return value) is the
+ * surface it reads.
+ */
+export interface SystemPluginLoadFailedOpts {
+  source: SystemEventSource;
+  /** arc package name the bundle installed under (`arc list --json`'s `name`). */
+  bundleName: string;
+  /** Plugin kind the manifest declared, when parsing got that far. */
+  kind?: "adapter" | "renderer";
+  /** Plugin id the manifest declared, when parsing got that far. */
+  pluginId?: string;
+  /**
+   * Which stage of discover → gate → import → register the failure
+   * occurred at. Kept as an open string (not a closed enum) so a future
+   * stage doesn't need a schema change — `loader.ts` is the single source
+   * of truth for the values it actually emits.
+   */
+  stage: string;
+  /** Human-readable, secret-free failure detail. */
+  reason: string;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.plugin.load_failed` envelope. Subject convention:
+ * `local.{principal}.system.plugin.load_failed` — surfaces subscribe to
+ * `system.plugin.>` (or the broader `system.>`).
+ */
+export function createSystemPluginLoadFailedEvent(
+  opts: SystemPluginLoadFailedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.plugin.load_failed",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      bundle_name: opts.bundleName,
+      ...(opts.kind !== undefined && { kind: opts.kind }),
+      ...(opts.pluginId !== undefined && { plugin_id: opts.pluginId }),
+      stage: opts.stage,
+      reason: opts.reason,
+    },
+  });
+}
+
+export interface SystemPluginLoadedOpts {
+  source: SystemEventSource;
+  bundleName: string;
+  kind: "adapter" | "renderer";
+  pluginId: string;
+  /** True when this plugin loaded under the OQ9 first-party-renderer
+   *  exemption rather than because `system.plugins.external` was on. */
+  firstParty: boolean;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.plugin.loaded` envelope — the success twin of
+ * {@link createSystemPluginLoadFailedEvent}. Subject convention:
+ * `local.{principal}.system.plugin.loaded`.
+ */
+export function createSystemPluginLoadedEvent(
+  opts: SystemPluginLoadedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.plugin.loaded",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      bundle_name: opts.bundleName,
+      kind: opts.kind,
+      plugin_id: opts.pluginId,
+      first_party: opts.firstParty,
+    },
+  });
+}

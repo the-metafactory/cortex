@@ -60,6 +60,27 @@ paths:
   publishedEventsDir: ~/.claude/events/published
   logDir: ~/.config/cortex/logs
 
+# -----------------------------------------------------------------------------
+# plugins — out-of-tree surface-plugin bundle loading (cortex#1792, ADR-0024)
+# -----------------------------------------------------------------------------
+# `external: false` (the secure default) means the daemon loads ONLY its
+# in-tree adapter/renderer registrations at boot — `arc install`-ed plugin
+# bundles are discovered but not imported. Flip to `true` to opt this stack
+# into `await import()`-ing installed bundle code at boot (full daemon
+# authority, no sandbox — ADR-0024 D4; an `arc install` is an explicit,
+# reviewed act, and an `arc upgrade` of an installed bundle re-executes new
+# code with that same authority, so treat both as code-review events).
+#
+# EXCEPTION (ADR-0024 §OQ9): a first-party RENDERER bundle — one on cortex's
+# own in-tree allowlist (`src/adapters/loader.ts`'s
+# `isFirstPartyRendererBundle`; never the bundle's own manifest or arc's
+# `tier` field, both of which the bundle author controls) — loads even when
+# `external` is off. Rationale: "don't load third-party code" is secure for
+# adapters, but fail-open for a paging sink — a stack with an uninstalled or
+# unloaded PagerDuty bundle must not silently stop paging.
+plugins:
+  external: false
+
 # =============================================================================
 # nats — M2 transport. THE SINGLE PLACE SUBJECT OVERRIDES LIVE (IAW CFG.b.2)
 # =============================================================================

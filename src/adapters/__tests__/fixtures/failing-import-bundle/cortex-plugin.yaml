@@ -1,0 +1,8 @@
+# cortex#1792 (S6) — a valid manifest whose entry module THROWS at
+# top-level import time. Proves the loader's "import" stage failure
+# isolation: this bundle is skipped and recorded as failed; it must not
+# crash boot or prevent any other bundle from loading.
+kind: renderer
+id: failing-import
+entry: ./index.ts
+sdkRange: "^1"

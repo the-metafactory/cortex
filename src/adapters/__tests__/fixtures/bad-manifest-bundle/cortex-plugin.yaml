@@ -1,0 +1,10 @@
+# cortex#1792 (S6) — deliberately invalid manifest fixture: `id` is not
+# lowercase-kebab-case AND an unknown key is present (`.strict()` violation).
+# Discovery must record a `manifest_parse` issue and skip this bundle;
+# `index.ts` deliberately does not exist — a manifest failure must never
+# reach the import stage.
+kind: adapter
+id: Bad_ID
+entry: ./index.ts
+sdkRange: "^1"
+unexpected_key: true

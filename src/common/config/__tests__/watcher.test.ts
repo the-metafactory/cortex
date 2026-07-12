@@ -92,6 +92,9 @@ const TEST_CONFIG: AgentConfig = {
     default: "local",
     backends: [],
   },
+  plugins: {
+    external: false,
+  },
   github: {
     webhookSecret: "",
     repos: [],

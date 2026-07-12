@@ -713,6 +713,18 @@ export const AgentConfigSchema = z.object({
     })).default([]),
   }).default(emptyDefault()),
 
+  /** cortex#1792 (S6, ADR-0024 D3/OQ6/OQ9) — external plugin-bundle loading
+   *  gate (`system.plugins.external`), default off. MIRROR: see
+   *  `CortexConfigSchema.plugins`/`PluginsConfigSchema` in `./cortex-config.ts`
+   *  for the full rationale (first-party-renderer exemption, etc). Drop
+   *  both on 7.2e. Explicit object default (not `emptyDefault()`) so an
+   *  absent `plugins:` block yields `{external: false}`, not `{}` — see
+   *  `cortex-config.ts`'s `emptyDefault` docstring for the Zod v4 quirk
+   *  this sidesteps. */
+  plugins: z.object({
+    external: z.boolean().default(false),
+  }).default({ external: false }),
+
   /** G-203b: GitHub webhook ingestion */
   github: z.object({
     /**

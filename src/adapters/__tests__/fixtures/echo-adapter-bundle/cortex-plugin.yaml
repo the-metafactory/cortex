@@ -1,0 +1,8 @@
+# cortex#1792 (S6) — adapter-kind happy-path load fixture. Proves the SAME
+# discover -> gate -> import -> register path for the OTHER plugin kind
+# (ADR-0024 D5: one loader, both kinds) using an id that cannot collide
+# with any in-tree platform.
+kind: adapter
+id: fixture-echo
+entry: ./index.ts
+sdkRange: "^1"

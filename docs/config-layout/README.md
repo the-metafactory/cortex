@@ -70,7 +70,7 @@ on one edit surface (design doc §3.7). The split isolates them by lifecycle:
 
 | File | Owns | Blast radius |
 |---|---|---|
-| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, `nats`, `bus` — **the dangerous transport knobs** | Whole stack |
+| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, `plugins`, `nats`, `bus` — **the dangerous transport knobs** | Whole stack |
 | `network/*.yaml` | federation roster (`policy.federated.networks[]`) | Cross-principal |
 | `surfaces/surfaces.yaml` | shared surface-gateway bindings (CFG.c / GW) | Cross-stack |
 | `stacks/*.yaml` | per-deployment policy / capabilities / agents | One stack only |
