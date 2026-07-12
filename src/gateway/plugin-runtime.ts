@@ -44,6 +44,8 @@ import {
   discoverPluginBundles,
   reimportRendererPlugin,
   type DiscoveredBundle,
+  type DiscoverPluginBundlesResult,
+  type ReimportRendererResult,
 } from "../adapters/loader";
 import type { RendererPlugin, SurfacePluginRegistry } from "../adapters/registry";
 import type { Renderer } from "../renderers/types";
@@ -128,6 +130,17 @@ export interface PluginRuntimeDeps {
   /** Forwarded to `discoverPluginBundles`/tests; `undefined` = arc's real
    *  install root. */
   pkgRoot?: string;
+  /** Test seam — defaults to the real `discoverPluginBundles`. Production
+   *  callers never set this. */
+  discoverBundles?: (opts: {
+    pkgRoot?: string;
+  }) => Promise<DiscoverPluginBundlesResult>;
+  /** Test seam — defaults to the real `reimportRendererPlugin`. Production
+   *  callers never set this. */
+  reimportRenderer?: (
+    bundle: DiscoveredBundle,
+    opts: { bust: boolean },
+  ) => Promise<ReimportRendererResult>;
 }
 
 // =============================================================================
@@ -228,7 +241,8 @@ export async function reloadLivePlugin(
     };
   }
 
-  const { bundles, issues } = await discoverPluginBundles({ pkgRoot: deps.pkgRoot });
+  const discoverBundles = deps.discoverBundles ?? discoverPluginBundles;
+  const { bundles, issues } = await discoverBundles({ pkgRoot: deps.pkgRoot });
   const bundle = bundles.find((b) => b.bundleName === handle.bundleName);
   if (!bundle) {
     const issueDetail = issues.find((i) => i.bundleName === handle.bundleName);
@@ -241,7 +255,8 @@ export async function reloadLivePlugin(
     };
   }
 
-  const reimport = await reimportRendererPlugin(bundle, { bust: true });
+  const reimportRenderer = deps.reimportRenderer ?? reimportRendererPlugin;
+  const reimport = await reimportRenderer(bundle, { bust: true });
   if (!reimport.ok) {
     return {
       ok: false,
@@ -268,7 +283,8 @@ export async function loadLivePlugin(
     };
   }
 
-  const { bundles, issues } = await discoverPluginBundles({ pkgRoot: deps.pkgRoot });
+  const discoverBundles = deps.discoverBundles ?? discoverPluginBundles;
+  const { bundles, issues } = await discoverBundles({ pkgRoot: deps.pkgRoot });
   const bundle = bundles.find((b) => b.bundleName === bundleName);
   if (!bundle) {
     const issueDetail = issues.find((i) => i.bundleName === bundleName);
@@ -298,7 +314,8 @@ export async function loadLivePlugin(
     };
   }
 
-  const reimport = await reimportRendererPlugin(bundle, { bust: false });
+  const reimportRenderer = deps.reimportRenderer ?? reimportRendererPlugin;
+  const reimport = await reimportRenderer(bundle, { bust: false });
   if (!reimport.ok) {
     return { ok: false, detail: `load failed at ${reimport.stage}: ${reimport.reason}` };
   }
