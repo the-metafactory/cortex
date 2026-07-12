@@ -221,4 +221,8 @@ describe("plugin SDK boundary guard (cortex#1790, ADR-0024 D5)", () => {
 // `buildAdapterPolicyPort` from `adapters/plugin-support.ts`, fixed during
 // the move — see the bundle's `src/plugin.ts` module doc). A future adapter
 // extraction that revives this style of test should check ANY cross-
-// directory `../` specifier outside `surface-sdk`, not just `../../`.
+// directory `../` specifier outside `surface-sdk`, not just `../../` —
+// use `crossBoundaryImports()` from `./extraction-boundary.ts` (cortex#1949),
+// which catches exactly that class and is self-tested in
+// `./extraction-boundary.test.ts`. cortex#1896 calls it per-adapter as each
+// is inverted, asserting `[]` before that adapter extracts.
