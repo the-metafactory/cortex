@@ -578,6 +578,13 @@ extract_config_arg() {
 #     resolve_stack_config_path stamps and discover_stack_slugs derives from).
 # Returns non-zero (prints nothing) when the path is empty or unclassifiable —
 # the caller treats that as a fail-safe abort when a skip-list is set.
+#
+# Known pathological corner (revw3c, non-deployment): a stack literally slugged
+# `cortex` in the dir layout has sentinel <config_dir>/cortex/cortex.yaml, whose
+# basename `cortex.yaml` hits the monolith special-case → meta-factory, while
+# discover_stack_slugs (dir basename) would call it `cortex`. This is a
+# pre-existing repo-wide ambiguity in config_file_to_slug's meta-factory
+# special-case, not introduced here; `cortex` is not a real deployed slug.
 slug_from_config_arg() {
   local raw="$1" path base slug parent
   [ -n "${raw}" ] || return 1

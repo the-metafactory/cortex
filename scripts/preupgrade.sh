@@ -26,6 +26,11 @@ require_min_arc_version 0.38.0 || exit 1
 
 echo "Stopping Cortex services for upgrade (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 
+# NOTE (cortex#1909): the entire stop/kill block below — including the
+# CORTEX_UPGRADE_SKIP_RESTART skip-restart + its fail-safe abort — is Darwin/
+# launchctl only. The principal's production `work` stack is macOS (launchd), so
+# this PR covers it. Linux/systemd skip-restart + abort PARITY is NOT built here
+# and rides with cortex#1909 — do not assume the skip/abort protects a Linux box.
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
   CONFIG_DIR="${HOME}/.config/cortex"

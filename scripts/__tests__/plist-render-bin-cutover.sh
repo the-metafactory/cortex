@@ -21,6 +21,10 @@ FAIL=0
 
 pass() { printf '  ✓ %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '  ✗ %s\n' "$1"; FAIL=$((FAIL + 1)); }
+# skip: count a case as passed on hosts where it does not apply (e.g. a
+# Darwin-gated integration test on the Linux CI runner). Keeps the count stable
+# and the suite green without asserting behaviour the host doesn't exercise.
+skip() { printf '  ↷ %s (skipped: not applicable on %s)\n' "$1" "$(uname)"; PASS=$((PASS + 1)); }
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -430,7 +434,18 @@ chmod +x "${MOCK_BIN}/ps"
 
 # ── Integration: preupgrade ABORTS before any kill on an unclassifiable daemon
 # when a skip-list is set (advw3b 3a fail-safe, end-to-end). ──
+#
+# DARWIN-GATED: this drives the real preupgrade.sh, whose entire kill / abort
+# block is itself gated behind `[ "$(uname)" = "Darwin" ]` (the launchctl bin
+# cutover is macOS-only; Linux/systemd skip-restart + abort parity rides with
+# cortex#1909). On a non-Darwin CI runner that block is a no-op → preupgrade
+# exits 0 with no abort, so the test's own preconditions don't hold. The
+# host-INDEPENDENT unit-level abort tests above (filter_out_skipped_pids rc 2)
+# still run everywhere and cover the fail-safe logic itself.
 printf '\n=== skip-restart: preupgrade fail-safe abort (integration) ===\n'
+if [ "$(uname)" != "Darwin" ]; then
+  skip "abort: preupgrade fail-safe integration (Darwin-only kill/abort block)"
+else
 ABORT_BIN="$(mktemp -d)"
 cat > "${ABORT_BIN}/arc" <<'EOF'
 #!/bin/sh
@@ -484,6 +499,7 @@ assert_eq "abort: NO launchctl unload ran before the abort" "0" \
 assert_grep_file "abort: reason printed (names PID 4242)" "${ABORT_ERR}" \
   'cannot determine slug for running daemon PID 4242'
 rm -rf "${ABORT_BIN}" "${ABORT_HOME}" "${STOP_LOG_ABORT}" "${ABORT_ERR}"
+fi
 
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"
