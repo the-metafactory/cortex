@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 
@@ -138,6 +138,39 @@ describe("discoverPluginBundles (cortex#1792)", () => {
     } finally {
       rmSync(symlinkParent, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlinked cortex-plugin.yaml FILE (dir itself real+contained) is refused — symlinked-manifest defense", async () => {
+    // Unlike the two tests above (which escape via the install DIRECTORY),
+    // this one plants a bundle dir that is itself real, contained, and
+    // legitimate — but whose `cortex-plugin.yaml` is a symlink pointing at a
+    // file OUTSIDE the trusted pkgRoot. Pre-fix, `existsSync` +
+    // `Bun.file(manifestPath).text()` followed the symlink with no
+    // realpath/containment check on the FILE itself (only the directory was
+    // checked) — an arbitrary-read / boot-OOM primitive via a bundle's own
+    // manifest path.
+    const pkgRoot = mkdtempSync(join(tmpdir(), "cortex-plugin-loader-manifest-symlink-pkgroot-"));
+    const outsideSecret = mkdtempSync(join(tmpdir(), "cortex-plugin-loader-manifest-symlink-outside-"));
+    try {
+      const bundleDir = join(pkgRoot, "manifest-symlink-bundle");
+      mkdirSync(bundleDir);
+      const secretFile = join(outsideSecret, "not-a-manifest.yaml");
+      writeFileSync(secretFile, "kind: renderer\nid: escaped-via-manifest\nentry: ./index.ts\nsdkRange: \"^1\"\n");
+      symlinkSync(secretFile, join(bundleDir, "cortex-plugin.yaml"));
+
+      const pkg = fixturePkg("manifest-symlink-bundle", { installPath: bundleDir });
+      const { bundles, issues } = await discoverPluginBundles({
+        pkgRoot,
+        runner: runnerFor([pkg]),
+      });
+      expect(bundles).toEqual([]);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.stage).toBe("manifest_containment");
+      expect(issues[0]?.reason).toMatch(/escapes the trusted bundle directory/);
+    } finally {
+      rmSync(pkgRoot, { recursive: true, force: true });
+      rmSync(outsideSecret, { recursive: true, force: true });
     }
   });
 
@@ -394,31 +427,91 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
     expect(result.failed[0]?.stage).toBe("org_trust");
   });
 
-  test("manifest kind/id mismatch against the exported plugin is refused at shape_validate", async () => {
-    // Reuse the valid cli-tail bundle's ENTRY but attach a manifest that
-    // declares a DIFFERENT id — proves the cross-check between the
-    // manifest's declared id/kind and the default export's own id/kind.
+  test("renaming the ARC PACKAGE (bundleName) is independent of the plugin id", async () => {
+    // The arc package name and the plugin's registry id are different axes:
+    // renaming the former (e.g. a re-published bundle) must not affect the
+    // latter. cli-tail-bundle's manifest and export agree on id, so this
+    // still loads cleanly under the relabelled bundle name.
     const pkg = fixturePkg("cli-tail-bundle", { name: "cli-tail-relabelled" });
     const registry = new SurfacePluginRegistry();
-    // Monkey-patch via a second package pointed at the same install dir but
-    // relabel is not possible without a manifest edit, so instead assert the
-    // POSITIVE case already covers id/kind agreement (see happy-path test)
-    // and directly unit-test the mismatch branch through the adapter fixture
-    // mislabeled as a renderer id, which the shape guard also catches.
     const result = await loadExternalPlugins({
       registry,
       externalEnabled: true,
       pkgRoot: FIXTURES_ROOT,
       runner: runnerFor([pkg]),
     });
-    // cli-tail-bundle's manifest and export agree, so this specific
-    // combination still loads cleanly — this test documents that the
-    // rename of the ARC PACKAGE name (bundleName) is independent of the
-    // plugin id, which is exactly the invariant duplicate-detection and
-    // event reporting rely on.
     expect(result.loaded).toEqual([
       { bundleName: "cli-tail-relabelled", kind: "renderer", id: "cli-tail", firstParty: false },
     ]);
+  });
+
+  test("manifest.id/export.id mismatch is refused at shape_validate (genuinely exercises the mismatch branch)", async () => {
+    // Prior version of this test (see git history) was misnamed — it
+    // actually asserted the AGREEING (happy-path) case and never drove the
+    // `imported.id !== manifest.id` branch at all. `id-mismatch-bundle`'s
+    // manifest declares id "id-mismatch-renderer"; its default export
+    // declares its own id as "totally-different-id" — a genuine mismatch.
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: true,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("id-mismatch-bundle")]),
+    });
+    expect(result.loaded).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.stage).toBe("shape_validate");
+    expect(result.failed[0]?.reason).toMatch(/does not match the manifest/);
+    expect(registry.getRenderer("id-mismatch-renderer")).toBeUndefined();
+    expect(registry.getRenderer("totally-different-id")).toBeUndefined();
+  });
+
+  // cortex#1792 BLOCKER (adversarial finding) — shadow-via-platform Discord
+  // bot-token disclosure. The id-keyed duplicate gate (stage d) alone is not
+  // enough: `buildGatewayAdapters` (`src/gateway/gateway-adapters.ts`)
+  // resolves which surface binding an adapter receives by `plugin.platform`,
+  // NOT by registry id. A bundle could declare a UNIQUE manifest.id (clearing
+  // stage d) while its export's `platform` claims an ALREADY-BOUND platform
+  // (e.g. "discord") — pre-fix it would register under the unique id and
+  // then be handed the REAL discord binding (bot token included) at gateway
+  // construction. The fix pins `platform === manifest.id` (and the renderer
+  // analogue `rendererKind === manifest.id`) at shape_validate.
+  test("BLOCKER: platform-collision bundle (unique id, platform='discord') is refused at shape_validate, not registered, in-tree discord untouched", async () => {
+    const registry = createDefaultSurfacePluginRegistry();
+    const inTreeDiscord = registry.getAdapter("discord");
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: true,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("platform-collision-bundle")]),
+    });
+    expect(result.loaded).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.stage).toBe("shape_validate");
+    expect(result.failed[0]?.reason).toMatch(/platform.*does not match its own id/);
+    // Never registered under EITHER key — not the manifest's unique id, and
+    // (since it was refused before registration) certainly not "discord".
+    expect(registry.getAdapter("evil-unique")).toBeUndefined();
+    // The real in-tree discord adapter is untouched — still the SAME object,
+    // proving the malicious bundle never shadowed or replaced it.
+    expect(registry.getAdapter("discord")).toBe(inTreeDiscord);
+  });
+
+  test("BLOCKER (renderer analogue): rendererKind-collision bundle (unique id, rendererKind='dashboard') is refused at shape_validate", async () => {
+    const registry = createDefaultSurfacePluginRegistry();
+    const inTreeDashboard = registry.getRenderer("dashboard");
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: true,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("renderer-kind-collision-bundle")]),
+    });
+    expect(result.loaded).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.stage).toBe("shape_validate");
+    expect(result.failed[0]?.reason).toMatch(/rendererKind.*does not match its own id/);
+    expect(registry.getRenderer("evil-renderer-unique")).toBeUndefined();
+    expect(registry.getRenderer("dashboard")).toBe(inTreeDashboard);
   });
 
   test("deterministic load order: bundles process in bundleName-sorted order regardless of arc list order", async () => {

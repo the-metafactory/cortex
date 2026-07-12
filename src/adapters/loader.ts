@@ -27,14 +27,22 @@
  *        b. external-flag / first-party-renderer gate (OQ6/OQ9);
  *        c. compat gate — `Bun.semver.satisfies(SURFACE_SDK_VERSION,
  *           manifest.sdkRange)` (D1, loader-authoritative);
- *        d. duplicate-platform gate — an in-tree plugin (or an
- *           earlier-loaded bundle) ALWAYS wins; a later bundle may not
+ *        d. duplicate-id gate — an in-tree plugin (or an earlier-loaded
+ *           bundle) ALWAYS wins on `manifest.id`; a later bundle may not
  *           shadow it (checked BEFORE importing — no reason to execute
  *           code that will be refused anyway);
  *        e. entry-path containment (must resolve inside the bundle dir,
  *           symlinks included) + `import()`;
  *        f. runtime structural shape validation against the declared
- *           `kind`;
+ *           `kind`, INCLUDING pinning the exported plugin's namespace key
+ *           (`platform` for an adapter, `rendererKind` for a renderer) to
+ *           `manifest.id` — the exact key gate (d) checked. Without this
+ *           pin, a bundle could pass gate (d) under a unique, unclaimed
+ *           `manifest.id` while its export's real `platform`/`rendererKind`
+ *           names an ALREADY-BOUND namespace (e.g. `platform: "discord"`),
+ *           and the gateway resolves adapters by `platform`, not registry
+ *           key — a shadow-via-platform token-disclosure path (cortex#1792
+ *           adversarial finding, closed here);
  *        g. registration into the live {@link SurfacePluginRegistry}.
  *      Every stage is wrapped so a throw at ANY point for ONE bundle is
  *      caught, recorded, and logged — the loop moves to the next bundle.
@@ -262,9 +270,39 @@ export async function discoverPluginBundles(
         continue;
       }
 
+      // Symlink-escape defense for the manifest FILE itself — symmetric
+      // with `resolveEntryWithinBundle`'s containment check for
+      // `manifest.entry` below. `realInstallPath` (the DIRECTORY) is
+      // already realpath'd + containment-verified above, but
+      // `cortex-plugin.yaml` itself could be a symlink planted inside that
+      // (legitimately contained) directory pointing OUTSIDE it — or at a
+      // non-regular file (e.g. `/dev/zero`) — that `Bun.file(...).text()`
+      // would follow, giving a malicious bundle an arbitrary-read or
+      // boot-OOM primitive via its own manifest file. realpath + containment
+      // on the FILE closes the gap the directory check alone leaves open.
+      let realManifestPath: string;
+      try {
+        realManifestPath = realpathSync(manifestPath);
+      } catch (err) {
+        issues.push({
+          bundleName: pkg.name,
+          stage: "manifest_containment",
+          reason: `cortex-plugin.yaml does not resolve to a readable path: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        continue;
+      }
+      if (!realManifestPath.startsWith(realInstallPath + sep)) {
+        issues.push({
+          bundleName: pkg.name,
+          stage: "manifest_containment",
+          reason: `cortex-plugin.yaml (resolved: "${realManifestPath}") escapes the trusted bundle directory "${realInstallPath}" — refused (symlinked-manifest defense)`,
+        });
+        continue;
+      }
+
       let manifestRaw: unknown;
       try {
-        const file = await Bun.file(manifestPath).text();
+        const file = await Bun.file(realManifestPath).text();
         manifestRaw = parseYaml(file);
       } catch (err) {
         issues.push({
@@ -628,9 +666,17 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
     return;
   }
 
-  // (d) Duplicate-platform gate — an in-tree plugin ALWAYS wins; a bundle
-  // may not shadow it. Checked BEFORE importing so a refused bundle's code
-  // never runs.
+  // (d) Duplicate-id gate — keyed on `manifest.id`, NOT `manifest.platform`
+  // (the manifest has no such field — see plugin-manifest.ts). An in-tree
+  // plugin ALWAYS wins; a bundle may not shadow it. Checked BEFORE importing
+  // so a refused bundle's code never runs. This gate is ONLY as strong as
+  // the id↔namespace pin stage (f) enforces below: `registry.getAdapter`/
+  // `getRenderer` are keyed by `id`, but `buildGatewayAdapters`
+  // (`src/gateway/gateway-adapters.ts`) resolves surface bindings by the
+  // exported plugin's `platform` field. Stage (f) pins `platform`/
+  // `rendererKind` to equal `manifest.id`, which is what makes checking
+  // `id` here equivalent to checking the namespace the gateway actually
+  // resolves on (cortex#1792 adversarial finding — shadow-via-platform).
   const existing =
     manifest.kind === "adapter" ? registry.getAdapter(manifest.id) : registry.getRenderer(manifest.id);
   if (existing) {
@@ -665,8 +711,8 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
       return;
     }
     // `isAdapterPluginShape` already established `imported.kind === "adapter"`
-    // (structurally, from the untrusted value) — only `id` can still
-    // disagree with the manifest, so that's the only remaining check
+    // (structurally, from the untrusted value) — `id` and `platform` can
+    // still disagree with the manifest, so those are the remaining checks
     // (a static `imported.kind !== manifest.kind` here would always be
     // `false` per the narrowed literal types, which is exactly why it's
     // not written).
@@ -674,6 +720,30 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
       fail(
         "shape_validate",
         `default export's id ("${imported.id}") does not match the manifest ("${manifest.id}")`,
+      );
+      return;
+    }
+    // cortex#1792 adversarial finding — shadow-via-platform token
+    // disclosure. The duplicate-id gate (stage d) checks `manifest.id`
+    // against the registry, but `buildGatewayAdapters`
+    // (`src/gateway/gateway-adapters.ts`'s `surfacesByPlatform[plugin.platform]`)
+    // resolves which `surfaces.*` binding (including secrets like a Discord
+    // bot token) a registered adapter receives by its `platform` field, NOT
+    // its registry `id`. Without this pin, a bundle could declare a UNIQUE
+    // `manifest.id` (e.g. "evil-unique", passing stage d against an
+    // unclaimed key) while its default export's `platform` names an
+    // ALREADY-BOUND platform (e.g. "discord") — it would load, register
+    // under "evil-unique", and then `buildGatewayAdapters` would hand it
+    // the REAL discord binding, including the bot token, because it
+    // resolves by `platform`, not registry id. Pinning `platform` to equal
+    // `id` (which already equals `manifest.id`, checked above) closes this:
+    // a bundle claiming `platform: "discord"` MUST declare `id: "discord"`,
+    // which then correctly collides with the in-tree discord adapter at
+    // stage (d) and is refused before any of this bundle's code runs.
+    if (imported.platform !== manifest.id) {
+      fail(
+        "shape_validate",
+        `default export's platform ("${imported.platform}") does not match its own id ("${manifest.id}") — a plugin's platform must equal its id so the duplicate-id gate (stage d) covers the exact namespace the gateway resolves adapters by`,
       );
       return;
     }
@@ -687,6 +757,21 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
       fail(
         "shape_validate",
         `default export's id ("${imported.id}") does not match the manifest ("${manifest.id}")`,
+      );
+      return;
+    }
+    // cortex#1792 — the renderer analogue of the adapter pin above.
+    // `renderers[].kind` resolution (`resolveRendererPluginOrThrow`,
+    // `src/adapters/registry.ts`) is keyed on registry `id` today, but
+    // pinning `rendererKind` to `id` here closes the SAME class of bug
+    // pre-emptively should a future construction path ever resolve
+    // renderers by `rendererKind` instead of registry key, and keeps the
+    // two plugin kinds symmetric (ADR-0024 D5: one loader, both kinds,
+    // one invariant).
+    if (imported.rendererKind !== manifest.id) {
+      fail(
+        "shape_validate",
+        `default export's rendererKind ("${imported.rendererKind}") does not match its own id ("${manifest.id}") — a plugin's rendererKind must equal its id so the duplicate-id gate (stage d) covers the exact namespace resolution keys on`,
       );
       return;
     }

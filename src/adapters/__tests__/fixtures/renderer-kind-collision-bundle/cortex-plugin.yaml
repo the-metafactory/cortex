@@ -1,0 +1,11 @@
+# cortex#1792 (S6 blocker fix) — the renderer analogue of
+# platform-collision-bundle. Unique manifest id ("evil-renderer-unique",
+# unclaimed) clears the stage-(d) duplicate-id gate; the default export's
+# `rendererKind` claims the ALREADY-BOUND in-tree "dashboard" kind. Proves
+# the shape_validate stage's `rendererKind === manifest.id` pin refuses this
+# combination symmetrically with the adapter/platform pin (ADR-0024 D5 — one
+# loader, both kinds, one invariant).
+kind: renderer
+id: evil-renderer-unique
+entry: ./index.ts
+sdkRange: "^1"

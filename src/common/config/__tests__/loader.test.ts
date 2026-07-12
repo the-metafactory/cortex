@@ -550,6 +550,27 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     });
   });
 
+  // cortex#1792 (S6, ADR-0024 D3/OQ6/OQ9) — the `plugins:` passthrough at
+  // `loadCortexShape` (`../loader.ts:941`, `plugins: cortexConfig.plugins`).
+  // NOT tsc-guarded: `merged` is a plain `Record<string, unknown>` there, so
+  // omitting this one field is a silent runtime strip a type check can never
+  // catch — only a test that actually reads `config.plugins.external` back
+  // out closes the gap. Regression guard for the same failure class as the
+  // mc/cockpit/grove/security passthrough tests above: a principal-declared
+  // `plugins: {external: true}` must survive the cortex-shape parse, not
+  // silently re-default to `false`.
+  test("cortex#1792: carries plugins.external through the cortex-shape parse when enabled", () => {
+    const cfg = minimalCortex();
+    cfg.plugins = { external: true };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.plugins.external).toBe(true);
+  });
+
+  test("cortex#1792: defaults plugins.external to false on the cortex shape when absent", () => {
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex()));
+    expect(config.plugins.external).toBe(false);
+  });
+
   // cortex#1000 — seed-aware secure default. A configured stack signing seed
   // with NO explicit `security.signing` must boot `permissive`, not the
   // schema's `off` (the forged-stamp-injection defaults gap). Explicit values

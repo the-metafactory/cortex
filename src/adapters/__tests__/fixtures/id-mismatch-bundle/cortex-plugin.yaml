@@ -1,0 +1,8 @@
+# cortex#1792 (S6) — genuinely exercises the `imported.id !== manifest.id`
+# shape_validate branch (the pre-fix test for this branch asserted the HAPPY
+# path instead — see loader.test.ts). Manifest declares "id-mismatch-renderer";
+# the default export (index.ts) declares its own id as "totally-different-id".
+kind: renderer
+id: id-mismatch-renderer
+entry: ./index.ts
+sdkRange: "^1"

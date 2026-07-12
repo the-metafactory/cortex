@@ -3129,20 +3129,33 @@ export async function startCortex(
     registry: surfacePluginRegistry,
     externalEnabled: config.plugins.external,
   });
+  // cortex#1792 — ONE stderr line per outcome, not two: `loadOneBundle`
+  // (`src/adapters/loader.ts`) already writes a `cortex plugin-loader: …`
+  // stderr line at the exact point each bundle is refused or loaded (and
+  // `loadExternalPlugins` does the same for discovery issues). Boot used to
+  // ALSO `console.error`/`console.log` the same failed/loaded outcomes here,
+  // duplicating every plugin outcome in boot logs. This loop's job is only
+  // the structured bus event (`system.plugin.load_failed`/`.loaded`) —
+  // logging stays the loader's job. `skipped` is the one outcome the loader
+  // never logs (an off-by-default gate skip isn't a failure worth a stderr
+  // line), so its `console.log` here remains the single site for it.
   for (const failure of pluginLoadResult.failed) {
-    console.error(
-      `cortex: plugin "${failure.bundleName}" failed to load at ${failure.stage}: ${failure.reason}`,
-    );
-    void runtime.publish(
-      createSystemPluginLoadFailedEvent({
-        source: systemEventSource,
-        bundleName: failure.bundleName,
-        kind: failure.kind,
-        pluginId: failure.pluginId,
-        stage: failure.stage,
-        reason: failure.reason,
-      }),
-    );
+    void runtime
+      .publish(
+        createSystemPluginLoadFailedEvent({
+          source: systemEventSource,
+          bundleName: failure.bundleName,
+          kind: failure.kind,
+          pluginId: failure.pluginId,
+          stage: failure.stage,
+          reason: failure.reason,
+        }),
+      )
+      .catch((err: unknown) => {
+        process.stderr.write(
+          `cortex: failed to publish system.plugin.load_failed for "${failure.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      });
   }
   for (const skippedPlugin of pluginLoadResult.skipped) {
     console.log(
@@ -3150,19 +3163,21 @@ export async function startCortex(
     );
   }
   for (const loadedPlugin of pluginLoadResult.loaded) {
-    console.log(
-      `cortex: plugin ${loadedPlugin.kind} "${loadedPlugin.id}" loaded from bundle "${loadedPlugin.bundleName}"` +
-        (loadedPlugin.firstParty ? " (first-party renderer exemption)" : ""),
-    );
-    void runtime.publish(
-      createSystemPluginLoadedEvent({
-        source: systemEventSource,
-        bundleName: loadedPlugin.bundleName,
-        kind: loadedPlugin.kind,
-        pluginId: loadedPlugin.id,
-        firstParty: loadedPlugin.firstParty,
-      }),
-    );
+    void runtime
+      .publish(
+        createSystemPluginLoadedEvent({
+          source: systemEventSource,
+          bundleName: loadedPlugin.bundleName,
+          kind: loadedPlugin.kind,
+          pluginId: loadedPlugin.id,
+          firstParty: loadedPlugin.firstParty,
+        }),
+      )
+      .catch((err: unknown) => {
+        process.stderr.write(
+          `cortex: failed to publish system.plugin.loaded for "${loadedPlugin.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      });
   }
 
   // cortex#1789 (S4, ADR-0024 D5) — the REGISTRY pass for `surfaces:`

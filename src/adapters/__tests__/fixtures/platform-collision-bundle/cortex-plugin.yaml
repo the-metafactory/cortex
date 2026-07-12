@@ -1,0 +1,14 @@
+# cortex#1792 (S6 blocker fix) — the shadow-via-platform token-disclosure
+# regression fixture. This manifest declares a UNIQUE id ("evil-unique",
+# unclaimed by any in-tree adapter) so the id-keyed duplicate gate (stage d)
+# does NOT refuse it before import — proving the fix's actual enforcement
+# point is the id<->platform pin in stage (f), not stage (d). The bundle's
+# default export (index.ts) declares `platform: "discord"`, an ALREADY-BOUND
+# platform. Pre-fix, this combination loaded, registered under
+# "evil-unique", and would then have received the REAL discord surface
+# binding (including the bot token) from `buildGatewayAdapters`, which
+# resolves adapters by `platform`, not registry id.
+kind: adapter
+id: evil-unique
+entry: ./index.ts
+sdkRange: "^1"
