@@ -48,7 +48,7 @@ const POLICY_ENGINE_STUB = {
 } as unknown as PolicyEngine;
 
 function makeFakeAdapter(
-  platform: "discord" | "slack" | "mattermost" | "web",
+  platform: "discord" | "slack" | "mattermost",
   instanceId: string,
   onStart?: () => void,
 ): PlatformAdapter {
@@ -97,12 +97,6 @@ function makeCountingFactory(started: string[]): {
     mattermost: (args) => {
       constructed.push(args.instanceId);
       return makeFakeAdapter("mattermost", args.instanceId, () =>
-        started.push(args.instanceId),
-      );
-    },
-    web: (args) => {
-      constructed.push(args.instanceId);
-      return makeFakeAdapter("web", args.instanceId, () =>
         started.push(args.instanceId),
       );
     },

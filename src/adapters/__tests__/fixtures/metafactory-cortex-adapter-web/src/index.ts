@@ -75,7 +75,7 @@ import type {
   OutboundFile,
   ContextMessage,
   AdapterPolicyPort,
-} from "../../surface-sdk";
+} from "./vendor/surface-sdk";
 import type { WebBinding } from "./schema";
 
 // =============================================================================
@@ -83,15 +83,15 @@ import type { WebBinding } from "./schema";
 // =============================================================================
 
 /**
- * cortex#1794 (S9b) — the minimal agent-identity shape `WebAdapter` reads
- * (`agent.id`, for log correlation only — see the constructor below). Kept
- * narrower than cortex's full `Agent` (`common/types/cortex-config` —
- * persona/trust/presence config) DELIBERATELY: `Agent` is a residual
- * coupling `surface-sdk` does not re-export (see that module's doc — same
- * reasoning as `SystemEventSource`/`MyelinRuntime`), and `WebAdapter` never
- * needed more than the id. A real `Agent` satisfies this structurally, so
- * every existing caller (`webAdapterPlugin.createAdapter`, tests) keeps
- * working unchanged.
+ * cortex#1794 (S9b/S9 MOVE) — the minimal agent-identity shape `WebAdapter`
+ * reads (`agent.id`, for log correlation only — see the constructor below).
+ * Kept narrower than cortex's full `Agent` (`common/types/cortex-config` —
+ * persona/trust/presence config) DELIBERATELY: `Agent` is cortex-internal
+ * config machinery the plugin SDK does not export (same reasoning as
+ * `SystemEventSource`/`MyelinRuntime`), and `WebAdapter` never needed more
+ * than the id. A real cortex `Agent` satisfies this structurally, so the
+ * host (`gateway-adapters.ts`'s `webAdapterPlugin.createAdapter` call) keeps
+ * working unchanged whether it passes a synthetic identity or a real `Agent`.
  */
 export interface AdapterAgentIdentity {
   readonly id: string;

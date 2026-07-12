@@ -150,9 +150,13 @@ export type {
  * type: no `PolicyEngine`-shaped value crosses the barrel, only a bound
  * behavior.
  *
- * First consumer: `WebAdapterInfra.policy` (`src/adapters/web/index.ts`).
- * Discord/Slack/Mattermost still import `common/policy` directly — their
- * dependency-inversion pass is a later slice (cortex#1896).
+ * First consumer: `WebAdapterInfra.policy`, originally at cortex's
+ * `src/adapters/web/index.ts` — relocated cortex#1794 (S9 MOVE) to the
+ * `metafactory-cortex-adapter-web` bundle's `src/index.ts`, which now
+ * imports this port from a vendored copy of this barrel (see that repo's
+ * `src/vendor/surface-sdk.ts`). Discord/Slack/Mattermost still import
+ * `common/policy` directly — their dependency-inversion pass is a later
+ * slice (cortex#1896).
  */
 export interface AdapterPolicyPort {
   /** Resolve `msg` to an `AccessDecision` via the host's bound policy engine

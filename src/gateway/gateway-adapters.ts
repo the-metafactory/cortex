@@ -71,7 +71,6 @@
 
 import type { PlatformAdapter } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
-import type { WebBinding } from "../common/types/surfaces";
 import type {
   DiscordPresence,
   SlackPresence,
@@ -90,7 +89,6 @@ import type {
 import { discordAdapterPlugin } from "../adapters/discord/plugin";
 import { slackAdapterPlugin } from "../adapters/slack/plugin";
 import { mattermostAdapterPlugin } from "../adapters/mattermost/plugin";
-import { webAdapterPlugin } from "../adapters/web/plugin";
 import { buildAdapterPolicyPort } from "../adapters/plugin-support";
 // Back-compat re-export for callers that still import the old suppression helper here.
 export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
@@ -177,23 +175,25 @@ interface MattermostFactoryArgs extends FactoryArgsBase {
   presence: MattermostPresence;
 }
 
-/** Args for the web factory call. `binding` carries the typed WebBinding. */
-interface WebFactoryArgs extends FactoryArgsBase {
-  /** Typed web binding (port, broadcastUrl, transport, authScheme). */
-  webBinding: WebBinding;
-}
-
 /**
  * The injected adapter-construction seam. One builder per platform. Production
  * uses {@link defaultGatewayAdapterFactory}; tests inject a recording fake that
  * returns construct-only stubs (no platform connection).
+ *
+ * cortex#1794 (S9 MOVE) — `web` (C-110, generic web/SSE surface adapter) is
+ * NOT a method here any more. It extracted to the `metafactory-cortex-adapter-web`
+ * bundle (ADR-0024 D2 — no in-tree fallback) and is now constructed via the
+ * registry path only (`plugin.createAdapter(args)` inside `buildGatewayAdapters`'s
+ * generic `registry.listAdapters()` loop below), never through this fixed
+ * per-platform factory interface. A caller still using the pre-registry
+ * `{factory}` seam (`registryFromFactory`) simply never gets a `web` adapter
+ * — pass `{registry}` (which threads in whatever `loadExternalPlugins`
+ * registered) to get one.
  */
 export interface GatewayAdapterFactory {
   discord(args: DiscordFactoryArgs): PlatformAdapter;
   slack(args: SlackFactoryArgs): PlatformAdapter;
   mattermost(args: MattermostFactoryArgs): PlatformAdapter;
-  /** C-110: Generic web/SSE surface adapter. */
-  web(args: WebFactoryArgs): PlatformAdapter;
 }
 
 /** Injected dependencies for {@link buildGatewayAdapters}. */
@@ -222,16 +222,16 @@ export interface GatewayAdapterDeps {
  * imports (`start-gateway.ts`, `surface-adapter-boot.ts`, and their tests'
  * recording/counting fakes) keep resolving. The actual construction logic
  * moved verbatim into each platform's `AdapterPlugin.createAdapter`
- * (`src/adapters/{discord,slack,mattermost,web}/plugin.ts`) — this object is
- * now a thin delegating shim, not the source of truth. New code should
- * thread a {@link SurfacePluginRegistry} (`createDefaultSurfacePluginRegistry`)
+ * (`src/adapters/{discord,slack,mattermost}/plugin.ts` — `web`'s moved
+ * out-of-tree entirely, cortex#1794 S9 MOVE) — this object is now a thin
+ * delegating shim, not the source of truth. New code should thread a
+ * {@link SurfacePluginRegistry} (`createDefaultSurfacePluginRegistry`)
  * instead of this factory.
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
   discord: (args) => discordAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
   slack: (args) => slackAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
   mattermost: (args) => mattermostAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
-  web: (args) => webAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
 };
 
 // =============================================================================
@@ -255,10 +255,11 @@ function gatewaySource(principal: string, instance: string): SystemEventSource {
  *
  * Synchronous + construct-only: it never calls `adapter.start()` (that is the
  * {@link SurfaceGateway}'s responsibility). Returns the adapters in the
- * registry's platform order (discord→slack→mattermost→web, matching the
+ * registry's platform order (discord→slack→mattermost, matching the
  * pre-registry fixed order — `createDefaultSurfacePluginRegistry` registers
- * in that sequence). An empty/absent `Surfaces` map yields `[]` and never
- * touches a plugin's `createAdapter`.
+ * in that sequence — plus any loaded external/first-party adapter, e.g. `web`
+ * once `loadExternalPlugins` registers it, appended after). An empty/absent
+ * `Surfaces` map yields `[]` and never touches a plugin's `createAdapter`.
  *
  * @throws re-throws any error from the canonical presence parse (a binding
  *   that the binding-schema admitted but the presence-schema rejects) or from

@@ -146,7 +146,6 @@ function makeMockAdapterFactory(): {
     discord: (args) => build(args.instanceId),
     slack: (args) => build(args.instanceId),
     mattermost: (args) => build(args.instanceId),
-    web: (args) => build(args.instanceId),
   };
   return { factory, byInstance };
 }

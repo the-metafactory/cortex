@@ -105,7 +105,8 @@ export interface GatewayConstructBase {
    * `common/policy`, so each plugin's `buildGatewayConstructArgs` casts
    * internally (the convention `AdapterPlugin`'s docstring already
    * establishes for `createAdapter`'s args). Currently only the web plugin
-   * forwards it — see `adapters/web/plugin.ts`.
+   * forwards it — see `metafactory-cortex-adapter-web`'s `src/plugin.ts`
+   * (relocated out-of-tree, cortex#1794 S9 MOVE; was `adapters/web/plugin.ts`).
    */
   readonly policy?: unknown;
 }
@@ -249,8 +250,11 @@ export class SurfacePluginRegistry {
   }
 
   /** Insertion order — `createDefaultSurfacePluginRegistry` registers
-   *  discord → slack → mattermost → web, matching the pre-registry
-   *  `buildGatewayAdapters`' fixed platform order byte-for-byte. */
+   *  discord → slack → mattermost (in-tree, matching the pre-registry
+   *  `buildGatewayAdapters`' fixed platform order byte-for-byte), then
+   *  boot's `loadExternalPlugins` appends any loaded external/first-party
+   *  bundle plugin (e.g. `web`, cortex#1794 S9 MOVE) in bundle-name-sorted
+   *  order. */
   listAdapters(): readonly AdapterPlugin[] {
     return [...this.adapterPlugins.values()];
   }
@@ -267,24 +271,34 @@ export class SurfacePluginRegistry {
 import { discordAdapterPlugin } from "./discord/plugin";
 import { slackAdapterPlugin } from "./slack/plugin";
 import { mattermostAdapterPlugin } from "./mattermost/plugin";
-import { webAdapterPlugin } from "./web/plugin";
 import { dashboardRendererPlugin } from "../renderers/dashboard";
 import { pagerdutyRendererPlugin } from "../renderers/pagerduty";
 
 /**
  * Compose ONE registry carrying every in-tree plugin — discord → slack →
- * mattermost → web (adapters, in the pre-registry `buildGatewayAdapters`
- * order) then dashboard → pagerduty (renderers, in the pre-registry
- * `createRenderer` switch order). Boot (`cortex.ts`) calls this ONCE and
- * threads the result to the gateway path (`buildGatewayAdapters`), the
- * per-stack path (`wireSurfaceAdapters`), and the renderer boot loop.
+ * mattermost (adapters, in the pre-registry `buildGatewayAdapters` order)
+ * then dashboard → pagerduty (renderers, in the pre-registry `createRenderer`
+ * switch order). Boot (`cortex.ts`) calls this ONCE and threads the result to
+ * the gateway path (`buildGatewayAdapters`), the per-stack path
+ * (`wireSurfaceAdapters`), and the renderer boot loop.
+ *
+ * cortex#1794 (S9 MOVE) — `web` is no longer registered here. It extracted to
+ * the `metafactory-cortex-adapter-web` bundle (ADR-0024 D2: extraction
+ * deletes the in-tree implementation, no fallback copy) and is now loaded at
+ * boot by `src/adapters/loader.ts`'s `loadExternalPlugins`, which registers
+ * it into this SAME registry instance under the S9a first-party-adapter
+ * exemption (cortex declares the bundle in `arc-manifest.yaml`
+ * `dependencies:`, so it loads even with `system.plugins.external` off).
+ * `registry.listAdapters()` therefore returns `["discord","slack",
+ * "mattermost"]` right after this function returns, and `["discord","slack",
+ * "mattermost","web"]` once boot's `loadExternalPlugins` call completes —
+ * both are correct, just different points in the boot sequence.
  */
 export function createDefaultSurfacePluginRegistry(): SurfacePluginRegistry {
   const registry = new SurfacePluginRegistry();
   registry.registerAdapter(discordAdapterPlugin);
   registry.registerAdapter(slackAdapterPlugin);
   registry.registerAdapter(mattermostAdapterPlugin);
-  registry.registerAdapter(webAdapterPlugin);
   registry.registerRenderer(dashboardRendererPlugin);
   registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;
@@ -385,10 +399,11 @@ export function validateSurfacesAgainstRegistry(
 
 /**
  * The pre-registry adapter-construction seam (`src/gateway/gateway-adapters.ts`'s
- * `GatewayAdapterFactory`) — four platform methods, still exported there and
- * still the type a dozen tests build recording/counting fakes against
- * (`gateway-adapters.test.ts`, `start-gateway.test.ts`,
- * `cross-principal-routing.integration.test.ts`, `web-adapter.test.ts`,
+ * `GatewayAdapterFactory`) — three platform methods (discord/slack/mattermost;
+ * `web` dropped cortex#1794 S9 MOVE — see this file's module-level note), still
+ * exported there and still the type a dozen tests build recording/counting
+ * fakes against (`gateway-adapters.test.ts`, `start-gateway.test.ts`,
+ * `cross-principal-routing.integration.test.ts`,
  * `surface-adapter-boot.test.ts`). Declared structurally here (not imported)
  * to avoid a dependency cycle with `gateway-adapters.ts`, which imports
  * {@link createDefaultSurfacePluginRegistry} (via `registry.ts` re-exports)
@@ -407,8 +422,6 @@ interface LegacyGatewayAdapterFactory {
   slack(args: any): PlatformAdapter;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mattermost(args: any): PlatformAdapter;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  web(args: any): PlatformAdapter;
 }
 
 /**
@@ -420,13 +433,18 @@ interface LegacyGatewayAdapterFactory {
  * `demuxKey`/`groupBindings`/`buildGatewayConstructArgs` are borrowed from
  * the real in-tree plugins (grouping/demux logic isn't what these tests
  * fake — only the terminal construction call is).
+ *
+ * cortex#1794 (S9 MOVE) — `web` dropped from both the registration loop and
+ * {@link LegacyGatewayAdapterFactory} (no in-tree `webAdapterPlugin` to
+ * borrow descriptor fields from any more). A test that needs a "web-shaped"
+ * fourth platform registers its own stub `AdapterPlugin` directly via
+ * `registry.registerAdapter(...)` after calling this function.
  */
 export function registryFromFactory(factory: LegacyGatewayAdapterFactory): SurfacePluginRegistry {
   const registry = new SurfacePluginRegistry();
   registry.registerAdapter({ ...discordAdapterPlugin, createAdapter: (args) => factory.discord(args) });
   registry.registerAdapter({ ...slackAdapterPlugin, createAdapter: (args) => factory.slack(args) });
   registry.registerAdapter({ ...mattermostAdapterPlugin, createAdapter: (args) => factory.mattermost(args) });
-  registry.registerAdapter({ ...webAdapterPlugin, createAdapter: (args) => factory.web(args) });
   registry.registerRenderer(dashboardRendererPlugin);
   registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;
@@ -455,6 +473,5 @@ export function registryToLegacyFactory(registry: SurfacePluginRegistry): Legacy
     discord: (args: Record<string, unknown>) => requireAdapterPlugin(registry, "discord").createAdapter(args),
     slack: (args: Record<string, unknown>) => requireAdapterPlugin(registry, "slack").createAdapter(args),
     mattermost: (args: Record<string, unknown>) => requireAdapterPlugin(registry, "mattermost").createAdapter(args),
-    web: (args: Record<string, unknown>) => requireAdapterPlugin(registry, "web").createAdapter(args),
   };
 }

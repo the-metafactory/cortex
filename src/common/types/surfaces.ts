@@ -74,15 +74,15 @@ import { z } from "zod/v4";
 
 import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { isPlainObject } from "./object-guards";
-// cortex#1794 (S9b) — the Web/SSE binding schema is now PLUGIN-OWNED
-// (`src/adapters/web/schema.ts`) so `src/adapters/web/*.ts` never needs to
-// reach into `common/types/surfaces` for it. This module imports it back
-// (dependency INVERTED from pre-S9b) to compose `WebSurfaceBindingSchema`/
-// `SurfacesSchema` below, and re-exports both symbols so every existing
-// external consumer (`gateway-adapters.ts`, tests) keeps importing from here
-// unchanged. See `web/schema.ts`'s module doc for the full rationale.
-import { WebBindingSchema, type WebBinding } from "../../adapters/web/schema";
-export { WebBindingSchema, type WebBinding };
+// cortex#1794 (S9 MOVE) — the Web/SSE binding schema left this repo entirely:
+// it now lives in the `metafactory-cortex-adapter-web` bundle's own
+// `src/schema.ts` (plugin-owned data, S4's principle), loaded at boot by
+// `src/adapters/loader.ts` and carried on the registered `AdapterPlugin`'s
+// `bindingSchema` field — never imported back into cortex core. `web` is no
+// longer one of the hardcoded platforms below; it validates like any other
+// registry-contributed platform (generic `SurfaceBindingEntrySchema` at the
+// STRUCTURAL pass, the plugin's own `bindingSchema` at the REGISTRY pass —
+// see `SurfacesSchema`'s doc comment).
 
 // =============================================================================
 // Per-platform binding schemas — the credential/instance subset that moves
@@ -157,10 +157,6 @@ export const MattermostBindingSchema = z
   })
   .catchall(z.unknown());
 
-// `WebBindingSchema`/`WebBinding` — cortex#1794 (S9b) relocated to
-// `src/adapters/web/schema.ts` (plugin-owned data) and imported/re-exported
-// above.
-
 // =============================================================================
 // Binding entry — one surface-instance bound to one stack's agent
 // =============================================================================
@@ -203,22 +199,6 @@ export const MattermostSurfaceBindingSchema = z.object({
 });
 
 /**
- * Web surface binding entry.
- *
- * Unlike the Discord/Slack/Mattermost entries, the `web` binding does NOT fold
- * into `agents[*].presence.web` at config-compose time (there is no legacy
- * `cortex.yaml` web-presence shape to fold into). Instead, the gateway
- * consumes `surfaces.web[]` directly from the `Surfaces` object and constructs
- * a `WebAdapter` per entry. The `agent` field is still the join key used by
- * `buildGatewayAdapters` to build the synthetic gateway agent; the `stack`
- * field carries the `{principal}/{stack}` routing target as usual.
- */
-export const WebSurfaceBindingSchema = z.object({
-  ...bindingEntryBase,
-  binding: WebBindingSchema,
-});
-
-/**
  * cortex#1789 (S4, ADR-0024 D5) — the generic STRUCTURAL binding entry.
  * Every `surfaces.{platform}[]` entry is `{agent, stack?, binding}` — this is
  * the shape any REGISTERED-OR-NOT platform key must satisfy at the structural
@@ -249,42 +229,38 @@ export type SurfaceBindingEntry = z.infer<typeof SurfaceBindingEntrySchema>;
  * optional (a deployment may bind only Discord).
  *
  * cortex#1789 (S4, ADR-0024 D5) — two-stage validation. This schema is the
- * STRUCTURAL pass ONLY: the four in-tree platforms keep their full,
- * strongly-typed binding schemas (byte-identical validation, zero ripple to
- * every consumer typed against `Surfaces["discord"]` etc. — `discord-token-
- * groups.ts`, `gateway-adapters.ts`, the web adapter); any OTHER top-level key
- * is accepted structurally as a generic {@link SurfaceBindingEntrySchema}
- * array via `.catchall(...)`, because a registry-contributed platform's key
- * is not known to this static schema. `.catchall()` replaces the old
- * `.strict()` — the "is this a REAL platform" check moves to the REGISTRY
- * pass (`resolveAdapterPluginOrThrow` / `validateSurfacesAgainstRegistry`,
- * `src/adapters/registry.ts`), which runs wherever a `SurfacePluginRegistry`
- * is in hand (today: always the in-tree `createDefaultSurfacePluginRegistry`,
- * since S6's out-of-tree bundle loading hasn't landed) and produces the SAME
- * loud "no adapter installed for platform …" failure a typo (`discrod:`)
- * used to get from `.strict()` — see `loader.ts`'s `parseSurfaces` and
- * `cortex.ts` boot for the two call sites.
+ * STRUCTURAL pass ONLY: the three in-tree platforms (discord/slack/mattermost)
+ * keep their full, strongly-typed binding schemas (byte-identical validation,
+ * zero ripple to every consumer typed against `Surfaces["discord"]` etc. —
+ * `discord-token-groups.ts`, `gateway-adapters.ts`); any OTHER top-level key
+ * — including `web`, cortex#1794 S9 MOVE: it extracted out-of-tree and is no
+ * longer one of the hardcoded three — is accepted structurally as a generic
+ * {@link SurfaceBindingEntrySchema} array via `.catchall(...)`, because a
+ * registry-contributed platform's key is not known to this static schema.
+ * `.catchall()` replaces the old `.strict()` — the "is this a REAL platform"
+ * check moves to the REGISTRY pass (`resolveAdapterPluginOrThrow` /
+ * `validateSurfacesAgainstRegistry`, `src/adapters/registry.ts`), which runs
+ * wherever a `SurfacePluginRegistry` is in hand (the in-tree
+ * `createDefaultSurfacePluginRegistry` plus whatever `loadExternalPlugins`
+ * registered, e.g. `web` once its bundle loads) and produces the SAME loud
+ * "no adapter installed for platform …" failure a typo (`discrod:`) used to
+ * get from `.strict()` — see `loader.ts`'s `parseSurfaces` and `cortex.ts`
+ * boot for the two call sites.
  *
  * Note: `web[]` bindings are NOT folded by `foldSurfaceBindings` (there is no
- * legacy presence shape). The gateway factory consumes them directly.
+ * legacy presence shape) — see {@link DEFAULT_FOLD_PLATFORMS}.
  */
 export const SurfacesSchema = z
   .object({
     discord: z.array(DiscordSurfaceBindingSchema).optional(),
     slack: z.array(SlackSurfaceBindingSchema).optional(),
     mattermost: z.array(MattermostSurfaceBindingSchema).optional(),
-    /**
-     * Web/SSE bindings — generic HTTP-ingress + broadcast-push surface.
-     * Multi-tenant: one entry per web application. Not folded into the
-     * per-stack config; the gateway factory constructs a WebAdapter per entry.
-     */
-    web: z.array(WebSurfaceBindingSchema).optional(),
   })
   // `.optional()` on the catchall element too — NOT a behavior change (a
   // catchall key, when actually present in the input, is never `undefined`
   // at runtime; Zod simply omits an absent key rather than storing
   // `undefined` under it). This is purely so the inferred TS type's index
-  // signature (`X[] | undefined`) matches the four explicit `.optional()`
+  // signature (`X[] | undefined`) matches the three explicit `.optional()`
   // keys above — TypeScript requires an object's named-optional-property
   // type to be assignable to its own index-signature type, and `X[] | undefined`
   // vs a non-optional `X[]` catchall would otherwise conflict
@@ -295,8 +271,9 @@ export type Surfaces = z.infer<typeof SurfacesSchema>;
 export type DiscordSurfaceBinding = z.infer<typeof DiscordSurfaceBindingSchema>;
 export type SlackSurfaceBinding = z.infer<typeof SlackSurfaceBindingSchema>;
 export type MattermostSurfaceBinding = z.infer<typeof MattermostSurfaceBindingSchema>;
-export type WebSurfaceBinding = z.infer<typeof WebSurfaceBindingSchema>;
-// `WebBinding` — re-exported above from `../../adapters/web/schema`.
+// `WebSurfaceBinding`/`WebBinding`/`WebBindingSchema` — cortex#1794 (S9 MOVE)
+// extracted entirely to the `metafactory-cortex-adapter-web` bundle; no
+// longer defined or re-exported from cortex core (see the module doc above).
 
 // =============================================================================
 // The fold — surfaces.yaml bindings → agents[*].presence.{platform}
@@ -305,19 +282,21 @@ export type WebSurfaceBinding = z.infer<typeof WebSurfaceBindingSchema>;
 /**
  * cortex#1789 (S4, ADR-0024 D5) — the default fold-platform list, byte-
  * identical to the pre-S4 hardcoded `PLATFORMS` const. `web` is deliberately
- * absent (it never folds — no legacy presence shape exists for it, see
- * `WebSurfaceBindingSchema`'s docstring). This is the FALLBACK `foldSurfaceBindings`
- * uses when called with no explicit `foldPlatforms` — every existing call
- * site (both `loader.ts` composer paths, every test) keeps this exact
- * behavior. `loader.ts` additionally computes this list from the registry
+ * absent — it never folded even when in-tree (no legacy presence shape
+ * exists for it), and cortex#1794 (S9 MOVE) removed it from this module
+ * entirely besides. This is the FALLBACK `foldSurfaceBindings` uses when
+ * called with no explicit `foldPlatforms` — every existing call site (both
+ * `loader.ts` composer paths, every test) keeps this exact behavior.
+ * `loader.ts` additionally computes this list from the registry
  * (`registry.listAdapters().filter(p => p.foldsIntoPresence)`) and passes it
  * explicitly — the registry-derived list and this constant agree today
- * because all four in-tree `AdapterPlugin`s set `foldsIntoPresence` to match
- * (discord/slack/mattermost `true`, web `false`). `surfaces.ts` itself does
- * NOT import the registry (`src/adapters/registry.ts` transitively imports
- * this module for `WebBindingSchema`/`DiscordBindingSchema`/etc — importing
- * the registry back here would cycle), so this constant is the registry-free
- * anchor the registry-derived list is checked against.
+ * because every in-tree `AdapterPlugin` sets `foldsIntoPresence` to match
+ * (discord/slack/mattermost `true`; `web`, wherever it's registered from,
+ * `false`). `surfaces.ts` itself does NOT import the registry
+ * (`src/adapters/registry.ts` transitively imports this module for
+ * `DiscordBindingSchema`/`SlackBindingSchema`/etc — importing the registry
+ * back here would cycle), so this constant is the registry-free anchor the
+ * registry-derived list is checked against.
  */
 export const DEFAULT_FOLD_PLATFORMS = ["discord", "slack", "mattermost"] as const;
 

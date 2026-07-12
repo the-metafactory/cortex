@@ -100,8 +100,13 @@ export interface AdapterPolicyTriad {
  * triad it has — possibly none, e.g. the shared surface-gateway's
  * shadow-stage build, which never wires a live `PolicyEngine` for ANY
  * platform — and forwards the returned port through `createAdapter`'s args.
- * The adapter body (`src/adapters/web/index.ts`) never imports
- * `common/policy` itself; it only calls the injected port.
+ * The adapter body — originally `src/adapters/web/index.ts`, relocated
+ * cortex#1794 (S9 MOVE) to the `metafactory-cortex-adapter-web` bundle's
+ * `src/index.ts` — never imports `common/policy` itself; it only calls the
+ * injected port. (The bundle's `src/plugin.ts` no longer calls THIS
+ * function either, post-move — it carries its own local
+ * `NO_POLICY_PORT` fallback reproducing the same behaviour, since this
+ * function is cortex-internal and doesn't ship with the bundle.)
  *
  * Called with no triad (or an all-undefined one), this reproduces EXACTLY
  * the behaviour a direct `resolvePolicyAccess({msg, engine: undefined, ...})`

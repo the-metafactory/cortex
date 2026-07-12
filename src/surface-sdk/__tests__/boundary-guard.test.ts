@@ -2,7 +2,8 @@
  * cortex#1790 (S5, ADR-0024 D5) — plugin SDK boundary-guard test.
  *
  * Walks every in-tree platform-adapter file (`src/adapters/{discord,slack,
- * mattermost,web}/*.ts`, excluding `__tests__`) and both registered renderer
+ * mattermost}/*.ts` — `web` extracted to the `metafactory-cortex-adapter-web`
+ * bundle, cortex#1794 S9 MOVE — excluding `__tests__`) and both registered renderer
  * implementations (`src/renderers/{dashboard,pagerduty}.ts`) — deliberately
  * EXCLUDING the contract-owning files themselves (`adapters/types.ts`,
  * `adapters/registry.ts`, `renderers/types.ts`, `renderers/index.ts` — the
@@ -107,7 +108,10 @@ const EXEMPT_ABS_PATHS = new Set<string>([
 ]);
 
 function listPlatformAdapterFiles(): string[] {
-  const platforms = ["discord", "slack", "mattermost", "web"];
+  // cortex#1794 (S9 MOVE) — `web` dropped: it extracted to the
+  // `metafactory-cortex-adapter-web` bundle and no longer has a
+  // `src/adapters/web/` directory to walk.
+  const platforms = ["discord", "slack", "mattermost"];
   const files: string[] = [];
   for (const platform of platforms) {
     const dir = resolve(SRC_ROOT, "adapters", platform);
@@ -202,36 +206,19 @@ describe("plugin SDK boundary guard (cortex#1790, ADR-0024 D5)", () => {
   });
 });
 
-/**
- * cortex#1794 (S9b) — the web adapter's dependency-inversion pass. Stricter
- * than the guard above: rather than checking a fixed symbol allowlist, this
- * asserts NO `../../` (cross-`src/adapters/`-boundary) import survives in
- * `src/adapters/web/*.ts` UNLESS its specifier resolves to `surface-sdk`.
- * `src/adapters/web/` is the one adapter directory (of the four) that no
- * longer needs `common/policy`, `common/types/surfaces`, or
- * `common/types/cortex-config` at all — everything it needs crosses the
- * boundary through the SDK barrel or a same-directory sibling (`./schema`,
- * `./index`). Discord/Slack/Mattermost are NOT held to this bar yet (their
- * dependency-inversion pass is cortex#1896) — this test is scoped to `web/`
- * only, on purpose.
- */
-describe("web adapter dependency inversion (cortex#1794, S9b)", () => {
-  test("src/adapters/web/*.ts's only cross-boundary (../../) imports are surface-sdk", () => {
-    const webDir = resolve(SRC_ROOT, "adapters", "web");
-    const files = readdirSync(webDir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-      .map((entry) => join(webDir, entry.name));
-    expect(files.length).toBeGreaterThan(0);
-
-    const violations: string[] = [];
-    for (const file of files) {
-      const source = readFileSync(file, "utf-8");
-      for (const { specifier } of extractImports(source)) {
-        if (!specifier.startsWith("../../")) continue;
-        if (specifier === "../../surface-sdk" || specifier.startsWith("../../surface-sdk/")) continue;
-        violations.push(`${file}: cross-boundary import "${specifier}" is not surface-sdk`);
-      }
-    }
-    expect(violations).toEqual([]);
-  });
-});
+// cortex#1794 (S9b) added a stricter dependency-inversion boundary test
+// scoped to `src/adapters/web/*.ts` (asserting its only cross-`src/adapters/`
+// import was `surface-sdk`, everything else same-directory). cortex#1794 (S9
+// MOVE) removed it: that directory no longer exists in this repo — the web
+// adapter (and its own, now-standalone dependency-inversion guarantee) lives
+// in the `metafactory-cortex-adapter-web` bundle, verified there by
+// `bunx tsc --noEmit` against its vendored SDK types (nothing to import
+// FROM in-tree once the bundle is genuinely out-of-tree). NOTE for
+// discord/slack/mattermost's eventual extraction (cortex#1896): that S9b
+// test's `../../`-only regex had a real gap — a ONE-level-up cross-boundary
+// import (e.g. `../plugin-support`) was never checked, and cortex's pre-move
+// `web/plugin.ts` had exactly that gap (a real runtime import of
+// `buildAdapterPolicyPort` from `adapters/plugin-support.ts`, fixed during
+// the move — see the bundle's `src/plugin.ts` module doc). A future adapter
+// extraction that revives this style of test should check ANY cross-
+// directory `../` specifier outside `surface-sdk`, not just `../../`.

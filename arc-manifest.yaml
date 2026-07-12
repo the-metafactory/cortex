@@ -158,6 +158,21 @@ dependencies:
   # the bundle is installed explicitly and this declaration records the intent.
   - name: "metafactory-discord"
     version: ">=0.1.0"
+  # metafactory-cortex-adapter-web (cortex#1794 S9, ADR-0024 D2): the web/SSE
+  # surface adapter (C-110) extracted out of cortex core into this bundle —
+  # `src/adapters/web/` is deleted in-tree, no fallback copy. `arc upgrade
+  # cortex` auto-installs it; cortex's plugin loader
+  # (src/adapters/loader.ts, cortex#1794 S9a) recognizes this exact NAME as
+  # matching the compass#115 `metafactory-cortex-adapter-<name>` naming
+  # standard (ADAPTER_BUNDLE_DEP_NAME_RE) and grants it the first-party
+  # ADAPTER exemption from the default-off `system.plugins.external` flag —
+  # so a stack upgrades transparently: the bundle installs, the adapter
+  # loads, `surfaces.web[]` keeps working, and no principal ever has to flip
+  # the flag for a repackage that only relocated cortex's own code.
+  # Distribution is repo-first (ADR-0017):
+  # https://github.com/the-metafactory/metafactory-cortex-adapter-web.
+  - name: "metafactory-cortex-adapter-web"
+    version: ">=0.1.0"
 # myelin deps still pending — declared once cortex's runtime depends on
 # myelin-side identity primitives.
 # dependencies:

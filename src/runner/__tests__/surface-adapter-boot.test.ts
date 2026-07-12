@@ -177,7 +177,6 @@ function makeRecordingFactory(recorded: RecordedAdapter[]): {
         recorded,
       );
     },
-    web: (args) => makeFakeAdapter({ platform: "web", instanceId: args.instanceId, botUserId: "unused" }, recorded),
   };
   return { factory, callOrder };
 }
@@ -396,7 +395,6 @@ describe("wireSurfaceAdapters", () => {
         bindings.mattermost = args.binding;
         return makeFakeAdapter({ platform: "mattermost", instanceId: args.instanceId, botUserId: "b" }, recorded);
       },
-      web: (args) => makeFakeAdapter({ platform: "web", instanceId: args.instanceId, botUserId: "b" }, recorded),
     };
     const { router } = makeRecordingRouter();
     const opts = baseOpts(config, factory, router);

@@ -1,25 +1,16 @@
 /**
- * cortex#1794 (S9b, ADR-0024 D5 extraction lane) — the Web/SSE surface
- * binding schema, relocated here from `src/common/types/surfaces.ts`.
- *
- * S4 (`adapters/registry.ts`'s `AdapterPlugin.bindingSchema` docstring)
- * already establishes the principle: a plugin's binding schema is
- * PLUGIN-OWNED data, not something the config layer should hardcode. Before
- * this slice, `common/types/surfaces.ts` was the schema's home and
- * `src/adapters/web/plugin.ts` reached `../../common/types/surfaces` to read
- * it back — a cross-boundary import that made the web adapter directory
- * un-compilable against `surface-sdk` alone. Moving the definition HERE and
- * having `common/types/surfaces.ts` import (and re-export) it inverts that
- * dependency: `src/adapters/web/*.ts` now reads its own binding schema via
- * the intra-directory `./schema` path, and the config layer depends on the
- * plugin instead of the other way around.
- *
- * `common/types/surfaces.ts` still needs the schema VALUE to compose
- * `WebSurfaceBindingSchema`/`SurfacesSchema` (the top-level `surfaces.web[]`
- * structural validation hardcodes the four in-tree platforms — see that
- * file's module doc) — it imports this module and re-exports both symbols so
- * every existing external consumer (`gateway-adapters.ts`, tests) keeps
- * importing from the same place, unchanged.
+ * cortex#1794 (S9, ADR-0024 D5 extraction lane) — the Web/SSE surface binding
+ * schema. Originally lived in cortex's `src/common/types/surfaces.ts`; S9b
+ * relocated it to cortex's in-tree `src/adapters/web/schema.ts` (plugin-owned
+ * data — S4's own principle: `adapters/registry.ts`'s
+ * `AdapterPlugin.bindingSchema` docstring). S9 (this bundle) is the FINAL
+ * relocation: the schema now lives HERE, in the
+ * `metafactory-cortex-adapter-web` bundle repo, and cortex core no longer
+ * imports or re-exports it at all — `surfaces.web[]` bindings validate
+ * structurally like any other registry-contributed platform (cortex's
+ * `SurfacesSchema` catchall), with this schema supplying the REAL per-field
+ * validation once cortex's plugin loader registers `webAdapterPlugin` (see
+ * `./plugin.ts`) and reads `bindingSchema` off it.
  */
 
 import { z } from "zod/v4";

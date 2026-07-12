@@ -1,0 +1,11 @@
+# cortex#1794 (S9, ADR-0024) — plugin manifest for the cortex web/SSE surface
+# adapter bundle.
+#
+# `id` MUST equal the exported AdapterPlugin's `platform` field (the S6
+# shadow-fix pin, src/adapters/loader.ts's loadOneBundle stage (f)) — web's
+# platform is "web", so id is "web" here too.
+kind: adapter
+id: web
+entry: ./src/plugin.ts
+sdkRange: "^1"
+cortex: ">=6.7.0"
