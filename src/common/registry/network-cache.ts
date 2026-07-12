@@ -21,7 +21,16 @@
  * return — a missing/corrupt cache file degrades to "no cache", never a throw.
  */
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -110,11 +119,38 @@ export class NetworkCache {
     };
     try {
       mkdirSync(this.cacheDir, { recursive: true });
+      const livePath = this.pathFor(networkId);
+      const tmpPath = `${livePath}.tmp`;
+      // Atomic write (G-28 / epic X-02: write → fsync → rename). A daemon
+      // respawn or crash mid-write can only ever truncate the .tmp; the live
+      // path holds either the previous good record or the complete new one,
+      // never a half-written file `load()` would swallow as a parse error and
+      // silently lose the DD-10 last-known-good roster.
       // Pretty-print: these files are human-inspectable during ops triage of
       // a registry outage, and the size is trivial (a handful of peers).
-      writeFileSync(this.pathFor(networkId), JSON.stringify(record, null, 2), {
-        encoding: "utf8",
-      });
+      const fd = openSync(tmpPath, "w");
+      try {
+        writeFileSync(fd, JSON.stringify(record, null, 2), { encoding: "utf8" });
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmpPath, livePath);
+      // Best-effort: fsync the containing dir so the rename itself survives a
+      // power loss. POSIX-only — opening a directory throws on some platforms
+      // (e.g. Windows), so tolerate failure rather than fail the write.
+      try {
+        const dirFd = openSync(this.cacheDir, "r");
+        try {
+          fsyncSync(dirFd);
+        } finally {
+          closeSync(dirFd);
+        }
+      } catch {
+        // Directory fsync unsupported on this platform; the rename already
+        // landed the file, so this only weakens crash-durability of the
+        // directory entry, never correctness of the live file's contents.
+      }
       return true;
     } catch (err) {
       this.logError(

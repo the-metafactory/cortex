@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -128,6 +128,69 @@ describe("NetworkCache", () => {
         encoding: "utf8",
       });
       expect(cache.list().length).toBe(1);
+    });
+  });
+
+  // G-28 / epic X-02 — store() must be atomic (write → fsync → rename) so a
+  // crash or daemon respawn mid-write can never land a truncated file at the
+  // live path, where load() would swallow the parse error and silently lose
+  // the DD-10 last-known-good roster.
+  describe("atomic store (G-28 / X-02)", () => {
+    const bigRoster = (n: number): NetworkRosterResult => ({
+      network_id: "iaw",
+      members: Array.from({ length: n }, (_, i) => ({
+        principal_id: `p${i}`,
+        principal_pubkey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      })),
+    });
+
+    test("store lands a complete, valid JSON file and leaves no .tmp residue", () => {
+      // A large record makes a non-atomic single writeFileSync span multiple
+      // write syscalls — the window this fix closes.
+      expect(cache.store("iaw", descriptor, bigRoster(5000))).toBe(true);
+      const raw = readFileSync(join(tmp, "iaw.json"), { encoding: "utf8" });
+      // The live file is always complete, parseable JSON.
+      expect(() => JSON.parse(raw)).not.toThrow();
+      expect(cache.load("iaw")?.roster.members.length).toBe(5000);
+      // The temp file was renamed away, not left beside the live file.
+      expect(readdirSync(tmp).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    });
+
+    test("a truncated .tmp left by a crashed write is never observable at the live path", () => {
+      // Simulate a crash mid-write: a truncated temp file, no live file yet.
+      writeFileSync(join(tmp, "iaw.json.tmp"), '{"schema_version":1,"cached', {
+        encoding: "utf8",
+      });
+      // load() reads only the live path — the partial tmp is invisible.
+      expect(cache.load("iaw")).toBeUndefined();
+      // list() skips non-.json files, so the tmp never surfaces there either.
+      expect(cache.list()).toEqual([]);
+      // A subsequent successful store overwrites the stale tmp and lands a
+      // complete, valid live record.
+      expect(cache.store("iaw", descriptor, roster)).toBe(true);
+      expect(cache.load("iaw")?.roster).toEqual(roster);
+      expect(readdirSync(tmp).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    });
+
+    test("interleaved stores and loads of a large record never observe invalid JSON", async () => {
+      const big = bigRoster(3000);
+      // Seed one good record so every reader has something to read.
+      expect(cache.store("iaw", descriptor, big)).toBe(true);
+
+      const rounds = 40;
+      const writers = Array.from({ length: rounds }, () =>
+        Promise.resolve().then(() => cache.store("iaw", descriptor, big)),
+      );
+      const readers = Array.from({ length: rounds }, () =>
+        Promise.resolve().then(() => {
+          // The reader must never see a truncated file at the live path: the
+          // raw bytes always parse, and load() returns the full record.
+          const raw = readFileSync(join(tmp, "iaw.json"), { encoding: "utf8" });
+          expect(() => JSON.parse(raw)).not.toThrow();
+          expect(cache.load("iaw")?.roster.members.length).toBe(3000);
+        }),
+      );
+      await Promise.all([...writers, ...readers]);
     });
   });
 });
