@@ -47,6 +47,7 @@
 import type { PlatformAdapter, InboundMessage } from "../adapters/types";
 import {
   resolveBinding,
+  parseStack,
   type GatewayBindingIndex,
   type GatewayBindingMatch,
 } from "./binding-resolver";
@@ -97,6 +98,40 @@ export interface GatewayInboundSink {
 }
 
 // =============================================================================
+// Runtime attach/detach (cortex#1793, S8, ADR-0024 D3 renderer-delta note +
+// "the adapter side is the hard half" scope amendment)
+// =============================================================================
+
+/**
+ * One binding seed to fold into the gateway's live {@link GatewayBindingIndex}
+ * when {@link SurfaceGateway.attachAdapter} brings a new adapter instance up
+ * at RUNTIME (no boot, no restart) — the runtime twin of the per-platform
+ * loops `buildBindingIndex` runs once at boot. Uses the SAME demux-key
+ * conventions byte-for-byte (`binding-resolver.ts`'s "v1 decisions") so an
+ * adapter attached mid-life resolves inbound identically to one present at
+ * boot:
+ *
+ *   - discord / slack: `demuxKey` = `binding.guildId` / `binding.workspaceId`.
+ *   - mattermost: `demuxKey` = `binding.apiUrl` (only meaningful for the
+ *     single-vs-multi recompute — see {@link SurfaceGateway.attachAdapter}).
+ *   - web: `demuxKey` = the adapter's own `instanceId` (NOT pre-fixed with
+ *     `"web:"` — the gateway derives the `web:${demuxKey}` index key itself,
+ *     matching `buildBindingIndex`'s web loop).
+ */
+export interface GatewayBindingSeed {
+  platform: "discord" | "slack" | "mattermost" | "web";
+  agent: string;
+  stack?: string;
+  demuxKey: string;
+}
+
+/** Outcome of {@link SurfaceGateway.detachAdapter}. */
+export interface DetachAdapterResult {
+  /** `false` when no attached instance matched `instanceId` — a no-op, not an error. */
+  detached: boolean;
+}
+
+// =============================================================================
 // SurfaceGateway
 // =============================================================================
 
@@ -129,6 +164,35 @@ export class SurfaceGateway {
   private readonly index: GatewayBindingIndex;
   private readonly sink: GatewayInboundSink;
   private readonly onUnroutable: (msg: InboundMessage, reason: string) => void;
+
+  /**
+   * cortex#1793 (S8) — the seeds each ATTACHED (runtime, not boot) instance
+   * folded into {@link index}, keyed by `PlatformAdapter.instanceId`. Boot-time
+   * adapters (constructed via the constructor's initial `adapters` array) are
+   * NOT tracked here — their index entries live for the gateway's whole
+   * lifetime and are torn down only by a full {@link stop}. Only entries added
+   * via {@link attachAdapter} are tracked, so {@link detachAdapter} removes
+   * EXACTLY what its matching attach added — never a boot-time binding.
+   */
+  private readonly attachedSeeds = new Map<string, GatewayBindingSeed[]>();
+
+  /**
+   * cortex#1793 (S8) — instance ids currently mid-detach or fully detached.
+   * Checked FIRST (synchronously, before any await) at the top of
+   * {@link handleInbound} so inbound racing in during/after a detach is
+   * dropped + logged rather than routed through a binding index entry that
+   * `detachAdapter` may already have removed. Cleared once the matching
+   * `detachAdapter` call returns (never inhabited by a boot-time instance).
+   */
+  private readonly detachedInstanceIds = new Set<string>();
+
+  /**
+   * cortex#1793 (S8) — in-flight `handleInbound` work per instance id, so
+   * {@link detachAdapter} can DRAIN: wait for everything already admitted
+   * before the detach flag was set, without blocking on work that arrives
+   * (and is dropped) after.
+   */
+  private readonly inFlight = new Map<string, Set<Promise<void>>>();
 
   constructor(
     adapters: PlatformAdapter[],
@@ -193,6 +257,235 @@ export class SurfaceGateway {
   }
 
   /**
+   * cortex#1793 (S8, ADR-0024 D3) — bring ONE new adapter instance up at
+   * runtime, no restart. The per-instance counterpart to {@link start}
+   * (which brings every BOOT-time adapter up together): folds `seeds` into
+   * the live {@link GatewayBindingIndex} (same demux-key rules
+   * `buildBindingIndex` uses — see {@link GatewayBindingSeed}), then
+   * `start()`s the adapter and attaches its inbound listener exactly like the
+   * boot-time loop does.
+   *
+   * Throws (adapter NOT attached) when:
+   *   - `adapter.instanceId` is already attached (boot-time or a prior
+   *     runtime attach) — call {@link detachAdapter} first to replace it;
+   *   - any discord/slack/web seed's demux key collides with an
+   *     already-bound key — the SAME loud "ambiguous config" error
+   *     `buildBindingIndex` throws at boot, so a colliding runtime attach
+   *     fails exactly as loudly as a colliding boot config would.
+   *
+   * Mattermost has no per-entry demux map (boot-time `buildBindingIndex`
+   * tracks only a single-vs-multi flag) — attaching a mattermost seed
+   * recomputes that flag from every seed this gateway has EVER attached
+   * (tracked in {@link attachedSeeds}), mirroring the boot-time loop's
+   * "exactly one binding is the fallback; more than one is ambiguous" rule.
+   *
+   * Never partially applies: index entries are added BEFORE `adapters.push`,
+   * so a throw here leaves neither the index nor the adapter list mutated
+   * for this attach.
+   */
+  async attachAdapter(
+    adapter: PlatformAdapter,
+    seeds: readonly GatewayBindingSeed[],
+  ): Promise<void> {
+    if (this.adapters.some((a) => a.instanceId === adapter.instanceId)) {
+      throw new Error(
+        `SurfaceGateway.attachAdapter: instance "${adapter.instanceId}" is already attached — ` +
+          `detachAdapter it first to replace it.`,
+      );
+    }
+
+    // Fold every non-mattermost seed into the index FIRST (loud throw on
+    // collision, before touching adapters/attachedSeeds) — mattermost is
+    // handled separately below via recompute, since it has no per-entry map.
+    for (const seed of seeds) {
+      if (seed.platform === "mattermost") continue;
+      this.addNonMattermostSeed(seed);
+    }
+    this.attachedSeeds.set(adapter.instanceId, [...seeds]);
+    if (seeds.some((s) => s.platform === "mattermost")) {
+      this.recomputeMattermostSlot();
+    }
+
+    this.detachedInstanceIds.delete(adapter.instanceId);
+    this.adapters.push(adapter);
+    await adapter.start((msg) => this.handleInbound(adapter, msg));
+    adapter.attachInboundDispatch?.();
+    process.stdout.write(
+      `[surface-gateway] adapter attached at runtime + inbound listener attached — ` +
+        `platform=${adapter.platform} instanceId=${adapter.instanceId}\n`,
+    );
+  }
+
+  /**
+   * cortex#1793 (S8, ADR-0024 D3) — detach ONE adapter instance at runtime,
+   * no restart, WITHOUT disturbing any other attached instance (the
+   * acceptance criterion: "detach of one adapter leaves every other adapter
+   * delivering").
+   *
+   * Sequence:
+   *   1. Mark `instanceId` detached FIRST (synchronous, before any await) —
+   *      any `handleInbound` call whose entry check runs after this point
+   *      drops its message (logged) instead of routing it, even though the
+   *      adapter object and its index entries are torn down a few lines
+   *      later in this same call. JS's single-threaded execution means no
+   *      inbound can slip between this line and the index/adapters mutation
+   *      below (neither yields to the event loop).
+   *   2. Remove the instance from `adapters` and fold its seeds back out of
+   *      the index (mattermost: recompute the slot from the REMAINING
+   *      tracked seeds).
+   *   3. DRAIN — await every `handleInbound` call already admitted into
+   *      {@link inFlight} for this instance (work that started before step 1)
+   *      so `adapter.stop()` never races an in-flight render/publish.
+   *   4. `adapter.stop()`.
+   *
+   * Returns `{ detached: false }` (no-op, not an error) when `instanceId`
+   * names no currently-attached adapter — mirrors the idempotent-miss
+   * convention `PlatformAdapter.stop()` documents elsewhere in this codebase.
+   */
+  async detachAdapter(instanceId: string): Promise<DetachAdapterResult> {
+    const idx = this.adapters.findIndex((a) => a.instanceId === instanceId);
+    if (idx === -1) return { detached: false };
+    const adapter = this.adapters[idx];
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- idx came from findIndex on THIS array, one line above; TS narrows via noUncheckedIndexedAccess but the index is provably in-bounds.
+    const liveAdapter = adapter!;
+
+    // Step 1 — flag FIRST. No await between here and step 2's mutations, so
+    // no inbound can observe a half-torn-down state.
+    this.detachedInstanceIds.add(instanceId);
+
+    // Step 2 — remove from the live adapter list + fold seeds back out of
+    // the index.
+    this.adapters.splice(idx, 1);
+    const seeds = this.attachedSeeds.get(instanceId) ?? [];
+    this.attachedSeeds.delete(instanceId);
+    for (const seed of seeds) {
+      if (seed.platform === "mattermost") continue;
+      this.removeNonMattermostSeed(seed);
+    }
+    if (seeds.some((s) => s.platform === "mattermost")) {
+      this.recomputeMattermostSlot();
+    }
+
+    // Step 3 — drain in-flight handleInbound work for this instance.
+    const pending = this.inFlight.get(instanceId);
+    if (pending && pending.size > 0) {
+      await Promise.allSettled([...pending]);
+    }
+    this.inFlight.delete(instanceId);
+
+    // Step 4 — release the platform connection.
+    await liveAdapter.stop();
+
+    process.stdout.write(
+      `[surface-gateway] adapter detached at runtime — platform=${liveAdapter.platform} ` +
+        `instanceId=${instanceId}\n`,
+    );
+    return { detached: true };
+  }
+
+  /** Fold one discord/slack/web seed into the live index. Throws the same
+   *  loud ambiguous-binding error {@link binding-resolver.ts}'s
+   *  `buildBindingIndex` throws at boot on a duplicate demux key. */
+  private addNonMattermostSeed(seed: GatewayBindingSeed): void {
+    const { principal, stack } = parseStack(seed.stack);
+    if (seed.platform === "discord") {
+      if (this.index.discord.has(seed.demuxKey)) {
+        throw new Error(
+          `SurfaceGateway.attachAdapter: ambiguous discord config — guildId "${seed.demuxKey}" is already bound.`,
+        );
+      }
+      this.index.discord.set(seed.demuxKey, {
+        agent: seed.agent,
+        principal,
+        stack,
+        instance: `discord:${seed.demuxKey}`,
+      });
+      return;
+    }
+    if (seed.platform === "slack") {
+      if (this.index.slack.has(seed.demuxKey)) {
+        throw new Error(
+          `SurfaceGateway.attachAdapter: ambiguous slack config — workspaceId "${seed.demuxKey}" is already bound.`,
+        );
+      }
+      this.index.slack.set(seed.demuxKey, {
+        agent: seed.agent,
+        principal,
+        stack,
+        instance: `slack:${seed.demuxKey}`,
+      });
+      return;
+    }
+    // web
+    const key = `web:${seed.demuxKey}`;
+    if (this.index.web.has(key)) {
+      throw new Error(
+        `SurfaceGateway.attachAdapter: ambiguous web config — instanceId "${seed.demuxKey}" is already bound.`,
+      );
+    }
+    this.index.web.set(key, {
+      agent: seed.agent,
+      principal,
+      stack,
+      instance: key,
+    });
+  }
+
+  /** Reverse of {@link addNonMattermostSeed} — removes exactly the entry the
+   *  matching attach inserted. */
+  private removeNonMattermostSeed(seed: GatewayBindingSeed): void {
+    if (seed.platform === "discord") {
+      this.index.discord.delete(seed.demuxKey);
+      return;
+    }
+    if (seed.platform === "slack") {
+      this.index.slack.delete(seed.demuxKey);
+      return;
+    }
+    this.index.web.delete(`web:${seed.demuxKey}`);
+  }
+
+  /**
+   * Recompute the index's mattermost single/multi slot from every mattermost
+   * seed CURRENTLY attached at runtime (`attachedSeeds`), mirroring
+   * `buildBindingIndex`'s "exactly one binding → fallback; more than one →
+   * ambiguous" rule. Deliberately does NOT consider boot-time mattermost
+   * bindings separately — those are already folded into the SAME
+   * `mattermostSingle`/`mattermostMulti` slot this recompute overwrites, so a
+   * boot-time binding must also flow through `attachedSeeds` bookkeeping to
+   * survive a later runtime attach/detach. In v1 (S8), boot never populates
+   * `attachedSeeds` (only `attachAdapter` does), so this recompute is a
+   * runtime-only concern until a boot-time mattermost + a runtime-attached
+   * mattermost coexist — not a configuration this slice's scope produces.
+   */
+  private recomputeMattermostSlot(): void {
+    const mmSeeds = [...this.attachedSeeds.values()]
+      .flat()
+      .filter((s) => s.platform === "mattermost");
+    if (mmSeeds.length === 0) {
+      this.index.mattermostSingle = null;
+      this.index.mattermostMulti = false;
+      return;
+    }
+    if (mmSeeds.length === 1) {
+      const sole = mmSeeds[0];
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length check above guarantees index 0 exists.
+      const { agent, stack, demuxKey } = sole!;
+      const { principal, stack: parsedStack } = parseStack(stack);
+      this.index.mattermostSingle = {
+        agent,
+        principal,
+        stack: parsedStack,
+        instance: `mattermost:${demuxKey}`,
+      };
+      this.index.mattermostMulti = false;
+      return;
+    }
+    this.index.mattermostSingle = null;
+    this.index.mattermostMulti = true;
+  }
+
+  /**
    * Route one inbound message to the sink.
    *
    * Called from inside the adapter's `onMessage` callback — MUST NOT throw.
@@ -201,12 +494,40 @@ export class SurfaceGateway {
    * throwing `sink.publish`, or anything else is logged with full context and
    * swallowed so the adapter loop stays alive.
    *
-   * @param _adapter the adapter that received the message. Unused in the shadow
-   *   stage; reserved for GW.a.3, where the outbound mux needs the per-connection
-   *   context to render replies. Kept on the signature (design §5 references
-   *   `gateway.handleInbound(adapter, msg)`) rather than re-threaded later.
+   * cortex#1793 (S8) — checks {@link detachedInstanceIds} FIRST: inbound for
+   * an instance mid-detach or already detached is dropped + logged rather
+   * than routed. Otherwise the actual work is tracked in {@link inFlight} for
+   * the duration of the call so {@link detachAdapter} can drain it.
+   *
+   * @param adapter the adapter that received the message. Used to key the
+   *   detached-check and the in-flight tracking by `instanceId`.
    */
   async handleInbound(
+    adapter: PlatformAdapter,
+    msg: InboundMessage,
+  ): Promise<void> {
+    if (this.detachedInstanceIds.has(adapter.instanceId)) {
+      process.stderr.write(
+        `[surface-gateway] dropping inbound — instance "${adapter.instanceId}" is detached. ` +
+          `platform=${msg.platform} channelId=${msg.channelId}\n`,
+      );
+      return;
+    }
+    const work = this.doHandleInbound(adapter, msg);
+    let set = this.inFlight.get(adapter.instanceId);
+    if (!set) {
+      set = new Set();
+      this.inFlight.set(adapter.instanceId, set);
+    }
+    set.add(work);
+    try {
+      await work;
+    } finally {
+      set.delete(work);
+    }
+  }
+
+  private async doHandleInbound(
     _adapter: PlatformAdapter,
     msg: InboundMessage,
   ): Promise<void> {

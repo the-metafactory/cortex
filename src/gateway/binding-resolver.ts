@@ -165,7 +165,14 @@ export interface GatewayBindingIndex {
  * - Returns `{ principal: undefined, stack: undefined }` when the input is
  *   absent (gap 4 — `stack` is optional on the binding).
  */
-function parseStack(raw: string | undefined): {
+/**
+ * cortex#1793 (S8) — exported (was module-private) so `SurfaceGateway`'s
+ * runtime `attachAdapter`/`detachAdapter` (`surface-gateway.ts`) can parse a
+ * seed's `stack` field with the EXACT same `{principal}/{stack}` splitting
+ * `buildBindingIndex` uses for the boot-time path — one parser, no drift
+ * between boot-built and runtime-attached index entries.
+ */
+export function parseStack(raw: string | undefined): {
   principal: string | undefined;
   stack: string | undefined;
 } {

@@ -1808,3 +1808,102 @@ export function createSystemPluginLoadedEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.plugin.unloaded / system.plugin.reload_failed — cortex#1793 (S8,
+// ADR-0024 D3)
+// ---------------------------------------------------------------------------
+
+/**
+ * S8's runtime-lifecycle twins of the S6 boot-time `system.plugin.loaded` /
+ * `system.plugin.load_failed` pair, above. Same `system.plugin.*` family
+ * (never a separate `system.adapter.*`/`system.renderer.*` namespace — the
+ * SCOPE AMENDED comment on cortex#1793 is explicit that S8 stays consistent
+ * with S6's naming rather than forking one), same secret-free reason-string
+ * discipline, same per-plugin fail-isolation posture: one detach/reload
+ * outcome never blocks or masks another's.
+ *
+ * `createSystemPluginUnloadedEvent` fires on a SUCCESSFUL runtime detach
+ * (`cortex plugin unload`, or a reconcile-driven detach of a bundle removed
+ * from disk) — the adapter/renderer instance is gone, its resources released.
+ * `createSystemPluginReloadFailedEvent` fires when a `cortex plugin reload`
+ * (cache-bust re-`import()` + detach-old/attach-new) fails at any stage —
+ * the OLD instance is left running (D3: reload never tears down the live
+ * instance before the replacement is confirmed constructible).
+ */
+export interface SystemPluginUnloadedOpts {
+  source: SystemEventSource;
+  /** arc package name the bundle installed under, or the in-tree module name
+   *  for a never-extracted anchor (mock adapter / dashboard renderer). */
+  bundleName: string;
+  kind: "adapter" | "renderer";
+  pluginId: string;
+  /** The specific live instance detached (`PlatformAdapter.instanceId` /
+   *  `Renderer.id`) — distinct from `pluginId`, which names the plugin
+   *  CLASS a registry entry is keyed by (ADR-0024 D5 "registry keys plugin
+   *  CLASSES, not instances"). */
+  instanceId: string;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.plugin.unloaded` envelope. Subject convention:
+ * `local.{principal}.system.plugin.unloaded`.
+ */
+export function createSystemPluginUnloadedEvent(
+  opts: SystemPluginUnloadedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.plugin.unloaded",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      bundle_name: opts.bundleName,
+      kind: opts.kind,
+      plugin_id: opts.pluginId,
+      instance_id: opts.instanceId,
+    },
+  });
+}
+
+export interface SystemPluginReloadFailedOpts {
+  source: SystemEventSource;
+  bundleName: string;
+  kind?: "adapter" | "renderer";
+  pluginId?: string;
+  /** The live instance a failed reload left running (unchanged) — present
+   *  whenever the old instance could be identified, absent only when the
+   *  failure occurred before an existing instance was resolved at all. */
+  instanceId?: string;
+  /** Which stage of cache-bust-reimport → construct → detach-old →
+   *  attach-new the failure occurred at. Open string, mirroring
+   *  `SystemPluginLoadFailedOpts.stage` — the reconcile module is the single
+   *  source of truth for the values it actually emits. */
+  stage: string;
+  /** Human-readable, secret-free failure detail. */
+  reason: string;
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.plugin.reload_failed` envelope. Subject convention:
+ * `local.{principal}.system.plugin.reload_failed`. The old instance is left
+ * running — this event reports a FAILED reload attempt, never a detach.
+ */
+export function createSystemPluginReloadFailedEvent(
+  opts: SystemPluginReloadFailedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.plugin.reload_failed",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      bundle_name: opts.bundleName,
+      ...(opts.kind !== undefined && { kind: opts.kind }),
+      ...(opts.pluginId !== undefined && { plugin_id: opts.pluginId }),
+      ...(opts.instanceId !== undefined && { instance_id: opts.instanceId }),
+      stage: opts.stage,
+      reason: opts.reason,
+    },
+  });
+}

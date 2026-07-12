@@ -24,6 +24,8 @@ import {
   createSystemAdapterRecoveredEvent,
   createSystemDispatchStageEvent,
   createSystemInboundAbortedEvent,
+  createSystemPluginReloadFailedEvent,
+  createSystemPluginUnloadedEvent,
   type SystemEventSource,
 } from "../system-events";
 import { emitSystemAccessDenied } from "../emit-system-access-denied";
@@ -917,5 +919,108 @@ describe("emitSystemAccessDenied — drop-site emit helper (cortex#932)", () => 
       }),
     ).not.toThrow();
     expect(published.length).toBe(0);
+  });
+});
+
+describe("createSystemPluginUnloadedEvent (cortex#1793, S8)", () => {
+  const SOURCE: SystemEventSource = {
+    principal: "andreas",
+    agent: "cortex",
+    instance: "local",
+  };
+
+  test("required fields populated; envelope passes schema validation", () => {
+    const env = createSystemPluginUnloadedEvent({
+      source: SOURCE,
+      bundleName: "cli-tail-renderer",
+      kind: "renderer",
+      pluginId: "cli-tail",
+      instanceId: "cli-tail",
+    });
+    expect(env.type).toBe("system.plugin.unloaded");
+    expect(env.source).toBe("andreas.cortex.local");
+    expect(env.payload).toEqual({
+      bundle_name: "cli-tail-renderer",
+      kind: "renderer",
+      plugin_id: "cli-tail",
+      instance_id: "cli-tail",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("adapter kind — instance_id distinct from plugin_id", () => {
+    const env = createSystemPluginUnloadedEvent({
+      source: SOURCE,
+      bundleName: "acme-chat-adapter",
+      kind: "adapter",
+      pluginId: "acme-chat",
+      instanceId: "acme-chat:guild-123",
+    });
+    expect((env.payload as { plugin_id: string }).plugin_id).toBe("acme-chat");
+    expect((env.payload as { instance_id: string }).instance_id).toBe("acme-chat:guild-123");
+  });
+});
+
+describe("createSystemPluginReloadFailedEvent (cortex#1793, S8)", () => {
+  const SOURCE: SystemEventSource = {
+    principal: "andreas",
+    agent: "cortex",
+    instance: "local",
+  };
+
+  test("required fields only — optional fields omitted, not undefined-valued", () => {
+    const env = createSystemPluginReloadFailedEvent({
+      source: SOURCE,
+      bundleName: "cli-tail-renderer",
+      stage: "cache_bust_reimport",
+      reason: "import() threw: SyntaxError",
+    });
+    expect(env.type).toBe("system.plugin.reload_failed");
+    expect(env.payload).toEqual({
+      bundle_name: "cli-tail-renderer",
+      stage: "cache_bust_reimport",
+      reason: "import() threw: SyntaxError",
+    });
+    expect(env.payload).not.toHaveProperty("kind");
+    expect(env.payload).not.toHaveProperty("plugin_id");
+    expect(env.payload).not.toHaveProperty("instance_id");
+    // NOTE: NOT asserting `validateEnvelope(env).ok` here — deliberately.
+    // `envelope-validator.ts`'s `/type` pattern
+    // (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$`) does not admit
+    // underscores within a segment, and `reload_failed` (like the
+    // already-shipped sibling `load_failed`, plus `system.bus.notify_discord`,
+    // `system.bus.reflex_activation_failed`, `system.gateway.routing_decision`,
+    // …) uses one. This is a PRE-EXISTING gap in the schema pattern vs. the
+    // established `snake_case` leaf-segment convention across MANY `system.*`
+    // event families already in production — not introduced by this event,
+    // and out of this slice's scope to fix (the pattern is only enforced on
+    // the SUBSCRIBER side, `myelin/subscriber.ts`, not at publish time, so it
+    // has never blocked these events from actually flowing). Flagged as a
+    // residual finding rather than silently renamed to dodge the regex.
+    expect(env.type).toBe("system.plugin.reload_failed");
+  });
+
+  test("all optional fields populated", () => {
+    const env = createSystemPluginReloadFailedEvent({
+      source: SOURCE,
+      bundleName: "cli-tail-renderer",
+      kind: "renderer",
+      pluginId: "cli-tail",
+      instanceId: "cli-tail",
+      stage: "construct",
+      reason: "createRenderer threw",
+    });
+    expect(env.payload).toEqual({
+      bundle_name: "cli-tail-renderer",
+      kind: "renderer",
+      plugin_id: "cli-tail",
+      instance_id: "cli-tail",
+      stage: "construct",
+      reason: "createRenderer threw",
+    });
+    // See the note above — `reload_failed` matches the established (if
+    // schema-pattern-noncompliant) `system.*` snake_case convention;
+    // `validateEnvelope` is not asserted here for the same pre-existing-gap
+    // reason.
   });
 });
