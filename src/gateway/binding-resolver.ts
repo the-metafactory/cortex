@@ -61,6 +61,7 @@
 
 import type { Surfaces } from "../common/types/surfaces";
 import type { InboundMessage } from "../adapters/types";
+import { requireStringBindingField } from "../common/types/object-guards";
 
 // =============================================================================
 // Public types
@@ -473,10 +474,18 @@ export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
   // InboundMessage (`web:${binding.instanceId}`), matched verbatim in
   // resolveBinding. Web carries no platform-native guild/server id.
   for (const entry of surfaces.web ?? []) {
-    const demuxKey = `web:${entry.binding.instanceId}`;
+    // cortex#1794 (S9 MOVE) — `entry.binding` is `Record<string, unknown>`
+    // now that `web` validates via the generic catchall (see
+    // `object-guards.ts`'s `requireStringBindingField` doc).
+    const instanceId = requireStringBindingField(
+      entry.binding,
+      "instanceId",
+      "gateway binding-resolver: surfaces.web[].binding",
+    );
+    const demuxKey = `web:${instanceId}`;
     if (web.has(demuxKey)) {
       throw new Error(
-        `gateway binding-resolver: ambiguous web config — two bindings share instanceId "${entry.binding.instanceId}". ` +
+        `gateway binding-resolver: ambiguous web config — two bindings share instanceId "${instanceId}". ` +
           `Each (platform, instanceId) pair must map to exactly one binding. ` +
           `Fix the surfaces.yaml web bindings to remove the duplicate.`,
       );

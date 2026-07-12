@@ -59,9 +59,13 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "path";
 
 import { loadExternalPlugins } from "../loader";
-import { createDefaultSurfacePluginRegistry } from "../registry";
+import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "../registry";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { ArcListRunResult } from "../loader";
+import type { Surfaces } from "../../common/types/surfaces";
+import { buildBindingIndex, resolveBinding } from "../../gateway/binding-resolver";
+import { buildGatewayAdapters } from "../../gateway/gateway-adapters";
+import type { MyelinRuntime } from "../../bus/myelin/runtime";
 
 const FIXTURES_ROOT = resolve(import.meta.dir, "fixtures");
 const WEB_BUNDLE_REPO_URL = "https://github.com/the-metafactory/metafactory-cortex-adapter-web";
@@ -228,5 +232,148 @@ describe("transparent upgrade E2E — the real metafactory-cortex-adapter-web bu
     expect(result.loaded).toEqual([
       { bundleName: "metafactory-cortex-adapter-web", kind: "adapter", id: "web", firstParty: false },
     ]);
+  });
+});
+
+// =============================================================================
+// cortex#1794 (S9, review finding M1) — the CONFIG-CONSUMPTION path
+// =============================================================================
+
+/**
+ * The suite above proves the LOAD path (discover → gate → import → register
+ * → construct-in-isolation). It never drives an actual `surfaces.web[...]`
+ * CONFIG through the pipeline a real boot uses to turn that config into a
+ * routed, running adapter: `validateSurfacesAgainstRegistry` (registry-pass
+ * per-field validation) → `buildBindingIndex`/`resolveBinding` (the shared
+ * gateway's inbound demux) → `buildGatewayAdapters` (construction from a
+ * REAL binding, not a hand-built `WebCreateArgs`). That gap is exactly what
+ * the review's B1 finding caught: `web` extracting out of `SurfacesSchema`'s
+ * hardcoded keys silently changed `surfaces.web[].binding.instanceId` from a
+ * typed `string` to `unknown` everywhere cortex-core code (the gateway
+ * binding-resolver + ownership-plan, both pre-dating the plugin registry and
+ * reading concrete per-platform fields by design) still reads it directly —
+ * a lint-time break (`@typescript-eslint/restrict-template-expressions`)
+ * this test suite would have caught pre-CI had it existed before the move.
+ * This describe block closes that gap: config-consumption-transparency, not
+ * just load-transparency.
+ */
+describe("config-path E2E — a REAL surfaces.web[] config survives validate → resolve → construct once the bundle loads (cortex#1794 S9, M1)", () => {
+  const RUNTIME_STUB = {
+    publish: async () => {},
+    onEnvelope: () => () => {},
+    stop: async () => {},
+  } as unknown as MyelinRuntime;
+
+  async function loadWebRegistry() {
+    const registry = createDefaultSurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([webBundlePkg()]),
+    });
+    expect(result.loaded).toHaveLength(1);
+    return registry;
+  }
+
+  // A genuine `surfaces.web[]` entry, shaped exactly as a principal's
+  // surfaces.yaml would declare it — NOT a hand-built WebCreateArgs.
+  function webSurfacesConfig(instanceId: string): Surfaces {
+    return {
+      web: [
+        {
+          agent: "ivy",
+          binding: {
+            instanceId,
+            host: "127.0.0.1",
+            port: 8090,
+            broadcastUrl: "http://example.com/broadcast",
+            transport: "ws",
+            authScheme: "cf-access",
+          },
+        },
+      ],
+    };
+  }
+
+  test("validateSurfacesAgainstRegistry accepts a valid surfaces.web[] entry once the bundle is loaded, and rejects an invalid one", async () => {
+    const registry = await loadWebRegistry();
+
+    expect(() =>
+      validateSurfacesAgainstRegistry(webSurfacesConfig("acme"), registry),
+    ).not.toThrow();
+
+    // Missing the required `broadcastUrl` — the REAL bundle's WebBindingSchema
+    // (not a fixture stand-in) must reject this at the registry pass.
+    const invalid: Surfaces = {
+      web: [{ agent: "ivy", binding: { instanceId: "acme" } }],
+    };
+    expect(() => validateSurfacesAgainstRegistry(invalid, registry)).toThrow(
+      /surfaces\.web\[0\]\.binding is invalid/,
+    );
+  });
+
+  test("buildBindingIndex + resolveBinding demux a real web binding to the right agent (proves the B1 fix: instanceId reads correctly post-extraction)", async () => {
+    await loadWebRegistry(); // not consumed by the resolver, but mirrors real boot order
+    const surfaces = webSurfacesConfig("acme");
+
+    const index = buildBindingIndex(surfaces);
+    expect(index.web.size).toBe(1);
+    expect(index.web.get("web:acme")?.agent).toBe("ivy");
+
+    const match = resolveBinding(index, {
+      platform: "web",
+      instanceId: "web:acme",
+      authorId: "u1",
+      authorName: "U",
+      content: "hi",
+      channelId: "ch",
+      attachments: [],
+      timestamp: new Date(),
+    });
+    expect(match).not.toBeNull();
+    expect(match?.agent).toBe("ivy");
+    expect(match?.instance).toBe("web:acme");
+  });
+
+  test("buildGatewayAdapters constructs a REAL WebAdapter from the config, with the right instanceId, once the bundle is registered", async () => {
+    const registry = await loadWebRegistry();
+    const surfaces = webSurfacesConfig("acme");
+
+    // Registry-pass validation must pass before construction (mirrors real
+    // boot: cortex.ts validates before calling buildGatewayAdapters).
+    expect(() => validateSurfacesAgainstRegistry(surfaces, registry)).not.toThrow();
+
+    const adapters = buildGatewayAdapters(surfaces, {
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      registry,
+    });
+
+    expect(adapters).toHaveLength(1);
+    const adapter = adapters[0]!;
+    expect(adapter.platform).toBe("web");
+    expect(adapter.instanceId).toBe("web:acme");
+  });
+
+  test("two distinct web bindings survive the whole config path with distinct instanceIds (no silent collision from the unknown-narrowing fix)", async () => {
+    const registry = await loadWebRegistry();
+    const surfaces: Surfaces = {
+      web: [
+        { agent: "ivy", binding: { instanceId: "tenant-a", broadcastUrl: "http://a.example/broadcast" } },
+        { agent: "oak", binding: { instanceId: "tenant-b", broadcastUrl: "http://b.example/broadcast" } },
+      ],
+    };
+    expect(() => validateSurfacesAgainstRegistry(surfaces, registry)).not.toThrow();
+
+    const index = buildBindingIndex(surfaces);
+    expect([...index.web.keys()].sort()).toEqual(["web:tenant-a", "web:tenant-b"]);
+
+    const adapters = buildGatewayAdapters(surfaces, {
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      registry,
+    });
+    expect(adapters.map((a) => a.instanceId).sort()).toEqual(["web:tenant-a", "web:tenant-b"]);
   });
 });

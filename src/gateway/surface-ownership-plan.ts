@@ -11,6 +11,7 @@
 
 import type { PlatformAdapter } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
+import { requireStringBindingField } from "../common/types/object-guards";
 import {
   crossPrincipalBindings,
   distinctBoundPrincipalStacks,
@@ -80,7 +81,10 @@ function gatewayInstanceIds(surfaces: Surfaces | undefined): string[] {
     ids.push(`mattermost:${entry.binding.apiUrl}`);
   }
   for (const entry of surfaces.web ?? []) {
-    ids.push(`web:${entry.binding.instanceId}`);
+    // cortex#1794 (S9 MOVE) — see `object-guards.ts`'s
+    // `requireStringBindingField` doc: `entry.binding` is now
+    // `Record<string, unknown>` for the generically-validated `web` platform.
+    ids.push(`web:${requireStringBindingField(entry.binding, "instanceId", "gateway surface-ownership-plan: surfaces.web[].binding")}`);
   }
   return ids;
 }
