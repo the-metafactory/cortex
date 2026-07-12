@@ -1134,3 +1134,61 @@ describe("pidFileFor — per-config PID file derivation", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// CORTEX_STATE_DIR env seam (cortex#1908 CONFIG/EVENTS/STATE trio) — #1900
+// carries the STATE read because pidfile.ts is the sole state constructor.
+// ---------------------------------------------------------------------------
+
+describe("STATE_DIR — CORTEX_STATE_DIR env seam", () => {
+  // STATE_DIR is a module constant read ONCE at import (T1b), so the override
+  // can only be observed in a FRESH process — probe pidFileFor in a child with
+  // the env var set vs. unset. An absolute + never-on-disk config keeps the
+  // canonical path (hence the pidfile basename hash) identical across both
+  // child processes regardless of their cwd.
+  const modPath = join(import.meta.dir, "..", "common", "pidfile.ts");
+  const CFG = "/cortex-1908-state-probe/stack.yaml";
+
+  function probePidFile(override: string | null): string {
+    const env = { ...process.env };
+    if (override === null) delete env.CORTEX_STATE_DIR;
+    else env.CORTEX_STATE_DIR = override;
+    const src =
+      `import { pidFileFor } from ${JSON.stringify(modPath)};` +
+      `process.stdout.write(pidFileFor(${JSON.stringify(CFG)}));`;
+    const proc = Bun.spawnSync([process.execPath, "-e", src], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) {
+      throw new Error(`state-dir probe failed (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
+    }
+    return proc.stdout.toString();
+  }
+
+  test("CORTEX_STATE_DIR set → pidFileFor resolves inside it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cortex-statedir-seam-"));
+    try {
+      const out = probePidFile(dir);
+      expect(out.startsWith(`${dir}/`)).toBe(true);
+      expect(basename(out)).toMatch(/^cortex-stack-[0-9a-f]{8}\.pid$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("CORTEX_STATE_DIR unset → byte-identical to the grove default STATE_DIR path", () => {
+    const out = probePidFile(null);
+    // basename is STATE_DIR-independent (hash is over the config path), so this
+    // reference default holds even if the test process itself set the override.
+    const expectedDefault = join(
+      process.env.HOME ?? "~",
+      ".config",
+      "grove",
+      "state",
+      basename(pidFileFor(CFG)),
+    );
+    expect(out).toBe(expectedDefault);
+  });
+});

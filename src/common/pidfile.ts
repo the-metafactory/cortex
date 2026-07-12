@@ -33,12 +33,22 @@ import { createHash } from "node:crypto";
 import { join, basename } from "path";
 import { realpathSync, existsSync, renameSync } from "fs";
 
-export const STATE_DIR = join(
-  process.env.HOME ?? "~",
-  ".config",
-  "grove",
-  "state",
-);
+/**
+ * State directory holding every pidfile (and the degraded-state markers derived
+ * from them). `CORTEX_STATE_DIR` overrides it — the STATE env seam (cortex#1908
+ * CONFIG/EVENTS/STATE trio). This is the SOLE state constructor in the tree, so
+ * the STATE read lands here rather than being split across files (which would
+ * desync cortex.ts's `mkdirSync(STATE_DIR)` from `PID_FILE`/`pidFileFor`
+ * derivation). Like `HOME`, it is read ONCE at import (T1b): the resolved value
+ * is a module constant, so processes needing an override must set the env
+ * before the module loads — the value does not track later `process.env`
+ * mutation. `.trim()` + `||` means a blank/whitespace override falls back to the
+ * grove default rather than resolving pidfiles into an empty-string path.
+ */
+export const STATE_DIR =
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- `||` is intentional: a blank/whitespace CORTEX_STATE_DIR trims to "" (falsy but not null), and MUST fall back to the grove default; `??` would keep the empty string and resolve pidfiles into a rootless path.
+  process.env.CORTEX_STATE_DIR?.trim() ||
+  join(process.env.HOME ?? "~", ".config", "grove", "state");
 export const PID_FILE = join(STATE_DIR, "cortex.pid");
 export const DEFAULT_CONFIG = join(
   process.env.HOME ?? "~",
