@@ -94,7 +94,15 @@ describe("fetchSealedLeafSecret — round-trip", () => {
   test("a tampered ciphertext fails soft-closed", async () => {
     const member = newMember();
     const sealed = await sealedFor(member, "PSK-abc", "alice");
-    const tampered = sealed.slice(0, -4) + (sealed.endsWith("A") ? "B" : "A") + sealed.slice(-3);
+    // Deterministic tamper: flip a char inside the sealed box (index 10 sits in
+    // the ephemeral pubkey — any bit flip there breaks crypto_box_seal_open),
+    // chosen by inspecting the char actually being replaced. The old version
+    // checked the LAST char but replaced the len-4 char, so whenever that
+    // position already held "B" (and the string didn't end in "A") the
+    // "tampered" ciphertext was byte-identical to the original, decryption
+    // succeeded, and this test flaked red (~1/64 runs).
+    const i = 10;
+    const tampered = sealed.slice(0, i) + (sealed[i] === "A" ? "B" : "A") + sealed.slice(i + 1);
     const fetchImpl = fakeRegistry([
       { request_id: "r1", principal_id: "alice", peer_pubkey: member.pubkeyB64, network_id: "metafactory", status: "ADMITTED", sealed_secret: tampered },
     ]);
