@@ -3140,8 +3140,14 @@ export async function startCortex(
   // never logs (an off-by-default gate skip isn't a failure worth a stderr
   // line), so its `console.log` here remains the single site for it.
   for (const failure of pluginLoadResult.failed) {
-    void runtime
-      .publish(
+    // Per CLAUDE.md "no empty catch blocks" + this file's established
+    // publish-site convention (`publishCapabilitiesFor`/tombstone/exec-brain
+    // above all `await` + `try`/`catch`, never fire-and-forget `void`) — a
+    // rejected bus publish here must not become an unhandled rejection, but
+    // it also must not abort the loop or crash boot (one bad plugin outcome
+    // failing to PUBLISH is not a reason to stop reporting the rest).
+    try {
+      await runtime.publish(
         createSystemPluginLoadFailedEvent({
           source: systemEventSource,
           bundleName: failure.bundleName,
@@ -3150,12 +3156,12 @@ export async function startCortex(
           stage: failure.stage,
           reason: failure.reason,
         }),
-      )
-      .catch((err: unknown) => {
-        process.stderr.write(
-          `cortex: failed to publish system.plugin.load_failed for "${failure.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      });
+      );
+    } catch (err) {
+      process.stderr.write(
+        `cortex: failed to publish system.plugin.load_failed for "${failure.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
   }
   for (const skippedPlugin of pluginLoadResult.skipped) {
     console.log(
@@ -3163,8 +3169,8 @@ export async function startCortex(
     );
   }
   for (const loadedPlugin of pluginLoadResult.loaded) {
-    void runtime
-      .publish(
+    try {
+      await runtime.publish(
         createSystemPluginLoadedEvent({
           source: systemEventSource,
           bundleName: loadedPlugin.bundleName,
@@ -3172,12 +3178,12 @@ export async function startCortex(
           pluginId: loadedPlugin.id,
           firstParty: loadedPlugin.firstParty,
         }),
-      )
-      .catch((err: unknown) => {
-        process.stderr.write(
-          `cortex: failed to publish system.plugin.loaded for "${loadedPlugin.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      });
+      );
+    } catch (err) {
+      process.stderr.write(
+        `cortex: failed to publish system.plugin.loaded for "${loadedPlugin.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
   }
 
   // cortex#1789 (S4, ADR-0024 D5) — the REGISTRY pass for `surfaces:`
