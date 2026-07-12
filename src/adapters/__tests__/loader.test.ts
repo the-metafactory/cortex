@@ -15,10 +15,14 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 
 import {
+  defaultCortexManifestPath,
   discoverPluginBundles,
+  isFirstPartyAdapterBundle,
+  isFirstPartyBundle,
   isFirstPartyRendererBundle,
   isTrustedOrgRepo,
   loadExternalPlugins,
+  readCortexDeclaredAdapterRepos,
   type ArcListRunResult,
 } from "../loader";
 import { createDefaultSurfacePluginRegistry, registryFromFactory, SurfacePluginRegistry } from "../registry";
@@ -242,6 +246,90 @@ describe("isTrustedOrgRepo / isFirstPartyRendererBundle (cortex#1792, ADR-0024 D
   test("the production allowlist default is empty (no first-party renderer bundle ships yet)", () => {
     // Calling with no allowlist argument uses the real in-tree constant.
     expect(isFirstPartyRendererBundle({ repoUrl: TRUSTED_REPO }, "renderer")).toBe(false);
+  });
+});
+
+// cortex#1794 (S9a) — the ADAPTER half of the OQ9 exemption, extended per
+// epic #1784's "Andreas decision 2026-07-12" (transparent repackaging).
+// `CORTEX_MANIFESTS_ROOT` fixtures stand in for cortex's OWN
+// `arc-manifest.yaml` via the `cortexManifestPath` test seam — never the
+// real repo-root file, except in the one test that deliberately reads it to
+// prove the real file doesn't accidentally widen trust.
+const CORTEX_MANIFESTS_ROOT = join(FIXTURES_ROOT, "cortex-manifests");
+const DECLARED_ADAPTER_REPO = "https://github.com/the-metafactory/metafactory-fixture-declared-adapter";
+const CORTEX_MANIFEST_DECLARES_FIXTURE = join(CORTEX_MANIFESTS_ROOT, "declares-fixture-adapter.yaml");
+
+describe("isFirstPartyAdapterBundle / isFirstPartyBundle (cortex#1794 S9a, epic #1784 decision)", () => {
+  test("adapter + on the declared-dependency allowlist -> exempt", () => {
+    const allowlist = new Set([DECLARED_ADAPTER_REPO.toLowerCase()]);
+    expect(isFirstPartyAdapterBundle({ repoUrl: DECLARED_ADAPTER_REPO }, "adapter", allowlist)).toBe(true);
+  });
+
+  test("renderer kind is NEVER exempt via the adapter allowlist path — the two exemptions are namespaced by kind", () => {
+    const allowlist = new Set([DECLARED_ADAPTER_REPO.toLowerCase()]);
+    expect(isFirstPartyAdapterBundle({ repoUrl: DECLARED_ADAPTER_REPO }, "renderer", allowlist)).toBe(false);
+  });
+
+  test("adapter NOT on the allowlist -> not exempt, no matter how trustworthy the repo looks", () => {
+    const allowlist = new Set([DECLARED_ADAPTER_REPO.toLowerCase()]);
+    expect(isFirstPartyAdapterBundle({ repoUrl: TRUSTED_REPO }, "adapter", allowlist)).toBe(false);
+  });
+
+  test("isFirstPartyBundle dispatches by kind: renderer path delegates verbatim, adapter path uses the adapter allowlist", () => {
+    const rendererAllowlist = new Set([TRUSTED_REPO.toLowerCase()]);
+    const adapterAllowlist = new Set([DECLARED_ADAPTER_REPO.toLowerCase()]);
+    expect(
+      isFirstPartyBundle({ repoUrl: TRUSTED_REPO }, "renderer", { rendererAllowlist, adapterAllowlist }),
+    ).toBe(true);
+    expect(
+      isFirstPartyBundle({ repoUrl: DECLARED_ADAPTER_REPO }, "adapter", { rendererAllowlist, adapterAllowlist }),
+    ).toBe(true);
+    // Cross-checks: a repo on the RENDERER list gets no adapter exemption,
+    // and vice versa — no accidental cross-pollination between the two.
+    expect(
+      isFirstPartyBundle({ repoUrl: DECLARED_ADAPTER_REPO }, "renderer", { rendererAllowlist, adapterAllowlist }),
+    ).toBe(false);
+    expect(
+      isFirstPartyBundle({ repoUrl: TRUSTED_REPO }, "adapter", { rendererAllowlist, adapterAllowlist }),
+    ).toBe(false);
+  });
+
+  test("isFirstPartyBundle with no allowlists supplied defaults closed for adapters (empty set, not open)", () => {
+    expect(isFirstPartyBundle({ repoUrl: DECLARED_ADAPTER_REPO }, "adapter")).toBe(false);
+  });
+});
+
+describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable anchor source", () => {
+  test("reads dependency names from a fixture arc-manifest.yaml and derives the-metafactory repo URLs", () => {
+    const repos = readCortexDeclaredAdapterRepos(CORTEX_MANIFEST_DECLARES_FIXTURE);
+    expect(repos.has(DECLARED_ADAPTER_REPO.toLowerCase())).toBe(true);
+    // "arc" is also declared (mirrors the real manifest's shape) but it has
+    // no cortex-plugin.yaml anywhere, so it can never become a discovered
+    // bundle — being IN this set is harmless; it just never matches anything.
+    expect(repos.has("https://github.com/the-metafactory/arc")).toBe(true);
+  });
+
+  test("fail-closed: a missing manifest file returns an empty set, never throws", () => {
+    const missing = join(CORTEX_MANIFESTS_ROOT, "does-not-exist.yaml");
+    expect(() => readCortexDeclaredAdapterRepos(missing)).not.toThrow();
+    expect(readCortexDeclaredAdapterRepos(missing).size).toBe(0);
+  });
+
+  test("fail-closed: malformed YAML returns an empty set, never throws", () => {
+    const malformed = join(CORTEX_MANIFESTS_ROOT, "malformed.yaml");
+    expect(() => readCortexDeclaredAdapterRepos(malformed)).not.toThrow();
+    expect(readCortexDeclaredAdapterRepos(malformed).size).toBe(0);
+  });
+
+  test("a valid manifest with no `dependencies:` key at all returns an empty set", () => {
+    const noDeps = join(CORTEX_MANIFESTS_ROOT, "no-dependencies-key.yaml");
+    expect(readCortexDeclaredAdapterRepos(noDeps).size).toBe(0);
+  });
+
+  test("cortex's REAL arc-manifest.yaml is readable and does NOT declare the fixture repo — proves the mechanism doesn't accidentally widen trust", () => {
+    const repos = readCortexDeclaredAdapterRepos(defaultCortexManifestPath());
+    expect(repos.has(DECLARED_ADAPTER_REPO.toLowerCase())).toBe(false);
+    expect(repos.has(TRUSTED_REPO.toLowerCase())).toBe(false);
   });
 });
 
@@ -717,5 +805,140 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
       runner: runnerFor([fixturePkg("echo-adapter-bundle"), fixturePkg("cli-tail-bundle")]),
     });
     expect(result.loaded.map((l) => l.bundleName)).toEqual(["cli-tail-bundle", "echo-adapter-bundle"]);
+  });
+});
+
+// cortex#1794 (S9a, epic #1784 "TRANSPARENT REPACKAGING" decision) — the
+// end-to-end fixture proof: a first-party ADAPTER bundle loads with
+// `system.plugins.external` OFF exactly like a first-party renderer already
+// does, but gated on cortex's OWN declared `arc-manifest.yaml` dependencies
+// instead of a hardcoded allowlist; an undeclared adapter bundle does not.
+describe("loadExternalPlugins — first-party ADAPTER exemption (cortex#1794 S9a)", () => {
+  test("a first-party ADAPTER bundle (repoUrl declared in cortex's arc-manifest dependencies) loads with system.plugins.external OFF", async () => {
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("adapter-declared-bundle", { repoUrl: DECLARED_ADAPTER_REPO })]),
+      cortexManifestPath: CORTEX_MANIFEST_DECLARES_FIXTURE,
+    });
+    expect(result.skipped).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.loaded).toEqual([
+      {
+        bundleName: "adapter-declared-bundle",
+        kind: "adapter",
+        id: "fixture-declared-adapter",
+        firstParty: true,
+      },
+    ]);
+    expect(registry.getAdapter("fixture-declared-adapter")).toBeDefined();
+  });
+
+  test("an adapter bundle whose repoUrl is NOT declared does not load with the flag off, but WOULD with it on (org-trust already satisfied)", async () => {
+    const registryOff = new SurfacePluginRegistry();
+    const offResult = await loadExternalPlugins({
+      registry: registryOff,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      // echo-adapter-bundle's repoUrl defaults to TRUSTED_REPO, which is NOT
+      // declared in declares-fixture-adapter.yaml's dependencies.
+      runner: runnerFor([fixturePkg("echo-adapter-bundle")]),
+      cortexManifestPath: CORTEX_MANIFEST_DECLARES_FIXTURE,
+    });
+    expect(offResult.loaded).toEqual([]);
+    expect(offResult.skipped).toHaveLength(1);
+    expect(offResult.skipped[0]?.bundleName).toBe("echo-adapter-bundle");
+    expect(registryOff.getAdapter("fixture-echo")).toBeUndefined();
+
+    // Same bundle, same (irrelevant) cortexManifestPath, flag ON — loads.
+    // Proves the skip above was SPECIFICALLY the first-party-adapter gate
+    // (org-trust and every other gate already pass for this fixture).
+    const registryOn = new SurfacePluginRegistry();
+    const onResult = await loadExternalPlugins({
+      registry: registryOn,
+      externalEnabled: true,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("echo-adapter-bundle")]),
+      cortexManifestPath: CORTEX_MANIFEST_DECLARES_FIXTURE,
+    });
+    expect(onResult.loaded).toEqual([
+      { bundleName: "echo-adapter-bundle", kind: "adapter", id: "fixture-echo", firstParty: false },
+    ]);
+  });
+
+  test("fail-closed: an unreadable cortexManifestPath grants NO adapter exemption — a genuinely declared-looking bundle still skips with the flag off", async () => {
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("adapter-declared-bundle", { repoUrl: DECLARED_ADAPTER_REPO })]),
+      cortexManifestPath: join(CORTEX_MANIFESTS_ROOT, "does-not-exist.yaml"),
+    });
+    expect(result.loaded).toEqual([]);
+    expect(result.skipped).toHaveLength(1);
+    expect(registry.getAdapter("fixture-declared-adapter")).toBeUndefined();
+  });
+
+  test("firstPartyAdapterRepos (explicit test seam) wins over cortexManifestPath when both are set", async () => {
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("adapter-declared-bundle", { repoUrl: DECLARED_ADAPTER_REPO })]),
+      // Points at a manifest that does NOT declare the bundle...
+      cortexManifestPath: join(CORTEX_MANIFESTS_ROOT, "no-dependencies-key.yaml"),
+      // ...but the explicit allowlist DOES include it, and must win.
+      firstPartyAdapterRepos: new Set([DECLARED_ADAPTER_REPO.toLowerCase()]),
+    });
+    expect(result.loaded).toEqual([
+      {
+        bundleName: "adapter-declared-bundle",
+        kind: "adapter",
+        id: "fixture-declared-adapter",
+        firstParty: true,
+      },
+    ]);
+  });
+
+  test("renderer path regression: a first-party RENDERER bundle still loads via firstPartyRendererRepos exactly as before, unaffected by the new adapter mechanism", async () => {
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([fixturePkg("cli-tail-bundle")]),
+      firstPartyRendererRepos: new Set([TRUSTED_REPO.toLowerCase()]),
+      // A cortex manifest is present and even declares a DIFFERENT adapter
+      // repo — must have zero bearing on the renderer exemption path.
+      cortexManifestPath: CORTEX_MANIFEST_DECLARES_FIXTURE,
+    });
+    expect(result.skipped).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.loaded).toEqual([
+      { bundleName: "cli-tail-bundle", kind: "renderer", id: "cli-tail", firstParty: true },
+    ]);
+  });
+
+  test("org-trust gate still refuses a non-the-metafactory adapter bundle even if it magically matched the adapter allowlist", async () => {
+    const registry = new SurfacePluginRegistry();
+    const result = await loadExternalPlugins({
+      registry,
+      externalEnabled: false,
+      pkgRoot: FIXTURES_ROOT,
+      runner: runnerFor([
+        fixturePkg("adapter-declared-bundle", { repoUrl: "https://github.com/attacker/metafactory-fixture-declared-adapter" }),
+      ]),
+      // Allowlist derived from the ATTACKER url directly (simulating a bug
+      // elsewhere) — org-trust must still refuse it BEFORE the first-party
+      // gate is ever consulted (D4 mitigation #1 is unconditional).
+      firstPartyAdapterRepos: new Set(["https://github.com/attacker/metafactory-fixture-declared-adapter"]),
+    });
+    expect(result.loaded).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.stage).toBe("org_trust");
   });
 });

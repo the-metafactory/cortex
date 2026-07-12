@@ -1,0 +1,20 @@
+# cortex#1794 (S9a) — fixture stand-in for cortex's OWN arc-manifest.yaml,
+# used ONLY via the `cortexManifestPath` test seam
+# (`src/adapters/loader.ts`'s `LoadPluginsOptions.cortexManifestPath`) to
+# exercise `readCortexDeclaredAdapterRepos` end-to-end without touching the
+# real repo-root arc-manifest.yaml. Shape mirrors the real file's
+# `dependencies:` block exactly (only `name` is read).
+name: "cortex-fixture"
+version: "0.0.0-test"
+type: component
+tier: community
+description: "Fixture stand-in for cortex's own arc-manifest.yaml (test-only)"
+dependencies:
+  - name: "arc"
+    version: ">=0.25.0"
+  # This is the fixture ADAPTER bundle's repoUrl (see
+  # ../adapter-declared-bundle/) declared as a dependency, exactly the way
+  # a real first-party adapter bundle (e.g. metafactory-cortex-adapter-web)
+  # is expected to be declared under cortex's real arc-manifest.yaml.
+  - name: "metafactory-fixture-declared-adapter"
+    version: ">=0.1.0"

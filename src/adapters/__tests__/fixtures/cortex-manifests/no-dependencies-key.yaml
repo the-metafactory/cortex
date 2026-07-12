@@ -1,0 +1,5 @@
+# cortex#1794 (S9a) — valid YAML, valid object, but no `dependencies:` key
+# at all — exercises `readCortexDeclaredAdapterRepos`'s "missing key returns
+# empty set" branch (distinct from "file unreadable" and "malformed YAML").
+name: "cortex-fixture"
+version: "0.0.0-test"

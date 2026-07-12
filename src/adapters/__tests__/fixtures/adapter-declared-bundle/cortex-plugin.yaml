@@ -1,0 +1,12 @@
+# cortex#1794 (S9a) — first-party ADAPTER exemption fixture. This bundle's
+# `arc list`-recorded repoUrl is set (by the test) to
+# https://github.com/the-metafactory/metafactory-fixture-declared-adapter,
+# which the fixture cortex-manifest at
+# ../cortex-manifests/declares-fixture-adapter.yaml declares under
+# `dependencies:`. Proves an adapter bundle loads with
+# `system.plugins.external` OFF when — and only when — cortex's OWN manifest
+# declares it, mirroring the renderer OQ9 exemption's fixture style.
+kind: adapter
+id: fixture-declared-adapter
+entry: ./index.ts
+sdkRange: "^1"

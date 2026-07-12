@@ -258,6 +258,47 @@ to) forbid the other cross-boundary imports discussed above; those are
 tracked as ADR-0024's residual couplings, resolved plugin-by-plugin as each
 one extracts (S9–S12).
 
+## Loading & the first-party exemption
+
+`src/adapters/loader.ts` discovers installed bundles (`arc list --json`),
+then gates each one through, in order: an unconditional org-trust check (only
+`the-metafactory`-org repos ever load, ADR-0024 D4 mitigation #1), the
+`system.plugins.external` flag (default OFF — see
+`docs/config-layout/system/system.yaml`), the SDK compat range, a
+duplicate-id/namespace-shadow check, and finally structural shape validation
+of the imported default export. None of this is something a plugin author
+needs to implement — it's listed here so you know WHY an installed bundle
+might not load, and what "first-party" buys you.
+
+**The `external: false` default means a THIRD-party bundle needs an explicit
+principal opt-in to load at all.** Two exemptions let a bundle load anyway,
+both anchored on something only CORTEX's own reviewed source controls —
+never anything the bundle's own manifest, `id`, `kind`, or arc's `tier` field
+says about itself (both were empirically checked and rejected as spoofable —
+see `isFirstPartyRendererBundle`'s doc comment in `loader.ts`):
+
+- **Renderer** (ADR-0024 §OQ9): the bundle's `repoUrl` is on
+  `FIRST_PARTY_RENDERER_REPOS`, a hardcoded, PR-reviewed allowlist in
+  `loader.ts`. Empty today — no first-party renderer bundle ships yet.
+- **Adapter** (cortex#1794 S9a, epic #1784 "transparent repackaging"
+  decision, 2026-07-12): the bundle's `repoUrl` matches an entry under
+  cortex's OWN `arc-manifest.yaml` `dependencies:` block, read fresh at
+  every boot (`readCortexDeclaredAdapterRepos`) — NOT a hardcoded allowlist,
+  so declaring a new first-party adapter bundle is a plain `arc-manifest.yaml`
+  PR, no loader code change. This is what makes extracting an in-tree
+  adapter (e.g. `web`) into its own bundle a *transparent* repackage:
+  `arc upgrade cortex` auto-installs the declared bundle, this exemption
+  loads it, and the surface keeps working with zero config change on any
+  existing stack — `external` never has to be flipped for a repackage that
+  isn't adding new third-party capability, only relocating cortex's own code.
+
+Both exemptions compose with (never replace) the org-trust gate — an
+exempt-looking bundle from outside `the-metafactory` is still refused before
+either allowlist is even consulted. If your bundle isn't declared as a
+cortex dependency and isn't loading, that's `system.plugins.external: false`
+doing its job; a principal opts in per-stack, or cortex's maintainers add
+your repo to the appropriate anchor once it's reviewed as truly first-party.
+
 ## Runtime lifecycle (S8) — attach/detach/reload + state loss
 
 cortex#1793 (S8, ADR-0024 D3) adds `cortex plugin list|unload|reload|load` —

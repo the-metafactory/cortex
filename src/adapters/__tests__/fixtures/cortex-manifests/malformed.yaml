@@ -1,0 +1,4 @@
+# cortex#1794 (S9a) — deliberately invalid YAML (unterminated flow mapping)
+# to exercise `readCortexDeclaredAdapterRepos`'s fail-closed parse-error path.
+name: "cortex-fixture"
+dependencies: [ { name: "oops"

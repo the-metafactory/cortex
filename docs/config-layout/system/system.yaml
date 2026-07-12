@@ -78,6 +78,19 @@ paths:
 # `external` is off. Rationale: "don't load third-party code" is secure for
 # adapters, but fail-open for a paging sink — a stack with an uninstalled or
 # unloaded PagerDuty bundle must not silently stop paging.
+#
+# EXCEPTION, extended (cortex#1794 S9a, epic #1784 "transparent repackaging"
+# decision, 2026-07-12): a first-party ADAPTER bundle — one whose repoUrl is
+# declared under CORTEX's OWN, PR-reviewed `arc-manifest.yaml` `dependencies:`
+# (`src/adapters/loader.ts`'s `isFirstPartyBundle` / `readCortexDeclaredAdapterRepos`;
+# again never the bundle's own manifest, `tier`, or any other bundle-author-
+# controlled signal) — ALSO loads even when `external` is off. Rationale:
+# extracting an in-tree adapter (e.g. `web`) into its own arc bundle must be
+# a transparent, non-breaking repackage — `arc upgrade cortex` auto-installs
+# the declared bundle and the surface keeps working with ZERO config change,
+# not a silent surface outage behind a flag nobody flipped. `external` keeps
+# its real job of gating genuinely THIRD-party plugins — nothing cortex
+# itself declares as a dependency.
 plugins:
   external: false
 
