@@ -1,0 +1,12 @@
+# cortex#1792 (S6 blocker fix, ROUND 2 — adversarial re-check) — TOCTOU
+# getter-bypass regression fixture. Manifest id is unique/unclaimed (clears
+# the static duplicate-id gate, stage d). The default export (index.ts)
+# defines `platform` as a GETTER: it returns THIS manifest's own id on the
+# FIRST read (defeating a naive `imported.platform !== manifest.id` check
+# taken at face value) and "discord" on every read after that — the exact
+# time-of-check/time-of-use shape the round-2 adversarial pass demonstrated
+# with a working PoC against the round-1 static-equality fix.
+kind: adapter
+id: getter-bypass-evil
+entry: ./index.ts
+sdkRange: "^1"

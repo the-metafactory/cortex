@@ -21,9 +21,21 @@ import {
   loadExternalPlugins,
   type ArcListRunResult,
 } from "../loader";
-import { createDefaultSurfacePluginRegistry, SurfacePluginRegistry } from "../registry";
+import { createDefaultSurfacePluginRegistry, registryFromFactory, SurfacePluginRegistry } from "../registry";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
+import { buildGatewayAdapters, type GatewayAdapterFactory } from "../../gateway/gateway-adapters";
+import type { MyelinRuntime } from "../../bus/myelin/runtime";
+import type { Surfaces } from "../../common/types/surfaces";
+// cortex#1792 (S6 blocker fix, ROUND 2) — static imports of the getter-/
+// mutation-bypass fixtures' EXTRA exports (beyond the default plugin
+// export the loader itself dynamically `import()`s). Bun's module registry
+// is keyed by resolved file path, so a static import here and the loader's
+// `import(pathToFileURL(...).href)` resolve to the SAME module instance —
+// `readLog` accumulates across both, and `mutateToDiscord()` mutates the
+// exact object the loader saw.
+import { readLog as getterBypassReadLog } from "./fixtures/getter-bypass-bundle/index";
+import { mutateToDiscord } from "./fixtures/mutation-bypass-bundle/index";
 
 const FIXTURES_ROOT = resolve(import.meta.dir, "fixtures");
 const TRUSTED_REPO = "https://github.com/the-metafactory/metafactory-fixture-plugins";
@@ -512,6 +524,187 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
     expect(result.failed[0]?.reason).toMatch(/rendererKind.*does not match its own id/);
     expect(registry.getRenderer("evil-renderer-unique")).toBeUndefined();
     expect(registry.getRenderer("dashboard")).toBe(inTreeDashboard);
+  });
+
+  // cortex#1792 BLOCKER, ROUND 2 (adversarial re-check) — the round-1 static
+  // `platform === manifest.id` check is a live re-read of the untrusted
+  // default export, and is bypassable: a GETTER can return the safe value on
+  // the loader's one check-time read and a different value on every read
+  // after that (the loader's own `{...imported}` spread; `buildGatewayAdapters`,
+  // much later, when the gateway resolves which `surfaces.*` binding — bot
+  // token included — to hand the registered adapter). The fix snapshots the
+  // routing-critical fields ONCE and registers a FROZEN, DECOUPLED copy, so
+  // nothing downstream ever reads the live (attacker-controlled) object
+  // again. These tests exercise the fixtures built for exactly that PoC.
+  describe("BLOCKER ROUND 2 — TOCTOU getter/mutation bypass of the platform pin", () => {
+    const RUNTIME_STUB = {
+      publish: async () => {},
+      onEnvelope: () => () => {},
+      stop: async () => {},
+    } as unknown as MyelinRuntime;
+
+    /** Recording fake — constructs a cheap stub adapter, never a real
+     *  network client, and captures every call's args (mirrors
+     *  `gateway-adapters.test.ts`'s own recording factory). */
+    function makeRecordingDiscordFactory(): {
+      factory: GatewayAdapterFactory;
+      discordCalls: { instanceId: string; binding: Record<string, unknown> }[];
+    } {
+      const discordCalls: { instanceId: string; binding: Record<string, unknown> }[] = [];
+      const stubAdapter = (platform: string, instanceId: string) => ({
+        platform,
+        instanceId,
+        start: async () => {},
+        stop: async () => {},
+        getPlatformUserId: async () => "stub-bot",
+        fetchContext: async () => [],
+        resolveAccess: () => ({ allowed: true, features: { chat: true, async: false, team: false } }),
+        postResponse: async () => {},
+        sendTyping: async () => {},
+        sendProgress: async () => {},
+        clearProgress: async () => {},
+        createThread: async () => ({ instanceId, channelId: "ch" }),
+        resolveLogicalTarget: async () => null,
+        notifyPrincipal: async () => {},
+      });
+      const factory: GatewayAdapterFactory = {
+        discord: (args) => {
+          discordCalls.push({ instanceId: args.instanceId, binding: args.binding });
+          return stubAdapter("discord", args.instanceId);
+        },
+        slack: (args) => stubAdapter("slack", args.instanceId),
+        mattermost: (args) => stubAdapter("mattermost", args.instanceId),
+        web: (args) => stubAdapter("web", args.instanceId),
+      };
+      return { factory, discordCalls };
+    }
+
+    test("getter-bypass: platform lies AFTER the check but the registered plugin stays pinned — buildGatewayAdapters never hands it the discord binding", async () => {
+      const { factory, discordCalls } = makeRecordingDiscordFactory();
+      // A registry seeded with the SAME safe recording-fake discord adapter
+      // real gateway tests use (registryFromFactory) — this lets us drive
+      // the REAL `buildGatewayAdapters` end-to-end without constructing a
+      // real network-capable Discord client.
+      const registry = registryFromFactory(factory);
+
+      const result = await loadExternalPlugins({
+        registry,
+        externalEnabled: true,
+        pkgRoot: FIXTURES_ROOT,
+        runner: runnerFor([fixturePkg("getter-bypass-bundle")]),
+      });
+
+      // The loader's OWN checks both saw the safe value and let it through —
+      // this is not merely re-testing the round-1 static-mismatch case.
+      expect(result.failed).toEqual([]);
+      expect(result.loaded).toEqual([
+        { bundleName: "getter-bypass-bundle", kind: "adapter", id: "getter-bypass-evil", firstParty: false },
+      ]);
+
+      // The fixture's getter recorded at least 2 safe reads (the shape check
+      // + our equality check) and at least one "discord" read it tried to
+      // sneak in afterward (the shape_validate stage's own spread) — proving
+      // the getter genuinely attempted the bypass, not that it was simply
+      // never exercised.
+      expect(getterBypassReadLog.slice(0, 2)).toEqual(["getter-bypass-evil", "getter-bypass-evil"]);
+      expect(getterBypassReadLog).toContain("discord");
+      const readsBeforeGateway = getterBypassReadLog.length;
+
+      const registered = registry.getAdapter("getter-bypass-evil");
+      expect(registered).toBeDefined();
+      // Read `.platform` several times — a live-delegating (unfixed) object
+      // would eventually return "discord" again; the frozen, decoupled copy
+      // can't, because it never touches the getter again.
+      for (let i = 0; i < 5; i++) {
+        expect(registered?.platform).toBe("getter-bypass-evil");
+      }
+      // None of those 5 reads reached back into the fixture's live getter —
+      // the read log is unchanged since before we touched the registry.
+      expect(getterBypassReadLog.length).toBe(readsBeforeGateway);
+
+      // The in-tree discord adapter (here, the safe recording fake) is
+      // still registered under "discord", untouched.
+      expect(registry.getAdapter("discord")).toBeDefined();
+      expect(registry.getAdapter("discord")?.platform).toBe("discord");
+
+      // The actual PoC: run the REAL `buildGatewayAdapters` with a discord
+      // surface binding carrying a fake "bot token", plus zero bindings for
+      // the malicious plugin's own (correctly pinned) namespace.
+      const surfaces: Surfaces = {
+        discord: [
+          {
+            agent: "luna",
+            binding: {
+              token: "SUPER-SECRET-BOT-TOKEN",
+              guildId: "111111111111111111",
+              agentChannelId: "222222222222222222",
+              logChannelId: "333333333333333333",
+            },
+          },
+        ],
+      };
+      const adapters = buildGatewayAdapters(surfaces, {
+        principal: "andreas",
+        runtime: RUNTIME_STUB,
+        registry,
+      });
+
+      // Exactly ONE adapter is constructed — the real (fake-factory) discord
+      // one. The malicious plugin's own namespace ("getter-bypass-evil") has
+      // no configured binding, so it is skipped entirely (0 bindings ->
+      // `continue`, `createAdapter` never called for it).
+      expect(adapters).toHaveLength(1);
+      expect(adapters[0]?.platform).toBe("discord");
+      expect(discordCalls).toHaveLength(1);
+      expect(discordCalls[0]?.binding.token).toBe("SUPER-SECRET-BOT-TOKEN");
+
+      // Reading `.platform` off the registered malicious plugin AGAIN, after
+      // `buildGatewayAdapters` iterated the whole registry (which reads
+      // every adapter's `.platform` at least once per binding-group loop),
+      // is STILL the safe value — durable across the full gateway build.
+      expect(registry.getAdapter("getter-bypass-evil")?.platform).toBe("getter-bypass-evil");
+      expect(getterBypassReadLog.length).toBe(readsBeforeGateway);
+    });
+
+    test("mutation-bypass: flipping the ORIGINAL export's platform after registration does not affect the registered (frozen) copy", async () => {
+      const registry = createDefaultSurfacePluginRegistry();
+      const inTreeDiscord = registry.getAdapter("discord");
+
+      const result = await loadExternalPlugins({
+        registry,
+        externalEnabled: true,
+        pkgRoot: FIXTURES_ROOT,
+        runner: runnerFor([fixturePkg("mutation-bypass-bundle")]),
+      });
+      expect(result.failed).toEqual([]);
+      expect(result.loaded).toEqual([
+        { bundleName: "mutation-bypass-bundle", kind: "adapter", id: "mutation-bypass-evil", firstParty: false },
+      ]);
+
+      const registered = registry.getAdapter("mutation-bypass-evil");
+      expect(registered).toBeDefined();
+      expect(registered?.platform).toBe("mutation-bypass-evil");
+
+      // Simulate the bundle's own later code (a `setTimeout`, a webhook
+      // handler, …) reaching back into its still-live default export and
+      // flipping its platform identity post-registration.
+      mutateToDiscord();
+
+      // The REGISTERED plugin is a decoupled, frozen snapshot — mutating the
+      // bundle's own original object has NO effect on it.
+      expect(registry.getAdapter("mutation-bypass-evil")?.platform).toBe("mutation-bypass-evil");
+      // The in-tree discord adapter is still untouched — still the SAME
+      // object, and mutating the malicious bundle's own export obviously
+      // cannot reach it either.
+      expect(registry.getAdapter("discord")).toBe(inTreeDiscord);
+
+      // Attempting to mutate the REGISTERED object directly (not the
+      // bundle's original export) throws — it's frozen, strict mode.
+      expect(() => {
+        (registered as unknown as { platform: string }).platform = "discord";
+      }).toThrow();
+      expect(registry.getAdapter("mutation-bypass-evil")?.platform).toBe("mutation-bypass-evil");
+    });
   });
 
   test("deterministic load order: bundles process in bundleName-sorted order regardless of arc list order", async () => {

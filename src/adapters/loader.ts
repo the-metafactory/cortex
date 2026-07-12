@@ -83,7 +83,6 @@ import type {
   AdapterPlugin,
   PluginKind,
   RendererPlugin,
-  SurfacePlugin,
   SurfacePluginRegistry,
 } from "./registry";
 
@@ -703,24 +702,34 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
     return;
   }
 
-  // (f) Runtime shape validation.
-  let plugin: SurfacePlugin;
+  // (f) Runtime shape validation + (g) register. Both stages live in ONE
+  // per-kind branch below (not split as before) because of the TOCTOU fix
+  // documented on the routing-critical-field comment further down: once we
+  // snapshot+freeze a decoupled plugin object, deciding "adapter or
+  // renderer" for the register call must use the TRUSTED `manifest.kind`
+  // discriminant (known since manifest parse), never a live re-read of
+  // `plugin.kind` off the (possibly still-untrusted, pre-freeze) object —
+  // keeping register in the SAME branch lets TypeScript's real
+  // `AdapterPlugin`/`RendererPlugin` types flow straight into
+  // `registerAdapter`/`registerRenderer` with no cast.
   if (manifest.kind === "adapter") {
     if (!isAdapterPluginShape(imported)) {
       fail("shape_validate", "default export does not satisfy the AdapterPlugin shape");
       return;
     }
+    // cortex#1792 — TOCTOU getter/Proxy re-check (adversarial re-check,
+    // second round). Read each ROUTING-CRITICAL field off the untrusted
+    // `imported` object EXACTLY ONCE, into a local const, right here.
     // `isAdapterPluginShape` already established `imported.kind === "adapter"`
-    // (structurally, from the untrusted value) — `id` and `platform` can
-    // still disagree with the manifest, so those are the remaining checks
-    // (a static `imported.kind !== manifest.kind` here would always be
-    // `false` per the narrowed literal types, which is exactly why it's
-    // not written).
-    if (imported.id !== manifest.id) {
-      fail(
-        "shape_validate",
-        `default export's id ("${imported.id}") does not match the manifest ("${manifest.id}")`,
-      );
+    // structurally (from the untrusted value) at ITS OWN read a moment ago —
+    // a static `imported.kind !== manifest.kind` here would always be
+    // `false` per the narrowed literal types, which is exactly why it's not
+    // written; `kind` is instead pinned from `manifest.kind` below, same as
+    // `id`/`platform`, so nothing ever re-reads `imported.kind` again either.
+    const id = imported.id;
+    const platform = imported.platform;
+    if (id !== manifest.id) {
+      fail("shape_validate", `default export's id ("${id}") does not match the manifest ("${manifest.id}")`);
       return;
     }
     // cortex#1792 adversarial finding — shadow-via-platform token
@@ -729,35 +738,72 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
     // (`src/gateway/gateway-adapters.ts`'s `surfacesByPlatform[plugin.platform]`)
     // resolves which `surfaces.*` binding (including secrets like a Discord
     // bot token) a registered adapter receives by its `platform` field, NOT
-    // its registry `id`. Without this pin, a bundle could declare a UNIQUE
-    // `manifest.id` (e.g. "evil-unique", passing stage d against an
-    // unclaimed key) while its default export's `platform` names an
-    // ALREADY-BOUND platform (e.g. "discord") — it would load, register
-    // under "evil-unique", and then `buildGatewayAdapters` would hand it
-    // the REAL discord binding, including the bot token, because it
-    // resolves by `platform`, not registry id. Pinning `platform` to equal
-    // `id` (which already equals `manifest.id`, checked above) closes this:
+    // its registry `id`. Pinning `platform` to equal `id` (which already
+    // equals `manifest.id`, checked above) closes the STATIC form of this:
     // a bundle claiming `platform: "discord"` MUST declare `id: "discord"`,
     // which then correctly collides with the in-tree discord adapter at
     // stage (d) and is refused before any of this bundle's code runs.
-    if (imported.platform !== manifest.id) {
+    if (platform !== manifest.id) {
       fail(
         "shape_validate",
-        `default export's platform ("${imported.platform}") does not match its own id ("${manifest.id}") — a plugin's platform must equal its id so the duplicate-id gate (stage d) covers the exact namespace the gateway resolves adapters by`,
+        `default export's platform ("${platform}") does not match its own id ("${manifest.id}") — a plugin's platform must equal its id so the duplicate-id gate (stage d) covers the exact namespace the gateway resolves adapters by`,
       );
       return;
     }
-    plugin = imported;
+    // cortex#1792 — TOCTOU (time-of-check/time-of-use) closure, round 2.
+    // The check above reads `imported.id`/`imported.platform` ONCE. But
+    // `buildGatewayAdapters` reads `plugin.platform` again — TWICE more,
+    // much LATER in boot, on whatever object `registerAdapter` stored — and
+    // `SurfacePluginRegistry.registerAdapter`/`.getAdapter` re-read
+    // `plugin.id` several more times right after this check (`has`, error
+    // message, `set`). A malicious default export can define `id`/`platform`
+    // as GETTERS (or hand back a Proxy) that return the TRUSTED value on
+    // THIS read (defeating the check above) and a DIFFERENT value — e.g.
+    // `"discord"` — on a later read once the gateway resolves bindings, or
+    // simply MUTATE a plain writable property on `imported` from inside its
+    // own module after this point (a `setTimeout`, an event callback, …).
+    // Registering `imported` itself (the live, still-referenced object) was
+    // the gap: every later read went straight back to attacker-controlled
+    // code. Instead, register a SANITIZED, FROZEN COPY. The spread copies
+    // every other field (`bindingSchema`, `secretFields`, `demuxKey`,
+    // `buildGatewayConstructArgs`, `createAdapter`, `foldsIntoPresence`,
+    // `groupBindings?`) as a VALUE at THIS instant — a getter on any of
+    // THOSE is invoked once here and never touched again. The trailing
+    // `kind`/`id`/`platform` keys are object-literal OVERRIDES: they win
+    // over whatever the spread copied for those three keys specifically
+    // (later keys always win in an object literal), so even a getter that
+    // fires DURING the spread cannot smuggle a different value through for
+    // the fields that matter — and they're set from `manifest`, the TRUSTED
+    // source, not from the already-snapshotted `id`/`platform` consts,
+    // though those are now provably equal to `manifest.id` anyway.
+    // `Object.freeze` then blocks any attempt to mutate the COPY itself
+    // post-registration (freeze is shallow — it protects the copy's own
+    // `id`/`platform`/`kind` properties, which is what routing depends on;
+    // it does not need to protect the referenced function values, which
+    // this bundle's own code already owns and could rewrite regardless of
+    // what we do to the wrapper). Nothing downstream ever reads `imported`
+    // again after this line.
+    const plugin: AdapterPlugin = Object.freeze({
+      ...imported,
+      kind: manifest.kind,
+      id: manifest.id,
+      platform: manifest.id,
+    });
+    try {
+      registry.registerAdapter(plugin);
+    } catch (err) {
+      fail("register", err instanceof Error ? err.message : String(err));
+      return;
+    }
   } else {
     if (!isRendererPluginShape(imported)) {
       fail("shape_validate", "default export does not satisfy the RendererPlugin shape");
       return;
     }
-    if (imported.id !== manifest.id) {
-      fail(
-        "shape_validate",
-        `default export's id ("${imported.id}") does not match the manifest ("${manifest.id}")`,
-      );
+    const id = imported.id;
+    const rendererKind = imported.rendererKind;
+    if (id !== manifest.id) {
+      fail("shape_validate", `default export's id ("${id}") does not match the manifest ("${manifest.id}")`);
       return;
     }
     // cortex#1792 — the renderer analogue of the adapter pin above.
@@ -768,29 +814,27 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
     // renderers by `rendererKind` instead of registry key, and keeps the
     // two plugin kinds symmetric (ADR-0024 D5: one loader, both kinds,
     // one invariant).
-    if (imported.rendererKind !== manifest.id) {
+    if (rendererKind !== manifest.id) {
       fail(
         "shape_validate",
-        `default export's rendererKind ("${imported.rendererKind}") does not match its own id ("${manifest.id}") — a plugin's rendererKind must equal its id so the duplicate-id gate (stage d) covers the exact namespace resolution keys on`,
+        `default export's rendererKind ("${rendererKind}") does not match its own id ("${manifest.id}") — a plugin's rendererKind must equal its id so the duplicate-id gate (stage d) covers the exact namespace resolution keys on`,
       );
       return;
     }
-    plugin = imported;
-  }
-
-  // (g) Register. Re-check-and-register is not atomic across (d)→(g)
-  // within a single-threaded event loop turn there is no interleaving
-  // between bundles (the loop is sequential `await`s, not parallel), so
-  // this can only throw on a genuine registry bug, not a TOCTOU race.
-  try {
-    if (plugin.kind === "adapter") {
-      registry.registerAdapter(plugin);
-    } else {
+    // Same TOCTOU closure as the adapter branch above — register a frozen,
+    // decoupled copy pinned to the trusted `manifest` values, not `imported`.
+    const plugin: RendererPlugin = Object.freeze({
+      ...imported,
+      kind: manifest.kind,
+      id: manifest.id,
+      rendererKind: manifest.id,
+    });
+    try {
       registry.registerRenderer(plugin);
+    } catch (err) {
+      fail("register", err instanceof Error ? err.message : String(err));
+      return;
     }
-  } catch (err) {
-    fail("register", err instanceof Error ? err.message : String(err));
-    return;
   }
 
   sinks.loaded.push({ bundleName, kind: manifest.kind, id: manifest.id, firstParty });

@@ -1,0 +1,12 @@
+# cortex#1792 (S6 blocker fix, ROUND 2 — adversarial re-check) — the MUTATION
+# variant of the TOCTOU bypass (companion to getter-bypass-bundle's accessor
+# variant). Manifest id is unique/unclaimed. The default export's `platform`
+# is a genuinely SAFE plain value at import time (passes every check
+# honestly) but the module also exports a function that mutates the SAME
+# live object's `platform` to "discord" afterward — modeling a bundle that
+# waits (a `setTimeout`, an event callback, anything async) before flipping
+# its own identity post-registration.
+kind: adapter
+id: mutation-bypass-evil
+entry: ./index.ts
+sdkRange: "^1"
