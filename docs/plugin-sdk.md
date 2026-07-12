@@ -33,6 +33,8 @@ import type {
   // Plugin descriptor contract
   PluginKind, SurfacePlugin, AdapterPlugin, RendererPlugin,
   SurfaceBindingEntry, BindingGroup, GatewayConstructBase,
+  // Host-injected policy port (cortex#1794 S9b)
+  AdapterPolicyPort,
 } from "@cortex/surface-sdk"; // in-tree: "../../surface-sdk" (adapters) / "../surface-sdk" (renderers)
 import { SURFACE_SDK_VERSION } from "@cortex/surface-sdk";
 ```
@@ -40,6 +42,16 @@ import { SURFACE_SDK_VERSION } from "@cortex/surface-sdk";
 *(The `@cortex/surface-sdk` specifier is illustrative of how an out-of-tree
 bundle resolves the SDK once S6's loader ships it; in-tree code today uses
 the plain relative path shown above and in the skeletons below.)*
+
+`AdapterPolicyPort` (cortex#1794 S9b) is a dependency-inversion PORT, not a
+data type: it describes `resolveAccess(msg)` / `isOperatorPrincipal(platform,
+platformId)` as a bound behavior, so an adapter can authorise an inbound
+message without importing cortex's `PolicyEngine` / `PlatformPrincipalIndex`
+/ `PrincipalRegistry` (`common/policy`) directly. The host binds the port to
+its real policy engine at construction time
+(`adapters/plugin-support.ts`'s `buildAdapterPolicyPort`) and forwards it
+through `createAdapter`'s args — see `src/adapters/web/index.ts`'s
+`WebAdapterInfra.policy` for the first consumer.
 
 ### What's IN the barrel, and why nothing else is
 
@@ -51,8 +63,17 @@ The barrel re-exports exactly the types the `PlatformAdapter` / `Renderer` /
 schemas (`DashboardRendererSchema`, `PagerDutyRendererSchema`, …), the
 `cc-events` tap reader, or formatting helpers. Those remain genuine
 cross-boundary imports the four in-tree adapters and two in-tree renderers
-still reach for today — ADR-0024's residual couplings (blockers #5–#8/#13),
-not yet resolved. Folding them into "the SDK" would mean a breaking change to
+still reach for today — ADR-0024's residual couplings (blockers #5–#8/#13).
+**Web is the first exception** (cortex#1794 S9b): `src/adapters/web/*.ts`
+now closes ALL of them — `common/policy` (via `AdapterPolicyPort` above),
+`common/types/surfaces` (its `WebBindingSchema` relocated to the
+plugin-owned `src/adapters/web/schema.ts`), and `common/types/
+cortex-config`'s `Agent` (narrowed to the adapter-local `AdapterAgentIdentity
+{id}`, the only field it ever read) — so it compiles against `surface-sdk`
+alone; a stricter test in `boundary-guard.test.ts` (below) pins this for
+`web/` specifically. Discord/Slack/Mattermost still reach for all of the
+above (their dependency-inversion pass is cortex#1896) — not yet resolved.
+Folding them into "the SDK" would mean a breaking change to
 *any* of them forces an SDK major bump, which is not what's pinned: **only**
 a breaking change to `PlatformAdapter`, `Renderer`, or the `SurfacePlugin`
 descriptor shapes is a major bump (ADR-0024 D1). Full decoupling of an
@@ -257,6 +278,14 @@ It is scoped to the CONTRACT surface only — it does not (and is not meant
 to) forbid the other cross-boundary imports discussed above; those are
 tracked as ADR-0024's residual couplings, resolved plugin-by-plugin as each
 one extracts (S9–S12).
+
+The same file also carries a second, STRICTER check scoped to `web/` only
+(cortex#1794 S9b): rather than a symbol allowlist, it asserts NO `../../`
+import survives in `src/adapters/web/*.ts` unless it resolves to
+`surface-sdk` — the full "compiles against the SDK alone" bar, not just "the
+contract types are re-exported from the right place." This is what a plugin
+author should expect once their own adapter finishes its dependency-inversion
+pass; run the audit command above against your own directory to check.
 
 ## Loading & the first-party exemption
 
