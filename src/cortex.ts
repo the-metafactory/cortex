@@ -351,7 +351,7 @@ import {
 // the lightweight `cortex agents reload` CLI can resolve the running daemon's
 // PID (to signal a reload) without importing this whole module graph. Re-import
 // here so cortex.ts's lifecycle paths stay on the single source of truth.
-import { STATE_DIR, DEFAULT_CONFIG, pidFileFor } from "./common/pidfile";
+import { STATE_DIR, DEFAULT_CONFIG, pidFileFor, migrateLegacyPidFile } from "./common/pidfile";
 // FS-7 / D-3 (cortex#1839) — last-known-good boot fallback + degraded state.
 import { readLastGoodSnapshotPath, writeLastGoodSnapshot } from "./common/config/last-good";
 import {
@@ -371,18 +371,14 @@ import { formatConfigLoadError } from "./common/config/validate-on-write";
  * singleton check in {@link checkSingleton} only blocks duplicates of
  * the same stack, not unrelated stacks.
  *
- * Resolution:
+ * Resolution (see `./common/pidfile` for the authoritative doc):
  *   - Default config (or unspecified) → legacy `cortex.pid` (preserves
  *     single-instance backward compat — principals on the default path
  *     see no behaviour change).
- *   - Custom config → `cortex-<config-basename>.pid` (derived from the
- *     config filename without the `.yaml`/`.yml` extension). Two stacks
- *     with different `--config` paths get different PID files.
- *
- * The basename derivation deliberately omits the directory portion so
- * `~/.config/cortex/cortex.work.yaml` and `./cortex.work.yaml` resolve
- * to the same PID file — moving a config doesn't accidentally orphan
- * the prior PID file.
+ *   - Custom config → `cortex-<basename>-<hash8>.pid`, keyed on a hash of
+ *     the canonical FULL config path (cortex#1900). Two config trees that
+ *     share a filename resolve to DISTINCT PID files, so `start`/`stop`
+ *     can never collide across trees.
  */
 // B-0 (cortex#1021) — `pidFileFor` is imported from `./common/pidfile` (single
 // source of truth shared with the `cortex agents reload` daemon-signal path)
@@ -6251,6 +6247,15 @@ if (import.meta.main) {
 
       mkdirSync(STATE_DIR, { recursive: true });
       const pidFile = pidFileFor(options.config);
+      // cortex#1900 continuity AC — adopt a pre-hash `cortex-<basename>.pid`
+      // if this config still owns one, so an existing fleet upgrading across
+      // the path-hash naming change is not orphaned. Runs BEFORE the singleton
+      // check so a still-live daemon's PID travels with the renamed file and
+      // checkSingleton correctly blocks the duplicate (or reaps it if stale).
+      const adopted = migrateLegacyPidFile(options.config);
+      if (adopted !== undefined) {
+        console.error(`cortex: migrated PID file ${adopted} → ${pidFile} (cortex#1900 path-hash naming)`);
+      }
       checkSingleton(pidFile);
       writeFileSync(pidFile, String(process.pid));
 

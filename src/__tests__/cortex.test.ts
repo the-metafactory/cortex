@@ -24,7 +24,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, chmodSync, symlinkSync } from "fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  chmodSync,
+  symlinkSync,
+  existsSync,
+  unlinkSync,
+  mkdirSync,
+} from "fs";
 // Hermetic agents.d/ (R26 P1 PR hygiene, cortex#1371): every `startCortex`
 // boot in this file points `agentsDir` at an EMPTY tmp dir. Without it the
 // boot path falls back to the principal's LIVE `~/.config/cortex/agents.d/`
@@ -37,6 +47,7 @@ import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
 import { pidFileFor, runDryRun, startCortex } from "../cortex";
+import { migrateLegacyPidFile } from "../common/pidfile";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 
@@ -884,9 +895,15 @@ describe("pidFileFor — per-config PID file derivation", () => {
     expect(pidFileFor(DEFAULT_CONFIG)).toBe(LEGACY_PID);
   });
 
-  test("custom config in same dir → derived from basename", () => {
+  // cortex#1900 — the pidfile name is `cortex-<basename>-<hash8>.pid`: it keeps
+  // the human-readable slug (continuity requirement #2) AND appends 8 hex chars
+  // of sha256(canonical full path) so two trees can never collide.
+  const STATE_DIR = join(process.env.HOME ?? "~", ".config", "grove", "state");
+
+  test("custom config → cortex-<basename>-<hash8>.pid (slug preserved + path hash)", () => {
     const result = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
-    expect(result).toBe(join(process.env.HOME ?? "~", ".config", "grove", "state", "cortex-cortex.work.pid"));
+    expect(basename(result)).toMatch(/^cortex-cortex\.work-[0-9a-f]{8}\.pid$/);
+    expect(result.startsWith(STATE_DIR)).toBe(true);
   });
 
   test("two distinct custom configs → two distinct PID files", () => {
@@ -895,28 +912,35 @@ describe("pidFileFor — per-config PID file derivation", () => {
     expect(a).not.toBe(b);
   });
 
-  test("config with .yml extension also normalises", () => {
+  test("config with .yml extension also normalises (extension stripped)", () => {
     const result = pidFileFor("/tmp/foo.yml");
-    expect(result).toBe(join(process.env.HOME ?? "~", ".config", "grove", "state", "cortex-foo.pid"));
+    expect(basename(result)).toMatch(/^cortex-foo-[0-9a-f]{8}\.pid$/);
   });
 
-  test("config path moves don't change the PID file (basename-only derivation)", () => {
-    const a = pidFileFor("/somewhere/cortex.work.yaml");
-    const b = pidFileFor("/elsewhere/cortex.work.yaml");
-    expect(a).toBe(b);
+  // cortex#1900 core property (AC: "two distinct config trees for the same
+  // stack resolve to DISTINCT pidfiles"). Under the OLD basename-only scheme
+  // these two collided on `cortex-stack.pid` — the exact X-07 copy-keep-original
+  // hazard. The full-path hash forces them apart.
+  test("two trees sharing a stack filename → DISTINCT PID files (path-full identity)", () => {
+    const a = pidFileFor("/config-tree-old/stack/stack.yaml");
+    const b = pidFileFor("/config-tree-new/stack/stack.yaml");
+    expect(a).not.toBe(b);
+    // both still carry the same readable slug — only the hash differs
+    expect(basename(a)).toMatch(/^cortex-stack-[0-9a-f]{8}\.pid$/);
+    expect(basename(b)).toMatch(/^cortex-stack-[0-9a-f]{8}\.pid$/);
   });
 
-  test("relative config path → same PID file as absolute (basename match)", () => {
-    const rel = pidFileFor("./cortex.work.yaml");
-    const abs = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
-    expect(rel).toBe(abs);
+  test("resolution is deterministic (same path → same PID file across calls)", () => {
+    const p = "/config-tree-old/stack/stack.yaml";
+    expect(pidFileFor(p)).toBe(pidFileFor(p));
   });
 
   // Sage cortex#1027 — different SPELLINGS of the same on-disk config must
   // resolve to one PID identity (otherwise `cortex agents reload` signals the
-  // wrong/no daemon). These probes use a real tmp file + a symlink so
+  // wrong/no daemon). Preserved under the hash: identical canonical path →
+  // identical hash. These probes use a real tmp file + a symlink so
   // realpathSync actually canonicalizes.
-  describe("spelling stability (Sage cortex#1027)", () => {
+  describe("spelling stability (Sage cortex#1027, preserved under path-hash)", () => {
     let dir: string;
     let configPath: string;
 
@@ -942,21 +966,171 @@ describe("pidFileFor — per-config PID file derivation", () => {
     test("symlink to the config resolves to the same PID file as the target", () => {
       const link = join(dir, "alias.yaml");
       symlinkSync(configPath, link);
-      // Without canonicalization these would key two daemons (stack.pid vs
-      // alias.pid); realpathSync collapses the symlink onto its target.
+      // Without canonicalization these would key two daemons; realpathSync
+      // collapses the symlink onto its target so the hash matches.
       expect(pidFileFor(link)).toBe(pidFileFor(configPath));
     });
 
-    test("non-existent config still derives a stable basename PID (fallback path)", () => {
+    test("non-existent config still derives a stable hashed PID (fallback path)", () => {
       const ghost = join(dir, "never-created.yaml");
-      const expected = join(
-        process.env.HOME ?? "~",
-        ".config",
-        "grove",
-        "state",
-        "cortex-never-created.pid",
-      );
-      expect(pidFileFor(ghost)).toBe(expected);
+      const result = pidFileFor(ghost);
+      expect(basename(result)).toMatch(/^cortex-never-created-[0-9a-f]{8}\.pid$/);
+      // stable across calls even though realpath can't resolve it
+      expect(pidFileFor(ghost)).toBe(result);
+    });
+  });
+
+  // cortex#1900 kill-site safety AC: "a `stop` invoked with the wrong tree's
+  // config path cannot SIGTERM a daemon started from the other tree." Because
+  // `stop` reads ONLY `pidFileFor(config)` (see src/cortex.ts stop action) and
+  // the two trees resolve to distinct files, a mis-targeted stop finds no file
+  // and never touches the live daemon. Exercised against a real child process.
+  describe("kill-site safety — stop targets only its own tree (cortex#1900)", () => {
+    let stateDir: string;
+    let dirA: string;
+    let dirB: string;
+    let cfgA: string;
+    let cfgB: string;
+    let sleeper: ReturnType<typeof Bun.spawn> | undefined;
+
+    beforeEach(() => {
+      // Hermetic STATE_DIR: never write pidfiles into the real ~/.config.
+      stateDir = mkdtempSync(join(tmpdir(), "cortex-killsite-state-"));
+      // Two DISTINCT trees, SAME stack filename — the X-07 copy-keep window.
+      dirA = mkdtempSync(join(tmpdir(), "cortex-killsite-treeA-"));
+      dirB = mkdtempSync(join(tmpdir(), "cortex-killsite-treeB-"));
+      cfgA = join(dirA, "stack.yaml");
+      cfgB = join(dirB, "stack.yaml");
+      writeFileSync(cfgA, "agent:\n  name: x\n");
+      writeFileSync(cfgB, "agent:\n  name: x\n");
+    });
+
+    afterEach(() => {
+      if (sleeper !== undefined) {
+        try {
+          sleeper.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        sleeper = undefined;
+      }
+      rmSync(stateDir, { recursive: true, force: true });
+      rmSync(dirA, { recursive: true, force: true });
+      rmSync(dirB, { recursive: true, force: true });
+    });
+
+    // Relocate the REAL pidFileFor filename (hash included) into the temp
+    // STATE_DIR, so distinctness is driven by production derivation.
+    function pidPathIn(config: string): string {
+      return join(stateDir, basename(pidFileFor(config)));
+    }
+
+    // Mirrors the stop action (src/cortex.ts stop command): resolve THIS
+    // config's pidfile, bail if absent, else SIGTERM the recorded PID.
+    function simulateStop(config: string): "not-running" | number {
+      const pidFile = pidPathIn(config);
+      if (!existsSync(pidFile)) return "not-running";
+      const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+      process.kill(pid, "SIGTERM");
+      unlinkSync(pidFile);
+      return pid;
+    }
+
+    test("two trees sharing a stack filename resolve to distinct pidfiles", () => {
+      expect(pidPathIn(cfgA)).not.toBe(pidPathIn(cfgB));
+    });
+
+    test("stop --config treeB does NOT signal treeA's live daemon", () => {
+      // Stand up a real, live "treeA daemon" and record its PID under treeA.
+      sleeper = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+      const pidValue = sleeper.pid;
+      const treeAPid = pidPathIn(cfgA);
+      writeFileSync(treeAPid, String(pidValue));
+
+      // treeB owns no pidfile → stop reports not-running and MUST NOT fall
+      // through to treeA's file (the pre-#1900 basename collision).
+      expect(existsSync(pidPathIn(cfgB))).toBe(false);
+      expect(simulateStop(cfgB)).toBe("not-running");
+
+      // treeA's daemon is untouched: its pidfile survives and the process
+      // is still alive (signal-0 probe throws only if the pid is gone).
+      expect(existsSync(treeAPid)).toBe(true);
+      expect(() => process.kill(pidValue, 0)).not.toThrow();
+
+      // Positive control: stop --config treeA DOES target it and clears the file.
+      expect(simulateStop(cfgA)).toBe(pidValue);
+      expect(existsSync(treeAPid)).toBe(false);
+    });
+  });
+
+  // cortex#1900 continuity AC: an existing fleet must not orphan its pidfiles
+  // mid-upgrade. `migrateLegacyPidFile` renames the pre-hash `cortex-<slug>.pid`
+  // onto the new hashed name on daemon start. Runs against a temp STATE_DIR.
+  describe("continuity migration (cortex#1900 continuity AC)", () => {
+    let stateDir: string;
+    let dir: string;
+    let cfg: string;
+    let legacyName: string;
+    let newName: string;
+
+    beforeEach(() => {
+      stateDir = mkdtempSync(join(tmpdir(), "cortex-pidmig-state-"));
+      dir = mkdtempSync(join(tmpdir(), "cortex-pidmig-tree-"));
+      cfg = join(dir, "work.yaml");
+      writeFileSync(cfg, "agent:\n  name: x\n");
+      newName = basename(pidFileFor(cfg)); // cortex-work-<hash>.pid
+      legacyName = `cortex-${basename(cfg).replace(/\.ya?ml$/i, "")}.pid`; // cortex-work.pid
+      mkdirSync(stateDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      rmSync(stateDir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    test("adopts an existing old-format pidfile → renames to new-format, PID preserved", () => {
+      const legacyPath = join(stateDir, legacyName);
+      const newPath = join(stateDir, newName);
+      writeFileSync(legacyPath, "12345");
+
+      const adopted = migrateLegacyPidFile(cfg, stateDir);
+
+      expect(adopted).toBe(legacyPath);
+      expect(existsSync(legacyPath)).toBe(false); // old name gone
+      expect(existsSync(newPath)).toBe(true); // adopted under new name
+      expect(readFileSync(newPath, "utf-8")).toBe("12345"); // live PID carried over
+    });
+
+    test("no-op when the new-format pidfile already exists (already migrated)", () => {
+      const legacyPath = join(stateDir, legacyName);
+      const newPath = join(stateDir, newName);
+      writeFileSync(legacyPath, "111");
+      writeFileSync(newPath, "222");
+
+      expect(migrateLegacyPidFile(cfg, stateDir)).toBeUndefined();
+      expect(readFileSync(newPath, "utf-8")).toBe("222"); // new-format untouched
+      expect(existsSync(legacyPath)).toBe(true); // legacy left as-is (readers ignore it)
+    });
+
+    test("no-op on a fresh install (no old-format pidfile present)", () => {
+      expect(migrateLegacyPidFile(cfg, stateDir)).toBeUndefined();
+      expect(existsSync(join(stateDir, newName))).toBe(false);
+    });
+
+    test("no-op for the default / unspecified config (legacy cortex.pid, never suffixed)", () => {
+      // A stray cortex.pid must never be renamed away by the migration.
+      writeFileSync(join(stateDir, "cortex.pid"), "555");
+      expect(migrateLegacyPidFile(DEFAULT_CONFIG, stateDir)).toBeUndefined();
+      expect(migrateLegacyPidFile(undefined, stateDir)).toBeUndefined();
+      expect(existsSync(join(stateDir, "cortex.pid"))).toBe(true);
+    });
+
+    test("migrated file IS the identity stop/status later resolve", () => {
+      const legacyPath = join(stateDir, legacyName);
+      writeFileSync(legacyPath, "999");
+      migrateLegacyPidFile(cfg, stateDir);
+      // readers key on basename(pidFileFor(cfg)); it must now exist.
+      expect(existsSync(join(stateDir, basename(pidFileFor(cfg))))).toBe(true);
     });
   });
 });
