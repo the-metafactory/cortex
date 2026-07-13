@@ -13,6 +13,8 @@ import type { SystemEventSource } from "../bus/system-events";
 import {
   createSystemAdapterRecoveredEvent,
   createSystemAdapterDisconnectedEvent,
+  createSystemAdapterDegradedEvent,
+  createSystemAccessDeniedEvent,
   type SystemAdapterPlatform,
 } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
@@ -218,6 +220,52 @@ export function buildAdapterSystemEventPort(
         ...(opts.shardId !== undefined && { shardId: opts.shardId }),
         ...(opts.closeCode !== undefined && { closeCode: opts.closeCode }),
         ...(opts.closeReason !== undefined && { closeReason: opts.closeReason }),
+      });
+      void runtime.publish(env);
+    },
+    // cortex#1797 (S12) — Discord's two extra system-event kinds. Same
+    // no-runtime / no-source-warns-once gate as `.recovered()`/.disconnected()`
+    // above; reproduces `DiscordAdapter.publishAdapterDegraded`/
+    // `.publishUntrustedBotDenied`'s pre-extraction inline construction
+    // exactly (module doc on `AdapterSystemEventPort` has the rationale).
+    degraded(opts) {
+      if (!runtime) return;
+      if (!source) {
+        warnOnceIfMissingSource(opts.adapterId, opts.platform);
+        return;
+      }
+      const env = createSystemAdapterDegradedEvent({
+        source,
+        adapterId: opts.adapterId,
+        platform: opts.platform as SystemAdapterPlatform,
+        disconnectedSince: opts.disconnectedSince,
+        thresholdMs: opts.thresholdMs,
+        ...(opts.reconnectAttempts !== undefined && { reconnectAttempts: opts.reconnectAttempts }),
+      });
+      void runtime.publish(env);
+    },
+    untrustedBotDenied(opts) {
+      if (!runtime) return;
+      if (!source) {
+        warnOnceIfMissingSource(opts.principalId, opts.platform);
+        return;
+      }
+      const env = createSystemAccessDeniedEvent({
+        source,
+        principalId: opts.principalId,
+        capability: `${opts.platform}.inbound`,
+        sovereignty: {
+          classification: "local",
+          data_residency: source.principal,
+          max_hop: 0,
+          frontier_ok: false,
+          model_class: "local-only",
+        },
+        correlationId: opts.correlationId,
+        signedBy: [],
+        envelopeSubject: opts.envelopeSubject,
+        envelopeId: opts.envelopeId,
+        reason: opts.reason,
       });
       void runtime.publish(env);
     },

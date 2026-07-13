@@ -197,8 +197,11 @@ export interface AdapterPolicyPort {
  * "runtime configured but source missing" one-time warning).
  *
  * First consumer: `SlackAdapterInfra.systemEvents`, `src/adapters/slack/index.ts`
- * (cortex#1795 S10). Discord/Mattermost still call `bus/system-events`
- * directly — their dependency-inversion pass is a later slice (cortex#1896).
+ * (cortex#1795 S10). cortex#1797 (S12) widened this port with `degraded`/
+ * `untrustedBotDenied` for Discord's extraction — see those methods' docs.
+ * Mattermost still calls `bus/system-events` directly for its (currently
+ * unused) `runtime` field — its own inversion pass already extracted, and
+ * simply never wired a system-events port; a follow-up would just plumb it.
  */
 export interface AdapterSystemEventPort {
   /** Emit `system.adapter.recovered` for `adapterId`/`platform`. No-op if
@@ -221,5 +224,44 @@ export interface AdapterSystemEventPort {
     shardId?: number;
     closeCode?: number;
     closeReason?: string;
+  }): void;
+  /**
+   * cortex#1797 (S12) — emit `system.adapter.degraded` for `adapterId`/
+   * `platform`: an adapter has been disconnected long enough to cross the
+   * principal-configured threshold. First consumer: `DiscordAdapter`
+   * (`src/adapters/discord/index.ts`'s `publishAdapterDegraded`, mirroring
+   * the discord.js per-shard degraded-timer path in `client.ts`). No-op if
+   * the host has no runtime/source wired.
+   */
+  degraded(opts: {
+    adapterId: string;
+    platform: string;
+    disconnectedSince: Date;
+    thresholdMs: number;
+    reconnectAttempts?: number;
+  }): void;
+  /**
+   * cortex#1797 (S12) — emit `system.access.denied` for an inbound message
+   * dropped by an adapter-side trust gate (e.g. an un-trusted bot author),
+   * BEFORE the message ever reaches the policy engine. Distinct from
+   * `AdapterPolicyPort.resolveAccess` (which gates messages that DO reach
+   * the policy engine) — this is the adapter's own pre-gate rejection.
+   * `sovereignty`/`signedBy`/`capability` are host-synthesised from
+   * `platform`+`source` (the same fixed "local inbound deny" shape the
+   * pre-extraction `DiscordAdapter.publishUntrustedBotDenied` built inline)
+   * so the adapter body never needs to construct a `SystemAccessSovereignty`
+   * itself. First consumer: `DiscordAdapter`'s trusted-bot-id gate. No-op if
+   * the host has no runtime/source wired.
+   */
+  untrustedBotDenied(opts: {
+    platform: string;
+    principalId: string;
+    correlationId: string;
+    envelopeSubject: string;
+    envelopeId: string;
+    /** Structured deny reason — `kind` is the discriminator (mirrors
+     *  cortex's internal `SystemAccessDeniedReason`); other fields ride
+     *  through verbatim. */
+    reason: { kind: string; [k: string]: unknown };
   }): void;
 }
