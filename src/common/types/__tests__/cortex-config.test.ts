@@ -32,7 +32,6 @@ import {
   NatsConfigSchema,
   NatsIdentitySchema,
   PrincipalConfigSchema,
-  PagerDutyRendererSchema,
   PathsConfigSchema,
   PolicyFederatedRegistrySchema,
   PolicyFederatedSchema,
@@ -531,15 +530,11 @@ describe("RendererSchema", () => {
     expect(parsed.projections).toEqual([]);
   });
 
-  test("pagerduty renderer requires routingKey", () => {
-    expect(() => PagerDutyRendererSchema.parse({ kind: "pagerduty" })).toThrow();
-    const parsed = PagerDutyRendererSchema.parse({
-      kind: "pagerduty",
-      routingKey: "PD-ROUTING-KEY",
-      subscribe: ["local.{principal}.system.adapter.degraded"],
-    });
-    expect(parsed.routingKey).toBe("PD-ROUTING-KEY");
-  });
+  // cortex#1894 (S12b MOVE) — `PagerDutyRendererSchema`'s per-kind field
+  // validation (routingKey required, etc.) moved out of cortex-config into the
+  // `metafactory-cortex-renderer-pagerduty` bundle's own `configSchema`; it is
+  // exercised by that bundle's standalone tests, not here. The structural pass
+  // still welcomes a `kind: pagerduty` entry (asserted below).
 
   // cortex#1789 (S4, ADR-0024 D5) — `RendererSchema` stopped being a closed
   // discriminated union and became the loose STRUCTURAL pass

@@ -399,12 +399,17 @@ export function isTrustedOrgRepo(repoUrl: string): boolean {
  * bundle that already cleared the org-trust gate.
  */
 const FIRST_PARTY_RENDERER_REPOS: ReadonlySet<string> = new Set([
-  // Populated as real first-party renderer bundles are published and
-  // reviewed (e.g. a future `metafactory-pagerduty` at S12b). Empty today:
-  // no first-party renderer bundle repo exists outside this slice's
-  // load-path fixture proof, which exercises this function via an
-  // INJECTED allowlist in tests (`src/adapters/__tests__/loader.test.ts`),
-  // never this production constant.
+  // cortex#1894 (S12b) — INTENTIONALLY EMPTY, and no longer the production
+  // source of the renderer allowlist. It survives only as the pure-predicate
+  // default of {@link isFirstPartyRendererBundle} (so a caller that passes no
+  // allowlist gets fail-closed "no renderer exemption"). The REAL production
+  // allowlist is now computed per-load from cortex's own `arc-manifest.yaml`
+  // `dependencies:` (entries matching {@link RENDERER_BUNDLE_DEP_NAME_RE}) by
+  // {@link readCortexDeclaredRendererRepos} and threaded through
+  // {@link loadExternalPlugins} — the un-spoofable, arc-manifest-based twin of
+  // the S9a adapter exemption. Declaring a new first-party renderer bundle
+  // (e.g. `metafactory-cortex-renderer-pagerduty`) is a plain arc-manifest PR,
+  // never an edit to this constant.
 ]);
 
 /** Shared empty-set default for {@link isFirstPartyBundle}'s adapter branch
@@ -510,6 +515,20 @@ export function isFirstPartyBundle(
 const ADAPTER_BUNDLE_DEP_NAME_RE = /^metafactory-cortex-adapter-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * cortex#1894 (S12b, epic #1784) — the RENDERER twin of
+ * {@link ADAPTER_BUNDLE_DEP_NAME_RE}: a cortex-owned renderer bundle's repo
+ * name is ALWAYS `metafactory-cortex-renderer-<name>` (`<owner>` = `cortex`,
+ * `<type>` = `renderer`) per the compass#115 component-repo-naming standard.
+ * Same un-spoofability property as the adapter regex — the NAME is read out of
+ * cortex's OWN PR-reviewed `arc-manifest.yaml`, never anything the bundle
+ * self-declares, and must self-identify in this fixed shape as a
+ * cortex-renderer component. `arc`, `metafactory-discord`, and every
+ * `metafactory-cortex-adapter-*` bundle never match, by construction — the
+ * adapter and renderer exemptions stay namespaced by both kind AND name.
+ */
+const RENDERER_BUNDLE_DEP_NAME_RE = /^metafactory-cortex-renderer-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
  * cortex#1794 (S9a, epic #1784 "Andreas decision 2026-07-12") — the
  * un-spoofable first-party ADAPTER anchor: cortex's OWN, PR-reviewed
  * `arc-manifest.yaml` `dependencies:` block, NARROWED to only the entries
@@ -600,6 +619,46 @@ export function readCortexDeclaredAdapterRepos(manifestPath: string): ReadonlySe
       // legitimately-declared-but-unrelated dependency never match, no
       // matter what they ship.
       if (!ADAPTER_BUNDLE_DEP_NAME_RE.test(name)) continue;
+      repos.add(normalizeRepoUrl(`https://github.com/the-metafactory/${name}`));
+    }
+    return repos;
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * cortex#1894 (S12b) — the RENDERER twin of {@link readCortexDeclaredAdapterRepos}.
+ * Reads cortex's OWN `arc-manifest.yaml` `dependencies:` and returns the
+ * normalized repo URLs of every entry whose `name` matches
+ * {@link RENDERER_BUNDLE_DEP_NAME_RE} (the compass#115
+ * `metafactory-cortex-renderer-<name>` standard). This REPLACES the old empty
+ * hardcoded {@link FIRST_PARTY_RENDERER_REPOS} constant as the production
+ * source of the renderer allowlist: declaring a new first-party renderer
+ * bundle (e.g. `metafactory-cortex-renderer-pagerduty`) is now a plain
+ * `arc-manifest.yaml` PR, never a `loader.ts` code change — identical to how
+ * the adapter exemption already works.
+ *
+ * Un-spoofable for the SAME reason as the adapter reader: the name is read out
+ * of CORTEX's manifest, shipped in CORTEX's repo, only ever changed by a PR
+ * against CORTEX — a bundle author cannot make cortex's dependency list
+ * declare their repo, and (post name-shape narrowing) cannot self-select by
+ * naming their OWN repo to match. Composes with (never replaces) the
+ * unconditional {@link isTrustedOrgRepo} gate. Fail-closed by design: ANY
+ * read/parse failure returns an EMPTY set (can only NARROW trust, never widen).
+ */
+export function readCortexDeclaredRendererRepos(manifestPath: string): ReadonlySet<string> {
+  try {
+    const raw = readFileSync(manifestPath, "utf-8");
+    const parsed: unknown = parseYaml(raw);
+    if (!isRecord(parsed)) return new Set();
+    const deps: unknown = parsed.dependencies;
+    if (!Array.isArray(deps)) return new Set();
+    const repos = new Set<string>();
+    for (const dep of deps) {
+      if (!isRecord(dep) || typeof dep.name !== "string") continue;
+      const name = dep.name.trim();
+      if (!RENDERER_BUNDLE_DEP_NAME_RE.test(name)) continue;
       repos.add(normalizeRepoUrl(`https://github.com/the-metafactory/${name}`));
     }
     return repos;
@@ -741,8 +800,13 @@ export interface LoadPluginsOptions {
   externalEnabled: boolean;
   pkgRoot?: string;
   runner?: ArcListRunner;
-  /** Test seam — see {@link isFirstPartyRendererBundle}. Production callers
-   *  never set this (defaults to the real in-tree allowlist). */
+  /** cortex#1894 (S12b) test seam — pre-resolved first-party RENDERER
+   *  allowlist. Production callers never set this: it is computed automatically,
+   *  once per {@link loadExternalPlugins} call, from cortex's own
+   *  `arc-manifest.yaml` via {@link readCortexDeclaredRendererRepos} (using
+   *  {@link cortexManifestPath}). Set this ONLY in tests that want to inject
+   *  the allowlist directly; if set, it wins (the manifest is not read for
+   *  renderers). See {@link isFirstPartyRendererBundle}. */
   firstPartyRendererRepos?: ReadonlySet<string>;
   /**
    * cortex#1794 (S9a) test seam — pre-resolved first-party ADAPTER allowlist.
@@ -794,9 +858,17 @@ export async function loadExternalPlugins(
   // implausible, must not gate different bundles inconsistently within one
   // boot). Explicit `firstPartyAdapterRepos` (test seam) always wins over
   // reading a manifest at all.
+  const manifestPath = options.cortexManifestPath ?? defaultCortexManifestPath();
   const firstPartyAdapterRepos =
-    options.firstPartyAdapterRepos ??
-    readCortexDeclaredAdapterRepos(options.cortexManifestPath ?? defaultCortexManifestPath());
+    options.firstPartyAdapterRepos ?? readCortexDeclaredAdapterRepos(manifestPath);
+  // cortex#1894 (S12b) — the RENDERER allowlist, resolved the SAME way from the
+  // SAME manifest snapshot. Production reads cortex's own `arc-manifest.yaml`
+  // (`metafactory-cortex-renderer-<name>` deps → first-party renderer
+  // exemption); an explicit `firstPartyRendererRepos` (test seam) wins. This
+  // replaces the old empty hardcoded `FIRST_PARTY_RENDERER_REPOS` as the
+  // production source — declaring a renderer bundle is now an arc-manifest PR.
+  const firstPartyRendererRepos =
+    options.firstPartyRendererRepos ?? readCortexDeclaredRendererRepos(manifestPath);
 
   const { bundles, issues: discoveryIssues } = await discoverPluginBundles({
     pkgRoot: options.pkgRoot,
@@ -814,7 +886,7 @@ export async function loadExternalPlugins(
       await loadOneBundle(bundle, {
         registry,
         externalEnabled,
-        firstPartyRendererRepos: options.firstPartyRendererRepos,
+        firstPartyRendererRepos,
         firstPartyAdapterRepos,
         loaded,
         skipped,
@@ -843,7 +915,10 @@ export async function loadExternalPlugins(
 interface LoadOneBundleSinks {
   registry: SurfacePluginRegistry;
   externalEnabled: boolean;
-  firstPartyRendererRepos: ReadonlySet<string> | undefined;
+  /** cortex#1894 (S12b) — pre-resolved once in {@link loadExternalPlugins}
+   *  from cortex's own `arc-manifest.yaml` (or the test seam), never re-read
+   *  per bundle. */
+  firstPartyRendererRepos: ReadonlySet<string>;
   /** cortex#1794 (S9a) — pre-resolved once in {@link loadExternalPlugins},
    *  never re-read per bundle. */
   firstPartyAdapterRepos: ReadonlySet<string>;

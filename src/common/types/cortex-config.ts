@@ -1176,31 +1176,17 @@ export const DashboardRendererSchema = z.object({
 export type DashboardRendererConfig = z.infer<typeof DashboardRendererSchema>;
 
 /**
- * PagerDuty renderer — operational events out per G-1111 §4.6. Subscribes to
- * `system.adapter.degraded`, `system.process.crashed`, etc., and routes them
- * to PagerDuty via the events-v2 API.
+ * cortex#1894 (S12b MOVE, ADR-0024 D5) — the PagerDuty renderer's per-kind
+ * schema (`PagerDutyRendererSchema` + `PagerDutyRendererConfig`) is no longer
+ * hardcoded here. It extracted to the `metafactory-cortex-renderer-pagerduty`
+ * bundle (the FIRST renderer-class extraction) and is now REGISTRY-CONTRIBUTED
+ * — the bundle's `RendererPlugin.configSchema` supplies it at the registry
+ * pass (`src/renderers/index.ts`'s `resolveRendererPluginAndConfig`), exactly
+ * as the four adapter `bindingSchema`s left `SurfacesSchema` for their own
+ * bundles. `RendererSchema` above (the loose structural `{kind, ...}` pass)
+ * still welcomes a `kind: pagerduty` entry structurally; per-kind field
+ * validation (incl. the required `routingKey` secret) happens in the bundle.
  */
-export const PagerDutyRendererSchema = z.object({
-  kind: z.literal("pagerduty"),
-  /**
-   * cortex#1788 (S3, ADR-0024 OQ10) — optional instance id, defaulting to
-   * `kind`. See {@link DashboardRendererSchema.id} for the rationale; the
-   * pagerduty case is the one OQ10 names explicitly (two `kind: pagerduty`
-   * entries with different routing keys are otherwise indistinguishable).
-   */
-  id: z.string().min(1).optional(),
-  /** Integration / routing key for PagerDuty events-v2. */
-  routingKey: z.string().min(1),
-  /** Subject patterns to subscribe to. Principal chooses what counts as page-worthy. */
-  subscribe: z.array(z.string().min(1)).default([]),
-  /**
-   * IAW Phase A.4 — optional visibility guardrails. See
-   * {@link RendererVisibilitySchema}.
-   */
-  visibility: RendererVisibilitySchema.optional(),
-});
-
-export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
 
 /**
  * CLI-tail renderer — local stdout follower. Developer tool; subscribes to the

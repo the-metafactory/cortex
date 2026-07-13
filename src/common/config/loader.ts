@@ -13,6 +13,7 @@ import { AgentConfigSchema, NetworkFileSchema, type AgentConfig, type NetworkFil
 import {
   AgentSchema,
   CortexConfigSchema,
+  RendererSchema,
   type Agent,
   type BusConfig,
   type CortexConfig,
@@ -37,9 +38,10 @@ import {
   validateSurfacesAgainstRegistry,
   type SurfacePluginRegistry,
 } from "../../adapters/registry";
-import { resolveRendererPluginAndConfig } from "../../renderers";
+import { resolveRendererPluginAndConfig, UnimplementedRendererKindError } from "../../renderers";
 import {
   assertConfiguredSystemCoverage,
+  isKnownFirstPartyRendererKind,
   type RendererCoverageInput,
 } from "../../renderers/coverage";
 import { deriveStackId } from "../types/stack";
@@ -951,15 +953,46 @@ function loadCortexShape(
   const rendererRegistry = createDefaultSurfacePluginRegistry();
   const configuredRendererCoverage: RendererCoverageInput[] = [];
   for (const entry of cortexConfig.renderers) {
-    const { plugin, config } = resolveRendererPluginAndConfig(entry, rendererRegistry);
-    // Capture the class + defaults-applied subscribe set for the §4.6
-    // coverage check below (dashboard/cli-tail default to a system-covering
-    // `local.{principal}.>`; pagerduty/webhook-out default to `[]`).
-    const subscribe = (config as Record<string, unknown>).subscribe;
-    configuredRendererCoverage.push({
-      kind: plugin.rendererKind,
-      subscribe: Array.isArray(subscribe) ? (subscribe as string[]) : [],
-    });
+    try {
+      const { plugin, config } = resolveRendererPluginAndConfig(entry, rendererRegistry);
+      // Capture the class + defaults-applied subscribe set for the §4.6
+      // coverage check below (dashboard/cli-tail default to a system-covering
+      // `local.{principal}.>`; pagerduty/webhook-out default to `[]`).
+      const subscribe = (config as Record<string, unknown>).subscribe;
+      configuredRendererCoverage.push({
+        kind: plugin.rendererKind,
+        subscribe: Array.isArray(subscribe) ? (subscribe as string[]) : [],
+      });
+    } catch (err) {
+      // cortex#1894 (S12b, the #1893 N1 forward-dep) — a FIRST-PARTY renderer
+      // whose schema + class extracted to a bundle (e.g. `pagerduty`) is NOT
+      // registered in the in-tree `createDefaultSurfacePluginRegistry` at
+      // config-load: its bundle only registers post-S6 at daemon boot
+      // (`cortex.ts`'s `loadExternalPlugins`). So `resolveRendererPluginAndConfig`
+      // throws `UnimplementedRendererKindError` here for a not-yet-loaded
+      // first-party kind. TOLERATE that specific case — the real "is the bundle
+      // loaded?" decision is deferred to the post-S6 install-state coverage
+      // guard (`assertRuntimeSystemCoverage`, #1893), which fires the correct
+      // INSTALL-STATE error (naming the bundle + `arc install`) if it never
+      // loaded. We still capture a coverage input from the STRUCTURAL parse so
+      // the config-load coverage check below counts the class + its subscribe
+      // set. A genuine typo (an UNKNOWN kind, not a known first-party bundle
+      // kind) is re-thrown and still fails loudly at config-load, exactly as
+      // before.
+      if (
+        err instanceof UnimplementedRendererKindError &&
+        isKnownFirstPartyRendererKind(RendererSchema.parse(entry).kind)
+      ) {
+        const structural = RendererSchema.parse(entry) as Record<string, unknown>;
+        const subscribe = structural.subscribe;
+        configuredRendererCoverage.push({
+          kind: structural.kind as string,
+          subscribe: Array.isArray(subscribe) ? (subscribe as string[]) : [],
+        });
+        continue;
+      }
+      throw err;
+    }
   }
 
   // cortex#1893 (S12b-pre, ADR-0024 §OQ9) — the CONFIG-LOAD half of the

@@ -88,6 +88,23 @@ export function rendererBundleForKind(kind: string): string {
 }
 
 /**
+ * cortex#1894 (S12b) — is `kind` a KNOWN first-party renderer whose schema +
+ * class ship in a separately-installed bundle (not the in-tree
+ * `createDefaultSurfacePluginRegistry`)? Used by the CONFIG-LOAD renderer pass
+ * (`loadCortexShape`) to TOLERATE an `UnimplementedRendererKindError` for such
+ * a kind at config-load — the bundle only registers post-S6 at daemon boot, so
+ * "is it loaded?" is not answerable at config-load and is deferred to
+ * {@link assertRuntimeSystemCoverage}. A genuine typo (a kind absent from
+ * {@link RENDERER_BUNDLE_BY_KIND}) is NOT tolerated — it still fails loudly at
+ * config-load exactly as before. This is the curated, PR-reviewed set (the
+ * inverse of `rendererBundleForKind`'s explicit map), so it can never
+ * self-widen from config or bundle content.
+ */
+export function isKnownFirstPartyRendererKind(kind: string): boolean {
+  return Object.prototype.hasOwnProperty.call(RENDERER_BUNDLE_BY_KIND, kind);
+}
+
+/**
  * Substitute the `{principal}` / `{stack}.` subject placeholders exactly as
  * {@link makeSubjectPlaceholderSubstituter} (`src/bus/myelin/runtime.ts`) does.
  *

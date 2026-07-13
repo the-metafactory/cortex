@@ -226,6 +226,27 @@ dependencies:
   # https://github.com/the-metafactory/metafactory-cortex-adapter-discord.
   - name: "metafactory-cortex-adapter-discord"
     version: ">=0.1.0"
+  # metafactory-cortex-renderer-pagerduty (cortex#1894 S12b, ADR-0024 D5
+  # extraction lane): the PagerDuty renderer extracted out of cortex core into
+  # this bundle — the FIRST renderer-class extraction (the four adapters left
+  # first). `src/renderers/pagerduty.ts` is deleted in-tree, no fallback copy;
+  # `dashboard` STAYS in-tree permanently (OQ8 anchor). `arc upgrade cortex`
+  # auto-installs it; cortex's plugin loader (src/adapters/loader.ts,
+  # cortex#1894) recognizes this exact NAME as matching the compass#115
+  # `metafactory-cortex-renderer-<name>` naming standard
+  # (RENDERER_BUNDLE_DEP_NAME_RE) and grants it the first-party RENDERER
+  # exemption from the default-off `system.plugins.external` flag — the
+  # renderer twin of the S9a adapter exemption. So a stack upgrades
+  # transparently: the bundle installs, the renderer loads, `renderers:
+  # [pagerduty]` keeps working, and no principal ever has to flip the flag for
+  # a repackage that only relocated cortex's own code. This declaration is ALSO
+  # what makes the #1893 boot-coverage guard's install-state branch correct: a
+  # stack with `renderers: [pagerduty]` but the bundle absent hard-fails naming
+  # THIS bundle + `arc install`, rather than the pager silently not paging.
+  # Distribution is repo-first (ADR-0017):
+  # https://github.com/the-metafactory/metafactory-cortex-renderer-pagerduty.
+  - name: "metafactory-cortex-renderer-pagerduty"
+    version: ">=0.1.0"
 # myelin deps still pending — declared once cortex's runtime depends on
 # myelin-side identity primitives.
 # dependencies:

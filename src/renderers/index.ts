@@ -34,7 +34,8 @@ import type { Renderer } from "./types";
 
 export type { Renderer } from "./types";
 export { DashboardRenderer } from "./dashboard";
-export { PagerDutyRenderer } from "./pagerduty";
+// cortex#1894 (S12b MOVE) — `PagerDutyRenderer` extracted to the
+// `metafactory-cortex-renderer-pagerduty` bundle; no in-tree re-export.
 
 export class UnimplementedRendererKindError extends Error {
   constructor(kind: string, registry: SurfacePluginRegistry) {

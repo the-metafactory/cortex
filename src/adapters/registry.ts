@@ -283,14 +283,12 @@ export class SurfacePluginRegistry {
 // =============================================================================
 
 import { dashboardRendererPlugin } from "../renderers/dashboard";
-import { pagerdutyRendererPlugin } from "../renderers/pagerduty";
 
 /**
- * Compose ONE registry carrying every in-tree plugin — dashboard → pagerduty
- * (renderers, in the pre-registry `createRenderer` switch order). Boot
- * (`cortex.ts`) calls this ONCE and threads the result to the gateway path
- * (`buildGatewayAdapters`), the per-stack path (`wireSurfaceAdapters`), and
- * the renderer boot loop.
+ * Compose ONE registry carrying every in-tree plugin — now just `dashboard`
+ * (the never-extracted renderer anchor, OQ8). Boot (`cortex.ts`) calls this
+ * ONCE and threads the result to the gateway path (`buildGatewayAdapters`),
+ * the per-stack path (`wireSurfaceAdapters`), and the renderer boot loop.
  *
  * cortex#1794 (S9 MOVE) — `web` is no longer registered here. It extracted to
  * the `metafactory-cortex-adapter-web` bundle (ADR-0024 D2: extraction
@@ -313,19 +311,27 @@ import { pagerdutyRendererPlugin } from "../renderers/pagerduty";
  * `metafactory-cortex-adapter-discord` bundle, same D2/S9a exemption
  * mechanism. **This function now registers ZERO in-tree adapters.** Every
  * adapter cortex ships is an out-of-tree, first-party bundle loaded by
- * `loadExternalPlugins` — `createDefaultSurfacePluginRegistry` composes only
- * the two in-tree RENDERER plugins (dashboard/pagerduty) plus an empty
- * adapter map for `loadExternalPlugins` to populate.
+ * `loadExternalPlugins`.
+ *
+ * cortex#1894 (S12b MOVE) — `pagerduty` is no longer registered here either.
+ * It extracted to the `metafactory-cortex-renderer-pagerduty` bundle (the
+ * FIRST renderer-class extraction), loaded by `loadExternalPlugins` under the
+ * renderer twin of the S9a first-party exemption (cortex declares the bundle
+ * in `arc-manifest.yaml` `dependencies:`; the loader's
+ * `RENDERER_BUNDLE_DEP_NAME_RE` recognizes the name and grants the first-party
+ * RENDERER exemption). `createDefaultSurfacePluginRegistry` composes only the
+ * ONE never-extracted in-tree renderer, `dashboard` (OQ8 anchor) — plus empty
+ * adapter + renderer-bundle maps for `loadExternalPlugins` to populate.
  *
  * `registry.listAdapters()` therefore returns `[]` right after this function
  * returns, and `["discord","mattermost","slack","web"]` (bundle-name-sorted)
- * once boot's `loadExternalPlugins` call completes — both are correct, just
- * different points in the boot sequence.
+ * once boot's `loadExternalPlugins` call completes; `listRenderers()` returns
+ * `["dashboard"]` here and `["dashboard","pagerduty"]` post-load — both are
+ * correct, just different points in the boot sequence.
  */
 export function createDefaultSurfacePluginRegistry(): SurfacePluginRegistry {
   const registry = new SurfacePluginRegistry();
   registry.registerRenderer(dashboardRendererPlugin);
-  registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;
 }
 
@@ -506,16 +512,20 @@ interface LegacyGatewayAdapterFactory {
  *
  * cortex#1797 (S12 MOVE) — `discord` dropped from the registration loop too,
  * same reason (no in-tree `discordAdapterPlugin` descriptor to spread any
- * more — this function now registers NO adapters at all, only the two
- * in-tree renderers). A test that needs a "discord-shaped" adapter in the
- * registry it builds registers its own stub `AdapterPlugin` directly via
- * `registry.registerAdapter(...)` after calling this function, same as the
- * web/slack/mattermost workaround above.
+ * more — this function now registers NO adapters at all). A test that needs a
+ * "discord-shaped" adapter in the registry it builds registers its own stub
+ * `AdapterPlugin` directly via `registry.registerAdapter(...)` after calling
+ * this function, same as the web/slack/mattermost workaround above.
+ *
+ * cortex#1894 (S12b MOVE) — `pagerduty` dropped from the registration loop
+ * too (extracted to the `metafactory-cortex-renderer-pagerduty` bundle) — this
+ * function now registers ONLY the never-extracted in-tree `dashboard` renderer.
+ * A test that needs a "pagerduty-shaped" renderer registers its own stub
+ * `RendererPlugin` via `registry.registerRenderer(...)` after calling this.
  */
 export function registryFromFactory(_factory: LegacyGatewayAdapterFactory): SurfacePluginRegistry {
   const registry = new SurfacePluginRegistry();
   registry.registerRenderer(dashboardRendererPlugin);
-  registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;
 }
 

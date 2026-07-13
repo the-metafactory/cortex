@@ -141,9 +141,12 @@ describe("createDefaultSurfacePluginRegistry", () => {
     expect(registry.listAdapters()).toEqual([]);
   });
 
-  test("registers exactly the 2 in-tree renderers, dashboard→pagerduty", () => {
+  test("registers exactly the 1 in-tree renderer, dashboard (pagerduty extracted, cortex#1894 S12b)", () => {
     const registry = createDefaultSurfacePluginRegistry();
-    expect(registry.listRenderers().map((p) => p.id)).toEqual(["dashboard", "pagerduty"]);
+    // cortex#1894 (S12b) — `pagerduty` extracted to the
+    // `metafactory-cortex-renderer-pagerduty` bundle; `dashboard` is the only
+    // never-extracted in-tree renderer (OQ8 anchor).
+    expect(registry.listRenderers().map((p) => p.id)).toEqual(["dashboard"]);
   });
 
   test("does NOT register cli-tail or webhook-out (S6 owns shipping them as bundles)", () => {
@@ -338,13 +341,14 @@ describe("resolveAdapterPluginOrThrow", () => {
 describe("resolveRendererPluginOrThrow", () => {
   test("resolves an installed renderer kind", () => {
     const registry = createDefaultSurfacePluginRegistry();
-    expect(resolveRendererPluginOrThrow("pagerduty", registry).id).toBe("pagerduty");
+    expect(resolveRendererPluginOrThrow("dashboard", registry).id).toBe("dashboard");
   });
 
   test("unregistered kind (cli-tail — S6 territory) throws, naming the kind and the installed set", () => {
     const registry = createDefaultSurfacePluginRegistry();
+    // cortex#1894 (S12b) — pagerduty extracted; only dashboard remains in-tree.
     expect(() => resolveRendererPluginOrThrow("cli-tail", registry)).toThrow(
-      /no renderer installed for kind "cli-tail".*installed: dashboard, pagerduty/,
+      /no renderer installed for kind "cli-tail".*installed: dashboard/,
     );
   });
 });
