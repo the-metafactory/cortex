@@ -300,13 +300,16 @@ describe("CFG.c.4 — surfaces.yaml schema validates required binding fields", (
     ).toThrow();
   });
 
-  test("Mattermost binding missing apiToken fails loudly", () => {
-    expect(() =>
-      SurfacesSchema.parse({
-        mattermost: [{ agent: "ivy", binding: { apiUrl: "https://mm.example.com" } }],
-      }),
-    ).toThrow();
-  });
+  // cortex#1796 (S11 MOVE) — "Mattermost binding missing apiToken fails
+  // loudly" moved: `mattermost` is no longer one of `SurfacesSchema`'s
+  // hardcoded per-platform schemas (same as `web`, cortex#1794 S9 MOVE), so
+  // `SurfacesSchema.parse` alone (the STRUCTURAL pass) no longer rejects a
+  // mattermost binding missing `apiToken` — it validates generically now.
+  // The REAL per-field check happens at the REGISTRY pass, against the
+  // bundle-loaded plugin's own `bindingSchema` — see
+  // `loader.mattermost-bundle.test.ts`'s "validateSurfacesAgainstRegistry
+  // accepts a valid surfaces.mattermost[] entry … and rejects an invalid
+  // one" for the equivalent (now registry-pass) coverage.
 
   test("unknown top-level platform key structurally parses (cortex#1789, S4)", () => {
     // cortex#1789 (S4, ADR-0024 D5) — `SurfacesSchema` alone is now only the

@@ -4,7 +4,7 @@
  */
 
 import type { MattermostPresence } from "./schema";
-import type { ContextMessage } from "../../surface-sdk";
+import type { ContextMessage } from "@the-metafactory/cortex/surface-sdk";
 
 /**
  * cortex#1796 (S11, ADR-0024 D5 extraction lane) — inlined verbatim from

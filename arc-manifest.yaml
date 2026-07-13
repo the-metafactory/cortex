@@ -173,6 +173,23 @@ dependencies:
   # https://github.com/the-metafactory/metafactory-cortex-adapter-web.
   - name: "metafactory-cortex-adapter-web"
     version: ">=0.1.0"
+  # metafactory-cortex-adapter-mattermost (cortex#1796 S11, ADR-0024 D5
+  # extraction lane): the Mattermost surface adapter extracted out of
+  # cortex core into this bundle — `src/adapters/mattermost/` is deleted
+  # in-tree, no fallback copy. `arc upgrade cortex` auto-installs it;
+  # cortex's plugin loader (src/adapters/loader.ts, cortex#1794 S9a)
+  # recognizes this exact NAME as matching the compass#115
+  # `metafactory-cortex-adapter-<name>` naming standard
+  # (ADAPTER_BUNDLE_DEP_NAME_RE) and grants it the first-party ADAPTER
+  # exemption from the default-off `system.plugins.external` flag — so a
+  # stack upgrades transparently: the bundle installs, the adapter loads,
+  # `surfaces.mattermost[]` / inline `agents[].presence.mattermost` keep
+  # working, and no principal ever has to flip the flag for a repackage
+  # that only relocated cortex's own code.
+  # Distribution is repo-first (ADR-0017):
+  # https://github.com/the-metafactory/metafactory-cortex-adapter-mattermost.
+  - name: "metafactory-cortex-adapter-mattermost"
+    version: ">=0.1.0"
 # myelin deps still pending — declared once cortex's runtime depends on
 # myelin-side identity primitives.
 # dependencies:

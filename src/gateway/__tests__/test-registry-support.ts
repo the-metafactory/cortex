@@ -5,16 +5,17 @@
  * `buildBindingIndex`/`planSurfaceOwnership`/`maybeCreateSurfaceGateway` now
  * derive each platform's demux key via the registered plugin's
  * `demuxKey(binding)` instead of a hardcoded field read — they default to
- * {@link createDefaultSurfacePluginRegistry} (in-tree discord/slack/
- * mattermost) when the caller omits a registry, so most existing gateway
- * tests need zero changes. `web` extracted out-of-tree (cortex#1794 S9) and
- * is normally loaded at boot via `loadExternalPlugins` against the REAL
- * `metafactory-cortex-adapter-web` bundle — gateway-layer tests that
- * exercise `surfaces.web[]` don't need that bundle machinery, just a plugin
- * whose `demuxKey` reproduces the real bundle's contract
- * (`stringBindingField(binding, "instanceId")`, see that bundle's
- * `src/plugin.ts` / the fixture copy at
- * `src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/plugin.ts`).
+ * {@link createDefaultSurfacePluginRegistry} (in-tree discord/slack) when
+ * the caller omits a registry, so most existing gateway tests need zero
+ * changes. `web` (cortex#1794 S9) and `mattermost` (cortex#1796 S11) both
+ * extracted out-of-tree and are normally loaded at boot via
+ * `loadExternalPlugins` against their REAL bundles — gateway-layer tests
+ * that exercise `surfaces.web[]`/`surfaces.mattermost[]` don't need that
+ * bundle machinery, just a plugin whose `demuxKey` reproduces the real
+ * bundle's contract
+ * (`stringBindingField(binding, "instanceId")`/`"apiUrl"`, see those
+ * bundles' `src/plugin.ts` / the fixture copies at
+ * `src/adapters/__tests__/fixtures/metafactory-cortex-adapter-{web,mattermost}/src/plugin.ts`).
  */
 
 import { z } from "zod/v4";
@@ -46,11 +47,37 @@ const webAdapterPluginStub: AdapterPlugin = {
 };
 
 /**
- * The in-tree default (discord/slack/mattermost) plus a `web` stub —
- * for tests that exercise `surfaces.web[]` demux/ownership-plan derivation.
+ * The mattermost platform's `demuxKey`/`secretFields`/`foldsIntoPresence`
+ * contract, reproduced from the real `metafactory-cortex-adapter-mattermost`
+ * bundle (out-of-tree, cortex#1796 S11 MOVE — see module doc).
+ * `createAdapter` throws — gateway-layer routing/ownership-plan tests never
+ * construct a live `MattermostAdapter` through this stub, only derive demux
+ * keys / exercise the single-binding fallback path.
+ */
+const mattermostAdapterPluginStub: AdapterPlugin = {
+  kind: "adapter",
+  id: "mattermost",
+  platform: "mattermost",
+  bindingSchema: z.record(z.string(), z.unknown()),
+  foldsIntoPresence: true,
+  secretFields: ["apiToken"],
+  demuxKey: (binding) => stringBindingField(binding, "apiUrl", "<unset>"),
+  buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+  createAdapter: () => {
+    throw new Error("mattermostAdapterPluginStub — never constructed in gateway-layer tests");
+  },
+};
+
+/**
+ * The in-tree default (discord/slack) plus `web` + `mattermost` stubs — for
+ * tests that exercise `surfaces.web[]`/`surfaces.mattermost[]` demux/
+ * ownership-plan derivation. Kept the same exported name it had
+ * pre-cortex#1796 (`testRegistryWithWeb`) so every existing call site needs
+ * zero changes — it now also covers mattermost.
  */
 export function testRegistryWithWeb(): SurfacePluginRegistry {
   const registry = createDefaultSurfacePluginRegistry();
   registry.registerAdapter(webAdapterPluginStub);
+  registry.registerAdapter(mattermostAdapterPluginStub);
   return registry;
 }

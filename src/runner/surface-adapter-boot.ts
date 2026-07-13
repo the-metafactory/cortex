@@ -90,7 +90,6 @@
  */
 
 import { DiscordAdapter } from "../adapters/discord";
-import { MattermostAdapter } from "../adapters/mattermost";
 import { SlackAdapter } from "../adapters/slack";
 import type { InboundMessage, PlatformAdapter } from "../adapters/types";
 import type { AgentConfig } from "../common/types/config";
@@ -655,7 +654,16 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
   const mattermostDescriptor: AdapterBootDescriptor<
     AgentConfig["mattermost"][number],
     MattermostPresence,
-    MattermostAdapter
+    // cortex#1796 (S11 MOVE) — `MattermostAdapter`'s concrete class no
+    // longer lives in-tree (extracted to `metafactory-cortex-adapter-mattermost`);
+    // constructed via `factory.mattermost(...)` → `registryToLegacyFactory`
+    // → the bundle-loaded plugin's `createAdapter`, so only its STRUCTURAL
+    // shape is available at this boundary. `PlatformAdapter & RouterRegistrable`
+    // is exactly what this descriptor actually needs (Mattermost carries no
+    // `trustResolverSupport`/`TrustMergeable` methods — see those fields'
+    // docs) — same structural-bound pattern the generic skeleton already
+    // uses everywhere else.
+    PlatformAdapter & RouterRegistrable
   > = {
     platform: "mattermost",
     instances: opts.mattermostInstances,
@@ -710,7 +718,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
           policyLookup: opts.policyLookup,
           policyRegistry: opts.policyRegistry,
         }),
-      }) as MattermostAdapter,
+      }) as PlatformAdapter & RouterRegistrable,
     postStartLog: (_adapter, instance, instanceId) =>
       `cortex: mattermost adapter started (instance: ${instanceId}, ${instance.channels.length} channel(s))`,
     // No trustResolverSupport — Mattermost has no trust resolver / Pass 2.

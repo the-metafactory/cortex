@@ -1,9 +1,10 @@
 /**
  * cortex#1790 (S5, ADR-0024 D5) — plugin SDK boundary-guard test.
  *
- * Walks every in-tree platform-adapter file (`src/adapters/{discord,slack,
- * mattermost}/*.ts` — `web` extracted to the `metafactory-cortex-adapter-web`
- * bundle, cortex#1794 S9 MOVE — excluding `__tests__`) and both registered renderer
+ * Walks every in-tree platform-adapter file (`src/adapters/{discord,slack}/*.ts`
+ * — `web` extracted to the `metafactory-cortex-adapter-web` bundle (cortex#1794
+ * S9 MOVE) and `mattermost` extracted to the `metafactory-cortex-adapter-mattermost`
+ * bundle (cortex#1796 S11 MOVE) — excluding `__tests__`) and both registered renderer
  * implementations (`src/renderers/{dashboard,pagerduty}.ts`) — deliberately
  * EXCLUDING the contract-owning files themselves (`adapters/types.ts`,
  * `adapters/registry.ts`, `renderers/types.ts`, `renderers/index.ts` — the
@@ -111,7 +112,9 @@ function listPlatformAdapterFiles(): string[] {
   // cortex#1794 (S9 MOVE) — `web` dropped: it extracted to the
   // `metafactory-cortex-adapter-web` bundle and no longer has a
   // `src/adapters/web/` directory to walk.
-  const platforms = ["discord", "slack", "mattermost"];
+  // cortex#1796 (S11 MOVE) — `mattermost` dropped for the same reason
+  // (`metafactory-cortex-adapter-mattermost`).
+  const platforms = ["discord", "slack"];
   const files: string[] = [];
   for (const platform of platforms) {
     const dir = resolve(SRC_ROOT, "adapters", platform);

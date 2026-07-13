@@ -144,17 +144,19 @@ export const SlackBindingSchema = z
   })
   .catchall(z.unknown());
 
-// cortex#1796 (S11, ADR-0024 D5 extraction lane, INVERSION step) — the
-// Mattermost binding schema is now PLUGIN-OWNED (`src/adapters/mattermost/
-// schema.ts`), mirroring `WebBindingSchema`'s cortex#1794 S9b move. This
-// module imports it back (dependency INVERTED from pre-inversion) to compose
-// `MattermostSurfaceBindingSchema`/`SurfacesSchema` below, and re-exports it
-// so every existing external consumer (tests, `gateway-adapters.ts`) keeps
-// importing from here unchanged. See `mattermost/schema.ts`'s module doc for
-// the full rationale. The FINAL MOVE slice drops this re-export entirely —
-// see `WebBindingSchema`'s cortex#1794 S9 MOVE for the precedent.
-import { MattermostBindingSchema } from "../../adapters/mattermost/schema";
-export { MattermostBindingSchema };
+// cortex#1796 (S11 MOVE) — the Mattermost binding schema left this repo
+// entirely: it now lives in the `metafactory-cortex-adapter-mattermost`
+// bundle's own `src/schema.ts` (plugin-owned data, S4's principle), loaded
+// at boot by `src/adapters/loader.ts` and carried on the registered
+// `AdapterPlugin`'s `bindingSchema` field — never imported back into cortex
+// core. `mattermost` is no longer one of the hardcoded platforms below (see
+// `WebBindingSchema`'s cortex#1794 S9 MOVE for the precedent this mirrors);
+// it validates like any other registry-contributed platform (generic
+// `SurfaceBindingEntrySchema` at the STRUCTURAL pass, the plugin's own
+// `bindingSchema` at the REGISTRY pass — see `SurfacesSchema`'s doc
+// comment below). It still FOLDS into `agents[*].presence.mattermost` (see
+// {@link DEFAULT_FOLD_PLATFORMS}) — extraction moved the CODE, not the
+// legacy presence-fold behavior.
 
 // =============================================================================
 // Binding entry — one surface-instance bound to one stack's agent
@@ -192,10 +194,10 @@ export const SlackSurfaceBindingSchema = z.object({
   binding: SlackBindingSchema,
 });
 
-export const MattermostSurfaceBindingSchema = z.object({
-  ...bindingEntryBase,
-  binding: MattermostBindingSchema,
-});
+// `MattermostSurfaceBindingSchema` — cortex#1796 (S11 MOVE) dropped: no
+// longer one of the hardcoded per-platform binding schemas (see the module
+// doc above). `surfaces.mattermost[]` now validates via the generic
+// {@link SurfaceBindingEntrySchema} catchall, same as `web`.
 
 /**
  * cortex#1789 (S4, ADR-0024 D5) — the generic STRUCTURAL binding entry.
@@ -228,38 +230,41 @@ export type SurfaceBindingEntry = z.infer<typeof SurfaceBindingEntrySchema>;
  * optional (a deployment may bind only Discord).
  *
  * cortex#1789 (S4, ADR-0024 D5) — two-stage validation. This schema is the
- * STRUCTURAL pass ONLY: the three in-tree platforms (discord/slack/mattermost)
+ * STRUCTURAL pass ONLY: the two REMAINING in-tree platforms (discord/slack)
  * keep their full, strongly-typed binding schemas (byte-identical validation,
  * zero ripple to every consumer typed against `Surfaces["discord"]` etc. —
  * `discord-token-groups.ts`, `gateway-adapters.ts`); any OTHER top-level key
- * — including `web`, cortex#1794 S9 MOVE: it extracted out-of-tree and is no
- * longer one of the hardcoded three — is accepted structurally as a generic
- * {@link SurfaceBindingEntrySchema} array via `.catchall(...)`, because a
- * registry-contributed platform's key is not known to this static schema.
- * `.catchall()` replaces the old `.strict()` — the "is this a REAL platform"
- * check moves to the REGISTRY pass (`resolveAdapterPluginOrThrow` /
- * `validateSurfacesAgainstRegistry`, `src/adapters/registry.ts`), which runs
- * wherever a `SurfacePluginRegistry` is in hand (the in-tree
- * `createDefaultSurfacePluginRegistry` plus whatever `loadExternalPlugins`
- * registered, e.g. `web` once its bundle loads) and produces the SAME loud
- * "no adapter installed for platform …" failure a typo (`discrod:`) used to
- * get from `.strict()` — see `loader.ts`'s `parseSurfaces` and `cortex.ts`
- * boot for the two call sites.
+ * — including `web` (cortex#1794 S9 MOVE) and `mattermost` (cortex#1796 S11
+ * MOVE), both extracted out-of-tree and no longer among the hardcoded set —
+ * is accepted structurally as a generic {@link SurfaceBindingEntrySchema}
+ * array via `.catchall(...)`, because a registry-contributed platform's key
+ * is not known to this static schema. `.catchall()` replaces the old
+ * `.strict()` — the "is this a REAL platform" check moves to the REGISTRY
+ * pass (`resolveAdapterPluginOrThrow` / `validateSurfacesAgainstRegistry`,
+ * `src/adapters/registry.ts`), which runs wherever a `SurfacePluginRegistry`
+ * is in hand (the in-tree `createDefaultSurfacePluginRegistry` plus whatever
+ * `loadExternalPlugins` registered, e.g. `web`/`mattermost` once their
+ * bundles load) and produces the SAME loud "no adapter installed for
+ * platform …" failure a typo (`discrod:`) used to get from `.strict()` —
+ * see `loader.ts`'s `parseSurfaces` and `cortex.ts` boot for the two call
+ * sites.
  *
  * Note: `web[]` bindings are NOT folded by `foldSurfaceBindings` (there is no
- * legacy presence shape) — see {@link DEFAULT_FOLD_PLATFORMS}.
+ * legacy presence shape) — see {@link DEFAULT_FOLD_PLATFORMS}. `mattermost[]`
+ * bindings DO still fold (legacy `agents[*].presence.mattermost` shape
+ * predates this extraction) — extraction moved the plugin CODE out-of-tree,
+ * not the fold behavior.
  */
 export const SurfacesSchema = z
   .object({
     discord: z.array(DiscordSurfaceBindingSchema).optional(),
     slack: z.array(SlackSurfaceBindingSchema).optional(),
-    mattermost: z.array(MattermostSurfaceBindingSchema).optional(),
   })
   // `.optional()` on the catchall element too — NOT a behavior change (a
   // catchall key, when actually present in the input, is never `undefined`
   // at runtime; Zod simply omits an absent key rather than storing
   // `undefined` under it). This is purely so the inferred TS type's index
-  // signature (`X[] | undefined`) matches the three explicit `.optional()`
+  // signature (`X[] | undefined`) matches the explicit `.optional()`
   // keys above — TypeScript requires an object's named-optional-property
   // type to be assignable to its own index-signature type, and `X[] | undefined`
   // vs a non-optional `X[]` catchall would otherwise conflict
@@ -269,10 +274,30 @@ export const SurfacesSchema = z
 export type Surfaces = z.infer<typeof SurfacesSchema>;
 export type DiscordSurfaceBinding = z.infer<typeof DiscordSurfaceBindingSchema>;
 export type SlackSurfaceBinding = z.infer<typeof SlackSurfaceBindingSchema>;
-export type MattermostSurfaceBinding = z.infer<typeof MattermostSurfaceBindingSchema>;
-// `WebSurfaceBinding`/`WebBinding`/`WebBindingSchema` — cortex#1794 (S9 MOVE)
-// extracted entirely to the `metafactory-cortex-adapter-web` bundle; no
-// longer defined or re-exported from cortex core (see the module doc above).
+// `MattermostSurfaceBinding`/`MattermostBindingSchema` — cortex#1796 (S11
+// MOVE), and `WebSurfaceBinding`/`WebBinding`/`WebBindingSchema` — cortex#1794
+// (S9 MOVE) — both extracted entirely to their own bundles; no longer defined
+// or re-exported from cortex core (see the module doc above).
+
+/**
+ * cortex#1796 (S11 MOVE) — platforms extracted out-of-tree via the
+ * first-party ADAPTER bundle exemption (ADR-0024 D2/S9a). The SYNCHRONOUS
+ * in-tree registry (`createDefaultSurfacePluginRegistry()`, used at
+ * config-load time — BEFORE `loadExternalPlugins`' async bundle discovery
+ * runs) has no entry for either. `common/config/loader.ts`'s `parseSurfaces`
+ * uses this set to admit `surfaces.{platform}[]` structurally at config-load
+ * time (deferring the REAL per-field `bindingSchema` check to boot, once the
+ * bundle has actually loaded) instead of rejecting a legitimately-declared
+ * platform as an unregistered typo. This is a registry-free anchor, same
+ * spirit as {@link DEFAULT_FOLD_PLATFORMS} — a genuinely unknown/misspelled
+ * platform key (anything NOT in this set and NOT discord/slack) still fails
+ * loudly at config-load, and `cortex.ts`'s boot sequence re-validates every
+ * platform (including these two) against the FULLY-LOADED registry after
+ * `loadExternalPlugins` completes, so a bundle that fails to load (bad
+ * manifest, sdk mismatch, …) still surfaces a loud failure — just at boot,
+ * not at config-parse.
+ */
+export const EXTRACTED_ADAPTER_PLATFORMS = ["web", "mattermost"] as const;
 
 // =============================================================================
 // The fold — surfaces.yaml bindings → agents[*].presence.{platform}

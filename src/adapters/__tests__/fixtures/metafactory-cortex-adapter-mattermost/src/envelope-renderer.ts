@@ -25,7 +25,7 @@
  * consumer's export) is NOT copied — mattermost never calls it.
  */
 
-import type { Envelope } from "../../surface-sdk";
+import type { Envelope } from "@the-metafactory/cortex/surface-sdk";
 
 /**
  * Format an envelope as a markdown code-block message body.

@@ -103,6 +103,7 @@ describe("planSurfaceOwnership", () => {
       surfaces: SURFACES,
       gatewayEnabled: true,
       principal: "andreas",
+      registry: testRegistryWithWeb(),
     });
 
     expect(plan.gatewayStartEligible).toBe(true);

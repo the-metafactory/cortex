@@ -28,6 +28,7 @@ import {
 import { buildBindingIndex } from "../binding-resolver";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
+import { testRegistryWithWeb } from "./test-registry-support";
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -310,7 +311,7 @@ describe("handleInbound — routable Slack message", () => {
 describe("handleInbound — routable Mattermost single-binding", () => {
   test("publishes correct decision via single-binding fallback", async () => {
     const adapter = new MockAdapter("mattermost", "mm-luna");
-    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES, testRegistryWithWeb());
     const sink = new FakeSink();
     const gw = new SurfaceGateway([adapter], index, sink);
     await gw.start();

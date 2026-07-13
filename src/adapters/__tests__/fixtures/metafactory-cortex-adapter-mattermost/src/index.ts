@@ -15,7 +15,7 @@ import type {
   Envelope,
   RenderTarget,
   AdapterPolicyPort,
-} from "../../surface-sdk";
+} from "@the-metafactory/cortex/surface-sdk";
 import type { MattermostPresence } from "./schema";
 import type { MattermostInboundMessage } from "./server";
 import {

@@ -24,10 +24,18 @@ import {
   type SlackPresence,
   type StackConfig,
 } from "../types/cortex-config";
-import { foldSurfaceBindings, SurfacesSchema, type Surfaces } from "../types/surfaces";
+import { z } from "zod/v4";
+import {
+  foldSurfaceBindings,
+  SurfacesSchema,
+  DEFAULT_FOLD_PLATFORMS,
+  EXTRACTED_ADAPTER_PLATFORMS,
+  type Surfaces,
+} from "../types/surfaces";
 import {
   createDefaultSurfacePluginRegistry,
   validateSurfacesAgainstRegistry,
+  type SurfacePluginRegistry,
 } from "../../adapters/registry";
 import { resolveRendererPluginAndConfig } from "../../renderers";
 import { enforceChmod600 } from "./file-permissions";
@@ -476,10 +484,68 @@ function composeRawConfigWithSurfaces(configPath: string): {
  * every other config-load-time registry check in this file uses.
  */
 function defaultFoldPlatforms(): readonly string[] {
-  return createDefaultSurfacePluginRegistry()
+  const fromRegistry = createDefaultSurfacePluginRegistry()
     .listAdapters()
     .filter((p) => p.foldsIntoPresence)
     .map((p) => p.platform);
+  // cortex#1796 (S11 MOVE) — `mattermost` extracted out-of-tree: it no
+  // longer appears in the SYNCHRONOUS in-tree registry this function builds
+  // (config load happens before `loadExternalPlugins`' async bundle
+  // discovery runs, so an out-of-tree plugin's `foldsIntoPresence: true`
+  // flag is invisible here even though it's unchanged). Union with
+  // {@link DEFAULT_FOLD_PLATFORMS} — the registry-free anchor — so
+  // mattermost's legacy `agents[*].presence.mattermost` fold behavior
+  // survives the extraction; extraction moved the plugin CODE, not this
+  // fold contract.
+  return [...new Set([...fromRegistry, ...DEFAULT_FOLD_PLATFORMS])];
+}
+
+/**
+ * cortex#1796 (S11 MOVE) — the registry used by {@link parseSurfaces}'s
+ * REGISTRY pass. Starts from the SYNCHRONOUS in-tree registry
+ * (`createDefaultSurfacePluginRegistry()` — config load happens BEFORE
+ * `loadExternalPlugins`' async bundle discovery runs) and supplements it
+ * with a permissive STUB `AdapterPlugin` for every platform in
+ * {@link EXTRACTED_ADAPTER_PLATFORMS} not already registered (`web`,
+ * `mattermost`) — otherwise a stack with a legitimately-declared
+ * `surfaces.web[]`/`surfaces.mattermost[]` binding would fail to LOAD at
+ * all, since those platforms' real plugins aren't visible to this
+ * synchronous registry (cortex#1796 review finding — mattermost, unlike
+ * `web`, has a live production `foldsIntoPresence: true` fold path, so this
+ * one actually broke real config loads, not just a theoretical gap).
+ *
+ * The stub's `bindingSchema` is fully permissive (`z.record(...)`) — it
+ * only proves "this platform key is a KNOWN, first-party-exempt adapter,
+ * not a typo", deferring the REAL per-field validation to boot time, once
+ * `loadExternalPlugins` has actually loaded the bundle and
+ * `cortex.ts` re-runs `validateSurfacesAgainstRegistry` against the
+ * fully-loaded registry. A genuinely unknown/misspelled platform key (not
+ * discord/slack and not in {@link EXTRACTED_ADAPTER_PLATFORMS}) still fails
+ * loudly here, unchanged.
+ */
+function surfacesParseRegistry(): SurfacePluginRegistry {
+  const registry = createDefaultSurfacePluginRegistry();
+  for (const platform of EXTRACTED_ADAPTER_PLATFORMS) {
+    if (registry.getAdapter(platform)) continue;
+    registry.registerAdapter({
+      kind: "adapter",
+      id: platform,
+      platform,
+      bindingSchema: z.record(z.string(), z.unknown()),
+      foldsIntoPresence: false,
+      secretFields: [],
+      demuxKey: () => platform,
+      buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+      createAdapter: () => {
+        throw new Error(
+          `surfacesParseRegistry: "${platform}" is a config-load-time structural stub — ` +
+            "it must never be constructed. Real construction routes through the bundle-loaded " +
+            "plugin registered by loadExternalPlugins at boot.",
+        );
+      },
+    });
+  }
+  return registry;
 }
 
 /**
@@ -498,7 +564,7 @@ function defaultFoldPlatforms(): readonly string[] {
 function parseSurfaces(value: unknown): Surfaces | undefined {
   if (value === undefined || value === null) return undefined;
   const surfaces = SurfacesSchema.parse(value);
-  validateSurfacesAgainstRegistry(surfaces, createDefaultSurfacePluginRegistry());
+  validateSurfacesAgainstRegistry(surfaces, surfacesParseRegistry());
   return surfaces;
 }
 

@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { z } from "zod/v4";
 import {
   buildGatewayAdapters,
   type GatewayAdapterDeps,
@@ -29,6 +30,40 @@ import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
+
+// =============================================================================
+// cortex#1796 (S11 MOVE) — mattermost test-registration helper
+// =============================================================================
+//
+// `registryFromFactory` no longer auto-registers "mattermost" (no in-tree
+// `mattermostAdapterPlugin` descriptor left to spread — see that function's
+// doc in `registry.ts`). This suite still needs a real "mattermost" entry
+// in the registry it builds (its `GatewayAdapterFactory` fakes still carry
+// `.mattermost`, unchanged interface), so it registers its own stub
+// `AdapterPlugin` after `registryFromFactory` — exactly the documented
+// pattern ("A test that needs a mattermost-shaped … adapter registers its
+// own stub AdapterPlugin directly via registry.registerAdapter(...)").
+// `demuxKey` reads `apiUrl` (byte-identical to the real, now out-of-tree,
+// plugin's demuxKey) so the "mattermost source instance is
+// mattermost:{apiUrl}" assertion below still holds; `secretFields:
+// ["apiToken"]` preserves the #1209 unresolved-placeholder fail-fast
+// coverage for mattermost too.
+function registerMattermostTestPlugin(registry: SurfacePluginRegistry, factory: GatewayAdapterFactory): void {
+  registry.registerAdapter({
+    kind: "adapter",
+    id: "mattermost",
+    platform: "mattermost",
+    bindingSchema: z.record(z.string(), z.unknown()),
+    foldsIntoPresence: true,
+    secretFields: ["apiToken"],
+    demuxKey: (binding) => (typeof binding.apiUrl === "string" ? binding.apiUrl : "<unset>"),
+    buildGatewayConstructArgs: (group, base) => {
+      const firstEntry = group.entries[0];
+      return { instanceId: base.instanceId, source: base.source, runtime: base.runtime, binding: firstEntry?.binding };
+    },
+    createAdapter: (args) => factory.mattermost(args as never),
+  });
+}
 
 // =============================================================================
 // Recording fake factory — construct-only, captures every call's args
@@ -139,10 +174,12 @@ const RUNTIME_STUB = {
 } as unknown as MyelinRuntime;
 
 function makeDeps(factory: GatewayAdapterFactory): GatewayAdapterDeps {
+  const registry = registryFromFactory(factory);
+  registerMattermostTestPlugin(registry, factory);
   return {
     principal: "andreas",
     runtime: RUNTIME_STUB,
-    registry: registryFromFactory(factory),
+    registry,
   };
 }
 

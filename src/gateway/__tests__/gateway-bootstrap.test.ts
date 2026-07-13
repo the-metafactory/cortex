@@ -301,6 +301,7 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
       enabled: true,
       surfaces: MATTERMOST_SURFACES,
       adapters: [makeFakeAdapter("fake-mm-1")],
+      registry: testRegistryWithWeb(),
     });
     expect(result).toBeInstanceOf(SurfaceGateway);
   });

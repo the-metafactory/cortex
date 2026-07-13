@@ -1,0 +1,11 @@
+# cortex#1796 (S11, ADR-0024 D5) — plugin manifest for the cortex Mattermost
+# adapter bundle.
+#
+# `id` MUST equal the exported AdapterPlugin's `platform` field (the S6
+# shadow-fix pin, src/adapters/loader.ts's loadOneBundle stage (f)) — the
+# Mattermost adapter's platform is "mattermost", so id is "mattermost" here too.
+kind: adapter
+id: mattermost
+entry: ./src/plugin.ts
+sdkRange: "^1"
+cortex: ">=6.7.0"
