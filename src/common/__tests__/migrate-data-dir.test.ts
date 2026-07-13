@@ -16,9 +16,17 @@ import { join } from "path";
 import {
   migrateCursorOnTouch,
   migrateDbOnTouch,
+  migratePublishedBufferOnTouch,
   migrateStackDbOnTouch,
 } from "../migrate-data-dir";
-import { canonicalStackDbPath, legacyStackDbPath } from "../data-path";
+import {
+  canonicalCursorPath,
+  canonicalPublishedEventsDir,
+  canonicalStackDbPath,
+  legacyCursorPath,
+  legacyPublishedEventsDir,
+  legacyStackDbPath,
+} from "../data-path";
 
 let home: string;
 let savedEnv: string | undefined;
@@ -145,7 +153,45 @@ describe("migrateDbOnTouch — WAL safety", () => {
   });
 });
 
-describe("migrateCursorOnTouch — plain data file", () => {
+describe("migratePublishedBufferOnTouch — guardrail A (carry in-flight events)", () => {
+  test("carries a published-but-not-yet-consumed event to the canonical dir, source kept", () => {
+    const legacy = legacyPublishedEventsDir(home); // ~/.claude/events/published
+    const canonical = canonicalPublishedEventsDir(home);
+    mkdirSync(legacy, { recursive: true });
+    const event = '{"id":"evt-1","type":"prompt"}\n';
+    writeFileSync(join(legacy, "2026-07-13.jsonl"), event);
+
+    const res = migratePublishedBufferOnTouch(home);
+    expect(res.dir).toBe(canonical);
+    expect(res.carried).toBe(1);
+    // The in-flight event is readable from the canonical dir the consumer reads.
+    expect(readFileSync(join(canonical, "2026-07-13.jsonl"), "utf-8")).toBe(event);
+    // Source kept — never moved out from under the writer.
+    expect(existsSync(join(legacy, "2026-07-13.jsonl"))).toBe(true);
+  });
+
+  test("idempotent — a second run carries nothing and never clobbers a carried file", () => {
+    const legacy = legacyPublishedEventsDir(home);
+    const canonical = canonicalPublishedEventsDir(home);
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "a.jsonl"), "v1\n");
+    migratePublishedBufferOnTouch(home);
+
+    // A consumer/relay appended to the canonical copy after the first carry.
+    writeFileSync(join(canonical, "a.jsonl"), "v1\nv2-canonical\n");
+    const res = migratePublishedBufferOnTouch(home); // re-run
+    expect(res.carried).toBe(0); // canonical-wins — nothing re-copied
+    expect(readFileSync(join(canonical, "a.jsonl"), "utf-8")).toBe("v1\nv2-canonical\n");
+  });
+
+  test("no legacy buffer ⇒ no-op (fresh install)", () => {
+    const res = migratePublishedBufferOnTouch(home);
+    expect(res.carried).toBe(0);
+    expect(res.dir).toBe(canonicalPublishedEventsDir(home));
+  });
+});
+
+describe("migrateCursorOnTouch — plain data file + guardrail B (position continuity)", () => {
   test("carries a legacy grove cursor to the canonical tree, source kept", () => {
     const legacy = join(home, ".local", "share", "grove", "mc-hook-cursor.json");
     mkdirSync(join(legacy, ".."), { recursive: true });
@@ -157,6 +203,27 @@ describe("migrateCursorOnTouch — plain data file", () => {
     );
     expect(existsSync(resolved)).toBe(true);
     expect(readFileSync(resolved, "utf-8")).toBe('{"cursor":42}');
+    expect(existsSync(legacy)).toBe(true); // source kept
+  });
+
+  test("guardrail B — MC resume position is PRESERVED across the move (offsets intact, no reset)", () => {
+    // The cursor is Record<rawEventFilePath, byteOffset>. Its keys reference the
+    // RAW buffer (`~/.claude/events/raw/…`), which does NOT move in #1902 — so
+    // moving the cursor FILE (copy-keep-source) preserves the exact resume
+    // position; MC neither re-ingests (dup events) nor skips.
+    const legacy = legacyCursorPath(home);
+    const canonical = canonicalCursorPath(home);
+    const rawKey = join(home, ".claude", "events", "raw", "2026-07-13.jsonl");
+    const cursor = { [rawKey]: 8192 };
+    mkdirSync(join(legacy, ".."), { recursive: true });
+    writeFileSync(legacy, JSON.stringify(cursor));
+
+    migrateCursorOnTouch(home);
+
+    const carried = JSON.parse(readFileSync(canonical, "utf-8")) as Record<string, number>;
+    expect(carried[rawKey]).toBe(8192); // exact offset preserved — no reset
+    // Key still references the (unmoved) raw buffer — no rewrite needed.
+    expect(Object.keys(carried)).toEqual([rawKey]);
     expect(existsSync(legacy)).toBe(true); // source kept
   });
 });

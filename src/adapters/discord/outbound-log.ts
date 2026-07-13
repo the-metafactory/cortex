@@ -15,7 +15,11 @@ import { existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { TextChannel } from "discord.js";
 import type { AgentConfig } from "../../common/types/config";
-import { legacyPublishedEventsDir } from "../../common/data-path";
+import {
+  canonicalPublishedEventsDir,
+  legacyPublishedEventsDir,
+  resolvePublishedEventsDir,
+} from "../../common/data-path";
 import type { SurfaceRouter } from "../../bus/surface-router";
 import type { SystemEventSource } from "../../bus/system-events";
 import { JsonlReader } from "../../taps/cc-events/lib/jsonl-reader";
@@ -39,17 +43,24 @@ export function attachLegacyOutboundLog(
   router: SurfaceRouter,
   systemEventSource: SystemEventSource,
 ): (() => void) | null {
-  // XDG wave-5 (#1902) — existence-gated read of the published-events buffer.
-  // The config value now defaults to the metafactory data root; a pinned legacy
-  // value is rewritten by the value-migrator. But the relay writer may not have
-  // moved yet on a pre-cutover box, so prefer the configured dir if it exists,
-  // else fall back to the legacy `~/.claude/events/published` (Fallback
-  // Contract) — the pipeline never breaks mid-migration.
+  // XDG wave-5 (#1902) — resolve the published-events buffer in LOCKSTEP with the
+  // relay writer (which writes the canonical metafactory data-root dir and carries
+  // the in-flight buffer forward on start). For a DEFAULT-spelled config value
+  // (the legacy `~/.claude/events/published` or the new canonical), resolve
+  // canonical-first / legacy-fallback so writer + consumer always agree — even if
+  // the config value-migrator hasn't rewritten this file yet. A genuinely CUSTOM
+  // pinned path is honored (existence-gated with a legacy fallback), matching the
+  // pre-move behavior.
   const home = process.env.HOME ?? "~";
   const configuredDir = config.paths.publishedEventsDir.replace(/^~/, home);
   const legacyDir = legacyPublishedEventsDir(home);
-  const eventsDir =
-    existsSync(configuredDir) || !existsSync(legacyDir) ? configuredDir : legacyDir;
+  const isDefaultSpelling =
+    configuredDir === legacyDir || configuredDir === canonicalPublishedEventsDir(home);
+  const eventsDir = isDefaultSpelling
+    ? resolvePublishedEventsDir(home)
+    : existsSync(configuredDir) || !existsSync(legacyDir)
+      ? configuredDir
+      : legacyDir;
   const client = discordAdapter.getClient();
   if (!client) {
     console.log("cortex: discord client not available for outbound log");

@@ -27,16 +27,18 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
-import { dirname } from "path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
+import { dirname, join } from "path";
 
 import { atomicWriteFile } from "./config/migrate-config-dir";
 import {
   canonicalCursorPath,
+  canonicalPublishedEventsDir,
   canonicalStackDbPath,
   canonicalStandaloneDbPath,
   cortexDataDirOverride,
   legacyCursorPath,
+  legacyPublishedEventsDir,
   legacyStackDbPath,
   legacyStandaloneDbPath,
 } from "./data-path";
@@ -160,4 +162,55 @@ export function migrateStandaloneDbOnTouch(home?: string): string {
 /** Resolve-and-migrate the MC hook cursor (G-25: legacy grove → canonical). */
 export function migrateCursorOnTouch(home?: string): string {
   return migrateDataFileOnTouch(canonicalCursorPath(home), legacyCursorPath(home)).path;
+}
+
+/**
+ * Carry the in-flight PUBLISHED-events buffer to the canonical data-root
+ * location (XDG wave-5 #1902, guardrail A), copy-keep-source. Any event already
+ * published-but-not-yet-consumed sits in the legacy `~/.claude/events/published`
+ * dir; the buffer move must COPY those files forward (not just repoint) so a
+ * consumer now reading the canonical dir doesn't miss them. RAW stays at
+ * `~/.claude/events/raw` (hook-substrate boundary) — only the published archive
+ * moves.
+ *
+ * Idempotent + non-destructive: each legacy file whose canonical counterpart is
+ * ABSENT is atomically copied (source mode preserved); an already-carried file
+ * is skipped (canonical-wins); the legacy files are KEPT. Returns the canonical
+ * published dir (the location the relay writes and the consumer reads).
+ *
+ * An explicit `$CORTEX_DATA_DIR` root has no legacy counterpart — never reach
+ * into the real `~/.claude/events/published` (breaks the hermetic guard).
+ *
+ * @returns `{ dir, carried }` — the canonical dir and how many files THIS call copied.
+ */
+export function migratePublishedBufferOnTouch(home?: string): { dir: string; carried: number } {
+  const canonical = canonicalPublishedEventsDir(home);
+  if (cortexDataDirOverride() !== undefined) return { dir: canonical, carried: 0 };
+
+  const legacy = legacyPublishedEventsDir(home);
+  if (!existsSync(legacy)) return { dir: canonical, carried: 0 };
+
+  let entries: string[];
+  try {
+    entries = readdirSync(legacy);
+  } catch {
+    return { dir: canonical, carried: 0 };
+  }
+
+  let carried = 0;
+  for (const name of entries) {
+    const src = join(legacy, name);
+    let st;
+    try {
+      st = statSync(src);
+    } catch {
+      continue; // vanished between readdir + stat — skip
+    }
+    if (!st.isFile()) continue; // buffer holds flat JSONL(.gz) files; skip any nested dir
+    const dest = join(canonical, name);
+    if (existsSync(dest)) continue; // canonical-wins — never clobber an already-carried file
+    atomicCopyKeepingSource(src, dest);
+    carried += 1;
+  }
+  return { dir: canonical, carried };
 }

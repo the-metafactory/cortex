@@ -13,7 +13,8 @@ import { processEvent } from "./lib/policy-engine";
 import { EventProcessor } from "./lib/event-processor";
 import { watchRawEvents } from "./lib/file-watcher";
 import { RawEventSchema } from "./hooks/lib/event-types";
-import { eventsDir } from "../../common/events-path";
+import { eventsDir, publishedEventsDir } from "../../common/events-path";
+import { migratePublishedBufferOnTouch } from "../../common/migrate-data-dir";
 import { resolvePrincipalEnv } from "./hooks/lib/principal-env";
 import { NatsLink } from "../../bus/nats/connection";
 import { createCcEventPublisher } from "./cc-events";
@@ -51,7 +52,10 @@ interface TestOptions {
 // CORTEX_EVENTS_DIR, else `~/.claude/events` (byte-identical when unset).
 const EVENTS_DIR = eventsDir();
 const RAW_DIR = join(EVENTS_DIR, "raw");
-const PUBLISHED_DIR = join(EVENTS_DIR, "published");
+// XDG wave-5 (#1902): RAW stays under ~/.claude/events (hook-substrate boundary);
+// PUBLISHED is app-private DATA and resolves under the metafactory data root.
+// Pure at module load; the in-flight buffer is carried forward in `start`.
+const PUBLISHED_DIR = publishedEventsDir();
 const DEFAULT_POLICY = join(
   process.env.HOME ?? "~",
   ".claude",
@@ -333,6 +337,17 @@ program
 
     // Write PID file
     writeFileSync(PID_FILE, String(process.pid));
+
+    // XDG wave-5 (#1902, guardrail A): carry the in-flight published buffer to
+    // the canonical data-root location (copy-keep-source) BEFORE processing, so
+    // any published-but-not-yet-consumed event survives the move and the Discord
+    // consumer (now reading the canonical dir) doesn't miss it. Idempotent.
+    const carriedBuf = migratePublishedBufferOnTouch();
+    if (carriedBuf.carried > 0) {
+      console.log(
+        `cortex-relay: carried ${carriedBuf.carried} in-flight published file(s) to ${carriedBuf.dir} (XDG #1902)`,
+      );
+    }
 
     // Run retention sweep on startup (removes stale JSONL files)
     void runRetentionSweep();
