@@ -3461,9 +3461,11 @@ export async function startCortex(
   // CONFIGURED set meets the floor, so a shortfall now is attributable to an
   // absent covering bundle → a loud INSTALL-STATE hard-fail naming the bundle +
   // `arc install` remedy, rather than the pager silently not paging. pagerduty
-  // is still in-tree today (extraction is cortex#1894), so the current
-  // dashboard+pagerduty pair starts fine and this passes; it only bites once a
-  // covering renderer is a bundle that failed to load.
+  // is now EXTRACTED to the metafactory-cortex-renderer-pagerduty bundle
+  // (cortex#1894, ADR-0024), so the second renderer class is a first-party bundle
+  // the loader installs at boot: with it loaded, the dashboard+pagerduty pair
+  // passes; if that bundle fails to load, THIS is where the install-state
+  // hard-fail bites (dashboard alone is inert and never satisfies the floor).
   assertRuntimeSystemCoverage(
     {
       // `r.subjects` are already placeholder-substituted (the boot loop above

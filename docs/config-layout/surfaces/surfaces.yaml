@@ -42,7 +42,12 @@
 # -----------------------------------------------------------------------------
 #
 #   surfaces:
-#     <platform>:                 # discord | slack | mattermost
+#     <platform>:                 # OPEN set — any platform an installed adapter
+#                                 #   BUNDLE registers (web, discord, slack,
+#                                 #   mattermost, or a third-party platform).
+#                                 #   `SurfacesSchema` has NO hardcoded per-platform
+#                                 #   binding key post-ADR-0024 — the loaded surface
+#                                 #   plugin declares its own binding shape.
 #       - agent: <agent-id>       # which agent's presence.<platform> this fills
 #                                 #   (join key against stacks/*.yaml agents[].id)
 #         stack: <principal>/<stack>   # OPTIONAL — the {instance → stack} binding
@@ -56,6 +61,26 @@
 #   - discord:    token, guildId, agentChannelId, logChannelId
 #   - slack:      botToken (xoxb-…), appToken (xapp-…), workspaceId (T…)
 #   - mattermost: apiUrl, apiToken
+#   - web:        (SSE surface — see the web adapter bundle's own binding schema)
+#
+# -----------------------------------------------------------------------------
+# Platforms come from installed ADAPTER BUNDLES, not a hardcoded list (ADR-0024)
+# -----------------------------------------------------------------------------
+#
+# cortex core ships ZERO in-tree adapters: `web`, `discord`, `slack`, and
+# `mattermost` are each a first-party ADAPTER BUNDLE
+# (`metafactory-cortex-adapter-<platform>`) declared in cortex's own
+# `arc-manifest.yaml`, auto-installed by `arc upgrade cortex`, and loaded even
+# with `system.plugins.external: false` (the first-party bundle exemption). So a
+# `surfaces.<platform>` block for any of the four Just Works out of the box.
+#
+# A THIRD-PARTY / out-of-tree platform (an adapter bundle NOT declared under
+# cortex's own manifest) additionally requires `system.plugins.external: true`
+# in system/system.yaml — that flag gates genuinely third-party plugin code. The
+# binding shape for such a platform is defined and validated by THAT bundle's
+# adapter (the surface plugin registers its own `<platform>` key + binding
+# schema), not by cortex; the key here must match the platform name the installed
+# adapter bundle registers.
 #
 # Non-binding presence knobs (e.g. discord `contextDepth`, `surfaceSubjects`,
 # `trustedBotIds`) MAY stay inline in the stack's presence block; surfaces.yaml

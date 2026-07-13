@@ -574,14 +574,27 @@ cortex/
     surface/          ── Principal surfaces — what humans see.
       mc/             ── Mission Control v3 (Hono + React, observed-session model).
       cli/            ── Future TUI / cli-tail surfaces. Empty in v1.
-    adapters/         ── Platform-specific adapters (Discord, Mattermost, etc.).
-                          Each adapter is a per-agent presence runtime (per §9):
-                          subscribes to the surface-router, renders envelopes
-                          to the platform, posts platform input back as envelopes.
-      discord/        ── DiscordAdapter (today's grove-v2 src/bot/lib/adapters/discord.ts)
-      mattermost/     ── MattermostAdapter
-      slack/          ── (Future)
-      pagerduty/      ── (Future — paging renderer for system.* events)
+    surface-sdk/      ── The stable, versioned surface-plugin SDK barrel
+                          (PlatformAdapter, Renderer, envelope/target types +
+                          SURFACE_SDK_VERSION). What an out-of-tree bundle
+                          compiles against, and nothing else in cortex (ADR-0024).
+    adapters/         ── Surface-plugin registry + loader + the never-extracted
+                          `mock` adapter (plus the dispatch-sink / render glue).
+                          ZERO in-tree platform adapters:
+                          createDefaultSurfacePluginRegistry() registers none,
+                          and EXTRACTED_ADAPTER_PLATFORMS = ["web","mattermost",
+                          "slack","discord"] are each an ADAPTER BUNDLE
+                          (metafactory-cortex-adapter-*) the loader installs at
+                          boot. Each adapter is still a per-agent presence
+                          runtime (per §9): renders envelopes to its platform,
+                          posts platform input back as envelopes.
+    renderers/        ── Renderer SDK glue + the in-tree `dashboard` fail-safe
+                          anchor (OQ8 — never extracted; inert per ADR-0005 §4).
+                          `pagerduty` is EXTRACTED to the renderer bundle
+                          metafactory-cortex-renderer-pagerduty. Boot HARD-FAILS
+                          if `system.>` renderer coverage drops below two distinct
+                          classes with ≥1 EFFECTIVE sink (the coverage guard,
+                          ADR-0024 §OQ9 / #1893).
     runner/           ── Workflow runner. Spawns Claude Code, owns session state,
                           manages worklog threads, emits dispatch.* lifecycle events.
     taps/             ── Cortex-side publishers that turn external events into bus
@@ -602,6 +615,14 @@ cortex/
 ```
 
 Internal module boundaries are TypeScript directory + import discipline, not packages. A flat `src/` is sufficient at v1; package-ising can come later if the codebase grows past a comfort threshold.
+
+### 8.1 Pluggable surfaces — the bundle model ([ADR-0024](adr/0024-pluggable-surface-adapters.md))
+
+cortex core carries **zero in-tree platform adapters and one in-tree renderer**. A **surface plugin** (a platform adapter or a renderer) ships as a separately-installable **bundle** — an **adapter bundle** (`metafactory-cortex-adapter-{web,slack,mattermost,discord}`) or a **renderer bundle** (`metafactory-cortex-renderer-pagerduty`, the first renderer-class bundle) — that the running daemon loads at boot via the surface-plugin **loader**, rather than code compiled into the cortex binary. Both plugin kinds share one SDK barrel (`src/surface-sdk/`), one loader, one version-compat gate, and per-plugin fail-isolation ([ADR-0024](adr/0024-pluggable-surface-adapters.md) D5).
+
+**Transparent upgrade (no config change, no major version).** Each bundle is declared a **first-party arc dependency** in cortex's own `arc-manifest.yaml`, so `arc upgrade cortex` auto-installs it and the loader loads it **even when `system.plugins.external` is off** (the default-off external-plugin gate). This **first-party bundle exemption** is un-spoofable: it is keyed on cortex's OWN arc-manifest dependencies plus the arc-recorded `repoUrl`, narrowed by the `ADAPTER_BUNDLE_DEP_NAME_RE` / `RENDERER_BUNDLE_DEP_NAME_RE` name patterns — not a naming convention a third-party bundle could claim. A principal who has not opted into external plugins still runs the full set of platform adapters and the pager, unchanged.
+
+**Fail-safe anchors + the boot coverage guard.** The `mock` adapter and the `dashboard` renderer are the permanent, never-extracted in-tree anchors ([ADR-0024](adr/0024-pluggable-surface-adapters.md) D2/OQ8): `dashboard` stays in-tree because extraction of *every* renderer could otherwise leave a stack silently un-paged. To close that fail-open, boot **hard-fails** (`#1893`, ADR-0024 §OQ9) when a stack's `system.>` renderer coverage drops below **two distinct classes with at least one EFFECTIVE sink** — `dashboard` counts toward the class pair but is inert (ADR-0005 §4), so "dashboard alone" never satisfies the floor. The guard emits two distinct errors: a **config** error ("you configured only one sink") versus an **install-state** error ("you configured two, one's covering bundle isn't loaded — run `arc install`"), the latter naming the missing bundle.
 
 ---
 

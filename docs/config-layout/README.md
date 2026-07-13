@@ -129,7 +129,7 @@ Binding-map shape (validated loudly at load — CFG.c.4,
 
 ```yaml
 surfaces:
-  <platform>:                  # discord | slack | mattermost
+  <platform>:                  # OPEN set — any installed adapter bundle's platform
     - agent: <agent-id>        # join key against stacks/*.yaml agents[].id
       stack: <principal>/<stack>   # OPTIONAL — the {instance → stack} GW routes on
       binding:                 # the required per-platform credential/instance fields
@@ -138,7 +138,10 @@ surfaces:
 
 Required binding fields: discord → `token`, `guildId`, `agentChannelId`,
 `logChannelId`; slack → `botToken` (`xoxb-…`), `appToken` (`xapp-…`),
-`workspaceId` (`T…`); mattermost → `apiUrl`, `apiToken`.
+`workspaceId` (`T…`); mattermost → `apiUrl`, `apiToken`; web → its SSE binding
+(defined by the web adapter bundle). The `<platform>` key set is **not**
+hardcoded — `SurfacesSchema` has no per-platform binding key post-ADR-0024; each
+loaded surface plugin declares its own platform key + binding shape (see below).
 
 **Precedence / fallback.** `surfaces.yaml` is OPTIONAL — per-stack
 `presence.{platform}` is always the fallback (the three live single-file
@@ -148,6 +151,37 @@ present for the same platform, the surfaces.yaml binding **wins on leaf keys**
 (`contextDepth`, `surfaceSubjects`, …) survive the merge. A binding naming an
 agent absent from every stack fails **loudly** rather than silently dropping a
 credential.
+
+## Pluggable surfaces — adapter & renderer bundles ([ADR-0024](../adr/0024-pluggable-surface-adapters.md))
+
+cortex core carries **zero in-tree platform adapters** and exactly one in-tree
+renderer (`dashboard`, the fail-safe anchor). Every platform adapter (`web`,
+`discord`, `slack`, `mattermost`) and the `pagerduty` renderer ship as a
+separately-installable arc **bundle** — an **adapter bundle**
+(`metafactory-cortex-adapter-<platform>`) or a **renderer bundle**
+(`metafactory-cortex-renderer-<kind>`) — loaded at boot by the surface-plugin
+loader.
+
+- **`system/system.yaml` → `plugins.external`** gates external-plugin loading.
+  It defaults to **`false`** (the secure default — do not load third-party code
+  into the daemon uninvited). See the annotated block in
+  [`system/system.yaml`](./system/system.yaml).
+- **First-party bundles load anyway.** The four adapter bundles and the
+  pagerduty renderer bundle are declared as first-party dependencies in cortex's
+  own `arc-manifest.yaml`, so `arc upgrade cortex` auto-installs them and the
+  loader loads them **even with `plugins.external: false`** — the *first-party
+  bundle exemption*, keyed on cortex's own manifest + the arc-recorded repoUrl
+  (un-spoofable, not a name prefix). A stock stack gets all four platforms + the
+  pager with **no config change**.
+- **A `surfaces.<platform>` binding** for any first-party platform Just Works.
+  A **third-party / out-of-tree** platform (an adapter bundle NOT declared under
+  cortex's manifest) additionally requires `plugins.external: true`, and its
+  binding shape is defined and validated by that bundle's adapter — the
+  `<platform>` key must match the name the installed adapter registers.
+- **Boot coverage guard.** Boot **hard-fails** if `system.>` renderer coverage
+  drops below two distinct classes with ≥1 effective sink (`dashboard` is inert
+  and never counts alone) — the error names the missing bundle and the
+  `arc install` that fixes it (ADR-0024 §OQ9, `#1893`).
 
 ## The files in this template
 
