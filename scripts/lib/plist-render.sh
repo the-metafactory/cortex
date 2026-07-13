@@ -33,6 +33,45 @@ resolve_bun_path() {
   printf '%s' "${bun_path}"
 }
 
+# ── XDG wave-4 (cortex#1869): config-dir resolution ──────────────────────────
+#
+# The cortex config directory is moving from the two pre-move trees
+# (`~/.config/cortex`, `~/.config/grove`) into the canonical
+# `~/.config/metafactory/cortex`. These two helpers are the SHELL analogue of
+# `resolveConfigDir` / `cortexConfigDir` in src/common/config/config-path.ts, so
+# the lifecycle scripts stamp the SAME `--config` path into plists that the TS
+# runtime reads from — no daemon-vs-CLI split-brain (traps T7′/T13/T17).
+
+# The canonical (write / move-target) config dir: `$CORTEX_CONFIG_DIR` verbatim
+# when set, else `~/.config/metafactory/cortex`. Used by the migration driver as
+# the destination the tree is carried into and the dir plists are re-stamped at.
+canonical_config_dir() {
+  if [ -n "${CORTEX_CONFIG_DIR:-}" ]; then
+    printf '%s' "${CORTEX_CONFIG_DIR}"
+  else
+    printf '%s' "${HOME}/.config/metafactory/cortex"
+  fi
+}
+
+# The config dir to READ from during the transition — canonical-first with legacy
+# fallback, mirroring resolveConfigDir(): `$CORTEX_CONFIG_DIR` (self-contained
+# root) → `~/.config/metafactory/cortex` (once migrated) → `~/.config/cortex`
+# (pre-wave-4 flat tree) → `~/.config/grove` (oldest) → the canonical path (fresh
+# host, nothing yet). A command run BEFORE the move still resolves the legacy
+# tree (byte-identical to pre-wave-4); a migrated host resolves the canonical
+# tree, so the re-rendered plists point at the moved config.
+resolve_config_dir() {
+  if [ -n "${CORTEX_CONFIG_DIR:-}" ]; then
+    printf '%s' "${CORTEX_CONFIG_DIR}"
+    return 0
+  fi
+  local canonical="${HOME}/.config/metafactory/cortex"
+  if [ -d "${canonical}" ]; then printf '%s' "${canonical}"; return 0; fi
+  if [ -d "${HOME}/.config/cortex" ]; then printf '%s' "${HOME}/.config/cortex"; return 0; fi
+  if [ -d "${HOME}/.config/grove" ]; then printf '%s' "${HOME}/.config/grove"; return 0; fi
+  printf '%s' "${canonical}"
+}
+
 # Extract the CANONICAL stack slug from a cortex config's `stack.id`.
 #
 # `stack.id` is `{principal}/{slug}` (e.g. `andreas/community` → `community`).

@@ -33,7 +33,11 @@ echo "Stopping Cortex services for upgrade (${PAI_OLD_VERSION:-?} → ${PAI_NEW_
 # and rides with cortex#1909 — do not assume the skip/abort protects a Linux box.
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
-  CONFIG_DIR="${HOME}/.config/cortex"
+  # XDG wave-4 (cortex#1869): resolve the active config dir canonical-first so
+  # discover_stack_slugs stops the daemons keyed on the SAME tree postupgrade
+  # re-renders + restarts (no stop-here/reload-there desync post-move). Honors
+  # $CORTEX_CONFIG_DIR; falls back to the legacy tree pre-move (byte-identical).
+  CONFIG_DIR="$(resolve_config_dir)"
 
   # Kill running cortex agent processes before upgrading symlinks.
   # Holly cortex#52 round 1 nit-3: previous `pgrep -f "cortex start"` matched

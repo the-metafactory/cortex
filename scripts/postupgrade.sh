@@ -16,7 +16,17 @@ set -e
 CORTEX_DIR="${PAI_INSTALL_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="${HOME}/.claude"
-CONFIG_DIR="${HOME}/.config/cortex"
+# plist-render.sh provides resolve_config_dir plus the render/reload/slug/
+# forward-symlink helpers used below. Sourced up-front so CONFIG_DIR can resolve
+# canonical-first (it is all function definitions — no source-time side effects).
+# shellcheck source=scripts/lib/plist-render.sh
+source "${SCRIPT_DIR}/lib/plist-render.sh"
+# XDG wave-4 (cortex#1869): resolve the ACTIVE config dir (canonical
+# ~/.config/metafactory/cortex once migrated, the legacy trees during transition,
+# or $CORTEX_CONFIG_DIR) instead of hardcoding the pre-move `~/.config/cortex` —
+# so the plists re-rendered below stamp the MOVED --config and daemons never
+# boot a stale tree (split-brain traps T7′/T13/T17).
+CONFIG_DIR="$(resolve_config_dir)"
 
 mkdir -p "${HOME}/.local/bin" "${CLAUDE_DIR}/relay" \
          "${CLAUDE_DIR}/skills" "${CONFIG_DIR}/logs"
@@ -44,9 +54,8 @@ echo "  ✓ Nested symlinks refreshed"
 # ~/bin/<name>, so we leave ~/bin/<name> as a forward-symlink → ~/.local/bin so
 # it keeps resolving through any interrupt in the render+reload window. We NEVER
 # delete ~/bin/<name> here — deletion is wave 6 (#1904). Host-independent (both
-# launchd and systemd exec ~/.local/bin now); source of the helper is the shared
-# plist-render lib (loaded in §2 below, but we need it here first).
-source "${SCRIPT_DIR}/lib/plist-render.sh"
+# launchd and systemd exec ~/.local/bin now); the helper comes from the shared
+# plist-render lib, already sourced up-front (for resolve_config_dir).
 echo "  Bridging legacy ~/bin entries → ~/.local/bin (forward-symlinks)..."
 for bin_name in cortex cortex-relay cldyo-live; do
   forward_link_legacy_bin "${bin_name}"
@@ -68,7 +77,7 @@ done
 # us that path — the file where agents[].id and stack.id live.
 echo "  Provisioning stack signing identity..."
 source "${SCRIPT_DIR}/lib/stack-identity-provision.sh"
-# plist-render.sh already sourced in §1b (forward-symlink bridge).
+# plist-render.sh already sourced up-front (for resolve_config_dir).
 
 while IFS= read -r slug; do
   stack_config="$(resolve_stack_agent_config_path "${CONFIG_DIR}" "${slug}")"

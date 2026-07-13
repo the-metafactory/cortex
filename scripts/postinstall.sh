@@ -20,7 +20,16 @@ CORTEX_DIR="${PAI_INSTALL_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="${HOME}/.claude"
 EVENTS_DIR="${CLAUDE_DIR}/events"
-CONFIG_DIR="${HOME}/.config/cortex"
+# plist-render.sh provides resolve_config_dir + the render/slug helpers used in
+# §4. Sourced up-front so CONFIG_DIR resolves canonical-first (all function
+# definitions — no source-time side effects).
+# shellcheck source=scripts/lib/plist-render.sh
+source "${SCRIPT_DIR}/lib/plist-render.sh"
+# XDG wave-4 (cortex#1869): resolve the active config dir (canonical
+# ~/.config/metafactory/cortex once migrated, legacy trees during transition, or
+# $CORTEX_CONFIG_DIR). On a fresh install none exist yet → resolves to the
+# canonical path, so a first install writes/renders canonical-side directly.
+CONFIG_DIR="$(resolve_config_dir)"
 
 echo "Running Cortex postinstall..."
 
@@ -62,8 +71,8 @@ fi
 
 # ─── 4. Launchd plist rendering (macOS only) ─────────────────────
 # Holly cortex#52 round 1 major: the sed-templating block + awk agent-name
-# extractor lived here AND in postupgrade.sh. Extracted to a shared lib.
-source "${SCRIPT_DIR}/lib/plist-render.sh"
+# extractor lived here AND in postupgrade.sh. Extracted to a shared lib
+# (already sourced up-front, for resolve_config_dir).
 # Audit stack-identity drift (cortex#810) — warn (non-fatal, host-independent)
 # when a stack's locator slug ≠ its stack.id slug. Before the Darwin guard so
 # Linux/systemd installs see it too.
