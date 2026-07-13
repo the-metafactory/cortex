@@ -77,10 +77,14 @@ import {
   legacyNetworkCacheDir,
   legacyPidStateDir,
   legacyRelayDir,
+  STATE_MIGRATION_JOURNAL_NAME,
 } from "./state-path";
 
-/** Journal dropped at the canonical state root so a move is auditable + reversible. */
-export const STATE_MIGRATION_JOURNAL_NAME = ".xdg-state-migration.json";
+// The completion-marker filename is owned by `state-path.ts` (the resolver's
+// canonical gate reads it), and re-exported here so callers that write/inspect
+// the journal keep importing it from the migrator. Writing this file at the
+// canonical root is precisely what flips `stateMigrationCompleted` → true.
+export { STATE_MIGRATION_JOURNAL_NAME };
 
 /** Which state class a carried entry belongs to (for audit + reasoning). */
 export type StateCarryKind = "pidfiles" | "logs" | "relay-pid" | "network-cache";

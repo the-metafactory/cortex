@@ -26,22 +26,27 @@
  * roster). It is DURABLE trust state — NOT a regenerable cache — so it moves to
  * the state root, and its move is gated + copy-keep-source like the pidfiles.
  *
- * ── Precedence (read) ────────────────────────────────────────────────────────
+ * ── Precedence (read) — COMPLETION-gated, not existence-gated ────────────────
  *   1. `$CORTEX_STATE_DIR/<…>`                     — explicit override (VERBATIM,
  *      a self-contained root; NO legacy probe — mirrors the config/data seams).
- *   2. `~/.local/state/metafactory/cortex/<…>`     — canonical (used if present).
+ *   2. canonical `~/.local/state/metafactory/cortex/<…>` — ONLY once a gated
+ *      migration wrote its completion marker ({@link stateMigrationCompleted}).
  *   3. legacy tree (grove state/logs, cortex logs/network-cache, claude relay)
- *      — read-fallback if present.
- *   4. canonical path                              — write/default target when none.
+ *      — the first candidate present on disk (read-fallback).
+ *   4. the PRIMARY legacy path                     — pre-migration default/write
+ *      target when nothing is on disk yet (a fresh box). Canonical is NEVER
+ *      returned pre-migration — that is the pidfile-identity guarantee.
  *
  * ── The STATE_DIR module-const hazard (T1b / cortex#1900) ────────────────────
  * `pidfile.ts` bakes `STATE_DIR` at import from {@link resolvePidStateDir}. A
  * RUNNING daemon computed its pidfile path from whatever STATE_DIR resolved to at
  * ITS import; a later CLI that resolves a DIFFERENT dir would compute a different
- * pidfile name and fail to find/manage the daemon. This is contained because the
- * physical state MOVE is GATED (X-09): nothing is running during the migration,
- * so no daemon's pidfile identity flips out from under it, and after the move +
- * restart every process resolves the canonical dir consistently.
+ * pidfile name and fail to find/manage the daemon. Bare directory existence would
+ * be UNSAFE here — the canonical root is shared across state classes, so a stray
+ * canonical dir (or one a sibling class created) would flip the const. Hence the
+ * COMPLETION gate: canonical is preferred ONLY after a fleet-DOWN migration wrote
+ * its marker, so the flip only ever happens with nothing running, and after the
+ * migration + restart every process resolves the canonical dir consistently.
  *
  * Every legacy-tree hit is surfaced via {@link noteXdgFallback} so a
  * `CORTEX_XDG_STRICT=1` fresh-install run stays silent (Fallback Contract,
@@ -103,6 +108,38 @@ export function cortexStateDir(home?: string): string {
   );
 }
 
+// ───────────────────────────────────────── completion marker (the canonical gate)
+
+/**
+ * Journal filename dropped at the canonical state root the instant a gated
+ * migration COMPLETES. Its presence is the COMPLETION marker that flips the
+ * resolvers from legacy to canonical. Owned by this low-level module (rather than
+ * `migrate-state-dir.ts`) so the migrator imports the name from here — no import
+ * cycle — and the resolver + the writer can never disagree on the marker path.
+ */
+export const STATE_MIGRATION_JOURNAL_NAME = ".xdg-state-migration.json";
+
+/**
+ * Has a gated STATE migration COMPLETED on this box? True iff the completion
+ * journal exists at the canonical state root.
+ *
+ * This — NOT bare directory existence — is what gates the canonical preference,
+ * and the distinction is load-bearing for the pidfile-identity contract
+ * (cortex#1900 / the STATE_DIR module-const hazard T1b): the canonical ROOT is
+ * shared by every state class, so a stray/empty `…/metafactory/cortex` dir, or
+ * one created as a side effect of a `NetworkCache.store` write or a logs
+ * `mkdirSync`, must NEVER flip a live daemon's pidfile path out from under it.
+ * A running daemon computed `STATE_DIR` (hence `PID_FILE`) at import; if a bare
+ * canonical dir flipped that const, a later CLI would derive a DIFFERENT pidfile
+ * name and fail to find/stop/manage the daemon (and the singleton check could
+ * spawn a duplicate). Only a completed, fleet-DOWN migration writes this marker,
+ * after which every process resolves canonical consistently on its next
+ * import/restart — the window in which the flip happens has nothing running.
+ */
+export function stateMigrationCompleted(home?: string): boolean {
+  return existsSync(join(cortexStateDir(home), STATE_MIGRATION_JOURNAL_NAME));
+}
+
 // ─────────────────────────────────────────────────────── canonical sub-locations
 
 /** Canonical pidfile + degraded-marker dir (the state root itself; pidfiles
@@ -157,58 +194,91 @@ export function legacyNetworkCacheDir(home?: string): string {
 // ─────────────────────────────────────────────── existence-gated dir resolvers
 
 /**
- * PURE existence-gated resolution of a state DIR — NO side effects beyond
- * `existsSync`. Prefers the canonical location if present, else the FIRST legacy
- * candidate that exists (in the given precedence order), else the canonical path
- * (the write target on a fresh host / post-migration). An explicit
- * `$CORTEX_STATE_DIR` short-circuits ALL fallback (self-contained root). Every
- * legacy hit is surfaced under `CORTEX_XDG_STRICT` via {@link noteXdgFallback}.
+ * COMPLETION-gated resolution of a state DIR — NO side effects beyond
+ * `existsSync`. Precedence:
+ *   1. explicit `$CORTEX_STATE_DIR` → canonical (self-contained root, no probe).
+ *   2. a COMPLETED gated migration ({@link stateMigrationCompleted}) → canonical.
+ *   3. else LEGACY: the first legacy candidate that EXISTS on disk (surfaced via
+ *      {@link noteXdgFallback} under `CORTEX_XDG_STRICT`), or — when none is on
+ *      disk yet — the PRIMARY legacy path as the stable default (`legacies[0]`).
+ *
+ * The critical difference from a bare existence gate (T1b / cortex#1900): the
+ * canonical location is preferred ONLY after a completed migration, NEVER merely
+ * because a canonical dir exists. The canonical root is shared across state
+ * classes, so a stray/empty canonical dir (or one a sibling class created) must
+ * not flip a live daemon's pidfile identity. Pre-migration this ALWAYS resolves
+ * to the legacy default — byte-identical to the pre-XDG path — so a running
+ * daemon and every CLI derive the same pidfile until the gated cutover + restart.
  */
 function resolveStateSubdir(
-  canonical: string,
+  home: string | undefined,
   legacies: readonly { dir: string; note: string }[],
+  canonicalOf: (home?: string) => string,
 ): string {
-  if (cortexStateDirOverride() !== undefined) return canonical;
-  if (existsSync(canonical)) return canonical;
+  if (cortexStateDirOverride() !== undefined) return canonicalOf(home);
+  if (stateMigrationCompleted(home)) return canonicalOf(home);
   for (const l of legacies) {
     if (existsSync(l.dir)) {
       noteXdgFallback("state", l.note);
       return l.dir;
     }
   }
-  return canonical;
+  // Pre-migration with no legacy tree on disk yet (e.g. a fresh install): the
+  // PRIMARY legacy path is the stable default + write target. Canonical is
+  // reserved for the post-migration state, so it is NEVER returned here — that
+  // is what keeps pidfile identity continuous until the gated cutover.
+  return legacies[0]?.dir ?? canonicalOf(home);
 }
 
-/** Resolve the pidfile + degraded-marker dir (canonical → legacy grove state). */
+/** Resolve the pidfile + degraded-marker dir (legacy grove state until a
+ *  completed migration flips it to canonical). */
 export function resolvePidStateDir(home?: string): string {
-  return resolveStateSubdir(canonicalPidStateDir(home), [
-    { dir: legacyPidStateDir(home), note: "pidfile dir resolved from legacy ~/.config/grove/state" },
-  ]);
+  return resolveStateSubdir(
+    home,
+    [{ dir: legacyPidStateDir(home), note: "pidfile dir resolved from legacy ~/.config/grove/state" }],
+    canonicalPidStateDir,
+  );
 }
 
-/** Resolve the logs dir (canonical → legacy grove logs → legacy cortex logs). */
+/** Resolve the logs dir (legacy grove logs → legacy cortex logs until a completed
+ *  migration flips it to canonical). Migration-planning-only (no runtime consumer). */
 export function resolveLogsDir(home?: string): string {
-  return resolveStateSubdir(canonicalLogsDir(home), [
-    { dir: legacyGroveLogsDir(home), note: "logs dir resolved from legacy ~/.config/grove/logs" },
-    { dir: legacyCortexLogsDir(home), note: "logs dir resolved from legacy ~/.config/cortex/logs" },
-  ]);
+  return resolveStateSubdir(
+    home,
+    [
+      { dir: legacyGroveLogsDir(home), note: "logs dir resolved from legacy ~/.config/grove/logs" },
+      { dir: legacyCortexLogsDir(home), note: "logs dir resolved from legacy ~/.config/cortex/logs" },
+    ],
+    canonicalLogsDir,
+  );
 }
 
-/** Resolve the relay dir (canonical → legacy ~/.claude/relay). */
+/** Resolve the relay dir (legacy ~/.claude/relay until a completed migration
+ *  flips it to canonical). Holds the relay pidfile — same identity contract as
+ *  the cortex pidfile, so it is completion-gated too. */
 export function resolveRelayDir(home?: string): string {
-  return resolveStateSubdir(canonicalRelayDir(home), [
-    { dir: legacyRelayDir(home), note: "relay pidfile dir resolved from legacy ~/.claude/relay" },
-  ]);
+  return resolveStateSubdir(
+    home,
+    [{ dir: legacyRelayDir(home), note: "relay pidfile dir resolved from legacy ~/.claude/relay" }],
+    canonicalRelayDir,
+  );
 }
 
-/** Resolve the network-cache dir (canonical → legacy ~/.config/cortex/network-cache). */
+/** Resolve the network-cache dir (legacy ~/.config/cortex/network-cache until a
+ *  completed migration flips it to canonical). The signed roster is trust state
+ *  read/written by both the daemon and the CLIs, so completion-gating keeps them
+ *  from disagreeing on which dir holds the last-known-good roster. */
 export function resolveNetworkCacheDir(home?: string): string {
-  return resolveStateSubdir(canonicalNetworkCacheDir(home), [
-    {
-      dir: legacyNetworkCacheDir(home),
-      note: "network-cache resolved from legacy ~/.config/cortex/network-cache",
-    },
-  ]);
+  return resolveStateSubdir(
+    home,
+    [
+      {
+        dir: legacyNetworkCacheDir(home),
+        note: "network-cache resolved from legacy ~/.config/cortex/network-cache",
+      },
+    ],
+    canonicalNetworkCacheDir,
+  );
 }
 
 // ──────────────────────────────────────────────────── schema value defaults

@@ -42,11 +42,13 @@ import { resolvePidStateDir } from "./state-path";
  * `mkdirSync(STATE_DIR)` from `PID_FILE`/`pidFileFor` derivation).
  *
  * XDG wave-5 (cortex#1903): resolved via {@link resolvePidStateDir} —
- * canonical-first (`~/.local/state/metafactory/cortex`), legacy-fallback
- * (`~/.config/grove/state`), `$CORTEX_STATE_DIR` override (VERBATIM). It still
- * honours the SAME `CORTEX_STATE_DIR` env seam (cortex#1908) with the SAME
- * blank-is-unset semantics, so a box with the override set is byte-identical, and
- * a pre-cutover box (no canonical dir yet) still resolves the legacy grove dir.
+ * COMPLETION-gated, NOT canonical-first. Pre-migration it resolves to the legacy
+ * `~/.config/grove/state` (byte-identical to the pre-XDG default), and it flips
+ * to the canonical `~/.local/state/metafactory/cortex` ONLY once a gated
+ * migration has written its completion marker. `$CORTEX_STATE_DIR` overrides
+ * VERBATIM (cortex#1908 seam, same blank-is-unset semantics). This gating is the
+ * crux of the pidfile-identity contract: a bare/stray canonical dir must never
+ * flip this const, or a live daemon's pidfile path would move out from under it.
  *
  * Like `HOME`, it is read ONCE at import (T1b): the resolved value is a module
  * constant, so processes needing an override must set the env before the module

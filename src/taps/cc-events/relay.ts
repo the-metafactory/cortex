@@ -65,11 +65,12 @@ const DEFAULT_POLICY = join(
   "relay-policy.yaml"
 );
 // XDG wave-5 (#1903): the relay pidfile is STATE and resolves under the
-// metafactory state root (canonical-first, legacy `~/.claude/relay` fallback,
-// `$CORTEX_STATE_DIR` override). Module-const like cortex.ts's STATE_DIR; the
-// physical move is X-09-gated so a running relay's pidfile identity never flips
-// out from under it. The relay POLICY (relay-policy.yaml) stays put — it is
-// CONFIG, not state — so DEFAULT_POLICY above is unchanged.
+// metafactory state root — COMPLETION-gated (legacy `~/.claude/relay` until a
+// gated migration writes its marker, then canonical), `$CORTEX_STATE_DIR`
+// override. Module-const like cortex.ts's STATE_DIR; the completion gate is what
+// keeps a running relay's pidfile identity from flipping out from under it (a
+// bare canonical dir does NOT move it). The relay POLICY (relay-policy.yaml)
+// stays put — it is CONFIG, not state — so DEFAULT_POLICY above is unchanged.
 const PID_FILE = join(resolveRelayDir(), "relay.pid");
 
 // =============================================================================

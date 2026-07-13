@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -29,8 +29,17 @@ import {
   resolveNetworkCacheDir,
   resolvePidStateDir,
   resolveRelayDir,
+  STATE_MIGRATION_JOURNAL_NAME,
+  stateMigrationCompleted,
   xdgStateHome,
 } from "../state-path";
+
+/** Write the completion marker at the canonical root — the ONLY thing that flips
+ *  the resolvers from legacy to canonical (#1903 pidfile-identity contract). */
+function completeMigration(h: string): void {
+  mkdirSync(cortexStateDir(h), { recursive: true });
+  writeFileSync(join(cortexStateDir(h), STATE_MIGRATION_JOURNAL_NAME), "{}");
+}
 
 let home: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -103,41 +112,58 @@ describe("$CORTEX_STATE_DIR override — self-contained root, no legacy probe", 
   });
 });
 
-describe("canonical-first / legacy-fallback (no override)", () => {
-  test("pid state dir: legacy grove used when canonical absent, canonical once present", () => {
-    // Nothing on disk → canonical write target.
-    expect(resolvePidStateDir(home)).toBe(canonicalPidStateDir(home));
-    // Legacy present → legacy fallback.
+describe("completion-gated canonical flip (no override) — #1903 identity contract", () => {
+  test("pid state dir: legacy grove is the pre-migration default; a BARE canonical dir does NOT flip it; the completion marker does", () => {
+    // Nothing on disk → legacy grove default (stable write target + identity).
+    expect(resolvePidStateDir(home)).toBe(legacyPidStateDir(home));
+    // Legacy present, no marker → still legacy.
     mkdirSync(legacyPidStateDir(home), { recursive: true });
     expect(resolvePidStateDir(home)).toBe(legacyPidStateDir(home));
-    // Canonical present → canonical wins over legacy.
+    // A BARE canonical dir WITHOUT the marker must NOT flip identity (the hazard
+    // the completion gate exists to prevent — a sibling class created the root).
     mkdirSync(canonicalPidStateDir(home), { recursive: true });
+    expect(stateMigrationCompleted(home)).toBe(false);
+    expect(resolvePidStateDir(home)).toBe(legacyPidStateDir(home));
+    // Completion marker present → canonical.
+    completeMigration(home);
+    expect(stateMigrationCompleted(home)).toBe(true);
     expect(resolvePidStateDir(home)).toBe(canonicalPidStateDir(home));
   });
 
-  test("logs dir prefers grove over cortex when both legacy trees exist", () => {
+  test("logs dir prefers grove over cortex pre-migration; flips to canonical only on the marker", () => {
     mkdirSync(legacyCortexLogsDir(home), { recursive: true });
     // Only cortex legacy present → cortex fallback.
     expect(resolveLogsDir(home)).toBe(legacyCortexLogsDir(home));
     // grove legacy also present → grove wins (first in precedence).
     mkdirSync(legacyGroveLogsDir(home), { recursive: true });
     expect(resolveLogsDir(home)).toBe(legacyGroveLogsDir(home));
-    // canonical present → canonical wins over both.
+    // A bare canonical logs dir without the marker does not flip.
     mkdirSync(canonicalLogsDir(home), { recursive: true });
+    expect(resolveLogsDir(home)).toBe(legacyGroveLogsDir(home));
+    // Completion marker → canonical.
+    completeMigration(home);
     expect(resolveLogsDir(home)).toBe(canonicalLogsDir(home));
   });
 
-  test("relay dir: legacy ~/.claude/relay fallback then canonical", () => {
+  test("relay dir: legacy ~/.claude/relay pre-migration; canonical after the marker", () => {
     mkdirSync(legacyRelayDir(home), { recursive: true });
     expect(resolveRelayDir(home)).toBe(legacyRelayDir(home));
-    mkdirSync(canonicalRelayDir(home), { recursive: true });
+    completeMigration(home);
     expect(resolveRelayDir(home)).toBe(canonicalRelayDir(home));
   });
 
-  test("network-cache: legacy ~/.config/cortex/network-cache fallback then canonical", () => {
+  test("network-cache: legacy ~/.config/cortex/network-cache pre-migration; canonical after the marker", () => {
     mkdirSync(legacyNetworkCacheDir(home), { recursive: true });
     expect(resolveNetworkCacheDir(home)).toBe(legacyNetworkCacheDir(home));
-    mkdirSync(canonicalNetworkCacheDir(home), { recursive: true });
+    completeMigration(home);
     expect(resolveNetworkCacheDir(home)).toBe(canonicalNetworkCacheDir(home));
+  });
+
+  test("fresh box (no legacy tree, no marker) → legacy grove default, NEVER canonical", () => {
+    // The pre-migration default must be the legacy path even when nothing is on
+    // disk yet, so pidfile identity is byte-stable from first boot until cutover.
+    expect(resolvePidStateDir(home)).toBe(legacyPidStateDir(home));
+    expect(resolveRelayDir(home)).toBe(legacyRelayDir(home));
+    expect(resolveNetworkCacheDir(home)).toBe(legacyNetworkCacheDir(home));
   });
 });
