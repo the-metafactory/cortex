@@ -33,7 +33,11 @@ import {
 } from "../surface-gateway";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
-import { testRegistryWithWeb, testRegistryWithSlack } from "./test-registry-support";
+import {
+  testRegistryWithDiscord,
+  testRegistryWithWeb,
+  testRegistryWithSlack,
+} from "./test-registry-support";
 
 // =============================================================================
 // Minimal fake PlatformAdapter (no real platform connection needed)
@@ -283,6 +287,9 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
       enabled: true,
       surfaces: DISCORD_SURFACES,
       adapters: [makeFakeAdapter()],
+      // cortex#1797 (S12 MOVE) — discord is no longer in the in-tree default
+      // registry (see test-registry-support.ts).
+      registry: testRegistryWithDiscord(),
     });
     expect(result).toBeInstanceOf(SurfaceGateway);
   });
@@ -324,6 +331,7 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
       enabled: true,
       surfaces: DISCORD_SURFACES,
       adapters: [fakeAdapter],
+      registry: testRegistryWithDiscord(),
     });
     expect(gw).toBeInstanceOf(SurfaceGateway);
     await gw!.start();
@@ -339,6 +347,7 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
       enabled: true,
       surfaces: DISCORD_SURFACES,
       adapters: [makeFakeAdapter()],
+      registry: testRegistryWithDiscord(),
       onUnroutable: (msg, reason) => {
         unroutableCalls.push({ msg, reason });
       },
@@ -374,6 +383,7 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
         enabled: true,
         surfaces: DISCORD_SURFACES,
         adapters: [makeFakeAdapter()],
+        registry: testRegistryWithDiscord(),
       });
       const combined = messages.join("");
       expect(combined).toContain("SHADOW");
@@ -394,6 +404,7 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
         enabled: true,
         surfaces: DISCORD_SURFACES,
         adapters: [makeFakeAdapter("a1"), makeFakeAdapter("a2")],
+        registry: testRegistryWithDiscord(),
       });
       const combined = messages.join("");
       // 1 discord binding → "1 binding"
@@ -416,6 +427,7 @@ describe("maybeCreateSurfaceGateway — sink injection", () => {
       enabled: true,
       surfaces: DISCORD_SURFACES,
       adapters: [makeFakeAdapter()],
+      registry: testRegistryWithDiscord(),
     });
     expect(gw).toBeInstanceOf(SurfaceGateway);
     expect(gw!.inboundSink).toBeInstanceOf(LoggingInboundSink);
@@ -436,6 +448,7 @@ describe("maybeCreateSurfaceGateway — sink injection", () => {
       surfaces: DISCORD_SURFACES,
       adapters: [makeFakeAdapter()],
       sink: customSink,
+      registry: testRegistryWithDiscord(),
     });
     expect(gw).toBeInstanceOf(SurfaceGateway);
     // identity check — exactly the injected instance, not a default
@@ -458,6 +471,7 @@ describe("maybeCreateSurfaceGateway — sink injection", () => {
         surfaces: DISCORD_SURFACES,
         adapters: [makeFakeAdapter()],
         sink: customSink,
+        registry: testRegistryWithDiscord(),
       });
       const combined = messages.join("");
       expect(combined).toContain("LIVE");
@@ -504,6 +518,7 @@ describe("maybeCreateSurfaceGateway — error propagation", () => {
         enabled: true,
         surfaces: duplicateDiscord,
         adapters: [makeFakeAdapter()],
+        registry: testRegistryWithDiscord(),
       }),
     ).toThrow(/ambiguous discord config/);
   });

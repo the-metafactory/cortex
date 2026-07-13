@@ -22,6 +22,7 @@
  * `src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/plugin.ts`).
  */
 
+import { createHash } from "node:crypto";
 import { z } from "zod/v4";
 import {
   createDefaultSurfacePluginRegistry,
@@ -31,6 +32,22 @@ import {
   type SurfacePluginRegistry,
 } from "../../adapters/registry";
 import { stringBindingField } from "../../adapters/plugin-support";
+
+/**
+ * Byte-identical to the real bundle's `discordTokenInstanceId`
+ * (`metafactory-cortex-adapter-discord`'s `src/token-groups.ts`) — a
+ * multi-guild token group's instance id is a sha256(token, stack) digest,
+ * not a JSON-stringified guildId list. The surface-ownership-plan suite
+ * pins this exact `/^discord:token:[0-9a-f]{12}$/` shape, so the stub must
+ * reproduce the hash, not just group membership.
+ */
+function discordTokenInstanceIdStub(token: string, stack: string | undefined): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify({ token, stack: stack ?? null }))
+    .digest("hex")
+    .slice(0, 12);
+  return `discord:token:${digest}`;
+}
 
 /**
  * The discord platform's `demuxKey`/`groupBindings`/`secretFields` contract,
@@ -52,11 +69,15 @@ function groupDiscordBindingsByTokenStub(entries: readonly SurfaceBindingEntry[]
     else groups.set(key, [entry]);
   }
   return [...groups.values()].map((groupedEntries) => {
+    const firstEntry = groupedEntries[0];
+    const token = stringBindingField(firstEntry?.binding ?? {}, "token", "");
+    const stack = firstEntry?.stack;
     const guildIds = groupedEntries.map((e) => stringBindingField(e.binding, "guildId"));
+    const firstGuildId = guildIds[0];
     const instanceId =
-      guildIds.length === 1
-        ? `discord:${guildIds[0]}`
-        : `discord:token:${JSON.stringify(guildIds)}`;
+      guildIds.length === 1 && firstGuildId !== undefined
+        ? `discord:${firstGuildId}`
+        : discordTokenInstanceIdStub(token, stack);
     return { entries: groupedEntries, instanceId };
   });
 }

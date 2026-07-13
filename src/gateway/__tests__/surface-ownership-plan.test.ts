@@ -4,7 +4,11 @@ import {
   planSurfaceOwnership,
 } from "../surface-ownership-plan";
 import type { Surfaces } from "../../common/types/surfaces";
-import { testRegistryWithWeb, testRegistryWithSlackAndMattermost } from "./test-registry-support";
+import {
+  testRegistryWithDiscord,
+  testRegistryWithWeb,
+  testRegistryWithSlackAndMattermost,
+} from "./test-registry-support";
 
 const SURFACES: Surfaces = {
   discord: [
@@ -159,6 +163,7 @@ describe("planSurfaceOwnership", () => {
       },
       gatewayEnabled: true,
       principal: "jc",
+      registry: testRegistryWithDiscord(),
     });
 
     expect(plan.gatewayAdapterInstanceIds).toHaveLength(1);
@@ -195,6 +200,7 @@ describe("planSurfaceOwnership", () => {
       },
       gatewayEnabled: true,
       principal: "jc",
+      registry: testRegistryWithDiscord(),
     });
 
     expect(plan.gatewayAdapterInstanceIds).toEqual([

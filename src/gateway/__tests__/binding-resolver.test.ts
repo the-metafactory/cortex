@@ -28,6 +28,7 @@ import {
 import type { Surfaces } from "../../common/types/surfaces";
 import type { InboundMessage } from "../../adapters/types";
 import {
+  testRegistryWithDiscord,
   testRegistryWithWeb,
   testRegistryWithSlack,
   testRegistryWithSlackAndMattermost,
@@ -121,7 +122,7 @@ const MATTERMOST_MULTI_SURFACES: Surfaces = {
 
 describe("buildBindingIndex — happy path", () => {
   test("discord: indexes by guildId", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     expect(index.discord.size).toBe(1);
     expect(index.discord.has("555555555555555555")).toBe(true);
   });
@@ -193,7 +194,7 @@ describe("buildBindingIndex — collision throws", () => {
         },
       ],
     };
-    expect(() => buildBindingIndex(ambiguous)).toThrow(/discord.*SAME_GUILD/i);
+    expect(() => buildBindingIndex(ambiguous, testRegistryWithDiscord())).toThrow(/discord.*SAME_GUILD/i);
   });
 
   test("slack: two bindings with same workspaceId → throws with platform + key in message", () => {
@@ -227,7 +228,7 @@ describe("buildBindingIndex — collision throws", () => {
 
 describe("resolveBinding — happy path", () => {
   test("discord: resolves by guildId", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const inbound = msg({ platform: "discord", guildId: "555555555555555555" });
     const match = resolveBinding(index, inbound);
     expect(match).not.toBeNull();
@@ -278,7 +279,7 @@ describe("resolveBinding — no platform bindings", () => {
 
 describe("resolveBinding — no-match on demux key", () => {
   test("discord: guildId not in index → null", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const inbound = msg({ platform: "discord", guildId: "999999999999999999" });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
@@ -294,7 +295,7 @@ describe("resolveBinding — no-match on demux key", () => {
 
 describe("resolveBinding — DM / no guildId", () => {
   test("discord DM (no guildId) → null (guild-granularity only in v1)", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const inbound = msg({ platform: "discord", guildId: undefined, isDM: true });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
@@ -335,7 +336,7 @@ describe("resolveBinding — mattermost multi-binding ambiguity", () => {
 
 describe("stack-parsing", () => {
   test("binding with stack='andreas/meta-factory' → principal=andreas, stack=meta-factory", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const match = resolveBinding(
       index,
       msg({ platform: "discord", guildId: "555555555555555555" }),
@@ -359,7 +360,7 @@ describe("stack-parsing", () => {
         },
       ],
     };
-    const index = buildBindingIndex(noStack);
+    const index = buildBindingIndex(noStack, testRegistryWithDiscord());
     const match = resolveBinding(
       index,
       msg({ platform: "discord", guildId: "GUILD_NO_STACK" }),
@@ -384,7 +385,7 @@ describe("stack-parsing", () => {
         },
       ],
     };
-    const index = buildBindingIndex(multiSlash);
+    const index = buildBindingIndex(multiSlash, testRegistryWithDiscord());
     const match = resolveBinding(
       index,
       msg({ platform: "discord", guildId: "GUILD_XSLASH" }),
@@ -398,7 +399,7 @@ describe("stack-parsing", () => {
 
 describe("instance-id determinism", () => {
   test("same (platform, guildId) always produces the same instance string", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const m1 = resolveBinding(
       index,
       msg({ platform: "discord", guildId: "555555555555555555" }),
@@ -411,7 +412,7 @@ describe("instance-id determinism", () => {
   });
 
   test("instance is 'platform:demuxKey' format (interim until schema carries explicit id)", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const match = resolveBinding(
       index,
       msg({ platform: "discord", guildId: "555555555555555555" }),
@@ -450,7 +451,7 @@ describe("instance-id determinism", () => {
         },
       ],
     };
-    const index = buildBindingIndex(twoGuilds);
+    const index = buildBindingIndex(twoGuilds, testRegistryWithDiscord());
     const mA = resolveBinding(index, msg({ platform: "discord", guildId: "GUILD_A" }));
     const mB = resolveBinding(index, msg({ platform: "discord", guildId: "GUILD_B" }));
     expect(mA!.instance).not.toBe(mB!.instance);
@@ -463,7 +464,7 @@ describe("instance-id determinism", () => {
 
 describe("resolveBinding — unknown platform", () => {
   test("a platform with no resolver branch (e.g. 'teams') → null", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     // InboundMessage.platform is typed `string`, so a future/unknown platform
     // is representable; the resolver must fall through to null, never throw.
     const inbound = msg({ platform: "teams", guildId: "555555555555555555" });
@@ -489,7 +490,7 @@ describe("stack-parsing — degenerate inputs collapse to undefined", () => {
         },
       ],
     };
-    const index = buildBindingIndex(loneSlash);
+    const index = buildBindingIndex(loneSlash, testRegistryWithDiscord());
     const match = resolveBinding(
       index,
       msg({ platform: "discord", guildId: "GUILD_SLASH" }),
@@ -894,7 +895,7 @@ describe("resolveBinding — web happy path", () => {
   });
 
   test("web inbound against discord-only index → null (web map is empty)", () => {
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const inbound = msg({ platform: "web", instanceId: "web:acme" });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
