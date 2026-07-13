@@ -33,7 +33,7 @@ import {
 } from "../surface-gateway";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
-import { testRegistryWithWeb } from "./test-registry-support";
+import { testRegistryWithWeb, testRegistryWithSlack } from "./test-registry-support";
 
 // =============================================================================
 // Minimal fake PlatformAdapter (no real platform connection needed)
@@ -292,6 +292,9 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
       enabled: true,
       surfaces: SLACK_SURFACES,
       adapters: [makeFakeAdapter("fake-slack-1")],
+      // cortex#1795 (S10 MOVE) — slack is no longer in the in-tree default
+      // registry (see test-registry-support.ts).
+      registry: testRegistryWithSlack(),
     });
     expect(result).toBeInstanceOf(SurfaceGateway);
   });

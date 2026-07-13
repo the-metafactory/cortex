@@ -28,6 +28,7 @@ import { foldSurfaceBindings, SurfacesSchema, type Surfaces } from "../types/sur
 import {
   createDefaultSurfacePluginRegistry,
   validateSurfacesAgainstRegistry,
+  type SurfacePluginRegistry,
 } from "../../adapters/registry";
 import { resolveRendererPluginAndConfig } from "../../renderers";
 import { enforceChmod600 } from "./file-permissions";
@@ -407,7 +408,10 @@ function listLayerFiles(dir: string): string[] {
 // Not exported — `loadConfigWithAgents` is the public entry for the `surfaces`
 // field; `composeRawConfig` (the delegating wrapper below) stays the public
 // raw-compose API for its existing callers.
-function composeRawConfigWithSurfaces(configPath: string): {
+function composeRawConfigWithSurfaces(
+  configPath: string,
+  registry: SurfacePluginRegistry = createDefaultSurfacePluginRegistry(),
+): {
   raw: Record<string, unknown>;
   surfaces: Surfaces | undefined;
 } {
@@ -433,8 +437,8 @@ function composeRawConfigWithSurfaces(configPath: string): {
     enforceChmod600(expandedPath);
     const content = readFileSync(expandedPath, "utf-8");
     const single = (parseYaml(content) ?? {}) as Record<string, unknown>;
-    const surfaces = parseSurfaces(single.surfaces);
-    return { raw: foldSurfaceBindings(single, defaultFoldPlatforms()), surfaces };
+    const surfaces = parseSurfaces(single.surfaces, registry);
+    return { raw: foldSurfaceBindings(single, defaultFoldPlatforms(registry)), surfaces };
   }
 
   // CFG.a.1 — directory layout. Fixed precedence: system → network → surfaces
@@ -456,8 +460,8 @@ function composeRawConfigWithSurfaces(configPath: string): {
   // itself (`foldSurfaceBindings`) already calls `SurfacesSchema.parse`
   // internally — `parseSurfaces` re-uses the same schema so the parse is
   // redundant but cheap (no I/O). Both share the same validated result shape.
-  const surfaces = parseSurfaces(merged.surfaces);
-  return { raw: foldSurfaceBindings(merged, defaultFoldPlatforms()), surfaces };
+  const surfaces = parseSurfaces(merged.surfaces, registry);
+  return { raw: foldSurfaceBindings(merged, defaultFoldPlatforms(registry)), surfaces };
 }
 
 /**
@@ -465,18 +469,28 @@ function composeRawConfigWithSurfaces(configPath: string): {
  * fold-platform list: every registered `AdapterPlugin` that opts into
  * `foldsIntoPresence`. Replaces the hardcoded `PLATFORMS` const that used to
  * live in `surfaces.ts` — "which platforms fold" is now a property each
- * plugin declares (discord/slack/mattermost `true`, web `false` — PRESERVED
- * exactly) rather than a second list that could drift from the registry.
+ * plugin declares (discord/mattermost `true`, web `false` — PRESERVED
+ * exactly; slack is ALSO `true` but is no longer resolvable from the
+ * in-tree default alone post-cortex#1795 S10 MOVE — see `registry`'s doc
+ * below) rather than a second list that could drift from the registry.
  * `surfaces.ts` itself cannot import the registry (would cycle — the
  * registry's in-tree adapter plugins import `surfaces.ts` for their binding
  * schemas), so `loader.ts` — which already imports the registry for the
  * registry-pass validation below — computes this list and passes it down
- * explicitly. Constructing a fresh `SurfacePluginRegistry` per call is cheap
- * (pure in-memory registration, no I/O); this is the same "default registry"
- * every other config-load-time registry check in this file uses.
+ * explicitly.
+ *
+ * @param registry cortex#1795 (S10 MOVE) — accepts an explicit registry
+ *   (e.g. one `loadExternalPlugins` has already enriched with the slack/web
+ *   bundles) so an out-of-tree-but-loaded platform's fold intent is still
+ *   discoverable. Defaults to a fresh {@link createDefaultSurfacePluginRegistry}
+ *   (in-tree discord/mattermost only) — UNCHANGED behaviour for every
+ *   existing caller that doesn't thread one through (this file's own default
+ *   parameter is a new extension point, not a behavior change by itself).
  */
-function defaultFoldPlatforms(): readonly string[] {
-  return createDefaultSurfacePluginRegistry()
+function defaultFoldPlatforms(
+  registry: SurfacePluginRegistry = createDefaultSurfacePluginRegistry(),
+): readonly string[] {
+  return registry
     .listAdapters()
     .filter((p) => p.foldsIntoPresence)
     .map((p) => p.platform);
@@ -494,11 +508,22 @@ function defaultFoldPlatforms(): readonly string[] {
  * and giving `cortex config validate`/dry-run/`migrate-config` callers (who
  * never reach `cortex.ts`'s boot-time registry check) the same loud typo
  * guard `.strict()` used to give directly.
+ *
+ * @param registry cortex#1795 (S10 MOVE) — see {@link defaultFoldPlatforms}'s
+ *   doc: an out-of-tree platform (slack, web) declared in `surfaces.yaml`
+ *   validates here ONLY if the caller threads a registry that already has
+ *   that plugin registered (e.g. post-`loadExternalPlugins`). The default
+ *   (in-tree discord/mattermost only) preserves every existing caller's
+ *   behaviour unchanged — this does NOT by itself make a bundle-loaded
+ *   registry reach this call site; that requires the caller to opt in.
  */
-function parseSurfaces(value: unknown): Surfaces | undefined {
+function parseSurfaces(
+  value: unknown,
+  registry: SurfacePluginRegistry = createDefaultSurfacePluginRegistry(),
+): Surfaces | undefined {
   if (value === undefined || value === null) return undefined;
   const surfaces = SurfacesSchema.parse(value);
-  validateSurfacesAgainstRegistry(surfaces, createDefaultSurfacePluginRegistry());
+  validateSurfacesAgainstRegistry(surfaces, registry);
   return surfaces;
 }
 
@@ -516,9 +541,16 @@ function parseSurfaces(value: unknown): Surfaces | undefined {
  *
  * Delegates to `composeRawConfigWithSurfaces` and returns only `.raw`.
  * Callers that need `LoadedConfig.surfaces` should use `loadConfigWithAgents`.
+ *
+ * @param registry cortex#1795 (S10 MOVE) — optional override forwarded to
+ *   `parseSurfaces`'s registry pass; see that function's doc. Omit for the
+ *   unchanged in-tree-only default.
  */
-export function composeRawConfig(configPath: string): Record<string, unknown> {
-  return composeRawConfigWithSurfaces(configPath).raw;
+export function composeRawConfig(
+  configPath: string,
+  registry?: SurfacePluginRegistry,
+): Record<string, unknown> {
+  return composeRawConfigWithSurfaces(configPath, registry).raw;
 }
 
 /**
@@ -545,8 +577,18 @@ export function composeRawConfig(configPath: string): Record<string, unknown> {
  * either deep-merges a directory layout (`system/`, `network/`, `surfaces/`,
  * `stacks/`) or reads the single `cortex.yaml` verbatim. `LoadedConfig` is
  * unchanged across both paths.
+ *
+ * @param registry cortex#1795 (S10 MOVE) — optional override threaded to the
+ *   surfaces registry pass (`parseSurfaces`) and the fold-platform list
+ *   (`defaultFoldPlatforms`). Omit for the unchanged in-tree-only default
+ *   (discord/mattermost) — every existing caller (dry-run/validate/
+ *   migrate-config CLI paths, which never load external plugin bundles)
+ *   keeps today's behaviour exactly. A caller that HAS an enriched registry
+ *   in hand (e.g. cortex.ts boot, post-`loadExternalPlugins`) can pass it
+ *   here so `surfaces.slack[]` / `surfaces.web[]` bindings validate and fold
+ *   successfully instead of throwing "no adapter installed for platform …".
  */
-export function loadConfigWithAgents(path: string): LoadedConfig {
+export function loadConfigWithAgents(path: string, registry?: SurfacePluginRegistry): LoadedConfig {
   // Echo nit #2 on cortex#525 — expand the tilde ONCE here via the fail-loud
   // helper, then hand the already-expanded path to `composeRawConfigWithSurfaces`
   // (`expandTilde` is idempotent on an absolute path), removing the redundant
@@ -557,7 +599,7 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   // CFG.a.1/CFG.a.2 — compose from directory layout or fall back to single
   // file. Capture the validated `Surfaces` binding map before the fold drops
   // the top-level `surfaces:` key (GW.a.3b.2a, cortex#524).
-  const { raw, surfaces } = composeRawConfigWithSurfaces(expandedPath);
+  const { raw, surfaces } = composeRawConfigWithSurfaces(expandedPath, registry);
 
   // cortex#1209 / cortex#1217 — resolve `__ENV__` placeholders in the surface
   // secret fields (`agents[].presence.{discord.token, mattermost.apiToken,

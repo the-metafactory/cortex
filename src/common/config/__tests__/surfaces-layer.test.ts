@@ -34,8 +34,15 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { stringify } from "yaml";
+import { z } from "zod/v4";
 import { loadConfigWithAgents } from "../loader";
 import { foldSurfaceBindings, SurfacesSchema } from "../../types/surfaces";
+import {
+  createDefaultSurfacePluginRegistry,
+  validateSurfacesAgainstRegistry,
+  type AdapterPlugin,
+} from "../../../adapters/registry";
+import { stringBindingField } from "../../../adapters/plugin-support";
 
 let testDir: string;
 
@@ -104,6 +111,46 @@ const MATTERMOST_BINDING = {
   apiUrl: "https://mm.example.com",
   apiToken: "fake-mm-token",
 };
+
+/**
+ * cortex#1795 (S10 MOVE) — slack's `bindingSchema` extracted to the
+ * `metafactory-cortex-adapter-slack` bundle's `src/schema.ts`
+ * (`SlackBindingSchema`); it's no longer importable here. Reproduced
+ * field-for-field/regex-for-regex so `validateSurfacesAgainstRegistry`
+ * (the REGISTRY pass a `surfaces.slack[]` binding validates through
+ * post-extraction — see `common/types/surfaces.ts`'s module doc) still
+ * catches a malformed token in THIS test suite, exactly as the in-tree
+ * plugin did before the move.
+ */
+const testSlackBindingSchema = z
+  .object({
+    botToken: z.string().regex(/^xoxb-/, "surfaces.slack[].binding.botToken must be a bot user OAuth token (xoxb-...)"),
+    appToken: z.string().regex(/^xapp-/, "surfaces.slack[].binding.appToken must be an app-level token (xapp-...)"),
+    workspaceId: z.coerce.string().regex(/^T[A-Z0-9]{8,16}$/, "surfaces.slack[].binding.workspaceId must be a Slack team id"),
+  })
+  .catchall(z.unknown());
+
+const testSlackAdapterPluginStub: AdapterPlugin = {
+  kind: "adapter",
+  id: "slack",
+  platform: "slack",
+  bindingSchema: testSlackBindingSchema,
+  foldsIntoPresence: true,
+  secretFields: ["botToken", "appToken"],
+  demuxKey: (binding) => stringBindingField(binding, "workspaceId"),
+  buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+  createAdapter: () => {
+    throw new Error("testSlackAdapterPluginStub — never constructed in loader tests");
+  },
+};
+
+/** In-tree default (discord/mattermost) plus a slack stub, for tests that
+ *  exercise `surfaces.slack[]` post-cortex#1795 (S10 MOVE). */
+function testRegistryWithSlack() {
+  const registry = createDefaultSurfacePluginRegistry();
+  registry.registerAdapter(testSlackAdapterPluginStub);
+  return registry;
+}
 
 /** Stack with bindings INLINE in per-stack presence (the pre-CFG.c shape). */
 function stackInline(): Record<string, unknown> {
@@ -201,8 +248,10 @@ describe("CFG.c.4 — surfaces.yaml round-trips to the same effective presence/b
       stackNoBindings(),
     );
 
-    const inline = loadConfigWithAgents(inlinePath);
-    const split = loadConfigWithAgents(splitPath);
+    // cortex#1795 (S10 MOVE) — splitPath's surfaces.yaml carries a slack[]
+    // binding; slack is no longer in the in-tree default registry.
+    const inline = loadConfigWithAgents(inlinePath, testRegistryWithSlack());
+    const split = loadConfigWithAgents(splitPath, testRegistryWithSlack());
 
     // Fold-output identity — the move is a source-layout change, not a
     // runtime-shape change. The split config additionally carries `surfaces`
@@ -246,8 +295,10 @@ describe("CFG.c.4 — surfaces.yaml round-trips to the same effective presence/b
       surfacesBlock(),
       stackNoBindings(),
     );
-    const inline = loadConfigWithAgents(inlinePath);
-    const split = loadConfigWithAgents(splitPath);
+    // cortex#1795 (S10 MOVE) — splitPath's surfaces.yaml carries a slack[]
+    // binding; slack is no longer in the in-tree default registry.
+    const inline = loadConfigWithAgents(inlinePath, testRegistryWithSlack());
+    const split = loadConfigWithAgents(splitPath, testRegistryWithSlack());
     expect(split.config.discord.map((d) => d.instanceId)).toEqual(
       inline.config.discord.map((d) => d.instanceId),
     );
@@ -293,11 +344,17 @@ describe("CFG.c.4 — surfaces.yaml schema validates required binding fields", (
   });
 
   test("Slack binding with a non-xoxb botToken fails loudly", () => {
-    expect(() =>
-      SurfacesSchema.parse({
-        slack: [{ agent: "ivy", binding: { botToken: "nope", appToken: "xapp-x", workspaceId: "T01234567" } }],
-      }),
-    ).toThrow();
+    // cortex#1795 (S10 MOVE) — slack's binding SCHEMA is no longer part of
+    // the STRUCTURAL pass (`SurfacesSchema` — it fell to the generic
+    // catchall, see that schema's module doc); the botToken-prefix
+    // enforcement now lives in the REGISTRY pass, against the bundle's own
+    // `bindingSchema`. Assert via `validateSurfacesAgainstRegistry` instead
+    // of a bare `SurfacesSchema.parse` — same loud-failure contract, correct
+    // layer post-extraction.
+    const surfaces = SurfacesSchema.parse({
+      slack: [{ agent: "ivy", binding: { botToken: "nope", appToken: "xapp-x", workspaceId: "T01234567" } }],
+    });
+    expect(() => validateSurfacesAgainstRegistry(surfaces, testRegistryWithSlack())).toThrow();
   });
 
   test("Mattermost binding missing apiToken fails loudly", () => {

@@ -112,10 +112,12 @@ describe("transparent upgrade E2E — the real metafactory-cortex-adapter-web bu
     ]);
   });
 
-  test("the loaded plugin registers into the SAME registry discord/slack/mattermost already live in, alongside them", async () => {
+  test("the loaded plugin registers into the SAME registry discord/mattermost already live in, alongside them", async () => {
+    // cortex#1795 (S10 MOVE) — "slack" no longer among the in-tree default
+    // (it extracted to metafactory-cortex-adapter-slack, same fate as web).
     const registry = createDefaultSurfacePluginRegistry();
     const beforeIds = registry.listAdapters().map((p) => p.id);
-    expect(beforeIds).toEqual(["discord", "slack", "mattermost"]);
+    expect(beforeIds).toEqual(["discord", "mattermost"]);
 
     await loadExternalPlugins({
       registry,
@@ -124,7 +126,7 @@ describe("transparent upgrade E2E — the real metafactory-cortex-adapter-web bu
       runner: runnerFor([webBundlePkg()]),
     });
 
-    expect(registry.listAdapters().map((p) => p.id)).toEqual(["discord", "slack", "mattermost", "web"]);
+    expect(registry.listAdapters().map((p) => p.id)).toEqual(["discord", "mattermost", "web"]);
   });
 
   test("the registered plugin constructs a REAL, working WebAdapter — not just a shape-valid stub", async () => {

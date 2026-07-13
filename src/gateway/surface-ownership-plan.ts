@@ -53,8 +53,9 @@ export interface SurfaceOwnershipPlanOpts {
    * cortex#1951 — the `(kind, id)`-keyed plugin registry `gatewayInstanceIds`
    * derives each platform's demux key from (`plugin.demuxKey(binding)`)
    * instead of a hardcoded field read. Defaults to
-   * {@link createDefaultSurfacePluginRegistry} (in-tree discord/slack/
-   * mattermost only) when omitted — a back-compat/test convenience;
+   * {@link createDefaultSurfacePluginRegistry} (in-tree discord/mattermost
+   * only — cortex#1795 S10 MOVE dropped slack from the in-tree default, same
+   * as web before it) when omitted — a back-compat/test convenience;
    * production boot always threads its own composed registry explicitly.
    */
   registry?: SurfacePluginRegistry;

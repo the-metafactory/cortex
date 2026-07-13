@@ -28,6 +28,7 @@ import {
 import { buildBindingIndex } from "../binding-resolver";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
+import { testRegistryWithSlack } from "./test-registry-support";
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -280,7 +281,9 @@ describe("handleInbound — routable Discord message", () => {
 describe("handleInbound — routable Slack message", () => {
   test("publishes correct decision", async () => {
     const adapter = new MockAdapter("slack", "slack-luna-mf");
-    const index = buildBindingIndex(SLACK_SURFACES);
+    // cortex#1795 (S10 MOVE) — slack is no longer in the in-tree default
+    // registry (see test-registry-support.ts).
+    const index = buildBindingIndex(SLACK_SURFACES, testRegistryWithSlack());
     const sink = new FakeSink();
     const gw = new SurfaceGateway([adapter], index, sink);
     await gw.start();

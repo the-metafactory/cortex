@@ -32,7 +32,49 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { stringify } from "yaml";
+import { z } from "zod/v4";
 import { loadConfigWithAgents } from "../loader";
+import { createDefaultSurfacePluginRegistry, type AdapterPlugin } from "../../../adapters/registry";
+import { stringBindingField } from "../../../adapters/plugin-support";
+
+/**
+ * cortex#1795 (S10 MOVE) — slack's `bindingSchema` extracted to the
+ * `metafactory-cortex-adapter-slack` bundle; it's no longer importable
+ * here. `loadConfigWithAgents`'s registry pass validates `surfaces.slack[]`
+ * only against a registry that has a "slack" plugin registered — this
+ * fixture-local stub reproduces the real bundle's `bindingSchema`
+ * field-for-field/regex-for-regex (see `common/types/surfaces.ts`'s module
+ * doc) so every test in this file that exercises `surfacesBlock()` (which
+ * always carries a slack[] binding) keeps validating exactly as before the
+ * move.
+ */
+const testSlackBindingSchema = z
+  .object({
+    botToken: z.string().regex(/^xoxb-/),
+    appToken: z.string().regex(/^xapp-/),
+    workspaceId: z.coerce.string().regex(/^T[A-Z0-9]{8,16}$/),
+  })
+  .catchall(z.unknown());
+
+const testSlackAdapterPluginStub: AdapterPlugin = {
+  kind: "adapter",
+  id: "slack",
+  platform: "slack",
+  bindingSchema: testSlackBindingSchema,
+  foldsIntoPresence: true,
+  secretFields: ["botToken", "appToken"],
+  demuxKey: (binding) => stringBindingField(binding, "workspaceId"),
+  buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+  createAdapter: () => {
+    throw new Error("testSlackAdapterPluginStub — never constructed in loader tests");
+  },
+};
+
+function testRegistryWithSlack() {
+  const registry = createDefaultSurfacePluginRegistry();
+  registry.registerAdapter(testSlackAdapterPluginStub);
+  return registry;
+}
 
 let testDir: string;
 
@@ -196,7 +238,7 @@ describe("GW.3b.2a.1 — directory layout with surfaces.yaml populates LoadedCon
       surfacesBlock(),
       stackNoBindings(),
     );
-    const loaded = loadConfigWithAgents(path);
+    const loaded = loadConfigWithAgents(path, testRegistryWithSlack());
 
     // surfaces must be defined and carry the validated binding map.
     expect(loaded.surfaces).toBeDefined();
@@ -234,7 +276,7 @@ describe("GW.3b.2a.1 — directory layout with surfaces.yaml populates LoadedCon
       surfacesBlock(),
       stackNoBindings(),
     );
-    const loaded = loadConfigWithAgents(path);
+    const loaded = loadConfigWithAgents(path, testRegistryWithSlack());
 
     // inlineAgents presence shape (the consumer cortex.ts reads).
     const ivy = loaded.inlineAgents[0]!;
@@ -265,8 +307,8 @@ describe("GW.3b.2a.1 — directory layout with surfaces.yaml populates LoadedCon
       stackNoBindings(),
     );
 
-    const inline = loadConfigWithAgents(inlinePath);
-    const split = loadConfigWithAgents(splitPath);
+    const inline = loadConfigWithAgents(inlinePath, testRegistryWithSlack());
+    const split = loadConfigWithAgents(splitPath, testRegistryWithSlack());
 
     // The fold-output fields (the only ones downstream consumers read) must
     // be equal. The split config additionally carries `surfaces` (the inline
@@ -326,7 +368,7 @@ describe("GW.3b.2a.3 — single-file cortex.yaml with inline surfaces: block", (
       ...stackNoBindings(),
       ...surfacesBlock(),
     });
-    const loaded = loadConfigWithAgents(path);
+    const loaded = loadConfigWithAgents(path, testRegistryWithSlack());
 
     expect(loaded.surfaces).toBeDefined();
     expect(loaded.surfaces!.discord).toHaveLength(1);

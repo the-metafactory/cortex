@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { z } from "zod/v4";
 import {
   buildGatewayAdapters,
   type GatewayAdapterDeps,
@@ -138,11 +139,45 @@ const RUNTIME_STUB = {
   stop: async () => {},
 } as unknown as MyelinRuntime;
 
+/**
+ * cortex#1795 (S10 MOVE) — `registryFromFactory` no longer auto-registers a
+ * "slack" entry (no in-tree `slackAdapterPlugin` to borrow
+ * `demuxKey`/`buildGatewayConstructArgs` from any more — see that
+ * function's doc, `adapters/registry.ts`). This file's tests still exercise
+ * slack construction through `factory.slack(...)`, so `makeDeps` registers
+ * its own minimal stub `AdapterPlugin` — same documented workaround
+ * `registry.test.ts` uses — with a `demuxKey`/`buildGatewayConstructArgs`
+ * pair that reproduces the bundle's real behaviour closely enough for THESE
+ * tests (workspaceId-keyed demux; `instanceId`/`source`/`binding`/`runtime`
+ * forwarded straight through to the recording factory, which is all
+ * `makeRecordingFactory`'s `slack` closure reads).
+ */
+function stubSlackPlugin(factory: GatewayAdapterFactory): AdapterPlugin {
+  return {
+    kind: "adapter",
+    id: "slack",
+    platform: "slack",
+    bindingSchema: z.unknown(),
+    foldsIntoPresence: true,
+    secretFields: ["botToken", "appToken"],
+    demuxKey: (binding) => (typeof binding.workspaceId === "string" ? binding.workspaceId : ""),
+    buildGatewayConstructArgs: (group, base) => ({
+      instanceId: base.instanceId,
+      source: base.source,
+      binding: group.entries[0]?.binding,
+      runtime: base.runtime,
+    }),
+    createAdapter: (args) => factory.slack(args as never),
+  };
+}
+
 function makeDeps(factory: GatewayAdapterFactory): GatewayAdapterDeps {
+  const registry = registryFromFactory(factory);
+  registry.registerAdapter(stubSlackPlugin(factory));
   return {
     principal: "andreas",
     runtime: RUNTIME_STUB,
-    registry: registryFromFactory(factory),
+    registry,
   };
 }
 

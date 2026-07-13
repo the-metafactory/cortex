@@ -83,6 +83,19 @@ import { isPlainObject } from "./object-guards";
 // registry-contributed platform (generic `SurfaceBindingEntrySchema` at the
 // STRUCTURAL pass, the plugin's own `bindingSchema` at the REGISTRY pass —
 // see `SurfacesSchema`'s doc comment).
+//
+// cortex#1795 (S10 MOVE) — the Slack binding schema left this repo the SAME
+// way: it now lives in the `metafactory-cortex-adapter-slack` bundle's own
+// `src/schema.ts` (`SlackBindingSchema`, byte-identical to the one that used
+// to live here), loaded at boot by `src/adapters/loader.ts` and carried on
+// the registered `AdapterPlugin`'s `bindingSchema` field. `slack` drops out
+// of the three hardcoded platforms below and validates like `web` does —
+// generic `SurfaceBindingEntrySchema` at the STRUCTURAL pass, the bundle's
+// own `bindingSchema` at the REGISTRY pass. UNLIKE `web`, slack still FOLDS
+// into `agents[*].presence.slack` (`foldsIntoPresence: true` on the bundle's
+// plugin, unchanged behaviour) — see {@link DEFAULT_FOLD_PLATFORMS}, which
+// keeps "slack" for exactly that reason; only the SCHEMA hardcoding moved,
+// not the fold behaviour.
 
 // =============================================================================
 // Per-platform binding schemas — the credential/instance subset that moves
@@ -121,28 +134,10 @@ export const DiscordBindingSchema = z
   })
   .catchall(z.unknown());
 
-/**
- * Slack surface binding — `botToken` + `appToken` + `workspaceId` are the
- * irreducible Socket-Mode binding (mirror of `SlackPresenceSchema`). Regexes
- * match the canonical presence schema so a malformed token fails at the
- * surfaces layer, not only post-fold.
- */
-export const SlackBindingSchema = z
-  .object({
-    botToken: z
-      .string()
-      .regex(/^xoxb-/, "surfaces.slack[].binding.botToken must be a bot user OAuth token (xoxb-...)"),
-    appToken: z
-      .string()
-      .regex(/^xapp-/, "surfaces.slack[].binding.appToken must be an app-level token (xapp-...)"),
-    workspaceId: z.coerce
-      .string()
-      .regex(
-        /^T[A-Z0-9]{8,16}$/,
-        "surfaces.slack[].binding.workspaceId must be a Slack team id (T... with 8-16 trailing chars)",
-      ),
-  })
-  .catchall(z.unknown());
+// `SlackBindingSchema` — cortex#1795 (S10 MOVE) extracted entirely to the
+// `metafactory-cortex-adapter-slack` bundle's `src/schema.ts` (byte-identical
+// fields/regexes); no longer defined or re-exported from cortex core (see
+// the module doc above).
 
 /**
  * Mattermost surface binding — the API connection subset of
@@ -188,10 +183,9 @@ export const DiscordSurfaceBindingSchema = z.object({
   binding: DiscordBindingSchema,
 });
 
-export const SlackSurfaceBindingSchema = z.object({
-  ...bindingEntryBase,
-  binding: SlackBindingSchema,
-});
+// `SlackSurfaceBindingSchema` — cortex#1795 (S10 MOVE), same fate as
+// `SlackBindingSchema` above; `slack[]` entries validate via the generic
+// `SurfaceBindingEntrySchema` at the structural pass now (see `SurfacesSchema`).
 
 export const MattermostSurfaceBindingSchema = z.object({
   ...bindingEntryBase,
@@ -229,31 +223,33 @@ export type SurfaceBindingEntry = z.infer<typeof SurfaceBindingEntrySchema>;
  * optional (a deployment may bind only Discord).
  *
  * cortex#1789 (S4, ADR-0024 D5) — two-stage validation. This schema is the
- * STRUCTURAL pass ONLY: the three in-tree platforms (discord/slack/mattermost)
- * keep their full, strongly-typed binding schemas (byte-identical validation,
- * zero ripple to every consumer typed against `Surfaces["discord"]` etc. —
- * `discord-token-groups.ts`, `gateway-adapters.ts`); any OTHER top-level key
- * — including `web`, cortex#1794 S9 MOVE: it extracted out-of-tree and is no
- * longer one of the hardcoded three — is accepted structurally as a generic
- * {@link SurfaceBindingEntrySchema} array via `.catchall(...)`, because a
- * registry-contributed platform's key is not known to this static schema.
- * `.catchall()` replaces the old `.strict()` — the "is this a REAL platform"
- * check moves to the REGISTRY pass (`resolveAdapterPluginOrThrow` /
- * `validateSurfacesAgainstRegistry`, `src/adapters/registry.ts`), which runs
- * wherever a `SurfacePluginRegistry` is in hand (the in-tree
- * `createDefaultSurfacePluginRegistry` plus whatever `loadExternalPlugins`
- * registered, e.g. `web` once its bundle loads) and produces the SAME loud
- * "no adapter installed for platform …" failure a typo (`discrod:`) used to
- * get from `.strict()` — see `loader.ts`'s `parseSurfaces` and `cortex.ts`
- * boot for the two call sites.
+ * STRUCTURAL pass ONLY: the two remaining in-tree platforms
+ * (discord/mattermost) keep their full, strongly-typed binding schemas
+ * (byte-identical validation, zero ripple to every consumer typed against
+ * `Surfaces["discord"]` etc. — `discord-token-groups.ts`,
+ * `gateway-adapters.ts`); any OTHER top-level key — including `web`
+ * (cortex#1794 S9 MOVE) and `slack` (cortex#1795 S10 MOVE), both extracted
+ * out-of-tree and no longer among the hardcoded set — is accepted
+ * structurally as a generic {@link SurfaceBindingEntrySchema} array via
+ * `.catchall(...)`, because a registry-contributed platform's key is not
+ * known to this static schema. `.catchall()` replaces the old `.strict()` —
+ * the "is this a REAL platform" check moves to the REGISTRY pass
+ * (`resolveAdapterPluginOrThrow` / `validateSurfacesAgainstRegistry`,
+ * `src/adapters/registry.ts`), which runs wherever a `SurfacePluginRegistry`
+ * is in hand (the in-tree `createDefaultSurfacePluginRegistry` plus whatever
+ * `loadExternalPlugins` registered, e.g. `web`/`slack` once their bundles
+ * load) and produces the SAME loud "no adapter installed for platform …"
+ * failure a typo (`discrod:`) used to get from `.strict()` — see
+ * `loader.ts`'s `parseSurfaces` and `cortex.ts` boot for the two call sites.
  *
  * Note: `web[]` bindings are NOT folded by `foldSurfaceBindings` (there is no
- * legacy presence shape) — see {@link DEFAULT_FOLD_PLATFORMS}.
+ * legacy presence shape) — see {@link DEFAULT_FOLD_PLATFORMS}. `slack[]`
+ * DOES still fold (unlike `web`, extraction didn't change slack's fold
+ * behaviour, only where its binding schema lives).
  */
 export const SurfacesSchema = z
   .object({
     discord: z.array(DiscordSurfaceBindingSchema).optional(),
-    slack: z.array(SlackSurfaceBindingSchema).optional(),
     mattermost: z.array(MattermostSurfaceBindingSchema).optional(),
   })
   // `.optional()` on the catchall element too — NOT a behavior change (a
@@ -269,11 +265,13 @@ export const SurfacesSchema = z
 
 export type Surfaces = z.infer<typeof SurfacesSchema>;
 export type DiscordSurfaceBinding = z.infer<typeof DiscordSurfaceBindingSchema>;
-export type SlackSurfaceBinding = z.infer<typeof SlackSurfaceBindingSchema>;
 export type MattermostSurfaceBinding = z.infer<typeof MattermostSurfaceBindingSchema>;
 // `WebSurfaceBinding`/`WebBinding`/`WebBindingSchema` — cortex#1794 (S9 MOVE)
 // extracted entirely to the `metafactory-cortex-adapter-web` bundle; no
 // longer defined or re-exported from cortex core (see the module doc above).
+// `SlackSurfaceBinding`/`SlackSurfaceBindingSchema`/`SlackBindingSchema` —
+// cortex#1795 (S10 MOVE), same fate: extracted to
+// `metafactory-cortex-adapter-slack`'s `src/schema.ts`.
 
 // =============================================================================
 // The fold — surfaces.yaml bindings → agents[*].presence.{platform}

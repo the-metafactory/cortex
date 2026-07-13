@@ -87,7 +87,6 @@ import type {
   SurfacePluginRegistry,
 } from "../adapters/registry";
 import { discordAdapterPlugin } from "../adapters/discord/plugin";
-import { slackAdapterPlugin } from "../adapters/slack/plugin";
 import { mattermostAdapterPlugin } from "../adapters/mattermost/plugin";
 import { buildAdapterPolicyPort, buildAdapterSystemEventPort } from "../adapters/plugin-support";
 import { formatEnvelopeAsMarkdown } from "../adapters/envelope-renderer";
@@ -223,15 +222,42 @@ export interface GatewayAdapterDeps {
  * imports (`start-gateway.ts`, `surface-adapter-boot.ts`, and their tests'
  * recording/counting fakes) keep resolving. The actual construction logic
  * moved verbatim into each platform's `AdapterPlugin.createAdapter`
- * (`src/adapters/{discord,slack,mattermost}/plugin.ts` — `web`'s moved
- * out-of-tree entirely, cortex#1794 S9 MOVE) — this object is now a thin
- * delegating shim, not the source of truth. New code should thread a
- * {@link SurfacePluginRegistry} (`createDefaultSurfacePluginRegistry`)
- * instead of this factory.
+ * (`src/adapters/{discord,mattermost}/plugin.ts` — `web` and `slack` both
+ * moved out-of-tree entirely, cortex#1794 S9 / cortex#1795 S10 MOVE) — this
+ * object is now a thin delegating shim, not the source of truth. New code
+ * should thread a {@link SurfacePluginRegistry}
+ * (`createDefaultSurfacePluginRegistry`) instead of this factory.
+ *
+ * cortex#1795 (S10 MOVE) — `slack` keeps its method here (unlike `web`,
+ * which dropped out of {@link GatewayAdapterFactory} entirely — see that
+ * interface's doc): `wireSurfaceAdapters`'s per-stack boot lane
+ * (`surface-adapter-boot.ts`) still calls `factory.slack(...)` on whichever
+ * factory a ternary produces, and that ternary's OTHER branch
+ * (`registryToLegacyFactory`, `adapters/registry.ts`) still has a real
+ * `slack` method — removing it here would make the union type-check fail on
+ * that call site for no behavioural gain. Production never actually reaches
+ * THIS implementation, though: `cortex.ts` always threads `registry` (which
+ * routes through `registryToLegacyFactory` instead, itself fully
+ * registry-driven — no in-tree import). This synchronous shim genuinely
+ * cannot construct a real Slack adapter any more (there is no in-tree
+ * `slackAdapterPlugin` to delegate to, and dynamic-import is async) — it
+ * throws a loud, actionable error instead of silently misbehaving. No
+ * production or test call site is known to reach this branch (verified: no
+ * test imports `defaultGatewayAdapterFactory` directly, and every
+ * `wireSurfaceAdapters`/`startGatewayIfEnabled` call site supplies an
+ * explicit `factory` or `registry`).
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
   discord: (args) => discordAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
-  slack: (args) => slackAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
+  slack: () => {
+    throw new Error(
+      "defaultGatewayAdapterFactory.slack: unreachable in production — cortex#1795 (S10 MOVE) " +
+        "extracted the Slack adapter to the metafactory-cortex-adapter-slack bundle; this legacy " +
+        "synchronous factory has no in-tree implementation to delegate to. Pass a `registry` " +
+        "(createDefaultSurfacePluginRegistry(), post-loadExternalPlugins) instead of relying on " +
+        "this factory's default.",
+    );
+  },
   mattermost: (args) => mattermostAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
 };
 
