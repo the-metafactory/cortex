@@ -36,6 +36,7 @@ import { basename, dirname, join } from "path";
 import { parse as parseYaml, parseDocument } from "yaml";
 
 import { expandTilde } from "../../../common/config/loader";
+import { resolveConfigDir } from "../../../common/config/config-path";
 import {
   ensureLeafInclude,
   leafIncludeDirectivePresent,
@@ -990,7 +991,11 @@ function stackConfigPath(cfg: LivePortsConfig): string {
   // in production — it's a belt-and-braces guard for direct port construction.
   if (cortexConfigPath === undefined || cortexConfigPath === "") {
     const slug = cfg.stackId.split("/")[1] ?? "default";
-    const cortexDir = expandTilde("~/.config/cortex");
+    // XDG wave-4 (cortex#1869): route through the canonical-first resolver
+    // instead of a hardcoded `~/.config/cortex`, so this belt-and-braces
+    // fallback lands on the moved `~/.config/metafactory/cortex` tree (or the
+    // legacy tree during transition), honoring `$CORTEX_CONFIG_DIR`.
+    const cortexDir = resolveConfigDir();
     const perStackDir = join(cortexDir, slug);
     if (existsSync(join(perStackDir, "system", "system.yaml"))) {
       return join(perStackDir, "stacks", `${slug}.yaml`);
@@ -1530,7 +1535,10 @@ export function buildDryRunPorts(cfg: LivePortsConfig): NetworkPorts {
  * `public.>` subscription is added/removed here.
  */
 function systemConfigPath(): string {
-  return join(expandTilde("~/.config/cortex"), "system", "system.yaml");
+  // XDG wave-4 (cortex#1869): resolve the active config dir (canonical
+  // `~/.config/metafactory/cortex` first, legacy trees as fallback, or
+  // `$CORTEX_CONFIG_DIR`) rather than hardcoding the pre-move `~/.config/cortex`.
+  return join(resolveConfigDir(), "system", "system.yaml");
 }
 
 /** The literal `public.>` subscribe pattern. */
