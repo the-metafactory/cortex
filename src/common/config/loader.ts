@@ -38,6 +38,11 @@ import {
   type SurfacePluginRegistry,
 } from "../../adapters/registry";
 import { resolveRendererPluginAndConfig } from "../../renderers";
+import {
+  assertConfiguredSystemCoverage,
+  type RendererCoverageInput,
+} from "../../renderers/coverage";
+import { deriveStackId } from "../types/stack";
 import { enforceChmod600 } from "./file-permissions";
 import {
   resolveAgentPresenceTokens,
@@ -944,9 +949,37 @@ function loadCortexShape(
   // `common/types/config.ts`): it only ever validated at `cortex.ts` boot,
   // and that asymmetry is preserved rather than newly tightened.
   const rendererRegistry = createDefaultSurfacePluginRegistry();
+  const configuredRendererCoverage: RendererCoverageInput[] = [];
   for (const entry of cortexConfig.renderers) {
-    resolveRendererPluginAndConfig(entry, rendererRegistry);
+    const { plugin, config } = resolveRendererPluginAndConfig(entry, rendererRegistry);
+    // Capture the class + defaults-applied subscribe set for the §4.6
+    // coverage check below (dashboard/cli-tail default to a system-covering
+    // `local.{principal}.>`; pagerduty/webhook-out default to `[]`).
+    const subscribe = (config as Record<string, unknown>).subscribe;
+    configuredRendererCoverage.push({
+      kind: plugin.rendererKind,
+      subscribe: Array.isArray(subscribe) ? (subscribe as string[]) : [],
+    });
   }
+
+  // cortex#1893 (S12b-pre, ADR-0024 §OQ9) — the CONFIG-LOAD half of the
+  // G-1111 §4.6 renderer-coverage HARD-FAIL guard. Fails LOUDLY when the
+  // CONFIGURED renderers do not, on their own, meet the ≥2-distinct-classes /
+  // ≥1-effective-sink floor (e.g. `dashboard` alone — the inert stub can never
+  // be the effective sink). The install-state half (a class whose bundle
+  // didn't load) runs AFTER plugin loading (S6) in `cortex.ts`, since "did the
+  // bundle load?" is not answerable here. Out of scope (→ no-op) for stacks
+  // that declare no system-covering renderer. See `src/renderers/coverage.ts`.
+  assertConfiguredSystemCoverage(configuredRendererCoverage, {
+    principal: cortexConfig.principal.id,
+    stack:
+      cortexConfig.stack !== undefined
+        ? deriveStackId({
+            principal: { id: cortexConfig.principal.id },
+            stack: cortexConfig.stack,
+          }).stack
+        : undefined,
+  });
 
   // CortexConfigSchema guarantees `agents.min(1)`, so [0] is always defined
   // at runtime; noUncheckedIndexedAccess still types it as possibly undefined.

@@ -390,12 +390,26 @@ agents:
 # -----------------------------------------------------------------------------
 # renderers — non-agent-bound surfaces (dashboards, pagerduty, etc.)
 # -----------------------------------------------------------------------------
+# G-1111 §4.6 / ADR-0024 §OQ9 — a stack that configures a renderer covering
+# `local.{principal}.system.>` MUST provide at least TWO distinct platform
+# classes there, with at least one EFFECTIVE (delivering) sink. The `dashboard`
+# renderer is INERT (ADR-0005 §4 — it buffers but delivers nothing), so it
+# cannot be that effective sink: `dashboard` ALONE fails the boot coverage guard
+# (cortex#1893). Pair it with an effective system sink (e.g. `pagerduty`) so an
+# operational alert reliably reaches the principal even if one sink is the thing
+# that broke.
 renderers:
   - kind: dashboard
     port: 8766
     subscribe:
-      - local.{org}.>
+      - local.{principal}.>
     projections: []
+  - kind: pagerduty
+    # Secret — supply via a `${PAGERDUTY_ROUTING_KEY}` env placeholder; never a
+    # literal in a committed config.
+    routingKey: ${PAGERDUTY_ROUTING_KEY}
+    subscribe:
+      - local.{principal}.system.>
 
 # -----------------------------------------------------------------------------
 # claude — runtime config shared across all agents' dispatch sessions

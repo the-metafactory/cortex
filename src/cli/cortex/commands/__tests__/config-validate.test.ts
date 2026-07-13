@@ -220,6 +220,51 @@ describe("cortex config validate — invalid config", () => {
   });
 });
 
+describe("cortex config validate — renderer coverage guard (cortex#1893, ADR-0024 §OQ9)", () => {
+  test("zero-renderer config still validates (out of scope → no false hard-fail)", async () => {
+    // validConfig() declares no renderers — the guard must not touch it.
+    const path = writeConfig(validConfig());
+    const result = await dispatchConfig(["validate", "--config", path]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("✓ config valid:");
+  });
+
+  test("AC5: dashboard + system-covering pagerduty validates through the real loader", async () => {
+    const cfg = validConfig();
+    cfg.renderers = [
+      { kind: "dashboard", subscribe: ["local.{principal}.>"] },
+      { kind: "pagerduty", routingKey: "unit-test-routing-key", subscribe: ["local.{principal}.system.>"] },
+    ];
+    const path = writeConfig(cfg);
+    const result = await dispatchConfig(["validate", "--config", path]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("✓ config valid:");
+  });
+
+  test("AC3: dashboard-alone fails config-load with the CONFIG coverage error (no secret echoed)", async () => {
+    const cfg = validConfig();
+    cfg.renderers = [{ kind: "dashboard", subscribe: ["local.{principal}.>"] }];
+    const path = writeConfig(cfg);
+    const result = await dispatchConfig(["validate", "--config", path]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("renderer coverage check FAILED (config)");
+    expect(result.stderr).toContain("[dashboard]");
+  });
+
+  test("AC4: the CONFIG coverage error never echoes the pagerduty routingKey", async () => {
+    // pagerduty alone (a single sink) fails, and it carries a secret — prove
+    // the failure text never surfaces it.
+    const secret = "SUPER-SECRET-ROUTING-KEY-do-not-leak";
+    const cfg = validConfig();
+    cfg.renderers = [{ kind: "pagerduty", routingKey: secret, subscribe: ["local.{principal}.system.>"] }];
+    const path = writeConfig(cfg);
+    const result = await dispatchConfig(["validate", "--config", path]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("renderer coverage check FAILED (config)");
+    expect(result.stderr).not.toContain(secret);
+  });
+});
+
 describe("cortex config validate — CLI grammar", () => {
   test("no subcommand → usage error (exit 2)", async () => {
     const result = await dispatchConfig([]);

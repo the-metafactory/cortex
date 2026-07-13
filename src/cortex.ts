@@ -134,6 +134,7 @@ import {
 } from "./bus/myelin/envelope-validator";
 
 import { resolveRendererPluginAndConfig, UnimplementedRendererKindError, type Renderer } from "./renderers";
+import { assertRuntimeSystemCoverage } from "./renderers/coverage";
 import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "./adapters/registry";
 import { loadExternalPlugins } from "./adapters/loader";
 import { createSystemPluginLoadFailedEvent, createSystemPluginLoadedEvent } from "./bus/system-events";
@@ -3446,6 +3447,44 @@ export async function startCortex(
       }
     }
   }
+
+  // cortex#1893 (S12b-pre, ADR-0024 §OQ9) — the INSTALL-STATE half of the
+  // G-1111 §4.6 renderer-coverage HARD-FAIL guard. This is the post-S6 seam:
+  // `loadExternalPlugins` (S6, above) has already imported+registered any
+  // arc-installed renderer bundles, and the renderer boot loop just above has
+  // STARTED every renderer whose kind resolved — populating `renderers[]`
+  // (what actually delivers) and `skippedRendererConfigs` (entries whose kind
+  // is unregistered because their bundle isn't loaded → the install-state
+  // signal). Only HERE is "did the bundle load?" answerable, so the
+  // config-vs-install-state distinction (OQ9) is drawn here, not at
+  // config-load. The config-load half (`loadCortexShape`) already asserted the
+  // CONFIGURED set meets the floor, so a shortfall now is attributable to an
+  // absent covering bundle → a loud INSTALL-STATE hard-fail naming the bundle +
+  // `arc install` remedy, rather than the pager silently not paging. pagerduty
+  // is still in-tree today (extraction is cortex#1894), so the current
+  // dashboard+pagerduty pair starts fine and this passes; it only bites once a
+  // covering renderer is a bundle that failed to load.
+  assertRuntimeSystemCoverage(
+    {
+      // `r.subjects` are already placeholder-substituted (the boot loop above
+      // substitutes `subscribe` before construction); re-substituting concrete
+      // subjects in the coverage check is idempotent.
+      started: renderers.map((r) => ({ kind: r.kind, subscribe: r.subjects })),
+      skippedForMissingBundle: [...skippedRendererConfigs.entries()].flatMap(
+        ([kind, rawEntries]) =>
+          rawEntries.map((raw) => ({
+            kind,
+            subscribe: Array.isArray((raw as { subscribe?: unknown }).subscribe)
+              ? ((raw as { subscribe: string[] }).subscribe)
+              : [],
+          })),
+      ),
+    },
+    {
+      principal: principalId,
+      stack: options.stack !== undefined ? derivedStack.stack : undefined,
+    },
+  );
 
   // IAW Phase C.3.1 — build the PolicyEngine from the optional
   // `policy:` block on cortex.yaml. `policyEngineFromConfig` returns
