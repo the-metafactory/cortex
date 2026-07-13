@@ -1662,7 +1662,12 @@ export type GithubConfig = z.infer<typeof GithubConfigSchema>;
  * MIRROR: see `AgentConfigSchema.paths` in `./config.ts`. Drop both on 7.2e.
  */
 export const PathsConfigSchema = z.object({
-  publishedEventsDir: z.string().default("~/.claude/events/published"),
+  // XDG wave-5 (#1902): the published-events buffer is DATA and moves under the
+  // metafactory data root. Kept byte-identical to `AgentConfigSchema.paths`
+  // (config.ts) and `PUBLISHED_EVENTS_DIR_DEFAULT` (common/data-path.ts) — no
+  // divergence. Value-migrator rewrites pinned legacy values; reader is
+  // existence-gated for a pre-cutover box.
+  publishedEventsDir: z.string().default("~/.local/share/metafactory/cortex/events/published"),
   logDir: z.string().default("~/.config/cortex/logs"),
 });
 

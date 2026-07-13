@@ -1073,7 +1073,10 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
 
   test("PathsConfigSchema applies inner defaults", () => {
     const parsed = PathsConfigSchema.parse({});
-    expect(parsed.publishedEventsDir).toBe("~/.claude/events/published");
+    // XDG wave-5 (#1902): published-events buffer moved under the metafactory data root.
+    expect(parsed.publishedEventsDir).toBe(
+      "~/.local/share/metafactory/cortex/events/published",
+    );
     expect(parsed.logDir).toBe("~/.config/cortex/logs");
   });
 
@@ -1380,7 +1383,9 @@ describe("CortexConfigSchema", () => {
     expect(parsed.execution.default).toBe("local");
     expect(parsed.github.webhookSecret).toBe("");
     expect(parsed.github.agentDetection.commitTrailers).toEqual(["Co-Authored-By: Claude"]);
-    expect(parsed.paths.publishedEventsDir).toBe("~/.claude/events/published");
+    expect(parsed.paths.publishedEventsDir).toBe(
+      "~/.local/share/metafactory/cortex/events/published",
+    );
     expect(parsed.paths.logDir).toBe("~/.config/cortex/logs");
     expect(parsed.networksDir).toBe("./networks");
   });

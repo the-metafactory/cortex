@@ -4,11 +4,14 @@
 
 import { readFileSync, existsSync } from "fs";
 import { parse as parseYaml } from "yaml";
-import { join } from "path";
 import { homedir } from "os";
 import { rawEventsDir as resolveRawEventsDir } from "../../common/events-path";
 import type { Config, LogLevel, CfAccessConfig, GovernanceConfig } from "./types";
 import { resolveConfigFilePath } from "../../common/config/config-path";
+import {
+  resolveStandaloneDbPath,
+  resolveCursorPath,
+} from "../../common/data-path";
 
 const VALID_LOG_LEVELS: ReadonlySet<LogLevel> = new Set([
   "debug",
@@ -21,7 +24,10 @@ export const DEFAULT_CONFIG: Config = {
   port: 8767,
   hostname: "127.0.0.1",
   db: {
-    path: join(homedir(), ".local", "share", "grove", "mission-control.db"),
+    // XDG wave-5 (#1902): canonical standalone MC db under the metafactory data
+    // root; existence-gated so a legacy `~/.local/share/grove/mission-control.db`
+    // is still read in place on a pre-cutover box (MC history continuous).
+    path: resolveStandaloneDbPath(homedir()),
   },
   log: {
     level: "info",
@@ -30,13 +36,10 @@ export const DEFAULT_CONFIG: Config = {
     // cortex#1908: honors CORTEX_EVENTS_DIR; passing `homedir()` keeps the
     // unset default byte-identical to the previous `join(homedir(), …)`.
     rawEventsDir: resolveRawEventsDir(homedir()),
-    cursorPath: join(
-      homedir(),
-      ".local",
-      "share",
-      "grove",
-      "mc-hook-cursor.json"
-    ),
+    // XDG wave-5 (#1902, G-25): MC hook cursor under the metafactory data root;
+    // existence-gated with a legacy `~/.local/share/grove/mc-hook-cursor.json`
+    // read-fallback.
+    cursorPath: resolveCursorPath(homedir()),
     pollInterval: 2000,
   },
   ws: {

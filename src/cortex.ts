@@ -40,6 +40,7 @@ import {
   type AgentsChangeEvent,
 } from "./common/config/watcher";
 import { type AgentConfig } from "./common/types/config";
+import { migrateStackDbOnTouch } from "./common/migrate-data-dir";
 import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
 import { AgentRegistry } from "./common/agents/registry";
@@ -4459,10 +4460,13 @@ export async function startCortex(
   let discoveredSiblings: readonly SiblingStackDescriptor[] = [];
   let siblingResolveOpts: SiblingDbResolveOptions | null = null;
   if (config.mc.enabled && !options.disableDashboard) {
-    // Per-slug default keeps each stack's MC db isolated; the cursor lands beside it.
-    const defaultDbPath = join(
-      homedir(), ".local", "share", "cortex", "mc", derivedStack.stack, "mission-control.db",
-    );
+    // Per-slug default keeps each stack's MC db isolated. XDG wave-5 (#1902):
+    // the canonical per-stack db now lives under the metafactory data root
+    // (`~/.local/share/metafactory/cortex/mc/<stack>/…`). `migrateStackDbOnTouch`
+    // resolves the canonical path AND carries a legacy `~/.local/share/cortex/mc`
+    // db to it (copy-keep-source, WAL-checkpointed) so MC history is continuous
+    // across the move; a fresh stack simply lands at the canonical write target.
+    const defaultDbPath = migrateStackDbOnTouch(derivedStack.stack, homedir());
     const dbPath = config.mc.dbPath !== "" ? expandTilde(config.mc.dbPath) : defaultDbPath;
 
     // #1008 — discover the principal's LOCAL sibling stacks (reusing #989's

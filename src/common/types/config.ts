@@ -814,7 +814,15 @@ export const AgentConfigSchema = z.object({
   mc: McSchema,
 
   paths: z.object({
-    publishedEventsDir: z.string().default("~/.claude/events/published"),
+    // XDG wave-5 (#1902): the published-events buffer is DATA and moves under the
+    // metafactory data root. Literal (not imported) so the value is grep-visible
+    // and this schema module stays free of the fs-touching data-path resolver;
+    // kept in sync with `PUBLISHED_EVENTS_DIR_DEFAULT` in `common/data-path.ts`
+    // and the generated `cortex.yaml` literal in `stack-lib.ts`. Existing pinned
+    // `~/.claude/events/published` values are rewritten by the value-migrator
+    // (`migrate-published-events-value.ts`); the reader is existence-gated so a
+    // pre-cutover box still reads the legacy buffer.
+    publishedEventsDir: z.string().default("~/.local/share/metafactory/cortex/events/published"),
     logDir: z.string().default("~/.config/grove/logs"),
   }).default(emptyDefault()),
 

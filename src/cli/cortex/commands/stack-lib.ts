@@ -400,7 +400,7 @@ attachments:
   maxAttachmentsPerMessage: 10
 
 paths:
-  publishedEventsDir: ~/.claude/events/published
+  publishedEventsDir: ~/.local/share/metafactory/cortex/events/published
   logDir: ~/.config/cortex/logs
 
 # nats — M2 transport. nats.subjects is the SINGLE place subject overrides live

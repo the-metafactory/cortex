@@ -18,7 +18,7 @@
  *      (proves query_only / readonly is in force), the request path never writes.
  */
 
-import { describe, expect, test, afterEach } from "bun:test";
+import { describe, expect, test, afterEach, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -348,6 +348,89 @@ describe("aggregateAgentTiles (/api/agents union)", () => {
     // Richer registry fields are preserved through the liveness upgrade.
     expect(lunas[0]!.capabilities).toEqual(["chat"]);
     expect(lunas[0]!.nkey_public_key).toBe("NKEYLUNA");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// XDG wave-5 (#1902) AC1 — sibling aggregation resolves peers AFTER the data move
+// ---------------------------------------------------------------------------
+//
+// The load-bearing hazard: the serving daemon discovers a sibling's
+// `mission-control.db` BY its on-disk shape. When the per-stack MC db moves from
+// `~/.local/share/cortex/mc/<stack>/…` to the metafactory data root
+// `~/.local/share/metafactory/cortex/mc/<stack>/…`, sibling resolution must move
+// IN LOCKSTEP — and must still find a peer that has NOT migrated yet (mixed
+// fleet). These tests omit `homeShareDir` (the production path) so resolution
+// runs through the existence-gated data-path resolver, against a scratch $HOME.
+
+describe("XDG wave-5 (#1902) — sibling discovery after the data move", () => {
+  let savedDataDirEnv: string | undefined;
+  beforeEach(() => {
+    // A stray ambient CORTEX_DATA_DIR would short-circuit existence-gated
+    // resolution — unset it so every path derives from the scratch home.
+    savedDataDirEnv = process.env.CORTEX_DATA_DIR;
+    delete process.env.CORTEX_DATA_DIR;
+  });
+  afterEach(() => {
+    if (savedDataDirEnv === undefined) delete process.env.CORTEX_DATA_DIR;
+    else process.env.CORTEX_DATA_DIR = savedDataDirEnv;
+  });
+
+  const canonicalDb = (home: string, stack: string) =>
+    join(home, ".local", "share", "metafactory", "cortex", "mc", stack, "mission-control.db");
+  const legacyDb = (home: string, stack: string) =>
+    join(home, ".local", "share", "cortex", "mc", stack, "mission-control.db");
+
+  test("resolveSiblingDbPath (homeShareDir omitted) prefers the migrated metafactory path", () => {
+    const home = freshTmp();
+    const configRoot = freshTmp();
+    // A MIGRATED peer: its db exists under the new metafactory data root.
+    seedDb(canonicalDb(home, "work"), { agentId: "w", agentName: "W", taskTitle: "t" });
+    const path = resolveSiblingDbPath(sibling("work"), { configRoot, home });
+    expect(path).toBe(canonicalDb(home, "work"));
+  });
+
+  test("resolveSiblingDbPath falls back to the legacy path for an un-migrated peer", () => {
+    const home = freshTmp();
+    const configRoot = freshTmp();
+    // An UN-migrated peer: its db exists ONLY under the legacy cortex tree.
+    seedDb(legacyDb(home, "halden"), { agentId: "h", agentName: "H", taskTitle: "t" });
+    const path = resolveSiblingDbPath(sibling("halden"), { configRoot, home });
+    expect(path).toBe(legacyDb(home, "halden"));
+  });
+
+  test("aggregateWorkingAgents resolves a MIXED fleet — migrated + un-migrated peers both appear", () => {
+    const home = freshTmp();
+    const configRoot = freshTmp();
+    // alpha migrated (new root); beta not yet (legacy root).
+    seedDb(canonicalDb(home, "alpha"), { agentId: "agent-alpha", agentName: "Alpha", taskTitle: "a" });
+    seedDb(legacyDb(home, "beta"), { agentId: "agent-beta", agentName: "Beta", taskTitle: "b" });
+
+    // The serving (local) db lives at the new root too.
+    const localPath = canonicalDb(home, "self");
+    const localDb = initDatabase(localPath);
+    localDb.run(`INSERT INTO agents (id, name, type, persistent) VALUES ('agent-self','Self','head',1)`);
+    localDb.run(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t','self',2,'andreas','internal')`);
+    localDb.run(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('a','agent-self','t','running')`);
+    localDb.run(`INSERT INTO sessions (id, assignment_id, endpoint_kind, started_at, substrate) VALUES ('s','a','local.observed','2026-06-12T00:00:00.000Z','claude-code')`);
+
+    // homeShareDir OMITTED → existence-gated resolution; selfDbPath excludes self.
+    const tiles = aggregateWorkingAgents(
+      localDb,
+      [sibling("alpha"), sibling("beta")],
+      { configRoot, home, selfDbPath: localPath },
+    );
+
+    for (const [stack, agentId] of [["alpha", "agent-alpha"], ["beta", "agent-beta"]] as const) {
+      const row = tiles.find(
+        (t) => typeof t.origin === "object" && t.origin.stack === stack,
+      );
+      expect(row, `expected an origin-tagged tile for ${stack} after the move`).toBeDefined();
+      expect(row!.agent_id).toBe(agentId);
+    }
+    // Self is the single local-origin row (self-exclusion held despite the move).
+    expect(tiles.filter((t) => t.origin === "local")).toHaveLength(1);
+    localDb.close();
   });
 });
 
