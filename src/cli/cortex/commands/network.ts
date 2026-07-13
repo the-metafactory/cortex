@@ -46,6 +46,7 @@ import { dirname, join } from "path";
 
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
 import type { LoadedConfig } from "../../../common/config/loader";
+import { resolveConfigDir, resolveConfigFilePath } from "../../../common/config/config-path";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import { NetworkCache } from "../../../common/registry/network-cache";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
@@ -228,16 +229,24 @@ const DEFAULT_REGISTRY_URL = DEFAULT_REGISTRY.url;
  * is passed. Same canonical path as `cortex agents` (`agents.ts`). The
  * one-liner `cortex network join <network>` reads here.
  */
-const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
+/**
+ * The default cortex.yaml to read when no `--config` is passed — fallback-aware
+ * (canonical `~/.config/metafactory/cortex` → legacy `~/.config/cortex` →
+ * `~/.config/grove`), resolved at CALL time so tests that plant a fixture after
+ * import are honored (cortex#1869, XDG wave-4).
+ */
+function defaultCortexConfigPath(): string {
+  return resolveConfigFilePath("cortex.yaml");
+}
 
 /**
  * #800 — the cortex.yaml the stack's CORTEX daemon loads (the join's `--config`,
- * default {@link DEFAULT_CONFIG_PATH}). Threaded into the ports config so the
+ * default {@link defaultCortexConfigPath}). Threaded into the ports config so the
  * daemon-restart can LOCATE the daemon's launchd/systemd service by its
  * `--config` arg instead of guessing `ai.meta-factory.cortex.<stack-slug>`.
  */
 function cortexConfigPathFromFlags(flags: FlagMap): string {
-  return expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
+  return expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
 }
 
 const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
@@ -693,10 +702,6 @@ function resolveStackSlug(
   return { ok: true, slug };
 }
 
-/** Config dir base — the same canonical path the daemon + the rest of the
- *  network lifecycle use. expandTilde reads $HOME (tests pin it). */
-const CONFIG_DIR_BASE = "~/.config/cortex";
-
 /**
  * #814 — resolve the cortex config path the `status` read should target for a
  * NAMED stack, layout-aware. A faithful TS mirror of `resolve_stack_config_path`
@@ -729,7 +734,7 @@ const CONFIG_DIR_BASE = "~/.config/cortex";
  * `cortex.default.yaml` and falsely reported "no networks joined".
  */
 function resolveStatusConfigPath(slug: string): string {
-  const base = expandTilde(CONFIG_DIR_BASE);
+  const base = resolveConfigDir();
   // The no-`--stack` sentinel `"default"` IS the `meta-factory` bare-name default
   // in the locator system (scoped to status; see doc comment above).
   const locatorSlug = slug === "default" ? "meta-factory" : slug;
@@ -1165,7 +1170,7 @@ async function runJoin(
         ...readOverride(flags, "--system-account-jwt", "systemAccountJwt"),
         // (--from-package removed — ADR-0015 retired O-4b / hub-minted identity)
       },
-      expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
+      expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath()),
       load,
     );
   } catch (err) {
@@ -1400,7 +1405,7 @@ async function runLeave(
         ...readOverride(flags, "--registry-pubkey", "registryPubkey"),
         ...readOverride(flags, "--seed-path", "seedPath"),
       },
-      expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
+      expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath()),
       load,
     );
   } catch (err) {
@@ -3837,7 +3842,7 @@ function deriveMakeLiveInputs(
   flags: FlagMap,
   load: ConfigReader,
 ): { ok: true; inputs: MakeLiveInputs } | { ok: false; reason: string; usage: boolean } {
-  const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
+  const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
   let cfg: LoadedConfig;
   try {
     cfg = load(configPath);
@@ -4085,7 +4090,7 @@ function deriveProvisionInputs(
   flags: FlagMap,
   load: ConfigReader,
 ): { ok: true; inputs: ProvisionInputs; stackConfigPath: string } | { ok: false; reason: string; usage: boolean } {
-  const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
+  const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
   let cfg: LoadedConfig;
   try {
     cfg = load(configPath);
@@ -4245,7 +4250,7 @@ async function maybeAutoProvision(
   load: ConfigReader,
   portsFactory: ProvisionPortsFactory,
 ): Promise<{ ran: boolean; provisionedAfter: boolean; provisionFailed: boolean; output: string }> {
-  const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
+  const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
   let cfg: LoadedConfig;
   try {
     cfg = load(configPath);

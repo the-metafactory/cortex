@@ -36,6 +36,8 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { execFileSync } from "child_process";
 import { dirname, join } from "path";
+
+import { resolveConfigDir } from "../../../common/config/config-path";
 import { homedir } from "os";
 
 import { validateConfigLoads } from "../../../common/config/validate-on-write";
@@ -73,8 +75,12 @@ type StackSubcommand = "create" | "list" | "delete";
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/;
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 
-/** Default config dir (same canonical path the daemon + network CLI use). */
-const DEFAULT_CONFIG_DIR = "~/.config/cortex";
+/** The `--config-dir` default resolved at CALL time — fallback-aware canonical
+ *  `~/.config/metafactory/cortex` → legacy `~/.config/cortex` → grove so an
+ *  un-migrated host reads the legacy tree (cortex#1869, XDG wave-4). */
+function defaultConfigDir(): string {
+  return resolveConfigDir();
+}
 /** Default NATS material dir (rendered `<slug>.conf`, leaf includes, seed). */
 const DEFAULT_NATS_DIR = "~/.config/nats";
 /** Default launchd LaunchAgents dir (the daemon + nats plists, macOS). */
@@ -216,7 +222,7 @@ function runCreate(
     );
   }
 
-  const configDir = expandTildePath(optionalValueFlag(flags, "--config-dir") ?? DEFAULT_CONFIG_DIR);
+  const configDir = expandTildePath(optionalValueFlag(flags, "--config-dir") ?? defaultConfigDir());
 
   // --- resolve + validate principal ---------------------------------------
   const principalRes = resolvePrincipal(flags, configDir);
@@ -494,7 +500,7 @@ function runDelete(
   }
 
   const roots: TeardownRoots = {
-    configDir: expandTildePath(optionalValueFlag(flags, "--config-dir") ?? DEFAULT_CONFIG_DIR),
+    configDir: expandTildePath(optionalValueFlag(flags, "--config-dir") ?? defaultConfigDir()),
     natsDir: expandTildePath(optionalValueFlag(flags, "--nats-dir") ?? DEFAULT_NATS_DIR),
     launchAgentsDir: expandTildePath(
       optionalValueFlag(flags, "--launch-agents-dir") ?? DEFAULT_LAUNCH_AGENTS_DIR,
@@ -730,7 +736,7 @@ function runList(
   flags: FlagMap,
   json: boolean,
 ): ExitResult {
-  const configDir = expandTildePath(optionalValueFlag(flags, "--config-dir") ?? DEFAULT_CONFIG_DIR);
+  const configDir = expandTildePath(optionalValueFlag(flags, "--config-dir") ?? defaultConfigDir());
   const stacks = discoverStacks(configDir);
 
   if (json) {

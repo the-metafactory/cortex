@@ -49,6 +49,7 @@
  */
 
 import { spawn } from "child_process";
+import { resolveConfigFilePath } from "../common/config/config-path";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { DispatchEventSource } from "../bus/dispatch-events";
 import type { CCSessionOpts } from "./cc-session";
@@ -278,8 +279,11 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
   // JSON bridge). Per-agent file stores are derived from it so two agents never
   // share one file; the AgentState store (stateful agents) instead scopes to the
   // agent's own `~/.config/cortex/agents/<id>/state.sqlite` instance dir.
+  // XDG wave-4 (cortex#1869): resolve fallback-aware (canonical
+  // ~/.config/metafactory/cortex → legacy ~/.config/cortex → grove) off the
+  // INJECTED env.HOME so dev boots stay hermetic under a scratch home.
   const baseSessionStorePath =
-    opts.sessionStorePath ?? `${env.HOME ?? "."}/.config/cortex/dev-warm-sessions.json`;
+    opts.sessionStorePath ?? resolveConfigFilePath("dev-warm-sessions.json", env.HOME);
 
   // cortex#1720 S4b — SELECT the warm-session store PER AGENT (constraint 5+6):
   //   - a test `seamsOverride` wins wholesale (the injected store, unchanged);

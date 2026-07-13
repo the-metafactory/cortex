@@ -48,10 +48,21 @@ describe("buildSecurityPreamble", () => {
     expect(preamble).toContain("/home/user/.config/cortex");
   });
 
-  test("defaults to ~/.config/cortex when no configPath (GV-1 cortex#1076 — config-path migration)", () => {
-    const preamble = buildSecurityPreamble(makeConfig());
-    expect(preamble).toContain("~/.config/cortex");
-    expect(preamble).not.toContain("~/.config/grove");
+  // XDG wave-4 (cortex#1869): with no configPath the immutability rule names the
+  // RESOLVED config dir via the seam. Pin CORTEX_CONFIG_DIR so the resolver
+  // returns it verbatim (short-circuiting real-home probing → hermetic) and the
+  // assertion is deterministic across hosts.
+  test("defaults to the resolved cortex config dir when no configPath (XDG wave-4 cortex#1869)", () => {
+    const prev = process.env.CORTEX_CONFIG_DIR;
+    process.env.CORTEX_CONFIG_DIR = "/scratch/xdg-preamble/metafactory/cortex";
+    try {
+      const preamble = buildSecurityPreamble(makeConfig());
+      expect(preamble).toContain("/scratch/xdg-preamble/metafactory/cortex");
+      expect(preamble).not.toContain("~/.config/grove");
+    } finally {
+      if (prev === undefined) delete process.env.CORTEX_CONFIG_DIR;
+      else process.env.CORTEX_CONFIG_DIR = prev;
+    }
   });
 
   test("includes filesystem restriction when allowedDirs configured", () => {

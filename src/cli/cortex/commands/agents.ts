@@ -39,6 +39,7 @@ import {
   FragmentLoadError,
   expandTilde,
 } from "../../../common/config/loader";
+import { resolveConfigFilePath } from "../../../common/config/config-path";
 import { type Agent } from "../../../common/types/cortex-config";
 
 // =============================================================================
@@ -126,7 +127,12 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
 // runAgentsReload
 // =============================================================================
 
-const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
+/** The default cortex.yaml (shown in help as `~/.config/metafactory/cortex/
+ *  cortex.yaml`) resolved at CALL time — fallback-aware canonical → legacy
+ *  cortex → grove so an un-migrated host reads the legacy tree (cortex#1869). */
+function defaultCortexConfigPath(): string {
+  return resolveConfigFilePath("cortex.yaml");
+}
 
 export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
   if (args.help) {
@@ -247,7 +253,7 @@ type SignalOutcome =
  * letting `readFileSync` throw out of the reload command as an unexpected error.
  */
 function signalDaemonReload(configPath: string | undefined): SignalOutcome {
-  const resolvedConfig = expandTilde(configPath ?? DEFAULT_CONFIG_PATH);
+  const resolvedConfig = expandTilde(configPath ?? defaultCortexConfigPath());
   const pidFile = pidFileFor(resolvedConfig);
   if (!existsSync(pidFile)) {
     // No runtime to signal — benign. Validation passed; nothing to reload.
@@ -586,7 +592,7 @@ function resolveAgentsDir(
   args: ParsedAgentsArgs,
   command: "reload" | "list",
 ): { agentsDir: string } | { exit: ExitResult } {
-  const configPath = expandTilde(args.config ?? DEFAULT_CONFIG_PATH);
+  const configPath = expandTilde(args.config ?? defaultCortexConfigPath());
   const configDir = dirname(configPath);
   if (!existsSync(configDir)) {
     return {

@@ -26,6 +26,7 @@ import { homedir } from "os";
 import { join } from "path";
 import {
   DEFAULT_STEP_UP_SECRET_PATH,
+  defaultStepUpSecretPath,
   createEnrollment,
   loadEnrollment,
   writeEnrollment,
@@ -83,7 +84,7 @@ function optionalValueFlag(flags: FlagMap, name: string): string | undefined {
 
 function resolveSecretPath(flags: FlagMap): string {
   return expandTildePath(
-    optionalValueFlag(flags, "--secret-path") ?? DEFAULT_STEP_UP_SECRET_PATH,
+    optionalValueFlag(flags, "--secret-path") ?? defaultStepUpSecretPath(),
   );
 }
 

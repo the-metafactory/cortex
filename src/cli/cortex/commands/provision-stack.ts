@@ -50,6 +50,7 @@ import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
+import { resolveConfigFilePath } from "../../../common/config/config-path";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import {
   resolveOwnAdmissionState,
@@ -260,8 +261,6 @@ interface HandlerCtx {
   json: boolean;
 }
 
-/** Default cortex config path — mirrors `cortex network`'s DEFAULT_CONFIG_PATH. */
-const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
 
 /**
  * cortex#1742 — resolve the pinned registry pubkey with precedence
@@ -294,7 +293,7 @@ export function resolveRegistryPubkey(
   }
   // Flag absent — fall back to the config pin (best-effort).
   const cfgFlag = ctx.flags["--config"];
-  const cfgRaw = typeof cfgFlag === "string" ? cfgFlag : DEFAULT_CONFIG_PATH;
+  const cfgRaw = typeof cfgFlag === "string" ? cfgFlag : resolveConfigFilePath("cortex.yaml");
   // expandTilde inside the try: it throws when $HOME is unset (loader.ts), and
   // the best-effort contract must hold there too — degrade to undefined, never throw.
   let cfgPath = cfgRaw;

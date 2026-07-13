@@ -81,6 +81,7 @@ import { homedir } from "os";
 import YAML from "yaml";
 
 import { composeRawConfig, loadAgentsDirectory } from "../../../common/config/loader";
+import { resolveConfigDir } from "../../../common/config/config-path";
 import { deriveEffectiveCapabilityCatalog } from "../../../common/agents/capability-catalog";
 import type { Agent } from "../../../common/types/cortex-config";
 import type { Capability } from "../../../common/types/capability";
@@ -118,7 +119,12 @@ type OfferSubcommand = "list" | "revoke";
  * grammar — dot-separated lowercase segments — can never collide with the
  * reserved `list`/`revoke` words, which are single bare lowercase tokens.)
  */
-const DEFAULT_CONFIG_DIR = "~/.config/cortex";
+/** The config-dir default resolved at CALL time — fallback-aware (canonical
+ *  `~/.config/metafactory/cortex` → legacy `~/.config/cortex` → grove) so an
+ *  un-migrated host reads the legacy tree (cortex#1869, XDG wave-4). */
+function defaultConfigDir(): string {
+  return resolveConfigDir();
+}
 
 /** Capability id grammar — mirrors CO-1's `OfferingCapabilityIdSchema` (the
  *  `*` quantifier admits SINGLE-segment ids like `chat`). */
@@ -1281,7 +1287,7 @@ function resolveConfigPath(flags: FlagMap): string {
       ? flags["--config"]
       : typeof flags["--config-dir"] === "string"
         ? flags["--config-dir"]
-        : DEFAULT_CONFIG_DIR;
+        : defaultConfigDir();
   return expandTildePath(explicit);
 }
 

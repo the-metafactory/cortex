@@ -18,10 +18,26 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
 import { enforceChmod600 } from "../config/file-permissions";
+import { resolveConfigFilePath } from "../config/config-path";
 import { TOTP_DEFAULTS, generateTotpSecret } from "./totp";
 
-/** Default on-disk home for the enrolled secret (overridable via config). */
-export const DEFAULT_STEP_UP_SECRET_PATH = "~/.config/cortex/step-up-totp.json";
+/**
+ * Display default for the enrolled step-up secret, shown in help (canonical,
+ * XDG wave-4). Runtime read-sites resolve via {@link defaultStepUpSecretPath}
+ * so an un-migrated host still finds the secret in the legacy tree.
+ */
+export const DEFAULT_STEP_UP_SECRET_PATH = "~/.config/metafactory/cortex/step-up-totp.json";
+
+/**
+ * The default step-up secret path resolved at CALL time — fallback-aware
+ * (canonical `~/.config/metafactory/cortex` → legacy `~/.config/cortex` →
+ * `~/.config/grove`). This is a chmod-600 secret at rest, so a fresh install
+ * lands it canonical-side while a not-yet-migrated host keeps reading its legacy
+ * copy (cortex#1869, XDG wave-4).
+ */
+export function defaultStepUpSecretPath(home?: string): string {
+  return resolveConfigFilePath("step-up-totp.json", home);
+}
 
 /** The persisted enrollment record. Version-stamped for forward migration. */
 export interface StepUpEnrollment {

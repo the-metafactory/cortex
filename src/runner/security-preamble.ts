@@ -3,6 +3,7 @@
  * Injects filesystem and behavior constraints based on the cortex agent config.
  */
 
+import { resolveConfigDir } from "../common/config/config-path";
 import type { AgentConfig } from "../common/types/config";
 
 /**
@@ -103,9 +104,12 @@ export function buildSecurityPreamble(config: AgentConfig, configPath?: string, 
   // default is only seen by tests; GV-1 (cortex#1076) points it at the canonical
   // cortex config dir. (Distinct from the GROVE_* → CORTEX_* env-var migration,
   // cortex#774.)
+  // XDG wave-4 (cortex#1869): when no explicit config path, name the resolved
+  // config dir (canonical ~/.config/metafactory/cortex, or the legacy tree an
+  // un-migrated host still reads) so the immutability rule references the real dir.
   const configDir = configPath
     ? configPath.replace(/\/[^/]+$/, "")
-    : "~/.config/cortex";
+    : resolveConfigDir();
   rules.push(
     `CONFIG IMMUTABILITY: You MUST NOT read, write, edit, or delete cortex.yaml or any file in the cortex config directory (${configDir}). ` +
     `This includes using any tool (Write, Edit, Bash, etc.) to modify, overwrite, move, copy, or remove cortex.yaml or files in ${configDir}. ` +

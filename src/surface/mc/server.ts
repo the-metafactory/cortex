@@ -82,7 +82,7 @@ import {
 } from "./api/mutation-guard";
 import { enforceStepUp, requiresStepUp } from "./api/step-up-mfa";
 import {
-  DEFAULT_STEP_UP_SECRET_PATH,
+  defaultStepUpSecretPath,
   loadEnrollment,
   type StepUpEnrollment,
 } from "../../common/step-up/enrollment";
@@ -340,7 +340,7 @@ export function startServer(
   // daemon restart. Default `~/.config/cortex/step-up-totp.json`; overridable
   // via `mc.governance.stepUp.secretPath`.
   const stepUpSecretPath = expandTilde(
-    config.governance?.stepUp?.secretPath ?? DEFAULT_STEP_UP_SECRET_PATH,
+    config.governance?.stepUp?.secretPath ?? defaultStepUpSecretPath(),
   );
 
   const apiDeps: ApiDeps | null = options.processManager
@@ -616,7 +616,7 @@ async function handleApi(
   guard: MutationGuardContext,
   handoffView: HandoffView | null = null,
   doctorView: DoctorView | null = null,
-  stepUpSecretPath: string = expandTilde(DEFAULT_STEP_UP_SECRET_PATH),
+  stepUpSecretPath: string = expandTilde(defaultStepUpSecretPath()),
   authorizer: Authorizer | null = null,
 ): Promise<Response> {
   const { pathname } = url;

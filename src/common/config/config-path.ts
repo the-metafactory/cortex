@@ -182,6 +182,38 @@ export function resolveConfigFilePath(filename: string, home?: string): string {
 }
 
 /**
+ * Resolve the config DIRECTORY a CLI should read from during the transition:
+ * the canonical `~/.config/metafactory/cortex` if it exists, else the legacy
+ * flat `~/.config/cortex`, else `~/.config/grove`, else the canonical path (the
+ * write target on a fresh host). This is the DIR analogue of
+ * {@link resolveConfigFilePath} and is what the swept `DEFAULT_CONFIG_DIR`
+ * defaults route through, so a command run BEFORE the config move still reads
+ * the legacy tree (byte-identical to pre-wave-4) while a migrated host reads the
+ * canonical tree. An explicit `$CORTEX_CONFIG_DIR` short-circuits all fallback.
+ *
+ * @param home Override for `$HOME` (tests). Resolved at CALL time so a
+ *   command test that plants a fixture after import is honored.
+ */
+export function resolveConfigDir(home?: string): string {
+  const canonical = cortexConfigDir(home);
+  // An explicit override is a self-contained root — never probe legacy trees.
+  if (cortexConfigDirOverride() !== undefined) return canonical;
+  if (existsSync(canonical)) return canonical;
+
+  const legacyCortex = legacyCortexConfigDir(home);
+  if (existsSync(legacyCortex)) {
+    noteXdgFallback("config", "config dir resolved from legacy ~/.config/cortex");
+    return legacyCortex;
+  }
+  const grove = dirname(groveConfigPath("_", home));
+  if (existsSync(grove)) {
+    noteXdgFallback("config", "config dir resolved from legacy ~/.config/grove");
+    return grove;
+  }
+  return canonical;
+}
+
+/**
  * Auto-migrate a legacy-tree config FILE to its canonical location,
  * **preserving the file mode**. (Historically grove-only; XDG wave-4 widened
  * it to also carry the legacy flat `~/.config/cortex` tree into the canonical

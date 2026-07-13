@@ -21,6 +21,7 @@ import {
   groveConfigPath,
   legacyCortexConfigPath,
   migrateGroveConfigFile,
+  resolveConfigDir,
   resolveConfigFile,
 } from "../config-path";
 
@@ -125,6 +126,38 @@ describe("resolveConfigFile — canonical-first, layered legacy fallback", () =>
     const r = resolveConfigFile(FILE, home);
     expect(r.path).toBe(cortexFile());
     expect(r.source).toBe("default");
+  });
+});
+
+describe("resolveConfigDir — dir-level fallback for swept DEFAULT_CONFIG_DIR", () => {
+  const canonicalDir = () => join(home, ".config", "metafactory", "cortex");
+  const legacyCortexDir = () => join(home, ".config", "cortex");
+  const groveRoot = () => join(home, ".config", "grove");
+
+  test("canonical dir when it exists", () => {
+    mkdirSync(canonicalDir(), { recursive: true });
+    mkLegacyCortex(); // legacy also present (post-move copy-keep) — canonical still wins
+    expect(resolveConfigDir(home)).toBe(canonicalDir());
+  });
+
+  test("legacy flat ~/.config/cortex when canonical is absent (un-migrated host)", () => {
+    mkLegacyCortex();
+    expect(resolveConfigDir(home)).toBe(legacyCortexDir());
+  });
+
+  test("grove when only grove exists", () => {
+    mkGrove();
+    expect(resolveConfigDir(home)).toBe(groveRoot());
+  });
+
+  test("canonical (write target) on a fresh host with no config tree", () => {
+    expect(resolveConfigDir(home)).toBe(canonicalDir());
+  });
+
+  test("legacy flat cortex wins over grove (fallback order)", () => {
+    mkLegacyCortex();
+    mkGrove();
+    expect(resolveConfigDir(home)).toBe(legacyCortexDir());
   });
 });
 
