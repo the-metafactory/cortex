@@ -9,11 +9,11 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { SlackAdapter, type SlackAdapterInfra } from "../index";
+import { SlackAdapter, type SlackAdapterInfra, type AdapterAgentIdentity } from "../index";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 import type { SlackClient, SlackInboundEvent, SlackBotIdentity } from "../client";
-import type { Agent, SlackPresence } from "../../../common/types/cortex-config";
-import type { InboundMessage } from "../../types";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import type { SlackPresence } from "../schema";
+import type { InboundMessage, Envelope, AdapterSystemEventPort } from "../../../surface-sdk";
 
 /**
  * Poll `condition` until truthy or `timeoutMs` expires (cortex#771). The inbound
@@ -159,12 +159,10 @@ function makePresence(overrides: Partial<SlackPresence> = {}): SlackPresence {
   };
 }
 
-function makeAgent(presence: SlackPresence): Agent {
+function makeAgent(presence: SlackPresence): AdapterAgentIdentity {
   return {
     id: "luna",
     displayName: "Luna",
-    persona: "(test)",
-    trust: [],
     presence: { slack: presence },
   };
 }
@@ -181,6 +179,14 @@ function makeAdapter(opts: {
     instanceId: "slack-test",
     principal: {},
     client: fake.client,
+    // cortex#1795 (S10) — `policy`/`formatEnvelope` are REQUIRED on
+    // `SlackAdapterInfra` post-inversion. Default to the SAME fallbacks
+    // `slackAdapterPlugin.createAdapter` uses for hand-built args
+    // (`../plugin`'s `NO_POLICY_PORT` / `fallbackFormatEnvelope`) so
+    // existing assertions (deny-by-default resolveAccess, the
+    // `**envelope.type**` render format) keep passing unchanged.
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
     ...opts.infra,
   };
   const adapter = new SlackAdapter(agent, presence, infra);
@@ -876,162 +882,145 @@ describe("SlackAdapter.surfaceConfig", () => {
 // ---------------------------------------------------------------------------
 
 describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => {
-  interface RecordingRuntime {
-    enabled: boolean;
-    onEnvelope: () => { unregister: () => void };
-    publish: (envelope: Envelope) => Promise<void>;
-    stop: () => Promise<void>;
-    publishes: Envelope[];
-  }
-  function makeRecordingRuntime(): RecordingRuntime {
-    const publishes: Envelope[] = [];
+  /**
+   * cortex#1795 (S10) — the adapter no longer builds/publishes envelopes
+   * itself; it calls the host-injected `AdapterSystemEventPort`
+   * (`infra.systemEvents`, from `../../../surface-sdk`). Envelope
+   * construction + the `MyelinRuntime.publish` call, plus the "runtime
+   * configured but source missing" one-time-warning gate, moved to
+   * `plugin-support.ts`'s `buildAdapterSystemEventPort` (cortex-side, NOT
+   * part of this bundle — see `src/adapters/__tests__/plugin-support.test.ts`
+   * for THAT gate's coverage). These tests assert only what `SlackAdapter`
+   * itself is responsible for: calling `.recovered()`/`.disconnected()`
+   * with the right args at the right lifecycle transitions, and staying
+   * silent (no throw) when no port is configured at all.
+   */
+  type RecordedCall =
+    | { kind: "recovered"; opts: Parameters<AdapterSystemEventPort["recovered"]>[0] }
+    | { kind: "disconnected"; opts: Parameters<AdapterSystemEventPort["disconnected"]>[0] };
+
+  function makeRecordingSystemEvents(): AdapterSystemEventPort & { calls: RecordedCall[] } {
+    const calls: RecordedCall[] = [];
     return {
-      enabled: true,
-      onEnvelope: () => ({ unregister: () => {} }),
-      publish: async (envelope: Envelope) => { publishes.push(envelope); },
-      stop: async () => {},
-      publishes,
+      calls,
+      recovered: (opts) => { calls.push({ kind: "recovered", opts }); },
+      disconnected: (opts) => { calls.push({ kind: "disconnected", opts }); },
     };
   }
 
-  const SOURCE = { principal: "metafactory", agent: "luna", instance: "local" };
-
-  test("initial connect after start() is silent (no envelope emitted)", async () => {
-    const runtime = makeRecordingRuntime();
+  test("initial connect after start() is silent (no call emitted)", async () => {
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, simulateConnect } = makeAdapter({
-      infra: { runtime, systemEventSource: SOURCE },
+      infra: { systemEvents },
     });
     await adapter.start(async () => {});
     simulateConnect();
-    expect(runtime.publishes).toHaveLength(0);
+    expect(systemEvents.calls).toHaveLength(0);
     await adapter.stop();
   });
 
-  test("disconnect emits system.adapter.disconnected with wasClean=false on unclean drop", async () => {
-    const runtime = makeRecordingRuntime();
+  test("disconnect calls .disconnected() with wasClean=false on unclean drop", async () => {
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, simulateDisconnect } = makeAdapter({
-      infra: { runtime, systemEventSource: SOURCE },
+      infra: { systemEvents },
     });
     await adapter.start(async () => {});
     simulateDisconnect({ wasClean: false, closeReason: "network drop" });
-    expect(runtime.publishes).toHaveLength(1);
-    const env = runtime.publishes[0]!;
-    expect(env.type).toBe("system.adapter.disconnected");
-    expect(env.payload.platform).toBe("slack");
-    expect(env.payload.adapter_id).toBe("slack-test");
-    expect(env.payload.was_clean).toBe(false);
-    expect(env.payload.close_reason).toBe("network drop");
+    expect(systemEvents.calls).toHaveLength(1);
+    const call = systemEvents.calls[0]!;
+    expect(call.kind).toBe("disconnected");
+    expect(call.opts.platform).toBe("slack");
+    expect(call.opts.adapterId).toBe("slack-test");
+    expect((call.opts as { wasClean: boolean }).wasClean).toBe(false);
+    expect((call.opts as { closeReason?: string }).closeReason).toBe("network drop");
     await adapter.stop();
   });
 
-  test("disconnect followed by reconnect emits disconnected + recovered pair", async () => {
-    const runtime = makeRecordingRuntime();
+  test("disconnect followed by reconnect calls disconnected then recovered", async () => {
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
-      infra: { runtime, systemEventSource: SOURCE },
+      infra: { systemEvents },
     });
     await adapter.start(async () => {});
     // Initial connect — silent
     simulateConnect();
-    expect(runtime.publishes).toHaveLength(0);
+    expect(systemEvents.calls).toHaveLength(0);
     // Drop
     simulateDisconnect({ wasClean: false });
-    expect(runtime.publishes).toHaveLength(1);
-    expect(runtime.publishes[0]!.type).toBe("system.adapter.disconnected");
+    expect(systemEvents.calls).toHaveLength(1);
+    expect(systemEvents.calls[0]!.kind).toBe("disconnected");
     // Reconnect — emits recovered
     simulateConnect();
-    expect(runtime.publishes).toHaveLength(2);
-    const recovered = runtime.publishes[1]!;
-    expect(recovered.type).toBe("system.adapter.recovered");
-    expect(recovered.payload.platform).toBe("slack");
-    expect(recovered.payload.adapter_id).toBe("slack-test");
-    expect(typeof recovered.payload.degraded_for_ms).toBe("number");
-    expect(recovered.payload.degraded_for_ms as number).toBeGreaterThanOrEqual(0);
+    expect(systemEvents.calls).toHaveLength(2);
+    const recovered = systemEvents.calls[1]!;
+    expect(recovered.kind).toBe("recovered");
+    expect(recovered.opts.platform).toBe("slack");
+    expect(recovered.opts.adapterId).toBe("slack-test");
+    expect(typeof (recovered.opts as { degradedForMs: number }).degradedForMs).toBe("number");
+    expect((recovered.opts as { degradedForMs: number }).degradedForMs).toBeGreaterThanOrEqual(0);
     await adapter.stop();
   });
 
-  test("recovered envelope carries the original disconnect timestamp", async () => {
-    const runtime = makeRecordingRuntime();
+  test("recovered call carries the original disconnect timestamp", async () => {
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
-      infra: { runtime, systemEventSource: SOURCE },
+      infra: { systemEvents },
     });
     await adapter.start(async () => {});
     simulateConnect();
     simulateDisconnect({ wasClean: false });
-    const disconnectedAt = (runtime.publishes[0]!.payload as { disconnected_since: string })
-      .disconnected_since;
+    const disconnectedAt = (systemEvents.calls[0]!.opts as { disconnectedSince: Date }).disconnectedSince;
     simulateConnect();
-    const recovered = runtime.publishes[1]!;
-    expect(recovered.payload.disconnected_since).toBe(disconnectedAt);
+    const recovered = systemEvents.calls[1]!;
+    expect((recovered.opts as { disconnectedSince: Date }).disconnectedSince).toBe(disconnectedAt);
     await adapter.stop();
   });
 
-  test("clean disconnect (stop() path) sets wasClean=true on envelope", async () => {
-    const runtime = makeRecordingRuntime();
+  test("clean disconnect (stop() path) sets wasClean=true", async () => {
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, simulateDisconnect } = makeAdapter({
-      infra: { runtime, systemEventSource: SOURCE },
+      infra: { systemEvents },
     });
     await adapter.start(async () => {});
     simulateDisconnect({ wasClean: true });
-    const env = runtime.publishes[0]!;
-    expect(env.payload.was_clean).toBe(true);
-    expect(env.payload.close_reason).toBeUndefined();
+    const call = systemEvents.calls[0]!;
+    expect((call.opts as { wasClean: boolean }).wasClean).toBe(true);
+    expect((call.opts as { closeReason?: string }).closeReason).toBeUndefined();
     await adapter.stop();
   });
 
-  test("no runtime configured → lifecycle silent (no crash)", async () => {
+  test("no systemEvents port configured → lifecycle silent (no crash)", async () => {
     const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
-      // intentionally no runtime/systemEventSource
+      // intentionally no systemEvents port
     });
     await adapter.start(async () => {});
     simulateConnect();
     simulateDisconnect({ wasClean: false });
     simulateConnect();
-    // No throw; no publish observable from the outside.
+    // No throw; nothing to observe from the outside.
     await adapter.stop();
   });
 
   test("stop() → start() resets latches; next initial connect is silent (Echo cortex#254 r1 M2)", async () => {
-    const runtime = makeRecordingRuntime();
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
-      infra: { runtime, systemEventSource: SOURCE },
+      infra: { systemEvents },
     });
     // First session: initial connect (silent) → unclean disconnect →
-    // recovered. Two envelopes expected.
+    // recovered. Two calls expected.
     await adapter.start(async () => {});
     simulateConnect();
     simulateDisconnect({ wasClean: false });
     simulateConnect();
-    expect(runtime.publishes).toHaveLength(2);
+    expect(systemEvents.calls).toHaveLength(2);
     await adapter.stop();
     // Second session: WITHOUT latch reset on stop(), the next initial
     // connect would be classified as a "recovery" and emit a spurious
-    // `system.adapter.recovered`. Assert it stays at 2.
+    // recovered call. Assert it stays at 2.
     await adapter.start(async () => {});
     simulateConnect();
-    expect(runtime.publishes).toHaveLength(2);
+    expect(systemEvents.calls).toHaveLength(2);
     await adapter.stop();
-  });
-
-  test("runtime present but systemEventSource missing → silent + one-time warning", async () => {
-    const runtime = makeRecordingRuntime();
-    const originalWarn = console.warn;
-    const warnings: string[] = [];
-    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
-    try {
-      const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
-        infra: { runtime }, // no systemEventSource
-      });
-      await adapter.start(async () => {});
-      simulateDisconnect({ wasClean: false });
-      simulateConnect();
-      // First disconnect fires the warning; second wouldn't (latched).
-      simulateDisconnect({ wasClean: false });
-      expect(runtime.publishes).toHaveLength(0);
-      expect(warnings.filter((w) => w.includes("systemEventSource is missing"))).toHaveLength(1);
-      await adapter.stop();
-    } finally {
-      console.warn = originalWarn;
-    }
   });
 });
 
@@ -1039,37 +1028,27 @@ describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => 
 // cortex#235 r1#5 — updateConfig hot-reload
 // ---------------------------------------------------------------------------
 
-import type { AgentConfig } from "../../../common/types/config";
+import type { AdapterAgentConfig } from "../index";
 
 describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () => {
   /**
-   * Minimal AgentConfig fixture with a single Slack instance. Mirrors the
-   * Discord/Mattermost test pattern. Only the fields we care about for
-   * hot-reload need realistic values; others get cheap defaults.
+   * Minimal `AdapterAgentConfig` fixture with a single Slack instance.
+   * cortex#1795 (S10) — `updateConfig`'s parameter narrowed from cortex's
+   * full `AgentConfig` (`common/types/config`) to the plugin-owned
+   * `AdapterAgentConfig` (`../index`) — the adapter only ever read
+   * `config.slack[i]` / `config.agent`, so the fixture only needs those.
    */
-  function makeAgentConfig(slackOverrides: Partial<AgentConfig["slack"][number]> = {}): AgentConfig {
+  function makeAgentConfig(slackOverrides: Partial<AdapterAgentConfig["slack"][number]> = {}): AdapterAgentConfig {
     return {
       agent: { name: "luna", displayName: "Luna" },
-      discord: [],
-      mattermost: [],
       slack: [{
-        instanceId: "slack-test",
-        enabled: true,
-        botToken: "xoxb-TEST-TOKEN",
-        appToken: "xapp-TEST-APP",
         workspaceId: "T0WORKSPACE",
         channels: [{ id: "C0CHANNEL1", name: "cortex" }],
         allowedUserIds: [],
         trustedBotIds: [],
-        surfaceSubjects: [],
         ...slackOverrides,
       }],
-      claude: {} as AgentConfig["claude"],
-    // Adapter's `updateConfig` only reads `config.slack[i]` and
-    // `config.agent`; the rest of the AgentConfig surface
-    // (attachments/execution/github/api/etc.) is unused here. Cast
-    // through unknown for test ergonomics.
-    } as unknown as AgentConfig;
+    };
   }
 
   test("matches the live presence by workspaceId and hot-reloads channels", () => {
@@ -1084,8 +1063,8 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     // Channels visible via surfaceConfig.subjects? No — easier check:
     // updateConfig didn't throw and the workspaceId match succeeded.
     // Detail-level assertion via the agent rebuild below.
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels).toHaveLength(2);
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels[1]?.name).toBe("research");
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.channels).toHaveLength(2);
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.channels[1]?.name).toBe("research");
   });
 
   // v2.0.0 (cortex#297) — `roles[]` + `defaultRole` retired from Slack
@@ -1096,7 +1075,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     const { adapter } = makeAdapter();
     const updated = makeAgentConfig({ allowedUserIds: ["U0NEW1", "U0NEW2"] });
     adapter.updateConfig(updated);
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.allowedUserIds).toEqual(["U0NEW1", "U0NEW2"]);
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.allowedUserIds).toEqual(["U0NEW1", "U0NEW2"]);
   });
 
   test("hot-reloads trustedBotIds (rebuilds the lookup set)", async () => {
@@ -1107,7 +1086,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     // Update to add a trusted bot id; verify the bot-id message no
     // longer trips the self-loop guard.
     adapter.updateConfig(makeAgentConfig({ trustedBotIds: ["B0PEERBOT"] }));
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.trustedBotIds).toEqual(["B0PEERBOT"]);
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.trustedBotIds).toEqual(["B0PEERBOT"]);
     // Smoke: send a message FROM the peer bot id; should be admitted
     // (no longer dropped as self-loop).
     await emit(makeSlackEvent({ bot_id: "B0PEERBOT", user: undefined, text: "peer hello" }));
@@ -1118,24 +1097,27 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
 
   test("does not touch botToken/appToken/workspaceId (reconnect-only fields)", () => {
     const { adapter } = makeAdapter();
-    const originalWorkspaceId = (adapter as unknown as { agent: Agent }).agent.presence.slack?.workspaceId;
-    // Pass an instance with rotated tokens — the match-by-workspaceId
-    // still works, and the presence's tokens carry through unchanged.
+    const originalWorkspaceId = (adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.workspaceId;
+    // cortex#1795 (S10) — `AdapterAgentConfig.slack[]` no longer even HAS a
+    // `botToken`/`appToken` field (updateConfig's real body never reads
+    // them off `newInstance` — see `index.ts`'s `updateConfig`, which only
+    // spreads `channels`/`allowedUserIds`/`trustedBotIds`). The absence is
+    // now enforced at the type level; this test drives an unrelated field
+    // update (`channels`) and confirms the match-by-workspaceId still
+    // works and the presence's tokens carry through untouched.
     adapter.updateConfig(makeAgentConfig({
-      botToken: "xoxb-ROTATED-IGNORED",
-      appToken: "xapp-ROTATED-IGNORED",
       channels: [{ id: "C0CHANNEL1", name: "cortex" }],
     }));
     // workspaceId preserved (match key)
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.workspaceId).toBe(originalWorkspaceId);
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.workspaceId).toBe(originalWorkspaceId);
     // Tokens: preserved across spread (presence retains original).
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.botToken).toBe("xoxb-TEST-TOKEN-12345");
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.appToken).toBe("xapp-TEST-APP-12345");
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.botToken).toBe("xoxb-TEST-TOKEN-12345");
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.appToken).toBe("xapp-TEST-APP-12345");
   });
 
   test("warns and no-ops when workspaceId removed from config", () => {
     const { adapter } = makeAdapter();
-    const originalChannels = (adapter as unknown as { agent: Agent }).agent.presence.slack?.channels ?? [];
+    const originalChannels = (adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.channels ?? [];
     const originalWarn = console.warn;
     const warnings: string[] = [];
     console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
@@ -1144,7 +1126,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
       adapter.updateConfig(makeAgentConfig({ workspaceId: "T0DIFFERENT" }));
       // Presence unchanged — update was ignored (channels is a proxy for
       // "the hot-reload didn't touch this presence").
-      expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels).toEqual(originalChannels);
+      expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.presence.slack?.channels).toEqual(originalChannels);
       // Warning emitted.
       expect(warnings.some((w) => w.includes("instance removed from config"))).toBe(true);
     } finally {
@@ -1158,8 +1140,8 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     updated.agent.name = "luna-rebranded";
     updated.agent.displayName = "Luna v2";
     adapter.updateConfig(updated);
-    expect((adapter as unknown as { agent: Agent }).agent.id).toBe("luna-rebranded");
-    expect((adapter as unknown as { agent: Agent }).agent.displayName).toBe("Luna v2");
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.id).toBe("luna-rebranded");
+    expect((adapter as unknown as { agent: AdapterAgentIdentity }).agent.displayName).toBe("Luna v2");
   });
 });
 
@@ -1437,6 +1419,8 @@ describe("SlackAdapter — surfaceConfig passes surfaceFilter through (cortex#23
       instanceId: "slack-test",
       principal: {},
       client: fake.client,
+      policy: NO_POLICY_PORT,
+      formatEnvelope: fallbackFormatEnvelope,
       surfaceSubjects: presence.surfaceSubjects,
       surfaceFilter: filter,
     });

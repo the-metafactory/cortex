@@ -131,9 +131,13 @@ export const NO_POLICY_PORT: AdapterPolicyPort = {
  * formatting shared with Discord/Mattermost, deliberately not duplicated
  * here). Both real hosts (`gateway-adapters.ts`'s `buildGatewayAdapters`,
  * `runner/surface-adapter-boot.ts`'s `baseFactoryArgs`) always forward the
- * real formatter, so this fallback never fires in production.
+ * real formatter, so this fallback never fires in production. Exported (not
+ * just module-private) so `__tests__/slack-adapter.test.ts` can reuse it as
+ * `makeAdapter`'s default `formatEnvelope` instead of duplicating the format
+ * — the test asserts against this exact shape (see its
+ * `**review.cycle.completed**` assertion).
  */
-function fallbackFormatEnvelope(envelope: Envelope): string {
+export function fallbackFormatEnvelope(envelope: Envelope): string {
   const corr = envelope.correlation_id ? ` [${envelope.correlation_id}]` : "";
   return [
     `**${envelope.type}**${corr}`,
