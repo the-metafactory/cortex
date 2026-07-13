@@ -26,7 +26,6 @@ import {
   type RendererPlugin,
 } from "../registry";
 import { discordAdapterPlugin } from "../discord/plugin";
-import { mattermostAdapterPlugin } from "../mattermost/plugin";
 import type { Surfaces } from "../../common/types/surfaces";
 
 // cortex#1789 (S4) — `bindingSchema`/`configSchema` are real `z.ZodType`s
@@ -109,12 +108,9 @@ describe("SurfacePluginRegistry", () => {
 });
 
 describe("createDefaultSurfacePluginRegistry", () => {
-  test("registers exactly the 2 in-tree adapters, discord→mattermost (cortex#1794 S9 web + cortex#1795 S10 slack extracted to bundles)", () => {
+  test("registers exactly the 1 in-tree adapter, discord (cortex#1794 S9 web + cortex#1795 S10 slack + cortex#1796 S11 mattermost all extracted to bundles)", () => {
     const registry = createDefaultSurfacePluginRegistry();
-    expect(registry.listAdapters().map((p) => p.id)).toEqual([
-      "discord",
-      "mattermost",
-    ]);
+    expect(registry.listAdapters().map((p) => p.id)).toEqual(["discord"]);
   });
 
   test("registers exactly the 2 in-tree renderers, dashboard→pagerduty", () => {
@@ -158,38 +154,41 @@ describe("in-tree AdapterPlugin descriptors — shape", () => {
   // shape is pinned by that repo's own standalone test suite instead (same
   // pattern as `web`, cortex#1794 S9 MOVE, below).
 
-  test("mattermost: platform id, apiToken secret, demuxKey falls back to <unset>", () => {
-    expect(mattermostAdapterPlugin.platform).toBe("mattermost");
-    expect(mattermostAdapterPlugin.secretFields).toEqual(["apiToken"]);
-    expect(mattermostAdapterPlugin.demuxKey({ apiUrl: "https://mm.example.com" })).toBe(
-      "https://mm.example.com",
-    );
-    expect(mattermostAdapterPlugin.demuxKey({})).toBe("<unset>");
-  });
-
   // cortex#1794 (S9 MOVE) — `web`'s descriptor now lives in the
   // `metafactory-cortex-adapter-web` bundle (not importable here); its
   // shape is pinned by that repo's own standalone test suite instead.
+  //
+  // cortex#1796 (S11 MOVE) — `mattermost`'s descriptor (platform id,
+  // apiToken secret, demuxKey <unset> fallback) now lives in the
+  // `metafactory-cortex-adapter-mattermost` bundle's own `src/__tests__/`
+  // suite, same reasoning. `loader.mattermost-bundle.test.ts`'s "constructs
+  // a REAL, working MattermostAdapter" test re-asserts the same shape
+  // against the LOADED (bundle) plugin, so the coverage isn't lost, only
+  // relocated to where the code now lives.
 });
 
 describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
-  test("registryFromFactory delegates discord/mattermost's createAdapter to the matching legacy method", () => {
+  test("registryFromFactory delegates discord's createAdapter to the matching legacy method", () => {
+    // cortex#1795/#1796 (S10/S11 MOVE) — `registryFromFactory` no longer
+    // auto-registers "slack" OR "mattermost" (no in-tree plugin descriptor
+    // left to spread for either — see that function's doc). The factory
+    // fake still DECLARES `.slack`/`.mattermost` methods (the interface
+    // shape is unchanged, since `wireSurfaceAdapters` still needs them via
+    // `registryToLegacyFactory`), they're just not wired into the BUILT
+    // registry by this function any more — mirrored by the two
+    // "test needs a {slack,mattermost}-shaped adapter" manual-registration
+    // cases right below.
     const calls: string[] = [];
     const stubAdapter = { platform: "x", instanceId: "y" } as never;
     const registry = registryFromFactory({
       discord: () => { calls.push("discord"); return stubAdapter; },
-      // cortex#1795 (S10 MOVE) — `slack` is still REQUIRED on the factory
-      // shape (LegacyGatewayAdapterFactory), but registryFromFactory no
-      // longer auto-registers a "slack" registry entry from it (no in-tree
-      // slackAdapterPlugin to borrow descriptor fields from) — see the
-      // next test for the documented self-registration workaround.
       slack: () => { calls.push("slack"); return stubAdapter; },
       mattermost: () => { calls.push("mattermost"); return stubAdapter; },
     });
     registry.getAdapter("discord")!.createAdapter({});
-    registry.getAdapter("mattermost")!.createAdapter({});
     expect(registry.getAdapter("slack")).toBeUndefined();
-    expect(calls).toEqual(["discord", "mattermost"]);
+    expect(registry.getAdapter("mattermost")).toBeUndefined();
+    expect(calls).toEqual(["discord"]);
   });
 
   test("a slack-shaped fourth entry can self-register a stub AdapterPlugin, same workaround as 'web'", () => {
@@ -212,6 +211,24 @@ describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
     expect(registry.getAdapter("slack")).toBeDefined();
     registry.getAdapter("slack")!.createAdapter({});
     expect(calls).toEqual(["slack"]);
+  });
+
+  test("a test needing a mattermost-shaped adapter registers its own stub AdapterPlugin after registryFromFactory (documented pattern)", () => {
+    const calls: string[] = [];
+    const stubAdapter = { platform: "mattermost", instanceId: "y" } as never;
+    const factory = {
+      discord: () => stubAdapter,
+      slack: () => stubAdapter,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mattermost: (_args: any) => { calls.push("mattermost"); return stubAdapter; },
+    };
+    const registry = registryFromFactory(factory);
+    registry.registerAdapter({
+      ...makeStubAdapterPlugin("mattermost"),
+      createAdapter: (args) => factory.mattermost(args),
+    });
+    registry.getAdapter("mattermost")!.createAdapter({});
+    expect(calls).toEqual(["mattermost"]);
   });
 
   test("registryToLegacyFactory routes each legacy method to the matching registry entry", () => {
@@ -237,9 +254,8 @@ describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
 // =============================================================================
 
 describe("in-tree AdapterPlugin descriptors — foldsIntoPresence (ADR-0024 D5 scope item 3)", () => {
-  test("discord/mattermost fold into agents[*].presence.{platform}", () => {
+  test("discord folds into agents[*].presence.{platform}", () => {
     expect(discordAdapterPlugin.foldsIntoPresence).toBe(true);
-    expect(mattermostAdapterPlugin.foldsIntoPresence).toBe(true);
   });
 
   // cortex#1794 (S9 MOVE) — "web does NOT fold" is now pinned by the
@@ -254,6 +270,13 @@ describe("in-tree AdapterPlugin descriptors — foldsIntoPresence (ADR-0024 D5 s
   // `surfaces.slack[]` → `agents[*].presence.slack` fold coverage (which
   // exercises `DEFAULT_FOLD_PLATFORMS` directly, the cortex-owned constant
   // that still lists "slack" — see `common/types/surfaces.ts`).
+  //
+  // cortex#1796 (S11 MOVE) — "mattermost DOES fold" is now pinned by the
+  // `metafactory-cortex-adapter-mattermost` bundle's own test suite AND by
+  // `src/common/config/__tests__/loader.test.ts`'s fold-behavior coverage
+  // (`defaultFoldPlatforms()` unions the registry-derived list with
+  // `DEFAULT_FOLD_PLATFORMS` specifically so this out-of-tree platform's
+  // fold contract survives — see that function's doc).
 });
 
 describe("resolveAdapterPluginOrThrow", () => {
@@ -265,7 +288,7 @@ describe("resolveAdapterPluginOrThrow", () => {
   test("unknown platform throws, naming the key and the installed set", () => {
     const registry = createDefaultSurfacePluginRegistry();
     expect(() => resolveAdapterPluginOrThrow("discrod", registry)).toThrow(
-      /no adapter installed for platform "discrod".*installed: discord, mattermost/,
+      /no adapter installed for platform "discrod".*installed: discord/,
     );
   });
 });

@@ -3,9 +3,32 @@
  * Fetches thread context from Mattermost REST API for multi-turn conversations.
  */
 
-import type { MattermostPresence } from "../../common/types/cortex-config";
-import type { ContextMessage } from "../../surface-sdk";
-import { formatContextForClaude } from "../../common/types/context";
+import type { MattermostPresence } from "./schema";
+import type { ContextMessage } from "@the-metafactory/cortex/surface-sdk";
+
+/**
+ * cortex#1796 (S11, ADR-0024 D5 extraction lane) — inlined verbatim from
+ * cortex core's `src/common/types/context.ts` (a small, self-contained pure
+ * function — same duplication tradeoff as this directory's
+ * `envelope-renderer.ts`). The original stays in `common/types/context.ts`
+ * for its other two in-tree consumers (`prompt-builder.ts`,
+ * `discord/context-fetcher.ts`), which this plugin never touches.
+ */
+function formatContextForClaude(messages: ContextMessage[]): string {
+  if (messages.length === 0) return "";
+
+  return messages
+    .map((m) => {
+      const tag = m.role === "human" ? "user_message" : "assistant_message";
+      let body = m.content;
+      if (m.attachments && m.attachments.length > 0) {
+        const attachList = m.attachments.map((a) => `[attachment: ${a.name} (${a.contentType})]`).join(", ");
+        body += `\n${attachList}`;
+      }
+      return `<${tag} author="${m.author}" timestamp="${m.timestamp}">\n${body}\n</${tag}>`;
+    })
+    .join("\n\n");
+}
 
 export interface MattermostPost {
   id: string;

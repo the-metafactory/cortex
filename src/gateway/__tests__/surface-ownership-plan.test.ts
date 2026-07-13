@@ -4,7 +4,7 @@ import {
   planSurfaceOwnership,
 } from "../surface-ownership-plan";
 import type { Surfaces } from "../../common/types/surfaces";
-import { testRegistryWithWeb, testRegistryWithSlack } from "./test-registry-support";
+import { testRegistryWithWeb, testRegistryWithSlackAndMattermost } from "./test-registry-support";
 
 const SURFACES: Surfaces = {
   discord: [
@@ -103,9 +103,10 @@ describe("planSurfaceOwnership", () => {
       surfaces: SURFACES,
       gatewayEnabled: true,
       principal: "andreas",
-      // cortex#1795 (S10 MOVE) — SURFACES carries a slack[] binding; slack
-      // is no longer in the in-tree default registry (see test-registry-support.ts).
-      registry: testRegistryWithSlack(),
+      // cortex#1795/#1796 (S10/S11 MOVE) — SURFACES carries slack[] AND
+      // mattermost[] bindings; neither is in the in-tree default registry
+      // any more (see test-registry-support.ts).
+      registry: testRegistryWithSlackAndMattermost(),
     });
 
     expect(plan.gatewayStartEligible).toBe(true);

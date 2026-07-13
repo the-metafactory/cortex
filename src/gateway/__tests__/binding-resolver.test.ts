@@ -27,7 +27,11 @@ import {
 } from "../binding-resolver";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { InboundMessage } from "../../adapters/types";
-import { testRegistryWithWeb, testRegistryWithSlack } from "./test-registry-support";
+import {
+  testRegistryWithWeb,
+  testRegistryWithSlack,
+  testRegistryWithSlackAndMattermost,
+} from "./test-registry-support";
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -129,13 +133,13 @@ describe("buildBindingIndex — happy path", () => {
   });
 
   test("mattermost single: single-binding slot is populated", () => {
-    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES, testRegistryWithWeb());
     expect(index.mattermostSingle).not.toBeNull();
     expect(index.mattermostMulti).toBe(false);
   });
 
   test("mattermost multi: multi-binding ambiguity flag is set", () => {
-    const index = buildBindingIndex(MATTERMOST_MULTI_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_MULTI_SURFACES, testRegistryWithWeb());
     expect(index.mattermostSingle).toBeNull();
     expect(index.mattermostMulti).toBe(true);
   });
@@ -146,7 +150,7 @@ describe("buildBindingIndex — happy path", () => {
       slack: SLACK_SURFACES.slack,
       mattermost: MATTERMOST_SINGLE_SURFACES.mattermost,
     };
-    const index = buildBindingIndex(combined, testRegistryWithSlack());
+    const index = buildBindingIndex(combined, testRegistryWithSlackAndMattermost());
     expect(index.discord.size).toBe(1);
     expect(index.slack.size).toBe(1);
     expect(index.mattermostSingle).not.toBeNull();
@@ -243,7 +247,7 @@ describe("resolveBinding — happy path", () => {
   });
 
   test("mattermost single: resolves by fallback", () => {
-    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES, testRegistryWithWeb());
     const inbound = msg({ platform: "mattermost", guildId: undefined });
     const match = resolveBinding(index, inbound);
     expect(match).not.toBeNull();
@@ -307,7 +311,7 @@ describe("resolveBinding — DM / no guildId", () => {
 
 describe("resolveBinding — mattermost single-binding", () => {
   test("resolves even when guildId is absent (no per-message server id on mattermost)", () => {
-    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES, testRegistryWithWeb());
     // Build without guildId to confirm the Mattermost single-binding fallback
     // does not require a demux key on the inbound message.
     const inbound = msg({ platform: "mattermost", guildId: undefined });
@@ -321,7 +325,7 @@ describe("resolveBinding — mattermost single-binding", () => {
 
 describe("resolveBinding — mattermost multi-binding ambiguity", () => {
   test("returns null (no per-message server id to discriminate)", () => {
-    const index = buildBindingIndex(MATTERMOST_MULTI_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_MULTI_SURFACES, testRegistryWithWeb());
     const inbound = msg({ platform: "mattermost", guildId: undefined });
     expect(resolveBinding(index, inbound)).toBeNull();
   });
@@ -416,7 +420,7 @@ describe("instance-id determinism", () => {
   });
 
   test("mattermost single-binding: instance is 'mattermost:apiUrl'", () => {
-    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_SINGLE_SURFACES, testRegistryWithWeb());
     const match = resolveBinding(index, msg({ platform: "mattermost" }));
     expect(match!.instance).toBe("mattermost:https://mm.example.com");
   });

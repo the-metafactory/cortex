@@ -248,10 +248,16 @@ describe("CFG.c.4 — surfaces.yaml round-trips to the same effective presence/b
       stackNoBindings(),
     );
 
-    // cortex#1795 (S10 MOVE) — splitPath's surfaces.yaml carries a slack[]
-    // binding; slack is no longer in the in-tree default registry.
-    const inline = loadConfigWithAgents(inlinePath, testRegistryWithSlack());
-    const split = loadConfigWithAgents(splitPath, testRegistryWithSlack());
+    // cortex#1795/#1796 (S10/S11 MOVE) — splitPath's surfaces.yaml carries
+    // slack[] and mattermost[] bindings; neither is in the in-tree default
+    // registry any more, but `loadConfigWithAgents` no longer needs a
+    // caller-supplied registry to admit them — `parseSurfaces`'s internal
+    // `surfacesParseRegistry()` (loader.ts) structurally admits every
+    // `EXTRACTED_ADAPTER_PLATFORMS` entry at load time (see that function's
+    // doc — this is the cortex#1796 review-fix generalized to cover slack
+    // too).
+    const inline = loadConfigWithAgents(inlinePath);
+    const split = loadConfigWithAgents(splitPath);
 
     // Fold-output identity — the move is a source-layout change, not a
     // runtime-shape change. The split config additionally carries `surfaces`
@@ -295,10 +301,16 @@ describe("CFG.c.4 — surfaces.yaml round-trips to the same effective presence/b
       surfacesBlock(),
       stackNoBindings(),
     );
-    // cortex#1795 (S10 MOVE) — splitPath's surfaces.yaml carries a slack[]
-    // binding; slack is no longer in the in-tree default registry.
-    const inline = loadConfigWithAgents(inlinePath, testRegistryWithSlack());
-    const split = loadConfigWithAgents(splitPath, testRegistryWithSlack());
+    // cortex#1795/#1796 (S10/S11 MOVE) — splitPath's surfaces.yaml carries
+    // slack[] and mattermost[] bindings; neither is in the in-tree default
+    // registry any more, but `loadConfigWithAgents` no longer needs a
+    // caller-supplied registry to admit them — `parseSurfaces`'s internal
+    // `surfacesParseRegistry()` (loader.ts) structurally admits every
+    // `EXTRACTED_ADAPTER_PLATFORMS` entry at load time (see that function's
+    // doc — this is the cortex#1796 review-fix generalized to cover slack
+    // too).
+    const inline = loadConfigWithAgents(inlinePath);
+    const split = loadConfigWithAgents(splitPath);
     expect(split.config.discord.map((d) => d.instanceId)).toEqual(
       inline.config.discord.map((d) => d.instanceId),
     );
@@ -357,13 +369,16 @@ describe("CFG.c.4 — surfaces.yaml schema validates required binding fields", (
     expect(() => validateSurfacesAgainstRegistry(surfaces, testRegistryWithSlack())).toThrow();
   });
 
-  test("Mattermost binding missing apiToken fails loudly", () => {
-    expect(() =>
-      SurfacesSchema.parse({
-        mattermost: [{ agent: "ivy", binding: { apiUrl: "https://mm.example.com" } }],
-      }),
-    ).toThrow();
-  });
+  // cortex#1796 (S11 MOVE) — "Mattermost binding missing apiToken fails
+  // loudly" moved: `mattermost` is no longer one of `SurfacesSchema`'s
+  // hardcoded per-platform schemas (same as `web`, cortex#1794 S9 MOVE), so
+  // `SurfacesSchema.parse` alone (the STRUCTURAL pass) no longer rejects a
+  // mattermost binding missing `apiToken` — it validates generically now.
+  // The REAL per-field check happens at the REGISTRY pass, against the
+  // bundle-loaded plugin's own `bindingSchema` — see
+  // `loader.mattermost-bundle.test.ts`'s "validateSurfacesAgainstRegistry
+  // accepts a valid surfaces.mattermost[] entry … and rejects an invalid
+  // one" for the equivalent (now registry-pass) coverage.
 
   test("unknown top-level platform key structurally parses (cortex#1789, S4)", () => {
     // cortex#1789 (S4, ADR-0024 D5) — `SurfacesSchema` alone is now only the

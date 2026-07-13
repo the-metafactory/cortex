@@ -14,9 +14,9 @@ import type {
   ContextMessage,
   Envelope,
   RenderTarget,
-} from "../../surface-sdk";
-import type { AgentConfig } from "../../common/types/config";
-import type { Agent, MattermostPresence } from "../../common/types/cortex-config";
+  AdapterPolicyPort,
+} from "@the-metafactory/cortex/surface-sdk";
+import type { MattermostPresence } from "./schema";
 import type { MattermostInboundMessage } from "./server";
 import {
   createMattermostPoller,
@@ -26,17 +26,45 @@ import {
 } from "./poller";
 import { fetchMattermostContext } from "./context";
 import { fetchBotUserId } from "./bot-user";
-import type { MyelinRuntime } from "../../bus/myelin/runtime";
-import type { PayloadFilter } from "../../bus/payload-filter";
-import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
-import { type SystemEventSource } from "../../bus/system-events";
-import {
-  isOperatorPrincipal,
-  resolvePolicyAccess,
-  type PlatformPrincipalIndex,
-  type PolicyEngine,
-  type PrincipalRegistry,
-} from "../../common/policy";
+import { formatEnvelopeAsMarkdown } from "./envelope-renderer";
+
+// =============================================================================
+// cortex#1796 (S11, ADR-0024 D5 extraction lane) — narrow, structural types
+// =============================================================================
+
+/**
+ * The minimal agent-identity shape `MattermostAdapter` actually reads:
+ * `id` (log/poller correlation), `displayName` + `presence` (both read-and-
+ * rewritten by `updateConfig`'s hot-reload spread). Narrowed from cortex's
+ * full `Agent` (`common/types/cortex-config` — persona/trust/runtime config)
+ * the same way `metafactory-cortex-adapter-web`'s `AdapterAgentIdentity`
+ * narrowed it (cortex#1794 S9b) — `Agent` is cortex-internal config machinery
+ * the plugin SDK does not export. A real cortex `Agent` satisfies this
+ * structurally, so the host (`gateway-adapters.ts` / `surface-adapter-boot.ts`)
+ * keeps working unchanged whether it passes a synthetic identity or a real
+ * `Agent`.
+ */
+export interface MattermostAgentIdentity {
+  readonly id: string;
+  readonly displayName: string;
+  /** Structural stand-in for cortex's `Agent["presence"]` — spread-merged in
+   *  `updateConfig`, never read field-by-field, so `Record<string, unknown>`
+   *  is sufficient (a real `Presence` object is structurally assignable). */
+  readonly presence: Record<string, unknown>;
+}
+
+/** The minimal `AgentConfig` shape `updateConfig` reads — see that method's
+ *  doc for why this is narrowed rather than importing cortex's full type. */
+export interface MattermostUpdateConfigShape {
+  readonly mattermost: readonly {
+    readonly apiUrl?: string;
+    readonly channels: string[];
+    readonly pollIntervalMs: number;
+    readonly allowedUsers: string[];
+    readonly triggerWord?: string;
+  }[];
+  readonly agent: { readonly name: string; readonly displayName: string };
+}
 
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
@@ -64,8 +92,11 @@ export interface MattermostAdapterInfra {
    * Renderer config at MIG-7.2d. */
   surfaceSubjects?: string[];
   /** MIG-3b: optional payload filter applied AFTER subject match. Moves to
-   * Renderer at MIG-7.2d. */
-  surfaceFilter?: PayloadFilter;
+   * Renderer at MIG-7.2d. Typed via `RenderTarget["filter"]` (SDK-exported)
+   * rather than importing `PayloadFilter` from `bus/payload-filter` directly
+   * — cortex#1796 (S11) boundary inversion; never actually populated by
+   * either construction path today (see `plugin.ts`'s `createAdapter` doc). */
+  surfaceFilter?: RenderTarget["filter"];
   /** MIG-3b: fallback Mattermost channel ID for envelope rendering when no
    * per-envelope routing rule applies. The 26-char channel ID, NOT a name.
    * Moves to Renderer at MIG-7.2d. */
@@ -74,20 +105,26 @@ export interface MattermostAdapterInfra {
    * v2.0.0 (cortex#297) — myelin runtime preserved for forward compat
    * with sibling `system.access.*` envelopes that may publish here in
    * the future. Today's resolveAccess path doesn't publish; the field
-   * is optional and the adapter still works when absent.
+   * is optional and the adapter still works when absent. cortex#1796
+   * (S11) — typed `unknown` (never dereferenced anywhere in this class,
+   * verified by grep) rather than importing `MyelinRuntime`.
    */
-  runtime?: MyelinRuntime;
-  /** v2.0.0 (cortex#297) — `{principal}.{agent}.{instance}` source triple. */
-  systemEventSource?: SystemEventSource;
+  runtime?: unknown;
+  /** v2.0.0 (cortex#297) — `{principal}.{agent}.{instance}` source triple.
+   *  cortex#1796 (S11) — typed `unknown`, same rationale as `runtime` above
+   *  (stored, never read). */
+  systemEventSource?: unknown;
   /**
-   * v2.0.0 cutover (cortex#297) — PolicyEngine is the sole authorisation
-   * gate. See `DiscordAdapterInfra.policyEngine` for the full contract.
+   * cortex#1796 (S11, ADR-0024 D5 extraction lane) — the host-injected
+   * `AdapterPolicyPort` (mirrors `WebAdapterInfra.policy`, cortex#1794 S9b),
+   * REQUIRED: `mattermostAdapterPlugin.createAdapter` always supplies a
+   * bound port (defaulting to the deny-by-default `NO_POLICY_PORT` fallback
+   * when no host-bound port was passed) so `resolveAccess()`/`isOperator()`
+   * below never need a null-check of their own. Replaces the pre-S11
+   * `policyEngine?`/`policyLookup?`/`policyRegistry?` triad this adapter
+   * used to call `common/policy` directly with.
    */
-  policyEngine?: PolicyEngine;
-  /** v2.0.0 (cortex#297) — `(platform, platformId) → principalId` index. */
-  policyLookup?: PlatformPrincipalIndex;
-  /** v2.0.0 (cortex#297) — `principal_id → PolicyPrincipal` registry. */
-  policyRegistry?: PrincipalRegistry;
+  policy: AdapterPolicyPort;
 }
 
 /**
@@ -122,7 +159,7 @@ export class MattermostAdapter implements PlatformAdapter {
   readonly instanceId: string;
 
   private stopPoller: (() => void) | null = null;
-  private agent: Agent;
+  private agent: MattermostAgentIdentity;
   private presence: MattermostPresence;
   private infra: MattermostAdapterInfra;
   /**
@@ -140,7 +177,7 @@ export class MattermostAdapter implements PlatformAdapter {
   private cachedPlatformUserId: string | null = null;
 
   constructor(
-    agent: Agent,
+    agent: MattermostAgentIdentity,
     presence: MattermostPresence,
     infra: MattermostAdapterInfra,
   ) {
@@ -240,8 +277,16 @@ export class MattermostAdapter implements PlatformAdapter {
    * `config.mattermost[]`). Only hot-reload-safe fields update;
    * `apiUrl`/`apiToken`/`webhookUrl` are reconnect-only and intentionally
    * preserved across the immutable spread.
+   *
+   * cortex#1796 (S11) — `config` narrowed to the local structural shape this
+   * method actually reads, instead of cortex's full `AgentConfig`
+   * (`common/types/config.ts`). `PlatformAdapter.updateConfig?(config:
+   * unknown)` in the SDK is already `unknown` — TS's bivariant method-
+   * parameter check lets this narrower signature satisfy that contract, and
+   * cortex.ts's caller (`adapter.updateConfig?.(event.config)`) passes a
+   * real `AgentConfig`, which is always structurally assignable here.
    */
-  updateConfig(config: AgentConfig): void {
+  updateConfig(config: MattermostUpdateConfigShape): void {
     const newInstance = config.mattermost.find((inst) => inst.apiUrl === this.apiUrl);
 
     if (!newInstance) {
@@ -292,14 +337,12 @@ export class MattermostAdapter implements PlatformAdapter {
    * Mattermost messages aren't classified as DMs in the legacy shape;
    * `dmType` synthesis is omitted. The principal-elevation short-circuit
    * lives in `resolvePolicyAccess` via the principal-grant capability.
+   *
+   * cortex#1796 (S11) — delegates to the host-injected `AdapterPolicyPort`
+   * (`this.infra.policy`) instead of calling `common/policy` directly.
    */
   resolveAccess(msg: InboundMessage): AccessDecision {
-    return resolvePolicyAccess({
-      msg,
-      engine: this.infra.policyEngine,
-      index: this.infra.policyLookup,
-      registry: this.infra.policyRegistry,
-    });
+    return this.infra.policy.resolveAccess(msg);
   }
 
   /**
@@ -308,12 +351,7 @@ export class MattermostAdapter implements PlatformAdapter {
    * paths) to decide privileged actions.
    */
   protected isOperator(authorId: string): boolean {
-    return isOperatorPrincipal(
-      "mattermost",
-      authorId,
-      this.infra.policyEngine,
-      this.infra.policyLookup,
-    );
+    return this.infra.policy.isOperatorPrincipal("mattermost", authorId);
   }
 
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {

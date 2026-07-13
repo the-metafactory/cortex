@@ -359,21 +359,24 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
     expect([...repos]).toEqual([DECLARED_ADAPTER_REPO.toLowerCase()]);
   });
 
-  test("cortex's REAL arc-manifest.yaml is readable, and its NARROWED adapter-exemption set contains exactly the web + slack bundles (cortex#1794 S9 / cortex#1795 S10 MOVE)", () => {
+  test("cortex's REAL arc-manifest.yaml is readable, and its NARROWED adapter-exemption set contains exactly the web + slack + mattermost bundles (cortex#1794 S9 / cortex#1795 S10 / cortex#1796 S11 MOVE)", () => {
     // PR #1942 MAJOR: the narrowing means only a dependency `name` matching
     // `metafactory-cortex-adapter-*` grants the exemption — `arc` and
     // `metafactory-discord` (both real, org-trusted dependencies declared for
     // UNRELATED reasons) never do, no matter what they ship. cortex#1794 (S9
-    // MOVE) was the first time the raw dependency list contained a name
-    // matching that shape (`metafactory-cortex-adapter-web`); cortex#1795
-    // (S10 MOVE) adds a second (`metafactory-cortex-adapter-slack`) — this
-    // test documents that the narrowed set now resolves to exactly those two
-    // entries, not "genuinely empty" (that was the pre-S9 state; see git
-    // history for the prior version of this test).
+    // MOVE) was the first time the raw dependency list actually contained a
+    // name matching that shape (`metafactory-cortex-adapter-web`); cortex#1795
+    // (S10 MOVE) added a second (`metafactory-cortex-adapter-slack`);
+    // cortex#1796 (S11 MOVE) added a third
+    // (`metafactory-cortex-adapter-mattermost`) — this test documents that
+    // the narrowed set now resolves to exactly those three entries, not
+    // "genuinely empty" (that was the pre-move state; see git history for
+    // the prior version of this test).
     const repos = readCortexDeclaredAdapterRepos(defaultCortexManifestPath());
-    expect([...repos]).toEqual([
-      "https://github.com/the-metafactory/metafactory-cortex-adapter-web",
+    expect([...repos].sort()).toEqual([
+      "https://github.com/the-metafactory/metafactory-cortex-adapter-mattermost",
       "https://github.com/the-metafactory/metafactory-cortex-adapter-slack",
+      "https://github.com/the-metafactory/metafactory-cortex-adapter-web",
     ]);
     expect(repos.has(DECLARED_ADAPTER_REPO.toLowerCase())).toBe(false);
     expect(repos.has(TRUSTED_REPO.toLowerCase())).toBe(false);

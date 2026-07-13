@@ -90,7 +90,6 @@
  */
 
 import { DiscordAdapter } from "../adapters/discord";
-import { MattermostAdapter } from "../adapters/mattermost";
 import type { InboundMessage, PlatformAdapter } from "../adapters/types";
 import type { AgentConfig } from "../common/types/config";
 import {
@@ -690,7 +689,16 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
   const mattermostDescriptor: AdapterBootDescriptor<
     AgentConfig["mattermost"][number],
     MattermostPresence,
-    MattermostAdapter
+    // cortex#1796 (S11 MOVE) — `MattermostAdapter`'s concrete class no
+    // longer lives in-tree (extracted to `metafactory-cortex-adapter-mattermost`);
+    // constructed via `factory.mattermost(...)` → `registryToLegacyFactory`
+    // → the bundle-loaded plugin's `createAdapter`, so only its STRUCTURAL
+    // shape is available at this boundary. `PlatformAdapter & RouterRegistrable`
+    // is exactly what this descriptor actually needs (Mattermost carries no
+    // `trustResolverSupport`/`TrustMergeable` methods — see those fields'
+    // docs) — same structural-bound pattern the generic skeleton already
+    // uses everywhere else.
+    PlatformAdapter & RouterRegistrable
   > = {
     platform: "mattermost",
     instances: opts.mattermostInstances,
@@ -731,10 +739,21 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
           ...(opts.principalMattermostId !== undefined && { mattermostId: opts.principalMattermostId }),
         },
         presence,
-        ...(opts.policyEngine !== undefined && { policyEngine: opts.policyEngine }),
-        ...(opts.policyLookup !== undefined && { policyLookup: opts.policyLookup }),
-        ...(opts.policyRegistry !== undefined && { policyRegistry: opts.policyRegistry }),
-      }) as MattermostAdapter,
+        // cortex#1796 (S11, ADR-0024 D5 extraction lane) — mattermost's
+        // (now out-of-tree) plugin reads a host-bound `AdapterPolicyPort`
+        // instead of the raw policy triad (see `index.ts`'s
+        // `MattermostAdapterInfra.policy` doc). Built here, cortex-side,
+        // from the SAME resolved triad discord/slack still forward
+        // directly — `buildAdapterPolicyPort` reproduces the identical
+        // `resolvePolicyAccess`/`isOperatorPrincipal` behaviour byte-for-
+        // byte (see that function's own doc), so this is a pure call-site
+        // conversion, not a behavior change.
+        policy: buildAdapterPolicyPort({
+          policyEngine: opts.policyEngine,
+          policyLookup: opts.policyLookup,
+          policyRegistry: opts.policyRegistry,
+        }),
+      }) as PlatformAdapter & RouterRegistrable,
     postStartLog: (_adapter, instance, instanceId) =>
       `cortex: mattermost adapter started (instance: ${instanceId}, ${instance.channels.length} channel(s))`,
     // No trustResolverSupport — Mattermost has no trust resolver / Pass 2.
