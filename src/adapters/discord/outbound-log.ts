@@ -14,14 +14,54 @@
 import { existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { TextChannel } from "discord.js";
-import type { AgentConfig } from "../../common/types/config";
-import type { SurfaceRouter } from "../../bus/surface-router";
-import type { SystemEventSource } from "../../bus/system-events";
-import { JsonlReader } from "../../taps/cc-events/lib/jsonl-reader";
-import { PublishedEventSchema } from "../../taps/cc-events/hooks/lib/event-types";
+import type { RenderTarget } from "../../surface-sdk";
+import { JsonlReader } from "./jsonl-reader";
+import { PublishedEventSchema } from "./events";
 import type { DiscordAdapter } from "./index";
 import { WorklogManager } from "./worklog-manager";
 import { formatEventForDiscord } from "./event-formatter";
+
+/**
+ * cortex#1797 (S12) — narrow, plugin-owned shape of the `DiscordInstance`
+ * fields this bridge actually reads (`common/types/config.ts`'s
+ * `DiscordInstanceSchema`). A real `DiscordInstance` structurally satisfies
+ * this, so `cortex.ts`'s call site (the only caller) is unaffected.
+ */
+export interface LegacyOutboundLogInstance {
+  logChannelId: string;
+  guildId: string;
+  worklogChannelId?: string;
+  enableAgentLog: boolean;
+}
+
+/**
+ * cortex#1797 (S12) — narrow, plugin-owned shape of the `AgentConfig` fields
+ * this bridge reads (`common/types/config.ts`'s `AgentConfigSchema`).
+ */
+export interface LegacyOutboundLogConfig {
+  paths: { publishedEventsDir: string };
+}
+
+/**
+ * cortex#1797 (S12) — the surface-router's `register` seam, narrowed to
+ * exactly the one call this bridge makes (`bus/surface-router.ts`'s
+ * `SurfaceRouter` is 1500+ lines of cortex-internal bus wiring this bridge
+ * has no other reason to depend on). A real `SurfaceRouter` satisfies this
+ * structurally.
+ */
+export interface LegacyOutboundLogRouter {
+  register(target: RenderTarget): void;
+}
+
+/**
+ * cortex#1797 (S12) — the one field this bridge reads off
+ * `bus/system-events.ts`'s `SystemEventSource` (`.principal`, forwarded to
+ * `worklog.surfaceConfig`). A real `SystemEventSource` satisfies this
+ * structurally.
+ */
+export interface LegacyOutboundLogSource {
+  principal: string;
+}
 
 /**
  * Subscribe a Discord adapter to the published-events JSONL stream so
@@ -33,10 +73,10 @@ import { formatEventForDiscord } from "./event-formatter";
  */
 export function attachLegacyOutboundLog(
   discordAdapter: DiscordAdapter,
-  instance: import("../../common/types/config").DiscordInstance,
-  config: AgentConfig,
-  router: SurfaceRouter,
-  systemEventSource: SystemEventSource,
+  instance: LegacyOutboundLogInstance,
+  config: LegacyOutboundLogConfig,
+  router: LegacyOutboundLogRouter,
+  systemEventSource: LegacyOutboundLogSource,
 ): (() => void) | null {
   const eventsDir = config.paths.publishedEventsDir.replace(/^~/, process.env.HOME ?? "~");
   const client = discordAdapter.getClient();

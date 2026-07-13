@@ -17,9 +17,10 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
 import type { ConnectionHealth } from "../client";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 let originalWarn: typeof console.warn;
 let originalLog: typeof console.log;
@@ -67,16 +68,16 @@ function makeAdapter(opts: {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test",
     displayName: "Test",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
     principal: { discordId: "principal-123" },
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 

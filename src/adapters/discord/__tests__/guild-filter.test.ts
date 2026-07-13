@@ -48,9 +48,10 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { EventEmitter } from "events";
 import { ChannelType } from "discord.js";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import type { InboundMessage } from "../../types";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
+import type { InboundMessage } from "../../../surface-sdk";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 // ---------------------------------------------------------------------------
 // Console suppression — adapter logs at construction + on dispatch; noise.
@@ -150,16 +151,16 @@ function makeAdapter(opts: {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test-agent",
     displayName: "TestAgent",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: opts.instanceId,
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
     ...(opts.explicitGuildScope && {
       allowedGuildIds: new Set([presence.guildId]),
       presenceByGuildId: new Map([[presence.guildId, presence]]),

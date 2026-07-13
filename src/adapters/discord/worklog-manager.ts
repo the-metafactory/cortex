@@ -8,7 +8,7 @@
  */
 
 import type { Client, TextChannel, ThreadChannel } from "discord.js";
-import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
+import type { PublishedEvent } from "./events";
 import {
   formatEventForThread,
   formatThreadName,

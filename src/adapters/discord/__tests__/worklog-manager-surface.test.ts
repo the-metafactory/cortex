@@ -19,15 +19,9 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Client, TextChannel, ThreadChannel } from "discord.js";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
-import type { PublishedEvent } from "../../../taps/cc-events/hooks/lib/event-types";
+import type { Envelope } from "../../../surface-sdk";
+import type { PublishedEvent } from "../events";
 import { WorklogManager } from "../worklog-manager";
-import {
-  createDispatchTaskAbortedEvent,
-  createDispatchTaskCompletedEvent,
-  createDispatchTaskFailedEvent,
-  createDispatchTaskStartedEvent,
-} from "../../../bus/dispatch-events";
 
 // ---------------------------------------------------------------------------
 // Fake Discord client
@@ -97,49 +91,64 @@ function makeFakeClient(channelId: string): { client: Client; calls: FakeCalls }
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SOURCE = { principal: "metafactory", agent: "cortex", instance: "local" };
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
 const STARTED_AT = new Date("2026-05-09T12:00:00.000Z");
 const COMPLETED_AT = new Date("2026-05-09T12:00:30.000Z");
 
+/**
+ * cortex#1797 (S12) — hand-built `dispatch.task.*` envelope fixture, mirroring
+ * `bus/dispatch-events.ts`'s `buildBaseEnvelope`/`createDispatchTask*Event`
+ * output shape exactly (source `"metafactory.cortex.local"`, correlation_id
+ * defaults to `taskId`, fixed `local`/`local-only` sovereignty) — WITHOUT
+ * importing that cortex-internal module. `WorklogManager.surfaceConfig`
+ * (`../worklog-manager`) only ever reads a generic `Envelope`'s
+ * `type`/`payload` fields (via `surface-sdk`), so a hand-built fixture in the
+ * exact wire shape those constructors emit exercises it identically.
+ */
+function makeDispatchEnvelope(type: string, payload: Record<string, unknown>): Envelope {
+  return {
+    id: crypto.randomUUID(),
+    source: "metafactory.cortex.local",
+    type,
+    timestamp: new Date().toISOString(),
+    correlation_id: TASK_ID,
+    sovereignty: {
+      classification: "local",
+      data_residency: "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    },
+    payload: { task_id: TASK_ID, agent_id: "cortex", ...payload },
+  };
+}
+
 function makeStarted(): Envelope {
-  return createDispatchTaskStartedEvent({
-    source: SOURCE,
-    taskId: TASK_ID,
-    agentId: "cortex",
-    startedAt: STARTED_AT,
+  return makeDispatchEnvelope("dispatch.task.started", {
+    started_at: STARTED_AT.toISOString(),
   });
 }
 
 function makeCompleted(): Envelope {
-  return createDispatchTaskCompletedEvent({
-    source: SOURCE,
-    taskId: TASK_ID,
-    agentId: "cortex",
-    startedAt: STARTED_AT,
-    completedAt: COMPLETED_AT,
-    resultSummary: "Built the thing",
+  return makeDispatchEnvelope("dispatch.task.completed", {
+    started_at: STARTED_AT.toISOString(),
+    completed_at: COMPLETED_AT.toISOString(),
+    result_summary: "Built the thing",
   });
 }
 
 function makeFailed(): Envelope {
-  return createDispatchTaskFailedEvent({
-    source: SOURCE,
-    taskId: TASK_ID,
-    agentId: "cortex",
-    startedAt: STARTED_AT,
-    failedAt: COMPLETED_AT,
-    errorSummary: "exit 1",
+  return makeDispatchEnvelope("dispatch.task.failed", {
+    started_at: STARTED_AT.toISOString(),
+    failed_at: COMPLETED_AT.toISOString(),
+    error_summary: "exit 1",
   });
 }
 
 function makeAborted(): Envelope {
-  return createDispatchTaskAbortedEvent({
-    source: SOURCE,
-    taskId: TASK_ID,
-    agentId: "cortex",
-    startedAt: STARTED_AT,
-    abortedAt: COMPLETED_AT,
+  return makeDispatchEnvelope("dispatch.task.aborted", {
+    started_at: STARTED_AT.toISOString(),
+    aborted_at: COMPLETED_AT.toISOString(),
     reason: "timeout",
   });
 }

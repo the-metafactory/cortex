@@ -19,9 +19,9 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { AgentConfig } from "../../../common/types/config";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity, type AdapterAgentConfig } from "../index";
+import type { DiscordPresence } from "../schema";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 let originalLog: typeof console.log;
 let originalWarn: typeof console.warn;
@@ -54,12 +54,10 @@ function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence
   };
 }
 
-function makeAgent(presence: DiscordPresence, overrides: Partial<Agent> = {}): Agent {
+function makeAgent(presence: DiscordPresence, overrides: Partial<AdapterAgentIdentity> = {}): AdapterAgentIdentity {
   return {
     id: "luna",
     displayName: "Luna",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
     ...overrides,
   };
@@ -72,7 +70,7 @@ function makeAgentConfig(overrides: Partial<{
   contextDepth: number;
   defaultRole: string;
   token: string;
-}> = {}): AgentConfig {
+}> = {}): AdapterAgentConfig {
   return {
     agent: {
       name: overrides.name ?? "luna",
@@ -81,15 +79,11 @@ function makeAgentConfig(overrides: Partial<{
     discord: [
       {
         guildId: overrides.guildId ?? "guild-1",
-        token: overrides.token ?? "initial-token",
-        agentChannelId: "ch-agent",
-        logChannelId: "ch-log",
         contextDepth: overrides.contextDepth ?? 5,
         enableAgentLog: false,
-        defaultRole: overrides.defaultRole ?? "allow-all",
       },
     ],
-  } as unknown as AgentConfig;
+  };
 }
 
 function makeAdapter(overrides: { presence?: Partial<DiscordPresence> } = {}) {
@@ -98,6 +92,8 @@ function makeAdapter(overrides: { presence?: Partial<DiscordPresence> } = {}) {
   const infra: DiscordAdapterInfra = {
     instanceId: "luna-discord-guild-1",
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
   };
   return new DiscordAdapter(agent, presence, infra);
 }
@@ -105,8 +101,8 @@ function makeAdapter(overrides: { presence?: Partial<DiscordPresence> } = {}) {
 function getPresence(adapter: DiscordAdapter): DiscordPresence {
   return (adapter as unknown as { presence: DiscordPresence }).presence;
 }
-function getAgent(adapter: DiscordAdapter): Agent {
-  return (adapter as unknown as { agent: Agent }).agent;
+function getAgent(adapter: DiscordAdapter): AdapterAgentIdentity {
+  return (adapter as unknown as { agent: AdapterAgentIdentity }).agent;
 }
 
 describe("DiscordAdapter.updateConfig", () => {

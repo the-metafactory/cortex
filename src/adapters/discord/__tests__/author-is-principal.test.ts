@@ -31,9 +31,10 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { EventEmitter } from "events";
 import { ChannelType } from "discord.js";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import type { InboundMessage } from "../../types";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
+import type { InboundMessage, AdapterPolicyPort } from "../../../surface-sdk";
+import { fallbackFormatEnvelope } from "../plugin";
 
 // ---------------------------------------------------------------------------
 // Console suppression
@@ -76,26 +77,19 @@ class FakeClient extends EventEmitter {
 }
 
 /**
- * Duck-typed policy stack consumed by `isOperatorPrincipal`:
- *   index.resolve(platform, platformId) → principalId | undefined
- *   engine.check(principalId, intent) → { allow }
- * Exactly the PRINCIPAL_AUTHOR_ID resolves and is granted the capability the
- * PolicyEngine keys the home-principal role on; everyone else is a
- * non-principal.
+ * cortex#1797 (S12) — `AdapterPolicyPort` stand-in for the pre-extraction
+ * duck-typed policyEngine/policyLookup pair. Exactly the PRINCIPAL_AUTHOR_ID
+ * resolves `isOperatorPrincipal` true; everyone else is a non-principal.
+ * `resolveAccess` is unused by this suite (it only drives `authorIsPrincipal`,
+ * computed via `isOperatorPrincipal` directly) — denies unconditionally.
  */
-function makePrincipalPolicy(): Pick<DiscordAdapterInfra, "policyEngine" | "policyLookup"> {
-  const policyLookup = {
-    resolve: (_platform: string, platformId: string): string | undefined =>
-      platformId === PRINCIPAL_AUTHOR_ID ? "home-principal" : undefined,
-  };
-  const policyEngine = {
-    check: (principalId: string): { allow: boolean } => ({
-      allow: principalId === "home-principal",
-    }),
-  };
+function makePrincipalPolicyPort(): AdapterPolicyPort {
   return {
-    policyEngine: policyEngine as unknown as DiscordAdapterInfra["policyEngine"],
-    policyLookup: policyLookup as unknown as DiscordAdapterInfra["policyLookup"],
+    resolveAccess: () => ({
+      allowed: false,
+      features: { chat: false, async: false, team: false },
+    }),
+    isOperatorPrincipal: (_platform, platformId) => platformId === PRINCIPAL_AUTHOR_ID,
   };
 }
 
@@ -138,17 +132,16 @@ function makeAdapter(): {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test-agent",
     displayName: "TestAgent",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-A",
     principal: {},
-    ...makePrincipalPolicy(),
+    policy: makePrincipalPolicyPort(),
+    formatEnvelope: fallbackFormatEnvelope,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 

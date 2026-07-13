@@ -2,28 +2,33 @@
  * MIG-3b-ii: integration tests for `system.adapter.*` event emission from
  * the Discord adapter.
  *
- * The adapter's `start()` wires three discord.js shard events to bus
- * publishes via the new system-events helpers:
- *   - shardDisconnect → system.adapter.disconnected
- *   - degraded threshold elapsed → system.adapter.degraded
- *   - shardReady after degraded → system.adapter.recovered
+ * cortex#1797 (S12) — the adapter no longer builds/publishes envelopes
+ * itself; it calls the host-injected `infra.systemEvents`
+ * (`AdapterSystemEventPort`, `../../../surface-sdk`). Envelope construction +
+ * the `MyelinRuntime.publish` call, plus the "runtime configured but source
+ * missing" one-time-warning gate, moved to `plugin-support.ts`'s
+ * `buildAdapterSystemEventPort` (cortex-side, NOT part of this bundle — see
+ * `src/adapters/__tests__/plugin-support.test.ts` for THAT gate's coverage,
+ * mirroring the split `metafactory-cortex-adapter-slack`'s system-events
+ * suite already made). These tests assert only what `DiscordAdapter` itself
+ * is responsible for: calling `.recovered()`/`.disconnected()`/`.degraded()`
+ * with the right args at the right lifecycle transitions, and staying
+ * silent (no throw) when no port is configured at all.
  *
- * Tests use a fake `MyelinRuntime` that records publishes; the discord.js
- * client is started in headless mode (no `login()` call) and shard events
- * are emitted directly via `client.emit(...)` — same pattern as
- * `client-degraded.test.ts`.
+ * The adapter's `start()` wires three discord.js shard events to port calls:
+ *   - shardDisconnect → systemEvents.disconnected
+ *   - degraded threshold elapsed → systemEvents.degraded
+ *   - shardReady after degraded → systemEvents.recovered
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
-import type { MyelinRuntime } from "../../../bus/myelin/runtime";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
+import type { AdapterSystemEventPort } from "../../../surface-sdk";
+import type { DiscordPresence } from "../schema";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 // MIG-7.2c-discord-flip: build a fresh (agent, presence) pair for each
-// adapter so tests can mutate them safely. Overrides on `presence` mirror
-// what the previous `makeAdapterConfig` helper used to do via the
-// `DiscordAdapterConfig` partial.
+// adapter so tests can mutate them safely.
 function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence {
   return {
     enabled: true,
@@ -40,30 +45,28 @@ function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence
   };
 }
 
-function makeAgent(presence: DiscordPresence): Agent {
+function makeAgent(presence: DiscordPresence): AdapterAgentIdentity {
   return {
     id: "test",
     displayName: "Test",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
 }
 
-interface RecordingRuntime extends MyelinRuntime {
-  publishes: Envelope[];
-}
+type RecordedCall =
+  | { kind: "recovered"; opts: Parameters<AdapterSystemEventPort["recovered"]>[0] }
+  | { kind: "disconnected"; opts: Parameters<AdapterSystemEventPort["disconnected"]>[0] }
+  | { kind: "degraded"; opts: Parameters<AdapterSystemEventPort["degraded"]>[0] }
+  | { kind: "untrustedBotDenied"; opts: Parameters<AdapterSystemEventPort["untrustedBotDenied"]>[0] };
 
-function makeRecordingRuntime(): RecordingRuntime {
-  const publishes: Envelope[] = [];
+function makeRecordingSystemEvents(): AdapterSystemEventPort & { calls: RecordedCall[] } {
+  const calls: RecordedCall[] = [];
   return {
-    enabled: true,
-    onEnvelope: () => ({ unregister: () => {} }),
-    publish: async (envelope: Envelope) => {
-      publishes.push(envelope);
-    },
-    stop: async () => {},
-    publishes,
+    calls,
+    recovered: (opts) => { calls.push({ kind: "recovered", opts }); },
+    disconnected: (opts) => { calls.push({ kind: "disconnected", opts }); },
+    degraded: (opts) => { calls.push({ kind: "degraded", opts }); },
+    untrustedBotDenied: (opts) => { calls.push({ kind: "untrustedBotDenied", opts }); },
   };
 }
 
@@ -75,26 +78,19 @@ function makeRecordingRuntime(): RecordingRuntime {
  * `Client.prototype.login` once via mock.
  */
 async function buildStartedAdapter(opts: {
-  runtime?: MyelinRuntime;
-  systemEventSource?: { principal: string; agent: string; instance: string };
-  degradedThresholdMs?: number;
+  systemEvents?: AdapterSystemEventPort;
 } = {}) {
-  // discord.js Client is constructed inside start(); the only way to skip
-  // the network call is to make login() resolve without doing anything.
-  // We do this via a subclass-style override on the result.
   const presence = makePresence();
   const agent = makeAgent(presence);
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
     principal: {},
-    ...(opts.runtime !== undefined && { runtime: opts.runtime }),
-    ...(opts.systemEventSource !== undefined && { systemEventSource: opts.systemEventSource }),
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
+    ...(opts.systemEvents !== undefined && { systemEvents: opts.systemEvents }),
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
   // Reach in: replace client.login with a no-op before the real login fires.
-  // The cleanest way is to start, then immediately replace the running
-  // client's login — but start() awaits login. Instead, we patch the
-  // discord.js Client prototype temporarily.
   const { Client } = await import("discord.js");
   const origLogin = Client.prototype.login;
   Client.prototype.login = mock(async () => "fake-token");
@@ -103,10 +99,6 @@ async function buildStartedAdapter(opts: {
   } finally {
     Client.prototype.login = origLogin;
   }
-  // The default degraded threshold is 60s; tests need a short value to keep
-  // wall time low. We can't pass it in via adapter constructor (Discord
-  // adapter currently doesn't expose that knob), so reach into the client's
-  // internals isn't a stable test. Instead we manipulate the client directly.
   return adapter;
 }
 
@@ -130,12 +122,9 @@ afterEach(() => {
 });
 
 describe("DiscordAdapter system.adapter.* emission", () => {
-  test("shardDisconnect publishes system.adapter.disconnected with correct payload", async () => {
-    const runtime = makeRecordingRuntime();
-    const adapter = await buildStartedAdapter({
-      runtime,
-      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
-    });
+  test("shardDisconnect calls systemEvents.disconnected with correct opts", async () => {
+    const systemEvents = makeRecordingSystemEvents();
+    const adapter = await buildStartedAdapter({ systemEvents });
     const client = adapter.getClient()!;
     // Emit a non-clean disconnect (1006 = abnormal closure)
     (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(
@@ -144,53 +133,43 @@ describe("DiscordAdapter system.adapter.* emission", () => {
       0,
     );
 
-    expect(runtime.publishes.length).toBe(1);
-    const env = runtime.publishes[0]!;
-    expect(env.type).toBe("system.adapter.disconnected");
-    expect(env.source).toBe("metafactory.cortex.local");
-    expect(env.payload).toMatchObject({
-      adapter_id: "discord-test",
-      platform: "discord",
-      shard_id: 0,
-      close_code: 1006,
-      close_reason: "abnormal closure",
-      was_clean: false,
-    });
+    expect(systemEvents.calls.length).toBe(1);
+    const call = systemEvents.calls[0]!;
+    expect(call.kind).toBe("disconnected");
+    const opts = call.opts as Parameters<AdapterSystemEventPort["disconnected"]>[0];
+    expect(opts.adapterId).toBe("discord-test");
+    expect(opts.platform).toBe("discord");
+    expect(opts.shardId).toBe(0);
+    expect(opts.closeCode).toBe(1006);
+    expect(opts.closeReason).toBe("abnormal closure");
+    expect(opts.wasClean).toBe(false);
     await adapter.stop();
   });
 
-  test("clean disconnect (code 1000) publishes was_clean: true", async () => {
-    const runtime = makeRecordingRuntime();
-    const adapter = await buildStartedAdapter({
-      runtime,
-      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
-    });
+  test("clean disconnect (code 1000) calls systemEvents.disconnected with wasClean: true", async () => {
+    const systemEvents = makeRecordingSystemEvents();
+    const adapter = await buildStartedAdapter({ systemEvents });
     const client = adapter.getClient()!;
     (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(
       "shardDisconnect",
       { code: 1000, reason: "shutting down" },
       0,
     );
-    expect(runtime.publishes[0]?.payload).toMatchObject({ was_clean: true });
+    const opts = systemEvents.calls[0]!.opts as Parameters<AdapterSystemEventPort["disconnected"]>[0];
+    expect(opts.wasClean).toBe(true);
     await adapter.stop();
   });
 
-  test("degraded callback path produces system.adapter.degraded envelope", async () => {
+  test("degraded callback path calls systemEvents.degraded", async () => {
     // The adapter's degraded callback is wired inside start() with the
     // default 60 s threshold from createDiscordClient. Waiting 60 s in a test
-    // is unacceptable; instead we exercise the publish path directly by
+    // is unacceptable; instead we exercise the port-call path directly by
     // invoking the private helper. The shardDisconnect → degraded threshold
     // timer itself is covered by `client-degraded.test.ts` — together those
-    // two tests cover the full disconnect→degraded→publish chain without
-    // adding a configurable-threshold knob to DiscordAdapter solely for
-    // testability.
-    const runtime = makeRecordingRuntime();
-    const adapter = await buildStartedAdapter({
-      runtime,
-      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
-    });
-    // Exercise the wired callback. `publishAdapterDegraded` is private; the
-    // bracket access is the standard escape hatch for adapter-internal tests.
+    // two tests cover the full disconnect→degraded→port chain without adding
+    // a configurable-threshold knob to DiscordAdapter solely for testability.
+    const systemEvents = makeRecordingSystemEvents();
+    const adapter = await buildStartedAdapter({ systemEvents });
     (
       adapter as unknown as {
         publishAdapterDegraded: (opts: {
@@ -205,24 +184,20 @@ describe("DiscordAdapter system.adapter.* emission", () => {
       since: new Date("2026-05-09T12:00:00.000Z"),
     });
 
-    expect(runtime.publishes.length).toBe(1);
-    const env = runtime.publishes[0]!;
-    expect(env.type).toBe("system.adapter.degraded");
-    expect(env.payload).toMatchObject({
-      adapter_id: "discord-test",
-      platform: "discord",
-      disconnected_since: "2026-05-09T12:00:00.000Z",
-      threshold_ms: 60_000,
-    });
+    expect(systemEvents.calls.length).toBe(1);
+    const call = systemEvents.calls[0]!;
+    expect(call.kind).toBe("degraded");
+    const opts = call.opts as Parameters<AdapterSystemEventPort["degraded"]>[0];
+    expect(opts.adapterId).toBe("discord-test");
+    expect(opts.platform).toBe("discord");
+    expect(opts.disconnectedSince.toISOString()).toBe("2026-05-09T12:00:00.000Z");
+    expect(opts.thresholdMs).toBe(60_000);
     await adapter.stop();
   });
 
-  test("recovered callback path produces system.adapter.recovered envelope", async () => {
-    const runtime = makeRecordingRuntime();
-    const adapter = await buildStartedAdapter({
-      runtime,
-      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
-    });
+  test("recovered callback path calls systemEvents.recovered", async () => {
+    const systemEvents = makeRecordingSystemEvents();
+    const adapter = await buildStartedAdapter({ systemEvents });
     (
       adapter as unknown as {
         publishAdapterRecovered: (opts: {
@@ -235,20 +210,19 @@ describe("DiscordAdapter system.adapter.* emission", () => {
       degradedForMs: 14_200,
     });
 
-    expect(runtime.publishes.length).toBe(1);
-    const env = runtime.publishes[0]!;
-    expect(env.type).toBe("system.adapter.recovered");
-    expect(env.payload).toMatchObject({
-      adapter_id: "discord-test",
-      platform: "discord",
-      degraded_for_ms: 14_200,
-    });
+    expect(systemEvents.calls.length).toBe(1);
+    const call = systemEvents.calls[0]!;
+    expect(call.kind).toBe("recovered");
+    const opts = call.opts as Parameters<AdapterSystemEventPort["recovered"]>[0];
+    expect(opts.adapterId).toBe("discord-test");
+    expect(opts.platform).toBe("discord");
+    expect(opts.degradedForMs).toBe(14_200);
     await adapter.stop();
   });
 
-  test("no runtime configured: no publishes (silent, doesn't throw)", async () => {
+  test("no systemEvents port configured: no calls (silent, doesn't throw)", async () => {
     const adapter = await buildStartedAdapter({
-      // No runtime, no source — adapter must keep working
+      // No port — adapter must keep working.
     });
     const client = adapter.getClient()!;
     (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(
@@ -256,50 +230,7 @@ describe("DiscordAdapter system.adapter.* emission", () => {
       { code: 1006, reason: "" },
       0,
     );
-    // Nothing to assert beyond "didn't throw" — the adapter has no recorder.
-    await adapter.stop();
-  });
-
-  test("runtime configured but systemEventSource missing: warns + skips publish", async () => {
-    const warnLogs: string[] = [];
-    console.warn = (...args: unknown[]) => {
-      warnLogs.push(args.map(String).join(" "));
-    };
-    const runtime = makeRecordingRuntime();
-    const adapter = await buildStartedAdapter({
-      runtime,
-      // intentionally omit systemEventSource
-    });
-    const client = adapter.getClient()!;
-    (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(
-      "shardDisconnect",
-      { code: 1006, reason: "" },
-      0,
-    );
-    expect(runtime.publishes.length).toBe(0);
-    const warned = warnLogs.some((m) =>
-      m.includes("systemEventSource is missing"),
-    );
-    expect(warned).toBe(true);
-    await adapter.stop();
-  });
-
-  test("emitted envelopes pass myelin schema validation", async () => {
-    const runtime = makeRecordingRuntime();
-    const adapter = await buildStartedAdapter({
-      runtime,
-      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
-    });
-    const client = adapter.getClient()!;
-    (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(
-      "shardDisconnect",
-      { code: 1006, reason: "abnormal closure" },
-      0,
-    );
-    expect(runtime.publishes.length).toBe(1);
-    const { validateEnvelope } = await import("../../../bus/myelin/envelope-validator");
-    const result = validateEnvelope(runtime.publishes[0]);
-    expect(result.ok).toBe(true);
+    // Nothing to assert beyond "didn't throw" — no port to record against.
     await adapter.stop();
   });
 });

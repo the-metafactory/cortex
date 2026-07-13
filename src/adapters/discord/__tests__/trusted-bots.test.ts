@@ -17,7 +17,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Client, Message } from "discord.js";
 import { isMentionForBot } from "../client";
-import { DiscordInstanceSchema } from "../../../common/types/config";
+import { DiscordPresenceSchema } from "../schema";
 
 const SELF_ID = "1111";
 const PEER_BOT_ID = "4444444444444444444"; // peer bot (placeholder snowflake)
@@ -109,7 +109,13 @@ describe("isMentionForBot — trustedBotIds allowlist (cortex#84)", () => {
   });
 });
 
-describe("DiscordInstanceSchema.trustedBotIds (cortex#84)", () => {
+describe("DiscordPresenceSchema.trustedBotIds (cortex#84)", () => {
+  // cortex#1797 (S12) — this suite pinned cortex's `DiscordInstanceSchema`
+  // (`common/types/config.ts`), a config-composition type this bundle has no
+  // reason to depend on. `DiscordPresenceSchema` (`../schema`) is the
+  // plugin-owned duplicate with the byte-identical `trustedBotIds` field
+  // (same regex-free `z.array(z.coerce.string()).default([])`), so the
+  // assertions carry over unchanged.
   const minInstance = {
     token: "x",
     guildId: "g",
@@ -118,12 +124,12 @@ describe("DiscordInstanceSchema.trustedBotIds (cortex#84)", () => {
   };
 
   test("defaults to empty array when omitted", () => {
-    const parsed = DiscordInstanceSchema.parse(minInstance);
+    const parsed = DiscordPresenceSchema.parse(minInstance);
     expect(parsed.trustedBotIds).toEqual([]);
   });
 
   test("accepts a populated array of Discord user ids", () => {
-    const parsed = DiscordInstanceSchema.parse({
+    const parsed = DiscordPresenceSchema.parse({
       ...minInstance,
       trustedBotIds: [PEER_BOT_ID, "2222222222222222222"],
     });
@@ -131,7 +137,7 @@ describe("DiscordInstanceSchema.trustedBotIds (cortex#84)", () => {
   });
 
   test("coerces numeric ids to strings (snowflakes-as-numbers in YAML)", () => {
-    const parsed = DiscordInstanceSchema.parse({
+    const parsed = DiscordPresenceSchema.parse({
       ...minInstance,
       trustedBotIds: [4444444444444444444n.toString(), 2222222222222222222n.toString()],
     });
@@ -140,7 +146,7 @@ describe("DiscordInstanceSchema.trustedBotIds (cortex#84)", () => {
 
   test("rejects a non-array value", () => {
     expect(() =>
-      DiscordInstanceSchema.parse({ ...minInstance, trustedBotIds: PEER_BOT_ID }),
+      DiscordPresenceSchema.parse({ ...minInstance, trustedBotIds: PEER_BOT_ID }),
     ).toThrow();
   });
 });

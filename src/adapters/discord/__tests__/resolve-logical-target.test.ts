@@ -12,8 +12,9 @@
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { ChannelType } from "discord.js";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 let originalWarn: typeof console.warn;
 let originalLog: typeof console.log;
@@ -118,16 +119,16 @@ function makeAdapter(): { adapter: DiscordAdapter; client: FakeClient } {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test-agent",
     displayName: "TestAgent",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-cortex502",
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
   const client = new FakeClient();

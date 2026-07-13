@@ -85,6 +85,14 @@ interface FactoryCall {
   runtime: MyelinRuntime | undefined;
   allowedGuildIds?: string[];
   presenceByGuildId?: Record<string, { agentChannelId: string; logChannelId: string }>;
+  /**
+   * cortex#1797 (S12 MOVE) — discord's real `buildGatewayConstructArgs` now
+   * forwards `systemEvents` (not `runtime`) alongside `policy`/`formatEnvelope`
+   * — see `AdapterPlugin.createAdapter`'s doc on the `unknown`-typed forward.
+   * Not part of the legacy `DiscordFactoryArgs` shape, so recorded via an
+   * `as unknown` read rather than a typed field.
+   */
+  systemEvents?: unknown;
 }
 
 function makeFakeAdapter(
@@ -136,6 +144,7 @@ function makeRecordingFactory(): {
         runtime: args.runtime,
         allowedGuildIds: [...args.allowedGuildIds].sort(),
         presenceByGuildId,
+        systemEvents: (args as unknown as { systemEvents?: unknown }).systemEvents,
       });
       return makeFakeAdapter("discord", args.instanceId);
     },
@@ -398,10 +407,24 @@ describe("buildGatewayAdapters", () => {
     expect(calls[0]?.instanceId).toBe("discord:555555555555555555");
   });
 
-  test("runtime is forwarded verbatim to the factory", () => {
+  test("systemEvents port (built from runtime+source) is forwarded to the factory (cortex#1797 S12)", () => {
+    // cortex#1797 (S12 MOVE) — discord's `buildGatewayConstructArgs` no
+    // longer forwards the raw `runtime` (mirrors slack's cortex#1795 S10
+    // inversion): the adapter body only ever calls the host-bound
+    // `AdapterSystemEventPort`, built here from `{runtime, source}` and
+    // threaded through `GatewayConstructBase.systemEvents` instead. This
+    // replaces the old "runtime is forwarded verbatim" assertion, which
+    // pinned a construction shape discord no longer produces.
     const { factory, calls } = makeRecordingFactory();
     buildGatewayAdapters(DISCORD_SURFACES, makeDeps(factory));
-    expect(calls[0]?.runtime).toBe(RUNTIME_STUB);
+    const systemEvents = calls[0]?.systemEvents as
+      | { recovered: unknown; disconnected: unknown; degraded: unknown; untrustedBotDenied: unknown }
+      | undefined;
+    expect(systemEvents).toBeDefined();
+    expect(typeof systemEvents?.recovered).toBe("function");
+    expect(typeof systemEvents?.disconnected).toBe("function");
+    expect(typeof systemEvents?.degraded).toBe("function");
+    expect(typeof systemEvents?.untrustedBotDenied).toBe("function");
   });
 
   test("same Discord token across two guild bindings → one adapter with both guilds allowed", () => {

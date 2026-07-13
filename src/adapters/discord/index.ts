@@ -15,31 +15,85 @@ import type {
   ContextMessage,
   Envelope,
   RenderTarget,
+  AdapterPolicyPort,
+  AdapterSystemEventPort,
 } from "../../surface-sdk";
-import type { AgentConfig } from "../../common/types/config";
-import type { Agent, DiscordPresence } from "../../common/types/cortex-config";
+import type { DiscordPresence } from "./schema";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
 import { fetchContext } from "./context-fetcher";
 import { postToDiscord } from "./response-poster";
 import { isRetryableError } from "./retry";
-import type { MyelinRuntime } from "../../bus/myelin/runtime";
-import type { PayloadFilter } from "../../bus/payload-filter";
-import {
-  type SystemEventSource,
-  createSystemAdapterDegradedEvent,
-  createSystemAdapterDisconnectedEvent,
-  createSystemAdapterRecoveredEvent,
-  createSystemAccessDeniedEvent,
-} from "../../bus/system-events";
-import {
-  isOperatorPrincipal,
-  resolvePolicyAccess,
-  type PlatformPrincipalIndex,
-  type PrincipalRegistry,
-} from "../../common/policy";
-import type { PolicyEngine } from "../../common/policy";
-import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 import { parseReviewWireFormat, reviewThreadName } from "./wire-format";
+
+// =============================================================================
+// Agent identity — the minimal shape DiscordAdapter actually reads
+// =============================================================================
+
+/**
+ * cortex#1797 (S12) — the minimal agent-identity shape `DiscordAdapter` reads
+ * (`agent.id`/`agent.displayName`/`agent.presence.discord` — see the
+ * constructor + `updateConfig` below). Kept narrower than cortex's full
+ * `Agent` (`common/types/cortex-config` — persona/trust/presence config)
+ * DELIBERATELY: `Agent` is a residual coupling `surface-sdk` does not
+ * re-export (same reasoning as `SystemEventSource`/`MyelinRuntime` — see
+ * that barrel's module doc), and `DiscordAdapter` never reads past these
+ * three fields. A real `Agent` satisfies this structurally, so every
+ * existing caller (`discordAdapterPlugin.createAdapter`, `updateConfig`
+ * callers, tests) keeps working unchanged. Mirrors
+ * `metafactory-cortex-adapter-slack`'s `AdapterAgentIdentity`.
+ */
+export interface AdapterAgentIdentity {
+  readonly id: string;
+  readonly displayName: string;
+  readonly presence: { discord?: DiscordPresence };
+}
+
+/**
+ * cortex#1797 (S12) — the minimal shape `updateConfig`'s hot-reload path
+ * reads off cortex's full `AgentConfig` (`common/types/config`): the
+ * matching `discord[]` instance list (by `guildId`) plus the agent's
+ * `name`/`displayName`. A real `AgentConfig` satisfies this structurally.
+ */
+export interface AdapterAgentConfig {
+  agent: { name: string; displayName: string };
+  discord: readonly {
+    guildId: string;
+    contextDepth: number;
+    enableAgentLog: boolean;
+  }[];
+}
+
+// =============================================================================
+// Payload filter — structural mirror of `bus/payload-filter`'s `PayloadFilter`
+// =============================================================================
+
+/** Structural mirror of `bus/payload-filter.ts`'s `FilterValue`. */
+export type AdapterFilterValue =
+  | string
+  | number
+  | boolean
+  | { "anything-but": string | number | boolean | (string | number | boolean)[] }
+  | { prefix: string }
+  | { exists: boolean }
+  | { "equals-ignore-case": string };
+
+/** Structural mirror of `bus/payload-filter.ts`'s `PayloadFilterPattern`. */
+export interface AdapterPayloadFilterPattern {
+  [key: string]: AdapterFilterValue[] | AdapterPayloadFilterPattern;
+}
+
+/**
+ * cortex#1797 (S12) — structural mirror of `bus/payload-filter.ts`'s
+ * `PayloadFilter`, which `RenderTarget.filter` (`surface-sdk`, re-exported
+ * from `bus/surface-router`'s `SurfaceAdapter`) is typed against. Pure data
+ * (JSON-shape pattern, no functions) — safe to duplicate locally rather than
+ * import across the boundary; the real `PayloadFilter` a host constructs
+ * satisfies this structurally.
+ */
+export interface AdapterPayloadFilter {
+  envelope?: AdapterPayloadFilterPattern;
+  payload?: AdapterPayloadFilterPattern;
+}
 
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
@@ -68,18 +122,23 @@ export interface DiscordAdapterInfra {
   /** Principal's platform identity. Architecture §9.1: the principal runs the cortex
    * deployment, distinct from the agents they host. */
   principal: { discordId?: string };
-  /** Myelin runtime for `system.adapter.*` envelope emission. Optional — adapters started
-   * without NATS still track degradation/reconnect locally. */
-  runtime?: MyelinRuntime;
-  /** `{principal}.{agent}.{instance}` source triple stamped onto emitted `system.*` envelopes
-   * (spec §3.6 names the agent, not the principal). */
-  systemEventSource?: SystemEventSource;
+  /**
+   * cortex#1797 (S12) — the host-injected system-event port (see
+   * `AdapterSystemEventPort` in `@the-metafactory/cortex/surface-sdk`).
+   * Optional — adapters started without NATS still track
+   * degradation/reconnect state locally (bus emission is additive); an
+   * absent port is treated exactly like a port built with no runtime
+   * configured (every method no-ops). Replaces the pre-S12
+   * `runtime?`/`systemEventSource?` pair this adapter used to call
+   * `bus/myelin/runtime`/`bus/system-events` directly with.
+   */
+  systemEvents?: AdapterSystemEventPort;
   /** MIG-3b: NATS subject patterns this adapter renders to Discord. Empty/undefined → adapter
    * never matches in the surface-router (still subscribes for messages, just doesn't render
    * envelopes). Moves to Renderer config at MIG-7.2d. */
   surfaceSubjects?: string[];
   /** MIG-3b: optional payload filter applied AFTER subject match. Moves to Renderer at MIG-7.2d. */
-  surfaceFilter?: PayloadFilter;
+  surfaceFilter?: AdapterPayloadFilter;
   /** MIG-3b: fallback Discord channel ID for envelope rendering when no per-envelope routing
    * rule applies. Channel ID, NOT name. Moves to Renderer at MIG-7.2d. */
   surfaceFallbackChannelId?: string;
@@ -100,30 +159,16 @@ export interface DiscordAdapterInfra {
    */
   trustedBotIds?: ReadonlySet<string>;
   /**
-   * v2.0.0 cutover (cortex#297) — PolicyEngine is the sole authorisation
-   * gate. Resolved by `cortex.ts` from the parsed `policy:` block via
-   * `policyEngineFromConfig`. `undefined` only when the deployment has
-   * not declared a `policy:` block — in that case every inbound message
-   * is denied with a pointer at `migrate-config`. Principals upgrading
-   * from <v2.0.0 MUST run the CLI first.
+   * cortex#1797 (S12) — the host-injected policy-resolution port (see
+   * `AdapterPolicyPort` in `@the-metafactory/cortex/surface-sdk`). REQUIRED:
+   * `discordAdapterPlugin.createAdapter` always supplies a bound port — a
+   * "no policy configured" port (deny-by-default) when the host has no live
+   * `PolicyEngine` yet — so `resolveAccess()`/`isOperator()` below never
+   * need a null-check fallback of their own. Replaces the pre-S12
+   * `policyEngine?`/`policyLookup?`/`policyRegistry?` triad this adapter
+   * used to call `common/policy` directly with.
    */
-  policyEngine?: PolicyEngine;
-  /**
-   * v2.0.0 (cortex#297) — `(platform, platformId) → principalId` lookup
-   * index built from `policy.principals[].platform_ids`. Resolves
-   * inbound `message.author.id` to a principal id before the engine
-   * consults capabilities. `undefined` follows the same condition as
-   * `policyEngine`.
-   */
-  policyLookup?: PlatformPrincipalIndex;
-  /**
-   * v2.0.0 (cortex#297) — `principal_id → PolicyPrincipal` registry
-   * used to look up `session_config` (channel vs DM CC session
-   * construction parameters). PolicyEngine itself answers yes/no on
-   * capabilities; session config is a sibling concern that lives on
-   * the principal record.
-   */
-  policyRegistry?: PrincipalRegistry;
+  policy: AdapterPolicyPort;
   /**
    * Gateway-only guild allowlist. Direct per-stack adapters omit this and keep
    * the strict single-guild isolation gate from `presence.guildId`; grouped
@@ -135,6 +180,15 @@ export interface DiscordAdapterInfra {
    * adapters omit this and read the constructor `presence` for their one guild.
    */
   presenceByGuildId?: ReadonlyMap<string, DiscordPresence>;
+  /**
+   * cortex#1797 (S12) — the host-injected envelope→markdown renderer (see
+   * `bus/surface-router`'s shared `adapters/envelope-renderer.ts`
+   * `formatEnvelopeAsMarkdown`, which Discord/Mattermost/Slack all share).
+   * REQUIRED, same rationale as `policy` above — the adapter body never
+   * imports `../envelope-renderer` (a one-level cross-boundary import)
+   * itself.
+   */
+  formatEnvelope: (envelope: Envelope) => string;
 }
 
 interface PendingResult {
@@ -150,7 +204,7 @@ export class DiscordAdapter implements PlatformAdapter {
 
   private client: Client | null = null;
   private connectionHealth: ConnectionHealth | null = null;
-  private agent: Agent;
+  private agent: AdapterAgentIdentity;
   private presence: DiscordPresence;
   private infra: DiscordAdapterInfra;
   /**
@@ -165,15 +219,6 @@ export class DiscordAdapter implements PlatformAdapter {
    */
   private onMessage: ((msg: InboundMessage) => Promise<void>) | null = null;
   private inboundDispatchAttached = false;
-  /**
-   * Cached pointers to `infra.runtime` / `infra.systemEventSource`. Kept as
-   * dedicated fields (rather than always reading via `this.infra.*`) so the
-   * `warnedMissingSource` latch — which fires once per process per
-   * misconfiguration — has the same lifecycle it had pre-flip. Set at
-   * construction; never re-read from `infra` afterwards.
-   */
-  private runtime: MyelinRuntime | undefined;
-  private systemEventSource: SystemEventSource | undefined;
   private readonly allowedGuildIds: ReadonlySet<string>;
   private readonly presenceByGuildId: ReadonlyMap<string, DiscordPresence>;
   /**
@@ -192,15 +237,9 @@ export class DiscordAdapter implements PlatformAdapter {
    * the new set, never a half-built one.
    */
   private trustedBotIds: ReadonlySet<string>;
-  /**
-   * Latches once we've warned about the runtime-without-source case so a
-   * busy adapter doesn't flood the log with the same diagnostic on every
-   * shard event. Cleared only when the adapter is reconstructed.
-   */
-  private warnedMissingSource = false;
 
   constructor(
-    agent: Agent,
+    agent: AdapterAgentIdentity,
     presence: DiscordPresence,
     infra: DiscordAdapterInfra,
   ) {
@@ -208,8 +247,6 @@ export class DiscordAdapter implements PlatformAdapter {
     this.presence = presence;
     this.infra = infra;
     this.instanceId = infra.instanceId;
-    this.runtime = infra.runtime;
-    this.systemEventSource = infra.systemEventSource;
     this.presenceByGuildId = new Map([
       [presence.guildId, presence],
       ...(infra.presenceByGuildId ?? new Map()),
@@ -505,11 +542,9 @@ export class DiscordAdapter implements PlatformAdapter {
       // CHANNEL @mentions aren't hard-blocked (live FP: PI-002 "act as a
       // jumphost" in #halden-observe, where Luna has `dmOwner: false` so a
       // channel @mention is the only path).
-      const authorIsPrincipal = isOperatorPrincipal(
+      const authorIsPrincipal = this.infra.policy.isOperatorPrincipal(
         "discord",
         message.author.id,
-        this.infra.policyEngine,
-        this.infra.policyLookup,
       );
       let dmType: "principal" | "user" | undefined;
       if (isDM) {
@@ -724,14 +759,16 @@ export class DiscordAdapter implements PlatformAdapter {
    * F-092: Hot-reload safe config fields.
    * Only updates fields that don't require reconnection.
    *
-   * MIG-7.2c-discord-flip: still takes `AgentConfig` since the bot.yaml watch
-   * pipeline upstream of this method hasn't been migrated yet. The matching
-   * key is the immutable `guildId` (token/agentChannelId/logChannelId are
-   * reconnect-only and must not change in a hot-reload). Updates are applied
-   * via immutable replacement so downstream readers can rely on
-   * structural-identity changes signalling a config refresh.
+   * MIG-7.2c-discord-flip: still takes the narrowed `AdapterAgentConfig`
+   * (cortex#1797 S12 — narrowed from cortex's full `AgentConfig`, see that
+   * type's doc) since the bot.yaml watch pipeline upstream of this method
+   * hasn't been migrated yet. The matching key is the immutable `guildId`
+   * (token/agentChannelId/logChannelId are reconnect-only and must not
+   * change in a hot-reload). Updates are applied via immutable replacement
+   * so downstream readers can rely on structural-identity changes signalling
+   * a config refresh.
    */
-  updateConfig(config: AgentConfig): void {
+  updateConfig(config: AdapterAgentConfig): void {
     const newInstance = config.discord.find((inst) => inst.guildId === this.presence.guildId);
 
     if (!newInstance) {
@@ -777,19 +814,13 @@ export class DiscordAdapter implements PlatformAdapter {
 
   /**
    * v2.0.0 (cortex#297) — single-gate authorisation via PolicyEngine.
-   * Replaces the legacy role-resolver + the cortex#296 parallel-mode
-   * orchestrator with a direct PolicyEngine consultation. The
-   * adapter-side logic lives in `resolvePolicyAccess`
-   * (`src/common/policy/resolve-access.ts`) so Discord, Mattermost,
-   * and Slack share it.
+   * cortex#1797 (S12) — delegates to the host-injected `infra.policy`
+   * (`AdapterPolicyPort`), which reproduces `resolvePolicyAccess`'s exact
+   * behaviour (`src/common/policy/resolve-access.ts`) — the adapter body no
+   * longer imports `common/policy` itself.
    */
   resolveAccess(msg: InboundMessage): AccessDecision {
-    return resolvePolicyAccess({
-      msg,
-      engine: this.infra.policyEngine,
-      index: this.infra.policyLookup,
-      registry: this.infra.policyRegistry,
-    });
+    return this.infra.policy.resolveAccess(msg);
   }
 
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {
@@ -1386,7 +1417,7 @@ export class DiscordAdapter implements PlatformAdapter {
     }
     await this.postResponse(
       { instanceId: this.instanceId, channelId },
-      formatEnvelopeAsMarkdown(envelope),
+      this.infra.formatEnvelope(envelope),
     );
   }
 
@@ -1395,71 +1426,52 @@ export class DiscordAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Common gate for `system.adapter.*` emission. Returns the bound runtime +
-   * source pair when both are configured, or `null` otherwise. Splits the "no
-   * runtime configured" case (silent — bot was started without NATS) from the
-   * "no source configured but runtime present" case (warn once — the principal
-   * wired NATS but forgot to pass `systemEventSource`, which is a config bug
-   * worth surfacing).
-   *
-   * Returning the pair (rather than a boolean) lets callers publish without
-   * any non-null assertions on `this.runtime` / `this.systemEventSource` —
-   * the discriminated shape carries the type evidence the compiler needs.
+   * cortex#1797 (S12) — the adapter no longer builds/publishes envelopes
+   * itself; it calls the host-injected `infra.systemEvents` port (see
+   * `AdapterSystemEventPort` in `@the-metafactory/cortex/surface-sdk`).
+   * Envelope construction + the `MyelinRuntime.publish` call, plus the
+   * "runtime configured but source missing" one-time-warning gate, moved to
+   * `plugin-support.ts`'s `buildAdapterSystemEventPort` (cortex-side, not
+   * part of this bundle). These methods are responsible only for calling
+   * the port with the right args at the right lifecycle transitions, and
+   * staying silent (no throw) when no port is configured at all.
    */
-  private canPublishSystemEvent(): { runtime: MyelinRuntime; source: SystemEventSource } | null {
-    const runtime = this.runtime;
-    if (!runtime) return null;
-    const source = this.systemEventSource;
-    if (!source) {
-      if (!this.warnedMissingSource) {
-        // Warn once per process — without the source, we'd emit envelopes
-        // that fail schema validation on the receiver side. The principal
-        // needs this signal at start time, not flooded across every shard
-        // disconnect during a real outage.
-        console.warn(
-          `discord-${this.instanceId}: runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
-        );
-        this.warnedMissingSource = true;
-      }
-      return null;
-    }
-    return { runtime, source };
-  }
-
   private publishAdapterDegraded(opts: {
     instanceId: string;
     thresholdMs: number;
     since: Date;
   }): void {
-    const wiring = this.canPublishSystemEvent();
-    if (!wiring) return;
-    const env = createSystemAdapterDegradedEvent({
-      source: wiring.source,
+    this.infra.systemEvents?.degraded({
       adapterId: opts.instanceId,
       platform: "discord",
       disconnectedSince: opts.since,
       thresholdMs: opts.thresholdMs,
-      reconnectAttempts: this.connectionHealth?.reconnectCount,
+      ...(this.connectionHealth?.reconnectCount !== undefined && {
+        reconnectAttempts: this.connectionHealth.reconnectCount,
+      }),
     });
-    // Fire-and-forget — `MyelinRuntime.publish` swallows + logs errors so we
-    // never crash the bot just because a degraded notification couldn't ship.
-    void wiring.runtime.publish(env);
   }
 
   private publishAdapterRecovered(opts: {
     instanceId: string;
     degradedForMs: number;
   }): void {
-    const wiring = this.canPublishSystemEvent();
-    if (!wiring) return;
-    const env = createSystemAdapterRecoveredEvent({
-      source: wiring.source,
+    // `client.ts`'s `markShardConnected` invokes `onRecovered` (which calls
+    // here) BEFORE it clears `health.degradedSince` — so
+    // `this.connectionHealth.degradedSince` is still the pre-recovery
+    // timestamp at this point. Defensive fallback derives it from
+    // `degradedForMs` in the (unreachable in practice) case it's already null.
+    const disconnectedSince =
+      this.connectionHealth?.degradedSince ?? new Date(Date.now() - opts.degradedForMs);
+    this.infra.systemEvents?.recovered({
       adapterId: opts.instanceId,
       platform: "discord",
       degradedForMs: opts.degradedForMs,
-      reconnectAttempts: this.connectionHealth?.reconnectCount,
+      disconnectedSince,
+      ...(this.connectionHealth?.reconnectCount !== undefined && {
+        reconnectAttempts: this.connectionHealth.reconnectCount,
+      }),
     });
-    void wiring.runtime.publish(env);
   }
 
   private publishAdapterDisconnected(opts: {
@@ -1468,16 +1480,13 @@ export class DiscordAdapter implements PlatformAdapter {
     closeReason?: string;
     wasClean: boolean;
   }): void {
-    const wiring = this.canPublishSystemEvent();
-    if (!wiring) return;
     // The disconnect timestamp lives on the connection-health snapshot; if
     // discord.js fired shardDisconnect before connection-health updated (or
     // the field was cleared between event and publish), fall back to "now"
     // — the envelope timestamp is an upper bound on disconnect time anyway.
     const disconnectedSince =
       this.connectionHealth?.lastDisconnectedAt ?? new Date();
-    const env = createSystemAdapterDisconnectedEvent({
-      source: wiring.source,
+    this.infra.systemEvents?.disconnected({
       adapterId: this.instanceId,
       platform: "discord",
       disconnectedSince,
@@ -1488,29 +1497,17 @@ export class DiscordAdapter implements PlatformAdapter {
       }),
       wasClean: opts.wasClean,
     });
-    void wiring.runtime.publish(env);
   }
 
   private publishUntrustedBotDenied(message: Message): void {
-    const wiring = this.canPublishSystemEvent();
-    if (!wiring) return;
     const envelopeSubject =
       message.guildId ?
         `discord.${message.guildId}.${message.channelId}.messageCreate` :
         `discord.dm.${message.channelId}.messageCreate`;
-    const env = createSystemAccessDeniedEvent({
-      source: wiring.source,
+    this.infra.systemEvents?.untrustedBotDenied({
+      platform: "discord",
       principalId: `discord:${message.author.id}`,
-      capability: "discord.inbound",
-      sovereignty: {
-        classification: "local",
-        data_residency: wiring.source.principal,
-        max_hop: 0,
-        frontier_ok: false,
-        model_class: "local-only",
-      },
       correlationId: `discord:${message.id}`,
-      signedBy: [],
       envelopeSubject,
       envelopeId: message.id,
       reason: {
@@ -1521,7 +1518,6 @@ export class DiscordAdapter implements PlatformAdapter {
         guild_id: message.guildId ?? undefined,
       },
     });
-    void wiring.runtime.publish(env);
   }
 }
 

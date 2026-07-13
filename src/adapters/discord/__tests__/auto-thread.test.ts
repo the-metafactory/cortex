@@ -17,11 +17,10 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { EventEmitter } from "events";
 import { ChannelType } from "discord.js";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import type { InboundMessage } from "../../types";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
-import type { MyelinRuntime } from "../../../bus/myelin/runtime";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
+import type { InboundMessage, AdapterSystemEventPort } from "../../../surface-sdk";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 // ---------------------------------------------------------------------------
 // Console suppression — the adapter emits a normal "channel=..." log and the
@@ -197,16 +196,16 @@ function makeAdapterWithInfra(
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test-agent",
     displayName: "TestAgent",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-cortex120",
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
     ...infraOverrides,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
@@ -215,20 +214,24 @@ function makeAdapterWithInfra(
   return { adapter, client };
 }
 
-interface RecordingRuntime extends MyelinRuntime {
-  publishes: Envelope[];
-}
+type RecordedSystemEventCall =
+  | { kind: "untrustedBotDenied"; opts: Parameters<AdapterSystemEventPort["untrustedBotDenied"]>[0] }
+  | { kind: "recovered" | "disconnected" | "degraded"; opts: unknown };
 
-function makeRecordingRuntime(): RecordingRuntime {
-  const publishes: Envelope[] = [];
+/**
+ * cortex#1797 (S12) — recording `AdapterSystemEventPort` stand-in for the
+ * pre-extraction `MyelinRuntime` fake. This suite only drives
+ * `untrustedBotDenied` (the untrusted-bot-mention path); the other three
+ * methods are recorded too for completeness but unused here.
+ */
+function makeRecordingSystemEvents(): AdapterSystemEventPort & { calls: RecordedSystemEventCall[] } {
+  const calls: RecordedSystemEventCall[] = [];
   return {
-    enabled: true,
-    onEnvelope: () => ({ unregister: () => {} }),
-    publish: async (envelope: Envelope) => {
-      publishes.push(envelope);
-    },
-    stop: async () => {},
-    publishes,
+    calls,
+    recovered: (opts) => { calls.push({ kind: "recovered", opts }); },
+    disconnected: (opts) => { calls.push({ kind: "disconnected", opts }); },
+    degraded: (opts) => { calls.push({ kind: "degraded", opts }); },
+    untrustedBotDenied: (opts) => { calls.push({ kind: "untrustedBotDenied", opts }); },
   };
 }
 
@@ -340,15 +343,10 @@ describe("findOrCreateThreadByName", () => {
 // ---------------------------------------------------------------------------
 
 describe("messageCreate auto-thread (cortex#120)", () => {
-  test("untrusted bot mention emits system.access.denied instead of silently dropping", async () => {
-    const runtime = makeRecordingRuntime();
+  test("untrusted bot mention calls systemEvents.untrustedBotDenied instead of silently dropping", async () => {
+    const systemEvents = makeRecordingSystemEvents();
     const { adapter, client } = makeAdapterWithInfra({
-      runtime,
-      systemEventSource: {
-        principal: "metafactory",
-        agent: "cortex",
-        instance: "discord-cortex120",
-      },
+      systemEvents,
     });
     const channel = new FakeTextChannel(CHANNEL_ID, PARENT_NAME);
     client.addChannel(channel);
@@ -374,24 +372,21 @@ describe("messageCreate auto-thread (cortex#120)", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(inbound).toHaveLength(0);
-    expect(runtime.publishes).toHaveLength(1);
-    const denied = runtime.publishes[0]!;
-    expect(denied.type).toBe("system.access.denied");
-    expect(denied.source).toBe("metafactory.cortex.discord-cortex120");
-    expect(denied.correlation_id).toBe("discord:msg-untrusted-bot");
-    expect(denied.payload).toMatchObject({
-      principal_id: "discord:peer-bot-untrusted",
-      capability: "discord.inbound",
-      envelope_id: "msg-untrusted-bot",
-      envelope_subject: `discord.g1.${CHANNEL_ID}.messageCreate`,
-      reason: {
-        kind: "untrusted_bot_author",
-        platform: "discord",
-        author_id: "peer-bot-untrusted",
-        channel_id: CHANNEL_ID,
-        guild_id: "g1",
-      },
-      signed_by: [],
+    expect(systemEvents.calls).toHaveLength(1);
+    const denied = systemEvents.calls[0]!;
+    expect(denied.kind).toBe("untrustedBotDenied");
+    const opts = denied.opts as Parameters<AdapterSystemEventPort["untrustedBotDenied"]>[0];
+    expect(opts.platform).toBe("discord");
+    expect(opts.principalId).toBe("discord:peer-bot-untrusted");
+    expect(opts.correlationId).toBe("discord:msg-untrusted-bot");
+    expect(opts.envelopeId).toBe("msg-untrusted-bot");
+    expect(opts.envelopeSubject).toBe(`discord.g1.${CHANNEL_ID}.messageCreate`);
+    expect(opts.reason).toMatchObject({
+      kind: "untrusted_bot_author",
+      platform: "discord",
+      author_id: "peer-bot-untrusted",
+      channel_id: CHANNEL_ID,
+      guild_id: "g1",
     });
   });
 

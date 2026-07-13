@@ -21,8 +21,21 @@
  * instead.
  */
 
-import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
-import { formatDuration } from "../../shared/format-utils";
+import type { PublishedEvent } from "./events";
+
+/**
+ * cortex#1797 (S12) — inlined verbatim from cortex's `src/shared/format-utils.ts`
+ * (the long-form duration formatter only; `formatDurationCompact` has no
+ * consumer in the worklog family). Not worth a cross-repo dependency for a
+ * five-line pure function.
+ */
+export function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
 
 /**
  * Coerce an `unknown` payload field to string. Avoids the
@@ -159,5 +172,3 @@ export function extractActivityEntry(event: PublishedEvent): SessionActivity | n
   }
 }
 
-// Re-export formatDuration from shared utilities for convenience
-export { formatDuration };

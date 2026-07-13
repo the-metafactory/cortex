@@ -9,7 +9,7 @@
  * - Thread names are human-scannable at a glance
  */
 
-import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
+import type { PublishedEvent } from "./events";
 import { formatDuration } from "./event-utils";
 
 /**

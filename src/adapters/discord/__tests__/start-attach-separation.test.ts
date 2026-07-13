@@ -33,9 +33,10 @@
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { EventEmitter } from "events";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import type { InboundMessage } from "../../types";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
+import type { InboundMessage } from "../../../surface-sdk";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 // ---------------------------------------------------------------------------
 // Console suppression — adapter logs a degraded-empty-surfaceSubjects warning
@@ -95,16 +96,16 @@ function makeAdapter(instanceId = "discord-test"): {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test-agent",
     displayName: "TestAgent",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId,
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 
@@ -187,16 +188,16 @@ describe("DiscordAdapter.attachInboundDispatch: pre-start guard (cortex#108)", (
       dmOwner: true,
       surfaceSubjects: [],
     };
-    const agent: Agent = {
+    const agent: AdapterAgentIdentity = {
       id: "test-agent",
       displayName: "TestAgent",
-      persona: "(test)",
-      trust: [],
       presence: { discord: presence },
     };
     const adapter = new DiscordAdapter(agent, presence, {
       instanceId: "discord-pre-start",
       principal: {},
+      policy: NO_POLICY_PORT,
+      formatEnvelope: fallbackFormatEnvelope,
     });
     // No client injected, no onMessage stashed — should throw with a
     // clear message instructing the caller to await start() first.

@@ -25,9 +25,10 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import type { ResponseTarget } from "../../types";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
+import type { ResponseTarget } from "../../../surface-sdk";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 // ---------------------------------------------------------------------------
 // Console suppression — adapter logs at construction; noise.
@@ -100,16 +101,16 @@ function makeAdapter(): DiscordAdapter {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test-agent",
     displayName: "TestAgent",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
   };
   return new DiscordAdapter(agent, presence, infra);
 }

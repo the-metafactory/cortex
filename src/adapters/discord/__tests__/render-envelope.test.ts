@@ -16,10 +16,11 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
+import { DiscordAdapter, type DiscordAdapterInfra, type AdapterAgentIdentity } from "../index";
+import type { DiscordPresence } from "../schema";
 import type { ConnectionHealth } from "../client";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import type { Envelope } from "../../../surface-sdk";
+import { NO_POLICY_PORT, fallbackFormatEnvelope } from "../plugin";
 
 // ---------------------------------------------------------------------------
 // Console suppression — these tests intentionally exercise log+warn paths.
@@ -88,16 +89,16 @@ function makeAdapter(opts: {
     dmOwner: true,
     surfaceSubjects: [],
   };
-  const agent: Agent = {
+  const agent: AdapterAgentIdentity = {
     id: "test",
     displayName: "Test",
-    persona: "(test)",
-    trust: [],
     presence: { discord: presence },
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-renderer",
     principal: {},
+    policy: NO_POLICY_PORT,
+    formatEnvelope: fallbackFormatEnvelope,
     ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
     ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
     ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),

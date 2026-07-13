@@ -5,7 +5,27 @@
 
 import type { TextChannel, ThreadChannel, Message, Collection, Snowflake } from "discord.js";
 import type { ContextMessage, ContextAttachment } from "../../surface-sdk";
-import { formatContextForClaude } from "../../common/types/context";
+
+/**
+ * cortex#1797 (S12) — inlined verbatim from cortex's `src/common/types/context.ts`
+ * (plugin-owned duplicate; not worth a cross-repo dependency for one pure
+ * function). Byte-identical to the shared implementation.
+ */
+function formatContextForClaude(messages: ContextMessage[]): string {
+  if (messages.length === 0) return "";
+
+  return messages
+    .map((m) => {
+      const tag = m.role === "human" ? "user_message" : "assistant_message";
+      let body = m.content;
+      if (m.attachments && m.attachments.length > 0) {
+        const attachList = m.attachments.map((a) => `[attachment: ${a.name} (${a.contentType})]`).join(", ");
+        body += `\n${attachList}`;
+      }
+      return `<${tag} author="${m.author}" timestamp="${m.timestamp}">\n${body}\n</${tag}>`;
+    })
+    .join("\n\n");
+}
 
 /**
  * Fetch context messages from a thread or channel.

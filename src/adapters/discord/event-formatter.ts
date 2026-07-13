@@ -3,8 +3,21 @@
  * Formats published events for Discord #agent-log.
  */
 
-import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
-import { POSTABLE_EVENTS } from "../../common/types/context";
+import type { PublishedEvent } from "./events";
+
+/**
+ * cortex#1797 (S12) — inlined verbatim from cortex's `src/common/types/context.ts`
+ * (plugin-owned duplicate; the canonical list stays in `context.ts` for the
+ * dispatch-handler's context-fetch consumers, which are cortex-internal).
+ */
+const POSTABLE_EVENTS = [
+  "agent.task.started",
+  "agent.task.completed",
+  "agent.task.failed",
+  "tool.file.changed",
+  "tool.agent.spawned",
+  "tool.todo.updated",
+] as const;
 
 const MAX_SUMMARY_LENGTH = 400;
 
