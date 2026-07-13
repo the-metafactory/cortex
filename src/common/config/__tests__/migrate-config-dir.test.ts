@@ -15,17 +15,21 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
+import { resolveConfigDir } from "../config-path";
 import {
   EXCLUDED_TOP_DIRS,
   MIGRATION_JOURNAL_NAME,
@@ -212,6 +216,119 @@ describe("atomicWriteFile — temp/fsync/rename primitive", () => {
     atomicWriteFile(dest, Buffer.from("v1"), 0o644);
     atomicWriteFile(dest, Buffer.from("v2"), 0o644);
     expect(readFileSync(dest, "utf-8")).toBe("v2");
+  });
+});
+
+describe("executeConfigDirMigration — transactional rollback-on-throw (finding #1)", () => {
+  test("a throw mid-copy leaves canonical fully ABSENT (never partial), legacy intact, resolver on legacy", () => {
+    // `good.yaml` is a cortex file (recorded FIRST → applied), `bad.yaml` is a
+    // grove-only file made unreadable (recorded SECOND → readFileSync throws
+    // EACCES). This deterministically exercises rollback of an ALREADY-applied
+    // copy plus removal of the canonical dir this run created.
+    write(legacyCortexDir(), "good.yaml", "good-bytes");
+    write(groveDir(), "bad.yaml", "bad-bytes", 0o000); // unreadable → forces a mid-loop throw
+
+    const plan = planConfigDirMigration({ home });
+    expect(() => executeConfigDirMigration(plan)).toThrow();
+
+    // INVARIANT: canonical is entirely gone — not a partial tree the resolver
+    // would prefer over legacy.
+    expect(existsSync(canonicalDir())).toBe(false);
+    expect(existsSync(join(canonicalDir(), "good.yaml"))).toBe(false);
+    expect(existsSync(join(canonicalDir(), MIGRATION_JOURNAL_NAME))).toBe(false);
+
+    // Every legacy source is still present (copy-keep-original; nothing renamed).
+    expect(existsSync(join(legacyCortexDir(), "good.yaml"))).toBe(true);
+    expect(existsSync(join(groveDir(), "bad.yaml"))).toBe(true);
+    expect(readFileSync(join(legacyCortexDir(), "good.yaml"), "utf-8")).toBe("good-bytes");
+
+    // With canonical absent, the dir resolver still lands on the legacy tree —
+    // no files silently shadowed into an incomplete canonical.
+    expect(resolveConfigDir(home)).toBe(legacyCortexDir());
+
+    chmodSync(join(groveDir(), "bad.yaml"), 0o644); // restore so afterEach cleanup is unhindered
+  });
+
+  test("a throw does NOT remove a canonical dir that pre-existed (only undoes applied copies)", () => {
+    write(canonicalDir(), "keep.yaml", "pre-existing-canonical"); // canonical pre-exists
+    write(legacyCortexDir(), "good.yaml", "good-bytes"); // will be applied then rolled back
+    write(groveDir(), "bad.yaml", "bad-bytes", 0o000); // forces the throw
+
+    const plan = planConfigDirMigration({ home });
+    expect(() => executeConfigDirMigration(plan)).toThrow();
+
+    // Canonical dir survives (we did not create it) and its pre-existing file is intact…
+    expect(existsSync(canonicalDir())).toBe(true);
+    expect(readFileSync(join(canonicalDir(), "keep.yaml"), "utf-8")).toBe("pre-existing-canonical");
+    // …but the copy THIS run applied was rolled back.
+    expect(existsSync(join(canonicalDir(), "good.yaml"))).toBe(false);
+
+    chmodSync(join(groveDir(), "bad.yaml"), 0o644);
+  });
+});
+
+describe("symlink carry — lstat-enumerated, symlink-carried, never dereferenced (finding #2)", () => {
+  test("a symlinked config FILE is carried AS a symlink (not flattened to a static copy)", () => {
+    write(legacyCortexDir(), "real.yaml", "real-payload");
+    const target = join(legacyCortexDir(), "real.yaml");
+    symlinkSync(target, join(legacyCortexDir(), "link.yaml"));
+
+    executeConfigDirMigration(planConfigDirMigration({ home }));
+
+    const dest = join(canonicalDir(), "link.yaml");
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true); // a dereferenced copy would be a regular file
+    expect(readlinkSync(dest)).toBe(target);
+    // Source link is untouched (never renamed/removed).
+    expect(lstatSync(join(legacyCortexDir(), "link.yaml")).isSymbolicLink()).toBe(true);
+    // The real file is carried too, as an ordinary file.
+    expect(readFileSync(join(canonicalDir(), "real.yaml"), "utf-8")).toBe("real-payload");
+  });
+
+  test("a symlinked DIRECTORY is carried as a link and does NOT EISDIR-abort the migration", () => {
+    const realDir = join(home, "external-target-dir"); // outside the scanned trees
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, "inside.yaml"), "inside");
+    write(legacyCortexDir(), "cfg.yaml", "cfg"); // an ordinary file that must still carry
+    symlinkSync(realDir, join(legacyCortexDir(), "linkdir"));
+
+    const journal = executeConfigDirMigration(planConfigDirMigration({ home })); // must not throw
+
+    const dest = join(canonicalDir(), "linkdir");
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(dest)).toBe(realDir);
+    // The ordinary sibling still migrated (proves the run completed, not aborted).
+    expect(readFileSync(join(canonicalDir(), "cfg.yaml"), "utf-8")).toBe("cfg");
+    expect(journal.moves.some((m) => m.relPath === "linkdir" && m.symlink === true)).toBe(true);
+  });
+
+  test("a DANGLING symlink is carried (not dropped, not crashed on)", () => {
+    const missing = join(home, "does", "not", "exist.yaml");
+    mkdirSync(legacyCortexDir(), { recursive: true });
+    symlinkSync(missing, join(legacyCortexDir(), "dangle.yaml"));
+
+    const journal = executeConfigDirMigration(planConfigDirMigration({ home })); // must not throw
+
+    const dest = join(canonicalDir(), "dangle.yaml");
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(dest)).toBe(missing);
+    expect(existsSync(dest)).toBe(false); // still dangling (existsSync follows) — carried faithfully
+    expect(journal.moves.some((m) => m.relPath === "dangle.yaml" && m.symlink === true)).toBe(true);
+  });
+
+  test("rollback removes a carried (even dangling) symlink", () => {
+    const missing = join(home, "nowhere.yaml");
+    mkdirSync(legacyCortexDir(), { recursive: true });
+    symlinkSync(missing, join(legacyCortexDir(), "dangle.yaml"));
+    const journal = executeConfigDirMigration(planConfigDirMigration({ home }));
+    const dest = join(canonicalDir(), "dangle.yaml");
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+
+    const removed = rollbackConfigDirMigration(journal);
+
+    expect(removed).toBe(1);
+    expect(existsSync(join(canonicalDir(), "dangle.yaml"))).toBe(false);
+    // lstat confirms the link itself is gone (existsSync alone would be ambiguous for a dangling link).
+    expect(() => lstatSync(dest)).toThrow();
   });
 });
 

@@ -25,11 +25,22 @@
  * from the legacy tree until their own wave moves them.
  *
  * ── Migration primitive ──────────────────────────────────────────────────────
- * Every carry is a COPY that keeps the source for rollback and writes the
- * destination atomically: a fresh temp file is created O_EXCL (`wx`), written,
- * `fsync`'d, mode-preserved, then `rename`'d over the destination. The SOURCE is
- * NEVER renamed or removed — a mid-flight crash leaves the legacy tree fully
- * intact, and rollback simply deletes the canonical copies the journal records.
+ * Every regular-file carry is a COPY that keeps the source for rollback and
+ * writes the destination atomically: a fresh temp file is created O_EXCL (`wx`),
+ * written, `fsync`'d, mode-preserved, then `rename`'d over the destination. A
+ * SYMLINK is instead carried AS a symlink — its link text (`readlinkSync`) is
+ * re-created via `symlinkSync` under a temp name and `rename`'d into place, so it
+ * is never dereferenced (a symlinked file stays a link, a symlinked directory
+ * cannot EISDIR-abort the run, a dangling link survives). The SOURCE is NEVER
+ * renamed or removed — a mid-flight crash leaves the legacy tree fully intact.
+ *
+ * ── Transactionality ─────────────────────────────────────────────────────────
+ * `executeConfigDirMigration` is all-or-nothing: on ANY throw mid-copy it rolls
+ * back every carry it applied and removes the canonical dir if it created it, so
+ * the resolver (which flips to canonical on mere directory existence) never sees
+ * a PARTIAL canonical that would shadow files still in a legacy tree. Rollback
+ * deletes the canonical copies the journal records; the legacy trees are never
+ * touched.
  *
  * ── Isolation ────────────────────────────────────────────────────────────────
  * Every path is derived from an injectable `home`, so the whole migrator runs
@@ -47,9 +58,10 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   renameSync,
   rmSync,
-  statSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from "fs";
@@ -102,6 +114,17 @@ export interface MoveRecord {
   applied?: boolean;
   /** Set when the destination already existed (canonical-wins) and was skipped. */
   skippedExisting?: boolean;
+  /**
+   * True when this entry is a SYMLINK carried AS a symlink (never dereferenced).
+   * The payload is {@link linkTarget}; execute re-creates it with `symlinkSync`
+   * so runtime reads still traverse the link exactly as they did pre-move.
+   */
+  symlink?: boolean;
+  /**
+   * For a symlink entry, the raw link text from `readlinkSync` (its target — may
+   * be relative and may legitimately dangle). Never stat'd during planning.
+   */
+  linkTarget?: string;
 }
 
 export interface ExclusionRecord {
@@ -129,10 +152,15 @@ export interface MigrateOptions {
 
 /**
  * Recursively list files under `root`, returning paths RELATIVE to `root`.
- * Symlinks are recorded as files (their link, not the target, is carried) and
- * are never followed — a symlink out of the tree cannot smuggle a real-home
- * read into the copy. Top-level entries in {@link EXCLUDED_TOP_DIRS} are
- * skipped and reported separately by the planner.
+ * Enumeration uses `lstatSync` and NEVER follows a symlink: a symlink (to a
+ * file OR a directory) is recorded as a single leaf entry — it is not recursed
+ * into and not dereferenced. `record()` then carries it AS a symlink (its link
+ * text, via `readlinkSync`), and `executeConfigDirMigration` re-creates it with
+ * `symlinkSync`. Because the target is never resolved here or downstream, a
+ * symlink out of the tree cannot smuggle a real-home read into the copy, a
+ * symlinked directory cannot EISDIR-abort the migration, and a dangling link is
+ * carried rather than dropped. Top-level entries in {@link EXCLUDED_TOP_DIRS}
+ * are skipped and reported separately by the planner.
  */
 function walkFiles(root: string, excludeTop: ReadonlySet<string>): { files: string[]; excluded: string[] } {
   const files: string[] = [];
@@ -203,12 +231,38 @@ export function planConfigDirMigration(opts: MigrateOptions = {}): MigrationJour
     const src = join(srcRoot, rel);
     let st;
     try {
-      st = statSync(src);
+      // lstat, NEVER stat: a symlink is carried AS a symlink (its own link text),
+      // never dereferenced. Following it would (a) silently flatten a symlinked
+      // FILE into a static copy, (b) EISDIR-abort on a symlinked DIRECTORY, and
+      // (c) throw+drop a DANGLING symlink. lstat succeeds for all three.
+      st = lstatSync(src);
     } catch {
       return; // vanished between scan + stat — skip
     }
     const mode = st.mode & 0o777;
     const bytes = st.size;
+    if (st.isSymbolicLink()) {
+      let linkTarget: string;
+      try {
+        // readlink reads the link TEXT only — it never resolves/stats the target,
+        // so a dangling link (legitimate) is carried, not dropped or crashed on.
+        linkTarget = readlinkSync(src);
+      } catch {
+        return; // unreadable link right after a successful lstat — skip defensively
+      }
+      moves.push({
+        relPath: rel,
+        fromTree: tree,
+        src,
+        dest: join(canonical, rel),
+        mode,
+        bytes,
+        shadowedGrove,
+        symlink: true,
+        linkTarget,
+      });
+      return;
+    }
     moves.push({ relPath: rel, fromTree: tree, src, dest: join(canonical, rel), mode, bytes, shadowedGrove });
   };
 
@@ -269,14 +323,53 @@ export function atomicWriteFile(dest: string, data: Buffer, mode: number): void 
   }
 }
 
+/**
+ * Atomically create a SYMLINK at `dest` pointing at `linkTarget`, mirroring
+ * {@link atomicWriteFile}: create the link under a pid+counter-unique temp name
+ * in the destination directory, then `rename` it over `dest`. The link TEXT is
+ * carried verbatim — the target is never resolved or stat'd, so a legitimately
+ * dangling link survives and a symlinked directory is carried as a link (not
+ * traversed). A crash leaves `dest` either its old self or the new link — never
+ * a torn state. `linkTarget` may be relative; it is stored exactly as read.
+ */
+export function atomicSymlink(dest: string, linkTarget: string): void {
+  mkdirSync(dirname(dest), { recursive: true });
+  let tmp: string;
+  for (let i = 0; ; i++) {
+    const candidate = `${dest}.xdgtmp.${process.pid}.${i}`;
+    try {
+      symlinkSync(linkTarget, candidate); // O_EXCL-like: symlink fails EEXIST on a stale temp
+      tmp = candidate;
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST" && i < 10_000) continue;
+      throw err;
+    }
+  }
+  try {
+    renameSync(tmp, dest);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
 // --------------------------------------------------------------- execution
 
 /**
- * Execute a plan: atomically COPY each carried file into the canonical tree
- * (source kept), skipping any destination that already exists (canonical-wins),
- * then write the journal to `<canonical>/${MIGRATION_JOURNAL_NAME}`. Idempotent:
- * a second run re-skips already-carried files. Returns the journal with each
- * move's `applied`/`skippedExisting` flag set.
+ * Execute a plan: atomically carry each entry into the canonical tree (source
+ * kept) — a regular file via {@link atomicWriteFile}, a symlink AS a symlink via
+ * {@link atomicSymlink} — skipping any destination that already exists
+ * (canonical-wins), then write the journal to
+ * `<canonical>/${MIGRATION_JOURNAL_NAME}`. Idempotent: a second run re-skips
+ * already-carried files. Returns the journal with each move's
+ * `applied`/`skippedExisting` flag set.
+ *
+ * TRANSACTIONAL: if any carry throws, every carry this invocation applied is
+ * rolled back (and the canonical dir removed if it did not pre-exist) before the
+ * original error is re-thrown — so the canonical tree is never left PARTIAL for
+ * the resolver to prefer. On success the canonical tree is complete and carries
+ * the journal.
  *
  * @param stampedAt Optional ISO timestamp to record (caller-supplied so the
  *   library stays deterministic under test).
@@ -285,15 +378,49 @@ export function executeConfigDirMigration(
   plan: MigrationJournal,
   stampedAt?: string,
 ): MigrationJournal {
+  // TRANSACTIONAL INVARIANT: after this returns OR throws, the canonical tree is
+  // EITHER complete-with-journal OR entirely absent — never partial. This matters
+  // because `resolveConfigDir()` flips reads to canonical on mere directory
+  // existence: a partial canonical with no journal would silently shadow files
+  // still living in a legacy tree (and deterministic copy failures would wedge it
+  // permanently). So we record whether WE created the canonical dir and, on any
+  // throw mid-copy, undo every applied carry — and remove the canonical dir if it
+  // did not pre-exist.
+  const canonicalPreexisted = existsSync(plan.canonical);
   mkdirSync(plan.canonical, { recursive: true });
-  for (const mv of plan.moves) {
-    if (existsSync(mv.dest)) {
-      mv.skippedExisting = true; // canonical-wins — never clobber a fresh-install copy
-      continue;
+  try {
+    for (const mv of plan.moves) {
+      if (existsSync(mv.dest)) {
+        mv.skippedExisting = true; // canonical-wins — never clobber a fresh-install copy
+        continue;
+      }
+      if (mv.symlink) {
+        // Carry the link AS a link — never readFileSync (which would follow it,
+        // flatten a symlinked file, or EISDIR-abort on a symlinked directory).
+        atomicSymlink(mv.dest, mv.linkTarget ?? "");
+      } else {
+        const data = readFileSync(mv.src); // SOURCE is only ever READ, never renamed
+        atomicWriteFile(mv.dest, data, mv.mode);
+      }
+      mv.applied = true;
     }
-    const data = readFileSync(mv.src); // SOURCE is only ever READ, never renamed
-    atomicWriteFile(mv.dest, data, mv.mode);
-    mv.applied = true;
+  } catch (err) {
+    // Roll back every copy/link THIS invocation applied (lstat, not existsSync,
+    // so a carried dangling symlink is still removed), then drop the canonical
+    // dir if we created it — leaving no partial canonical for the resolver.
+    for (const mv of plan.moves) {
+      if (!mv.applied) continue;
+      let present = true;
+      try {
+        lstatSync(mv.dest);
+      } catch {
+        present = false;
+      }
+      if (present) rmSync(mv.dest, { force: true });
+      mv.applied = false;
+    }
+    if (!canonicalPreexisted) rmSync(plan.canonical, { recursive: true, force: true });
+    throw err; // preserve the original error — never swallow it
   }
   const journal: MigrationJournal = { ...plan, stampedAt };
   writeFileSync(join(plan.canonical, MIGRATION_JOURNAL_NAME), JSON.stringify(journal, null, 2), {
@@ -316,7 +443,15 @@ export function rollbackConfigDirMigration(journal: MigrationJournal): number {
   let removed = 0;
   for (const mv of journal.moves) {
     if (!mv.applied) continue; // only undo what THIS migration wrote
-    if (existsSync(mv.dest)) {
+    // lstat (never follow) so a carried symlink — including a legitimately
+    // dangling one, which existsSync would report ABSENT — is still removed.
+    let present = true;
+    try {
+      lstatSync(mv.dest);
+    } catch {
+      present = false;
+    }
+    if (present) {
       rmSync(mv.dest, { force: true });
       removed++;
     }
