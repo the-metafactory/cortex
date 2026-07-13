@@ -11,11 +11,12 @@
  * tests construct pieces directly; the CLI bottom wires SIGINT/SIGTERM.
  */
 
-// MUST be first: forces @discordjs/ws onto the `ws` package on Bun (overrides
-// globalThis.WebSocket) BEFORE any transitive discord.js import evaluates its
-// module-level WebSocket constructor. Fixes the recurring gateway flapping
-// (cortex#546/#581/#590/#591/#593). See src/bootstrap/ws-transport.ts.
-import "./bootstrap/ws-transport";
+// cortex#1797 (S12 MOVE) — the Bun WebSocket-transport shim that forces
+// @discordjs/ws onto the `ws` package moved OUT of cortex core and INTO the
+// discord bundle (`metafactory-cortex-adapter-discord/src/ws-transport.ts`),
+// alongside the `discord.js` dependency it protects (which left cortex's own
+// package.json this slice). The bundle's `plugin.ts` imports it first, so the
+// override still lands before any Discord client connects.
 
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from "fs";

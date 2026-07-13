@@ -16,6 +16,17 @@
  * `./token-groups.ts`'s doc).
  */
 
+// cortex#1797 (S12) — FIXTURE DEVIATION: the real bundle's `plugin.ts` opens
+// with `import "./ws-transport";` (a Bun WebSocket-transport shim that imports
+// the `ws` npm package). That line is deliberately OMITTED here. `ws-transport`
+// pulls `ws` (+ conceptually `@discordjs/ws`) — real npm packages the bundle
+// declares but that this fixture, living inside cortex's own `src/` tree with no
+// separate `node_modules`, cannot resolve on a clean install (same class of fix
+// as `discordjs-stub.ts` / `client.ts`'s discord.js stand-ins). The
+// transparent-upgrade E2E exercises adapter LOADING + construction + config
+// validation, NOT the gateway websocket transport, so the shim is not needed
+// here; omitting it keeps the fixture free of any `ws`/`@discordjs/ws` import
+// (which would re-break cortex's own CI Typecheck).
 import { DiscordAdapter } from "./index";
 import { DiscordPresenceSchema, DiscordBindingSchema, type DiscordPresence } from "./schema";
 import { groupDiscordBindingsByToken } from "./token-groups";
