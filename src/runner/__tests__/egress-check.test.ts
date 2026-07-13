@@ -99,6 +99,22 @@ describe("scanEgress — config/path leakage", () => {
     }
   });
 
+  // XDG wave-4 (cortex#1869) — the config dir moved to ~/.config/metafactory/cortex.
+  // The leak detector MUST fire on the new canonical tree too, else the move
+  // silently regresses the egress security control (G-14).
+  test("flags the NEW ~/.config/metafactory/cortex path (post-move, G-14)", () => {
+    for (const s of [
+      "my config is at ~/.config/metafactory/cortex/work.yaml",
+      "leaked /Users/someone/.config/metafactory/cortex",
+    ]) {
+      const out = scanEgress(s);
+      expect(out.clean).toBe(false);
+      if (!out.clean) {
+        expect(out.findings.some((f) => f.kind === "config-path")).toBe(true);
+      }
+    }
+  });
+
   // cortex#1022 — value/path-shaped detection, never bare key-name tokens.
   // The key names are public repo content; a review of a PR about signing
   // config (e.g. cortex#1020) must be able to name them.

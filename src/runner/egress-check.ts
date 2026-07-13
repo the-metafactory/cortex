@@ -136,7 +136,12 @@ const SECRET_PATTERNS: readonly { reason: string; re: RegExp }[] = [
  * assigning `nkey_seed_path` an actual path value.
  */
 const CONFIG_PATTERNS: readonly { reason: string; re: RegExp }[] = [
-  { reason: "cortex config path", re: /(?:~|\/[^\s]*)\/\.config\/cortex\b/ },
+  // XDG wave-4 (cortex#1869) — the config dir moved to `~/.config/metafactory/cortex`.
+  // The optional `metafactory/` segment matches the NEW canonical tree while the
+  // bare form keeps matching the LEGACY `~/.config/cortex` (both are still on
+  // disk during the transition), so this leak detector never silently stops
+  // firing on a principal's real config path.
+  { reason: "cortex config path", re: /(?:~|\/[^\s]*)\/\.config\/(?:metafactory\/)?cortex\b/ },
   // A home-anchored path TO a cortex.yaml (`~/…/cortex.yaml`,
   // `/Users/…/cortex.yaml`, `/home/…/cortex.yaml`) is principal filesystem
   // detail; the bare file name in prose is not.
