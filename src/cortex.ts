@@ -359,6 +359,7 @@ import {
 import { STATE_DIR, DEFAULT_CONFIG, pidFileFor, migrateLegacyPidFile } from "./common/pidfile";
 // FS-7 / D-3 (cortex#1839) — last-known-good boot fallback + degraded state.
 import { readLastGoodSnapshotPath, writeLastGoodSnapshot } from "./common/config/last-good";
+import { resolveConfigDir } from "./common/config/config-path";
 import {
   clearDegradedMarker,
   readDegradedMarker,
@@ -1237,7 +1238,13 @@ export async function startCortex(
   // experimental fragment is malformed. Once the cortex.yaml migration is
   // complete (MIG-7.2e), the rule flips to strict per spec §FR-4.
   const agentsDir = options.agentsDir
-    ?? (options.configPath ? join(dirname(expandedConfigPath), "agents.d") : expandTilde("~/.config/cortex/agents.d/"));
+    // XDG wave-4 (cortex#1869): the no-configPath fallback resolves the active
+    // config dir (canonical ~/.config/metafactory/cortex first, legacy trees
+    // during transition, or $CORTEX_CONFIG_DIR) instead of a hardcoded
+    // ~/.config/cortex. `agents.d/` is config-class (identity fragments) and is
+    // carried with the config move — distinct from the state-class `agents/`
+    // (per-agent state.sqlite, G-15) the migrator excludes.
+    ?? (options.configPath ? join(dirname(expandedConfigPath), "agents.d") : join(resolveConfigDir(), "agents.d"));
   let fragmentAgents: Agent[] = [];
   // cortex#1217 — collect fail-soft disabled-surface warnings from agents.d/
   // fragments (vega ships its Discord token as a fragment placeholder). These
