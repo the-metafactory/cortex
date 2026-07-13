@@ -1,0 +1,15 @@
+# cortex#1894 (S12b, ADR-0024) — plugin manifest for the cortex PagerDuty
+# renderer bundle. The FIRST renderer-class bundle (the four adapters —
+# web/slack/mattermost/discord — extracted first; this proves the renderer
+# deletion path).
+#
+# `id` MUST equal the exported RendererPlugin's `rendererKind` field (the S6
+# loader's id↔namespace pin, src/adapters/loader.ts loadOneBundle stage (f) —
+# `getRenderer` is keyed by `id`, but the renderer boot loop + coverage guard
+# resolve by `rendererKind`). pagerduty's rendererKind is "pagerduty", so id
+# is "pagerduty" here too.
+kind: renderer
+id: pagerduty
+entry: ./src/plugin.ts
+sdkRange: "^1"
+cortex: ">=6.7.0"

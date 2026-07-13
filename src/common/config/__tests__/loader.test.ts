@@ -423,6 +423,37 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(principal?.discordId).toBe("555555555555555555");
   });
 
+  // cortex#1894 (S12b, the #1893 N1 forward-dep) — the config-load renderer
+  // pass TOLERATES a not-yet-loaded first-party renderer kind. `pagerduty`
+  // extracted to `metafactory-cortex-renderer-pagerduty` (S12b), so it is NOT
+  // in the in-tree `createDefaultSurfacePluginRegistry` at config-load — its
+  // bundle only registers post-S6 at daemon boot. A `renderers: [dashboard,
+  // pagerduty]` config must LOAD (deferring the "is the bundle loaded?"
+  // decision to the post-S6 install-state coverage guard), NOT throw
+  // UnimplementedRendererKindError at config-load.
+  test("config-load tolerates a not-yet-loaded first-party renderer kind (pagerduty), so a dashboard+pagerduty config loads", () => {
+    const cfg = minimalCortex();
+    cfg.renderers = [
+      { kind: "dashboard" },
+      { kind: "pagerduty", routingKey: "rk-fake", subscribe: ["local.{principal}.system.>"] },
+    ];
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).not.toThrow();
+  });
+
+  // Control: a GENUINE typo (an unknown kind that is NOT a known first-party
+  // renderer bundle kind) still fails LOUDLY at config-load — the tolerance is
+  // scoped to the curated first-party set, never a blanket "accept any kind".
+  test("config-load still fails loudly on an unknown renderer kind (typo), even with a system-covering dashboard present", () => {
+    const cfg = minimalCortex();
+    cfg.renderers = [
+      { kind: "dashboard" },
+      { kind: "pagerdooty", routingKey: "rk-fake", subscribe: ["local.{principal}.system.>"] },
+    ];
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/pagerdooty/);
+  });
+
   // fix/c-844 — the mc:/cockpit: blocks must survive the cortex-shape parse.
   // They were defined on AgentConfigSchema only; CortexConfigSchema's
   // strip-by-default parse silently dropped them, so `mc.enabled: true` in a
