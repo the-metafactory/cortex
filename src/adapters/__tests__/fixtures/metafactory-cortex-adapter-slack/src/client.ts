@@ -81,7 +81,15 @@ export interface RealSlackClientOptions {
  * fixture's consuming suite calls one — see module doc).
  */
 export class RealSlackClient implements SlackClient {
-  constructor(_opts: RealSlackClientOptions) {}
+  // Parameter property (assigns `this.opts = opts`) rather than a bare
+  // `constructor(_opts: RealSlackClientOptions) {}` — the latter trips
+  // @typescript-eslint/no-useless-constructor (an empty body that does
+  // nothing with its param), while still needing to accept the SAME
+  // `RealSlackClientOptions` shape `index.ts`'s `new RealSlackClient({...})`
+  // call site passes. `opts` itself is never read (every method throws
+  // unconditionally — see module doc); it exists purely to keep the
+  // constructor's signature real.
+  constructor(private readonly opts: RealSlackClientOptions) {}
 
   async start(): Promise<void> {
     throw new Error(

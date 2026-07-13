@@ -58,12 +58,12 @@ export interface AdapterAgentIdentity {
  */
 export interface AdapterAgentConfig {
   agent: { name: string; displayName: string };
-  slack: ReadonlyArray<{
+  slack: readonly {
     workspaceId: string;
     channels: { id: string; name: string }[];
     allowedUserIds: string[];
     trustedBotIds: string[];
-  }>;
+  }[];
 }
 
 // =============================================================================
