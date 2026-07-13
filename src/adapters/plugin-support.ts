@@ -11,13 +11,19 @@
 import type { Agent } from "../common/types/cortex-config";
 import type { SystemEventSource } from "../bus/system-events";
 import {
+  createSystemAdapterRecoveredEvent,
+  createSystemAdapterDisconnectedEvent,
+  type SystemAdapterPlatform,
+} from "../bus/system-events";
+import type { MyelinRuntime } from "../bus/myelin/runtime";
+import {
   resolvePolicyAccess,
   isOperatorPrincipal,
   type PolicyEngine,
   type PlatformPrincipalIndex,
   type PrincipalRegistry,
 } from "../common/policy";
-import type { AdapterPolicyPort } from "../surface-sdk";
+import type { AdapterPolicyPort, AdapterSystemEventPort } from "../surface-sdk";
 
 /**
  * The gateway owns one connection per binding but is NOT a stack — it has no
@@ -126,5 +132,94 @@ export function buildAdapterPolicyPort(triad: AdapterPolicyTriad = {}): AdapterP
       }),
     isOperatorPrincipal: (platform, platformId) =>
       isOperatorPrincipal(platform, platformId, policyEngine, policyLookup),
+  };
+}
+
+// =============================================================================
+// cortex#1795 (S10) — host-bound AdapterSystemEventPort
+// =============================================================================
+
+/**
+ * The runtime + source pair a host may have in hand when constructing an
+ * adapter. Both optional — mirrors the pre-extraction `SlackAdapterInfra`
+ * shape (`runtime?`, `systemEventSource?`).
+ */
+export interface AdapterSystemEventWiring {
+  runtime?: MyelinRuntime;
+  source?: SystemEventSource;
+}
+
+/**
+ * cortex#1795 (S10) — bind cortex's real system-event construction
+ * (`bus/system-events`'s `createSystemAdapterRecoveredEvent`/
+ * `createSystemAdapterDisconnectedEvent`) + publish (`MyelinRuntime.publish`)
+ * into the narrow {@link AdapterSystemEventPort} shape `surface-sdk` exposes.
+ * The host (`gateway-adapters.ts`'s `buildGatewayAdapters`,
+ * `runner/surface-adapter-boot.ts`'s `baseFactoryArgs`) calls this ONCE per
+ * construction with whatever `{runtime, source}` it has — possibly neither,
+ * e.g. the shared surface-gateway's shadow-stage build — and forwards the
+ * returned port through `createAdapter`'s args. The adapter body
+ * (`src/adapters/slack/index.ts`) never imports `bus/myelin/runtime` or
+ * `bus/system-events` itself; it only calls the injected port.
+ *
+ * Reproduces the pre-extraction `SlackAdapter.canPublishSystemEvent()` gate
+ * EXACTLY: no runtime → silent no-op (adapters started without NATS still
+ * track connection state locally); runtime present but no source → warn
+ * ONCE per constructed port (mirrors the per-instance `warnedMissingSource`
+ * flag) then no-op; both present → build the envelope and
+ * `void runtime.publish(env)`.
+ */
+export function buildAdapterSystemEventPort(
+  wiring: AdapterSystemEventWiring = {},
+): AdapterSystemEventPort {
+  const { runtime, source } = wiring;
+  let warnedMissingSource = false;
+
+  function warnOnceIfMissingSource(adapterId: string, platform: string): void {
+    if (warnedMissingSource) return;
+    warnedMissingSource = true;
+    console.warn(
+      `${platform}-${adapterId}: runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
+    );
+  }
+
+  return {
+    recovered(opts) {
+      if (!runtime) return;
+      if (!source) {
+        warnOnceIfMissingSource(opts.adapterId, opts.platform);
+        return;
+      }
+      const env = createSystemAdapterRecoveredEvent({
+        source,
+        adapterId: opts.adapterId,
+        // `SystemAdapterPlatform` is cortex-internal (bus/system-events); the
+        // port's `platform` is a plain string so it stays out of surface-sdk.
+        platform: opts.platform as SystemAdapterPlatform,
+        degradedForMs: opts.degradedForMs,
+        disconnectedSince: opts.disconnectedSince,
+        ...(opts.reconnectAttempts !== undefined && { reconnectAttempts: opts.reconnectAttempts }),
+      });
+      void runtime.publish(env);
+    },
+    disconnected(opts) {
+      if (!runtime) return;
+      if (!source) {
+        warnOnceIfMissingSource(opts.adapterId, opts.platform);
+        return;
+      }
+      const env = createSystemAdapterDisconnectedEvent({
+        source,
+        adapterId: opts.adapterId,
+        // See `.recovered()` above.
+        platform: opts.platform as SystemAdapterPlatform,
+        disconnectedSince: opts.disconnectedSince,
+        wasClean: opts.wasClean,
+        ...(opts.shardId !== undefined && { shardId: opts.shardId }),
+        ...(opts.closeCode !== undefined && { closeCode: opts.closeCode }),
+        ...(opts.closeReason !== undefined && { closeReason: opts.closeReason }),
+      });
+      void runtime.publish(env);
+    },
   };
 }

@@ -22,25 +22,81 @@ import type {
   ContextMessage,
   Envelope,
   RenderTarget,
+  AdapterPolicyPort,
+  AdapterSystemEventPort,
 } from "../../surface-sdk";
-import type { Agent, SlackPresence } from "../../common/types/cortex-config";
-import type { AgentConfig } from "../../common/types/config";
-import type { MyelinRuntime } from "../../bus/myelin/runtime";
-import type { PayloadFilter } from "../../bus/payload-filter";
-import {
-  type SystemEventSource,
-  createSystemAdapterDisconnectedEvent,
-  createSystemAdapterRecoveredEvent,
-} from "../../bus/system-events";
-import {
-  isOperatorPrincipal,
-  resolvePolicyAccess,
-  type PlatformPrincipalIndex,
-  type PolicyEngine,
-  type PrincipalRegistry,
-} from "../../common/policy";
-import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
+import type { SlackPresence } from "./schema";
 import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBotIdentity } from "./client";
+
+// =============================================================================
+// Agent identity — the minimal shape SlackAdapter actually reads
+// =============================================================================
+
+/**
+ * cortex#1795 (S10) — the minimal agent-identity shape `SlackAdapter` reads
+ * (`agent.id`/`agent.displayName`/`agent.presence.slack` — see the
+ * constructor + `updateConfig` below). Kept narrower than cortex's full
+ * `Agent` (`common/types/cortex-config` — persona/trust/presence config)
+ * DELIBERATELY: `Agent` is a residual coupling `surface-sdk` does not
+ * re-export (see that module's doc — same reasoning as
+ * `SystemEventSource`/`MyelinRuntime`), and `SlackAdapter` never reads past
+ * these three fields. A real `Agent` satisfies this structurally, so every
+ * existing caller (`slackAdapterPlugin.createAdapter`, `updateConfig`
+ * callers, tests) keeps working unchanged.
+ */
+export interface AdapterAgentIdentity {
+  readonly id: string;
+  readonly displayName: string;
+  readonly presence: { slack?: SlackPresence };
+}
+
+/**
+ * cortex#1795 (S10) — the minimal shape `updateConfig`'s hot-reload path
+ * reads off cortex's full `AgentConfig` (`common/types/config`): the
+ * matching `slack[]` instance list (by `workspaceId`) plus the agent's
+ * `name`/`displayName`. A real `AgentConfig` satisfies this structurally.
+ */
+export interface AdapterAgentConfig {
+  agent: { name: string; displayName: string };
+  slack: ReadonlyArray<{
+    workspaceId: string;
+    channels: { id: string; name: string }[];
+    allowedUserIds: string[];
+    trustedBotIds: string[];
+  }>;
+}
+
+// =============================================================================
+// Payload filter — structural mirror of `bus/payload-filter`'s `PayloadFilter`
+// =============================================================================
+
+/** Structural mirror of `bus/payload-filter.ts`'s `FilterValue`. */
+export type AdapterFilterValue =
+  | string
+  | number
+  | boolean
+  | { "anything-but": string | number | boolean | (string | number | boolean)[] }
+  | { prefix: string }
+  | { exists: boolean }
+  | { "equals-ignore-case": string };
+
+/** Structural mirror of `bus/payload-filter.ts`'s `PayloadFilterPattern`. */
+export interface AdapterPayloadFilterPattern {
+  [key: string]: AdapterFilterValue[] | AdapterPayloadFilterPattern;
+}
+
+/**
+ * cortex#1795 (S10) — structural mirror of `bus/payload-filter.ts`'s
+ * `PayloadFilter`, which `RenderTarget.filter` (`surface-sdk`, re-exported
+ * from `bus/surface-router`'s `SurfaceAdapter`) is typed against. Pure data
+ * (JSON-shape pattern, no functions) — safe to duplicate locally rather than
+ * import across the boundary; the real `PayloadFilter` a host constructs
+ * satisfies this structurally.
+ */
+export interface AdapterPayloadFilter {
+  envelope?: AdapterPayloadFilterPattern;
+  payload?: AdapterPayloadFilterPattern;
+}
 
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence
@@ -59,21 +115,19 @@ export interface SlackAdapterInfra {
   /** Principal's platform identity. */
   principal: { slackId?: string };
   /**
-   * MyelinRuntime for `system.adapter.*` envelope emission (cortex#235
-   * r1#4). Optional — adapters started without NATS still track
-   * connection state locally; bus emission is additive.
+   * cortex#1795 (S10) — the host-injected system-event port (see
+   * `AdapterSystemEventPort` in `../../surface-sdk`). Optional — adapters
+   * started without NATS still track connection state locally (bus
+   * emission is additive); an absent port is treated exactly like a port
+   * built with no runtime configured (both methods no-op). Replaces the
+   * pre-S10 `runtime?`/`systemEventSource?` pair this adapter used to call
+   * `bus/myelin/runtime`/`bus/system-events` directly with.
    */
-  runtime?: MyelinRuntime;
-  /**
-   * `{principal}.{agent}.{instance}` source triple stamped onto emitted
-   * `system.*` envelopes. Required for any `system.adapter.*` envelope
-   * to fire — see `canPublishSystemEvent()`.
-   */
-  systemEventSource?: SystemEventSource;
+  systemEvents?: AdapterSystemEventPort;
   /** MIG-3b: NATS subject patterns this adapter renders to Slack. */
   surfaceSubjects?: string[];
   /** MIG-3b: optional payload filter applied AFTER subject match. */
-  surfaceFilter?: PayloadFilter;
+  surfaceFilter?: AdapterPayloadFilter;
   /** MIG-3b: fallback Slack channel id for envelope rendering. */
   surfaceFallbackChannelId?: string;
   /** Principal-set trusted peer bot user ids (`U...`). */
@@ -84,12 +138,26 @@ export interface SlackAdapterInfra {
    * `presence.appToken`. Tests inject a fake.
    */
   client?: SlackClient;
-  /** v2.0.0 (cortex#297) — PolicyEngine is the sole authorisation gate. */
-  policyEngine?: PolicyEngine;
-  /** v2.0.0 (cortex#297) — `(platform, platformId) → principalId` index. */
-  policyLookup?: PlatformPrincipalIndex;
-  /** v2.0.0 (cortex#297) — `principal_id → PolicyPrincipal` registry. */
-  policyRegistry?: PrincipalRegistry;
+  /**
+   * cortex#1795 (S10) — the host-injected policy-resolution port (see
+   * `AdapterPolicyPort` in `../../surface-sdk`). REQUIRED: `slackAdapterPlugin
+   * .createAdapter` always supplies a bound port — a "no policy configured"
+   * port (deny-by-default) when the host has no live `PolicyEngine` yet —
+   * so `resolveAccess()`/`isOperator()` below never need a null-check
+   * fallback of their own. Replaces the pre-S10 `policyEngine?`/
+   * `policyLookup?`/`policyRegistry?` triad this adapter used to call
+   * `common/policy` directly with.
+   */
+  policy: AdapterPolicyPort;
+  /**
+   * cortex#1795 (S10) — the host-injected envelope→markdown renderer (see
+   * `bus/surface-router`'s shared `adapters/envelope-renderer.ts`
+   * `formatEnvelopeAsMarkdown`, which Discord/Mattermost/Slack all share).
+   * REQUIRED, same rationale as `policy` above — the adapter body never
+   * imports `../envelope-renderer` (a one-level cross-boundary import)
+   * itself.
+   */
+  formatEnvelope: (envelope: Envelope) => string;
 }
 
 /**
@@ -104,7 +172,7 @@ export class SlackAdapter implements PlatformAdapter {
   // cortex#235 r1#5 — agent + presence are reassigned by
   // `updateConfig` to reflect hot-reload state. Same pattern as
   // Discord + Mattermost adapters.
-  private agent: Agent;
+  private agent: AdapterAgentIdentity;
   private presence: SlackPresence;
   private readonly infra: SlackAdapterInfra;
   private readonly client: SlackClient;
@@ -152,9 +220,6 @@ export class SlackAdapter implements PlatformAdapter {
    */
   private lastDisconnectedAt: Date | null = null;
   private connectedOnce = false;
-  private warnedMissingSource = false;
-  private readonly runtime: MyelinRuntime | undefined;
-  private readonly systemEventSource: SystemEventSource | undefined;
   /**
    * cortex#235 r1#7 — two-pass dispatch gate. `start()` stores the
    * caller's `onMessage` here so `attachInboundDispatch()` (Pass 2)
@@ -182,13 +247,11 @@ export class SlackAdapter implements PlatformAdapter {
    */
   private drainPromise: Promise<void> = Promise.resolve();
 
-  constructor(agent: Agent, presence: SlackPresence, infra: SlackAdapterInfra) {
+  constructor(agent: AdapterAgentIdentity, presence: SlackPresence, infra: SlackAdapterInfra) {
     this.agent = agent;
     this.presence = presence;
     this.infra = infra;
     this.instanceId = infra.instanceId;
-    this.runtime = infra.runtime;
-    this.systemEventSource = infra.systemEventSource;
     this.trustedBotIds = infra.trustedBotIds ?? new Set(presence.trustedBotIds);
     this.client = infra.client ?? new RealSlackClient({
       botToken: presence.botToken,
@@ -375,13 +438,17 @@ export class SlackAdapter implements PlatformAdapter {
     //     connect as a recovery, emitting a spurious `recovered`.
     //   - `lastDisconnectedAt` could falsely pair with that
     //     synthetic recovered.
-    //   - `warnedMissingSource` is process-lifetime in spirit but
-    //     resetting on stop()/start() boundaries is fine (principal
-    //     restarting an adapter probably wants the diagnostic again
-    //     if they fixed nothing in between).
+    // cortex#1795 (S10) — the "warned missing source" latch moved into the
+    // host-bound `AdapterSystemEventPort` (`buildAdapterSystemEventPort`,
+    // `plugin-support.ts`) since the source/runtime pair it closes over is
+    // now host-side, not `infra`-visible here. Minor, deliberate behaviour
+    // delta: the port (built once at construction) is NOT rebuilt on
+    // stop()/start(), so a restarted instance no longer re-warns after a
+    // stop() — pre-S10 it did (the flag reset here). The diagnostic still
+    // fires once per constructed adapter, which is the case that matters
+    // (a misconfigured host).
     this.connectedOnce = false;
     this.lastDisconnectedAt = null;
-    this.warnedMissingSource = false;
     // cortex#235 r1#7 / cortex#257 r1 — reset the two-pass gate so a
     // subsequent start() → attachInboundDispatch() cycle on the same
     // instance operates against a clean slate. `inboundDispatchAttached`
@@ -426,7 +493,7 @@ export class SlackAdapter implements PlatformAdapter {
    * 1).
    */
 
-  updateConfig(config: AgentConfig): void {
+  updateConfig(config: AdapterAgentConfig): void {
     const newInstance = config.slack.find((inst) => inst.workspaceId === this.presence.workspaceId);
     if (!newInstance) {
       console.warn(
@@ -514,12 +581,7 @@ export class SlackAdapter implements PlatformAdapter {
       };
     }
 
-    return resolvePolicyAccess({
-      msg,
-      engine: this.infra.policyEngine,
-      index: this.infra.policyLookup,
-      registry: this.infra.policyRegistry,
-    });
+    return this.infra.policy.resolveAccess(msg);
   }
 
   /**
@@ -528,12 +590,7 @@ export class SlackAdapter implements PlatformAdapter {
    * use; the `notifyPrincipal` path still routes by `infra.principal.slackId`.
    */
   protected isOperator(authorId: string): boolean {
-    return isOperatorPrincipal(
-      "slack",
-      authorId,
-      this.infra.policyEngine,
-      this.infra.policyLookup,
-    );
+    return this.infra.policy.isOperatorPrincipal("slack", authorId);
   }
 
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {
@@ -663,7 +720,7 @@ export class SlackAdapter implements PlatformAdapter {
       return;
     }
     try {
-      await this.client.postMessage(channelId, formatEnvelopeAsMarkdown(envelope));
+      await this.client.postMessage(channelId, this.infra.formatEnvelope(envelope));
     } catch (err) {
       console.warn(
         `slack-${this.instanceId}: renderEnvelope failed for envelope ${envelope.id}:`,
@@ -789,31 +846,18 @@ export class SlackAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Common gate for `system.adapter.*` emission. Returns the bound
-   * runtime + source pair when both are configured, or `null`
-   * otherwise. Mirrors Discord's `canPublishSystemEvent`.
-   */
-  private canPublishSystemEvent(): { runtime: MyelinRuntime; source: SystemEventSource } | null {
-    const runtime = this.runtime;
-    if (!runtime) return null;
-    const source = this.systemEventSource;
-    if (!source) {
-      if (!this.warnedMissingSource) {
-        console.warn(
-          `slack-${this.instanceId}: runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
-        );
-        this.warnedMissingSource = true;
-      }
-      return null;
-    }
-    return { runtime, source };
-  }
-
-  /**
    * Socket Mode `connected` event. First-ever connect is silent
    * (matches Discord — initial connect is the expected steady state);
    * any subsequent connect is a recovery from a prior disconnect and
    * emits `system.adapter.recovered`.
+   *
+   * cortex#1795 (S10) — `infra.systemEvents?.recovered(...)` replaces the
+   * pre-S10 `canPublishSystemEvent()` gate + `createSystemAdapterRecoveredEvent`
+   * + `runtime.publish` call: the host-bound port (`AdapterSystemEventPort`,
+   * built by `buildAdapterSystemEventPort`) reproduces that gate — including
+   * the one-time "runtime configured but source missing" warning —
+   * internally, so this call is a safe no-op when the host has no live
+   * wiring (or no port at all, e.g. a test double).
    */
   private handleConnected(): void {
     if (!this.connectedOnce) {
@@ -823,16 +867,12 @@ export class SlackAdapter implements PlatformAdapter {
     const disconnectedSince = this.lastDisconnectedAt;
     this.lastDisconnectedAt = null;
     if (disconnectedSince === null) return;
-    const wiring = this.canPublishSystemEvent();
-    if (!wiring) return;
-    const env = createSystemAdapterRecoveredEvent({
-      source: wiring.source,
+    this.infra.systemEvents?.recovered({
       adapterId: this.instanceId,
       platform: "slack",
       degradedForMs: Date.now() - disconnectedSince.getTime(),
       disconnectedSince,
     });
-    void wiring.runtime.publish(env);
   }
 
   /**
@@ -849,10 +889,7 @@ export class SlackAdapter implements PlatformAdapter {
   private handleDisconnected(info: { wasClean?: boolean; closeReason?: string }): void {
     const now = new Date();
     this.lastDisconnectedAt = now;
-    const wiring = this.canPublishSystemEvent();
-    if (!wiring) return;
-    const env = createSystemAdapterDisconnectedEvent({
-      source: wiring.source,
+    this.infra.systemEvents?.disconnected({
       adapterId: this.instanceId,
       platform: "slack",
       disconnectedSince: now,
@@ -861,6 +898,5 @@ export class SlackAdapter implements PlatformAdapter {
         closeReason: info.closeReason,
       }),
     });
-    void wiring.runtime.publish(env);
   }
 }

@@ -91,7 +91,6 @@
 
 import { DiscordAdapter } from "../adapters/discord";
 import { MattermostAdapter } from "../adapters/mattermost";
-import { SlackAdapter } from "../adapters/slack";
 import type { InboundMessage, PlatformAdapter } from "../adapters/types";
 import type { AgentConfig } from "../common/types/config";
 import {
@@ -112,6 +111,8 @@ import {
   type GatewayAdapterFactory,
 } from "../gateway/gateway-adapters";
 import { registryToLegacyFactory, type SurfacePluginRegistry } from "../adapters/registry";
+import { buildAdapterPolicyPort, buildAdapterSystemEventPort } from "../adapters/plugin-support";
+import { formatEnvelopeAsMarkdown } from "../adapters/envelope-renderer";
 
 // =============================================================================
 // Per-platform boot descriptor — the divergent bits `bootPlatformAdapters` needs
@@ -217,6 +218,23 @@ interface TrustMergeable {
 }
 
 /**
+ * cortex#1795 (S10) — `SlackAdapter`'s concrete class extracted to the
+ * `metafactory-cortex-adapter-slack` bundle; its TYPE is no longer
+ * importable in-tree. This module only ever touches slack's
+ * `PlatformAdapter` + `RouterRegistrable` + `TrustMergeable` surface (never
+ * a slack-specific member) — the SAME structural bound `TAdapter` is already
+ * constrained to, and `applyStandardMergedTrust` already takes
+ * `TrustMergeable` directly rather than the concrete class. A structural
+ * alias satisfies every use site the real `SlackAdapter` type used to
+ * (the `AdapterBootDescriptor<..., SlackLikeAdapter>` type argument, and the
+ * `as SlackLikeAdapter` cast after `factory.slack(...)` construction) — the
+ * REAL adapter the bundle constructs at runtime still satisfies this
+ * structurally, so behaviour is unchanged; only the compile-time type
+ * source moved.
+ */
+type SlackLikeAdapter = PlatformAdapter & RouterRegistrable & TrustMergeable;
+
+/**
  * Shared `applyMergedTrust` body — Discord + Slack's pre-hoist descriptors
  * had this identical three-line closure; hoisted once (Sage #1547 r1 nit 6)
  * so a future third trust-supporting platform doesn't re-copy it. Takes the
@@ -312,6 +330,24 @@ function baseFactoryArgs<TPresence extends { surfaceSubjects: string[]; surfaceF
     ...(args.policyEngine !== undefined && { policyEngine: args.policyEngine }),
     ...(args.policyLookup !== undefined && { policyLookup: args.policyLookup }),
     ...(args.policyRegistry !== undefined && { policyRegistry: args.policyRegistry }),
+    // cortex#1795 (S10) — ADDITIVE host-bound ports, alongside the raw
+    // fields above. Discord/Mattermost's (still un-inverted) `createAdapter`
+    // bodies read the raw `policyEngine`/`policyLookup`/`policyRegistry`/
+    // `runtime`/`source` fields and ignore these; the extracted slack
+    // plugin's `createAdapter` reads ONLY `policy`/`systemEvents`/
+    // `formatEnvelope` and ignores the raw fields. Both shapes coexist in
+    // the SAME record — each platform's plugin picks the keys it knows
+    // about (`AdapterPlugin.createAdapter`'s documented convention).
+    policy: buildAdapterPolicyPort({
+      policyEngine: args.policyEngine,
+      policyLookup: args.policyLookup,
+      policyRegistry: args.policyRegistry,
+    }),
+    systemEvents: buildAdapterSystemEventPort({
+      runtime: args.runtime,
+      source: args.systemEventSource,
+    }),
+    formatEnvelope: formatEnvelopeAsMarkdown,
     surfaceSubjects: args.presence.surfaceSubjects,
     ...(args.presence.surfaceFallbackChannelId !== undefined && {
       surfaceFallbackChannelId: args.presence.surfaceFallbackChannelId,
@@ -706,7 +742,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
   await bootPlatformAdapters(mattermostDescriptor, ctx);
 
   // ── Slack ───────────────────────────────────────────────────────────────
-  const slackDescriptor: AdapterBootDescriptor<AgentConfig["slack"][number], SlackPresence, SlackAdapter> = {
+  const slackDescriptor: AdapterBootDescriptor<AgentConfig["slack"][number], SlackPresence, SlackLikeAdapter> = {
     platform: "slack",
     instances: opts.slackInstances,
     noInstancesConfiguredCount: opts.config.slack.length,
@@ -746,7 +782,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
           policyLookup: opts.policyLookup,
           policyRegistry: opts.policyRegistry,
         }),
-      ) as SlackAdapter,
+      ) as SlackLikeAdapter,
     trustResolverSupport: {
       registerFailSuffix: " (slack)",
       startedSummary: (instance) => `workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s)`,

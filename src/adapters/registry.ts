@@ -104,11 +104,25 @@ export interface GatewayConstructBase {
    * registry module has no compile-time dependency on `surface-sdk` or
    * `common/policy`, so each plugin's `buildGatewayConstructArgs` casts
    * internally (the convention `AdapterPlugin`'s docstring already
-   * establishes for `createAdapter`'s args). Currently only the web plugin
-   * forwards it — see `metafactory-cortex-adapter-web`'s `src/plugin.ts`
-   * (relocated out-of-tree, cortex#1794 S9 MOVE; was `adapters/web/plugin.ts`).
+   * establishes for `createAdapter`'s args). Forwarded by both the `web`
+   * plugin (`metafactory-cortex-adapter-web`'s `src/plugin.ts`, relocated
+   * out-of-tree cortex#1794 S9 MOVE) and the `slack` plugin
+   * (`metafactory-cortex-adapter-slack`'s `src/plugin.ts`, cortex#1795 S10).
    */
   readonly policy?: unknown;
+  /**
+   * cortex#1795 (S10) — a host-bound `AdapterSystemEventPort` (`surface-sdk`),
+   * typed `unknown` for the same reason `policy` is. Currently only the
+   * slack plugin forwards it.
+   */
+  readonly systemEvents?: unknown;
+  /**
+   * cortex#1795 (S10) — the host-bound envelope→markdown renderer (the
+   * shared `adapters/envelope-renderer.ts`'s `formatEnvelopeAsMarkdown`),
+   * typed `unknown` for the same reason `policy` is. Currently only the
+   * slack plugin forwards it.
+   */
+  readonly formatEnvelope?: unknown;
 }
 
 /**

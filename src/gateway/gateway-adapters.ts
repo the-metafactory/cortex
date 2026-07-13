@@ -89,7 +89,8 @@ import type {
 import { discordAdapterPlugin } from "../adapters/discord/plugin";
 import { slackAdapterPlugin } from "../adapters/slack/plugin";
 import { mattermostAdapterPlugin } from "../adapters/mattermost/plugin";
-import { buildAdapterPolicyPort } from "../adapters/plugin-support";
+import { buildAdapterPolicyPort, buildAdapterSystemEventPort } from "../adapters/plugin-support";
+import { formatEnvelopeAsMarkdown } from "../adapters/envelope-renderer";
 // Back-compat re-export for callers that still import the old suppression helper here.
 export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
 
@@ -321,11 +322,19 @@ export function buildGatewayAdapters(
       }
 
       const source = gatewaySource(principal, group.instanceId);
+      // cortex#1795 (S10) — the shadow gateway's system-event port, built
+      // per-instance (unlike `policy`, invariant across instances) since it
+      // closes over this group's own `source`. Reproduces the pre-S10
+      // `SlackAdapter.canPublishSystemEvent()` gate exactly — see
+      // `buildAdapterSystemEventPort`'s doc.
+      const systemEvents = buildAdapterSystemEventPort({ runtime, source });
       const args = plugin.buildGatewayConstructArgs(group, {
         instanceId: group.instanceId,
         source,
         runtime,
         policy,
+        systemEvents,
+        formatEnvelope: formatEnvelopeAsMarkdown,
       });
       adapters.push(plugin.createAdapter(args));
     }
