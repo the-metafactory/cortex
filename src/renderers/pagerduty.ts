@@ -35,9 +35,63 @@
  * are out-of-band (re-trigger on subsequent envelopes).
  */
 
-import type { Envelope, RenderTarget, RendererPlugin } from "../surface-sdk";
-import { PagerDutyRendererSchema, type PagerDutyRendererConfig } from "../common/types/cortex-config";
-import type { Renderer } from "./types";
+import { z } from "zod/v4";
+import type { Envelope, RenderTarget, RendererPlugin, Renderer } from "../surface-sdk";
+
+// =============================================================================
+// cortex#1894 (S12b, ADR-0024 D5 extraction lane) — the plugin-OWNED renderer
+// config schema, inverted OUT of `common/types/cortex-config.ts` so this file
+// imports ONLY the `surface-sdk` barrel (plus its own `zod`) and is compilable
+// as a stand-alone bundle module (`metafactory-cortex-renderer-pagerduty`).
+//
+// S4 (`adapters/registry.ts`'s `RendererPlugin.configSchema` docstring)
+// already establishes the principle a `RendererPlugin` carries its OWN
+// per-kind schema; the four adapter extractions (web/slack/mattermost/discord)
+// did the identical move for their `bindingSchema` (into each bundle's
+// `./schema`). `RendererVisibilitySchema` is duplicated here (not moved):
+// cortex-config's copy stays the canonical one the WHOLE config subsystem
+// consumes; this is a behaviour-identical copy scoped to this plugin's own
+// `configSchema`. Kept byte-identical in fields/enums/regexes so a config that
+// validated pre-extraction validates identically post-extraction.
+// =============================================================================
+
+/** IAW Phase A.4 (cortex#113, cortex#109 §B) — per-renderer visibility
+ *  constraints. Behaviour-identical copy of cortex-config's
+ *  `RendererVisibilitySchema` (see this file's schema block doc). */
+const RendererVisibilitySchema = z.object({
+  hide_residency_outside: z.array(
+    z.string().regex(
+      /^[A-Z]{2}$/,
+      "residency entries must be 2-letter ISO-3166-1 alpha-2 country codes",
+    ),
+  ).optional(),
+  require_model_class: z.array(z.enum(["local-only", "frontier", "any"])).optional(),
+  max_classification: z.enum(["local", "federated", "public"]).optional(),
+});
+
+/**
+ * PagerDuty renderer config — operational events out per G-1111 §4.6.
+ * Plugin-owned (cortex#1894, S12b): the schema `pagerdutyRendererPlugin`
+ * validates a `renderers[]` entry through before construction. The required
+ * `routingKey` secret is validated here; a Zod failure never echoes the
+ * rejected value (only the field path + message), so a malformed `routingKey`
+ * is never leaked into the thrown error.
+ */
+export const PagerDutyRendererSchema = z.object({
+  kind: z.literal("pagerduty"),
+  /** cortex#1788 (S3, ADR-0024 OQ10) — optional instance id, defaulting to
+   *  `kind`. Two `kind: pagerduty` entries (different routing keys) are
+   *  otherwise indistinguishable in router metrics / a future `unload` verb. */
+  id: z.string().min(1).optional(),
+  /** Integration / routing key for PagerDuty events-v2. REQUIRED secret. */
+  routingKey: z.string().min(1),
+  /** Subject patterns to subscribe to. Principal chooses what is page-worthy. */
+  subscribe: z.array(z.string().min(1)).default([]),
+  /** IAW Phase A.4 — optional visibility guardrails. */
+  visibility: RendererVisibilitySchema.optional(),
+});
+
+export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
 
 const EVENTS_V2_URL = "https://events.pagerduty.com/v2/enqueue";
 const SUMMARY_MAX_LEN = 1024;
