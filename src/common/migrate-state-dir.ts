@@ -455,17 +455,26 @@ export async function migrateStateDir(
   const { home, stampedAt, extraOccupancyDirs, ...gateOpts } = opts;
   const procAlive = gateOpts.env?.procAlive ?? defaultProcAlive;
 
-  const run = await withMigrationGate(gateOpts, async () => {
-    const scanDirs = [...occupancyScanDirs(home), ...(extraOccupancyDirs ?? [])];
-    const occupancy = stateDirOccupancyCheck(scanDirs, procAlive);
-    if (occupancy.occupied) {
-      // Belt-insufficiency abort: a directory move needs a directory-occupancy
-      // proof, not just the name-reconstruction belt. Carry NOTHING.
-      return { occupancy };
-    }
-    const journal = executeStateDirMigration(planStateDirMigration(home !== undefined ? { home } : {}), stampedAt);
-    return { occupancy, journal };
-  });
+  // The gated body is fully synchronous (occupancy scan + copy-keep-source carry),
+  // so it returns an already-resolved Promise rather than being `async` (no await
+  // to make — the service gate's async stop/prove-dead is inside withMigrationGate).
+  const run = await withMigrationGate(
+    gateOpts,
+    (): Promise<{ occupancy: OccupancyResult; journal?: StateMigrationJournal }> => {
+      const scanDirs = [...occupancyScanDirs(home), ...(extraOccupancyDirs ?? [])];
+      const occupancy = stateDirOccupancyCheck(scanDirs, procAlive);
+      if (occupancy.occupied) {
+        // Belt-insufficiency abort: a directory move needs a directory-occupancy
+        // proof, not just the name-reconstruction belt. Carry NOTHING.
+        return Promise.resolve({ occupancy });
+      }
+      const journal = executeStateDirMigration(
+        planStateDirMigration(home !== undefined ? { home } : {}),
+        stampedAt,
+      );
+      return Promise.resolve({ occupancy, journal });
+    },
+  );
 
   if (!run.cleared) {
     return { outcome: "gate-refused", gate: run.gate, restore: run.restore };

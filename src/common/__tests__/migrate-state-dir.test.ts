@@ -274,7 +274,7 @@ describe("state migration — AC3 one live process per stack after move", () => 
     expect(lc.loaded.has(WORK_LABEL)).toBe(true);
     const livePid = lc.loaded.get(WORK_LABEL);
     expect(livePid).toBeDefined();
-    expect(lc.alive.has(livePid as number)).toBe(true);
+    expect(lc.alive.has(livePid!)).toBe(true);
     // The OLD pid is gone (proven dead before the move) — not two processes.
     expect(lc.alive.has(4242)).toBe(false);
     expect([...lc.loaded.keys()].filter((l) => l === WORK_LABEL)).toHaveLength(1);

@@ -39,13 +39,13 @@ const ENV_KEYS = ["CORTEX_STATE_DIR", "XDG_STATE_HOME", "CORTEX_XDG_STRICT"] as 
 beforeEach(() => {
   for (const k of ENV_KEYS) {
     savedEnv[k] = process.env[k];
-    delete process.env[k];
+    Reflect.deleteProperty(process.env, k);
   }
   home = mkdtempSync(join(tmpdir(), "xdg1903-path-"));
 });
 afterEach(() => {
   for (const k of ENV_KEYS) {
-    if (savedEnv[k] === undefined) delete process.env[k];
+    if (savedEnv[k] === undefined) Reflect.deleteProperty(process.env, k);
     else process.env[k] = savedEnv[k];
   }
   rmSync(home, { recursive: true, force: true });

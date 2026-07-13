@@ -47,7 +47,8 @@ import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
 import { pidFileFor, runDryRun, startCortex } from "../cortex";
-import { migrateLegacyPidFile } from "../common/pidfile";
+import { migrateLegacyPidFile, PID_FILE, STATE_DIR } from "../common/pidfile";
+import { resolvePidStateDir } from "../common/state-path";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 
@@ -884,21 +885,27 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
 // ---------------------------------------------------------------------------
 
 describe("pidFileFor — per-config PID file derivation", () => {
+  // DEFAULT_CONFIG stays grove/bot.yaml (config is out of scope for #1903).
   const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
-  const LEGACY_PID = join(process.env.HOME ?? "~", ".config", "grove", "state", "cortex.pid");
+  // XDG wave-5 (#1903): the default pidfile lives directly under the RESOLVED
+  // STATE_DIR (canonical `~/.local/state/metafactory/cortex`, legacy-grove
+  // fallback). Assert against the module const (== join(STATE_DIR,"cortex.pid"))
+  // so the expectation tracks the resolver rather than a hardcoded grove path —
+  // holding on a clean CI box (canonical) and a dev box (legacy) alike.
+  const LEGACY_PID = PID_FILE;
 
-  test("undefined config → legacy cortex.pid (backward compat)", () => {
+  test("undefined config → default cortex.pid (backward compat)", () => {
     expect(pidFileFor(undefined)).toBe(LEGACY_PID);
   });
 
-  test("default config path → legacy cortex.pid (no behaviour change)", () => {
+  test("default config path → default cortex.pid (no behaviour change)", () => {
     expect(pidFileFor(DEFAULT_CONFIG)).toBe(LEGACY_PID);
   });
 
   // cortex#1900 — the pidfile name is `cortex-<basename>-<hash8>.pid`: it keeps
   // the human-readable slug (continuity requirement #2) AND appends 8 hex chars
-  // of sha256(canonical full path) so two trees can never collide.
-  const STATE_DIR = join(process.env.HOME ?? "~", ".config", "grove", "state");
+  // of sha256(canonical full path) so two trees can never collide. STATE_DIR is
+  // the imported module const (resolver-derived, #1903).
 
   test("custom config → cortex-<basename>-<hash8>.pid (slug preserved + path hash)", () => {
     const result = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
@@ -1243,17 +1250,24 @@ describe("STATE_DIR — CORTEX_STATE_DIR env seam", () => {
     }
   });
 
-  test("CORTEX_STATE_DIR unset → byte-identical to the grove default STATE_DIR path", () => {
+  test("CORTEX_STATE_DIR unset → resolves to the default STATE_DIR (canonical-first, legacy-grove fallback) #1903", () => {
     const out = probePidFile(null);
-    // basename is STATE_DIR-independent (hash is over the config path), so this
-    // reference default holds even if the test process itself set the override.
-    const expectedDefault = join(
-      process.env.HOME ?? "~",
-      ".config",
-      "grove",
-      "state",
-      basename(pidFileFor(CFG)),
-    );
+    // The child ran with CORTEX_STATE_DIR unset, so its STATE_DIR is the resolver
+    // default for THIS box: canonical `~/.local/state/metafactory/cortex` when
+    // present, else legacy `~/.config/grove/state`. Reproduce that resolution
+    // here with the override cleared so parent + child agree regardless of which
+    // state tree exists on disk (the pre-#1903 hardcoded grove path only held on
+    // boxes that already had the legacy tree — it broke on a clean CI runner).
+    // basename is STATE_DIR-independent (hash is over the config path).
+    const saved = process.env.CORTEX_STATE_DIR;
+    delete process.env.CORTEX_STATE_DIR;
+    let expectedDir: string;
+    try {
+      expectedDir = resolvePidStateDir();
+    } finally {
+      if (saved !== undefined) process.env.CORTEX_STATE_DIR = saved;
+    }
+    const expectedDefault = join(expectedDir, basename(pidFileFor(CFG)));
     expect(out).toBe(expectedDefault);
   });
 
