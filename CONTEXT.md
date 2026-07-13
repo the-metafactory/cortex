@@ -225,7 +225,7 @@ The in-daemon map of loaded **surface plugins**, keyed by platform (adapters) an
 _Avoid_: adapter registry (it holds renderers too — say **surface plugin registry**); conflating the registry (loaded-plugin map) with the **plugin loader** (the discovery/install pass that fills it).
 
 **Plugin loader**:
-The boot-time component (`src/adapters/loader.ts`) that discovers installed surface-plugin **bundles**, gates each on the **surface SDK** version, enforces per-plugin fail-isolation, and registers it into the **surface plugin registry**. It is the **single authority** on whether a bundle loads (arc's install-time check is advisory). It honours the **first-party bundle exemption** (below) so that first-party bundles load even with `system.plugins.external` off. Contract + trust posture: [ADR-0024](docs/adr/0024-pluggable-surface-adapters.md) D1/D5.
+The boot-time component (`src/adapters/loader.ts`) that discovers installed surface-plugin **bundles**, gates each on the **Surface SDK** version, enforces per-plugin fail-isolation, and registers it into the **surface plugin registry**. It is the **single authority** on whether a bundle loads (arc's install-time check is advisory). It honours the **first-party bundle exemption** (below) so that first-party bundles load even with `system.plugins.external` off. Contract + trust posture: [ADR-0024](docs/adr/0024-pluggable-surface-adapters.md) D1/D5.
 _Avoid_: plugin manager, plugin host, bootstrapper; conflating the loader with the **registry** it populates.
 
 **First-party bundle exemption**:
