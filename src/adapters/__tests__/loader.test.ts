@@ -25,7 +25,7 @@ import {
   readCortexDeclaredAdapterRepos,
   type ArcListRunResult,
 } from "../loader";
-import { createDefaultSurfacePluginRegistry, registryFromFactory, SurfacePluginRegistry } from "../registry";
+import { createDefaultSurfacePluginRegistry, registryFromFactory, SurfacePluginRegistry, type AdapterPlugin } from "../registry";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import { buildGatewayAdapters, type GatewayAdapterFactory } from "../../gateway/gateway-adapters";
@@ -59,6 +59,33 @@ function fixturePkg(dirName: string, overrides: Partial<ArcPackage> = {}): ArcPa
 
 function runnerFor(packages: ArcPackage[]): () => Promise<ArcListRunResult> {
   return async () => ({ stdout: JSON.stringify({ packages }), stderr: "", exitCode: 0 });
+}
+
+/**
+ * cortex#1797 (S12 MOVE) — the duplicate-platform and TOCTOU-bypass tests
+ * below simulate "discord is already a live, registered adapter" (the
+ * production shape once `loadExternalPlugins` has loaded the REAL
+ * `metafactory-cortex-adapter-discord` bundle, or — pre-S12 — the in-tree
+ * plugin `createDefaultSurfacePluginRegistry()` used to provide
+ * synchronously). Since the default registry now composes ZERO in-tree
+ * adapters, these tests register this minimal stand-in themselves so the
+ * "an adapter already occupies this platform id" scenario they're actually
+ * testing (the duplicate/TOCTOU gate, not discord specifically) still holds.
+ */
+function makeInTreeDiscordStub(): AdapterPlugin {
+  return {
+    kind: "adapter",
+    id: "discord",
+    platform: "discord",
+    bindingSchema: { safeParse: () => ({ success: true, data: {} }) } as never,
+    foldsIntoPresence: true,
+    secretFields: ["token"],
+    demuxKey: () => "",
+    buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+    createAdapter: () => {
+      throw new Error("makeInTreeDiscordStub — never constructed in loader tests");
+    },
+  };
 }
 
 describe("discoverPluginBundles (cortex#1792)", () => {
@@ -359,7 +386,7 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
     expect([...repos]).toEqual([DECLARED_ADAPTER_REPO.toLowerCase()]);
   });
 
-  test("cortex's REAL arc-manifest.yaml is readable, and its NARROWED adapter-exemption set contains exactly the web + slack + mattermost bundles (cortex#1794 S9 / cortex#1795 S10 / cortex#1796 S11 MOVE)", () => {
+  test("cortex's REAL arc-manifest.yaml is readable, and its NARROWED adapter-exemption set contains exactly the web + slack + mattermost + discord bundles (cortex#1794 S9 / cortex#1795 S10 / cortex#1796 S11 / cortex#1797 S12 MOVE)", () => {
     // PR #1942 MAJOR: the narrowing means only a dependency `name` matching
     // `metafactory-cortex-adapter-*` grants the exemption — `arc` and
     // `metafactory-discord` (both real, org-trusted dependencies declared for
@@ -368,12 +395,14 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
     // name matching that shape (`metafactory-cortex-adapter-web`); cortex#1795
     // (S10 MOVE) added a second (`metafactory-cortex-adapter-slack`);
     // cortex#1796 (S11 MOVE) added a third
-    // (`metafactory-cortex-adapter-mattermost`) — this test documents that
-    // the narrowed set now resolves to exactly those three entries, not
-    // "genuinely empty" (that was the pre-move state; see git history for
-    // the prior version of this test).
+    // (`metafactory-cortex-adapter-mattermost`); cortex#1797 (S12 MOVE) added
+    // the fourth and final (`metafactory-cortex-adapter-discord`) — this test
+    // documents that the narrowed set now resolves to exactly those four
+    // entries, not "genuinely empty" (that was the pre-move state; see git
+    // history for the prior version of this test).
     const repos = readCortexDeclaredAdapterRepos(defaultCortexManifestPath());
     expect([...repos].sort()).toEqual([
+      "https://github.com/the-metafactory/metafactory-cortex-adapter-discord",
       "https://github.com/the-metafactory/metafactory-cortex-adapter-mattermost",
       "https://github.com/the-metafactory/metafactory-cortex-adapter-slack",
       "https://github.com/the-metafactory/metafactory-cortex-adapter-web",
@@ -483,6 +512,11 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
 
   test("duplicate-platform shadow attempt against an in-tree plugin is refused BEFORE import — the bundle's code never runs", async () => {
     const registry = createDefaultSurfacePluginRegistry();
+    // cortex#1797 (S12 MOVE) — the default registry composes ZERO in-tree
+    // adapters now; register a discord stand-in so "discord" is already
+    // occupied when the shadow bundle attempts to claim it (see
+    // `makeInTreeDiscordStub`'s doc).
+    registry.registerAdapter(makeInTreeDiscordStub());
     const inTreeDiscord = registry.getAdapter("discord");
     const result = await loadExternalPlugins({
       registry,
@@ -723,8 +757,28 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
       // A registry seeded with the SAME safe recording-fake discord adapter
       // real gateway tests use (registryFromFactory) — this lets us drive
       // the REAL `buildGatewayAdapters` end-to-end without constructing a
-      // real network-capable Discord client.
+      // real network-capable Discord client. cortex#1797 (S12 MOVE) —
+      // `registryFromFactory` no longer auto-registers "discord" (no in-tree
+      // descriptor left to spread); register a stub that delegates to the
+      // SAME `factory.discord`, reproducing the exact pre-extraction shape
+      // this test's "in-tree discord stays pinned" assertion needs.
       const registry = registryFromFactory(factory);
+      registry.registerAdapter({
+        kind: "adapter",
+        id: "discord",
+        platform: "discord",
+        bindingSchema: { safeParse: () => ({ success: true, data: {} }) } as never,
+        foldsIntoPresence: true,
+        secretFields: ["token"],
+        demuxKey: () => "",
+        buildGatewayConstructArgs: (group, base) => ({
+          instanceId: base.instanceId,
+          source: base.source,
+          binding: group.entries[0]?.binding,
+          runtime: base.runtime,
+        }),
+        createAdapter: (args) => factory.discord(args as never),
+      });
 
       const result = await loadExternalPlugins({
         registry,

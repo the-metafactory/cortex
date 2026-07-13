@@ -28,7 +28,7 @@ import {
 import { buildBindingIndex } from "../binding-resolver";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
-import { testRegistryWithSlack, testRegistryWithWeb } from "./test-registry-support";
+import { testRegistryWithDiscord, testRegistryWithSlack, testRegistryWithWeb } from "./test-registry-support";
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -246,7 +246,7 @@ describe("SurfaceGateway.stop()", () => {
 describe("handleInbound — routable Discord message", () => {
   test("publishes correct decision with match + responseRouting", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
     const gw = new SurfaceGateway([adapter], index, sink);
     await gw.start();
@@ -343,7 +343,7 @@ describe("handleInbound — routable Mattermost single-binding", () => {
 describe("handleInbound — thread_id propagation", () => {
   test("thread_id is set on responseRouting when msg.threadId is present", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
     const gw = new SurfaceGateway([adapter], index, sink);
     await gw.start();
@@ -365,7 +365,7 @@ describe("handleInbound — thread_id propagation", () => {
 
   test("thread_id is absent on responseRouting when msg.threadId is undefined", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
     const gw = new SurfaceGateway([adapter], index, sink);
     await gw.start();
@@ -391,7 +391,7 @@ describe("handleInbound — thread_id propagation", () => {
 describe("handleInbound — unroutable (DM)", () => {
   test("onUnroutable is called, sink is NOT called", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
 
     const unroutableCalls: { msg: InboundMessage; reason: string }[] = [];
@@ -423,7 +423,7 @@ describe("handleInbound — unroutable (DM)", () => {
 describe("handleInbound — unroutable (unknown guildId)", () => {
   test("onUnroutable is called with no-binding reason, sink is NOT called", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
 
     const unroutableCalls: string[] = [];
@@ -454,7 +454,7 @@ describe("handleInbound — unroutable (unknown guildId)", () => {
 describe("handleInbound — mattermost multi-binding (unroutable)", () => {
   test("onUnroutable is called with multi-binding reason, sink NOT called", async () => {
     const adapter = new MockAdapter("mattermost", "mm-multi");
-    const index = buildBindingIndex(MATTERMOST_MULTI_SURFACES);
+    const index = buildBindingIndex(MATTERMOST_MULTI_SURFACES, testRegistryWithWeb());
     const sink = new FakeSink();
 
     const unroutableCalls: string[] = [];
@@ -484,7 +484,7 @@ describe("handleInbound — mattermost multi-binding (unroutable)", () => {
 describe("handleInbound — sink throws", () => {
   test("sink error is logged to stderr, no throw escapes handleInbound", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
     sink.shouldThrow = new Error("bus not connected");
 
@@ -520,7 +520,7 @@ describe("handleInbound — sink throws", () => {
 
   test("non-Error sink throw is stringified, no throw escapes", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
     sink.shouldThrow = "boom-string"; // non-Error throw value → String(err) branch
 
@@ -553,7 +553,7 @@ describe("handleInbound — sink throws", () => {
 describe("handleInbound — onUnroutable hook throws", () => {
   test("a throwing onUnroutable is caught, no throw escapes the adapter loop", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
 
     const stderrChunks: string[] = [];
@@ -595,7 +595,7 @@ describe("handleInbound — onUnroutable hook throws", () => {
 describe("SurfaceGateway — default onUnroutable", () => {
   test("console.warn is called when no custom handler is provided", async () => {
     const adapter = new MockAdapter("discord", "discord-luna-mf");
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const sink = new FakeSink();
     // No onUnroutable option — default should call console.warn
     const gw = new SurfaceGateway([adapter], index, sink);
@@ -630,7 +630,7 @@ describe("SurfaceGateway — default onUnroutable", () => {
 describe("LoggingInboundSink", () => {
   test("publish writes a shadow-stage log line to stdout", async () => {
     const sink = new LoggingInboundSink();
-    const index = buildBindingIndex(DISCORD_SURFACES);
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
     const match = {
       platform: "discord" as const,
       agent: "luna",

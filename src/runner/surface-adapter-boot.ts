@@ -89,7 +89,6 @@
  * boot-wiring module moved, not the factory it calls.
  */
 
-import { DiscordAdapter } from "../adapters/discord";
 import type { InboundMessage, PlatformAdapter } from "../adapters/types";
 import type { AgentConfig } from "../common/types/config";
 import {
@@ -232,6 +231,20 @@ interface TrustMergeable {
  * source moved.
  */
 type SlackLikeAdapter = PlatformAdapter & RouterRegistrable & TrustMergeable;
+
+/**
+ * cortex#1797 (S12) — `DiscordAdapter`'s concrete class extracted to the
+ * `metafactory-cortex-adapter-discord` bundle (the FOURTH and FINAL in-tree
+ * adapter to extract); its TYPE is no longer importable in-tree. Same
+ * structural-alias pattern as {@link SlackLikeAdapter} — this module only
+ * ever touches discord's `PlatformAdapter` + `RouterRegistrable` +
+ * `TrustMergeable` surface (never a discord-specific member like
+ * `getClient()`, which only the now-extracted `outbound-log.ts` used). The
+ * REAL adapter the bundle constructs at runtime still satisfies this
+ * structurally, so behaviour is unchanged; only the compile-time type
+ * source moved.
+ */
+type DiscordLikeAdapter = PlatformAdapter & RouterRegistrable & TrustMergeable;
 
 /**
  * Shared `applyMergedTrust` body — Discord + Slack's pre-hoist descriptors
@@ -541,15 +554,34 @@ export interface WireSurfaceAdaptersOpts {
    * the implementation into `adapters/discord/outbound-log.ts` (exported
    * as `attachLegacyOutboundLog` from the adapter's index) so the
    * discord.js-specific coupling — `DiscordAdapter.getClient()`,
-   * `formatEventForDiscord`, `WorklogManager`-with-`Client` — lives on the
-   * adapter's side of the boundary instead of in `cortex.ts`. Still
-   * threaded through as a function reference (not imported directly here)
-   * to keep this Discord-only, otherwise-unrelated legacy path opt-in via
+   * `formatEventForDiscord`, `WorklogManager`-with-`Client` — lived on the
+   * adapter's side of the boundary instead of in `cortex.ts`. Threaded
+   * through as a function reference (not imported directly here) to keep
+   * this Discord-only, otherwise-unrelated legacy path opt-in via
    * `cortex.ts`'s wiring rather than a hard import from this shared boot
    * module.
+   *
+   * cortex#1797 (S12 MOVE) — `attachLegacyOutboundLog` now lives ENTIRELY
+   * inside the `metafactory-cortex-adapter-discord` bundle (moved alongside
+   * the rest of `src/adapters/discord/`), which cortex core can no longer
+   * statically import (bundles load dynamically, at runtime, through the
+   * plugin loader — never via a compile-time `import`). `cortex.ts` can
+   * therefore no longer wire a real implementation here; this field is now
+   * OPTIONAL and `cortex.ts` omits it. The JSONL-polling direct-call bridge
+   * (per-CC-hook-event `#agent-log` posts + `WorklogManager`'s direct-call
+   * thread creation for `enableAgentLog`/`worklogChannelId`) goes UNWIRED
+   * from `cortex.ts`'s boot sequence as a result — a genuine, intentional
+   * behaviour change this extraction accepts, flagged for the orchestrator.
+   * The BUS-DRIVEN sibling path (`WorklogManager.surfaceConfig`,
+   * `dispatch.task.*` envelopes via the surface-router) is UNAFFECTED and
+   * already the documented forward path (`outbound-log.ts`'s own module doc:
+   * "MIG-7.2d Renderer cutover is pending") — deployments that need the
+   * legacy per-event JSONL bridge specifically should either stay on a
+   * pre-S12 cortex version until a follow-up re-exposes it through the
+   * plugin contract, or migrate onto the bus-driven path.
    */
-  setupOutboundLog: (
-    discordAdapter: DiscordAdapter,
+  setupOutboundLog?: (
+    discordAdapter: PlatformAdapter,
     instance: AgentConfig["discord"][number],
     config: AgentConfig,
     router: SurfaceRouter,
@@ -605,7 +637,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
   const discordDescriptor: AdapterBootDescriptor<
     AgentConfig["discord"][number],
     DiscordPresence,
-    DiscordAdapter
+    DiscordLikeAdapter
   > = {
     platform: "discord",
     instances: opts.discordInstances,
@@ -665,7 +697,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
         // REAL `DiscordAdapter` built both ways and asserts identical dispatch.
         allowedGuildIds: new Set([presence.guildId]),
         presenceByGuildId: new Map([[presence.guildId, presence]]),
-      }) as DiscordAdapter,
+      }) as DiscordLikeAdapter,
     trustResolverSupport: {
       registerFailSuffix: "",
       startedSummary: (instance) => `guild: ${instance.guildId}`,
@@ -677,7 +709,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
         // poller wired"; poller setup is decoupled from the trust-resolver
         // merge.
         if (!opts.disableOutboundPoller && (instance.enableAgentLog || instance.worklogChannelId)) {
-          const cleanup = opts.setupOutboundLog(adapter, instance, opts.config, opts.router, opts.systemEventSource);
+          const cleanup = opts.setupOutboundLog?.(adapter, instance, opts.config, opts.router, opts.systemEventSource);
           if (cleanup) opts.adapterCleanup.push(cleanup);
         }
       },

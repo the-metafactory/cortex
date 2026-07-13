@@ -501,18 +501,21 @@ function defaultFoldPlatforms(): readonly string[] {
 }
 
 /**
- * cortex#1796 (S11 MOVE) — the registry used by {@link parseSurfaces}'s
- * REGISTRY pass. Starts from the SYNCHRONOUS in-tree registry
- * (`createDefaultSurfacePluginRegistry()` — config load happens BEFORE
- * `loadExternalPlugins`' async bundle discovery runs) and supplements it
- * with a permissive STUB `AdapterPlugin` for every platform in
+ * cortex#1796 (S11 MOVE), cortex#1797 (S12 MOVE) — the registry used by
+ * {@link parseSurfaces}'s REGISTRY pass. Starts from the SYNCHRONOUS in-tree
+ * registry (`createDefaultSurfacePluginRegistry()` — config load happens
+ * BEFORE `loadExternalPlugins`' async bundle discovery runs) and supplements
+ * it with a permissive STUB `AdapterPlugin` for every platform in
  * {@link EXTRACTED_ADAPTER_PLATFORMS} not already registered (`web`,
- * `mattermost`, `slack`) — otherwise a stack with a legitimately-declared
- * `surfaces.web[]`/`surfaces.mattermost[]`/`surfaces.slack[]` binding would
- * fail to LOAD at all, since those platforms' real plugins aren't visible to
- * this synchronous registry (cortex#1796 review finding — mattermost/slack,
- * unlike `web`, have a live production `foldsIntoPresence: true` fold path,
- * so this one actually broke real config loads, not just a theoretical gap).
+ * `mattermost`, `slack`, and — as of S12 — `discord` too, now that it
+ * extracted out-of-tree and `createDefaultSurfacePluginRegistry()` composes
+ * ZERO in-tree adapters) — otherwise a stack with a legitimately-declared
+ * `surfaces.{platform}[]` binding would fail to LOAD at all, since that
+ * platform's real plugin isn't visible to this synchronous registry
+ * (cortex#1796 review finding — mattermost/slack, unlike `web`, have a live
+ * production `foldsIntoPresence: true` fold path, so this one actually broke
+ * real config loads, not just a theoretical gap; discord inherits the same
+ * risk at S12 since it folds too).
  *
  * The stub's `bindingSchema` is fully permissive (`z.record(...)`) — it
  * only proves "this platform key is a KNOWN, first-party-exempt adapter,
@@ -520,8 +523,9 @@ function defaultFoldPlatforms(): readonly string[] {
  * `loadExternalPlugins` has actually loaded the bundle and
  * `cortex.ts` re-runs `validateSurfacesAgainstRegistry` against the
  * fully-loaded registry. A genuinely unknown/misspelled platform key (not
- * discord and not in {@link EXTRACTED_ADAPTER_PLATFORMS}) still fails
- * loudly here, unchanged.
+ * in {@link EXTRACTED_ADAPTER_PLATFORMS}) still fails loudly here, unchanged
+ * — every platform cortex ships is in that set now, so this loop is the
+ * SOLE source of load-time adapter admission.
  */
 function surfacesParseRegistry(): SurfacePluginRegistry {
   const registry = createDefaultSurfacePluginRegistry();

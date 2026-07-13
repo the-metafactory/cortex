@@ -25,8 +25,36 @@ import {
   type AdapterPlugin,
   type RendererPlugin,
 } from "../registry";
-import { discordAdapterPlugin } from "../discord/plugin";
 import type { Surfaces } from "../../common/types/surfaces";
+
+// cortex#1797 (S12 MOVE) — `discordAdapterPlugin`'s descriptor no longer
+// lives in-tree (extracted to `metafactory-cortex-adapter-discord`, the
+// FOURTH and FINAL in-tree adapter). Tests below that need a "discord"
+// registry entry build their own minimal stub via this helper, same
+// workaround the web/slack/mattermost precedents already established.
+function makeDiscordStubPlugin(
+  overrides: Partial<import("../registry").AdapterPlugin> = {},
+): AdapterPlugin {
+  return {
+    kind: "adapter",
+    id: "discord",
+    platform: "discord",
+    bindingSchema: z.object({
+      token: z.string(),
+      guildId: z.coerce.string(),
+      agentChannelId: z.coerce.string(),
+      logChannelId: z.coerce.string(),
+    }).catchall(z.unknown()),
+    foldsIntoPresence: true,
+    secretFields: ["token"],
+    demuxKey: (binding) => (typeof binding.guildId === "string" ? binding.guildId : ""),
+    buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+    createAdapter: () => {
+      throw new Error("stub — never constructed in this test");
+    },
+    ...overrides,
+  };
+}
 
 // cortex#1789 (S4) — `bindingSchema`/`configSchema` are real `z.ZodType`s
 // now, not inert `unknown` placeholders; stubs use a permissive `z.unknown()`
@@ -108,9 +136,9 @@ describe("SurfacePluginRegistry", () => {
 });
 
 describe("createDefaultSurfacePluginRegistry", () => {
-  test("registers exactly the 1 in-tree adapter, discord (cortex#1794 S9 web + cortex#1795 S10 slack + cortex#1796 S11 mattermost all extracted to bundles)", () => {
+  test("registers ZERO in-tree adapters (cortex#1794 S9 web + cortex#1795 S10 slack + cortex#1796 S11 mattermost + cortex#1797 S12 discord all extracted to bundles)", () => {
     const registry = createDefaultSurfacePluginRegistry();
-    expect(registry.listAdapters().map((p) => p.id)).toEqual(["discord"]);
+    expect(registry.listAdapters()).toEqual([]);
   });
 
   test("registers exactly the 2 in-tree renderers, dashboard→pagerduty", () => {
@@ -126,29 +154,6 @@ describe("createDefaultSurfacePluginRegistry", () => {
 });
 
 describe("in-tree AdapterPlugin descriptors — shape", () => {
-  test("discord: platform id, token-field secret, groupBindings present (token-grouping)", () => {
-    expect(discordAdapterPlugin.platform).toBe("discord");
-    expect(discordAdapterPlugin.id).toBe("discord");
-    expect(discordAdapterPlugin.secretFields).toEqual(["token"]);
-    expect(typeof discordAdapterPlugin.groupBindings).toBe("function");
-  });
-
-  test("discord: demuxKey falls back to guildId (ungrouped spec-completeness path)", () => {
-    expect(discordAdapterPlugin.demuxKey({ guildId: "123" })).toBe("123");
-    expect(discordAdapterPlugin.demuxKey({})).toBe("");
-  });
-
-  test("discord: groupBindings groups same-token bindings, one group per distinct token+stack", () => {
-    const groups = discordAdapterPlugin.groupBindings!([
-      { agent: "juniper", stack: "jc/default", binding: { token: "tok-a", guildId: "111" } },
-      { agent: "juniper", stack: "jc/default", binding: { token: "tok-a", guildId: "222" } },
-      { agent: "vega", stack: "andreas/research", binding: { token: "tok-b", guildId: "333" } },
-    ]);
-    expect(groups.length).toBe(2);
-    const tokenAGroup = groups.find((g) => g.entries.length === 2);
-    expect(tokenAGroup?.entries.map((e) => e.binding.guildId)).toEqual(["111", "222"]);
-  });
-
   // cortex#1795 (S10 MOVE) — `slack`'s descriptor now lives in the
   // `metafactory-cortex-adapter-slack` bundle (not importable here); its
   // shape is pinned by that repo's own standalone test suite instead (same
@@ -165,29 +170,55 @@ describe("in-tree AdapterPlugin descriptors — shape", () => {
   // a REAL, working MattermostAdapter" test re-asserts the same shape
   // against the LOADED (bundle) plugin, so the coverage isn't lost, only
   // relocated to where the code now lives.
+  //
+  // cortex#1797 (S12 MOVE) — `discord`'s descriptor (platform id, token-field
+  // secret, groupBindings token-grouping, demuxKey guildId fallback) is the
+  // FOURTH and FINAL one to move: it now lives in the
+  // `metafactory-cortex-adapter-discord` bundle's own `src/__tests__/` suite
+  // (`token-groups.ts`'s grouping behaviour, `schema.ts`'s binding schema).
+  // `loader.discord-bundle.test.ts`'s "constructs a REAL, working
+  // DiscordAdapter" test re-asserts the same shape against the LOADED
+  // (bundle) plugin, same reasoning as mattermost above.
 });
 
 describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
-  test("registryFromFactory delegates discord's createAdapter to the matching legacy method", () => {
-    // cortex#1795/#1796 (S10/S11 MOVE) — `registryFromFactory` no longer
-    // auto-registers "slack" OR "mattermost" (no in-tree plugin descriptor
-    // left to spread for either — see that function's doc). The factory
-    // fake still DECLARES `.slack`/`.mattermost` methods (the interface
-    // shape is unchanged, since `wireSurfaceAdapters` still needs them via
+  test("registryFromFactory auto-registers NO adapter (discord/slack/mattermost all self-register now)", () => {
+    // cortex#1795/#1796/#1797 (S10/S11/S12 MOVE) — `registryFromFactory` no
+    // longer auto-registers "discord", "slack", OR "mattermost" (no in-tree
+    // plugin descriptor left to spread for any of them — see that function's
+    // doc; discord was the LAST one). The factory fake still DECLARES
+    // `.discord`/`.slack`/`.mattermost` methods (the interface shape is
+    // unchanged, since `wireSurfaceAdapters` still needs them via
     // `registryToLegacyFactory`), they're just not wired into the BUILT
-    // registry by this function any more — mirrored by the two
-    // "test needs a {slack,mattermost}-shaped adapter" manual-registration
-    // cases right below.
+    // registry by this function any more — mirrored by the "test needs a
+    // {discord,slack,mattermost}-shaped adapter" manual-registration cases
+    // right below.
+    const stubAdapter = { platform: "x", instanceId: "y" } as never;
+    const registry = registryFromFactory({
+      discord: () => stubAdapter,
+      slack: () => stubAdapter,
+      mattermost: () => stubAdapter,
+    });
+    expect(registry.getAdapter("discord")).toBeUndefined();
+    expect(registry.getAdapter("slack")).toBeUndefined();
+    expect(registry.getAdapter("mattermost")).toBeUndefined();
+  });
+
+  test("a discord-shaped fourth entry can self-register a stub AdapterPlugin, same workaround as 'web'", () => {
+    // cortex#1797 (S12 MOVE) — same documented pattern as the slack/
+    // mattermost cases below, now covering discord too.
     const calls: string[] = [];
     const stubAdapter = { platform: "x", instanceId: "y" } as never;
     const registry = registryFromFactory({
-      discord: () => { calls.push("discord"); return stubAdapter; },
-      slack: () => { calls.push("slack"); return stubAdapter; },
-      mattermost: () => { calls.push("mattermost"); return stubAdapter; },
+      discord: () => stubAdapter,
+      slack: () => stubAdapter,
+      mattermost: () => stubAdapter,
     });
+    registry.registerAdapter(makeDiscordStubPlugin({
+      createAdapter: () => { calls.push("discord"); return stubAdapter; },
+    }));
+    expect(registry.getAdapter("discord")).toBeDefined();
     registry.getAdapter("discord")!.createAdapter({});
-    expect(registry.getAdapter("slack")).toBeUndefined();
-    expect(registry.getAdapter("mattermost")).toBeUndefined();
     expect(calls).toEqual(["discord"]);
   });
 
@@ -254,10 +285,15 @@ describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
 // =============================================================================
 
 describe("in-tree AdapterPlugin descriptors — foldsIntoPresence (ADR-0024 D5 scope item 3)", () => {
-  test("discord folds into agents[*].presence.{platform}", () => {
-    expect(discordAdapterPlugin.foldsIntoPresence).toBe(true);
-  });
-
+  // cortex#1797 (S12 MOVE) — "discord DOES fold" is no longer assertable
+  // against an in-tree `discordAdapterPlugin.foldsIntoPresence` here; it's
+  // pinned by the `metafactory-cortex-adapter-discord` bundle's own test
+  // suite, and by `src/common/config/__tests__/surfaces-layer.test.ts`'s
+  // end-to-end `surfaces.discord[]` → `agents[*].presence.discord` fold
+  // coverage (which exercises `DEFAULT_FOLD_PLATFORMS` directly, the
+  // cortex-owned constant that still lists "discord" — see
+  // `common/types/surfaces.ts`).
+  //
   // cortex#1794 (S9 MOVE) — "web does NOT fold" is now pinned by the
   // `metafactory-cortex-adapter-web` bundle's own test suite; there is no
   // in-tree `webAdapterPlugin` left to assert against here.
@@ -281,12 +317,18 @@ describe("in-tree AdapterPlugin descriptors — foldsIntoPresence (ADR-0024 D5 s
 
 describe("resolveAdapterPluginOrThrow", () => {
   test("resolves an installed platform", () => {
+    // cortex#1797 (S12 MOVE) — the default registry has ZERO in-tree
+    // adapters now; register a discord stub first (same workaround the
+    // registryFromFactory tests above use).
     const registry = createDefaultSurfacePluginRegistry();
-    expect(resolveAdapterPluginOrThrow("discord", registry)).toBe(discordAdapterPlugin);
+    const stub = makeDiscordStubPlugin();
+    registry.registerAdapter(stub);
+    expect(resolveAdapterPluginOrThrow("discord", registry)).toBe(stub);
   });
 
   test("unknown platform throws, naming the key and the installed set", () => {
     const registry = createDefaultSurfacePluginRegistry();
+    registry.registerAdapter(makeDiscordStubPlugin());
     expect(() => resolveAdapterPluginOrThrow("discrod", registry)).toThrow(
       /no adapter installed for platform "discrod".*installed: discord/,
     );
@@ -308,7 +350,10 @@ describe("resolveRendererPluginOrThrow", () => {
 });
 
 describe("validateSurfacesAgainstRegistry", () => {
+  // cortex#1797 (S12 MOVE) — register a discord stub since the default
+  // registry no longer carries one in-tree.
   const registry = createDefaultSurfacePluginRegistry();
+  registry.registerAdapter(makeDiscordStubPlugin());
 
   test("undefined surfaces is a no-op", () => {
     expect(() => validateSurfacesAgainstRegistry(undefined, registry)).not.toThrow();

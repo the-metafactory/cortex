@@ -282,17 +282,15 @@ export class SurfacePluginRegistry {
 // Default (production) registry — in-tree plugins, dogfooding the registry
 // =============================================================================
 
-import { discordAdapterPlugin } from "./discord/plugin";
 import { dashboardRendererPlugin } from "../renderers/dashboard";
 import { pagerdutyRendererPlugin } from "../renderers/pagerduty";
 
 /**
- * Compose ONE registry carrying every in-tree plugin — `discord` is the ONLY
- * in-tree adapter left (in the pre-registry `buildGatewayAdapters` order)
- * then dashboard → pagerduty (renderers, in the pre-registry `createRenderer`
- * switch order). Boot (`cortex.ts`) calls this ONCE and threads the result to
- * the gateway path (`buildGatewayAdapters`), the per-stack path
- * (`wireSurfaceAdapters`), and the renderer boot loop.
+ * Compose ONE registry carrying every in-tree plugin — dashboard → pagerduty
+ * (renderers, in the pre-registry `createRenderer` switch order). Boot
+ * (`cortex.ts`) calls this ONCE and threads the result to the gateway path
+ * (`buildGatewayAdapters`), the per-stack path (`wireSurfaceAdapters`), and
+ * the renderer boot loop.
  *
  * cortex#1794 (S9 MOVE) — `web` is no longer registered here. It extracted to
  * the `metafactory-cortex-adapter-web` bundle (ADR-0024 D2: extraction
@@ -310,14 +308,22 @@ import { pagerdutyRendererPlugin } from "../renderers/pagerduty";
  * either. It extracted to the `metafactory-cortex-adapter-mattermost`
  * bundle, same D2/S9a exemption mechanism as `web`/`slack`.
  *
- * `registry.listAdapters()` therefore returns `["discord"]` right after this
- * function returns, and `["discord","mattermost","slack","web"]`
- * (bundle-name-sorted) once boot's `loadExternalPlugins` call completes —
- * both are correct, just different points in the boot sequence.
+ * cortex#1797 (S12 MOVE) — `discord` is no longer registered here either —
+ * the FOURTH and FINAL in-tree adapter to extract, to the
+ * `metafactory-cortex-adapter-discord` bundle, same D2/S9a exemption
+ * mechanism. **This function now registers ZERO in-tree adapters.** Every
+ * adapter cortex ships is an out-of-tree, first-party bundle loaded by
+ * `loadExternalPlugins` — `createDefaultSurfacePluginRegistry` composes only
+ * the two in-tree RENDERER plugins (dashboard/pagerduty) plus an empty
+ * adapter map for `loadExternalPlugins` to populate.
+ *
+ * `registry.listAdapters()` therefore returns `[]` right after this function
+ * returns, and `["discord","mattermost","slack","web"]` (bundle-name-sorted)
+ * once boot's `loadExternalPlugins` call completes — both are correct, just
+ * different points in the boot sequence.
  */
 export function createDefaultSurfacePluginRegistry(): SurfacePluginRegistry {
   const registry = new SurfacePluginRegistry();
-  registry.registerAdapter(discordAdapterPlugin);
   registry.registerRenderer(dashboardRendererPlugin);
   registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;
@@ -447,6 +453,12 @@ export function validateSurfacesAgainstRegistry(
  * construction call site that calls `factory.mattermost(...)` unconditionally
  * — see {@link registryToLegacyFactory}'s doc for why that stays safe to
  * keep with zero static import of the (now out-of-tree) mattermost plugin.
+ *
+ * cortex#1797 (S12 MOVE) — `discord` stays a member here too, same reason:
+ * `wireSurfaceAdapters` still calls `factory.discord(...)` unconditionally
+ * on its per-stack construction path, and {@link registryToLegacyFactory}'s
+ * `discord` implementation is (and always was) a pure runtime registry
+ * lookup — zero static import of the (now out-of-tree) discord plugin.
  */
 interface LegacyGatewayAdapterFactory {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -491,10 +503,17 @@ interface LegacyGatewayAdapterFactory {
  * the registry it builds registers its own stub `AdapterPlugin` directly via
  * `registry.registerAdapter(...)` after calling this function (see
  * `gateway-adapters.test.ts`'s `mattermostTestPlugin` helper).
+ *
+ * cortex#1797 (S12 MOVE) — `discord` dropped from the registration loop too,
+ * same reason (no in-tree `discordAdapterPlugin` descriptor to spread any
+ * more — this function now registers NO adapters at all, only the two
+ * in-tree renderers). A test that needs a "discord-shaped" adapter in the
+ * registry it builds registers its own stub `AdapterPlugin` directly via
+ * `registry.registerAdapter(...)` after calling this function, same as the
+ * web/slack/mattermost workaround above.
  */
-export function registryFromFactory(factory: LegacyGatewayAdapterFactory): SurfacePluginRegistry {
+export function registryFromFactory(_factory: LegacyGatewayAdapterFactory): SurfacePluginRegistry {
   const registry = new SurfacePluginRegistry();
-  registry.registerAdapter({ ...discordAdapterPlugin, createAdapter: (args) => factory.discord(args) });
   registry.registerRenderer(dashboardRendererPlugin);
   registry.registerRenderer(pagerdutyRendererPlugin);
   return registry;

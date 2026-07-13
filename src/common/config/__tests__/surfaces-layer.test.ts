@@ -144,8 +144,47 @@ const testSlackAdapterPluginStub: AdapterPlugin = {
   },
 };
 
-/** In-tree default (discord/mattermost) plus a slack stub, for tests that
- *  exercise `surfaces.slack[]` post-cortex#1795 (S10 MOVE). */
+/**
+ * cortex#1797 (S12 MOVE) — discord's `bindingSchema` extracted to the
+ * `metafactory-cortex-adapter-discord` bundle's `src/schema.ts`
+ * (`DiscordBindingSchema`); it's no longer importable here. Reproduced
+ * field-for-field so `validateSurfacesAgainstRegistry` still catches a
+ * missing `token` in THIS test suite, exactly as the in-tree plugin did
+ * before the move.
+ */
+const testDiscordBindingSchema = z
+  .object({
+    token: z.string().min(1, "surfaces.discord[].binding.token is required"),
+    guildId: z.coerce.string().min(1, "surfaces.discord[].binding.guildId is required"),
+    agentChannelId: z.coerce.string().min(1, "surfaces.discord[].binding.agentChannelId is required"),
+    logChannelId: z.coerce.string().min(1, "surfaces.discord[].binding.logChannelId is required"),
+  })
+  .catchall(z.unknown());
+
+const testDiscordAdapterPluginStub: AdapterPlugin = {
+  kind: "adapter",
+  id: "discord",
+  platform: "discord",
+  bindingSchema: testDiscordBindingSchema,
+  foldsIntoPresence: true,
+  secretFields: ["token"],
+  demuxKey: (binding) => stringBindingField(binding, "guildId"),
+  buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+  createAdapter: () => {
+    throw new Error("testDiscordAdapterPluginStub — never constructed in loader tests");
+  },
+};
+
+/** Empty in-tree default (cortex#1797 S12 MOVE — zero in-tree adapters now)
+ *  plus a discord stub, for tests that exercise `surfaces.discord[]`. */
+function testRegistryWithDiscord() {
+  const registry = createDefaultSurfacePluginRegistry();
+  registry.registerAdapter(testDiscordAdapterPluginStub);
+  return registry;
+}
+
+/** Empty in-tree default plus a slack stub, for tests that exercise
+ *  `surfaces.slack[]` post-cortex#1795 (S10 MOVE). */
 function testRegistryWithSlack() {
   const registry = createDefaultSurfacePluginRegistry();
   registry.registerAdapter(testSlackAdapterPluginStub);
@@ -348,11 +387,18 @@ describe("CFG.c.2 — no surfaces.yaml → per-stack presence is the fallback (f
 
 describe("CFG.c.4 — surfaces.yaml schema validates required binding fields", () => {
   test("Discord binding missing token fails loudly", () => {
-    expect(() =>
-      SurfacesSchema.parse({
-        discord: [{ agent: "ivy", binding: { guildId: "1", agentChannelId: "2", logChannelId: "3" } }],
-      }),
-    ).toThrow();
+    // cortex#1797 (S12 MOVE) — discord's binding SCHEMA is no longer part of
+    // the STRUCTURAL pass (`SurfacesSchema` — it fell to the generic
+    // catchall, the LAST platform to do so; see that schema's module doc);
+    // the required-token enforcement now lives in the REGISTRY pass, against
+    // the bundle's own `bindingSchema`. Assert via
+    // `validateSurfacesAgainstRegistry` instead of a bare
+    // `SurfacesSchema.parse` — same loud-failure contract, correct layer
+    // post-extraction (mirrors the Slack test right below, cortex#1795 S10).
+    const surfaces = SurfacesSchema.parse({
+      discord: [{ agent: "ivy", binding: { guildId: "1", agentChannelId: "2", logChannelId: "3" } }],
+    });
+    expect(() => validateSurfacesAgainstRegistry(surfaces, testRegistryWithDiscord())).toThrow();
   });
 
   test("Slack binding with a non-xoxb botToken fails loudly", () => {

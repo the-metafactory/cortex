@@ -130,7 +130,6 @@ import {
   type Envelope,
 } from "./bus/myelin/envelope-validator";
 
-import { attachLegacyOutboundLog } from "./adapters/discord";
 import { resolveRendererPluginAndConfig, UnimplementedRendererKindError, type Renderer } from "./renderers";
 import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "./adapters/registry";
 import { loadExternalPlugins } from "./adapters/loader";
@@ -3316,7 +3315,15 @@ export async function startCortex(
     trustResolver,
     inboundWithGateBridge,
     disableOutboundPoller: options.disableOutboundPoller ?? false,
-    setupOutboundLog: attachLegacyOutboundLog,
+    // cortex#1797 (S12 MOVE) — `attachLegacyOutboundLog` moved into the
+    // metafactory-cortex-adapter-discord bundle alongside the rest of
+    // src/adapters/discord/; it's no longer statically importable here
+    // (bundles load dynamically via the plugin loader, not via a
+    // compile-time `import`). `setupOutboundLog` is now optional on
+    // `WireSurfaceAdaptersOpts` and simply omitted — see that field's doc
+    // for the accepted behaviour change (the legacy JSONL-polling
+    // #agent-log/worklog direct-call bridge goes unwired; the bus-driven
+    // `WorklogManager.surfaceConfig` path is unaffected).
     adapters,
     adapterCleanup,
     liveSurfaces,

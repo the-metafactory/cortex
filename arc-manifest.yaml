@@ -50,8 +50,11 @@ provides:
     # ~/bin/discord and src/cli/discord/skill → ~/.claude/skills/Discord) were
     # EXTRACTED to the `metafactory-discord` arc bundle (ADR-0017, epic #1171
     # S1/S2). The bundle now provides ~/bin/discord and the Discord skill;
-    # cortex declares it under `dependencies:` below. The live Discord ADAPTER
-    # (src/adapters/discord/) STAYS in cortex — only the tooling moved.
+    # cortex declares it under `dependencies:` below (this is the CLI +
+    # skill, ADR-0017 — unaffected). The live Discord ADAPTER itself later
+    # extracted SEPARATELY (cortex#1797 S12, ADR-0024) to the
+    # `metafactory-cortex-adapter-discord` bundle, also declared below —
+    # `src/adapters/discord/` no longer exists in-tree.
     - source: src/cli/cldyo-live
       target: ~/.local/bin/cldyo-live
 
@@ -204,6 +207,24 @@ dependencies:
   # Distribution is repo-first (ADR-0017):
   # https://github.com/the-metafactory/metafactory-cortex-adapter-mattermost.
   - name: "metafactory-cortex-adapter-mattermost"
+    version: ">=0.1.0"
+  # metafactory-cortex-adapter-discord (cortex#1797 S12, ADR-0024 D5
+  # extraction lane): the Discord surface adapter extracted out of cortex
+  # core into this bundle — `src/adapters/discord/` is deleted in-tree, no
+  # fallback copy. This is the FOURTH and FINAL in-tree adapter to extract;
+  # `createDefaultSurfacePluginRegistry()` now registers ZERO in-tree
+  # adapters. `arc upgrade cortex` auto-installs it; cortex's plugin loader
+  # (src/adapters/loader.ts, cortex#1794 S9a) recognizes this exact NAME as
+  # matching the compass#115 `metafactory-cortex-adapter-<name>` naming
+  # standard (ADAPTER_BUNDLE_DEP_NAME_RE) and grants it the first-party
+  # ADAPTER exemption from the default-off `system.plugins.external` flag —
+  # so a stack upgrades transparently: the bundle installs, the adapter
+  # loads, `surfaces.discord[]` / inline `agents[].presence.discord` keep
+  # working, and no principal ever has to flip the flag for a repackage
+  # that only relocated cortex's own code.
+  # Distribution is repo-first (ADR-0017):
+  # https://github.com/the-metafactory/metafactory-cortex-adapter-discord.
+  - name: "metafactory-cortex-adapter-discord"
     version: ">=0.1.0"
 # myelin deps still pending — declared once cortex's runtime depends on
 # myelin-side identity primitives.

@@ -1,10 +1,10 @@
 /**
  * cortex#1790 (S5, ADR-0024 D5) — plugin SDK boundary-guard test.
  *
- * Walks every in-tree platform-adapter file (`src/adapters/{discord,slack}/*.ts`
- * — `web` extracted to the `metafactory-cortex-adapter-web` bundle (cortex#1794
- * S9 MOVE) and `mattermost` extracted to the `metafactory-cortex-adapter-mattermost`
- * bundle (cortex#1796 S11 MOVE) — excluding `__tests__`) and both registered renderer
+ * Walks every in-tree platform-adapter file (NONE remain as of cortex#1797
+ * S12 MOVE — `web`/`slack`/`mattermost`/`discord` all extracted to their own
+ * `metafactory-cortex-adapter-*` bundles, cortex#1794 S9 / cortex#1795 S10 /
+ * cortex#1796 S11 / cortex#1797 S12 — excluding `__tests__`) and both registered renderer
  * implementations (`src/renderers/{dashboard,pagerduty}.ts`) — deliberately
  * EXCLUDING the contract-owning files themselves (`adapters/types.ts`,
  * `adapters/registry.ts`, `renderers/types.ts`, `renderers/index.ts` — the
@@ -117,7 +117,13 @@ function listPlatformAdapterFiles(): string[] {
   // `src/adapters/slack/` directory to walk.
   // cortex#1796 (S11 MOVE) — `mattermost` dropped for the same reason
   // (`metafactory-cortex-adapter-mattermost`).
-  const platforms = ["discord"];
+  // cortex#1797 (S12 MOVE) — `discord` dropped too, the FOURTH and FINAL
+  // in-tree adapter to extract (`metafactory-cortex-adapter-discord`).
+  // `src/adapters/` now has NO platform subdirectories left to walk — this
+  // guard's adapter half is permanently empty until a future adapter lands
+  // in-tree again; the renderer half (`listRendererFiles`) still guards
+  // dashboard/pagerduty.
+  const platforms: string[] = [];
   const files: string[] = [];
   for (const platform of platforms) {
     const dir = resolve(SRC_ROOT, "adapters", platform);

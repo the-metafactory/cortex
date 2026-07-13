@@ -57,7 +57,30 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "path";
 
 import { loadExternalPlugins } from "../loader";
-import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "../registry";
+import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry, type AdapterPlugin } from "../registry";
+
+/**
+ * cortex#1797 (S12 MOVE) — `createDefaultSurfacePluginRegistry()` composes
+ * ZERO in-tree adapters now (discord was the last one). The "alongside it"
+ * test below only needs a placeholder occupant to prove a SECOND platform
+ * registers into the SAME registry instance without disturbing the first —
+ * this stub never constructs anything real.
+ */
+function makeDiscordTestStub(): AdapterPlugin {
+  return {
+    kind: "adapter",
+    id: "discord",
+    platform: "discord",
+    bindingSchema: { safeParse: () => ({ success: true, data: {} }) } as never,
+    foldsIntoPresence: true,
+    secretFields: ["token"],
+    demuxKey: () => "",
+    buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+    createAdapter: () => {
+      throw new Error("makeDiscordTestStub — never constructed in loader-bundle tests");
+    },
+  };
+}
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { ArcListRunResult } from "../loader";
 import type { Surfaces } from "../../common/types/surfaces";
@@ -116,10 +139,14 @@ describe("transparent upgrade E2E — the real metafactory-cortex-adapter-slack 
     ]);
   });
 
-  test("the loaded plugin registers into the SAME registry discord already lives in, alongside it", async () => {
-    // cortex#1796 (S11 MOVE) — `mattermost` also extracted out-of-tree since
-    // this suite was written; the in-tree registry is discord-only now.
+  test("the loaded plugin registers into the SAME registry a discord stub already lives in, alongside it", async () => {
+    // cortex#1796/#1797 (S11/S12 MOVE) — `mattermost` AND `discord` are both
+    // out-of-tree now; the in-tree default registers ZERO adapters. Register
+    // a discord stand-in ourselves so this test still proves what it always
+    // meant to: a second platform (`slack`) registers into the SAME registry
+    // instance alongside an already-present one, without disturbing it.
     const registry = createDefaultSurfacePluginRegistry();
+    registry.registerAdapter(makeDiscordTestStub());
     const beforeIds = registry.listAdapters().map((p) => p.id);
     expect(beforeIds).toEqual(["discord"]);
 

@@ -87,7 +87,6 @@ import type {
   SurfaceBindingEntry,
   SurfacePluginRegistry,
 } from "../adapters/registry";
-import { discordAdapterPlugin } from "../adapters/discord/plugin";
 import { buildAdapterPolicyPort, buildAdapterSystemEventPort } from "../adapters/plugin-support";
 import { formatEnvelopeAsMarkdown } from "../adapters/envelope-renderer";
 // Back-compat re-export for callers that still import the old suppression helper here.
@@ -148,11 +147,13 @@ interface FactoryArgsBase {
   /**
    * cortex#1796 (S11, ADR-0024 D5 extraction lane) — the host-bound
    * `AdapterPolicyPort` (mirrors `GatewayConstructBase.policy`,
-   * cortex#1794 S9b). Only the (now out-of-tree) mattermost plugin reads
-   * this field — discord/slack still call `common/policy` directly via the
-   * triad above; their own dependency-inversion is a later slice. Optional
-   * so discord/slack's existing `baseFactoryArgs` call sites (which never
-   * set it) are unaffected.
+   * cortex#1794 S9b). cortex#1797 (S12) — discord's plugin now reads this
+   * field too (its dependency-inversion is complete, same as
+   * mattermost/slack); all four extracted adapters read `policy` instead of
+   * the raw triad above. The raw triad fields stay on this interface only
+   * for `buildAdapterPolicyPort`'s inputs at the call site
+   * (`surface-adapter-boot.ts`'s `baseFactoryArgs`) — no plugin body reads
+   * them directly any more.
    */
   policy?: AdapterPolicyPort;
 }
@@ -231,12 +232,11 @@ export interface GatewayAdapterDeps {
  * cortex#1788 (S3) — pre-registry construction seam, RETAINED so existing
  * imports (`start-gateway.ts`, `surface-adapter-boot.ts`, and their tests'
  * recording/counting fakes) keep resolving. The actual construction logic
- * moved verbatim into each platform's `AdapterPlugin.createAdapter`
- * (`src/adapters/discord/plugin.ts` — `web`, `slack`, and `mattermost` all
- * moved out-of-tree entirely, cortex#1794 S9 / cortex#1795 S10 / cortex#1796
- * S11 MOVE) — this
- * object is now a thin delegating shim, not the source of truth. New code
- * should thread a {@link SurfacePluginRegistry}
+ * moved verbatim into each platform's `AdapterPlugin.createAdapter` — `web`,
+ * `slack`, `mattermost`, and `discord` all moved out-of-tree entirely
+ * (cortex#1794 S9 / cortex#1795 S10 / cortex#1796 S11 / cortex#1797 S12
+ * MOVE) — this object is now a thin delegating shim, not the source of
+ * truth. New code should thread a {@link SurfacePluginRegistry}
  * (`createDefaultSurfacePluginRegistry`) instead of this factory.
  *
  * cortex#1795 (S10 MOVE) — `slack` keeps its method here (unlike `web`,
@@ -267,9 +267,21 @@ export interface GatewayAdapterDeps {
  * default. Only a caller that supplies NEITHER `factory` NOR `registry`
  * would ever hit this arm — kept as a loud, actionable error instead of a
  * silent `undefined` crash so that caller finds out immediately what to fix.
+ *
+ * cortex#1797 (S12 MOVE) — `discord` below throws for the SAME reason: no
+ * in-tree `discordAdapterPlugin` left to delegate to (the FOURTH and FINAL
+ * in-tree adapter to extract). Same unreachable-in-production guarantee —
+ * `wireSurfaceAdapters` always receives `opts.registry` and resolves
+ * discord via {@link registryToLegacyFactory}'s pure runtime lookup.
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
-  discord: (args) => discordAdapterPlugin.createAdapter(args as unknown as Record<string, unknown>),
+  discord: () => {
+    throw new Error(
+      "defaultGatewayAdapterFactory.discord: discord extracted out-of-tree " +
+        "(metafactory-cortex-adapter-discord, cortex#1797 S12 MOVE) — pass `registry` " +
+        "(threaded from loadExternalPlugins) instead of the bare factory.",
+    );
+  },
   slack: () => {
     throw new Error(
       "defaultGatewayAdapterFactory.slack: unreachable in production — cortex#1795 (S10 MOVE) " +

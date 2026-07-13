@@ -5,16 +5,19 @@
  * `buildBindingIndex`/`planSurfaceOwnership`/`maybeCreateSurfaceGateway` now
  * derive each platform's demux key via the registered plugin's
  * `demuxKey(binding)` instead of a hardcoded field read — they default to
- * {@link createDefaultSurfacePluginRegistry} (in-tree discord ONLY, post
- * cortex#1794/#1795/#1796 — see that function's doc) when the caller omits a
- * registry, so most existing gateway tests need zero changes. `web`
- * (cortex#1794 S9), `slack` (cortex#1795 S10), and `mattermost` (cortex#1796
- * S11) all extracted out-of-tree and are normally loaded at boot via
- * `loadExternalPlugins` against their REAL bundles — gateway-layer tests
- * that exercise `surfaces.web[]` / `surfaces.slack[]` / `surfaces.mattermost[]`
- * don't need that bundle machinery, just a plugin whose `demuxKey`
- * reproduces the real bundle's contract (`stringBindingField(binding,
- * "instanceId")` / `"workspaceId"` / `"apiUrl"`, see each bundle's
+ * {@link createDefaultSurfacePluginRegistry} when the caller omits a
+ * registry. cortex#1797 (S12 MOVE) — that default registry now composes
+ * ZERO in-tree adapters (discord was the last one; see that function's doc),
+ * so EVERY gateway test that needs discord/web/slack/mattermost demux
+ * derivation must go through one of this file's `testRegistryWith*` helpers
+ * — there is no more implicit "discord just works" default. `web`
+ * (cortex#1794 S9), `slack` (cortex#1795 S10), `mattermost` (cortex#1796
+ * S11), and `discord` (cortex#1797 S12) all extracted out-of-tree and are
+ * normally loaded at boot via `loadExternalPlugins` against their REAL
+ * bundles — gateway-layer tests that exercise `surfaces.{platform}[]` don't
+ * need that bundle machinery, just a plugin whose `demuxKey` reproduces the
+ * real bundle's contract (`stringBindingField(binding, "instanceId")` /
+ * `"workspaceId"` / `"apiUrl"` / `"guildId"`, see each bundle's
  * `src/plugin.ts` — the web fixture copy lives at
  * `src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/plugin.ts`).
  */
@@ -23,9 +26,60 @@ import { z } from "zod/v4";
 import {
   createDefaultSurfacePluginRegistry,
   type AdapterPlugin,
+  type BindingGroup,
+  type SurfaceBindingEntry,
   type SurfacePluginRegistry,
 } from "../../adapters/registry";
 import { stringBindingField } from "../../adapters/plugin-support";
+
+/**
+ * The discord platform's `demuxKey`/`groupBindings`/`secretFields` contract,
+ * reproduced from the real `metafactory-cortex-adapter-discord` bundle
+ * (out-of-tree, cortex#1797 S12 MOVE — see module doc). `groupBindings`
+ * mirrors that bundle's `token-groups.ts` (token-keyed grouping — Discord
+ * delivers every guild event for one bot token over ONE gateway session) so
+ * "same Discord token across two guild bindings" tests still exercise real
+ * grouping behaviour, not just per-binding demux. `createAdapter` throws —
+ * gateway-layer routing/ownership-plan tests never construct a live
+ * `DiscordAdapter` through this stub, only derive demux keys / groups.
+ */
+function groupDiscordBindingsByTokenStub(entries: readonly SurfaceBindingEntry[]): BindingGroup[] {
+  const groups = new Map<string, SurfaceBindingEntry[]>();
+  for (const entry of entries) {
+    const key = JSON.stringify({ token: entry.binding.token, stack: entry.stack ?? null });
+    const group = groups.get(key);
+    if (group) group.push(entry);
+    else groups.set(key, [entry]);
+  }
+  return [...groups.values()].map((groupedEntries) => {
+    const guildIds = groupedEntries.map((e) => stringBindingField(e.binding, "guildId"));
+    const instanceId =
+      guildIds.length === 1
+        ? `discord:${guildIds[0]}`
+        : `discord:token:${JSON.stringify(guildIds)}`;
+    return { entries: groupedEntries, instanceId };
+  });
+}
+
+const discordAdapterPluginStub: AdapterPlugin = {
+  kind: "adapter",
+  id: "discord",
+  platform: "discord",
+  bindingSchema: z.object({
+    token: z.string(),
+    guildId: z.coerce.string(),
+    agentChannelId: z.coerce.string(),
+    logChannelId: z.coerce.string(),
+  }).catchall(z.unknown()),
+  foldsIntoPresence: true,
+  secretFields: ["token"],
+  demuxKey: (binding) => stringBindingField(binding, "guildId"),
+  groupBindings: (entries) => groupDiscordBindingsByTokenStub(entries),
+  buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+  createAdapter: () => {
+    throw new Error("discordAdapterPluginStub — never constructed in gateway-layer tests");
+  },
+};
 
 /**
  * The web platform's `demuxKey` contract, reproduced from the real
@@ -90,50 +144,64 @@ const mattermostAdapterPluginStub: AdapterPlugin = {
 };
 
 /**
- * The in-tree default (discord ONLY) plus `web` + `mattermost` stubs — for
- * tests that exercise `surfaces.web[]`/`surfaces.mattermost[]` demux/
- * ownership-plan derivation. Kept the same exported name it had
- * pre-cortex#1796 (`testRegistryWithWeb`) so every existing call site needs
- * zero changes — it now also covers mattermost.
+ * cortex#1797 (S12 MOVE) — the in-tree default registry now composes ZERO
+ * adapters (discord was the last one). This is the new baseline every other
+ * helper below builds on: `createDefaultSurfacePluginRegistry()` plus JUST
+ * the `discord` stub — for tests that only need `surfaces.discord[]` demux/
+ * grouping derivation (the shape the bare default registry used to provide
+ * implicitly, pre-S12).
+ */
+export function testRegistryWithDiscord(): SurfacePluginRegistry {
+  const registry = createDefaultSurfacePluginRegistry();
+  registry.registerAdapter(discordAdapterPluginStub);
+  return registry;
+}
+
+/**
+ * `discord` + `web` + `mattermost` stubs — for tests that exercise
+ * `surfaces.web[]`/`surfaces.mattermost[]` demux/ownership-plan derivation
+ * alongside discord. Kept the same exported name it had pre-cortex#1796
+ * (`testRegistryWithWeb`) so every existing call site needs zero changes —
+ * it now also covers mattermost AND discord (cortex#1797 S12).
  */
 export function testRegistryWithWeb(): SurfacePluginRegistry {
-  const registry = createDefaultSurfacePluginRegistry();
+  const registry = testRegistryWithDiscord();
   registry.registerAdapter(webAdapterPluginStub);
   registry.registerAdapter(mattermostAdapterPluginStub);
   return registry;
 }
 
 /**
- * The in-tree default (discord ONLY) plus a `slack` stub — for tests
- * that exercise `surfaces.slack[]` demux/ownership-plan derivation
- * (cortex#1795 S10 MOVE — slack is no longer part of the in-tree default).
+ * `discord` + `slack` stubs — for tests that exercise `surfaces.slack[]`
+ * demux/ownership-plan derivation alongside discord (cortex#1795 S10 MOVE —
+ * slack is no longer part of the in-tree default; cortex#1797 S12 MOVE —
+ * neither is discord any more).
  */
 export function testRegistryWithSlack(): SurfacePluginRegistry {
-  const registry = createDefaultSurfacePluginRegistry();
+  const registry = testRegistryWithDiscord();
   registry.registerAdapter(slackAdapterPluginStub);
   return registry;
 }
 
 /**
- * The in-tree default (discord ONLY) plus BOTH the `web` and `slack`
- * stubs — for tests that mix bindings from every platform in one fixture
- * (e.g. "all platforms combined").
+ * `discord` + `web` + `slack` stubs — for tests that mix bindings from
+ * every platform in one fixture (e.g. "all platforms combined").
  */
 export function testRegistryWithWebAndSlack(): SurfacePluginRegistry {
-  const registry = createDefaultSurfacePluginRegistry();
+  const registry = testRegistryWithDiscord();
   registry.registerAdapter(webAdapterPluginStub);
   registry.registerAdapter(slackAdapterPluginStub);
   return registry;
 }
 
 /**
- * The in-tree default (discord ONLY) plus BOTH the `slack` and `mattermost`
- * stubs (no `web`) — for tests that mix discord/slack/mattermost bindings
- * in one fixture without needing the `web` platform too (e.g.
- * binding-resolver's "all platforms combined" test).
+ * `discord` + `slack` + `mattermost` stubs (no `web`) — for tests that mix
+ * discord/slack/mattermost bindings in one fixture without needing the
+ * `web` platform too (e.g. binding-resolver's "all platforms combined"
+ * test).
  */
 export function testRegistryWithSlackAndMattermost(): SurfacePluginRegistry {
-  const registry = createDefaultSurfacePluginRegistry();
+  const registry = testRegistryWithDiscord();
   registry.registerAdapter(slackAdapterPluginStub);
   registry.registerAdapter(mattermostAdapterPluginStub);
   return registry;
