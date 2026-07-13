@@ -49,6 +49,7 @@ import type { LoadedConfig } from "../../../common/config/loader";
 import { resolveConfigDir, resolveConfigFilePath } from "../../../common/config/config-path";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import { NetworkCache } from "../../../common/registry/network-cache";
+import { resolveNetworkCacheDir } from "../../../common/state-path";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import {
   materialFromSeedString,
@@ -2257,7 +2258,7 @@ export async function seedDescriptorCacheOnMiss(
   registryUrl: string,
   registryPubkey: string | undefined,
   cache: NetworkCache = new NetworkCache({
-    cacheDir: expandTilde(join("~", ".config", "cortex", "network-cache")),
+    cacheDir: resolveNetworkCacheDir(),
   }),
   seed: typeof seedAdminDescriptorCache = seedAdminDescriptorCache,
 ): Promise<{ seeded: boolean; reason?: string; skipped?: boolean }> {
@@ -3400,7 +3401,7 @@ export function resolveOperatorAttestation(
   networkId: string,
   load: ConfigReader,
   cache: NetworkCache = new NetworkCache({
-    cacheDir: expandTilde(join("~", ".config", "cortex", "network-cache")),
+    cacheDir: resolveNetworkCacheDir(),
   }),
 ): { hubMode?: "operator" | "simple"; resolverMode?: "nats" | "memory"; hubFedAccount?: string } {
   const descriptor = cache.load(networkId)?.descriptor;

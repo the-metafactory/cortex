@@ -15,6 +15,8 @@ import { watchRawEvents } from "./lib/file-watcher";
 import { RawEventSchema } from "./hooks/lib/event-types";
 import { eventsDir, publishedEventsDir } from "../../common/events-path";
 import { migratePublishedBufferOnTouch } from "../../common/migrate-data-dir";
+import { resolveRelayDir } from "../../common/state-path";
+import { mkdirSync } from "fs";
 import { resolvePrincipalEnv } from "./hooks/lib/principal-env";
 import { NatsLink } from "../../bus/nats/connection";
 import { createCcEventPublisher } from "./cc-events";
@@ -62,7 +64,13 @@ const DEFAULT_POLICY = join(
   "relay",
   "relay-policy.yaml"
 );
-const PID_FILE = join(process.env.HOME ?? "~", ".claude", "relay", "relay.pid");
+// XDG wave-5 (#1903): the relay pidfile is STATE and resolves under the
+// metafactory state root (canonical-first, legacy `~/.claude/relay` fallback,
+// `$CORTEX_STATE_DIR` override). Module-const like cortex.ts's STATE_DIR; the
+// physical move is X-09-gated so a running relay's pidfile identity never flips
+// out from under it. The relay POLICY (relay-policy.yaml) stays put — it is
+// CONFIG, not state — so DEFAULT_POLICY above is unchanged.
+const PID_FILE = join(resolveRelayDir(), "relay.pid");
 
 // =============================================================================
 // JSONL Data Retention (logrotate-style)
@@ -335,7 +343,10 @@ program
 
     const processor = new EventProcessor(policy, { onPublished });
 
-    // Write PID file
+    // Write PID file. The canonical state-root relay dir may not exist yet on a
+    // migrated box (the pidfile is transient — the migrator carries any legacy
+    // one but a fresh boot creates its own), so ensure the dir before writing.
+    mkdirSync(resolveRelayDir(), { recursive: true });
     writeFileSync(PID_FILE, String(process.pid));
 
     // XDG wave-5 (#1902, guardrail A): carry the in-flight published buffer to

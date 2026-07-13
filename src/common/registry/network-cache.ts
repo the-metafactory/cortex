@@ -31,13 +31,21 @@ import {
   renameSync,
   writeFileSync,
 } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 
+import { resolveNetworkCacheDir } from "../state-path";
 import type { NetworkDescriptor, NetworkRosterResult } from "./types";
 
-/** Default cache dir — sibling of `~/.config/cortex/cortex.yaml`. */
-const DEFAULT_CACHE_DIR = join(homedir(), ".config", "cortex", "network-cache");
+/**
+ * Default cache dir. XDG wave-5 (#1903): the network-cache is STATE (the DD-10
+ * signature-verified last-known-good roster — the offline fallback, §1.2), NOT a
+ * regenerable cache, so it resolves under the metafactory STATE root
+ * (`~/.local/state/metafactory/cortex/network-cache`) with canonical-first /
+ * legacy `~/.config/cortex/network-cache` fallback. Every explicit `cacheDir`
+ * override site (the CLIs) resolves through the SAME {@link resolveNetworkCacheDir}
+ * so a live daemon and a CLI never disagree on which dir the signed roster is in.
+ */
+const DEFAULT_CACHE_DIR = resolveNetworkCacheDir();
 
 /** Schema version stamped into each cache file so a future shape change can
  *  detect + discard stale entries rather than mis-parsing them. */

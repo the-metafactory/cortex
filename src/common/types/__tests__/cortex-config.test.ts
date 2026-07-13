@@ -1077,7 +1077,8 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     expect(parsed.publishedEventsDir).toBe(
       "~/.local/share/metafactory/cortex/events/published",
     );
-    expect(parsed.logDir).toBe("~/.config/cortex/logs");
+    // XDG wave-5 (#1903): logs are STATE — moved under the metafactory state root.
+    expect(parsed.logDir).toBe("~/.local/state/metafactory/cortex/logs");
   });
 
   test("AgentDetectionSchema applies inner defaults", () => {
@@ -1386,7 +1387,8 @@ describe("CortexConfigSchema", () => {
     expect(parsed.paths.publishedEventsDir).toBe(
       "~/.local/share/metafactory/cortex/events/published",
     );
-    expect(parsed.paths.logDir).toBe("~/.config/cortex/logs");
+    // XDG wave-5 (#1903): logs are STATE — moved under the metafactory state root.
+    expect(parsed.paths.logDir).toBe("~/.local/state/metafactory/cortex/logs");
     expect(parsed.networksDir).toBe("./networks");
   });
 
@@ -1461,9 +1463,10 @@ describe("CortexConfigSchema", () => {
 // Method: parse `{}` on each cortex schema, parse the minimum AgentConfig
 // (which applies inner defaults to optional cross-cutting blocks), and compare.
 // Default-value equality is the strictest test because it catches both field
-// additions/removals AND default drift. Known divergence — `paths.logDir`
-// (grove → cortex rename) — is asserted as a key-set match plus per-field
-// equality on the non-divergent fields.
+// additions/removals AND default drift. The former `paths.logDir` divergence
+// (grove vs cortex namespace) is RESOLVED as of XDG wave-5 (#1903) — logs became
+// STATE and both defaults now point at the shared metafactory state root — so
+// `paths` mirrors fully (key-set match plus per-field equality).
 
 describe("PolicyFederatedRegistrySchema — IAW D.4.3", () => {
   test("accepts a fully populated registry block (url + pubkey)", () => {
@@ -1701,19 +1704,21 @@ describe("MIRROR sync — cortex cross-cutting schemas vs AgentConfigSchema", ()
     expect(AgentDetectionSchema.parse({})).toEqual(bot.github.agentDetection);
   });
 
-  test("paths shape matches (logDir grove→cortex rename is the only intended divergence)", () => {
+  test("paths shape + defaults match (logDir grove/cortex divergence resolved by the XDG wave-5 state move #1903)", () => {
     const cortexPaths = PathsConfigSchema.parse({});
     // Same key set — field additions/removals would fail here.
     expect(Object.keys(cortexPaths).sort()).toEqual(Object.keys(bot.paths).sort());
     // Non-divergent fields equal.
     expect(cortexPaths.publishedEventsDir).toBe(bot.paths.publishedEventsDir);
-    // Documented divergence: cortex moved the default log directory off the
-    // grove namespace as part of the rename. If this assertion ever stops
-    // holding, the AgentConfig side has been re-pointed at cortex/ too and the
-    // MIRROR window is collapsing — drop both this assertion and the
-    // AgentConfig.paths block (per the MIRROR-removal note in cortex-config.ts).
-    expect(cortexPaths.logDir).toBe("~/.config/cortex/logs");
-    expect(bot.paths.logDir).toBe("~/.config/grove/logs");
+    // XDG wave-5 (#1903): the historical `logDir` divergence (cortex → `~/.config/
+    // cortex/logs`, grove → `~/.config/grove/logs`) is RESOLVED — both schema
+    // defaults now point at the shared metafactory STATE root, so the two sides
+    // agree and `paths` mirrors fully. (This is the "MIRROR window collapsing"
+    // outcome the old assertion anticipated: logs became STATE and both defaults
+    // were re-pointed at the same canonical dir.)
+    expect(cortexPaths.logDir).toBe("~/.local/state/metafactory/cortex/logs");
+    expect(bot.paths.logDir).toBe("~/.local/state/metafactory/cortex/logs");
+    expect(cortexPaths.logDir).toBe(bot.paths.logDir);
   });
 });
 

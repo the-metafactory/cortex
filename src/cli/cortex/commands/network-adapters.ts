@@ -57,6 +57,7 @@ import {
 } from "../../../common/nats/nats-service-manager";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import { NetworkCache } from "../../../common/registry/network-cache";
+import { resolveNetworkCacheDir } from "../../../common/state-path";
 import { backupConfigFile } from "../../../common/nats/config-backup";
 import { probeHealthzMonitor } from "../../../common/nats/healthz-probe";
 import {
@@ -1393,7 +1394,7 @@ export function buildCachedNetworkPort(): CachedNetworkPort {
   // tests' temp-$HOME isolation (os.homedir() would punch through to the real
   // home and leak the developer's live cache into a config-less status run).
   const cache = new NetworkCache({
-    cacheDir: expandTilde(join("~", ".config", "cortex", "network-cache")),
+    cacheDir: resolveNetworkCacheDir(),
   });
   return {
     list() {

@@ -60,6 +60,7 @@ import {
 } from "../../../bus/stack-provisioning";
 import { bunExecRunner, type ExecRunner } from "../../../common/nats/nats-service-manager";
 import { NetworkCache } from "../../../common/registry/network-cache";
+import { resolveNetworkCacheDir } from "../../../common/state-path";
 import { extractHubHost } from "./network-secret-lib";
 import {
   readNetworksFromConfig,
@@ -742,7 +743,7 @@ const defaultLocalInterfaceAddresses = (): string[] => {
 function buildLiveHubLocalityPort(cfg: LiveSecretPortsConfig): HubLocalityPort {
   const cache =
     cfg.networkCache ??
-    new NetworkCache({ cacheDir: expandTilde(joinPath("~", ".config", "cortex", "network-cache")) });
+    new NetworkCache({ cacheDir: resolveNetworkCacheDir() });
   const getHostname = cfg.hostname ?? osHostname;
   const resolveHostAddresses = cfg.resolveHostAddresses ?? defaultResolveHostAddresses;
   const localInterfaceAddresses = cfg.localInterfaceAddresses ?? defaultLocalInterfaceAddresses;

@@ -1668,7 +1668,10 @@ export const PathsConfigSchema = z.object({
   // divergence. Value-migrator rewrites pinned legacy values; reader is
   // existence-gated for a pre-cutover box.
   publishedEventsDir: z.string().default("~/.local/share/metafactory/cortex/events/published"),
-  logDir: z.string().default("~/.config/cortex/logs"),
+  // XDG wave-5 (#1903): logs are STATE — moved under the metafactory state root.
+  // Kept byte-identical to `AgentConfigSchema.paths.logDir` (config.ts) and
+  // `LOG_DIR_DEFAULT` (common/state-path.ts) — no divergence.
+  logDir: z.string().default("~/.local/state/metafactory/cortex/logs"),
 });
 
 export type PathsConfig = z.infer<typeof PathsConfigSchema>;

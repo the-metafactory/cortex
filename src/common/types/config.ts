@@ -823,7 +823,13 @@ export const AgentConfigSchema = z.object({
     // (`migrate-published-events-value.ts`); the reader is existence-gated so a
     // pre-cutover box still reads the legacy buffer.
     publishedEventsDir: z.string().default("~/.local/share/metafactory/cortex/events/published"),
-    logDir: z.string().default("~/.config/grove/logs"),
+    // XDG wave-5 (#1903): rotating logs are STATE and move under the metafactory
+    // state root. Literal (not imported) so the value is grep-visible and this
+    // schema module stays free of the fs-touching state-path resolver; kept in
+    // sync with `LOG_DIR_DEFAULT` in `common/state-path.ts`. Existing pinned
+    // `~/.config/grove/logs` values are honoured as-is (logs are append-only /
+    // low-risk); the physical carry is done by the gated `migrate-state-dir.ts`.
+    logDir: z.string().default("~/.local/state/metafactory/cortex/logs"),
   }).default(emptyDefault()),
 
   /**
