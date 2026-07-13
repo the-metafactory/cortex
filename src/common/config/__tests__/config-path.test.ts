@@ -19,6 +19,7 @@ import {
   cortexConfigDirOverride,
   cortexConfigPath,
   groveConfigPath,
+  legacyCortexConfigPath,
   migrateGroveConfigFile,
   resolveConfigFile,
 } from "../config-path";
@@ -27,11 +28,22 @@ let home: string;
 let savedConfigDirEnv: string | undefined;
 const FILE = "cli.yaml";
 
+// Canonical (XDG wave-4): ~/.config/metafactory/cortex/<file>.
 function cortexFile() {
+  return join(home, ".config", "metafactory", "cortex", FILE);
+}
+// Legacy flat cortex tree (read-fallback).
+function legacyCortexFile() {
   return join(home, ".config", "cortex", FILE);
 }
 function groveFile() {
   return join(home, ".config", "grove", FILE);
+}
+function mkLegacyCortex() {
+  mkdirSync(join(home, ".config", "cortex"), { recursive: true });
+}
+function mkGrove() {
+  mkdirSync(join(home, ".config", "grove"), { recursive: true });
 }
 
 beforeEach(() => {
@@ -51,42 +63,65 @@ afterEach(() => {
 });
 
 describe("path builders", () => {
-  test("cortexConfigPath builds ~/.config/cortex/<file>", () => {
+  test("cortexConfigPath builds the canonical ~/.config/metafactory/cortex/<file>", () => {
     expect(cortexConfigPath(FILE, home)).toBe(cortexFile());
+  });
+  test("legacyCortexConfigPath builds ~/.config/cortex/<file>", () => {
+    expect(legacyCortexConfigPath(FILE, home)).toBe(legacyCortexFile());
   });
   test("groveConfigPath builds ~/.config/grove/<file>", () => {
     expect(groveConfigPath(FILE, home)).toBe(groveFile());
   });
 });
 
-describe("resolveConfigFile — cortex-first, grove-fallback", () => {
-  test("returns cortex path + source=cortex when cortex file exists", () => {
-    mkdirSync(join(home, ".config", "cortex"), { recursive: true });
-    writeFileSync(cortexFile(), "from-cortex");
+describe("resolveConfigFile — canonical-first, layered legacy fallback", () => {
+  test("returns canonical path + source=cortex when the canonical file exists", () => {
+    mkdirSync(join(home, ".config", "metafactory", "cortex"), { recursive: true });
+    writeFileSync(cortexFile(), "from-canonical");
     const r = resolveConfigFile(FILE, home);
     expect(r.path).toBe(cortexFile());
     expect(r.source).toBe("cortex");
   });
 
-  test("falls back to grove path + source=grove when only grove exists", () => {
-    mkdirSync(join(home, ".config", "grove"), { recursive: true });
+  test("falls back to legacy flat ~/.config/cortex when only it exists", () => {
+    mkLegacyCortex();
+    writeFileSync(legacyCortexFile(), "from-legacy-cortex");
+    const r = resolveConfigFile(FILE, home);
+    expect(r.path).toBe(legacyCortexFile());
+    expect(r.source).toBe("legacy-cortex");
+  });
+
+  test("falls back to grove when only grove exists (oldest tree)", () => {
+    mkGrove();
     writeFileSync(groveFile(), "from-grove");
     const r = resolveConfigFile(FILE, home);
     expect(r.path).toBe(groveFile());
     expect(r.source).toBe("grove");
   });
 
-  test("cortex wins when BOTH exist (cortex-first precedence)", () => {
-    mkdirSync(join(home, ".config", "cortex"), { recursive: true });
-    mkdirSync(join(home, ".config", "grove"), { recursive: true });
-    writeFileSync(cortexFile(), "from-cortex");
+  test("canonical wins over BOTH legacy trees (canonical-first precedence)", () => {
+    mkdirSync(join(home, ".config", "metafactory", "cortex"), { recursive: true });
+    mkLegacyCortex();
+    mkGrove();
+    writeFileSync(cortexFile(), "from-canonical");
+    writeFileSync(legacyCortexFile(), "from-legacy-cortex");
     writeFileSync(groveFile(), "from-grove");
     const r = resolveConfigFile(FILE, home);
     expect(r.path).toBe(cortexFile());
     expect(r.source).toBe("cortex");
   });
 
-  test("targets cortex path + source=default when neither exists (write target)", () => {
+  test("legacy flat cortex wins over grove (cortex-wins-on-dup fallback order)", () => {
+    mkLegacyCortex();
+    mkGrove();
+    writeFileSync(legacyCortexFile(), "from-legacy-cortex");
+    writeFileSync(groveFile(), "from-grove");
+    const r = resolveConfigFile(FILE, home);
+    expect(r.path).toBe(legacyCortexFile());
+    expect(r.source).toBe("legacy-cortex");
+  });
+
+  test("targets the canonical path + source=default when none exist (write target)", () => {
     const r = resolveConfigFile(FILE, home);
     expect(r.path).toBe(cortexFile());
     expect(r.source).toBe("default");
@@ -125,7 +160,7 @@ describe("migrateGroveConfigFile — auto-migrate preserving mode", () => {
   test("cloud-credentials.txt (a secret) stays 0o600 across the grove→cortex migrate", () => {
     const SECRET = "cloud-credentials.txt";
     const groveSecret = join(home, ".config", "grove", SECRET);
-    const cortexSecret = join(home, ".config", "cortex", SECRET);
+    const cortexSecret = join(home, ".config", "metafactory", "cortex", SECRET);
     mkdirSync(join(home, ".config", "grove"), { recursive: true });
     writeFileSync(groveSecret, "TOKEN=redacted", { mode: 0o600 });
     chmodSync(groveSecret, 0o600); // umask-proof the fixture
@@ -136,16 +171,28 @@ describe("migrateGroveConfigFile — auto-migrate preserving mode", () => {
     expect(statSync(cortexSecret).mode & 0o777).toBe(0o600);
   });
 
-  test("no-op (returns false) when cortex already exists — never clobbers", () => {
-    mkdirSync(join(home, ".config", "cortex"), { recursive: true });
-    mkdirSync(join(home, ".config", "grove"), { recursive: true });
-    writeFileSync(cortexFile(), "cortex-canonical");
+  test("no-op (returns false) when the canonical copy already exists — never clobbers", () => {
+    mkdirSync(join(home, ".config", "metafactory", "cortex"), { recursive: true });
+    mkGrove();
+    writeFileSync(cortexFile(), "canonical");
     writeFileSync(groveFile(), "grove-stale");
 
     const migrated = migrateGroveConfigFile(FILE, home);
 
     expect(migrated).toBe(false);
-    expect(readFileSync(cortexFile(), "utf-8")).toBe("cortex-canonical");
+    expect(readFileSync(cortexFile(), "utf-8")).toBe("canonical");
+  });
+
+  test("legacy flat ~/.config/cortex wins over grove on migrate (cortex-wins-on-dup)", () => {
+    mkLegacyCortex();
+    mkGrove();
+    writeFileSync(legacyCortexFile(), "from-legacy-cortex");
+    writeFileSync(groveFile(), "from-grove");
+
+    const migrated = migrateGroveConfigFile(FILE, home);
+
+    expect(migrated).toBe(true);
+    expect(readFileSync(cortexFile(), "utf-8")).toBe("from-legacy-cortex");
   });
 
   test("no-op (returns false) when neither exists", () => {
@@ -172,9 +219,9 @@ describe("CORTEX_CONFIG_DIR override (XDG wave-1 cortex#1908)", () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  test("unset ⇒ default dir is ~/.config/cortex (byte-identical) and override is undefined", () => {
+  test("unset ⇒ default dir is the canonical ~/.config/metafactory/cortex and override is undefined", () => {
     expect(cortexConfigDirOverride()).toBeUndefined();
-    expect(cortexConfigDir(home)).toBe(join(home, ".config", "cortex"));
+    expect(cortexConfigDir(home)).toBe(join(home, ".config", "metafactory", "cortex"));
     expect(cortexConfigPath(FILE, home)).toBe(cortexFile());
   });
 
@@ -188,7 +235,7 @@ describe("CORTEX_CONFIG_DIR override (XDG wave-1 cortex#1908)", () => {
   test("empty CORTEX_CONFIG_DIR is treated as unset (not '/')", () => {
     process.env.CORTEX_CONFIG_DIR = "";
     expect(cortexConfigDirOverride()).toBeUndefined();
-    expect(cortexConfigDir(home)).toBe(join(home, ".config", "cortex"));
+    expect(cortexConfigDir(home)).toBe(join(home, ".config", "metafactory", "cortex"));
   });
 
   test("resolveConfigFile returns the in-override file when it exists", () => {

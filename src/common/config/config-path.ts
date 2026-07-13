@@ -27,12 +27,29 @@
  * XDG wave-1 (cortex#1908, EPIC cortex#1867 X-03) — CONFIG_DIR env seam.
  *
  * `CORTEX_CONFIG_DIR`, when set, is the cortex config directory VERBATIM (the
- * `~/.config/cortex` default is bypassed), so a hermetic guard (#1870) can
- * point config resolution at a scratch dir with ZERO real-home access. When
- * UNSET, every path here is byte-identical to before. This is JUST the env
- * read; honoring `$XDG_CONFIG_HOME` and moving files is #1869/#1903 — out of
- * scope. `CORTEX_STATE_DIR` (the `pidfile.ts` state dir) is owned by #1900
- * this wave (G-21 serialization); `CORTEX_EVENTS_DIR` lives in `events-path.ts`.
+ * default is bypassed), so a hermetic guard (#1870) can point config resolution
+ * at a scratch dir with ZERO real-home access. `CORTEX_STATE_DIR` is owned by
+ * #1900; `CORTEX_EVENTS_DIR` lives in `events-path.ts`.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * XDG wave-4 (cortex#1869, EPIC cortex#1867 §P3a) — CONFIG DIRECTORY MOVE.
+ *
+ * The canonical config directory is now `~/.config/metafactory/cortex`, folded
+ * under the shared `metafactory` XDG root (matching the wave-3 `~/.local/bin`
+ * cutover). The two pre-move trees are READ-FALLBACKS during the transition,
+ * in precedence order:
+ *
+ *   1. `~/.config/metafactory/cortex/<file>` — canonical (or `$CORTEX_CONFIG_DIR`).
+ *   2. `~/.config/cortex/<file>`             — legacy flat cortex tree.
+ *   3. `~/.config/grove/<file>`              — legacy grove tree (oldest).
+ *   4. canonical path                        — write/default target when none exist.
+ *
+ * The physical move (merge-policy union of the two legacy trees, atomic-write +
+ * journal + rollback, plist re-render + `launchctl bootout/bootstrap`) lives in
+ * `migrate-config-dir.ts`; this module is only the RESOLVER (which tree a path
+ * reads from) plus the per-file auto-migrate helper. Every legacy-tree hit is
+ * surfaced via {@link noteXdgFallback} so a `CORTEX_XDG_STRICT=1` fresh-install
+ * run stays silent (Fallback Contract, cortex#1867 / removal owned by #1904).
  */
 
 import { copyFileSync, existsSync, mkdirSync, statSync, chmodSync } from "fs";
@@ -40,28 +57,41 @@ import { dirname, join } from "path";
 
 import { noteXdgFallback, readDirEnv } from "../xdg";
 
-/** The canonical config directory name. */
+/** The shared metafactory XDG root under `~/.config` (wave-3/wave-4 cutover). */
+export const METAFACTORY_DIRNAME = "metafactory";
+/** The canonical config directory name (now nested under `metafactory/`). */
 export const CORTEX_CONFIG_DIRNAME = "cortex";
-/** The legacy config directory name (read-fallback only during transition). */
+/** The legacy grove config directory name (read-fallback only during transition). */
 export const GROVE_CONFIG_DIRNAME = "grove";
 
 /** Which directory a resolved path came from. */
-export type ConfigSource = "cortex" | "grove" | "default";
+export type ConfigSource = "cortex" | "legacy-cortex" | "grove" | "default";
 
 export interface ResolvedConfigFile {
   /** Absolute path to use. */
   path: string;
   /**
    * Where it resolved:
-   *  - `cortex`  — the canonical file exists.
-   *  - `grove`   — only the legacy file exists (fallback in effect).
-   *  - `default` — neither exists; `path` is the cortex write target.
+   *  - `cortex`        — the canonical `metafactory/cortex` file exists.
+   *  - `legacy-cortex` — only the legacy flat `~/.config/cortex` file exists.
+   *  - `grove`         — only the legacy `~/.config/grove` file exists.
+   *  - `default`       — none exist; `path` is the canonical write target.
    */
   source: ConfigSource;
 }
 
 function homeDir(home?: string): string {
   return home ?? process.env.HOME ?? "~";
+}
+
+/** Legacy flat cortex config dir `~/.config/cortex` (read-fallback only). */
+export function legacyCortexConfigDir(home?: string): string {
+  return join(homeDir(home), ".config", CORTEX_CONFIG_DIRNAME);
+}
+
+/** Build `~/.config/cortex/<filename>` (legacy flat cortex tree / fallback). */
+export function legacyCortexConfigPath(filename: string, home?: string): string {
+  return join(legacyCortexConfigDir(home), filename);
 }
 
 /**
@@ -82,11 +112,16 @@ export function cortexConfigDirOverride(): string | undefined {
 
 /**
  * The cortex config DIRECTORY: `$CORTEX_CONFIG_DIR` if set, else the canonical
- * `~/.config/cortex`. This is the single seam every config-file path is built
- * on, so overriding the env var relocates the whole config tree at once.
+ * `~/.config/metafactory/cortex` (XDG wave-4, cortex#1869). This is the single
+ * seam every config-file path is built on, so overriding the env var relocates
+ * the whole config tree at once. The two pre-move trees (`~/.config/cortex`,
+ * `~/.config/grove`) are read-fallbacks only — see {@link resolveConfigFile}.
  */
 export function cortexConfigDir(home?: string): string {
-  return cortexConfigDirOverride() ?? join(homeDir(home), ".config", CORTEX_CONFIG_DIRNAME);
+  return (
+    cortexConfigDirOverride() ??
+    join(homeDir(home), ".config", METAFACTORY_DIRNAME, CORTEX_CONFIG_DIRNAME)
+  );
 }
 
 /** Build `~/.config/cortex/<filename>` (canonical, or under `$CORTEX_CONFIG_DIR`). */
@@ -113,14 +148,20 @@ export function resolveConfigFile(filename: string, home?: string): ResolvedConf
   const cortex = cortexConfigPath(filename, home);
   if (existsSync(cortex)) return { path: cortex, source: "cortex" };
 
-  // With an explicit `CORTEX_CONFIG_DIR` the legacy grove read-fallback is
-  // SKIPPED: the override is a self-contained config root, and probing the
-  // real `~/.config/grove` would both break hermeticity (a real-home stat)
-  // and be meaningless (grove has no counterpart under an explicit root).
+  // With an explicit `CORTEX_CONFIG_DIR` BOTH legacy read-fallbacks are SKIPPED:
+  // the override is a self-contained config root, and probing the real
+  // `~/.config/{cortex,grove}` would both break hermeticity (a real-home stat)
+  // and be meaningless (the legacy trees have no counterpart under the root).
   if (cortexConfigDirOverride() === undefined) {
+    // Fallback 1 — legacy flat `~/.config/cortex` (the pre-wave-4 canonical).
+    const legacyCortex = legacyCortexConfigPath(filename, home);
+    if (existsSync(legacyCortex)) {
+      noteXdgFallback("config", `${filename} resolved from legacy ~/.config/cortex`);
+      return { path: legacyCortex, source: "legacy-cortex" };
+    }
+    // Fallback 2 — legacy `~/.config/grove` (oldest tree; #1908 kept this).
     const grove = groveConfigPath(filename, home);
     if (existsSync(grove)) {
-      // Legacy-fallback site (#1908 kept this ~/.config/grove read-fallback).
       // Under CORTEX_XDG_STRICT this emits the one grep-able `xdg-fallback:`
       // line the #1870 guard asserts ZERO of on a fresh install; non-strict
       // stays silent/byte-identical.
@@ -141,16 +182,21 @@ export function resolveConfigFilePath(filename: string, home?: string): string {
 }
 
 /**
- * Auto-migrate a legacy grove-side config FILE to its cortex location,
- * **preserving the file mode**.
+ * Auto-migrate a legacy-tree config FILE to its canonical location,
+ * **preserving the file mode**. (Historically grove-only; XDG wave-4 widened
+ * it to also carry the legacy flat `~/.config/cortex` tree into the canonical
+ * `~/.config/metafactory/cortex`.)
+ *
+ * Precedence when both legacy copies exist: the flat `~/.config/cortex` copy is
+ * newer than grove, so it wins (cortex-wins-on-dup, matching the merge policy).
  *
  * Idempotent and non-destructive:
- *   - if the cortex copy already exists → no-op, returns `false` (the cortex
- *     copy is canonical; we never clobber it with a stale grove copy);
- *   - if only the grove copy exists → copies it to cortex with the SAME mode
+ *   - if the canonical copy already exists → no-op, returns `false` (canonical
+ *     is authoritative; we never clobber it with a stale legacy copy);
+ *   - if only a legacy copy exists → copies it to canonical with the SAME mode
  *     (so a `chmod 600` secret such as `cloud-credentials.txt` stays 600 and
  *     is never widened), returns `true`;
- *   - if neither exists → no-op, returns `false`.
+ *   - if none exist → no-op, returns `false`.
  *
  * Mode preservation is explicit: `copyFileSync` does NOT preserve mode (the
  * destination is created with the process umask), so we re-apply the source
@@ -159,23 +205,30 @@ export function resolveConfigFilePath(filename: string, home?: string): string {
  * @returns whether a migration copy was performed.
  */
 export function migrateGroveConfigFile(filename: string, home?: string): boolean {
-  const cortex = cortexConfigPath(filename, home);
-  if (existsSync(cortex)) return false; // cortex copy is canonical — never clobber
+  const canonical = cortexConfigPath(filename, home);
+  if (existsSync(canonical)) return false; // canonical copy is authoritative — never clobber
 
-  // An explicit `CORTEX_CONFIG_DIR` root has no grove side — never reach into
-  // the real `~/.config/grove` to migrate (would break the hermetic guard).
+  // An explicit `CORTEX_CONFIG_DIR` root has no legacy side — never reach into
+  // the real `~/.config/{cortex,grove}` to migrate (breaks the hermetic guard).
   if (cortexConfigDirOverride() !== undefined) return false;
 
+  // cortex-wins-on-dup: prefer the newer flat `~/.config/cortex` copy, else grove.
+  const legacyCortex = legacyCortexConfigPath(filename, home);
   const grove = groveConfigPath(filename, home);
-  if (!existsSync(grove)) return false; // nothing to migrate
+  const src = existsSync(legacyCortex)
+    ? { path: legacyCortex, tree: "~/.config/cortex" }
+    : existsSync(grove)
+      ? { path: grove, tree: "~/.config/grove" }
+      : undefined;
+  if (src === undefined) return false; // nothing to migrate
 
   // A migration copy IS a legacy-tree read — surface it under strict mode too.
-  noteXdgFallback("config", `${filename} migrated from legacy ~/.config/grove`);
-  const mode = statSync(grove).mode & 0o777;
-  mkdirSync(dirname(cortex), { recursive: true });
-  copyFileSync(grove, cortex);
+  noteXdgFallback("config", `${filename} migrated from legacy ${src.tree}`);
+  const mode = statSync(src.path).mode & 0o777;
+  mkdirSync(dirname(canonical), { recursive: true });
+  copyFileSync(src.path, canonical);
   // copyFileSync applies the umask, not the source mode — re-assert it so a
-  // 0o600 secret is preserved exactly (and never widened) on the cortex copy.
-  if (process.platform !== "win32") chmodSync(cortex, mode);
+  // 0o600 secret is preserved exactly (and never widened) on the canonical copy.
+  if (process.platform !== "win32") chmodSync(canonical, mode);
   return true;
 }
