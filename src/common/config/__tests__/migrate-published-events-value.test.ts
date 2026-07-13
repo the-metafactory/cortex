@@ -9,12 +9,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { parse as parseYaml } from "yaml";
 
 import { migratePublishedEventsDirValue } from "../migrate-published-events-value";
+import { publishedEventsDir } from "../../events-path";
+import { canonicalPublishedEventsDir, resolvePublishedEventsDir } from "../../data-path";
 
 const NEW = "~/.local/share/metafactory/cortex/events/published";
 
@@ -101,5 +103,51 @@ describe("migratePublishedEventsDirValue", () => {
 
   test("missing file is a safe no-op", () => {
     expect(migratePublishedEventsDirValue(join(dir, "nope.yaml")).changed).toBe(false);
+  });
+});
+
+/**
+ * GAP-3 end-to-end: a box that pinned the LEGACY default in its cortex.yaml.
+ * The published-events WRITER (`events-path.ts:publishedEventsDir`) always writes
+ * the canonical data root; the READER (`adapters/discord/outbound-log.ts`) resolves
+ * `paths.publishedEventsDir` existence-gated (canonical-first / legacy-fallback for a
+ * default spelling). After the boot-path value-migration the persisted config, the
+ * writer, and the reader ALL agree on the canonical dir — the pipeline cannot split.
+ */
+describe("GAP-3 — pinned legacy value migrated ⇒ writer & reader agree on canonical", () => {
+  let savedDataDir: string | undefined;
+  let home: string;
+
+  beforeEach(() => {
+    savedDataDir = process.env.CORTEX_DATA_DIR;
+    delete process.env.CORTEX_DATA_DIR; // hermetic: no override; resolve the real canonical
+    home = join(dir, "home");
+  });
+  afterEach(() => {
+    if (savedDataDir === undefined) delete process.env.CORTEX_DATA_DIR;
+    else process.env.CORTEX_DATA_DIR = savedDataDir;
+  });
+
+  test("pinned legacy ~/.claude/events/published → migrated → writer==reader==canonical", () => {
+    const canonical = canonicalPublishedEventsDir(home);
+    // Pre-condition: writer already targets canonical (never reads the config field).
+    expect(publishedEventsDir(home)).toBe(canonical);
+
+    // A pre-cutover config pins the legacy default.
+    writeFileSync(cfg, CONFIG("~/.claude/events/published"));
+    const res = migratePublishedEventsDirValue(cfg, { home });
+    expect(res.changed).toBe(true);
+
+    // The persisted value now equals canonical (tilde-expanded under `home`).
+    const parsed = parseYaml(readFileSync(cfg, "utf-8")) as {
+      paths: { publishedEventsDir: string };
+    };
+    expect(parsed.paths.publishedEventsDir.replace(/^~/, home)).toBe(canonical);
+
+    // Once the relay has created/carried the canonical dir, the reader's
+    // existence-gated resolution picks canonical — the SAME dir the writer writes.
+    mkdirSync(canonical, { recursive: true });
+    expect(resolvePublishedEventsDir(home)).toBe(canonical); // reader
+    expect(publishedEventsDir(home)).toBe(canonical); // writer
   });
 });

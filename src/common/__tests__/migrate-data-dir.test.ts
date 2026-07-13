@@ -14,16 +14,14 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
-  migrateCursorOnTouch,
+  carryDbSidecars,
   migrateDbOnTouch,
   migratePublishedBufferOnTouch,
   migrateStackDbOnTouch,
 } from "../migrate-data-dir";
 import {
-  canonicalCursorPath,
   canonicalPublishedEventsDir,
   canonicalStackDbPath,
-  legacyCursorPath,
   legacyPublishedEventsDir,
   legacyStackDbPath,
 } from "../data-path";
@@ -57,6 +55,18 @@ function readMarker(dbPath: string): string {
   const row = db.query("SELECT v FROM t LIMIT 1").get() as { v: string };
   db.close();
   return row.v;
+}
+
+/** True iff the db at `dbPath` opens and passes `PRAGMA integrity_check`. */
+function integrityOk(dbPath: string): boolean {
+  try {
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.query("PRAGMA integrity_check").get() as { integrity_check?: string } | null;
+    db.close();
+    return row?.integrity_check === "ok";
+  } catch {
+    return false;
+  }
 }
 
 describe("migrateStackDbOnTouch — copy-keep-source", () => {
@@ -101,44 +111,84 @@ describe("migrateStackDbOnTouch — copy-keep-source", () => {
 });
 
 describe("migrateDbOnTouch — WAL safety", () => {
-  test("checkpoints before copy so committed WAL data lands in the canonical db", () => {
+  test("checkpoints before copy so the canonical db is a VALID, self-consistent copy carrying the data", () => {
     const legacy = join(home, "legacy", "mission-control.db");
     const canonical = join(home, "canon", "mission-control.db");
     // A WAL-mode db with committed data. migrateDbOnTouch runs
     // wal_checkpoint(TRUNCATE) on the source first, folding any -wal frames into
     // the main .db file, THEN copies it — so no committed transaction is lost.
+    // The invariant that MATTERS (platform-independent): after migration the
+    // canonical db opens, reads the committed row, and passes integrity_check.
+    // A checkpointed db needs NO -wal to be valid, so we assert validity — not
+    // the presence of a sidecar SQLite may legitimately unlink on open (the old
+    // Linux-non-deterministic assertion this replaces).
     makeDb(legacy, "committed-in-wal");
 
     const res = migrateDbOnTouch(canonical, legacy);
     expect(res.migrated).toBe(true);
     // The canonical copy is a consistent, readable db carrying the data.
     expect(readMarker(canonical)).toBe("committed-in-wal");
-    // Source db intact (never renamed/removed).
+    expect(integrityOk(canonical)).toBe(true);
+    // Source db intact (never renamed/removed) and still valid.
     expect(readMarker(legacy)).toBe("committed-in-wal");
+    expect(integrityOk(legacy)).toBe(true);
   });
 
-  test("carries any surviving -wal / -shm sidecars alongside the main db", () => {
+  test("carryDbSidecars carries real -wal / -shm files WITH the db (deterministic — no db-open)", () => {
+    // Exercise the sidecar-copy LAYER directly with genuine sidecar files
+    // present and NO intervening db-open/checkpoint. This is deterministic on
+    // every platform: a db-open would let SQLite unlink a stray -wal for a
+    // rollback-journal db (the Linux flake the old in-migrator assertion hit).
+    // The real invariant: given sidecars on disk at copy time, they travel.
     const legacy = join(home, "legacy", "mission-control.db");
     const canonical = join(home, "canon", "mission-control.db");
-    // Rollback-journal db (wal=false): the internal checkpoint is a no-op that
-    // leaves these stray sidecar files untouched, so the test isolates the
-    // sidecar-CARRY behavior. (In production a real un-truncatable WAL is the
-    // case these carries protect.)
-    makeDb(legacy, "with-sidecars", false);
-    // Sidecars present at copy time (a partial checkpoint under active readers
-    // could leave un-folded frames here). They must travel WITH the db, and the
-    // source copies must remain intact.
-    writeFileSync(`${legacy}-wal`, "wal-bytes");
+    mkdirSync(join(legacy, ".."), { recursive: true });
+    mkdirSync(join(canonical, ".."), { recursive: true });
+    writeFileSync(legacy, "main-db-bytes");
+    writeFileSync(`${legacy}-wal`, "wal-bytes"); // un-folded committed frames
     writeFileSync(`${legacy}-shm`, "shm-bytes");
 
-    const res = migrateDbOnTouch(canonical, legacy);
-    expect(res.migrated).toBe(true);
-    expect(existsSync(canonical)).toBe(true);
-    expect(existsSync(`${canonical}-wal`)).toBe(true);
-    expect(existsSync(`${canonical}-shm`)).toBe(true);
+    const carried = carryDbSidecars(canonical, legacy);
+    expect(carried).toBe(2);
+    expect(readFileSync(`${canonical}-wal`, "utf-8")).toBe("wal-bytes");
+    expect(readFileSync(`${canonical}-shm`, "utf-8")).toBe("shm-bytes");
     // Source sidecars intact (copy-keep-source).
     expect(existsSync(`${legacy}-wal`)).toBe(true);
     expect(existsSync(`${legacy}-shm`)).toBe(true);
+  });
+
+  test("carryDbSidecars is a no-op (returns 0, never throws) when no sidecar exists", () => {
+    const legacy = join(home, "legacy", "mission-control.db");
+    const canonical = join(home, "canon", "mission-control.db");
+    mkdirSync(join(canonical, ".."), { recursive: true });
+    expect(carryDbSidecars(canonical, legacy)).toBe(0);
+    expect(existsSync(`${canonical}-wal`)).toBe(false);
+  });
+
+  test("torn-copy hardening — a corrupt canonical is detected, removed, and re-copied on the next run (GAP-4)", () => {
+    const legacy = join(home, "legacy", "mission-control.db");
+    const canonical = join(home, "canon", "mission-control.db");
+    // A source file that is NOT a valid SQLite db → the faithful copy yields a
+    // canonical that FAILS integrity_check. Because idempotence gates on
+    // existsSync(canonical), a torn copy would otherwise be preferred forever.
+    mkdirSync(join(legacy, ".."), { recursive: true });
+    writeFileSync(legacy, "this is not a sqlite database at all");
+
+    const res1 = migrateDbOnTouch(canonical, legacy);
+    // Detected corrupt → removed (source KEPT), reported not-migrated so the
+    // next run retries rather than sticking to garbage.
+    expect(res1.migrated).toBe(false);
+    expect(existsSync(canonical)).toBe(false);
+    expect(existsSync(legacy)).toBe(true); // source never removed
+
+    // The source becomes a valid db (e.g. it was mid-write before) — the next
+    // run re-copies and now lands a valid canonical.
+    rmSync(legacy);
+    makeDb(legacy, "recovered");
+    const res2 = migrateDbOnTouch(canonical, legacy);
+    expect(res2.migrated).toBe(true);
+    expect(integrityOk(canonical)).toBe(true);
+    expect(readMarker(canonical)).toBe("recovered");
   });
 
   test("canonical-wins — an existing canonical db is never overwritten", () => {
@@ -191,39 +241,9 @@ describe("migratePublishedBufferOnTouch — guardrail A (carry in-flight events)
   });
 });
 
-describe("migrateCursorOnTouch — plain data file + guardrail B (position continuity)", () => {
-  test("carries a legacy grove cursor to the canonical tree, source kept", () => {
-    const legacy = join(home, ".local", "share", "grove", "mc-hook-cursor.json");
-    mkdirSync(join(legacy, ".."), { recursive: true });
-    writeFileSync(legacy, '{"cursor":42}');
-
-    const resolved = migrateCursorOnTouch(home);
-    expect(resolved).toBe(
-      join(home, ".local", "share", "metafactory", "cortex", "mc-hook-cursor.json"),
-    );
-    expect(existsSync(resolved)).toBe(true);
-    expect(readFileSync(resolved, "utf-8")).toBe('{"cursor":42}');
-    expect(existsSync(legacy)).toBe(true); // source kept
-  });
-
-  test("guardrail B — MC resume position is PRESERVED across the move (offsets intact, no reset)", () => {
-    // The cursor is Record<rawEventFilePath, byteOffset>. Its keys reference the
-    // RAW buffer (`~/.claude/events/raw/…`), which does NOT move in #1902 — so
-    // moving the cursor FILE (copy-keep-source) preserves the exact resume
-    // position; MC neither re-ingests (dup events) nor skips.
-    const legacy = legacyCursorPath(home);
-    const canonical = canonicalCursorPath(home);
-    const rawKey = join(home, ".claude", "events", "raw", "2026-07-13.jsonl");
-    const cursor = { [rawKey]: 8192 };
-    mkdirSync(join(legacy, ".."), { recursive: true });
-    writeFileSync(legacy, JSON.stringify(cursor));
-
-    migrateCursorOnTouch(home);
-
-    const carried = JSON.parse(readFileSync(canonical, "utf-8")) as Record<string, number>;
-    expect(carried[rawKey]).toBe(8192); // exact offset preserved — no reset
-    // Key still references the (unmoved) raw buffer — no rewrite needed.
-    expect(Object.keys(carried)).toEqual([rawKey]);
-    expect(existsSync(legacy)).toBe(true); // source kept
-  });
-});
+// NOTE: the `migrateCursorOnTouch` (G-25) tests were removed with the migrator
+// itself (#1902 GAP-2). The grove standalone hook cursor is read ONLY by the
+// retired-for-production standalone MC entry (`surface/mc/index.ts`, FS-8a #1822);
+// the production EMBEDDED MC keeps its cursor beside its per-stack db and never
+// touches the grove cursor. A copy-forward migrator for a path nothing writes in
+// production is dead code — see the rationale block in `migrate-data-dir.ts`.

@@ -41,6 +41,7 @@ import {
 } from "./common/config/watcher";
 import { type AgentConfig } from "./common/types/config";
 import { migrateStackDbOnTouch } from "./common/migrate-data-dir";
+import { migratePublishedEventsDirValue } from "./common/config/migrate-published-events-value";
 import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
 import { AgentRegistry } from "./common/agents/registry";
@@ -6459,6 +6460,23 @@ if (import.meta.main) {
       // exits the process non-zero instead of being swallowed as a "non-fatal"
       // unhandled rejection. The daemon must not survive a failed security gate.
       const handle = await bootOrDie(async () => {
+        // XDG wave-5 (#1902, GAP-3) — the published-events pipeline WRITER
+        // (`taps/cc-events/relay.ts` → `publishedEventsDir()`) always writes the
+        // canonical metafactory data root; it does NOT read `paths.publishedEventsDir`.
+        // The persisted value is pinned into every generated `cortex.yaml`, so an
+        // upgraded box can still carry the LEGACY default (`~/.claude/events/published`)
+        // in its file. Rewrite that pinned legacy default to the canonical root
+        // (targeted one-line edit, comments/quotes preserved; a CUSTOM value is
+        // left untouched) BEFORE the config is loaded, so the in-memory value +
+        // the persisted file agree with the always-canonical writer. Idempotent
+        // and non-destructive; a no-op on a fresh/canonical config.
+        const migratedCfgPath = expandTilde(options.config);
+        const pubMig = migratePublishedEventsDirValue(migratedCfgPath);
+        if (pubMig.changed) {
+          console.log(
+            `cortex: migrated pinned paths.publishedEventsDir "${pubMig.from}" → "${pubMig.to}" in ${migratedCfgPath} (XDG #1902)`,
+          );
+        }
         // FS-7 / D-3 (cortex#1839) — resolve the boot config with a last-known-good
         // fallback. A healthy load refreshes the snapshot + clears any degraded
         // marker; a bad load either fails hard (`--strict` / no snapshot) or boots

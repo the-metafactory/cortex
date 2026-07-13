@@ -27,20 +27,16 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "fs";
 import { dirname, join } from "path";
 
 import { atomicWriteFile } from "./config/migrate-config-dir";
 import {
-  canonicalCursorPath,
   canonicalPublishedEventsDir,
   canonicalStackDbPath,
-  canonicalStandaloneDbPath,
   cortexDataDirOverride,
-  legacyCursorPath,
   legacyPublishedEventsDir,
   legacyStackDbPath,
-  legacyStandaloneDbPath,
 } from "./data-path";
 
 /** The WAL/SHM sidecar suffixes carried alongside a `.db` file. */
@@ -90,6 +86,65 @@ function atomicCopyKeepingSource(src: string, dest: string): void {
 }
 
 /**
+ * Carry any surviving `-wal` / `-shm` sidecars from `legacyDbPath` to sit
+ * alongside `canonicalDbPath`, copy-keep-source. Separated from
+ * {@link migrateDbOnTouch} so the carry can be exercised DIRECTLY (with real
+ * sidecar files present and NO intervening db-open) — a db-open would let
+ * SQLite unlink a stray `-wal` on some platforms (Linux), making an in-migrator
+ * "the sidecar survives an open" assertion non-deterministic. This helper states
+ * the real invariant: given sidecars on disk at copy time, they travel WITH the
+ * db. Returns the number of sidecars copied (0 when none exist — a no-op that
+ * never throws).
+ */
+export function carryDbSidecars(canonicalDbPath: string, legacyDbPath: string): number {
+  let carried = 0;
+  for (const suffix of DB_SIDECAR_SUFFIXES) {
+    const srcSidecar = `${legacyDbPath}${suffix}`;
+    if (existsSync(srcSidecar)) {
+      atomicCopyKeepingSource(srcSidecar, `${canonicalDbPath}${suffix}`);
+      carried += 1;
+    }
+  }
+  return carried;
+}
+
+/**
+ * Whether the db at `dbPath` is a VALID, self-consistent SQLite db. Opens
+ * read-only and runs `PRAGMA integrity_check`; a checkpointed db needs no `-wal`
+ * to be valid, so this is the invariant that actually matters after a carry.
+ * NEVER throws — an unreadable / not-a-db / corrupt file reads as invalid.
+ */
+function canonicalDbIsValid(dbPath: string): boolean {
+  let db: Database | undefined;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const row = db.query("PRAGMA integrity_check").get() as
+      | { integrity_check?: string }
+      | null;
+    return row?.integrity_check === "ok";
+  } catch {
+    return false;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // best-effort close
+    }
+  }
+}
+
+/** Remove a canonical db copy + its sidecars (best-effort). The SOURCE is KEPT. */
+function removeCanonicalDbCopy(canonicalDbPath: string): void {
+  for (const p of [canonicalDbPath, ...DB_SIDECAR_SUFFIXES.map((s) => `${canonicalDbPath}${s}`)]) {
+    try {
+      if (existsSync(p)) rmSync(p);
+    } catch {
+      // best-effort — a leftover here just means the next run re-attempts.
+    }
+  }
+}
+
+/**
  * Migrate-on-touch a SQLite db (with WAL/SHM sidecars), copy-keep-source.
  *
  * Idempotent + non-destructive:
@@ -116,32 +171,21 @@ export function migrateDbOnTouch(canonicalDbPath: string, legacyDbPath: string):
   // Carry any surviving sidecars so a partial checkpoint's committed frames
   // travel with the db. `-shm` is regenerable but harmless to carry; `-wal`
   // may hold committed frames not yet folded — carrying it is the safe choice.
-  for (const suffix of DB_SIDECAR_SUFFIXES) {
-    const srcSidecar = `${legacyDbPath}${suffix}`;
-    if (existsSync(srcSidecar)) {
-      atomicCopyKeepingSource(srcSidecar, `${canonicalDbPath}${suffix}`);
-    }
+  carryDbSidecars(canonicalDbPath, legacyDbPath);
+
+  // Torn-copy hardening: idempotence gates on `existsSync(canonical)`, so a
+  // half-copied / corrupt canonical db would be stickily preferred FOREVER
+  // (`resolveStackDbPath` picks it, MC opens garbage). Validate the copy with
+  // `PRAGMA integrity_check`; on failure remove the canonical copy + sidecars
+  // (the SOURCE is KEPT → no data loss) so the NEXT boot re-attempts the carry.
+  if (!canonicalDbIsValid(canonicalDbPath)) {
+    removeCanonicalDbCopy(canonicalDbPath);
+    return { path: canonicalDbPath, migrated: false };
   }
   return { path: canonicalDbPath, migrated: true };
 }
 
-/**
- * Migrate-on-touch a plain data file (e.g. the MC hook cursor), copy-keep-source.
- * Idempotent + non-destructive, same gating as {@link migrateDbOnTouch} minus
- * the WAL handling.
- */
-export function migrateDataFileOnTouch(canonicalPath: string, legacyPath: string): DataMigrationResult {
-  if (existsSync(canonicalPath)) return { path: canonicalPath, migrated: false };
-  if (cortexDataDirOverride() !== undefined) return { path: canonicalPath, migrated: false };
-  if (!existsSync(legacyPath)) return { path: canonicalPath, migrated: false };
-  mkdirSync(dirname(canonicalPath), { recursive: true });
-  // copyFileSync would apply the umask, not the source mode — use the atomic
-  // copy which re-asserts the source mode (a 0600 cursor stays 0600).
-  atomicCopyKeepingSource(legacyPath, canonicalPath);
-  return { path: canonicalPath, migrated: true };
-}
-
-// ─────────────────────────────────────────────── stack / standalone / cursor wrappers
+// ───────────────────────────────────────────────────────── stack MC db wrapper
 
 /**
  * Resolve-and-migrate the SERVING stack's OWN per-stack MC db: carry a legacy
@@ -154,15 +198,22 @@ export function migrateStackDbOnTouch(stack: string, home?: string): string {
   return migrateDbOnTouch(canonicalStackDbPath(stack, home), legacyStackDbPath(stack, home)).path;
 }
 
-/** Resolve-and-migrate the standalone MC v2 db (legacy grove → canonical). */
-export function migrateStandaloneDbOnTouch(home?: string): string {
-  return migrateDbOnTouch(canonicalStandaloneDbPath(home), legacyStandaloneDbPath(home)).path;
-}
-
-/** Resolve-and-migrate the MC hook cursor (G-25: legacy grove → canonical). */
-export function migrateCursorOnTouch(home?: string): string {
-  return migrateDataFileOnTouch(canonicalCursorPath(home), legacyCursorPath(home)).path;
-}
+// ── Why there is no standalone-db / cursor migrator (GAP-1 / GAP-2, #1902) ────
+//
+// The STANDALONE MC v2 db (`~/.local/share/grove/mission-control.db`, layout 1)
+// and the STANDALONE grove hook cursor (`~/.local/share/grove/mc-hook-cursor.json`,
+// G-25) are read ONLY by the retired standalone entry `surface/mc/index.ts`,
+// which is RETIRED FOR PRODUCTION (FS-8a, #1822): it refuses to boot without the
+// `--legacy` / `MC_LEGACY_BOOT` test-harness escape hatch. The PRODUCTION MC runs
+// EMBEDDED (`surface/mc/embed.ts`), which resolves its db via `migrateStackDbOnTouch`
+// (above) and OVERRIDES the cursor to sit BESIDE that per-stack db
+// (`embed.ts` → `join(dirname(dbPath), "mc-hook-cursor.json")`) — it never touches
+// the grove standalone db OR cursor. So a `migrate{Standalone,Cursor}OnTouch`
+// would have NO production writer to guard: wiring it into the retired boot path
+// is theater, and leaving it unwired is a dead migrator. Both were removed.
+// The existence-gated *resolvers* (`resolveStandaloneDbPath` / `resolveCursorPath`
+// in `data-path.ts`) stay — they let the retired harness boot still read a legacy
+// grove file in place — but no COPY-forward runs for a path nothing writes.
 
 /**
  * Carry the in-flight PUBLISHED-events buffer to the canonical data-root
