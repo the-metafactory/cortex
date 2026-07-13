@@ -1,0 +1,11 @@
+# cortex#1795 (S10, ADR-0024) — plugin manifest for the cortex Slack surface
+# adapter bundle.
+#
+# `id` MUST equal the exported AdapterPlugin's `platform` field (the S6
+# shadow-fix pin, src/adapters/loader.ts's loadOneBundle stage (f)) — slack's
+# platform is "slack", so id is "slack" here too.
+kind: adapter
+id: slack
+entry: ./src/plugin.ts
+sdkRange: "^1"
+cortex: ">=6.7.0"
