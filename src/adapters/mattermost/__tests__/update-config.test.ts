@@ -20,9 +20,20 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { MattermostAdapter, type MattermostAdapterInfra } from "../index";
-import type { AgentConfig } from "../../../common/types/config";
-import type { Agent, MattermostPresence } from "../../../common/types/cortex-config";
+import {
+  MattermostAdapter,
+  type MattermostAdapterInfra,
+  type MattermostAgentIdentity,
+  type MattermostUpdateConfigShape,
+} from "../index";
+import type { MattermostPresence } from "../schema";
+import type { AdapterPolicyPort } from "../../../surface-sdk";
+
+/** Deny-by-default test double — none of these tests exercise resolveAccess. */
+const STUB_POLICY: AdapterPolicyPort = {
+  resolveAccess: () => ({ allowed: false, features: { chat: false, async: false, team: false } }),
+  isOperatorPrincipal: () => false,
+};
 
 let originalLog: typeof console.log;
 let originalWarn: typeof console.warn;
@@ -52,12 +63,10 @@ function makePresence(overrides: Partial<MattermostPresence> = {}): MattermostPr
   };
 }
 
-function makeAgent(presence: MattermostPresence): Agent {
+function makeAgent(presence: MattermostPresence): MattermostAgentIdentity {
   return {
     id: "luna",
     displayName: "Luna",
-    persona: "(test)",
-    trust: [],
     presence: { mattermost: presence },
   };
 }
@@ -72,7 +81,7 @@ function makeAgentConfig(overrides: Partial<{
   defaultRole: string;
   allowedUsers: string[];
   triggerWord: string;
-}> = {}): AgentConfig {
+}> = {}): MattermostUpdateConfigShape {
   return {
     agent: {
       name: overrides.name ?? "luna",
@@ -81,15 +90,13 @@ function makeAgentConfig(overrides: Partial<{
     mattermost: [
       {
         apiUrl: overrides.apiUrl ?? "https://mm-a.example",
-        apiToken: overrides.apiToken ?? "initial-token",
         channels: overrides.channels ?? ["c-initial"],
         pollIntervalMs: overrides.pollIntervalMs ?? 3000,
         allowedUsers: overrides.allowedUsers ?? [],
-        defaultRole: overrides.defaultRole ?? "allow-all",
         ...(overrides.triggerWord !== undefined && { triggerWord: overrides.triggerWord }),
       },
     ],
-  } as unknown as AgentConfig;
+  };
 }
 
 function makeAdapter(overrides: { presence?: Partial<MattermostPresence> } = {}) {
@@ -98,6 +105,7 @@ function makeAdapter(overrides: { presence?: Partial<MattermostPresence> } = {})
   const infra: MattermostAdapterInfra = {
     instanceId: "luna-mattermost",
     principal: {},
+    policy: STUB_POLICY,
   };
   return new MattermostAdapter(agent, presence, infra);
 }
@@ -105,8 +113,8 @@ function makeAdapter(overrides: { presence?: Partial<MattermostPresence> } = {})
 function getPresence(adapter: MattermostAdapter): MattermostPresence {
   return (adapter as unknown as { presence: MattermostPresence }).presence;
 }
-function getAgent(adapter: MattermostAdapter): Agent {
-  return (adapter as unknown as { agent: Agent }).agent;
+function getAgent(adapter: MattermostAdapter): MattermostAgentIdentity {
+  return (adapter as unknown as { agent: MattermostAgentIdentity }).agent;
 }
 
 describe("MattermostAdapter.updateConfig", () => {
@@ -148,7 +156,7 @@ describe("MattermostAdapter.updateConfig", () => {
     const agentAfter = getAgent(adapter);
     const presenceAfter = getPresence(adapter);
     expect(agentAfter.presence.mattermost).toBe(presenceAfter);
-    expect(agentAfter.presence.mattermost?.pollIntervalMs).toBe(7000);
+    expect((agentAfter.presence.mattermost as MattermostPresence).pollIntervalMs).toBe(7000);
   });
 
   test("agent id + displayName reflect updated botConfig.agent", () => {

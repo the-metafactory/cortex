@@ -3,8 +3,29 @@
  * Receives outgoing webhook POSTs from Mattermost, extracts messages.
  */
 
-import type { AgentConfig } from "../../common/types/config";
 import type { Server } from "bun";
+
+/**
+ * cortex#1796 (S11, ADR-0024 D5 extraction lane) — the minimal config shape
+ * `createMattermostServer` actually reads (`config.mattermost[0]`'s
+ * `callbackPort`/`triggerWord`, `config.agent.name`), narrowed from cortex's
+ * full `AgentConfig` (`common/types/config.ts`) the same way `AdapterAgentIdentity`
+ * narrowed `Agent` in the web bundle (cortex#1794 S9b). NOTE: this function
+ * is currently DEAD CODE in cortex's own production wiring (no call site
+ * outside this module — verified via repo-wide grep) — the webhook-callback
+ * transport was superseded by the poller (`poller.ts`). Kept + narrowed
+ * rather than deleted so this extraction stays a pure relocation, not a
+ * behavior change; a real cortex `AgentConfig` still satisfies this shape
+ * structurally, so nothing outside this plugin needs to change if a future
+ * caller ever wires it back up.
+ */
+export interface MattermostServerConfigShape {
+  readonly mattermost: readonly {
+    readonly callbackPort?: number;
+    readonly triggerWord?: string;
+  }[];
+  readonly agent: { readonly name: string };
+}
 
 /**
  * Mattermost outgoing webhook payload.
@@ -93,7 +114,7 @@ export function parseWebhookPayload(
  * Returns a Bun server and a cleanup function.
  */
 export function createMattermostServer(
-  config: AgentConfig,
+  config: MattermostServerConfigShape,
   onMessage: (msg: MattermostInboundMessage) => Promise<string>
 ): { server: Server<unknown>; stop: () => void } {
   const mm = config.mattermost[0]; // Instance-scoped config

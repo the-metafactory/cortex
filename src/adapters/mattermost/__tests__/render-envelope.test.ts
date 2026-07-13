@@ -14,9 +14,15 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { MattermostAdapter, type MattermostAdapterInfra } from "../index";
-import type { Agent, MattermostPresence } from "../../../common/types/cortex-config";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import { MattermostAdapter, type MattermostAdapterInfra, type MattermostAgentIdentity } from "../index";
+import type { MattermostPresence } from "../schema";
+import type { AdapterPolicyPort, Envelope } from "../../../surface-sdk";
+
+/** Deny-by-default test double — these tests never exercise resolveAccess. */
+const STUB_POLICY: AdapterPolicyPort = {
+  resolveAccess: () => ({ allowed: false, features: { chat: false, async: false, team: false } }),
+  isOperatorPrincipal: () => false,
+};
 
 // ---------------------------------------------------------------------------
 // Console + fetch suppression — these tests intentionally exercise
@@ -98,16 +104,15 @@ function makeAdapter(opts: {
     pollIntervalMs: 1000,
     allowedUsers: [],
   };
-  const agent: Agent = {
+  const agent: MattermostAgentIdentity = {
     id: "test",
     displayName: "Test",
-    persona: "(test)",
-    trust: [],
     presence: { mattermost: presence },
   };
   const infra: MattermostAdapterInfra = {
     instanceId: "mm-renderer",
     principal: {},
+    policy: STUB_POLICY,
     ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
     ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
     ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),

@@ -144,18 +144,17 @@ export const SlackBindingSchema = z
   })
   .catchall(z.unknown());
 
-/**
- * Mattermost surface binding — the API connection subset of
- * `MattermostPresenceSchema`. `apiUrl` + `apiToken` are the irreducible
- * binding (the bot needs both to reach the server); webhook/trigger knobs ride
- * along via the catchall.
- */
-export const MattermostBindingSchema = z
-  .object({
-    apiUrl: z.string().min(1, "surfaces.mattermost[].binding.apiUrl is required"),
-    apiToken: z.string().min(1, "surfaces.mattermost[].binding.apiToken is required"),
-  })
-  .catchall(z.unknown());
+// cortex#1796 (S11, ADR-0024 D5 extraction lane, INVERSION step) — the
+// Mattermost binding schema is now PLUGIN-OWNED (`src/adapters/mattermost/
+// schema.ts`), mirroring `WebBindingSchema`'s cortex#1794 S9b move. This
+// module imports it back (dependency INVERTED from pre-inversion) to compose
+// `MattermostSurfaceBindingSchema`/`SurfacesSchema` below, and re-exports it
+// so every existing external consumer (tests, `gateway-adapters.ts`) keeps
+// importing from here unchanged. See `mattermost/schema.ts`'s module doc for
+// the full rationale. The FINAL MOVE slice drops this re-export entirely —
+// see `WebBindingSchema`'s cortex#1794 S9 MOVE for the precedent.
+import { MattermostBindingSchema } from "../../adapters/mattermost/schema";
+export { MattermostBindingSchema };
 
 // =============================================================================
 // Binding entry — one surface-instance bound to one stack's agent

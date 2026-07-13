@@ -80,6 +80,7 @@ import type {
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "../common/policy";
+import type { AdapterPolicyPort } from "../surface-sdk";
 import { assertNoUnresolvedPlaceholder } from "../common/config/resolve-env-placeholders";
 import type {
   BindingGroup,
@@ -145,6 +146,16 @@ interface FactoryArgsBase {
   policyEngine?: PolicyEngine;
   policyLookup?: PlatformPrincipalIndex;
   policyRegistry?: PrincipalRegistry;
+  /**
+   * cortex#1796 (S11, ADR-0024 D5 extraction lane) — the host-bound
+   * `AdapterPolicyPort` (mirrors `GatewayConstructBase.policy`,
+   * cortex#1794 S9b). Only the (now out-of-tree) mattermost plugin reads
+   * this field — discord/slack still call `common/policy` directly via the
+   * triad above; their own dependency-inversion is a later slice. Optional
+   * so discord/slack's existing `baseFactoryArgs` call sites (which never
+   * set it) are unaffected.
+   */
+  policy?: AdapterPolicyPort;
 }
 
 interface DiscordFactoryArgs extends FactoryArgsBase {

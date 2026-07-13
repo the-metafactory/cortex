@@ -5,7 +5,7 @@
  * No inbound network connection required.
  */
 
-import type { MattermostPresence } from "../../common/types/cortex-config";
+import type { MattermostPresence } from "./schema";
 import { extractAfterTrigger, matchesTrigger, type MattermostInboundMessage } from "./server";
 import { fetchBotUserId as fetchBotUserIdShared } from "./bot-user";
 import { basename } from "path";
