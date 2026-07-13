@@ -760,11 +760,25 @@ export interface GatewayConstructBase {
 	 * registry module has no compile-time dependency on `surface-sdk` or
 	 * `common/policy`, so each plugin's `buildGatewayConstructArgs` casts
 	 * internally (the convention `AdapterPlugin`'s docstring already
-	 * establishes for `createAdapter`'s args). Currently only the web plugin
-	 * forwards it — see `metafactory-cortex-adapter-web`'s `src/plugin.ts`
-	 * (relocated out-of-tree, cortex#1794 S9 MOVE; was `adapters/web/plugin.ts`).
+	 * establishes for `createAdapter`'s args). Forwarded by both the `web`
+	 * plugin (`metafactory-cortex-adapter-web`'s `src/plugin.ts`, relocated
+	 * out-of-tree cortex#1794 S9 MOVE) and the `slack` plugin
+	 * (`metafactory-cortex-adapter-slack`'s `src/plugin.ts`, cortex#1795 S10).
 	 */
 	readonly policy?: unknown;
+	/**
+	 * cortex#1795 (S10) — a host-bound `AdapterSystemEventPort` (`surface-sdk`),
+	 * typed `unknown` for the same reason `policy` is. Currently only the
+	 * slack plugin forwards it.
+	 */
+	readonly systemEvents?: unknown;
+	/**
+	 * cortex#1795 (S10) — the host-bound envelope→markdown renderer (the
+	 * shared `adapters/envelope-renderer.ts`'s `formatEnvelopeAsMarkdown`),
+	 * typed `unknown` for the same reason `policy` is. Currently only the
+	 * slack plugin forwards it.
+	 */
+	readonly formatEnvelope?: unknown;
 }
 /**
  * Per-platform adapter plugin descriptor. `createAdapter`'s args type is
@@ -951,9 +965,10 @@ export declare const SURFACE_SDK_VERSION = "1.0.0";
  * `src/adapters/web/index.ts` — relocated cortex#1794 (S9 MOVE) to the
  * `metafactory-cortex-adapter-web` bundle's `src/index.ts`, which now
  * imports this port from a vendored copy of this barrel (see that repo's
- * `src/vendor/surface-sdk.ts`). Discord/Slack/Mattermost still import
- * `common/policy` directly — their dependency-inversion pass is a later
- * slice (cortex#1896).
+ * `src/vendor/surface-sdk.ts`). cortex#1795 (S10) closed the SAME coupling
+ * for `slack` (now `metafactory-cortex-adapter-slack`). Discord/Mattermost
+ * still import `common/policy` directly — their dependency-inversion pass
+ * is a later slice (cortex#1896).
  */
 export interface AdapterPolicyPort {
 	/** Resolve `msg` to an `AccessDecision` via the host's bound policy engine
@@ -962,6 +977,57 @@ export interface AdapterPolicyPort {
 	/** Whether `(platform, platformId)` maps to a principal holding the
 	 *  `operator` capability (mirrors `common/policy`'s `isOperatorPrincipal`). */
 	isOperatorPrincipal(platform: string, platformId: string): boolean;
+}
+/**
+ * cortex#1795 (S10) — the narrow, TYPE-ONLY behavioral contract an adapter
+ * uses to emit `system.adapter.recovered` / `system.adapter.disconnected`
+ * envelopes, in place of importing cortex's `MyelinRuntime` (`bus/myelin/runtime`)
+ * and `createSystemAdapterRecoveredEvent`/`createSystemAdapterDisconnectedEvent`
+ * (`bus/system-events`) directly. Those are genuine cortex-internal runtime
+ * machinery (envelope construction + bus publish semantics) — out of scope
+ * for the SDK barrel for the same reason `MyelinRuntime`/`SystemEventSource`
+ * are (see the module doc above) — so rather than re-export them, the SDK
+ * exposes only the SHAPE an adapter needs: "tell the host I recovered/
+ * disconnected"; the host decides whether/how that becomes a published
+ * envelope.
+ *
+ * The host binds both closures over its real `MyelinRuntime` + bound
+ * `SystemEventSource` at adapter-construction time
+ * (`adapters/plugin-support.ts`'s `buildAdapterSystemEventPort`, cortex-side)
+ * and hands the bound port through `AdapterPlugin.createAdapter`'s `args` —
+ * the adapter body never imports `bus/myelin/runtime` or `bus/system-events`
+ * itself, so it stays compilable against `surface-sdk` alone whether it
+ * lives in-tree or, after extraction, in its own package. Both methods are
+ * safe no-ops when the host has no live runtime/source wired (mirrors the
+ * pre-extraction `canPublishSystemEvent()` gate exactly, including its
+ * "runtime configured but source missing" one-time warning).
+ *
+ * First consumer: `SlackAdapterInfra.systemEvents`, `src/adapters/slack/index.ts`
+ * (cortex#1795 S10). Discord/Mattermost still call `bus/system-events`
+ * directly — their dependency-inversion pass is a later slice (cortex#1896).
+ */
+export interface AdapterSystemEventPort {
+	/** Emit `system.adapter.recovered` for `adapterId`/`platform`. No-op if
+	 *  the host has no runtime/source wired (mirrors `resolveAccess`'s
+	 *  deny-by-default posture: absent wiring never throws). */
+	recovered(opts: {
+		adapterId: string;
+		platform: string;
+		disconnectedSince: Date;
+		degradedForMs: number;
+		reconnectAttempts?: number;
+	}): void;
+	/** Emit `system.adapter.disconnected` for `adapterId`/`platform`. No-op if
+	 *  the host has no runtime/source wired. */
+	disconnected(opts: {
+		adapterId: string;
+		platform: string;
+		disconnectedSince: Date;
+		wasClean: boolean;
+		shardId?: number;
+		closeCode?: number;
+		closeReason?: string;
+	}): void;
 }
 
 export {

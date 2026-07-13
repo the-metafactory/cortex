@@ -5,11 +5,23 @@
  * the adapter. Lock in the field-level invariants so a schema regression
  * surfaces immediately at config-load rather than as a runtime stack trace
  * inside the adapter.
+ *
+ * cortex#1795 (S10) — relocated from `src/adapters/slack/__tests__/
+ * schema.test.ts`. This file tests cortex-core's OWN `cortex-config.ts` /
+ * `config.ts` schemas (the config-loader-facing "fold `surfaces.slack[]`/
+ * `agents[].presence.slack` into a validated presence object" schema — see
+ * `src/adapters/slack/schema.ts`'s module doc for why that schema stays in
+ * cortex-config.ts rather than moving with the adapter) — NOT the
+ * plugin-owned duplicate in `src/adapters/slack/schema.ts`. It never
+ * exercised `SlackAdapter`/`slackAdapterPlugin` and has no bundle
+ * counterpart; it moved here (out of the adapter's test directory) so the
+ * MOVE half of #1795 (deleting `src/adapters/slack/`) doesn't silently
+ * drop cortex-core schema coverage.
  */
 
 import { test, expect, describe } from "bun:test";
-import { SlackPresenceSchema } from "../../../common/types/cortex-config";
-import { SlackInstanceSchema } from "../../../common/types/config";
+import { SlackPresenceSchema } from "../cortex-config";
+import { SlackInstanceSchema } from "../config";
 
 const VALID_PRESENCE = {
   botToken: "xoxb-TEST-TOKEN-12345",
