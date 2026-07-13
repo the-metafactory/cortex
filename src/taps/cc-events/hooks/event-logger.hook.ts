@@ -9,7 +9,7 @@
 import { appendFileSync, mkdirSync, chmodSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { createRawEvent, type RawEvent } from "./lib/event-types";
-import { eventsDir } from "../../../common/events-path";
+import { eventsDir, publishedEventsDir } from "../../../common/events-path";
 import { mapHookToEventType, EVENT_TYPES } from "./lib/event-taxonomy";
 import { resolvePrincipalEnv } from "./lib/principal-env";
 import { resolveSurfaceEnv } from "./lib/surface-env";
@@ -130,8 +130,9 @@ function ensureDir(dir: string, mode: number): void {
 
 ensureDir(RAW_DIR, 0o700);
 // TC-4b (cortex#637): published/ JSONL holds prompt/command/tool previews —
-// owner-only (0o700) to match raw/, not world-readable.
-ensureDir(join(EVENTS_DIR, "published"), 0o700);
+// owner-only (0o700) to match raw/, not world-readable. XDG wave-5 (#1902):
+// published is app-private DATA under the metafactory data root (raw stays here).
+ensureDir(publishedEventsDir(), 0o700);
 
 // =============================================================================
 // H-004: HTTP POST ingestion (primary), JSONL fallback (secondary)

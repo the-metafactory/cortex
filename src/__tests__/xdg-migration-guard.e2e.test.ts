@@ -77,6 +77,7 @@ const MANAGED = [
   "HOME",
   "CORTEX_CONFIG_DIR",
   "CORTEX_EVENTS_DIR",
+  "CORTEX_DATA_DIR",
   "CORTEX_STATE_DIR",
   "CORTEX_XDG_STRICT",
 ] as const;
@@ -275,34 +276,50 @@ describe("(i) exactly one live process per stack PID", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Invariant (ii) — byte-identical events dir across hook / relay / MC.
+// Invariant (ii) — RAW events dir byte-identical across hook / relay / MC;
+// PUBLISHED split off onto the data seam (XDG wave-5 #1902).
 // ═══════════════════════════════════════════════════════════════════════════
-describe("(ii) hook-writer / relay-reader / MC-cursor resolve to a byte-identical events dir", () => {
-  test("override wins over home ⇒ all three sites resolve the SAME dir regardless of home spelling", () => {
+describe("(ii) hook-writer / relay-reader / MC resolve a byte-identical RAW dir; published is on the data seam", () => {
+  test("CORTEX_EVENTS_DIR override ⇒ all RAW sites resolve the SAME dir regardless of home spelling", () => {
     const ev = scratch("events");
     process.env.CORTEX_EVENTS_DIR = ev;
+    delete process.env.CORTEX_DATA_DIR;
 
-    // The three consumers derive home DIFFERENTLY: the hook calls eventsDir()
-    // (no arg → process.env.HOME), MC calls with os.homedir(), the relay with
-    // its own. With the override set, home is IGNORED — so all spellings agree.
+    // The consumers derive home DIFFERENTLY: the hook calls rawEventsDir()
+    // (no arg → process.env.HOME), MC calls with os.homedir(). With the override
+    // set, home is IGNORED — so all RAW spellings agree.
     const hookRaw = rawEventsDir(); // event-logger.hook.ts spelling
     const mcRaw = rawEventsDir("/some/other/home"); // mc/config.ts spelling
-    const relayPub = publishedEventsDir("/yet/another/home"); // relay.ts spelling
-
     expect(hookRaw).toBe(mcRaw);
     expect(hookRaw).toBe(join(ev, "raw"));
-    expect(relayPub).toBe(join(ev, "published"));
-    // hook (raw) and relay (published) share ONE root — byte-identical.
-    expect(dirname(hookRaw)).toBe(dirname(relayPub));
     expect(eventsDir("/ignored")).toBe(ev);
+
+    // XDG wave-5: published is DATA — CORTEX_EVENTS_DIR does NOT move it, and it
+    // NO LONGER shares raw's root (the intended split).
+    const pub = publishedEventsDir("/yet/another/home");
+    expect(pub.startsWith(ev)).toBe(false);
+    expect(dirname(hookRaw)).not.toBe(dirname(pub));
   });
 
-  test("unset ⇒ still byte-identical across sites (default ~/.claude/events)", () => {
+  test("CORTEX_DATA_DIR moves published (data seam) but leaves RAW untouched", () => {
     delete process.env.CORTEX_EVENTS_DIR;
+    const data = scratch("data");
+    process.env.CORTEX_DATA_DIR = data;
     const home = "/fake/home";
     expect(rawEventsDir(home)).toBe(join(home, ".claude", "events", "raw"));
-    expect(publishedEventsDir(home)).toBe(join(home, ".claude", "events", "published"));
-    expect(dirname(rawEventsDir(home))).toBe(dirname(publishedEventsDir(home)));
+    expect(publishedEventsDir(home)).toBe(join(data, "events", "published"));
+  });
+
+  test("both unset ⇒ raw under ~/.claude/events, published under the metafactory data root", () => {
+    delete process.env.CORTEX_EVENTS_DIR;
+    delete process.env.CORTEX_DATA_DIR;
+    const home = "/fake/home";
+    expect(rawEventsDir(home)).toBe(join(home, ".claude", "events", "raw"));
+    expect(publishedEventsDir(home)).toBe(
+      join(home, ".local", "share", "metafactory", "cortex", "events", "published"),
+    );
+    // The split: raw and published no longer share a parent.
+    expect(dirname(rawEventsDir(home))).not.toBe(dirname(publishedEventsDir(home)));
   });
 });
 
@@ -442,10 +459,12 @@ describe("(v) fresh-env strict discrimination — the fresh-install failure-clas
     const home = scratch("fresh-home"); // pristine — no ~/.config/{cortex,grove}
     const cfg = scratch("cfg");
     const ev = scratch("events");
+    const data = scratch("data");
     const st = scratch("state");
     process.env.HOME = home;
     process.env.CORTEX_CONFIG_DIR = cfg;
     process.env.CORTEX_EVENTS_DIR = ev;
+    process.env.CORTEX_DATA_DIR = data; // XDG wave-5 data seam — hermetic + strict
     process.env.CORTEX_STATE_DIR = st;
     process.env.CORTEX_XDG_STRICT = "1";
 
@@ -457,10 +476,12 @@ describe("(v) fresh-env strict discrimination — the fresh-install failure-clas
       expect(r.source).not.toBe("grove"); // never the legacy fallback
       expect(r.path.startsWith(cfg)).toBe(true);
     }
-    // Events round-trip through the seam.
+    // RAW events round-trip through the events seam (published now on the data seam).
     mkdirSync(rawEventsDir(home), { recursive: true });
     writeFileSync(join(rawEventsDir(home), "e.jsonl"), "{}\n");
-    expect(existsSync(publishedEventsDir(home).replace(/published$/, "raw"))).toBe(true);
+    expect(existsSync(rawEventsDir(home))).toBe(true);
+    // Published resolves under the (strict, scratch) data root — no legacy touch.
+    expect(publishedEventsDir(home).startsWith(data)).toBe(true);
     // Pidfile identity under the scratch state dir.
     expect(pidFileForIn(st, join(cfg, "bot.yaml")).startsWith(st)).toBe(true);
 

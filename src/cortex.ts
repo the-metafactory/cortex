@@ -40,6 +40,8 @@ import {
   type AgentsChangeEvent,
 } from "./common/config/watcher";
 import { type AgentConfig } from "./common/types/config";
+import { migrateStackDbOnTouch } from "./common/migrate-data-dir";
+import { migratePublishedEventsDirValue } from "./common/config/migrate-published-events-value";
 import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
 import { AgentRegistry } from "./common/agents/registry";
@@ -4466,10 +4468,13 @@ export async function startCortex(
   let discoveredSiblings: readonly SiblingStackDescriptor[] = [];
   let siblingResolveOpts: SiblingDbResolveOptions | null = null;
   if (config.mc.enabled && !options.disableDashboard) {
-    // Per-slug default keeps each stack's MC db isolated; the cursor lands beside it.
-    const defaultDbPath = join(
-      homedir(), ".local", "share", "cortex", "mc", derivedStack.stack, "mission-control.db",
-    );
+    // Per-slug default keeps each stack's MC db isolated. XDG wave-5 (#1902):
+    // the canonical per-stack db now lives under the metafactory data root
+    // (`~/.local/share/metafactory/cortex/mc/<stack>/…`). `migrateStackDbOnTouch`
+    // resolves the canonical path AND carries a legacy `~/.local/share/cortex/mc`
+    // db to it (copy-keep-source, WAL-checkpointed) so MC history is continuous
+    // across the move; a fresh stack simply lands at the canonical write target.
+    const defaultDbPath = migrateStackDbOnTouch(derivedStack.stack, homedir());
     const dbPath = config.mc.dbPath !== "" ? expandTilde(config.mc.dbPath) : defaultDbPath;
 
     // #1008 — discover the principal's LOCAL sibling stacks (reusing #989's
@@ -6462,6 +6467,23 @@ if (import.meta.main) {
       // exits the process non-zero instead of being swallowed as a "non-fatal"
       // unhandled rejection. The daemon must not survive a failed security gate.
       const handle = await bootOrDie(async () => {
+        // XDG wave-5 (#1902, GAP-3) — the published-events pipeline WRITER
+        // (`taps/cc-events/relay.ts` → `publishedEventsDir()`) always writes the
+        // canonical metafactory data root; it does NOT read `paths.publishedEventsDir`.
+        // The persisted value is pinned into every generated `cortex.yaml`, so an
+        // upgraded box can still carry the LEGACY default (`~/.claude/events/published`)
+        // in its file. Rewrite that pinned legacy default to the canonical root
+        // (targeted one-line edit, comments/quotes preserved; a CUSTOM value is
+        // left untouched) BEFORE the config is loaded, so the in-memory value +
+        // the persisted file agree with the always-canonical writer. Idempotent
+        // and non-destructive; a no-op on a fresh/canonical config.
+        const migratedCfgPath = expandTilde(options.config);
+        const pubMig = migratePublishedEventsDirValue(migratedCfgPath);
+        if (pubMig.changed) {
+          console.log(
+            `cortex: migrated pinned paths.publishedEventsDir "${pubMig.from}" → "${pubMig.to}" in ${migratedCfgPath} (XDG #1902)`,
+          );
+        }
         // FS-7 / D-3 (cortex#1839) — resolve the boot config with a last-known-good
         // fallback. A healthy load refreshes the snapshot + clears any degraded
         // marker; a bad load either fails hard (`--strict` / no snapshot) or boots

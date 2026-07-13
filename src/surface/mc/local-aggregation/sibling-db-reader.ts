@@ -49,6 +49,7 @@ import { join } from "path";
 import { parse as parseYaml } from "yaml";
 
 import type { SiblingStackDescriptor } from "./sibling-discovery";
+import { resolveStackDbPath } from "../../../common/data-path";
 import {
   listWorkingAgents,
   type WorkingAgentTile,
@@ -78,11 +79,6 @@ export interface LocalAggregationContext {
 /** Lazy accessor for the local-aggregation context; `null` ⇒ DB-read OFF. */
 export type LocalAggregationProvider = () => LocalAggregationContext | null;
 
-/** The conventional per-slug MC db root: `~/.local/share/cortex/mc`. */
-function defaultHomeShareDir(home: string): string {
-  return join(home, ".local", "share", "cortex", "mc");
-}
-
 /** Expand a leading `~` to the given home dir (matches the loader's expandTilde). */
 function expandTildeWith(p: string, home: string): string {
   if (p === "~") return home;
@@ -95,9 +91,13 @@ export interface SiblingDbResolveOptions {
   /** Config root scanned for sibling stack dirs (`<root>/<slug>/stacks/*.yaml`). */
   configRoot: string;
   /**
-   * Root for the per-slug default db path. Defaults to
-   * `~/.local/share/cortex/mc`. Injected by tests; production passes the same
-   * root `cortex.ts` derives the serving stack's `defaultDbPath` from.
+   * Explicit per-slug default db root. When set, a sibling's default db resolves
+   * directly under it (`<homeShareDir>/<stack>/mission-control.db`), byte-identical
+   * to the pre-move behavior — used by tests that pin the root. When UNSET
+   * (production), the default resolves via {@link resolveStackDbPath}:
+   * existence-gated across the canonical metafactory data root and the legacy
+   * `~/.local/share/cortex/mc` tree, so peers are found whether or not they have
+   * migrated (XDG wave-5, #1902).
    */
   homeShareDir?: string;
   /** Home dir for tilde expansion. Defaults to `os.homedir()`. */
@@ -112,22 +112,32 @@ export interface SiblingDbResolveOptions {
 /**
  * Resolve a sibling stack's `mission-control.db` PATH.
  *
- * Mirrors `cortex.ts`'s own resolution exactly: the stack's configured
- * `mc.dbPath` (read from its `stacks/*.yaml`, tilde-expanded) when set, else the
- * per-slug default `{homeShareDir}/{stack}/mission-control.db`.
+ * Mirrors `cortex.ts`'s own resolution exactly (so self-exclusion stays byte-
+ * identical): the stack's configured `mc.dbPath` (read from its `stacks/*.yaml`,
+ * tilde-expanded) when set; else, when `homeShareDir` is pinned, the per-slug
+ * default under it; else the XDG wave-5 (#1902) existence-gated default across
+ * the canonical metafactory data root and the legacy `~/.local/share/cortex/mc`
+ * tree — so a migrated peer is read from the new tree and an un-migrated peer
+ * from legacy, preserving sibling aggregation across a mixed fleet AFTER the
+ * move.
+ *
+ * PURE resolution — it NEVER migrates a peer's data (reading peers is read-only;
+ * each stack migrates its OWN db at boot, `cortex.ts` → `migrateStackDbOnTouch`).
  */
 export function resolveSiblingDbPath(
   sibling: SiblingStackDescriptor,
   opts: SiblingDbResolveOptions,
 ): string {
   const home = opts.home ?? homedir();
-  const shareDir = opts.homeShareDir ?? defaultHomeShareDir(home);
 
   const configured = readConfiguredDbPath(opts.configRoot, sibling.stack);
   if (configured !== null && configured !== "") {
     return expandTildeWith(configured, home);
   }
-  return join(shareDir, sibling.stack, "mission-control.db");
+  if (opts.homeShareDir !== undefined) {
+    return join(opts.homeShareDir, sibling.stack, "mission-control.db");
+  }
+  return resolveStackDbPath(sibling.stack, home);
 }
 
 /**

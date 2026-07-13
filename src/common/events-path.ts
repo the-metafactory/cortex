@@ -16,14 +16,24 @@
  *   - SET    ⇒ that directory VERBATIM, so a guard (#1870) can point the whole
  *     hook→relay→MC pipeline at a scratch dir with zero real-home access.
  *
- * SCOPE — this is JUST the env read. It does NOT honor `$XDG_DATA_HOME` /
- * `$XDG_STATE_HOME` or move the buffer (that classification is #1867 P3 /
- * #1902). No `GROVE_*` dual-read: `CORTEX_EVENTS_DIR` is a newly-introduced
- * var, not a name being migrated (cortex#774's dual-read is only for renames).
+ * ─────────────────────────────────────────────────────────────────────────
+ * XDG wave-5 (cortex#1902, EPIC cortex#1867 §P3b) — PUBLISHED half moves.
+ *
+ * The buffer is now SPLIT by data class (matching the merged XDG standard):
+ *   - RAW (`eventsDir()` / `rawEventsDir()`) is the hook-substrate boundary and
+ *     STAYS at `~/.claude/events/{,raw}` (or `$CORTEX_EVENTS_DIR`) — the #1908
+ *     byte-identical contract here is UNCHANGED.
+ *   - PUBLISHED (`publishedEventsDir()`) is app-private DATA and MOVES under the
+ *     metafactory data root (`~/.local/share/metafactory/cortex/events/published`,
+ *     or `$CORTEX_DATA_DIR`) via `data-path.ts`. The relay writer + retention +
+ *     the Discord consumer route through this; the in-flight buffer is carried
+ *     forward by `migratePublishedBufferOnTouch` (copy-keep-source). So raw and
+ *     published NO LONGER share a root — that is the intended split.
  */
 
 import { join } from "path";
 
+import { canonicalPublishedEventsDir } from "./data-path";
 import { readDirEnv } from "./xdg";
 
 function homeDir(home?: string): string {
@@ -55,7 +65,14 @@ export function rawEventsDir(home?: string): string {
   return join(eventsDir(home), "raw");
 }
 
-/** The published event buffer: `<eventsDir>/published`. */
+/**
+ * The published event buffer. XDG wave-5 (#1902): this is app-private DATA and
+ * now resolves under the metafactory data root
+ * (`~/.local/share/metafactory/cortex/events/published`, or `$CORTEX_DATA_DIR`)
+ * — NOT `<eventsDir>/published`. Pure (like `rawEventsDir`); the existence-gated
+ * fallback + in-flight buffer carry live in `data-path.ts` / `migrate-data-dir.ts`
+ * and run at the relay/consumer boot. Raw stays at `~/.claude/events/raw`.
+ */
 export function publishedEventsDir(home?: string): string {
-  return join(eventsDir(home), "published");
+  return canonicalPublishedEventsDir(home);
 }

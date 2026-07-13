@@ -9,10 +9,12 @@
  * which is what this helper enables.
  *
  * The cortex-relay (cc-events tap) reads CC hooks from
- * `~/.claude/events/raw/`, applies the relay policy, writes published
- * events to `~/.claude/events/published/`, and ALSO — when a
- * `MyelinRuntime` is attached — wraps each published event in a Myelin
- * envelope and publishes it to `local.{principal}.{type}`.
+ * `~/.claude/events/raw/` (the hook-substrate boundary — stays put), applies
+ * the relay policy, writes published events to the app-private DATA buffer
+ * (`~/.local/share/metafactory/cortex/events/published/` since XDG wave-5
+ * #1902; was `~/.claude/events/published/`), and ALSO — when a `MyelinRuntime`
+ * is attached — wraps each published event in a Myelin envelope and publishes
+ * it to `local.{principal}.{type}`.
  *
  * **Why the relay (and not the hook)?** Hooks run as standalone Bun
  * processes spawned by Claude Code (`~/.claude/hooks/EventLogger.hook.ts`).
