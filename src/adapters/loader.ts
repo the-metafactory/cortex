@@ -1204,7 +1204,7 @@ export type ReimportRendererResult =
  * Renderer-only (adapters are out of scope for `cortex plugin reload` in
  * this slice — see `docs/plugin-sdk.md` §Runtime lifecycle for the
  * rationale: adapter re-construction needs binding-seed + demux-key inputs
- * `GatewayAdapterFactory` owns today, tracked separately at cortex#1896).
+ * the adapter construction paths build today, tracked separately).
  */
 export async function reimportRendererPlugin(
   bundle: DiscoveredBundle,

@@ -48,12 +48,8 @@ import {
   isGatewayPublishEnabled,
   maybeCreateSurfaceGateway,
 } from "./gateway-bootstrap";
-import {
-  buildGatewayAdapters,
-  defaultGatewayAdapterFactory,
-  type GatewayAdapterFactory,
-} from "./gateway-adapters";
-import { registryFromFactory, type SurfacePluginRegistry } from "../adapters/registry";
+import { buildGatewayAdapters } from "./gateway-adapters";
+import type { SurfacePluginRegistry } from "../adapters/registry";
 import { BusInboundSink } from "./bus-inbound-sink";
 import { defaultUnroutableWarn } from "./surface-gateway";
 import { makeEmittingUnroutable } from "./gateway-unroutable-emit";
@@ -96,21 +92,14 @@ export interface StartGatewayOpts {
    */
   policyEngine: PolicyEngine | undefined;
   /**
-   * Adapter-construction seam. Production omits this and gets
-   * {@link defaultGatewayAdapterFactory}; tests inject a recording fake that
-   * returns construct-only stubs (no platform connection). Superseded by
-   * {@link registry} when both are supplied.
-   */
-  factory?: GatewayAdapterFactory;
-  /**
    * cortex#1788 (S3, ADR-0024 D5) — the `(kind, id)`-keyed registry
    * (`src/adapters/registry.ts`). cortex.ts composes ONE registry and
-   * threads it here and to the per-stack boot path
-   * (`wireSurfaceAdapters`). Takes priority over {@link factory} when both
-   * are supplied; existing `factory`-based test doubles keep working
-   * unchanged via {@link registryFromFactory}.
+   * threads it here and to the per-stack boot path (`wireSurfaceAdapters`).
+   * REQUIRED (cortex#1896) — there is no legacy factory fallback; the caller
+   * always supplies the composed registry (tests register recording
+   * `AdapterPlugin` stubs on a registry they build).
    */
-  registry?: SurfacePluginRegistry;
+  registry: SurfacePluginRegistry;
   /** Optional unroutable-message hook forwarded to the gateway. */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
   /**
@@ -183,12 +172,12 @@ export async function startGatewayIfEnabled(
     return undefined;
   }
 
-  // cortex#1951 — resolve ONCE, thread the SAME registry to both
-  // `maybeCreateSurfaceGateway` calls below (inbound demux) AND
-  // `buildGatewayAdapters` (construction) — one registry, no drift between
-  // how a binding's demux key and its live adapter are derived.
-  const registry =
-    opts.registry ?? registryFromFactory(opts.factory ?? defaultGatewayAdapterFactory);
+  // cortex#1951 — thread the SAME registry to both `maybeCreateSurfaceGateway`
+  // calls below (inbound demux) AND `buildGatewayAdapters` (construction) —
+  // one registry, no drift between how a binding's demux key and its live
+  // adapter are derived. cortex#1896 — `registry` is REQUIRED; no legacy
+  // factory fallback.
+  const registry = opts.registry;
 
   // ── Path 2: flag on but no bindings → degrade gracefully. ─────────────────
   // Short-circuit BEFORE buildGatewayAdapters so the factory is never called

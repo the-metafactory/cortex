@@ -17,8 +17,6 @@ import { z } from "zod/v4";
 import {
   SurfacePluginRegistry,
   createDefaultSurfacePluginRegistry,
-  registryFromFactory,
-  registryToLegacyFactory,
   validateSurfacesAgainstRegistry,
   resolveAdapterPluginOrThrow,
   resolveRendererPluginOrThrow,
@@ -184,105 +182,6 @@ describe("in-tree AdapterPlugin descriptors — shape", () => {
   // (bundle) plugin, same reasoning as mattermost above.
 });
 
-describe("registryFromFactory / registryToLegacyFactory — round trip", () => {
-  test("registryFromFactory auto-registers NO adapter (discord/slack/mattermost all self-register now)", () => {
-    // cortex#1795/#1796/#1797 (S10/S11/S12 MOVE) — `registryFromFactory` no
-    // longer auto-registers "discord", "slack", OR "mattermost" (no in-tree
-    // plugin descriptor left to spread for any of them — see that function's
-    // doc; discord was the LAST one). The factory fake still DECLARES
-    // `.discord`/`.slack`/`.mattermost` methods (the interface shape is
-    // unchanged, since `wireSurfaceAdapters` still needs them via
-    // `registryToLegacyFactory`), they're just not wired into the BUILT
-    // registry by this function any more — mirrored by the "test needs a
-    // {discord,slack,mattermost}-shaped adapter" manual-registration cases
-    // right below.
-    const stubAdapter = { platform: "x", instanceId: "y" } as never;
-    const registry = registryFromFactory({
-      discord: () => stubAdapter,
-      slack: () => stubAdapter,
-      mattermost: () => stubAdapter,
-    });
-    expect(registry.getAdapter("discord")).toBeUndefined();
-    expect(registry.getAdapter("slack")).toBeUndefined();
-    expect(registry.getAdapter("mattermost")).toBeUndefined();
-  });
-
-  test("a discord-shaped fourth entry can self-register a stub AdapterPlugin, same workaround as 'web'", () => {
-    // cortex#1797 (S12 MOVE) — same documented pattern as the slack/
-    // mattermost cases below, now covering discord too.
-    const calls: string[] = [];
-    const stubAdapter = { platform: "x", instanceId: "y" } as never;
-    const registry = registryFromFactory({
-      discord: () => stubAdapter,
-      slack: () => stubAdapter,
-      mattermost: () => stubAdapter,
-    });
-    registry.registerAdapter(makeDiscordStubPlugin({
-      createAdapter: () => { calls.push("discord"); return stubAdapter; },
-    }));
-    expect(registry.getAdapter("discord")).toBeDefined();
-    registry.getAdapter("discord")!.createAdapter({});
-    expect(calls).toEqual(["discord"]);
-  });
-
-  test("a slack-shaped fourth entry can self-register a stub AdapterPlugin, same workaround as 'web'", () => {
-    // Mirrors this file's `web` precedent (cortex#1794 S9 MOVE — see the
-    // "in-tree AdapterPlugin descriptors — shape" describe block above): a
-    // test that needs a "slack" registry entry registers its own stub
-    // directly via `registry.registerAdapter(...)` after calling
-    // `registryFromFactory`, rather than relying on it to auto-populate one.
-    const calls: string[] = [];
-    const stubAdapter = { platform: "x", instanceId: "y" } as never;
-    const registry = registryFromFactory({
-      discord: () => stubAdapter,
-      slack: () => stubAdapter,
-      mattermost: () => stubAdapter,
-    });
-    registry.registerAdapter({
-      ...makeStubAdapterPlugin("slack"),
-      createAdapter: () => { calls.push("slack"); return stubAdapter; },
-    });
-    expect(registry.getAdapter("slack")).toBeDefined();
-    registry.getAdapter("slack")!.createAdapter({});
-    expect(calls).toEqual(["slack"]);
-  });
-
-  test("a test needing a mattermost-shaped adapter registers its own stub AdapterPlugin after registryFromFactory (documented pattern)", () => {
-    const calls: string[] = [];
-    const stubAdapter = { platform: "mattermost", instanceId: "y" } as never;
-    const factory = {
-      discord: () => stubAdapter,
-      slack: () => stubAdapter,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mattermost: (_args: any) => { calls.push("mattermost"); return stubAdapter; },
-    };
-    const registry = registryFromFactory(factory);
-    registry.registerAdapter({
-      ...makeStubAdapterPlugin("mattermost"),
-      createAdapter: (args) => factory.mattermost(args),
-    });
-    registry.getAdapter("mattermost")!.createAdapter({});
-    expect(calls).toEqual(["mattermost"]);
-  });
-
-  test("registryToLegacyFactory routes each legacy method to the matching registry entry", () => {
-    const registry = new SurfacePluginRegistry();
-    const calls: string[] = [];
-    const stubAdapter = { platform: "x", instanceId: "y" } as never;
-    for (const id of ["discord", "slack", "mattermost"]) {
-      registry.registerAdapter({
-        ...makeStubAdapterPlugin(id),
-        createAdapter: () => { calls.push(id); return stubAdapter; },
-      });
-    }
-    const factory = registryToLegacyFactory(registry);
-    factory.discord({});
-    factory.slack({});
-    factory.mattermost({});
-    expect(calls).toEqual(["discord", "slack", "mattermost"]);
-  });
-});
-
 // =============================================================================
 // cortex#1789 (S4, ADR-0024 D5) — registry-pass validation
 // =============================================================================
@@ -321,8 +220,8 @@ describe("in-tree AdapterPlugin descriptors — foldsIntoPresence (ADR-0024 D5 s
 describe("resolveAdapterPluginOrThrow", () => {
   test("resolves an installed platform", () => {
     // cortex#1797 (S12 MOVE) — the default registry has ZERO in-tree
-    // adapters now; register a discord stub first (same workaround the
-    // registryFromFactory tests above use).
+    // adapters now; register a discord stub first (the documented
+    // stub-registration workaround used throughout this suite).
     const registry = createDefaultSurfacePluginRegistry();
     const stub = makeDiscordStubPlugin();
     registry.registerAdapter(stub);

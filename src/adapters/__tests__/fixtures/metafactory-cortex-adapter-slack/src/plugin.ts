@@ -22,7 +22,7 @@
  * `web`).
  *
  * `createAdapter`'s body is still, structurally,
- * `defaultGatewayAdapterFactory.slack`'s pre-registry body (`src/gateway
+ * `the pre-registry factory's slack`'s pre-registry body (`src/gateway
  * /gateway-adapters.ts`) — this slice inverted WHERE its dependencies come
  * from, not WHAT it constructs; behavior is unchanged. Slack has no grouping
  * (one adapter per binding, demuxed by workspace id) — `groupBindings` is
@@ -41,7 +41,7 @@ import type {
 
 /**
  * Construction args `createAdapter` accepts — the same shape
- * `defaultGatewayAdapterFactory.slack` accepted pre-registry
+ * `the pre-registry factory's slack` accepted pre-registry
  * (`SlackFactoryArgs`, `src/gateway/gateway-adapters.ts`), minus the
  * `Agent`/`SystemEventSource`/`MyelinRuntime`/policy-triad cortex-internal
  * types (cortex#1795 S10 — see module doc). `source` is used only by

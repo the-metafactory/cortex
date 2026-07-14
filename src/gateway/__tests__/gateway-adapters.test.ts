@@ -20,10 +20,8 @@ import { createHash } from "node:crypto";
 import {
   buildGatewayAdapters,
   type GatewayAdapterDeps,
-  type GatewayAdapterFactory,
 } from "../gateway-adapters";
 import {
-  registryFromFactory,
   SurfacePluginRegistry,
   type AdapterPlugin,
 } from "../../adapters/registry";
@@ -32,24 +30,50 @@ import type { Surfaces } from "../../common/types/surfaces";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 
+/**
+ * cortex#1896 — the recording-fake shape this suite builds, replacing the
+ * retired legacy adapter-factory type. Each closure reads only the construct
+ * args its assertions need; the stub `AdapterPlugin`s below delegate their
+ * `createAdapter` to these closures, so the registry is built DIRECTLY.
+ */
+interface RecordingFactory {
+  discord(args: {
+    instanceId: string;
+    source: SystemEventSource | undefined;
+    binding: Record<string, unknown>;
+    runtime: MyelinRuntime | undefined;
+    allowedGuildIds: ReadonlySet<string>;
+    presenceByGuildId: ReadonlyMap<string, { agentChannelId: string; logChannelId: string }>;
+  }): PlatformAdapter;
+  slack(args: {
+    instanceId: string;
+    source: SystemEventSource | undefined;
+    binding: Record<string, unknown>;
+    runtime: MyelinRuntime | undefined;
+  }): PlatformAdapter;
+  mattermost(args: {
+    instanceId: string;
+    source: SystemEventSource | undefined;
+    binding: Record<string, unknown>;
+    runtime: MyelinRuntime | undefined;
+  }): PlatformAdapter;
+}
+
 // =============================================================================
 // cortex#1796 (S11 MOVE) — mattermost test-registration helper
 // =============================================================================
 //
-// `registryFromFactory` no longer auto-registers "mattermost" (no in-tree
-// `mattermostAdapterPlugin` descriptor left to spread — see that function's
-// doc in `registry.ts`). This suite still needs a real "mattermost" entry
-// in the registry it builds (its `GatewayAdapterFactory` fakes still carry
-// `.mattermost`, unchanged interface), so it registers its own stub
-// `AdapterPlugin` after `registryFromFactory` — exactly the documented
-// pattern ("A test that needs a mattermost-shaped … adapter registers its
-// own stub AdapterPlugin directly via registry.registerAdapter(...)").
+// The mattermost adapter is out-of-tree (no in-tree `mattermostAdapterPlugin`
+// descriptor). This suite still needs a real "mattermost" entry in the
+// registry it builds (its recording fakes carry a `.mattermost` closure), so
+// it registers its own stub `AdapterPlugin` directly via
+// `registry.registerAdapter(...)`.
 // `demuxKey` reads `apiUrl` (byte-identical to the real, now out-of-tree,
 // plugin's demuxKey) so the "mattermost source instance is
 // mattermost:{apiUrl}" assertion below still holds; `secretFields:
 // ["apiToken"]` preserves the #1209 unresolved-placeholder fail-fast
 // coverage for mattermost too.
-function registerMattermostTestPlugin(registry: SurfacePluginRegistry, factory: GatewayAdapterFactory): void {
+function registerMattermostTestPlugin(registry: SurfacePluginRegistry, factory: RecordingFactory): void {
   registry.registerAdapter({
     kind: "adapter",
     id: "mattermost",
@@ -122,11 +146,11 @@ function makeFakeAdapter(
 }
 
 function makeRecordingFactory(): {
-  factory: GatewayAdapterFactory;
+  factory: RecordingFactory;
   calls: FactoryCall[];
 } {
   const calls: FactoryCall[] = [];
-  const factory: GatewayAdapterFactory = {
+  const factory: RecordingFactory = {
     discord: (args) => {
       const presenceByGuildId = Object.fromEntries(
         [...args.presenceByGuildId].map(([guildId, presence]) => [
@@ -184,19 +208,17 @@ const RUNTIME_STUB = {
 } as unknown as MyelinRuntime;
 
 /**
- * cortex#1795 (S10 MOVE) — `registryFromFactory` no longer auto-registers a
- * "slack" entry (no in-tree `slackAdapterPlugin` to borrow
- * `demuxKey`/`buildGatewayConstructArgs` from any more — see that
- * function's doc, `adapters/registry.ts`). This file's tests still exercise
- * slack construction through `factory.slack(...)`, so `makeDeps` registers
- * its own minimal stub `AdapterPlugin` — same documented workaround
- * `registry.test.ts` uses — with a `demuxKey`/`buildGatewayConstructArgs`
- * pair that reproduces the bundle's real behaviour closely enough for THESE
- * tests (workspaceId-keyed demux; `instanceId`/`source`/`binding`/`runtime`
- * forwarded straight through to the recording factory, which is all
+ * The slack adapter is out-of-tree (no in-tree `slackAdapterPlugin` to borrow
+ * `demuxKey`/`buildGatewayConstructArgs` from any more). This file's tests
+ * still exercise slack construction through the recording fake's `slack`
+ * closure, so `makeDeps` registers its own minimal stub `AdapterPlugin`
+ * directly — with a `demuxKey`/`buildGatewayConstructArgs` pair that
+ * reproduces the bundle's real behaviour closely enough for THESE tests
+ * (workspaceId-keyed demux; `instanceId`/`source`/`binding`/`runtime`
+ * forwarded straight through to the recording closure, which is all
  * `makeRecordingFactory`'s `slack` closure reads).
  */
-function stubSlackPlugin(factory: GatewayAdapterFactory): AdapterPlugin {
+function stubSlackPlugin(factory: RecordingFactory): AdapterPlugin {
   return {
     kind: "adapter",
     id: "slack",
@@ -216,13 +238,11 @@ function stubSlackPlugin(factory: GatewayAdapterFactory): AdapterPlugin {
 }
 
 /**
- * cortex#1797 (S12 MOVE) — `registryFromFactory` no longer auto-registers a
- * "discord" entry (no in-tree `discordAdapterPlugin` descriptor left to
- * spread — the FOURTH and FINAL in-tree adapter extracted; see that
- * function's doc in `registry.ts`). This suite still needs a real "discord"
- * entry — its `GatewayAdapterFactory` fakes still carry `.discord`,
- * unchanged interface — so `makeDeps` registers its own stub `AdapterPlugin`,
- * same documented workaround as slack/mattermost above. Reproduces the real
+ * The discord adapter is out-of-tree (no in-tree `discordAdapterPlugin`
+ * descriptor left — the FOURTH and FINAL in-tree adapter extracted). This
+ * suite still needs a real "discord" entry — its recording fakes carry a
+ * `.discord` closure — so `makeDeps` registers its own stub `AdapterPlugin`,
+ * same workaround as slack/mattermost above. Reproduces the real
  * (now out-of-tree) plugin's contract closely enough for THESE tests:
  * `demuxKey`/`groupBindings` byte-identical to the real token-grouping
  * (`metafactory-cortex-adapter-discord`'s `token-groups.ts`) so the "same
@@ -233,7 +253,7 @@ function stubSlackPlugin(factory: GatewayAdapterFactory): AdapterPlugin {
  * needs `guildId`/`agentChannelId`/`logChannelId` present as strings, not
  * full schema validation).
  */
-function stubDiscordPlugin(factory: GatewayAdapterFactory): AdapterPlugin {
+function stubDiscordPlugin(factory: RecordingFactory): AdapterPlugin {
   return {
     kind: "adapter",
     id: "discord",
@@ -287,8 +307,8 @@ function stubDiscordPlugin(factory: GatewayAdapterFactory): AdapterPlugin {
   };
 }
 
-function makeDeps(factory: GatewayAdapterFactory): GatewayAdapterDeps {
-  const registry = registryFromFactory(factory);
+function makeDeps(factory: RecordingFactory): GatewayAdapterDeps {
+  const registry = new SurfacePluginRegistry();
   registry.registerAdapter(stubDiscordPlugin(factory));
   registry.registerAdapter(stubSlackPlugin(factory));
   registerMattermostTestPlugin(registry, factory);
@@ -575,7 +595,7 @@ describe("buildGatewayAdapters", () => {
     // Build with a factory whose adapters record start() calls; the builder
     // must NOT call start() — start is the gateway's job at gw.start().
     const started: string[] = [];
-    const factory: GatewayAdapterFactory = {
+    const factory: RecordingFactory = {
       discord: (args) => {
         const a = makeFakeAdapter("discord", args.instanceId);
         a.start = async () => {
@@ -586,11 +606,7 @@ describe("buildGatewayAdapters", () => {
       slack: (args) => makeFakeAdapter("slack", args.instanceId),
       mattermost: (args) => makeFakeAdapter("mattermost", args.instanceId),
     };
-    buildGatewayAdapters(DISCORD_SURFACES, {
-      principal: "andreas",
-      runtime: RUNTIME_STUB,
-      registry: registryFromFactory(factory),
-    });
+    buildGatewayAdapters(DISCORD_SURFACES, makeDeps(factory));
     // builder is synchronous + construct-only
     expect(started).toEqual([]);
     // sanity: the message type import is exercised (no-op assertion)

@@ -230,8 +230,8 @@ Subcommands:
           new instance before detaching the old one. RENDERER-ONLY in this
           slice, and only for a renderer loaded from an arc bundle (an
           in-tree renderer has no bundle to re-import — restart instead).
-          Adapter reload needs GatewayAdapterFactory reconstruction
-          (cortex#1896), out of scope here.
+          Adapter reload needs adapter re-construction (binding-seed +
+          demux-key inputs), out of scope here.
   load    Activate a renderer whose "renderers[]" config entry exists but
           failed to construct at boot (the plugin hadn't loaded yet).
           Adapter load: same #1896 rationale as reload.

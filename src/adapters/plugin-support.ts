@@ -1,7 +1,7 @@
 /**
  * cortex#1788 (S3) — shared helpers every in-tree `AdapterPlugin.createAdapter`
  * body needs. Moved verbatim out of `src/gateway/gateway-adapters.ts`'s
- * `defaultGatewayAdapterFactory` closures (GW.a.3b.2b, S9/cortex#1523) so the
+ * pre-registry factory closures (GW.a.3b.2b, S9/cortex#1523) so the
  * four platform plugin modules (`discord/plugin.ts`, `slack/plugin.ts`,
  * `mattermost/plugin.ts`, `web/plugin.ts`) can share them without each
  * reaching into `gateway-adapters.ts` for gateway-only construction logic.

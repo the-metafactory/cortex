@@ -21,7 +21,7 @@
  * boundary moved.
  *
  * `createAdapter`'s body is still, structurally, cortex's pre-registry
- * `defaultGatewayAdapterFactory.web`'s body (C-110) — this slice only moved
+ * `the pre-registry factory's web`'s body (C-110) — this slice only moved
  * the file and closed the one remaining cross-repo import; it does not
  * change what gets constructed.
  */
@@ -32,7 +32,7 @@ import type { AdapterPlugin, AdapterPolicyPort, InboundMessage } from "./vendor/
 
 /**
  * Construction args `createAdapter` accepts — the same shape
- * `defaultGatewayAdapterFactory.web` accepted pre-registry (`WebFactoryArgs`,
+ * `the pre-registry factory's web` accepted pre-registry (`WebFactoryArgs`,
  * cortex's `src/gateway/gateway-adapters.ts`), minus the `Agent`/
  * `SystemEventSource` cortex-internal types (cortex#1794 S9b — see module
  * doc). `source` is used only by {@link resolveWebAgent}'s

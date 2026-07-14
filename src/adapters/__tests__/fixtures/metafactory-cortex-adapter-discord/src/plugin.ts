@@ -7,7 +7,7 @@
  * inversions — the LAST of the four in-tree adapters to invert.
  *
  * `createAdapter`'s body is still, structurally, cortex's pre-registry
- * `defaultGatewayAdapterFactory.discord`'s body (relocated verbatim at S3) —
+ * `the pre-registry factory's discord`'s body (relocated verbatim at S3) —
  * this slice only closes the remaining cross-boundary imports (`common/policy`,
  * `bus/system-events`, `bus/myelin/runtime`, `common/types/cortex-config`,
  * `common/types/surfaces`, `../plugin-support`, `../../gateway/discord-token-groups`);
@@ -42,7 +42,7 @@ import type {
 
 /**
  * Construction args `createAdapter` accepts — the same shape
- * `defaultGatewayAdapterFactory.discord` accepted pre-registry
+ * `the pre-registry factory's discord` accepted pre-registry
  * (`DiscordFactoryArgs`, cortex's `src/gateway/gateway-adapters.ts`), minus
  * the `Agent`/`SystemEventSource`/`MyelinRuntime`/policy-triad cortex-internal
  * types (cortex#1797 S12 — see module doc). `source` is used only by

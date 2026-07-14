@@ -3291,9 +3291,10 @@ export async function startCortex(
   // S9 (epic #1514, plan §2, cortex#1523) — the inline Discord/Mattermost/
   // Slack construct→register→start→trust-merge sequence (three near-
   // identical loops, ~600 lines) extracted to `wireSurfaceAdapters`.
-  // Construction now routes through the SAME `GatewayAdapterFactory` seam
-  // the shared surface gateway uses (cortex#524) — see that module's doc
-  // for the full "what moved, what stayed" + PRESERVE ORDER contract.
+  // Construction now routes through the SAME `SurfacePluginRegistry` the
+  // shared surface gateway uses (cortex#524 / ADR-0024 D5) — see that
+  // module's doc for the full "what moved, what stayed" + PRESERVE ORDER
+  // contract.
   // `adapterPolicyEngine` / `adapterPolicyLookup` / `adapterPolicyRegistry`
   // (constructed above, before the DispatchHandler) are shared verbatim
   // across all three platforms, same as pre-extraction.

@@ -25,10 +25,23 @@ import {
   readCortexDeclaredAdapterRepos,
   type ArcListRunResult,
 } from "../loader";
-import { createDefaultSurfacePluginRegistry, registryFromFactory, SurfacePluginRegistry, type AdapterPlugin } from "../registry";
+import { createDefaultSurfacePluginRegistry, SurfacePluginRegistry, type AdapterPlugin } from "../registry";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
-import { buildGatewayAdapters, type GatewayAdapterFactory } from "../../gateway/gateway-adapters";
+import { buildGatewayAdapters } from "../../gateway/gateway-adapters";
+import type { PlatformAdapter } from "../../adapters/types";
+
+/**
+ * cortex#1896 — the recording-fake shape used below, replacing the retired
+ * legacy adapter-factory type. Only `discord` is actually invoked (via a stub
+ * `AdapterPlugin` registered on a directly-built registry); slack/mattermost
+ * round out the shape.
+ */
+interface LocalRecordingFactory {
+  discord(args: { instanceId: string; binding: Record<string, unknown> }): PlatformAdapter;
+  slack(args: { instanceId: string }): PlatformAdapter;
+  mattermost(args: { instanceId: string }): PlatformAdapter;
+}
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { Surfaces } from "../../common/types/surfaces";
 // cortex#1792 (S6 blocker fix, ROUND 2) — static imports of the getter-/
@@ -721,7 +734,7 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
      *  network client, and captures every call's args (mirrors
      *  `gateway-adapters.test.ts`'s own recording factory). */
     function makeRecordingDiscordFactory(): {
-      factory: GatewayAdapterFactory;
+      factory: LocalRecordingFactory;
       discordCalls: { instanceId: string; binding: Record<string, unknown> }[];
     } {
       const discordCalls: { instanceId: string; binding: Record<string, unknown> }[] = [];
@@ -741,7 +754,7 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
         resolveLogicalTarget: async () => null,
         notifyPrincipal: async () => {},
       });
-      const factory: GatewayAdapterFactory = {
+      const factory: LocalRecordingFactory = {
         discord: (args) => {
           discordCalls.push({ instanceId: args.instanceId, binding: args.binding });
           return stubAdapter("discord", args.instanceId);
@@ -754,15 +767,14 @@ describe("loadExternalPlugins (cortex#1792) — the full discover-gate-import-re
 
     test("getter-bypass: platform lies AFTER the check but the registered plugin stays pinned — buildGatewayAdapters never hands it the discord binding", async () => {
       const { factory, discordCalls } = makeRecordingDiscordFactory();
-      // A registry seeded with the SAME safe recording-fake discord adapter
-      // real gateway tests use (registryFromFactory) — this lets us drive
-      // the REAL `buildGatewayAdapters` end-to-end without constructing a
-      // real network-capable Discord client. cortex#1797 (S12 MOVE) —
-      // `registryFromFactory` no longer auto-registers "discord" (no in-tree
-      // descriptor left to spread); register a stub that delegates to the
-      // SAME `factory.discord`, reproducing the exact pre-extraction shape
-      // this test's "in-tree discord stays pinned" assertion needs.
-      const registry = registryFromFactory(factory);
+      // A registry built directly and seeded with the SAME safe recording-fake
+      // discord adapter — this lets us drive the REAL `buildGatewayAdapters`
+      // end-to-end without constructing a real network-capable Discord client.
+      // The discord adapter is out-of-tree (no in-tree descriptor); register a
+      // stub that delegates to the SAME `factory.discord`, reproducing the
+      // exact pre-extraction shape this test's "in-tree discord stays pinned"
+      // assertion needs.
+      const registry = new SurfacePluginRegistry();
       registry.registerAdapter({
         kind: "adapter",
         id: "discord",

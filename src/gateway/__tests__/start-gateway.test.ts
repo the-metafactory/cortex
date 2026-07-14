@@ -15,8 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { SurfaceGateway, LoggingInboundSink } from "../surface-gateway";
 import { BusInboundSink } from "../bus-inbound-sink";
-import { startGatewayWithPlan } from "./start-gateway-test-helper";
-import type { GatewayAdapterFactory } from "../gateway-adapters";
+import { startGatewayWithPlan, type RecordingGatewayFactory } from "./start-gateway-test-helper";
 import type { PlatformAdapter } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
@@ -77,11 +76,11 @@ function makeFakeAdapter(
 
 /** A factory + a record of how many times it was invoked. */
 function makeCountingFactory(started: string[]): {
-  factory: GatewayAdapterFactory;
+  factory: RecordingGatewayFactory;
   constructed: string[];
 } {
   const constructed: string[] = [];
-  const factory: GatewayAdapterFactory = {
+  const factory: RecordingGatewayFactory = {
     discord: (args) => {
       constructed.push(args.instanceId);
       return makeFakeAdapter("discord", args.instanceId, () =>

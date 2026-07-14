@@ -1,9 +1,10 @@
 /**
  * S9 (epic #1514, plan §2, cortex#1523) — `wireSurfaceAdapters` tests.
  *
- * Mirrors `gateway-adapters.test.ts`'s recording-fake pattern: an injected
- * `GatewayAdapterFactory` whose per-platform functions return construct-only
- * fake adapters (no platform connection). The fakes additionally implement
+ * Mirrors `gateway-adapters.test.ts`'s recording-fake pattern: a
+ * `SurfacePluginRegistry` whose per-platform `AdapterPlugin.createAdapter`
+ * returns construct-only fake adapters (no platform connection). The fakes
+ * additionally implement
  * `surfaceConfig` / `setTrustedBotIds` / `attachInboundDispatch` /
  * `trustedBotIdCount` — the concrete-class-only members
  * `surface-adapter-boot.ts`'s `as DiscordAdapter` / `as SlackAdapter`
@@ -37,7 +38,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { wireSurfaceAdapters, type WireSurfaceAdaptersOpts } from "../surface-adapter-boot";
-import type { GatewayAdapterFactory } from "../../gateway/gateway-adapters";
+import { SurfacePluginRegistry, type AdapterPlugin } from "../../adapters/registry";
 import { AgentConfigSchema, type AgentConfig } from "../../common/types/config";
 import type { Agent } from "../../common/types/cortex-config";
 import { AgentRegistry } from "../../common/agents/registry";
@@ -45,6 +46,47 @@ import { TrustResolver } from "../../common/agents/trust-resolver";
 import type { SurfaceRouter, SurfaceAdapter } from "../../bus/surface-router";
 import type { SystemEventSource } from "../../bus/system-events";
 import type { InboundMessage, PlatformAdapter } from "../../adapters/types";
+import { z } from "zod/v4";
+
+/**
+ * cortex#1896 — the recording-fake shape this suite builds, replacing the
+ * retired legacy adapter-factory type. Each per-platform closure reads only
+ * `instanceId` off the hand-built construct args `wireSurfaceAdapters` passes
+ * to `createAdapter`; {@link registryFromRecordingFactory} wraps these into a
+ * `SurfacePluginRegistry` built DIRECTLY.
+ */
+interface RecordingBootFactory {
+  discord(args: { instanceId: string; binding: Record<string, unknown> }): PlatformAdapter;
+  slack(args: { instanceId: string; binding: Record<string, unknown> }): PlatformAdapter;
+  mattermost(args: { instanceId: string; binding: Record<string, unknown> }): PlatformAdapter;
+}
+
+/**
+ * cortex#1896 — build a `SurfacePluginRegistry` directly, one recording
+ * `AdapterPlugin` per platform whose `createAdapter` DELEGATES to the caller's
+ * `factory` closure. `wireSurfaceAdapters` resolves each platform's plugin from
+ * this registry and calls `createAdapter` — it never touches
+ * `demuxKey`/`groupBindings`/`buildGatewayConstructArgs` (gateway-path only),
+ * so those are minimal stubs here.
+ */
+function registryFromRecordingFactory(factory: RecordingBootFactory): SurfacePluginRegistry {
+  const registry = new SurfacePluginRegistry();
+  const mk = (platform: string, create: (args: Record<string, unknown>) => PlatformAdapter): AdapterPlugin => ({
+    kind: "adapter",
+    id: platform,
+    platform,
+    bindingSchema: z.unknown(),
+    foldsIntoPresence: true,
+    secretFields: [],
+    demuxKey: () => "",
+    buildGatewayConstructArgs: (_group, base) => ({ instanceId: base.instanceId }),
+    createAdapter: create,
+  });
+  registry.registerAdapter(mk("discord", (args) => factory.discord(args as never)));
+  registry.registerAdapter(mk("mattermost", (args) => factory.mattermost(args as never)));
+  registry.registerAdapter(mk("slack", (args) => factory.slack(args as never)));
+  return registry;
+}
 
 // =============================================================================
 // Fixtures
@@ -151,11 +193,11 @@ function makeFakeAdapter(
 }
 
 function makeRecordingFactory(recorded: RecordedAdapter[]): {
-  factory: GatewayAdapterFactory;
+  factory: RecordingBootFactory;
   callOrder: string[];
 } {
   const callOrder: string[] = [];
-  const factory: GatewayAdapterFactory = {
+  const factory: RecordingBootFactory = {
     discord: (args) => {
       callOrder.push("discord");
       return makeFakeAdapter(
@@ -183,7 +225,7 @@ function makeRecordingFactory(recorded: RecordedAdapter[]): {
 
 function baseOpts(
   config: AgentConfig,
-  factory: GatewayAdapterFactory,
+  factory: RecordingBootFactory,
   router: SurfaceRouter,
   overrides: Partial<WireSurfaceAdaptersOpts> = {},
 ): WireSurfaceAdaptersOpts {
@@ -217,7 +259,7 @@ function baseOpts(
     adapters: [],
     adapterCleanup: [],
     liveSurfaces: new Set<string>(),
-    factory,
+    registry: registryFromRecordingFactory(factory),
     ...overrides,
   };
 }
@@ -376,7 +418,7 @@ describe("wireSurfaceAdapters", () => {
     });
     const recorded: RecordedAdapter[] = [];
     const bindings: Record<string, Record<string, unknown>> = {};
-    const factory: GatewayAdapterFactory = {
+    const factory: RecordingBootFactory = {
       discord: (args) => {
         bindings.discord = args.binding;
         return makeFakeAdapter(

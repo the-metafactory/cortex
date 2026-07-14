@@ -28,8 +28,8 @@
  *     `src/adapters/loader.ts`). Refused for an IN-TREE renderer (no bundle
  *     to re-import; restart is the only way to pick up code changes) and
  *     for every adapter (adapter re-construction needs the binding-seed +
- *     demux-key inputs `GatewayAdapterFactory` owns today — that shim is
- *     cortex#1896, explicitly out of scope for this slice).
+ *     demux-key inputs the adapter construction paths build today —
+ *     explicitly out of scope for this slice).
  *   - `load` — full support for a renderer bundle that was DISCOVERED but
  *     not constructed at boot (its `renderers[]` YAML entry's `kind` didn't
  *     resolve because the plugin hadn't loaded yet — `plugins.external` was
@@ -155,7 +155,7 @@ export function listLivePlugins(deps: PluginRuntimeDeps): LivePluginRow[] {
     // S6's loader doesn't thread per-adapter-instance bundle provenance
     // through to `wireSurfaceAdapters`/`SurfaceGateway` yet — every adapter
     // in `list` reports "in-tree" until that's wired (tracked with the same
-    // #1896 GatewayAdapterFactory follow-up `reload`/`load` cite for adapters).
+    // adapter `reload`/`load` follow-up cited above).
     bundleName: "in-tree",
     running: true,
   }));
@@ -225,8 +225,8 @@ export async function reloadLivePlugin(
         ok: false,
         detail:
           `adapter reload is out of scope for this slice — re-constructing an adapter needs the ` +
-          `binding-seed + demux-key inputs GatewayAdapterFactory owns today (tracked separately at ` +
-          `cortex#1896). Use "cortex plugin unload" + a config-driven restart instead.`,
+          `binding-seed + demux-key inputs the adapter construction paths build today (tracked ` +
+          `separately at cortex#1896). Use "cortex plugin unload" + a config-driven restart instead.`,
       };
     }
     return { ok: false, detail: `no plugin instance "${instanceId}" is currently live` };
@@ -298,7 +298,7 @@ export async function loadLivePlugin(
       ok: false,
       detail:
         `"cortex plugin load" supports renderer bundles only in this slice — adapter load needs the ` +
-        `binding-seed + demux-key inputs GatewayAdapterFactory owns today (cortex#1896). ` +
+        `binding-seed + demux-key inputs the adapter construction paths build today (cortex#1896). ` +
         `"${bundleName}" declares kind "${bundle.manifest.kind}".`,
     };
   }

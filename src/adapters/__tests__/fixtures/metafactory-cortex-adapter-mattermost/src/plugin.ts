@@ -20,7 +20,7 @@
  * unchanged; only the import boundary moved.
  *
  * `createAdapter`'s body is still, structurally, cortex's pre-registry
- * `defaultGatewayAdapterFactory.mattermost`'s body (relocated verbatim at S3)
+ * `the pre-registry factory's mattermost`'s body (relocated verbatim at S3)
  * — this slice only closes the remaining cross-boundary imports; it does not
  * change what gets constructed. Mattermost has no grouping (one adapter per
  * binding, demuxed by apiUrl, single-binding fallback) — UNCHANGED.
@@ -32,7 +32,7 @@ import type { AdapterPlugin, AdapterPolicyPort, InboundMessage } from "@the-meta
 
 /**
  * Construction args `createAdapter` accepts — the same shape
- * `defaultGatewayAdapterFactory.mattermost` accepted pre-registry
+ * `the pre-registry factory's mattermost` accepted pre-registry
  * (`MattermostFactoryArgs`, cortex's `src/gateway/gateway-adapters.ts`),
  * minus the `Agent`/`SystemEventSource`/`MyelinRuntime`/policy-triad
  * cortex-internal types (cortex#1796 S11 — see module doc). `source` is used

@@ -4,30 +4,43 @@ import {
 } from "../start-gateway";
 import { isGatewayEnabled } from "../gateway-bootstrap";
 import { planSurfaceOwnership } from "../surface-ownership-plan";
-import { registryFromFactory, type SurfacePluginRegistry } from "../../adapters/registry";
-import { defaultGatewayAdapterFactory } from "../gateway-adapters";
+import { SurfacePluginRegistry } from "../../adapters/registry";
 import { stringBindingField } from "../../adapters/plugin-support";
+import type { PlatformAdapter } from "../../adapters/types";
 import { z } from "zod/v4";
 import { createHash } from "node:crypto";
 
 /**
- * cortex#1797 (S12 MOVE) — `registryFromFactory` no longer auto-registers
- * discord/slack/mattermost stubs (no in-tree plugin descriptors left to
- * spread from any of the three — see that function's doc in
- * `adapters/registry.ts`). This test helper's whole POINT is exercising
- * `startGatewayIfEnabled`'s factory-driven construction path end-to-end
- * (`makeCountingFactory`-style fakes in `start-gateway.test.ts` /
- * `cross-principal-routing.integration.test.ts`), so it needs a registry
- * whose adapter plugins actually DELEGATE to the caller's `factory` — the
- * same shape `registryFromFactory` gave pre-extraction for every platform.
- * Builds one FRESH per call (never shared/cached) so each test's own
- * `factory` closure is the one invoked.
+ * cortex#1896 — the recording-fake shape these gateway tests build. The
+ * per-platform closures only ever read `instanceId` off the construct args a
+ * plugin's `buildGatewayConstructArgs` produced; the rest is forwarded
+ * verbatim. Replaces the retired legacy adapter-factory type — the tests now
+ * register `AdapterPlugin` stubs whose `createAdapter` delegates to these
+ * closures, so the registry is built DIRECTLY.
  */
-function registryFromFactoryWithAllPlatforms(
-  factory: StartGatewayOpts["factory"],
+export interface RecordingGatewayFactory {
+  discord(args: { instanceId: string } & Record<string, unknown>): PlatformAdapter;
+  slack(args: { instanceId: string } & Record<string, unknown>): PlatformAdapter;
+  mattermost(args: { instanceId: string } & Record<string, unknown>): PlatformAdapter;
+}
+
+/**
+ * cortex#1896 — build a `SurfacePluginRegistry` directly, registering a
+ * recording `AdapterPlugin` per platform whose `createAdapter` DELEGATES to the
+ * caller's `factory` closure. This test helper's whole POINT is exercising
+ * `startGatewayIfEnabled`'s registry-driven construction path end-to-end
+ * (`makeCountingFactory`-style fakes in `start-gateway.test.ts` /
+ * `cross-principal-routing.integration.test.ts`). Builds one FRESH per call
+ * (never shared/cached) so each test's own `factory` closure is the one
+ * invoked. `demuxKey`/`groupBindings`/`buildGatewayConstructArgs` reproduce the
+ * bundle plugins' behaviour closely enough for these tests (discord's
+ * token-grouping in particular, so "same token, two guild bindings → one
+ * adapter" fixtures still collapse correctly).
+ */
+function buildRecordingRegistry(
+  factory: RecordingGatewayFactory,
 ): SurfacePluginRegistry {
-  const registry = registryFromFactory(factory ?? defaultGatewayAdapterFactory);
-  const f = factory ?? defaultGatewayAdapterFactory;
+  const registry = new SurfacePluginRegistry();
   registry.registerAdapter({
     kind: "adapter",
     id: "discord",
@@ -67,7 +80,7 @@ function registryFromFactoryWithAllPlatforms(
       binding: group.entries[0]?.binding,
       runtime: base.runtime,
     }),
-    createAdapter: (args) => f.discord(args as never),
+    createAdapter: (args) => factory.discord(args as never),
   });
   registry.registerAdapter({
     kind: "adapter",
@@ -83,7 +96,7 @@ function registryFromFactoryWithAllPlatforms(
       binding: group.entries[0]?.binding,
       runtime: base.runtime,
     }),
-    createAdapter: (args) => f.slack(args as never),
+    createAdapter: (args) => factory.slack(args as never),
   });
   registry.registerAdapter({
     kind: "adapter",
@@ -99,17 +112,27 @@ function registryFromFactoryWithAllPlatforms(
       binding: group.entries[0]?.binding,
       runtime: base.runtime,
     }),
-    createAdapter: (args) => f.mattermost(args as never),
+    createAdapter: (args) => factory.mattermost(args as never),
   });
   return registry;
 }
 
 export function startGatewayWithPlan(
-  opts: Omit<StartGatewayOpts, "ownershipPlan">,
+  opts: Omit<StartGatewayOpts, "ownershipPlan" | "registry"> & {
+    factory?: RecordingGatewayFactory;
+    registry?: SurfacePluginRegistry;
+  },
 ): ReturnType<typeof startGatewayIfEnabled> {
-  const registry = opts.registry ?? registryFromFactoryWithAllPlatforms(opts.factory);
+  const { factory, registry: registryIn, ...rest } = opts;
+  let registry = registryIn;
+  if (!registry) {
+    if (!factory) {
+      throw new Error("startGatewayWithPlan requires `factory` or `registry`");
+    }
+    registry = buildRecordingRegistry(factory);
+  }
   return startGatewayIfEnabled({
-    ...opts,
+    ...rest,
     registry,
     ownershipPlan: planSurfaceOwnership({
       surfaces: opts.surfaces,

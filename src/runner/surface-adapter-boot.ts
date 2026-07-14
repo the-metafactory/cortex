@@ -3,9 +3,9 @@
  * extraction. Lifts the ~600-line inline Discord/Mattermost/Slack adapter
  * construction (three near-identical `for` loops) out of `cortex.ts` into
  * `wireSurfaceAdapters`. Adapter CONSTRUCTION now routes through the SAME
- * `GatewayAdapterFactory` seam (`gateway-adapters.ts`, cortex#524) the shared
- * surface gateway already uses — exactly one module
- * (`defaultGatewayAdapterFactory`) knows how to build a `new DiscordAdapter`
+ * `SurfacePluginRegistry` (`adapters/registry.ts`, ADR-0024 D5) the shared
+ * surface gateway already uses — each platform's `AdapterPlugin.createAdapter`
+ * (the bundle-loaded plugin) knows how to build a `new DiscordAdapter`
  * / `new MattermostAdapter` / `new SlackAdapter`.
  *
  * ## What moved, what stayed (mirrors S7/S8's split)
@@ -57,21 +57,20 @@
  * the three `bootPlatformAdapters` calls in `wireSurfaceAdapters` without a
  * deliberate, reviewed decision.
  *
- * ## The factory returns `PlatformAdapter`; this module needs the concrete class
+ * ## `createAdapter` returns `PlatformAdapter`; this module needs the concrete class
  *
- * `GatewayAdapterFactory.discord()` / `.mattermost()` / `.slack()` declare a
- * generic `PlatformAdapter` return — the shape `WebAdapter` and any test fake
- * also satisfy. This module's trust-merge / router-register / outbound-log
- * machinery needs members (`setTrustedBotIds`, `trustedBotIdCount`,
- * `surfaceConfig`) that are NOT on the generic interface — `WebAdapter`
- * deliberately has none of them (see `web-adapter.test.ts`'s explicit
- * `"surfaceConfig" in adapter === false` assertion), so widening the shared
- * interface to require them would break that invariant. Since each
- * descriptor here only ever calls its OWN platform's factory function
- * (never `.web()`), and the production factory always constructs the
- * matching concrete class, each descriptor's `constructAdapter` narrows the
- * factory's return with an explicit `as` cast immediately after
- * construction. A test-injected factory must return an object that actually
+ * `AdapterPlugin.createAdapter` declares a generic `PlatformAdapter` return —
+ * the shape `WebAdapter` and any test fake also satisfy. This module's
+ * trust-merge / router-register / outbound-log machinery needs members
+ * (`setTrustedBotIds`, `trustedBotIdCount`, `surfaceConfig`) that are NOT on
+ * the generic interface — `WebAdapter` deliberately has none of them (see
+ * `web-adapter.test.ts`'s explicit `"surfaceConfig" in adapter === false`
+ * assertion), so widening the shared interface to require them would break
+ * that invariant. Since each descriptor here only ever resolves its OWN
+ * platform's plugin (never `web`), and the production plugin always
+ * constructs the matching concrete class, each descriptor's `constructAdapter`
+ * narrows the return with an explicit `as` cast immediately after
+ * construction. A test-registered plugin must return an object that actually
  * implements the concrete class's members this module calls, or the cast is
  * a lie the test's own assertions will catch (see
  * `surface-adapter-boot.test.ts`) — it is never silently unsafe in
@@ -84,9 +83,10 @@
  * process, cortex#524); this module is the per-stack DIRECT-connect boot
  * lane and belongs beside its sibling `*-consumer-boot.ts` lanes
  * (`review-consumer-boot.ts`, `brain-consumer-boot.ts`,
- * `release-consumer-boot.ts`, all S7/S8). It still imports the shared
- * `GatewayAdapterFactory` FROM `src/gateway/gateway-adapters.ts` — only the
- * boot-wiring module moved, not the factory it calls.
+ * `release-consumer-boot.ts`, all S7/S8). It resolves each platform's
+ * `AdapterPlugin` from the shared `SurfacePluginRegistry`
+ * (`src/adapters/registry.ts`) — only the boot-wiring module lives here, not
+ * the plugins it constructs from.
  */
 
 import type { InboundMessage, PlatformAdapter } from "../adapters/types";
@@ -104,11 +104,7 @@ import type { PolicyEngine, PlatformPrincipalIndex, PrincipalRegistry } from "..
 import type { AgentRegistry } from "../common/agents/registry";
 import type { TrustResolver, Platform } from "../common/agents/trust-resolver";
 import { surfaceInstanceEnabled } from "../common/config/loader";
-import {
-  defaultGatewayAdapterFactory,
-  type GatewayAdapterFactory,
-} from "../gateway/gateway-adapters";
-import { registryToLegacyFactory, type SurfacePluginRegistry } from "../adapters/registry";
+import type { AdapterPlugin, SurfacePluginRegistry } from "../adapters/registry";
 import { buildAdapterPolicyPort, buildAdapterSystemEventPort } from "../adapters/plugin-support";
 import { formatEnvelopeAsMarkdown } from "../adapters/envelope-renderer";
 
@@ -225,7 +221,8 @@ interface TrustMergeable {
  * `TrustMergeable` directly rather than the concrete class. A structural
  * alias satisfies every use site the real `SlackAdapter` type used to
  * (the `AdapterBootDescriptor<..., SlackLikeAdapter>` type argument, and the
- * `as SlackLikeAdapter` cast after `factory.slack(...)` construction) — the
+ * `as SlackLikeAdapter` cast after the slack plugin's `createAdapter(...)`
+ * construction) — the
  * REAL adapter the bundle constructs at runtime still satisfies this
  * structurally, so behaviour is unchanged; only the compile-time type
  * source moved.
@@ -593,24 +590,24 @@ export interface WireSurfaceAdaptersOpts {
   adapterCleanup: (() => void)[];
   /** Shared, NOT owned. */
   liveSurfaces: Set<string>;
-  /** Adapter-construction seam. Production omits this and gets {@link defaultGatewayAdapterFactory}; tests inject a recording fake. Superseded by {@link registry} when both are supplied. */
-  factory?: GatewayAdapterFactory;
   /**
    * cortex#1788 (S3, ADR-0024 D5) — the `(kind, id)`-keyed registry
    * (`src/adapters/registry.ts`). cortex.ts composes ONE registry and
    * threads it to both this boot path and the gateway path
-   * (`buildGatewayAdapters`). Takes priority over {@link factory} when both
-   * are supplied; existing `factory`-based test doubles keep working
-   * unchanged via {@link registryToLegacyFactory}.
+   * (`buildGatewayAdapters`). REQUIRED (cortex#1896) — there is no legacy
+   * factory fallback; each platform's adapter is constructed by resolving its
+   * `AdapterPlugin` from this registry and calling `createAdapter`. Tests
+   * register recording `AdapterPlugin` stubs on a registry they build.
    */
-  registry?: SurfacePluginRegistry;
+  registry: SurfacePluginRegistry;
 }
 
 /**
  * Boot the Discord, Mattermost, and Slack adapters for a stack's own
  * `agents[].presence.*` — the per-stack (non-gateway) direct-connect path.
- * Construction routes through the SAME `GatewayAdapterFactory` seam the
- * shared surface gateway uses (see the module doc). Mutates the shared
+ * Construction resolves each platform's `AdapterPlugin` from the SAME
+ * `SurfacePluginRegistry` the shared surface gateway uses (see the module
+ * doc), then calls its `createAdapter`. Mutates the shared
  * `opts.adapters` / `opts.adapterCleanup` / `opts.liveSurfaces` in place;
  * returns nothing — nothing else in `cortex.ts` reads per-adapter state
  * beyond those three shared arrays (mirrors `wireReleaseConsumers`'s
@@ -620,9 +617,20 @@ export interface WireSurfaceAdaptersOpts {
  * doc's "PRESERVE ORDER" section.
  */
 export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promise<void> {
-  const factory = opts.registry
-    ? registryToLegacyFactory(opts.registry)
-    : (opts.factory ?? defaultGatewayAdapterFactory);
+  // cortex#1896 — resolve each platform's plugin from the composed registry
+  // and call `createAdapter` directly (replaces the retired legacy-factory
+  // shim). A missing platform is a boot-time misconfiguration (`cortex.ts`
+  // always registers the bundle-loaded plugin before wiring), surfaced as a
+  // loud, actionable error.
+  const requireAdapter = (platform: string): AdapterPlugin => {
+    const plugin = opts.registry.getAdapter(platform);
+    if (!plugin) {
+      throw new Error(
+        `wireSurfaceAdapters: no adapter plugin registered for platform "${platform}"`,
+      );
+    }
+    return plugin;
+  };
   const ctx: BootCtx = {
     gatewayOwned: opts.gatewayOwned,
     router: opts.router,
@@ -667,7 +675,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { discord: presence }),
     trustedBotIdsFor: (instance) => new Set<string>(instance.trustedBotIds),
     constructAdapter: ({ agent, presence, instanceId, explicitTrustedBotIds }) =>
-      factory.discord({
+      requireAdapter("discord").createAdapter({
         ...baseFactoryArgs({
           instanceId,
           systemEventSource: opts.systemEventSource,
@@ -723,8 +731,8 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     MattermostPresence,
     // cortex#1796 (S11 MOVE) — `MattermostAdapter`'s concrete class no
     // longer lives in-tree (extracted to `metafactory-cortex-adapter-mattermost`);
-    // constructed via `factory.mattermost(...)` → `registryToLegacyFactory`
-    // → the bundle-loaded plugin's `createAdapter`, so only its STRUCTURAL
+    // constructed via `requireAdapter("mattermost").createAdapter(...)` →
+    // the bundle-loaded plugin's `createAdapter`, so only its STRUCTURAL
     // shape is available at this boundary. `PlatformAdapter & RouterRegistrable`
     // is exactly what this descriptor actually needs (Mattermost carries no
     // `trustResolverSupport`/`TrustMergeable` methods — see those fields'
@@ -759,7 +767,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { mattermost: presence }),
     // No trustedBotIdsFor — Mattermost's presence carries no trust field.
     constructAdapter: ({ agent, presence, instanceId }) =>
-      factory.mattermost({
+      requireAdapter("mattermost").createAdapter({
         instanceId,
         // Mattermost's inline construction never wired `runtime`/`source` —
         // preserved as-is (see the module doc + gateway-adapters.ts's `source` doc).
@@ -818,7 +826,7 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     fallbackAgent: (presence) => deferredFallbackAgent(opts.config, { slack: presence }),
     trustedBotIdsFor: (instance) => new Set<string>(instance.trustedBotIds),
     constructAdapter: ({ agent, presence, instanceId, explicitTrustedBotIds }) =>
-      factory.slack(
+      requireAdapter("slack").createAdapter(
         baseFactoryArgs({
           instanceId,
           systemEventSource: opts.systemEventSource,
@@ -883,9 +891,9 @@ const SAFE_BINDING_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * `binding` is forwarded to the factory purely for observability/test
- * assertions (see `gateway-adapters.ts`'s `FactoryArgsBase.binding` doc) —
- * the default production factory never reads it. The per-stack boot path has
+ * `binding` is forwarded to the adapter plugin purely for observability/test
+ * assertions (the construct-args `binding` field) — the production plugins
+ * never read it. The per-stack boot path has
  * no equivalent "raw pre-parse binding" the way the gateway does (it builds
  * `presence` directly from the already-Zod-parsed config instance), so this
  * forwards the already-built presence as the closest analogue, filtered down

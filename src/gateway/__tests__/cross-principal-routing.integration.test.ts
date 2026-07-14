@@ -38,10 +38,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { BusInboundSink } from "../bus-inbound-sink";
-import { startGatewayWithPlan } from "./start-gateway-test-helper";
+import { startGatewayWithPlan, type RecordingGatewayFactory } from "./start-gateway-test-helper";
 import { createDispatchSink } from "../../adapters/dispatch-sink";
 import { MockAdapter } from "../../adapters/mock";
-import type { GatewayAdapterFactory } from "../gateway-adapters";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
@@ -133,7 +132,7 @@ const GATEWAY_SOURCE: SystemEventSource = {
  * faithful stand-in for the real Discord adapter on the routing path.
  */
 function makeMockAdapterFactory(): {
-  factory: GatewayAdapterFactory;
+  factory: RecordingGatewayFactory;
   byInstance: Map<string, MockAdapter>;
 } {
   const byInstance = new Map<string, MockAdapter>();
@@ -142,7 +141,7 @@ function makeMockAdapterFactory(): {
     byInstance.set(instanceId, a);
     return a;
   };
-  const factory: GatewayAdapterFactory = {
+  const factory: RecordingGatewayFactory = {
     discord: (args) => build(args.instanceId),
     slack: (args) => build(args.instanceId),
     mattermost: (args) => build(args.instanceId),
