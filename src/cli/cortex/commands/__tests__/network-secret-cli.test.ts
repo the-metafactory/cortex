@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, statSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, statSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createUser } from "nkeys.js";
@@ -34,6 +34,40 @@ let tmp: string;
 let seedPath: string;
 // A valid 44-char base64 Ed25519 pubkey (32 bytes → 44 b64 chars, one '=' pad).
 const MEMBER = btoa("A".repeat(32));
+
+// ─────────────────────────────────────────────────────── test hermeticity
+// TEST-ONLY: every network-resolving dispatch runs under an EMPTY temp $HOME.
+//
+// The secret path resolves the per-network payload key K + the hub-mode
+// attestation from TWO real, home-rooted stores: the hub stack config
+// (`~/.config/cortex/…`, via the default ConfigReader) AND the network-cache
+// descriptor (`~/.config/cortex/network-cache/`, via resolveNetworkCacheDir()).
+// When the real machine carries a "metafactory" descriptor (or a config that
+// fails validation), those reads flip the seal onto the attested (non-simple)
+// path (or throw) and the 20 network-touching tests fail (they expect the
+// simple/PSK path) — so the file passed on a machine joined to "metafactory"
+// but failed 20/35 in a fresh worktree. Pointing $HOME at an empty temp dir
+// makes BOTH reads resolve nothing → the deterministic simple path everywhere.
+// Mirrors the withHome pattern in network-cli.test.ts. A `load` fixture alone
+// can't fix this: the network-cache read is not injectable through
+// dispatchNetwork and would still leak. NOTE: the restore MUST await fn — the
+// secret path reads $HOME after several awaits, so a synchronous-restore
+// withHome would restore too early.
+let home: string;
+async function withHome<T>(h: string, fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.HOME;
+  process.env.HOME = h;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.HOME;
+    else process.env.HOME = prev;
+  }
+}
+/** dispatchNetwork under the hermetic empty $HOME (signature-preserving). */
+function dn(...args: Parameters<typeof dispatchNetwork>): ReturnType<typeof dispatchNetwork> {
+  return withHome(home, () => dispatchNetwork(...args));
+}
 
 // A recording fake ports bundle + factory.
 interface Calls {
@@ -90,9 +124,13 @@ beforeEach(() => {
   const seed = new TextDecoder().decode(createUser().getSeed());
   writeFileSync(seedPath, seed, { mode: 0o600 });
   chmodSync(seedPath, 0o600);
+  // Empty, config-dir-present temp $HOME — see the withHome comment above.
+  home = mkdtempSync(join(tmpdir(), "secret-cli-home-"));
+  mkdirSync(join(home, ".config", "cortex"), { recursive: true });
 });
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
+  if (home !== undefined && existsSync(home)) rmSync(home, { recursive: true, force: true });
   __setDiscordRemoveClientForTests(null);
 });
 
@@ -103,19 +141,19 @@ function argv(...args: string[]): string[] {
 describe("cortex network secret — grammar", () => {
   test("unknown action → usage error (exit 2)", async () => {
     const { factory } = fakeFactory();
-    const res = await dispatchNetwork(argv("secret", "bogus", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "bogus", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(2);
   });
 
   test("malformed member pubkey → usage error", async () => {
     const { factory } = fakeFactory();
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", "not-a-pubkey", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", "not-a-pubkey", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(2);
   });
 
   test("rotate + --deliver oob → usage error", async () => {
     const { factory } = fakeFactory();
-    const res = await dispatchNetwork(argv("secret", "rotate", "metafactory", MEMBER, "--deliver", "oob", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "rotate", "metafactory", MEMBER, "--deliver", "oob", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(2);
   });
 });
@@ -123,7 +161,7 @@ describe("cortex network secret — grammar", () => {
 describe("cortex network secret add-member", () => {
   test("dry-run (default) mutates nothing", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("dry-run");
     expect(calls.writes.length).toBe(0);
@@ -133,7 +171,7 @@ describe("cortex network secret add-member", () => {
 
   test("--apply sealed: adds hub user + reload + posts sealed blob; no secret in stdout", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.writes.length).toBe(1);
     expect(calls.reloads).toBe(1);
@@ -145,7 +183,7 @@ describe("cortex network secret add-member", () => {
 
   test("--apply oob: surfaces the PSK explicitly, registry untouched", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--deliver", "oob", "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--deliver", "oob", "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.posted.length).toBe(0); // registry untouched
     expect(res.stdout).toContain("OUT-OF-BAND SECRET");
@@ -154,7 +192,7 @@ describe("cortex network secret add-member", () => {
 
   test("--json --apply sealed: machine-readable, applied=true, no oob secret key", async () => {
     const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
     expect(parsed.data.applied).toBe("true");
@@ -164,7 +202,7 @@ describe("cortex network secret add-member", () => {
 
   test("no ADMITTED row → exit 1", async () => {
     const { factory } = fakeFactory({ admitted: undefined });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(1);
   });
 
@@ -188,7 +226,7 @@ describe("cortex network secret add-member", () => {
 
   test("--apply sealed with hub K configured → seals K + kid; K never in stdout", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
       loadWithK, undefined, undefined, factory,
     );
@@ -207,7 +245,7 @@ describe("cortex network secret add-member", () => {
     // Inject an explicit reader with NO key for the network (hermetic — never the
     // real ~/.config/cortex, which may carry a live metafactory K).
     const loadNoK = ((_path: string) => ({ policy: { federated: { networks: [] } } })) as never;
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
       loadNoK, undefined, undefined, factory,
     );
@@ -218,7 +256,7 @@ describe("cortex network secret add-member", () => {
 
   test("--json --apply with hub K → payload_key_kid + fingerprint surfaced, K is not", async () => {
     const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath),
       loadWithK, undefined, undefined, factory,
     );
@@ -241,7 +279,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
       hubUrl: "tls://andreas-vm.example.com:7422",
       localHostname: "jc-laptop.local",
     });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.writes.length).toBe(0);
     expect(calls.reloads).toBe(0);
@@ -256,7 +294,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
       hubUrl: "tls://andreas-vm.example.com:7422",
       localHostname: "jc-laptop.local",
     });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--json", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     const parsed = JSON.parse(res.stdout) as { data: Record<string, string> };
     expect(parsed.data.hub_owner_artifact).toContain("HUB-OWNER ACTION REQUIRED");
@@ -266,7 +304,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
 
   test("--seal-only forces the artifact path even on a local-looking hub", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--seal-only", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--seal-only", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.writes.length).toBe(0);
     expect(calls.reloads).toBe(0);
@@ -276,7 +314,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
 
   test("local hub, no --seal-only → writes exactly as before, no artifact printed", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.writes.length).toBe(1);
     expect(calls.reloads).toBe(1);
@@ -285,7 +323,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
 
   test("no cached hub descriptor (can't determine locality) → treated as external, fail-safe", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" }, noHubCache: true });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.writes.length).toBe(0);
     expect(calls.reloads).toBe(0);
@@ -299,7 +337,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
       localHostname: "jc-laptop.local",
     });
     const account = "A" + "D".repeat(55);
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--hub-account", account, "--admin-seed", seedPath),
       undefined, undefined, undefined, factory,
     );
@@ -309,7 +347,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
 
   test("malformed --hub-account → usage error (exit 2)", async () => {
     const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "add-member", "metafactory", MEMBER, "--apply", "--hub-account", "not-an-nkey", "--admin-seed", seedPath),
       undefined, undefined, undefined, factory,
     );
@@ -322,7 +360,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
       hubUrl: "tls://andreas-vm.example.com:7422",
       localHostname: "jc-laptop.local",
     });
-    const res = await dispatchNetwork(argv("secret", "add-member", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "add-member", "metafactory", MEMBER, "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("dry-run");
     expect(res.stdout.toLowerCase()).toContain("seal-only");
@@ -334,7 +372,7 @@ describe("cortex network secret add-member — hub locality (cortex#1481)", () =
 describe("cortex network secret revoke-member", () => {
   test("--apply: drops hub user + reload (cut) + registry revoke", async () => {
     const { factory, calls } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(argv("secret", "revoke-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
+    const res = await dn(argv("secret", "revoke-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath), undefined, undefined, undefined, factory);
     expect(res.exitCode).toBe(0);
     expect(calls.reloads).toBe(1);
     expect(calls.revoked).toEqual(["req1"]);
@@ -364,7 +402,7 @@ describe("cortex network secret revoke-member", () => {
     };
     __setDiscordRemoveClientForTests(mockDiscord);
 
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "revoke-member", "metafactory", MEMBER,
         "--discord-member", "member-snowflake-999", "--discord-guild", "guild-123",
         "--apply", "--json", "--admin-seed", seedPath),
@@ -386,7 +424,7 @@ describe("cortex network secret revoke-member", () => {
     };
     __setDiscordRemoveClientForTests(mockDiscord);
 
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "revoke-member", "metafactory", MEMBER,
         "--discord-member", "member-999", "--discord-guild", "guild-123",
         "--apply", "--json", "--admin-seed", seedPath),
@@ -410,7 +448,7 @@ describe("cortex network secret revoke-member", () => {
     };
     __setDiscordRemoveClientForTests(mockDiscord);
 
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "revoke-member", "metafactory", MEMBER,
         "--discord-member", "member-999", "--discord-guild", "guild-123",
         "--apply", "--admin-seed", seedPath),
@@ -432,7 +470,7 @@ describe("cortex network secret revoke-member", () => {
     };
     __setDiscordRemoveClientForTests(mockDiscord);
 
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "revoke-member", "metafactory", MEMBER,
         "--discord-member", "member-999", "--discord-guild", "guild-123",
         "--discord-role", "custom-fleet", "--apply", "--admin-seed", seedPath),
@@ -519,7 +557,7 @@ describe("cortex network secret rotate-key", () => {
 
   test("dry-run (default) mints/writes/posts NOTHING; prints the plan + next kid", async () => {
     const { factory, calls } = fakeRotationFactory({ admitted, hubUsers, networks: [encNet()] });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "rotate-key", "metafactory", "--admin-seed", seedPath),
       undefined, undefined, undefined, undefined, undefined, factory,
     );
@@ -533,7 +571,7 @@ describe("cortex network secret rotate-key", () => {
 
   test("--apply re-seals every ADMITTED member + advances hub K; K never in stdout", async () => {
     const { factory, calls } = fakeRotationFactory({ admitted, hubUsers, networks: [encNet()] });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "rotate-key", "metafactory", "--apply", "--admin-seed", seedPath),
       undefined, undefined, undefined, undefined, undefined, factory,
     );
@@ -553,7 +591,7 @@ describe("cortex network secret rotate-key", () => {
 
   test("--json --apply: machine-readable, resealed_count, no K", async () => {
     const { factory } = fakeRotationFactory({ admitted, hubUsers, networks: [encNet()] });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "rotate-key", "metafactory", "--apply", "--json", "--admin-seed", seedPath),
       undefined, undefined, undefined, undefined, undefined, factory,
     );
@@ -570,7 +608,7 @@ describe("cortex network secret rotate-key", () => {
       admitted: [], hubUsers: [],
       networks: [{ id: "metafactory", peers: [] } as unknown as PolicyFederatedNetwork],
     });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "rotate-key", "metafactory", "--apply", "--admin-seed", seedPath),
       undefined, undefined, undefined, undefined, undefined, factory,
     );
@@ -588,7 +626,7 @@ describe("cortex network secret revoke-member — C-1349 rotate-now recommendati
 
   test("on an ENCRYPTION-ENABLED network prints the rotate-now line naming rotate-key", async () => {
     const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "revoke-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
       loadWithK, undefined, undefined, factory,
     );
@@ -599,7 +637,7 @@ describe("cortex network secret revoke-member — C-1349 rotate-now recommendati
 
   test("on a NON-encrypted network prints NO rotate-now line", async () => {
     const { factory } = fakeFactory({ admitted: { request_id: "req1", principal_id: "alice" } });
-    const res = await dispatchNetwork(
+    const res = await dn(
       argv("secret", "revoke-member", "metafactory", MEMBER, "--apply", "--admin-seed", seedPath),
       loadNoK, undefined, undefined, factory,
     );
@@ -633,7 +671,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     // Dry-run join (no --apply): the descriptor fetch will fail against the
     // unreachable registry, but the AUTO-FETCH runs first — we assert it was
     // invoked with the right coordinates (the wiring), which is the PR's claim.
-    await dispatchNetwork([
+    await dn([
       "join", "metafactory",
       "--principal", "andreas",
       "--registry-url", "http://127.0.0.1:0",
@@ -696,7 +734,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
 
-    await dispatchNetwork(joinArgs(writeJoinerSeed("joiner3.seed")), (() => ({})) as never);
+    await dn(joinArgs(writeJoinerSeed("joiner3.seed")), (() => ({})) as never);
 
     const installed = join(installDir, "metafactory-leaf.creds");
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
@@ -717,7 +755,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
 
-    await dispatchNetwork(joinArgs(writeJoinerSeed("joiner4.seed")), (() => ({})) as never);
+    await dn(joinArgs(writeJoinerSeed("joiner4.seed")), (() => ({})) as never);
 
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     expect(statSync(installed).mode & 0o777).toBe(0o600);
@@ -734,7 +772,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
 
-    await dispatchNetwork(joinArgs(writeJoinerSeed("joiner5.seed")), (() => ({})) as never);
+    await dn(joinArgs(writeJoinerSeed("joiner5.seed")), (() => ({})) as never);
 
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     expect(statSync(installed).mode & 0o777).toBe(0o600);
@@ -747,7 +785,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     let called = false;
     __setJoinLeafSecretFetcherForTests(async () => { called = true; return { ok: false, reason: "x" }; });
 
-    await dispatchNetwork([
+    await dn([
       "join", "metafactory",
       "--principal", "andreas",
       "--registry-url", "http://127.0.0.1:0",
