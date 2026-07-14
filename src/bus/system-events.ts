@@ -1826,23 +1826,25 @@ export function createSystemPluginLoadedEvent(
  * **Leaf segment is `reload-failed` (hyphen), NOT `reload_failed`.** The
  * vendored envelope schema's `/type` pattern
  * (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$`, `envelope.schema.json`)
- * forbids underscores in a type segment. `system.plugin.load-failed` (S6,
- * already on `main`) and several older `system.*` families
- * (`system.bus.notify-discord`, `system.bus.reflex-activation-failed`,
- * `system.gateway.routing-decision`, …) violate this pattern — the schema
- * check only runs on the SUBSCRIBER side (`myelin/subscriber.ts`), so a
- * violating envelope publishes without error and is then **silently
- * dropped by every standard push-mode subscriber** (`runtime.subscribe()` +
- * `onEnvelope`) — confirmed via a live NATS round-trip while building S8's
- * `system.plugin.control-request`/`-response` pair (the exact bug this
- * comment documents: the first draft used `control_request`/`control_response`
- * and every response silently vanished). `unloaded` has no segment needing
- * a separator fix; `reload-failed` is spelled correctly here rather than
- * inheriting the sibling's already-broken convention. `load_failed` is left
- * as-is — it already shipped on `main` via S6/#1927, and renaming a shipped
- * wire type is a separate, coordinated fix (flagged, not bundled into this
- * unrelated slice); every OTHER pre-existing underscore violation across
- * `system.*` is the same systemic gap and is out of scope here too.
+ * forbids underscores in a type segment. The schema check only runs on the
+ * SUBSCRIBER side (`myelin/subscriber.ts`), so an underscore-typed envelope
+ * publishes without error and is then **silently dropped by every standard
+ * push-mode subscriber** (`runtime.subscribe()` + `onEnvelope`) — confirmed via
+ * a live NATS round-trip while building S8's
+ * `system.plugin.control-request`/`-response` pair (the exact bug: the first
+ * draft used `control_request`/`control_response` and every response silently
+ * vanished). `unloaded` has no segment needing a separator fix; `reload-failed`
+ * is spelled correctly here.
+ *
+ * A cohort of earlier `system.*` families shipped with the underscore bug —
+ * `system.plugin.load_failed` (S6/#1927), `system.bus.notify_discord`,
+ * `system.bus.peer_dispatch_received`, `system.bus.reflex_activation_*`,
+ * `system.gateway.routing_decision`, `system.verifier.self_check`. cortex#1935
+ * was the coordinated fix that renamed every one of those leaves to hyphens
+ * (this file now emits `system.plugin.load-failed`, `system.bus.notify-discord`,
+ * …), and added the `envelope-type-no-underscore` regression gate +
+ * `renamed-envelope-types-roundtrip` real-schema test so the class cannot
+ * silently recur. Any new `system.*` leaf MUST use hyphens.
  *
  * `createSystemPluginUnloadedEvent` fires on a SUCCESSFUL runtime detach
  * (`cortex plugin unload`, or a reconcile-driven detach of a bundle removed
