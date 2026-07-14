@@ -186,6 +186,28 @@ export interface PlatformAdapter {
   /** Unique instance ID across all adapters */
   readonly instanceId: string;
 
+  /**
+   * cortex#2002 (C-1853) — the maximum size (bytes) of a SINGLE outbound file
+   * this platform accepts. Platform-specific, so it **travels with the
+   * adapter**: platform-neutral core (`src/runner/attachments.ts`, `src/bus/`)
+   * must never name a platform's ceiling. `collectOutputFiles()` takes this as
+   * an argument rather than reading a platform-named constant.
+   *
+   * **OPTIONAL and additive** (the backward-compatible cortex-only slice of
+   * #2002, superseding the required-field #1890). An adapter bundle that does
+   * NOT declare it keeps compiling and the host falls back to
+   * `ATTACHMENT_LIMITS.defaultMaxUploadBytes` — behaviour is unchanged for
+   * every existing bundle. Per-bundle adoption (each
+   * `metafactory-cortex-adapter-*` supplying its platform's documented
+   * ceiling) is incremental follow-up work.
+   *
+   * Adapters that DO declare it MUST source the value from the platform's
+   * documented ceiling, not a guess, and SHOULD err low: an under-estimate
+   * only filters an extra file out, whereas an over-estimate makes the
+   * platform reject the upload at post time.
+   */
+  readonly maxUploadBytes?: number;
+
   /** Connect to the platform and start listening for messages */
   start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void>;
   /** Disconnect and clean up resources */

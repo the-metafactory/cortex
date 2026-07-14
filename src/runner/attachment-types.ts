@@ -88,6 +88,14 @@ export const ATTACHMENT_LIMITS = {
   tempFileTtlMs: 10 * 60 * 1000,
   /** Max total temp directory size (100MB) */
   maxTempDirSizeBytes: 100 * 1024 * 1024,
-  /** Discord's upload limit for outbound files (8MB) */
-  discordMaxUploadBytes: 8 * 1024 * 1024,
+  /**
+   * cortex#2002 (C-1853) — HOST DEFAULT outbound single-file upload ceiling
+   * (8 MB). Surface-neutral: renamed from the platform-named
+   * `discordMaxUploadBytes` so platform-neutral core names no platform's
+   * ceiling. `collectOutputFiles()` uses this ONLY as the fallback when the
+   * target adapter does not declare its own `PlatformAdapter.maxUploadBytes`.
+   * Held at the historical 8 MB so behaviour is UNCHANGED for any adapter
+   * bundle that has not yet adopted the per-surface field.
+   */
+  defaultMaxUploadBytes: 8 * 1024 * 1024,
 };

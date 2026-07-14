@@ -1314,7 +1314,9 @@ export class DispatchHandler extends EventEmitter {
 
     // Terminal success — post the response and forward usage.
     if (finalResult && finalResult.success && finalResult.response && finalReason === null) {
-      const outputFiles = collectOutputFiles(attachmentSessionId);
+      // cortex#2002 (C-1853) — bound by the TARGET surface's ceiling (falls
+      // back to the host default when the adapter doesn't declare one).
+      const outputFiles = collectOutputFiles(attachmentSessionId, adapter.maxUploadBytes);
       const files = outputFiles.length > 0
         ? await Promise.all(outputFiles.map(async (p) => ({
             content: Buffer.from(await Bun.file(p).arrayBuffer()),
@@ -1483,7 +1485,9 @@ export class DispatchHandler extends EventEmitter {
         clearInterval(typingInterval);
         await adapter.clearProgress(replyTarget);
         try {
-          const outputFiles = collectOutputFiles(attachmentSessionId);
+          // cortex#2002 (C-1853) — bound by the TARGET surface's ceiling
+          // (falls back to the host default when the adapter doesn't declare one).
+          const outputFiles = collectOutputFiles(attachmentSessionId, adapter.maxUploadBytes);
           const files = outputFiles.length > 0
             ? await Promise.all(outputFiles.map(async (p) => ({
                 content: Buffer.from(await Bun.file(p).arrayBuffer()),

@@ -58,8 +58,20 @@
  * bump with a documented plugin-author migration note (OQ5 — SDK changelog
  * ownership, ratified "as recommended", still applies: record the
  * migration in this file's history, not just the commit message).
+ *
+ * ## Changelog (OQ5 — plugin-author migration notes)
+ *
+ * - **1.1.0** (cortex#2002, C-1853) — ADDITIVE, non-breaking. `PlatformAdapter`
+ *   gains an OPTIONAL `readonly maxUploadBytes?: number` (a platform's single
+ *   outbound-file ceiling in bytes). No migration required: a bundle that does
+ *   not declare it keeps compiling and the host falls back to its default
+ *   ceiling. Bundles SHOULD adopt it to advertise their platform's real limit
+ *   (Discord ~25 MB boosted, Slack 1 GB, Mattermost `FileSettings.MaxFileSize`
+ *   default 100 MB, web N/A). Minor bump — no `sdkRange` change needed for
+ *   existing plugins.
+ * - **1.0.0** — initial versioned SDK barrel (cortex#1790, S5).
  */
-export const SURFACE_SDK_VERSION = "1.0.0";
+export const SURFACE_SDK_VERSION = "1.1.0";
 
 // =============================================================================
 // Platform adapter contract (src/adapters/types.ts)
