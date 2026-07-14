@@ -104,7 +104,7 @@ To join a **second or later** stack, pass `--principal-seed <root-seed>` — the
 
 ```bash
 cortex network join <network> \
-  --config ~/.config/cortex/<slug>/<slug>.yaml \
+  --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml \
   --principal-seed ~/.config/nats/cortex.nk \
   --apply
 ```

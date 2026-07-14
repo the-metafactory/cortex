@@ -111,16 +111,16 @@ launchctl load ~/Library/LaunchAgents/ai.meta-factory.nats.<slug>.plist
 lsof -nP -iTCP:<port> -sTCP:LISTEN | grep nats   # verify up
 ```
 
-### Step 3 — Write the cortex config (`~/.config/cortex/<slug>/`)
+### Step 3 — Write the cortex config (`~/.config/metafactory/cortex/<slug>/`)
 
 **Start from the canonical template.** [`docs/config-layout/`](config-layout/) is
 the self-documenting config-split template — copy it and fill the `<REPLACE_ME>`
 markers rather than hand-rolling the directory:
 
 ```bash
-cp -R docs/config-layout ~/.config/cortex/<slug>
+cp -R docs/config-layout ~/.config/metafactory/cortex/<slug>
 # rename the pointer file after your slug, then fill the <REPLACE_ME> markers
-mv ~/.config/cortex/<slug>/research.yaml ~/.config/cortex/<slug>/<slug>.yaml
+mv ~/.config/metafactory/cortex/<slug>/research.yaml ~/.config/metafactory/cortex/<slug>/<slug>.yaml
 ```
 
 Multi-file layout (`composer` reads `system/` + `stacks/`):
@@ -175,12 +175,12 @@ presence:
 
 ### Step 4 — Write + load the cortex plist
 
-`~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` → `/Users/<you>/.local/bin/cortex start --config ~/.config/cortex/<slug>/<slug>.yaml`, `WorkingDirectory` = the installed pkg, `CORTEX_CHANNEL=<slug>`, logs to `~/.config/cortex/logs/cortex-<slug>.{log,error.log}`. Then `launchctl load …`.
+`~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` → `/Users/<you>/.local/bin/cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml`, `WorkingDirectory` = the installed pkg, `CORTEX_CHANNEL=<slug>`, logs to `~/.local/state/metafactory/cortex/logs/cortex-<slug>.{log,error.log}`. Then `launchctl load …`.
 
 ### Step 5 — Verify
 
 ```bash
-grep -E "Stack:|connected to nats|policy-engine active|connected as|Guild:" ~/.config/cortex/logs/cortex-<slug>.log | tail
+grep -E "Stack:|connected to nats|policy-engine active|connected as|Guild:" ~/.local/state/metafactory/cortex/logs/cortex-<slug>.log | tail
 ```
 
 A healthy boot shows `Stack: <principal>/<slug>`, `connected to nats://…:<port>`, `policy-engine active — principals=N`, `discord adapter started (… guild: <guildId>)`, and `connected as <Bot>#NNNN`. Then:
@@ -334,7 +334,7 @@ policy:
 ```bash
 cortex provision-stack register <principal> --seed-path <seed> \
   --registry-url https://network.meta-factory.ai --stack-id <principal>/<slug>
-cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml --apply
+cortex network join <network> --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --apply
 ```
 
 Dry-run first (omit `--apply`). The join pulls the signature-verified descriptor → renders a `leafnodes` include into the stack's nats config → writes `policy.federated.networks[]` with registry-resolved peers → restarts. If the B2 config blocks are absent, pass `--registry-pubkey / --creds / --account / --nats-config / --plist` overrides instead.
@@ -342,7 +342,7 @@ Dry-run first (omit `--apply`). The join pulls the signature-verified descriptor
 **If this is the principal's 2nd+ stack** (e.g. you already federated `andreas/meta-factory` and are now adding `andreas/community`), the register step needs the principal **root** seed to authorize the add-stack — pass `--principal-seed <root-seed>` (#791):
 
 ```bash
-cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml \
+cortex network join <network> --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml \
   --principal-seed ~/.config/nats/cortex.nk --apply
 ```
 

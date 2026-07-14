@@ -55,15 +55,15 @@ when the config-split dir holds more than one stack):
 
 ```bash
 # dev agent — implement a slice (internal only)
-cortex offer dev.implement  --scope local --config ~/.config/cortex/<slug>
+cortex offer dev.implement  --scope local --config ~/.config/metafactory/cortex/<slug>
 
 # release agent — cut a release (internal only, principal-gated)
-cortex offer release.cut    --scope local --config ~/.config/cortex/<slug>
+cortex offer release.cut    --scope local --config ~/.config/metafactory/cortex/<slug>
 
 # review lane — scope is the principal's call:
 #   local      → review only your own stack's PRs
 #   public     → the PR-review marketplace (CO-5; requires CO-7 hardening)
-cortex offer code-review.typescript --scope local --config ~/.config/cortex/<slug>
+cortex offer code-review.typescript --scope local --config ~/.config/metafactory/cortex/<slug>
 ```
 
 Each command is **dry-run by default** — it prints the offerings edit + the
@@ -126,12 +126,12 @@ offering makes the intent explicit without changing a single subscribed subject.
 
 ```bash
 # 1. Apply each offering (writes stacks/<slug>.yaml + a timestamped .bak)
-cortex offer dev.implement  --scope local --config ~/.config/cortex/<slug> --apply
-cortex offer release.cut    --scope local --config ~/.config/cortex/<slug> --apply
-cortex offer code-review.typescript --scope local --config ~/.config/cortex/<slug> --apply
+cortex offer dev.implement  --scope local --config ~/.config/metafactory/cortex/<slug> --apply
+cortex offer release.cut    --scope local --config ~/.config/metafactory/cortex/<slug> --apply
+cortex offer code-review.typescript --scope local --config ~/.config/metafactory/cortex/<slug> --apply
 
 # 2. Confirm the exposure surface
-cortex offer list --config ~/.config/cortex/<slug>
+cortex offer list --config ~/.config/metafactory/cortex/<slug>
 
 # 3. Restart the stack so the daemon re-composes config + re-binds consumers
 arc upgrade cortex     # or reload the stack's launchd plist

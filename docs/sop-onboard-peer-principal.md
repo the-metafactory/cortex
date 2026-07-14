@@ -198,10 +198,10 @@ This is the same sealed channel that later carries the network **payload key** `
 
 ```bash
 # Dry-run first — inspect what will be written before touching the live deployment:
-cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml
+cortex network join <network> --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
 
 # Then apply:
-cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml --apply
+cortex network join <network> --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --apply
 ```
 
 The join command performs the full sequence idempotently:
