@@ -47,6 +47,9 @@
 
 import { existsSync } from "node:fs";
 import { resolveInstanceDir } from "../common/agents/agent-state-scaffold";
+// cortex#2007 — shared `defaultErrandsScript()` (was triplicated); routes
+// through `resolveArcPackReposDir()`, env override + lazy resolution preserved.
+import { defaultErrandsScript } from "../common/agents/agent-state-scripts";
 import {
   defaultAgentStateSpawn,
   type AgentStateSpawn,
@@ -65,18 +68,6 @@ export const DEV_SESSION_WORK_ITEM_KIND = "dev-session";
 
 /** The host-namespaced notes key carrying the CC session id. */
 const SESSION_ID_NOTE_KEY = "session_id";
-
-/**
- * Canonical AgentState `errands.ts` path (shared shape with the S3 recorder).
- * `MF_AGENT_STATE_ERRANDS_SCRIPT` overrides; resolved lazily so a late env
- * override is honoured.
- */
-function defaultErrandsScript(): string {
-  return (
-    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
-    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`
-  );
-}
 
 /** Minimal shape this store needs off an agent — id, plus the opt-in `state`. */
 export interface DevSessionStoreAgent {

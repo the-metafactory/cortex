@@ -74,13 +74,20 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, relative, resolve } from "node:path";
+// cortex#2007 — the confidentiality-scan engine ships in the arc-installed
+// `metafactory-actions` pack, so its default path MUST resolve the same way
+// every other arc-pack path does (canonical XDG data tree on a migrated box,
+// existence-gated legacy fallback) rather than hardcoding the pre-#287
+// `~/.config/metafactory/pkg/repos`. `scripts/` already imports from
+// `src/common/` (see migrate-config-dir-exec.ts), so route through the shared
+// resolver instead of inlining. `--engine <path>` still overrides.
+import { arcPackScriptPath } from "../src/common/config/arc-pack-repos-dir";
 
-export const DEFAULT_ENGINE_PATH = join(
-  homedir(),
-  ".config/metafactory/pkg/repos/metafactory-actions/scan/confidentiality-scan.ts",
-);
+export const DEFAULT_ENGINE_PATH = arcPackScriptPath("metafactory-actions", [
+  "scan",
+  "confidentiality-scan.ts",
+]);
 
 // Text-scannable extensions for the dashboard build output. Bun's build emits
 // js/css/html/map/json (and any inlined svg); fonts/images are skipped — not

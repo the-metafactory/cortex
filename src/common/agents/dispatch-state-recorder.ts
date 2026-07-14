@@ -52,6 +52,11 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveInstanceDir } from "./agent-state-scaffold";
+// cortex#2007 — `defaultErrandsScript()` is now the ONE shared resolver (was
+// triplicated here / in the scaffold lib / in the dev-session store). It routes
+// through `resolveArcPackReposDir()`; `MF_AGENT_STATE_ERRANDS_SCRIPT` override +
+// per-call lazy resolution preserved.
+import { defaultErrandsScript } from "./agent-state-scripts";
 import {
   defaultAgentStateSpawn,
   type AgentStateSpawnResult,
@@ -59,23 +64,6 @@ import {
 
 /** Default host label baked into cortex work_item env. */
 const DEFAULT_HOST = "cortex";
-
-/**
- * cortex#1720 S3 — canonical AgentState bundle errands script (shared shape with
- * S2's replay lib). The `enqueue` / `claim` / `resolve` subcommands live on the
- * SAME `errands.ts` the S2 `pending` path uses. Kept as its own env override so
- * a principal can point the dispatch-wiring at a non-standard install
- * independently. `MF_AGENT_STATE_ERRANDS_SCRIPT` overrides.
- *
- * Resolved PER CALL (not frozen at module import) so a late env override is
- * honoured — matches the `opts ?? DEFAULT` pattern used throughout.
- */
-function defaultErrandsScript(): string {
-  return (
-    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
-    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`
-  );
-}
 
 /** Terminal outcome an accepted dispatch resolves to. */
 export type DispatchResolveStatus = "done" | "failed";

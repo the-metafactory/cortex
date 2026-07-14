@@ -133,3 +133,32 @@ export function resolveArcPackReposDir(seam?: ArcPackReposDirSeam): string {
 
   return canonical;
 }
+
+/**
+ * Resolve the on-disk path to a file (typically a workflow script) INSIDE an
+ * arc-installed pack, rooted at the existence-gated {@link resolveArcPackReposDir}.
+ * The pack name plus any trailing path `segments` are joined onto the resolved
+ * repos dir:
+ *
+ *   arcPackScriptPath("agent-state", ["skill", "scripts", "scaffold.ts"])
+ *     → <reposDir>/agent-state/skill/scripts/scaffold.ts
+ *
+ * This is the SINGLE construction site for arc-pack script paths across cortex —
+ * the agent-state scaffold/errands resolvers and the deploy confidentiality-scan
+ * engine path all route through it (cortex#2007), so the pre-#287
+ * `~/.config/metafactory/pkg/repos` default can never be re-hardcoded per-caller
+ * (the #1988 bug class — it had already shipped three times via a triplicated
+ * `defaultErrandsScript`).
+ *
+ * Resolved PER CALL (never frozen): a late `$HOME` / `$XDG_DATA_HOME` change — or
+ * arc installing the pack AFTER cortex boot — is honoured, matching the lazy
+ * `opts ?? DEFAULT` semantics of the resolvers that consume it. The `{home, env}`
+ * seam flows straight through to the repos-dir resolver for hermetic tests.
+ */
+export function arcPackScriptPath(
+  pack: string,
+  segments: string[],
+  seam?: ArcPackReposDirSeam,
+): string {
+  return join(resolveArcPackReposDir(seam), pack, ...segments);
+}

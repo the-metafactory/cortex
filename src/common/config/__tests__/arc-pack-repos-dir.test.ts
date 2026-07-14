@@ -22,6 +22,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   arcCanonicalPackReposDir,
+  arcPackScriptPath,
   legacyArcPackReposDir,
   resolveArcPackReposDir,
 } from "../arc-pack-repos-dir";
@@ -144,5 +145,71 @@ describe("consumer parity — brain-consumer-boot join shape", () => {
     expect(join(base, "my-exec-brain")).toBe(
       join(canonicalDefault(), "my-exec-brain"),
     );
+  });
+});
+
+describe("arcPackScriptPath (cortex#2007 — single arc-pack path construction site)", () => {
+  // Multi-tree box: pack path roots at the canonical XDG data tree.
+  test("default multi-tree box → <canonical>/<pack>/<segments>", () => {
+    mkdirSync(canonicalDefault(), { recursive: true });
+    expect(
+      arcPackScriptPath(
+        "agent-state",
+        ["skill", "scripts", "scaffold.ts"],
+        { home, env: {} },
+      ),
+    ).toBe(join(canonicalDefault(), "agent-state", "skill", "scripts", "scaffold.ts"));
+  });
+
+  // Legacy-only (singleTree) box: existence-gated fall back to the legacy tree.
+  test("legacy-only box → <legacy>/<pack>/<segments>", () => {
+    mkdirSync(legacyDir(), { recursive: true });
+    expect(
+      arcPackScriptPath("agent-state", ["skill", "scripts", "errands.ts"], {
+        home,
+        env: {},
+      }),
+    ).toBe(join(legacyDir(), "agent-state", "skill", "scripts", "errands.ts"));
+  });
+
+  // The deploy confidentiality-scan engine path (scan-deploy-surface.ts
+  // DEFAULT_ENGINE_PATH) resolves through the SAME helper — pin its shape on
+  // both a multi-tree and a legacy box.
+  test("scan engine path (metafactory-actions) → canonical on a multi-tree box", () => {
+    mkdirSync(canonicalDefault(), { recursive: true });
+    expect(
+      arcPackScriptPath(
+        "metafactory-actions",
+        ["scan", "confidentiality-scan.ts"],
+        { home, env: {} },
+      ),
+    ).toBe(
+      join(canonicalDefault(), "metafactory-actions", "scan", "confidentiality-scan.ts"),
+    );
+  });
+
+  test("scan engine path (metafactory-actions) → legacy on a singleTree box", () => {
+    mkdirSync(legacyDir(), { recursive: true });
+    expect(
+      arcPackScriptPath(
+        "metafactory-actions",
+        ["scan", "confidentiality-scan.ts"],
+        { home, env: {} },
+      ),
+    ).toBe(
+      join(legacyDir(), "metafactory-actions", "scan", "confidentiality-scan.ts"),
+    );
+  });
+
+  test("$XDG_DATA_HOME flows through the seam to the pack path", () => {
+    const xdg = join(home, "xdg-data");
+    const repos = join(xdg, "metafactory", "arc", "repos");
+    mkdirSync(repos, { recursive: true });
+    expect(
+      arcPackScriptPath("agent-state", ["skill", "scripts", "scaffold.ts"], {
+        home,
+        env: { XDG_DATA_HOME: xdg },
+      }),
+    ).toBe(join(repos, "agent-state", "skill", "scripts", "scaffold.ts"));
   });
 });

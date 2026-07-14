@@ -71,11 +71,11 @@
  */
 
 import { existsSync, readFileSync, realpathSync } from "fs";
-import { homedir } from "os";
 import { join, resolve as resolvePath, sep } from "path";
 import { pathToFileURL } from "url";
 import { parse as parseYaml } from "yaml";
 
+import { resolveArcPackReposDir } from "../common/config/arc-pack-repos-dir";
 import {
   ArcListOutputSchema,
   PluginManifestSchema,
@@ -117,10 +117,15 @@ async function defaultArcListRunner(): Promise<ArcListRunResult> {
   return { stdout, stderr, exitCode };
 }
 
-/** Default trusted install root — arc#289's real on-disk layout. Overridable
- *  (tests point this at a fixtures directory). */
+/** Default trusted install root — arc's package-repos dir. Routed through the
+ *  shared existence-gated resolver (cortex#2007 / #1988) so it mirrors arc's
+ *  post-#287 layout: the canonical `~/.local/share/metafactory/arc/repos` on a
+ *  migrated box, the legacy `~/.config/metafactory/pkg/repos` only on a
+ *  singleTree install. A raw `join(homedir(), ".config"/"metafactory"/"pkg"/"repos")`
+ *  here was a segmented copy of the pre-#287 default that the literal path audit
+ *  could not see. Overridable (tests point this at a fixtures directory). */
 export function defaultPkgRoot(): string {
-  return join(homedir(), ".config", "metafactory", "pkg", "repos");
+  return resolveArcPackReposDir();
 }
 
 // =============================================================================

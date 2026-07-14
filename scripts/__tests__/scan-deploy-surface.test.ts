@@ -9,8 +9,11 @@
 // below is obviously-fake and non-sequential; it is not a real platform id.
 //
 // ENGINE DEPENDENCY: this suite shells to the INSTALLED confidentiality-scan
-// engine (~/.config/metafactory/pkg/repos/metafactory-actions/scan/) — an
-// arc-managed local package, not something vendored into this repo or fetched
+// engine, resolved via `DEFAULT_ENGINE_PATH` through the shared arc-pack-repos
+// resolver (cortex#2007: canonical ~/.local/share/metafactory/arc/repos on a
+// migrated box, legacy ~/.config/metafactory/pkg/repos on a singleTree install)
+// under `metafactory-actions/scan/` — an arc-managed local package, not
+// something vendored into this repo or fetched
 // by GitHub Actions' `bun test` job. Mirrors the existing `hasClaude` /
 // `testClaude` self-skip pattern in src/common/test-utils.ts for the same
 // reason (external binary not present on GitHub Actions runners): tests that

@@ -30,46 +30,15 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-
-/**
- * Canonical AgentState bundle scaffold script.
- *
- * NOTE: this is `skill/scripts/scaffold.ts`, NOT `scripts/errands.ts`. Grove's
- * own default (`grove/src/bot/lib/agent-state-scaffold.ts`) points at the wrong
- * path — it omits the `skill/` segment and names `errands.ts` (a filed grove
- * bug). The bundle installed by arc lays the workflow scripts down under
- * `.../agent-state/skill/scripts/`, and the scaffold entrypoint is
- * `scaffold.ts` (`bun scaffold.ts <instance-dir> --host=<h> --agent=<a>`).
- * `MF_AGENT_STATE_SCRIPT` overrides for non-standard installs.
- */
-function defaultScaffoldScript(): string {
-  return (
-    process.env.MF_AGENT_STATE_SCRIPT ??
-    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/scaffold.ts`
-  );
-}
-
-/**
- * cortex#1720 S2 — canonical AgentState bundle errands script.
- *
- * The `ReplayPending` workflow (`agent-state/skill/Workflows/ReplayPending.md`)
- * lists pending work via `bun <bundle>/skill/scripts/errands.ts pending` — a
- * SIBLING of `scaffold.ts` in the same `skill/scripts/` dir, NOT the scaffold
- * entrypoint. Kept as its own resolver (rather than deriving from
- * `defaultScaffoldScript`) so a principal can install / override the two
- * independently. `MF_AGENT_STATE_ERRANDS_SCRIPT` overrides for non-standard
- * installs.
- *
- * Resolved PER CALL (not frozen at module import) so an env override set after
- * import — e.g. by a test or a late-configured host — is honoured, matching the
- * `opts ?? DEFAULT` pattern used throughout this module.
- */
-function defaultErrandsScript(): string {
-  return (
-    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
-    `${process.env.HOME ?? ""}/.config/metafactory/pkg/repos/agent-state/skill/scripts/errands.ts`
-  );
-}
+// cortex#2007 — the scaffold/errands default-path resolvers now live in ONE
+// shared module (was triplicated across the agent-state consumers, which is how
+// the pre-#287 `~/.config/metafactory/pkg/repos` default shipped three times).
+// Both route through `resolveArcPackReposDir()`; env overrides + per-call lazy
+// resolution are preserved.
+import {
+  defaultScaffoldScript,
+  defaultErrandsScript,
+} from "./agent-state-scripts";
 
 /** Default host label baked into cortex-scaffolded instance dirs. */
 const DEFAULT_HOST = "cortex";
@@ -158,10 +127,8 @@ export function scaffoldInstance(
   const instanceDir = opts.instanceDir ?? resolveInstanceDir(agent.id, host);
   // Resolve the bundle script PER CALL (not frozen at module import) so a late
   // env override is honoured — matches the `opts ?? DEFAULT` pattern.
-  const agentStateScript =
-    opts.agentStateScript ??
-    process.env.MF_AGENT_STATE_SCRIPT ??
-    defaultScaffoldScript();
+  // `defaultScaffoldScript()` owns the `MF_AGENT_STATE_SCRIPT` precedence.
+  const agentStateScript = opts.agentStateScript ?? defaultScaffoldScript();
 
   const created: string[] = [];
   const skipped: string[] = [];
@@ -439,10 +406,8 @@ export function replayPending(
   const instanceDir = opts.instanceDir ?? resolveInstanceDir(agent.id, host);
   // Resolve the script path PER CALL (not frozen at module import) so an env
   // override set after import is honoured — matches the `opts ?? DEFAULT` pattern.
-  const errandsScript =
-    opts.errandsScript ??
-    process.env.MF_AGENT_STATE_ERRANDS_SCRIPT ??
-    defaultErrandsScript();
+  // `defaultErrandsScript()` owns the `MF_AGENT_STATE_ERRANDS_SCRIPT` precedence.
+  const errandsScript = opts.errandsScript ?? defaultErrandsScript();
 
   // Bundle not installed → soft-skip (S1 already logged this class of miss on
   // the scaffold side; here we degrade the onStart hook to a no-op).
