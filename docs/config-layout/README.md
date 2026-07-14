@@ -25,7 +25,7 @@ cortex stack create research --principal andreas --apply
 
 # Then provision the signing seed → point your daemon → (optionally) federate:
 arc upgrade cortex                                              # auto-provisions ~/.config/nats/cortex-research.nk
-cortex start --config ~/.config/cortex/research/research.yaml
+cortex start --config ~/.config/metafactory/cortex/research/research.yaml
 cortex network join <network>                                  # federate (optional)
 ```
 
@@ -37,15 +37,20 @@ only for true secrets (Discord token/guild/channels + the post-first-boot
 
 ```bash
 # 1. Copy this directory to your config dir, naming it after your stack slug
-cp -R docs/config-layout ~/.config/cortex/research
+cp -R docs/config-layout ~/.config/metafactory/cortex/research
 
 # 2. Fill in every <REPLACE_ME> marker across the files below
 #    (secrets/ids: principal id, stack signing keys, Discord token/guild/channels)
-$EDITOR ~/.config/cortex/research/{system/system.yaml,stacks/research.yaml,surfaces/surfaces.yaml}
+$EDITOR ~/.config/metafactory/cortex/research/{system/system.yaml,stacks/research.yaml,surfaces/surfaces.yaml}
 
 # 3. Point your daemon at the POINTER (sentinel) file — its dirname selects the layout
-cortex start --config ~/.config/cortex/research/research.yaml
+cortex start --config ~/.config/metafactory/cortex/research/research.yaml
 ```
+
+> **Config root moved to `~/.config/metafactory/cortex` (XDG, cortex#1867).** Fresh
+> installs use it directly. Existing installs on the legacy `~/.config/cortex`
+> root keep working and migrate automatically on the next `arc upgrade cortex` —
+> the resolver reads the legacy root until then, so nothing breaks in the meantime.
 
 The pointer file [`research.yaml`](./research.yaml) is the file `--config`
 points at; **its contents are ignored** — only its dirname selects the layout,

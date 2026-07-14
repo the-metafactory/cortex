@@ -377,7 +377,7 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 **What arc does:**
 
 - **Bundles** metafactory things — myelin (the M2–M6 protocol bundle), signal (the observability tap), cortex (this M7 app), pilot, plus tools, skills, and CLIs. Each bundle declares itself in an `arc-manifest.yaml` with `name`, `version`, `description`, and a `provides:` list of files to install.
-- **Distributes** bundles across principal hosts via `arc upgrade <Name>`. The principal runs one command and gets the binary + hooks + skills + config templates installed at the right filesystem paths (`~/bin/`, `~/.claude/hooks/`, `~/.claude/skills/`, …).
+- **Distributes** bundles across principal hosts via `arc upgrade <Name>`. The principal runs one command and gets the binary + hooks + skills + config templates installed at the right filesystem paths (`~/.local/bin/`, `~/.claude/hooks/`, `~/.claude/skills/`, …).
 - **Configures** environment-specific things at install time — NATS identity keys (per myelin#8 / MY-400), CF Access secrets, per-host overrides. Templates live in the manifest; concrete values live in the principal's environment.
 - **Tracks** what's installed and at what version — `arc list` shows installed bundles, `arc upgrade` updates them.
 
@@ -570,7 +570,7 @@ cortex/
                           NATS client (M2), envelope validator (M3),
                           identity client (M4 when MY-400 lands), surface-router
                           (cortex-internal fan-out from bus to adapters/runner).
-                          Loads ~/.config/cortex/cortex.yaml.
+                          Loads ~/.config/metafactory/cortex/cortex.yaml.
     surface/          ── Principal surfaces — what humans see.
       mc/             ── Mission Control v3 (Hono + React, observed-session model).
       cli/            ── Future TUI / cli-tail surfaces. Empty in v1.
@@ -602,7 +602,7 @@ cortex/
       gh-webhook/     ── GitHub webhook → NATS
       cc-events/      ── Claude Code hooks → NATS
     cli/              ── Principal CLIs.
-      discord/        ── ~/bin/discord (subdir: discord.ts entry + lib/ + skill/)
+      discord/        ── ~/.local/bin/discord (subdir: discord.ts entry + lib/ + skill/)
       cldyo-live      ── CC instrumentation wrapper (single bash script, NOT a directory)
     common/           ── Shared types, utilities.
   docs/

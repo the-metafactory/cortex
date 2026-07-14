@@ -100,11 +100,11 @@ The short version (full procedure in
 cortex stack create mystack --principal yourname --apply
 
 # Fill in the <REPLACE_ME> secrets (Discord token, guild + channel ids)
-$EDITOR ~/.config/cortex/mystack/stacks/mystack.yaml
+$EDITOR ~/.config/metafactory/cortex/mystack/stacks/mystack.yaml
 
 # Validate, then start
-cortex start --config ~/.config/cortex/mystack/mystack.yaml --dry-run
-cortex start --config ~/.config/cortex/mystack/mystack.yaml
+cortex start --config ~/.config/metafactory/cortex/mystack/mystack.yaml --dry-run
+cortex start --config ~/.config/metafactory/cortex/mystack/mystack.yaml
 ```
 
 Then @mention your assistant in the bound Discord guild and watch it answer.

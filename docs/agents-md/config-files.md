@@ -28,7 +28,7 @@ duplicate double-binds the boot subscriber and double-delivers every envelope
   `cortex.yaml`, or the second daemon collides on `cortex-cortex.pid`.
 
 **Canonical template:** [`docs/config-layout/`](docs/config-layout/) — copy that
-directory to `~/.config/cortex/<slug>/`, fill the `<REPLACE_ME>` markers, point
+directory to `~/.config/metafactory/cortex/<slug>/`, fill the `<REPLACE_ME>` markers, point
 your daemon at the pointer file. The repo-root `cortex.yaml.example` is the
 legacy single-file reference. See
 [`docs/config-layout/README.md`](docs/config-layout/README.md),

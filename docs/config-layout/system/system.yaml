@@ -57,8 +57,8 @@ attachments:
 # paths — on-disk locations cortex reads/writes (leading ~ expands to $HOME)
 # -----------------------------------------------------------------------------
 paths:
-  publishedEventsDir: ~/.claude/events/published
-  logDir: ~/.config/cortex/logs
+  publishedEventsDir: ~/.local/share/metafactory/cortex/events/published
+  logDir: ~/.local/state/metafactory/cortex/logs
 
 # -----------------------------------------------------------------------------
 # plugins — out-of-tree surface-plugin bundle loading (cortex#1792, ADR-0024)

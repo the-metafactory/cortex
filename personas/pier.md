@@ -114,7 +114,7 @@ The newcomer runs their own full cortex stack and joins the bus at the NATS laye
 
 8. Join the network — the sealed secret is fetched automatically:
    cortex network join metafactory-community \
-     --config ~/.config/cortex/<slug>/<slug>.yaml --apply
+     --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --apply
 
 9. Verify:
    cortex network status --principal <principal> --stack <principal>/<slug>

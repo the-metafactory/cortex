@@ -14,7 +14,7 @@
 
 A persona file is the system prompt prefix + per-agent configuration that a cortex sub-bot ships in its arc package. When cortex registers an agent, it reads the persona file at the path declared in the agent's `agents.d/<id>.yaml` fragment and uses it to build the runtime context for that agent's Claude Code (or other substrate) sessions.
 
-Personas are owned by the **bot package** (cortex#58 D5). The bot author edits `persona.md` in the bot's source repo; `arc install <bot>` drops it under `~/.config/cortex/personas/<id>.md`. Cortex's `personas/` directory is rendered output, not a source of truth.
+Personas are owned by the **bot package** (cortex#58 D5). The bot author edits `persona.md` in the bot's source repo; `arc install <bot>` drops it under `~/.config/metafactory/cortex/personas/<id>.md`. Cortex's `personas/` directory is rendered output, not a source of truth.
 
 ## Schema
 
@@ -68,7 +68,7 @@ Surface findings as blockers / majors / suggestions / nits with clear
 file:line references and proposed fixes.
 ```
 
-This is enough to ship a working sub-bot. `arc install` drops this file at `~/.config/cortex/personas/echo.md`; cortex picks it up via the `persona:` path in the agent's `agents.d/echo.yaml` fragment.
+This is enough to ship a working sub-bot. `arc install` drops this file at `~/.config/metafactory/cortex/personas/echo.md`; cortex picks it up via the `persona:` path in the agent's `agents.d/echo.yaml` fragment.
 
 ### Comprehensive (all optional fields populated)
 

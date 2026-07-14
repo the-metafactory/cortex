@@ -177,7 +177,7 @@ github:
 # mission-control.db. ONE db per stack is REQUIRED: the hook cursor lives beside
 # the db, so two stacks sharing a dbPath would also share cursor state. Leave
 # dbPath empty to get the per-slug default
-# (~/.local/share/cortex/mc/{slug}/mission-control.db).
+# (~/.local/share/metafactory/cortex/{slug}/mission-control.db).
 #
 # #1044 — producer/server split. The embed has two halves:
 #   * the PRODUCER — initDatabase + the ingestor (HookStreamPoller) — always
@@ -233,7 +233,7 @@ mc:
     # sibling db that's missing/locked/too-old degrades to absent, never crashing
     # the feed. Set false to fall back to the #989 bus path (agents only, no trees).
     dbRead: true
-    configRoot: ""                 # empty = the serving config dir's parent (~/.config/cortex)
+    configRoot: ""                 # empty = the serving config dir's parent (~/.config/metafactory/cortex)
     # Explicit roster OVERRIDES auto-discovery when non-empty (precedence:
     # explicit > discovery). Use it to add a bus the scan can't see, or to
     # narrow the set. Each entry needs a connectable creds file.

@@ -30,11 +30,11 @@ cd cortex
 bun install
 
 # Copy and adapt the example config
-cp cortex.yaml.example ~/.config/cortex/cortex.yaml
+cp cortex.yaml.example ~/.config/metafactory/cortex/cortex.yaml
 
 # Validate schema + agent registry without starting services
 bun src/cli/cortex/commands/cortex.ts start \
-    --config ~/.config/cortex/cortex.yaml --dry-run
+    --config ~/.config/metafactory/cortex/cortex.yaml --dry-run
 ```
 
 ## Development workflow

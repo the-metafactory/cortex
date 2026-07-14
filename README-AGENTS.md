@@ -97,7 +97,7 @@ cortex --version          # confirm it resolves
 manifest lifecycle (`scripts.postinstall`); a manual clone does not, so without
 this step the daemon starts against missing scaffolding. It creates the runtime
 directories (`~/.claude/events/{raw,published}`, `~/.claude/{logs,relay}`,
-`~/.config/cortex/{logs,state}`), installs the default relay policy (never
+`~/.local/state/metafactory/cortex/{logs,state}`), installs the default relay policy (never
 clobbering an existing `~/.claude/relay/relay-policy.yaml`), marks the entry-point
 scripts executable, and on macOS renders the launchd plists.
 
@@ -116,7 +116,7 @@ For an arc-managed install, update with `arc upgrade cortex` instead (Path A).
 ## 3. Configure a stack
 
 cortex uses the **config-split (multi-file) layout** as the standard. A stack's
-config is a directory under `~/.config/cortex/<slug>/`; the daemon's `--config`
+config is a directory under `~/.config/metafactory/cortex/<slug>/`; the daemon's `--config`
 points at a **pointer file** inside it. The single-file `cortex.yaml`
 (`cortex.yaml.example`) is legacy — it still loads, but do not create new
 installs with it.
@@ -131,9 +131,9 @@ cortex stack create <slug> --principal <principal>
 cortex stack create <slug> --principal <principal> --apply
 ```
 
-This scaffolds `~/.config/cortex/<slug>/` "born aligned": dir basename == slug
+This scaffolds `~/.config/metafactory/cortex/<slug>/` "born aligned": dir basename == slug
 == trailing segment of `stack.id`. It refuses dir collisions and duplicate
-`stack.id`s. Manual fallback: `cp -R docs/config-layout ~/.config/cortex/<slug>`
+`stack.id`s. Manual fallback: `cp -R docs/config-layout ~/.config/metafactory/cortex/<slug>`
 and rename the pointer file to `<slug>.yaml`.
 
 ### 3.2 The files and what to fill
@@ -224,21 +224,21 @@ same way — no system-level / one-stack-per-machine fallback needed.
 
 ```bash
 # Validate schema + agent registry resolution without starting:
-cortex start --config ~/.config/cortex/<slug>/<slug>.yaml --dry-run
+cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --dry-run
 
 # Start (launchd/systemd handles this in steady state):
-cortex start --config ~/.config/cortex/<slug>/<slug>.yaml
+cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
 ```
 
 Daemonised: `~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` →
 `cortex start --config …/<slug>.yaml`, logs to
-`~/.config/cortex/logs/cortex-<slug>.{log,error.log}`.
+`~/.local/state/metafactory/cortex/logs/cortex-<slug>.{log,error.log}`.
 
 **Healthy-boot gate** — all of these lines must appear:
 
 ```bash
 grep -E "Stack:|connected to nats|policy-engine active|connected as|Guild:" \
-  ~/.config/cortex/logs/cortex-<slug>.log | tail
+  ~/.local/state/metafactory/cortex/logs/cortex-<slug>.log | tail
 ```
 
 Expect: `Stack: <principal>/<slug>` · `connected to nats://…:<port>` ·
@@ -270,7 +270,7 @@ full procedure in [`docs/sop-network-join.md`](docs/sop-network-join.md) and
 ```bash
 cortex provision-stack register <principal> --seed-path <seed> \
   --registry-url https://network.meta-factory.ai --stack-id <principal>/<slug>
-cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml --apply
+cortex network join <network> --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --apply
 ```
 
 A principal's **2nd+ stack** must pass `--principal-seed <root-seed>` (the
@@ -292,7 +292,7 @@ CORTEX_CHANNEL=<label> CORTEX_AGENT_NAME=<display> CORTEX_AGENT_ID=<id> \
 
 `CORTEX_CHANNEL` is the required enabler; `CORTEX_PRINCIPAL` stamps the human
 for correlation. Event pipeline: CC hooks → `~/.claude/events/raw/` →
-cortex-relay → `~/.claude/events/published/` → daemon → bus → dashboard.
+cortex-relay → `~/.local/share/metafactory/cortex/events/published/` → daemon → bus → dashboard.
 
 **Discord CLI** from any terminal:
 

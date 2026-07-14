@@ -10,7 +10,7 @@
 # But the STANDARD layout is now the CONFIG-SPLIT (multi-file) layout. A fresh
 # install should NOT copy this file; copy the template directory instead:
 #
-#     cp -R docs/config-layout ~/.config/cortex/<your-stack-slug>
+#     cp -R docs/config-layout ~/.config/metafactory/cortex/<your-stack-slug>
 #     # → fill the <REPLACE_ME> markers, point --config at the pointer file
 #
 # See **docs/config-layout/** (the canonical, self-documenting config template)
@@ -23,7 +23,7 @@
 # cortex.yaml — example configuration (single-file form)
 #
 # Copy this file to one of the locations the cortex CLI scans (default:
-# `~/.config/cortex/cortex.yaml`) and replace every `<REPLACE_ME>` marker
+# `~/.config/metafactory/cortex/cortex.yaml`) and replace every `<REPLACE_ME>` marker
 # below with your own values. The file parses cleanly out of the box —
 # replace markers gradually as you wire each surface.
 #
@@ -318,7 +318,7 @@ policy:
   #       leaf_node: nats-leaf-research   # routing label / link-pool key
   #       nats:                           # OPTIONAL — omit to ride primary link
   #         url: nats://research:4222
-  #         credsPath: ~/.config/cortex/creds/research.creds
+  #         credsPath: ~/.config/metafactory/cortex/creds/research.creds
   #       peers:
   #         - principal_id: peer-principal              # <REPLACE_ME>
   #           stack_id: peer-principal/peer-stack       # <REPLACE_ME> ({principal}/{slug})
@@ -472,8 +472,8 @@ github:
 # paths — filesystem locations used by the runner + taps
 # -----------------------------------------------------------------------------
 paths:
-  publishedEventsDir: ~/.claude/events/published
-  logDir: ~/.config/cortex/logs
+  publishedEventsDir: ~/.local/share/metafactory/cortex/events/published
+  logDir: ~/.local/state/metafactory/cortex/logs
 
 # -----------------------------------------------------------------------------
 # networks — optional cross-stack federation files (G-500)

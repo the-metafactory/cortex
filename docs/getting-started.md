@@ -13,10 +13,15 @@ stack-onboarding SOP).
 
 ## Fresh install
 
-If you have never run cortex before, you have no `~/.config/cortex/*.yaml`
+If you have never run cortex before, you have no `~/.config/metafactory/cortex/*.yaml`
 yet — that's expected. `cortex start --config …` has nothing to validate until
 you create a stack config, and the migrate path below is only for those
 coming from an existing **grove** install.
+
+> **Config root is `~/.config/metafactory/cortex` (XDG, cortex#1867).** Fresh
+> installs use it directly. An existing install on the legacy `~/.config/cortex`
+> root keeps working and migrates automatically on the next `arc upgrade cortex`
+> — the existence-gated resolver reads the legacy root until then.
 
 **Prerequisite — nats-server with JetStream.** cortex needs its own,
 already-running NATS server (JetStream enabled); it does not install or
@@ -32,7 +37,7 @@ config; this page only orders the steps.
 **Manual `git clone` installs — run `./scripts/postinstall.sh` first.** `arc
 install cortex` runs it for you via the manifest lifecycle; a raw clone does not,
 so run it once from the repo root before the steps below. It creates the runtime
-dirs (`~/.claude/events/{raw,published}`, `~/.config/cortex/{logs,state}`),
+dirs (`~/.claude/events/{raw,published}`, `~/.local/state/metafactory/cortex/{logs,state}`),
 installs the default relay policy, and on macOS renders the launchd plists. See
 [`README-AGENTS.md` §2 Path B](../README-AGENTS.md#2-install).
 
@@ -56,7 +61,7 @@ The fresh-install happy path, in order:
    ```
 
    - `<slug>` is your stack's label (e.g. `work`, `community`) — becomes the
-     config dir name `~/.config/cortex/<slug>/` and the trailing segment of
+     config dir name `~/.config/metafactory/cortex/<slug>/` and the trailing segment of
      `stack.id`.
    - `<principal>` is your identity (e.g. your name, lowercase) — the first
      half of `stack.id = <principal>/<slug>`. **Required on a fresh install**:
@@ -67,7 +72,7 @@ The fresh-install happy path, in order:
      left only for true secrets (Discord token/guild/channels).
 
 2. **Fill the `<REPLACE_ME>` markers** in the generated
-   `~/.config/cortex/<slug>/stacks/<slug>.yaml` and `surfaces/surfaces.yaml`
+   `~/.config/metafactory/cortex/<slug>/stacks/<slug>.yaml` and `surfaces/surfaces.yaml`
    (Discord bot token, guild id, channel ids, your Discord id), and point
    `system/system.yaml`'s `nats.url` at the bus from step 0.
 
@@ -93,10 +98,10 @@ The fresh-install happy path, in order:
 
    ```bash
    # Validate schema + agent registry resolution without starting:
-   cortex start --config ~/.config/cortex/<slug>/<slug>.yaml --dry-run
+   cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --dry-run
 
    # Start for real:
-   cortex start --config ~/.config/cortex/<slug>/<slug>.yaml
+   cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
    ```
 
    See [`docs/sop-stack-onboarding.md`](sop-stack-onboarding.md) for the full
@@ -112,13 +117,13 @@ above if you have no `~/.config/grove/bot.yaml`):
 ```bash
 bun <cortex-repo>/src/cli/cortex/commands/migrate-config.ts \
     ~/.config/grove/bot.yaml \
-    --out ~/.config/cortex/cortex.yaml
+    --out ~/.config/metafactory/cortex/cortex.yaml
 ```
 
 Then validate the converted config the same way:
 
 ```bash
-cortex start --config ~/.config/cortex/cortex.yaml --dry-run
+cortex start --config ~/.config/metafactory/cortex/cortex.yaml --dry-run
 ```
 
 `migrate-config.ts` supports `--check` (validate + print a conversion report

@@ -21,7 +21,7 @@ During the MIG-7 cutover window the legacy `GROVE_*` env vars remain accepted by
 
 `CORTEX_PRINCIPAL` is the vocabulary-migration (R9) rename of the operator-the-human env var. During the transition release the EventLogger still accepts the legacy `CORTEX_OPERATOR` (emits a deprecation warning) and `GROVE_OPERATOR` names; both fallbacks are removed in the breaking v3.0.0.
 
-**Event pipeline:** CC hooks → `~/.claude/events/raw/` → cortex-relay (policy filter) → `~/.claude/events/published/` → cortex daemon (`ai.meta-factory.cortex.meta-factory` and/or `.work` plist) → bus → dashboard API → `cortex.meta-factory.ai`
+**Event pipeline:** CC hooks → `~/.claude/events/raw/` → cortex-relay (policy filter) → `~/.local/share/metafactory/cortex/events/published/` → cortex daemon (`ai.meta-factory.cortex.meta-factory` and/or `.work` plist) → bus → dashboard API → `cortex.meta-factory.ai`
 
 **Pre-configured wrapper:** `cldyo-live` (at `~/.local/bin/`) starts an instrumented Opus session. Plain `cldyo` stays dark (no events). Use `cldyo-live` when you want your work visible on the dashboard.
 

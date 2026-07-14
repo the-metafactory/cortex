@@ -4,7 +4,7 @@
 #
 # This is the file your cortex daemon's `--config` flag points at:
 #
-#     cortex start --config ~/.config/cortex/research/research.yaml
+#     cortex start --config ~/.config/metafactory/cortex/research/research.yaml
 #
 # Its CONTENTS ARE IGNORED. The loader does NOT parse this file for config — it
 # uses only its **dirname** to select the layout. When the composer

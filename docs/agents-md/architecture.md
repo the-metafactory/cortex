@@ -32,7 +32,7 @@ Internal componentisation (per `docs/architecture.md` §8):
 - `src/common/` — Shared types + utilities: agent-detection, event-processor, event-utils, github-events, agents/, config/, timeout, types/, usage.
 - `src/services/` — launchd plists: `ai.meta-factory.cortex.stack.plist` (generic template — every discovered stack, incl. `meta-factory`/`work`, renders from this one; cortex#1848 removed the two personal-slug templates), `ai.meta-factory.cortex.relay.plist` (shared relay).
 - `src/settings/` — `cortex-hooks.json` (CC hook registration).
-- Config: `~/.config/cortex/cortex.yaml` (post-MIG-7.9 — migrated from grove-v2 `~/.config/grove/bot.yaml` via `migrate-config`).
+- Config: `~/.config/metafactory/cortex/cortex.yaml` (post-MIG-7.9 — migrated from grove-v2 `~/.config/grove/bot.yaml` via `migrate-config`).
 
 Read `docs/architecture.md` for the full layered model + agent + presence/renderer model + event architecture + agent task routing pattern. Read `docs/plan-cortex-migration.md` for the per-phase migration plan (MIG-0..MIG-8) that drives all current work.
 
