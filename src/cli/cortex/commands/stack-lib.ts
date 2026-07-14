@@ -360,7 +360,7 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   const Display = displayName;
 
   return [
-    { relPath: "system/system.yaml", contents: systemYaml(slug) },
+    { relPath: "system/system.yaml", contents: systemYaml(slug, seedPath) },
     { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
     { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath) },
     { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
@@ -368,10 +368,11 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   ];
 }
 
-function systemYaml(slug: string): string {
+function systemYaml(slug: string, seedPath: string): string {
   // The cross-cutting substrate layer — substituted from
-  // docs/config-layout/system/system.yaml. Identity is left at the safe
-  // conventional default; `arc upgrade cortex` auto-provisions the seed.
+  // docs/config-layout/system/system.yaml. Identity's seedPath is the resolved
+  // per-stack conventional path (matches stacks/<slug>.yaml's nkey_seed_path);
+  // `arc upgrade cortex` auto-provisions the seed there.
   return `# =============================================================================
 # system.yaml — the cross-cutting machine / substrate layer (IAW CFG.b)
 # =============================================================================
@@ -419,13 +420,14 @@ nats:
   # \`~/.config/nats/${slug}.creds\`). Two different NATS accounts MUST be two
   # different files — a shared path would clobber on the second mint.
   credsPath: ~/.config/nats/${slug}-bot.creds
-  # NKey identity for envelope signing. The seedPath is the conventional path
-  # \`arc upgrade cortex\` auto-provisions on first install; publicKey is pinned
-  # after first boot (paste from the cortex log \`stack signing key staged …\`).
+  # NKey identity for envelope signing. seedPath is the conventional per-stack
+  # path \`arc upgrade cortex\` auto-provisions on first install; publicKey holds
+  # the SAME U-prefixed key you pin as \`nkey_pub\` in stacks/${slug}.yaml — paste
+  # it from the cortex log \`stack signing key staged …\` after first boot.
   identity:
-    seedPath: ~/.config/nats/cortex.nk
+    seedPath: ${seedPath}
     # Valid-FORMAT placeholder so this file loads; REPLACE after first boot.
-    publicKey: ${NKEY_PUB_PLACEHOLDER}   # <REPLACE_ME>: U-prefixed pubkey
+    publicKey: ${NKEY_PUB_PLACEHOLDER}   # <REPLACE_ME>: same value as nkey_pub (U-prefixed)
 
 bus:
   review:

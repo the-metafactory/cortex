@@ -145,6 +145,17 @@ describe("renderScaffold", () => {
     expect(stack?.contents).toContain("assistant");
   });
 
+  test("system/system.yaml identity.seedPath carries the resolved per-stack seed path (cortex-<slug>.nk, not cortex.nk)", () => {
+    // Regression (Vincent Zontini report): systemYaml() previously ignored the
+    // resolved seedPath and hardcoded `~/.config/nats/cortex.nk`, so the
+    // generated system.yaml disagreed with stacks/<slug>.yaml's nkey_seed_path
+    // and made users think the identity block needed different data.
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).toContain("seedPath: ~/.config/nats/cortex-demo.nk");
+    expect(system?.contents).not.toContain("seedPath: ~/.config/nats/cortex.nk");
+  });
+
   test("system/system.yaml seeds the bus/bot credsPath (~/.config/nats/<slug>-bot.creds), distinct from the federation default", () => {
     // v5.30.2 (C-1265c): a from-scratch stack carries nats.credsPath explicitly,
     // so `cortex network make-live` needs no --creds flag. The path is the
