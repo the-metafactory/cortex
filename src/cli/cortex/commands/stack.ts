@@ -87,6 +87,10 @@ const DEFAULT_NATS_DIR = "~/.config/nats";
 const DEFAULT_LAUNCH_AGENTS_DIR = "~/Library/LaunchAgents";
 /** Default agent id for the scaffolded stack — neutral placeholder, not a personal persona name (#1338). */
 const DEFAULT_AGENT_ID = "assistant";
+/** Default `nats.url` for the generated system.yaml — 4222 is the NATS default
+ *  and the metafactory convention. Overridable with --nats-url when the stack's
+ *  bus listens on another port, so the scaffold is born matching it (#1453). */
+const DEFAULT_NATS_URL = "nats://127.0.0.1:4222";
 
 const SPEC: SubcommandSpec<StackSubcommand> = {
   cliName: "stack",
@@ -97,6 +101,7 @@ const SPEC: SubcommandSpec<StackSubcommand> = {
         "--principal": "value",
         "--display-name": "value",
         "--agent": "value",
+        "--nats-url": "value",
         "--config-dir": "value",
         "--apply": "bool",
         "--dry-run": "bool",
@@ -265,6 +270,19 @@ function runCreate(
   const stackId = `${principal}/${slug}`;
   const seedPath = `~/.config/nats/cortex-${slug}.nk`;
 
+  // --- nats.url: default to the 4222 convention, override with --nats-url ---
+  // The generated system.yaml MUST dial the port the stack's nats-server
+  // listens on. A user who stood the bus up on a non-default port (e.g. 4242)
+  // otherwise gets a scaffold silently pointing at 4222 (#1453).
+  const natsUrl = optionalValueFlag(flags, "--nats-url") ?? DEFAULT_NATS_URL;
+  if (!/^(nats|tls):\/\/[^\s]+$/.test(natsUrl)) {
+    return usageError(
+      "create",
+      `--nats-url "${natsUrl}" must be a nats:// or tls:// URL (e.g. nats://127.0.0.1:4242)`,
+      json,
+    );
+  }
+
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return usageError("create", applyRes.reason, json);
 
@@ -307,7 +325,7 @@ function runCreate(
   }
 
   // --- render --------------------------------------------------------------
-  const files = renderScaffold({ slug, principal, stackId, agentId, displayName, seedPath });
+  const files = renderScaffold({ slug, principal, stackId, agentId, displayName, seedPath, natsUrl });
 
   // --- dry-run (DEFAULT): print the file set, touch NOTHING ----------------
   if (!applyRes.apply) {

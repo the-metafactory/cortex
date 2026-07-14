@@ -339,6 +339,11 @@ export interface ScaffoldInputs {
   /** Conventional seed path (`~/.config/nats/cortex-<slug>.nk`). NOT generated
    *  here — `arc upgrade cortex` auto-provisions the seed on first install. */
   seedPath: string;
+  /** The `nats.url` the generated system.yaml dials. MUST match the port the
+   *  stack's nats-server listens on. Defaults to the metafactory-convention
+   *  `nats://127.0.0.1:4222`; set via `--nats-url` when the bus is on another
+   *  port so the scaffold is born matching it (cortex#1453). */
+  natsUrl: string;
 }
 
 /** A scaffold file to write, relative to the new stack's dir. */
@@ -356,11 +361,11 @@ export interface ScaffoldFile {
  * later (see `arc upgrade cortex` / postupgrade.sh §2).
  */
 export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
-  const { slug, principal, stackId, agentId, displayName, seedPath } = inputs;
+  const { slug, principal, stackId, agentId, displayName, seedPath, natsUrl } = inputs;
   const Display = displayName;
 
   return [
-    { relPath: "system/system.yaml", contents: systemYaml(slug) },
+    { relPath: "system/system.yaml", contents: systemYaml(slug, natsUrl) },
     { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
     { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath) },
     { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
@@ -368,7 +373,7 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   ];
 }
 
-function systemYaml(slug: string): string {
+function systemYaml(slug: string, natsUrl: string): string {
   // The cross-cutting substrate layer — substituted from
   // docs/config-layout/system/system.yaml. Identity is left at the safe
   // conventional default; `arc upgrade cortex` auto-provisions the seed.
@@ -408,17 +413,30 @@ paths:
 # pattern double-binds the boot subscriber (the double-message problem,
 # cortex#491). The dispatch-listener self-subscribes its own interest at start.
 nats:
-  url: nats://127.0.0.1:4222
+  # url — MUST match the port your nats-server for this stack listens on
+  # (its \`listen:\` in ~/.config/nats/<slug>.conf). 4222 is the NATS default and
+  # the metafactory convention; pick another (e.g. 4223/4224) only if you stood
+  # the bus up on a different port, and set --nats-url at \`cortex stack create\`
+  # time so this line is born matching your bus (cortex#1453).
+  url: ${natsUrl}
   name: cortex
   subjects: []
   # credsPath — the daemon's OWN bus/bot creds, minted under the \`agents\` account
-  # by \`cortex network make-live\` (via add-bot). The \`-bot\` suffix is LOAD-BEARING:
-  # it keeps this path DISTINCT from stacks/${slug}.yaml's
-  # \`stack.nats_infra.creds_path\` (the FEDERATION creds, minted at
-  # \`cortex network join\` under a DIFFERENT account, conventional default
-  # \`~/.config/nats/${slug}.creds\`). Two different NATS accounts MUST be two
-  # different files — a shared path would clobber on the second mint.
-  credsPath: ~/.config/nats/${slug}-bot.creds
+  # by \`cortex network make-live\` (via add-bot). COMMENTED OUT by default: a
+  # fresh, local-only stack runs on a hard-isolated ANONYMOUS bus (no operator
+  # mode, no minted creds — SOP-stack-onboarding Part 1), so a credsPath here
+  # points at a file that does not exist yet and the runtime logs
+  # "failed to connect — continuing without NATS: ENOENT … <slug>-bot.creds",
+  # leaving the whole bus plane dark (cortex#1453). \`cortex network make-live\`
+  # mints the creds AND writes this line back (it defaults credsPath to the same
+  # path and persists it when defaulted, cortex#1265) when you convert this bus
+  # to operator-mode to federate — so uncommenting by hand is not required.
+  # The \`-bot\` suffix is LOAD-BEARING: it keeps this path DISTINCT from
+  # stacks/${slug}.yaml's \`stack.nats_infra.creds_path\` (the FEDERATION creds,
+  # minted at \`cortex network join\` under a DIFFERENT account, conventional
+  # default \`~/.config/nats/${slug}.creds\`). Two different NATS accounts MUST be
+  # two different files — a shared path would clobber on the second mint.
+  # credsPath: ~/.config/nats/${slug}-bot.creds
   # NKey identity for envelope signing. The seedPath is the conventional path
   # \`arc upgrade cortex\` auto-provisions on first install; publicKey is pinned
   # after first boot (paste from the cortex log \`stack signing key staged …\`).
