@@ -28,6 +28,8 @@
  *      every classified site) is later-wave work.
  */
 
+import { join } from "path";
+
 /** Structured prefix every fallback diagnostic carries (the guard greps this). */
 export const XDG_FALLBACK_PREFIX = "xdg-fallback:";
 
@@ -43,6 +45,35 @@ export function readDirEnv(name: string): string | undefined {
   if (raw === undefined) return undefined;
   const v = raw.trim();
   return v.length > 0 ? v : undefined;
+}
+
+/**
+ * cortex#1909 (G-38, EPIC cortex#1867) — the single resolver for the systemd
+ * *user* unit directory, honoring `$XDG_CONFIG_HOME` exactly as systemd itself
+ * does (`man systemd.unit` → "Table 1: Load paths"): the per-user unit dir is
+ * `$XDG_CONFIG_HOME/systemd/user`, and `$XDG_CONFIG_HOME` defaults to
+ * `$HOME/.config` when unset/empty. Three sites hardcoded `~/.config/systemd/user`
+ * and so silently ignored a relocated `$XDG_CONFIG_HOME` — the very variable this
+ * epic honors — pointing daemon discovery / restart at the WRONG dir on any box
+ * that moved its config home. Route all three through this.
+ *
+ * Precedence (highest first):
+ *   1. explicit `env.xdgConfigHome` — the injectable test/caller seam;
+ *   2. the `$XDG_CONFIG_HOME` process env (blank/whitespace-only ⇒ unset, via
+ *      {@link readDirEnv}, so `XDG_CONFIG_HOME=` keeps the `$HOME/.config`
+ *      default rather than resolving to `/systemd/user`);
+ *   3. `$HOME/.config` (systemd's documented default), where `$HOME` is
+ *      `env.home` when injected, else the process `$HOME`.
+ *
+ * Pure over its injected inputs — no fs, no side effects — so callers can pin a
+ * scratch `$HOME`/`$XDG_CONFIG_HOME` in a hermetic test without touching a real
+ * `~/.config`.
+ */
+export function systemdUserDir(env: { home?: string; xdgConfigHome?: string } = {}): string {
+  const xdgConfigHome = env.xdgConfigHome ?? readDirEnv("XDG_CONFIG_HOME");
+  const home = env.home ?? process.env.HOME ?? "~";
+  const configHome = xdgConfigHome ?? join(home, ".config");
+  return join(configHome, "systemd", "user");
 }
 
 /**

@@ -20,10 +20,13 @@
  *     via `launchctl kickstart -k gui/<uid>/<label>` reading the plist
  *     `<key>Label</key>`. This is the EXISTING behavior, lifted here verbatim.
  *   - **systemd (Linux):** ensure the unit `[Service] ExecStart=` carries
- *     `-c <config>` (S3-sibling `ensureUnitConfigArg`), restart via
- *     `systemctl [--user] restart <unit>` reading the unit's `.service` id
- *     (the systemd analogue of the plist Label). `--user` vs system scope is
- *     chosen from the unit's on-disk location.
+ *     `-c <config>` (S3-sibling `ensureUnitConfigArg`), then `systemctl
+ *     [--user] daemon-reload` + `systemctl [--user] restart <unit>` reading the
+ *     unit's `.service` id (the systemd analogue of the plist Label). The
+ *     `daemon-reload` is REQUIRED (cortex#1909): systemd caches unit files, so a
+ *     rewritten `ExecStart=` does not take effect on `restart` alone — unlike
+ *     `launchctl kickstart -k`, which re-reads the plist implicitly. `--user`
+ *     vs system scope is chosen from the unit's on-disk location.
  *
  * {@link selectNatsServiceManager} picks the implementation by the descriptor
  * type (plist XML vs systemd unit — detected from path extension, falling back
@@ -311,12 +314,38 @@ class SystemdServiceManager implements NatsServiceManager {
     const unitText = readFileSync(this.unitPath, "utf-8");
     const serviceId = systemdUnitServiceId(this.unitPath, unitText);
     const scope = systemdScope(this.unitPath);
-    const argv =
-      scope === "user"
-        ? ["systemctl", "--user", "restart", serviceId]
-        : ["systemctl", "restart", serviceId];
+    const scopeFlag = scope === "user" ? ["--user"] : [];
+    const scopeLabel = scope === "user" ? "--user " : "";
+
+    // cortex#1909 (config-cutover re-render, G-09) — `daemon-reload` BEFORE
+    // `restart`. Unlike `launchctl kickstart -k`, which re-reads the plist on
+    // every kick, systemd caches the unit file: a rewritten `ExecStart=`
+    // (`ensureConfigLoaded` repointing `--config` to the moved canonical path)
+    // does NOT take effect on `restart` alone — the manager keeps running the
+    // OLD argv until `daemon-reload` reloads the unit from disk. Without this
+    // the Linux config split-brain the macOS leg fixes (#763/T17) stays live:
+    // the daemon restarts still pointing at the pre-move config. `daemon-reload`
+    // is idempotent + cheap, so we always run it (mirroring kickstart's implicit
+    // re-read) rather than tracking whether THIS call mutated the unit.
+    const reloadArgv = ["systemctl", ...scopeFlag, "daemon-reload"];
     // #821 item-2 — `exec` (Bun.spawn) THROWS SYNCHRONOUSLY on ENOENT (systemctl
     // not on PATH). Honour the "never throws" contract → { ok: false }.
+    try {
+      const { code, stderr } = await this.exec(reloadArgv);
+      if (code !== 0) {
+        return {
+          ok: false,
+          reason: `systemctl ${scopeLabel}daemon-reload exited ${code.toString()}: ${stderr.trim()}`,
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `systemctl ${scopeLabel}daemon-reload could not run: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const argv = ["systemctl", ...scopeFlag, "restart", serviceId];
     let code: number;
     let stderr: string;
     try {
@@ -324,13 +353,13 @@ class SystemdServiceManager implements NatsServiceManager {
     } catch (err) {
       return {
         ok: false,
-        reason: `systemctl ${scope === "user" ? "--user " : ""}restart ${serviceId} could not run: ${err instanceof Error ? err.message : String(err)}`,
+        reason: `systemctl ${scopeLabel}restart ${serviceId} could not run: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
     if (code !== 0) {
       return {
         ok: false,
-        reason: `systemctl ${scope === "user" ? "--user " : ""}restart ${serviceId} exited ${code.toString()}: ${stderr.trim()}`,
+        reason: `systemctl ${scopeLabel}restart ${serviceId} exited ${code.toString()}: ${stderr.trim()}`,
       };
     }
     return { ok: true };

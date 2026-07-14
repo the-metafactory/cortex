@@ -125,6 +125,16 @@ export function findCortexDaemonDescriptor(opts: {
   }
   // Linux (systemd user units). The clawbox daemon is `cortex-bot.service`; match
   // by the ExecStart `--config` rather than a hard-coded unit name.
+  //
+  // cortex#1909 G-39 (NAMING DECISION — GRANDFATHER): the name pattern is the
+  // maximally-permissive `/\.service$/`, NEVER a specific label. This is a
+  // deliberate grandfather: a cortex daemon unit named under EITHER the frozen
+  // doc convention (`cortex-<slug>.service`, plain) OR the shipped
+  // `ai.meta-factory.cortex.*` label style is discovered identically, purely by
+  // the ExecStart `--config` match. No forced rename/disable migration is done —
+  // nothing is deployed on Linux yet, so forcing a rename would only risk
+  // orphaning a hand-authored unit for no gain. `--config` uniqueness (the relay/
+  // mc siblings carry no `--config`) keeps the match unambiguous regardless of name.
   return scanDir(opts.systemdUserDir, /\.service$/, io, (text) =>
     configMatches(parseUnitExecStartArgs(text), cortexConfigPath),
   );

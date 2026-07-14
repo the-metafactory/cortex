@@ -37,6 +37,7 @@ import { parse as parseYaml, parseDocument } from "yaml";
 
 import { expandTilde } from "../../../common/config/loader";
 import { resolveConfigDir } from "../../../common/config/config-path";
+import { systemdUserDir } from "../../../common/xdg";
 import {
   ensureLeafInclude,
   leafIncludeDirectivePresent,
@@ -1049,7 +1050,9 @@ function assertDaemonLoadsConfig(cfg: LivePortsConfig): void {
     platform,
     cortexConfigPath: cfg.cortexConfigPath,
     launchAgentsDir: override?.launchAgentsDir ?? expandTilde("~/Library/LaunchAgents"),
-    systemdUserDir: override?.systemdUserDir ?? expandTilde("~/.config/systemd/user"),
+    // cortex#1909 (G-38) — honor $XDG_CONFIG_HOME instead of hardcoding
+    // ~/.config/systemd/user (the override seam still wins for tests).
+    systemdUserDir: override?.systemdUserDir ?? systemdUserDir(),
     io: override?.io ?? liveDaemonLocatorIO,
   });
   if (descriptorPath === undefined) {
@@ -1141,11 +1144,12 @@ function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
         platform,
         cortexConfigPath: cfg.cortexConfigPath,
         launchAgentsDir: expandTilde("~/Library/LaunchAgents"),
-        systemdUserDir: expandTilde("~/.config/systemd/user"),
+        // cortex#1909 (G-38) — $XDG_CONFIG_HOME-aware systemd user unit dir.
+        systemdUserDir: systemdUserDir(),
         io: liveDaemonLocatorIO,
       });
       if (descriptorPath === undefined) {
-        const where = platform === "darwin" ? "~/Library/LaunchAgents" : "~/.config/systemd/user";
+        const where = platform === "darwin" ? "~/Library/LaunchAgents" : systemdUserDir();
         return {
           ok: false,
           reason:

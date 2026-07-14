@@ -164,6 +164,37 @@ function verifyPlistPaths(xml: string): PathVerdict[] {
   return out;
 }
 
+/**
+ * cortex#1909 (G-09) — the invariant-(iii) verifier over a systemd `.service`
+ * unit: the Linux parallel of {@link verifyPlistPaths}. Collect every filesystem
+ * path the unit's `ExecStart=` names and classify extant-ness:
+ *   - ExecStart absolute-path args (minus the `--config` value) → the exec /
+ *     script FILE must exist (the relay.ts / cortex-bin class G-03/G-09).
+ *   - the `--config` value → the config FILE must exist (the Linux parallel of
+ *     the plist `--config` check — this is what invariant (iii) previously only
+ *     asserted for launchd plists).
+ *   - WorkingDirectory=… → the DIR must exist.
+ */
+function verifyUnitPaths(unitText: string): PathVerdict[] {
+  const args = parseUnitExecStartArgs(unitText);
+  const config = configArgValue(args);
+  const out: PathVerdict[] = [];
+
+  for (const a of args) {
+    if (!a.startsWith("/")) continue; // "start", "--config", flags
+    if (a === config) continue; // handled as config below
+    out.push({ path: a, kind: "exec", extant: existsSync(a) });
+  }
+  if (config !== undefined) {
+    out.push({ path: config, kind: "config", extant: existsSync(config) });
+  }
+  const workdir = /^\s*WorkingDirectory\s*=\s*(.+)$/m.exec(unitText)?.[1]?.trim();
+  if (workdir !== undefined && workdir !== "") {
+    out.push({ path: workdir, kind: "workdir", extant: existsSync(workdir) });
+  }
+  return out;
+}
+
 /** Build a fully-populated scratch fleet layout + the two rendered plists. */
 function renderFleet(): {
   home: string;
@@ -365,30 +396,68 @@ describe("(iii) installed plist ProgramArguments + WorkingDirectory + Std*Path +
     expect(missing.some((v) => v.path.endsWith("relay.ts"))).toBe(true);
   });
 
-  test("(Linux) a .service ExecStart path is verified extant (G-09)", () => {
-    const { cortexDir } = renderFleet();
+  test("(Linux) a correctly-installed .service has its ExecStart exec + --config + WorkingDirectory extant (G-09)", () => {
+    const { cortexDir, configPath } = renderFleet();
     const relayTs = join(cortexDir, "src", "taps", "cc-events", "relay.ts");
+    // cortex#1909 — a daemon unit carries BOTH an exec AND `--config <path>`;
+    // invariant (iii) now asserts the config value extant too (the Linux
+    // parallel of the plist `--config` check), not just the exec.
     const unit = [
+      "[Unit]",
+      "Description=cortex daemon",
       "[Service]",
-      `ExecStart=/usr/bin/bun ${relayTs} start`,
-      "WorkingDirectory=" + cortexDir,
+      `ExecStart=/usr/bin/bun ${relayTs} start --config ${configPath}`,
+      `WorkingDirectory=${cortexDir}`,
       "[Install]",
       "WantedBy=default.target",
     ].join("\n");
-    const args = parseUnitExecStartArgs(unit);
-    const execPaths = args.filter((a) => a.startsWith("/"));
-    expect(execPaths).toContain(relayTs);
-    for (const p of execPaths) {
-      // /usr/bin/bun may be absent on CI; assert the CORTEX-owned exec is extant
-      // (the migration-relevant path). The system interpreter is out of scope.
-      if (p.startsWith(cortexDir)) expect(existsSync(p)).toBe(true);
-    }
 
-    const staleUnit = unit.replace(relayTs, "/nonexistent/pkg/repos/relay.ts");
-    const staleArgs = parseUnitExecStartArgs(staleUnit);
-    const staleCortexExec = staleArgs.find((a) => a.includes("/pkg/repos/"));
-    expect(staleCortexExec).toBeDefined();
-    expect(existsSync(staleCortexExec!)).toBe(false); // FLAGGED
+    const verdicts = verifyUnitPaths(unit);
+    // sanity: we actually exercised exec + config + workdir kinds.
+    expect(new Set(verdicts.map((v) => v.kind))).toEqual(
+      new Set(["exec", "config", "workdir"]),
+    );
+    // The CORTEX-owned exec, the config file, and the workdir are all extant.
+    // (/usr/bin/bun may be absent on CI, but it is not under cortexDir so it is
+    // not among the cortex-owned exec verdicts we hard-assert.)
+    const cortexOwned = verdicts.filter(
+      (v) => v.kind !== "exec" || v.path.startsWith(cortexDir),
+    );
+    expect(cortexOwned.filter((v) => !v.extant)).toEqual([]);
+    // Explicitly: the --config value is verified (the G-09 addition).
+    const configVerdict = verdicts.find((v) => v.kind === "config");
+    expect(configVerdict).toBeDefined();
+    expect(configVerdict!.path).toBe(configPath);
+    expect(configVerdict!.extant).toBe(true);
+  });
+
+  test("(Linux) NEGATIVE: a .service whose exec moved out from under it is FLAGGED (G-09)", () => {
+    const { cortexDir, configPath } = renderFleet();
+    const relayTs = join(cortexDir, "src", "taps", "cc-events", "relay.ts");
+    const stale = [
+      "[Service]",
+      `ExecStart=/usr/bin/bun /nonexistent/pkg/repos/cortex/relay.ts start --config ${configPath}`,
+      `WorkingDirectory=${cortexDir}`,
+    ].join("\n");
+    const verdicts = verifyUnitPaths(stale);
+    const missing = verdicts.filter((v) => !v.extant);
+    expect(missing.length).toBeGreaterThan(0);
+    expect(missing.some((v) => v.kind === "exec" && v.path.includes("/pkg/repos/"))).toBe(true);
+    // control: relay.ts under the real cortexDir would have been extant.
+    expect(existsSync(relayTs)).toBe(true);
+  });
+
+  test("(Linux) NEGATIVE: a .service whose --config points at a moved/absent path is FLAGGED (the T17 split-brain, G-09)", () => {
+    const { cortexDir } = renderFleet();
+    const relayTs = join(cortexDir, "src", "taps", "cc-events", "relay.ts");
+    const stale = [
+      "[Service]",
+      `ExecStart=/usr/bin/bun ${relayTs} start --config /home/ghost/.config/cortex/gone.yaml`,
+    ].join("\n");
+    const verdicts = verifyUnitPaths(stale);
+    const configVerdict = verdicts.find((v) => v.kind === "config");
+    expect(configVerdict).toBeDefined();
+    expect(configVerdict!.extant).toBe(false); // FLAGGED — the config-cutover regression
   });
 });
 

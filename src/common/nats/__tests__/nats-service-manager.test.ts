@@ -148,7 +148,7 @@ describe("systemd manager — ExecStart ensure-config-arg (live)", () => {
     expect(after).not.toContain(`-c ${NATS_CONFIG}`);
   });
 
-  test("restart runs `systemctl --user restart <unit>` for a user-scope unit", async () => {
+  test("restart runs `systemctl --user daemon-reload` THEN `restart <unit>` for a user-scope unit (cortex#1909)", async () => {
     const dir = freshDir();
     // A path under a `systemd/user/` dir → user scope.
     const userDir = join(dir, "systemd", "user");
@@ -167,11 +167,15 @@ describe("systemd manager — ExecStart ensure-config-arg (live)", () => {
     });
     const res = await mgr.restart();
     expect(res.ok).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(["systemctl", "--user", "restart", "nats-server.service"]);
+    // cortex#1909 — daemon-reload MUST precede restart so a rewritten ExecStart
+    // is reloaded from disk (systemd caches units; restart alone runs stale argv).
+    expect(calls).toEqual([
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "restart", "nats-server.service"],
+    ]);
   });
 
-  test("restart runs system-scope `systemctl restart <unit>` for a /etc/systemd/system unit", async () => {
+  test("restart runs system-scope `systemctl daemon-reload` THEN `restart <unit>` for a /etc/systemd/system unit", async () => {
     const dir = freshDir();
     const sysDir = join(dir, "etc", "systemd", "system");
     const fs = await import("fs");
@@ -187,7 +191,86 @@ describe("systemd manager — ExecStart ensure-config-arg (live)", () => {
       exec: runner,
     });
     await mgr.restart();
-    expect(calls[0]).toEqual(["systemctl", "restart", "nats-server.service"]);
+    // System scope: NO `--user` flag on either command.
+    expect(calls).toEqual([
+      ["systemctl", "daemon-reload"],
+      ["systemctl", "restart", "nats-server.service"],
+    ]);
+  });
+
+  test("cortex#1909 config-cutover ROUND-TRIP: repoint ExecStart --config then reload+restart (the Linux T17 fix)", async () => {
+    const dir = freshDir();
+    const userDir = join(dir, "systemd", "user");
+    const fs = await import("fs");
+    fs.mkdirSync(userDir, { recursive: true });
+    const unitPath = join(userDir, "cortex-bot.service");
+    // A unit still pointing at the PRE-move config path.
+    const OLD_CONFIG = "/home/jc/.config/cortex/cortex.yaml";
+    const NEW_CONFIG = "/home/jc/.config/metafactory/cortex/cortex.yaml";
+    const before = [
+      "[Unit]",
+      "Description=cortex daemon",
+      "",
+      "[Service]",
+      `ExecStart=/usr/bin/bun /opt/cortex/cli.ts start --config ${OLD_CONFIG}`,
+      "",
+      "[Install]",
+      "WantedBy=default.target",
+      "",
+    ].join("\n");
+    writeFileSync(unitPath, before, "utf-8");
+
+    const { runner, calls } = capturingExec();
+    const mgr = selectNatsServiceManager({
+      descriptorPath: unitPath,
+      platform: "linux",
+      mutate: true,
+      exec: runner,
+    });
+
+    // (1) re-render: the stale config flag is repointed to the canonical path.
+    // The arg normalizer collapses any `--config X` to the canonical `-c <path>`
+    // form (single source of truth: nats-plist-loader `ensureConfigArg`).
+    mgr.ensureConfigLoaded(NEW_CONFIG);
+    const after = readFileSync(unitPath, "utf-8");
+    expect(after).toContain(`-c ${NEW_CONFIG}`);
+    expect(after).not.toContain(OLD_CONFIG);
+
+    // (2) reload+restart: the rewritten unit is reloaded, then the service bounced.
+    const res = await mgr.restart();
+    expect(res.ok).toBe(true);
+    expect(calls).toEqual([
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "restart", "cortex-bot.service"],
+    ]);
+  });
+
+  test("cortex#1909: a FAILED daemon-reload aborts BEFORE restart (fail-closed)", async () => {
+    const dir = freshDir();
+    const userDir = join(dir, "systemd", "user");
+    const fs = await import("fs");
+    fs.mkdirSync(userDir, { recursive: true });
+    const unitPath = join(userDir, "nats-server.service");
+    writeFileSync(unitPath, bareUnit(), "utf-8");
+
+    const calls: string[][] = [];
+    // daemon-reload fails; restart must NOT be attempted.
+    const failingReload: ExecRunner = async (argv) => {
+      calls.push(argv);
+      if (argv.includes("daemon-reload")) return { code: 1, stderr: "reload boom" };
+      return { code: 0, stderr: "" };
+    };
+    const mgr = selectNatsServiceManager({
+      descriptorPath: unitPath,
+      platform: "linux",
+      mutate: true,
+      exec: failingReload,
+    });
+    const res = await mgr.restart();
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("daemon-reload");
+    // Only daemon-reload ran — restart was never attempted.
+    expect(calls).toEqual([["systemctl", "--user", "daemon-reload"]]);
   });
 
   test("restart surfaces a non-zero systemctl exit as { ok: false }", async () => {

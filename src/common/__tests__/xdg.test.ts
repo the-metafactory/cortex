@@ -13,10 +13,18 @@ import {
   XDG_FALLBACK_PREFIX,
   noteXdgFallback,
   readDirEnv,
+  systemdUserDir,
   xdgStrict,
 } from "../xdg";
 
-const VARS = ["CORTEX_CONFIG_DIR", "CORTEX_EVENTS_DIR", "CORTEX_XDG_STRICT", "X_DIR_TEST"] as const;
+const VARS = [
+  "CORTEX_CONFIG_DIR",
+  "CORTEX_EVENTS_DIR",
+  "CORTEX_XDG_STRICT",
+  "X_DIR_TEST",
+  "XDG_CONFIG_HOME",
+  "HOME",
+] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -61,6 +69,42 @@ describe("xdgStrict — CORTEX_XDG_STRICT parse", () => {
   test.each(["0", "false", "no", ""])("%p ⇒ false", (v) => {
     process.env.CORTEX_XDG_STRICT = v;
     expect(xdgStrict()).toBe(false);
+  });
+});
+
+describe("systemdUserDir — $XDG_CONFIG_HOME-aware user unit dir (cortex#1909, G-38)", () => {
+  test("UNSET $XDG_CONFIG_HOME ⇒ $HOME/.config/systemd/user (systemd default)", () => {
+    process.env.HOME = "/home/clawbox";
+    expect(systemdUserDir()).toBe("/home/clawbox/.config/systemd/user");
+  });
+
+  test("SET $XDG_CONFIG_HOME ⇒ $XDG_CONFIG_HOME/systemd/user (honored)", () => {
+    process.env.HOME = "/home/clawbox";
+    process.env.XDG_CONFIG_HOME = "/opt/xdg";
+    expect(systemdUserDir()).toBe("/opt/xdg/systemd/user");
+  });
+
+  test("BLANK $XDG_CONFIG_HOME ⇒ falls back to $HOME/.config (never /systemd/user at root)", () => {
+    process.env.HOME = "/home/clawbox";
+    process.env.XDG_CONFIG_HOME = "";
+    expect(systemdUserDir()).toBe("/home/clawbox/.config/systemd/user");
+  });
+
+  test("WHITESPACE-only $XDG_CONFIG_HOME ⇒ unset (never a literal relative dir)", () => {
+    process.env.HOME = "/home/clawbox";
+    process.env.XDG_CONFIG_HOME = "   ";
+    expect(systemdUserDir()).toBe("/home/clawbox/.config/systemd/user");
+  });
+
+  test("injected xdgConfigHome WINS over the process env (hermetic seam)", () => {
+    process.env.HOME = "/home/clawbox";
+    process.env.XDG_CONFIG_HOME = "/opt/env-xdg";
+    expect(systemdUserDir({ xdgConfigHome: "/scratch/xdg" })).toBe("/scratch/xdg/systemd/user");
+  });
+
+  test("injected home is used for the default when $XDG_CONFIG_HOME is unset", () => {
+    process.env.HOME = "/home/real";
+    expect(systemdUserDir({ home: "/scratch/home" })).toBe("/scratch/home/.config/systemd/user");
   });
 });
 

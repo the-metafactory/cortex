@@ -260,4 +260,26 @@ describe("#800 findCortexDaemonDescriptor (linux/systemd)", () => {
     });
     expect(found).toBe(`${SD}/cortex-bot.service`);
   });
+
+  // cortex#1909 G-39 — NAMING DECISION: GRANDFATHER. Discovery matches by the
+  // ExecStart `--config` value, NEVER by unit name, so a unit named under EITHER
+  // convention is found: the frozen-doc `cortex-<slug>.service` (plain) AND the
+  // shipped `ai.meta-factory.cortex.*` label style. Nothing is deployed on Linux
+  // yet, so a forced rename would only risk orphaning a hand-authored unit for
+  // zero benefit; config-match discovery is name-agnostic by construction.
+  test.each([
+    ["cortex-work.service", "frozen-doc plain `cortex-<slug>.service`"],
+    ["ai.meta-factory.cortex.work.service", "shipped `ai.meta-factory.cortex.*` label style"],
+    ["totally-hand-authored.service", "an arbitrary hand-authored name"],
+  ])("G-39 GRANDFATHER: discovers %p (%s) purely by --config match", (name) => {
+    const io = fakeIO({ [SD]: { [name]: unit, "other.service": otherUnit } });
+    const found = findCortexDaemonDescriptor({
+      platform: "linux",
+      cortexConfigPath: LXCFG,
+      launchAgentsDir: "/unused",
+      systemdUserDir: SD,
+      io,
+    });
+    expect(found).toBe(`${SD}/${name}`);
+  });
 });

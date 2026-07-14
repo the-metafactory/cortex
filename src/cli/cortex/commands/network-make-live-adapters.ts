@@ -17,6 +17,7 @@ import { Socket } from "net";
 import { parseDocument } from "yaml";
 
 import { expandTilde } from "../../../common/config/loader";
+import { systemdUserDir } from "../../../common/xdg";
 import {
   renderOperatorModeBlocks,
   renderBaseIsolatedConfig,
@@ -296,7 +297,6 @@ export function buildResolverPreloadAdapter(): ResolverPreloadPort {
 // =============================================================================
 
 const LAUNCH_AGENTS_DIR = join(homedir(), "Library", "LaunchAgents");
-const SYSTEMD_USER_DIR = join(homedir(), ".config", "systemd", "user");
 
 const realLocatorIO: DaemonLocatorIO = {
   listDir: (dir) => {
@@ -352,6 +352,10 @@ export function findNatsServerDescriptor(opts: {
 /** Live {@link ServiceRestartPort}. Discovers descriptors, restarts via launchd/systemd. */
 export function buildServiceRestartAdapter(mutate: boolean): ServiceRestartPort {
   const platform = currentServicePlatform();
+  // cortex#1909 (G-38) — resolve the systemd user unit dir at call time so
+  // $XDG_CONFIG_HOME is honored (was a module-level hardcoded ~/.config/systemd/
+  // user, blind to a relocated config home — the exact var this epic honors).
+  const SYSTEMD_USER_DIR = systemdUserDir();
   return {
     // BLOCK 2 — read-only descriptor resolution for the dry-run preview. Reuses
     // the SAME finders the restarts use, so the previewed target is exactly the
