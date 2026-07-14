@@ -161,7 +161,7 @@ A principal may peer into more than one network — `andreas` in `metafactory` a
 
 ## 11. The per-stack descriptor
 
-A convenience artefact (not the source of truth — `cortex.{stack}.yaml` is): a rendered, human- and agent-readable card declaring a stack's bus-addressing identity — "where am I, what subjects do I own." One per stack, at `~/.config/cortex/stack-{name}.md`.
+A convenience artefact (not the source of truth — `cortex.{stack}.yaml` is): a rendered, human- and agent-readable card declaring a stack's bus-addressing identity — "where am I, what subjects do I own." One per stack, at `~/.config/metafactory/cortex/stack-{name}.md`.
 
 > **Distinct from `CONTEXT.md`.** `CONTEXT.md` (repo root, uppercase) is the bounded-context *glossary*. The per-stack descriptor is a *runtime identity card* for one deployment. Different artefacts; do not conflate.
 

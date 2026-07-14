@@ -54,7 +54,7 @@ These are inputs to this spec, NOT open for re-litigation:
 ```
 ~/.config/metafactory/pkg/repos/pilot/
 ├── arc-manifest.yaml            # skill manifest (`pilot-review-loop` v0.3.0)
-├── package.json                 # bun package, ships `~/bin/pilot`
+├── package.json                 # bun package, ships `~/.local/bin/pilot`
 ├── bun.lock
 ├── agent/                       # AgentManifest (Pilot as proactive agent, Phase 1)
 ├── bin/                         # `bin/pilot` entrypoint shim
@@ -94,7 +94,7 @@ Below: every file, one-line responsibility, line count, primary concern.
 | `config.ts` | 194 | W | `validateClaimLoopConfig` (identity-collapse guard) + `loadRepoCommandConfigs` (per-repo install/test env). Pure. |
 | `dashboard.ts` | 66 | P | Renders `~/.metafactory/agents/pilot/dashboard.md` from `db.ts` errands. |
 | `db.ts` | 456 | P | SQLite errand + finding store; the `pilot fetch`/`triage`/`dispatch` persistence backbone. |
-| `discord.ts` | 64 | B (transition) | `channelForRepo` + `threadNameForPR` + `postMessage` shelling `~/bin/discord`. Lives at `bus/legacy/discord.ts` post-restructure — the bot-mention transport that retires when cortex#237 ships. |
+| `discord.ts` | 64 | B (transition) | `channelForRepo` + `threadNameForPR` + `postMessage` shelling `~/.local/bin/discord`. Lives at `bus/legacy/discord.ts` post-restructure — the bot-mention transport that retires when cortex#237 ships. |
 | `discord-veto.ts` | 382 | B (transition) | Discord REST API client for the claim-veto window: announce → reactions → defensive-veto. Same transition shell as `discord.ts`. |
 | `dispatch.ts` | 321 | W | `pilot dispatch` — parses triage, applies decisions, posts re-review request + ping. Touches discord + gh. |
 | `drive-review.ts` | 120 | W | `driveReview` — pure outer loop over `runReviewCycle` with fix-and-push + escalation. |
@@ -175,7 +175,7 @@ These bear special attention during the move (decide retire-vs-keep):
 | File | Status | Recommendation |
 |---|---|---|
 | `mention-dispatch.ts` | Spec 0003 surface; tests exist; no `cli.ts` import references it as of 2026-05-16. **Looks unwired.** | Keep — Phase 3 §F-9 wires it (audited in `agent-state.ts:142-148`'s `claim.requested-by-mention` event). Move into `workflow/mention/` and document the wiring gap as a known-TODO. |
-| `discord.ts` + `discord-veto.ts` + `reviewers.ts` | Three Discord-coupled files. `discord-veto.ts` talks Discord REST directly (bypasses `~/bin/discord` CLI). `discord.ts` shells the CLI. `reviewers.ts` hardcodes IDs. | Cluster into `bus/legacy/` — see §3.2. Retires module-by-module as cortex#237 lands. |
+| `discord.ts` + `discord-veto.ts` + `reviewers.ts` | Three Discord-coupled files. `discord-veto.ts` talks Discord REST directly (bypasses `~/.local/bin/discord` CLI). `discord.ts` shells the CLI. `reviewers.ts` hardcodes IDs. | Cluster into `bus/legacy/` — see §3.2. Retires module-by-module as cortex#237 lands. |
 | `nats-review-io.ts` | Subscribes to `mf.{network}.review.completed` — **legacy subject namespace**. | Retire when `wait-for-verdict` ships. Keep in `bus/legacy/` until the cutover (Phase C in the migration plan). |
 | `nats-publish.ts` | Publishes to `local.{org}.tasks.code-review.<specialization>` — **canonical subject**. | Promote to `bus/publish-review-request.ts` (renamed for clarity; legacy name preserved as re-export). |
 | `gh.ts` | Re-export shim of `github-backend.ts`. Comment says "back-compat." | Keep across MIG-1; delete after MIG-3 once all importers consume `forge/github-backend.ts` directly. |
@@ -239,7 +239,7 @@ src/
 │   │   ├── verdict.ts                # match review.verdict.* by (repo, pr_number, correlation_id)
 │   │   └── github-review.ts          # match local.{org}.github.> for (repo, pr_number, reviewer login)
 │   └── legacy/                       # retires post-cortex#237
-│       ├── discord.ts                # (was src/discord.ts) ~/bin/discord shell
+│       ├── discord.ts                # (was src/discord.ts) ~/.local/bin/discord shell
 │       ├── discord-veto.ts           # (was src/discord-veto.ts) claim-veto window
 │       ├── reviewers.ts              # (was src/reviewers.ts) — REVIEWERS registry
 │       ├── mention-dispatch.ts       # (was src/mention-dispatch.ts) — @pilot verb dispatch
@@ -614,7 +614,7 @@ pilot request-review --pr <owner/repo#N> --capability code-review.<flavor>
 **Behaviour:**
 
 1. Validate args (PR ref, capability grammar — `code-review.<segment>` matching `VALID_SPECIALIZATION`).
-2. Load cortex config (`~/.config/cortex/cortex.yaml` by default, `--config` override). Required: `nats.url`, `agent.operatorId` (becomes `<org>`). Optional: `nats.token` / `nats.credsPath`.
+2. Load cortex config (`~/.config/metafactory/cortex/cortex.yaml` by default, `--config` override). Required: `nats.url`, `agent.operatorId` (becomes `<org>`). Optional: `nats.token` / `nats.credsPath`.
 3. Build and publish the capability-dispatch envelope via `bus/publish-review-request.ts`. **Always publishes** — bus publish is fire-and-forget, independent of `--wait`.
 4. If `--wait`:
    a. Subscribe to `local.{org}.review.verdict.>` AND `local.{org}.dispatch.task.completed` AND `local.{org}.dispatch.task.failed`.
@@ -637,7 +637,7 @@ pilot request-review --pr <owner/repo#N> --capability code-review.<flavor>
 | `--note` | string | no | Free-form note in envelope payload. |
 | `--wait` | bool | no | Block until verdict, lifecycle-completed, or timeout. |
 | `--timeout` | duration | no | `<n>(s\|m\|h)`. Default `30m`. Only used with `--wait`. |
-| `--config` | path | no | cortex.yaml path. Default `~/.config/cortex/cortex.yaml`. |
+| `--config` | path | no | cortex.yaml path. Default `~/.config/metafactory/cortex/cortex.yaml`. |
 | `--json` | bool | no | Emit `CliJsonEnvelope<RequestResult>` on stdout. Default: text. |
 
 **Exit codes:**
@@ -944,7 +944,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 |---|---|
 | **Schema versioning** | The envelope shape is myelin-defined; pilot pins to `@the-metafactory/cortex@<sha>` (see §7) which transitively pins myelin. Any schema-flip is a coordinated update across cortex + pilot. |
 | **OTLP spans** | Phase C.4 adds them. Pre-Phase C, pilot emits no traces — only stderr logs. |
-| **Principal config** | `pilot request-review` reads cortex.yaml. The skill's `--config` defaults to `~/.config/cortex/cortex.yaml`. No new principal-visible config file in pilot. |
+| **Principal config** | `pilot request-review` reads cortex.yaml. The skill's `--config` defaults to `~/.config/metafactory/cortex/cortex.yaml`. No new principal-visible config file in pilot. |
 | **Rollback** | Each phase is reversible: Phase B can be reverted to A by removing the new verbs; Phase C can be reverted to B by reinstating the env-var gate; Phase D is a deletion phase — reverting it requires recovering the legacy files from git history. By Phase D the new path is proven, so rollback is not anticipated. |
 
 ---
@@ -973,7 +973,7 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 
 - Assumes cortex repo is at `../cortex` relative to pilot checkout. **False for the standard `~/Developer/cortex` + `~/.config/metafactory/pkg/repos/pilot` layout.** Principals would have to manually symlink.
 - CI configuration would need to clone cortex before `bun install`.
-- arc-manifest distribution (the `arc upgrade Pilot` story): `arc` does NOT install path-relative deps. The pilot binary at `~/bin/pilot` would silently break on principal machines that don't have cortex checked out alongside.
+- arc-manifest distribution (the `arc upgrade Pilot` story): `arc` does NOT install path-relative deps. The pilot binary at `~/.local/bin/pilot` would silently break on principal machines that don't have cortex checked out alongside.
 
 ### §7.2 Option B — Git-URL with pinned ref
 

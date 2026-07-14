@@ -60,7 +60,7 @@ The epic's stocktake was captured @ origin/main `83e73ec2`; re-verified here aga
 | 8 | Platform npm deps live in cortex `package.json` | ❌ blocker | `package.json:47,48,55` |
 | 9 | arc bundles + `dependencies:` ranges + repo-first install proven | ✅ | ADR-0017, `metafactory-discord` installed under `~/.config/metafactory/pkg/repos/` |
 | 10 | arc semver-range *enforcement* between installed packages + bundle `bun install` | ⚠️ likely missing | arc-side slice (arc#284 / S7) |
-| 11 | Daemon runs TS via bun → dynamic `import()` of installed bundle source is feasible | ✅ | `src/cortex.ts:1` shebang; plists run `~/bin/cortex start` |
+| 11 | Daemon runs TS via bun → dynamic `import()` of installed bundle source is feasible | ✅ | `src/cortex.ts:1` shebang; plists run `~/.local/bin/cortex start` |
 | 12 | Config hot-reload machinery exists (`applied` vs `requiresRestart`) | ✅ | `src/common/config/watcher.ts:12-16,101-106` |
 | 13 | Gateway lifecycle is all-or-nothing `start()/stop()`; no per-adapter runtime attach/detach | ❌ missing | `src/gateway/surface-gateway.ts:167,191` |
 | 14 | No existing ADR/issue covers adapter extraction/hot-loading | ✅ gap | ADR-0001..0023 checked; this fills it |

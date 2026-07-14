@@ -328,7 +328,7 @@ The cutover is a config-schema and adapter-internal change. The bus, federation,
 
 ## 11. Reality-check — what Andreas's current cortex.yaml actually contains
 
-Anchoring the design in operational config. Two files: `~/.config/cortex/cortex.yaml` (meta-factory stack) and `~/.config/cortex/cortex.work.yaml` (work stack).
+Anchoring the design in operational config. Two files: `~/.config/metafactory/cortex/cortex.yaml` (meta-factory stack) and `~/.config/metafactory/cortex/cortex.work.yaml` (work stack).
 
 ### 11.1 meta-factory stack (the one this migration targets)
 

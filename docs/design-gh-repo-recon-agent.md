@@ -374,7 +374,7 @@ The judgment-free property of the deterministic class is enforced by the workflo
 
 ## 7. Cortex Config Block
 
-Registered as a fragment under `~/.config/cortex/agents.d/gh-repo-recon-agent.yaml`. Loaded by cortex's existing fragment loader. Discriminator: `runtime.harness: deterministic-agent` (the new `HarnessId` entry).
+Registered as a fragment under `~/.config/metafactory/cortex/agents.d/gh-repo-recon-agent.yaml`. Loaded by cortex's existing fragment loader. Discriminator: `runtime.harness: deterministic-agent` (the new `HarnessId` entry).
 
 ```yaml
 agents:
@@ -698,7 +698,7 @@ For any well-formed input that passes `ReconInputSchema`, the output passes `Rec
 
 ### Principal-side
 
-- [ ] Fragment at `~/.config/cortex/agents.d/gh-repo-recon-agent.yaml` loaded by cortex without rejection
+- [ ] Fragment at `~/.config/metafactory/cortex/agents.d/gh-repo-recon-agent.yaml` loaded by cortex without rejection
 - [ ] Manual smoke: Luna in `#cortex` channel emits `dispatch.recon.cortex`, receives verdict within 5s, summarizes "what's in flight for cortex" without making any gh calls herself
 - [ ] Verdict envelope is renderable in the Mission Control dashboard (existing envelope-viewer surfaces it)
 
@@ -772,7 +772,7 @@ Independent of cortex#92 — can land in parallel.
 ### Step 3 — Principal side
 
 - `arc install github:the-metafactory/arc-skill-recon` — drops skill + slash command
-- `cp <fragment-example> ~/.config/cortex/agents.d/gh-repo-recon-agent.yaml`
+- `cp <fragment-example> ~/.config/metafactory/cortex/agents.d/gh-repo-recon-agent.yaml`
 - Restart cortex so the new agent loads. Restart command is principal-deployment-specific:
   - On macOS (Andreas' deployment): `launchctl kickstart -k gui/$(id -u)/ai.meta-factory.cortex.meta-factory` (or `.work` for the parallel work stack)
   - On Linux / containers: per the principal's process manager (systemd unit, docker restart, etc.)

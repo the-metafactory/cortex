@@ -30,7 +30,7 @@ metafactory-discord/
   skills/
     discord/SKILL.md       # the existing CLI-wrapping skill (post/read/role/threads)
     fleet-admit/SKILL.md   # NEW — the two-tier admission procedure
-  bin/discord              # the PATH shim arc installs (replaces cortex's ~/bin/discord)
+  bin/discord              # the PATH shim arc installs (replaces cortex's ~/.local/bin/discord)
   README.md  CLAUDE.md  package.json  tests
 ```
 
@@ -65,7 +65,7 @@ Skills provided:
 - **S1** — create `the-metafactory/metafactory-discord`; extract `src/cli/discord/` (CLI +
   existing skill) into it; vendor `config-path`; arc-manifest; tests pass standalone;
   `arc install` from repo works.
-- **S2** — cortex consumes the bundle: remove `src/cli/discord/` from cortex; `~/bin/discord`
+- **S2** — cortex consumes the bundle: remove `src/cli/discord/` from cortex; `~/.local/bin/discord`
   comes from the bundle; cortex `arc-manifest` declares the dependency; cortex build + tests
   green without the CLI. *(the decoupling)*
 - **S3** — add `fleet-admit` + `discord-role` / `discord-post` skills to the bundle.

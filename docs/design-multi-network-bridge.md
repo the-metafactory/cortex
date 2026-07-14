@@ -143,10 +143,10 @@ Per `plan-internet-of-agentic-work.md` §E.1 (lines 426–433) and Phase E accep
 leaf_nodes:
   nats-leaf-research:
     url: nats://research-mesh.example:4222
-    creds_path: ~/.config/cortex/creds/research.creds   # chmod 600, NatsLink loader (connection.ts)
+    creds_path: ~/.config/metafactory/cortex/creds/research.creds   # chmod 600, NatsLink loader (connection.ts)
   nats-leaf-jv:
     url: nats://jv-mesh.example:4222
-    creds_path: ~/.config/cortex/creds/jv.creds
+    creds_path: ~/.config/metafactory/cortex/creds/jv.creds
 
 policy:
   federated:

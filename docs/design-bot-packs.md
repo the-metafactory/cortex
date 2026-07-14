@@ -82,8 +82,8 @@ An arc package, `type: agent` (extends the cortex#60 manifest):
 ```
 yarrow/
   arc-manifest.yaml        # type: agent, targets: [cortex]
-  agent.yaml               # → installed to ~/.config/cortex/agents.d/yarrow.yaml
-  persona.md               # → ~/.config/cortex/personas/yarrow.md
+  agent.yaml               # → installed to ~/.config/metafactory/cortex/agents.d/yarrow.yaml
+  persona.md               # → ~/.config/metafactory/cortex/personas/yarrow.md
   brain/
     main.ts                # the behavior — any language, any framework
   README.md

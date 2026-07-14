@@ -391,7 +391,7 @@ Note the `id: luna` / `id: luna-codex` / `id: luna-daemon` are *presence handles
 The first concrete deliverable, once this design ratifies:
 
 1. **`SomaCortexAdapter`** (Soma-side, new) — implements Soma's adapter contract for the Cortex/Myelin substrate. Two projection shapes per `docs/substrate-adapters.md`:
-   - **In-process** (`home` mode): projects a Soma assistant into `~/.config/cortex/agents.d/<name>.md` as the thin frontmatter+pointer fragment shown in §7.
+   - **In-process** (`home` mode): projects a Soma assistant into `~/.config/metafactory/cortex/agents.d/<name>.md` as the thin frontmatter+pointer fragment shown in §7.
    - **Daemon** (`daemon` mode): arc-installs a standalone bot from the Soma package; bot subscribes to Myelin subjects via the existing `MyelinRuntime` interface (no SessionHarness, no in-process spawn — pattern matches sage today).
 2. **Schema additions on the cortex side** — add `body: soma://...` to **both** `AgentSchema` (around line 421, for projection) and `PolicyPrincipalSchema` (around line 1124, for federation join) in `src/common/types/cortex-config.ts`. Optional string field at first (back-compat with pre-Soma agents that carry inline persona); cross-field validation enforces that when both are present they agree per id. Becomes the only path at v3.0.0 cutover.
 3. **`migrate-config` extension** — when an agent fragment carries inline persona + capabilities + trust, offer to lift those into a new Soma assistant scaffold under `~/.soma/profile/<id>/` and rewrite the fragment to `body: soma://...`. Idempotent. Principal pre-flight via `--check`.

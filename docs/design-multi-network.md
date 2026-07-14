@@ -86,7 +86,7 @@ resolved before any code lands.
 
 ```yaml
 leaf_nodes:
-  nats-leaf-research: { url: nats://research:4222, creds_path: ~/.config/cortex/creds/research.creds }
+  nats-leaf-research: { url: nats://research:4222, creds_path: ~/.config/metafactory/cortex/creds/research.creds }
 policy:
   federated:
     networks:
@@ -107,7 +107,7 @@ policy:
     networks:
       - id: research-collab
         leaf_node: nats-leaf-research      # retained as the routing label / pool key
-        nats: { url: nats://research:4222, credsPath: ~/.config/cortex/creds/research.creds }
+        nats: { url: nats://research:4222, credsPath: ~/.config/metafactory/cortex/creds/research.creds }
 ```
 
 The `nats:` block sits directly on each network; `leaf_node` survives purely as the pool key /

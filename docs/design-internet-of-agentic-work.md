@@ -436,7 +436,7 @@ The orchestrator pattern is what gives principals the "main digital assistant th
 
 ### §3.7 Config split — layering cortex.yaml by blast radius (foundation)
 
-Everything above assumes one config file per stack. Today that file — `~/.config/cortex/cortex.yaml` — is **~911 lines** and has quietly grown into the *whole-environment* config. It mixes, in one document:
+Everything above assumes one config file per stack. Today that file — `~/.config/metafactory/cortex/cortex.yaml` — is **~911 lines** and has quietly grown into the *whole-environment* config. It mixes, in one document:
 
 - **principal + stack identity** (`operator:` block / `stack:` block — names pending cortex#448),
 - the **capability catalog** (Q2's `capabilities:` schema),

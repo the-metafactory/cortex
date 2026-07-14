@@ -33,7 +33,7 @@ The pi.dev design doc's central insight: **presence and substrate are independen
 
 | Axis | Values | Where it persists | Who owns it |
 |---|---|---|---|
-| **Identity** | `id`, `displayName`, `roles`, `trust` | Fragment in `~/.config/cortex/agents.d/<id>.yaml` | Bot package (Q1 answer) |
+| **Identity** | `id`, `displayName`, `roles`, `trust` | Fragment in `~/.config/metafactory/cortex/agents.d/<id>.yaml` | Bot package (Q1 answer) |
 | **Capabilities** | `[code-review]`, `[research]`, `[copy-edit]`, ... | NATS KV `local.{org}.agents.capabilities.{id}` on start | Bot daemon |
 | **Substrate** | `claude-code` / `codex` / `pi-dev` / `custom-binary` | Fragment + bot's arc-manifest | Bot package |
 | **Presence** | `discord` / `mattermost` / `slack` / none | Fragment under `presence:` (optional) | Bot package |
@@ -54,8 +54,8 @@ Cortex's runner (after MIG-7.1 lands `src/cortex.ts`) spawns Claude Code subproc
 
 ```
 arc install foo-review-bot
-  → drops persona.md   → ~/.config/cortex/personas/foo.md
-  → drops fragment     → ~/.config/cortex/agents.d/foo.yaml
+  → drops persona.md   → ~/.config/metafactory/cortex/personas/foo.md
+  → drops fragment     → ~/.config/metafactory/cortex/agents.d/foo.yaml
   → signals cortex     → SIGHUP or `cortex agents reload`
                          (loader+watcher, extended per §6.1, pick up the fragment;
                           daemon registers foo BEFORE creds issue so it can scope
@@ -65,7 +65,7 @@ arc install foo-review-bot
                           writes ~/.config/nats/creds/foo.creds)
 ```
 
-**No new process. No new launchd plist.** The watcher (`src/common/config/watcher.ts`) hot-reloads `cortex.yaml` today and is extended in §6.1 to also watch `~/.config/cortex/agents.d/`. Cortex's runner spawns CC for foo on the next dispatch matching foo's capability.
+**No new process. No new launchd plist.** The watcher (`src/common/config/watcher.ts`) hot-reloads `cortex.yaml` today and is extended in §6.1 to also watch `~/.config/metafactory/cortex/agents.d/`. Cortex's runner spawns CC for foo on the next dispatch matching foo's capability.
 
 Use this shape for: simple persona-based agents on the cortex's Claude-Code substrate.
 
@@ -88,15 +88,15 @@ runtime:
 ```
 arc install foo-codex-review-bot
   → cortex target:
-      drops persona.md   → ~/.config/cortex/personas/foo.md
-      drops fragment     → ~/.config/cortex/agents.d/foo.yaml
+      drops persona.md   → ~/.config/metafactory/cortex/personas/foo.md
+      drops fragment     → ~/.config/metafactory/cortex/agents.d/foo.yaml
       signals cortex     → SIGHUP or `cortex agents reload`
                             (daemon registers foo from agents.d/ before creds issue)
       mints NATS creds   → cortex creds issue foo
                             (now scoped to foo's runtime.capabilities)
                             → ~/.config/nats/creds/foo.creds (cortex daemon-signed)
   → darwin-launchd target:
-      installs binary    → ~/bin/foo-bot   (symlink to package)
+      installs binary    → ~/.local/bin/foo-bot   (symlink to package)
       installs plist     → ~/Library/LaunchAgents/ai.meta-factory.foo.plist
       launchctl load     → daemon starts LAST — connects bus with the creds,
                             publishes capability registration to NATS KV
@@ -162,11 +162,11 @@ presence:
 
 provides:
   files:
-    persona.md: ~/.config/cortex/personas/foo.md
-    agent.yaml: ~/.config/cortex/agents.d/foo.yaml
+    persona.md: ~/.config/metafactory/cortex/personas/foo.md
+    agent.yaml: ~/.config/metafactory/cortex/agents.d/foo.yaml
 
   # standalone-only — omitted for in-process
-  binary: foo-bot                 # → ~/bin/foo-bot
+  binary: foo-bot                 # → ~/.local/bin/foo-bot
   plist: services/ai.meta-factory.foo.plist
 
 lifecycle:
@@ -182,7 +182,7 @@ lifecycle:
 
 **Schema decisions (locked):**
 
-- **Q1 — persona ownership:** the bot package ships its own `persona.md` under `provides.files`. Bot author edits the persona in the bot's source repo; arc upgrades carry persona updates. Cortex's `~/.config/cortex/personas/` is rendered output, not source of truth.
+- **Q1 — persona ownership:** the bot package ships its own `persona.md` under `provides.files`. Bot author edits the persona in the bot's source repo; arc upgrades carry persona updates. Cortex's `~/.config/metafactory/cortex/personas/` is rendered output, not source of truth.
 - **Q3 — substrate + mode in fragment:** the rendered `agent.yaml` fragment (next section) includes `runtime.substrate` and `runtime.mode` so cortex's dashboard renders accurate provenance ("foo (in-process / claude-code)") without inferring from capability registry.
 
 **`roles:` semantics** (per `docs/architecture.md` §9 + cortex's role-resolution model): roles declare the **maximum** capability bundle an agent is allowed to exercise. The agent's effective capability set at dispatch time is the **intersection** of `runtime.capabilities` (declared by the bot package) and the bundle implied by `roles:`. Declaring a capability that the role doesn't grant is a load-time warning, not an error — the role wins. An empty `roles: []` means no capability is granted regardless of `runtime.capabilities`; agents must declare at least one role to be dispatched against. The role → capability bundle mapping is owned by cortex (G-121 family) and is out of scope for this design — bots reference role names, cortex resolves them.
@@ -194,10 +194,10 @@ lifecycle:
 `provides.files.agent.yaml` is rendered by arc at install time. Example for the manifest above:
 
 ```yaml
-# ~/.config/cortex/agents.d/foo.yaml
+# ~/.config/metafactory/cortex/agents.d/foo.yaml
 id: foo
 displayName: Foo
-persona: ~/.config/cortex/personas/foo.md
+persona: ~/.config/metafactory/cortex/personas/foo.md
 roles: [agent-restricted]
 trust: [luna, holly, ivy]
 
@@ -236,7 +236,7 @@ These are the prerequisites for `arc install <bot>` to work end-to-end. None of 
 
 **Scope:** `src/common/config/loader.ts` + `watcher.ts`.
 
-- Loader walks `~/.config/cortex/agents.d/*.yaml` after parsing `cortex.yaml`, merges into `agents[]`.
+- Loader walks `~/.config/metafactory/cortex/agents.d/*.yaml` after parsing `cortex.yaml`, merges into `agents[]`.
 - Watcher watches the directory; emits the same reload event as `cortex.yaml` does today.
 - New CLI: `cortex agents reload` — manual trigger for principals / lifecycle scripts. Calls into the same reload code path. SIGHUP also routes here.
 - Fragment schema = subset of `CortexConfigAgent` (no `principal:` block; cortex.yaml stays the source of truth for principal identity).
@@ -261,12 +261,12 @@ export class CortexHostAdapter implements HostAdapter {
 
   paths: HostPaths & CortexPaths = {
     skillsDir:    "",                                  // n/a — cortex isn't a skills host
-    agentsDir:    "~/.config/cortex/agents.d/",        // arc#117 HostPaths field — identity fragments
-    binDir:       "~/bin/",                            // arc#117 HostPaths field — standalone bot binaries
-    settingsPath: "~/.config/cortex/cortex.yaml",      // arc#117 HostPaths field — principal-edited core config
+    agentsDir:    "~/.config/metafactory/cortex/agents.d/",        // arc#117 HostPaths field — identity fragments
+    binDir:       "~/.local/bin/",                            // arc#117 HostPaths field — standalone bot binaries
+    settingsPath: "~/.config/metafactory/cortex/cortex.yaml",      // arc#117 HostPaths field — principal-edited core config
     hooksFormat:  "none",                              // arc#117 HostPaths field — no claude-code-style hooks
     // Cortex-internal extensions (not in arc#117 HostPaths today):
-    personasDir:  "~/.config/cortex/personas/",        // persona markdown files
+    personasDir:  "~/.config/metafactory/cortex/personas/",        // persona markdown files
     credsDir:     "~/.config/nats/creds/",             // per-agent NATS creds (daemon-written)
   };
 
@@ -365,8 +365,8 @@ identity:
   trust: [luna, holly]
 provides:
   files:
-    persona.md: ~/.config/cortex/personas/rev.md
-    agent.yaml: ~/.config/cortex/agents.d/rev.yaml
+    persona.md: ~/.config/metafactory/cortex/personas/rev.md
+    agent.yaml: ~/.config/metafactory/cortex/agents.d/rev.yaml
 lifecycle:
   postinstall:
     - scripts/signal-cortex-reload.sh    # FIRST — daemon registers rev
@@ -394,8 +394,8 @@ identity:
   trust: [luna, holly]
 provides:
   files:
-    persona.md: ~/.config/cortex/personas/codex-rev.md
-    agent.yaml: ~/.config/cortex/agents.d/codex-rev.yaml
+    persona.md: ~/.config/metafactory/cortex/personas/codex-rev.md
+    agent.yaml: ~/.config/metafactory/cortex/agents.d/codex-rev.yaml
   binary: codex-rev-bot
   plist: services/ai.meta-factory.codex-rev.plist
 lifecycle:
@@ -435,8 +435,8 @@ Principal interacts with Scout indirectly: another agent (Luna) dispatches a res
 ```
 principal: arc install foo-review-bot
 arc:      preinstall: scripts/check-cortex-version.sh        [verify cortex target compat via CortexHostAdapter.detect()]
-arc:      drop persona.md   → ~/.config/cortex/personas/foo.md
-arc:      drop agent.yaml   → ~/.config/cortex/agents.d/foo.yaml
+arc:      drop persona.md   → ~/.config/metafactory/cortex/personas/foo.md
+arc:      drop agent.yaml   → ~/.config/metafactory/cortex/agents.d/foo.yaml
 arc:      postinstall: scripts/signal-cortex-reload.sh        [signal BEFORE creds]
             → SIGHUP cortex bot pid (or `cortex agents reload`)
             → config-watcher.ts re-reads agents.d/
@@ -455,7 +455,7 @@ principal: foo appears in dashboard, can take tasks
 ```
 principal: arc install codex-review-bot
 arc:      preinstall: scripts/check-cortex-version.sh         [via CortexHostAdapter.detect()]
-arc:      drop persona, agent.yaml, binary (~/bin/codex-rev-bot)
+arc:      drop persona, agent.yaml, binary (~/.local/bin/codex-rev-bot)
 arc:      drop plist → ~/Library/LaunchAgents/ai.meta-factory.codex-rev.plist
 arc:      postinstall: scripts/signal-cortex-reload.sh        [signal FIRST so daemon learns about agent]
             → cortex re-reads agents.d/, registers codex-rev
