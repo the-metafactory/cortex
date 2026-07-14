@@ -8,7 +8,7 @@
  *
  * Two scan domains:
  *   --repos    pattern-registry scan over git-tracked files (default: cortex,
- *              arc, metafactory-discord; add more roots as positional args)
+ *              arc, metafactory-bundle-discord; add more roots as positional args)
  *   --machine  live inventory: dangling symlinks, plist exec paths,
  *              settings.json hooks, packages.db rows, WAL sidecars,
  *              occupied cutover destinations, grove-vs-cortex divergence,
@@ -63,7 +63,7 @@ const EXCLUDES = [":!node_modules", ":!*.lock", ":!dist", ":!build", ":!.git"];
 const DEFAULT_REPOS = [
   join(HOME, "Developer", "cortex"),
   join(HOME, "Developer", "arc"),
-  join(HOME, "Developer", "metafactory-discord"),
+  join(HOME, "Developer", "metafactory-bundle-discord"),
 ];
 
 interface Finding {

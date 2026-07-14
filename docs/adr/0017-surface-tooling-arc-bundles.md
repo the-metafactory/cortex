@@ -2,6 +2,8 @@
 
 **Status:** accepted · **Date:** 2026-06-19 · **Refs:** ADR-0014 (capability-authorized agents), design-bot-packs.md, the marketplace building-block direction (#95)
 
+> **Naming note (cortex#1905 / compass#116):** the tooling bundle named `metafactory-discord` throughout this ADR was **renamed to `metafactory-bundle-discord`** to conform to the `metafactory-bundle-<name>` component-repo-naming standard (compass PR #115). This ADR is left in its original wording as a matter of historical accuracy; read every `metafactory-discord` mention below as the bundle now named `metafactory-bundle-discord`.
+
 ## Context
 
 Cortex today vendors each surface's *principal/agent tooling* inline — the Discord

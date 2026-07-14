@@ -1,4 +1,4 @@
-# Design — Decouple the Discord CLI + skills into the `metafactory-discord` bundle
+# Design — Decouple the Discord CLI + skills into the `metafactory-bundle-discord` bundle
 
 **Status:** plan · **Date:** 2026-06-19 · **ADR:** [0017](adr/0017-surface-tooling-arc-bundles.md) · **Drives:** the epic below
 
@@ -21,10 +21,10 @@ Cortex keeps the live Discord **adapter** (`src/adapters/discord/`); only the **
 - `src/cli/discord/skill/SKILL.md` + `Workflows/` already exist — the wrapping skill ships
   with the CLI as one unit.
 
-## Target repo: `the-metafactory/metafactory-discord`
+## Target repo: `the-metafactory/metafactory-bundle-discord`
 
 ```
-metafactory-discord/
+metafactory-bundle-discord/
   arc-manifest.yaml        # name: discord, namespace: metafactory, type: skill/bundle, provides
   cli/                     # the extracted discord CLI (discord.ts + lib/, config-path vendored)
   skills/
@@ -44,12 +44,12 @@ Skills provided:
 
 ## Distribution (repo-first)
 
-- **Now:** `arc install <git-url of metafactory-discord>` — install from the repo. NOT on
+- **Now:** `arc install <git-url of metafactory-bundle-discord>` — install from the repo. NOT on
   the metafactory registry yet.
 - **Cortex dependency:** cortex `arc-manifest.yaml` `dependencies:` declares
-  `metafactory-discord`. (Confirm whether arc auto-resolves package deps on
+  `metafactory-bundle-discord`. (Confirm whether arc auto-resolves package deps on
   `arc install cortex`; if not, install the bundle explicitly + record the intent.)
-- **Later:** registry publication → `arc install metafactory-discord` by name.
+- **Later:** registry publication → `arc install metafactory-bundle-discord` by name.
 
 ## Onboarding wiring (the payoff)
 
@@ -62,7 +62,7 @@ Skills provided:
 ## Slices (epic)
 
 - **S0** — this ADR + design doc (the decision). *(this PR)*
-- **S1** — create `the-metafactory/metafactory-discord`; extract `src/cli/discord/` (CLI +
+- **S1** — create `the-metafactory/metafactory-bundle-discord`; extract `src/cli/discord/` (CLI +
   existing skill) into it; vendor `config-path`; arc-manifest; tests pass standalone;
   `arc install` from repo works.
 - **S2** — cortex consumes the bundle: remove `src/cli/discord/` from cortex; `~/.local/bin/discord`

@@ -318,7 +318,7 @@ see `isFirstPartyRendererBundle`'s doc comment in `loader.ts`):
   dependency only counts if its `name` ALSO follows the compass#115
   `metafactory-cortex-adapter-<name>` repo-naming standard — being declared
   as a cortex dependency for some OTHER reason (`arc`, the package manager;
-  `metafactory-discord`, ADR-0017 CLI/skill tooling) never grants the
+  `metafactory-bundle-discord`, ADR-0017 CLI/skill tooling) never grants the
   exemption, even though both are real, org-trusted, cortex-declared
   dependencies. This is what makes extracting an in-tree adapter (e.g.
   `web`) into its own bundle a *transparent* repackage: once cortex declares

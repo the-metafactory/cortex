@@ -43,7 +43,7 @@ echo "Upgrading Cortex (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 echo "  Refreshing nested-target symlinks..."
 ln -sf "${CORTEX_DIR}/src/taps/cc-events"          "${CLAUDE_DIR}/relay/cortex"
 # The ~/.claude/skills/Discord symlink is no longer cortex's to manage: the
-# Discord CLI + skill were extracted to the metafactory-discord arc bundle
+# Discord CLI + skill were extracted to the metafactory-bundle-discord arc bundle
 # (ADR-0017, epic #1171). That bundle now installs ~/bin/discord and the
 # Discord skill; cortex declares it as a dependency in arc-manifest.yaml.
 echo "  ✓ Nested symlinks refreshed"

@@ -2,7 +2,7 @@
  * Unit tests for the cortex-owned Discord role helpers used by
  * `cortex network admit` (ADR-0015, O-5). These helpers were carried in the
  * extracted Discord CLI lib until epic #1171 S2 moved the CLI tooling into the
- * `metafactory-discord` bundle (ADR-0017); the runtime slice the daemon imports
+ * `metafactory-bundle-discord` bundle (ADR-0017); the runtime slice the daemon imports
  * stayed in cortex at src/cli/cortex/lib/discord-roles.ts and is covered here.
  *
  * Tests cover:

@@ -3148,7 +3148,7 @@ export async function startCortex(
   // `dependencies:` AND whose declared name follows the compass#115
   // `metafactory-cortex-adapter-<name>` naming standard (PR #1942 fix — a
   // dependency declared for an unrelated reason, e.g. `arc` or
-  // `metafactory-discord`, must NOT get the exemption) — read fresh each
+  // `metafactory-bundle-discord`, must NOT get the exemption) — read fresh each
   // boot via `defaultCortexManifestPath()` (the default here; no options
   // passed), so an extracted in-tree adapter (e.g. `web`) keeps loading with
   // zero config change on any existing stack once its bundle is declared as

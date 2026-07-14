@@ -18,14 +18,14 @@ dependencies:
   - name: "arc"
     version: ">=0.25.0"
   # Non-adapter dependency #2 — mirrors the REAL manifest's
-  # `metafactory-discord` entry exactly: a legitimately cortex-declared,
+  # `metafactory-bundle-discord` entry exactly: a legitimately cortex-declared,
   # org-trusted dependency that is CLI/skill tooling (ADR-0017), not an
   # adapter. This is the exact case PR #1942's MAJOR finding was about — a
   # pre-narrowing version of this anchor would have granted this name the
   # adapter exemption the moment it ever shipped a `kind: adapter` manifest.
   # Post-narrowing it never matches `metafactory-cortex-adapter-*`, so it
   # never can.
-  - name: "metafactory-discord"
+  - name: "metafactory-bundle-discord"
     version: ">=0.1.0"
   # The ONE dependency that DOES self-identify as a cortex-owned adapter
   # component by name (compass#115 naming standard) — this is the fixture

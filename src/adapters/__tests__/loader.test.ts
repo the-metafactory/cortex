@@ -302,10 +302,10 @@ const CORTEX_MANIFESTS_ROOT = join(FIXTURES_ROOT, "cortex-manifests");
 // it's a legitimately declared cortex dependency (see
 // `ADAPTER_BUNDLE_DEP_NAME_RE` in loader.ts).
 const DECLARED_ADAPTER_REPO = "https://github.com/the-metafactory/metafactory-cortex-adapter-fixture";
-// Mirrors the REAL manifest's `metafactory-discord` entry: a genuinely
+// Mirrors the REAL manifest's `metafactory-bundle-discord` entry: a genuinely
 // cortex-declared, org-trusted dependency that is NOT an adapter bundle by
 // name shape (tooling, ADR-0017) — must never grant the adapter exemption.
-const NON_ADAPTER_DECLARED_REPO = "https://github.com/the-metafactory/metafactory-discord";
+const NON_ADAPTER_DECLARED_REPO = "https://github.com/the-metafactory/metafactory-bundle-discord";
 const CORTEX_MANIFEST_DECLARES_FIXTURE = join(CORTEX_MANIFESTS_ROOT, "declares-fixture-adapter.yaml");
 
 describe("isFirstPartyAdapterBundle / isFirstPartyBundle (cortex#1794 S9a, epic #1784 decision)", () => {
@@ -351,7 +351,7 @@ describe("isFirstPartyAdapterBundle / isFirstPartyBundle (cortex#1794 S9a, epic 
 describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable anchor source", () => {
   test("reads dependency names from a fixture arc-manifest.yaml and derives EXACTLY the adapter-shaped repo URL — nothing else", () => {
     // PR #1942 MAJOR regression test: the fixture manifest declares THREE
-    // dependencies (arc, metafactory-discord, metafactory-cortex-adapter-fixture)
+    // dependencies (arc, metafactory-bundle-discord, metafactory-cortex-adapter-fixture)
     // — asserting the EXACT resulting set (not just "contains X") proves the
     // narrowing filter, not merely the happy path.
     const repos = readCortexDeclaredAdapterRepos(CORTEX_MANIFEST_DECLARES_FIXTURE);
@@ -362,7 +362,7 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
     expect(repos.has(NON_ADAPTER_DECLARED_REPO.toLowerCase())).toBe(false);
   });
 
-  test("PR #1942 MAJOR: a legitimately-declared but non-adapter-named dependency (mirrors the real metafactory-discord entry) never grants the exemption", () => {
+  test("PR #1942 MAJOR: a legitimately-declared but non-adapter-named dependency (mirrors the real metafactory-bundle-discord entry) never grants the exemption", () => {
     const repos = readCortexDeclaredAdapterRepos(CORTEX_MANIFEST_DECLARES_FIXTURE);
     expect(repos.has(NON_ADAPTER_DECLARED_REPO.toLowerCase())).toBe(false);
     expect(isFirstPartyAdapterBundle({ repoUrl: NON_ADAPTER_DECLARED_REPO }, "adapter", repos)).toBe(false);
@@ -402,7 +402,7 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
   test("cortex's REAL arc-manifest.yaml is readable, and its NARROWED adapter-exemption set contains exactly the web + slack + mattermost + discord bundles (cortex#1794 S9 / cortex#1795 S10 / cortex#1796 S11 / cortex#1797 S12 MOVE)", () => {
     // PR #1942 MAJOR: the narrowing means only a dependency `name` matching
     // `metafactory-cortex-adapter-*` grants the exemption — `arc` and
-    // `metafactory-discord` (both real, org-trusted dependencies declared for
+    // `metafactory-bundle-discord` (both real, org-trusted dependencies declared for
     // UNRELATED reasons) never do, no matter what they ship. cortex#1794 (S9
     // MOVE) was the first time the raw dependency list actually contained a
     // name matching that shape (`metafactory-cortex-adapter-web`); cortex#1795
@@ -423,7 +423,7 @@ describe("readCortexDeclaredAdapterRepos (cortex#1794 S9a) — the un-spoofable 
     expect(repos.has(DECLARED_ADAPTER_REPO.toLowerCase())).toBe(false);
     expect(repos.has(TRUSTED_REPO.toLowerCase())).toBe(false);
     expect(repos.has("https://github.com/the-metafactory/arc")).toBe(false);
-    expect(repos.has("https://github.com/the-metafactory/metafactory-discord")).toBe(false);
+    expect(repos.has("https://github.com/the-metafactory/metafactory-bundle-discord")).toBe(false);
   });
 });
 
@@ -954,13 +954,13 @@ describe("loadExternalPlugins — first-party ADAPTER exemption (cortex#1794 S9a
   });
 
   // PR #1942 MAJOR regression, end-to-end: a dependency that mirrors the
-  // REAL `metafactory-discord` entry (genuinely declared by cortex,
+  // REAL `metafactory-bundle-discord` entry (genuinely declared by cortex,
   // org-trusted, but NOT an adapter-shaped name) must not grant the
   // exemption even if a `kind: adapter` bundle is later installed at that
   // exact repo. Uses `echo-adapter-bundle`'s manifest/export (any valid
   // adapter shape works) with its repoUrl overridden to the non-adapter
   // declared repo.
-  test("PR #1942 MAJOR: an adapter bundle at a legitimately-declared but non-adapter-shaped repo (metafactory-discord) does NOT get the exemption", async () => {
+  test("PR #1942 MAJOR: an adapter bundle at a legitimately-declared but non-adapter-shaped repo (metafactory-bundle-discord) does NOT get the exemption", async () => {
     const registry = new SurfacePluginRegistry();
     const result = await loadExternalPlugins({
       registry,

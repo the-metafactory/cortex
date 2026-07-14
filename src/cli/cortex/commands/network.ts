@@ -59,7 +59,7 @@ import {
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
 // O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
-// cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-discord
+// cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-bundle-discord
 // bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side
 // admit path cannot import from an external arc bundle. Admit's ASSIGN side
 // moved to network-admit-adapters.ts (S5); reject's REMOVE side (shared with

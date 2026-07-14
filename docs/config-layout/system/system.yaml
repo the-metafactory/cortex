@@ -88,7 +88,7 @@ paths:
 # again never the bundle's own manifest, `tier`, or any other bundle-author-
 # controlled signal) — ALSO loads even when `external` is off. The naming
 # check matters: cortex declares OTHER dependencies too (`arc`, the package
-# manager; `metafactory-discord`, ADR-0017 CLI/skill tooling) that must NOT
+# manager; `metafactory-bundle-discord`, ADR-0017 CLI/skill tooling) that must NOT
 # get an adapter's flag-off exemption just because they're declared for some
 # unrelated reason (PR #1942 code-review fix). Rationale: extracting an
 # in-tree adapter (e.g. `web`) into its own arc bundle must be a transparent,

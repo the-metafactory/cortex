@@ -4,7 +4,7 @@
  * These are RUNTIME helpers the cortex daemon-side `network admit` command
  * depends on to grant the `community-fleet` role — NOT principal/agent tooling.
  * They were carried in the in-repo Discord CLI lib until that CLI + its skills
- * were extracted into the `metafactory-discord` arc bundle (ADR-0017, epic
+ * were extracted into the `metafactory-bundle-discord` arc bundle (ADR-0017, epic
  * #1171 S2). The CLI tooling moved out; this slice keeps the small slice the
  * runtime actually imports inside cortex, because the daemon cannot import from
  * an external `arc install`-able bundle.

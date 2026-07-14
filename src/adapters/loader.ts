@@ -480,7 +480,7 @@ export function isFirstPartyBundle(
  * "cortex depends on it for some reason". This is the fix for a code-review
  * MAJOR (PR #1942): an earlier version of this anchor treated cortex's
  * ENTIRE `dependencies:` list as adapter-exempt, so `arc` (the package
- * manager) and `metafactory-discord` (ADR-0017 CLI/skill *tooling* —
+ * manager) and `metafactory-bundle-discord` (ADR-0017 CLI/skill *tooling* —
  * explicitly NOT the adapter, per ADR-0024's own migration provenance
  * section) would BOTH have granted the exemption to any `kind: adapter`
  * plugin they ever happened to ship, despite neither being declared FOR
@@ -505,8 +505,8 @@ export function isFirstPartyBundle(
  * self-declares — the narrowing only adds a SECOND, independently-checkable
  * requirement on TOP of "declared by cortex": the declared name must also
  * self-identify, in a fixed and enforced shape, as a cortex-adapter
- * component. `arc` and `metafactory-discord` (or its scheduled rename,
- * `metafactory-bundle-discord` — compass#116) never match this shape, by
+ * component. `arc` and `metafactory-bundle-discord` (renamed from
+ * `metafactory-discord`, compass#116 / cortex#1905) never match this shape, by
  * construction: neither is a `metafactory-cortex-adapter-*` name, so
  * neither is EVER treated as first-party for the adapter exemption, no
  * matter what kind of `cortex-plugin.yaml` a bundle at that name might one
@@ -522,7 +522,7 @@ const ADAPTER_BUNDLE_DEP_NAME_RE = /^metafactory-cortex-adapter-[a-z0-9]+(?:-[a-
  * Same un-spoofability property as the adapter regex — the NAME is read out of
  * cortex's OWN PR-reviewed `arc-manifest.yaml`, never anything the bundle
  * self-declares, and must self-identify in this fixed shape as a
- * cortex-renderer component. `arc`, `metafactory-discord`, and every
+ * cortex-renderer component. `arc`, `metafactory-bundle-discord`, and every
  * `metafactory-cortex-adapter-*` bundle never match, by construction — the
  * adapter and renderer exemptions stay namespaced by both kind AND name.
  */
@@ -556,9 +556,9 @@ const RENDERER_BUNDLE_DEP_NAME_RE = /^metafactory-cortex-renderer-[a-z0-9]+(?:-[
  * Deriving a repo URL from a dependency `name`: `arc-manifest.yaml`
  * dependency names in this ecosystem ARE the GitHub repo name under the
  * trusted `the-metafactory` org, by the repo-first install convention
- * (ADR-0017 — see cortex's own `arc-manifest.yaml`, the `metafactory-discord`
+ * (ADR-0017 — see cortex's own `arc-manifest.yaml`, the `metafactory-bundle-discord`
  * entry: "the bundle is `arc install`-able from the
- * the-metafactory/metafactory-discord repo"). So `name:
+ * the-metafactory/metafactory-bundle-discord repo"). So `name:
  * "metafactory-cortex-adapter-web"` derives
  * `https://github.com/the-metafactory/metafactory-cortex-adapter-web`,
  * normalized the same way {@link normalizeRepoUrl} normalizes an installed
@@ -615,7 +615,7 @@ export function readCortexDeclaredAdapterRepos(manifestPath: string): ReadonlySe
       const name = dep.name.trim();
       // PR #1942 MAJOR fix — only a dependency name that self-identifies as
       // a cortex-owned ADAPTER component (the compass#115 naming standard)
-      // grants the exemption. `arc`, `metafactory-discord`, and any other
+      // grants the exemption. `arc`, `metafactory-bundle-discord`, and any other
       // legitimately-declared-but-unrelated dependency never match, no
       // matter what they ship.
       if (!ADAPTER_BUNDLE_DEP_NAME_RE.test(name)) continue;
