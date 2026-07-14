@@ -40,6 +40,7 @@ import {
   AgentsDirectoryWatcher,
   type AgentsChangeEvent,
 } from "./common/config/watcher";
+import { resolveArcPackReposDir } from "./common/config/arc-pack-repos-dir";
 import { type AgentConfig } from "./common/types/config";
 import { migrateStackDbOnTouch } from "./common/migrate-data-dir";
 import { migratePublishedEventsDirValue } from "./common/config/migrate-published-events-value";
@@ -2303,8 +2304,15 @@ export async function startCortex(
   // brainConsumers[] array the shutdown drain + reconcile walk), provisions the
   // per-capability JetStream durables, and binds the consumer. NEVER throws —
   // one brain's wiring failure does not abort boot.
+  // #1988 — the DEFAULT arc package-repos dir must MIRROR arc's own
+  // `dataRoot/repos` resolution (XDG DATA class; arc#287), NOT the moved
+  // pre-#287 legacy path. `resolveArcPackReposDir` honors `$XDG_DATA_HOME`
+  // (→ `<base>/metafactory/arc/repos`) and existence-gates the legacy
+  // `~/.config/metafactory/pkg/repos` fallback (singleTree / `ARC_CONFIG_ROOT`
+  // installs). An explicit `options.brainPackBaseDir` (set only in tests) stays
+  // the highest-precedence override, unchanged.
   const brainPackBaseDir =
-    options.brainPackBaseDir ?? expandTilde("~/.config/metafactory/pkg/repos/");
+    options.brainPackBaseDir ?? resolveArcPackReposDir();
 
   // Bot Packs B-3 (cortex#1021 W-1/W-2) — the adapter inbound reply-bridge +
   // the booted surface gate. Constructed ONCE here (before the per-agent brain
