@@ -38,6 +38,28 @@ No one owns the network. Anyone can join, bring their own assistants, build, and
 The whole system must surface to a person who can see and steer it. If it is hard, or hidden behind jargon, people won't engage — and an ecosystem no one joins is not one. Ease of engagement is a first-class requirement, not polish.
 **The test —** can a newcomer understand and command this without insider knowledge?
 
+### 8. Autonomy is a line, not a dial
+Autonomy isn't a slider you turn up. There's a line, and it's drawn by two questions: *can this be undone, and how far does it reach if it's wrong.* Below the line — editing a branch, running tests, reading, drafting, opening a PR — let the agent run and don't watch. Above it — merging to main, deleting data, sending anything outside, rotating a credential, touching its own config — stop and gate. Babysitting parks the human below the line; YOLO lets it above. Put the human *on the line itself* and you get both: free movement where mistakes are cheap, attention only where they aren't.
+**The test —** for this action, is the human placed at the reversibility line — not babysitting the cheap work, nor absent from the irreversible?
+
+### 9. Gate on what happened, not what it claims
+A gate that accepts the agent's story is no gate — any gate it can write to, it forges. The check is on observable state: *tests exited 0, the old value is gone from the repo, the URL answered* — never "I verified it." Every gated action leaves a named receipt. The model stays untrusted forever, and that is fine: you stop trusting its account and start trusting what you can watch happen.
+**The test —** does this verify a fact you can observe, or does it take the agent's word?
+
+### 10. Controls live where the agent has no hands
+Enforcement sits where the thing being enforced cannot reach it: branch protection on the server, a hook running from a directory the agent cannot write, an append-only log it cannot rewrite. A guard running out of the agent's own repo is not a guard.
+**The test —** can the agent reach, edit, or silence this control? If yes, it is not one.
+
+### 11. The agent never sets its own limits
+Whether an action is auto, propose, or needs-a-human is policy the agent *inherits and cannot edit* — and flipping that setting is the most gated thing there is. A hook the agent can switch off was never a hook.
+**The test —** can the agent change its own permission to act? If yes, there is no permission — only a suggestion.
+
+### 12. Deterministic gates; the model only advises
+The condition that lets a change through is deterministic — tests, a grep for banned patterns, a human tick for anything irreversible. A model reviewer feeds in as a second opinion, never as the receipt. Make an LLM the judge and it nitpicks round after round until it is overruled — babysitting in a costume.
+**The test —** is what lets this through a deterministic check with the model advisory, or a model's sign-off?
+
+*Principles 8–12 distilled from the autonomy/gating thread (2026-07) — Ivy's reflection and Vincent's JSON-gate lesson.*
+
 ---
 
 ## What we refuse to become
@@ -46,6 +68,9 @@ The whole system must surface to a person who can see and steer it. If it is har
 - **Autonomy without accountability.** Nothing acts without a human it traces back to.
 - **A stack that retrofits trust.** Security and accountability are designed in from the first commit; we refuse to bolt them on after something ships.
 - **A system only experts can use.** If engaging requires reading the source, we have failed principle 7.
+- **A gate the agent can switch off.** If the acting agent can edit its own permissions, hooks, or the log, they were never controls.
+- **An LLM as the merge condition.** Model review is a filter, not a receipt; the judge is deterministic.
+- **A system that audits itself.** The observer is never the thing being graded.
 
 ---
 
