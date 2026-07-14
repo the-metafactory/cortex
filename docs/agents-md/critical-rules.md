@@ -12,7 +12,7 @@
 
 **CLAUDE.md is fully generated — NEVER hand-edit it.** It is produced by `arc upgrade compass` from:
 
-- **Template:** `compass/templates/CLAUDE.md.template` (shared ecosystem template; the installed copy lives at `~/.config/metafactory/pkg/repos/compass/templates/CLAUDE.md.template`)
+- **Template:** `compass/templates/CLAUDE.md.template` (shared ecosystem template; the installed copy lives at `~/.local/share/metafactory/arc/repos/compass/templates/CLAUDE.md.template`)
 - **Config:** `agents-md.yaml` (repo-specific placeholders and section list)
 - **Section files:** `docs/agents-md/*.md` (repo-specific content injected at marked positions)
 

@@ -58,7 +58,7 @@ The epic's stocktake was captured @ origin/main `83e73ec2`; re-verified here aga
 | 6 | Legacy worklog reaches through `DiscordAdapter` — static import + `getClient()` + `formatEventForDiscord` | ❌ blocker | `src/cortex.ts:134` (import), `:335` (`formatEventForDiscord`), `:5882,5889` (`getClient`), `:5936` (format call) |
 | 7 | `SurfacesSchema` is `.strict()` with 4 hardcoded platform keys — no out-of-tree platform validates | ❌ blocker | `src/common/types/surfaces.ts:327-341` |
 | 8 | Platform npm deps live in cortex `package.json` | ❌ blocker | `package.json:47,48,55` |
-| 9 | arc bundles + `dependencies:` ranges + repo-first install proven | ✅ | ADR-0017, `metafactory-bundle-discord` installed under `~/.config/metafactory/pkg/repos/` |
+| 9 | arc bundles + `dependencies:` ranges + repo-first install proven | ✅ | ADR-0017, `metafactory-bundle-discord` installed under `~/.local/share/metafactory/arc/repos/` |
 | 10 | arc semver-range *enforcement* between installed packages + bundle `bun install` | ⚠️ likely missing | arc-side slice (arc#284 / S7) |
 | 11 | Daemon runs TS via bun → dynamic `import()` of installed bundle source is feasible | ✅ | `src/cortex.ts:1` shebang; plists run `~/.local/bin/cortex start` |
 | 12 | Config hot-reload machinery exists (`applied` vs `requiresRestart`) | ✅ | `src/common/config/watcher.ts:12-16,101-106` |
@@ -167,7 +167,7 @@ metafactory-slack/
   src/index.ts             # default-exports a SurfacePlugin
 ```
 
-`arc install metafactory-slack` lands it under `~/.config/metafactory/pkg/repos/metafactory-slack/` and runs its `bun install` (arc#284 / S7). Distribution is **repo-first** (ADR-0017's decision) — registry-by-name publication is later and gated on a principal sign-off (HOLD).
+`arc install metafactory-slack` lands it under `~/.local/share/metafactory/arc/repos/metafactory-slack/` and runs its `bun install` (arc#284 / S7). Distribution is **repo-first** (ADR-0017's decision) — registry-by-name publication is later and gated on a principal sign-off (HOLD).
 
 The manifest is **one file for both kinds** — `cortex-plugin.yaml` (not `cortex-adapter.yaml`; the draft's name predates the fold-in). It carries `kind: adapter | renderer`; `entry`; `sdkRange`; and the advisory `cortex` range. A renderer bundle (`metafactory-pagerduty`) has the identical shape with `kind: renderer` and, typically, no `package.json` deps at all (R10).
 

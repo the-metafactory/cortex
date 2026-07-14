@@ -67,8 +67,8 @@ resolve_config_dir() {
   fi
   local canonical="${HOME}/.config/metafactory/cortex"
   if [ -d "${canonical}" ]; then printf '%s' "${canonical}"; return 0; fi
-  if [ -d "${HOME}/.config/cortex" ]; then printf '%s' "${HOME}/.config/cortex"; return 0; fi
-  if [ -d "${HOME}/.config/grove" ]; then printf '%s' "${HOME}/.config/grove"; return 0; fi
+  if [ -d "${HOME}/.config/cortex" ]; then printf '%s' "${HOME}/.config/cortex"; return 0; fi  # xdg-audit:allow(XDG-aware config resolver — legacy fallback candidate, by design)
+  if [ -d "${HOME}/.config/grove" ]; then printf '%s' "${HOME}/.config/grove"; return 0; fi  # xdg-audit:allow(XDG-aware config resolver — legacy fallback candidate, by design)
   printf '%s' "${canonical}"
 }
 
@@ -463,7 +463,7 @@ render_cortex_plists() {
 forward_link_legacy_bin() {
   local name="$1"
   local target="${HOME}/.local/bin/${name}"
-  local link="${HOME}/bin/${name}"
+  local link="${HOME}/bin/${name}"  # xdg-audit:allow(legacy ~/bin→~/.local/bin forward-compat bridge — by design (cortex#1866))
 
   # Nothing to point at → do not create a dangling forward-symlink.
   [ -e "${target}" ] || return 0

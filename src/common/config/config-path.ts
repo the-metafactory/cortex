@@ -202,12 +202,12 @@ export function resolveConfigDir(home?: string): string {
 
   const legacyCortex = legacyCortexConfigDir(home);
   if (existsSync(legacyCortex)) {
-    noteXdgFallback("config", "config dir resolved from legacy ~/.config/cortex");
+    noteXdgFallback("config", "config dir resolved from legacy ~/.config/cortex");  // xdg-audit:allow(resolver legacy-fallback note — by design)
     return legacyCortex;
   }
   const grove = dirname(groveConfigPath("_", home));
   if (existsSync(grove)) {
-    noteXdgFallback("config", "config dir resolved from legacy ~/.config/grove");
+    noteXdgFallback("config", "config dir resolved from legacy ~/.config/grove");  // xdg-audit:allow(resolver legacy-fallback note — by design)
     return grove;
   }
   return canonical;
@@ -248,9 +248,9 @@ export function migrateGroveConfigFile(filename: string, home?: string): boolean
   const legacyCortex = legacyCortexConfigPath(filename, home);
   const grove = groveConfigPath(filename, home);
   const src = existsSync(legacyCortex)
-    ? { path: legacyCortex, tree: "~/.config/cortex" }
+    ? { path: legacyCortex, tree: "~/.config/cortex" }  // xdg-audit:allow(resolver legacy-fallback candidate — by design)
     : existsSync(grove)
-      ? { path: grove, tree: "~/.config/grove" }
+      ? { path: grove, tree: "~/.config/grove" }  // xdg-audit:allow(resolver legacy-fallback candidate — by design)
       : undefined;
   if (src === undefined) return false; // nothing to migrate
 

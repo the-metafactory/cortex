@@ -1,0 +1,463 @@
+# xdg-audit allowlist — every entry suppresses a BY-DESIGN legacy-path reference
+# the class rules can't (docs/yaml stay gated by default). Five fields required:
+#   pattern : a pattern-id from xdg-audit.ts's registry
+#   path    : glob (repo-relative) selecting the file(s)
+#   match   : NARROW content regex — a bare path glob must not silently allow
+#             future new lines in the file
+#   reason  : why this reference is correct / by-design
+#   owner   : tracking issue, or "by-design" for a permanent exception
+#
+# The gate warns on unknown pattern-ids and unused entries so dead allows get
+# pruned. Run `bun scripts/xdg-audit.ts --repos --verbose` to see what each
+# entry currently suppresses. Resolver-internal legacy fallbacks are suppressed
+# INLINE (xdg-audit:allow(...) at the site), not here.
+allow:
+  # ── cortex: migration / cleanup scripts (must name the legacy path) ──────
+  - pattern: bin-home
+    path: scripts/preupgrade.sh
+    match: grove-bot
+    reason: legacy grove-bot cleanup — kills processes + removes the pre-migration ~/bin/grove-bot symlink; must name the legacy path
+    owner: cortex#1866
+  - pattern: grove-state
+    path: scripts/federation-selftest.sh
+    match: rm -f .*/\.config/grove/state/
+    reason: selftest teardown — removes legacy grove-state pidfiles it created
+    owner: by-design
+  - pattern: config-tree
+    path: scripts/federation-selftest.sh
+    match: rm -f .*/\.config/grove/state/
+    reason: selftest teardown — removes legacy grove-state pidfiles it created
+    owner: by-design
+
+  # ── cortex: postinstall physical creation + status echoes ────────────────
+  - pattern: claude-events
+    path: scripts/postinstall.sh
+    match: \.claude/(events|relay)
+    reason: postinstall creates + describes the permanent ~/.claude events/relay buffer (standard §6; relay dir is pre-migration correct, resolver-gated)
+    owner: by-design
+  - pattern: config-tree
+    path: scripts/postinstall.sh
+    match: Runtime directories created
+    reason: postinstall status echo — the real dir is the resolved CONFIG_DIR; the message shows the transition-active path
+    owner: cortex#1869
+
+  # ── cortex: GV-1 cortex-first / grove-fallback bot.yaml readers ──────────
+  - pattern: config-tree
+    path: src/cli/cldyo-live
+    match: \.config/(cortex|grove)/bot\.yaml
+    reason: cldyo-live GV-1 cortex-first/grove-fallback bot.yaml resolver — reads the XDG-default flat config path
+    owner: cortex#1076
+  - pattern: config-tree
+    path: src/statusline/cortex-status.sh
+    match: \.config/(cortex|grove)/bot\.yaml
+    reason: statusline GV-1 cortex-first/grove-fallback bot.yaml resolver — reads the XDG-default flat config path
+    owner: cortex#1076
+
+  # ── cortex: developer-facing hygiene / CLI help text ─────────────────────
+  - pattern: config-tree
+    path: scripts/check-shippable-hygiene.ts
+    match: keep real ids in ~/\.config/cortex/|move this deployment fragment to ~/\.config/cortex/
+    reason: hygiene remediation text — points devs to the local (never-shipped) config tree
+    owner: by-design
+  - pattern: config-tree
+    path: src/cli/cortex/commands/agents.ts
+    match: ~/\.config/cortex/(agents\.d|cortex\.yaml)
+    reason: CLI --help text — shows the transition-active config path (canonicalizes at the wave-4 cutover)
+    owner: cortex#1869
+  - pattern: config-tree
+    path: src/cli/cortex/commands/cloud.ts
+    match: ~/\.config/cortex/(bot\.yaml|cloud-credentials)
+    reason: CLI --help text — shows the transition-active config path (canonicalizes at the wave-4 cutover)
+    owner: cortex#1869
+  - pattern: config-tree
+    path: src/cli/cortex/commands/network.ts
+    match: ~/\.config/cortex/cortex\.yaml
+    reason: CLI --help text — shows the transition-active config path (canonicalizes at the wave-4 cutover)
+    owner: cortex#1869
+  - pattern: config-tree
+    path: src/cli/cortex/commands/network-adapters.ts
+    match: ~/\.config/cortex/<stack>/<stack>\.yaml
+    reason: CLI --help text — shows the transition-active stack config path (canonicalizes at the wave-4 cutover)
+    owner: cortex#1869
+  - pattern: config-tree
+    path: src/cli/cortex/commands/stack-lib.ts
+    match: cortex start --config ~/\.config/cortex/
+    reason: generated stack.yaml header comment — shows the transition-active start command (canonicalizes at the wave-4 cutover)
+    owner: cortex#1869
+
+  # ── cortex: pier install-script hints ────────────────────────────────────
+  - pattern: config-tree
+    path: scripts/pier/*.sh
+    match: ~/\.config/cortex/(\.env|agents\.d)
+    reason: pier install-script hint text — transition-active config path shown to the operator
+    owner: cortex#1869
+  - pattern: legacy-share
+    path: scripts/pier/signal-cortex-reload.sh
+    match: \.local/share/cortex/cortex\.pid
+    reason: best-effort SIGHUP pidfile fallback (comment acknowledges non-default configs need a manual reload) — see PR note, verify against the pidfile convention
+    owner: cortex#1903
+
+  # ── cortex: STACK logDir cluster (differs from canonical XDG state) ───────
+  # NOTE: canonical logDir default is ~/.local/state/metafactory/cortex/logs
+  # (config.ts / cortex-config.ts), but the stack subsystem generates + logs to
+  # ~/.config/cortex/logs. It WORKS at every migration stage (co-located with
+  # the stack config), so allowed here + flagged in the PR for a product call on
+  # whether stack logs should move to the XDG state dir. publishedEventsDir is
+  # already canonical.
+  - pattern: config-tree
+    path: src/cli/cortex/commands/stack-lib.ts
+    match: logDir:\s*~/\.config/cortex/logs
+    reason: generated stack system.yaml logDir — stack-log co-location, differs from canonical XDG state default (see PR note; needs product decision)
+    owner: cortex#1869
+  - pattern: config-tree
+    path: src/services/*.plist
+    match: \.config/cortex/logs/cortex-
+    reason: stack launchd plist StandardOut/Err path — matches the generated stack logDir (see stack logDir note)
+    owner: cortex#1869
+  - pattern: config-tree
+    path: scripts/federation-selftest.sh
+    match: s\|~/\.config/cortex/logs\|
+    reason: selftest rewrites the default stack logDir literal to a test-isolated dir (see stack logDir note)
+    owner: cortex#1869
+
+  # ═══ DOCS (generated 2026-07-15 sweep) ═══════════════════════════════
+  - pattern: bin-home
+    path: docs/plan-cortex-migration.md
+    match: (~|\$\{HOME\})/bin/
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/plan-cortex-migration.md
+    match: \.config/(cortex|grove)
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: config-tree
+    path: docs/migrations/0002-vocabulary-finish-2026-05.md
+    match: \.config/(cortex|grove)
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: config-tree
+    path: docs/migrations/0003-config-split-layout.md
+    match: ~/\.config/(cortex|grove)
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: grove-state
+    path: docs/migrations/0003-config-split-layout.md
+    match: \.config/grove/state
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1903
+  - pattern: config-tree
+    path: docs/sop-migrate-config.md
+    match: ~/\.config/cortex
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: bin-home
+    path: docs/archive/v1-to-v2-cutover.md
+    match: ~/bin/
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/archive/v1-to-v2-cutover.md
+    match: ~/\.config/grove
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: claude-events
+    path: docs/archive/v1-to-v2-cutover.md
+    match: \.claude/events
+    reason: permanent ~/.claude events/relay buffer (standard §6) — accurate runtime dir
+    owner: by-design
+  - pattern: config-tree
+    path: docs/iteration-cloud-api.md
+    match: ~/\.config/grove
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: config-tree
+    path: docs/iteration-github-visibility.md
+    match: \.config/grove/state
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1903
+  - pattern: grove-state
+    path: docs/iteration-github-visibility.md
+    match: \.config/grove/state
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1903
+  - pattern: legacy-share
+    path: docs/iteration-mission-control-pane-of-glass.md
+    match: \.local/share/cortex/mc
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1902
+  - pattern: config-tree
+    path: docs/iteration-policy-cutover.md
+    match: ~/\.config/cortex
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: config-tree
+    path: docs/stock-take-v3-to-v4.5.md
+    match: ~/\.config/cortex/<stack>
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: bin-home
+    path: docs/federation-1598-admit-mint-worklog.md
+    match: federation-selftest
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/plan-bot-packs-completion.md
+    match: ~/\.config/cortex
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: config-tree
+    path: docs/migration-examples/after-single-adapter.yaml
+    match: logDir:\s*~/\.config/cortex/logs
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: claude-events
+    path: docs/migration-examples/after-single-adapter.yaml
+    match: publishedEventsDir:\s*~/\.claude/events/published
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1902
+  - pattern: bin-home
+    path: CHANGELOG.md
+    match: ~/bin/
+    reason: historical changelog/release entry — frozen
+    owner: cortex#1866
+  - pattern: config-tree
+    path: CHANGELOG.md
+    match: ~/\.config/cortex
+    reason: historical changelog/release entry — frozen
+    owner: cortex#1869
+  - pattern: config-tree
+    path: RELEASE-HISTORY.md
+    match: ~/\.config/cortex
+    reason: historical changelog/release entry — frozen
+    owner: cortex#1869
+  - pattern: config-tree
+    path: .specify/specs/F-2-agents-d-fragment-loader-and-watcher/plan.md
+    match: ~/\.config/cortex
+    reason: archived feature spec — config path as of authoring
+    owner: cortex#1869
+  - pattern: config-tree
+    path: .specify/specs/F-2-agents-d-fragment-loader-and-watcher/spec.md
+    match: ~/\.config/cortex
+    reason: archived feature spec — config path as of authoring
+    owner: cortex#1869
+  - pattern: config-tree
+    path: .specify/specs/F-3-cortex-agents-reload-cli/plan.md
+    match: ~/\.config/cortex
+    reason: archived feature spec — config path as of authoring
+    owner: cortex#1869
+  - pattern: config-tree
+    path: .specify/specs/F-3-cortex-agents-reload-cli/spec.md
+    match: ~/\.config/cortex
+    reason: archived feature spec — config path as of authoring
+    owner: cortex#1869
+  - pattern: config-tree
+    path: .specify/specs/f-6-reflex-activation-bridge/HANDOFF.md
+    match: \.config/cortex
+    reason: archived feature spec — config path as of authoring
+    owner: cortex#1869
+  - pattern: config-tree
+    path: CLAUDE.md
+    match: migrated from grove-v2 `~/\.config/grove
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: config-tree
+    path: docs/agents-md/architecture.md
+    match: migrated from grove-v2 `~/\.config/grove
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: claude-events
+    path: README-AGENTS.md
+    match: \.claude/(events|relay)
+    reason: permanent ~/.claude events/relay buffer (standard §6) — accurate runtime dir
+    owner: by-design
+  - pattern: config-tree
+    path: docs/getting-started.md
+    match: ~/\.config/grove/bot\.yaml
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1869
+  - pattern: claude-events
+    path: docs/getting-started.md
+    match: \.claude/events/\{raw,published\}
+    reason: permanent ~/.claude events/relay buffer (standard §6) — accurate runtime dir
+    owner: by-design
+  - pattern: config-tree
+    path: docs/runbook-federation-peering.md
+    match: ~/\.config/cortex
+    reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
+    owner: cortex#1869
+  - pattern: bin-home
+    path: docs/adr/0017-surface-tooling-arc-bundles.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/design-agentic-dev-pipeline.md
+    match: ~/\.config/cortex/agents
+    reason: agent instance-state path — future agent-instance-state wave
+    owner: agent-instance-state
+  - pattern: systemd-userdir
+    path: docs/design-arc-agent-bots.md
+    match: \.config/systemd/user
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: G-38
+  - pattern: config-tree
+    path: docs/design-cloud-api.md
+    match: ~/\.config/grove
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: claude-events
+    path: docs/design-cloud-api.md
+    match: \.claude/events/published
+    reason: permanent ~/.claude events/relay buffer (standard §6) — accurate runtime dir
+    owner: by-design
+  - pattern: bin-home
+    path: docs/design-collaboration-surface.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/design-dm-operator-channel.md
+    match: ~/\.config/grove/bot\.yaml
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: config-tree
+    path: docs/design-github-visibility.md
+    match: ~/\.config/grove
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: grove-state
+    path: docs/design-github-visibility.md
+    match: \.config/grove/state
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: bin-home
+    path: docs/design-mc-f11-discord-notifications.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: bin-home
+    path: docs/design-mc-f12-task-curation.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/design-mission-control.md
+    match: ~/\.config/grove/mission-control
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: legacy-share
+    path: docs/design-mission-control.md
+    match: \.local/share/grove
+    reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
+    owner: cortex#436
+  - pattern: bin-home
+    path: docs/design-test-rig.md
+    match: ~/bin/
+    reason: migration/cutover history — frozen doc describing the grove→cortex / XDG migration
+    owner: cortex#1866
+  - pattern: config-tree
+    path: examples/processes/build-journal.yaml
+    match: ~/\.config/cortex/processes
+    reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
+    owner: cortex#1869
+  - pattern: bin-home
+    path: arc-manifest.yaml
+    match: ~/bin/
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: arc-manifest.yaml
+    match: ~/\.config/cortex/cortex\.yaml
+    reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
+    owner: cortex#1869
+  - pattern: claude-events
+    path: arc-manifest.yaml
+    match: target:\s*~/\.claude/relay/cortex
+    reason: provides.files symlink target; relay dir is pre-cutover correct, relay cutover owned by wave 5
+    owner: cortex#1903
+  - pattern: config-tree
+    path: arc-manifest-pier.yaml
+    match: ~/\.config/cortex/(personas|agents\.d|\.env)
+    reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
+    owner: cortex#1869
+  - pattern: config-tree
+    path: agents.d/pier.yaml
+    match: ~/\.config/cortex/(agents\.d|personas)
+    reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
+    owner: cortex#1869
+  - pattern: pkg-repos
+    path: CLAUDE.md
+    match: \.config/metafactory/pkg/repos
+    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
+    owner: arc#287
+  - pattern: pkg-repos
+    path: QUICKSTART.md
+    match: \.config/metafactory/pkg/repos
+    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
+    owner: arc#287
+  - pattern: pkg-repos
+    path: README.md
+    match: \.config/metafactory/pkg/repos
+    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
+    owner: arc#287
+  - pattern: pkg-repos
+    path: design/library-support.md
+    match: \.config/metafactory/pkg/repos
+    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
+    owner: arc#287
+  - pattern: pkg-repos
+    path: docs/agents-md/architecture.md
+    match: \.config/metafactory/pkg/repos
+    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
+    owner: arc#287
+  - pattern: pkg-repos
+    path: skill/SKILL.md
+    match: \.config/metafactory/pkg/repos
+    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
+    owner: arc#287
+  - pattern: config-tree
+    path: docs/agent-identity-provisioning.md
+    match: ~/\.config/cortex/agents
+    reason: agent instance-state path — future agent-instance-state wave
+    owner: agent-instance-state
+  - pattern: bin-home
+    path: CLAUDE.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: CLAUDE.md
+    match: ~/\.config/cortex/cli\.yaml
+    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate
+    owner: by-design
+  - pattern: bin-home
+    path: README.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: README.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: arc-manifest.yaml
+    match: ~/\.config/(cortex|grove)/cli\.yaml
+    reason: declared XDG read-fallback (canonical-first + two legacy reads) — matches the resolver contract
+    owner: by-design
+  - pattern: config-tree
+    path: cli.yaml.example
+    match: ~/\.config/cortex/cli\.yaml
+    reason: example/schema-reference header naming the config file — never a live config
+    owner: by-design
+  - pattern: bin-home
+    path: skill/SKILL.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    owner: cortex#1866
+  - pattern: config-tree
+    path: skill/SKILL.md
+    match: ~/\.config/cortex/cli\.yaml
+    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate
+    owner: by-design

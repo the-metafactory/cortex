@@ -10,7 +10,7 @@
 - `docs/architecture.md` — §3 (four subject classes, hot/cold path), §7 (capability-driven dispatch, three distribution modes, nak taxonomy, sovereignty modes).
 - `docs/plan-internet-of-agentic-work.md` — Phase D §D.4 (capability registry / federation handshake).
 - Reverted source (still readable in git history) — `git show 3a88dd8:src/cli/cortex/commands/wait-for-review.ts` (the cortex#234 CLI; PR #236 reverts it). The new `pilot wait-for-review` CLI lifts shape from here.
-- Source under restructure — `~/.config/metafactory/pkg/repos/pilot/` (the pilot repo, root commit `ff2fe2a` extracted from `the-metafactory/meta-factory` on 2026-04-24).
+- Source under restructure — `~/.local/share/metafactory/arc/repos/pilot/` (the pilot repo, root commit `ff2fe2a` extracted from `the-metafactory/meta-factory` on 2026-04-24).
 
 **Tracking issues:** cortex#232 (umbrella — review-bundle migration to pilot), cortex#237 (Echo's bus-side consumer: subscribe to `tasks.code-review.*`, emit `review.verdict.*`).
 
@@ -52,7 +52,7 @@ These are inputs to this spec, NOT open for re-litigation:
 ### §2.1 Top-level layout
 
 ```
-~/.config/metafactory/pkg/repos/pilot/
+~/.local/share/metafactory/arc/repos/pilot/
 ├── arc-manifest.yaml            # skill manifest (`pilot-review-loop` v0.3.0)
 ├── package.json                 # bun package, ships `~/.local/bin/pilot`
 ├── bun.lock
@@ -971,7 +971,7 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 
 **Cons:**
 
-- Assumes cortex repo is at `../cortex` relative to pilot checkout. **False for the standard `~/Developer/cortex` + `~/.config/metafactory/pkg/repos/pilot` layout.** Principals would have to manually symlink.
+- Assumes cortex repo is at `../cortex` relative to pilot checkout. **False for the standard `~/Developer/cortex` + `~/.local/share/metafactory/arc/repos/pilot` layout.** Principals would have to manually symlink.
 - CI configuration would need to clone cortex before `bun install`.
 - arc-manifest distribution (the `arc upgrade Pilot` story): `arc` does NOT install path-relative deps. The pilot binary at `~/.local/bin/pilot` would silently break on principal machines that don't have cortex checked out alongside.
 
@@ -1133,7 +1133,7 @@ cortex#232 is closed when Phase A merges (the design lands as a tracked artefact
 - `~/Developer/cortex/docs/design-internet-of-agentic-work.md` — multi-network framing (Phase D context).
 - `~/Developer/cortex/docs/architecture.md` — §3, §7 (bus structure, capability dispatch).
 - `~/Developer/cortex/docs/plan-internet-of-agentic-work.md` — Phase D detail (out of this spec's immediate scope).
-- `~/.config/metafactory/pkg/repos/pilot/` — source under restructure.
+- `~/.local/share/metafactory/arc/repos/pilot/` — source under restructure.
 - `git show 3a88dd8:src/cli/cortex/commands/wait-for-review.ts` — reverted CLI; the shape template for §5's three new CLIs.
 - cortex PR #236 — reverts the cortex#234 CLI; surfaces this restructure as the follow-up.
 - cortex#232 — review-bundle migration umbrella.

@@ -390,7 +390,7 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 | Cortex consumes other bundles indirectly | Principals install `myelin` (via arc) for the bus protocol; `signal` (via arc) for the observability tap; `cortex` (via arc) for the surface. Each is independently rolled out. |
 | Cortex does NOT runtime-import arc | arc is a build/install-time tool. At runtime cortex doesn't know it was installed by arc — it just finds its config at the configured path and runs. |
 | Cross-bundle dependencies | Declared via the `arc-manifest.yaml` `dependsOn:` field. Cortex declares `myelin` (the schema is vendored, but principals need myelin's CLI for identity-key provisioning per MIG-7's `nats.identity` config). signal is *recommended* but not required (cortex tolerates absent collector). |
-| Existing examples | `~/.config/metafactory/pkg/repos/` shows installed bundles today: `grove` (legacy bot), `compass` (SOPs + validators), `pilot`, etc. The same directory will hold `cortex` post-MIG-7. |
+| Existing examples | `~/.local/share/metafactory/arc/repos/` shows installed bundles today: `grove` (legacy bot), `compass` (SOPs + validators), `pilot`, etc. The same directory will hold `cortex` post-MIG-7. |
 
 **Why this matters for the design:**
 
@@ -404,7 +404,7 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 - Cortex's `arc-manifest.yaml` MUST be valid against arc's published manifest schema. Manifest validation runs in cortex's CI.
 - Cortex MAY shell out to `arc` for one-shot install-time steps (e.g. `arc identity provision` per JC's E2E NATS work) but never as a runtime dependency.
 
-**Reading order:** `~/Developer/arc/README.md` for the install model → `arc list` / `arc upgrade --help` for the principal-facing CLI → existing manifests in `~/.config/metafactory/pkg/repos/*/arc-manifest.yaml` as concrete examples.
+**Reading order:** `~/Developer/arc/README.md` for the install model → `arc list` / `arc upgrade --help` for the principal-facing CLI → existing manifests in `~/.local/share/metafactory/arc/repos/*/arc-manifest.yaml` as concrete examples.
 
 ---
 
@@ -766,7 +766,7 @@ Skip on first pass: signal collector internals (still design), pilot's internals
 - **Lineage docs** — `docs/design-collaboration-surface.md` (PR #58 + #83 — includes the event architecture diagram), `docs/design-event-taxonomy.md` (PR #81), `docs/iteration-collaboration-surface.md` (PR #79).
 - **M7 sibling apps** — `~/Developer/pilot/README.md`, `~/Developer/signal/README.md` + `~/Developer/signal/docs/design-signal-bundle-migration.md`.
 - **Knowledge artefacts** — `~/Developer/compass/sops/*.md`, `~/Developer/blueprint/README.md`, `~/Developer/blueprint/docs/design-event-sync.md`.
-- **Distribution layer** — `~/Developer/arc/README.md`, existing manifests at `~/.config/metafactory/pkg/repos/*/arc-manifest.yaml` (concrete examples).
+- **Distribution layer** — `~/Developer/arc/README.md`, existing manifests at `~/.local/share/metafactory/arc/repos/*/arc-manifest.yaml` (concrete examples).
 - **Process** — `~/Developer/compass/sops/dev-pipeline.md`, `worktree-discipline.md`, `pr-review.md`, `design-process.md`, `versioning.md`, `new-repo-pattern.md`.
 - **Working migration plan** — `docs/plan-cortex-migration.md`.
 

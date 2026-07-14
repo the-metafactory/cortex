@@ -235,7 +235,7 @@ function resolveStateSubdir(
 export function resolvePidStateDir(home?: string): string {
   return resolveStateSubdir(
     home,
-    [{ dir: legacyPidStateDir(home), note: "pidfile dir resolved from legacy ~/.config/grove/state" }],
+    [{ dir: legacyPidStateDir(home), note: "pidfile dir resolved from legacy ~/.config/grove/state" }],  // xdg-audit:allow(resolver legacy-fallback candidate — by design)
     canonicalPidStateDir,
   );
 }
@@ -246,8 +246,8 @@ export function resolveLogsDir(home?: string): string {
   return resolveStateSubdir(
     home,
     [
-      { dir: legacyGroveLogsDir(home), note: "logs dir resolved from legacy ~/.config/grove/logs" },
-      { dir: legacyCortexLogsDir(home), note: "logs dir resolved from legacy ~/.config/cortex/logs" },
+      { dir: legacyGroveLogsDir(home), note: "logs dir resolved from legacy ~/.config/grove/logs" },  // xdg-audit:allow(resolver legacy-fallback candidate — by design)
+      { dir: legacyCortexLogsDir(home), note: "logs dir resolved from legacy ~/.config/cortex/logs" },  // xdg-audit:allow(resolver legacy-fallback candidate — by design)
     ],
     canonicalLogsDir,
   );
@@ -259,7 +259,7 @@ export function resolveLogsDir(home?: string): string {
 export function resolveRelayDir(home?: string): string {
   return resolveStateSubdir(
     home,
-    [{ dir: legacyRelayDir(home), note: "relay pidfile dir resolved from legacy ~/.claude/relay" }],
+    [{ dir: legacyRelayDir(home), note: "relay pidfile dir resolved from legacy ~/.claude/relay" }],  // xdg-audit:allow(resolver legacy-fallback candidate — by design)
     canonicalRelayDir,
   );
 }
@@ -274,7 +274,7 @@ export function resolveNetworkCacheDir(home?: string): string {
     [
       {
         dir: legacyNetworkCacheDir(home),
-        note: "network-cache resolved from legacy ~/.config/cortex/network-cache",
+        note: "network-cache resolved from legacy ~/.config/cortex/network-cache",  // xdg-audit:allow(resolver legacy-fallback note — by design)
       },
     ],
     canonicalNetworkCacheDir,
@@ -294,6 +294,6 @@ export function resolveNetworkCacheDir(home?: string): string {
 export const LOG_DIR_DEFAULT = "~/.local/state/metafactory/cortex/logs";
 
 /** Pre-move grove logDir default (value-migration / test source). */
-export const LEGACY_LOG_DIR_DEFAULT_GROVE = "~/.config/grove/logs";
+export const LEGACY_LOG_DIR_DEFAULT_GROVE = "~/.config/grove/logs";  // xdg-audit:allow(resolver legacy-fallback constant — by design)
 /** Pre-move cortex logDir default (value-migration / test source). */
-export const LEGACY_LOG_DIR_DEFAULT_CORTEX = "~/.config/cortex/logs";
+export const LEGACY_LOG_DIR_DEFAULT_CORTEX = "~/.config/cortex/logs";  // xdg-audit:allow(resolver legacy-fallback constant — by design)

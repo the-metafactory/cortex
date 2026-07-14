@@ -235,7 +235,7 @@ wont_do` failure vocabulary maps 1:1 onto brain exit codes / error events.
 The process boundary makes this almost boring — no module-cache exorcism:
 
 1. **Install/upgrade:** `arc install yarrow` drops the pack into
-   `~/.config/metafactory/pkg/repos/yarrow/`, writes `agent.yaml` into
+   `~/.local/share/metafactory/arc/repos/yarrow/`, writes `agent.yaml` into
    `agents.d/`, runs `cortex creds issue yarrow` (A.2) when
    `lifecycle: daemon`.
 2. **Detect:** the cortex#60 A.1 watcher on `agents.d/` (plus

@@ -133,7 +133,7 @@ export function resolveStackDbPath(stack: string, home?: string): string {
   if (existsSync(canonical)) return canonical;
   const legacy = legacyStackDbPath(stack, home);
   if (existsSync(legacy)) {
-    noteXdgFallback("data", `mc db for "${stack}" resolved from legacy ~/.local/share/cortex/mc`);
+    noteXdgFallback("data", `mc db for "${stack}" resolved from legacy ~/.local/share/cortex/mc`);  // xdg-audit:allow(resolver legacy-fallback note — by design)
     return legacy;
   }
   return canonical;
@@ -162,7 +162,7 @@ export function resolveStandaloneDbPath(home?: string): string {
   if (existsSync(canonical)) return canonical;
   const legacy = legacyStandaloneDbPath(home);
   if (existsSync(legacy)) {
-    noteXdgFallback("data", "mission-control.db resolved from legacy ~/.local/share/grove");
+    noteXdgFallback("data", "mission-control.db resolved from legacy ~/.local/share/grove");  // xdg-audit:allow(resolver legacy-fallback note — by design)
     return legacy;
   }
   return canonical;
@@ -190,7 +190,7 @@ export function resolveCursorPath(home?: string): string {
   if (existsSync(canonical)) return canonical;
   const legacy = legacyCursorPath(home);
   if (existsSync(legacy)) {
-    noteXdgFallback("data", "mc-hook-cursor.json resolved from legacy ~/.local/share/grove");
+    noteXdgFallback("data", "mc-hook-cursor.json resolved from legacy ~/.local/share/grove");  // xdg-audit:allow(resolver legacy-fallback note — by design)
     return legacy;
   }
   return canonical;
@@ -227,7 +227,7 @@ export function resolvePublishedEventsDir(home?: string): string {
   if (existsSync(canonical)) return canonical;
   const legacy = legacyPublishedEventsDir(home);
   if (existsSync(legacy)) {
-    noteXdgFallback("data", "published events resolved from legacy ~/.claude/events/published");
+    noteXdgFallback("data", "published events resolved from legacy ~/.claude/events/published");  // xdg-audit:allow(resolver legacy-fallback note — by design)
     return legacy;
   }
   return canonical;
@@ -244,4 +244,4 @@ export const PUBLISHED_EVENTS_DIR_DEFAULT =
   "~/.local/share/metafactory/cortex/events/published";
 
 /** The pre-move default literal for `paths.publishedEventsDir` (value-migrator source). */
-export const LEGACY_PUBLISHED_EVENTS_DIR_DEFAULT = "~/.claude/events/published";
+export const LEGACY_PUBLISHED_EVENTS_DIR_DEFAULT = "~/.claude/events/published";  // xdg-audit:allow(resolver legacy-fallback constant — by design)
