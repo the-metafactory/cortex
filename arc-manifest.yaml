@@ -8,7 +8,7 @@ name: "cortex"
 # now fail to load (strict canonical-only schemas). Run `cortex migrate-config`
 # to rewrite a pre-v4 config to the canonical `principal:` / `principalId` /
 # `principal_id` shape.
-version: "6.7.2"
+version: "6.8.0"
 type: component
 tier: community
 description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin stack"
