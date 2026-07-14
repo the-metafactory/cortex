@@ -6,7 +6,7 @@
  * this cortex's own publish path). Verifies each envelope's
  * `signed_by[]` chain via `verifySignedByChain` (cryptoVerify-gated by
  * whether the receiving agent has an `nkey_pub` declared), then surfaces
- * the receipt as a `system.bus.peer_dispatch_received` visibility event.
+ * the receipt as a `system.bus.peer-dispatch-received` visibility event.
  *
  * **What this slice delivers (B.2a — inbound listener half of B.2):**
  *   - Subscribes via `runtime.onEnvelope` and filters for
@@ -14,7 +14,7 @@
  *     our own publish).
  *   - Verifies the chain (structural always; cryptographic when the
  *     receiving agent has an `nkey_pub`).
- *   - Emits a structured `system.bus.peer_dispatch_received` envelope
+ *   - Emits a structured `system.bus.peer-dispatch-received` envelope
  *     on every valid arrival — principals see "peer X dispatched a task
  *     to us at <time>" on the dashboard / audit trail.
  *   - Drops invalid envelopes with a stderr log carrying the structured

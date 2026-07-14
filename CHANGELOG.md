@@ -207,7 +207,7 @@ with new unit coverage added for the extracted seams.
   anything in this PR. The bridge trusts the already-verified fired payload; it
   does not re-authenticate it. A spoofed author on an unverified delivery is an
   upstream concern, out of scope here. A trusted-author drop is an honest policy
-  SKIP, not a failure: it emits the new `system.bus.reflex_activation_skipped`
+  SKIP, not a failure: it emits the new `system.bus.reflex-activation-skipped`
   visibility event (reason `author_trusted`, with the matched `author`) and
   marks the Decision id so a redelivery re-skips silently. Empty/absent list =
   no gate (dispatch everyone). Drives reflex's `@jc/sage-pr-review` target

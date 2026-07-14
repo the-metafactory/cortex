@@ -992,9 +992,9 @@ describe("createSystemPluginReloadFailedEvent (cortex#1793, S8)", () => {
     // — no underscores) publishes without error but is SILENTLY DROPPED by
     // every standard push-mode subscriber (`runtime.subscribe()` +
     // `onEnvelope`, via `myelin/subscriber.ts`'s schema check). The
-    // already-shipped sibling `system.plugin.load_failed` (S6, on `main`)
-    // and several older `system.*` families (`system.bus.notify_discord`,
-    // `system.bus.reflex_activation_failed`, `system.gateway.routing_decision`,
+    // already-shipped sibling `system.plugin.load-failed` (S6, on `main`)
+    // and several older `system.*` families (`system.bus.notify-discord`,
+    // `system.bus.reflex-activation-failed`, `system.gateway.routing-decision`,
     // …) still carry this bug — out of scope to mass-fix here (separate,
     // coordinated change), but `reload-failed` is spelled correctly since
     // it ships in THIS slice.

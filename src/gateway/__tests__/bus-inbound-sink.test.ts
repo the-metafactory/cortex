@@ -426,7 +426,7 @@ describe("BusInboundSink", () => {
     expect(calls[0]?.subjectPrincipal).toBeUndefined();
   });
 
-  // ── cortex#596: system.gateway.routing_decision bus events ──────────────────
+  // ── cortex#596: system.gateway.routing-decision bus events ──────────────────
   //
   // The sink emits a structured routing-decision event on both branches so
   // signal + Mission Control observe the gateway's demux decision instead of
@@ -448,7 +448,7 @@ describe("BusInboundSink", () => {
     return { runtime, published };
   }
 
-  test("routed publish → emits system.gateway.routing_decision { outcome: routed, stack, subject }", async () => {
+  test("routed publish → emits system.gateway.routing-decision { outcome: routed, stack, subject }", async () => {
     const { runtime, published } = makeCapturingRuntime();
     const { sink } = makeSink(
       [{ published: true, subject: "local.andreas.meta-factory.tasks.@luna.chat" }],
@@ -458,7 +458,7 @@ describe("BusInboundSink", () => {
     await sink.publish(makeDecision(), makeMsg());
 
     const evt = published.find(
-      (e) => e.type === "system.gateway.routing_decision",
+      (e) => e.type === "system.gateway.routing-decision",
     );
     expect(evt).toBeDefined();
     const payload = evt!.payload;
@@ -472,7 +472,7 @@ describe("BusInboundSink", () => {
     expect(payload.reason).toBeUndefined();
   });
 
-  test("refused publish → emits system.gateway.routing_decision { outcome: unroutable, reason }", async () => {
+  test("refused publish → emits system.gateway.routing-decision { outcome: unroutable, reason }", async () => {
     const { runtime, published } = makeCapturingRuntime();
     // Silence the expected stderr refusal breadcrumb.
     const originalWrite = process.stderr.write.bind(process.stderr);
@@ -495,7 +495,7 @@ describe("BusInboundSink", () => {
     }
 
     const evt = published.find(
-      (e) => e.type === "system.gateway.routing_decision",
+      (e) => e.type === "system.gateway.routing-decision",
     );
     expect(evt).toBeDefined();
     const payload = evt!.payload;

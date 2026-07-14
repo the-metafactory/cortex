@@ -1,12 +1,12 @@
 /**
- * cortex#596 — no-binding-match routing_decision emit tests (TDD Red→Green).
+ * cortex#596 — no-binding-match routing-decision emit tests (TDD Red→Green).
  *
  * Covers the UPSTREAM unroutable case PR #1667 left as stdout-only: an inbound
  * that matches NO binding. Mirrors the emit-assertion shape of
  * `bus-inbound-sink.test.ts` (the publish-refusal twin).
  *
  * Tests:
- *   1. no-binding inbound → emits system.gateway.routing_decision
+ *   1. no-binding inbound → emits system.gateway.routing-decision
  *      { outcome: "unroutable", reason, platform, instanceId } and NO agent.
  *   2. source undefined → no emit, no throw (optional-dep guard).
  *   3. runtime undefined → no emit, no throw.
@@ -74,7 +74,7 @@ const REASON = 'no binding for discord guildId "111222333"';
 // =============================================================================
 
 describe("emitUnroutableRoutingDecision", () => {
-  test("no-binding inbound → emits system.gateway.routing_decision { unroutable, reason }, no agent", () => {
+  test("no-binding inbound → emits system.gateway.routing-decision { unroutable, reason }, no agent", () => {
     const { runtime, published } = makeCapturingRuntime();
 
     emitUnroutableRoutingDecision(
@@ -84,7 +84,7 @@ describe("emitUnroutableRoutingDecision", () => {
     );
 
     const evt = published.find(
-      (e) => e.type === "system.gateway.routing_decision",
+      (e) => e.type === "system.gateway.routing-decision",
     );
     expect(evt).toBeDefined();
     const payload = evt!.payload;
@@ -154,7 +154,7 @@ describe("makeEmittingUnroutable", () => {
     expect(baseCalls[0]?.reason).toBe(REASON);
     // …and the event was emitted.
     const evt = published.find(
-      (e) => e.type === "system.gateway.routing_decision",
+      (e) => e.type === "system.gateway.routing-decision",
     );
     expect(evt).toBeDefined();
     expect(evt!.payload.outcome).toBe("unroutable");

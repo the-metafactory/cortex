@@ -282,9 +282,9 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
     await betaListener.stop();
 
     // β's runtime.publish should have been called exactly once with
-    // a `system.bus.peer_dispatch_received` envelope for α's request.
+    // a `system.bus.peer-dispatch-received` envelope for α's request.
     const betaVisibility = beta.runtime.published.filter(
-      (e) => e.type === "system.bus.peer_dispatch_received",
+      (e) => e.type === "system.bus.peer-dispatch-received",
     );
     expect(betaVisibility).toHaveLength(1);
     expect(betaVisibility[0]?.payload.receiving_agent_id).toBe("beta-agent");
@@ -293,7 +293,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
 
     // α symmetrically: one visibility event for β's envelope.
     const alphaVisibility = alpha.runtime.published.filter(
-      (e) => e.type === "system.bus.peer_dispatch_received",
+      (e) => e.type === "system.bus.peer-dispatch-received",
     );
     expect(alphaVisibility).toHaveLength(1);
     expect(alphaVisibility[0]?.payload.receiving_agent_id).toBe("alpha-agent");
@@ -375,7 +375,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
 
     // No visibility event — rejection drops the envelope.
     const betaVisibility = beta.runtime.published.filter(
-      (e) => e.type === "system.bus.peer_dispatch_received",
+      (e) => e.type === "system.bus.peer-dispatch-received",
     );
     expect(betaVisibility).toHaveLength(0);
   });
@@ -436,7 +436,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
     // No visibility event.
     expect(
       beta.runtime.published.filter(
-        (e) => e.type === "system.bus.peer_dispatch_received",
+        (e) => e.type === "system.bus.peer-dispatch-received",
       ),
     ).toHaveLength(0);
   });
@@ -496,7 +496,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
     expect(stderrOutput).toContain("signer_not_trusted");
     expect(
       beta.runtime.published.filter(
-        (e) => e.type === "system.bus.peer_dispatch_received",
+        (e) => e.type === "system.bus.peer-dispatch-received",
       ),
     ).toHaveLength(0);
   });

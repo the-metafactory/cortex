@@ -2794,7 +2794,7 @@ export async function startCortex(
   // IAW Phase B.2a (refs cortex#114) — inbound peer-dispatch listener.
   // Subscribes via the runtime's onEnvelope fan-out, filters for
   // `dispatch.task.dispatched` envelopes from non-self sources, runs
-  // verifySignedByChain, emits `system.bus.peer_dispatch_received`
+  // verifySignedByChain, emits `system.bus.peer-dispatch-received`
   // visibility envelopes on valid arrivals. Listener is bound to the
   // FIRST registered agent today — multi-agent stacks may eventually
   // want one listener per agent (each receiver's `trust:` list is
@@ -3158,7 +3158,7 @@ export async function startCortex(
   // `loadExternalPlugins` does the same for discovery issues). Boot used to
   // ALSO `console.error`/`console.log` the same failed/loaded outcomes here,
   // duplicating every plugin outcome in boot logs. This loop's job is only
-  // the structured bus event (`system.plugin.load_failed`/`.loaded`) —
+  // the structured bus event (`system.plugin.load-failed`/`.loaded`) —
   // logging stays the loader's job. `skipped` is the one outcome the loader
   // never logs (an off-by-default gate skip isn't a failure worth a stderr
   // line), so its `console.log` here remains the single site for it.
@@ -3182,7 +3182,7 @@ export async function startCortex(
       );
     } catch (err) {
       process.stderr.write(
-        `cortex: failed to publish system.plugin.load_failed for "${failure.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
+        `cortex: failed to publish system.plugin.load-failed for "${failure.bundleName}": ${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
   }

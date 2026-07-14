@@ -104,7 +104,7 @@ export interface BusInboundSinkDeps {
  * `SurfaceGateway.handleInbound` catch-swallow loop) are free to rely on this.
  *
  * cortex#596 — on BOTH branches the sink also emits a structured
- * `system.gateway.routing_decision` bus event (`outcome: "routed"` on success,
+ * `system.gateway.routing-decision` bus event (`outcome: "routed"` on success,
  * `"unroutable"` on refusal) via {@link source}, so signal + Mission Control
  * observe the gateway's demux decision instead of tailing stdout. The emit is
  * fire-and-forget and guarded on the optional runtime/source deps (see
@@ -253,7 +253,7 @@ export class BusInboundSink implements GatewayInboundSink {
   }
 
   /**
-   * cortex#596 — emit a `system.gateway.routing_decision` bus event, the
+   * cortex#596 — emit a `system.gateway.routing-decision` bus event, the
    * structured replacement for the gateway's interim stdout routing hunt-line.
    *
    * Fire-and-forget and guarded on BOTH optional deps: the gateway may run
@@ -281,7 +281,7 @@ export class BusInboundSink implements GatewayInboundSink {
     // defence-in-depth so a runtime contract change can't crash the sink.
     void runtime.publish(env).catch((err: unknown) => {
       process.stderr.write(
-        `[bus-inbound-sink] publish(system.gateway.routing_decision) failed — ` +
+        `[bus-inbound-sink] publish(system.gateway.routing-decision) failed — ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     });

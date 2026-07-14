@@ -81,7 +81,7 @@ export async function runVerifierSelfCheck(
   const base = {
     id: crypto.randomUUID(),
     source: `${opts.principalId}.cortex.self-check`,
-    type: "system.verifier.self_check" as const,
+    type: "system.verifier.self-check" as const,
     timestamp: new Date().toISOString(),
     sovereignty: {
       classification: "local" as const,

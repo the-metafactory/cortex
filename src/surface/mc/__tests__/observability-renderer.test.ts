@@ -377,8 +377,8 @@ describe("#1661 — familyForType routes the cortex-local families", () => {
 
   it("EXCLUDES high-volume siblings by design (narrow type set, not a prefix)", () => {
     expect(familyForType("system.access.allowed")).toBeNull();
-    expect(familyForType("system.bus.peer_dispatch_received")).toBeNull();
-    expect(familyForType("system.bus.notify_discord")).toBeNull();
+    expect(familyForType("system.bus.peer-dispatch-received")).toBeNull();
+    expect(familyForType("system.bus.notify-discord")).toBeNull();
     expect(familyForType("system.dispatch.dead_letter")).toBeNull();
   });
 });

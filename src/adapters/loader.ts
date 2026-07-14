@@ -57,7 +57,7 @@
  * It does not publish bus envelopes itself — `src/cortex.ts` (which holds
  * the boot's `MyelinRuntime` + `SystemEventSource`) converts this module's
  * structured `loaded`/`skipped`/`failed` results into
- * `system.plugin.loaded` / `system.plugin.load_failed` envelopes
+ * `system.plugin.loaded` / `system.plugin.load-failed` envelopes
  * (`src/bus/system-events.ts`) and a stderr line each, mirroring the
  * existing renderer-boot-loop convention (`cortex.ts`'s `console.error` +
  * loop, upgraded to a `system.*` event per ADR-0024 §3.3). Keeping the

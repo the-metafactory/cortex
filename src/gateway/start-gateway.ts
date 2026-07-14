@@ -274,7 +274,7 @@ export async function startGatewayIfEnabled(
     : undefined;
 
   // cortex#596 — on the LIVE path, decorate `onUnroutable` so a NO-BINDING-match
-  // inbound emits a `system.gateway.routing_decision { outcome: "unroutable" }`
+  // inbound emits a `system.gateway.routing-decision { outcome: "unroutable" }`
   // bus event (the signal/MC-consumable replacement for the stdout hunt-line),
   // NOT just the `console.warn` breadcrumb. This is the upstream twin of the
   // publish-refusal emit `BusInboundSink` already does (that case matched a

@@ -8,7 +8,7 @@
  *      our own publishes are ignored.
  *   3. Verify gate — invalid chain (untrusted signer, malformed
  *      principal, etc.) drops with a stderr log; no visibility event.
- *   4. Valid chain emits `system.bus.peer_dispatch_received` carrying
+ *   4. Valid chain emits `system.bus.peer-dispatch-received` carrying
  *      the peer source + envelope id + correlation id.
  *   5. Idempotent start/stop.
  */
@@ -274,7 +274,7 @@ describe("BusDispatchListener — peer-dispatch filter", () => {
 });
 
 describe("BusDispatchListener — verification gate", () => {
-  test("emits system.bus.peer_dispatch_received on valid peer dispatch", async () => {
+  test("emits system.bus.peer-dispatch-received on valid peer dispatch", async () => {
     const luna = agentFixture({ id: "luna", trust: ["echo"] });
     const echo = agentFixture({
       id: "echo",
@@ -305,7 +305,7 @@ describe("BusDispatchListener — verification gate", () => {
     // Exactly one visibility event published.
     expect(published).toHaveLength(1);
     const event = published[0];
-    expect(event?.type).toBe("system.bus.peer_dispatch_received");
+    expect(event?.type).toBe("system.bus.peer-dispatch-received");
     expect(event?.payload.receiving_agent_id).toBe("luna");
     expect(event?.payload.peer_source).toBe("metafactory.echo.local");
     expect(event?.payload.dispatch_envelope_id).toBe(
@@ -406,7 +406,7 @@ describe("BusDispatchListener — verification gate", () => {
     await drain();
 
     expect(published).toHaveLength(1);
-    expect(published[0]?.type).toBe("system.bus.peer_dispatch_received");
+    expect(published[0]?.type).toBe("system.bus.peer-dispatch-received");
 
     await listener.stop();
   });
@@ -521,7 +521,7 @@ describe("BusDispatchListener — signing posture (TC-1d / #210)", () => {
     // Accepted: the unsigned empty-chain envelope falls through, the listener
     // surfaces exactly one visibility event.
     expect(published).toHaveLength(1);
-    expect(published[0]?.type).toBe("system.bus.peer_dispatch_received");
+    expect(published[0]?.type).toBe("system.bus.peer-dispatch-received");
 
     await listener.stop();
   });
@@ -553,7 +553,7 @@ describe("BusDispatchListener — signing posture (TC-1d / #210)", () => {
     await drain();
 
     expect(published).toHaveLength(1);
-    expect(published[0]?.type).toBe("system.bus.peer_dispatch_received");
+    expect(published[0]?.type).toBe("system.bus.peer-dispatch-received");
 
     await listener.stop();
   });
@@ -604,7 +604,7 @@ describe("BusDispatchListener — signing posture (TC-1d / #210)", () => {
 
     // Passed the reject gate despite enforce: re-signed traffic surfaces.
     expect(published).toHaveLength(1);
-    expect(published[0]?.type).toBe("system.bus.peer_dispatch_received");
+    expect(published[0]?.type).toBe("system.bus.peer-dispatch-received");
 
     await listener.stop();
   });

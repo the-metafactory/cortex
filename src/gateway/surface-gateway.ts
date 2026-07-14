@@ -642,7 +642,7 @@ export class LoggingInboundSink implements GatewayInboundSink {
  * so the composition-root's bus-emitting `onUnroutable` (see
  * `makeEmittingUnroutable` in `gateway-unroutable-emit.ts`) can PRESERVE the
  * exact stdout breadcrumb — it stays the fallback when the bus is down — while
- * ALSO emitting the structured `system.gateway.routing_decision` event. Reusing
+ * ALSO emitting the structured `system.gateway.routing-decision` event. Reusing
  * this function keeps the two in lockstep instead of duplicating the format.
  *
  * `onUnroutable` must never throw; `console.warn` does not.

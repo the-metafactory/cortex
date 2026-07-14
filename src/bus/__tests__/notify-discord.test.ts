@@ -73,7 +73,7 @@ async function flush() {
 }
 
 const lastNotify = (published: Envelope[]) =>
-  published.find((e) => e.type === "system.bus.notify_discord")?.payload;
+  published.find((e) => e.type === "system.bus.notify-discord")?.payload;
 
 // ===========================================================================
 

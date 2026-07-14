@@ -332,7 +332,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(await dedup.seen("decision-123")).toBe(true);
 
     const vis = ctrl.published.find(
-      (e) => e.type === "system.bus.reflex_activation_dispatched",
+      (e) => e.type === "system.bus.reflex-activation-dispatched",
     );
     expect(vis).toBeDefined();
     const vp = vis!.payload;
@@ -366,7 +366,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(decision).toEqual({ kind: "ack" });
     expect(ctrl.onSubject).toHaveLength(0);
     const fail = ctrl.published.find(
-      (e) => e.type === "system.bus.reflex_activation_failed",
+      (e) => e.type === "system.bus.reflex-activation-failed",
     );
     expect(fail).toBeDefined();
     expect((fail!.payload).reason).toBe("unknown_target");
@@ -383,7 +383,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(decision.kind).toBe("term");
     expect(ctrl.onSubject).toHaveLength(0);
     expect(
-      ctrl.published.some((e) => e.type === "system.bus.reflex_activation_failed"),
+      ctrl.published.some((e) => e.type === "system.bus.reflex-activation-failed"),
     ).toBe(true);
   });
 
@@ -410,7 +410,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(decision).toEqual({ kind: "ack" });
     expect(await dedup.seen("decision-123")).toBe(false);
     const fail = ctrl.published.find(
-      (e) => e.type === "system.bus.reflex_activation_failed",
+      (e) => e.type === "system.bus.reflex-activation-failed",
     );
     expect(fail).toBeDefined();
     expect((fail!.payload).reason as string).toContain(
@@ -456,7 +456,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(ctrl.onSubject).toHaveLength(0); // no bus re-emit
     expect(await dedup.seen("decision-123")).toBe(true);
     const vis = ctrl.published.find(
-      (e) => e.type === "system.bus.reflex_activation_dispatched",
+      (e) => e.type === "system.bus.reflex-activation-dispatched",
     );
     expect((vis!.payload).via).toBe("handler");
   });
@@ -472,7 +472,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(decision).toEqual({ kind: "ack" });
     expect(await dedup.seen("decision-123")).toBe(false);
     const fail = ctrl.published.find(
-      (e) => e.type === "system.bus.reflex_activation_failed",
+      (e) => e.type === "system.bus.reflex-activation-failed",
     );
     expect((fail!.payload).reason as string).toContain("handler:");
   });
@@ -500,7 +500,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect(decision).toEqual({ kind: "ack" });
     expect(ctrl.onSubject).toHaveLength(0);
     const fail = ctrl.published.find(
-      (e) => e.type === "system.bus.reflex_activation_failed",
+      (e) => e.type === "system.bus.reflex-activation-failed",
     );
     expect((fail!.payload).reason as string).toContain(
       "unknown_handler",
@@ -574,7 +574,7 @@ describe("ReflexActivationListener.handleFired — author trust gate", () => {
     expect(ctrl.onSubject).toHaveLength(0); // no CC dispatch
     expect(await dedup.seen("decision-123")).toBe(true); // marked → redelivery re-skips
 
-    const vis = ctrl.published.find((e) => e.type === "system.bus.reflex_activation_skipped");
+    const vis = ctrl.published.find((e) => e.type === "system.bus.reflex-activation-skipped");
     expect(vis).toBeDefined();
     const vp = vis!.payload;
     expect(vp.reason).toBe("author_trusted");
@@ -582,7 +582,7 @@ describe("ReflexActivationListener.handleFired — author trust gate", () => {
     expect(vp.target).toBe("@jc/sage-pr-review");
     expect(vp.capability).toBe("code-review.generic");
     // It must NOT look like a failure.
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_failed")).toBe(false);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-failed")).toBe(false);
   });
 
   test("untrusted author → dispatches the review normally", async () => {
@@ -595,8 +595,8 @@ describe("ReflexActivationListener.handleFired — author trust gate", () => {
 
     expect(decision).toEqual({ kind: "ack" });
     expect(ctrl.onSubject).toHaveLength(1); // CC review dispatched
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(false);
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_dispatched")).toBe(true);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-skipped")).toBe(false);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-dispatched")).toBe(true);
   });
 
   test("audit publish fails AFTER author match → dedup NOT marked, re-fireable", async () => {
@@ -624,7 +624,7 @@ describe("ReflexActivationListener.handleFired — author trust gate", () => {
     await listener.handleFired(firedPrEnvelope("MELLANON"), "subj");
 
     expect(ctrl.onSubject).toHaveLength(0);
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(true);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-skipped")).toBe(true);
   });
 });
 
@@ -723,7 +723,7 @@ describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)
       title: "Fix bug",
     });
     expect(await dedup.seen("decision-123")).toBe(true);
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_dispatched")).toBe(true);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-dispatched")).toBe(true);
   });
 
   test("trusted author → skipped BEFORE any review publish", async () => {
@@ -733,7 +733,7 @@ describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)
     await listener.handleFired(firedReviewablePr({ author: "jcfischer" }), "subj");
 
     expect(ctrl.onSubject).toHaveLength(0);
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_skipped")).toBe(true);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-skipped")).toBe(true);
   });
 
   test("non-PR payload → _failed (not-a-reviewable-pr), dedup marked, no publish", async () => {
@@ -746,7 +746,7 @@ describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)
     );
 
     expect(ctrl.onSubject).toHaveLength(0);
-    const fail = ctrl.published.find((e) => e.type === "system.bus.reflex_activation_failed");
+    const fail = ctrl.published.find((e) => e.type === "system.bus.reflex-activation-failed");
     expect(fail).toBeDefined();
     expect((fail!.payload).reason).toBe("review-payload-not-a-reviewable-pr");
     expect(await dedup.seen("decision-123")).toBe(true);
@@ -759,7 +759,7 @@ describe("ReflexActivationListener.handleFired — review dispatch (engine:sage)
     await listener.handleFired(firedReviewablePr({}), "subj");
 
     expect(await dedup.seen("decision-123")).toBe(false);
-    expect(ctrl.published.some((e) => e.type === "system.bus.reflex_activation_failed")).toBe(true);
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-failed")).toBe(true);
   });
 
   test("non-reviewable payload + audit publish fails → dedup NOT marked (re-fireable)", async () => {

@@ -96,7 +96,7 @@ export const OBSERVABILITY_PROJECTION_SUBJECTS: string[] = [
   // #1661 (MC folds) — the cortex-LOCAL families. Subscribed to the EXACT
   // subjects the folded types publish on (`local.{principal}[.{stack}].{type}`),
   // NOT broad `system.access.>` / `system.bus.>` prefixes — so high-volume
-  // sibling types (`system.access.allowed`, `system.bus.peer_dispatch_received`)
+  // sibling types (`system.access.allowed`, `system.bus.peer-dispatch-received`)
   // never reach the renderer's dispatch loop at all. `familyForType` remains the
   // authoritative belt-filter for anything that does arrive.
   // access:
@@ -143,7 +143,7 @@ export function familyForType(type: string): ObservabilityFamily | null {
   // this renderer READS these system envelopes; the producer emit sites in
   // bus/system-events.ts are OUT of scope and untouched. Routed by EXACT type,
   // not broad prefix — sibling types like `system.access.allowed` (high-volume)
-  // or `system.bus.peer_dispatch_received` stay OUT of the fold by design
+  // or `system.bus.peer-dispatch-received` stay OUT of the fold by design
   // (decision B is 3 SECTIONS, not "everything under the prefix"). Widening a
   // family's type set is a deliberate follow-up, never an accidental default.
   //   access   = system.access.{denied,filtered} + system.admission.{throttled,degraded}

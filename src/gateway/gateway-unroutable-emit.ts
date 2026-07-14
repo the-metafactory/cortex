@@ -1,5 +1,5 @@
 /**
- * cortex#596 — no-binding-match `system.gateway.routing_decision` emit.
+ * cortex#596 — no-binding-match `system.gateway.routing-decision` emit.
  *
  * PR #1667 added the routed / publish-refusal routing-decision event, emitted
  * from {@link BusInboundSink} once an inbound has MATCHED a binding. The OTHER
@@ -13,7 +13,7 @@
  * gateway boot path (`start-gateway.ts`) already holds the `runtime` + `source`
  * it uses to build {@link BusInboundSink}, so it injects an `onUnroutable` that
  * (1) preserves the existing `console.warn` breadcrumb (the fallback when the
- * bus is down) and (2) fire-and-forget emits a `system.gateway.routing_decision`
+ * bus is down) and (2) fire-and-forget emits a `system.gateway.routing-decision`
  * with `outcome: "unroutable"` and `reason` = the `unroutableReason()` string.
  * `SurfaceGateway` itself stays free of any bus/system-event coupling — it keeps
  * its injected-interface design; the bus knowledge lives only here + at the boot
@@ -61,7 +61,7 @@ export interface GatewayUnroutableEmitDeps {
 }
 
 /**
- * Fire-and-forget emit a `system.gateway.routing_decision` for a NO-BINDING
+ * Fire-and-forget emit a `system.gateway.routing-decision` for a NO-BINDING
  * unroutable inbound. Guarded on both optional deps and on the runtime actually
  * exposing `publish`; on any miss it returns without emitting. Never throws —
  * the caller runs inside `SurfaceGateway`'s never-throw `onUnroutable` contract.
@@ -95,7 +95,7 @@ export function emitUnroutableRoutingDecision(
   // defence-in-depth so a runtime contract change can't crash the caller.
   void runtime.publish(env).catch((err: unknown) => {
     process.stderr.write(
-      `[surface-gateway] publish(system.gateway.routing_decision) failed — ` +
+      `[surface-gateway] publish(system.gateway.routing-decision) failed — ` +
         `${err instanceof Error ? err.message : String(err)}\n`,
     );
   });
