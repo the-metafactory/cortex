@@ -56,12 +56,15 @@ const GUARDED_MODULES: readonly { absPath: string; symbols: readonly string[] }[
       "ContextMessage",
     ],
   },
-  // NOTE: `Renderer` (renderers/types.ts) is deliberately NOT in this list.
-  // Its only in-tree consumers (dashboard.ts, pagerduty.ts, renderers/index.ts)
-  // import it via the intra-directory `./types` relative path, which the
-  // slice's scope explicitly leaves alone ("their own intra-directory
-  // relative imports stay") — there is no adapter-side consumer for it to
-  // guard against drifting from.
+  // `Renderer` (renderers/types.ts): in-tree renderer consumers must import it
+  // via the `../surface-sdk` barrel, not the intra-directory `./types` path —
+  // symmetric with `PlatformAdapter`. Closes the #1917 asymmetry (S5's scope
+  // had left the renderer half unguarded). The defining file (types.ts) and
+  // its re-export barrel (index.ts) are exempt via EXEMPT_ABS_PATHS.
+  {
+    absPath: resolve(SRC_ROOT, "renderers", "types.ts"),
+    symbols: ["Renderer"],
+  },
   {
     absPath: resolve(SRC_ROOT, "bus", "surface-router.ts"),
     symbols: ["SurfaceAdapter"],

@@ -32,9 +32,8 @@
  * activity-centric, not agent-centric.
  */
 
-import type { Envelope, RenderTarget, RendererPlugin } from "../surface-sdk";
+import type { Envelope, Renderer, RenderTarget, RendererPlugin } from "../surface-sdk";
 import { DashboardRendererSchema, type DashboardRendererConfig } from "../common/types/cortex-config";
-import type { Renderer } from "./types";
 
 export interface DashboardRendererOptions {
   /** Max envelopes retained in the ring buffer. Default 1000 — generous
