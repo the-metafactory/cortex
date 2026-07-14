@@ -386,36 +386,6 @@ allow:
     match: ~/\.config/cortex/(agents\.d|personas)
     reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
     owner: cortex#1869
-  - pattern: pkg-repos
-    path: CLAUDE.md
-    match: \.config/metafactory/pkg/repos
-    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
-    owner: arc#287
-  - pattern: pkg-repos
-    path: QUICKSTART.md
-    match: \.config/metafactory/pkg/repos
-    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
-    owner: arc#287
-  - pattern: pkg-repos
-    path: README.md
-    match: \.config/metafactory/pkg/repos
-    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
-    owner: arc#287
-  - pattern: pkg-repos
-    path: design/library-support.md
-    match: \.config/metafactory/pkg/repos
-    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
-    owner: arc#287
-  - pattern: pkg-repos
-    path: docs/agents-md/architecture.md
-    match: \.config/metafactory/pkg/repos
-    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
-    owner: arc#287
-  - pattern: pkg-repos
-    path: skill/SKILL.md
-    match: \.config/metafactory/pkg/repos
-    reason: arc install-location doc — stale vs arc#287 canonical (~/.local/share/metafactory/arc/repos); companion arc doc fix needed
-    owner: arc#287
   - pattern: config-tree
     path: docs/agent-identity-provisioning.md
     match: ~/\.config/cortex/agents
