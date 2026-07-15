@@ -28,8 +28,13 @@ source "${SCRIPT_DIR}/lib/plist-render.sh"
 # boot a stale tree (split-brain traps T7′/T13/T17).
 CONFIG_DIR="$(resolve_config_dir)"
 
-mkdir -p "${HOME}/.local/bin" "${CLAUDE_DIR}/relay" \
-         "${CLAUDE_DIR}/skills" "${CONFIG_DIR}/logs"
+# NOTE: daemon logs + pidfiles/state are STATE-class and are NOT scaffolded under
+# the CONFIG root — the config root holds config only (mirrors postinstall.sh §1;
+# cortex#2030/#2044). The canonical state tree (~/.local/state/metafactory/cortex/
+# logs) is owned by the state resolver/migrator and the daemon's own logDir default
+# (config.ts). Scaffolding "${CONFIG_DIR}/logs" here recreated the #2030
+# misplacement on every upgrade — the twin of the postinstall line PR#2032 fixed.
+mkdir -p "${HOME}/.local/bin" "${CLAUDE_DIR}/relay" "${CLAUDE_DIR}/skills"
 
 echo "Upgrading Cortex (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 
@@ -75,9 +80,15 @@ done
 # sentinel <slug>.yaml is a pointer with no stack block); under the legacy
 # monolith it is the monolith itself. resolve_stack_agent_config_path() gives
 # us that path — the file where agents[].id and stack.id live.
-echo "  Provisioning stack signing identity..."
 source "${SCRIPT_DIR}/lib/stack-identity-provision.sh"
 # plist-render.sh already sourced up-front (for resolve_config_dir).
+
+# Only announce provisioning when there is at least one stack to act on — an
+# install-only box has zero stacks, so the loop below is a no-op and the header
+# would otherwise imply work that never happened (cortex#2044 cosmetic).
+if [ -n "$(discover_stack_slugs "${CONFIG_DIR}")" ]; then
+  echo "  Provisioning stack signing identity..."
+fi
 
 while IFS= read -r slug; do
   stack_config="$(resolve_stack_agent_config_path "${CONFIG_DIR}" "${slug}")"

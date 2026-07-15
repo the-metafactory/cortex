@@ -156,6 +156,17 @@ assert_false "D: no dangling forward-symlink when target absent" \
 assert_false "D: not even a broken symlink is created" \
   test -L "${HOME}/bin/cldyo-live"
 
+# Case E — target exists but ~/bin does NOT (a fresh install that never had a
+# legacy ~/bin) → the bridge is a no-op and must NOT materialize ~/bin
+# (cortex#2044). Only genuine pre-cutover boxes, which already have ~/bin, get
+# the forward-symlink; a fresh box has nothing execing ~/bin to bridge.
+reset_home_bins
+rm -rf "${HOME:?}/bin"                       # simulate a box that never had ~/bin
+printf '#!/bin/sh\n' > "${HOME}/.local/bin/cortex"
+forward_link_legacy_bin cortex
+assert_false "E: fresh box (no ~/bin) → ~/bin NOT created" test -d "${HOME}/bin"
+assert_false "E: fresh box → no forward-symlink created"   test -e "${HOME}/bin/cortex"
+
 # ─── Section 2: reload_plist (bootout → bootstrap) ────────────────
 printf '\n=== reload_plist ===\n'
 

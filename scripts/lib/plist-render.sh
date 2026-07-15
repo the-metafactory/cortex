@@ -468,6 +468,12 @@ forward_link_legacy_bin() {
   # Nothing to point at → do not create a dangling forward-symlink.
   [ -e "${target}" ] || return 0
 
+  # Only bridge when a legacy ~/bin already exists (a pre-cutover install that
+  # may still hold ~/bin/<name> entries or plists that exec them). On a FRESH
+  # install ~/bin never existed and no plist execs it → there is nothing to
+  # bridge; do NOT materialize the directory (cortex#2044 — Linux 6.8.2 finding).
+  [ -d "${HOME}/bin" ] || return 0
+
   mkdir -p "${HOME}/bin"
 
   if [ -L "${link}" ]; then

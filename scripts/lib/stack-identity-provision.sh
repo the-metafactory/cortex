@@ -8,8 +8,12 @@
 #   1. Detects the canonical NKey path for the stack (default
 #      `~/.config/nats/cortex.nk` for the main config,
 #      `~/.config/nats/cortex-work.nk` for the work stack).
-#   2. If the NKey file is missing, generates one via `nsc` (or skips
-#      with a warning when nsc is not installed).
+#   2. If the NKey file is missing, generates one. `nsc` is OPTIONAL: the
+#      generator prefers it when on PATH, else falls back to `bun` + the
+#      bundled `nkeys.js` dependency (see generate_nkey_seed). Since `bun` is
+#      the mandatory runtime, the fallback is always available — `nsc` is a
+#      convenience, never a prerequisite. Only skips (with a warning) in the
+#      impossible case that neither `bun` nor `nsc` is present (cortex#2044).
 #   3. Appends `nkey_seed_path` + (when derivable) `nkey_pub` to the
 #      existing `stack:` block — or creates a new `stack:` block when
 #      none exists.
@@ -228,7 +232,10 @@ patch_nkey_pub_sites() {
 }
 
 # Generate a fresh SU-prefixed NKey at the given path, chmod 600.
-# Returns 0 on success, 1 if nsc is not installed (caller skips).
+# Prefers `nsc` when on PATH; otherwise falls back to `bun` + the bundled
+# `nkeys.js` dependency (identical bare-seed format). Returns 0 on success,
+# 1 only if NEITHER `bun` NOR `nsc` is available (caller then skips). `nsc` is
+# therefore optional — `bun` (the mandatory runtime) alone suffices (cortex#2044).
 generate_nkey_seed() {
   local seed_path="$1"
   local nsc_path
