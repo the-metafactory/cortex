@@ -139,11 +139,18 @@ nats:
   #     - local.{principal}.{stack}.tasks.*.>
   subjects: []
 
-  # NKey identity for envelope signing (paths point at on-disk key material;
-  # the loader enforces chmod 600 on the creds/account-signing files).
-  identity:
-    seedPath: ~/.config/nats/cortex.nk
-    publicKey: UD7OGEVBNJAUQ57H5NHSPJZOKKOXOZ4DEUJVAO5URHBIUAVSVTJGL4QV
+  # NKey identity for envelope signing is PER-STACK and lives in
+  # stacks/<slug>.yaml — `stack.nkey_seed_path` + `stack.nkey_pub`, which
+  # `arc upgrade cortex` auto-provisions on first install (seed at
+  # ~/.config/nats/cortex-<slug>.nk, chmod 600) and which the runtime signer
+  # actually reads. This machine-wide layer ships NO active `identity:` block by
+  # default: a per-stack key does not belong in the shared substrate file, and a
+  # placeholder here is never reconciled by provisioning (cortex#2052). This
+  # `nats.identity` field remains schema-optional purely as a machine-wide
+  # OVERRIDE — uncomment only if you fully understand it, with a REAL pubkey:
+  # identity:
+  #   seedPath: ~/.config/nats/cortex-<slug>.nk
+  #   publicKey: U...   # the real U-prefixed pubkey (56 chars), NOT a placeholder
 
 # -----------------------------------------------------------------------------
 # bus — application-level JetStream stream / consumer provisioning
