@@ -75,6 +75,10 @@ const NON_ENVELOPE_DOTTED_NAMESPACES: readonly {
     prefix: "iteration.",
     why: "Mission-Control WebSocket notification tags (wsRegistry.broadcast in src/surface/mc/notifications.ts) — never buildBaseEnvelope / the myelin bus.",
   },
+  {
+    prefix: "tool_call.",
+    why: "ApiAgentHarness ModelProvider streaming-event discriminants (src/common/inference/types.ts, API-P0.3 #2058) — provider inference-stream tags, never buildBaseEnvelope / the myelin bus; translated to valid bus envelopes before any publish.",
+  },
 ];
 
 /** The vendored schema's `/type` pattern — the single source of truth. */
