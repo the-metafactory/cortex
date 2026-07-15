@@ -160,7 +160,7 @@
     <text x="0" y="0" font-size="20" font-weight="700" fill="#2e4d7b" letter-spacing="3">RUNTIME-LAYER INDEPENDENCE  ·  CORTEX / MYELIN  ·  IAW</text>
   </g>
 
-  <text x="80" y="830" font-size="18" font-weight="700" fill="#1d1c19">M1 – M7  Myelin stack  ·  the bus / transport / composition spine</text>
+  <text x="80" y="830" font-size="18" font-weight="700" fill="#1d1c19">M1 – M7  Myelin layer model  ·  the bus / transport / composition spine</text>
   <text x="80" y="852" font-size="13" fill="#3a3833" font-style="italic">cortex consumes M2–M6, owns no part of M1–M6, shares M7 with sibling apps (pilot, signal-collector, future).  Soma is NOT an M-layer — it crosses them.</text>
 
   <!-- M-layer stack (left column, full width-ish) -->

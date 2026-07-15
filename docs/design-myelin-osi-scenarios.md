@@ -1,10 +1,10 @@
 # Myelin OSI Layer Model — Dispatch Scenarios
 
-**Status:** Pressure-test of the Direction A Q2 proposal against myelin's seven-layer protocol stack. Surfaces four corrections to `docs/design-platform-adapter-dispatch-publishing.md`, adds Scenario 4 (cross-principal via shared platform surface) and Scenario 5 (bot-to-bot direct chat — the bus-native baseline). §12 has the locked answers for all four original §10 questions (Andreas, 2026-05-23 review); §14 captures the multi-subscriber / multi-surface pub-sub model.
+**Status:** Pressure-test of the Direction A Q2 proposal against myelin's M1–M7 protocol stack. Surfaces four corrections to `docs/design-platform-adapter-dispatch-publishing.md`, adds Scenario 4 (cross-principal via shared platform surface) and Scenario 5 (bot-to-bot direct chat — the bus-native baseline). §12 has the locked answers for all four original §10 questions (Andreas, 2026-05-23 review); §14 captures the multi-subscriber / multi-surface pub-sub model.
 **Date:** 2026-05-22 (Scenarios 1–3 + §1–§9); 2026-05-23 (Scenario 4, §11 locked answers)
 **Driver:** Andreas (pushback in #myelin → §10/§11 locked answers) + Jens-Christian (Direction A grilling)
 **Related:**
-- `the-metafactory/myelin` — canonical seven-layer model + namespace spec (`docs/architecture.md`, `specs/namespace.md`); `src/types.ts` ships `DistributionMode` + `AttributionMode` enums; `schemas/envelope.schema.json` carries the `originator` field
+- `the-metafactory/myelin` — canonical M1–M7 layer model + namespace spec (`docs/architecture.md`, `specs/namespace.md`); `src/types.ts` ships `DistributionMode` + `AttributionMode` enums; `schemas/envelope.schema.json` carries the `originator` field
 - `docs/design-platform-adapter-dispatch-publishing.md` — Direction A design (this doc supersedes Q2's grammar split; §12 supersedes Q1 signing model and the original §10 open questions)
 - `docs/design-internet-of-agentic-work.md` + `docs/plan-internet-of-agentic-work.md` — **the IoAW architectural baseline** for cortex federation (cortex#110 META; cortex#117 Phase E: multi-network bridges + delegation). The OSI scenarios in this doc assume the federation primitives from IoAW §3.3 (`stack → network → multi-network`, NATS leaf-node federation, peer registry, accept-rules) — see §13 below for the open seams that tie Scenarios 3/4/5 to IoAW phases.
 - `CONTEXT.md` — cortex vocabulary

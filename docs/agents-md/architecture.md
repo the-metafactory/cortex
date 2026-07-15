@@ -1,8 +1,8 @@
 ## Architecture
 
-cortex is the **M7 application** of the metafactory Myelin stack — the operator's collaboration surface that consumes the bus (M2–M6) and presents activity to humans. It replaces both `the-metafactory/grove` (legacy v0.29.0) and `the-metafactory/grove-v2` (v0.22.1) as the canonical home for Discord/Mattermost adapters, Mission Control dashboard, workflow runner, and bus-side taps.
+cortex is the **M7 application** of the metafactory Myelin layer model — the operator's collaboration surface that consumes the bus (M2–M6) and presents activity to humans. It replaces both `the-metafactory/grove` (legacy v0.29.0) and `the-metafactory/grove-v2` (v0.22.1) as the canonical home for Discord/Mattermost adapters, Mission Control dashboard, workflow runner, and bus-side taps.
 
-cortex is layer 7 in the OSI-style **M1–M7 Myelin stack**:
+cortex is layer 7 in the OSI-style **M1–M7 Myelin layer model**:
 
 ```
 M7 SURFACES (cortex, pilot, signal-collector, future apps) ← cortex lives HERE

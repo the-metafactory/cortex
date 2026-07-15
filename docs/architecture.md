@@ -45,7 +45,7 @@ Both failures share one root cause: **a single Discord surface is the only place
 
 **NATS + myelin landed underneath, and forced the OSI-style layered model into the open.** Sovereignty travels in the envelope (myelin); agents publish structured events to a bus (NATS) instead of message-creating in Discord; signal/OTLP arrives as a separate observability path on the same transport.
 
-The canonical layer model is **M1–M7 — the Myelin stack** (myelin#7, JC + Andreas converged 2026-05-07): connectivity / transport / envelope / identity / discovery / composition / surfaces. G-1100..G-1110 implemented the bus glue (myelin client + envelope validator + subscription primitive at M2–M3); G-1111 specifies the M7-application-side event vocabulary cortex emits and consumes.
+The canonical layer model is **M1–M7 — the Myelin layer model** (myelin#7, JC + Andreas converged 2026-05-07): connectivity / transport / envelope / identity / discovery / composition / surfaces. G-1100..G-1110 implemented the bus glue (myelin client + envelope validator + subscription primitive at M2–M3); G-1111 specifies the M7-application-side event vocabulary cortex emits and consumes.
 
 Once the bus appeared, the question "which layer owns which concern?" became operationally real. You can't have your transport client (M2), your envelope handling (M3), your dispatch handler, your workflow runner, *and* your Discord surface adapter all sharing the same `src/bot/` files anymore — M1–M6 are real now, with their own contracts owned by myelin, and the M7 application that consumes them needs its own home with a clean internal split.
 
@@ -66,9 +66,9 @@ The metafactory ecosystem uses a nervous-system family of names. Cortex slots in
 
 ---
 
-## 2. The Myelin stack (M1–M7)
+## 2. The Myelin layer model (M1–M7)
 
-The canonical layered architecture is **M1–M7**, the Myelin stack — OSI-style protocol layering of the nervous system. Defined in myelin#7 (closed 2026-05-07, JC + Andreas converged); a pending acceptance criterion is "Seven-layer model documented in myelin (`docs/architecture.md`)" — to be landed before cortex's plan freezes its references.
+The canonical layered architecture is **M1–M7**, the Myelin layer model — OSI-style protocol layering of the nervous system. Defined in myelin#7 (closed 2026-05-07, JC + Andreas converged); a pending acceptance criterion is "Seven-layer model documented in myelin (`docs/architecture.md`)" — to be landed before cortex's plan freezes its references.
 
 ```
                                                                   spec / contract
@@ -561,12 +561,12 @@ The agent task routing pattern thus exercises M2–M7 end-to-end and is the cano
 
 ## 8. Cortex internal componentisation
 
-The five top-level `src/` subdirectories below are **modules of one M7 application**. They are NOT layers — they are the internal componentisation of cortex, much as any application has internal modules. They map to the bus stack as consumers (bus client subscribes to M2; surface adapters render envelopes; etc.), but cortex-the-app sits at M7 of the Myelin stack as a whole.
+The five top-level `src/` subdirectories below are **modules of one M7 application**. They are NOT layers — they are the internal componentisation of cortex, much as any application has internal modules. They map to the bus stack as consumers (bus client subscribes to M2; surface adapters render envelopes; etc.), but cortex-the-app sits at M7 of the Myelin layer model as a whole.
 
 ```
 cortex/
   src/
-    bus/              ── M2–M6 client code (cortex's connection to the Myelin stack):
+    bus/              ── M2–M6 client code (cortex's connection to the Myelin layer model):
                           NATS client (M2), envelope validator (M3),
                           identity client (M4 when MY-400 lands), surface-router
                           (cortex-internal fan-out from bus to adapters/runner).

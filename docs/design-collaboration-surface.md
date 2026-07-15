@@ -30,7 +30,7 @@ Both run *under* Grove, on a transport Grove doesn't own. Two consequences for G
 - **Loss of visibility by default.** When agents collaborate via myelin envelopes (review pings, fix-and-ack cycles, dispatch hand-offs) instead of through Grove's `messageCreate` handler, the activity is no longer in chat history. The principal sees the *result* of collaboration but not the *fact* of it. This is the failure state the rethink is designed against.
 - **Grove stops being middleware.** Grove is no longer the wire — the wire is NATS+myelin. Grove becomes the **principal's surface**: the place where the human looks at what's happening, drills in, gives approval, gives input, redirects work. It is, literally, *the "+" in "AI + human"*. Everything below the "+" is machine-to-machine traffic on the bus; Grove's job is to make that traffic legible and actionable to the one human who needs to stay in the loop.
 
-This document does two things. First, it places Grove inside a seven-layer model so the boundaries between Grove, myelin, signal, blueprint, and compass are clear. Second, it specifies what changes in Grove's product surface so the under-the-hood collaboration becomes visible again — without re-coupling Grove to the wire.
+This document does two things. First, it places Grove inside a layered concern map so the boundaries between Grove, myelin, signal, blueprint, and compass are clear. Second, it specifies what changes in Grove's product surface so the under-the-hood collaboration becomes visible again — without re-coupling Grove to the wire.
 
 ### 1.1 Vision — the Flybridge command centre
 
@@ -68,7 +68,7 @@ These KPIs map onto existing Grove infrastructure: F-18 (`docs/design-mc-f18-met
 
 ---
 
-## 2. The seven-layer model
+## 2. The layered concern map
 
 ![Event architecture — three event classes share NATS as transport, differ in subject prefix, retention, and audience](diagrams/collaboration-surface__event-architecture.jpg)
 

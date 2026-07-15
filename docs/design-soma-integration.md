@@ -462,4 +462,4 @@ None of these is large. The harder work is the design ratification — once §5 
 
 ---
 
-*This document is the design specification for Soma integration into the cortex/myelin stack. It does NOT include implementation — once the remaining §9 questions (Q2–Q10) ratify (Q1 fold-or-defer was resolved in round 1: defer to v3.0.0), a sibling plan doc will sequence the v3.0.0 cycle. Authored 2026-05-17 by Andreas + Luna; round-1 review by Echo (in-session Architect equivalent, see PR #309 comment thread) applied as commit-after-review. Round-2 ratification awaits @jcfischer.*
+*This document is the design specification for Soma integration into the cortex/myelin layer model. It does NOT include implementation — once the remaining §9 questions (Q2–Q10) ratify (Q1 fold-or-defer was resolved in round 1: defer to v3.0.0), a sibling plan doc will sequence the v3.0.0 cycle. Authored 2026-05-17 by Andreas + Luna; round-1 review by Echo (in-session Architect equivalent, see PR #309 comment thread) applied as commit-after-review. Round-2 ratification awaits @jcfischer.*

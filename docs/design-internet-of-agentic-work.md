@@ -20,7 +20,7 @@ The unit isn't the agent, isn't the stack — it's the network, and networks com
 
 ## §1 — OSI layering of the cortex stack
 
-cortex's canonical layered architecture is the **M1–M7 Myelin stack** (`cortex/docs/architecture.md:69-105`). This document inherits that naming and refines the boundary between cortex (the M7 application) and myelin (the protocol stack M1–M6). Sibling issues land at specific layers; understanding which layer each one belongs to is the spine of this synthesis.
+cortex's canonical layered architecture is the **M1–M7 Myelin layer model** (`cortex/docs/architecture.md:69-105`). This document inherits that naming and refines the boundary between cortex (the M7 application) and myelin (the protocol stack M1–M6). Sibling issues land at specific layers; understanding which layer each one belongs to is the spine of this synthesis.
 
 ### M1 — Raw connectivity (NATS + TLS + creds-auth)
 
@@ -924,7 +924,7 @@ Total roughly 12–18 weeks if sequenced; A+B+C is the foundation (~6 weeks) and
 
 ### Myelin source
 
-- `myelin/docs/architecture.md:21-79` — seven-layer model + per-layer summary
+- `myelin/docs/architecture.md:21-79` — Myelin layer model (M1–M7) + per-layer summary
 - `myelin/docs/architecture.md:188-204` — cross-layer invariants (sovereignty, mutable fields, transport-independence, operator sovereignty)
 - `myelin/docs/envelope.md:13-32` — canonical envelope fields
 - `myelin/docs/envelope.md:62-92` — sovereignty + inside-vs-outside-signature
@@ -950,7 +950,7 @@ Total roughly 12–18 weeks if sequenced; A+B+C is the foundation (~6 weeks) and
 - cortex#86 — creds-auth (closed; M1 foundation)
 - cortex#98 — trust-mesh wiring (tactical fix; retires when cortex#102 lands)
 - cortex#105 — Pass 1 / Pass 2 trust-mesh wiring
-- myelin#7 — seven-layer model (myelin canonical)
+- myelin#7 — Myelin layer model, M1–M7 (myelin canonical)
 - myelin#11 — sovereignty enforcement protocol (spec-pending)
 - myelin#31 — chain-of-stamps (shipped, PR #92)
 - myelin#43 — federation principal mapping (referenced in `namespace.md:212`)

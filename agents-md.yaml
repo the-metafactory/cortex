@@ -10,7 +10,7 @@ generate:
 
 # Placeholder values (substituted into templates)
 repo_name: Cortex
-repo_description: "Layer-7 collaboration surface for the metafactory Myelin stack"
+repo_description: "Layer-7 collaboration surface for the metafactory Myelin layer model"
 deploy_command: "arc upgrade cortex"
 version_source: arc-manifest.yaml
 release_title_format: '"Cortex vX.Y.Z — Short Description"'

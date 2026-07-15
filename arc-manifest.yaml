@@ -11,7 +11,7 @@ name: "cortex"
 version: "6.8.3"
 type: component
 tier: community
-description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin stack"
+description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin layer model"
 authors:
   - "Andreas Astrom"
   - "Jens-Christian Fischer"
