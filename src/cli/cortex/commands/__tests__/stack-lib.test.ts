@@ -165,6 +165,37 @@ describe("renderScaffold", () => {
     // No SU… seed ever appears in scaffolded output.
     expect(all).not.toMatch(/\bSU[A-Z0-9]{20,}/);
   });
+
+  // cortex#2052: the machine-wide system.yaml must NOT ship a per-stack
+  // `identity:` block. It previously carried a non-slug seedPath
+  // (~/.config/nats/cortex.nk) and a placeholder publicKey the provisioner
+  // never reconciled — per-stack identity is authoritative in stacks/<slug>.yaml.
+  test("system/system.yaml ships NO active identity block (cortex#2052 — #3/#4)", () => {
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    // No active (uncommented) `identity:` key, and no active seedPath/publicKey.
+    expect(system?.contents).not.toMatch(/^\s*identity:\s*$/m);
+    expect(system?.contents).not.toMatch(/^\s*seedPath:/m);
+    expect(system?.contents).not.toMatch(/^\s*publicKey:/m);
+    // #3: the old non-slug seed path must not appear anywhere in the file.
+    expect(system?.contents).not.toContain("cortex.nk");
+  });
+
+  test("system/system.yaml's commented identity reference is slug-aware + points at stacks/ (cortex#2052)", () => {
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    // The commented reference documents the slug-aware seed path…
+    expect(system?.contents).toContain("~/.config/nats/cortex-demo.nk");
+    // …and redirects to the authoritative per-stack identity source.
+    expect(system?.contents).toContain("stacks/demo.yaml");
+    expect(system?.contents).toMatch(/#\s*identity:/);
+  });
+
+  test("system/system.yaml's nats.url carries a review-the-port note (cortex#2052 — #2)", () => {
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).toMatch(/url:\s*nats:\/\/127\.0\.0\.1:4222\s+#.*port/i);
+  });
 });
 
 // =============================================================================

@@ -360,7 +360,7 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   const Display = displayName;
 
   return [
-    { relPath: "system/system.yaml", contents: systemYaml(slug) },
+    { relPath: "system/system.yaml", contents: systemYaml(slug, seedPath) },
     { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
     { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath) },
     { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
@@ -368,10 +368,13 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   ];
 }
 
-function systemYaml(slug: string): string {
+function systemYaml(slug: string, seedPath: string): string {
   // The cross-cutting substrate layer — substituted from
-  // docs/config-layout/system/system.yaml. Identity is left at the safe
-  // conventional default; `arc upgrade cortex` auto-provisions the seed.
+  // docs/config-layout/system/system.yaml. NO active `identity:` block: the
+  // authoritative, auto-provisioned signing identity is per-stack and lives in
+  // stacks/<slug>.yaml (`stack.nkey_seed_path`/`nkey_pub`), not in this shared
+  // machine-wide file. Shipping a per-stack key here left a non-slug seedPath
+  // and a placeholder pubkey the provisioner never reconciled (cortex#2052).
   return `# =============================================================================
 # system.yaml — the cross-cutting machine / substrate layer (IAW CFG.b)
 # =============================================================================
@@ -408,7 +411,7 @@ paths:
 # pattern double-binds the boot subscriber (the double-message problem,
 # cortex#491). The dispatch-listener self-subscribes its own interest at start.
 nats:
-  url: nats://127.0.0.1:4222
+  url: nats://127.0.0.1:4222   # review host:port for your NATS server (default: local 4222)
   name: cortex
   subjects: []
   # credsPath — the daemon's OWN bus/bot creds, minted under the \`agents\` account
@@ -419,13 +422,18 @@ nats:
   # \`~/.config/nats/${slug}.creds\`). Two different NATS accounts MUST be two
   # different files — a shared path would clobber on the second mint.
   credsPath: ~/.config/nats/${slug}-bot.creds
-  # NKey identity for envelope signing. The seedPath is the conventional path
-  # \`arc upgrade cortex\` auto-provisions on first install; publicKey is pinned
-  # after first boot (paste from the cortex log \`stack signing key staged …\`).
-  identity:
-    seedPath: ~/.config/nats/cortex.nk
-    # Valid-FORMAT placeholder so this file loads; REPLACE after first boot.
-    publicKey: ${NKEY_PUB_PLACEHOLDER}   # <REPLACE_ME>: U-prefixed pubkey
+  # NKey identity for envelope signing is PER-STACK and lives in
+  # stacks/${slug}.yaml — \`stack.nkey_seed_path\` + \`stack.nkey_pub\`, which
+  # \`arc upgrade cortex\` auto-provisions on first install (seed at
+  # ${seedPath}, chmod 600) and which the runtime signer actually reads.
+  # This machine-wide layer intentionally ships NO \`identity:\` block: a
+  # per-stack key does not belong in the shared substrate file, and a
+  # placeholder here is never reconciled by provisioning (cortex#2052).
+  # Uncomment ONLY to force a machine-wide override you fully understand —
+  # and paste a REAL U-prefixed pubkey, never a placeholder:
+  # identity:
+  #   seedPath: ${seedPath}
+  #   publicKey: U...   # the real U-prefixed pubkey (56 chars), NOT a placeholder
 
 bus:
   review:
