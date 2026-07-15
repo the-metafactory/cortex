@@ -20,6 +20,7 @@ import type {
   CCSessionLike,
 } from "../../substrates/claude-code/harness";
 import type { CCSessionResult, CCSessionOpts } from "../../runner/cc-session";
+import { CC_AUTH_FAILURE_MESSAGE } from "../../runner/cc-failure-classifier";
 import { ORCHESTRATOR_CAPABILITY } from "../../runner/orchestrator-command";
 import { CLAUDE_TOOL_INVENTORY } from "../../common/policy/tool-inventory";
 import { readLogicalRouting } from "../../adapters/response-routing-delivery";
@@ -998,6 +999,44 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
     expect(env.correlation_id?.length ?? 0).toBeGreaterThan(0);
     // Schema-valid envelope (drift-detection against vendored myelin schema).
     expect(validateEnvelope(env).ok).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  test("auth failure is terminal (no retry) and surfaces the actionable re-login message (cortex#2055)", async () => {
+    const runtime = makeRecordingRuntime();
+    // A single expired-auth result: exit 1, no stdout response, auth error on
+    // stderr. If retried it would just re-fail, so the loop must NOT retry.
+    const { factory, spawnCount } = makeStubFactory([
+      { success: false, response: "", exitCode: 1, durationMs: 700, stderr: '{"error":"authentication_failed"}' },
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    // Exactly ONE spawn — auth failure short-circuits the retry loop.
+    expect(spawnCount()).toBe(1);
+
+    const texts = adapter.sentMessages.map((m) => m.text);
+    // No "Still working…" retry status, no opaque exit-code apology — just the
+    // actionable message that names the fix.
+    expect(texts).toEqual([CC_AUTH_FAILURE_MESSAGE]);
+    expect(texts.some((t) => t.startsWith("Sorry, I couldn't process"))).toBe(false);
+
+    // Terminal failure envelope, kind=cant_do, detail carries the actionable text.
+    const failed = runtime.publishes.filter((e) => e.type === "dispatch.task.failed");
+    expect(failed.length).toBe(1);
+    const payload = failed[0]!.payload as { reason: { kind: string; detail?: string } };
+    expect(payload.reason.kind).toBe("cant_do");
+    expect(payload.reason.detail).toBe(CC_AUTH_FAILURE_MESSAGE);
 
     await handler.shutdown();
   });

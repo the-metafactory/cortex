@@ -35,6 +35,8 @@ import type {
 import {
   classifyCcFailure,
   classifyCcSpawnError,
+  isCcAuthFailure,
+  CC_AUTH_FAILURE_MESSAGE,
 } from "../runner/cc-failure-classifier";
 import {
   createDispatchTaskFailedEvent,
@@ -1272,6 +1274,19 @@ export class DispatchHandler extends EventEmitter {
           break;
         }
 
+        // cortex#2055 — auth failure is TERMINAL: the host's `claude` login has
+        // expired, so retrying is futile (all attempts re-fail the same way) and
+        // the principal needs to re-login. Classify as `cant_do` and break out
+        // of the retry loop; the post-loop apology swaps in the actionable
+        // CC_AUTH_FAILURE_MESSAGE for this case (detected via `finalResult`).
+        if (isCcAuthFailure(result)) {
+          console.warn(
+            `dispatch-handler: Claude Code auth failure on attempt ${attempt}/${this.retryMaxAttempts} (correlation_id=${correlationId}) — host re-login required; not retrying`,
+          );
+          finalReason = { kind: "cant_do", detail: CC_AUTH_FAILURE_MESSAGE };
+          break;
+        }
+
         // Classify the failure. `null` from the classifier means "no
         // substrate failure detected" — e.g. `success && !response`
         // or `!success && response.trim() !== ""`. Treat as terminal
@@ -1342,9 +1357,15 @@ export class DispatchHandler extends EventEmitter {
       return;
     }
 
-    // Terminal failure — post apology + emit dispatch.task.failed.
+    // Terminal failure — post apology + emit dispatch.task.failed. cortex#2055:
+    // when the failure is an expired-auth on the host, replace the opaque
+    // "couldn't process that (exit code: 1)" with an actionable re-login message
+    // so the principal isn't left digging through the session JSONL.
     const exitCode = finalResult?.exitCode ?? 1;
-    await adapter.postResponse(target, `Sorry, I couldn't process that. (exit code: ${exitCode})`);
+    const apology = finalResult && isCcAuthFailure(finalResult)
+      ? CC_AUTH_FAILURE_MESSAGE
+      : `Sorry, I couldn't process that. (exit code: ${exitCode})`;
+    await adapter.postResponse(target, apology);
 
     // Build a reason if we have none (defensive — every loop exit sets
     // finalReason on a failure path, but TypeScript can't prove it).

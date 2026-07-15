@@ -12,7 +12,7 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -199,6 +199,36 @@ describe("create uniqueness", () => {
     const res = await dispatchStack(["create", "research", "--principal", "andreas", "--config-dir", cfg, "--apply"]);
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("already exists");
+  });
+});
+
+// =============================================================================
+// create --apply permissions (cortex#2055)
+// =============================================================================
+// The scaffold's secret-bearing file is surfaces/surfaces.yaml (Discord bot
+// token). Before this fix it was born 0644 (world-readable) while
+// stacks/<slug>.yaml was only incidentally 0600 (provisioner mktemp+mv) — the
+// file WITH the secret was the readable one. Every scaffold file must be 0600.
+describe("create --apply permissions", () => {
+  test("the bot-token file (surfaces.yaml) is 0600, not world-readable", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack(["create", "research", "--principal", "andreas", "--config-dir", cfg, "--apply"]);
+    expect(res.exitCode).toBe(0);
+    const surfaces = join(cfg, "research", "surfaces", "surfaces.yaml");
+    expect(statSync(surfaces).mode & 0o777).toBe(0o600);
+  });
+
+  test("every generated file is 0600", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack(["create", "research", "--principal", "andreas", "--config-dir", cfg, "--apply"]);
+    expect(res.exitCode).toBe(0);
+    const base = join(cfg, "research");
+    const entries = readdirSync(base, { recursive: true }) as string[];
+    const files = entries.filter((rel) => statSync(join(base, rel)).isFile());
+    expect(files.length).toBeGreaterThan(0);
+    for (const rel of files) {
+      expect(statSync(join(base, rel)).mode & 0o777).toBe(0o600);
+    }
   });
 });
 

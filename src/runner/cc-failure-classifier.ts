@@ -135,3 +135,48 @@ export function isTransientFailure(
 ): boolean {
   return reason.kind === "not_now";
 }
+
+/**
+ * cortex#2055 — Signatures of a Claude Code **authentication** failure. When
+ * the host's `claude` login has expired, the CLI exits non-zero with the auth
+ * error on stderr (and no stdout response), so the generic classifier buckets
+ * it as `not_now` → the chat path retries 3× (all futile — auth won't self-heal)
+ * and then surfaces the opaque "couldn't process that (exit code: 1)". These
+ * patterns let the chat path detect it, skip the retries, and tell the
+ * principal what to actually do.
+ *
+ * Matched case-insensitively against `response + stderr`. Kept broad because
+ * the exact wording varies by CLI version (OAuth vs API-key, login-expired vs
+ * invalid-key), but every variant is principal-recoverable the same way.
+ */
+const CC_AUTH_FAILURE_SIGNATURES: readonly RegExp[] = [
+  /authentication_failed/i,
+  /invalid api key/i,
+  /oauth token (?:has )?expired/i,
+  /(?:please|run) .*\bclaude\b.*\b(?:login|log ?in)\b/i,
+  /\/login\b/i,
+  /not (?:logged|signed) in/i,
+  /session (?:has )?expired/i,
+];
+
+/**
+ * cortex#2055 — Actionable message shown to the principal (in place of the
+ * generic apology) when a dispatch fails because Claude Code auth expired on
+ * the host. Names the fix so they don't have to dig through session JSONL.
+ */
+export const CC_AUTH_FAILURE_MESSAGE =
+  "⚠️ I couldn't reach Claude Code — the host's authentication has expired. " +
+  "On the host, run `claude` in a terminal and complete the login, then try again.";
+
+/**
+ * cortex#2055 — True when a `CCSessionResult` bears the fingerprint of an auth
+ * failure (checks the captured stderr and any partial response). The chat path
+ * uses this to classify the failure as terminal (no retry) and to swap the
+ * opaque apology for `CC_AUTH_FAILURE_MESSAGE`.
+ */
+export function isCcAuthFailure(result: CCSessionResult): boolean {
+  if (result.success) return false;
+  const haystack = `${result.response}\n${result.stderr ?? ""}`;
+  if (!haystack.trim()) return false;
+  return CC_AUTH_FAILURE_SIGNATURES.some((re) => re.test(haystack));
+}

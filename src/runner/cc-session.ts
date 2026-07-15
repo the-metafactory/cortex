@@ -117,6 +117,12 @@ export interface CCSessionResult {
    * shutdown) can populate it without a breaking change.
    */
   abortReason?: "timeout";
+  /**
+   * cortex#2055 — accumulated stderr from the CC process (empty string when
+   * none). Surfaced so failure classifiers can spot substrate-level errors
+   * (e.g. `authentication_failed`) that exit non-zero with no stdout response.
+   */
+  stderr?: string;
 }
 
 /**
@@ -169,6 +175,11 @@ export class CCSession extends EventEmitter {
   private lineBuffer = new StreamLineBuffer();
   private startTime = 0;
   private stdoutDone: Promise<void> = Promise.resolve();
+  private stderrDone: Promise<void> = Promise.resolve();
+  /** cortex#2055 — accumulated stderr text, surfaced on the result so callers
+   *  can detect substrate-level failures (e.g. `authentication_failed`) that
+   *  never reach the stdout stream. */
+  private stderrText = "";
   /** cortex#701 — materialised curated-settings file for this session; cleaned up on exit. */
   private isolatedSettings: IsolatedSettings | null = null;
 
@@ -301,8 +312,10 @@ export class CCSession extends EventEmitter {
       // Wire stdout streaming (track promise so wireExit can await drain)
       this.stdoutDone = this.pipeStdout();
 
-      // Wire stderr (for error detection)
-      void this.pipeStderr();
+      // Wire stderr (for error detection). Tracked so wireExit can await the
+      // drain before settling — an auth failure's message must be captured
+      // before the result resolves (cortex#2055).
+      this.stderrDone = this.pipeStderr();
 
       // Wire exit (waits for stdout drain before emitting "exit")
       void this.wireExit();
@@ -376,6 +389,7 @@ export class CCSession extends EventEmitter {
           exitCode: 1,
           durationMs,
           usage: this.usage,
+          ...(this.stderrText && { stderr: this.stderrText }),
           ...(this.timedOut && { aborted: true, abortReason: "timeout" as const }),
         });
       });
@@ -389,6 +403,7 @@ export class CCSession extends EventEmitter {
           exitCode: code,
           durationMs,
           usage: this.usage,
+          ...(this.stderrText && { stderr: this.stderrText }),
           // The exit path can also be reached on inactivity timeout —
           // wireExit() races with the error listener and may win when CC
           // exits in response to SIGINT before the error has been emitted.
@@ -470,6 +485,9 @@ export class CCSession extends EventEmitter {
     }
 
     const stderrText = chunks.join("");
+    // cortex#2055 — retain the raw stderr on the session so the result can
+    // carry it (auth failures print here and never reach the stdout stream).
+    this.stderrText = stderrText;
     if (stderrText.trim()) {
       // Only emit if there's meaningful stderr (not just progress indicators)
       const meaningful = stderrText.trim().split("\n").filter(
@@ -491,6 +509,9 @@ export class CCSession extends EventEmitter {
     // Wait for stdout to fully drain before firing exit — prevents race
     // where clearProgress runs before late tool-use events are processed.
     await this.stdoutDone;
+    // cortex#2055 — also drain stderr so `this.stderrText` is complete before
+    // the result settles (auth-failure detection reads it).
+    await this.stderrDone;
 
     if (this.timeoutId) {
       clearTimeout(this.timeoutId);

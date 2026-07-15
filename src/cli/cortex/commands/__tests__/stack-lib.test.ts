@@ -196,6 +196,15 @@ describe("renderScaffold", () => {
     const system = files.find((f) => f.relPath === "system/system.yaml");
     expect(system?.contents).toMatch(/url:\s*nats:\/\/127\.0\.0\.1:4222\s+#.*port/i);
   });
+
+  test("system/system.yaml's nats.name is slug-scoped, not the generic 'cortex' (cortex#2055)", () => {
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    // Slug-scoped client connection label so multi-stack hosts are distinguishable.
+    expect(system?.contents).toMatch(/^\s*name:\s*cortex-demo\s*$/m);
+    // Must NOT ship the old generic non-slug default.
+    expect(system?.contents).not.toMatch(/^\s*name:\s*cortex\s*$/m);
+  });
 });
 
 // =============================================================================

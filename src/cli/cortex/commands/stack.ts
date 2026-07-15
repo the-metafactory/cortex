@@ -33,7 +33,7 @@
  * Exit codes: 0 success · 1 operational failure (conflict / write error) · 2 usage.
  */
 
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { execFileSync } from "child_process";
 import { dirname, join } from "path";
 
@@ -320,6 +320,15 @@ function runCreate(
       const dest = join(targetDir, f.relPath);
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, f.contents);
+      // cortex#2055 — born 0600. The scaffold's secret-bearing file is
+      // surfaces/surfaces.yaml (the Discord bot token the principal pastes in
+      // later); stacks/<slug>.yaml carries signing identity. `writeFileSync`
+      // defaults to 0644 (world-readable), and only stacks/<slug>.yaml was
+      // *incidentally* tightened later by the provisioner's mktemp+mv rewrite —
+      // so the file with the actual secret was left readable. chmod every
+      // scaffold file to 0600 at birth: it's the principal's private config
+      // tree, and the token is protected before it is ever written.
+      chmodSync(dest, 0o600);
     }
   } catch (err) {
     // Roll back the partial scaffold so a mid-write failure (ENOSPC, EACCES on

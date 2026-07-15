@@ -3,6 +3,8 @@ import {
   classifyCcFailure,
   classifyCcSpawnError,
   isTransientFailure,
+  isCcAuthFailure,
+  CC_AUTH_FAILURE_MESSAGE,
 } from "../cc-failure-classifier";
 import type { CCSessionResult } from "../cc-session";
 
@@ -174,5 +176,44 @@ describe("classification stability", () => {
     // classifyCcSpawnError always returns not_now → the helper agrees.
     const reason = classifyCcSpawnError(new Error("CC binary missing"));
     expect(isTransientFailure(reason)).toBe(true);
+  });
+});
+
+// =============================================================================
+// cortex#2055 — auth-failure detection (isCcAuthFailure)
+// =============================================================================
+// An expired host login exits non-zero with the auth error on stderr and no
+// stdout response. Without detection the generic classifier buckets it as
+// not_now → 3 futile retries → opaque "exit code: 1". isCcAuthFailure lets the
+// chat path treat it as terminal and surface an actionable re-login message.
+describe("isCcAuthFailure", () => {
+  function failed(overrides: Partial<CCSessionResult> = {}): CCSessionResult {
+    return { success: false, response: "", exitCode: 1, durationMs: 800, ...overrides };
+  }
+
+  test("detects authentication_failed on stderr (the canonical signal)", () => {
+    expect(isCcAuthFailure(failed({ stderr: '{"type":"result","error":"authentication_failed"}' }))).toBe(true);
+  });
+
+  test("detects common auth wordings (expired OAuth / invalid key / re-login)", () => {
+    expect(isCcAuthFailure(failed({ stderr: "Error: OAuth token has expired" }))).toBe(true);
+    expect(isCcAuthFailure(failed({ stderr: "Invalid API key provided" }))).toBe(true);
+    expect(isCcAuthFailure(failed({ stderr: "Please run `claude login` to authenticate" }))).toBe(true);
+    expect(isCcAuthFailure(failed({ response: "You are not logged in." }))).toBe(true);
+  });
+
+  test("does NOT fire on a clean success", () => {
+    expect(isCcAuthFailure(successResult())).toBe(false);
+  });
+
+  test("does NOT fire on an ordinary non-auth failure (no false positives)", () => {
+    expect(isCcAuthFailure(failed({ stderr: "TypeError: cannot read property 'x' of undefined" }))).toBe(false);
+    expect(isCcAuthFailure(failed({ stderr: "" }))).toBe(false);
+    expect(isCcAuthFailure(failed({ response: "partial answer then crash" }))).toBe(false);
+  });
+
+  test("CC_AUTH_FAILURE_MESSAGE is actionable (names the fix: run claude to re-login)", () => {
+    expect(CC_AUTH_FAILURE_MESSAGE).toMatch(/claude/i);
+    expect(CC_AUTH_FAILURE_MESSAGE).toMatch(/log ?in|login/i);
   });
 });

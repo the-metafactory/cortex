@@ -412,7 +412,12 @@ paths:
 # cortex#491). The dispatch-listener self-subscribes its own interest at start.
 nats:
   url: nats://127.0.0.1:4222   # review host:port for your NATS server (default: local 4222)
-  name: cortex
+  # NATS *client* connection label (how this daemon identifies itself to the
+  # server — visible in \`nats server report connections\`). Slug-scoped so
+  # multiple stacks on one host are distinguishable (cortex#2055). This is NOT
+  # the nats-server's own \`server_name\` in ~/.config/nats/<slug>.conf — that
+  # names the server process; the two play different roles and needn't match.
+  name: cortex-${slug}
   subjects: []
   # credsPath — the daemon's OWN bus/bot creds, minted under the \`agents\` account
   # by \`cortex network make-live\` (via add-bot). The \`-bot\` suffix is LOAD-BEARING:
