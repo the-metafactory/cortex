@@ -202,3 +202,39 @@ jobs:
 
       - name: check-shippable-hygiene (whole-tree)
         run: bun scripts/check-shippable-hygiene.ts
+
+  # ──────────────────────────────────────────────────────────────────
+  # XDG gate — runs the xdg-audit REPO GATE against THIS checkout only
+  # (cortex#2033). The self-test (scripts/__tests__/xdg-audit.test.ts) already
+  # runs under the `test` job and proves the gate MECHANISM works; this job runs
+  # the gate itself over the PR's tree so a stale-XDG-path regression can't land
+  # the way it did in PR#2026 (2 gated findings + 9 dead allow-entries reached
+  # main because the full scan ran only manually — b2030 had to clean it up).
+  #
+  # Scope is SELF-REPO ONLY: the positional root `.` REPLACES the tool's default
+  # cross-repo roots (cortex/arc/metafactory-discord), so CI scans just the
+  # cortex checkout. arc + metafactory-discord are not checked out here and
+  # cross-repo state is not a cortex PR's fault — each repo enforces its own tree
+  # in its own CI.
+  #
+  # Exit contract (verified in scripts/xdg-audit.ts): the exit code is the count
+  # of GATED findings; unused/unknown allowlist ENTRIES are WARNINGS that do NOT
+  # affect the exit code. On a cortex-only scan the shared allowlist's arc/discord
+  # entries read "unused" by design (the cross-repo NOTE b2030 added documents
+  # this) — so those warnings inform without failing the job. Only gated findings
+  # in the PR's tree turn this red.
+  # ──────────────────────────────────────────────────────────────────
+  xdg-gate:
+    name: XDG gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: xdg-audit --repos (self-repo scope)
+        run: bun scripts/xdg-audit.ts --repos .

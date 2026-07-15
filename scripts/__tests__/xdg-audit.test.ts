@@ -36,6 +36,22 @@ function runGate(root: string, allowlistPath?: string) {
   return { status: r.status ?? -1, json, stderr: r.stderr, stdout: r.stdout };
 }
 
+/**
+ * Run the MACHINE domain against a scratch `$HOME` (`--home`), never the real
+ * home. The `$XDG_*` / `$CORTEX_*` dir-override env is SCRUBBED so a value in the
+ * dev/CI environment can't relocate the canonical roots out from under the
+ * fixture — the seam honors those verbatim, so the test must pin them to unset.
+ */
+function runMachine(home: string) {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const k of ["CORTEX_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME"]) delete env[k];
+  const r = spawnSync("bun", [AUDIT, "--machine", "--home", home, "--json"], { encoding: "utf8", env });
+  let json: any = {};
+  try { json = JSON.parse(r.stdout); } catch { /* leave empty; assertions below will surface it */ }
+  return { status: r.status ?? -1, json, stderr: r.stderr, stdout: r.stdout };
+}
+const gatedPatterns = (json: any) => (json.gated ?? []).map((f: any) => f.pattern);
+
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "xdg-audit-selftest-"));
   git(scratch, "init", "-q");
@@ -116,5 +132,71 @@ describe("xdg-audit gate — self-test (cortex#1867)", () => {
     expect(gatedRuntime.length).toBe(1);
     expect(gatedRuntime[0].content).toContain("grove/other.yaml");
     expect(status).toBeGreaterThan(0); // the un-allowed line keeps the gate red
+  });
+});
+
+// ── machine-domain positive-layout checks (cortex#2033) ─────────────────────
+// Vincent's blind spot: the machine scan only fired on KNOWN-BAD legacy paths,
+// so a box wrong-by-CLASS (state dirs under the config root, or a half-migrated
+// canonical state tree) passed with all-zeros. These pin the positive-layout
+// assertions. Every fixture runs against a scratch $HOME (`--home`) with the
+// XDG/CORTEX dir-override env scrubbed — ZERO real-home access.
+describe("xdg-audit machine domain — positive-layout checks (cortex#2033)", () => {
+  let mhome: string;
+  beforeAll(() => { mhome = mkdtempSync(join(tmpdir(), "xdg-audit-machine-")); });
+  afterAll(() => { if (mhome) rmSync(mhome, { recursive: true, force: true }); });
+
+  const freshBox = () => mkdtempSync(join(tmpdir(), "xdg-audit-machine-box-"));
+
+  test("clean fresh box → PASS with zeros (legitimately)", () => {
+    const box = freshBox();
+    const { status, json } = runMachine(box);
+    expect(status).toBe(0);
+    expect(json.summary.gated).toBe(0);
+    rmSync(box, { recursive: true, force: true });
+  });
+
+  test("state-class dir under the CONFIG root → NONZERO naming the misplacement", () => {
+    const box = freshBox();
+    mkdirSync(join(box, ".config", "metafactory", "cortex", "state"), { recursive: true });
+    const { status, json } = runMachine(box);
+    expect(status).toBeGreaterThan(0);
+    expect(gatedPatterns(json)).toContain("config-root-state-misplacement");
+    const f = (json.gated ?? []).find((x: any) => x.pattern === "config-root-state-misplacement");
+    expect(f.location).toContain(".config/metafactory/cortex/state");
+    rmSync(box, { recursive: true, force: true });
+  });
+
+  test("canonical state root WITHOUT completion marker → NONZERO (wedge class)", () => {
+    const box = freshBox();
+    mkdirSync(join(box, ".local", "state", "metafactory", "cortex"), { recursive: true });
+    const { status, json } = runMachine(box);
+    expect(status).toBeGreaterThan(0);
+    expect(gatedPatterns(json)).toContain("canonical-state-without-marker");
+    rmSync(box, { recursive: true, force: true });
+  });
+
+  test("coherent canonical state root + completion marker → PASS", () => {
+    const box = freshBox();
+    const canon = join(box, ".local", "state", "metafactory", "cortex");
+    mkdirSync(canon, { recursive: true });
+    writeFileSync(join(canon, ".xdg-state-migration.json"), "{}\n");
+    const { status, json } = runMachine(box);
+    expect(status).toBe(0);
+    expect(json.summary.gated).toBe(0);
+    rmSync(box, { recursive: true, force: true });
+  });
+
+  test("marker present + pidfile in a LEGACY state dir → NONZERO (split identity)", () => {
+    const box = freshBox();
+    const canon = join(box, ".local", "state", "metafactory", "cortex");
+    mkdirSync(canon, { recursive: true });
+    writeFileSync(join(canon, ".xdg-state-migration.json"), "{}\n");
+    mkdirSync(join(box, ".config", "grove", "state"), { recursive: true });
+    writeFileSync(join(box, ".config", "grove", "state", "cortex.pid"), "424242\n");
+    const { status, json } = runMachine(box);
+    expect(status).toBeGreaterThan(0);
+    expect(gatedPatterns(json)).toContain("split-identity-legacy-pidfile");
+    rmSync(box, { recursive: true, force: true });
   });
 });

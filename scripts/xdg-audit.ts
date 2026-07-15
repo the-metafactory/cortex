@@ -12,7 +12,10 @@
  *   --machine  live inventory: dangling symlinks, plist exec paths,
  *              settings.json hooks, packages.db rows, WAL sidecars,
  *              occupied cutover destinations, grove-vs-cortex divergence,
- *              pidfile liveness
+ *              pidfile liveness, and positive-layout checks (cortex#2033):
+ *              state-class dirs misplaced under the canonical CONFIG root, and
+ *              STATE-tree coherence (stray canonical without marker / split
+ *              identity). Testable against a scratch $HOME via `--home <dir>`.
  *
  * ── THE REPO GATE ──────────────────────────────────────────────────────────
  * `bun xdg-audit.ts --repos` is a DETERMINISTIC gate. Exit code = number of
@@ -57,10 +60,24 @@ import { homedir } from "os";
 import { Database } from "bun:sqlite";
 import { parse as parseYaml } from "yaml";
 
-const HOME = homedir();
+import {
+  cortexStateDir,
+  legacyPidStateDir,
+  stateMigrationCompleted,
+  STATE_MIGRATION_JOURNAL_NAME,
+} from "../src/common/state-path";
+import { readDirEnv } from "../src/common/xdg";
+
 const args = process.argv.slice(2);
 const flag = (f: string) => args.includes(f);
 const opt = (f: string) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
+// HOME is the machine-scan root. `--home <dir>` overrides it so the machine
+// domain is testable against a scratch $HOME with ZERO real-home access (the
+// same escape hatch the repo scan gets from positional roots). The state/config
+// coherence checks below thread this HOME into the state-path resolvers, which
+// still honor `$XDG_*` / `$CORTEX_*` verbatim — env wins over the injected home,
+// exactly as the resolvers behave in production.
+const HOME = opt("--home") ?? homedir();
 const JSON_OUT = flag("--json");
 const VERBOSE = flag("--verbose");
 const WAVE = opt("--wave");
@@ -440,6 +457,77 @@ function scanPidfiles() {
   }
 }
 
+// ─────────────────────────────────── positive-layout checks (cortex#2033)
+// The legacy scans above only fire on KNOWN-BAD legacy paths, so a box that is
+// wrong-by-CLASS — state-class content living under the canonical CONFIG root,
+// or a half-migrated canonical STATE tree — passes with all-zeros (Vincent's
+// blind spot, #2033). These assert the layout POSITIVELY. All GATE.
+
+/** The canonical config home, honoring `$XDG_CONFIG_HOME` (blank ⇒ unset) the
+ *  same way the resolvers do; default `$HOME/.config`. */
+function xdgConfigHomeDir(): string {
+  return readDirEnv("XDG_CONFIG_HOME") ?? join(HOME, ".config");
+}
+
+/**
+ * (1) Class-misplacement: state-class dirs living under the canonical CONFIG
+ * root (`…/metafactory/cortex/{logs,state,relay,network-cache}`) — the #2030
+ * postinstall bug shape. These four are STATE classes (they belong under
+ * `~/.local/state/metafactory/cortex`); their presence under the CONFIG root is
+ * a layout error the legacy-path scan can't see (it's a canonical path, not a
+ * legacy one). Catches already-scaffolded-wrong boxes + any future regression.
+ */
+function scanConfigRootMisplacement() {
+  const cortexConfig = join(xdgConfigHomeDir(), "metafactory", "cortex");
+  for (const name of ["logs", "state", "relay", "network-cache"]) {
+    const p = join(cortexConfig, name);
+    if (!existsSync(p)) continue;
+    pushMachine({
+      domain: "machine", pattern: "config-root-state-misplacement", clazz: "state", wave: 5, issue: "cortex#2030/#2033",
+      location: p.replace(HOME, "~"),
+      excerpt: `state-class '${name}' under CONFIG root — belongs in ~/.local/state/metafactory/cortex (#2030 bug shape)`,
+    });
+  }
+}
+
+/**
+ * (2) State-tree coherence of the canonical STATE root:
+ *   • canonical root EXISTS but the completion marker does NOT → partial/stray
+ *     canonical (the "wedge" class): a bare/half-migrated canonical dir that the
+ *     resolvers must NOT prefer, and which shouldn't exist without a completed,
+ *     marker-writing migration.
+ *   • marker PRESENT (migration completed) yet a cortex pidfile still sits in a
+ *     LEGACY state dir → split identity: a daemon whose pidfile lives in the old
+ *     tree while the box has flipped canonical.
+ * Both honor `$CORTEX_STATE_DIR` / `$XDG_STATE_HOME` via the state-path seam.
+ */
+function scanStateTreeCoherence() {
+  const canonical = cortexStateDir(HOME);
+  const migrated = stateMigrationCompleted(HOME);
+
+  if (existsSync(canonical) && !migrated) {
+    pushMachine({
+      domain: "machine", pattern: "canonical-state-without-marker", clazz: "state", wave: 5, issue: "cortex#1903/#2033",
+      location: canonical.replace(HOME, "~"),
+      excerpt: `canonical state root exists WITHOUT completion marker ${STATE_MIGRATION_JOURNAL_NAME} (partial/stray — wedge class)`,
+    });
+  }
+
+  if (migrated) {
+    const legacy = legacyPidStateDir(HOME);
+    let names: string[] = [];
+    try { if (existsSync(legacy)) names = readdirSync(legacy); } catch { names = []; }
+    for (const name of names) {
+      if (!name.endsWith(".pid")) continue;
+      pushMachine({
+        domain: "machine", pattern: "split-identity-legacy-pidfile", clazz: "state", wave: 5, issue: "cortex#1903/#2033",
+        location: join(legacy, name).replace(HOME, "~"),
+        excerpt: `pidfile in LEGACY state dir while canonical marker present (split identity)`,
+      });
+    }
+  }
+}
+
 // -------------------------------------------------------------------- main
 if (DO_REPOS) {
   const extra = args.filter(a => !a.startsWith("--") && a !== WAVE && a !== REF && existsSync(a));
@@ -458,6 +546,7 @@ if (DO_MACHINE) {
   for (const d of ["skills", "bin", "agents", "commands", "hooks"]) scanSymlinks(join(HOME, ".claude", d), 5, "arc#287");
   scanPlists(); scanSettingsHooks(); scanPackagesDb(); scanWalSidecars();
   scanOccupiedDestinations(); scanTreeDivergence(); scanPidfiles();
+  scanConfigRootMisplacement(); scanStateTreeCoherence();
 }
 
 // ------------------------------------------------------------------ report
