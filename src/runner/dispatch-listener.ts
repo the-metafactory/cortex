@@ -127,14 +127,12 @@ import {
   type ChainRejectionReason,
   type ChainVerificationResult,
 } from "../bus/verify-signed-by-chain";
-import {
-  ClaudeCodeHarness,
-  type CCSessionFactory as ClaudeCodeFactory,
-} from "../substrates/claude-code/harness";
-import {
-  AgentTeamHarness,
-  type AgentTeamFactory,
-} from "./agent-team";
+import type { CCSessionFactory as ClaudeCodeFactory } from "../substrates/claude-code/harness";
+import type { AgentTeamFactory } from "./agent-team";
+// API-P0.5 (#2060) — harness selection lives in the resolver seam. The
+// `ClaudeCodeHarness` / `AgentTeamHarness` classes are constructed there now,
+// not inline here, so this file imports only the resolver.
+import { DefaultHarnessResolver } from "./harness-resolver";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -2075,16 +2073,21 @@ async function handleDispatchEnvelope(
     req.runtime = runtime;
   }
 
-  const harness: SessionHarness =
-    envelope.distribution_mode === "delegate"
-      ? new AgentTeamHarness({
-          source,
-          ...(agentTeamFactory !== undefined && { agentTeamFactory }),
-        })
-      : new ClaudeCodeHarness({
-          source,
-          ...(ccSessionFactory !== undefined && { ccSessionFactory }),
-        });
+  // API-P0.5 (#2060, D3) — harness selection lives in the HarnessResolver
+  // seam, not inline. Construction is byte-identical to the pre-extraction
+  // ternary. The receiving agent's `AgentRuntime` is not threaded into this
+  // seam today (only `receivingAgentId`), so we pass `undefined` and the
+  // resolver falls to the `claude-code` default for ordinary dispatch (D3);
+  // API-P1.3 threads the real agent when it wires the `api-agent` substrate.
+  const harnessResolver = new DefaultHarnessResolver({
+    source,
+    ccSessionFactory,
+    agentTeamFactory,
+  });
+  const harness: SessionHarness = harnessResolver.resolve(
+    undefined,
+    envelope.distribution_mode,
+  );
 
   // cortex#492 — emitted SYNCHRONOUSLY immediately before draining the
   // harness (the CC spawn). `harness.dispatch(req)` is the long-running
