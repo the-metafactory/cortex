@@ -247,6 +247,48 @@ dependencies:
   # https://github.com/the-metafactory/metafactory-cortex-renderer-pagerduty.
   - name: "metafactory-cortex-renderer-pagerduty"
     version: ">=0.1.0"
+
+# depends_on.packages — the arc AUTO-INSTALL contract (cortex#2028).
+#
+# WHY THIS EXISTS SEPARATELY FROM `dependencies:` ABOVE. cortex's own dep
+# graph is read by TWO consumers that key off DIFFERENT fields:
+#
+#   1. cortex's plugin loader (src/adapters/loader.ts,
+#      readCortexDeclaredAdapterRepos / readCortexDeclaredRendererRepos) reads
+#      the TOP-LEVEL `dependencies:` array BY NAME to compute the first-party
+#      load exemption. It derives each repo URL from the dependency NAME
+#      (github.com/the-metafactory/<name>) and never looks at a `repo:` field.
+#      → the `dependencies:` block above is authoritative for that path and is
+#        left exactly as-is.
+#
+#   2. arc's installer (arc/src/commands/install.ts) reads `depends_on.packages`
+#      (PackageDependency = { name, repo }) to CLONE + install each dependency
+#      when you run `arc install cortex` / `arc upgrade cortex`. It IGNORES the
+#      top-level `dependencies:` key entirely (ArcManifest has no such field),
+#      and SKIPS any package with no `repo:`.
+#      → this block is authoritative for that path.
+#
+# Before cortex#2028 only (1) existed, so arc auto-installed NONE of the five
+# first-party surface-plugin bundles — the "arc auto-installs first-party
+# bundles" story (release notes v6.8.0, sop-stack-onboarding.md) was untrue.
+# Declaring the SAME five bundles here (name + repo) closes that gap. The two
+# blocks list the same bundles by design; keep them in sync when a bundle is
+# added or removed. `arc` (no repo) and metafactory-bundle-discord (ADR-0017
+# CLI bundle) stay in `dependencies:` only — out of scope for this auto-install
+# lane.
+depends_on:
+  packages:
+    - name: "metafactory-cortex-adapter-web"
+      repo: "https://github.com/the-metafactory/metafactory-cortex-adapter-web"
+    - name: "metafactory-cortex-adapter-slack"
+      repo: "https://github.com/the-metafactory/metafactory-cortex-adapter-slack"
+    - name: "metafactory-cortex-adapter-mattermost"
+      repo: "https://github.com/the-metafactory/metafactory-cortex-adapter-mattermost"
+    - name: "metafactory-cortex-adapter-discord"
+      repo: "https://github.com/the-metafactory/metafactory-cortex-adapter-discord"
+    - name: "metafactory-cortex-renderer-pagerduty"
+      repo: "https://github.com/the-metafactory/metafactory-cortex-renderer-pagerduty"
+
 # myelin deps still pending — declared once cortex's runtime depends on
 # myelin-side identity primitives.
 # dependencies:
