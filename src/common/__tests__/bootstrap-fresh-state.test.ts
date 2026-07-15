@@ -67,10 +67,10 @@ const markerPath = (h: string) => join(cortexStateDir(h), STATE_MIGRATION_JOURNA
 function captureStderr(fn: () => void): string {
   const orig = process.stderr.write.bind(process.stderr);
   let buf = "";
-  process.stderr.write = ((chunk: unknown) => {
+  process.stderr.write = (chunk: unknown) => {
     buf += String(chunk);
     return true;
-  }) as typeof process.stderr.write;
+  };
   try {
     fn();
   } finally {
