@@ -641,7 +641,7 @@ export const AgentRuntimeSchema = z.object({
    *  `engine: sage` agents run through the sage CLI (no HarnessId) and omit it;
    *  the legacy `pi-dev` value is the back-compat shim that `resolveReviewEngine`
    *  maps to `engine: sage`. */
-  substrate: z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"]).optional(),
+  substrate: z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom", "api-agent"]).optional(),
   /** Dispatch mode. `in-process` = cortex's runner spawns the substrate;
    *  `standalone` = arc-installed daemon connects to the bus directly. */
   mode: z.enum(["in-process", "standalone"]),

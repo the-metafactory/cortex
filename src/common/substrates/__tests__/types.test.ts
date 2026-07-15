@@ -48,13 +48,14 @@ describe("HarnessId", () => {
     "mistral",
     "pi-dev",
     "agent-team",
+    "api-agent",
   ];
 
-  test("includes all eight known substrates", () => {
-    expect(ALL_HARNESS_IDS).toHaveLength(8);
+  test("includes all nine known substrates", () => {
+    expect(ALL_HARNESS_IDS).toHaveLength(9);
   });
 
-  test("exhaustive switch compiles for all eight values", () => {
+  test("exhaustive switch compiles for all nine values", () => {
     // If a new HarnessId is added without updating this switch, tsc fails
     // (the `never` assignment becomes ill-typed). Compile-time proof that
     // every downstream switch must enumerate the union exhaustively.
@@ -68,6 +69,7 @@ describe("HarnessId", () => {
         case "mistral": return "mistral";
         case "pi-dev": return "pi";
         case "agent-team": return "team";
+        case "api-agent": return "api";
         default: {
           const _exhaustive: never = id;
           return _exhaustive;

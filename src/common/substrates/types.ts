@@ -110,6 +110,8 @@ export type MyelinEnvelope = Envelope;
  *                         used for cortex-co-located agents.
  *   - `"agent-team"`    — meta-harness that coordinates a moderator plus
  *                         multiple participant harnesses for delegate mode.
+ *   - `"api-agent"`     — direct API harness; an agent opts in to run against
+ *                         a model provider via the API rather than a CLI child.
  *
  * **Why not `string`?** Because the runtime needs to refuse the unknown.
  * A new harness must be a typed registration, not a free-form string,
@@ -123,7 +125,8 @@ export type HarnessId =
   | "gemini"
   | "mistral"
   | "pi-dev"
-  | "agent-team";
+  | "agent-team"
+  | "api-agent";
 
 // ---------------------------------------------------------------------------
 // Capability
