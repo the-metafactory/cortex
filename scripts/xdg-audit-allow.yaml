@@ -375,6 +375,56 @@ allow:
     match: ~/\.config/cortex/(agents\.d|personas)
     reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
     owner: cortex#1869
+  # NOTE: the entries below apply CROSS-REPO — their match targets are live in
+  # arc and/or metafactory-discord @origin/main (verified with `git grep` against
+  # fresh fetches), even though the cortex copies no longer carry them. The gate's
+  # default scan is all three repos, so these MUST stay (a cortex-only "unused"
+  # read is a false negative). Re-verify prunes with the full 3-repo scan.
+  - pattern: config-tree
+    path: docs/agent-identity-provisioning.md
+    match: ~/\.config/cortex/agents
+    reason: agent instance-state path — future agent-instance-state wave (live in arc)
+    owner: agent-instance-state
+  - pattern: bin-home
+    path: CLAUDE.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
+    owner: cortex#1866
+  - pattern: config-tree
+    path: CLAUDE.md
+    match: ~/\.config/cortex/cli\.yaml
+    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate (live in metafactory-discord)
+    owner: by-design
+  - pattern: bin-home
+    path: README.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
+    owner: cortex#1866
+  - pattern: config-tree
+    path: README.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
+    owner: cortex#1866
+  - pattern: config-tree
+    path: arc-manifest.yaml
+    match: ~/\.config/(cortex|grove)/cli\.yaml
+    reason: declared XDG read-fallback (canonical-first + two legacy reads) — matches the resolver contract (live in metafactory-discord)
+    owner: by-design
+  - pattern: config-tree
+    path: cli.yaml.example
+    match: ~/\.config/cortex/cli\.yaml
+    reason: example/schema-reference header naming the config file — never a live config (live in metafactory-discord)
+    owner: by-design
+  - pattern: bin-home
+    path: skill/SKILL.md
+    match: ~/bin/discord
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
+    owner: cortex#1866
+  - pattern: config-tree
+    path: skill/SKILL.md
+    match: ~/\.config/cortex/cli\.yaml
+    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate (live in metafactory-discord)
+    owner: by-design
 
   # ── cortex: XDG epic close-out report (frozen — #2026) ───────────────────
   # NOTE: these two were pre-existing GATED findings inherited from the #2026

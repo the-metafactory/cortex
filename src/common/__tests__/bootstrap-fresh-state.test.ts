@@ -29,6 +29,7 @@ import {
 } from "../migrate-state-dir";
 import {
   canonicalLogsDir,
+  canonicalPidStateDir,
   cortexStateDir,
   legacyCortexLogsDir,
   legacyGroveLogsDir,
@@ -156,6 +157,49 @@ describe("fresh state — upgrade box is left untouched (cortex#2030 AC2)", () =
     const res = bootstrapFreshStateDir({ home }, STAMP);
     expect(res.outcome).toBe("legacy-present");
     expect(existsSync(cortexStateDir(home))).toBe(false);
+  });
+});
+
+describe("fresh state — occupancy belt refuses a live pidfile (cortex#2030 / #1932)", () => {
+  test("fresh state: a LIVE pidfile in the canonical state dir → refuses, no marker", () => {
+    // The 5 predicate paths are ALL absent (genuinely "fresh" by the predicate),
+    // but a canonical-side pidfile — invisible to the legacy-path predicate — is
+    // live. The occupancy belt must still block the marker.
+    expect(legacyStateTreePresent(home)).toBe(false);
+    mkdirSync(canonicalPidStateDir(home), { recursive: true });
+    writeFileSync(join(canonicalPidStateDir(home), "cortex.pid"), "4242\n");
+    const aliveFor4242 = (pid: number) => pid === 4242;
+
+    const res = bootstrapFreshStateDir({ home }, STAMP, aliveFor4242);
+
+    expect(res.outcome).toBe("occupied");
+    expect(res.occupancy?.occupied).toBe(true);
+    expect(res.occupancy?.refused.some((r) => r.reason === "live")).toBe(true);
+    expect(existsSync(markerPath(home))).toBe(false);
+    expect(stateMigrationCompleted(home)).toBe(false);
+  });
+
+  test("fresh state: an UNCLASSIFIABLE pidfile (unparseable) → refuses, no marker", () => {
+    mkdirSync(canonicalPidStateDir(home), { recursive: true });
+    writeFileSync(join(canonicalPidStateDir(home), "relay.pid"), "not-a-pid\n");
+    const neverAlive = () => false;
+
+    const res = bootstrapFreshStateDir({ home }, STAMP, neverAlive);
+
+    expect(res.outcome).toBe("occupied");
+    expect(res.occupancy?.refused.some((r) => r.reason === "unparseable")).toBe(true);
+    expect(existsSync(markerPath(home))).toBe(false);
+  });
+
+  test("fresh state: a DEAD pidfile does not block the bootstrap", () => {
+    mkdirSync(canonicalPidStateDir(home), { recursive: true });
+    writeFileSync(join(canonicalPidStateDir(home), "cortex.pid"), "4242\n");
+    const neverAlive = () => false;
+
+    const res = bootstrapFreshStateDir({ home }, STAMP, neverAlive);
+
+    expect(res.outcome).toBe("bootstrapped");
+    expect(existsSync(markerPath(home))).toBe(true);
   });
 });
 

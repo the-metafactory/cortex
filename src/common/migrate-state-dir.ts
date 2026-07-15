@@ -551,7 +551,8 @@ export function legacyStateTreePresent(home?: string): boolean {
 export type FreshStateBootstrapOutcome =
   | "bootstrapped" // fresh box → canonical tree (+ logs/) + completion marker written
   | "already-complete" // a completion marker already exists (idempotent re-install)
-  | "legacy-present"; // an upgrade box → left UNTOUCHED (the gated migration owns it)
+  | "legacy-present" // an upgrade box → left UNTOUCHED (the gated migration owns it)
+  | "occupied"; // a live/unclassifiable *.pid on disk → REFUSED (belt-insufficiency #1932)
 
 export interface FreshStateBootstrapResult {
   outcome: FreshStateBootstrapOutcome;
@@ -559,6 +560,8 @@ export interface FreshStateBootstrapResult {
   canonical: string;
   /** The completion journal — present only on `bootstrapped`. */
   journal?: StateMigrationJournal;
+  /** The occupancy verdict — present only on `occupied` (the refusing pidfiles). */
+  occupancy?: OccupancyResult;
 }
 
 /**
@@ -586,17 +589,39 @@ export interface FreshStateBootstrapResult {
  * must NEVER write the marker there (AC2). An already-complete marker short-
  * circuits to `already-complete` so a re-install is idempotent.
  *
- * Isolation: every path derives from the injectable `home`, so a scratch `$HOME`
- * fully sandboxes it — zero real-home access.
+ * ── Defense-in-depth: the occupancy belt (#1932) ────────────────────────────
+ * The completion marker is the single most dangerous bit in the state system —
+ * once written it flips every resolver to canonical — so it is NEVER protected by
+ * a single check. Even with the 5-path {@link legacyStateTreePresent} predicate
+ * clear, this ALSO runs {@link stateDirOccupancyCheck} over {@link occupancyScanDirs}
+ * (readdir every candidate state dir + liveness-check every `*.pid`; an
+ * unreadable/unparseable pidfile counts as PRESENT → abort). If ANY pidfile is
+ * live or unclassifiable — e.g. a stray canonical-side pidfile a half-booted
+ * daemon wrote, which the legacy-path predicate cannot see — the bootstrap
+ * REFUSES (`occupied`) and writes nothing. This is the migrator's OWN belt (same
+ * function it runs inside the gated body), reused here; it is the appropriate
+ * protection for a fresh box, where the full {@link withMigrationGate} service
+ * gate would only try to stop a fleet that provably does not exist (no units, no
+ * legacy state) — so predicate + occupancy belt is the correct, ceremony-free
+ * guard, not a shortcut.
+ *
+ * Isolation: every path derives from the injectable `home`, and `procAlive` is
+ * injectable, so a scratch `$HOME` fully sandboxes it — zero real-home access.
  */
 export function bootstrapFreshStateDir(
   opts: StateMigrateOptions = {},
   stampedAt?: string,
+  procAlive: (pid: number) => boolean = defaultProcAlive,
 ): FreshStateBootstrapResult {
   const { home } = opts;
   const canonical = cortexStateDir(home);
   if (stateMigrationCompleted(home)) return { outcome: "already-complete", canonical };
   if (legacyStateTreePresent(home)) return { outcome: "legacy-present", canonical };
+  // Belt-insufficiency guard (#1932): refuse if ANY *.pid on disk is live or
+  // unclassifiable, even though the 5-path predicate is clear — a canonical-side
+  // stray pidfile is invisible to that predicate but must still block the marker.
+  const occupancy = stateDirOccupancyCheck(occupancyScanDirs(home), procAlive);
+  if (occupancy.occupied) return { outcome: "occupied", canonical, occupancy };
   // Genuinely fresh: the plan is empty (no legacy tree to walk), so this only
   // mkdir's the canonical root and writes the completion marker — the migrator's
   // own writer, never hand-rolled.

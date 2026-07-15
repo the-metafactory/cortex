@@ -45,4 +45,15 @@ switch (res.outcome) {
       "  ⊘ legacy state present (upgrade box) — leaving state untouched; the gated migration owns the cutover",
     );
     break;
+  case "occupied": {
+    // Anomaly: the 5-path predicate read fresh, but a live/unclassifiable *.pid is
+    // on disk (e.g. a canonical-side stray). Refuse the marker (#1932 belt) and
+    // surface it loudly — but do NOT abort the install (best-effort, non-fatal).
+    const refused = res.occupancy?.refused.map((r) => `${r.path} (${r.reason})`).join(", ") ?? "";
+    console.log(
+      `  ⚠ state bootstrap REFUSED — occupied state dir (${refused}); marker NOT written. ` +
+        "Resolve the live/stale pidfile, then re-run the install or let a daemon boot establish canonical state.",
+    );
+    break;
+  }
 }
