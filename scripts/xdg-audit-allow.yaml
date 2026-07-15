@@ -35,11 +35,6 @@ allow:
     match: \.claude/(events|relay)
     reason: postinstall creates + describes the permanent ~/.claude events/relay buffer (standard §6; relay dir is pre-migration correct, resolver-gated)
     owner: by-design
-  - pattern: config-tree
-    path: scripts/postinstall.sh
-    match: Runtime directories created
-    reason: postinstall status echo — the real dir is the resolved CONFIG_DIR; the message shows the transition-active path
-    owner: cortex#1869
 
   # ── cortex: GV-1 cortex-first / grove-fallback bot.yaml readers ──────────
   - pattern: config-tree
@@ -97,23 +92,17 @@ allow:
     reason: best-effort SIGHUP pidfile fallback (comment acknowledges non-default configs need a manual reload) — see PR note, verify against the pidfile convention
     owner: cortex#1903
 
-  # ── cortex: STACK logDir cluster (differs from canonical XDG state) ───────
-  # NOTE: canonical logDir default is ~/.local/state/metafactory/cortex/logs
-  # (config.ts / cortex-config.ts), but the stack subsystem generates + logs to
-  # ~/.config/cortex/logs. It WORKS at every migration stage (co-located with
-  # the stack config), so allowed here + flagged in the PR for a product call on
-  # whether stack logs should move to the XDG state dir. publishedEventsDir is
-  # already canonical.
-  - pattern: config-tree
-    path: src/cli/cortex/commands/stack-lib.ts
-    match: logDir:\s*~/\.config/cortex/logs
-    reason: generated stack system.yaml logDir — stack-log co-location, differs from canonical XDG state default (see PR note; needs product decision)
-    owner: cortex#1869
+  # ── cortex: STACK logDir residuals (generator now canonical, #2030) ──────
+  # NOTE: as of cortex#2030 the stack generator (stack-lib.ts) AND the config-
+  # layout seed emit the canonical ~/.local/state/metafactory/cortex/logs, so the
+  # former stack-lib.ts logDir allow is GONE. The residual legacy references below
+  # are the committed launchd plist StandardOut/Err paths + the selftest logDir
+  # rewrite — a separate stack-log StandardOut move (tracked under cortex#1983).
   - pattern: config-tree
     path: src/services/*.plist
     match: \.config/cortex/logs/cortex-
-    reason: stack launchd plist StandardOut/Err path — matches the generated stack logDir (see stack logDir note)
-    owner: cortex#1869
+    reason: residual committed launchd plist StandardOut/Err path — legacy stack-log location; StandardOut move tracked under cortex#1983
+    owner: cortex#1983
   - pattern: config-tree
     path: scripts/federation-selftest.sh
     match: s\|~/\.config/cortex/logs\|
@@ -386,48 +375,68 @@ allow:
     match: ~/\.config/cortex/(agents\.d|personas)
     reason: transition-active config path (~/.config/cortex) — canonicalizes at the wave-4 cutover
     owner: cortex#1869
+  # NOTE: the entries below apply CROSS-REPO — their match targets are live in
+  # arc and/or metafactory-discord @origin/main (verified with `git grep` against
+  # fresh fetches), even though the cortex copies no longer carry them. The gate's
+  # default scan is all three repos, so these MUST stay (a cortex-only "unused"
+  # read is a false negative). Re-verify prunes with the full 3-repo scan.
   - pattern: config-tree
     path: docs/agent-identity-provisioning.md
     match: ~/\.config/cortex/agents
-    reason: agent instance-state path — future agent-instance-state wave
+    reason: agent instance-state path — future agent-instance-state wave (live in arc)
     owner: agent-instance-state
   - pattern: bin-home
     path: CLAUDE.md
     match: ~/bin/discord
-    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
     owner: cortex#1866
   - pattern: config-tree
     path: CLAUDE.md
     match: ~/\.config/cortex/cli\.yaml
-    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate
+    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate (live in metafactory-discord)
     owner: by-design
   - pattern: bin-home
     path: README.md
     match: ~/bin/discord
-    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
     owner: cortex#1866
   - pattern: config-tree
     path: README.md
     match: ~/bin/discord
-    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
     owner: cortex#1866
   - pattern: config-tree
     path: arc-manifest.yaml
     match: ~/\.config/(cortex|grove)/cli\.yaml
-    reason: declared XDG read-fallback (canonical-first + two legacy reads) — matches the resolver contract
+    reason: declared XDG read-fallback (canonical-first + two legacy reads) — matches the resolver contract (live in metafactory-discord)
     owner: by-design
   - pattern: config-tree
     path: cli.yaml.example
     match: ~/\.config/cortex/cli\.yaml
-    reason: example/schema-reference header naming the config file — never a live config
+    reason: example/schema-reference header naming the config file — never a live config (live in metafactory-discord)
     owner: by-design
   - pattern: bin-home
     path: skill/SKILL.md
     match: ~/bin/discord
-    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3
+    reason: discord CLI shim location (~/bin/discord) — legacy-bin bridge, cutover owned by wave 3 (live in metafactory-discord)
     owner: cortex#1866
   - pattern: config-tree
     path: skill/SKILL.md
     match: ~/\.config/cortex/cli\.yaml
-    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate
+    reason: cli.yaml XDG resolution — canonical-first with legacy read-fallback; accurate (live in metafactory-discord)
     owner: by-design
+
+  # ── cortex: XDG epic close-out report (frozen — #2026) ───────────────────
+  # NOTE: these two were pre-existing GATED findings inherited from the #2026
+  # close-out doc (not from #2030); allowlisted here so the manual gate returns
+  # to PASS. Both are frozen-report prose, no runtime impact.
+  - pattern: bin-home
+    path: docs/xdg-epic-closeout.md
+    match: "Gate nits: tighten"
+    reason: frozen close-out report — gate-nits note quoting the bin-home allowlist match pattern (~/bin/), not a live path
+    owner: cortex#1866
+  - pattern: config-tree
+    path: docs/xdg-epic-closeout.md
+    match: ~/\.config/cortex/agents/<id>
+    reason: frozen close-out report — names the deferred agent-instance state path (future agent-instance-state wave)
+    owner: agent-instance-state

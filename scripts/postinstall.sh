@@ -34,13 +34,33 @@ CONFIG_DIR="$(resolve_config_dir)"
 echo "Running Cortex postinstall..."
 
 # ─── 1. Runtime directories ──────────────────────────────────────
+# NOTE: daemon logs + pidfiles/state are STATE-class and NO LONGER scaffolded
+# under the CONFIG root — the config root holds config only. The canonical XDG
+# state tree (~/.local/state/metafactory/cortex/) is established in §1b below.
 mkdir -p "${EVENTS_DIR}/raw" "${EVENTS_DIR}/published" \
          "${CLAUDE_DIR}/logs" "${CLAUDE_DIR}/relay" \
-         "${CONFIG_DIR}/logs" "${CONFIG_DIR}/state" \
          "${HOME}/.local/bin"
 chmod 700 "${EVENTS_DIR}/raw"
 chmod 755 "${EVENTS_DIR}/published"
-echo "  ✓ Runtime directories created (~/.claude/events — hook event buffer; ~/.config/cortex/{logs,state} — daemon logs + state)"
+echo "  ✓ Runtime directories created (~/.claude/events — hook event buffer; ~/.claude/{logs,relay}; ~/.local/bin)"
+
+# ─── 1b. Fresh-install canonical state bootstrap (cortex#2030) ────
+# On a GENUINELY FRESH box (no legacy grove/cortex state tree, no relay pidfile,
+# no prior completion marker), establish the canonical XDG state tree
+# ~/.local/state/metafactory/cortex/ (+ logs/) and write the state-migration
+# completion marker, so the completion-gated resolvers (src/common/state-path.ts)
+# resolve canonical everywhere — a fresh install is then fully XDG (epic #1867
+# DoD). On an UPGRADE box (legacy state present) this writes NOTHING; the gated
+# migration (cortex#1903) owns that cutover. The TS driver carries BOTH the
+# fresh-vs-upgrade decision AND the marker writer (never hand-rolled in bash).
+# Best-effort + non-fatal: a driver/bun hiccup must not abort the whole install
+# (the state tree is otherwise created on first daemon boot).
+if command -v "${BUN_BIN:-bun}" >/dev/null 2>&1; then
+  "${BUN_BIN:-bun}" "${SCRIPT_DIR}/migrate-state-dir-exec.ts" || \
+    echo "  ⚠ state bootstrap skipped (driver error) — canonical state is created on first daemon boot"
+else
+  echo "  ⚠ bun not found — skipped state bootstrap; canonical state tree is created on first daemon boot"
+fi
 
 # ─── 2. Executable permissions ──────────────────────────────────
 # Idempotent: skip chmod when the file is already executable. Both entry
@@ -101,5 +121,5 @@ echo "  ${CORTEX_DIR}/src/settings/cortex-hooks.json is documentation only —"
 echo "  do NOT manually copy it into settings.json (would double-fire hooks)."
 echo ""
 echo "  Next: getting started → https://github.com/the-metafactory/cortex/blob/main/docs/getting-started.md"
-echo "    Fresh install (no ~/.config/cortex yet)? Start with 'cortex stack create'."
+echo "    Fresh install (no cortex config yet)? Start with 'cortex stack create'."
 echo "    Migrating from grove? See the doc's 'Migrating from grove' section instead."
