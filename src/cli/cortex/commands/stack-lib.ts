@@ -401,7 +401,7 @@ attachments:
 
 paths:
   publishedEventsDir: ~/.local/share/metafactory/cortex/events/published
-  logDir: ~/.config/cortex/logs
+  logDir: ~/.local/state/metafactory/cortex/logs
 
 # nats — M2 transport. nats.subjects is the SINGLE place subject overrides live
 # (IAW CFG.b.2). KEEP IT EMPTY ([]) unless you know exactly why — a duplicate

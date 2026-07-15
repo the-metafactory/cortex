@@ -77,6 +77,7 @@ import {
   legacyNetworkCacheDir,
   legacyPidStateDir,
   legacyRelayDir,
+  stateMigrationCompleted,
   STATE_MIGRATION_JOURNAL_NAME,
 } from "./state-path";
 
@@ -512,4 +513,99 @@ function defaultProcAlive(pid: number): boolean {
   } catch (err) {
     return (err as { code?: string }).code !== "ESRCH";
   }
+}
+
+// =============================================================================
+// Fresh-install bootstrap (cortex#2030) — establish canonical state on a
+// genuinely fresh box, WITHOUT the gated migration path
+// =============================================================================
+
+/**
+ * Is ANY legacy STATE tree present on this box? True when a pre-XDG install left
+ * pidfiles (`~/.config/grove/state`), rotating logs (`~/.config/{grove,cortex}/
+ * logs`), the DD-10 network-cache (`~/.config/cortex/network-cache`), or a relay
+ * pidfile (`~/.claude/relay/relay.pid`) behind. This is the fresh-vs-upgrade
+ * discriminator for the postinstall bootstrap (cortex#2030): a genuinely fresh
+ * box has NONE of these; an upgrade box has at least one.
+ *
+ * DIR existence (not file-count) is the signal — a box with a legacy
+ * `~/.config/grove` tree counts as an upgrade even if a particular run left it
+ * empty, and AC2 requires the upgrade path stay hands-off whenever legacy state
+ * is present.
+ *
+ * NOTE the relay probe is the `relay.pid` FILE, not `~/.claude/relay/` itself:
+ * postinstall creates that dir for the (CONFIG-class) relay policy on EVERY
+ * install, so the dir's presence is never a state signal — only the pidfile is.
+ */
+export function legacyStateTreePresent(home?: string): boolean {
+  return (
+    existsSync(legacyPidStateDir(home)) ||
+    existsSync(legacyGroveLogsDir(home)) ||
+    existsSync(legacyCortexLogsDir(home)) ||
+    existsSync(legacyNetworkCacheDir(home)) ||
+    existsSync(join(legacyRelayDir(home), "relay.pid"))
+  );
+}
+
+/** Why {@link bootstrapFreshStateDir} did (or did not) establish canonical state. */
+export type FreshStateBootstrapOutcome =
+  | "bootstrapped" // fresh box → canonical tree (+ logs/) + completion marker written
+  | "already-complete" // a completion marker already exists (idempotent re-install)
+  | "legacy-present"; // an upgrade box → left UNTOUCHED (the gated migration owns it)
+
+export interface FreshStateBootstrapResult {
+  outcome: FreshStateBootstrapOutcome;
+  /** The canonical state root (`~/.local/state/metafactory/cortex`). */
+  canonical: string;
+  /** The completion journal — present only on `bootstrapped`. */
+  journal?: StateMigrationJournal;
+}
+
+/**
+ * Fresh-install STATE bootstrap (cortex#2030). On a GENUINELY FRESH box — no
+ * legacy state tree present ({@link legacyStateTreePresent} false) and no prior
+ * completion marker — establish the canonical state tree
+ * `~/.local/state/metafactory/cortex/` (+ `logs/`) and write the state-migration
+ * completion marker, so the completion-gated resolvers in `state-path.ts` flip to
+ * canonical everywhere and a `CORTEX_XDG_STRICT=1` boot emits zero fallback lines
+ * (the "fresh install fully XDG" DoD leg, epic #1867).
+ *
+ * The marker is written by {@link executeStateDirMigration} — the migrator's OWN
+ * writer — over an EMPTY plan ({@link planStateDirMigration} finds no legacy tree
+ * to carry on a fresh box), NOT a hand-rolled second marker writer: with an empty
+ * plan, `executeStateDirMigration` only `mkdir`s the canonical root and drops the
+ * journal (nothing is carried). Skipping the X-09 service gate + directory-
+ * occupancy precondition is SOUND here precisely because the fresh predicate
+ * proves there is nothing to gate — no legacy state to carry, and (being fresh) no
+ * running daemon whose pidfile identity a canonical flip could invalidate. Those
+ * two gates exist to protect a LIVE fleet during a CARRY; a fresh box has neither
+ * a carry nor a fleet.
+ *
+ * When legacy state IS present this returns `legacy-present` and writes NOTHING —
+ * an upgrade box keeps the gated migration path (cortex#1903), and postinstall
+ * must NEVER write the marker there (AC2). An already-complete marker short-
+ * circuits to `already-complete` so a re-install is idempotent.
+ *
+ * Isolation: every path derives from the injectable `home`, so a scratch `$HOME`
+ * fully sandboxes it — zero real-home access.
+ */
+export function bootstrapFreshStateDir(
+  opts: StateMigrateOptions = {},
+  stampedAt?: string,
+): FreshStateBootstrapResult {
+  const { home } = opts;
+  const canonical = cortexStateDir(home);
+  if (stateMigrationCompleted(home)) return { outcome: "already-complete", canonical };
+  if (legacyStateTreePresent(home)) return { outcome: "legacy-present", canonical };
+  // Genuinely fresh: the plan is empty (no legacy tree to walk), so this only
+  // mkdir's the canonical root and writes the completion marker — the migrator's
+  // own writer, never hand-rolled.
+  const journal = executeStateDirMigration(
+    planStateDirMigration(home !== undefined ? { home } : {}),
+    stampedAt,
+  );
+  // The empty-plan execute makes only the state ROOT; create logs/ too so a fresh
+  // box has the canonical logs dir the (now-removed) postinstall scaffold made.
+  mkdirSync(canonicalLogsDir(home), { recursive: true });
+  return { outcome: "bootstrapped", canonical, journal };
 }
