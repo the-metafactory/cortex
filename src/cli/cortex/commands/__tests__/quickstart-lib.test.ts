@@ -143,7 +143,11 @@ describe("validateEnvContract — shape violations", () => {
 
   test("a 19-digit snowflake (realistic Discord id length) is valid shape", () => {
     const env = validEnv();
-    env.CTX_MY_DISCORD_ID = "1234567890123456789";
+    // Repeated-digit — the confidentiality-gate's platform-snowflake pattern
+    // (17-20 digit run) allow-lists all-same-digit values as an obvious
+    // placeholder; a sequential run like "123456789…" is NOT allow-listed and
+    // trips the gate even though it's just as clearly synthetic.
+    env.CTX_MY_DISCORD_ID = "5555555555555555555";
     const result = validateEnvContract(env);
     expect(result.ok).toBe(true);
   });
