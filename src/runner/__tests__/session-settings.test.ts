@@ -123,6 +123,61 @@ describe("buildCuratedSettings — per-skill grant hook (cortex#710)", () => {
   });
 });
 
+describe("buildCuratedSettings — per-principal MCP guard hook (cortex#2111)", () => {
+  interface Curated {
+    hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]>;
+  }
+
+  const mcpHook = (s: Curated) =>
+    s.hooks.PreToolUse!.find((e) => e.matcher === "mcp__.*");
+
+  test("UNDEFINED mcpGrants → no MCP hook (non-policy path, behaviour unchanged)", () => {
+    const s = buildCuratedSettings("/fake/.claude", undefined, undefined) as unknown as Curated;
+    expect(mcpHook(s)).toBeUndefined();
+  });
+
+  test("EMPTY mcpGrants ([]) STILL registers the hook — deny-all is a decision", () => {
+    // Asymmetry with skills is deliberate: an empty skill list is covered by
+    // the `Skill` deny rule, but NO deny rule can reach un-enumerable mcp__*
+    // names — the hook IS the deny (cortex#2111).
+    const s = buildCuratedSettings("/fake/.claude", undefined, []) as unknown as Curated;
+    const entry = mcpHook(s);
+    expect(entry).toBeDefined();
+    expect(entry!.hooks[0]!.command).toMatch(/\/hooks\/CortexMcpGuard\.hook\.ts$/);
+  });
+
+  test("WITH grants → MCP Guard hook registered under the mcp__.* matcher", () => {
+    const s = buildCuratedSettings("/fake/.claude", undefined, ["gdrive"]) as unknown as Curated;
+    expect(mcpHook(s)).toBeDefined();
+  });
+
+  test("grant patterns are NOT baked into the settings file (they ride the env var)", () => {
+    const s = buildCuratedSettings("/fake/.claude", undefined, ["gdrive", "jira.search"]);
+    expect(JSON.stringify(s)).not.toContain("gdrive");
+  });
+
+  test("skill + mcp hooks coexist independently", () => {
+    const s = buildCuratedSettings("/fake/.claude", ["code-review"], []) as unknown as Curated;
+    expect(s.hooks.PreToolUse!.find((e) => e.matcher === "Skill")).toBeDefined();
+    expect(mcpHook(s)).toBeDefined();
+    expect(s.hooks.PreToolUse!.find((e) => e.matcher === "Bash")).toBeDefined();
+  });
+
+  test("createIsolatedSettings threads mcpGrants into the written file", () => {
+    const iso = createIsolatedSettings("/fake/.claude", undefined, []);
+    try {
+      const written = JSON.parse(readFileSync(iso.settingsPath, "utf8"));
+      const mcp = written.hooks.PreToolUse.find(
+        (e: { matcher?: string }) => e.matcher === "mcp__.*",
+      );
+      expect(mcp).toBeDefined();
+      expect(mcp.hooks[0].command).toContain("CortexMcpGuard.hook.ts");
+    } finally {
+      iso.cleanup();
+    }
+  });
+});
+
 describe("createIsolatedSettings — materialised file + args", () => {
   test("writes a settings file and emits the isolation args", () => {
     const iso = createIsolatedSettings("/fake/.claude");

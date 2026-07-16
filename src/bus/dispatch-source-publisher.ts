@@ -47,6 +47,16 @@ export interface InboundChatDispatchPublishOpts {
    * (it grants nothing — see bus-inbound-sink.ts).
    */
   allowedSkills: string[] | undefined;
+  /**
+   * cortex#2111 — per-principal MCP grant list, emitted as `mcp_grants` on
+   * the payload. `undefined` → omit (non-policy path; runner behaviour
+   * unchanged). Present (even `[]`) → the runner arms the MCP Guard
+   * PreToolUse hook with exactly these patterns (`"*"` | `"<server>"` |
+   * `"<server>.<tool>"`) — deny-by-default over the `mcp__*` namespace.
+   * Emitted even for `[]` (explicit no-MCP) so the runner can distinguish
+   * "no decision" (field absent) from "decided: no MCP".
+   */
+  mcpGrants?: string[];
   timeoutMs: number | undefined;
   cwd: string | undefined;
   additionalArgs: string[] | undefined;
@@ -279,6 +289,12 @@ export async function publishInboundChatDispatchEnvelope(
     // distinguish "no decision" (field absent) from "decided: no skills".
     ...(opts.allowedSkills !== undefined && {
       allowed_skills: opts.allowedSkills,
+    }),
+    // cortex#2111 — carry the per-principal MCP grant list when the source
+    // decided one. Emitted even for `[]` (explicit no-MCP) so the runner can
+    // distinguish "no decision" (field absent) from "decided: deny all MCP".
+    ...(opts.mcpGrants !== undefined && {
+      mcp_grants: opts.mcpGrants,
     }),
     ...(opts.allowedDirs.length > 0 && { allowed_dirs: opts.allowedDirs }),
     ...(opts.timeoutMs !== undefined && { timeout_ms: opts.timeoutMs }),

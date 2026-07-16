@@ -501,6 +501,8 @@ export class DispatchHandler extends EventEmitter {
     allowedTools?: string[];
     /** cortex#710 — per-skill grant list (see InboundChatDispatchPublishOpts). */
     allowedSkills: string[] | undefined;
+    /** cortex#2111 — per-principal MCP grant list (see InboundChatDispatchPublishOpts). */
+    mcpGrants?: string[];
     timeoutMs: number | undefined;
     cwd: string | undefined;
     additionalArgs: string[] | undefined;
@@ -1000,10 +1002,24 @@ export class DispatchHandler extends EventEmitter {
         : undefined;
       const principal = msg.authorName;
 
+      // cortex#2111 — per-principal MCP grants. Defined (even []) on every
+      // policy-resolved decision; the CC session registers the MCP Guard
+      // PreToolUse hook with exactly this list (deny-by-default over the
+      // `mcp__*` namespace, which CLAUDE_TOOL_INVENTORY inversion can never
+      // reach). Threaded to all dispatch paths below.
+      const mcpGrants = access.mcpGrants;
+
       // WEB-2 / B1 — per-agent --strict-mcp-config. Computed alongside
       // effectiveDisallowed so all dispatch paths (bus sync, direct sync,
       // async, team) carry it uniformly via the effectiveAdditionalArgs param.
-      const effectiveAdditionalArgs = targetAgent?.strictMcpConfig === true
+      // cortex#2111 — a principal with ZERO MCP grants gets the same
+      // structural flag: no MCP servers load at all for their session (the
+      // MCP Guard hook stays armed as the in-session backstop). A principal
+      // with partial grants must NOT get the flag — their granted servers
+      // have to load; the hook enforces the per-server/per-tool boundary.
+      const strictMcp = targetAgent?.strictMcpConfig === true ||
+        mcpGrants?.length === 0;
+      const effectiveAdditionalArgs = strictMcp
         ? [...this.config.claude.additionalArgs, "--strict-mcp-config"]
         : this.config.claude.additionalArgs;
 
@@ -1029,6 +1045,10 @@ export class DispatchHandler extends EventEmitter {
           // applies {broad Skill allow + gate hook} for grants, default-deny
           // otherwise. `access.allowedSkills` is undefined → field omitted.
           allowedSkills: skillGrants,
+          // cortex#2111 — carry the per-principal MCP grant list so the
+          // runner harness arms the MCP Guard (deny-by-default over mcp__*).
+          // undefined → field omitted (non-policy behaviour unchanged).
+          mcpGrants,
           timeoutMs: this.config.claude.timeoutMs,
           cwd: effectiveCwd,
           additionalArgs: effectiveAdditionalArgs,
@@ -1057,13 +1077,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants);
           break;
       }
     } catch (error) {
@@ -1105,6 +1125,8 @@ export class DispatchHandler extends EventEmitter {
     allowedTools?: string[],
     /** WEB-2 / B1 — pre-computed effective additionalArgs (may include --strict-mcp-config). */
     additionalArgs?: string[],
+    /** cortex#2111 — per-principal MCP grants (defined ⇒ deny-by-default over mcp__*). */
+    mcpGrants?: string[],
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
 
@@ -1146,6 +1168,9 @@ export class DispatchHandler extends EventEmitter {
       allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
+      // cortex#2111 — arm the MCP Guard when the policy decision carried a
+      // grant list (defined ⇒ deny-by-default over mcp__*).
+      ...(mcpGrants !== undefined && { mcpGrants }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       cwd,
       bashAllowlist,
@@ -1467,6 +1492,8 @@ export class DispatchHandler extends EventEmitter {
     allowedTools?: string[],
     /** WEB-2 / B1 — pre-computed effective additionalArgs (may include --strict-mcp-config). */
     additionalArgs?: string[],
+    /** cortex#2111 — per-principal MCP grants (defined ⇒ deny-by-default over mcp__*). */
+    mcpGrants?: string[],
   ): Promise<void> {
     const taskId = `task-${randomUUID()}`;
 
@@ -1489,6 +1516,9 @@ export class DispatchHandler extends EventEmitter {
       allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
+      // cortex#2111 — arm the MCP Guard when the policy decision carried a
+      // grant list (defined ⇒ deny-by-default over mcp__*).
+      ...(mcpGrants !== undefined && { mcpGrants }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       cwd,
       project: groveProject,
@@ -1605,6 +1635,8 @@ export class DispatchHandler extends EventEmitter {
     allowedTools?: string[],
     /** WEB-2 / B1 — pre-computed effective additionalArgs (may include --strict-mcp-config). */
     additionalArgs?: string[],
+    /** cortex#2111 — per-principal MCP grants (defined ⇒ deny-by-default over mcp__*). */
+    mcpGrants?: string[],
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
 
@@ -1628,6 +1660,9 @@ export class DispatchHandler extends EventEmitter {
       allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
+      // cortex#2111 — every team-member session inherits the invoking
+      // principal's MCP grant list (defined ⇒ deny-by-default over mcp__*).
+      ...(mcpGrants !== undefined && { mcpGrants }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       timeoutMs: this.config.claude.asyncTimeoutMs,
       bashGuardDisabled,

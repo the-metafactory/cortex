@@ -363,6 +363,16 @@ export class ClaudeCodeHarness implements SessionHarness {
       if (!disallowedTools.includes("Skill")) disallowedTools.push("Skill");
     }
 
+    // cortex#2111 — per-principal MCP grants. Pass-through: a DEFINED list
+    // (even []) makes cc-session register the MCP Guard PreToolUse hook
+    // (matcher `mcp__.*`) with exactly these patterns and export them via
+    // CORTEX_MCP_GRANTS — deny-by-default over the un-enumerable `mcp__*`
+    // namespace. `undefined` → no hook, existing behaviour (a request that
+    // never went through resolvePolicyAccess).
+    if (req.mcpGrants !== undefined) {
+      opts.mcpGrants = [...req.mcpGrants];
+    }
+
     if (allowedTools.length > 0) {
       opts.allowedTools = allowedTools;
     }

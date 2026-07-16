@@ -82,6 +82,14 @@ provides:
     # reference the installed absolute path.
     - source: src/runner/hooks/skill-guard.hook.ts
       target: ~/.claude/hooks/CortexSkillGuard.hook.ts
+    # cortex#2111 — per-principal MCP grant PreToolUse hook. Same posture as
+    # the Skill Guard above: symlink ONLY (no `hooks:` entry) so it is NEVER
+    # registered in the principal's GLOBAL settings.json — it would otherwise
+    # gate the principal's own MCP tools. It is registered PER-SESSION in the
+    # curated `--settings` file (session-settings.ts, matcher `mcp__.*`) for
+    # bot sessions whose policy decision carried an MCP grant list.
+    - source: src/runner/hooks/mcp-guard.hook.ts
+      target: ~/.claude/hooks/CortexMcpGuard.hook.ts
     # cortex#1676: deliberately NO `hooks/lib` symlink under ~/.claude. Hook
     # files import their lib modules with paths relative to their own file
     # (e.g. `./lib/...`, or `../../taps/cc-events/hooks/lib/...` for

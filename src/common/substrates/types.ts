@@ -389,6 +389,23 @@ export interface DispatchRequest {
    */
   allowedSkills?: string[];
   /**
+   * cortex#2111 — per-principal MCP grant list. Distinct from `tools`: MCP
+   * tool names (`mcp__*`) are not enumerable at build time (they depend on
+   * which servers the host has connected), so they can never appear in the
+   * inventory-inverted deny list; the namespace is gated by the MCP Guard
+   * PreToolUse hook instead.
+   *
+   * Semantics, mirroring `AccessDecision.mcpGrants`:
+   *   - `undefined` → no decision carried; the harness leaves MCP behaviour
+   *     unchanged (no MCP hook registered).
+   *   - `[]` → explicit deny-all: the guard denies every `mcp__*` call.
+   *   - `[...]` → allow exactly the covered servers/tools (patterns
+   *     `"*"` | `"<server>"` | `"<server>.<tool>"`, lowercase).
+   *
+   * Non-CC harnesses (bus-peer, future) ignore this field.
+   */
+  mcpGrants?: string[];
+  /**
    * Pluggable context bundle. The runner attaches whatever the agent's
    * trigger source produced (Discord message history, GitHub PR diffs,
    * attachments, environment hints). The harness handles whichever

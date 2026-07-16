@@ -123,6 +123,13 @@ export interface AgentTeamOpts {
    * skill overrides are out of scope; the whole team shares the grant set.
    */
   allowedSkills?: string[];
+  /**
+   * cortex#2111 — per-principal MCP grant list, propagated to ALL team
+   * sessions (moderator + participants + synthesis) so a granted team
+   * inherits the MCP Guard deny-by-default like any other session.
+   * Undefined → no MCP hook (non-policy path, behaviour unchanged).
+   */
+  mcpGrants?: string[];
   allowedDirs?: string[];
   timeoutMs?: number;
   /** Bash guard config — propagated to all team sessions (moderator + participants) */
@@ -589,6 +596,7 @@ export class AgentTeam extends EventEmitter {
       allowedTools: this.opts.allowedTools,
       disallowedTools: this.opts.disallowedTools,
       ...(this.opts.allowedSkills !== undefined && { allowedSkills: this.opts.allowedSkills }),
+      ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
       allowedDirs: this.opts.allowedDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
@@ -710,6 +718,7 @@ export class AgentTeam extends EventEmitter {
       allowedTools: config.allowedTools ?? this.opts.allowedTools,
       disallowedTools: config.disallowedTools ?? this.opts.disallowedTools,
       ...(this.opts.allowedSkills !== undefined && { allowedSkills: this.opts.allowedSkills }),
+      ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
       allowedDirs: config.dirs ?? this.opts.allowedDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
@@ -890,6 +899,7 @@ export class AgentTeam extends EventEmitter {
       allowedTools: this.opts.allowedTools,
       disallowedTools: this.opts.disallowedTools,
       ...(this.opts.allowedSkills !== undefined && { allowedSkills: this.opts.allowedSkills }),
+      ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
       allowedDirs: this.opts.allowedDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,

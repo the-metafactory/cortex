@@ -237,6 +237,12 @@ export interface DispatchTaskReceivedPayload {
    * grant exactly those skills via the Skill Guard PreToolUse hook.
    */
   allowed_skills?: string[];
+  /**
+   * cortex#2111 — per-principal MCP grant list. `undefined` → no MCP hook
+   * (behaviour unchanged); `[]` → deny every `mcp__*` tool; `[...]` → allow
+   * exactly the covered servers/tools via the MCP Guard PreToolUse hook.
+   */
+  mcp_grants?: string[];
   allowed_dirs?: string[];
   timeout_ms?: number;
   cwd?: string;
@@ -1276,6 +1282,11 @@ function buildDispatchRequest(
     // Omitted when the payload didn't carry it (→ harness default-deny).
     ...(payload.allowed_skills !== undefined && {
       allowedSkills: payload.allowed_skills,
+    }),
+    // cortex#2111 — per-principal MCP grants ride `mcp_grants`. Omitted when
+    // the payload didn't carry it (→ harness leaves MCP behaviour unchanged).
+    ...(payload.mcp_grants !== undefined && {
+      mcpGrants: payload.mcp_grants,
     }),
     context: hasEnvContext ? [{ kind: "env", data: envContext }] : [],
     agent: {
