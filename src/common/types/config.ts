@@ -9,6 +9,11 @@
 import { z } from "zod/v4";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
+// API-P1.3 (#2063) — the machine-layer model-provider block. Imported from the
+// dependency-free leaf (NOT `./cortex-config`, which imports THIS file — that
+// would be an eval-order cycle) so both top-level config shapes can carry an
+// `inference` block. `cortex-config.ts` re-exports the same symbol.
+import { InferenceConfigSchema } from "../inference/inference-config-schema";
 import { checkLoopbackSideband, DEFAULT_SIDEBAND_URL } from "../sideband/loopback";
 
 // =============================================================================
@@ -712,6 +717,19 @@ export const AgentConfigSchema = z.object({
       endpoint: z.string(),
     })).default([]),
   }).default(emptyDefault()),
+
+  /**
+   * API-P1.3 (#2063) — model-provider config (`providers` + `profiles`), the
+   * machine-layer block the `ApiAgentHarness` resolves `substrate: api-agent`
+   * agents' `inferenceProfile` against. MIRROR of `CortexConfigSchema.inference`
+   * (see `./cortex-config.ts` for the full security posture — `env:NAME` secret
+   * references, reviewed egress `baseUrl`, policy-bearing `modelClass`).
+   * OPTIONAL (not defaulted) so every pre-existing hand-built `AgentConfig`
+   * literal + fixture stays valid without change — an absent block reads as
+   * `undefined`, and boot substitutes an empty registry (any `api-agent`
+   * dispatch then fails closed at the harness).
+   */
+  inference: InferenceConfigSchema.optional(),
 
   /** cortex#1792 (S6, ADR-0024 D3/OQ6/OQ9) — external plugin-bundle loading
    *  gate (`system.plugins.external`), default off. MIRROR: see

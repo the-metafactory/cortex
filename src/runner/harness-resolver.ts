@@ -21,12 +21,13 @@
 //                                        `substrate`, **defaulting to
 //                                        `claude-code` when unset** (D3).
 //
-// The ordinary-dispatch `switch` is deliberately structured so a future
-// `api-agent` substrate (API-P1.3) is a ONE-LINE addition — a new `case`
-// alongside `claude-code`. Do NOT add `api-agent` here (out of scope for
-// P0.5); today every substrate value resolves to `ClaudeCodeHarness`,
-// exactly as the pre-extraction ternary did (it never consulted the
-// substrate at all — all non-delegate dispatches went to claude-code).
+// The ordinary-dispatch `switch` selects on the receiving agent's configured
+// `substrate`, defaulting to `claude-code` when unset. API-P1.3 added the
+// `api-agent` case (direct-API harness resolved through the injected
+// `InferenceRegistry`); every other substrate value still resolves to
+// `ClaudeCodeHarness`, so a claude-code agent (or one with no substrate) behaves
+// exactly as the pre-extraction ternary did (all non-delegate dispatches →
+// claude-code).
 
 import type { AgentRuntime } from "../common/types/cortex-config";
 import type { DistributionMode } from "../bus/myelin/envelope-validator";
@@ -36,6 +37,8 @@ import {
   ClaudeCodeHarness,
   type CCSessionFactory,
 } from "../substrates/claude-code/harness";
+import { ApiAgentHarness } from "../substrates/api-agent/harness";
+import { InferenceRegistry } from "../common/inference/registry";
 import { AgentTeamHarness, type AgentTeamFactory } from "./agent-team";
 
 /**
@@ -56,6 +59,14 @@ export interface HarnessResolverDeps {
   source: SystemEventSource;
   ccSessionFactory: CCSessionFactory | undefined;
   agentTeamFactory: AgentTeamFactory | undefined;
+  /**
+   * API-P1.3 — the inference registry the `api-agent` substrate resolves its
+   * profile through. Optional so the pre-existing claude-code / delegate call
+   * sites and tests construct the resolver unchanged; when an `api-agent`
+   * dispatch arrives with no registry wired, the harness is built against an
+   * empty registry and fails closed (unknown-profile) at dispatch.
+   */
+  inferenceRegistry?: InferenceRegistry;
 }
 
 /**
@@ -97,11 +108,31 @@ export class DefaultHarnessResolver implements HarnessResolver {
     // behaviour (all non-delegate dispatches → ClaudeCodeHarness).
     const substrate = agent?.substrate ?? "claude-code";
     switch (substrate) {
-      // API-P1.3 will add: case "api-agent": return this.apiAgentHarness();
+      case "api-agent":
+        return this.apiAgentHarness(agent);
       case "claude-code":
       default:
         return this.claudeCodeHarness();
     }
+  }
+
+  /**
+   * API-P1.3 — the direct-API substrate. Reads the receiving agent's
+   * `inferenceProfile` (the harness fails closed when it is absent) and resolves
+   * it through the injected registry. When no registry was wired, use an empty
+   * one so an `api-agent` dispatch fails closed (`unknown-profile`) rather than
+   * throwing — the claude-code default path is unaffected.
+   */
+  private apiAgentHarness(agent: AgentRuntime | undefined): SessionHarness {
+    const { source } = this.deps;
+    const registry =
+      this.deps.inferenceRegistry ??
+      new InferenceRegistry({ providers: {}, profiles: {} }, {});
+    return new ApiAgentHarness({
+      source,
+      registry,
+      inferenceProfile: agent?.inferenceProfile,
+    });
   }
 
   private agentTeamHarness(): SessionHarness {

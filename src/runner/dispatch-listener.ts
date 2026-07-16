@@ -81,7 +81,12 @@ import {
   resolveSourceNetwork,
   subjectMatches,
 } from "../bus/surface-router";
-import type { PolicyFederated, PolicyFederatedNetwork } from "../common/types/cortex-config";
+import type {
+  AgentRuntime,
+  PolicyFederated,
+  PolicyFederatedNetwork,
+} from "../common/types/cortex-config";
+import type { InferenceRegistry } from "../common/inference/registry";
 import type {
   SystemAccessDeniedReason,
   SystemAccessSignedBy,
@@ -404,6 +409,22 @@ export interface DispatchListenerOptions {
    * that supply only one configure deliberately incomplete state).
    */
   receivingAgentId?: string;
+  /**
+   * API-P1.3 (#2063) — receiving agents' runtime configs indexed by agent id,
+   * used to thread the DISPATCHED-TO agent's `substrate` + `inferenceProfile`
+   * into the harness resolver. When present, the handler looks up the
+   * `receivingAgentId`'s `AgentRuntime` here and passes it to
+   * `HarnessResolver.resolve(...)` so `substrate: api-agent` agents dispatch
+   * through the `ApiAgentHarness`. Absent (or an agent with no `substrate`)
+   * preserves the pre-P1.3 behaviour — every ordinary dispatch → claude-code.
+   */
+  agentRuntimesById?: Map<string, AgentRuntime>;
+  /**
+   * API-P1.3 (#2063) — the inference registry the `api-agent` substrate resolves
+   * its profile through. Threaded to `HarnessResolver`. Absent on stacks with no
+   * `inference` config → an `api-agent` dispatch fails closed at the harness.
+   */
+  inferenceRegistry?: InferenceRegistry;
   /**
    * cortex#480 — the receiving stack's signing DID (e.g.
    * `did:mf:andreas-meta-factory`). Threaded through to
@@ -801,6 +822,8 @@ export function createDispatchListener(
     policyEngine,
     trustResolver,
     receivingAgentId,
+    agentRuntimesById,
+    inferenceRegistry,
     principalId,
     stackIdentity,
     stackNKeyPub,
@@ -882,6 +905,8 @@ export function createDispatchListener(
         rejectEmpty,
         principalId,
         receivingAgentId,
+        agentRuntimesById,
+        inferenceRegistry,
         stackIdentity,
         stackNKeyPub,
         resignSigner,
@@ -1309,6 +1334,10 @@ interface DispatchHandlerContext {
   rejectEmpty: boolean;
   principalId: string | undefined;
   receivingAgentId: string | undefined;
+  /** API-P1.3 (#2063) — receiving agents' runtime configs by id, for substrate selection. */
+  agentRuntimesById: Map<string, AgentRuntime> | undefined;
+  /** API-P1.3 (#2063) — inference registry the `api-agent` substrate resolves through. */
+  inferenceRegistry: InferenceRegistry | undefined;
   /** cortex#480 — receiving stack's signing DID for own-stack trust. */
   stackIdentity: string | undefined;
   /** cortex#480 — receiving stack's NKey pubkey for crypto-verify pass. */
@@ -1382,6 +1411,8 @@ async function handleDispatchEnvelope(
     rejectEmpty,
     principalId,
     receivingAgentId,
+    agentRuntimesById,
+    inferenceRegistry,
     stackIdentity,
     stackNKeyPub,
     resignSigner,
@@ -2074,18 +2105,24 @@ async function handleDispatchEnvelope(
   }
 
   // API-P0.5 (#2060, D3) — harness selection lives in the HarnessResolver
-  // seam, not inline. Construction is byte-identical to the pre-extraction
-  // ternary. The receiving agent's `AgentRuntime` is not threaded into this
-  // seam today (only `receivingAgentId`), so we pass `undefined` and the
-  // resolver falls to the `claude-code` default for ordinary dispatch (D3);
-  // API-P1.3 threads the real agent when it wires the `api-agent` substrate.
+  // seam, not inline. API-P1.3 (#2063) threads the DISPATCHED-TO agent's
+  // runtime config into the seam so `substrate: api-agent` agents resolve
+  // through the `ApiAgentHarness`. We look the receiving agent up by
+  // `receivingAgentId` in the runtime map (both may be absent — legacy /
+  // single-agent stacks — in which case `receivingAgent` is undefined and the
+  // resolver falls to the `claude-code` default, byte-identical to pre-P1.3).
+  const receivingAgent =
+    receivingAgentId !== undefined
+      ? agentRuntimesById?.get(receivingAgentId)
+      : undefined;
   const harnessResolver = new DefaultHarnessResolver({
     source,
     ccSessionFactory,
     agentTeamFactory,
+    ...(inferenceRegistry !== undefined && { inferenceRegistry }),
   });
   const harness: SessionHarness = harnessResolver.resolve(
-    undefined,
+    receivingAgent,
     envelope.distribution_mode,
   );
 
@@ -2101,7 +2138,9 @@ async function handleDispatchEnvelope(
     "session-spawning",
     "info",
     traceCtx,
-    envelope.distribution_mode === "delegate" ? "agent-team" : "claude-code",
+    // API-P1.3 — trace the ACTUAL resolved substrate (was hard-coded to
+    // delegate?agent-team:claude-code; now `api-agent` is a live third value).
+    harness.id,
   );
 
   // Drain the harness's lifecycle stream onto the bus. The harness

@@ -144,6 +144,7 @@ import type { PluginRuntimeDeps, RendererHandle } from "./gateway/plugin-runtime
 import { deriveStackId, DEFAULT_STREAM_MAX_BYTES } from "./common/types/cortex-config";
 import type {
   Agent,
+  AgentRuntime,
   BusConfig,
   Policy,
   ReflexActivationConfig,
@@ -250,6 +251,9 @@ import type { Surfaces } from "./common/types/surfaces";
 import type { SurfaceGateway } from "./gateway/surface-gateway";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
+// API-P1.3 (#2063) — build the inference registry (real provider factories
+// injected) so `substrate: api-agent` agents resolve their `inferenceProfile`.
+import { createInferenceRegistry } from "./substrates/api-agent/provider-factories";
 // S2 (cortex#1160) — per-agent chat dispatch listeners derive their scoped
 // subscription subject (`local.{principal}.{stack}.tasks.@{enc-did}.>`) via the
 // canonical myelin subject builder so the subscribe-side pattern matches the
@@ -3684,10 +3688,26 @@ export async function startCortex(
   // Shared options every listener carries — only `receivingAgentId` + the
   // scoped `subjects` differ per agent. Built once so the per-agent wiring
   // can't drift between listeners.
+  // API-P1.3 (#2063) — thread receiving agents' runtime configs + the inference
+  // registry into the dispatch listener so `substrate: api-agent` agents resolve
+  // through the `ApiAgentHarness`. The map is the BOOT snapshot of `mergedAgents`
+  // (agents with a `runtime` block only); the registry wires the real provider
+  // factories over the machine-layer `inference` config (empty → any `api-agent`
+  // dispatch fails closed at the harness). claude-code agents are untouched.
+  const agentRuntimesById = new Map<string, AgentRuntime>();
+  for (const a of mergedAgents) {
+    if (a.runtime !== undefined) agentRuntimesById.set(a.id, a.runtime);
+  }
+  const inferenceRegistry = createInferenceRegistry(
+    config.inference ?? { providers: {}, profiles: {} },
+  );
+
   const sharedDispatchListenerOpts = {
     runtime,
     source: systemEventSource,
     stack: derivedStack.stack,
+    agentRuntimesById,
+    inferenceRegistry,
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,
     // TC-0 (#628) — verifier knobs resolved from `security.signing`. `off`/
