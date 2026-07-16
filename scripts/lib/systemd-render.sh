@@ -22,12 +22,14 @@
 #   source "${SCRIPT_DIR}/lib/systemd-render.sh"
 #   render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 #
-# Functions never write outside ${UNIT_DIR}, the per-stack workspace/log dirs
-# under ${HOME}/.local/{share,state}, and ${HOME}/.local/state/nats/logs (the
-# linger/symlink checks are read-only).
+# Functions never write outside ${UNIT_DIR}, ${HOME}/.local/share/metafactory/
+# cortex/<slug>/workspace (per discovered stack), and ${HOME}/.local/state/nats/
+# logs. Deliberately NOT ${HOME}/.local/state/metafactory/cortex — that tree's
+# creation is postinstall.sh's §1b state bootstrap's authority alone (see
+# ensure_stack_log_dirs' docstring); the linger/symlink checks are read-only.
 #
-# PR#2103 adversarial review (two rounds) found this file's first cut
-# unsafe in three ways, all fixed here:
+# PR#2103 adversarial review (three rounds) found this file's first cut unsafe
+# in four ways, all fixed here:
 #   - the shipped units could not start on a fresh host at all (WorkingDirectory/
 #     StandardOutput both fail-closed on a missing directory, BEFORE any exec
 #     command including ExecStartPre runs — see render_cortex_systemd_units'
@@ -37,7 +39,13 @@
 #     (see run_with_timeout + the guarded call sites below);
 #   - render_systemd_unit clobbered a hand-authored unit unconditionally —
 #     Appendix A explicitly invites hand-copying these exact files, so a
-#     marker-less dst is now left untouched (see render_systemd_unit).
+#     marker-less dst is now left untouched (see render_systemd_unit);
+#   - the first fix for the StandardOutput/EXIT_STDOUT half of the fresh-host
+#     bug unconditionally created the CANONICAL cortex state tree, which broke
+#     the XDG wave-5 gated-migration invariant that an upgrade box gets NO
+#     canonical-tree writes from postinstall until cortex#1903's migration
+#     runs (see ensure_stack_log_dirs' docstring — this class of bug is why
+#     the existing test suite matters even for code that looks unrelated).
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # plist-render.sh provides discover_stack_slugs — stack enumeration is shared,
@@ -174,33 +182,43 @@ warn_systemd_linger() {
   return 0
 }
 
-# Ensure the two host-wide log dirs both units' `StandardOutput=`/
-# `StandardError=append:` lines write into actually exist, at RENDER time —
-# not via the units' own `ExecStartPre=mkdir -p` lines, which CANNOT do this
-# job on a cold start.
+# Ensure the nats-server log dir both units' (well, nats@.service's own)
+# `StandardOutput=`/`StandardError=append:` lines write into actually
+# exists, at RENDER time — not via the unit's own `ExecStartPre=mkdir -p`
+# line, which CANNOT do this job on a cold start.
 #
 # Verified empirically (systemd 257, Debian trixie AND independently on
 # Ubuntu 22.04 / systemd 249): `StandardOutput=append:<path>` is opened
 # BEFORE any exec command of the unit runs, including ExecStartPre — a
 # missing log dir fails the unit outright (systemd exit reason
 # EXIT_STDOUT/209) before ExecStartPre's own `mkdir -p` of that same
-# directory ever gets to execute. The ExecStartPre lines stay in both unit
-# files as belt-and-braces (a harmless no-op once the dir already exists,
-# and they DO help if a warm dir gets deleted between a stop and the next
-# stop — just never on the very first cold start), but the actual
-# cold-start guarantee has to come from here.
+# directory ever gets to execute. The ExecStartPre line stays in the unit
+# file as belt-and-braces (a harmless no-op once the dir already exists, and
+# it DOES help if a warm dir gets deleted between a stop and the next start —
+# just never on the very first cold start), but the actual cold-start
+# guarantee has to come from here: nothing else in the codebase creates
+# `~/.local/state/nats/logs` (nats-server is an external dependency;
+# README-AGENTS.md Appendix A §A.1 hand-creates it for the manual path, this
+# is the arc-managed equivalent).
 #
-# `~/.local/state/nats/logs` — nothing else in the codebase creates this
-# (nats-server is an external dependency; README-AGENTS.md Appendix A §A.1
-# hand-creates it for the manual path, this is the arc-managed equivalent).
-# `~/.local/state/metafactory/cortex/logs` — postinstall.sh's state-bootstrap
-# (§1b, migrate-state-dir-exec.ts) already creates this on install, but only
-# on a genuinely fresh box and only via a bun subprocess that's allowed to
-# no-op on error; recreating it here too makes the guarantee deterministic
-# and host-independent of that script having run first or succeeded.
+# `~/.local/state/metafactory/cortex/logs` is DELIBERATELY NOT created here,
+# even though cortex@.service needs the identical guarantee. That directory
+# is part of the CANONICAL CORTEX STATE TREE, whose creation is owned
+# end-to-end by postinstall.sh's §1b state bootstrap (migrate-state-dir-exec.ts)
+# under the XDG wave-5 gated migration (cortex#1903) — verified via
+# scripts/__tests__/postinstall-state-bootstrap.sh's own invariant: on an
+# UPGRADE box (legacy grove state present, not yet migrated) postinstall must
+# write NOTHING state-related, no canonical tree at all, until the gated
+# migration explicitly runs. This function creating even just the logs/
+# subdirectory unconditionally would violate that invariant (confirmed: it
+# broke that exact test in PR#2103 review round 3 before this comment was
+# written) — a genuinely fresh box gets the tree from §1b already; an
+# upgrade-in-progress box is intentionally left alone by both. The residual
+# gap (a NOT-YET-migrated upgrade box trying to `enable` a NEW stack before
+# cortex#1903's migration completes) belongs to that migration, not this
+# renderer duplicating its authority.
 ensure_stack_log_dirs() {
   mkdir -p "${HOME}/.local/state/nats/logs"
-  mkdir -p "${HOME}/.local/state/metafactory/cortex/logs"
 }
 
 # Ensure the per-stack workspace dir exists for every discovered stack
@@ -228,11 +246,13 @@ ensure_stack_workspace_dirs() {
 }
 
 # Render nats@.service + cortex@.service into UNIT_DIR from the templates
-# checked in under CORTEX_DIR/src/services/, ensure the host-wide log dirs
-# and every discovered stack's workspace dir exist (see ensure_stack_log_dirs
-# / ensure_stack_workspace_dirs), then run the bun-guard-analogue symlink
-# check and the linger check. `systemctl --user daemon-reload` runs at most
-# once, and only when at least one unit's content actually changed.
+# checked in under CORTEX_DIR/src/services/, ensure the nats log dir and every
+# discovered stack's workspace dir exist (see ensure_stack_log_dirs /
+# ensure_stack_workspace_dirs — the cortex log dir is deliberately NOT this
+# function's job, see ensure_stack_log_dirs' docstring), then run the
+# bun-guard-analogue symlink check and the linger check. `systemctl --user
+# daemon-reload` runs at most once, and only when at least one unit's content
+# actually changed.
 #
 # Never aborts the caller: `daemon-reload` is guarded (a transient bus
 # failure prints a warning and continues — postinstall.sh/postupgrade.sh both

@@ -225,9 +225,15 @@ rm -rf "${HOME}/.local/state/nats" "${HOME}/.local/state/metafactory"
 ensure_stack_log_dirs
 assert_true "nats log dir created (nothing else creates this on Linux)" \
   test -d "${HOME}/.local/state/nats/logs"
-assert_true "cortex log dir created (deterministic, independent of postinstall's bootstrap)" \
+# The cortex log dir is DELIBERATELY NOT this function's job — see its
+# docstring. Regression case: an earlier version of this function created it
+# unconditionally, which broke scripts/__tests__/postinstall-state-bootstrap.sh's
+# invariant that an UPGRADE box gets ZERO writes to the canonical cortex state
+# tree from postinstall until cortex#1903's gated migration runs (PR#2103
+# review round 3, caught live in CI's plain Test job).
+assert_false "cortex log dir NOT created here (owned by postinstall's §1b + the XDG wave-5 gate)" \
   test -d "${HOME}/.local/state/metafactory/cortex/logs"
-# Idempotent — a second call on already-existing dirs is a clean no-op.
+# Idempotent — a second call on an already-existing dir is a clean no-op.
 assert_true "re-running is a clean no-op" ensure_stack_log_dirs
 
 # ─── Section 4: render_cortex_systemd_units — orchestration ───────
@@ -272,9 +278,9 @@ assert_eq "systemd-less Linux → zero systemctl calls" "0" "$(wc -l < "${SYSTEM
 export SYSTEMD_HOST_MARKER="${TMPHOME}/fake-run-systemd-system"
 
 # Real systemd Linux host, fresh unit dir → both units rendered, exactly one
-# daemon-reload call (not one per unit), the two host-wide log dirs exist, AND
-# both discovered stacks' workspace dirs exist (defense-in-depth pre-creation
-# — the units also self-heal this via the "-" WorkingDirectory prefix, but a
+# daemon-reload call (not one per unit), the nats log dir exists, AND both
+# discovered stacks' workspace dirs exist (defense-in-depth pre-creation — the
+# units also self-heal this via the "-" WorkingDirectory prefix, but a
 # proactive render-time create means an arc-managed upgrade never needs to
 # fall back to that path at all).
 reset_unit_dir
@@ -286,7 +292,12 @@ assert_file_exists "cortex@.service rendered" "${UNIT_DIR}/cortex@.service"
 assert_eq "fresh render (2 units changed) → exactly 1 daemon-reload call" "1" \
   "$(grep -c '^systemctl --user daemon-reload$' "${SYSTEMCTL_LOG}")"
 assert_true "render creates the nats log dir" test -d "${HOME}/.local/state/nats/logs"
-assert_true "render creates the cortex log dir" test -d "${HOME}/.local/state/metafactory/cortex/logs"
+# Regression guard (PR#2103 review round 3): render_cortex_systemd_units must
+# NEVER create the canonical cortex state tree — that's postinstall.sh's §1b
+# / the XDG wave-5 gated migration's authority alone, on EVERY host shape,
+# fresh or upgrade (see ensure_stack_log_dirs' docstring).
+assert_false "render does NOT create the cortex canonical state tree" \
+  test -d "${HOME}/.local/state/metafactory/cortex"
 assert_true "render also creates 'work' stack's workspace dir" \
   test -d "${HOME}/.local/share/metafactory/cortex/work/workspace"
 assert_true "render also creates 'halden' stack's workspace dir" \
