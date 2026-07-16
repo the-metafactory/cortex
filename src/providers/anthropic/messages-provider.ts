@@ -28,7 +28,27 @@ import { mapAnthropicMessagesStream } from "./stream-parser";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_ANTHROPIC_VERSION = "2023-06-01";
-const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+/**
+ * The `max_tokens` cortex sends when a profile omits `maxOutputTokens` (issue
+ * #2114).
+ *
+ * WHY A DEFAULT EXISTS AT ALL — and only here. The Anthropic Messages API makes
+ * `max_tokens` a REQUIRED body field: omitting it is a 400, so cortex cannot
+ * pass the omission through the way the OpenAI-compatible adapter can (there
+ * the field is simply left off and the server's own default applies). Some
+ * value must be chosen; the only question is whether it is chosen silently.
+ *
+ * It is therefore DECLARED, not silent: exported and named so the value is
+ * greppable, assertable from a test, and documented in the design's
+ * §Configuration table rather than buried as a magic number at a call site.
+ * Overridable per provider instance via `defaultMaxOutputTokens`.
+ *
+ * A profile that states `maxOutputTokens` always wins — this constant applies
+ * ONLY to profiles that omit it. Prefer stating the bound explicitly in the
+ * profile: it is the principal's declared cost/length bound, and 4096 is a
+ * conservative floor well below what current Anthropic models support.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 /** Constructor options for {@link AnthropicMessagesProvider}. */
 export interface AnthropicMessagesProviderOptions {

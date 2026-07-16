@@ -104,7 +104,20 @@ export const InferenceProfileSchema = z
     provider: z.string().min(1),
     /** Provider-neutral model id. */
     model: z.string().min(1),
-    /** Upper bound on generated tokens. Optional. */
+    /**
+     * Upper bound on generated tokens — the principal's declared cost/length
+     * bound. Reaches the wire as `max_tokens` on BOTH protocols (issue #2114).
+     *
+     * Optional, and what omission means is PER PROTOCOL (it is not uniform,
+     * because the two APIs differ on whether the field is required):
+     *   - `anthropic-messages`: the API REQUIRES `max_tokens`, so cortex sends
+     *     its declared default — `DEFAULT_MAX_OUTPUT_TOKENS` (4096) in
+     *     `src/providers/anthropic/messages-provider.ts`.
+     *   - `openai-chat-completions`: the field is omitted entirely and the
+     *     target server's own default applies (cortex bounds nothing).
+     *
+     * Prefer stating it. Omitting it means the bound is someone else's choice.
+     */
     maxOutputTokens: z.number().int().positive().optional(),
     /** Policy: the egress class this profile is permitted. */
     modelClass: z.enum(["local-only", "frontier", "any"]),

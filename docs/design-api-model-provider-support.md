@@ -285,6 +285,63 @@ runtime:
     - research
 ```
 
+#### `maxOutputTokens` — and what omitting it means
+
+`maxOutputTokens` is the principal's declared cost/length bound. It reaches the
+wire as `max_tokens` on both protocols. (It was accepted by the schema and read
+by both providers but never populated in between for the whole of Phase 1 —
+silently discarding the bound; issue #2114 wired the middle of that chain and
+pins it with wire-body tests.)
+
+It is optional, but **what omission means is per protocol** — the two APIs
+disagree on whether the field is required, so cortex cannot make this uniform:
+
+| Protocol | Profile omits `maxOutputTokens` |
+|---|---|
+| `anthropic-messages` | The API **requires** `max_tokens`, so cortex sends a declared default: `DEFAULT_MAX_OUTPUT_TOKENS` = **4096** (exported from `src/providers/anthropic/messages-provider.ts`; overridable per provider instance via `defaultMaxOutputTokens`). |
+| `openai-chat-completions` | The field is **omitted entirely**; the target server's own default applies and cortex bounds nothing. |
+
+A profile that states `maxOutputTokens` always wins on both. **Prefer stating
+it** — as the examples above do. Omitting it does not mean "unbounded"; it means
+the bound is chosen by the provider adapter's default or by the remote server,
+not by the principal.
+
+#### `options` — the namespaced escape hatch
+
+`options` is a single bag of opaque provider-only knobs keyed by provider
+namespace (Q5). A provider merges **only its own namespace** onto its wire body:
+
+```yaml
+profiles:
+  claude-sonnet:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    maxOutputTokens: 8192
+    modelClass: frontier
+    options:
+      anthropic:            # → merged onto the Anthropic wire body
+        top_k: 40
+      openai:               # → inert here; a foreign namespace is never read
+        temperature: 0.2
+```
+
+Portable behaviour must not depend on anything under `options`.
+
+**Precedence against core fields is currently asymmetric** — the two adapters
+merge the bag in opposite order:
+
+- `anthropic-messages` merges the bag **first**, then the core fields
+  (`model`, `max_tokens`, `stream`, `system`, `messages`) — so core **wins** and
+  `options.anthropic` cannot override the profile's `maxOutputTokens`.
+- `openai-chat-completions` merges the bag **last** — so `options.openai` **can**
+  override core fields, including `max_tokens`.
+
+Both are as-shipped in Phase 1 and pinned by test. The asymmetry is a known wart
+rather than a designed behaviour: an `options` entry that overrides the
+principal's declared bound on one protocol but not the other is a footgun, and
+converging both on "core wins" is worth a follow-up decision. Until then, do not
+set core fields via `options`.
+
 Do not reuse `agent.runtime.model`: that field currently selects the model used
 by the Sage review engine. `inferenceProfile` names a resolved operational
 profile rather than embedding a provider and model at every agent.

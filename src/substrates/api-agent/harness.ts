@@ -26,7 +26,10 @@ import { randomUUID } from "crypto";
 
 import { isUuidLoose } from "../../common/types/uuid";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
-import type { InferenceRegistry } from "../../common/inference/registry";
+import type {
+  InferenceRegistry,
+  ResolvedProfile,
+} from "../../common/inference/registry";
 import type { ModelMessage, ModelRequest } from "../../common/inference/types";
 import type {
   Capability,
@@ -102,22 +105,37 @@ function unsupportedCapabilityReason(req: DispatchRequest): string | undefined {
 }
 
 /**
- * Build a normalized {@link ModelRequest} FROM THE DISPATCH REQUEST. Phase 1
- * rebuilds the "conversation" from the request alone (no ConversationStore —
- * that's Phase 2): the persona/system becomes `instructions`, and the prompt
- * becomes the single user turn. Text only (D5/Phase 1).
+ * Build a normalized {@link ModelRequest} FROM THE DISPATCH REQUEST plus the
+ * RESOLVED PROFILE. Phase 1 rebuilds the "conversation" from the request alone
+ * (no ConversationStore — that's Phase 2): the persona/system becomes
+ * `instructions`, and the prompt becomes the single user turn. Text only
+ * (D5/Phase 1).
+ *
+ * The profile contributes the principal's declared knobs: `model`, the
+ * `maxOutputTokens` bound, and the namespaced `options` escape hatch. It takes
+ * the WHOLE {@link ResolvedProfile} rather than cherry-picked fields on purpose
+ * — cherry-picking `model` alone is precisely how `maxOutputTokens`/`options`
+ * stayed silently unpopulated for a full epic (issue #2114) despite the schema
+ * accepting them and both providers reading them.
  */
-function buildModelRequest(req: DispatchRequest, model: string): ModelRequest {
+function buildModelRequest(
+  req: DispatchRequest,
+  profile: ResolvedProfile,
+): ModelRequest {
   const messages: ModelMessage[] = [
     { role: "user", content: [{ type: "text", text: req.prompt }] },
   ];
   const instructions = req.persona?.content;
   return {
-    model,
+    model: profile.model,
     ...(instructions !== undefined && instructions !== ""
       ? { instructions }
       : {}),
     messages,
+    ...(profile.maxOutputTokens !== undefined
+      ? { maxOutputTokens: profile.maxOutputTokens }
+      : {}),
+    ...(profile.options !== undefined ? { options: profile.options } : {}),
   };
 }
 
@@ -258,7 +276,7 @@ export class ApiAgentHarness implements SessionHarness {
     }
     const resolved = resolution.profile;
 
-    const request = buildModelRequest(req, resolved.model);
+    const request = buildModelRequest(req, resolved);
 
     // One controller per dispatch, tracked for shutdown-driven cancellation.
     const controller = new AbortController();

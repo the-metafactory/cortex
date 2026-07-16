@@ -29,6 +29,7 @@ import type {
 } from "../../../common/substrates/types";
 import { ApiAgentHarness } from "../harness";
 import { createInferenceRegistry } from "../provider-factories";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "../../../providers/anthropic/messages-provider";
 import { DefaultHarnessResolver } from "../../../runner/harness-resolver";
 import type { AgentRuntime } from "../../../common/types/cortex-config";
 
@@ -576,5 +577,204 @@ describe("harness resolver — substrate selection (api-agent + non-regression)"
       capabilities: [],
     };
     expect(resolver.resolve(agent, undefined).id).toBe("api-agent");
+  });
+});
+
+// ── Profile → WIRE BODY · maxOutputTokens + options (issue #2114) ─────────────
+//
+// WHY THESE ASSERT ON THE CAPTURED WIRE BODY AND NOT THE `ModelRequest`
+// ---------------------------------------------------------------------
+// `maxOutputTokens` and `options` were accepted by the schema and read by BOTH
+// providers, yet reached NEITHER wire for the whole of Phase 1: `ResolvedProfile`
+// did not carry them, so `buildModelRequest` never set them. Each end looked
+// correct in isolation, and every test profile omitted both fields — so nothing
+// failed. A unit assertion on the request OBJECT would not have caught it
+// either: only bytes on the wire prove the whole chain
+// (config → schema → registry → harness → provider → HTTP body) is connected.
+//
+// These drive a REAL harness against the fake server and assert on
+// `server.requests[0].body`. They are the pin: revert the population in
+// `registry.ts` or `harness.ts` and they fail.
+describe("profile → wire body · maxOutputTokens + options (#2114)", () => {
+  /** The single captured request's parsed JSON body. */
+  const wireBody = (): Record<string, unknown> => {
+    expect(server.requests).toHaveLength(1);
+    return JSON.parse(server.requests[0]?.body ?? "{}") as Record<string, unknown>;
+  };
+
+  /**
+   * Drive one dispatch through a harness whose single profile is built from
+   * `profile`. `protocol` selects the adapter (default: openai-chat-completions)
+   * and is stripped before the profile is parsed.
+   */
+  async function dispatchWithProfile(
+    profile: Record<string, unknown> = {},
+  ): Promise<void> {
+    const { protocol = "openai-chat-completions", ...profileFields } = profile;
+    const config = InferenceConfigSchema.parse({
+      providers: {
+        test: { protocol, baseUrl: `${server.url}/v1`, apiKey: "env:TEST_KEY" },
+      },
+      profiles: {
+        fast: {
+          provider: "test",
+          model: "test-model",
+          modelClass: "any",
+          ...profileFields,
+        },
+      },
+    });
+    const harness = new ApiAgentHarness({
+      source: SOURCE,
+      registry: createInferenceRegistry(config, { env: TEST_ENV }),
+      inferenceProfile: "fast",
+    });
+    await drain(harness.dispatch(makeRequest()));
+  }
+
+  /** One Anthropic-wire SSE frame (`event:`/`data:` + blank line). */
+  const aFrame = (event: string, data: unknown): string =>
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  /** A minimal well-formed Anthropic stream, so the dispatch completes cleanly. */
+  const enqueueAnthropicOk = (): void => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [
+        {
+          data:
+            aFrame("message_start", {
+              type: "message_start",
+              message: {
+                id: "msg_1",
+                role: "assistant",
+                usage: { input_tokens: 1, output_tokens: 1 },
+              },
+            }) +
+            aFrame("content_block_delta", {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "ok" },
+            }) +
+            aFrame("message_delta", {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 2 },
+            }) +
+            aFrame("message_stop", { type: "message_stop" }),
+        },
+      ],
+    });
+  };
+
+  /** A minimal well-formed OpenAI-compatible stream. */
+  const enqueueOpenAiOk = (): void => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [{ data: contentChunk("ok") + finishChunk("stop") + DONE }],
+    });
+  };
+
+  // ── The bound reaches BOTH wires ─────────────────────────────────────────
+
+  test("maxOutputTokens: N → max_tokens: N on the ANTHROPIC wire body", async () => {
+    enqueueAnthropicOk();
+    await dispatchWithProfile({ protocol: "anthropic-messages", maxOutputTokens: 8192 });
+
+    expect(wireBody().max_tokens).toBe(8192);
+  });
+
+  test("maxOutputTokens: N → max_tokens: N on the OPENAI-COMPATIBLE wire body", async () => {
+    enqueueOpenAiOk();
+    await dispatchWithProfile({ maxOutputTokens: 8192 });
+
+    expect(wireBody().max_tokens).toBe(8192);
+  });
+
+  // ── Documented behaviour when the profile OMITS the bound ────────────────
+  // Asymmetric ON PURPOSE: the two APIs disagree on whether `max_tokens` is
+  // required. Both halves are pinned so neither drifts into the other's rule.
+
+  test("omitted maxOutputTokens → Anthropic sends its declared default (the API requires max_tokens)", async () => {
+    enqueueAnthropicOk();
+    await dispatchWithProfile({ protocol: "anthropic-messages" });
+
+    // The Messages API rejects a body with no `max_tokens`, so cortex cannot
+    // pass the omission through — it sends the exported, documented default
+    // rather than a magic number invented at the call site.
+    expect(wireBody().max_tokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+    expect(DEFAULT_MAX_OUTPUT_TOKENS).toBe(4096);
+  });
+
+  test("omitted maxOutputTokens → OpenAI-compatible omits max_tokens entirely (server default applies)", async () => {
+    enqueueOpenAiOk();
+    await dispatchWithProfile();
+
+    // Omission is legal here, so cortex bounds nothing rather than inventing a
+    // bound the principal never declared.
+    expect(wireBody()).not.toHaveProperty("max_tokens");
+  });
+
+  // ── options: own namespace lands, foreign namespace is inert ─────────────
+
+  test("options under the provider's OWN namespace reach that provider's wire body", async () => {
+    enqueueOpenAiOk();
+    await dispatchWithProfile({ options: { openai: { temperature: 0.2, top_p: 0.9 } } });
+
+    const body = wireBody();
+    expect(body.temperature).toBe(0.2);
+    expect(body.top_p).toBe(0.9);
+  });
+
+  test("options under a FOREIGN namespace never reach the wire body", async () => {
+    enqueueOpenAiOk();
+    // `anthropic` is foreign to the openai adapter: inert, and its keys must not
+    // leak onto the wire under any name (nor as a nested `anthropic` object).
+    await dispatchWithProfile({
+      options: { anthropic: { top_k: 40 }, openai: { temperature: 0.5 } },
+    });
+
+    const body = wireBody();
+    expect(body).not.toHaveProperty("top_k");
+    expect(body).not.toHaveProperty("anthropic");
+    expect(body.temperature).toBe(0.5); // the own-namespace bag still lands
+  });
+
+  test("options under the anthropic namespace reach the ANTHROPIC wire body only", async () => {
+    enqueueAnthropicOk();
+    await dispatchWithProfile({
+      protocol: "anthropic-messages",
+      maxOutputTokens: 8192,
+      options: { anthropic: { top_k: 40 }, openai: { temperature: 0.5 } },
+    });
+
+    const body = wireBody();
+    expect(body.top_k).toBe(40);
+    expect(body).not.toHaveProperty("temperature"); // foreign namespace inert
+    expect(body).not.toHaveProperty("openai");
+    // Anthropic merges the bag FIRST, so core fields win: the declared bound
+    // survives the escape hatch.
+    expect(body.max_tokens).toBe(8192);
+  });
+
+  // ── Combined regression pin ─────────────────────────────────────────────
+
+  test("regression: a profile's bound AND its options both reach the wire (both were silently dropped)", async () => {
+    enqueueOpenAiOk();
+    await dispatchWithProfile({
+      maxOutputTokens: 1234,
+      options: { openai: { temperature: 0.7 } },
+    });
+
+    const body = wireBody();
+    // The exact pair the bug dropped. BEFORE the fix the captured body was:
+    //   {"model":"test-model","messages":[…],"stream":true,
+    //    "stream_options":{"include_usage":true}}
+    // — no max_tokens, no temperature.
+    expect(body.max_tokens).toBe(1234);
+    expect(body.temperature).toBe(0.7);
+    expect(body.model).toBe("test-model");
   });
 });
