@@ -21,6 +21,10 @@ CLAUDE_DIR="${HOME}/.claude"
 # canonical-first (it is all function definitions — no source-time side effects).
 # shellcheck source=scripts/lib/plist-render.sh
 source "${SCRIPT_DIR}/lib/plist-render.sh"
+# systemd-render.sh (cortex#2071) provides the Linux twin of §3's plist
+# re-templating + reload.
+# shellcheck source=scripts/lib/systemd-render.sh
+source "${SCRIPT_DIR}/lib/systemd-render.sh"
 # XDG wave-4 (cortex#1869): resolve the ACTIVE config dir (canonical
 # ~/.config/metafactory/cortex once migrated, the legacy trees during transition,
 # or $CORTEX_CONFIG_DIR) instead of hardcoding the pre-move `~/.config/cortex` —
@@ -155,6 +159,18 @@ if [ "$(uname)" = "Darwin" ]; then
       reload_stack_unless_skipped "${LAUNCH_DIR}" "${slug}"
     done < <(discover_stack_slugs "${CONFIG_DIR}")
   fi
+elif [ "$(uname)" = "Linux" ]; then
+  # ─── 3'. Re-template + restart systemd user units (cortex#2071) ──
+  # No-ops silently on a systemd-less host (see systemd_host_detected).
+  UNIT_DIR="${HOME}/.config/systemd/user"
+  render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+
+  # ─── 4'. Restart running stacks ───────────────────────────────────
+  # Unlike the Darwin side, preupgrade.sh never stops anything on Linux (its
+  # stop/kill block is Darwin-only), so there is no recorded running-set to
+  # replay — restart_running_systemd_stacks checks `systemctl --user
+  # is-active` live per discovered slug and only restarts what's already up.
+  restart_running_systemd_stacks "${CONFIG_DIR}"
 fi
 
 echo "  ✓ Cortex upgrade complete"

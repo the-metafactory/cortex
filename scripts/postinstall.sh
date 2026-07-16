@@ -25,6 +25,10 @@ EVENTS_DIR="${CLAUDE_DIR}/events"
 # definitions — no source-time side effects).
 # shellcheck source=scripts/lib/plist-render.sh
 source "${SCRIPT_DIR}/lib/plist-render.sh"
+# systemd-render.sh (cortex#2071) provides the Linux twin of §4's plist
+# rendering. Also all function definitions — no source-time side effects.
+# shellcheck source=scripts/lib/systemd-render.sh
+source "${SCRIPT_DIR}/lib/systemd-render.sh"
 # XDG wave-4 (cortex#1869): resolve the active config dir (canonical
 # ~/.config/metafactory/cortex once migrated, legacy trees during transition, or
 # $CORTEX_CONFIG_DIR). On a fresh install none exist yet → resolves to the
@@ -89,7 +93,7 @@ else
   echo "  ⊘ Relay policy exists (~/.claude/relay/relay-policy.yaml — not overwriting)"
 fi
 
-# ─── 4. Launchd plist rendering (macOS only) ─────────────────────
+# ─── 4. Service-unit rendering (launchd on macOS, systemd on Linux) ─
 # Holly cortex#52 round 1 major: the sed-templating block + awk agent-name
 # extractor lived here AND in postupgrade.sh. Extracted to a shared lib
 # (already sourced up-front, for resolve_config_dir).
@@ -100,6 +104,12 @@ warn_stack_identity_drift "${CONFIG_DIR}"
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
   render_cortex_plists "${CORTEX_DIR}" "${LAUNCH_DIR}" "${CONFIG_DIR}"
+elif [ "$(uname)" = "Linux" ]; then
+  # cortex#2071: render the systemd user units (nats@.service, cortex@.service —
+  # community-validated on Debian 13, README-AGENTS.md Appendix A). No-ops
+  # silently on a systemd-less host (see systemd_host_detected in the lib).
+  UNIT_DIR="${HOME}/.config/systemd/user"
+  render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
 fi
 
 echo ""

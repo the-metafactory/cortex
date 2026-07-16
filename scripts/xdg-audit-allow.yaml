@@ -295,6 +295,16 @@ allow:
     match: \.config/systemd/user
     reason: Appendix A Debian runbook — documents systemd's CANONICAL user-unit directory (community-validated units a human copies by hand; systemd itself honors $XDG_CONFIG_HOME). The L1 auto-renderer resolves the path programmatically (cortex#2071)
     owner: cortex#2071
+  - pattern: systemd-userdir
+    path: scripts/postinstall.sh
+    match: UNIT_DIR="\$\{HOME\}/\.config/systemd/user"
+    reason: L1 auto-renderer target dir (cortex#2071) — the canonical systemd user-unit search path; render_cortex_systemd_units is the programmatic resolver this pattern otherwise asks for
+    owner: cortex#2071
+  - pattern: systemd-userdir
+    path: scripts/postupgrade.sh
+    match: UNIT_DIR="\$\{HOME\}/\.config/systemd/user"
+    reason: L1 auto-renderer target dir (cortex#2071) — the canonical systemd user-unit search path; render_cortex_systemd_units is the programmatic resolver this pattern otherwise asks for
+    owner: cortex#2071
   - pattern: config-tree
     path: docs/design-cloud-api.md
     match: ~/\.config/grove

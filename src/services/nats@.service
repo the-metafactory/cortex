@@ -1,0 +1,19 @@
+[Unit]
+Description=NATS server (cortex stack: %i)
+After=network.target
+
+[Service]
+PrivateTmp=true
+Type=simple
+ExecStart=%h/.local/bin/nats-server -c %h/.config/nats/%i.conf
+Restart=on-failure
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s SIGUSR2 $MAINPID
+TimeoutStopSec=150
+
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/nats/logs
+StandardOutput=append:%h/.local/state/nats/logs/nats-server-%i.log
+StandardError=append:%h/.local/state/nats/logs/nats-server-%i.error.log
+
+[Install]
+WantedBy=default.target

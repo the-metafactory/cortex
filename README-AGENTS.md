@@ -42,12 +42,15 @@ Verify each before starting:
 **Platform — macOS and Linux both supported.** The runtime is OS-agnostic (Bun,
 NATS, and the config `.conf` are identical); only the **service manager** differs:
 - **macOS** — launchd. `arc upgrade` renders the plists (`src/services/`) for you.
-- **Linux** — systemd **user** units. Auto-rendering is tracked in
-  [cortex#2071](https://github.com/the-metafactory/cortex/issues/2071); until it
-  ships, use the **validated template units in Appendix A** — one `nats@.service`
-  + one `cortex@.service` serve every stack via the `%i` instance parameter
+- **Linux** — systemd **user** units. `arc install`/`arc upgrade cortex` render
+  the two committed template units — `src/services/nats@.service` +
+  `src/services/cortex@.service` — into `~/.config/systemd/user/`
+  ([cortex#2071](https://github.com/the-metafactory/cortex/issues/2071)); one
+  pair serves every stack via the `%i` instance parameter
   (`systemctl --user enable --now cortex@<slug>`). cortex's `daemon-locator`
-  finds it. (Or run directly: `bun src/cortex.ts start --config <pointer>`.)
+  finds it. For a from-source clone, a manual setup, or the exact enable/start
+  commands, see **Appendix A** (same units, byte-consistent with the shipped
+  files). (Or run directly: `bun src/cortex.ts start --config <pointer>`.)
 
 ## 2. Install
 
@@ -352,10 +355,16 @@ Community-validated on a clean Debian 13 x64 bring-up (thanks Vincent Zontini �
 his fuller walkthrough with Discord-side steps lives in
 [this gist](https://gist.github.com/vpzed/fc3b8da5ee9ecaea4a0d17e567ffbb17)).
 These are systemd **template units**: the text after `@` becomes `%i` (the stack
-slug), so ONE pair of files serves every stack on the host. Auto-rendering of
-these units by `arc upgrade cortex` is tracked in
-[cortex#2071](https://github.com/the-metafactory/cortex/issues/2071); until it
-ships, create them by hand as below.
+slug), so ONE pair of files serves every stack on the host.
+
+**Arc-managed installs (Path A) render these automatically** — `arc install`/
+`arc upgrade cortex` copies the checked-in `src/services/nats@.service` +
+`src/services/cortex@.service` into `~/.config/systemd/user/` for you
+([cortex#2071](https://github.com/the-metafactory/cortex/issues/2071)); you do
+not need to create the files below by hand. The blocks in A.2/A.3 are kept
+inline — byte-identical to the shipped `src/services/*.service` files — as the
+reference for a **from-source clone** (Path B, no `arc` lifecycle scripts) or
+for manually inspecting/recreating what the renderer installs.
 
 ### A.1 One-time host preparation
 
@@ -411,12 +420,14 @@ Wants=nats@%i.service
 [Service]
 Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Type=simple
+WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace
 ExecStart=%h/.local/bin/cortex start --config %h/.config/metafactory/cortex/%i/%i.yaml
 Restart=on-failure
 RestartSec=10
 RestartSteps=5
 RestartMaxDelaySec=300
 
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
@@ -429,7 +440,10 @@ WantedBy=default.target
 matching nats instance up with the stack. The escalating restart backoff
 (10 s → capped at 300 s over 5 steps) stops a misconfigured stack from
 hot-looping. Log paths are the XDG state dir — the same paths §5's
-healthy-boot gate greps.
+healthy-boot gate greps. `WorkingDirectory=` (+ its matching `ExecStartPre`
+mkdir) points a dispatched session's default cwd at a dedicated per-stack
+workspace dir instead of `$HOME` (systemd's default when unset) — see
+[cortex#2097](https://github.com/the-metafactory/cortex/issues/2097).
 
 > `RestartSteps=`/`RestartMaxDelaySec=` need systemd ≥ 254 (Debian 13 ships
 > ≥ 254; on older hosts drop those two lines and keep `RestartSec=10`).
@@ -449,7 +463,9 @@ Then run §5's healthy-boot gate against
 `~/.local/state/metafactory/cortex/logs/cortex-$CTX_SLUG.log` and the
 functional gate (@mention as principal → reply; non-principal → silence).
 
-**Upgrades:** `arc upgrade cortex` handles code + seed provisioning; after an
-upgrade, `systemctl --user restart "cortex@$CTX_SLUG"` picks up the new build
-(launchd restart is automated on macOS; the systemd analogue arrives with
-cortex#2071).
+**Upgrades:** `arc upgrade cortex` handles code + seed provisioning, re-renders
+the two unit files (§ above), and — for an **arc-managed install** — restarts
+every currently-active `cortex@<slug>` itself (the systemd analogue of the
+launchd restart that's automated on macOS). For a **from-source clone** (no
+`arc` lifecycle scripts), restart manually: `systemctl --user restart
+"cortex@$CTX_SLUG"`.
