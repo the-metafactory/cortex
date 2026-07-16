@@ -285,5 +285,19 @@ jobs:
       - name: Smoke systemctl --user
         run: systemctl --user status --no-pager || systemctl --user list-units --no-pager | head -5
 
+      # `bun test --test-name-pattern` exits 1 on zero matches (verified locally),
+      # which would make this job red until cortex#2071 adds a matching test —
+      # contradicting the issue's own acceptance criterion that zero matches is
+      # green at this stage. Guard on the "matched 0 tests" message so a real
+      # test failure still fails the job once cortex#2071 lands.
       - name: bun test (systemd-e2e placeholder — cortex#2071 will populate)
-        run: bun test --test-name-pattern systemd-e2e
+        run: |
+          set +e
+          output=$(bun test --test-name-pattern systemd-e2e 2>&1)
+          status=$?
+          echo "$output"
+          if [ $status -ne 0 ] && echo "$output" | grep -q "matched 0 tests"; then
+            echo "No systemd-e2e tests yet — zero matches is green per cortex#2092 (cortex#2071 will populate this pattern)."
+            exit 0
+          fi
+          exit $status
