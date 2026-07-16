@@ -141,7 +141,7 @@ describe("isReservedRefSource — the env:NAME ref-source prefix deny (different
     expect(isReservedRefSource("CLAUDE_CODE_OAUTH_TOKEN")).toBe(true);
     expect(isReservedRefSource("anthropic_api_key")).toBe(true);
     expect(isReservedRefSource("CORTEX_BASH_GUARD")).toBe(true);
-    expect(isReservedRefSource("grove_operator")).toBe(true);
+    expect(isReservedRefSource("grove_channel")).toBe(true);
     // A non-reserved daemon var is a legitimate credential source.
     expect(isReservedRefSource("GWS_SA_PATH")).toBe(false);
     expect(isReservedRefSource("MANDA_GWS_TOKEN")).toBe(false);
