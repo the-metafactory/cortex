@@ -99,7 +99,7 @@ afterEach(async () => {
   db.close();
 });
 
-function makeHarness(): ApiAgentHarness {
+function makeHarness(profileExtras: Record<string, unknown> = {}): ApiAgentHarness {
   const config = InferenceConfigSchema.parse({
     providers: {
       test: {
@@ -109,7 +109,12 @@ function makeHarness(): ApiAgentHarness {
       },
     },
     profiles: {
-      fast: { provider: "test", model: "test-model", modelClass: "any" },
+      fast: {
+        provider: "test",
+        model: "test-model",
+        modelClass: "any",
+        ...profileExtras,
+      },
     },
   });
   const registry = createInferenceRegistry(config, { env: TEST_ENV });
@@ -402,6 +407,38 @@ describe("API-2115 · usage PERSISTS onto the anchor session (keying: Option A)"
     expect(row.output_tokens).toBe(0);
     // ...while an UNREPORTED column stays NULL rather than being zero-filled.
     expect(row.cache_read_tokens).toBeNull();
+  });
+});
+
+describe("API-2115 × API-2114 · a profile-bounded dispatch still projects usage", () => {
+  // #2119 (API-2114) made the profile's `maxOutputTokens` / `options` actually
+  // reach the wire. Both changes touch this harness, so pin that a profile
+  // carrying those knobs does not disturb the usage seam — the request body and
+  // the response usage frame are independent, but that is checked, not assumed.
+  test("maxOutputTokens on the profile reaches the wire AND usage still persists", async () => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [
+        { data: contentChunk("bounded") + finishChunk("stop") + usageChunk(11, 22, 33) + DONE },
+      ],
+    });
+    const envs = await drain(
+      makeHarness({ maxOutputTokens: 8192 }).dispatch(makeRequest()),
+    );
+
+    // #2119's half: the bound really is on the wire body.
+    const body = JSON.parse(server.requests[0]?.body ?? "{}") as Record<string, unknown>;
+    expect(body.max_tokens).toBe(8192);
+
+    // My half: usage still extracts and persists onto the anchor session.
+    const result = projectAll(envs);
+    expect(result.usage.inputTokens).toBe(11);
+    const row = sessionRow(result.sessionId);
+    expect(row.input_tokens).toBe(11);
+    expect(row.output_tokens).toBe(22);
+    expect(row.cache_read_tokens).toBe(33);
+    expect(row.substrate).toBe("api-agent");
   });
 });
 
