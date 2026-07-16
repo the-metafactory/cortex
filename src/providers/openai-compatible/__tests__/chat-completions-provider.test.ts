@@ -204,6 +204,11 @@ describe("provider contract · openai-compatible (live, #2062)", () => {
     expect(events.some((e) => e.type === "response.started")).toBe(true);
     expect(firstError(events)?.kind).toBe("malformed_response");
     expect(events.some((e) => e.type === "response.completed")).toBe(false);
+    // The async iterable completes normally (no throw) and its FINAL event is the
+    // normalized error — the read-loop swallows the abort and ends cleanly.
+    const last = events[events.length - 1];
+    expect(last?.type).toBe("error");
+    if (last?.type === "error") expect(last.error.kind).toBe("malformed_response");
   });
 
   test(CASE("normalizes usage from a final usage frame"), async () => {

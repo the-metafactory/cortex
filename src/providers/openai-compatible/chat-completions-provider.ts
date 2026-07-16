@@ -289,7 +289,21 @@ async function* readableToByteChunks(
   const reader = stream.getReader();
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await reader.read();
+      } catch (_err) {
+        // A mid-stream read rejection — an aborted / truncated connection (incl.
+        // the way `ReadableStreamDefaultController.error()` surfaces under Bun,
+        // which rejects the pending `read()` rather than EOF-ing). END ITERATION
+        // CLEANLY so the provider's structural check ("stream ended without a
+        // terminal frame") classifies it as a normalized `malformed_response`,
+        // instead of letting the raw abort escape as an uncaught error. `_err`
+        // may carry raw provider/connection detail; it is deliberately dropped —
+        // nothing from it reaches a summary, event, or log.
+        return;
+      }
+      const { done, value } = result;
       if (done) return;
       yield value;
     }
