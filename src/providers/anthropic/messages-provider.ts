@@ -272,6 +272,14 @@ export class AnthropicMessagesProvider implements ModelProvider {
  * Adapt a `ReadableStream<Uint8Array>` (a fetch `Response.body`) to an
  * `AsyncIterable<Uint8Array>` via an explicit reader, so cancellation releases
  * the underlying connection deterministically across runtimes.
+ *
+ * A mid-stream read REJECTION — an aborted / truncated connection, e.g. the
+ * peer erroring the stream (`controller.error`) after HTTP 200 — is caught and
+ * ends iteration CLEANLY rather than propagating. Whether such an abort surfaces
+ * as a rejected `read()` or a silent EOF is Bun/environment-sensitive (it threw
+ * in CI but not locally), so we never depend on the throw reaching a caller: the
+ * mapper classifies the resulting terminal-frame-less end as `malformed_response`.
+ * The raw error is deliberately NOT surfaced (it could carry provider detail).
  */
 async function* readBody(
   stream: ReadableStream<Uint8Array>,
@@ -279,11 +287,24 @@ async function* readBody(
   const reader = stream.getReader();
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      yield value;
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        chunk = await reader.read();
+      } catch (_err) {
+        // Aborted / truncated stream. Stop yielding; the mapper sees a stream
+        // that ended without a `message_stop` and emits a normalized
+        // `malformed_response` error. Raw error intentionally swallowed.
+        return;
+      }
+      if (chunk.done) break;
+      yield chunk.value;
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch (_err) {
+      // The reader may already be released/errored after an aborted stream;
+      // releasing again is a no-op we can safely ignore.
+    }
   }
 }
