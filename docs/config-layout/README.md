@@ -75,7 +75,7 @@ on one edit surface (design doc §3.7). The split isolates them by lifecycle:
 
 | File | Owns | Blast radius |
 |---|---|---|
-| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, `plugins`, `nats`, `bus` — **the dangerous transport knobs** | Whole stack |
+| `system/system.yaml` | substrate / transport: `claude`, `execution`, `inference`, `attachments`, `paths`, `plugins`, `nats`, `bus` — **the dangerous transport knobs** | Whole stack |
 | `network/*.yaml` | federation roster (`policy.federated.networks[]`) | Cross-principal |
 | `surfaces/surfaces.yaml` | shared surface-gateway bindings (CFG.c / GW) | Cross-stack |
 | `stacks/*.yaml` | per-deployment policy / capabilities / agents | One stack only |
@@ -111,6 +111,84 @@ The loader validates the block **loudly at load** (CFG.b.3,
 `src/common/types/nats-subjects.ts`): a malformed pattern or a duplicate entry
 throws a clear error rather than parsing into a silent partial config that would
 double-publish.
+
+## Model providers — the `inference` block and the `api-agent` substrate
+
+`system/system.yaml` carries an **`inference`** block: the model providers and
+named profiles the **`api-agent`** substrate dispatches against (epic #2055).
+It ships **empty and opt-in**. Full annotation — provider shape, credential
+rules, egress posture, limitations — lives in the block itself; this is the map.
+
+**`claude-code` remains the default substrate ([design D3](../design-api-model-provider-support.md)).**
+An agent that omits `substrate` is unchanged by anything in this section.
+
+### Opting one agent in
+
+1. **Define a provider + profile** in `system/system.yaml` (substrate layer —
+   whole-stack blast radius, *not* a per-stack file):
+
+   ```yaml
+   inference:
+     providers:
+       anthropic:
+         protocol: anthropic-messages        # or: openai-chat-completions
+         baseUrl: https://api.anthropic.com  # a reviewed model-egress destination
+         apiKey: env:ANTHROPIC_API_KEY       # a REFERENCE — a literal is rejected at load
+     profiles:
+       claude-sonnet:
+         provider: anthropic                 # MUST name a key in providers above
+         model: claude-sonnet-4-6
+         modelClass: frontier                # local-only | frontier | any
+   ```
+
+2. **Export the referenced variable** in the cortex daemon's environment
+   (`ANTHROPIC_API_KEY` here). Every configured provider is built — and its
+   reference resolved — at **boot pre-flight** (`#2110`), not on first dispatch.
+
+3. **Bind an agent to the profile** in `stacks/<slug>.yaml`:
+
+   ```yaml
+   runtime:
+     substrate: api-agent
+     inferenceProfile: claude-sonnet   # names a key in inference.profiles
+     mode: in-process
+     capabilities: [chat]
+   ```
+
+   Not `runtime.model` — that field selects the **Sage review engine's** model
+   and is unrelated to inference profiles.
+
+4. **Boot.** An unresolvable profile is reported on stderr, one line per profile,
+   and that profile fails closed at dispatch. It does **not** take the daemon
+   down: unrelated `claude-code` agents boot normally.
+
+### Security posture (design §"Secrets and egress", D6)
+
+- **Credentials are references, never literals.** `apiKey` and every `headers`
+  value must be exactly `env:NAME`. A literal is **rejected at config load** —
+  enforced, not advisory. The parsed config holds only the reference, so a config
+  dump or log shows `env:NAME` and never the secret.
+- **A `baseUrl` is a reviewed model-egress destination** — it is where prompt
+  text leaves the machine, with whole-stack blast radius. This block is the one
+  place those destinations are declared. Adding or changing one is an egress
+  review.
+- **Provider/profile changes are policy changes** — they move data residency,
+  model class, retention, and cost. Review them as policy, not as config tweaks.
+- **Never route a credential through a profile's `options` bag** — it is an
+  opaque passthrough with no secret-reference validation.
+
+### Known limitations today (Phase 1 — text-only)
+
+Be clear-eyed before pointing real work at `api-agent`:
+
+| Limitation | Detail |
+|---|---|
+| **No tools** (D5) | No Bash, file edits, skills, or attachments. Such a request is rejected with an `unsupported_capability` terminal *before* any provider call. **Not** coding-agent parity — use it for prose/chat work. Tools are Phase 3. |
+| **No streaming progress** | cortex has no progress-envelope constructor. The harness emits one `started` + one terminal per dispatch; text accumulates and arrives **all on the terminal**. A principal sees one final block. |
+| **Usage/cost not on Mission Control** (`#2115`) | Token counts ride the terminal envelope payload, but MC does not project api-agent usage/cost. |
+| **`maxOutputTokens` + `options` discarded** (`#2114`) | The harness builds its request from model id + prompt only. On `anthropic-messages` the effective cap is the adapter's own default (**4096**), not your configured value; on `openai-chat-completions` no `max_tokens` is sent. Both fields are the forward contract — accepted, not yet honoured. |
+| **`modelClass` / `dataResidency` not enforced** (`#2117`) | Validated, resolved, and carried on the profile, but admission does not gate on them. Not a control. |
+| **No durable conversation** (Phase 2) | Each dispatch rebuilds the turn from the request alone — persona becomes system instructions, prompt becomes one user turn. No multi-turn memory. |
 
 ## The surface binding map (CFG.c)
 
@@ -193,7 +271,7 @@ loader.
 | File | Layer | What to fill in |
 |---|---|---|
 | [`research.yaml`](./research.yaml) | pointer | nothing — rename it after your stack slug; contents ignored, dirname selects the layout, basename names the PID file |
-| [`system/system.yaml`](./system/system.yaml) | substrate / transport | `nats.url` + identity; leave `nats.subjects` at the safe `[]` default |
+| [`system/system.yaml`](./system/system.yaml) | substrate / transport | `nats.url` + identity; leave `nats.subjects` at the safe `[]` default; leave `inference` empty unless you opt an agent into `api-agent` |
 | [`network/example-network.yaml`](./network/example-network.yaml) | federation roster (OPTIONAL) | peers, registry, accept-subjects — only if you federate; inert until uncommented |
 | [`surfaces/surfaces.yaml`](./surfaces/surfaces.yaml) | shared surface bindings (OPTIONAL) | Discord/Slack/Mattermost `token` / `guild` / channels for each agent |
 | [`stacks/research.yaml`](./stacks/research.yaml) | per-deployment stack | `principal`, `stack` signing keys, `policy` (principal-only pattern), `agents`, `github.repos` |

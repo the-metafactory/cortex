@@ -9,7 +9,7 @@ fixed precedence (later layers win on leaf keys), producing the SAME
 
 | Layer | Owns | Blast radius |
 |---|---|---|
-| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, `plugins`, **`nats` (incl. the `nats.subjects` landmine — ONE place), `bus`** | whole stack |
+| `system/system.yaml` | substrate / transport: `claude`, `execution`, `inference` (model providers/profiles), `attachments`, `paths`, `plugins`, **`nats` (incl. the `nats.subjects` landmine — ONE place), `bus`** | whole stack |
 | `network/*.yaml` | federation roster (`policy.federated.{registry, networks[]}`) — OPTIONAL | cross-principal |
 | `surfaces/surfaces.yaml` | shared surface-gateway bindings (Discord/Slack/Mattermost tokens) — OPTIONAL | cross-stack |
 | `stacks/*.yaml` | per-deployment `principal` / `stack` / `policy` / `capabilities` / `agents` / `github` | one stack |
@@ -26,6 +26,20 @@ duplicate double-binds the boot subscriber and double-delivers every envelope
   PID file from the `--config` basename; per-stack deployments MUST give each
   pointer a per-stack name (`research.yaml`, `work.yaml`, …), never a uniform
   `cortex.yaml`, or the second daemon collides on `cortex-cortex.pid`.
+- **`inference` is substrate-layer, opt-in, and `claude-code` stays the
+  default.** The `inference` block (model `providers` + named `profiles`) lives
+  in `system/system.yaml` beside `claude`/`execution` — never in a stack file.
+  An agent opts in with `runtime.substrate: api-agent` +
+  `runtime.inferenceProfile: <name>`; an agent that omits `substrate` is
+  unchanged (design D3). Do NOT reuse `runtime.model` — that selects the Sage
+  review engine. Credentials are `env:NAME` **references** only (a literal is
+  rejected at load) and a provider `baseUrl` is a reviewed **model-egress
+  destination**, so provider/profile edits are policy changes (D6). The API
+  harness is **text-only — NO TOOLS** (D5): no Bash/edits/skills/attachments,
+  no streaming progress (one terminal envelope). See
+  [`docs/config-layout/README.md`](docs/config-layout/README.md) §"Model
+  providers" for the opt-in walkthrough + current limitations, and
+  [`docs/design-api-model-provider-support.md`](docs/design-api-model-provider-support.md).
 
 **Canonical template:** [`docs/config-layout/`](docs/config-layout/) — copy that
 directory to `~/.config/metafactory/cortex/<slug>/`, fill the `<REPLACE_ME>` markers, point

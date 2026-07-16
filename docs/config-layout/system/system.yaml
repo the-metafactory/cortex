@@ -44,6 +44,149 @@ execution:
   default: local
   backends: []
 
+# =============================================================================
+# inference — model-provider config for `substrate: api-agent` (epic #2055, D6)
+# =============================================================================
+#
+# OPT-IN AND OFF BY DEFAULT. The maps below ship EMPTY, and an agent that does
+# not set `runtime.substrate: api-agent` never touches this block. `claude-code`
+# remains THE DEFAULT substrate (design D3): an agent that omits `substrate` is
+# completely unchanged by anything here.
+#
+# Two maps:
+#   * `providers` — WHERE inference is bought: the wire protocol, the egress
+#     destination (`baseUrl`), and the credential REFERENCE.
+#   * `profiles`  — WHAT an agent asks for: a named provider+model+policy
+#     selection an agent binds to via `runtime.inferenceProfile: <name>`.
+#     Every `profiles.*.provider` MUST name a key in `providers` — a dangling
+#     reference fails config load with a per-offender error.
+#
+# WHY THIS LAYER: `inference` is substrate config with WHOLE-STACK blast radius,
+# so it lives here beside `claude` / `execution` — never in `stacks/*.yaml`. It
+# is read from the top level of the composed config
+# (`src/common/types/cortex-config.ts` → `InferenceConfigSchema` in
+# `src/common/inference/inference-config-schema.ts`).
+#
+# ---------------------------------------------------------------------------
+# SECURITY POSTURE — read before adding a provider (design §"Secrets and egress")
+# ---------------------------------------------------------------------------
+#
+#   1. CREDENTIALS ARE REFERENCES, NEVER LITERALS. `apiKey` and every `headers`
+#      value must be the exact form `env:NAME` (`src/common/inference/secret-ref.ts`).
+#      A literal key is REJECTED at config load — this is enforced, not advisory.
+#      The reference is resolved from that environment variable in the cortex
+#      daemon's own environment; the parsed config only ever holds `env:NAME`, so
+#      a config dump or log shows the reference and never the secret.
+#      NOTE (#2110): every configured provider is built — and so its reference
+#      RESOLVED — at BOOT pre-flight, not lazily on first dispatch. Export the
+#      variable in the daemon's environment before boot; an unset variable is
+#      reported on stderr per-profile and that profile fails closed at dispatch
+#      (it does NOT take the daemon down — unrelated claude-code agents boot fine).
+#
+#   2. `baseUrl` IS A REVIEWED MODEL-EGRESS DESTINATION. It is where prompt text
+#      leaves this machine. It has whole-stack blast radius and this block is the
+#      single place those destinations are declared — treat adding or changing one
+#      as an egress review, not a config tweak.
+#
+#   3. PROVIDER/PROFILE CHANGES ARE POLICY CHANGES (D6). They move data
+#      residency, model class, retention, and cost. Review them as policy.
+#
+#   4. NEVER route a credential through a profile's `options` bag — `options` is
+#      an opaque passthrough with NO secret-reference validation. Credentials go
+#      in `apiKey` / `headers` only.
+#
+# ---------------------------------------------------------------------------
+# KNOWN LIMITATIONS TODAY — the api-agent substrate is Phase 1 (text-only)
+# ---------------------------------------------------------------------------
+#
+#   * NO TOOLS (D5). The API harness ships no tool loop: no Bash, no file
+#     edits, no skills. A request carrying attachments or requiring tools is
+#     rejected with an `unsupported_capability` terminal BEFORE any provider
+#     call. Do NOT expect coding-agent parity — this is a chat/text turn.
+#     (Tools are Phase 3.) Point `api-agent` at prose work, not at code work.
+#   * NO STREAMING PROGRESS. cortex has no progress-envelope constructor; the
+#     harness emits exactly one `started` and one terminal envelope per
+#     dispatch, accumulating the assistant text and delivering it ALL on the
+#     terminal. A principal sees one final block, not incremental output.
+#   * USAGE/COST IS NOT ON MISSION CONTROL YET (#2115). Token counts ride the
+#     terminal envelope's payload, but MC does not project api-agent usage/cost.
+#   * `maxOutputTokens` AND `options` ARE CURRENTLY DISCARDED (#2114). The
+#     harness builds its provider request from the model id + prompt only, so
+#     neither field reaches the provider. Consequence to plan for: on
+#     `anthropic-messages` the effective output cap is the provider adapter's
+#     own default (4096 tokens), NOT the number you write below; on
+#     `openai-chat-completions` no `max_tokens` is sent at all. Both fields are
+#     accepted by the schema and documented here because they are the forward
+#     contract — they are just not yet honoured.
+#   * `modelClass` / `dataResidency` ARE CARRIED, NOT YET ENFORCED (#2117).
+#     They are validated, resolved, and attached to the profile, but admission
+#     does not yet gate a dispatch on them. Do not treat them as a control.
+#   * NO DURABLE CONVERSATION (Phase 2). Each dispatch rebuilds the turn from
+#     the request alone: the persona becomes the system instructions and the
+#     prompt becomes a single user turn. There is no multi-turn memory.
+#
+# ---------------------------------------------------------------------------
+# EXAMPLE — copy the shape, then uncomment + adapt (inert until you do)
+# ---------------------------------------------------------------------------
+#
+# inference:                                  # <-- begin inference reference example
+#   providers:
+#     anthropic:
+#       protocol: anthropic-messages          # or: openai-chat-completions
+#       baseUrl: https://api.anthropic.com    # the reviewed egress destination
+#       apiKey: env:ANTHROPIC_API_KEY         # REFERENCE ONLY — a literal is rejected at load
+#       # Optional extra headers. Values are ALSO `env:NAME` references (a header
+#       # can carry a token), resolved at call time, never literals.
+#       # headers:
+#       #   x-example-gateway-token: env:<REPLACE_ME_HEADER_ENV_VAR>
+#     local-ollama:
+#       protocol: openai-chat-completions
+#       baseUrl: http://127.0.0.1:11434/v1    # loopback — nothing leaves the box
+#       apiKey: env:OLLAMA_API_KEY            # still a reference (Ollama ignores the value)
+#       # Optional STATIC capability override. Configured-only — cortex never
+#       # probes a provider at startup, so whatever you declare here is the whole
+#       # truth. Declare only the flags you mean to override.
+#       capabilities:
+#         streaming: true
+#         tools: false
+#         images: false
+#         structuredOutput: false
+#   profiles:
+#     claude-sonnet:
+#       provider: anthropic                   # MUST name a key in providers above
+#       model: claude-sonnet-4-6
+#       maxOutputTokens: 8192                 # accepted; NOT yet honoured (#2114)
+#       modelClass: frontier                  # local-only | frontier | any (carried, not enforced — #2117)
+#       dataResidency: us                     # opaque label (carried, not enforced — #2117)
+#     local-qwen:
+#       provider: local-ollama
+#       model: qwen3-coder
+#       maxOutputTokens: 8192                 # accepted; NOT yet honoured (#2114)
+#       modelClass: local-only
+#       dataResidency: nz
+#       # Q5 escape hatch: ONE namespaced, opaque bag of provider-only knobs.
+#       # Portable behaviour must never depend on anything in here, and a
+#       # credential must NEVER be routed through it. Not yet honoured (#2114).
+#       # options:
+#       #   anthropic:
+#       #     <REPLACE_ME_VENDOR_KNOB>: <REPLACE_ME_VALUE>
+#                                             # <-- end inference reference example
+#
+# Then bind an agent to a profile in stacks/<slug>.yaml (see the commented
+# api-agent example beside the `ivy` agent there):
+#
+#   runtime:
+#     substrate: api-agent
+#     inferenceProfile: claude-sonnet
+#
+# Active default: both maps EMPTY. With no profiles there is no boot pre-flight
+# output and no behaviour change. An `api-agent` agent bound to a profile that
+# is not defined here fails closed at dispatch with a clear terminal — it never
+# silently falls back to some default model.
+inference:
+  providers: {}
+  profiles: {}
+
 # -----------------------------------------------------------------------------
 # attachments — inbound file-handling limits
 # -----------------------------------------------------------------------------

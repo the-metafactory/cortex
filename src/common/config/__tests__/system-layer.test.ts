@@ -23,11 +23,12 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { stringify } from "yaml";
+import { stringify, parse } from "yaml";
 import { loadConfigWithAgents } from "../loader";
+import { InferenceConfigSchema } from "../../inference/inference-config-schema";
 
 let testDir: string;
 
@@ -238,5 +239,68 @@ describe("CFG.b — docs/config-layout reference example composes", () => {
     expect(loaded.config.nats?.subjects).toEqual([]); // landmine kept safe-default
     expect(loaded.config.claude?.timeoutMs).toBe(300000);
     expect(loaded.bus?.review.stream.name).toBe("CODE_REVIEW");
+  });
+
+  // -------------------------------------------------------------------------
+  // #2116 — the documented `inference` example must be VALID, not just prose
+  // -------------------------------------------------------------------------
+  //
+  // The reference `system/system.yaml` ships `inference` empty (opt-in, D3:
+  // `claude-code` stays the default) with the real shape documented as a
+  // COMMENTED example. Prose rots: a schema change would silently leave a
+  // principal copy-pasting a block that no longer loads. These two tests pin
+  // both halves — the shipped default is opt-in, and the commented example
+  // parses through the REAL `InferenceConfigSchema` once uncommented.
+  //
+  // Both assert against the TEMPLATE (a docs artifact) rather than the loader,
+  // so they test what this branch actually changes. The loader's own handling of
+  // `inference` is pinned separately by the #2121 regression tests.
+
+  test("the reference template ships `inference` opt-in (empty maps, claude-code default)", () => {
+    const refDir = join(import.meta.dir, "..", "..", "..", "..", "docs", "config-layout");
+    const systemYaml = parse(
+      readFileSync(join(refDir, "system", "system.yaml"), "utf8"),
+    ) as { inference?: { providers?: unknown; profiles?: unknown } };
+
+    // Empty ⇒ a stock stack gets no boot pre-flight output and no api-agent
+    // behaviour change. The block is present (so it's discoverable) but inert.
+    expect(systemYaml.inference).toBeDefined();
+    expect(systemYaml.inference?.providers).toEqual({});
+    expect(systemYaml.inference?.profiles).toEqual({});
+
+    // D3: the reference agent stays on the default substrate.
+    const loaded = loadConfigWithAgents(join(refDir, "cortex.yaml"));
+    expect(loaded.inlineAgents[0]?.runtime?.substrate).toBe("claude-code");
+  });
+
+  test("the COMMENTED inference example in system.yaml parses through InferenceConfigSchema", () => {
+    const systemYaml = join(
+      import.meta.dir, "..", "..", "..", "..",
+      "docs", "config-layout", "system", "system.yaml",
+    );
+    const lines = readFileSync(systemYaml, "utf8").split("\n");
+    const begin = lines.findIndex((l) => l.includes("<-- begin inference reference example"));
+    const end = lines.findIndex((l) => l.includes("<-- end inference reference example"));
+    expect(begin).toBeGreaterThan(-1); // the markers themselves are the contract
+    expect(end).toBeGreaterThan(begin);
+
+    // Strip the leading `# ` comment prefix to recover the YAML the principal
+    // would uncomment, then validate it exactly as the loader would.
+    const uncommented = lines.slice(begin, end + 1).map((l) => l.replace(/^# ?/, "")).join("\n");
+    const doc = parse(uncommented) as { inference?: unknown };
+    const result = InferenceConfigSchema.safeParse(doc.inference);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // Spot-check the load-bearing claims the surrounding docs make.
+    const cfg = result.data;
+    // Credentials are `env:NAME` REFERENCES, never literals (D6).
+    for (const provider of Object.values(cfg.providers)) {
+      expect(provider.apiKey).toMatch(/^env:[A-Za-z_][A-Za-z0-9_]*$/);
+    }
+    // Every profile resolves to a declared provider (the document-level invariant).
+    for (const profile of Object.values(cfg.profiles)) {
+      expect(Object.keys(cfg.providers)).toContain(profile.provider);
+    }
   });
 });

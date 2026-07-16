@@ -132,10 +132,38 @@ agents:
     roles: []
     trust: []
     runtime:
-      substrate: claude-code
+      substrate: claude-code       # THE DEFAULT (design D3) — full Claude Code session, all tools
       mode: in-process
       capabilities:
         - chat                     # MUST also appear in the top-level capabilities[] catalog
+      # -----------------------------------------------------------------------
+      # OPT-IN: dispatch this agent against a raw model provider instead
+      # -----------------------------------------------------------------------
+      # Swap `substrate: claude-code` for the two lines below to route this
+      # agent's dispatches through the api-agent harness (epic #2055, Phase 1):
+      #
+      #   substrate: api-agent
+      #   inferenceProfile: claude-sonnet   # names a key in system.yaml's inference.profiles
+      #
+      # `claude-code` stays the default for every agent that omits `substrate` —
+      # opting ONE agent in changes nothing for the others.
+      #
+      # KNOW WHAT YOU GIVE UP (D5): api-agent is TEXT-ONLY. No tools, no Bash,
+      # no file edits, no skills, no attachments — a request needing any of them
+      # is rejected with an `unsupported_capability` terminal. No streaming
+      # progress either: the reply arrives as ONE block on the terminal
+      # envelope. It is NOT a coding agent. Use it for prose/chat work.
+      #
+      # Fails closed: an `api-agent` agent whose `inferenceProfile` is missing
+      # or names an undefined profile fails at dispatch with a clear terminal —
+      # it never silently falls back to a default model.
+      #
+      # NOT `runtime.model` — that field selects the Sage review engine's model
+      # and has nothing to do with inference profiles.
+      #
+      # The profile is defined ONE layer up in system/system.yaml (substrate
+      # layer, whole-stack blast radius) — see the annotated `inference` block
+      # there for the provider/credential/egress rules and current limitations.
     # Style (A): EMPTY — the Discord binding folds in from surfaces/surfaces.yaml.
     presence: {}
 
