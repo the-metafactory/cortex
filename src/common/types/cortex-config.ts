@@ -964,6 +964,15 @@ export const AgentSchema = z.object({
    * remain accessible even when all 14 known CC tools appear in
    * `agentDisallowedTools`. Mirrors grill.ts's `--strict-mcp-config` flag.
    * Default `false`/absent.
+   *
+   * NOTE this is AGENT-level (all-or-nothing for every sender). Since
+   * cortex#2111 the PRINCIPAL-level control is the `tool.mcp*` capability
+   * namespace on policy roles: `mcp__*` is deny-by-default per principal
+   * with explicit grants (`tool.mcp` | `tool.mcp.<server>` |
+   * `tool.mcp.<server>.<tool>`), enforced by the MCP Guard PreToolUse hook
+   * plus a `--strict-mcp-config` backstop for zero-grant principals. This
+   * flag remains for structural airgaps that must hold regardless of who
+   * asks (e.g. zero-tool facilitator agents).
    */
   strictMcpConfig: z.boolean().optional(),
   /**

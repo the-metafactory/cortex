@@ -162,6 +162,19 @@ export const CORTEX_PRESERVED_CLAUDE_ENV = new Set<string>([
 export const CORTEX_SKILL_GRANTS_ENV = "CORTEX_SKILL_GRANTS";
 
 /**
+ * Env var carrying the per-session **MCP grant list** to the MCP Guard
+ * PreToolUse hook (cortex#2111). Value is a JSON array of lowercase grant
+ * patterns (`"*"` | `"<server>"` | `"<server>.<tool>"` — see
+ * `deriveMcpGrants` in `src/common/policy/resolve-access.ts`). The hook
+ * (`mcp-guard.hook.ts`, matcher `mcp__.*`) DENIES any `mcp__*` invocation
+ * not covered by a pattern; absent/malformed env → deny-all (fail-closed).
+ *
+ * Set on the child env by `cc-session.ts`, layered AFTER `scopeSessionEnv`
+ * — exactly the {@link CORTEX_SKILL_GRANTS_ENV} pattern.
+ */
+export const CORTEX_MCP_GRANTS_ENV = "CORTEX_MCP_GRANTS";
+
+/**
  * Build the curated settings object cortex spawns bot sessions under.
  *
  * Contains ONLY cortex's own hooks (resolved to the installed symlink
@@ -186,15 +199,35 @@ export const CORTEX_SKILL_GRANTS_ENV = "CORTEX_SKILL_GRANTS";
  * session is either {broad `Skill` allow + this gate hook} or {no `Skill`
  * tool}, never the broken {`Skill(name)` allow + bare `Skill` deny}.
  *
+ * ## MCP gating (cortex#2111)
+ *
+ * When `mcpGrants` is DEFINED (including `[]`), the session came from a
+ * policy-resolved decision and the `mcp__*` namespace is deny-by-default:
+ * we register the **MCP Guard** PreToolUse hook (matcher `mcp__.*`), which
+ * denies any MCP invocation not covered by the grant list. The list reaches
+ * the hook via the {@link CORTEX_MCP_GRANTS_ENV} env var on the child (set
+ * by cc-session.ts, atomically with this registration). Note the asymmetry
+ * with skills: an EMPTY skill-grant list skips the hook (the `Skill` deny
+ * rule covers it), but an empty MCP grant list still REGISTERS the hook —
+ * there is no inventory-based deny rule that can reach `mcp__*` names
+ * (that's the whole #2111 gap), so the hook IS the deny.
+ *
+ * When `mcpGrants` is `undefined` (a path that never went through
+ * `resolvePolicyAccess` — review pipeline, dev consumer), no MCP hook is
+ * registered and existing behaviour is unchanged.
+ *
  * @param claudeDir Absolute path to the cortex-owned `.claude` dir holding
  *   the installed hook symlinks. Defaults to `${HOME}/.claude`.
  * @param skillGrants Per-session skill grant list. Non-empty → register the
  *   Skill Guard hook. Undefined/empty → no Skill hook (default-deny lives
  *   in the caller's `disallowedTools`).
+ * @param mcpGrants Per-session MCP grant list (cortex#2111). Defined →
+ *   register the MCP Guard hook (deny-by-default over `mcp__*`).
  */
 export function buildCuratedSettings(
   claudeDir: string,
   skillGrants?: readonly string[],
+  mcpGrants?: readonly string[],
 ): Record<string, unknown> {
   const hook = (name: string) => ({
     type: "command",
@@ -209,6 +242,12 @@ export function buildCuratedSettings(
   ];
   if (skillGrants !== undefined && skillGrants.length > 0) {
     preToolUse.push({ matcher: "Skill", hooks: [hook("CortexSkillGuard.hook.ts")] });
+  }
+  // cortex#2111 — defined mcpGrants (even []) arms the namespace gate. The
+  // matcher is a regex: every tool name starting `mcp__` routes through the
+  // guard.
+  if (mcpGrants !== undefined) {
+    preToolUse.push({ matcher: "mcp__.*", hooks: [hook("CortexMcpGuard.hook.ts")] });
   }
 
   // Mirrors src/settings/cortex-hooks.json (the reference fallback) but
@@ -257,16 +296,21 @@ export interface IsolatedSettings {
  *   the curated file registers the Skill Guard PreToolUse hook; the caller
  *   must ALSO broadly allow the `Skill` tool and set the
  *   {@link CORTEX_SKILL_GRANTS_ENV} env var. Undefined/empty → no Skill hook.
+ * @param mcpGrants Per-session MCP grant list (cortex#2111). Defined (even
+ *   `[]`) → the curated file registers the MCP Guard PreToolUse hook and the
+ *   caller must set the {@link CORTEX_MCP_GRANTS_ENV} env var. Undefined →
+ *   no MCP hook (non-policy path, behaviour unchanged).
  */
 export function createIsolatedSettings(
   claudeDir: string,
   skillGrants?: readonly string[],
+  mcpGrants?: readonly string[],
 ): IsolatedSettings {
   const dir = mkdtempSync(join(tmpdir(), "cortex-session-"));
   const settingsPath = join(dir, "settings.json");
   writeFileSync(
     settingsPath,
-    JSON.stringify(buildCuratedSettings(claudeDir, skillGrants), null, 2),
+    JSON.stringify(buildCuratedSettings(claudeDir, skillGrants, mcpGrants), null, 2),
     {
       mode: 0o600,
     },

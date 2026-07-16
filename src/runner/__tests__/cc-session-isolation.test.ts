@@ -257,3 +257,180 @@ describe("CCSession — isolation opt-out (principal-as-self)", () => {
     }
   });
 });
+
+describe("CCSession — per-principal MCP grants (cortex#2111)", () => {
+  /**
+   * Snapshot the curated `--settings` file AT SPAWN TIME — the spy throw
+   * triggers CCSession's catch path, which cleans the temp dir (same
+   * pattern as captureSpawnWithSettings above).
+   */
+  function captureSpawnMcp(): {
+    calls: (Captured & { settings: unknown })[];
+    restore: () => void;
+  } {
+    const calls: (Captured & { settings: unknown })[] = [];
+    const spy = spyOn(Bun, "spawn").mockImplementation(((
+      cmd: string[],
+      opts: { env: Record<string, string> },
+    ) => {
+      const idx = cmd.indexOf("--settings");
+      const settings =
+        idx > -1 ? JSON.parse(readFileSync(cmd[idx + 1]!, "utf8")) : undefined;
+      calls.push({ cmd, env: opts.env, settings });
+      throw new Error("spawn intercepted by test");
+    }) as unknown as typeof Bun.spawn);
+    return { calls, restore: () => spy.mockRestore() };
+  }
+
+  const mcpEntry = (settings: unknown) =>
+    (settings as { hooks: { PreToolUse: { matcher?: string; hooks: { command: string }[] }[] } })
+      .hooks.PreToolUse.find((e) => e.matcher === "mcp__.*");
+
+  test("defined mcpGrants → CORTEX_MCP_GRANTS env + MCP Guard hook in curated settings", () => {
+    const { calls, restore } = captureSpawnMcp();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        claudeDir: "/fake/.claude",
+        mcpGrants: ["gdrive", "jira.search_issues"],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+
+      const { cmd, env, settings } = calls[0]!;
+      // Env: grant list rides CORTEX_MCP_GRANTS, atomically with the hook.
+      expect(env.CORTEX_MCP_GRANTS).toBe('["gdrive","jira.search_issues"]');
+      // Curated settings file registers the MCP Guard under mcp__.*.
+      const mcp = mcpEntry(settings);
+      expect(mcp).toBeDefined();
+      expect(mcp!.hooks[0]!.command).toContain("CortexMcpGuard.hook.ts");
+      // Partial grants must NOT add the structural strict flag — granted
+      // servers have to load; the hook enforces the boundary.
+      expect(cmd).not.toContain("--strict-mcp-config");
+    } finally {
+      restore();
+    }
+  });
+
+  test("EMPTY mcpGrants → deny-all: hook + env + --strict-mcp-config backstop", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        claudeDir: "/fake/.claude",
+        mcpGrants: [],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+
+      const { cmd, env } = calls[0]!;
+      expect(env.CORTEX_MCP_GRANTS).toBe("[]");
+      expect(cmd).toContain("--strict-mcp-config");
+      // No double-append when the caller already supplied the flag is
+      // covered by the dedupe test below.
+    } finally {
+      restore();
+    }
+  });
+
+  test("EMPTY mcpGrants + caller-supplied strict flag → no duplicate", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        claudeDir: "/fake/.claude",
+        mcpGrants: [],
+        additionalArgs: ["--strict-mcp-config"],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+
+      const { cmd } = calls[0]!;
+      expect(cmd.filter((a) => a === "--strict-mcp-config").length).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  test("UNDEFINED mcpGrants → no env, no hook, no strict flag (behaviour unchanged)", () => {
+    const { calls, restore } = captureSpawnMcp();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        claudeDir: "/fake/.claude",
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+
+      const { cmd, env, settings } = calls[0]!;
+      expect(env.CORTEX_MCP_GRANTS).toBeUndefined();
+      expect(cmd).not.toContain("--strict-mcp-config");
+      expect(mcpEntry(settings)).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("settingsIsolation OFF + empty grants → strict flag STILL applied (not gated on isolate)", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        settingsIsolation: false,
+        mcpGrants: [],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+
+      const { cmd } = calls[0]!;
+      // No curated settings (no hook) on the non-isolated path, so the
+      // structural flag is the only line of defence — it must survive.
+      expect(cmd).toContain("--strict-mcp-config");
+      expect(cmd.indexOf("--settings")).toBe(-1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+  test("M3: settingsIsolation OFF + PARTIAL grants → strict flag (fail-closed, no hook possible)", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        settingsIsolation: false,
+        mcpGrants: ["gdrive"],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+      // No curated settings on the non-isolated path → the hook can't
+      // register, so fine-grained enforcement is impossible. Denying the
+      // granted server too beats granting the whole namespace.
+      expect(calls[0]!.cmd).toContain("--strict-mcp-config");
+    } finally {
+      restore();
+    }
+  });
+
+  test("M3: settingsIsolation OFF + FULL grant ('*') → no strict flag (nothing to confine)", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        settingsIsolation: false,
+        mcpGrants: ["*"],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+      expect(calls[0]!.cmd).not.toContain("--strict-mcp-config");
+    } finally {
+      restore();
+    }
+  });

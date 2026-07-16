@@ -326,6 +326,7 @@ import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchRelease } from "./cli/cortex/commands/release";
 import { dispatchStack } from "./cli/cortex/commands/stack";
+import { dispatchQuickstart } from "./cli/cortex/commands/quickstart";
 import { dispatchPlugin } from "./cli/cortex/commands/plugin";
 import { dispatchConfig } from "./cli/cortex/commands/config";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
@@ -6722,6 +6723,25 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // cortex#2094 (L3) — env-contract driven one-command first install. Same
+  // passthrough shape as `stack`/`network`: `dispatchQuickstart` owns its own
+  // flag parsing (there is no subcommand — quickstart is a single, env-driven
+  // verb), so commander hands it the raw remaining argv untouched. Does not
+  // boot the daemon itself — step 7 hands that off to `systemctl --user`.
+  program
+    .command("quickstart")
+    .description("Env-contract driven one-command first install (preflight → validate → scaffold → services → gate)")
+    .argument("[args...]", "quickstart flags (see `cortex quickstart --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchQuickstart(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);

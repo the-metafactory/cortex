@@ -150,6 +150,7 @@ Adapter resolves inbound `message.author.id` → principal via reverse lookup. I
 Reserved capability ids:
 - `keyword.chat`, `keyword.async`, `keyword.team` — replace `features[]`
 - `tool.<lowercase-tool-name>` — granted means tool is allowed; absent means denied. `disallowedTools: ["Bash"]` migrates to: omit `tool.bash` from the role's capabilities.
+- `tool.mcp` / `tool.mcp.<server>` / `tool.mcp.<server>.<toolname>` — cortex#2111: the MCP namespace (`mcp__*` CC tools). INVERSE default of the CC tools above: MCP names are not enumerable at build time (they depend on which servers the host connected), so deny-by-omission via the inventory can never reach them — instead the whole namespace is **deny-by-default** and these capabilities are explicit grants (`tool.mcp` = everything; `tool.mcp.<server>` = every tool of one server; `tool.mcp.<server>.<toolname>` = one tool; all lowercase). `operator` principals hold the implicit full grant. Enforced by the MCP Guard PreToolUse hook (matcher `mcp__.*`) registered in the curated session settings, plus a `--strict-mcp-config` structural backstop for zero-grant principals. The 14-tool inventory semantics are untouched.
 - `operator` — special capability granted only to the operator role. Used by adapter to short-circuit DM gating (operator-role principal gets full access).
 - `dispatch.<agent_id>` — already used by dispatch-listener.ts:718, unchanged.
 

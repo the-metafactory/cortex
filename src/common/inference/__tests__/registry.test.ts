@@ -131,6 +131,60 @@ describe("InferenceRegistry.resolveProfile — happy path", () => {
     expect(profile.provider.id).toBe("anthropic");
   });
 
+  // ── #2114: the resolved bundle must CARRY the principal's knobs ───────────
+  // These were absent from `ResolvedProfile` for a full epic, so the harness had
+  // nothing to copy onto the `ModelRequest` and both fields were silently
+  // discarded. The end-to-end proof is the wire-body suite in
+  // `src/substrates/api-agent/__tests__/harness.test.ts`; these pin the seam.
+
+  test("carries maxOutputTokens + options from config onto the resolved bundle (#2114)", () => {
+    const spy = makeFactorySpy();
+    const config = InferenceConfigSchema.parse({
+      providers: {
+        anthropic: {
+          protocol: "anthropic-messages",
+          baseUrl: "https://api.anthropic.example/v1",
+          apiKey: "env:ANTHROPIC_API_KEY",
+        },
+      },
+      profiles: {
+        bounded: {
+          provider: "anthropic",
+          model: "claude-sonnet-4",
+          modelClass: "frontier",
+          maxOutputTokens: 8192,
+          options: { anthropic: { top_k: 40 } },
+        },
+      },
+    });
+    const registry = new InferenceRegistry(config, {
+      "anthropic-messages": spy.factory,
+    });
+
+    const result = registry.resolveProfile("bounded");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.profile.maxOutputTokens).toBe(8192);
+    expect(result.profile.options).toEqual({ anthropic: { top_k: 40 } });
+  });
+
+  test("omits maxOutputTokens + options from the bundle when the profile omits them (#2114)", () => {
+    const spy = makeFactorySpy();
+    const registry = new InferenceRegistry(baseConfig(), {
+      "anthropic-messages": spy.factory,
+    });
+
+    const result = registry.resolveProfile("frontier-eu");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    // Absent, not `undefined`-valued: the harness spreads these conditionally,
+    // and each provider then applies its own documented omission behaviour.
+    expect(result.profile).not.toHaveProperty("maxOutputTokens");
+    expect(result.profile).not.toHaveProperty("options");
+  });
+
   test("caches the provider instance across resolves of the same provider", () => {
     const spy = makeFactorySpy();
     const config = InferenceConfigSchema.parse({

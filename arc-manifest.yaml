@@ -8,7 +8,7 @@ name: "cortex"
 # now fail to load (strict canonical-only schemas). Run `cortex migrate-config`
 # to rewrite a pre-v4 config to the canonical `principal:` / `principalId` /
 # `principal_id` shape.
-version: "6.8.5"
+version: "6.9.0"
 type: component
 tier: community
 description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin layer model"
@@ -82,6 +82,14 @@ provides:
     # reference the installed absolute path.
     - source: src/runner/hooks/skill-guard.hook.ts
       target: ~/.claude/hooks/CortexSkillGuard.hook.ts
+    # cortex#2111 — per-principal MCP grant PreToolUse hook. Same posture as
+    # the Skill Guard above: symlink ONLY (no `hooks:` entry) so it is NEVER
+    # registered in the principal's GLOBAL settings.json — it would otherwise
+    # gate the principal's own MCP tools. It is registered PER-SESSION in the
+    # curated `--settings` file (session-settings.ts, matcher `mcp__.*`) for
+    # bot sessions whose policy decision carried an MCP grant list.
+    - source: src/runner/hooks/mcp-guard.hook.ts
+      target: ~/.claude/hooks/CortexMcpGuard.hook.ts
     # cortex#1676: deliberately NO `hooks/lib` symlink under ~/.claude. Hook
     # files import their lib modules with paths relative to their own file
     # (e.g. `./lib/...`, or `../../taps/cc-events/hooks/lib/...` for
@@ -139,6 +147,12 @@ scripts:
   postinstall: ./scripts/postinstall.sh
   preupgrade: ./scripts/preupgrade.sh
   postupgrade: ./scripts/postupgrade.sh
+  # cortex#2093: L1 rollback — disables + removes rendered systemd user units
+  # (cortex#2071) before `arc remove cortex` tears down symlinks/repo. Fires
+  # via arc's `scripts.preremove` hook (arc/src/commands/remove.ts step 1,
+  # arc#138) — the first thing `arc remove` does, non-aborting on failure.
+  # No-ops on Darwin / systemd-less hosts.
+  preremove: ./scripts/preremove.sh
 
 # Dependencies — cortex#79 pins arc >= 0.25.0. That's the release that
 # ships the stable `arc.nats.v1` JSON contract on the four `arc nats *`

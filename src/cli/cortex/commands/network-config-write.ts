@@ -133,11 +133,17 @@ export function writeNetworksGuarded(
   mkdirSync(dirname(path), { recursive: true });
 
   // (2) Timestamped backup (only when a file existed — a fresh file is removed on
-  // failure instead).
+  // failure instead). The backup carries the file's CURRENT content — which, when
+  // a network entry already carries a payload_key from an earlier write, means the
+  // backup carries that secret too. Written at the file's own mode from creation
+  // (and re-chmodded, umask-proof) so a secret-bearing config never produces a
+  // world-readable backup — `originalMode` is always defined here (`existed` guards
+  // this branch, and `originalMode` is only ever `undefined` when `!existed`).
   let backupPath: string | undefined;
-  if (existed && originalText !== undefined) {
+  if (existed && originalText !== undefined && originalMode !== undefined) {
     backupPath = `${path}.pre-${backupLabel}-${backupStamp()}.bak`;
-    writeFileSync(backupPath, originalText, "utf-8");
+    writeFileSync(backupPath, originalText, { encoding: "utf-8", mode: originalMode });
+    chmodSync(backupPath, originalMode);
   }
 
   // (3) Atomic write, then (4) re-parse verify the networks round-trip. Any parse

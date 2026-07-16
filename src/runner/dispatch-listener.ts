@@ -111,6 +111,7 @@ import { extractAgentIdFromDid } from "../common/policy/did";
 // limiting) + the anonymous public principal id it fails closed for.
 import type { AdmissionGate, AdmissionLease } from "../bus/admission";
 import { PUBLIC_PRINCIPAL_ID } from "../common/policy/factory";
+import { deriveMcpGrants, intersectMcpGrants } from "../common/policy/resolve-access";
 import { isUuid } from "../common/types/uuid";
 // M3 (cortex#1241, ADR-0019) — verify-then-decrypt the sealed dispatch payload.
 import { readMarker, NetworkKeyring } from "../common/crypto/payload-encryption";
@@ -237,6 +238,12 @@ export interface DispatchTaskReceivedPayload {
    * grant exactly those skills via the Skill Guard PreToolUse hook.
    */
   allowed_skills?: string[];
+  /**
+   * cortex#2111 — per-principal MCP grant list. `undefined` → no MCP hook
+   * (behaviour unchanged); `[]` → deny every `mcp__*` tool; `[...]` → allow
+   * exactly the covered servers/tools via the MCP Guard PreToolUse hook.
+   */
+  mcp_grants?: string[];
   allowed_dirs?: string[];
   timeout_ms?: number;
   cwd?: string;
@@ -1277,6 +1284,11 @@ function buildDispatchRequest(
     ...(payload.allowed_skills !== undefined && {
       allowedSkills: payload.allowed_skills,
     }),
+    // cortex#2111 — per-principal MCP grants ride `mcp_grants`. Omitted when
+    // the payload didn't carry it (→ harness leaves MCP behaviour unchanged).
+    ...(payload.mcp_grants !== undefined && {
+      mcpGrants: payload.mcp_grants,
+    }),
     context: hasEnvContext ? [{ kind: "env", data: envContext }] : [],
     agent: {
       id: payload.agent_id,
@@ -1799,6 +1811,12 @@ async function handleDispatchEnvelope(
   // leave it `undefined` so the engine skips the federation branch.
   const sourceNetwork = extractSourceNetwork(envelope, subject, federatedNetworksById);
   let gatedPrincipal: Principal | undefined;
+  // cortex#2111 (adversarial-review MAJOR) — the EXECUTING stack's own
+  // policy-derived capability set for the originator, captured from the
+  // gate decision below so the MCP grant injection after
+  // buildDispatchRequest() can be RECEIVING-STACK-AUTHORITATIVE (the #127
+  // bash-allowlist model) instead of trusting the wire.
+  let gatedCapabilities: readonly string[] | undefined;
   // R26 P1 (cortex#1371) — in-flight admission lease, acquired by the
   // admission gate below (only when `max_concurrent` tiers are configured)
   // and released in the `finally` around the harness drain: the harness
@@ -1972,6 +1990,7 @@ async function handleDispatchEnvelope(
       decision.capability,
     );
     gatedPrincipal = decision.principal;
+    gatedCapabilities = decision.capabilities;
 
     // R26 P1 (cortex#1371) — ADMISSION GATE (enforcement point 1, design
     // §4.2). Runs AFTER the policy allow and BEFORE harness construction:
@@ -2102,6 +2121,35 @@ async function handleDispatchEnvelope(
       runtime.bashGuardDisabled = bashGuardDisabled;
     }
     req.runtime = runtime;
+  }
+
+  // cortex#2111 (adversarial-review MAJOR) — RECEIVING-STACK-AUTHORITATIVE
+  // MCP grants, the #127 model applied to the MCP namespace. The wire's
+  // `mcp_grants` is a REMOTE claim: a federated peer (or a pre-#2111 /
+  // crafted publisher) could send `["*"]` to self-grant the executing
+  // host's whole MCP surface, or OMIT the field to land in the
+  // allow-by-default no-hook path. Neither may stand. The EXECUTING
+  // stack's own policy decision for the originator (captured at the gate
+  // above) is the authority:
+  //   - wire ABSENT  → authoritative list wholesale (closes the omission
+  //     fail-open: every policy-gated dispatch now carries a defined list,
+  //     so the MCP Guard always arms).
+  //   - wire PRESENT → intersect(wire, authoritative): a source may NARROW
+  //     its session's MCP surface, never widen it past local policy.
+  // `gatedCapabilities` is always set on the allow path; the
+  // belt-and-braces fallback derives from `undefined` → `[]` (deny-all),
+  // never allow.
+  {
+    // `gatedCapabilities` is assigned on the gate's allow path and every
+    // deny path returns before this point; deriveMcpGrants maps undefined
+    // → [] = deny-all (never allow) if a future refactor broke that. The
+    // reserved short-circuit capability is detected INSIDE deriveMcpGrants
+    // (single-arg form) — the literal stays in the carved-out policy module.
+    const authoritative = deriveMcpGrants(gatedCapabilities);
+    req.mcpGrants =
+      req.mcpGrants === undefined
+        ? authoritative
+        : intersectMcpGrants(req.mcpGrants, authoritative);
   }
 
   // API-P0.5 (#2060, D3) — harness selection lives in the HarnessResolver

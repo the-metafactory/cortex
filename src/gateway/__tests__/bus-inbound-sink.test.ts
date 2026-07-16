@@ -181,6 +181,25 @@ describe("BusInboundSink", () => {
     expect(opts.disallowedTools).toEqual(["Skill"]);
   });
 
+  // ── Test 3b: fail-closed MCP deny on the gateway path (cortex#2111) ──────────
+  //
+  // The MCP twin of Test 3: no deny rule can reach un-enumerable `mcp__*`
+  // names, so an OMITTED mcpGrants would leave the bound stack's session
+  // with every MCP tool available by default. The gateway grants nothing —
+  // it must emit the EXPLICIT empty grant list, which makes the runner
+  // register the MCP Guard hook in deny-all mode + add --strict-mcp-config.
+
+  test("emits mcpGrants: [] (fail-closed MCP deny-all, cortex#2111)", async () => {
+    const { sink, calls } = makeSink();
+    await sink.publish(makeDecision(), makeMsg());
+    const opts = calls[0];
+    if (opts === undefined) throw new Error("expected publishFn to have been called");
+
+    // PRESENT and EMPTY — presence is what arms the deny-by-default; an
+    // absent field would mean "no decision" (allow-by-default, the #2111 gap).
+    expect(opts.mcpGrants).toEqual([]);
+  });
+
   // ── Test 4: taskId is non-empty ──────────────────────────────────────────────
 
   test("taskId is non-empty on each call", async () => {

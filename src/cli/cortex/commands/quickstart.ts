@@ -1,0 +1,733 @@
+#!/usr/bin/env bun
+/**
+ * `cortex quickstart` — L3 (cortex#2094): env-contract driven one-command
+ * first install (Debian).
+ *
+ * Collapses the validated Debian runbook (README-AGENTS.md Appendix A + §5,
+ * merged PR#2090 — itself crediting the community gist it's based on) into
+ * ONE idempotent command, driven entirely by the DD-L5 `CTX_*` env contract
+ * (arc `design/linux-host-support.md`, arc#309):
+ *
+ *   set -a; . ./cortex.env; set +a; cortex quickstart
+ *
+ * Eight numbered steps, each printing a ✓/✗ table before the next one runs.
+ * The WHOLE run is re-runnable without damage — every step is designed to
+ * be a no-op (skip/verified) on a config that's already in the desired
+ * state, so a principal can re-run this after fixing one env var without
+ * fear of clobbering anything already wired up.
+ *
+ *   1. Preflight        — bun/claude/nats-server on PATH, claude authenticated,
+ *                          Linux linger enabled. All read-only.
+ *   2. Validate env      — every required CTX_* present + shape-checked.
+ *   3. nats conf         — write ~/.config/nats/$CTX_SLUG.conf (skip if
+ *                          byte-identical; refuse a DIFFERENT existing file
+ *                          without --force).
+ *   4. Scaffold          — `cortex stack create` (or verify+skip if the
+ *                          stack already exists with matching identity).
+ *   5. Patch configs     — the three formerly-manual edits, guarded +
+ *                          comment-preserving (quickstart-lib.ts).
+ *   6. Seed provisioning — the SAME entry postupgrade.sh uses.
+ *   7. Services          — Linux: systemd user units (L1, cortex#2071
+ *                          REQUIRED — declared as a hard dependency, not
+ *                          re-implemented here). macOS: arc handles launchd;
+ *                          skip.
+ *   8. Gate              — the §5 healthy-boot grep table + nats /healthz,
+ *                          bounded wait.
+ *
+ * Explicitly OUT OF SCOPE (cortex#2094): rendering the systemd units
+ * (cortex#2071 — quickstart REQUIRES it merged, checked in step 7); the
+ * container entrypoint (a future L4 issue calls INTO this command, not the
+ * reverse); Discord bot creation / invite flow (irreducibly manual — the
+ * Developer Portal has no API for it; quickstart only validates the
+ * resulting ids via the env contract).
+ *
+ * Secret hygiene (non-negotiable, cortex#2094 acceptance criteria):
+ * `CTX_DISCORD_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` values NEVER reach stdout,
+ * stderr, or any error message — every place quickstart reports on them
+ * prints only `"set" | "missing"` (see `quickstart-lib.ts`'s
+ * `validateEnvContract` / `renderEnvTable`, which structurally keep those two
+ * keys out of any value-carrying field).
+ *
+ * Exit codes: 0 success (or a fully-idempotent no-op re-run) · 1 operational
+ * failure (a step's precondition failed, or a step itself failed) · 2 usage
+ * error (bad flag) or a missing/malformed env contract.
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname } from "path";
+
+import { discoverStacks } from "./stack-lib";
+import { dispatchStack } from "./stack";
+import { CliArgsError } from "./_shared/arg-error";
+import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
+import { type ExitResult } from "./_shared/exit-result";
+
+import { CC_AUTH_FAILURE_MESSAGE, isCcAuthFailure } from "../../../runner/cc-failure-classifier";
+import type { CCSessionResult } from "../../../runner/cc-session";
+import { resolveConfigDir } from "../../../common/config/config-path";
+
+import { buildQuickstartPorts } from "./quickstart-adapters";
+import type { QuickstartPorts } from "./quickstart-ports";
+import {
+  daemonLogPath,
+  evaluateHealthyBootGate,
+  gatePassed,
+  natsConfPath,
+  nkeyBasenameForSlug,
+  patchStackYaml,
+  patchSurfacesYaml,
+  patchSystemNatsPort,
+  pointerConfigPath,
+  renderEnvTable,
+  renderGateTable,
+  renderNatsConf,
+  stackAgentConfigPath,
+  stackTargetDir,
+  surfacesConfigPath,
+  systemConfigPath,
+  validateEnvContract,
+  type EnvValidationResult,
+} from "./quickstart-lib";
+
+export { type ExitResult } from "./_shared/exit-result";
+
+// =============================================================================
+// Injectable ports factory (mirrors network.ts's *PortsFactory convention)
+// =============================================================================
+
+/** Production omits this — the live adapters. Tests pass a fake bundle so
+ *  quickstart's CLI-level tests never spawn a real `systemctl`/`loginctl`/
+ *  `claude`, never hit a real `/healthz`, and never wait real wall-clock
+ *  time in the gate's poll loop. */
+export type QuickstartPortsFactory = () => QuickstartPorts;
+const DEFAULT_QUICKSTART_PORTS_FACTORY: QuickstartPortsFactory = buildQuickstartPorts;
+
+/** Bounded wait window for step 8's gate poll loop (cortex#2094: "30s-120s
+ *  bounded wait"). Overridable via `--gate-timeout-ms` (tests + an unusually
+ *  slow first boot). */
+export const DEFAULT_GATE_TIMEOUT_MS = 60_000;
+const GATE_POLL_INTERVAL_MS = 3_000;
+
+// =============================================================================
+// Flags
+// =============================================================================
+
+interface QuickstartFlags {
+  configDir?: string;
+  natsDir?: string;
+  force: boolean;
+  json: boolean;
+  skipServices: boolean;
+  gateTimeoutMs: number;
+  help: boolean;
+}
+
+/** quickstart takes no subcommand (it's a single, env-driven verb) — a small
+ *  hand-rolled flag parser rather than `parseSubcommandArgs` (built for the
+ *  `<subcommand> <flags>` shape `stack`/`network` use). */
+function parseQuickstartArgs(argv: string[]): QuickstartFlags {
+  const flags: QuickstartFlags = {
+    force: false,
+    json: false,
+    skipServices: false,
+    gateTimeoutMs: DEFAULT_GATE_TIMEOUT_MS,
+    help: false,
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    switch (a) {
+      case "--config-dir":
+        flags.configDir = requireValue(argv, ++i, "--config-dir");
+        break;
+      case "--nats-dir":
+        flags.natsDir = requireValue(argv, ++i, "--nats-dir");
+        break;
+      case "--gate-timeout-ms": {
+        const raw = requireValue(argv, ++i, "--gate-timeout-ms");
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new CliArgsError("quickstart", `--gate-timeout-ms must be a positive number, got "${raw}"`);
+        }
+        flags.gateTimeoutMs = n;
+        break;
+      }
+      case "--force":
+        flags.force = true;
+        break;
+      case "--json":
+        flags.json = true;
+        break;
+      // Linux-only step 7 is already a clean no-op on macOS (checked via
+      // `process.platform`); this flag exists for CI/tests that want to
+      // exercise steps 1-6+8 without a systemd host at all.
+      case "--skip-services":
+        flags.skipServices = true;
+        break;
+      case "--help":
+      case "-h":
+        flags.help = true;
+        break;
+      default:
+        throw new CliArgsError("quickstart", `unknown flag: ${a}`);
+    }
+  }
+  return flags;
+}
+
+function requireValue(argv: string[], idx: number, flag: string): string {
+  const v = argv[idx];
+  if (v === undefined || v.startsWith("--")) {
+    throw new CliArgsError("quickstart", `${flag} requires a value`);
+  }
+  return v;
+}
+
+// =============================================================================
+// Step result + report accumulation
+// =============================================================================
+
+interface StepReport {
+  name: string;
+  ok: boolean;
+  lines: string[];
+}
+
+function step(name: string, ok: boolean, lines: string[]): StepReport {
+  return { name, ok, lines };
+}
+
+function renderReport(reports: StepReport[]): string {
+  const out: string[] = [];
+  for (const r of reports) {
+    out.push(`── ${r.name} ${r.ok ? "✓" : "✗"} ──`);
+    for (const l of r.lines) out.push(l);
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+// =============================================================================
+// Step 1 — preflight
+// =============================================================================
+
+function runPreflight(ports: QuickstartPorts): StepReport {
+  const lines: string[] = [];
+  let ok = true;
+
+  const bun = ports.preflight.which("bun");
+  lines.push(`  ${bun !== undefined ? "✓" : "✗"} bun on PATH${bun !== undefined ? ` (${bun})` : ""}`);
+  if (bun === undefined) ok = false;
+
+  const claudePath = ports.preflight.which("claude");
+  if (claudePath === undefined) {
+    lines.push("  ✗ claude on PATH — install Claude Code first (https://claude.com/claude-code)");
+    ok = false;
+  } else {
+    const versionResult = ports.preflight.claudeVersion();
+    if (versionResult.exitCode === 0) {
+      lines.push(`  ✓ claude authenticated (${claudePath})`);
+    } else {
+      // cortex#2068 — reuse the shared classifier's signature match instead
+      // of re-deriving auth-failure regexes here. `claudeVersion()` doesn't
+      // return a real CCSessionResult (there's no dispatched session), so a
+      // minimal shape carrying only the fields `isCcAuthFailure` reads is
+      // built here — never echoing anything beyond claude's own CLI output.
+      const fakeResult: CCSessionResult = {
+        success: false,
+        response: versionResult.stdout,
+        stderr: versionResult.stderr,
+        exitCode: versionResult.exitCode,
+        durationMs: 0,
+      };
+      if (isCcAuthFailure(fakeResult)) {
+        lines.push(`  ✗ claude not authenticated`);
+        lines.push(`    ${CC_AUTH_FAILURE_MESSAGE}`);
+      } else {
+        lines.push(`  ✗ claude --version failed (exit ${String(versionResult.exitCode)})`);
+        if (versionResult.stderr.trim().length > 0) {
+          lines.push(`    ${versionResult.stderr.trim()}`);
+        }
+      }
+      ok = false;
+    }
+  }
+
+  const natsServer = ports.preflight.which("nats-server");
+  lines.push(`  ${natsServer !== undefined ? "✓" : "✗"} nats-server on PATH${natsServer !== undefined ? ` (${natsServer})` : ""}`);
+  if (natsServer === undefined) ok = false;
+
+  if (process.platform === "linux") {
+    const user = process.env.USER;
+    const linger = user !== undefined ? ports.preflight.lingerStatus(user) : "unknown";
+    if (linger === "yes") {
+      lines.push("  ✓ systemd linger enabled");
+    } else if (linger === "no") {
+      const target = user !== undefined ? `"${user}"` : '"$USER"';
+      lines.push("  ✗ systemd linger disabled — services stop the moment your SSH session ends");
+      lines.push(`    fix: sudo loginctl enable-linger ${target}`);
+      ok = false;
+    } else {
+      lines.push("  ○ systemd linger status unknown (loginctl unavailable — verify manually)");
+    }
+  }
+
+  return step("1. Preflight", ok, lines);
+}
+
+// =============================================================================
+// Step 2 — env contract
+// =============================================================================
+
+function runEnvValidation(): { report: StepReport; result: EnvValidationResult } {
+  const result = validateEnvContract(process.env);
+  const lines = renderEnvTable(result).split("\n").slice(1); // drop the "env contract (CTX_*):" header — the step name is already the header
+  return { report: step("2. Validate env contract", result.ok, lines), result };
+}
+
+// =============================================================================
+// Step 3 — nats conf
+// =============================================================================
+
+function runNatsConf(opts: {
+  slug: string;
+  principal: string;
+  port: string;
+  monitorPort: string;
+  natsDir: string;
+  force: boolean;
+}): StepReport {
+  const path = natsConfPath(opts.natsDir, opts.slug);
+  const desired = renderNatsConf({
+    slug: opts.slug,
+    principal: opts.principal,
+    port: opts.port,
+    monitorPort: opts.monitorPort,
+    natsDir: opts.natsDir,
+  });
+
+  if (existsSync(path)) {
+    const existing = readFileSync(path, "utf-8");
+    if (existing === desired) {
+      return step("3. nats conf", true, [`  ✓ ${path} already up to date (skip)`]);
+    }
+    if (!opts.force) {
+      return step("3. nats conf", false, [
+        `  ✗ ${path} exists and differs from the expected contents`,
+        `    refusing to overwrite without --force (a hand-edited or differently-configured .conf is preserved by default)`,
+      ]);
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, desired, "utf-8");
+    return step("3. nats conf", true, [`  ✓ ${path} overwritten (--force)`]);
+  }
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, desired, "utf-8");
+  return step("3. nats conf", true, [`  ✓ ${path} written`]);
+}
+
+// =============================================================================
+// Step 4 — scaffold
+// =============================================================================
+
+async function runScaffold(opts: {
+  slug: string;
+  principal: string;
+  configDir: string;
+}): Promise<StepReport> {
+  const create = await dispatchStack([
+    "create",
+    opts.slug,
+    "--principal",
+    opts.principal,
+    "--apply",
+    "--config-dir",
+    opts.configDir,
+  ]);
+
+  if (create.exitCode === 0) {
+    return step("4. Scaffold", true, [`  ✓ stack "${opts.slug}" created under ${opts.configDir}`]);
+  }
+
+  // Idempotency: `stack create` refuses a dir collision. That's expected on
+  // a re-run — verify the ALREADY-discovered stack's identity actually
+  // matches this env's CTX_PRINCIPAL/CTX_SLUG (a structural check, not a
+  // string-match on create's error text) before treating it as a skip.
+  const targetDir = stackTargetDir(opts.configDir, opts.slug);
+  if (existsSync(targetDir)) {
+    const discovered = discoverStacks(opts.configDir).find((s) => s.slugLocator === opts.slug);
+    const expectedStackId = `${opts.principal}/${opts.slug}`;
+    if (discovered?.stackId === expectedStackId) {
+      return step("4. Scaffold", true, [
+        `  ✓ stack "${opts.slug}" already exists with matching identity (${expectedStackId}) — skip`,
+      ]);
+    }
+    return step("4. Scaffold", false, [
+      `  ✗ ${targetDir} exists but its stack.id ("${discovered?.stackId ?? "(unreadable)"}") does not match the expected "${expectedStackId}"`,
+      `    this is a pre-existing, differently-identified stack at the CTX_SLUG path — resolve manually before re-running quickstart`,
+    ]);
+  }
+
+  return step("4. Scaffold", false, [
+    `  ✗ cortex stack create failed:`,
+    ...create.stderr.split("\n").filter((l) => l.length > 0).map((l) => `    ${l}`),
+  ]);
+}
+
+// =============================================================================
+// Step 5 — patch configs from env
+// =============================================================================
+
+function runPatchConfigs(opts: {
+  slug: string;
+  principal: string;
+  configDir: string;
+  natsPort: string;
+  discordToken: string;
+  guildId: string;
+  channelId: string;
+  logChannelId: string;
+  myDiscordId: string;
+}): StepReport {
+  const lines: string[] = [];
+  let ok = true;
+
+  try {
+    const surfacesResult = patchSurfacesYaml(surfacesConfigPath(opts.configDir, opts.slug), {
+      token: opts.discordToken,
+      guildId: opts.guildId,
+      agentChannelId: opts.channelId,
+      logChannelId: opts.logChannelId,
+    });
+    lines.push(
+      `  ✓ surfaces/surfaces.yaml ${surfacesResult.changed ? "patched (token set — never echoed)" : "already up to date (skip)"}`,
+    );
+  } catch (err) {
+    lines.push(`  ✗ surfaces/surfaces.yaml patch failed: ${errMsg(err)}`);
+    ok = false;
+  }
+
+  try {
+    const pointerPath = pointerConfigPath(opts.configDir, opts.slug);
+    const stackResult = patchStackYaml(stackAgentConfigPath(opts.configDir, opts.slug), pointerPath, {
+      principal: opts.principal,
+      discordId: opts.myDiscordId,
+    });
+    if (stackResult.composeErrors !== undefined) {
+      lines.push(`  ✗ stacks/${opts.slug}.yaml patched, but the composed config failed validation:`);
+      for (const e of stackResult.composeErrors) lines.push(`    ${e}`);
+      ok = false;
+    } else {
+      lines.push(
+        `  ✓ stacks/${opts.slug}.yaml ${stackResult.changed ? "patched (discordId set)" : "already up to date (skip)"}`,
+      );
+    }
+  } catch (err) {
+    lines.push(`  ✗ stacks/${opts.slug}.yaml patch failed: ${errMsg(err)}`);
+    ok = false;
+  }
+
+  // system/system.yaml's nats.url only needs a patch when the port differs
+  // from the scaffold's own default (4222) — cortex#2094's explicit gate.
+  if (opts.natsPort !== "4222") {
+    try {
+      const systemResult = patchSystemNatsPort(systemConfigPath(opts.configDir, opts.slug), opts.natsPort);
+      lines.push(
+        `  ✓ system/system.yaml ${systemResult.changed ? `patched (nats.url port → ${opts.natsPort})` : "already up to date (skip)"}`,
+      );
+    } catch (err) {
+      lines.push(`  ✗ system/system.yaml patch failed: ${errMsg(err)}`);
+      ok = false;
+    }
+  } else {
+    lines.push("  ✓ system/system.yaml nats.url — CTX_NATS_PORT is the default (4222); no patch needed");
+  }
+
+  return step("5. Patch configs from env", ok, lines);
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// =============================================================================
+// Step 6 — seed provisioning
+// =============================================================================
+
+function runSeedProvisioning(ports: QuickstartPorts, opts: { slug: string; configDir: string }): StepReport {
+  const nkeyBasename = nkeyBasenameForSlug(opts.slug);
+  const result = ports.provision.provisionSeed(stackAgentConfigPath(opts.configDir, opts.slug), nkeyBasename);
+  // scripts/lib/stack-identity-provision.sh is documented best-effort (its
+  // own header: "Exit code: always 0") — a non-zero here means the SHELL
+  // invocation itself failed (bash missing, the script unreadable), not a
+  // provisioning outcome. Either way this step never blocks progression to
+  // services/gate: an unsigned stack still boots (with a boot-time WARNING),
+  // which is exactly the degrade path the script itself documents.
+  const lines = result.stdout
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+    .map((l) => `  ${l.trim()}`);
+  if (result.exitCode !== 0) {
+    lines.push(`  ⚠ provisioning script exited ${String(result.exitCode)} — continuing (stack will boot unsigned)`);
+    if (result.stderr.trim().length > 0) lines.push(`    ${result.stderr.trim()}`);
+  }
+  return step("6. Seed provisioning", true, lines.length > 0 ? lines : ["  ✓ nothing to do"]);
+}
+
+// =============================================================================
+// Step 7 — services (Linux only)
+// =============================================================================
+
+function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean }): StepReport {
+  if (opts.skip) {
+    return step("7. Services", true, ["  ○ --skip-services passed — skipping"]);
+  }
+  if (process.platform !== "linux") {
+    return step("7. Services", true, ["  ○ non-Linux host — launchd is handled by arc; skip"]);
+  }
+
+  const lines: string[] = [];
+  let ok = true;
+
+  // L1 (cortex#2071) REQUIRED, not re-implemented here — an install without
+  // it has no template units to enable an instance of.
+  const natsUnit = ports.service.unitFileExists("nats@.service");
+  const cortexUnit = ports.service.unitFileExists("cortex@.service");
+  if (!natsUnit || !cortexUnit) {
+    // The actual check above reads via ports.service.unitFileExists(), whose
+    // live adapter (quickstart-adapters.ts's systemdUserUnitDir()) resolves
+    // the real path off homedir()+join() — this string is a human-facing
+    // diagnostic only, never a runtime path.
+    lines.push("  ✗ systemd template units not found under ~/.config/systemd/user/"); // xdg-audit:allow(user-facing diagnostic naming the canonical systemd user-unit dir — not a runtime path write; cortex#2094)
+    lines.push(
+      "    quickstart REQUIRES cortex#2071 (L1) — run `arc install`/`arc upgrade cortex` first to render nats@.service + cortex@.service",
+    );
+    return step("7. Services", false, lines);
+  }
+
+  const reload = ports.service.daemonReload();
+  if (reload.exitCode !== 0) {
+    lines.push(`  ✗ systemctl --user daemon-reload failed: ${reload.stderr.trim()}`);
+    return step("7. Services", false, lines);
+  }
+  lines.push("  ✓ systemctl --user daemon-reload");
+
+  const enable = ports.service.enableNow([`nats@${opts.slug}`, `cortex@${opts.slug}`]);
+  if (enable.exitCode !== 0) {
+    lines.push(`  ✗ systemctl --user enable --now nats@${opts.slug} cortex@${opts.slug} failed: ${enable.stderr.trim()}`);
+    ok = false;
+  } else {
+    lines.push(`  ✓ systemctl --user enable --now nats@${opts.slug} cortex@${opts.slug}`);
+  }
+
+  return step("7. Services", ok, lines);
+}
+
+// =============================================================================
+// Step 8 — healthy-boot gate
+// =============================================================================
+
+async function runGate(
+  ports: QuickstartPorts,
+  opts: { slug: string; monitorPort: string; timeoutMs: number },
+): Promise<StepReport> {
+  const logPath = daemonLogPath(process.env.HOME ?? "", opts.slug);
+  const healthzUrl = `http://127.0.0.1:${opts.monitorPort}/healthz`;
+  const deadline = ports.gate.now() + opts.timeoutMs;
+
+  for (;;) {
+    const logText = ports.gate.readLog(logPath);
+    const gateLines = evaluateHealthyBootGate(logText);
+    const healthzOk = await ports.gate.fetchHealthz(healthzUrl, 3_000);
+    if (gatePassed(gateLines, healthzOk)) {
+      return step("8. Healthy-boot gate", true, [renderGateTable(gateLines, healthzOk)]);
+    }
+    if (ports.gate.now() >= deadline) {
+      return step("8. Healthy-boot gate", false, [
+        renderGateTable(gateLines, healthzOk),
+        `  (timed out after ${String(opts.timeoutMs)}ms waiting on ${logPath})`,
+      ]);
+    }
+    await ports.gate.sleep(GATE_POLL_INTERVAL_MS);
+  }
+}
+
+// =============================================================================
+// Orchestrator
+// =============================================================================
+
+export async function dispatchQuickstart(
+  argv: string[],
+  // cortex#2094 — injectable ports factory so quickstart's CLI tests drive
+  // fake preflight/service/provision/gate ports (no real systemctl/loginctl/
+  // claude spawn, no real HTTP, no real wall-clock wait). Production omits
+  // it → the live adapters.
+  portsFactory: QuickstartPortsFactory = DEFAULT_QUICKSTART_PORTS_FACTORY,
+): Promise<ExitResult> {
+  let flags: QuickstartFlags;
+  try {
+    flags = parseQuickstartArgs(argv);
+  } catch (err) {
+    if (err instanceof CliArgsError) {
+      return { exitCode: 2, stdout: "", stderr: `cortex quickstart: ${err.message}\n${topLevelHelp()}` };
+    }
+    throw err;
+  }
+
+  if (flags.help) {
+    return { exitCode: 0, stdout: topLevelHelp(), stderr: "" };
+  }
+
+  const ports = portsFactory();
+  const configDir = flags.configDir ?? resolveConfigDir();
+  const natsDir = flags.natsDir ?? "~/.config/nats";
+  const reports: StepReport[] = [];
+
+  // --- 1. Preflight ----------------------------------------------------------
+  const preflight = runPreflight(ports);
+  reports.push(preflight);
+  if (!preflight.ok) {
+    return finish(reports, 1, flags.json);
+  }
+
+  // --- 2. Validate env contract ------------------------------------------------
+  const { report: envReport, result: env } = runEnvValidation();
+  reports.push(envReport);
+  if (!env.ok || env.values === undefined) {
+    return finish(reports, 2, flags.json);
+  }
+  const v = env.values;
+
+  // --- 3. nats conf ------------------------------------------------------------
+  const natsConfReport = runNatsConf({
+    slug: v.CTX_SLUG,
+    principal: v.CTX_PRINCIPAL,
+    port: v.CTX_NATS_PORT,
+    monitorPort: v.CTX_NATS_MON,
+    natsDir,
+    force: flags.force,
+  });
+  reports.push(natsConfReport);
+  if (!natsConfReport.ok) {
+    return finish(reports, 1, flags.json);
+  }
+
+  // --- 4. Scaffold ---------------------------------------------------------
+  const scaffoldReport = await runScaffold({ slug: v.CTX_SLUG, principal: v.CTX_PRINCIPAL, configDir });
+  reports.push(scaffoldReport);
+  if (!scaffoldReport.ok) {
+    return finish(reports, 1, flags.json);
+  }
+
+  // --- 5. Patch configs from env ---------------------------------------------
+  // process.env access for the two secrets happens HERE ONLY, scoped to this
+  // one call — never stored in a variable that a later step's log line could
+  // accidentally interpolate.
+  const patchReport = runPatchConfigs({
+    slug: v.CTX_SLUG,
+    principal: v.CTX_PRINCIPAL,
+    configDir,
+    natsPort: v.CTX_NATS_PORT,
+    discordToken: process.env.CTX_DISCORD_TOKEN ?? "",
+    guildId: v.CTX_GUILD_ID,
+    channelId: v.CTX_CHANNEL_ID,
+    logChannelId: v.CTX_LOG_CHANNEL_ID,
+    myDiscordId: v.CTX_MY_DISCORD_ID,
+  });
+  reports.push(patchReport);
+  if (!patchReport.ok) {
+    return finish(reports, 1, flags.json);
+  }
+
+  // --- 6. Seed provisioning ---------------------------------------------------
+  const provisionReport = runSeedProvisioning(ports, { slug: v.CTX_SLUG, configDir });
+  reports.push(provisionReport);
+
+  // --- 7. Services -------------------------------------------------------------
+  const servicesReport = runServices(ports, { slug: v.CTX_SLUG, skip: flags.skipServices });
+  reports.push(servicesReport);
+  if (!servicesReport.ok) {
+    return finish(reports, 1, flags.json);
+  }
+
+  // --- 8. Healthy-boot gate -----------------------------------------------------
+  const gateReport = await runGate(ports, {
+    slug: v.CTX_SLUG,
+    monitorPort: v.CTX_NATS_MON,
+    timeoutMs: flags.gateTimeoutMs,
+  });
+  reports.push(gateReport);
+  if (!gateReport.ok) {
+    return finish(reports, 1, flags.json);
+  }
+
+  return finish(reports, 0, flags.json);
+}
+
+function finish(reports: StepReport[], exitCode: number, json: boolean): ExitResult {
+  if (json) {
+    const allOk = reports.every((r) => r.ok);
+    const envelope = allOk
+      ? envelopeOk(
+          reports.map((r) => ({ step: r.name, ok: "true" })),
+          {},
+        )
+      : envelopeError(
+          reports.find((r) => !r.ok)?.name ?? "unknown step failed",
+          { steps: JSON.stringify(reports.map((r) => ({ step: r.name, ok: r.ok }))) },
+        );
+    return { exitCode, stdout: renderJson(envelope), stderr: "" };
+  }
+  const text = renderReport(reports);
+  return exitCode === 0
+    ? { exitCode, stdout: `${text}cortex quickstart: complete ✓\n`, stderr: "" }
+    : { exitCode, stdout: text, stderr: "" };
+}
+
+// =============================================================================
+// Help
+// =============================================================================
+
+function topLevelHelp(): string {
+  return `cortex quickstart — env-contract driven one-command first install (cortex#2094, L3)
+
+Usage:
+  set -a; . ./cortex.env; set +a; cortex quickstart [options]
+
+Runs the validated Debian runbook (README-AGENTS.md Appendix A + §5) as ONE
+idempotent command: preflight → validate env → nats conf → scaffold → patch
+configs from env → seed provisioning → services → healthy-boot gate.
+
+Requires (env, DD-L5 contract): CTX_PRINCIPAL, CTX_SLUG, CTX_NATS_PORT,
+CTX_NATS_MON, CTX_GUILD_ID, CTX_CHANNEL_ID, CTX_LOG_CHANNEL_ID,
+CTX_MY_DISCORD_ID, CTX_DISCORD_TOKEN. Optional: CLAUDE_CODE_OAUTH_TOKEN
+(native hosts with an existing \`claude\` login don't need it).
+
+Flags:
+  --config-dir <path>     Config dir (default: the resolved cortex config dir).
+  --nats-dir <path>       NATS material dir (default: ~/.config/nats).
+  --force                 Allow step 3 to overwrite a DIFFERENT existing
+                          .conf file (default: refuse).
+  --skip-services         Skip step 7 (systemd) entirely — for CI/tests
+                          without a systemd host.
+  --gate-timeout-ms <n>   Step 8's bounded wait (default: ${String(DEFAULT_GATE_TIMEOUT_MS)}).
+  --json                  Emit a { status, items, data, error } envelope.
+
+Requires cortex#2071 (L1 — systemd unit rendering) merged; declared as a hard
+dependency, checked (not re-implemented) in step 7.
+
+Secret hygiene: CTX_DISCORD_TOKEN / CLAUDE_CODE_OAUTH_TOKEN values are NEVER
+printed — every report shows only "set" / "missing" for those two keys.
+`;
+}
+
+// =============================================================================
+// Main
+// =============================================================================
+
+if (import.meta.main) {
+  const result = await dispatchQuickstart(process.argv.slice(2));
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exit(result.exitCode);
+}

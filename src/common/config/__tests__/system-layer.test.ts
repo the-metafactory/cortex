@@ -28,6 +28,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { stringify } from "yaml";
 import { loadConfigWithAgents } from "../loader";
+import { createInferenceRegistry } from "../../../substrates/api-agent/provider-factories";
 
 let testDir: string;
 
@@ -238,5 +239,153 @@ describe("CFG.b — docs/config-layout reference example composes", () => {
     expect(loaded.config.nats?.subjects).toEqual([]); // landmine kept safe-default
     expect(loaded.config.claude?.timeoutMs).toBe(300000);
     expect(loaded.bus?.review.stream.name).toBe("CODE_REVIEW");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2121 — the `inference` block must SURVIVE the loader (regression)
+// ---------------------------------------------------------------------------
+//
+// `loadConfigWithAgents` synthesizes a legacy `AgentConfig` from the parsed
+// `CortexConfig`. That synthesis passes `claude`/`execution`/`plugins`/
+// `security`/`mc`/`grove`/… through explicitly — and USED TO OMIT `inference`.
+// Because `AgentConfigSchema.inference` is `.optional()` with no default, the
+// block a principal declared in `system/system.yaml` was silently dropped:
+// `config.inference` at the boot path (src/cortex.ts) was ALWAYS `undefined`,
+// the InferenceRegistry was ALWAYS built empty, and EVERY
+// `substrate: api-agent` dispatch failed closed with `unknown-profile` no matter
+// what was configured. Silently, too — with no profiles the boot pre-flight has
+// nothing to report.
+//
+// The gap that let it ship was the absence of a test spanning the WHOLE path:
+// the schema tests proved `inference` parses, and the harness tests proved a
+// registry resolves — but nothing proved a CONFIGURED block reaches a registry.
+// These two tests close exactly that gap, at both ends:
+//
+//   1. the loader round-trip (config file → `config.inference`), and
+//   2. the end-to-end path (config file → registry → resolved provider),
+//      which is the assertion that would have caught the bug on its own.
+//
+// Both fail on the pre-fix loader.
+
+describe("#2121 — a configured `inference` block reaches the boot path", () => {
+  /** Write a config-split layout declaring one provider + one profile. */
+  function writeLayoutWithInference(dir: string, envVarName: string): string {
+    mkdirSync(join(dir, "system"), { recursive: true });
+    mkdirSync(join(dir, "stacks"), { recursive: true });
+    writeFileSync(
+      join(dir, "system", "system.yaml"),
+      stringify({
+        claude: { timeoutMs: 300000 },
+        inference: {
+          providers: {
+            "local-provider": {
+              protocol: "openai-chat-completions",
+              // Loopback: constructing the provider performs NO network I/O.
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: `env:${envVarName}`,
+            },
+          },
+          profiles: {
+            "local-profile": {
+              provider: "local-provider",
+              model: "some-model",
+              modelClass: "local-only",
+            },
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(dir, "stacks", "s.yaml"),
+      stringify({
+        principal: { id: "someone", displayName: "Someone" },
+        capabilities: [{ id: "chat", description: "chat", provided_by: ["a1"] }],
+        agents: [
+          {
+            id: "a1",
+            displayName: "A1",
+            persona: "./personas/a1.md",
+            roles: [],
+            trust: [],
+            runtime: {
+              substrate: "api-agent",
+              inferenceProfile: "local-profile",
+              mode: "in-process",
+              capabilities: ["chat"],
+            },
+            presence: {},
+          },
+        ],
+      }),
+    );
+    const pointer = join(dir, "cortex.yaml");
+    writeFileSync(pointer, "");
+    return pointer;
+  }
+
+  test("the loader round-trips a declared block onto `config.inference`", () => {
+    const dir = join(testDir, "inference-passthrough");
+    const pointer = writeLayoutWithInference(dir, "CORTEX_TEST_INFERENCE_REF");
+
+    const loaded = loadConfigWithAgents(pointer);
+
+    // The block reaches `config.inference` — the exact object src/cortex.ts
+    // feeds `createInferenceRegistry`. Pre-fix this was `undefined`.
+    expect(loaded.config.inference).toBeDefined();
+    expect(Object.keys(loaded.config.inference?.providers ?? {})).toEqual(["local-provider"]);
+    expect(loaded.config.inference?.profiles?.["local-profile"]?.provider).toBe("local-provider");
+    // The credential stays a REFERENCE on the loaded config — never resolved at
+    // load, so a config dump/log can't leak a value (D6).
+    expect(loaded.config.inference?.providers?.["local-provider"]?.apiKey).toBe(
+      "env:CORTEX_TEST_INFERENCE_REF",
+    );
+    // The agent's opt-in survives too — the other half of the dispatch path.
+    expect(loaded.inlineAgents[0]?.runtime?.substrate).toBe("api-agent");
+    expect(loaded.inlineAgents[0]?.runtime?.inferenceProfile).toBe("local-profile");
+  });
+
+  test("end-to-end: configured profile → non-empty registry → resolveProfile succeeds", () => {
+    const envVarName = "CORTEX_TEST_INFERENCE_REF";
+    const dir = join(testDir, "inference-e2e");
+    const pointer = writeLayoutWithInference(dir, envVarName);
+
+    // The `env:NAME` reference resolves at provider CONSTRUCTION (#2110), so the
+    // variable must exist for the factory to build. Set/restore around the
+    // assertion; the value is an inert test stand-in, never a real credential.
+    const env = process.env as Record<string, string | undefined>;
+    const previous = env[envVarName];
+    env[envVarName] = "test-placeholder-value";
+    try {
+      const loaded = loadConfigWithAgents(pointer);
+
+      // Exactly what src/cortex.ts does at boot.
+      const registry = createInferenceRegistry(
+        loaded.config.inference ?? { providers: {}, profiles: {} },
+      );
+
+      // Pre-fix: `[]` — the registry was empty, so every api-agent dispatch
+      // failed closed with `unknown-profile` regardless of config.
+      expect(registry.profileNames()).toEqual(["local-profile"]);
+
+      // Pre-fix: `{ ok: false, error: unknown-profile }`.
+      const resolution = registry.resolveProfile("local-profile");
+      expect(resolution.ok).toBe(true);
+      if (!resolution.ok) return;
+      expect(resolution.profile.model).toBe("some-model");
+      expect(resolution.profile.modelClass).toBe("local-only");
+      expect(resolution.profile.provider).toBeDefined();
+
+      // The boot pre-flight is silent for a healthy profile — no dangling
+      // provider, no missing factory.
+      expect(registry.validateAll()).toEqual([]);
+    } finally {
+      // Restore exactly. `Reflect.deleteProperty` rather than `delete` (lint:
+      // no-dynamic-delete) and rather than assigning `undefined` — some runtimes
+      // stringify an assigned `undefined` into the literal "undefined", which
+      // would leave a bogus variable behind for every later test in the process.
+      if (previous === undefined) Reflect.deleteProperty(env, envVarName);
+      else env[envVarName] = previous;
+    }
   });
 });

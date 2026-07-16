@@ -92,8 +92,30 @@ export interface AccessDecision {
 		async: boolean;
 		team: boolean;
 	};
-	/** Disallowed MCP tools for this user */
+	/**
+	 * Disallowed Claude Code tools for this sender — the inversion of their
+	 * `tool.*` capability grants against `CLAUDE_TOOL_INVENTORY`. CC tools
+	 * only: `mcp__*` names never appear here (not enumerable at build time —
+	 * see `mcpGrants` below, cortex#2111).
+	 */
 	toolRestrictions?: string[];
+	/**
+	 * cortex#2111 — per-principal MCP grants, in the MCP Guard pattern grammar
+	 * (`"*"` = whole namespace | `"<server>"` | `"<server>.<tool>"`, lowercase).
+	 * Derived from `tool.mcp*` capabilities by `deriveMcpGrants` (a principal
+	 * holding the reserved short-circuit capability ⇒ `["*"]`).
+	 *
+	 * Semantics of PRESENCE vs ABSENCE (load-bearing):
+	 *   - present (even `[]`) — a policy-resolved decision: the MCP namespace
+	 *     is DENY-BY-DEFAULT for this session. The dispatch-handler threads the
+	 *     list to the CC session, which registers the MCP Guard PreToolUse hook
+	 *     (matcher `mcp__.*`) with exactly these grants; `[]` additionally arms
+	 *     the `--strict-mcp-config` structural backstop (no servers load).
+	 *   - absent — a path that never went through `resolvePolicyAccess`
+	 *     (review pipeline, dev consumer, direct CLI); existing behaviour is
+	 *     unchanged there.
+	 */
+	mcpGrants?: string[];
 	/**
 	 * cortex#1167 — EXPLICIT tool ALLOWLIST. When present and non-empty, the CC
 	 * session is confined to exactly these tools (anything else, including every

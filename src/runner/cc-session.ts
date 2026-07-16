@@ -13,6 +13,7 @@ import {
   createIsolatedSettings,
   scopeSessionEnv,
   CORTEX_SKILL_GRANTS_ENV,
+  CORTEX_MCP_GRANTS_ENV,
   type IsolatedSettings,
 } from "./session-settings";
 
@@ -89,6 +90,26 @@ export interface CCSessionOpts {
    * principal's full skill set and does not register the gate.
    */
   allowedSkills?: string[];
+  /**
+   * cortex#2111 — per-principal MCP grant list for this session, in the MCP
+   * Guard pattern grammar (`"*"` | `"<server>"` | `"<server>.<tool>"`,
+   * lowercase). When DEFINED (including `[]`), the curated settings file
+   * registers the MCP Guard PreToolUse hook (matcher `mcp__.*`) and this
+   * list is passed to it via the `CORTEX_MCP_GRANTS` env var — any `mcp__*`
+   * invocation not covered by a pattern is denied. `[]` means NO MCP at all
+   * (the dispatch path additionally appends `--strict-mcp-config` for that
+   * case, so un-granted servers don't even load).
+   *
+   * When `undefined`, no MCP hook is registered — a path that never went
+   * through `resolvePolicyAccess` keeps existing (allow-by-default)
+   * behaviour.
+   *
+   * Only honoured when `settingsIsolation` is on (the default) — the hook
+   * lives in the curated settings file. A principal-as-self session
+   * (`settingsIsolation:false`) runs as the home principal with their own
+   * settings; that principal holds the implicit full grant anyway.
+   */
+  mcpGrants?: string[];
 }
 
 export interface CCSessionResult {
@@ -213,11 +234,44 @@ export class CCSession extends EventEmitter {
     const skillGrants = this.opts.allowedSkills;
     const hasSkillGrants =
       isolate && skillGrants !== undefined && skillGrants.length > 0;
+    // cortex#2111 — per-principal MCP grants. Defined (even []) → curated
+    // settings register the MCP Guard hook AND the grant list is exported to
+    // it via env. The two MUST move together (same atomicity contract as the
+    // skill pair above). Note `!== undefined` — an EMPTY list still arms the
+    // guard (deny-all), unlike skills where empty skips the hook.
+    const mcpGrants = this.opts.mcpGrants;
+    const hasMcpGuard = isolate && mcpGrants !== undefined;
+    // cortex#2111 — structural backstop, CENTRALIZED here so every
+    // construction path gets it (dispatch-handler direct paths, the bus
+    // harness, agent-team, gateway-published envelopes): a session whose
+    // policy decision granted ZERO MCP patterns loads no MCP servers at
+    // all. Deduped against caller-supplied args (the dispatch-handler also
+    // appends it for agent-level strictMcpConfig). Deliberately NOT gated
+    // on `isolate`: even a non-isolated session must not fail open when a
+    // deny-all MCP decision was made.
+    // Adversarial-review M3 — the flag fires in TWO confinement cases:
+    //   1. ZERO grants (any isolation mode): no MCP at all.
+    //   2. PARTIAL grants on a NON-ISOLATED session: the guard hook lives
+    //      in the curated settings file, which a non-isolated session
+    //      doesn't load — so fine-grained enforcement is impossible there.
+    //      Denying the granted servers too (fail-closed) beats silently
+    //      granting the whole namespace (fail-open). Full grant ("*")
+    //      needs no confinement.
+    const mcpConfinementRequired =
+      mcpGrants !== undefined &&
+      (mcpGrants.length === 0 ||
+        (!isolate && !mcpGrants.includes("*")));
+    const strictMcpArgs =
+      mcpConfinementRequired &&
+      this.opts.additionalArgs?.includes("--strict-mcp-config") !== true
+        ? ["--strict-mcp-config"]
+        : [];
     const isolationArgs: string[] = [];
     if (isolate) {
       this.isolatedSettings = createIsolatedSettings(
         this.opts.claudeDir ?? `${homedir()}/.claude`,
         skillGrants,
+        mcpGrants,
       );
       isolationArgs.push(...this.isolatedSettings.args);
     }
@@ -258,6 +312,7 @@ export class CCSession extends EventEmitter {
         "--verbose",
         "--output-format", "stream-json",
         ...isolationArgs,
+        ...strictMcpArgs,
         ...(this.opts.additionalArgs ?? []),
       ],
     };
@@ -283,6 +338,14 @@ export class CCSession extends EventEmitter {
       // is not a CLAUDE_* var so scoping passes it through regardless.
       ...(hasSkillGrants && {
         [CORTEX_SKILL_GRANTS_ENV]: JSON.stringify(skillGrants),
+      }),
+      // cortex#2111 — pass the MCP grant list to the MCP Guard hook. Only set
+      // when the curated settings actually registered the hook (hasMcpGuard),
+      // so the env var and the hook move atomically. The hook itself treats a
+      // missing var as deny-all, so even a registration-without-env bug fails
+      // CLOSED, never open.
+      ...(hasMcpGuard && {
+        [CORTEX_MCP_GRANTS_ENV]: JSON.stringify(mcpGrants),
       }),
     };
 

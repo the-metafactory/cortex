@@ -40,6 +40,69 @@ import {
 } from "./policy-gate";
 
 /**
+ * cortex#2111 — the capability prefix that carries per-principal MCP grants.
+ *
+ * `CLAUDE_TOOL_INVENTORY` deny-by-omission can never reach `mcp__*` tools:
+ * MCP names are not enumerable at build time (they depend on which servers
+ * the operator connected in `~/.claude/settings.json`, per-host, changing
+ * without a cortex release). So the `mcp` namespace is DENY-BY-DEFAULT with
+ * explicit grants, expressed as capabilities on roles:
+ *
+ *   - `tool.mcp`                      — the whole MCP namespace
+ *   - `tool.mcp.<server>`             — every tool of one server
+ *   - `tool.mcp.<server>.<toolname>`  — a single tool
+ *
+ * (all lowercase, per the `tool.<lowercase>` convention of
+ * `docs/design-policy-cutover.md` §5.2). Enforcement is the Cortex MCP Guard
+ * PreToolUse hook (`src/runner/hooks/mcp-guard.hook.ts`) plus a structural
+ * `--strict-mcp-config` backstop when a principal has NO grants at all —
+ * see the dispatch-handler. The 14-tool CC inventory and its
+ * allow-by-default semantics are untouched.
+ */
+export const MCP_CAPABILITY_PREFIX = "tool.mcp";
+
+/**
+ * Derive the normalized MCP grant list for a principal from their effective
+ * capability set. Returns patterns in the grammar the MCP Guard hook
+ * consumes (`"*"` | `"<server>"` | `"<server>.<tool>"`), deduped, in
+ * capability-set iteration order.
+ *
+ * - `operator` principals get the full namespace (`["*"]`): the operator is
+ *   the stack's home principal / trust root (features + `trusted` already
+ *   short-circuit on it) and pre-#2111 stacks relied on allow-by-default —
+ *   this keeps single-principal stacks working with zero config change while
+ *   the deny-by-default lands for everyone else.
+ * - A bare `tool.mcp` capability also grants the full namespace.
+ * - Otherwise, every `tool.mcp.<rest>` capability contributes `<rest>`.
+ *
+ * Exported for unit tests.
+ *
+ * @param isOperator pass the engine-checked short-circuit result when the
+ *   caller already has it (resolvePolicyAccess). Omit to derive it from
+ *   the capability set itself (the runner's gate decision carries the
+ *   reserved capability in-band) — keeps the literal inside this
+ *   carved-out module.
+ */
+export function deriveMcpGrants(
+  capabilities: readonly string[] | undefined,
+  isOperator?: boolean,
+): string[] {
+  const operator =
+    isOperator ?? capabilities?.includes("operator") ?? false;
+  if (operator) return ["*"];
+  if (capabilities === undefined) return [];
+  const grants: string[] = [];
+  for (const cap of capabilities) {
+    if (cap === MCP_CAPABILITY_PREFIX) return ["*"];
+    if (cap.startsWith(`${MCP_CAPABILITY_PREFIX}.`)) {
+      const rest = cap.slice(MCP_CAPABILITY_PREFIX.length + 1).toLowerCase();
+      if (rest.length > 0 && !grants.includes(rest)) grants.push(rest);
+    }
+  }
+  return grants;
+}
+
+/**
  * Inputs the adapter passes to {@link resolvePolicyAccess}. The engine +
  * index + registry are populated from the parsed `policy:` block; when the
  * deployment hasn't declared a policy (or declares one with no
@@ -124,6 +187,9 @@ export function anonOnboardingAccess(
     allowedTools: allowlist,
     // Belt-and-braces deny-list backstop: the full known inventory.
     toolRestrictions: [...CLAUDE_TOOL_INVENTORY],
+    // cortex#2111 — zero MCP grants: arms the MCP Guard deny-by-default (and
+    // the --strict-mcp-config backstop) on top of the allowlist confinement.
+    mcpGrants: [],
     bashGuard: true,
     trusted: false,
     anonPrincipal: true,
@@ -132,6 +198,49 @@ export function anonOnboardingAccess(
     anonPrincipalId: `anon:${msg.platform}:${msg.authorId}`,
     ...(msg.isDM === true && { isDM: true }),
   };
+}
+
+/**
+ * cortex#2111 (adversarial-review MAJOR) — does grant pattern `p` cover
+ * pattern `q`? `"*"` covers everything; `"<server>"` covers itself and
+ * every `"<server>.<tool>"`; a tool pattern covers only itself.
+ */
+function mcpGrantCovers(p: string, q: string): boolean {
+  return p === MCP_GRANT_WILDCARD || p === q || q.startsWith(`${p}.`);
+}
+
+/** The full-namespace grant pattern (`deriveMcpGrants`'s `["*"]`). */
+export const MCP_GRANT_WILDCARD = "*";
+
+/**
+ * Intersect two MCP grant-pattern sets: the result allows a tool iff BOTH
+ * sets allow it. Used by the runner to combine the wire-supplied grant list
+ * with the EXECUTING stack's own policy-derived list, so a remote
+ * dispatcher can NARROW its session's MCP surface but never WIDEN it past
+ * what local policy grants the originator (the cortex#127
+ * receiving-stack-authoritative model applied to MCP).
+ *
+ * Pattern-set intersection: for every pair `(a, b)` keep the NARROWER
+ * pattern when one covers the other (`"*"` ∩ X = X; `"srv"` ∩ `"srv.tool"`
+ * = `"srv.tool"`; disjoint pairs contribute nothing). Deduped, stable
+ * order (a-major). Exported for unit tests.
+ */
+export function intersectMcpGrants(
+  a: readonly string[],
+  b: readonly string[],
+): string[] {
+  const out: string[] = [];
+  for (const pa of a) {
+    for (const pb of b) {
+      const narrower = mcpGrantCovers(pa, pb)
+        ? pb
+        : mcpGrantCovers(pb, pa)
+          ? pa
+          : undefined;
+      if (narrower !== undefined && !out.includes(narrower)) out.push(narrower);
+    }
+  }
+  return out;
 }
 
 /**
@@ -189,8 +298,22 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
   }
 
   const sovereignty = defaultPolicySovereignty();
-  const allow = (capability: string): boolean =>
-    engine.check(principalId, { capability, sovereignty }).allow;
+  // cortex#2111 — an ALLOWED engine decision carries the principal's full
+  // effective capability set. Harvest it from the first allow so the MCP
+  // grant derivation below reads the same ground truth the checks used
+  // (no second resolution path, no drift). Any allowed access implies at
+  // least one allowed check (keyword.* or operator), so on every path that
+  // reaches the allowed return the set has been captured.
+  let effectiveCapabilities: readonly string[] | undefined;
+  const allow = (capability: string): boolean => {
+    const decision = engine.check(principalId, { capability, sovereignty });
+    // The allow-branch of PolicyDecision always carries `capabilities`
+    // (discriminated union) — no undefined check needed.
+    if (decision.allow) {
+      effectiveCapabilities = decision.capabilities;
+    }
+    return decision.allow;
+  };
 
   const features = {
     chat: allow("keyword.chat"),
@@ -245,6 +368,11 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
       ? { chat: true, async: true, team: true }
       : features,
     ...(toolRestrictions.length > 0 && { toolRestrictions }),
+    // cortex#2111 — ALWAYS present on a policy-resolved allow (empty array =
+    // no MCP at all). Presence of the field is what arms the MCP Guard
+    // deny-by-default downstream; legacy/non-policy paths that never set it
+    // keep their existing behaviour.
+    mcpGrants: deriveMcpGrants(effectiveCapabilities, isOperator),
     ...(allowedDirs !== undefined && { dirRestrictions: allowedDirs }),
     ...(allowedSkills !== undefined && { allowedSkills }),
     bashGuard,

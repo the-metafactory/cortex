@@ -12,6 +12,8 @@ import { DID_RE } from "@the-metafactory/myelin/identity";
 import {
   resolvePolicyAccess,
   anonOnboardingAccess,
+  deriveMcpGrants,
+  intersectMcpGrants,
   PUBLIC_ORIGINATOR_DID,
   isOperatorPrincipal,
 } from "../resolve-access";
@@ -618,5 +620,154 @@ describe("resolvePolicyAccess — facilitator-role: pylon locked-out as sender (
     expect(engine.check("luna", { capability: "dispatch.pylon", sovereignty }).allow).toBe(true);
     // pylon cannot dispatch to anything (not registered)
     expect(engine.check("pylon", { capability: "dispatch.luna", sovereignty }).allow).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#2111 — per-principal MCP grants (`tool.mcp*` capability namespace)
+// ---------------------------------------------------------------------------
+
+describe("deriveMcpGrants — capability → grant-pattern derivation (cortex#2111)", () => {
+  test("operator gets the implicit full grant regardless of capabilities", () => {
+    expect(deriveMcpGrants([], true)).toEqual(["*"]);
+    expect(deriveMcpGrants(undefined, true)).toEqual(["*"]);
+    expect(deriveMcpGrants(["keyword.chat"], true)).toEqual(["*"]);
+  });
+
+  test("bare tool.mcp grants the whole namespace", () => {
+    expect(deriveMcpGrants(["keyword.chat", "tool.mcp"], false)).toEqual(["*"]);
+  });
+
+  test("server + tool capabilities map to their patterns", () => {
+    expect(
+      deriveMcpGrants(
+        ["keyword.chat", "tool.mcp.gdrive", "tool.mcp.jira.search_issues", "tool.read"],
+        false,
+      ),
+    ).toEqual(["gdrive", "jira.search_issues"]);
+  });
+
+  test("no mcp capabilities → empty (deny-all)", () => {
+    expect(deriveMcpGrants(["keyword.chat", "tool.read", "tool.bash"], false)).toEqual([]);
+    expect(deriveMcpGrants(undefined, false)).toEqual([]);
+  });
+
+  test("patterns are lowercased and deduped", () => {
+    expect(
+      deriveMcpGrants(["tool.mcp.GDrive", "tool.mcp.gdrive"], false),
+    ).toEqual(["gdrive"]);
+  });
+
+  test("a capability that merely PREFIXES tool.mcp (e.g. tool.mcpfoo) does not grant", () => {
+    expect(deriveMcpGrants(["tool.mcpfoo"], false)).toEqual([]);
+  });
+});
+
+describe("resolvePolicyAccess — mcpGrants on the decision (cortex#2111)", () => {
+  test("non-operator principal with NO tool.mcp capabilities gets mcpGrants: [] (deny-all)", () => {
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "555555555555555555" }),
+      ...buildHarness(USER_POLICY),
+    });
+    expect(result.allowed).toBe(true);
+    // PRESENT and EMPTY — presence arms the deny-by-default downstream.
+    expect(result.mcpGrants).toEqual([]);
+  });
+
+  test("operator principal gets the implicit full grant", () => {
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "666666666666666666" }),
+      ...buildHarness(OPERATOR_POLICY),
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.mcpGrants).toEqual(["*"]);
+  });
+
+  test("non-operator with explicit tool.mcp.* capabilities gets exactly those grants", () => {
+    const policy: Policy = {
+      principals: [
+        {
+          id: "martin",
+          home_principal: "andreas",
+          home_stack: "andreas/manda",
+          role: ["chat-user"],
+          trust: [],
+          platform_ids: { discord: ["444444444444444444"] },
+        },
+      ],
+      roles: [
+        {
+          id: "chat-user",
+          capabilities: [
+            "keyword.chat",
+            "tool.read",
+            "tool.mcp.gdrive",
+            "tool.mcp.jira.search_issues",
+          ],
+        },
+      ],
+    };
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "444444444444444444" }),
+      ...buildHarness(policy),
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.mcpGrants).toEqual(["gdrive", "jira.search_issues"]);
+    // The asymmetric-principal scenario from the issue: withholding tool.bash
+    // IS still enforced via toolRestrictions…
+    expect(result.toolRestrictions).toContain("Bash");
+    // …and now the MCP surface is confined too (not the wider principal's).
+    expect(result.mcpGrants).not.toContain("*");
+  });
+
+  test("anonOnboardingAccess carries mcpGrants: [] (deny-all belt-and-braces)", () => {
+    const decision = anonOnboardingAccess(msg());
+    expect(decision.mcpGrants).toEqual([]);
+  });
+});
+
+describe("intersectMcpGrants — wire may narrow, never widen (cortex#2111 MAJOR fix)", () => {
+  test("wildcard wire claim collapses to the authoritative list", () => {
+    // Attack A from the adversarial review: a peer sends ["*"] — the
+    // executing stack's own policy is the ceiling.
+    expect(intersectMcpGrants(["*"], ["gdrive"])).toEqual(["gdrive"]);
+    expect(intersectMcpGrants(["*"], [])).toEqual([]);
+  });
+
+  test("wire may narrow a server grant to a single tool", () => {
+    expect(intersectMcpGrants(["gdrive.read_file"], ["gdrive"])).toEqual([
+      "gdrive.read_file",
+    ]);
+  });
+
+  test("disjoint sets intersect to empty (deny-all)", () => {
+    expect(intersectMcpGrants(["jira"], ["gdrive"])).toEqual([]);
+  });
+
+  test("authoritative wildcard yields the wire list unchanged", () => {
+    expect(intersectMcpGrants(["gdrive", "jira.search"], ["*"])).toEqual([
+      "gdrive",
+      "jira.search",
+    ]);
+  });
+
+  test("both wildcard → wildcard", () => {
+    expect(intersectMcpGrants(["*"], ["*"])).toEqual(["*"]);
+  });
+
+  test("dedupes overlapping contributions", () => {
+    expect(intersectMcpGrants(["gdrive", "*"], ["gdrive"])).toEqual(["gdrive"]);
+  });
+});
+
+describe("deriveMcpGrants — single-arg form derives the short-circuit from the set", () => {
+  test("capability set carrying the reserved short-circuit → full grant", () => {
+    expect(deriveMcpGrants(["keyword.chat", "operator"])).toEqual(["*"]);
+  });
+
+  test("without it → normal derivation", () => {
+    expect(deriveMcpGrants(["keyword.chat", "tool.mcp.gdrive"])).toEqual(["gdrive"]);
+    expect(deriveMcpGrants(["keyword.chat"])).toEqual([]);
+    expect(deriveMcpGrants(undefined)).toEqual([]);
   });
 });
