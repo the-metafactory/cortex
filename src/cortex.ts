@@ -919,7 +919,7 @@ export async function startCortex(
   // default silently when no `substrates.claude-code.configHome` is declared —
   // which is a legitimate default, but indistinguishable at runtime from a
   // misconfiguration. Logging it once turns a silent fallback into an
-  // observable fact an operator can check against intent.
+  // observable fact the principal can check against intent.
   const bootConfigHome = activeConfigHomeEnv("claude-code");
   console.log(
     `  Claude config home: ${bootConfigHome?.value ?? "(vendor default — no substrates.claude-code.configHome)"}`,
@@ -4056,7 +4056,7 @@ export async function startCortex(
       // edit takes effect for subsequently-spawned sessions without a restart),
       // and re-log on CHANGE. Without the re-log the boot line goes stale-but-
       // confident: deleting `substrates:` and reloading silently reverts every
-      // later session to the vendor default while the one line an operator can
+      // later session to the vendor default while the one line the principal can
       // check still reports the old home. A confidently wrong log is worse than
       // no log.
       const homeBeforeReload = activeConfigHomeEnv("claude-code")?.value;
