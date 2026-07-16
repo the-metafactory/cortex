@@ -107,6 +107,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       maxAttachmentsPerMessage: 10,
     },
     execution: { default: "local", backends: [] },
+    inference: { providers: {}, profiles: {} },
     plugins: { external: false },
     github: {
       webhookSecret: "",

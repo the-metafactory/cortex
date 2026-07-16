@@ -58,9 +58,15 @@ export interface ScriptedResponse {
    */
   readonly chunks?: readonly StreamChunk[];
   /**
-   * Abort the connection AFTER the scripted chunks are written, WITHOUT a clean
-   * terminal frame — models "an in-stream error after HTTP success" and
-   * "truncated stream". Default false (clean close).
+   * End the response body (premature EOF) AFTER the scripted chunks are written,
+   * WITHOUT a terminal SSE frame — models "an in-stream error after HTTP
+   * success" and a "truncated stream". This is a deterministic abrupt CLOSE, not
+   * a stream-error injection: `controller.error(...)` produced a
+   * non-deterministic unhandled rejection under some Bun versions that bun's
+   * test runner mis-attributed to the calling test. A premature close lets each
+   * provider's "clean end with no terminal frame → malformed_response"
+   * classifier fire deterministically across runtimes. Default false (the normal
+   * path also closes cleanly, but with the terminal frame present in `chunks`).
    */
   readonly abortAfterChunks?: boolean;
   /**
@@ -156,10 +162,19 @@ export function startFakeStreamingServer(): FakeStreamingServer {
               return;
             }
             if (scripted.abortAfterChunks) {
-              // Abrupt close without a clean terminal frame (in-stream error /
-              // truncated stream). controller.error triggers a network-level
-              // abort on the client side.
-              controller.error(new Error("simulated in-stream abort"));
+              // Truncated stream = the response body ends (premature EOF) BEFORE
+              // a terminal SSE frame, so we `close()` here — the same clean-EOF
+              // primitive as the normal path, just without the terminal frame in
+              // the enqueued chunks. We deliberately do NOT inject a stream error
+              // (`controller.error(...)`): that surfaced a non-deterministic
+              // unhandled rejection under some Bun versions (server-side, so no
+              // client `reader.read()` try/catch could suppress it), which bun's
+              // test runner attributed to the calling test and failed it in CI.
+              // A premature `close()` faithfully models a truncated stream and
+              // lets each provider's "clean end with no terminal frame →
+              // malformed_response" classifier fire deterministically across
+              // runtimes.
+              controller.close();
               return;
             }
             controller.close();
