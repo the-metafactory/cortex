@@ -33,7 +33,11 @@
 // opaque provider-knob escape hatch that cortex never inspects and never resolves
 // secrets from — never route a credential through `options`.
 
-import type { ProviderCapabilities, ModelProvider } from "./types";
+import type {
+  ProviderCapabilities,
+  ModelProvider,
+  ProviderOptions,
+} from "./types";
 import type {
   InferenceConfig,
   InferenceProvider,
@@ -92,6 +96,27 @@ export interface ResolvedProfile {
   readonly modelClass: ModelClass;
   /** Policy: declared data-residency label (from config), when set. */
   readonly dataResidency?: string;
+  /**
+   * Upper bound on generated tokens, from the profile config, when set. The
+   * principal's declared cost/length bound: the harness copies it onto every
+   * `ModelRequest` this profile builds, and each provider puts it on the wire
+   * (`max_tokens`). Omitted here ⇒ omitted from the request ⇒ each provider
+   * applies its OWN documented fallback (Anthropic: its
+   * `defaultMaxOutputTokens`, since the Messages API requires `max_tokens`;
+   * OpenAI-compatible: the field is omitted and the server's default applies).
+   *
+   * Carrying this on the resolved bundle is load-caring: it was missing here
+   * for a full epic, which silently discarded the bound (issue #2114).
+   */
+  readonly maxOutputTokens?: number;
+  /**
+   * The Q5 namespaced escape hatch, from the profile config, when set. Opaque
+   * provider-only knobs keyed by provider namespace (e.g. `anthropic`); the
+   * harness passes them through untouched and each provider merges ONLY its own
+   * namespace onto the wire — a foreign namespace is inert by construction.
+   * Portable behaviour must NOT depend on anything here.
+   */
+  readonly options?: ProviderOptions;
 }
 
 /** The reasons a profile can fail to resolve. All fail closed. */
@@ -225,6 +250,14 @@ export class InferenceRegistry {
         ...(profile.dataResidency !== undefined
           ? { dataResidency: profile.dataResidency }
           : {}),
+        // Carry the principal's declared bound + escape hatch onto the resolved
+        // bundle. Dropping them here is what made both fields inert (#2114):
+        // the schema accepted them and both providers read them, but nothing
+        // populated the middle of the chain.
+        ...(profile.maxOutputTokens !== undefined
+          ? { maxOutputTokens: profile.maxOutputTokens }
+          : {}),
+        ...(profile.options !== undefined ? { options: profile.options } : {}),
       },
     };
   }

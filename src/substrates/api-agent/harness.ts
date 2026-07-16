@@ -26,11 +26,15 @@ import { randomUUID } from "crypto";
 
 import { isUuidLoose } from "../../common/types/uuid";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
-import type { InferenceRegistry } from "../../common/inference/registry";
+import type {
+  InferenceRegistry,
+  ResolvedProfile,
+} from "../../common/inference/registry";
 import type { ModelMessage, ModelRequest } from "../../common/inference/types";
 import type {
   Capability,
   DispatchRequest,
+  HarnessId,
   MyelinEnvelope,
   SessionHarness,
 } from "../../common/substrates/types";
@@ -102,22 +106,37 @@ function unsupportedCapabilityReason(req: DispatchRequest): string | undefined {
 }
 
 /**
- * Build a normalized {@link ModelRequest} FROM THE DISPATCH REQUEST. Phase 1
- * rebuilds the "conversation" from the request alone (no ConversationStore —
- * that's Phase 2): the persona/system becomes `instructions`, and the prompt
- * becomes the single user turn. Text only (D5/Phase 1).
+ * Build a normalized {@link ModelRequest} FROM THE DISPATCH REQUEST plus the
+ * RESOLVED PROFILE. Phase 1 rebuilds the "conversation" from the request alone
+ * (no ConversationStore — that's Phase 2): the persona/system becomes
+ * `instructions`, and the prompt becomes the single user turn. Text only
+ * (D5/Phase 1).
+ *
+ * The profile contributes the principal's declared knobs: `model`, the
+ * `maxOutputTokens` bound, and the namespaced `options` escape hatch. It takes
+ * the WHOLE {@link ResolvedProfile} rather than cherry-picked fields on purpose
+ * — cherry-picking `model` alone is precisely how `maxOutputTokens`/`options`
+ * stayed silently unpopulated for a full epic (issue #2114) despite the schema
+ * accepting them and both providers reading them.
  */
-function buildModelRequest(req: DispatchRequest, model: string): ModelRequest {
+function buildModelRequest(
+  req: DispatchRequest,
+  profile: ResolvedProfile,
+): ModelRequest {
   const messages: ModelMessage[] = [
     { role: "user", content: [{ type: "text", text: req.prompt }] },
   ];
   const instructions = req.persona?.content;
   return {
-    model,
+    model: profile.model,
     ...(instructions !== undefined && instructions !== ""
       ? { instructions }
       : {}),
     messages,
+    ...(profile.maxOutputTokens !== undefined
+      ? { maxOutputTokens: profile.maxOutputTokens }
+      : {}),
+    ...(profile.options !== undefined ? { options: profile.options } : {}),
   };
 }
 
@@ -154,6 +173,29 @@ function stampUsage(
         : {}),
     },
   };
+}
+
+/**
+ * API-2115 — stamp the EXECUTING SUBSTRATE onto every lifecycle envelope this
+ * harness yields, so Mission Control can label the session's `substrate` column
+ * from a DECLARED fact rather than an inference.
+ *
+ * Why declared, not inferred: MC's `sessions.substrate` column is
+ * `NOT NULL DEFAULT 'claude-code'`, so an api-agent session is silently
+ * mislabelled today. The projection could have guessed "api-agent" from the
+ * presence of usage / provider diagnostics — but that guess is WRONG exactly
+ * where it matters: a cortex-side failure (wall-clock / inactivity timeout,
+ * unsupported capability, missing profile) carries neither, and would be
+ * mislabelled `claude-code`. So the substrate rides the envelope explicitly,
+ * on EVERY kind (started included, so the session is born correctly labelled
+ * rather than corrected at terminal).
+ *
+ * Uses the same additional-payload-property mechanism `stampUsage` rides (the
+ * myelin schema admits extra payload keys) — no wire-grammar change. The value
+ * is the harness's own closed-enum `HarnessId`, never principal-supplied input.
+ */
+function stampSubstrate(env: Envelope, substrate: HarnessId): Envelope {
+  return { ...env, payload: { ...env.payload, substrate } };
 }
 
 /**
@@ -217,7 +259,20 @@ export class ApiAgentHarness implements SessionHarness {
     this.now = opts.now;
   }
 
+  /**
+   * API-2115 — the ONE choke point that stamps `substrate` onto every envelope
+   * this harness yields. Wrapping the generator (rather than editing each of the
+   * seven `yield` sites) makes the guarantee structural: a future early-return
+   * path added inside `dispatchInner` is labelled automatically and cannot
+   * regress the invariant.
+   */
   async *dispatch(req: DispatchRequest): AsyncIterable<MyelinEnvelope> {
+    for await (const env of this.dispatchInner(req)) {
+      yield stampSubstrate(env, this.id);
+    }
+  }
+
+  private async *dispatchInner(req: DispatchRequest): AsyncIterable<Envelope> {
     const correlationId = this.correlationFor(req);
     const startedAt = new Date();
     yield this.buildStarted(req, startedAt, correlationId);
@@ -258,7 +313,7 @@ export class ApiAgentHarness implements SessionHarness {
     }
     const resolved = resolution.profile;
 
-    const request = buildModelRequest(req, resolved.model);
+    const request = buildModelRequest(req, resolved);
 
     // One controller per dispatch, tracked for shutdown-driven cancellation.
     const controller = new AbortController();

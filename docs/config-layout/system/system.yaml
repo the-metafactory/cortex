@@ -108,16 +108,25 @@ execution:
 #     harness emits exactly one `started` and one terminal envelope per
 #     dispatch, accumulating the assistant text and delivering it ALL on the
 #     terminal. A principal sees one final block, not incremental output.
-#   * USAGE/COST IS NOT ON MISSION CONTROL YET (#2115). Token counts ride the
-#     terminal envelope's payload, but MC does not project api-agent usage/cost.
-#   * `maxOutputTokens` AND `options` ARE CURRENTLY DISCARDED (#2114). The
-#     harness builds its provider request from the model id + prompt only, so
-#     neither field reaches the provider. Consequence to plan for: on
-#     `anthropic-messages` the effective output cap is the provider adapter's
-#     own default (4096 tokens), NOT the number you write below; on
-#     `openai-chat-completions` no `max_tokens` is sent at all. Both fields are
-#     accepted by the schema and documented here because they are the forward
-#     contract — they are just not yet honoured.
+#   * USAGE lands on Mission Control; COST stays empty. Token counts from an
+#     api-agent dispatch project onto the MC session row (#2115). `cost_usd` is
+#     written ONLY when the provider itself reports a price — cortex consults no
+#     price table (design Q7 is unanswered, so an estimate would have nowhere
+#     honest to be labelled). No api-agent provider reports a price today, so in
+#     practice cost stays empty. Do not read a blank cost as "free".
+#   * OUTPUT BOUNDS DIFFER BY PROTOCOL. `maxOutputTokens` + `options` now reach
+#     the provider (#2114), but what an OMITTED `maxOutputTokens` means is
+#     protocol-specific:
+#       - `anthropic-messages`   → the adapter's own default of 4096 tokens.
+#       - `openai-chat-completions` → NO bound is sent; the server's default
+#         applies (whatever the endpoint decides — it may be much larger).
+#     Set `maxOutputTokens` explicitly if you care about the cap.
+#   * THE `options` BAG OVERRIDES DIFFERENTLY BY PROTOCOL (#2120) — a live
+#     footgun. On `openai-chat-completions` the bag merges LAST, so an
+#     `options.openai.max_tokens` SILENTLY OVERRIDES the `maxOutputTokens` you
+#     declared. On `anthropic-messages` the bag merges FIRST and the core fields
+#     win, so the same key is silently IGNORED. Same config, opposite outcomes:
+#     prefer `maxOutputTokens` and keep wire knobs out of `options`.
 #   * `modelClass` / `dataResidency` ARE CARRIED, NOT YET ENFORCED (#2117).
 #     They are validated, resolved, and attached to the profile, but admission
 #     does not yet gate a dispatch on them. Do not treat them as a control.
@@ -155,18 +164,23 @@ execution:
 #     claude-sonnet:
 #       provider: anthropic                   # MUST name a key in providers above
 #       model: claude-sonnet-4-6
-#       maxOutputTokens: 8192                 # accepted; NOT yet honoured (#2114)
+#       maxOutputTokens: 8192                 # reaches the provider as the output cap
 #       modelClass: frontier                  # local-only | frontier | any (carried, not enforced — #2117)
 #       dataResidency: us                     # opaque label (carried, not enforced — #2117)
 #     local-qwen:
 #       provider: local-ollama
 #       model: qwen3-coder
-#       maxOutputTokens: 8192                 # accepted; NOT yet honoured (#2114)
+#       maxOutputTokens: 8192                 # reaches the provider as the output cap
 #       modelClass: local-only
 #       dataResidency: nz
-#       # Q5 escape hatch: ONE namespaced, opaque bag of provider-only knobs.
-#       # Portable behaviour must never depend on anything in here, and a
-#       # credential must NEVER be routed through it. Not yet honoured (#2114).
+#       # Q5 escape hatch: ONE namespaced, opaque bag of provider-only knobs,
+#       # keyed by provider namespace. Reaches the wire (#2114). Portable
+#       # behaviour must never depend on anything in here, and a credential must
+#       # NEVER be routed through it (no secret-reference validation applies).
+#       # Precedence differs by protocol (#2120): on `openai-chat-completions`
+#       # the bag merges LAST and CAN silently override core fields such as
+#       # `max_tokens`; on `anthropic-messages` it merges FIRST and core fields
+#       # win. Keep wire knobs cortex already models OUT of here.
 #       # options:
 #       #   anthropic:
 #       #     <REPLACE_ME_VENDOR_KNOB>: <REPLACE_ME_VALUE>

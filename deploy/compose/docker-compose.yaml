@@ -1,0 +1,74 @@
+# docker-compose.yaml — the L4 container path (cortex#2095).
+#
+#   cp .env.example .env      # then fill it in (see the README)
+#   docker compose up -d      # = a running assistant
+#
+# Two services:
+#   - nats:   the isolated per-stack JetStream bus (official image + mounted conf).
+#   - cortex: the assistant daemon, built from Dockerfile.cortex, provisioned +
+#             started by its entrypoint from the CTX_* env contract in .env.
+#
+# SUPERVISION (DD-L4): compose `restart: unless-stopped` is the supervisor —
+# systemd is absent by design in a container.
+#
+# NETWORKING: cortex shares the nats container's network namespace
+# (`network_mode: "service:nats"`) so it reaches the loopback bus at
+# 127.0.0.1:4222 — matching cortex's scaffolded `nats.url` and its
+# loopback-bus requirement, with NO host patching needed. See the README
+# ("Networking model") for the full rationale and the alternative.
+#
+# ISOLATION: one stack per compose project. `COMPOSE_PROJECT_NAME` (or the
+# `name:` below) namespaces the containers, network, and volumes, so a second
+# stack is a second copy of this directory with its own project name.
+
+name: cortex
+
+services:
+  nats:
+    image: ${NATS_IMAGE:-nats:2.14-alpine}
+    command: ["-c", "/etc/nats/stack.conf"]
+    volumes:
+      - ./nats.conf:/etc/nats/stack.conf:ro
+      - nats-jetstream:/data/jetstream
+    # The monitor endpoint (/healthz) gates cortex's start via depends_on. The
+    # alpine image variant carries busybox wget for an in-container probe.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  cortex:
+    build:
+      context: .
+      dockerfile: Dockerfile.cortex
+      args:
+        CORTEX_REF: ${CORTEX_REF:-v6.8.5}
+        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        CLAUDE_VERSION: ${CLAUDE_VERSION:-2.1.211}
+        NATS_SERVER_VERSION: ${NATS_SERVER_VERSION:-2.14.3}
+    image: ${CORTEX_IMAGE:-cortex:local}
+    # Secrets + the CTX_* contract arrive at RUNTIME only — never baked (env_file,
+    # not build args / ENV). `docker history` therefore shows zero secrets.
+    env_file: .env
+    # Share the nats container's network namespace: cortex talks to the bus over
+    # 127.0.0.1 (see the header + README). depends_on still gates on nats health.
+    network_mode: "service:nats"
+    depends_on:
+      nats:
+        condition: service_healthy
+    volumes:
+      # All mutable, identity-bearing state — so restart / down+up preserve the
+      # stack identity, seeds, and sessions.
+      - cortex-config:/home/cortex/.config/metafactory/cortex
+      - cortex-state:/home/cortex/.local/state/metafactory/cortex
+      - cortex-nats:/home/cortex/.config/nats
+    restart: unless-stopped
+
+volumes:
+  nats-jetstream:
+  cortex-config:
+  cortex-state:
+  cortex-nats:
