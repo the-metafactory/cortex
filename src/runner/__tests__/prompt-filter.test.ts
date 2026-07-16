@@ -15,6 +15,7 @@ import {
   scanPrompt,
   deriveReasonCategory,
   assertPromptFilterReady,
+  validateLoadedFilter,
   __setPromptFilterLoadErrorForTests,
 } from "../prompt-filter";
 
@@ -271,5 +272,41 @@ describe("assertPromptFilterReady (cortex#2184 boot gate)", () => {
     const warnings = logged.filter((l) => l.includes("SECURITY") && l.includes(ENV_VAR));
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("DISABLED");
+  });
+});
+
+describe("validateLoadedFilter (cortex#2184 round 2 — resolved-but-degraded import)", () => {
+  // A RESOLVED import promise is not proof of a working filter: a partial
+  // fetch, an ESM/CJS interop quirk landing the export on `.default`, or a
+  // renamed/missing export all resolve without throwing — so the module-init
+  // `catch` never fires, yet `scanPrompt`'s fail-open check
+  // (`if (!filterContentString)`) would still trip. These tests pin that
+  // `validateLoadedFilter` uses the SAME predicate scanPrompt does, on a few
+  // plausible degraded-module shapes, without needing a real broken import.
+
+  test("mod exports a real callable filterContentString → null (ready)", () => {
+    const mod = { filterContentString: () => ({}) as unknown };
+    expect(validateLoadedFilter(mod)).toBeNull();
+  });
+
+  test("mod.filterContentString is undefined (missing export) → error string", () => {
+    const mod = { filterContentString: undefined };
+    const result = validateLoadedFilter(mod);
+    expect(result).not.toBeNull();
+    expect(result).toContain("@metafactory/content-filter");
+    expect(result).toContain("did not export a callable");
+  });
+
+  test("mod.filterContentString present but not a function (e.g. landed on .default, wrong shape) → error string", () => {
+    const mod = { filterContentString: { default: () => {} } };
+    const result = validateLoadedFilter(mod);
+    expect(result).not.toBeNull();
+    expect(result).toContain("did not export a callable");
+  });
+
+  test("mod with no filterContentString key at all → error string", () => {
+    const mod = {};
+    const result = validateLoadedFilter(mod);
+    expect(result).not.toBeNull();
   });
 });

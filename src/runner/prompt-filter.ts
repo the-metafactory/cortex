@@ -32,16 +32,52 @@ let filterContentString: FilterContentString | null = null;
  */
 export let promptFilterLoadError: string | null = null;
 
+/**
+ * cortex#2184 round 2 — validate a successfully-RESOLVED content-filter import
+ * actually exports a callable `filterContentString`. A resolved import promise
+ * is not proof of a working filter: a partial fetch, an ESM/CJS interop quirk
+ * landing the export on `.default`, or a renamed/missing export all resolve
+ * without throwing — the module-init `catch` below never fires for any of
+ * those. `scanPrompt`'s own fail-open check is on the FUNCTION VALUE
+ * (`if (!filterContentString)`), not on whether the import threw, so this gate
+ * must check the SAME thing or a degraded-but-non-throwing load slips through
+ * with `promptFilterLoadError` staying `null` — a boot-time false negative.
+ *
+ * Pure + exported so the degraded-load shapes are unit-testable without a
+ * real broken import (see prompt-filter.test.ts): a mod whose
+ * `filterContentString` is `undefined`, or present but not a function.
+ */
+export function validateLoadedFilter(mod: {
+  filterContentString?: unknown;
+}): string | null {
+  if (typeof mod.filterContentString !== "function") {
+    return (
+      "@metafactory/content-filter loaded but did not export a callable " +
+      "filterContentString — inbound prompts would NOT be scanned"
+    );
+  }
+  return null;
+}
+
 // Load @metafactory/content-filter at module init. This is a required security
 // control — if the package fails to load we log loudly so principals notice.
 // Previously this was silently fail-open (grove#173). Since cortex#2184 the
 // failure is also hard-gated at boot — see assertPromptFilterReady below.
 try {
   const mod = await import("@metafactory/content-filter");
-  filterContentString = mod.filterContentString;
-  console.log(
-    "prompt-filter: @metafactory/content-filter loaded — inbound prompts will be scanned",
-  );
+  const validationError = validateLoadedFilter(mod);
+  if (validationError !== null) {
+    // Resolved import, but the export shape is unusable — treat identically
+    // to a throw: promptFilterLoadError set, filterContentString stays null,
+    // scanPrompt fails open, assertPromptFilterReady hard-gates.
+    promptFilterLoadError = validationError;
+    console.error(`prompt-filter: WARN ${validationError}`);
+  } else {
+    filterContentString = mod.filterContentString;
+    console.log(
+      "prompt-filter: @metafactory/content-filter loaded — inbound prompts will be scanned",
+    );
+  }
 } catch (err) {
   promptFilterLoadError = err instanceof Error ? err.message : String(err);
   console.error(
