@@ -169,7 +169,11 @@ export interface CCSessionResult {
  * `principal-env.ts`) so external setters still on `GROVE_*` keep resolving
  * during the transition.
  *
- * Pure function: does not mutate `baseEnv`. Extracted from `start()` so the
+ * Does not mutate `baseEnv` — but NOT referentially transparent: it reads the
+ * process-wide config home (`activeConfigHomeEnv`) published at daemon boot, so
+ * the same inputs yield a different `CLAUDE_CONFIG_DIR` across deployments.
+ * Tests that care must set it explicitly (`setActiveSubstrates`) or pass
+ * `opts.configHomeEnv`. Extracted from `start()` so the
  * spawned env is unit-testable without invoking the `claude` binary.
  */
 export function buildSessionEnv(

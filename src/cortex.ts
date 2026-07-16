@@ -4053,8 +4053,20 @@ export async function startCortex(
   ) {
     configWatcher = new ConfigWatcher(expandedConfigPath, config, (event) => {
       // Keep the process-wide config-home current on hot reload (a `substrates:`
-      // edit takes effect for subsequently-spawned sessions without a restart).
+      // edit takes effect for subsequently-spawned sessions without a restart),
+      // and re-log on CHANGE. Without the re-log the boot line goes stale-but-
+      // confident: deleting `substrates:` and reloading silently reverts every
+      // later session to the vendor default while the one line an operator can
+      // check still reports the old home. A confidently wrong log is worse than
+      // no log.
+      const homeBeforeReload = activeConfigHomeEnv("claude-code")?.value;
       setActiveSubstrates(event.config.substrates);
+      const homeAfterReload = activeConfigHomeEnv("claude-code")?.value;
+      if (homeBeforeReload !== homeAfterReload) {
+        console.log(
+          `cortex: Claude config home changed on reload → ${homeAfterReload ?? "(vendor default — no substrates.claude-code.configHome)"}`,
+        );
+      }
       dispatchHandler.updateConfig(event.config, expandedConfigPath);
       for (const adapter of adapters) adapter.updateConfig?.(event.config);
       if (cloudPublisher) {

@@ -81,7 +81,7 @@
  */
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import { activeConfigHomeEnv } from "../common/substrates/config-home";
+import { configHomeSpawnEnv, type SubstrateId } from "../common/substrates/config-home";
 import {
   createReviewTaskFailedEvent,
   createReviewVerdictEvent,
@@ -127,8 +127,21 @@ export interface SageSpawnResult {
  */
 export type SageSpawnFn = (
   argv: string[],
-  opts: { stdout: "pipe"; stderr: "pipe" },
+  opts: { stdout: "pipe"; stderr: "pipe"; env?: Record<string, string> },
 ) => SageSpawnResult;
+
+/**
+ * sage's `--substrate` LLM vocabulary → the cortex substrate id used to key the
+ * deployment's `substrates:` config-home block. The two vocabularies differ
+ * (sage says `claude`; cortex says `claude-code`), so the mapping is explicit
+ * rather than assumed. `pi` is a direct pi.dev API call with no CLI config home
+ * → no entry.
+ */
+const SAGE_MODEL_TO_SUBSTRATE: Record<string, SubstrateId | undefined> = {
+  claude: "claude-code",
+  codex: "codex",
+  pi: undefined,
+};
 
 /**
  * Binary resolver — returns the absolute path to the sage CLI, or
@@ -150,8 +163,9 @@ export type SageWhichFn = (cmd: string) => string | undefined;
  *   - Use `Bun.spawn` for the subprocess.
  *   - Use the current process env (no scrubbing — sage piggybacks on the
  *     principal's `gh` auth and `GITHUB_TOKEN` via inherited env), plus the
- *     configured claude config home layered on top, so a `--substrate claude`
- *     run's own `claude` grandchild resolves against it (see `defaultSpawn`).
+ *     config home for whichever substrate sage will actually run, layered on
+ *     top, so that CLI grandchild resolves against the declared home (see the
+ *     SUBPROCESS BOUNDARY note at the spawn call site).
  */
 export interface MakeSageRunnerOpts {
   /**
@@ -283,9 +297,24 @@ export function makeSageReviewRunner(
       argv.push("--forge", forge);
     }
 
+    // SUBPROCESS BOUNDARY: sage re-execs its substrate's CLI itself, one level
+    // BELOW cortex's own spawn chokepoint (cc-session), which therefore cannot
+    // reach it. Export the config home for the substrate sage will ACTUALLY run
+    // (resolved above) — not a hardcoded one — so the grandchild resolves
+    // against the declared home rather than its vendor default. `pi` maps to no
+    // substrate → env omitted → plain inherit, which sage needs for `gh` /
+    // `GITHUB_TOKEN` anyway.
+    //
+    // ASSUMPTION, unverified in this repo (sage is not vendored here): that sage
+    // passes its env through to the CLI it execs. Default subprocess inheritance
+    // makes that near-certain, but nothing here proves it — if sage scrubs or
+    // rebuilds env for its child, this line is inert.
+    const sageSubstrate = SAGE_MODEL_TO_SUBSTRATE[substrate];
+    const spawnEnv = sageSubstrate ? configHomeSpawnEnv(sageSubstrate) : undefined;
+
     let proc: SageSpawnResult;
     try {
-      proc = spawn(argv, { stdout: "pipe", stderr: "pipe" });
+      proc = spawn(argv, { stdout: "pipe", stderr: "pipe", ...(spawnEnv && { env: spawnEnv }) });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       return failed(
@@ -383,23 +412,15 @@ export function makeSageReviewRunner(
 /** Production spawn — `Bun.spawn`. */
 function defaultSpawn(
   argv: string[],
-  opts: { stdout: "pipe"; stderr: "pipe" },
+  opts: { stdout: "pipe"; stderr: "pipe"; env?: Record<string, string> },
 ): SageSpawnResult {
-  // SUBPROCESS BOUNDARY: with `--substrate claude`, sage re-execs `claude`
-  // itself — one level BELOW cortex's own spawn chokepoint (cc-session), which
-  // therefore cannot reach it. Export the configured config home here so that
-  // grandchild inherits it instead of authenticating on the vendor-default
-  // credential (which refreshes independently and expires). Layered on top of
-  // the inherited env, which sage relies on for `gh`/`GITHUB_TOKEN`. Harmless
-  // for non-claude substrates — the var is simply unused.
-  // See common/substrates/config-home.ts.
-  const configHome = activeConfigHomeEnv("claude-code");
+  // `env` is resolved by the CALLER (which knows the substrate sage will run) —
+  // see the SUBPROCESS BOUNDARY note at the call site. Omitted → plain inherit,
+  // which sage relies on for `gh` / `GITHUB_TOKEN`.
   const proc = Bun.spawn(argv, {
     stdout: opts.stdout,
     stderr: opts.stderr,
-    ...(configHome && {
-      env: { ...process.env, [configHome.name]: configHome.value },
-    }),
+    ...(opts.env && { env: opts.env }),
   });
   return {
     stdout: proc.stdout,

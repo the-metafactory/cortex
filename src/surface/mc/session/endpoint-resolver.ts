@@ -7,7 +7,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { Subprocess } from "bun";
-import { activeConfigHomeEnv } from "../../../common/substrates/config-home";
+import { configHomeSpawnEnv } from "../../../common/substrates/config-home";
 import type { SessionEndpoint, ManagedProcess } from "./types";
 import type { StreamJsonContentBlock } from "./stream-json";
 import { NotControllable, SessionConflict, SessionClosed } from "./types";
@@ -50,22 +50,21 @@ export function resolveSessionEndpoint(
 export type SpawnFn = (args: string[]) => Subprocess;
 
 const defaultSpawn: SpawnFn = (args) => {
-  // This is the SECOND `claude` spawn site in cortex (the other is
-  // runner/cc-session.ts) — both must export the deployment's configured config
-  // home, or the child authenticates against the vendor-default credential and
-  // expires independently of the principal's. Without an explicit `env` the
-  // child inherits `process.env`, which does NOT carry it; layer it on top.
-  // See common/substrates/config-home.ts.
-  const configHome = activeConfigHomeEnv("claude-code");
+  // One of the two places cortex spawns `claude` (the other is
+  // runner/cc-session.ts). Both must export the deployment's configured config
+  // home, or the child authenticates against the vendor-default credential,
+  // which refreshes independently of the principal's and expires. `env` is
+  // omitted when nothing is declared → plain inherit (the pre-existing
+  // behaviour). The decision itself lives in — and is unit-tested at —
+  // common/substrates/config-home.ts, because THIS wrapper is an injection-seam
+  // default that every test replaces, so logic placed here would never run
+  // under CI.
+  const env = configHomeSpawnEnv("claude-code");
   return Bun.spawn(args, {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
-    // Omitted entirely when no config home is declared → plain inherit (the
-    // pre-existing behaviour), rather than an env we've needlessly rebuilt.
-    ...(configHome && {
-      env: { ...process.env, [configHome.name]: configHome.value },
-    }),
+    ...(env && { env }),
   });
 };
 

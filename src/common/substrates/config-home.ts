@@ -155,3 +155,37 @@ export function activeConfigHomeEnv(
 ): { name: string; value: string } | undefined {
   return resolveConfigHomeEnv(substrate, activeSubstrates);
 }
+
+/**
+ * Build the env for spawning `substrate`'s binary — or a subprocess that will
+ * itself exec it — by layering the configured config home on top of `baseEnv`
+ * (default: this process's env). Returns `undefined` when no config home is
+ * declared, so the caller can OMIT `env` entirely and let the child inherit
+ * (the pre-existing behaviour) rather than needlessly rebuilding it.
+ *
+ * `undefined` values in `baseEnv` are dropped, not stringified — matching what
+ * a plain inherit does.
+ *
+ * EXPORTED, and deliberately NOT inlined at the spawn sites: those wrappers are
+ * injection-seam defaults that every test replaces with a fake, so logic left
+ * inside them is never executed by the suite and can be silently reverted with
+ * CI green. Keeping the decision here makes it directly unit-testable.
+ *
+ * KNOWN GAP: this only reaches spawns cortex performs itself. A deployment-
+ * authored process spec run via `bus/process-runner.ts` gets an env pass-through
+ * ALLOWLIST (it forwards vars cortex already has; it cannot ADD one), so a
+ * `claude` invoked that way has no route to the declared home.
+ */
+export function configHomeSpawnEnv(
+  substrate: SubstrateId,
+  baseEnv: Record<string, string | undefined> = process.env,
+): Record<string, string> | undefined {
+  const configHome = activeConfigHomeEnv(substrate);
+  if (!configHome) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value !== undefined) out[key] = value;
+  }
+  out[configHome.name] = configHome.value;
+  return out;
+}

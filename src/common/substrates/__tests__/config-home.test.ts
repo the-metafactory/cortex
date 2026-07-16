@@ -6,6 +6,7 @@ import {
   resolveConfigHomeEnv,
   setActiveSubstrates,
   activeConfigHomeEnv,
+  configHomeSpawnEnv,
 } from "../config-home";
 import { AgentRuntimeSchema } from "../../types/cortex-config";
 
@@ -119,6 +120,51 @@ describe("active substrates chokepoint (setActiveSubstrates / activeConfigHomeEn
   test("returns undefined for a substrate absent from the active set", () => {
     setActiveSubstrates({ codex: { configHome: "/x" } });
     expect(activeConfigHomeEnv("claude-code")).toBeUndefined();
+  });
+});
+
+// These guard the two spawn wrappers (mc endpoint-resolver, sage-runner) whose
+// own bodies are injection-seam defaults tests never execute — the logic lives
+// here precisely so it CAN be asserted.
+describe("configHomeSpawnEnv — spawn env for a substrate's binary", () => {
+  afterEach(() => setActiveSubstrates(undefined));
+
+  test("returns undefined when no config home is declared (caller omits env → inherit)", () => {
+    setActiveSubstrates(undefined);
+    expect(configHomeSpawnEnv("claude-code", { PATH: "/usr/bin" })).toBeUndefined();
+  });
+
+  test("layers the config home on top of the base env, preserving it", () => {
+    setActiveSubstrates({ "claude-code": { configHome: "/Users/x/.claude-soma" } });
+    const env = configHomeSpawnEnv("claude-code", { PATH: "/usr/bin", GITHUB_TOKEN: "t" });
+    expect(env?.CLAUDE_CONFIG_DIR).toBe("/Users/x/.claude-soma");
+    // sage relies on inherited gh auth — the base env must survive.
+    expect(env?.PATH).toBe("/usr/bin");
+    expect(env?.GITHUB_TOKEN).toBe("t");
+  });
+
+  test("drops undefined base-env values rather than stringifying them", () => {
+    setActiveSubstrates({ "claude-code": { configHome: "/home" } });
+    const env = configHomeSpawnEnv("claude-code", { PATH: "/usr/bin", NOPE: undefined });
+    expect("NOPE" in (env ?? {})).toBe(false);
+  });
+
+  // The codex regression: a site that hardcodes "claude-code" leaves a codex
+  // deployment on its vendor default — the exact bug class this module exists
+  // to kill. Resolution must follow the substrate actually being run.
+  test("resolves per-substrate: codex gets CODEX_HOME, not CLAUDE_CONFIG_DIR", () => {
+    setActiveSubstrates({
+      "claude-code": { configHome: "/claude/home" },
+      codex: { configHome: "/codex/home" },
+    });
+    const env = configHomeSpawnEnv("codex", { PATH: "/usr/bin" });
+    expect(env?.CODEX_HOME).toBe("/codex/home");
+    expect(env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
+  test("returns undefined for a substrate with no config-home env var (pi-dev)", () => {
+    setActiveSubstrates({ "pi-dev": { configHome: "/x" } });
+    expect(configHomeSpawnEnv("pi-dev", { PATH: "/usr/bin" })).toBeUndefined();
   });
 });
 
