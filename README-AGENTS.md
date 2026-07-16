@@ -42,12 +42,12 @@ Verify each before starting:
 **Platform — macOS and Linux both supported.** The runtime is OS-agnostic (Bun,
 NATS, and the config `.conf` are identical); only the **service manager** differs:
 - **macOS** — launchd. `arc upgrade` renders the plists (`src/services/`) for you.
-- **Linux** — systemd **user** units. arc's auto-rendering of systemd units is WIP
-  ([arc#140](https://github.com/the-metafactory/arc/issues/140)); for now hand-write a
-  user unit mirroring the launchd plist — `ExecStart=<path>/cortex start --config
-  <pointer>`, `Restart=always`, `CORTEX_CHANNEL` set, `~/.bun/bin` on `PATH` — then
-  `systemctl --user enable --now`. cortex's `daemon-locator` finds it. (Or run directly:
-  `bun src/cortex.ts start --config <pointer>`.)
+- **Linux** — systemd **user** units. Auto-rendering is tracked in
+  [cortex#2071](https://github.com/the-metafactory/cortex/issues/2071); until it
+  ships, use the **validated template units in Appendix A** — one `nats@.service`
+  + one `cortex@.service` serve every stack via the `%i` instance parameter
+  (`systemctl --user enable --now cortex@<slug>`). cortex's `daemon-locator`
+  finds it. (Or run directly: `bun src/cortex.ts start --config <pointer>`.)
 
 ## 2. Install
 
@@ -236,8 +236,9 @@ cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml --dry-run
 cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
 ```
 
-Daemonised: `~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` →
-`cortex start --config …/<slug>.yaml`, logs to
+Daemonised — macOS: `~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plist` →
+`cortex start --config …/<slug>.yaml`. Linux: `systemctl --user enable --now
+nats@<slug> cortex@<slug>` (template units — Appendix A). Both log to
 `~/.local/state/metafactory/cortex/logs/cortex-<slug>.{log,error.log}`.
 
 **Healthy-boot gate** — all of these lines must appear:
@@ -344,3 +345,111 @@ via `bus.review`; see [`docs/sop-bus-review.md`](docs/sop-bus-review.md).
 | Bus review path | [`docs/sop-bus-review.md`](docs/sop-bus-review.md) |
 | Architecture | [`docs/architecture.md`](docs/architecture.md) |
 | Domain vocabulary | [`CONTEXT.md`](CONTEXT.md) |
+
+## Appendix A — Debian/Linux end-to-end (systemd user units)
+
+Community-validated on a clean Debian 13 x64 bring-up (thanks Vincent Zontini —
+his fuller walkthrough with Discord-side steps lives in
+[this gist](https://gist.github.com/vpzed/fc3b8da5ee9ecaea4a0d17e567ffbb17)).
+These are systemd **template units**: the text after `@` becomes `%i` (the stack
+slug), so ONE pair of files serves every stack on the host. Auto-rendering of
+these units by `arc upgrade cortex` is tracked in
+[cortex#2071](https://github.com/the-metafactory/cortex/issues/2071); until it
+ships, create them by hand as below.
+
+### A.1 One-time host preparation
+
+```bash
+# Keep user services running after logout (REQUIRED — without linger, systemd
+# stops your assistant the moment your SSH session ends):
+sudo loginctl enable-linger "$USER"
+
+mkdir -p ~/.config/systemd/user
+mkdir -p ~/.local/state/nats/logs
+```
+
+The install/config flow is the same as §2–§4 (Bun, Claude Code login, arc,
+`cortex stack create`, the nats `.conf` per §4) — only the service manager
+differs. Set the env vars once for repeatability (`CTX_SLUG`, `CTX_PRINCIPAL`,
+`CTX_NATS_PORT`, `CTX_NATS_MON`, …) so every step below is copy-paste.
+
+### A.2 `~/.config/systemd/user/nats@.service`
+
+```ini
+[Unit]
+Description=NATS server (cortex stack: %i)
+After=network.target
+
+[Service]
+PrivateTmp=true
+Type=simple
+ExecStart=%h/.local/bin/nats-server -c %h/.config/nats/%i.conf
+Restart=on-failure
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s SIGUSR2 $MAINPID
+TimeoutStopSec=150
+
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/nats/logs
+StandardOutput=append:%h/.local/state/nats/logs/nats-server-%i.log
+StandardError=append:%h/.local/state/nats/logs/nats-server-%i.error.log
+
+[Install]
+WantedBy=default.target
+```
+
+`SIGUSR2` gives nats-server a *lame-duck* shutdown (drains clients before
+exiting); `HUP` reloads the config in place.
+
+### A.3 `~/.config/systemd/user/cortex@.service`
+
+```ini
+[Unit]
+Description=Cortex stack: %i
+After=network.target nats@%i.service
+Wants=nats@%i.service
+
+[Service]
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Type=simple
+ExecStart=%h/.local/bin/cortex start --config %h/.config/metafactory/cortex/%i/%i.yaml
+Restart=on-failure
+RestartSec=10
+RestartSteps=5
+RestartMaxDelaySec=300
+
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
+StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
+StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
+
+[Install]
+WantedBy=default.target
+```
+
+`After=`+`Wants=nats@%i.service` gives correct start ordering AND pulls the
+matching nats instance up with the stack. The escalating restart backoff
+(10 s → capped at 300 s over 5 steps) stops a misconfigured stack from
+hot-looping. Log paths are the XDG state dir — the same paths §5's
+healthy-boot gate greps.
+
+> `RestartSteps=`/`RestartMaxDelaySec=` need systemd ≥ 254 (Debian 13 ships
+> ≥ 254; on older hosts drop those two lines and keep `RestartSec=10`).
+
+### A.4 Enable, start, verify
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now "nats@$CTX_SLUG"
+curl -sf "http://127.0.0.1:$CTX_NATS_MON/healthz"   # → {"status":"ok"}
+systemctl --user enable --now "cortex@$CTX_SLUG"
+
+systemctl --user status "nats@$CTX_SLUG" "cortex@$CTX_SLUG"
+```
+
+Then run §5's healthy-boot gate against
+`~/.local/state/metafactory/cortex/logs/cortex-$CTX_SLUG.log` and the
+functional gate (@mention as principal → reply; non-principal → silence).
+
+**Upgrades:** `arc upgrade cortex` handles code + seed provisioning; after an
+upgrade, `systemctl --user restart "cortex@$CTX_SLUG"` picks up the new build
+(launchd restart is automated on macOS; the systemd analogue arrives with
+cortex#2071).
