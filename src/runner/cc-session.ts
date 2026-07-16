@@ -250,9 +250,8 @@ export class CCSession extends EventEmitter {
     // on `isolate`: even a non-isolated session must not fail open when a
     // deny-all MCP decision was made.
     const strictMcpArgs =
-      mcpGrants !== undefined &&
-      mcpGrants.length === 0 &&
-      !(this.opts.additionalArgs ?? []).includes("--strict-mcp-config")
+      mcpGrants?.length === 0 &&
+      this.opts.additionalArgs?.includes("--strict-mcp-config") !== true
         ? ["--strict-mcp-config"]
         : [];
     const isolationArgs: string[] = [];
