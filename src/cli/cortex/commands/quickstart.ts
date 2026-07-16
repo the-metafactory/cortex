@@ -65,6 +65,7 @@ import { type ExitResult } from "./_shared/exit-result";
 import { CC_AUTH_FAILURE_MESSAGE, isCcAuthFailure } from "../../../runner/cc-failure-classifier";
 import type { CCSessionResult } from "../../../runner/cc-session";
 import { resolveConfigDir } from "../../../common/config/config-path";
+import { validateConfigLoads } from "../../../common/config/validate-on-write";
 
 import { buildQuickstartPorts } from "./quickstart-adapters";
 import type { QuickstartPorts } from "./quickstart-ports";
@@ -78,6 +79,7 @@ import {
   patchSurfacesYaml,
   patchSystemNatsPort,
   pointerConfigPath,
+  readSurfaceAgent,
   renderEnvTable,
   renderGateTable,
   renderNatsConf,
@@ -86,7 +88,12 @@ import {
   surfacesConfigPath,
   systemConfigPath,
   validateEnvContract,
+  validateWebEnvContract,
+  writeWebSurfacesYaml,
+  type CtxRequiredKey,
+  type CtxWebRequiredKey,
   type EnvValidationResult,
+  type Surface,
 } from "./quickstart-lib";
 
 export { type ExitResult } from "./_shared/exit-result";
@@ -119,6 +126,7 @@ interface QuickstartFlags {
   json: boolean;
   skipServices: boolean;
   container: boolean;
+  surface: Surface;
   gateTimeoutMs: number;
   help: boolean;
 }
@@ -132,6 +140,9 @@ function parseQuickstartArgs(argv: string[]): QuickstartFlags {
     json: false,
     skipServices: false,
     container: false,
+    // Default `discord` — byte-identical to pre-#2153 behaviour for every
+    // caller that doesn't pass --surface (the entrypoint + every existing test).
+    surface: "discord",
     gateTimeoutMs: DEFAULT_GATE_TIMEOUT_MS,
     help: false,
   };
@@ -176,6 +187,19 @@ function parseQuickstartArgs(argv: string[]): QuickstartFlags {
         flags.container = true;
         flags.skipServices = true;
         break;
+      // Surface mode (cortex#2153): which surface to provision. `discord`
+      // (default) validates the Discord snowflake contract + patches a discord
+      // binding; `web` validates a host/port/token contract + scaffolds a web
+      // binding. EXPLICIT — never auto-detected from which CTX_* are present
+      // (epic #2164 planner decision).
+      case "--surface": {
+        const raw = requireValue(argv, ++i, "--surface");
+        if (raw !== "discord" && raw !== "web") {
+          throw new CliArgsError("quickstart", `--surface must be "discord" or "web", got "${raw}"`);
+        }
+        flags.surface = raw;
+        break;
+      }
       case "--help":
       case "-h":
         flags.help = true;
@@ -291,10 +315,50 @@ function runPreflight(ports: QuickstartPorts): StepReport {
 // Step 2 — env contract
 // =============================================================================
 
-function runEnvValidation(): { report: StepReport; result: EnvValidationResult } {
-  const result = validateEnvContract(process.env);
-  const lines = renderEnvTable(result).split("\n").slice(1); // drop the "env contract (CTX_*):" header — the step name is already the header
-  return { report: step("2. Validate env contract", result.ok, lines), result };
+/** The four SHARED env values every surface needs (NATS identity + stack
+ *  scaffold — the genuinely-useful parts quickstart keeps across surfaces). */
+interface SharedEnvValues {
+  principal: string;
+  slug: string;
+  natsPort: string;
+  natsMon: string;
+}
+
+/** Step-2 outcome. `ok` gates progression; `shared` is the cross-surface value
+ *  set; exactly one of `discord`/`web` is populated (the surface's typed
+ *  values) when `ok`. */
+interface EnvStepResult {
+  report: StepReport;
+  ok: boolean;
+  shared?: SharedEnvValues;
+  discord?: Record<CtxRequiredKey, string>;
+  web?: Record<CtxWebRequiredKey, string>;
+}
+
+function runEnvValidation(surface: Surface): EnvStepResult {
+  // drop the "env contract (CTX_*):" header — the step name is already the header
+  if (surface === "web") {
+    const result = validateWebEnvContract(process.env);
+    const report = step("2. Validate env contract", result.ok, renderEnvTable(result).split("\n").slice(1));
+    if (!result.ok || result.values === undefined) return { report, ok: false };
+    const v = result.values;
+    return {
+      report,
+      ok: true,
+      shared: { principal: v.CTX_PRINCIPAL, slug: v.CTX_SLUG, natsPort: v.CTX_NATS_PORT, natsMon: v.CTX_NATS_MON },
+      web: v,
+    };
+  }
+  const result: EnvValidationResult = validateEnvContract(process.env);
+  const report = step("2. Validate env contract", result.ok, renderEnvTable(result).split("\n").slice(1));
+  if (!result.ok || result.values === undefined) return { report, ok: false };
+  const v = result.values;
+  return {
+    report,
+    ok: true,
+    shared: { principal: v.CTX_PRINCIPAL, slug: v.CTX_SLUG, natsPort: v.CTX_NATS_PORT, natsMon: v.CTX_NATS_MON },
+    discord: v,
+  };
 }
 
 // =============================================================================
@@ -442,6 +506,92 @@ function runPatchConfigs(opts: {
 
   // system/system.yaml's nats.url only needs a patch when the port differs
   // from the scaffold's own default (4222) — cortex#2094's explicit gate.
+  if (opts.natsPort !== "4222") {
+    try {
+      const systemResult = patchSystemNatsPort(systemConfigPath(opts.configDir, opts.slug), opts.natsPort);
+      lines.push(
+        `  ✓ system/system.yaml ${systemResult.changed ? `patched (nats.url port → ${opts.natsPort})` : "already up to date (skip)"}`,
+      );
+    } catch (err) {
+      lines.push(`  ✗ system/system.yaml patch failed: ${errMsg(err)}`);
+      ok = false;
+    }
+  } else {
+    lines.push("  ✓ system/system.yaml nats.url — CTX_NATS_PORT is the default (4222); no patch needed");
+  }
+
+  return step("5. Patch configs from env", ok, lines);
+}
+
+// =============================================================================
+// Step 5 (web) — scaffold the web surface binding (cortex#2153)
+// =============================================================================
+
+/**
+ * The web analogue of {@link runPatchConfigs}. Instead of patching Discord
+ * values into the scaffold's `<REPLACE_ME>` slots, it REWRITES surfaces.yaml
+ * to a single `web:` binding (the scaffold's discord binding can't survive a
+ * web deployment — see quickstart-lib's web-scaffold section), then applies
+ * the SAME shared `system/system.yaml` nats-port patch the discord path does.
+ * It does NOT patch `stacks/<slug>.yaml` — a web deployment has no principal
+ * discordId to set (the scaffold's `<REPLACE_ME>` discord placeholders are
+ * inert with no discord surface bound).
+ *
+ * `token` is read from `process.env` at the call site (never stored) — same
+ * secret hygiene the discord token gets.
+ */
+function runPatchConfigsWeb(opts: {
+  slug: string;
+  principal: string;
+  configDir: string;
+  natsPort: string;
+  host: string;
+  port: string;
+  token: string;
+}): StepReport {
+  const lines: string[] = [];
+  let ok = true;
+
+  const surfacesPath = surfacesConfigPath(opts.configDir, opts.slug);
+  // The agent id the scaffold wrote (default "assistant", or whatever
+  // `--agent` a prior scaffold used). Read it off the file rather than
+  // duplicating stack.ts's default, and prefer the web entry so a re-run reads
+  // the already-rewritten file.
+  const agent = readSurfaceAgent(surfacesPath);
+  if (agent === undefined) {
+    return step("5. Patch configs from env", false, [
+      `  ✗ surfaces/surfaces.yaml: could not read the scaffolded agent id — not the shape \`cortex stack create\` writes`,
+    ]);
+  }
+
+  try {
+    const surfacesResult = writeWebSurfacesYaml(surfacesPath, {
+      agent,
+      stack: `${opts.principal}/${opts.slug}`,
+      instanceId: opts.slug,
+      host: opts.host,
+      port: opts.port,
+      token: opts.token,
+    });
+    lines.push(
+      `  ✓ surfaces/surfaces.yaml ${surfacesResult.changed ? "written (web binding — token set, never echoed)" : "already up to date (skip)"}`,
+    );
+    // FS-7 discipline: compose the WHOLE config through the daemon's boot
+    // validator so a broken web binding is caught at write time, not boot.
+    if (surfacesResult.changed) {
+      const validation = validateConfigLoads(pointerConfigPath(opts.configDir, opts.slug));
+      if (!validation.ok) {
+        lines.push(`  ✗ surfaces/surfaces.yaml written, but the composed config failed validation:`);
+        for (const e of validation.errors) lines.push(`    ${e}`);
+        ok = false;
+      }
+    }
+  } catch (err) {
+    lines.push(`  ✗ surfaces/surfaces.yaml web write failed: ${errMsg(err)}`);
+    ok = false;
+  }
+
+  // system/system.yaml's nats.url — IDENTICAL shared logic to the discord path.
   if (opts.natsPort !== "4222") {
     try {
       const systemResult = patchSystemNatsPort(systemConfigPath(opts.configDir, opts.slug), opts.natsPort);
@@ -615,19 +765,21 @@ export async function dispatchQuickstart(
   }
 
   // --- 2. Validate env contract ------------------------------------------------
-  const { report: envReport, result: env } = runEnvValidation();
-  reports.push(envReport);
-  if (!env.ok || env.values === undefined) {
+  // cortex#2153 — the contract is surface-specific: `discord` (default)
+  // validates the snowflake contract; `web` validates host/port/token.
+  const env = runEnvValidation(flags.surface);
+  reports.push(env.report);
+  if (!env.ok || env.shared === undefined) {
     return finish(reports, 2, flags.json);
   }
-  const v = env.values;
+  const s = env.shared;
 
   // --- 3. nats conf ------------------------------------------------------------
   const natsConfReport = runNatsConf({
-    slug: v.CTX_SLUG,
-    principal: v.CTX_PRINCIPAL,
-    port: v.CTX_NATS_PORT,
-    monitorPort: v.CTX_NATS_MON,
+    slug: s.slug,
+    principal: s.principal,
+    port: s.natsPort,
+    monitorPort: s.natsMon,
     natsDir,
     force: flags.force,
   });
@@ -637,38 +789,56 @@ export async function dispatchQuickstart(
   }
 
   // --- 4. Scaffold ---------------------------------------------------------
-  const scaffoldReport = await runScaffold({ slug: v.CTX_SLUG, principal: v.CTX_PRINCIPAL, configDir });
+  const scaffoldReport = await runScaffold({ slug: s.slug, principal: s.principal, configDir });
   reports.push(scaffoldReport);
   if (!scaffoldReport.ok) {
     return finish(reports, 1, flags.json);
   }
 
   // --- 5. Patch configs from env ---------------------------------------------
-  // process.env access for the two secrets happens HERE ONLY, scoped to this
-  // one call — never stored in a variable that a later step's log line could
-  // accidentally interpolate.
-  const patchReport = runPatchConfigs({
-    slug: v.CTX_SLUG,
-    principal: v.CTX_PRINCIPAL,
-    configDir,
-    natsPort: v.CTX_NATS_PORT,
-    discordToken: process.env.CTX_DISCORD_TOKEN ?? "",
-    guildId: v.CTX_GUILD_ID,
-    channelId: v.CTX_CHANNEL_ID,
-    logChannelId: v.CTX_LOG_CHANNEL_ID,
-    myDiscordId: v.CTX_MY_DISCORD_ID,
-  });
+  // process.env access for the surface's secret token happens HERE ONLY, scoped
+  // to this one call — never stored in a variable that a later step's log line
+  // could accidentally interpolate.
+  let patchReport: StepReport;
+  if (flags.surface === "web" && env.web !== undefined) {
+    const w = env.web;
+    patchReport = runPatchConfigsWeb({
+      slug: s.slug,
+      principal: s.principal,
+      configDir,
+      natsPort: s.natsPort,
+      host: w.CTX_WEB_HOST,
+      port: w.CTX_WEB_PORT,
+      token: process.env.CTX_WEB_TOKEN ?? "",
+    });
+  } else if (env.discord !== undefined) {
+    const d = env.discord;
+    patchReport = runPatchConfigs({
+      slug: s.slug,
+      principal: s.principal,
+      configDir,
+      natsPort: s.natsPort,
+      discordToken: process.env.CTX_DISCORD_TOKEN ?? "",
+      guildId: d.CTX_GUILD_ID,
+      channelId: d.CTX_CHANNEL_ID,
+      logChannelId: d.CTX_LOG_CHANNEL_ID,
+      myDiscordId: d.CTX_MY_DISCORD_ID,
+    });
+  } else {
+    // Unreachable: `env.ok` guarantees the surface's typed values are set.
+    return finish(reports, 2, flags.json);
+  }
   reports.push(patchReport);
   if (!patchReport.ok) {
     return finish(reports, 1, flags.json);
   }
 
   // --- 6. Seed provisioning ---------------------------------------------------
-  const provisionReport = runSeedProvisioning(ports, { slug: v.CTX_SLUG, configDir });
+  const provisionReport = runSeedProvisioning(ports, { slug: s.slug, configDir });
   reports.push(provisionReport);
 
   // --- 7. Services -------------------------------------------------------------
-  const servicesReport = runServices(ports, { slug: v.CTX_SLUG, skip: flags.skipServices });
+  const servicesReport = runServices(ports, { slug: s.slug, skip: flags.skipServices });
   reports.push(servicesReport);
   if (!servicesReport.ok) {
     return finish(reports, 1, flags.json);
@@ -676,8 +846,8 @@ export async function dispatchQuickstart(
 
   // --- 8. Healthy-boot gate -----------------------------------------------------
   const gateReport = await runGate(ports, {
-    slug: v.CTX_SLUG,
-    monitorPort: v.CTX_NATS_MON,
+    slug: s.slug,
+    monitorPort: s.natsMon,
     timeoutMs: flags.gateTimeoutMs,
     skip: flags.container,
   });
@@ -723,12 +893,20 @@ Runs the validated Debian runbook (README-AGENTS.md Appendix A + §5) as ONE
 idempotent command: preflight → validate env → nats conf → scaffold → patch
 configs from env → seed provisioning → services → healthy-boot gate.
 
-Requires (env, DD-L5 contract): CTX_PRINCIPAL, CTX_SLUG, CTX_NATS_PORT,
-CTX_NATS_MON, CTX_GUILD_ID, CTX_CHANNEL_ID, CTX_LOG_CHANNEL_ID,
-CTX_MY_DISCORD_ID, CTX_DISCORD_TOKEN. Optional: CLAUDE_CODE_OAUTH_TOKEN
-(native hosts with an existing \`claude\` login don't need it).
+Requires (env) — the SHARED keys, both surfaces: CTX_PRINCIPAL, CTX_SLUG,
+CTX_NATS_PORT, CTX_NATS_MON. Optional: CLAUDE_CODE_OAUTH_TOKEN (native hosts
+with an existing \`claude\` login don't need it). Then, per --surface:
+  discord (default): CTX_GUILD_ID, CTX_CHANNEL_ID, CTX_LOG_CHANNEL_ID,
+                     CTX_MY_DISCORD_ID, CTX_DISCORD_TOKEN.
+  web:               CTX_WEB_HOST, CTX_WEB_PORT, CTX_WEB_TOKEN (no Discord
+                     snowflakes — scaffolds a \`web:\` surfaces binding instead).
 
 Flags:
+  --surface <discord|web> Which surface to provision (default: discord).
+                          \`web\` validates a host/port/token contract and
+                          scaffolds a \`web:\` binding; \`discord\` validates the
+                          snowflake contract and patches a discord binding. The
+                          NATS-identity + stack scaffold is shared (cortex#2153).
   --config-dir <path>     Config dir (default: the resolved cortex config dir).
   --nats-dir <path>       NATS material dir (default: ~/.config/nats).
   --force                 Allow step 3 to overwrite a DIFFERENT existing

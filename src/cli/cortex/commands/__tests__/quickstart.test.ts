@@ -110,6 +110,10 @@ const CTX_KEYS = [
   "CTX_LOG_CHANNEL_ID",
   "CTX_MY_DISCORD_ID",
   "CTX_DISCORD_TOKEN",
+  // cortex#2153 — web surface contract keys (cleared/restored per test too).
+  "CTX_WEB_HOST",
+  "CTX_WEB_PORT",
+  "CTX_WEB_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ] as const;
 
@@ -137,6 +141,23 @@ function validCtxEnv(overrides: Partial<Record<(typeof CTX_KEYS)[number], string
     CTX_LOG_CHANNEL_ID: "333333333333333333",
     CTX_MY_DISCORD_ID: "444444444444444444",
     CTX_DISCORD_TOKEN: SECRET_TOKEN,
+    ...overrides,
+  };
+}
+
+const WEB_SECRET_TOKEN = "THE-REAL-WEB-AUTH-TOKEN-VALUE-xyz789";
+
+/** A valid WEB env — the shared identity keys + host/port/token, NO Discord
+ *  snowflakes (cortex#2153). */
+function validWebCtxEnv(overrides: Partial<Record<(typeof CTX_KEYS)[number], string>> = {}): Record<string, string> {
+  return {
+    CTX_PRINCIPAL: "andreas",
+    CTX_SLUG: "gateway",
+    CTX_NATS_PORT: "4222",
+    CTX_NATS_MON: "8222",
+    CTX_WEB_HOST: "127.0.0.1",
+    CTX_WEB_PORT: "8090",
+    CTX_WEB_TOKEN: WEB_SECRET_TOKEN,
     ...overrides,
   };
 }
@@ -544,6 +565,149 @@ describe("dispatchQuickstart — --container skips the healthy-boot gate", () =>
     // is what suppresses it, not some unrelated change.
     expect(readLogCalls).toBeGreaterThan(0);
     expect(res.stdout).not.toContain("--container passed");
+  });
+});
+
+// =============================================================================
+// --surface (cortex#2153) — web/gateway surface mode
+// =============================================================================
+
+describe("dispatchQuickstart — --surface flag parsing", () => {
+  test("--surface with no value → exit 2", async () => {
+    const res = await dispatchQuickstart(["--surface"]);
+    expect(res.exitCode).toBe(2);
+  });
+
+  test("--surface bogus → exit 2 with a clear message", async () => {
+    const res = await dispatchQuickstart(["--surface", "telegram"]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain('--surface must be "discord" or "web"');
+  });
+
+  test("--help documents the --surface flag and the web contract", async () => {
+    const res = await dispatchQuickstart(["--help"]);
+    expect(res.stdout).toContain("--surface");
+    expect(res.stdout).toContain("CTX_WEB_HOST");
+    expect(res.stdout).toContain("CTX_WEB_TOKEN");
+  });
+});
+
+describe("dispatchQuickstart — --surface web (macOS: step 7 auto-skips)", () => {
+  test("a full web run validates the web contract, scaffolds a web: binding, and NEVER echoes the token", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("darwin", () =>
+      withEnv(validWebCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir, "--surface", "web"], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("cortex quickstart: complete");
+    // secret hygiene: the web token never appears in ANY output.
+    expect(res.stdout).not.toContain(WEB_SECRET_TOKEN);
+    expect(res.stderr).not.toContain(WEB_SECRET_TOKEN);
+
+    // surfaces.yaml carries a WEB binding, no Discord snowflakes.
+    const surfaces = readFileSync(join(configDir, "gateway", "surfaces", "surfaces.yaml"), "utf-8");
+    expect(surfaces).toContain("web:");
+    expect(surfaces).not.toContain("discord:");
+    expect(surfaces).toContain("host: 127.0.0.1");
+    expect(surfaces).toContain("port: 8090");
+    expect(surfaces).toContain(`token: "${WEB_SECRET_TOKEN}"`); // the FILE carries it — only stdout must not
+    // shared parts still ran: nats conf + stack scaffold.
+    expect(existsSync(join(natsDir, "gateway.conf"))).toBe(true);
+    expect(existsSync(join(configDir, "gateway", "stacks", "gateway.yaml"))).toBe(true);
+  });
+
+  test("web run requires NO Discord snowflakes — a web env with none of them still succeeds", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const env = validWebCtxEnv();
+    // Prove the discord contract keys are entirely absent from this run.
+    expect(env.CTX_GUILD_ID).toBeUndefined();
+    expect(env.CTX_DISCORD_TOKEN).toBeUndefined();
+    const res = await withPlatform("darwin", () =>
+      withEnv(env, () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir, "--surface", "web"], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+  });
+
+  test("a second web run mutates NOTHING (idempotent re-run)", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const run = () =>
+      withPlatform("darwin", () =>
+        withEnv(validWebCtxEnv(), () =>
+          dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir, "--surface", "web"], () => fakePorts()),
+        ),
+      );
+    const first = await run();
+    expect(first.exitCode).toBe(0);
+    const before = snapshotTree([configDir, natsDir]);
+    const second = await run();
+    expect(second.exitCode).toBe(0);
+    const after = snapshotTree([configDir, natsDir]);
+    expect(after).toEqual(before);
+    expect(second.stdout).toContain("already up to date (skip)");
+    expect(second.stdout).not.toContain(WEB_SECRET_TOKEN);
+  });
+});
+
+describe("dispatchQuickstart — --surface mismatch is rejected clearly", () => {
+  test("--surface web but only Discord env set → exit 2, names the missing web keys", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir, "--surface", "web"], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(2);
+    expect(res.stdout).toContain("✗ CTX_WEB_HOST: missing");
+    expect(res.stdout).toContain("CTX_WEB_TOKEN: missing");
+    // it never scaffolded anything (env gate is step 2, before scaffold).
+    expect(existsSync(join(configDir, "work"))).toBe(false);
+  });
+
+  test("--surface discord (default) but only web env set → exit 2, names the missing snowflakes", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("darwin", () =>
+      withEnv(validWebCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(2);
+    expect(res.stdout).toContain("✗ CTX_GUILD_ID: missing");
+    expect(res.stdout).toContain("CTX_DISCORD_TOKEN: missing");
+  });
+});
+
+describe("dispatchQuickstart — --surface discord is the default (back-compat)", () => {
+  test("explicit --surface discord is byte-identical to omitting it", async () => {
+    const configDirA = freshDir();
+    const configDirB = freshDir();
+    const natsDirA = freshDir();
+    const natsDirB = freshDir();
+    const withDefault = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDirA, "--nats-dir", natsDirA], () => fakePorts()),
+      ),
+    );
+    const withExplicit = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDirB, "--nats-dir", natsDirB, "--surface", "discord"], () => fakePorts()),
+      ),
+    );
+    expect(withDefault.exitCode).toBe(0);
+    expect(withExplicit.exitCode).toBe(0);
+    // Same scaffold shape: both wrote a discord surfaces binding.
+    const surfacesA = readFileSync(join(configDirA, "work", "surfaces", "surfaces.yaml"), "utf-8");
+    const surfacesB = readFileSync(join(configDirB, "work", "surfaces", "surfaces.yaml"), "utf-8");
+    expect(surfacesA).toBe(surfacesB);
+    expect(surfacesA).toContain("discord:");
   });
 });
 

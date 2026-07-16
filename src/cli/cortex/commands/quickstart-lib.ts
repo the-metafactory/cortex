@@ -36,12 +36,13 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   renameSync,
   statSync,
   writeFileSync,
 } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { parseDocument } from "yaml";
 
 import { validateConfigLoads } from "../../../common/config/validate-on-write";
@@ -79,6 +80,42 @@ export type CtxRequiredKey = (typeof CTX_REQUIRED_KEYS)[number];
 export const CTX_SECRET_KEYS = ["CTX_DISCORD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const;
 export type CtxSecretKey = (typeof CTX_SECRET_KEYS)[number];
 
+/**
+ * The surface a quickstart run provisions (cortex#2153, epic #2164). Explicit —
+ * chosen by `--surface <discord|web>`, NEVER auto-detected from which `CTX_*`
+ * keys happen to be present (an explicit flag is greppable + testable; the
+ * planner decision in #2164). `discord` (the default) is byte-identical to the
+ * pre-#2153 behaviour.
+ */
+export type Surface = "discord" | "web";
+
+/**
+ * The web/gateway surface's non-secret env contract (cortex#2153). Reuses the
+ * SHARED identity/transport keys (`CTX_PRINCIPAL`, `CTX_SLUG`, `CTX_NATS_PORT`,
+ * `CTX_NATS_MON` — the genuinely-useful NATS-identity + stack-scaffold parts
+ * quickstart keeps across surfaces) and swaps the four Discord snowflakes for
+ * the web binding's host/port. NO Discord snowflake is required.
+ */
+export const CTX_WEB_REQUIRED_KEYS = [
+  "CTX_PRINCIPAL",
+  "CTX_SLUG",
+  "CTX_NATS_PORT",
+  "CTX_NATS_MON",
+  "CTX_WEB_HOST",
+  "CTX_WEB_PORT",
+] as const;
+export type CtxWebRequiredKey = (typeof CTX_WEB_REQUIRED_KEYS)[number];
+
+/**
+ * The web surface's secret env vars. `CTX_WEB_TOKEN` is the web analogue of
+ * `CTX_DISCORD_TOKEN` — it GATES success (a web scaffold that "succeeded" with
+ * no token would bind an unauthenticated surface) and is validated
+ * PRESENCE-ONLY, never echoed. `CLAUDE_CODE_OAUTH_TOKEN` stays optional, same
+ * as the Discord contract.
+ */
+export const CTX_WEB_SECRET_KEYS = ["CTX_WEB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const;
+export type CtxWebSecretKey = (typeof CTX_WEB_SECRET_KEYS)[number];
+
 // Mirrors stack.ts's SLUG_RE / PRINCIPAL_ID_RE (the `cortex stack create`
 // grammar) — not exported from that module, so duplicated here rather than
 // widen stack.ts's surface for a one-line regex. Keep in sync if that
@@ -90,10 +127,15 @@ const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
  *  digit-string, never parsed to a JS number. */
 const SNOWFLAKE_RE = /^[0-9]{1,20}$/;
 const PORT_RE = /^[0-9]{1,5}$/;
+/** A web bind host — an IP or hostname (letters, digits, dots, hyphens). Kept
+ *  deliberately permissive (`127.0.0.1`, `0.0.0.0`, `localhost`, a DNS name);
+ *  rejects whitespace, slashes, and scheme prefixes. */
+const HOST_RE = /^[a-zA-Z0-9.-]+$/;
 
-/** One required key's validation verdict. */
+/** One required key's validation verdict. `key` is a plain string so the same
+ *  shape serves both the Discord and web ({@link CtxWebRequiredKey}) contracts. */
 export interface CtxKeyCheck {
-  key: CtxRequiredKey;
+  key: string;
   /** `undefined` when missing entirely (distinct from present-but-invalid). */
   value?: string;
   ok: boolean;
@@ -103,17 +145,22 @@ export interface CtxKeyCheck {
 
 /** One secret key's presence verdict — value NEVER carried here. */
 export interface CtxSecretCheck {
-  key: CtxSecretKey;
+  key: string;
   status: "set" | "missing";
+  /** `true` when this secret GATES `ok` (the surface's primary token —
+   *  `CTX_DISCORD_TOKEN` for discord, `CTX_WEB_TOKEN` for web). A missing
+   *  gating secret renders as a hard ✗; a missing non-gating one (the optional
+   *  `CLAUDE_CODE_OAUTH_TOKEN`) as a soft ○. */
+  gates: boolean;
 }
 
-export interface EnvValidationResult {
+export interface EnvValidationResult<K extends string = CtxRequiredKey> {
   ok: boolean;
   checks: CtxKeyCheck[];
   secrets: CtxSecretCheck[];
   /** Convenience: the typed values, only present when `ok`. Callers still
    *  must not log `secrets` values — this map never carries the secret keys. */
-  values?: Record<CtxRequiredKey, string>;
+  values?: Record<K, string>;
 }
 
 /**
@@ -136,6 +183,7 @@ export function validateEnvContract(env: NodeJS.ProcessEnv): EnvValidationResult
   const secrets: CtxSecretCheck[] = CTX_SECRET_KEYS.map((key) => ({
     key,
     status: env[key] !== undefined && env[key].length > 0 ? "set" : "missing",
+    gates: key === "CTX_DISCORD_TOKEN",
   }));
 
   // CTX_DISCORD_TOKEN gates `ok` (§5 needs a real token to patch into
@@ -160,9 +208,52 @@ export function validateEnvContract(env: NodeJS.ProcessEnv): EnvValidationResult
   return values !== undefined ? { ok, checks, secrets, values } : { ok, checks, secrets };
 }
 
+/**
+ * Validate the web/gateway surface's `CTX_*` env contract (cortex#2153). The
+ * web analogue of {@link validateEnvContract}: same never-throw / `ok`-gating
+ * contract, but keyed on {@link CTX_WEB_REQUIRED_KEYS} (host/port instead of
+ * the Discord snowflakes) with {@link CTX_WEB_SECRET_KEYS} (`CTX_WEB_TOKEN`
+ * gates). NO Discord snowflake is required or consulted — a web deployment
+ * never feeds placeholder snowflakes.
+ */
+export function validateWebEnvContract(
+  env: NodeJS.ProcessEnv,
+): EnvValidationResult<CtxWebRequiredKey> {
+  const checks: CtxKeyCheck[] = CTX_WEB_REQUIRED_KEYS.map((key) => {
+    const raw = env[key];
+    if (raw === undefined || raw.length === 0) {
+      return { key, ok: false, reason: "missing" };
+    }
+    const shape = shapeCheck(key, raw);
+    return shape.ok
+      ? { key, value: raw, ok: true }
+      : { key, value: raw, ok: false, reason: shape.reason };
+  });
+
+  const secrets: CtxSecretCheck[] = CTX_WEB_SECRET_KEYS.map((key) => ({
+    key,
+    status: env[key] !== undefined && env[key].length > 0 ? "set" : "missing",
+    gates: key === "CTX_WEB_TOKEN",
+  }));
+
+  // CTX_WEB_TOKEN gates `ok` (the web binding needs a real auth secret — a run
+  // that "succeeded" with a placeholder token would bind an unauthenticated
+  // surface), same PRESENCE-ONLY / never-echoed discipline CTX_DISCORD_TOKEN
+  // gets. CLAUDE_CODE_OAUTH_TOKEN stays optional.
+  const webTokenSet = secrets.some((s) => s.gates && s.status === "set");
+  const ok = checks.every((c) => c.ok) && webTokenSet;
+  const values = checks.every((c) => c.ok)
+    ? (Object.fromEntries(checks.map((c) => [c.key, c.value ?? ""])) as Record<CtxWebRequiredKey, string>)
+    : undefined;
+
+  return values !== undefined ? { ok, checks, secrets, values } : { ok, checks, secrets };
+}
+
 /** Per-key shape rule. Extracted from {@link validateEnvContract} so the
- *  matrix is independently testable per key. */
-function shapeCheck(key: CtxRequiredKey, value: string): { ok: boolean; reason?: string } {
+ *  matrix is independently testable per key. Serves both the Discord and web
+ *  contracts (hence the `string` key + `default`); every caller only ever
+ *  passes a key from its own required-key list. */
+function shapeCheck(key: string, value: string): { ok: boolean; reason?: string } {
   switch (key) {
     case "CTX_PRINCIPAL":
       return PRINCIPAL_ID_RE.test(value)
@@ -174,6 +265,7 @@ function shapeCheck(key: CtxRequiredKey, value: string): { ok: boolean; reason?:
         : { ok: false, reason: "must be lowercase alphanumeric + hyphen/underscore, letter-prefixed" };
     case "CTX_NATS_PORT":
     case "CTX_NATS_MON":
+    case "CTX_WEB_PORT":
       return PORT_RE.test(value) && Number(value) > 0 && Number(value) <= 65535
         ? { ok: true }
         : { ok: false, reason: "must be a numeric port (1-65535)" };
@@ -184,12 +276,23 @@ function shapeCheck(key: CtxRequiredKey, value: string): { ok: boolean; reason?:
       return SNOWFLAKE_RE.test(value)
         ? { ok: true }
         : { ok: false, reason: "must be a numeric Discord snowflake" };
+    case "CTX_WEB_HOST":
+      return HOST_RE.test(value)
+        ? { ok: true }
+        : { ok: false, reason: "must be a hostname or IP (letters, digits, dots, hyphens)" };
+    default:
+      // Unreachable: every caller maps its own required-key list. A present,
+      // non-empty value with no specific rule passes (shape unknown → accept).
+      return { ok: true };
   }
 }
 
 /** Render the validation result as a human-readable ✓/✗ table. Never prints
- *  a secret VALUE — only `set`/`missing` for the two secret keys. */
-export function renderEnvTable(result: EnvValidationResult): string {
+ *  a secret VALUE — only `set`/`missing` for the two secret keys. Takes the
+ *  structural subset both {@link validateEnvContract} and
+ *  {@link validateWebEnvContract} share (checks + secrets), so it renders
+ *  either surface's contract. */
+export function renderEnvTable(result: { checks: CtxKeyCheck[]; secrets: CtxSecretCheck[] }): string {
   const lines: string[] = ["env contract (CTX_*):"];
   for (const c of result.checks) {
     const mark = c.ok ? "✓" : "✗";
@@ -197,11 +300,10 @@ export function renderEnvTable(result: EnvValidationResult): string {
     lines.push(`  ${mark} ${c.key}: ${detail}`);
   }
   for (const s of result.secrets) {
-    // CTX_DISCORD_TOKEN gates `ok` (see validateEnvContract) — missing is a
-    // hard ✗, matching the required checks above. CLAUDE_CODE_OAUTH_TOKEN is
-    // always optional — missing is a soft ○, never a failure mark.
-    const gates = s.key === "CTX_DISCORD_TOKEN";
-    const mark = s.status === "set" ? "✓" : gates ? "✗" : "○";
+    // The surface's gating token (CTX_DISCORD_TOKEN / CTX_WEB_TOKEN) — missing
+    // is a hard ✗, matching the required checks above. CLAUDE_CODE_OAUTH_TOKEN
+    // is always optional — missing is a soft ○, never a failure mark.
+    const mark = s.status === "set" ? "✓" : s.gates ? "✗" : "○";
     lines.push(`  ${mark} ${s.key}: ${s.status}`);
   }
   return lines.join("\n");
@@ -449,6 +551,109 @@ export function patchSurfacesYaml(
       doc.getIn(["surfaces", "discord", 0, "binding", "agentChannelId"]) === opts.agentChannelId &&
       doc.getIn(["surfaces", "discord", 0, "binding", "logChannelId"]) === opts.logChannelId,
   );
+}
+
+// =============================================================================
+// Web surface scaffold (cortex#2153) — REPLACE, not patch
+// =============================================================================
+//
+// The Discord path PATCHES real values into the `<REPLACE_ME>` slots of the
+// discord binding `cortex stack create` scaffolds. The web path can't do that:
+// the scaffold writes a `discord:` block, and a web deployment must end up with
+// a `web:` block instead (leaving a placeholder discord binding around would
+// fail the daemon's registry pass at boot). So the web path REWRITES
+// surfaces.yaml wholesale to a single `web:` binding.
+//
+// The authoritative web binding SCHEMA is out-of-tree: it lives in the
+// `metafactory-cortex-adapter-web` bundle's own `src/schema.ts` (ADR-0024 /
+// cortex#1794 S9 — cortex core hardcodes NO per-platform binding schema). At
+// scaffold time only the STRUCTURAL pass runs (`{agent, stack?, binding:
+// record}` — `SurfaceBindingEntrySchema`); the bundle's `WebBindingSchema`
+// validates at the REGISTRY pass on daemon boot. The fields written here
+// (instanceId/host/port + the gating token) follow the epic #2164 planner's
+// `host/port/token` web contract; see the report note for the reconciliation
+// risk against the bundle's exact required-field set.
+
+/** Read the agent id off whichever surface binding the scaffold (or a prior
+ *  web rewrite) left in `surfaces.yaml`. Prefers `web` (so a re-run reads the
+ *  already-rewritten file), then the scaffold's `discord`, then slack/mattermost.
+ *  Returns `undefined` when no binding entry carries a string `agent`. */
+export function readSurfaceAgent(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  const doc = parseDocument(readFileSync(path, "utf-8"));
+  for (const platform of ["web", "discord", "slack", "mattermost"]) {
+    const agent = doc.getIn(["surfaces", platform, 0, "agent"]);
+    if (typeof agent === "string" && agent.length > 0) return agent;
+  }
+  return undefined;
+}
+
+export interface WebSurfaceInputs {
+  agent: string;
+  stack: string;
+  instanceId: string;
+  host: string;
+  port: string;
+  token: string;
+}
+
+/** Render a web-only `surfaces.yaml` (cortex#2153). Deterministic given its
+ *  inputs — the byte-identical fixed point a re-run compares against for the
+ *  "second run mutates nothing" guarantee. `port` is emitted UNQUOTED so YAML
+ *  parses it as a number (matching the real web binding shape). `token` is the
+ *  secret — quoted, and NEVER echoed anywhere but this file. */
+export function renderWebSurfacesYaml(opts: WebSurfaceInputs): string {
+  return `# =============================================================================
+# surfaces/surfaces.yaml — web/gateway surface binding (cortex#2153)
+# =============================================================================
+# Written by \`cortex quickstart --surface web\`. Replaces the Discord binding
+# \`cortex stack create\` scaffolds with a single \`web:\` binding. The web binding
+# SCHEMA is owned by the metafactory-cortex-adapter-web bundle (ADR-0024) and
+# validated at the daemon's registry pass on boot — not by cortex core.
+
+surfaces:
+  web:
+    - agent: ${opts.agent}
+      stack: ${opts.stack}
+      binding:
+        instanceId: ${opts.instanceId}
+        host: ${opts.host}
+        port: ${opts.port}
+        token: "${opts.token}"            # web auth secret (chmod 600 the file)
+`;
+}
+
+/** Write the web `surfaces.yaml` (cortex#2153) — a full-file REWRITE (see the
+ *  section header). Idempotent: a re-run against an already-web file is
+ *  byte-identical → no write, no backup. Backs up the pre-existing (Discord
+ *  scaffold or prior web) file at its own mode before an atomic replace, and
+ *  re-reads to verify the bytes landed. Every file here is born 0600 (stack.ts
+ *  scaffold); the backup carries the secret too, so it gets the same mode. */
+export function writeWebSurfacesYaml(path: string, opts: WebSurfaceInputs): PatchResult {
+  const desired = renderWebSurfacesYaml(opts);
+  const exists = existsSync(path);
+  const mode = exists ? statSync(path).mode & 0o777 : 0o600;
+
+  if (exists && readFileSync(path, "utf-8") === desired) {
+    return { changed: false };
+  }
+
+  mkdirSync(dirname(path), { recursive: true });
+
+  let backupPath: string | undefined;
+  if (exists) {
+    const originalText = readFileSync(path, "utf-8");
+    backupPath = `${path}.pre-quickstart-web-surfaces-${backupStamp()}.bak`;
+    writeFileSync(backupPath, originalText, { encoding: "utf-8", mode });
+    chmodSync(backupPath, mode);
+  }
+
+  atomicWriteFileSync(path, desired, mode);
+  if (readFileSync(path, "utf-8") !== desired) {
+    throw new Error(`web surfaces write failed round-trip verification for ${path}`);
+  }
+
+  return backupPath !== undefined ? { changed: true, backupPath } : { changed: true };
 }
 
 /** Patch `system/system.yaml`'s `nats.url` port. Callers skip calling this

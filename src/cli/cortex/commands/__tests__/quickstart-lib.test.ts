@@ -19,6 +19,7 @@ import { join } from "path";
 
 import {
   CTX_REQUIRED_KEYS,
+  CTX_WEB_REQUIRED_KEYS,
   daemonLogPath,
   evaluateHealthyBootGate,
   gatePassed,
@@ -27,9 +28,13 @@ import {
   patchStackYaml,
   patchSurfacesYaml,
   patchSystemNatsPort,
+  readSurfaceAgent,
   renderEnvTable,
   renderNatsConf,
+  renderWebSurfacesYaml,
   validateEnvContract,
+  validateWebEnvContract,
+  writeWebSurfacesYaml,
 } from "../quickstart-lib";
 
 const tmpDirs: string[] = [];
@@ -162,9 +167,10 @@ describe("secret hygiene — CTX_DISCORD_TOKEN never echoed", () => {
     const result = validateEnvContract(validEnv());
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(SECRET);
-    // The secrets bucket must carry only the status enum, never a `value` field.
+    // The secrets bucket must carry only the status enum + the (non-secret)
+    // `gates` flag, never a `value` field.
     const tokenEntry = result.secrets.find((s) => s.key === "CTX_DISCORD_TOKEN");
-    expect(tokenEntry).toEqual({ key: "CTX_DISCORD_TOKEN", status: "set" });
+    expect(tokenEntry).toEqual({ key: "CTX_DISCORD_TOKEN", status: "set", gates: true });
   });
 
   test("renderEnvTable's rendered text never contains the token value", () => {
@@ -471,4 +477,211 @@ test("daemonLogPath matches §5's target path shape", () => {
   expect(daemonLogPath("/home/andreas", "work")).toBe(
     "/home/andreas/.local/state/metafactory/cortex/logs/cortex-work.log",
   );
+});
+
+// =============================================================================
+// cortex#2153 — web surface env contract
+// =============================================================================
+
+const WEB_SECRET = "THE-REAL-WEB-AUTH-TOKEN-VALUE";
+
+/** A fully valid WEB env — no Discord snowflakes at all. */
+function validWebEnv(): NodeJS.ProcessEnv {
+  return {
+    CTX_PRINCIPAL: "andreas",
+    CTX_SLUG: "gateway",
+    CTX_NATS_PORT: "4222",
+    CTX_NATS_MON: "8222",
+    CTX_WEB_HOST: "127.0.0.1",
+    CTX_WEB_PORT: "8090",
+    CTX_WEB_TOKEN: WEB_SECRET,
+  };
+}
+
+describe("validateWebEnvContract — the happy path", () => {
+  test("a valid web env validates ok WITHOUT any Discord snowflake", () => {
+    const result = validateWebEnvContract(validWebEnv());
+    expect(result.ok).toBe(true);
+    expect(result.values?.CTX_WEB_HOST).toBe("127.0.0.1");
+    expect(result.values?.CTX_WEB_PORT).toBe("8090");
+    // The shared identity keys survive.
+    expect(result.values?.CTX_SLUG).toBe("gateway");
+    expect(result.values?.CTX_PRINCIPAL).toBe("andreas");
+  });
+
+  test("no CTX_GUILD_ID / CTX_DISCORD_TOKEN required — a web env with NONE of them still validates", () => {
+    const env = validWebEnv();
+    // prove the discord contract's keys are entirely absent
+    expect(env.CTX_GUILD_ID).toBeUndefined();
+    expect(env.CTX_DISCORD_TOKEN).toBeUndefined();
+    expect(validateWebEnvContract(env).ok).toBe(true);
+  });
+
+  test("CLAUDE_CODE_OAUTH_TOKEN absent does NOT block ok (optional, same as discord)", () => {
+    const result = validateWebEnvContract(validWebEnv());
+    expect(result.ok).toBe(true);
+    expect(result.secrets.find((s) => s.key === "CLAUDE_CODE_OAUTH_TOKEN")?.status).toBe("missing");
+  });
+});
+
+describe("validateWebEnvContract — missing / invalid", () => {
+  for (const key of CTX_WEB_REQUIRED_KEYS) {
+    test(`missing ${key} → not ok`, () => {
+      const env = validWebEnv();
+      Reflect.deleteProperty(env, key);
+      const result = validateWebEnvContract(env);
+      expect(result.ok).toBe(false);
+      expect(result.values).toBeUndefined();
+      expect(result.checks.find((c) => c.key === key)?.ok).toBe(false);
+    });
+  }
+
+  test("CTX_WEB_TOKEN missing → not ok (it gates, like CTX_DISCORD_TOKEN)", () => {
+    const env = validWebEnv();
+    delete env.CTX_WEB_TOKEN;
+    const result = validateWebEnvContract(env);
+    expect(result.ok).toBe(false);
+    expect(result.secrets.find((s) => s.key === "CTX_WEB_TOKEN")?.gates).toBe(true);
+  });
+
+  test("CTX_WEB_HOST with a slash → invalid shape (no scheme/path allowed)", () => {
+    const env = validWebEnv();
+    env.CTX_WEB_HOST = "http://example.com/x";
+    const result = validateWebEnvContract(env);
+    expect(result.ok).toBe(false);
+    expect(result.checks.find((c) => c.key === "CTX_WEB_HOST")?.reason).toContain("hostname or IP");
+  });
+
+  test("CTX_WEB_PORT out of range → invalid shape (reuses the port rule)", () => {
+    const env = validWebEnv();
+    env.CTX_WEB_PORT = "99999";
+    const result = validateWebEnvContract(env);
+    expect(result.ok).toBe(false);
+    expect(result.checks.find((c) => c.key === "CTX_WEB_PORT")?.reason).toContain("port");
+  });
+});
+
+describe("validateWebEnvContract — secret hygiene", () => {
+  test("the web token value never appears in the result nor the rendered table", () => {
+    const result = validateWebEnvContract(validWebEnv());
+    expect(JSON.stringify(result)).not.toContain(WEB_SECRET);
+    const table = renderEnvTable(result);
+    expect(table).not.toContain(WEB_SECRET);
+    expect(table).toContain("CTX_WEB_TOKEN: set");
+  });
+
+  test("a MISSING gating web token renders as a hard ✗ (not the soft ○ the optional oauth token gets)", () => {
+    const env = validWebEnv();
+    delete env.CTX_WEB_TOKEN;
+    const table = renderEnvTable(validateWebEnvContract(env));
+    expect(table).toContain("✗ CTX_WEB_TOKEN: missing");
+    expect(table).toContain("○ CLAUDE_CODE_OAUTH_TOKEN: missing");
+  });
+});
+
+// =============================================================================
+// cortex#2153 — web surfaces.yaml render + write
+// =============================================================================
+
+const WEB_INPUTS = {
+  agent: "assistant",
+  stack: "andreas/gateway",
+  instanceId: "gateway",
+  host: "127.0.0.1",
+  port: "8090",
+  token: WEB_SECRET,
+};
+
+describe("renderWebSurfacesYaml", () => {
+  test("emits a web binding with the numeric port unquoted and the token quoted", () => {
+    const yaml = renderWebSurfacesYaml(WEB_INPUTS);
+    expect(yaml).toContain("web:");
+    expect(yaml).toContain("agent: assistant");
+    expect(yaml).toContain("stack: andreas/gateway");
+    expect(yaml).toContain("instanceId: gateway");
+    expect(yaml).toContain("host: 127.0.0.1");
+    expect(yaml).toContain("port: 8090"); // unquoted → YAML number
+    expect(yaml).toContain(`token: "${WEB_SECRET}"`);
+    // NO discord binding is written.
+    expect(yaml).not.toContain("discord:");
+  });
+});
+
+describe("writeWebSurfacesYaml — full-file REWRITE", () => {
+  test("REPLACES a scaffolded discord surfaces.yaml with a web-only binding", () => {
+    const dir = freshDir();
+    const path = join(dir, "surfaces.yaml");
+    // simulate the `cortex stack create` discord scaffold
+    writeFileSync(
+      path,
+      "surfaces:\n  discord:\n    - agent: assistant\n      stack: andreas/gateway\n      binding:\n        token: \"<REPLACE_ME>\"\n",
+      { mode: 0o600 },
+    );
+
+    const result = writeWebSurfacesYaml(path, WEB_INPUTS);
+    expect(result.changed).toBe(true);
+    expect(result.backupPath).toBeDefined();
+
+    const written = readFileSync(path, "utf-8");
+    expect(written).toContain("web:");
+    expect(written).not.toContain("discord:"); // the discord block is gone
+    expect(written).toContain(`token: "${WEB_SECRET}"`);
+    // the file is 0600 (secret-bearing)
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("idempotent: a second write with the SAME inputs is byte-identical → no change, no backup", () => {
+    const dir = freshDir();
+    const path = join(dir, "surfaces.yaml");
+    writeFileSync(path, "surfaces:\n  discord:\n    - agent: assistant\n      stack: andreas/gateway\n      binding: {}\n", {
+      mode: 0o600,
+    });
+
+    const first = writeWebSurfacesYaml(path, WEB_INPUTS);
+    expect(first.changed).toBe(true);
+    const afterFirst = readFileSync(path, "utf-8");
+
+    const second = writeWebSurfacesYaml(path, WEB_INPUTS);
+    expect(second.changed).toBe(false);
+    expect(second.backupPath).toBeUndefined();
+    expect(readFileSync(path, "utf-8")).toBe(afterFirst); // untouched
+  });
+
+  test("the backup carries the pre-existing content and is written 0600 (secret-safe)", () => {
+    const dir = freshDir();
+    const path = join(dir, "surfaces.yaml");
+    const original = "surfaces:\n  discord:\n    - agent: assistant\n      stack: andreas/gateway\n      binding:\n        token: \"OLD-SECRET\"\n";
+    writeFileSync(path, original, { mode: 0o600 });
+
+    const result = writeWebSurfacesYaml(path, WEB_INPUTS);
+    expect(result.backupPath).toBeDefined();
+    if (result.backupPath !== undefined) {
+      expect(readFileSync(result.backupPath, "utf-8")).toBe(original);
+      expect(statSync(result.backupPath).mode & 0o777).toBe(0o600);
+    }
+  });
+});
+
+describe("readSurfaceAgent", () => {
+  test("reads the agent from a scaffolded discord surfaces.yaml", () => {
+    const dir = freshDir();
+    const path = join(dir, "surfaces.yaml");
+    writeFileSync(path, "surfaces:\n  discord:\n    - agent: luna\n      stack: andreas/work\n      binding: {}\n");
+    expect(readSurfaceAgent(path)).toBe("luna");
+  });
+
+  test("reads the agent from an already-rewritten web surfaces.yaml (re-run path)", () => {
+    const dir = freshDir();
+    const path = join(dir, "surfaces.yaml");
+    writeFileSync(path, renderWebSurfacesYaml({ ...WEB_INPUTS, agent: "pylon" }));
+    expect(readSurfaceAgent(path)).toBe("pylon");
+  });
+
+  test("returns undefined when the file is missing or carries no binding entry", () => {
+    const dir = freshDir();
+    expect(readSurfaceAgent(join(dir, "nope.yaml"))).toBeUndefined();
+    const empty = join(dir, "empty.yaml");
+    writeFileSync(empty, "surfaces: {}\n");
+    expect(readSurfaceAgent(empty)).toBeUndefined();
+  });
 });
