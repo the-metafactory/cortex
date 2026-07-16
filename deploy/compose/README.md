@@ -23,7 +23,7 @@ arc's `design/linux-host-support.md` (§L4 / DD-L4): compose supervises via
 | File | Role |
 |------|------|
 | `docker-compose.yaml` | Two services: `nats` (bus) + `cortex` (assistant). |
-| `Dockerfile.cortex` | The cortex image — bun + claude CLI + cortex, all pinned. |
+| `Dockerfile.cortex` | The cortex image — bun + claude CLI + cortex + arc + surface adapter bundle(s), all pinned. |
 | `docker-entrypoint.sh` | Provisions (idempotent `cortex quickstart`) then `exec`s the daemon. |
 | `nats.conf` | The isolated per-stack JetStream bus config (mounted read-only). |
 | `.env.example` | The DD-L5 `CTX_*` env contract — placeholders only. |
@@ -77,10 +77,52 @@ grep in step 5 and by `@mention`.
   `docker compose build --pull && docker compose up -d`. (An automated
   build+publish pipeline is the sibling L4b issue, cortex#2096.)
 
+## Surface adapters are arc-installed
+
+cortex core ships **zero** in-tree platform adapters — `discord`, `web`,
+`slack`, and `mattermost` are each a first-party [arc](https://github.com/the-metafactory/arc)
+**adapter bundle** (`metafactory-cortex-adapter-*`), discovered at boot via
+`arc list --json` (`src/adapters/loader.ts`). A git-clone of cortex alone
+installs none of them, so `cortex start` would FATAL at surface boot with
+`no adapter installed for platform "…"` (cortex#2156). This image therefore
+bakes `arc` and `arc install`s the bundle(s) named by the **`CORTEX_SURFACES`**
+build arg:
+
+- **`CORTEX_SURFACES`** — space-separated surface short-names. Default
+  `discord` (matches the quickstart above). Each entry `X` installs
+  `the-metafactory/metafactory-cortex-adapter-X`. At least one is required — an
+  empty value bakes no adapter and reproduces cortex#2156. Examples:
+
+  ```bash
+  # discord only (default)
+  docker compose build
+
+  # a web/gateway surface instead
+  docker compose build --build-arg CORTEX_SURFACES=web
+
+  # multiple surfaces in one image
+  docker compose build --build-arg CORTEX_SURFACES="discord web"
+  ```
+
+The bundles install as the runtime `cortex` user into arc's per-user repos dir
+(`~/.local/share/metafactory/arc/repos`) — **not** one of the named volumes, so
+they are part of the image and survive restart. Installing from the
+`the-metafactory` repo URL records the org-trusted `repoUrl` the loader's
+first-party-adapter exemption checks against (ADR-0024), so the adapter loads at
+boot even with `system.plugins.external` off. Surface **tokens** are still
+provided at runtime via the `CTX_*` contract in `.env` (never baked); `arc
+install --skip-secrets` keeps the build itself non-interactive.
+
+Match `CORTEX_SURFACES` to the surface your stack actually configures: the
+default Discord quickstart needs `discord`; a `web:`-only stack should build
+`--build-arg CORTEX_SURFACES=web`.
+
 ## Pinned versions
 
 All are build ARGs, overridable from `.env`: `CORTEX_REF` (a release tag, **not**
-`main`), `BUN_VERSION`, `CLAUDE_VERSION`, `NATS_SERVER_VERSION`, and the
+`main`), `BUN_VERSION`, `CLAUDE_VERSION`, `NATS_SERVER_VERSION`, `ARC_REF` (the
+arc release tag used to install the surface-adapter package manager),
+`CORTEX_SURFACES` (which adapter bundle(s) to bake — see above), and the
 `NATS_IMAGE` tag. Bump one, rebuild, redeploy.
 
 ## Known limitation: Claude OAuth token lifetime

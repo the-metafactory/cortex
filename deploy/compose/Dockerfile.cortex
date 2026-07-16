@@ -9,7 +9,14 @@
 #     (honored by src/runner/cc-session.ts, which suppresses ANTHROPIC_API_KEY
 #     when the token is set). No token is ever baked into a layer — it arrives
 #     via `env_file: .env` at run time only. `docker history` shows zero secrets.
-#   - claude CLI + bun + nats-server are BAKED (reproducible), pinned by ARG.
+#   - claude CLI + bun + nats-server + arc are BAKED (reproducible), pinned by
+#     ARG. arc is what makes the SURFACE ADAPTER BUNDLE(S) present in the image:
+#     a git-clone provision of cortex alone installs no adapter, so `cortex
+#     start` FATALs at surface boot with `no adapter installed for platform
+#     "…"` (cortex#2156). The image therefore installs `arc` and `arc install`s
+#     the first-party surface adapter bundle(s) selected by CORTEX_SURFACES,
+#     matching ADR-0024: the loader's first-party-bundle exemption keys on
+#     cortex's OWN arc-manifest deps, discovered at boot via `arc list --json`.
 #
 # Every pinned version is an ARG so the image is reproducible and a rebuild can
 # bump a single component. CORTEX_REF defaults to a RELEASE TAG, never `main`.
@@ -18,6 +25,13 @@ ARG CORTEX_REF=v6.8.5
 ARG BUN_VERSION=1.3.14
 ARG CLAUDE_VERSION=2.1.211
 ARG NATS_SERVER_VERSION=2.14.3
+ARG ARC_REF=v0.40.2
+# Space-separated list of surface adapters to arc-install (short names — each
+# maps to the-metafactory/metafactory-cortex-adapter-<name>). Default `discord`
+# matches the documented README quickstart. Override e.g.
+# `--build-arg CORTEX_SURFACES="discord web"`. At least one is required — an
+# empty value bakes no adapter and reproduces cortex#2156.
+ARG CORTEX_SURFACES=discord
 
 FROM debian:bookworm-slim
 
@@ -27,6 +41,8 @@ ARG CORTEX_REF
 ARG BUN_VERSION
 ARG CLAUDE_VERSION
 ARG NATS_SERVER_VERSION
+ARG ARC_REF
+ARG CORTEX_SURFACES
 # Provided automatically by BuildKit; used to fetch the right nats-server binary.
 ARG TARGETARCH
 
@@ -78,8 +94,33 @@ RUN arch="${TARGETARCH:-amd64}" \
 #    on named volumes mounted at run time.
 RUN useradd --create-home --uid 1000 --shell /bin/bash cortex
 
-# 6. cortex source at the pinned RELEASE tag (not main). Clone shallow, install
+# 6. arc (pinned) — the package manager that installs cortex's surface adapter
+#    bundles (step 9). Installed the SAME way this Dockerfile installs cortex:
+#    shallow clone at a pinned tag + a PATH shim. The shim (`bun /opt/arc/src/
+#    cli.ts`) is the container-deterministic stand-in for arc's documented
+#    `bun link` install (arc QUICKSTART.md: clone + `bun install` + `bun link`)
+#    — a shim is unambiguous in a multi-user image (root builds, cortex runs)
+#    and mirrors the in-tree cortex shim above. arc's own `bin` is `src/cli.ts`
+#    (arc package.json). No `--frozen-lockfile`: arc commits no lockfile.
+RUN git clone --depth 1 --branch "${ARC_REF}" \
+        https://github.com/the-metafactory/arc /opt/arc \
+    && cd /opt/arc \
+    && bun install \
+    && printf '#!/usr/bin/env bash\nexec bun /opt/arc/src/cli.ts "$@"\n' \
+        > /usr/local/bin/arc \
+    && chmod 0755 /usr/local/bin/arc \
+    && arc --version
+
+# 7. cortex source at the pinned RELEASE tag (not main). Clone shallow, install
 #    frozen deps, drop a PATH shim, and hand ownership to the runtime user.
+#    The final chown ALSO hands bun's package cache (/usr/local/install/cache,
+#    created root-owned by the baked root installs above) to the cortex user:
+#    step 9 runs `arc install` AS cortex, arc spawns `bun install` with its own
+#    env (a BUN_INSTALL override on that RUN does NOT reach the spawned bun), and
+#    bun aborts at startup ("unable to write files to tempdir: AccessDenied") if
+#    it cannot write that BUN_INSTALL-derived cache. Making the dir cortex-owned
+#    is the env-independent fix. No baked bin lives there (globals are in
+#    /usr/local/bin), so this is safe.
 RUN git clone --depth 1 --branch "${CORTEX_REF}" \
         https://github.com/the-metafactory/cortex /opt/cortex \
     && cd /opt/cortex \
@@ -87,9 +128,9 @@ RUN git clone --depth 1 --branch "${CORTEX_REF}" \
     && printf '#!/usr/bin/env bash\nexec bun /opt/cortex/src/cortex.ts "$@"\n' \
         > /usr/local/bin/cortex \
     && chmod 0755 /usr/local/bin/cortex \
-    && chown -R cortex:cortex /opt/cortex
+    && chown -R cortex:cortex /opt/cortex /usr/local/install
 
-# 7. Scaffold runtime dirs + default relay policy as the runtime user. The
+# 8. Scaffold runtime dirs + default relay policy as the runtime user. The
 #    systemd render inside postinstall.sh detects the absent host bus and skips
 #    silently (DD-L4 / scripts/lib/systemd-render.sh:systemd_host_detected), so
 #    this is a clean no-op for the container's service story. Guarded with a
@@ -99,7 +140,30 @@ WORKDIR /home/cortex
 RUN cd /opt/cortex && ./scripts/postinstall.sh || \
     echo "cortex: postinstall.sh returned non-zero (systemd-less container) — continuing"
 
-# 8. Entrypoint: idempotent provision (quickstart) then hand off to the daemon.
+# 9. Surface adapter bundle(s) — as the RUNTIME user, so they land in arc's
+#    per-user repos dir (~/.local/share/metafactory/arc/repos) that cortex's
+#    plugin loader discovers at boot via `arc list --json`
+#    (src/adapters/loader.ts → resolveArcPackReposDir). This dir is NOT one of
+#    the compose named volumes (those are .config/metafactory/cortex,
+#    .local/state/metafactory/cortex, .config/nats), so the baked bundles
+#    survive into the running container. Each CORTEX_SURFACES entry maps to its
+#    first-party bundle repo under the-metafactory; installing from that exact
+#    URL records the org-trusted repoUrl the loader's first-party-adapter
+#    exemption checks against (ADR-0024 / cortex#1794), so the adapter loads at
+#    boot even with `system.plugins.external` off. `--yes` clears arc's non-TTY
+#    capability-confirmation guard for this headless build; `--skip-secrets`
+#    keeps the build non-interactive — surface tokens are provisioned at runtime
+#    via cortex config (surfaces/stack), never as arc secrets. arc's spawned
+#    `bun install` writes to the bun package cache made cortex-owned in step 7.
+RUN set -eu; \
+    for surface in ${CORTEX_SURFACES}; do \
+        echo "cortex: installing surface adapter bundle metafactory-cortex-adapter-${surface}…"; \
+        arc install "https://github.com/the-metafactory/metafactory-cortex-adapter-${surface}" --yes --skip-secrets; \
+    done; \
+    echo "cortex: installed surface adapter bundles — arc list:"; \
+    arc list --json
+
+# 10. Entrypoint: idempotent provision (quickstart) then hand off to the daemon.
 COPY --chown=cortex:cortex --chmod=0755 docker-entrypoint.sh /usr/local/bin/cortex-entrypoint
 
 ENTRYPOINT ["cortex-entrypoint"]
