@@ -142,8 +142,11 @@ An agent that omits `substrate` is unchanged by anything in this section.
    ```
 
 2. **Export the referenced variable** in the cortex daemon's environment
-   (`ANTHROPIC_API_KEY` here). Every configured provider is built — and its
-   reference resolved — at **boot pre-flight** (`#2110`), not on first dispatch.
+   (`ANTHROPIC_API_KEY` here). Every provider **a profile references** is built —
+   and its reference resolved — at **boot pre-flight** (`#2110`), not on first
+   dispatch. The pre-flight walks *profiles*, so a provider no profile names is
+   never built and its variable never read: an unused provider with an unset
+   variable stays silent at boot and only surfaces once a profile points at it.
 
 3. **Bind an agent to the profile** in `stacks/<slug>.yaml`:
 

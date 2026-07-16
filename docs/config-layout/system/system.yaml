@@ -77,11 +77,15 @@ execution:
 #      The reference is resolved from that environment variable in the cortex
 #      daemon's own environment; the parsed config only ever holds `env:NAME`, so
 #      a config dump or log shows the reference and never the secret.
-#      NOTE (#2110): every configured provider is built — and so its reference
-#      RESOLVED — at BOOT pre-flight, not lazily on first dispatch. Export the
-#      variable in the daemon's environment before boot; an unset variable is
-#      reported on stderr per-profile and that profile fails closed at dispatch
-#      (it does NOT take the daemon down — unrelated claude-code agents boot fine).
+#      NOTE (#2110): every provider A PROFILE REFERENCES is built — and so its
+#      reference RESOLVED — at BOOT pre-flight, not lazily on first dispatch.
+#      The pre-flight walks PROFILES, so a provider no profile names is never
+#      built and its variable is never read: declaring an unused provider with
+#      an unset variable is silent at boot, and only surfaces when a profile
+#      first points at it. Export the variable in the daemon's environment
+#      before boot; an unset variable is reported on stderr per-profile and that
+#      profile fails closed at dispatch (it does NOT take the daemon down —
+#      unrelated claude-code agents boot fine).
 #
 #   2. `baseUrl` IS A REVIEWED MODEL-EGRESS DESTINATION. It is where prompt text
 #      leaves this machine. It has whole-stack blast radius and this block is the
