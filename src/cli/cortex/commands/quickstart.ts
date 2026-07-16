@@ -494,7 +494,11 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
   const natsUnit = ports.service.unitFileExists("nats@.service");
   const cortexUnit = ports.service.unitFileExists("cortex@.service");
   if (!natsUnit || !cortexUnit) {
-    lines.push("  ✗ systemd template units not found under ~/.config/systemd/user/");
+    // The actual check above reads via ports.service.unitFileExists(), whose
+    // live adapter (quickstart-adapters.ts's systemdUserUnitDir()) resolves
+    // the real path off homedir()+join() — this string is a human-facing
+    // diagnostic only, never a runtime path.
+    lines.push("  ✗ systemd template units not found under ~/.config/systemd/user/"); // xdg-audit:allow(user-facing diagnostic naming the canonical systemd user-unit dir — not a runtime path write; cortex#2094)
     lines.push(
       "    quickstart REQUIRES cortex#2071 (L1) — run `arc install`/`arc upgrade cortex` first to render nats@.service + cortex@.service",
     );
