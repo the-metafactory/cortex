@@ -110,7 +110,12 @@ import {
 import { tmpdir, homedir } from "os";
 import { join, basename } from "path";
 import { parse as parseYaml } from "yaml";
-import { isDeniedAgentEnvKey, AGENT_ENV_KEY_PATTERN } from "../common/config/agent-env";
+import {
+  isAllowedAgentEnvKey,
+  isReservedRefSource,
+  ALLOWED_AGENT_ENV_KEYS,
+  AGENT_ENV_KEY_PATTERN,
+} from "../common/config/agent-env";
 import { SECRET_REF_PATTERN } from "../common/inference/secret-ref";
 
 /**
@@ -637,24 +642,30 @@ export function scopeSessionEnv(
  *
  * Four responsibilities, all security-relevant:
  *
- *   1. **Re-assert the reserved-prefix deny on the DESTINATION KEY
- *      (defence-in-depth).** The config schema already rejects a reserved-prefix
- *      key at load ({@link isDeniedAgentEnvKey} in `common/config/agent-env.ts`,
- *      the SHARED predicate — now `CLAUDE_`/`ANTHROPIC_`/`CORTEX_`/`GROVE_`), but
- *      we DROP it here too so NO path — a test, a future direct caller, a schema
- *      regression — can layer a reserved-prefix var onto a child session.
- *      Dropping (not throwing) is the fail-closed choice: the var simply never
- *      gets set, isolation holds regardless of how the map arrived, and a
- *      crafted map cannot DoS the session. Each drop is logged.
+ *   1. **Re-assert the ALLOWLIST on the DESTINATION KEY (defence-in-depth).**
+ *      The config schema already rejects any non-allowlisted key at load
+ *      ({@link isAllowedAgentEnvKey} in `common/config/agent-env.ts`, the SHARED
+ *      predicate — deny-by-default; only {@link ALLOWED_AGENT_ENV_KEYS} pass),
+ *      but we DROP anything not allowed here too so NO path — a test, a future
+ *      direct caller, a schema regression — can layer an unblessed var onto a
+ *      child session. Dropping (not throwing) is the fail-closed choice: the var
+ *      simply never gets set, isolation holds regardless of how the map arrived,
+ *      and a crafted map cannot DoS the session. Each drop is logged. This is
+ *      the destination side of the two-shape design (see agent-env.ts module
+ *      doc): allowlist what we SET.
  *
- *   2. **Re-assert the reserved-prefix deny on the `env:` REF SOURCE NAME too
- *      (MINOR-3).** A benign destination key whose value is `env:DENIED_NAME`
- *      would otherwise re-surface a denied daemon var's VALUE under a clean name
- *      — e.g. `GDRIVE_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN"` exfiltrates the OAuth
- *      token. So when a value is an `env:NAME` reference we also drop it if
- *      `isDeniedAgentEnvKey(NAME)` holds. The stderr line names the key and the
- *      ref NAME only — NEVER the resolved value — preserving the module's
- *      no-value-logging property.
+ *   2. **Prefix-deny the `env:` REF SOURCE NAME (MINOR-3).** A benign,
+ *      allowlisted destination key whose value is `env:GUARDED_NAME` would
+ *      otherwise re-surface a guarded daemon var's VALUE under a clean name —
+ *      e.g. `GDRIVE_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN"` exfiltrates the OAuth
+ *      token. The ref source is a READ FROM the daemon env (not a set), so its
+ *      guard is a PREFIX DENY on the cortex/substrate control namespaces
+ *      ({@link isReservedRefSource} — CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_), NOT the
+ *      destination allowlist: we are protecting a bounded set of guarded daemon
+ *      vars from re-surfacing, not deciding which arbitrary daemon var is a
+ *      legitimate credential source. Two sides, two shapes — deliberate. The
+ *      stderr line names the key and the ref NAME only — NEVER the resolved value
+ *      — preserving the module's no-value-logging property.
  *
  *   3. **Re-assert the KEY GRAMMAR at runtime (MINOR-4).** We re-check the
  *      destination key against {@link AGENT_ENV_KEY_PATTERN} (the ASCII-anchored
@@ -694,11 +705,13 @@ export function resolveAgentEnv(
       );
       continue;
     }
-    if (isDeniedAgentEnvKey(key)) {
-      // Responsibility (1). Never set a reserved-prefix
-      // (CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_) var from this map.
+    if (!isAllowedAgentEnvKey(key)) {
+      // Responsibility (1). Deny-by-default: only exact, case-sensitive
+      // ALLOWED_AGENT_ENV_KEYS names may be set from this map. Anything else —
+      // the open-ended session-hijack classes a denylist could never fully
+      // enumerate — is dropped (cortex#2133 / epic #2164 allowlist inversion).
       process.stderr.write(
-        `session-settings: agent env key '${key}' dropped — reserved-prefix vars are default-deny (cortex#701/#2133 isolation)\n`,
+        `session-settings: agent env key '${key}' dropped — per-agent env is deny-by-default (allowlist); only [${ALLOWED_AGENT_ENV_KEYS.join(", ")}] are permitted (cortex#2133/#2164)\n`,
       );
       continue;
     }
@@ -709,7 +722,7 @@ export function resolveAgentEnv(
       // re-surface a denied daemon var's VALUE under a clean name
       // (e.g. `GDRIVE_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN"`). Log the key + ref
       // NAME only — never the value (preserve the no-value-logging property).
-      if (isDeniedAgentEnvKey(refEnvVar)) {
+      if (isReservedRefSource(refEnvVar)) {
         process.stderr.write(
           `session-settings: agent env '${key}' → secret reference env:${refEnvVar} dropped — ` +
             `the referenced var is in a reserved prefix (CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_); ` +

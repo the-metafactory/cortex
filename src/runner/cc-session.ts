@@ -129,9 +129,9 @@ export interface CCSessionOpts {
    * Layered onto the child env by `start()` AFTER `scopeSessionEnv` and BEFORE
    * cortex's own `CORTEX_*`/config-home/grant vars, so a declared var can
    * neither shadow cortex's pipeline vars nor touch the `CLAUDE_*` namespace
-   * (resolution + the re-asserted `CLAUDE_*` deny live in `resolveAgentEnv`,
-   * session-settings.ts). Undefined/absent ⇒ no passthrough (byte-identical to
-   * the pre-#2133 env).
+   * (resolution + the re-asserted deny-by-default allowlist live in
+   * `resolveAgentEnv`, session-settings.ts). Undefined/absent ⇒ no passthrough
+   * (byte-identical to the pre-#2133 env).
    */
   agentEnv?: Record<string, string>;
 }
@@ -412,11 +412,11 @@ export class CCSession extends EventEmitter {
       : { ...(process.env as Record<string, string>) };
 
     // cortex#2133 — the agent's declarative `env:` passthrough. Resolved (refs
-    // read from the daemon env; CLAUDE_* re-denied as defence-in-depth) and
-    // layered on the scoped base BEFORE buildSessionEnv applies cortex's own
-    // CORTEX_*/config-home/grant vars — so cortex's pipeline vars always win and
-    // a declared var can never reach the CLAUDE_* namespace scopeSessionEnv
-    // guards. Undefined/empty ⇒ {} ⇒ byte-identical to the pre-#2133 env.
+    // read from the daemon env; deny-by-default allowlist re-asserted as
+    // defence-in-depth) and layered on the scoped base BEFORE buildSessionEnv
+    // applies cortex's own CORTEX_*/config-home/grant vars — so cortex's pipeline
+    // vars always win and a declared var can never reach the CLAUDE_* namespace
+    // scopeSessionEnv guards. Undefined/empty ⇒ {} ⇒ byte-identical to pre-#2133.
     const agentEnv = resolveAgentEnv(this.opts.agentEnv, process.env);
 
     const env: Record<string, string> = {
@@ -443,10 +443,11 @@ export class CCSession extends EventEmitter {
     // written UNCONDITIONALLY (cortex#2133, defense-in-depth for MAJOR-1): cortex
     // is always the authoritative writer of this var — this assignment OVERWRITES
     // whatever the layered base/agent env carried, so a stale/injected value can
-    // never win. The reserved-prefix deny (resolveAgentEnv / AgentEnvSchema)
-    // already blocks a declared CORTEX_* key at the key layer; writing the guard
-    // var here makes it authoritative even if a value reaches the base env by any
-    // other route. See {@link resolveBashGuardEnv} for the value semantics.
+    // never win. The deny-by-default allowlist (resolveAgentEnv / AgentEnvSchema)
+    // already blocks a declared CORTEX_* key at the key layer (it isn't in
+    // ALLOWED_AGENT_ENV_KEYS); writing the guard var here makes it authoritative
+    // even if a value reaches the base env by any other route. See
+    // {@link resolveBashGuardEnv} for the value semantics.
     env.CORTEX_BASH_GUARD = resolveBashGuardEnv(this.opts);
 
     // Suppress ANTHROPIC_API_KEY when OAuth token is present

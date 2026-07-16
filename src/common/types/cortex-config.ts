@@ -1033,19 +1033,20 @@ export const AgentSchema = z.object({
    * secret) OR an `env:NAME` SECRET REFERENCE resolved from the daemon env at
    * call time and never stored in config (design §"Secrets and egress", D6).
    *
-   * **HARD CONSTRAINT — a RESERVED-PREFIX denylist is default-deny.** A key in
-   * any of `CLAUDE_` / `ANTHROPIC_` / `CORTEX_` / `GROVE_` (case-insensitive) is
+   * **HARD CONSTRAINT — an ALLOWLIST: deny-by-default (cortex#2133/#2164).**
+   * Only the exact, case-sensitive names in `ALLOWED_AGENT_ENV_KEYS` (seeded
+   * with just `GOOGLE_APPLICATION_CREDENTIALS`) may be set; every other key is
    * REJECTED at parse time ({@link AgentEnvSchema}) and re-dropped at runtime
-   * (`resolveAgentEnv`). This passthrough must never re-introduce the
-   * hooks/plugins/settings a `CLAUDE_*` var would (cortex#701 isolation),
-   * redirect auth or the inference endpoint (`ANTHROPIC_BASE_URL`/`_API_KEY`/
-   * `_AUTH_TOKEN`/`_MODEL`), or disable a cortex guard / rewrite grants+identity
-   * (`CORTEX_BASH_GUARD`, `CORTEX_SKILL_GRANTS`, `CORTEX_MCP_GRANTS`,
-   * `CORTEX_CHANNEL`, …, and their legacy `GROVE_*` aliases). The `env:NAME`
-   * REF SOURCE name is denied by the same predicate, so a benign key cannot
-   * re-surface a guarded daemon var's value (cortex#2133). Relocating a
-   * substrate config home is the `substrates:` `configHome` seam's job
-   * (cortex#2132), not this map's.
+   * (`resolveAgentEnv`). This inverts a former reserved-prefix DENYLIST that an
+   * adversarial review proved un-completable — the session-hijack set (BASH_ENV,
+   * PATH, NODE_OPTIONS, LD_PRELOAD, DYLD_INSERT_LIBRARIES, GIT_SSH_COMMAND,
+   * *_PROXY, NODE_EXTRA_CA_CERTS, CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_ prefixes, …) is
+   * open-ended. Adding a permitted var is a reviewed cortex PR editing
+   * `ALLOWED_AGENT_ENV_KEYS`. The `env:NAME` REF SOURCE name uses a DIFFERENT
+   * shape — a prefix deny on CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_ — because a source
+   * is a READ, so a benign key cannot re-surface a guarded daemon var's value
+   * (cortex#2133). Relocating a substrate config home is the `substrates:`
+   * `configHome` seam's job (cortex#2132), not this map's.
    *
    * Additive: existing agents omit this key and are unaffected (byte-identical
    * to the pre-#2133 session env).
