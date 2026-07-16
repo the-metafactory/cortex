@@ -193,6 +193,49 @@ export function anonOnboardingAccess(
 }
 
 /**
+ * cortex#2111 (adversarial-review MAJOR) — does grant pattern `p` cover
+ * pattern `q`? `"*"` covers everything; `"<server>"` covers itself and
+ * every `"<server>.<tool>"`; a tool pattern covers only itself.
+ */
+function mcpGrantCovers(p: string, q: string): boolean {
+  return p === MCP_GRANT_WILDCARD || p === q || q.startsWith(`${p}.`);
+}
+
+/** The full-namespace grant pattern (`deriveMcpGrants`'s `["*"]`). */
+export const MCP_GRANT_WILDCARD = "*";
+
+/**
+ * Intersect two MCP grant-pattern sets: the result allows a tool iff BOTH
+ * sets allow it. Used by the runner to combine the wire-supplied grant list
+ * with the EXECUTING stack's own policy-derived list, so a remote
+ * dispatcher can NARROW its session's MCP surface but never WIDEN it past
+ * what local policy grants the originator (the cortex#127
+ * receiving-stack-authoritative model applied to MCP).
+ *
+ * Pattern-set intersection: for every pair `(a, b)` keep the NARROWER
+ * pattern when one covers the other (`"*"` ∩ X = X; `"srv"` ∩ `"srv.tool"`
+ * = `"srv.tool"`; disjoint pairs contribute nothing). Deduped, stable
+ * order (a-major). Exported for unit tests.
+ */
+export function intersectMcpGrants(
+  a: readonly string[],
+  b: readonly string[],
+): string[] {
+  const out: string[] = [];
+  for (const pa of a) {
+    for (const pb of b) {
+      const narrower = mcpGrantCovers(pa, pb)
+        ? pb
+        : mcpGrantCovers(pb, pa)
+          ? pa
+          : undefined;
+      if (narrower !== undefined && !out.includes(narrower)) out.push(narrower);
+    }
+  }
+  return out;
+}
+
+/**
  * Authorise an inbound platform message via the PolicyEngine. Returns an
  * `AccessDecision` the adapter passes back to MessageRouter.
  *

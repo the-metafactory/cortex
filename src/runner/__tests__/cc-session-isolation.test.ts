@@ -397,3 +397,40 @@ describe("CCSession — per-principal MCP grants (cortex#2111)", () => {
     }
   });
 });
+
+  test("M3: settingsIsolation OFF + PARTIAL grants → strict flag (fail-closed, no hook possible)", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        settingsIsolation: false,
+        mcpGrants: ["gdrive"],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+      // No curated settings on the non-isolated path → the hook can't
+      // register, so fine-grained enforcement is impossible. Denying the
+      // granted server too beats granting the whole namespace.
+      expect(calls[0]!.cmd).toContain("--strict-mcp-config");
+    } finally {
+      restore();
+    }
+  });
+
+  test("M3: settingsIsolation OFF + FULL grant ('*') → no strict flag (nothing to confine)", () => {
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        settingsIsolation: false,
+        mcpGrants: ["*"],
+      });
+      session.on("error", () => {/* expected */});
+      session.start();
+      expect(calls[0]!.cmd).not.toContain("--strict-mcp-config");
+    } finally {
+      restore();
+    }
+  });

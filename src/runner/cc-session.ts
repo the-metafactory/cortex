@@ -249,8 +249,20 @@ export class CCSession extends EventEmitter {
     // appends it for agent-level strictMcpConfig). Deliberately NOT gated
     // on `isolate`: even a non-isolated session must not fail open when a
     // deny-all MCP decision was made.
+    // Adversarial-review M3 — the flag fires in TWO confinement cases:
+    //   1. ZERO grants (any isolation mode): no MCP at all.
+    //   2. PARTIAL grants on a NON-ISOLATED session: the guard hook lives
+    //      in the curated settings file, which a non-isolated session
+    //      doesn't load — so fine-grained enforcement is impossible there.
+    //      Denying the granted servers too (fail-closed) beats silently
+    //      granting the whole namespace (fail-open). Full grant ("*")
+    //      needs no confinement.
+    const mcpConfinementRequired =
+      mcpGrants !== undefined &&
+      (mcpGrants.length === 0 ||
+        (!isolate && !mcpGrants.includes("*")));
     const strictMcpArgs =
-      mcpGrants?.length === 0 &&
+      mcpConfinementRequired &&
       this.opts.additionalArgs?.includes("--strict-mcp-config") !== true
         ? ["--strict-mcp-config"]
         : [];

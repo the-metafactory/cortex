@@ -13,6 +13,7 @@ import {
   resolvePolicyAccess,
   anonOnboardingAccess,
   deriveMcpGrants,
+  intersectMcpGrants,
   PUBLIC_ORIGINATOR_DID,
   isOperatorPrincipal,
 } from "../resolve-access";
@@ -722,5 +723,39 @@ describe("resolvePolicyAccess — mcpGrants on the decision (cortex#2111)", () =
   test("anonOnboardingAccess carries mcpGrants: [] (deny-all belt-and-braces)", () => {
     const decision = anonOnboardingAccess(msg());
     expect(decision.mcpGrants).toEqual([]);
+  });
+});
+
+describe("intersectMcpGrants — wire may narrow, never widen (cortex#2111 MAJOR fix)", () => {
+  test("wildcard wire claim collapses to the authoritative list", () => {
+    // Attack A from the adversarial review: a peer sends ["*"] — the
+    // executing stack's own policy is the ceiling.
+    expect(intersectMcpGrants(["*"], ["gdrive"])).toEqual(["gdrive"]);
+    expect(intersectMcpGrants(["*"], [])).toEqual([]);
+  });
+
+  test("wire may narrow a server grant to a single tool", () => {
+    expect(intersectMcpGrants(["gdrive.read_file"], ["gdrive"])).toEqual([
+      "gdrive.read_file",
+    ]);
+  });
+
+  test("disjoint sets intersect to empty (deny-all)", () => {
+    expect(intersectMcpGrants(["jira"], ["gdrive"])).toEqual([]);
+  });
+
+  test("authoritative wildcard yields the wire list unchanged", () => {
+    expect(intersectMcpGrants(["gdrive", "jira.search"], ["*"])).toEqual([
+      "gdrive",
+      "jira.search",
+    ]);
+  });
+
+  test("both wildcard → wildcard", () => {
+    expect(intersectMcpGrants(["*"], ["*"])).toEqual(["*"]);
+  });
+
+  test("dedupes overlapping contributions", () => {
+    expect(intersectMcpGrants(["gdrive", "*"], ["gdrive"])).toEqual(["gdrive"]);
   });
 });

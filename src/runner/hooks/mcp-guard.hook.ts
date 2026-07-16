@@ -114,9 +114,24 @@ export function decideMcp(
 ): { allow: boolean; reason?: string } {
   const parsed = parseMcpToolName(toolName);
   if (parsed === null) {
-    // Not an mcp__* tool — not ours to gate (Claude Code fires this hook on
-    // the `mcp__.*` matcher, but if it over-matches, pass through: every
-    // non-MCP tool has its own confinement via toolRestrictions/allowlist).
+    // Adversarial-review M2 — split the two null cases; only ONE may pass:
+    //   (a) name does NOT start with `mcp__` → genuinely not ours to gate
+    //       (matcher over-match; the tool has its own confinement via
+    //       toolRestrictions/allowlist). Pass through.
+    //   (b) name IS in the `mcp__` namespace but unparseable (empty server
+    //       segment, e.g. `mcp__` / `mcp____tool`) → we cannot attribute it
+    //       to a server, and the namespace is allow-by-default at the
+    //       permission layer. Fail CLOSED — never let an unattributable
+    //       in-namespace name through.
+    if (toolName.startsWith(MCP_TOOL_PREFIX)) {
+      return {
+        allow: false,
+        reason:
+          `[Cortex MCP Guard] Blocked MCP tool "${toolName}": in the ` +
+          `mcp__ namespace but not parseable into a (server, tool) pair — ` +
+          `denying to stay fail-closed (cortex#2111).`,
+      };
+    }
     return { allow: true };
   }
   const { server, tool } = parsed;

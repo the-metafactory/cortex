@@ -158,6 +158,14 @@ describe("decideMcp — allow/deny decision", () => {
     expect(decideMcp("Read", []).allow).toBe(true);
   });
 
+  test("M2: in-namespace but UNPARSEABLE names are DENIED even with a wildcard grant", () => {
+    // `mcp__` / `mcp____tool` parse to null but sit inside the namespace the
+    // matcher fired on — unattributable ⇒ fail-closed, never pass-through.
+    expect(decideMcp("mcp__", ["*"]).allow).toBe(false);
+    expect(decideMcp("mcp____tool", ["*"]).allow).toBe(false);
+    expect(decideMcp("mcp__", []).allow).toBe(false);
+  });
+
   test("server-only invocation is allowed by server grant, denied otherwise", () => {
     expect(decideMcp("mcp__gdrive", ["gdrive"]).allow).toBe(true);
     expect(decideMcp("mcp__gdrive", ["jira"]).allow).toBe(false);
