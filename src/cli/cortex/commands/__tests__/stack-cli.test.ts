@@ -18,6 +18,7 @@ import { join } from "path";
 
 import { dispatchStack } from "../stack";
 import { loadConfigWithAgents } from "../../../../common/config/loader";
+import { __setPromptFilterLoadErrorForTests } from "../../../../runner/prompt-filter";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -155,6 +156,70 @@ describe("create validation", () => {
     const res = await dispatchStack(["create", "research", "--config-dir", cfg]);
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain("--principal");
+  });
+});
+
+// =============================================================================
+// create — prompt-filter boot gate (cortex#2184)
+// =============================================================================
+
+describe("create prompt-filter boot gate", () => {
+  const ENV_VAR = "CORTEX_ALLOW_UNSCANNED_PROMPTS";
+  const originalEnv = process.env[ENV_VAR];
+
+  // Simulated via the test seam, never by uninstalling content-filter — see
+  // prompt-filter.ts's __setPromptFilterLoadErrorForTests doc comment.
+  afterEach(() => {
+    __setPromptFilterLoadErrorForTests(null);
+    if (originalEnv === undefined) delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+    else process.env[ENV_VAR] = originalEnv;
+  });
+
+  test("content-filter NOT loadable → exit 1 with actionable message, writes nothing (dry-run default)", async () => {
+    __setPromptFilterLoadErrorForTests("simulated: Cannot find package '@metafactory/content-filter'");
+    delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+
+    const cfg = freshDir();
+    const res = await dispatchStack(["create", "research", "--principal", "andreas", "--config-dir", cfg]);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("@metafactory/content-filter");
+    expect(res.stderr).toContain("bun install");
+    expect(existsSync(join(cfg, "research"))).toBe(false);
+  });
+
+  test("content-filter NOT loadable + --apply → still exit 1, no scaffold written", async () => {
+    __setPromptFilterLoadErrorForTests("simulated load failure");
+    delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "research", "--principal", "andreas", "--config-dir", cfg, "--apply",
+    ]);
+
+    expect(res.exitCode).toBe(1);
+    expect(existsSync(join(cfg, "research"))).toBe(false);
+  });
+
+  test("content-filter NOT loadable + opt-out set → proceeds normally (exit 0)", async () => {
+    __setPromptFilterLoadErrorForTests("simulated load failure");
+    process.env[ENV_VAR] = "1";
+
+    const cfg = freshDir();
+    const res = await dispatchStack(["create", "research", "--principal", "andreas", "--config-dir", cfg]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("andreas/research");
+  });
+
+  test("content-filter loadable (no simulated failure) → unaffected, exit 0", async () => {
+    __setPromptFilterLoadErrorForTests(null);
+    delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+
+    const cfg = freshDir();
+    const res = await dispatchStack(["create", "research", "--principal", "andreas", "--config-dir", cfg]);
+
+    expect(res.exitCode).toBe(0);
   });
 });
 

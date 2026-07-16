@@ -62,6 +62,7 @@ import {
 // `loadAccountSigningKey` independently.
 
 import { buildSecurityPreamble } from "./runner/security-preamble";
+import { assertPromptFilterReady } from "./runner/prompt-filter";
 import { DispatchHandler } from "./bus/dispatch-handler";
 import {
   makeSubjectPlaceholderSubstituter,
@@ -906,6 +907,14 @@ export async function startCortex(
   config: AgentConfig,
   options: StartCortexOptions = {},
 ): Promise<CortexHandle> {
+  // cortex#2184 — hard-fail before any other boot work if the prompt-injection
+  // scanner failed to load (unless the deliberate opt-out is set). The daemon
+  // must never linger half-booted dispatching unscanned prompts — see
+  // assertPromptFilterReady's doc comment. `bootOrDie` (the CLI's `start`
+  // wrapper) maps a throw here to `console.error` + `process.exit(1)`, same as
+  // every other fatal boot check.
+  assertPromptFilterReady("cortex start");
+
   const expandedConfigPath = options.configPath
     ? options.configPath.replace(/^~/, process.env.HOME ?? "~")
     : DEFAULT_CONFIG;

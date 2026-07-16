@@ -22,9 +22,20 @@ type FilterContentString = (
 
 let filterContentString: FilterContentString | null = null;
 
+/**
+ * cortex#2184 — set (from the module-init catch below) when
+ * @metafactory/content-filter failed to load. `null` means the filter loaded
+ * cleanly. Read by {@link assertPromptFilterReady} so `cortex start` /
+ * `cortex stack create` can hard-fail on a load failure instead of the
+ * runtime `scanPrompt` fail-open path being the only signal (grove#173 kept
+ * that path loud but open; this closes the boot-time gap).
+ */
+export let promptFilterLoadError: string | null = null;
+
 // Load @metafactory/content-filter at module init. This is a required security
 // control — if the package fails to load we log loudly so principals notice.
-// Previously this was silently fail-open (grove#173).
+// Previously this was silently fail-open (grove#173). Since cortex#2184 the
+// failure is also hard-gated at boot — see assertPromptFilterReady below.
 try {
   const mod = await import("@metafactory/content-filter");
   filterContentString = mod.filterContentString;
@@ -32,10 +43,71 @@ try {
     "prompt-filter: @metafactory/content-filter loaded — inbound prompts will be scanned",
   );
 } catch (err) {
+  promptFilterLoadError = err instanceof Error ? err.message : String(err);
   console.error(
     "prompt-filter: WARN @metafactory/content-filter failed to load — " +
       "inbound prompts are NOT being scanned for prompt injection:",
     err instanceof Error ? err.message : err,
+  );
+}
+
+/**
+ * Test seam (cortex#2184) — override the module-init load state to simulate
+ * @metafactory/content-filter failing to load, WITHOUT actually uninstalling
+ * or breaking the dependency. Pass `null` to restore the loaded state.
+ * Mirrors the `__set…ForTests` convention used elsewhere in this repo (e.g.
+ * `network-adapters.ts` `__setAdmissionResolverForTests`).
+ */
+export function __setPromptFilterLoadErrorForTests(err: string | null): void {
+  promptFilterLoadError = err;
+}
+
+/** The deliberate opt-out — see {@link assertPromptFilterReady}. */
+const ALLOW_UNSCANNED_PROMPTS_ENV = "CORTEX_ALLOW_UNSCANNED_PROMPTS";
+
+/**
+ * cortex#2184 — boot-time gate: refuse to proceed past `context` (e.g.
+ * `"cortex start"`, `"cortex stack create"`) when @metafactory/content-filter
+ * failed to load, unless the deliberate opt-out env var is set.
+ *
+ * The prompt-injection scanner is a required security control (gate doctrine,
+ * cortex#1381 PRINCIPLES #9/#10, arc#332). Previously a load failure only
+ * logged a WARN and let boot continue with `scanPrompt` silently fail-open —
+ * so any host where content-filter didn't load ran with injection scanning
+ * OFF and no one noticed. This closes that gap: the two security-relevant
+ * lifecycle points (daemon boot, stack scaffolding) now hard-fail on a load
+ * failure, with an explicit, loud escape hatch for anyone who genuinely needs
+ * to proceed unscanned.
+ *
+ * - filter loaded (`promptFilterLoadError === null`) → no-op.
+ * - not loaded + opt-out unset → throws with an actionable message (module
+ *   name, "scanning would be OFF", the fix, the underlying error, and the
+ *   opt-out). Callers map the throw to a non-zero exit — see `bootOrDie` in
+ *   `src/cortex.ts` (daemon boot) and the `try`/`opError` wrap around
+ *   `assertAligned` in `src/cli/cortex/commands/stack.ts` (stack create).
+ * - not loaded + opt-out set (`CORTEX_ALLOW_UNSCANNED_PROMPTS=1`) → proceeds,
+ *   but prints ONE loud single-line SECURITY warning first. Not a silent
+ *   bypass — the opt-out must be an explicit, deliberate env var.
+ *
+ * This gate does NOT change `scanPrompt`'s own runtime fail-open behavior
+ * (out of scope, cortex#2184) — it exists so that path is never reached
+ * unscanned in the first place, absent the opt-out.
+ */
+export function assertPromptFilterReady(context: string): void {
+  if (promptFilterLoadError === null) return;
+
+  if (process.env[ALLOW_UNSCANNED_PROMPTS_ENV] === "1") {
+    console.error(
+      `⚠ SECURITY: prompt-injection scanning is DISABLED by the opt-out env var ${ALLOW_UNSCANNED_PROMPTS_ENV}=1 (${context}) — proceeding unscanned.`,
+    );
+    return;
+  }
+
+  throw new Error(
+    `prompt-filter: REFUSING TO PROCEED (${context}) — @metafactory/content-filter failed to load, ` +
+      `so inbound prompt-injection scanning would be OFF. Fix: ensure a current bun and re-run ` +
+      `\`bun install\` in the cortex repo. Underlying error: ${promptFilterLoadError}. ` +
+      `To proceed anyway (NOT recommended — scanning stays OFF), set ${ALLOW_UNSCANNED_PROMPTS_ENV}=1.`,
   );
 }
 

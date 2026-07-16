@@ -10,8 +10,13 @@
  * prompt injection scanner is silently fail-open — exactly the bug grove#173
  * was filed to fix.
  */
-import { describe, test, expect } from "bun:test";
-import { scanPrompt, deriveReasonCategory } from "../prompt-filter";
+import { describe, test, expect, afterEach } from "bun:test";
+import {
+  scanPrompt,
+  deriveReasonCategory,
+  assertPromptFilterReady,
+  __setPromptFilterLoadErrorForTests,
+} from "../prompt-filter";
 
 describe("scanPrompt (grove#173 acceptance)", () => {
   test("allows clean conversational text", () => {
@@ -197,5 +202,74 @@ describe("scanPrompt trust gate (cortex#741)", () => {
   test("trusted score is still surfaced for the audit record", () => {
     const result = scanPrompt(EX004_FP, "discord", { trusted: true });
     expect(typeof result.score).toBe("number");
+  });
+});
+
+describe("assertPromptFilterReady (cortex#2184 boot gate)", () => {
+  const ENV_VAR = "CORTEX_ALLOW_UNSCANNED_PROMPTS";
+  const originalEnv = process.env[ENV_VAR];
+
+  // Real content-filter loads cleanly in this environment (the whole point of
+  // grove#173 Phase B — see the file-level doc comment above), so
+  // `promptFilterLoadError` is `null` at module init. We simulate a load
+  // failure via the test seam rather than uninstalling the dependency — reset
+  // it after every test so we never leak the simulated failure into the
+  // scanPrompt tests above/below.
+  afterEach(() => {
+    __setPromptFilterLoadErrorForTests(null);
+    if (originalEnv === undefined) {
+      delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+    } else {
+      process.env[ENV_VAR] = originalEnv;
+    }
+  });
+
+  test("loaded (no simulated failure) → no-op, never throws", () => {
+    __setPromptFilterLoadErrorForTests(null);
+    delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+    expect(() => assertPromptFilterReady("cortex start")).not.toThrow();
+  });
+
+  test("not loaded + opt-out unset → throws an actionable error", () => {
+    __setPromptFilterLoadErrorForTests("Cannot find package '@metafactory/content-filter'");
+    delete process.env.CORTEX_ALLOW_UNSCANNED_PROMPTS;
+
+    let thrown: unknown;
+    try {
+      assertPromptFilterReady("cortex start");
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    // Names the module, states scanning would be OFF, gives the fix, echoes
+    // the underlying error, and mentions the opt-out — per cortex#2184.
+    expect(message).toContain("@metafactory/content-filter");
+    expect(message).toContain("scanning would be OFF");
+    expect(message).toContain("bun install");
+    expect(message).toContain("Cannot find package '@metafactory/content-filter'");
+    expect(message).toContain(ENV_VAR);
+    expect(message).toContain("cortex start");
+  });
+
+  test("not loaded + opt-out set → proceeds with exactly one loud SECURITY warning", () => {
+    __setPromptFilterLoadErrorForTests("simulated load failure");
+    process.env[ENV_VAR] = "1";
+
+    const logged: string[] = [];
+    const orig = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      expect(() => assertPromptFilterReady("cortex stack create")).not.toThrow();
+    } finally {
+      console.error = orig;
+    }
+
+    const warnings = logged.filter((l) => l.includes("SECURITY") && l.includes(ENV_VAR));
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("DISABLED");
   });
 });

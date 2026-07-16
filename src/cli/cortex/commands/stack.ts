@@ -46,6 +46,7 @@ import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
 import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
+import { assertPromptFilterReady } from "../../../runner/prompt-filter";
 import {
   assertAligned,
   discoverStacks,
@@ -214,6 +215,16 @@ function runCreate(
   flags: FlagMap,
   json: boolean,
 ): ExitResult {
+  // --- prompt-filter boot gate (cortex#2184) --------------------------------
+  // Surface a content-filter load failure at CREATE time — the point Vincent
+  // hit it — not just as a WARN buried in `cortex start` output. Fires even in
+  // the dry-run default so an operator sees it before ever running `--apply`.
+  try {
+    assertPromptFilterReady("cortex stack create");
+  } catch (err) {
+    return opError("create", err instanceof Error ? err.message : String(err), json);
+  }
+
   // --- validate slug -------------------------------------------------------
   if (!SLUG_RE.test(slug)) {
     return usageError(
