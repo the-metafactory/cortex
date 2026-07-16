@@ -238,3 +238,66 @@ jobs:
 
       - name: xdg-audit --repos (self-repo scope)
         run: bun scripts/xdg-audit.ts --repos .
+
+  # ──────────────────────────────────────────────────────────────────
+  # systemd-e2e — systemd-user session capability for e2e jobs (cortex#2092).
+  # Phase L1 of the Linux host support spec (arc design/linux-host-support.md,
+  # arc#309) adds scripts/lib/systemd-render.sh to cortex; its e2e test needs
+  # `systemctl --user` to work for real. cortex CI already runs entirely on
+  # ubuntu-latest — this is NOT a new CI lane. The gap is narrower: a plain
+  # GitHub Actions job has no systemd user session (no XDG_RUNTIME_DIR bus for
+  # the runner user), so `systemctl --user` fails with "Failed to connect to
+  # bus". This job enables lingering + waits for the user bus socket, exports
+  # XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS via GITHUB_ENV, and runs a smoke
+  # check plus a placeholder bun test filter (zero matching tests is green at
+  # this stage — cortex#2071's L1 e2e test will populate the pattern).
+  #
+  # NON-REQUIRED for now: flipping this to a required check is a principal
+  # decision, deferred until cortex#2071's e2e test lands (see issue #2092
+  # "explicitly out of scope").
+  # ──────────────────────────────────────────────────────────────────
+  systemd-e2e:
+    name: systemd e2e (systemd-user session)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Enable systemd user session
+        run: |
+          sudo loginctl enable-linger "$(whoami)"
+          # Wait for the user manager + bus socket to come up (up to 15s):
+          for i in $(seq 1 15); do
+            [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1
+          done
+          test -S "/run/user/$(id -u)/bus"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+
+      - name: Verify env exported
+        run: env | grep -E "XDG_RUNTIME|DBUS"
+
+      - name: Smoke systemctl --user
+        run: systemctl --user status --no-pager || systemctl --user list-units --no-pager | head -5
+
+      # `bun test --test-name-pattern` exits 1 on zero matches (verified locally),
+      # which would make this job red until cortex#2071 adds a matching test —
+      # contradicting the issue's own acceptance criterion that zero matches is
+      # green at this stage. Guard on the "matched 0 tests" message so a real
+      # test failure still fails the job once cortex#2071 lands.
+      - name: bun test (systemd-e2e placeholder — cortex#2071 will populate)
+        run: |
+          set +e
+          output=$(bun test --test-name-pattern systemd-e2e 2>&1)
+          status=$?
+          echo "$output"
+          if [ $status -ne 0 ] && echo "$output" | grep -q "matched 0 tests"; then
+            echo "No systemd-e2e tests yet — zero matches is green per cortex#2092 (cortex#2071 will populate this pattern)."
+            exit 0
+          fi
+          exit $status
