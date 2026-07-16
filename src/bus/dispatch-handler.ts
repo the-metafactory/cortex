@@ -133,6 +133,17 @@ interface DispatchTargetAgent {
    * complete zero-tool airgap alongside `agentDisallowedTools`.
    */
   strictMcpConfig?: boolean;
+  /**
+   * cortex#2133 (epic #2164) — the agent's declared `env:` passthrough map
+   * (`NAME → literal-or-`env:NAME`-reference`; see `AgentSchema.env`). Carried
+   * per-target-agent (narrowest scope) and threaded onto the CC session's
+   * `agentEnv`, where `resolveAgentEnv` resolves references from the daemon env
+   * and layers the vars AFTER `scopeSessionEnv` — never touching the default-deny
+   * `CLAUDE_*` namespace. Absent → no passthrough. Applies to the DIRECT dispatch
+   * paths (async, team, sync-fallback); the canonical bus-mediated sync path is
+   * injected receiving-stack-authoritatively in the dispatch-listener.
+   */
+  env?: Record<string, string>;
 }
 
 export interface DispatchHandlerOpts {
@@ -1077,13 +1088,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
           break;
       }
     } catch (error) {
@@ -1127,6 +1138,8 @@ export class DispatchHandler extends EventEmitter {
     additionalArgs?: string[],
     /** cortex#2111 — per-principal MCP grants (defined ⇒ deny-by-default over mcp__*). */
     mcpGrants?: string[],
+    /** cortex#2133 — the target agent's declared env passthrough (NAME → literal-or-`env:NAME`). */
+    agentEnv?: Record<string, string>,
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
 
@@ -1171,6 +1184,9 @@ export class DispatchHandler extends EventEmitter {
       // cortex#2111 — arm the MCP Guard when the policy decision carried a
       // grant list (defined ⇒ deny-by-default over mcp__*).
       ...(mcpGrants !== undefined && { mcpGrants }),
+      // cortex#2133 — the agent's declared env passthrough (resolved + CLAUDE_*
+      // re-denied in cc-session's resolveAgentEnv before it hits the child env).
+      ...(agentEnv !== undefined && { agentEnv }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       cwd,
       bashAllowlist,
@@ -1494,6 +1510,8 @@ export class DispatchHandler extends EventEmitter {
     additionalArgs?: string[],
     /** cortex#2111 — per-principal MCP grants (defined ⇒ deny-by-default over mcp__*). */
     mcpGrants?: string[],
+    /** cortex#2133 — the target agent's declared env passthrough (NAME → literal-or-`env:NAME`). */
+    agentEnv?: Record<string, string>,
   ): Promise<void> {
     const taskId = `task-${randomUUID()}`;
 
@@ -1519,6 +1537,9 @@ export class DispatchHandler extends EventEmitter {
       // cortex#2111 — arm the MCP Guard when the policy decision carried a
       // grant list (defined ⇒ deny-by-default over mcp__*).
       ...(mcpGrants !== undefined && { mcpGrants }),
+      // cortex#2133 — the agent's declared env passthrough (resolved + CLAUDE_*
+      // re-denied in cc-session's resolveAgentEnv before it hits the child env).
+      ...(agentEnv !== undefined && { agentEnv }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       cwd,
       project: groveProject,
@@ -1637,6 +1658,8 @@ export class DispatchHandler extends EventEmitter {
     additionalArgs?: string[],
     /** cortex#2111 — per-principal MCP grants (defined ⇒ deny-by-default over mcp__*). */
     mcpGrants?: string[],
+    /** cortex#2133 — the target agent's declared env passthrough (NAME → literal-or-`env:NAME`). */
+    agentEnv?: Record<string, string>,
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
 
@@ -1663,6 +1686,9 @@ export class DispatchHandler extends EventEmitter {
       // cortex#2111 — every team-member session inherits the invoking
       // principal's MCP grant list (defined ⇒ deny-by-default over mcp__*).
       ...(mcpGrants !== undefined && { mcpGrants }),
+      // cortex#2133 — every team-member session inherits the agent's declared
+      // env passthrough (resolved + CLAUDE_* re-denied in cc-session).
+      ...(agentEnv !== undefined && { agentEnv }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       timeoutMs: this.config.claude.asyncTimeoutMs,
       bashGuardDisabled,

@@ -110,6 +110,8 @@ import {
 import { tmpdir, homedir } from "os";
 import { join, basename } from "path";
 import { parse as parseYaml } from "yaml";
+import { isDeniedAgentEnvKey } from "../common/config/agent-env";
+import { SECRET_REF_PATTERN } from "../common/inference/secret-ref";
 
 /**
  * The setting sources cortex bot sessions load: NONE. Deliberately empty.
@@ -620,4 +622,75 @@ export function scopeSessionEnv(
     scoped[key] = value;
   }
   return scoped;
+}
+
+/**
+ * cortex#2133 (epic #2164, TRUST-PATH) — resolve an agent's declarative `env:`
+ * passthrough map ({@link AgentEnvSchema}) into the concrete `NAME → value`
+ * pairs to layer onto a CC session's child env.
+ *
+ * The caller (`cc-session.ts`) merges the result onto the scoped base env
+ * BEFORE `buildSessionEnv` layers cortex's own `CORTEX_*`/config-home/grant
+ * vars — so a declared var can never shadow cortex's pipeline vars, and (with
+ * the deny below) can never touch the `CLAUDE_*` namespace `scopeSessionEnv`
+ * guards.
+ *
+ * Two responsibilities, both security-relevant:
+ *
+ *   1. **Re-assert the `CLAUDE_*` deny (defence-in-depth).** The config schema
+ *      already rejects a `CLAUDE_*` key at load ({@link isDeniedAgentEnvKey} in
+ *      `common/config/agent-env.ts`, the SHARED predicate), but we DROP it here
+ *      too so NO path — a test, a future direct caller, a schema regression —
+ *      can layer a `CLAUDE_*` var onto a child session. Dropping (not throwing)
+ *      is the fail-closed choice: the var simply never gets set, isolation
+ *      holds regardless of how the map arrived, and a crafted map cannot DoS
+ *      the session. Each drop is logged.
+ *
+ *   2. **Resolve secret references at call time.** A value of the form
+ *      `env:NAME` ({@link SECRET_REF_PATTERN}) is a SECRET REFERENCE, read from
+ *      `parentEnv` here (the daemon env) and never stored in config; anything
+ *      else is a literal (e.g. a credential PATH) and passes through verbatim.
+ *      An unresolved reference (unset/empty daemon var) is SKIPPED with a loud
+ *      stderr line rather than throwing — the session still runs and the
+ *      dependent skill surfaces its own "credential missing" error, instead of
+ *      one bad ref taking down the whole dispatch.
+ *
+ * @param agentEnv The agent's declared passthrough map, or `undefined`/absent
+ *   (⇒ `{}`, byte-identical to the pre-#2133 session env).
+ * @param parentEnv The daemon env to resolve `env:NAME` references against.
+ *   Injectable for testing; defaults to `process.env`.
+ */
+export function resolveAgentEnv(
+  agentEnv: Record<string, string> | undefined,
+  parentEnv: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  if (agentEnv === undefined) return resolved;
+  for (const [key, rawValue] of Object.entries(agentEnv)) {
+    if (isDeniedAgentEnvKey(key)) {
+      // See responsibility (1). Never set a CLAUDE_* var from this map.
+      process.stderr.write(
+        `session-settings: agent env key '${key}' dropped — CLAUDE_* is default-deny (cortex#701 isolation)\n`,
+      );
+      continue;
+    }
+    const refMatch = SECRET_REF_PATTERN.exec(rawValue);
+    if (refMatch?.[1] !== undefined) {
+      const refEnvVar = refMatch[1];
+      const secretVal = parentEnv[refEnvVar];
+      if (secretVal === undefined || secretVal.trim() === "") {
+        // See responsibility (2): skip an unresolved ref, don't throw.
+        process.stderr.write(
+          `session-settings: agent env '${key}' → secret reference env:${refEnvVar} ` +
+            `could not be resolved (unset/empty) — variable not set for this session\n`,
+        );
+        continue;
+      }
+      resolved[key] = secretVal;
+    } else {
+      // A literal (e.g. a credential path). Passes through verbatim.
+      resolved[key] = rawValue;
+    }
+  }
+  return resolved;
 }

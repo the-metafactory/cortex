@@ -843,7 +843,7 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime" | "agentDisallowedTools" | "strictMcpConfig">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime" | "agentDisallowedTools" | "strictMcpConfig" | "env">,
   configDir: string,
 ): {
   id: string;
@@ -854,6 +854,7 @@ function targetAgentForDispatch(
   capabilities?: readonly string[];
   agentDisallowedTools?: string[];
   strictMcpConfig?: boolean;
+  env?: Record<string, string>;
 } {
   const expandedPersona = expandTilde(agent.persona);
   return {
@@ -884,6 +885,11 @@ function targetAgentForDispatch(
       agentDisallowedTools: agent.agentDisallowedTools,
     }),
     ...(agent.strictMcpConfig === true && { strictMcpConfig: true }),
+    // cortex#2133 — carry the agent's declared env passthrough so the DIRECT
+    // dispatch paths (async/team/sync-fallback) layer it onto the CC session
+    // (resolved + CLAUDE_* re-denied in cc-session). The canonical bus-mediated
+    // sync path is injected receiving-stack-authoritatively in the listener.
+    ...(agent.env !== undefined && { env: agent.env }),
   };
 }
 
@@ -3714,6 +3720,16 @@ export async function startCortex(
   for (const a of mergedAgents) {
     if (a.runtime !== undefined) agentRuntimesById.set(a.id, a.runtime);
   }
+  // cortex#2133 (epic #2164) — BOOT snapshot of each agent's declared `env:`
+  // passthrough, keyed by agent id. The dispatch-listener injects the RECEIVING
+  // agent's map onto `req.runtime.agentEnv` receiving-stack-authoritatively (the
+  // executing stack's config is the single source of truth — the value NEVER
+  // comes from the inbound wire, mirroring the `bashAllowlist`/`mcpGrants`
+  // receiving-side authority). Empty map ⇒ no agent declared `env:` ⇒ no-op.
+  const agentEnvById = new Map<string, Record<string, string>>();
+  for (const a of mergedAgents) {
+    if (a.env !== undefined) agentEnvById.set(a.id, a.env);
+  }
   const inferenceRegistry = createInferenceRegistry(
     config.inference ?? { providers: {}, profiles: {} },
   );
@@ -3738,6 +3754,7 @@ export async function startCortex(
     source: systemEventSource,
     stack: derivedStack.stack,
     agentRuntimesById,
+    agentEnvById,
     inferenceRegistry,
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,

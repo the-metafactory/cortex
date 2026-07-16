@@ -51,6 +51,7 @@ import type {
   InferenceProfile,
   InferenceConfig,
 } from "../inference/inference-config-schema";
+import { AgentEnvSchema } from "../config/agent-env";
 import { CapabilitySchema } from "./capability";
 import { REVIEW_FLAVORS, reviewFlavorOfCapability } from "./review-flavors";
 import {
@@ -1014,6 +1015,34 @@ export const AgentSchema = z.object({
       version: z.string().min(1),
     })
     .optional(),
+  /**
+   * cortex#2133 (epic #2164) — OPT-IN declarative per-agent environment
+   * passthrough. A map of `NAME → literal-or-`env:NAME`-reference` that is
+   * layered onto THIS agent's CC sessions at the SESSION layer (after
+   * `scopeSessionEnv`, alongside cortex's own `CORTEX_*` pipeline vars — see
+   * `resolveAgentEnv` in `src/runner/session-settings.ts`).
+   *
+   * Purpose: give a deployment credential a CLI-based skill needs (e.g.
+   * `GOOGLE_APPLICATION_CREDENTIALS` for the `gws` skill) a declarative home in
+   * cortex config, instead of a hand-edited launchd plist that `arc upgrade`
+   * overwrites. Narrowest scope by design (same asymmetric-agent argument as
+   * cortex#2111): only the agent that declares it gets the var, not every agent
+   * on the stack.
+   *
+   * Values: a non-secret LITERAL (a path like `/…/sa.json` is a path, not a
+   * secret) OR an `env:NAME` SECRET REFERENCE resolved from the daemon env at
+   * call time and never stored in config (design §"Secrets and egress", D6).
+   *
+   * **HARD CONSTRAINT — `CLAUDE_*` is default-deny.** A `CLAUDE_*` key is
+   * REJECTED at parse time ({@link AgentEnvSchema}); this passthrough must never
+   * re-introduce the hooks/plugins/settings a `CLAUDE_*` var would, undoing the
+   * cortex#701 isolation boundary. Relocating a substrate config home is the
+   * `substrates:` `configHome` seam's job (cortex#2132), not this map's.
+   *
+   * Additive: existing agents omit this key and are unaffected (byte-identical
+   * to the pre-#2133 session env).
+   */
+  env: AgentEnvSchema.optional(),
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

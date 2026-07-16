@@ -427,6 +427,16 @@ export interface DispatchListenerOptions {
    */
   agentRuntimesById?: Map<string, AgentRuntime>;
   /**
+   * cortex#2133 (epic #2164) — the RECEIVING agents' declared `env:` passthrough
+   * maps indexed by agent id. When present, the handler injects the
+   * `receivingAgentId`'s map onto `req.runtime.agentEnv`
+   * receiving-stack-AUTHORITATIVELY (the executing stack's config is the single
+   * source of truth — NEVER the inbound wire, so a federated peer cannot inject
+   * env vars into a host session). Mirrors the `bashAllowlist`/`mcpGrants`
+   * receiving-side authority. Absent / no entry ⇒ no passthrough.
+   */
+  agentEnvById?: Map<string, Record<string, string>>;
+  /**
    * API-P1.3 (#2063) — the inference registry the `api-agent` substrate resolves
    * its profile through. Threaded to `HarnessResolver`. Absent on stacks with no
    * `inference` config → an `api-agent` dispatch fails closed at the harness.
@@ -830,6 +840,7 @@ export function createDispatchListener(
     trustResolver,
     receivingAgentId,
     agentRuntimesById,
+    agentEnvById,
     inferenceRegistry,
     principalId,
     stackIdentity,
@@ -913,6 +924,7 @@ export function createDispatchListener(
         principalId,
         receivingAgentId,
         agentRuntimesById,
+        agentEnvById,
         inferenceRegistry,
         stackIdentity,
         stackNKeyPub,
@@ -1348,6 +1360,8 @@ interface DispatchHandlerContext {
   receivingAgentId: string | undefined;
   /** API-P1.3 (#2063) — receiving agents' runtime configs by id, for substrate selection. */
   agentRuntimesById: Map<string, AgentRuntime> | undefined;
+  /** cortex#2133 — receiving agents' declared `env:` passthrough maps by id (receiving-stack-authoritative). */
+  agentEnvById: Map<string, Record<string, string>> | undefined;
   /** API-P1.3 (#2063) — inference registry the `api-agent` substrate resolves through. */
   inferenceRegistry: InferenceRegistry | undefined;
   /** cortex#480 — receiving stack's signing DID for own-stack trust. */
@@ -1424,6 +1438,7 @@ async function handleDispatchEnvelope(
     principalId,
     receivingAgentId,
     agentRuntimesById,
+    agentEnvById,
     inferenceRegistry,
     stackIdentity,
     stackNKeyPub,
@@ -2120,6 +2135,24 @@ async function handleDispatchEnvelope(
     if (bashGuardDisabled !== undefined) {
       runtime.bashGuardDisabled = bashGuardDisabled;
     }
+    req.runtime = runtime;
+  }
+
+  // cortex#2133 (epic #2164) — RECEIVING-STACK-AUTHORITATIVE agent env
+  // passthrough, the #127 model applied to the per-agent `env:` map. The wire
+  // NEVER carries it (`buildDispatchRequest` does not populate `runtime.agentEnv`
+  // from the payload) — the EXECUTING stack's own config is the single source of
+  // truth, looked up by the receiving agent id. So a federated peer (or a
+  // crafted publisher) can neither inject env vars into a host session nor
+  // widen this agent's declared set. The claude-code harness threads this onto
+  // `CCSessionOpts.agentEnv`, where `resolveAgentEnv` resolves references and
+  // re-denies `CLAUDE_*` before it reaches the child env. Absent / no entry ⇒
+  // nothing injected (default: no passthrough).
+  const receivingAgentEnv =
+    receivingAgentId !== undefined ? agentEnvById?.get(receivingAgentId) : undefined;
+  if (receivingAgentEnv !== undefined) {
+    const runtime = req.runtime ?? {};
+    runtime.agentEnv = receivingAgentEnv;
     req.runtime = runtime;
   }
 

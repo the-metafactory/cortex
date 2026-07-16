@@ -13,6 +13,7 @@ import { buildClaudeArgs, type ClaudeInvocationOpts } from "./claude-invoker";
 import {
   createIsolatedSettings,
   scopeSessionEnv,
+  resolveAgentEnv,
   CORTEX_SKILL_GRANTS_ENV,
   CORTEX_MCP_GRANTS_ENV,
   type IsolatedSettings,
@@ -122,6 +123,17 @@ export interface CCSessionOpts {
    * common/substrates/config-home.ts.
    */
   configHomeEnv?: { name: string; value: string };
+  /**
+   * cortex#2133 (epic #2164) — the target agent's declared `env:` passthrough
+   * map (`NAME → literal-or-`env:NAME`-reference`; see `AgentSchema.env`).
+   * Layered onto the child env by `start()` AFTER `scopeSessionEnv` and BEFORE
+   * cortex's own `CORTEX_*`/config-home/grant vars, so a declared var can
+   * neither shadow cortex's pipeline vars nor touch the `CLAUDE_*` namespace
+   * (resolution + the re-asserted `CLAUDE_*` deny live in `resolveAgentEnv`,
+   * session-settings.ts). Undefined/absent ⇒ no passthrough (byte-identical to
+   * the pre-#2133 env).
+   */
+  agentEnv?: Record<string, string>;
 }
 
 export interface CCSessionResult {
@@ -370,8 +382,16 @@ export class CCSession extends EventEmitter {
       ? scopeSessionEnv(process.env)
       : { ...(process.env as Record<string, string>) };
 
+    // cortex#2133 — the agent's declarative `env:` passthrough. Resolved (refs
+    // read from the daemon env; CLAUDE_* re-denied as defence-in-depth) and
+    // layered on the scoped base BEFORE buildSessionEnv applies cortex's own
+    // CORTEX_*/config-home/grant vars — so cortex's pipeline vars always win and
+    // a declared var can never reach the CLAUDE_* namespace scopeSessionEnv
+    // guards. Undefined/empty ⇒ {} ⇒ byte-identical to the pre-#2133 env.
+    const agentEnv = resolveAgentEnv(this.opts.agentEnv, process.env);
+
     const env: Record<string, string> = {
-      ...buildSessionEnv(baseEnv, this.opts),
+      ...buildSessionEnv({ ...baseEnv, ...agentEnv }, this.opts),
       // cortex#710 — pass the per-skill grant list to the Skill Guard hook.
       // Only set when the curated settings actually registered the hook
       // (hasSkillGrants), so the env var and the hook move atomically. Layered

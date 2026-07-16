@@ -301,6 +301,21 @@ export interface DispatchRuntime {
    * absent for an agent-rooted dispatch.
    */
   parentSessionId?: string;
+  /**
+   * cortex#2133 (epic #2164) — the receiving agent's declared `env:` passthrough
+   * map (`NAME → literal-or-`env:NAME`-reference`; see `AgentSchema.env`). The
+   * claude-code harness threads this onto `CCSessionOpts.agentEnv`, where
+   * `resolveAgentEnv` (session-settings.ts) resolves references from the daemon
+   * env and layers the vars onto the child AFTER `scopeSessionEnv` — never
+   * touching the default-deny `CLAUDE_*` namespace. Non-CC harnesses ignore it.
+   *
+   * **Receiving-stack-authoritative.** The runner populates this from the
+   * EXECUTING stack's own config (looked up by receiving agent id), NOT from
+   * the inbound wire — so a federated peer cannot inject env vars into a host
+   * session (same trust model as the receiving-stack-authoritative `mcpGrants`).
+   * Optional everywhere; absent ⇒ no passthrough.
+   */
+  agentEnv?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

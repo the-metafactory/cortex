@@ -130,6 +130,13 @@ export interface AgentTeamOpts {
    * Undefined → no MCP hook (non-policy path, behaviour unchanged).
    */
   mcpGrants?: string[];
+  /**
+   * cortex#2133 — the agent's declared env passthrough, propagated to ALL team
+   * sessions (moderator + participants + synthesis). Resolved + CLAUDE_*
+   * re-denied per-session in cc-session's `resolveAgentEnv`. Undefined → no
+   * passthrough.
+   */
+  agentEnv?: Record<string, string>;
   allowedDirs?: string[];
   timeoutMs?: number;
   /** Bash guard config — propagated to all team sessions (moderator + participants) */
@@ -597,6 +604,7 @@ export class AgentTeam extends EventEmitter {
       disallowedTools: this.opts.disallowedTools,
       ...(this.opts.allowedSkills !== undefined && { allowedSkills: this.opts.allowedSkills }),
       ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
+      ...(this.opts.agentEnv !== undefined && { agentEnv: this.opts.agentEnv }),
       allowedDirs: this.opts.allowedDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
@@ -719,6 +727,7 @@ export class AgentTeam extends EventEmitter {
       disallowedTools: config.disallowedTools ?? this.opts.disallowedTools,
       ...(this.opts.allowedSkills !== undefined && { allowedSkills: this.opts.allowedSkills }),
       ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
+      ...(this.opts.agentEnv !== undefined && { agentEnv: this.opts.agentEnv }),
       allowedDirs: config.dirs ?? this.opts.allowedDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
@@ -900,6 +909,7 @@ export class AgentTeam extends EventEmitter {
       disallowedTools: this.opts.disallowedTools,
       ...(this.opts.allowedSkills !== undefined && { allowedSkills: this.opts.allowedSkills }),
       ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
+      ...(this.opts.agentEnv !== undefined && { agentEnv: this.opts.agentEnv }),
       allowedDirs: this.opts.allowedDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
