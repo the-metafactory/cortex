@@ -67,6 +67,8 @@ jobs:
   build-and-push:
     name: Build + push + attest (GHCR)
     runs-on: ubuntu-latest
+    # Cap the run so a hung/wedged build can't hold a runner for the 6h default.
+    timeout-minutes: 30
     permissions:
       contents: read # checkout
       packages: write # push image + attestation to GHCR
@@ -78,6 +80,13 @@ jobs:
         with:
           # Build the exact commit the release points at, not the branch tip.
           ref: ${{ github.event.release.tag_name }}
+          # Do NOT persist the job's GITHUB_TOKEN into .git/config. This job holds
+          # the repo's most privileged token (packages:write + id-token:write +
+          # attestations:write); `context: .` ships the repo root — incl. .git/ —
+          # to the builder, so a persisted token could reach the image context.
+          # Latent today (L4a's Dockerfile clones at CORTEX_REF, no broad `COPY .`)
+          # but this removes the token from the context outright — defense in depth.
+          persist-credentials: false
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -125,6 +134,9 @@ jobs:
           provenance: false
 
       - name: Attest build provenance (SLSA, signed, pushed to registry)
+        # Pinned by immutable SHA (the anchor). Trailing tag is v2.4.0, NOT the
+        # latest major (v4.x exists) — the inputs used here (subject-name/-digest,
+        # push-to-registry) are stable across majors; bump deliberately if desired.
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ env.IMAGE }}
