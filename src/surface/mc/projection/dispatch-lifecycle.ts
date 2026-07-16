@@ -81,6 +81,12 @@ import {
   parseSliceThread,
   linkAnchorToSliceWorkItem,
 } from "./anchor";
+import {
+  readDispatchUsage,
+  readDispatchProviderDiagnostics,
+  type DispatchUsage,
+  type DispatchProviderDiagnostics,
+} from "./dispatch-usage";
 import type { AssignmentState } from "../types";
 
 /**
@@ -157,6 +163,26 @@ export interface ProjectionResult {
   sessionId: string;
   /** MC assignment row id. */
   assignmentId: string;
+  /**
+   * API-2115 — the usage the dispatch REPORTED on a terminal envelope, read off
+   * the payload (`projection/dispatch-usage.ts`). All-null on `started` (no
+   * terminal usage exists yet) and for every claude-code dispatch (its envelopes
+   * carry no token fields).
+   *
+   * NOT YET PERSISTED. Which MC row an api-agent dispatch's usage lands on —
+   * given the harness has no `cc_session_id` — is a keying decision awaiting a
+   * ruling (#2115 acceptance criterion 2). Surfaced here so the read is
+   * live-exercised and the write site is a one-line wire-up once ruled.
+   */
+  usage: DispatchUsage;
+  /**
+   * API-2115 — the normalized, secret-safe provider diagnostics the dispatch
+   * reported. All-null when the envelope carries none. Same not-yet-persisted
+   * status as {@link ProjectionResult.usage}; note the `retry_after_ms` WRITE
+   * path onto `agent_task_assignment.retry_after_ms` belongs to the CK-4a
+   * write-half lane (#1514), not here (see db/schema.ts's column comment).
+   */
+  providerDiagnostics: DispatchProviderDiagnostics;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +237,14 @@ export function projectDispatchLifecycle(
   // lifecycle only (no interior, which is never projected from a peer).
   const sliceRef = parseSliceThread(readSliceThread(payload));
 
+  // API-2115 — read the usage + provider diagnostics the producer stamped on the
+  // payload (all-null when it stamped none: every `started`, every claude-code
+  // dispatch). Pure reads, no DB effect — the PERSISTENCE keying is still under
+  // decision (see ProjectionResult.usage). Hoisted out of the transaction because
+  // they touch nothing.
+  const usage = readDispatchUsage(payload);
+  const providerDiagnostics = readDispatchProviderDiagnostics(payload);
+
   // Everything below runs in ONE transaction: anchor creation, transition, and
   // (for terminal) cc_session_id backfill + orphan reconciliation must be
   // atomic so a partial write can't leave a dangling row or a double cc_session.
@@ -244,6 +278,8 @@ export function projectDispatchLifecycle(
         correlationId,
         sessionId: anchor.sessionId,
         assignmentId: anchor.assignmentId,
+        usage,
+        providerDiagnostics,
       };
     }
 
@@ -268,6 +304,8 @@ export function projectDispatchLifecycle(
       correlationId,
       sessionId,
       assignmentId: anchor.assignmentId,
+      usage,
+      providerDiagnostics,
     };
   });
 
