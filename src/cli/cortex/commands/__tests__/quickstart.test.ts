@@ -446,6 +446,108 @@ describe("dispatchQuickstart — step 8 gate", () => {
 });
 
 // =============================================================================
+// --container — skip step 8 (cortex#2155, L4 container standup)
+// =============================================================================
+
+describe("dispatchQuickstart — --container skips the healthy-boot gate", () => {
+  test("--container skips step 8 with NO log-grep / healthz probe, and does not stall or fail", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    let readLogCalls = 0;
+    let healthzCalls = 0;
+    const res = await withEnv(validCtxEnv(), () =>
+      dispatchQuickstart(
+        // A gate that would NEVER pass if it ran (empty log + failing healthz)
+        // — plus a tiny timeout that WOULD have surfaced a timeout message.
+        ["--config-dir", configDir, "--nats-dir", natsDir, "--container", "--gate-timeout-ms", "5000"],
+        () =>
+          fakePorts({
+            readLog: () => {
+              readLogCalls++;
+              return undefined;
+            },
+            fetchHealthz: () => {
+              healthzCalls++;
+              return Promise.resolve(false);
+            },
+          }),
+      ),
+    );
+    // Exit 0 even though the gate ports are rigged to fail — because step 8
+    // never ran.
+    expect(res.exitCode).toBe(0);
+    // Explicit skip marker (mirrors step 7's --skip-services convention).
+    expect(res.stdout).toContain("--container passed");
+    // No log-grep, no /healthz probe — the two things that cost the ~60s stall.
+    expect(readLogCalls).toBe(0);
+    expect(healthzCalls).toBe(0);
+    // The gate's bounded-wait timeout path was never entered.
+    expect(res.stdout).not.toContain("timed out after");
+  });
+
+  test("--container implies --skip-services (step 7 is skipped too, even on a faked Linux host)", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--container"],
+          () => fakePorts({ unitFileExists: () => false }), // would fail step 7 if NOT skipped
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("--skip-services passed");
+    expect(res.stdout).toContain("--container passed");
+  });
+
+  test("--json under --container: envelope is ok and step 8 is reported (skipped), not omitted", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--container", "--json"],
+          () => fakePorts({ readLog: () => undefined, fetchHealthz: () => Promise.resolve(false) }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    const parsed = JSON.parse(res.stdout) as { status: string; items?: { step: string; ok: string }[] };
+    expect(parsed.status).toBe("ok");
+    // The trace still carries step 8 as an ok (skipped) entry — an observer
+    // sees it explicitly skipped, not silently absent.
+    expect(parsed.items?.some((i) => i.step === "8. Healthy-boot gate" && i.ok === "true")).toBe(true);
+    expect(res.stdout).not.toContain(SECRET_TOKEN);
+  });
+
+  test("WITHOUT --container the gate still runs (default behaviour unchanged): the log IS grepped", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    let readLogCalls = 0;
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir],
+          () =>
+            fakePorts({
+              readLog: () => {
+                readLogCalls++;
+                return FULL_HEALTHY_LOG;
+              },
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    // The gate ran — the log was grepped at least once — proving --container
+    // is what suppresses it, not some unrelated change.
+    expect(readLogCalls).toBeGreaterThan(0);
+    expect(res.stdout).not.toContain("--container passed");
+  });
+});
+
+// =============================================================================
 // End to end — happy path, secret non-echo, and idempotent re-run
 // =============================================================================
 

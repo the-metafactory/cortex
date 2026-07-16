@@ -118,6 +118,7 @@ interface QuickstartFlags {
   force: boolean;
   json: boolean;
   skipServices: boolean;
+  container: boolean;
   gateTimeoutMs: number;
   help: boolean;
 }
@@ -130,6 +131,7 @@ function parseQuickstartArgs(argv: string[]): QuickstartFlags {
     force: false,
     json: false,
     skipServices: false,
+    container: false,
     gateTimeoutMs: DEFAULT_GATE_TIMEOUT_MS,
     help: false,
   };
@@ -161,6 +163,17 @@ function parseQuickstartArgs(argv: string[]): QuickstartFlags {
       // `process.platform`); this flag exists for CI/tests that want to
       // exercise steps 1-6+8 without a systemd host at all.
       case "--skip-services":
+        flags.skipServices = true;
+        break;
+      // Container mode (cortex#2155): skip step 8's healthy-boot gate. Under
+      // the L4 split-container model the daemon starts only AFTER quickstart
+      // returns (`exec cortex start`), so the gate's log-grep can never pass —
+      // it just stalls the whole poll window (~60s) then fails on every boot.
+      // The container's real health signal is compose `restart:` + the nats
+      // healthcheck (deploy/compose/README.md). Implies --skip-services (the
+      // daemon is launched by the entrypoint, not by step 7 here).
+      case "--container":
+        flags.container = true;
         flags.skipServices = true;
         break;
       case "--help":
@@ -529,8 +542,19 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
 
 async function runGate(
   ports: QuickstartPorts,
-  opts: { slug: string; monitorPort: string; timeoutMs: number },
+  opts: { slug: string; monitorPort: string; timeoutMs: number; skip: boolean },
 ): Promise<StepReport> {
+  // Container mode (cortex#2155): the daemon isn't up yet (the entrypoint
+  // `exec cortex start`s it only AFTER quickstart returns), so the gate could
+  // never pass — it would only burn the whole poll window before failing.
+  // Short-circuit BEFORE any ports.gate call: no log-grep, no /healthz probe,
+  // no wall-clock wait. Reported as an explicit skip (ok), mirroring step 7's
+  // --skip-services convention.
+  if (opts.skip) {
+    return step("8. Healthy-boot gate", true, [
+      "  ○ --container passed — skipping healthy-boot gate (container health is compose restart: + nats healthcheck)",
+    ]);
+  }
   const logPath = daemonLogPath(process.env.HOME ?? "", opts.slug);
   const healthzUrl = `http://127.0.0.1:${opts.monitorPort}/healthz`;
   const deadline = ports.gate.now() + opts.timeoutMs;
@@ -655,6 +679,7 @@ export async function dispatchQuickstart(
     slug: v.CTX_SLUG,
     monitorPort: v.CTX_NATS_MON,
     timeoutMs: flags.gateTimeoutMs,
+    skip: flags.container,
   });
   reports.push(gateReport);
   if (!gateReport.ok) {
@@ -710,6 +735,15 @@ Flags:
                           .conf file (default: refuse).
   --skip-services         Skip step 7 (systemd) entirely — for CI/tests
                           without a systemd host.
+  --container             L4 container mode (cortex#2155): skip step 8's
+                          healthy-boot gate and return after step 7. Implies
+                          --skip-services. In the split-container model the
+                          daemon starts only AFTER quickstart returns
+                          (\`exec cortex start\`), so the gate could never pass —
+                          it would only add ~60s of stall then fail. The
+                          container's real health signal is compose \`restart:\`
+                          + the nats healthcheck. Step 8 is reported as an
+                          explicit skip (ok) rather than run.
   --gate-timeout-ms <n>   Step 8's bounded wait (default: ${String(DEFAULT_GATE_TIMEOUT_MS)}).
   --json                  Emit a { status, items, data, error } envelope.
 
