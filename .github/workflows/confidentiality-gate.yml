@@ -70,7 +70,7 @@ jobs:
   # Tiers 1 (gitleaks) + 2 (public shape patterns) + 3 (org-secret hashed
   # denylist). mode=auto maps pull_request→diff, push→tree, schedule→history.
   gate:
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@8ed0ab26f804aa98f74dcdcaf86917e09459f874
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@9b63de2394c32e54d9e4ebd4a90dcb93423bbf55
     permissions:
       contents: read
     with:
@@ -78,7 +78,7 @@ jobs:
       # is the engine's immutability anchor. `github.job_workflow_sha` resolves EMPTY
       # on cross-repo caller runs, so the gate cannot derive the engine SHA itself and
       # needs this explicit pin (metafactory-actions fix: engine_sha input).
-      engine_sha: 8ed0ab26f804aa98f74dcdcaf86917e09459f874
+      engine_sha: 9b63de2394c32e54d9e4ebd4a90dcb93423bbf55
       # Burn-in posture (design doc §4 L1). cortex has no MF_CONFIDENTIALITY_DENYLIST
       # configured yet, so on the TRUSTED same-repo path we explicitly opt OUT of the
       # fail-closed-on-absent-denylist behavior and DEGRADE to tiers 1+2 (gitleaks +
@@ -106,7 +106,7 @@ jobs:
   # public issue. This is the "push-alert stub" of design doc §6 PR 4.
   alert:
     if: ${{ github.event_name == 'push' }}
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@8ed0ab26f804aa98f74dcdcaf86917e09459f874
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@9b63de2394c32e54d9e4ebd4a90dcb93423bbf55
     permissions:
       contents: read
       issues: write
