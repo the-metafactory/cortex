@@ -26,7 +26,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 import { dispatchStack } from "../../stack";
@@ -111,7 +112,20 @@ function pubkeyFromGenerate(stdout: string): string {
   return pk;
 }
 
+// cortex#2097 — step 1's `stack create --apply` (slugs "hub" + JOINER_STACK_SLUG
+// = "work") now also mkdirSync's the dispatch cwd fallback's canonical
+// workspace dir, resolved off `homedir()` ($HOME on POSIX) — NOT under
+// `--config-dir`, the isolation this suite's temp dirs already give. Sandbox
+// $HOME for the whole file so this walkthrough never writes into the real
+// developer/CI home (and never collides with a REAL "work" stack's data).
+let lifecycleHome: string;
+let savedLifecycleHome: string | undefined;
+
 beforeAll(async () => {
+  savedLifecycleHome = process.env.HOME;
+  lifecycleHome = mkdtempSync(join(tmpdir(), "c1355-home-"));
+  process.env.HOME = lifecycleHome;
+
   resetRegistry();
 
   // --- Mint the ADMIN identity (network admin + hub admin + registry admin —
@@ -156,6 +170,9 @@ afterAll(() => {
   ctx.restoreFetch?.();
   cleanupDirs();
   resetRegistry();
+  if (savedLifecycleHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedLifecycleHome;
+  rmSync(lifecycleHome, { recursive: true, force: true });
 });
 
 describe("C-1355 — E2E admission lifecycle guard", () => {

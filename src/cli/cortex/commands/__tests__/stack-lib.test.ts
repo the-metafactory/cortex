@@ -205,6 +205,21 @@ describe("renderScaffold", () => {
     // Must NOT ship the old generic non-slug default.
     expect(system?.contents).not.toMatch(/^\s*name:\s*cortex\s*$/m);
   });
+
+  // cortex#2097 — the scaffold documents the dispatch cwd fallback's
+  // canonical default, slug-scoped, as a COMMENTED line (the dir itself is
+  // created out-of-band by `stack.ts`'s --apply write, not by this pure
+  // renderer — see stack-cli.test.ts for the disk-side assertion).
+  test("system/system.yaml documents claude.workspaceDir's canonical default, commented + slug-scoped (cortex#2097)", () => {
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).toContain(
+      "# workspaceDir: ~/.local/share/metafactory/cortex/demo/workspace",
+    );
+    // Commented, not active — `stack create` never forces the key into the
+    // parsed config; the daemon resolves the same default at runtime absent it.
+    expect(system?.contents).not.toMatch(/^\s*workspaceDir:/m);
+  });
 });
 
 // =============================================================================

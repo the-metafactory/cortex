@@ -231,6 +231,12 @@ function renderFleet(): {
   writeFileSync(configPath, "principal: {}\n");
   mkdirSync(join(home, ".config", "cortex", "logs"), { recursive: true });
   mkdirSync(join(home, ".claude", "logs"), { recursive: true });
+  // cortex#2097 — the stack plist's WorkingDirectory moved off the cortex
+  // install repo (self-editing exposure) onto the per-stack workspace dir;
+  // materialize it the same way `render_stack_plist` (plist-render.sh) does
+  // — owner-only (0700) — so a correctly-installed fleet verifies fully extant.
+  const workspaceDir = join(cortexDir, slug, "workspace");
+  mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
 
   const tokens = {
     HOME: home,
@@ -238,6 +244,7 @@ function renderFleet(): {
     CONFIG_PATH: configPath,
     STACK_SLUG: slug,
     BUN_PATH: bunPath,
+    WORKSPACE_DIR: workspaceDir,
   };
   return {
     home,

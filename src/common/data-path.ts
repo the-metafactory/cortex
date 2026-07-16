@@ -245,3 +245,24 @@ export const PUBLISHED_EVENTS_DIR_DEFAULT =
 
 /** The pre-move default literal for `paths.publishedEventsDir` (value-migrator source). */
 export const LEGACY_PUBLISHED_EVENTS_DIR_DEFAULT = "~/.claude/events/published";  // xdg-audit:allow(resolver legacy-fallback constant — by design)
+
+// ────────────────────────────────────────────────── per-stack workspace dir (cortex#2097)
+
+/**
+ * Canonical per-stack workspace dir: `~/.local/share/metafactory/cortex/<slug>/workspace`.
+ *
+ * The dispatch cwd FALLBACK for a bare stack (no `allowedDirs`/`dirRestrictions`
+ * configured) — see `dispatch-handler.ts` G-500. Before this, an unconfigured
+ * stack's dispatched CC session inherited the DAEMON's own cwd: `$HOME` on a
+ * Linux systemd unit with no `WorkingDirectory=` (community #cortex thread,
+ * 2026-07-16 — visible as `~/.claude/projects/-home-<user>/`), or the cortex
+ * install repo itself on the macOS launchd plist. Both silently widen the
+ * assistant's read/write scope to somewhere it must never be. Slug-scoped
+ * (not a flat shared dir) so co-hosted stacks never share one workspace.
+ *
+ * No legacy-fallback probe (unlike the sibling resolvers in this module) —
+ * this is a net-new concept with no prior on-disk location to migrate from.
+ */
+export function canonicalWorkspaceDir(slug: string, home?: string): string {
+  return join(cortexDataDir(home), slug, "workspace");
+}

@@ -38,6 +38,7 @@ import { execFileSync } from "child_process";
 import { dirname, join } from "path";
 
 import { resolveConfigDir } from "../../../common/config/config-path";
+import { canonicalWorkspaceDir } from "../../../common/data-path";
 import { homedir } from "os";
 
 import { validateConfigLoads } from "../../../common/config/validate-on-write";
@@ -269,6 +270,12 @@ function runCreate(
   if (!applyRes.ok) return usageError("create", applyRes.reason, json);
 
   const targetDir = join(configDir, slug);
+  // cortex#2097 — the dispatch cwd fallback's canonical default for a bare
+  // stack. Created here (0700) so a FRESH scaffold never hits the
+  // dispatch-time mkdirSync fallback on its very first message; matches
+  // `canonicalWorkspaceDir` in data-path.ts (the TS resolver dispatch-handler
+  // reads at runtime) so the two never drift.
+  const workspaceDir = canonicalWorkspaceDir(slug, homedir());
 
   // --- uniqueness: dir collision ------------------------------------------
   // Never overwrite. Refuse a dir that already exists BEFORE the scan so a
@@ -311,7 +318,7 @@ function runCreate(
 
   // --- dry-run (DEFAULT): print the file set, touch NOTHING ----------------
   if (!applyRes.apply) {
-    return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, false, json);
+    return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, false, json, workspaceDir);
   }
 
   // --- apply: write the file set -------------------------------------------
@@ -330,6 +337,12 @@ function runCreate(
       // tree, and the token is protected before it is ever written.
       chmodSync(dest, 0o600);
     }
+    // cortex#2097 — the dispatch cwd fallback dir, born 0700 (owner-only,
+    // matching the repo's other XDG data dirs — db-utils.ts, event-logger.hook.ts).
+    // Lives under the DATA root (~/.local/share/…), not targetDir (the CONFIG
+    // tree just written above) — a distinct dir the rollback below leaves in
+    // place on failure (nothing secret lands in it at scaffold time).
+    mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
   } catch (err) {
     // Roll back the partial scaffold so a mid-write failure (ENOSPC, EACCES on
     // a subpath, …) doesn't leave a half-written, non-loadable dir that the
@@ -375,7 +388,7 @@ function runCreate(
     );
   }
 
-  return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, true, json);
+  return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, true, json, workspaceDir);
 }
 
 function renderPlan(
@@ -388,6 +401,7 @@ function renderPlan(
   files: ScaffoldFile[],
   applied: boolean,
   json: boolean,
+  workspaceDir: string,
 ): ExitResult {
   if (json) {
     return ok(
@@ -400,6 +414,9 @@ function renderPlan(
             stack_id: stackId,
             agent: agentId,
             seed_path: seedPath,
+            // cortex#2097 — the dispatch cwd fallback dir, created alongside
+            // the config tree (0700).
+            workspace_dir: workspaceDir,
             aligned: "true",
             applied: applied ? "true" : "false",
           },
@@ -416,6 +433,7 @@ function renderPlan(
   lines.push(`  stack.id:   ${stackId}   (born aligned: dir == slug == trailing segment)`);
   lines.push(`  agent:      ${agentId}`);
   lines.push(`  seed path:  ${seedPath}   (auto-provisioned by 'arc upgrade cortex' — NOT generated here)`);
+  lines.push(`  workspace:  ${workspaceDir}   (${applied ? "created" : "would create"}, 0700 — the dispatch cwd fallback dir, cortex#2097)`);
   lines.push("");
   lines.push(`  ${applied ? "wrote" : "would write"} under ${targetDir}:`);
   for (const f of files) lines.push(`    • ${f.relPath}`);

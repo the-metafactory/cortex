@@ -365,6 +365,18 @@ render_stack_plist() {
     echo "  ⚠ Template missing: ${src}" >&2
     return 1
   fi
+
+  # cortex#2097 — the daemon's OWN launchd WorkingDirectory moves off the
+  # cortex install repo (self-editing exposure) onto the same slug-scoped
+  # workspace dir the dispatch-cwd fallback resolves (TS side:
+  # `canonicalWorkspaceDir` in data-path.ts — kept byte-identical here since
+  # shell has no import). Created (owner-only) BEFORE the render so launchd
+  # never chdir()s into a directory that doesn't exist yet — the daemon's
+  # first-ever start on a fresh host, same as any upgrade onto this template.
+  local workspace_dir="${HOME}/.local/share/metafactory/cortex/${slug}/workspace"
+  mkdir -p "${workspace_dir}"
+  chmod 700 "${workspace_dir}"
+
   # G-30 (cortex#1866, XDG wave 3): render atomically. A bare `sed > dst`
   # onto a live LaunchAgents path leaves a truncated/partial plist visible if
   # the render is interrupted — launchd would then load garbage. Render to a
@@ -375,9 +387,10 @@ render_stack_plist() {
       -e "s|__HOME__|${HOME}|g" \
       -e "s|__STACK_SLUG__|${slug}|g" \
       -e "s|__CONFIG_PATH__|${config_yaml}|g" \
+      -e "s|__WORKSPACE_DIR__|${workspace_dir}|g" \
       "${src}" > "${dst}.tmp"
   mv -f "${dst}.tmp" "${dst}"
-  echo "  ✓ ${slug} plist rendered → ${dst} (config=${config_yaml})"
+  echo "  ✓ ${slug} plist rendered → ${dst} (config=${config_yaml}, workspace=${workspace_dir})"
 }
 
 # Render plists for relay + all discovered stacks into ${LAUNCH_DIR}.

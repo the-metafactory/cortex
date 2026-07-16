@@ -1,7 +1,33 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+
+/**
+ * cortex#2097 — FILE-LEVEL $HOME sandbox. The dispatch cwd fallback resolves
+ * `canonicalWorkspaceDir` (data-path.ts) off `process.env.HOME` whenever a
+ * dispatched message's `effectiveDirs` is empty — and `makeConfig()`'s
+ * default `claude.allowedDirs` IS empty, so nearly every pre-existing
+ * `handleMessage()` test in this file (not just the dedicated cortex#2097
+ * suite below) now takes that fallback branch and mkdirSync's a real
+ * directory. Sandbox $HOME for the WHOLE file, once, so none of those
+ * pre-existing tests silently write into the real developer/CI home — the
+ * same "never touch real ~/.config or ~/.claude" isolation this repo
+ * requires of every test, just extended to cover a production behavior this
+ * file didn't have before.
+ */
+let fileScratchHome: string;
+let savedFileHome: string | undefined;
+beforeAll(() => {
+  savedFileHome = process.env.HOME;
+  fileScratchHome = mkdtempSync(join(tmpdir(), "cortex-dispatch-test-home-"));
+  process.env.HOME = fileScratchHome;
+});
+afterAll(() => {
+  if (savedFileHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedFileHome;
+  rmSync(fileScratchHome, { recursive: true, force: true });
+});
 import { MockAdapter } from "../../adapters/mock";
 import { DispatchHandler } from "../dispatch-handler";
 import type { InboundMessage } from "../../adapters/types";
@@ -1182,6 +1208,150 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
     const texts = adapter.sentMessages.map((m) => m.text);
     expect(texts.length).toBe(1);
     expect(texts[0]).toBe("Sorry, I couldn't process that. (exit code: 1)");
+
+    await handler.shutdown();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#2097 — dispatch cwd fallback. A bare stack (no dirRestrictions, no
+// network/global allowedDirs configured) used to inherit the DAEMON's own
+// cwd — `$HOME` on a Linux systemd unit with no `WorkingDirectory=`, or the
+// cortex install repo itself on the macOS plist — silently widening the
+// dispatched CC session's read/write scope. The fallback resolves a
+// dedicated per-stack workspace dir instead (`canonicalWorkspaceDir`,
+// data-path.ts), mkdir'd owner-only (0700) before spawn.
+// ---------------------------------------------------------------------------
+
+describe("DispatchHandler — dispatch cwd fallback (cortex#2097)", () => {
+  // `canonicalWorkspaceDir` (no explicit `home` arg, matching dispatch-
+  // handler.ts's call site) resolves off `process.env.HOME` — sandbox it to a
+  // scratch dir per test so the mkdirSync side effect never touches the real
+  // developer/CI home (repo convention: tests never touch real ~/.config or
+  // ~/.claude — the XDG data root is the same class of real-home path).
+  let savedHome: string | undefined;
+  let scratchHome: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    scratchHome = mkdtempSync(join(tmpdir(), "cortex-workspace-home-"));
+    process.env.HOME = scratchHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    rmSync(scratchHome, { recursive: true, force: true });
+  });
+
+  test("bare stack: cwd falls back to the per-stack workspace dir, created 0700, and joins allowedDirs", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(), // claude.allowedDirs: [] — bare stack, no dirs configured
+      securityPreamble: "",
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      stack: "acme",
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    const expected = join(scratchHome, ".local", "share", "metafactory", "cortex", "acme", "workspace");
+    const opts = optsLog()[0]!;
+    expect(opts.cwd).toBe(expected);
+    expect(opts.allowedDirs).toContain(expected);
+    expect(statSync(expected).isDirectory()).toBe(true);
+    // Owner-only — matches the repo's other XDG data-dir mkdirSync calls
+    // (db-utils.ts, event-logger.hook.ts).
+    expect(statSync(expected).mode & 0o777).toBe(0o700);
+
+    await handler.shutdown();
+  });
+
+  test("no stack opt passed: falls back to the 'default' slug (mirrors deriveStackId's own default)", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      // no `stack` — production always passes one (cortex.ts wires
+      // `derivedStack.stack`), but the type is optional and tests may omit it.
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    const expected = join(scratchHome, ".local", "share", "metafactory", "cortex", "default", "workspace");
+    expect(optsLog()[0]!.cwd).toBe(expected);
+
+    await handler.shutdown();
+  });
+
+  test("configured allowedDirs: cwd is UNCHANGED (regression) — no workspace fallback, nothing extra appended", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig({
+        claude: {
+          timeoutMs: 120_000,
+          asyncTimeoutMs: 900_000,
+          additionalArgs: [],
+          allowedTools: [],
+          disallowedTools: [],
+          allowedDirs: ["/configured/dir"],
+          readOnlyDirs: [],
+        },
+      }),
+      securityPreamble: "",
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      stack: "acme",
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    const opts = optsLog()[0]!;
+    expect(opts.cwd).toBe("/configured/dir");
+    expect(opts.allowedDirs).toEqual(["/configured/dir"]);
+
+    // The fallback branch never ran — the workspace dir was never created.
+    const wouldBeWorkspace = join(scratchHome, ".local", "share", "metafactory", "cortex", "acme", "workspace");
+    expect(existsSync(wouldBeWorkspace)).toBe(false);
+
+    await handler.shutdown();
+  });
+
+  test("claude.workspaceDir set explicitly: dispatch uses it verbatim, `~` expands", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig({
+        claude: {
+          timeoutMs: 120_000,
+          asyncTimeoutMs: 900_000,
+          additionalArgs: [],
+          allowedTools: [],
+          disallowedTools: [],
+          allowedDirs: [],
+          readOnlyDirs: [],
+          workspaceDir: "~/custom-workspace",
+        },
+      }),
+      securityPreamble: "",
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      stack: "acme",
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    const expected = join(scratchHome, "custom-workspace");
+    const opts = optsLog()[0]!;
+    expect(opts.cwd).toBe(expected);
+    expect(opts.allowedDirs).toContain(expected);
+    expect(statSync(expected).isDirectory()).toBe(true);
 
     await handler.shutdown();
   });

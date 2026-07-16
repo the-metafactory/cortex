@@ -391,6 +391,13 @@ claude:
   allowedTools: []
   disallowedTools:
     - Write
+  # workspaceDir — the dispatched CC session's cwd when no allowedDirs/
+  # dirRestrictions resolve one (a bare stack — cortex#2097). Scoped to this
+  # stack so its dispatched sessions never inherit the daemon's own cwd
+  # ($HOME / the cortex install repo). \`cortex stack create\` already
+  # created this dir (0700) for you; uncomment only to point it somewhere
+  # else.
+  # workspaceDir: ~/.local/share/metafactory/cortex/${slug}/workspace
 
 execution:
   default: local

@@ -1047,6 +1047,17 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     expect(parsed.allowedDirs).toEqual([]);
   });
 
+  // cortex#2097 — dispatch cwd fallback's config knob. Optional (no default):
+  // absent means "resolve the canonical per-stack default at dispatch time"
+  // (dispatch-handler.ts / canonicalWorkspaceDir), NOT a fixed schema default,
+  // since the default is slug-scoped and the schema layer has no slug.
+  test("ClaudeConfigSchema.workspaceDir is optional (absent ⇒ undefined) and round-trips a string", () => {
+    expect(ClaudeConfigSchema.parse({}).workspaceDir).toBeUndefined();
+    expect(
+      ClaudeConfigSchema.parse({ workspaceDir: "~/custom-workspace" }).workspaceDir,
+    ).toBe("~/custom-workspace");
+  });
+
   test("AttachmentsConfigSchema applies inner defaults", () => {
     const parsed = AttachmentsConfigSchema.parse({});
     expect(parsed.enabled).toBe(true);

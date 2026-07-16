@@ -694,6 +694,8 @@ export const AgentConfigSchema = z.object({
     allowedDirs: z.array(z.string()).default([]),
     /** Directories the agent can read but not modify. Also passed as --add-dir, with write restriction enforced via security preamble. */
     readOnlyDirs: z.array(z.string()).default([]),
+    /** cortex#2097 — dedicated per-stack workspace dir; dispatch's cwd fallback when no allowedDirs/dirRestrictions resolve one (a bare stack). Optional; `~` expands. Absent ⇒ canonical default `~/.local/share/metafactory/cortex/<slug>/workspace` (see `canonicalWorkspaceDir` in `../data-path`). */
+    workspaceDir: z.string().optional(),
   }),
 
   attachments: z.object({

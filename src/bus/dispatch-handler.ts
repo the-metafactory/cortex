@@ -9,8 +9,9 @@
 import { EventEmitter } from "events";
 import { basename } from "path";
 import { randomUUID } from "crypto";
-import { readFileSync } from "fs";
+import { mkdirSync, readFileSync } from "fs";
 import { type AgentConfig, getAllRepos } from "../common/types/config";
+import { canonicalWorkspaceDir } from "../common/data-path";
 import type {
   PlatformAdapter,
   InboundMessage,
@@ -957,17 +958,40 @@ export class DispatchHandler extends EventEmitter {
         ? access.dirRestrictions
         : (networkClaude?.allowedDirs.length ? networkClaude.allowedDirs : this.config.claude.allowedDirs);
       const readOnlyDirs = networkClaude?.readOnlyDirs.length ? networkClaude.readOnlyDirs : this.config.claude.readOnlyDirs;
-      const invokeDirs = [...effectiveDirs, ...readOnlyDirs, ...attachmentDirs];
       const bashGuardDisabled = access.bashGuard === false;
       // G-300: DM role may override bash allowlist; otherwise fall back to network, then global
       const effectiveBashAllowlist = bashGuardDisabled
         ? undefined
         : (access.bashAllowlist ?? networkClaude?.bashAllowlist ?? this.config.claude.bashAllowlist);
-      // G-500: Set cwd to first allowedDir so the agent starts in the right directory
+      // G-500: Set cwd to first allowedDir so the agent starts in the right directory.
+      // cortex#2097 — when NO dir resolves (a bare stack: dirRestrictions,
+      // network allowedDirs, AND global allowedDirs all empty), fall back to
+      // the per-stack workspace dir instead of inheriting the DAEMON's own
+      // cwd — `$HOME` on a Linux systemd unit with no `WorkingDirectory=`, or
+      // the cortex install repo itself on the macOS plist. Either silently
+      // widens the dispatched session's read/write scope to somewhere it must
+      // never be. `claude.workspaceDir` overrides the canonical default when
+      // set; mkdirSync (owner-only, matching the repo's other XDG data dirs)
+      // covers the fresh-host / pre-#2097-upgrade case where it doesn't exist
+      // yet — `stack create` also creates it at scaffold time.
       const firstDir = effectiveDirs[0];
-      const effectiveCwd = firstDir
-        ? firstDir.replace(/^~/, process.env.HOME ?? "~")
-        : undefined;
+      let workspaceFallbackDir: string | undefined;
+      let effectiveCwd: string | undefined;
+      if (firstDir) {
+        effectiveCwd = firstDir.replace(/^~/, process.env.HOME ?? "~");
+      } else {
+        workspaceFallbackDir = this.config.claude.workspaceDir
+          ? this.config.claude.workspaceDir.replace(/^~/, process.env.HOME ?? "~")
+          : canonicalWorkspaceDir(this.stack ?? "default");
+        mkdirSync(workspaceFallbackDir, { recursive: true, mode: 0o700 });
+        effectiveCwd = workspaceFallbackDir;
+      }
+      // cortex#2097 — the workspace dir is only ever a STAND-IN for an empty
+      // effectiveDirs (the branch above), so appending it here can never
+      // duplicate an entry already present in effectiveDirs.
+      const invokeDirs = workspaceFallbackDir
+        ? [...effectiveDirs, workspaceFallbackDir, ...readOnlyDirs, ...attachmentDirs]
+        : [...effectiveDirs, ...readOnlyDirs, ...attachmentDirs];
 
       // H-001: Explicit metadata for spawn boundary
       const groveProject = channelCtx.repoShort ?? undefined;

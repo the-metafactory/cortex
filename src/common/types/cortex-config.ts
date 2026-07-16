@@ -1563,6 +1563,15 @@ export const ClaudeConfigSchema = z.object({
   }).optional(),
   allowedDirs: z.array(z.string()).default([]),
   readOnlyDirs: z.array(z.string()).default([]),
+  /**
+   * cortex#2097 — dedicated per-stack workspace dir. Dispatch's cwd fallback
+   * when NO dir resolves (`dirRestrictions`/`allowedDirs` all empty — a bare
+   * stack), so an unconfigured stack's CC session never inherits the daemon's
+   * own cwd (`$HOME` / the cortex repo). Optional; `~` expands. Absent ⇒ the
+   * canonical default `~/.local/share/metafactory/cortex/<slug>/workspace`
+   * (see `canonicalWorkspaceDir` in `../data-path`).
+   */
+  workspaceDir: z.string().optional(),
 });
 
 export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;

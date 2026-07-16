@@ -63,6 +63,27 @@ assert_file_not_exists() {
   fi
 }
 
+# cortex#2097 — render_stack_plist now mkdir's the per-stack workspace dir as
+# a side effect; assert both its presence and its owner-only mode.
+assert_dir_exists() {
+  local label="$1" path="$2"
+  if [ -d "${path}" ]; then
+    pass "${label}"
+  else
+    fail "${label}: dir not found: ${path}"
+  fi
+}
+
+assert_dir_mode() {
+  local label="$1" path="$2" expected="$3" actual
+  actual="$(stat -f '%Lp' "${path}" 2>/dev/null || stat -c '%a' "${path}" 2>/dev/null || echo '?')"
+  if [ "${actual}" = "${expected}" ]; then
+    pass "${label}"
+  else
+    fail "${label}: expected mode ${expected} got ${actual} for ${path}"
+  fi
+}
+
 # ─── Fixtures ─────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -78,6 +99,13 @@ trap 'rm -rf "${TMPBASE}"' EXIT
 CONFIG_DIR="${TMPBASE}/config"
 LAUNCH_DIR="${TMPBASE}/LaunchAgents"
 mkdir -p "${CONFIG_DIR}" "${LAUNCH_DIR}"
+
+# cortex#2097 — render_stack_plist now mkdir's a per-stack workspace dir under
+# ${HOME}/.local/share/metafactory/cortex/<slug>/workspace as a side effect of
+# rendering. Scratch HOME so that side effect (and the __HOME__ substitution
+# already exercised below) never touches the real developer/CI home.
+export HOME="${TMPBASE}/home"
+mkdir -p "${HOME}"
 
 # Mock bun: the real bun isn't needed for slug/render tests; we provide a
 # stub that prints a fixed path so sed substitution produces a valid (non-
@@ -204,6 +232,18 @@ assert_contains "meta-factory plist contains label" "ai.meta-factory.cortex.meta
 assert_contains "meta-factory plist CORTEX_CHANNEL substituted from slug" "meta-factory" "$(cat "${MF_DST}")"
 assert_not_contains "meta-factory plist has no leftover __STACK_SLUG__ placeholder" "__STACK_SLUG__" "$(cat "${MF_DST}")"
 assert_not_contains "meta-factory plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist has no leftover __WORKSPACE_DIR__ placeholder" "__WORKSPACE_DIR__" "$(cat "${MF_DST}")"
+# cortex#2097 — WorkingDirectory is the per-stack workspace dir, NOT the
+# cortex install repo (fail-on-old: this must fail if WorkingDirectory ever
+# reverts to __CORTEX_DIR__/REPO_ROOT — the self-editing-exposure regression).
+assert_contains "meta-factory plist WorkingDirectory is the workspace dir" \
+  "${HOME}/.local/share/metafactory/cortex/meta-factory/workspace" "$(cat "${MF_DST}")"
+assert_not_contains "meta-factory plist WorkingDirectory is NOT the cortex repo (fail-on-old)" \
+  "${REPO_ROOT}" "$(cat "${MF_DST}")"
+assert_dir_exists "meta-factory workspace dir created" \
+  "${HOME}/.local/share/metafactory/cortex/meta-factory/workspace"
+assert_dir_mode "meta-factory workspace dir is owner-only (0700)" \
+  "${HOME}/.local/share/metafactory/cortex/meta-factory/workspace" "700"
 assert_not_contains "meta-factory plist carries no CORTEX_AGENT_NAME (vestigial, removed)" "CORTEX_AGENT_NAME" "$(cat "${MF_DST}")"
 assert_not_contains "meta-factory plist carries no CORTEX_AGENT_ID (vestigial, removed)" "CORTEX_AGENT_ID" "$(cat "${MF_DST}")"
 assert_not_contains "meta-factory plist agent id NOT embedded (personal-identity template deleted)" "my-test-agent" "$(cat "${MF_DST}")"
@@ -222,6 +262,13 @@ assert_contains "work plist contains label" "ai.meta-factory.cortex.work" "$(cat
 assert_contains "work plist CORTEX_CHANNEL substituted from slug" "work" "$(cat "${WORK_DST}")"
 assert_not_contains "work plist has no leftover __STACK_SLUG__ placeholder" "__STACK_SLUG__" "$(cat "${WORK_DST}")"
 assert_not_contains "work plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist has no leftover __WORKSPACE_DIR__ placeholder" "__WORKSPACE_DIR__" "$(cat "${WORK_DST}")"
+assert_contains "work plist WorkingDirectory is the workspace dir" \
+  "${HOME}/.local/share/metafactory/cortex/work/workspace" "$(cat "${WORK_DST}")"
+assert_not_contains "work plist WorkingDirectory is NOT the cortex repo (fail-on-old)" \
+  "${REPO_ROOT}" "$(cat "${WORK_DST}")"
+assert_dir_exists "work workspace dir created" \
+  "${HOME}/.local/share/metafactory/cortex/work/workspace"
 assert_not_contains "work plist carries no CORTEX_AGENT_NAME (vestigial, removed)" "CORTEX_AGENT_NAME" "$(cat "${WORK_DST}")"
 assert_not_contains "work plist carries no CORTEX_AGENT_ID=luna-work (personal identity, removed)" "luna-work" "$(cat "${WORK_DST}")"
 assert_not_contains "work plist carries no luna identity (personal identity, removed)" "luna" "$(cat "${WORK_DST}")"
@@ -240,6 +287,13 @@ if [ -f "${GENERIC_TEMPLATE}" ]; then
   assert_not_contains "halden plist has no leftover STACK_SLUG" "__STACK_SLUG__" "$(cat "${HALDEN_DST}")"
   assert_not_contains "halden plist has no leftover CONFIG_FILE" "__CONFIG_FILE__" "$(cat "${HALDEN_DST}")"
   assert_not_contains "halden plist has no leftover CORTEX_DIR" "__CORTEX_DIR__" "$(cat "${HALDEN_DST}")"
+  assert_not_contains "halden plist has no leftover __WORKSPACE_DIR__ placeholder" "__WORKSPACE_DIR__" "$(cat "${HALDEN_DST}")"
+  assert_contains "halden plist WorkingDirectory is the workspace dir" \
+    "${HOME}/.local/share/metafactory/cortex/halden/workspace" "$(cat "${HALDEN_DST}")"
+  assert_not_contains "halden plist WorkingDirectory is NOT the cortex repo (fail-on-old)" \
+    "${REPO_ROOT}" "$(cat "${HALDEN_DST}")"
+  assert_dir_exists "halden workspace dir created" \
+    "${HOME}/.local/share/metafactory/cortex/halden/workspace"
 else
   fail "generic stack template missing: ${GENERIC_TEMPLATE}"
 fi

@@ -11,7 +11,7 @@
  * fresh tmp dir and asserts dry-run leaves it empty.
  */
 
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -27,6 +27,28 @@ function freshDir(): string {
 }
 afterEach(() => {
   while (tmpDirs.length > 0) rmSync(tmpDirs.pop()!, { recursive: true, force: true });
+});
+
+/**
+ * cortex#2097 — `stack create --apply` now also mkdirSync's the dispatch cwd
+ * fallback's canonical default workspace dir, resolved off `homedir()` (which
+ * reads `$HOME` on POSIX) — NOT under `--config-dir`, the isolation this file's
+ * header comment already documents. Sandbox `$HOME` for the whole file so
+ * `--apply` tests never write into the real developer/CI home; only
+ * `--config-dir` is asserted against directly, so nothing here depends on the
+ * real value of `$HOME`.
+ */
+let stackHome: string;
+let savedStackHome: string | undefined;
+beforeAll(() => {
+  savedStackHome = process.env.HOME;
+  stackHome = mkdtempSync(join(tmpdir(), "c808-stack-cli-home-"));
+  process.env.HOME = stackHome;
+});
+afterAll(() => {
+  if (savedStackHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedStackHome;
+  rmSync(stackHome, { recursive: true, force: true });
 });
 
 /** Seed an existing split-layout stack under <configDir>/<slug>/ with stack.id. */

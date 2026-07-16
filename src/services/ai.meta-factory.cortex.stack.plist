@@ -12,7 +12,7 @@
         <string>__CONFIG_PATH__</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>__CORTEX_DIR__</string>
+    <string>__WORKSPACE_DIR__</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
