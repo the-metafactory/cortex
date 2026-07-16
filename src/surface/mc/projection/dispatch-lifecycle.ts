@@ -84,6 +84,8 @@ import {
 import {
   readDispatchUsage,
   readDispatchProviderDiagnostics,
+  readDispatchSubstrate,
+  hasReportedUsage,
   type DispatchUsage,
   type DispatchProviderDiagnostics,
 } from "./dispatch-usage";
@@ -169,18 +171,21 @@ export interface ProjectionResult {
    * terminal usage exists yet) and for every claude-code dispatch (its envelopes
    * carry no token fields).
    *
-   * NOT YET PERSISTED. Which MC row an api-agent dispatch's usage lands on —
-   * given the harness has no `cc_session_id` — is a keying decision awaiting a
-   * ruling (#2115 acceptance criterion 2). Surfaced here so the read is
-   * live-exercised and the write site is a one-line wire-up once ruled.
+   * PERSISTED onto {@link ProjectionResult.sessionId}'s `sessions` row when a
+   * terminal reports any of it (keying: Option A — the anchor session this
+   * projection already creates). Surfaced here so a caller can observe what the
+   * dispatch reported without re-reading the row.
    */
   usage: DispatchUsage;
   /**
    * API-2115 — the normalized, secret-safe provider diagnostics the dispatch
-   * reported. All-null when the envelope carries none. Same not-yet-persisted
-   * status as {@link ProjectionResult.usage}; note the `retry_after_ms` WRITE
-   * path onto `agent_task_assignment.retry_after_ms` belongs to the CK-4a
-   * write-half lane (#1514), not here (see db/schema.ts's column comment).
+   * reported. All-null when the envelope carries none.
+   *
+   * NOT persisted, deliberately. The `retry_after_ms` WRITE path onto
+   * `agent_task_assignment.retry_after_ms` belongs to the CK-4a write-half lane
+   * (#1514) — `db/schema.ts`'s column comment states the writer is "deliberately
+   * NOT wired here", and this projection does not annex it. Exposed so that lane
+   * (and any correlation consumer of `provider_request_id`) has the read ready.
    */
   providerDiagnostics: DispatchProviderDiagnostics;
 }
@@ -244,6 +249,7 @@ export function projectDispatchLifecycle(
   // they touch nothing.
   const usage = readDispatchUsage(payload);
   const providerDiagnostics = readDispatchProviderDiagnostics(payload);
+  const substrate = readDispatchSubstrate(payload);
 
   // Everything below runs in ONE transaction: anchor creation, transition, and
   // (for terminal) cc_session_id backfill + orphan reconciliation must be
@@ -257,6 +263,7 @@ export function projectDispatchLifecycle(
       // started on a RESUME may stamp the prior session's id provisionally;
       // a fresh dispatch's started carries no id (pending).
       provisionalCcSessionId: kind === "started" ? ccSessionId : null,
+      substrate,
     });
 
     // Slice convergence C — link the per-dispatch anchor task to the slice's
@@ -292,6 +299,21 @@ export function projectDispatchLifecycle(
         projectedAssignmentId: anchor.assignmentId,
         ccSessionId,
       });
+    }
+
+    // API-2115 — persist the reported usage onto the anchor session (the row
+    // this projection already owns). Runs AFTER the cc_session_id backfill /
+    // orphan reconciliation so `sessionId` is the FINAL surviving row: on an
+    // adoption the placeholder is dropped, and writing before this point would
+    // put the usage on a row about to be deleted. Guarded — a dispatch that
+    // reported nothing (every claude-code dispatch) executes no statement.
+    if (hasReportedUsage(usage)) {
+      persistDispatchUsage(db, sessionId, usage);
+    }
+    // Same final-row reasoning: label whatever row survived. Covers the paths
+    // `ensureAnchor`'s INSERT could not (terminal-first delivery, adopted orphan).
+    if (substrate !== null) {
+      persistDispatchSubstrate(db, sessionId, substrate);
     }
 
     // A terminal envelope can arrive before the assignment ever reached
@@ -330,6 +352,84 @@ interface AnchorParams {
   agentId: string;
   /** Provisional cc id from a resume `started`, or null (pending). */
   provisionalCcSessionId: string | null;
+  /**
+   * API-2115 — the substrate the envelope DECLARED, or null when it declared
+   * none. Null leaves `sessions.substrate` to its `NOT NULL DEFAULT 'claude-code'`
+   * column default (the pre-2115 behaviour, unchanged for every claude-code
+   * dispatch); a declared value is written so an api-agent session is born
+   * correctly labelled rather than mislabelled for its whole running life.
+   */
+  substrate: string | null;
+}
+
+/**
+ * API-2115 (#2115, epic #2055 DoD step 4) — persist the usage a terminal dispatch
+ * REPORTED onto the anchor session (keying decision: Option A — the row the
+ * projection already creates; no synthetic cc id, no new table).
+ *
+ * ## Guarded: write-only-when-present
+ *
+ * Called ONLY when {@link hasReportedUsage} — so a dispatch that reported nothing
+ * (every claude-code dispatch: its envelopes carry no token fields) executes NO
+ * statement at all. Per-column `COALESCE(?, col)` then makes each field
+ * independently guarded: an unreported column keeps its prior value rather than
+ * being clobbered to NULL by a partial report.
+ *
+ * ## Null is "unreported"; 0 is a datum
+ *
+ * The extraction maps unreported → null, and `COALESCE(null, col)` is a no-op —
+ * so a null NEVER writes a 0 stand-in. A provider that legitimately reports 0
+ * yields `COALESCE(0, col)` = 0, which IS written: 0 ≠ absent (D-16 honesty; the
+ * ledger's `usageOf` already renders a NULL column as an honest 0 without one
+ * being fabricated on the row).
+ *
+ * ## Cost is provider-reported or absent
+ *
+ * `cost_usd` is written only when the PRODUCER reported a price. No price table
+ * is consulted — design open question Q7 (where versioned price data lives, and
+ * which component labels provider-reported vs estimated) is UNANSWERED, so an
+ * estimate would have nowhere honest to be labelled. No api-agent provider
+ * reports a price today, so this is structurally always a no-op for cost.
+ */
+function persistDispatchUsage(
+  db: Database,
+  sessionId: string,
+  usage: DispatchUsage,
+): void {
+  db.query(
+    `UPDATE sessions SET
+       input_tokens = COALESCE(?, input_tokens),
+       output_tokens = COALESCE(?, output_tokens),
+       cache_read_tokens = COALESCE(?, cache_read_tokens),
+       cost_usd = COALESCE(?, cost_usd)
+     WHERE id = ?`,
+  ).run(
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheReadTokens,
+    usage.costUsd,
+    sessionId,
+  );
+}
+
+/**
+ * API-2115 — stamp the DECLARED substrate onto an existing anchor session.
+ *
+ * The `started` envelope normally births the row already labelled (see
+ * `ensureAnchor`), so this covers the paths where it could not: a terminal-first
+ * delivery (lost/reordered `started`), and an adopted S5 orphan session (born
+ * `local.observed` with the column default). Guarded on a non-null declaration —
+ * an envelope that declares nothing leaves the column untouched, never guessed.
+ */
+function persistDispatchSubstrate(
+  db: Database,
+  sessionId: string,
+  substrate: string,
+): void {
+  db.query(`UPDATE sessions SET substrate = ? WHERE id = ?`).run(
+    substrate,
+    sessionId,
+  );
 }
 
 /**
@@ -402,16 +502,20 @@ function ensureAnchor(
   // Controlled session — dispatch spawns are controlled, distinguishing them
   // from S5's local.observed orphans. cc_session_id is the provisional resume
   // id when present, else NULL (pending until the terminal backfills it).
+  // API-2115 — `substrate` is NOT NULL DEFAULT 'claude-code', so a null (nothing
+  // declared) must fall back to that default rather than be bound as NULL.
+  // COALESCE keeps the column list fixed while honouring the default.
   db.query(
     `INSERT INTO sessions
-       (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at)
-     VALUES (?, ?, ?, ?, NULL, ?)`,
+       (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at, substrate)
+     VALUES (?, ?, ?, ?, NULL, ?, COALESCE(?, 'claude-code'))`,
   ).run(
     sessionId,
     assignmentId,
     params.provisionalCcSessionId,
     CONTROLLED_ENDPOINT,
     now,
+    params.substrate,
   );
 
   return { sessionId, assignmentId };

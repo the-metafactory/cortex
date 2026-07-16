@@ -19,9 +19,9 @@
  *
  * ## Scope
  *
- * The EXTRACTION half only. Persisting usage onto an MC row is a keying decision
- * still awaiting a ruling (the api-agent harness has no `cc_session_id`), so
- * there is deliberately no assertion here that a `sessions` column was written.
+ * Extraction AND persistence. The keying is Option A: usage lands on the ANCHOR
+ * SESSION the projection already creates per `correlation_id` — so these assert
+ * against the real `sessions` row, and that the claude-code path writes nothing.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -45,7 +45,12 @@ import type {
   DispatchRequest,
   MyelinEnvelope,
 } from "../../../common/substrates/types";
-import { createDispatchTaskCompletedEvent } from "../../../bus/dispatch-events";
+import {
+  createDispatchTaskCompletedEvent,
+  createDispatchTaskStartedEvent,
+} from "../../../bus/dispatch-events";
+
+const CC_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 const SOURCE: DispatchEventSource = {
   principal: "andreas",
@@ -282,6 +287,177 @@ describe("API-2115 · MC projection reads api-agent usage off a REAL envelope", 
     expect(result?.kind).toBe("started");
     if (result === null) throw new Error("started envelope did not project");
     expect(hasReportedUsage(result.usage)).toBe(false);
+  });
+});
+
+/** Read the persisted usage columns straight off the sessions row. */
+function sessionRow(sessionId: string) {
+  return db
+    .query(
+      `SELECT input_tokens, output_tokens, cache_read_tokens, cost_usd, substrate
+       FROM sessions WHERE id = ?`,
+    )
+    .get(sessionId) as {
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_tokens: number | null;
+    cost_usd: number | null;
+    substrate: string;
+  };
+}
+
+describe("API-2115 · usage PERSISTS onto the anchor session (keying: Option A)", () => {
+  test("the UPDATE lands on the anchor session the projection returns", async () => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [
+        {
+          data:
+            contentChunk("hi") + finishChunk("stop") + usageChunk(120, 34, 64) + DONE,
+        },
+      ],
+    });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+    const result = projectAll(envs);
+
+    // The row the projection says it landed on really carries the tokens —
+    // asserted against the DB, not the returned struct.
+    const row = sessionRow(result.sessionId);
+    expect(row.input_tokens).toBe(120);
+    expect(row.output_tokens).toBe(34);
+    expect(row.cache_read_tokens).toBe(64);
+
+    // Option A writes NO extra row: one session for the dispatch, the anchor's.
+    const count = db.query(`SELECT COUNT(*) AS n FROM sessions`).get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+
+  test("substrate is labelled 'api-agent', not the 'claude-code' column default", async () => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [{ data: contentChunk("x") + finishChunk("stop") + usageChunk(1, 1) + DONE }],
+    });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+
+    // Born correctly labelled at `started` — not mislabelled for its running life
+    // and corrected at terminal.
+    const started = envs.find((e) => e.type === "dispatch.task.started");
+    if (started === undefined) throw new Error("no started envelope");
+    const atStart = projectDispatchLifecycle(db, started);
+    if (atStart === null) throw new Error("started did not project");
+    expect(sessionRow(atStart.sessionId).substrate).toBe("api-agent");
+
+    // ...and still correct after the terminal.
+    const result = projectAll(envs);
+    expect(sessionRow(result.sessionId).substrate).toBe("api-agent");
+  });
+
+  test("a cortex-side api-agent failure (no usage, no provider error) is STILL labelled api-agent", async () => {
+    // The exact case that defeats inferring substrate from usage-presence: an
+    // unsupported-capability failure never reaches the provider, so it carries
+    // neither tokens nor provider diagnostics. It must not read as claude-code.
+    const harness = makeHarness();
+    const envs = await drain(
+      harness.dispatch({ ...makeRequest(), tools: { allow: ["Bash"] } }),
+    );
+    const result = projectAll(envs);
+    expect(result.kind).toBe("failed");
+    expect(hasReportedUsage(result.usage)).toBe(false);
+    expect(sessionRow(result.sessionId).substrate).toBe("api-agent");
+  });
+
+  test("cost stays NULL on the row when the provider reported no price (Q7)", async () => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [{ data: contentChunk("x") + finishChunk("stop") + usageChunk(50, 5) + DONE }],
+    });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+    const result = projectAll(envs);
+
+    // Tokens written; cost left NULL. No price table was consulted, and no
+    // estimate was written unlabelled.
+    const row = sessionRow(result.sessionId);
+    expect(row.input_tokens).toBe(50);
+    expect(row.cost_usd).toBeNull();
+  });
+
+  test("a reported 0 is written (0 ≠ absent); unreported columns stay NULL", async () => {
+    server.enqueue({
+      status: 200,
+      headers: SSE_HEADERS,
+      chunks: [
+        // Reports 0 output tokens and no cache-read figure at all.
+        { data: contentChunk("") + finishChunk("stop") + usageChunk(7, 0) + DONE },
+      ],
+    });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+    const result = projectAll(envs);
+
+    const row = sessionRow(result.sessionId);
+    expect(row.input_tokens).toBe(7);
+    // A legitimately reported 0 survives the COALESCE guard...
+    expect(row.output_tokens).toBe(0);
+    // ...while an UNREPORTED column stays NULL rather than being zero-filled.
+    expect(row.cache_read_tokens).toBeNull();
+  });
+});
+
+describe("API-2115 · the claude-code path writes NOTHING (guard proof)", () => {
+  /** Build the real claude-code-shaped lifecycle pair (no token fields, no substrate). */
+  function ccEnvelopes() {
+    const started = createDispatchTaskStartedEvent({
+      source: SOURCE,
+      taskId: REQUEST_ID,
+      agentId: "cortex",
+      correlationId: REQUEST_ID,
+      startedAt: new Date(),
+    });
+    const completed = createDispatchTaskCompletedEvent({
+      source: SOURCE,
+      taskId: REQUEST_ID,
+      agentId: "cortex",
+      correlationId: REQUEST_ID,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      resultSummary: "done",
+      ccSessionId: CC_SESSION,
+    });
+    return [started, completed];
+  }
+
+  test("a claude-code dispatch leaves every usage column NULL and substrate default", () => {
+    let last = null;
+    for (const env of ccEnvelopes()) {
+      const r = projectDispatchLifecycle(db, env);
+      if (r !== null) last = r;
+    }
+    if (last === null) throw new Error("nothing projected");
+
+    const row = sessionRow(last.sessionId);
+    // Structurally a no-op: the guard skips the UPDATE entirely, so these are
+    // the INSERT's NULLs — never a fabricated 0.
+    expect(row.input_tokens).toBeNull();
+    expect(row.output_tokens).toBeNull();
+    expect(row.cache_read_tokens).toBeNull();
+    expect(row.cost_usd).toBeNull();
+    // Declares no substrate → the column default stands, unchanged from pre-2115.
+    expect(row.substrate).toBe("claude-code");
+  });
+
+  test("the cc terminal still backfills cc_session_id (no regression from the new writes)", () => {
+    let last = null;
+    for (const env of ccEnvelopes()) {
+      const r = projectDispatchLifecycle(db, env);
+      if (r !== null) last = r;
+    }
+    if (last === null) throw new Error("nothing projected");
+    const cc = db
+      .query(`SELECT cc_session_id FROM sessions WHERE id = ?`)
+      .get(last.sessionId) as { cc_session_id: string | null };
+    expect(cc.cc_session_id).toBe(CC_SESSION);
   });
 });
 

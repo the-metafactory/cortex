@@ -31,6 +31,7 @@ import type { ModelMessage, ModelRequest } from "../../common/inference/types";
 import type {
   Capability,
   DispatchRequest,
+  HarnessId,
   MyelinEnvelope,
   SessionHarness,
 } from "../../common/substrates/types";
@@ -157,6 +158,29 @@ function stampUsage(
 }
 
 /**
+ * API-2115 — stamp the EXECUTING SUBSTRATE onto every lifecycle envelope this
+ * harness yields, so Mission Control can label the session's `substrate` column
+ * from a DECLARED fact rather than an inference.
+ *
+ * Why declared, not inferred: MC's `sessions.substrate` column is
+ * `NOT NULL DEFAULT 'claude-code'`, so an api-agent session is silently
+ * mislabelled today. The projection could have guessed "api-agent" from the
+ * presence of usage / provider diagnostics — but that guess is WRONG exactly
+ * where it matters: a cortex-side failure (wall-clock / inactivity timeout,
+ * unsupported capability, missing profile) carries neither, and would be
+ * mislabelled `claude-code`. So the substrate rides the envelope explicitly,
+ * on EVERY kind (started included, so the session is born correctly labelled
+ * rather than corrected at terminal).
+ *
+ * Uses the same additional-payload-property mechanism `stampUsage` rides (the
+ * myelin schema admits extra payload keys) — no wire-grammar change. The value
+ * is the harness's own closed-enum `HarnessId`, never principal-supplied input.
+ */
+function stampSubstrate(env: Envelope, substrate: HarnessId): Envelope {
+  return { ...env, payload: { ...env.payload, substrate } };
+}
+
+/**
  * API-P1.4 — widen a `dispatch.task.failed` envelope's payload with the
  * normalized provider-error diagnostics (`provider_error_kind`, `retryable`,
  * `retry_after_ms`, `provider_request_id`). Uses the same additional-payload-
@@ -217,7 +241,20 @@ export class ApiAgentHarness implements SessionHarness {
     this.now = opts.now;
   }
 
+  /**
+   * API-2115 — the ONE choke point that stamps `substrate` onto every envelope
+   * this harness yields. Wrapping the generator (rather than editing each of the
+   * seven `yield` sites) makes the guarantee structural: a future early-return
+   * path added inside `dispatchInner` is labelled automatically and cannot
+   * regress the invariant.
+   */
   async *dispatch(req: DispatchRequest): AsyncIterable<MyelinEnvelope> {
+    for await (const env of this.dispatchInner(req)) {
+      yield stampSubstrate(env, this.id);
+    }
+  }
+
+  private async *dispatchInner(req: DispatchRequest): AsyncIterable<Envelope> {
     const correlationId = this.correlationFor(req);
     const startedAt = new Date();
     yield this.buildStarted(req, startedAt, correlationId);

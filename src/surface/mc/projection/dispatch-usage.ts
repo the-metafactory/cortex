@@ -10,13 +10,16 @@
  * field names plus normalized provider diagnostics; until this module existed,
  * NOTHING read them (issue #2115 — epic #2055 DoD step 4).
  *
- * It is a pure structural read: `(payload) → typed struct`. It does NOT write
- * MC rows. The PERSISTENCE half — which MC row an api-agent dispatch's usage
- * lands on, given the harness has no `cc_session_id` — is a keying decision
- * still awaiting a ruling (#2115 acceptance criterion 2), so this module stops
- * deliberately short of it. `projectDispatchLifecycle` surfaces the extracted
- * struct on its {@link ProjectionResult} so the read is live-exercised rather
- * than orphaned, and the write site becomes a one-line wire-up once ruled.
+ * It is a pure structural read: `(payload) → typed struct`. It does NOT write MC
+ * rows — `dispatch-lifecycle.ts` owns the write (`persistDispatchUsage`), keeping
+ * "what the wire said" separable from "which row it lands on".
+ *
+ * The KEYING that write uses is settled (#2115 acceptance criterion 2): the usage
+ * lands on the ANCHOR SESSION the projection already creates per `correlation_id`
+ * — Option A. The premise that an api-agent dispatch has no session to key into
+ * was false: `ensureAnchor` has always created one (`cc_session_id` NULL). A
+ * `cc_session_id` is the cc-events JOIN key, not the session's identity, so no
+ * synthetic id is minted and no new table is introduced.
  *
  * ## Cost is provider-reported or ABSENT — never estimated (design Q7)
  *
@@ -163,6 +166,38 @@ export function readDispatchProviderDiagnostics(
     providerErrorKind: asNonEmptyString(fields.provider_error_kind),
     retryAfterMs: asTokenCount(fields.retry_after_ms),
   };
+}
+
+/**
+ * The substrates a dispatch may DECLARE on its lifecycle envelope. Mirrors the
+ * `HarnessId` closed enum (`common/substrates/types.ts`) — kept as a local
+ * allow-list so the projection stays import-free of the substrate layer and, more
+ * importantly, so a malformed/hostile publisher cannot write an arbitrary string
+ * into `sessions.substrate` (which the ledger and session-tree read models group
+ * by). An unrecognised value reads as null ⇒ the column default stands.
+ */
+const KNOWN_SUBSTRATES: ReadonlySet<string> = new Set([
+  "claude-code",
+  "codex",
+  "pi-dev",
+  "cursor",
+  "custom",
+  "api-agent",
+]);
+
+/**
+ * Read the substrate a dispatch DECLARED on its lifecycle payload.
+ *
+ * Null ⇒ the envelope declared none (every claude-code dispatch today), in which
+ * case the caller must leave `sessions.substrate` to its column default rather
+ * than guess. NEVER inferred from the presence of usage or provider diagnostics:
+ * a cortex-side api-agent failure (timeout / unsupported capability / missing
+ * profile) carries neither, so that inference would mislabel it.
+ */
+export function readDispatchSubstrate(payload: unknown): string | null {
+  const value = asNonEmptyString(asFields(payload).substrate);
+  if (value === null) return null;
+  return KNOWN_SUBSTRATES.has(value) ? value : null;
 }
 
 /** True when the extraction found at least one reported usage figure. */
