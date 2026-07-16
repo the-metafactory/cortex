@@ -117,10 +117,16 @@ jobs:
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          # Context is the repo root so the Dockerfile can COPY cortex source
-          # (cortex#2095: Dockerfile.cortex lives under deploy/compose/ but builds
-          # from the repo root, or installs CORTEX_REF).
-          context: .
+          # Context is deploy/compose, NOT the repo root. L4a's Dockerfile.cortex
+          # (cortex#2095) does NOT `COPY .` the repo — it `git clone`s cortex at
+          # CORTEX_REF inside the build; its ONLY local COPY is `docker-entrypoint.sh`,
+          # which lives in deploy/compose/. This mirrors L4a's own compose build
+          # (`context: .`, compose-file-relative → deploy/compose). Two bonuses:
+          # deploy/compose/.dockerignore becomes the context-ROOT ignore file (Docker
+          # only honors the one at the context root) — it excludes .env and pares the
+          # context down to docker-entrypoint.sh; and there is no .git in this dir, so
+          # nothing sensitive reaches the builder.
+          context: deploy/compose
           file: deploy/compose/Dockerfile.cortex
           push: true
           tags: ${{ steps.meta.outputs.tags }}

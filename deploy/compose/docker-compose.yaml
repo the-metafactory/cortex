@@ -41,6 +41,17 @@ services:
     restart: unless-stopped
 
   cortex:
+    # ── IMAGE SOURCE ─────────────────────────────────────────────────────────
+    # TODAY (default): build locally from the pinned release tag. Works on a fresh
+    # clone with NO published image — the built image is named by the `image:` line
+    # below (cortex:local by default).
+    #
+    # PULL-BASED FLOW (after the first cortex release publishes the image to GHCR —
+    # cortex#2096): comment out the whole `build:` block below AND replace the active
+    # `image:` line with the pinned GHCR ref on the commented line beneath it. Then
+    #     docker compose pull && docker compose up -d
+    # upgrades with no local build — the container analogue of `arc upgrade cortex`.
+    # Pin a RELEASE TAG; never floating :latest as the committed default (#2096).
     build:
       context: .
       dockerfile: Dockerfile.cortex
@@ -50,6 +61,7 @@ services:
         CLAUDE_VERSION: ${CLAUDE_VERSION:-2.1.211}
         NATS_SERVER_VERSION: ${NATS_SERVER_VERSION:-2.14.3}
     image: ${CORTEX_IMAGE:-cortex:local}
+    # image: ghcr.io/the-metafactory/cortex:v6.8.5   # ← pull-based: uncomment (and comment the `build:` block above) after the first release publishes the image; pin the published release tag.
     # Secrets + the CTX_* contract arrive at RUNTIME only — never baked (env_file,
     # not build args / ENV). `docker history` therefore shows zero secrets.
     env_file: .env

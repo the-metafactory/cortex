@@ -4,6 +4,19 @@
 arc's `design/linux-host-support.md` (§L4 / DD-L4): compose supervises via
 `restart:` policies — systemd is absent by design.
 
+### Two ways to get the cortex image
+
+- **Pull (primary, once published)** — a fresh machine with just this compose
+  file + a filled `.env` pulls the published image and runs; no cortex checkout,
+  no local build. This is the true one-command UX. Publishing happens per release
+  via the GHCR pipeline (cortex#2096); the image is
+  `ghcr.io/the-metafactory/cortex:<release-tag>`.
+- **Build locally (default until the first release publishes an image)** — the
+  committed `docker-compose.yaml` ships with `build:` active so a fresh clone
+  works **today**, before any image exists. Flip to the pull flow by toggling the
+  image-source block in `docker-compose.yaml` (see the comments there) once the
+  first release has published a tag.
+
 ## Quickstart
 
 1. **Create the Discord bot** (one-time, manual — the Developer Portal has no
@@ -73,9 +86,16 @@ grep in step 5 and by `@mention`.
 - **Stop/start** (`docker compose down && docker compose up -d`) with volumes
   intact behaves identically. `docker compose down -v` **destroys** the stack
   identity — don't, unless you mean to re-provision from scratch.
-- **Upgrade** — bump `CORTEX_REF` in `.env` (or the compose default) and
-  `docker compose build --pull && docker compose up -d`. (An automated
-  build+publish pipeline is the sibling L4b issue, cortex#2096.)
+- **Upgrade** —
+  - _Pull mode (primary, once on the published image):_
+    `docker compose pull && docker compose up -d` — the container analogue of
+    `arc upgrade cortex`. Bump the pinned tag on the `image:` line to move
+    between releases (keep it a release tag, never floating `:latest`).
+  - _Local-build mode (default until an image is published):_ bump `CORTEX_REF`
+    in `.env` (or the compose default) and
+    `docker compose build --pull && docker compose up -d`.
+  - The per-release build+publish pipeline that produces the pullable image is
+    L4b (cortex#2096).
 
 ## Pinned versions
 
