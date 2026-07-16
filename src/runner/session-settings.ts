@@ -316,6 +316,13 @@ function materialiseGrantedPlugin(
       // recreate that symlink — leaving the write-through-to-source hole open.
       // Dereferencing materialises real files, fully severing the link. Then
       // lock it down read-only as defence-in-depth.
+      //
+      // Trust note: dereference also copies a skill's OWN inner symlink targets
+      // into the plugin — transitive trust of the granted skill's content. Safe
+      // at same-uid (the session could already read those targets directly);
+      // REVISIT if cortex ever runs sessions at lower fs privilege than the
+      // daemon, where a skill's symlink could pull in bytes the session may not
+      // otherwise read.
       cpSync(target, dest, { recursive: true, dereference: true });
       chmodTreeReadOnly(dest);
       materialised++;

@@ -421,11 +421,16 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
       expect(existsSync(join(skillsDir, "secrets"))).toBe(false);
       // And the real out-of-tree secrets dir was never copied/removed.
       expect(existsSync(join(secretsDir, "SKILL.md"))).toBe(true);
-      // Each invalid name was logged and skipped.
+      // Each invalid name was logged and skipped. The empty string is called
+      // out explicitly: basename("") === "" passes the basename check, so only
+      // the `grant.length === 0` sub-clause rejects it — without this assertion
+      // deleting that sub-clause stays green while "" resolves to the skills
+      // ROOT and cpSync merges the entire source into the plugin.
       const log = logged.join("");
       expect(log).toContain("skill grant '../secrets' invalid — skipped");
       expect(log).toContain("skill grant '..' invalid — skipped");
       expect(log).toContain("skill grant '.' invalid — skipped");
+      expect(log).toContain("skill grant '' invalid — skipped");
     } finally {
       iso!.cleanup();
       rmSync(parent, { recursive: true, force: true });
