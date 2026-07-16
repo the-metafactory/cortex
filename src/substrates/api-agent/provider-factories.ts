@@ -8,11 +8,23 @@
 // REFERENCES (`apiKey` / `headers.*` as `env:NAME`) intact. The shipped provider
 // constructors (`AnthropicMessagesProvider` / `OpenAICompatibleProvider`) take a
 // LITERAL key, so the factory resolves the reference via `resolveSecretRef` at
-// construction time — which the registry does LAZILY on first `resolveProfile`,
-// so an unused provider with an unset env var never resolves (and never throws).
+// PROVIDER-CONSTRUCTION time — inside `InferenceRegistry.resolveProfile`, the
+// first time a given provider is built (instances are then cached).
+//
+// TIMING (API-P1.4): that construction happens at BOOT, not on first dispatch.
+// The boot pre-flight (`inferenceRegistry.validateAll()` in `startCortex`)
+// resolves EVERY configured profile at startup, so every configured provider's
+// secret is resolved then — including providers no agent currently uses. The
+// intended consequence: an unset/empty `env:NAME` surfaces as a boot stderr line
+// (`resolveSecretRef` throws `SecretRefResolutionError`; the registry catches it
+// and reports that profile as `provider-instantiation-failed`) instead of lying
+// dormant until the first dispatch. Reported, not fatal — boot continues, and
+// the api-agent harness still fails closed per-dispatch on the same condition.
+//
 // The resolved value lives on the provider instance only; it is never written
 // back onto config and never logged (both providers keep it out of every error,
-// event, and log line).
+// event, and log line) — and the resolution error names the env VAR only, never
+// a value.
 
 import type {
   ProviderFactory,

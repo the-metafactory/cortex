@@ -22,8 +22,13 @@
 // passes the schema-validated secret REFERENCE (`apiKey` / `headers.*`, each an
 // `env:NAME` ref) straight through to the factory on the untouched provider
 // config. It does NOT import or call `resolveSecretRef`, and places NO resolved
-// secret value on any object. Resolution stays at REQUEST time inside the
-// provider (the only correct place — see secret-ref.ts). Credentials belong in
+// secret value on any object — that invariant is the registry's own and holds.
+// Resolution happens one layer out, in the injected FACTORY, at provider-
+// CONSTRUCTION time (the shipped provider constructors take a literal key — see
+// `substrates/api-agent/provider-factories.ts`), which `resolveProfile` triggers
+// on a provider's first build. Since the boot pre-flight ({@link
+// InferenceRegistry.validateAll} in `startCortex`) resolves every profile at
+// startup, that is BOOT for every configured provider. Credentials belong in
 // the `apiKey` / `headers` reference fields ONLY; the profile `options` bag is an
 // opaque provider-knob escape hatch that cortex never inspects and never resolves
 // secrets from — never route a credential through `options`.
@@ -46,9 +51,19 @@ export type ModelClass = InferenceProfile["modelClass"];
  * entry. Injected per `protocol` (dependency injection): API-P1.3 wires the real
  * `AnthropicMessagesProvider` / `OpenAICompatibleProvider` constructors; tests
  * wire fakes. The `config` passed in still carries the secret REFERENCES
- * (`apiKey` / `headers.*` as `env:NAME`) untouched — the factory hands them to
- * the provider, which resolves them at REQUEST time. The factory MUST NOT
- * resolve or persist a secret value.
+ * (`apiKey` / `headers.*` as `env:NAME`) untouched — the REGISTRY never resolves
+ * them. A factory whose provider constructor needs a literal key (both shipped
+ * P1.3 providers do) resolves the reference here, at construction, via
+ * `resolveSecretRef`; a factory whose provider can defer should. Either way the
+ * factory MUST NOT persist a resolved secret: never write it back onto the
+ * `config` object it was handed, and never log it. A resolved value belongs on
+ * the provider instance alone.
+ *
+ * Construction — and therefore any such resolution — is triggered by
+ * `resolveProfile`, which the boot pre-flight ({@link
+ * InferenceRegistry.validateAll}) runs for EVERY profile at startup. A factory
+ * that resolves eagerly will therefore throw at BOOT on an unset env var; the
+ * registry catches that and reports `provider-instantiation-failed`.
  */
 export type ProviderFactory = (input: {
   /** The provider's key in `inference.providers` — becomes the provider id. */
@@ -121,7 +136,11 @@ export type ProfileResolution =
  * provider bundles, failing closed on every unresolvable case.
  *
  * Provider instances are created LAZILY on first resolve and cached by provider
- * key, so profiles sharing a provider reuse one instance.
+ * key, so profiles sharing a provider reuse one instance. Note that "first
+ * resolve" is BOOT in the daemon: {@link InferenceRegistry.validateAll} runs as
+ * a startup pre-flight over every profile, so every configured provider is built
+ * (and its secret reference resolved by the factory) at boot — not on first
+ * dispatch.
  */
 export class InferenceRegistry {
   private readonly config: InferenceConfig;
