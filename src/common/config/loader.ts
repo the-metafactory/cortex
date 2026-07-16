@@ -1098,6 +1098,18 @@ function loadCortexShape(
     // merged)` would re-default `grove.baseUrl` to "" and every attention-
     // notification deep-link on a cortex-shape stack would fall back to localhost.
     grove: cortexConfig.grove,
+    // #2121 (found while writing the #2116 docs) — carry the machine-layer
+    // `inference` block (model providers + profiles) through to the synthesized
+    // AgentConfig. SAME FAILURE CLASS the `plugins`/`security`/`mc`/`grove`
+    // comments above warn about, and it was LIVE: without this passthrough
+    // `AgentConfigSchema.parse(merged)` dropped the block for EVERY cortex-shape
+    // deployment (`AgentConfigSchema.inference` is optional with no default), so
+    // `config.inference` at the boot path (src/cortex.ts) was always `undefined`,
+    // the InferenceRegistry was always built empty, and every
+    // `substrate: api-agent` dispatch failed closed with `unknown-profile` — no
+    // matter what the principal declared in system.yaml. Silently, too: with no
+    // profiles the boot pre-flight has nothing to report.
+    inference: cortexConfig.inference,
     ...(cortexConfig.nats !== undefined && { nats: cortexConfig.nats }),
   };
 
