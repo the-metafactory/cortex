@@ -139,6 +139,12 @@ scripts:
   postinstall: ./scripts/postinstall.sh
   preupgrade: ./scripts/preupgrade.sh
   postupgrade: ./scripts/postupgrade.sh
+  # cortex#2093: L1 rollback — disables + removes rendered systemd user units
+  # (cortex#2071) before `arc remove cortex` tears down symlinks/repo. Fires
+  # via arc's `scripts.preremove` hook (arc/src/commands/remove.ts step 1,
+  # arc#138) — the first thing `arc remove` does, non-aborting on failure.
+  # No-ops on Darwin / systemd-less hosts.
+  preremove: ./scripts/preremove.sh
 
 # Dependencies — cortex#79 pins arc >= 0.25.0. That's the release that
 # ships the stable `arc.nats.v1` JSON contract on the four `arc nats *`
