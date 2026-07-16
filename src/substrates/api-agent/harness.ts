@@ -40,12 +40,14 @@ import {
   createDispatchTaskFailedEvent,
   createDispatchTaskStartedEvent,
   type DispatchEventSource,
+  type DispatchTaskFailedReason,
 } from "../../bus/dispatch-events";
 import {
   truncateDispatchErrorSummary,
   truncateDispatchResultSummary,
 } from "../../bus/dispatch-lifecycle-summary";
 import { runAgentLoop, type AgentLoopOutcome, type AgentLoopUsage } from "./agent-loop";
+import { shapeProviderFailure, type ProviderFailureShape } from "./error-mapping";
 
 // Q6 defaults (design §"Streaming and lifecycle") — the same two-cap model the
 // substrate protocol documents on `DispatchRequest.timeoutMs` / `inactivityMs`.
@@ -146,6 +148,38 @@ function stampUsage(
               ? { cache_read_tokens: usage.cacheReadTokens }
               : {}),
           }
+        : {}),
+      ...(providerRequestId !== undefined
+        ? { provider_request_id: providerRequestId }
+        : {}),
+    },
+  };
+}
+
+/**
+ * API-P1.4 — widen a `dispatch.task.failed` envelope's payload with the
+ * normalized provider-error diagnostics (`provider_error_kind`, `retryable`,
+ * `retry_after_ms`, `provider_request_id`). Uses the same additional-payload-
+ * property mechanism `stampUsage` rides (the myelin schema admits extra payload
+ * keys), so it widens the diagnostic surface without a wire-grammar change.
+ *
+ * SECRET-SAFE: every value comes from the normalized {@link ProviderFailureShape}
+ * (kind + numeric hint) or the redacted request id — never the raw provider
+ * body, headers, or key material.
+ */
+function stampFailureDiagnostics(
+  env: Envelope,
+  shape: ProviderFailureShape,
+  providerRequestId: string | undefined,
+): Envelope {
+  return {
+    ...env,
+    payload: {
+      ...env.payload,
+      provider_error_kind: shape.errorKind,
+      retryable: shape.retryable,
+      ...(shape.retryAfterMs !== undefined
+        ? { retry_after_ms: shape.retryAfterMs }
         : {}),
       ...(providerRequestId !== undefined
         ? { provider_request_id: providerRequestId }
@@ -329,6 +363,7 @@ export class ApiAgentHarness implements SessionHarness {
     startedAt: Date,
     correlationId: string,
     errorSummary: string,
+    reason?: DispatchTaskFailedReason,
   ): Envelope {
     return createDispatchTaskFailedEvent({
       source: this.source,
@@ -338,6 +373,7 @@ export class ApiAgentHarness implements SessionHarness {
       startedAt,
       failedAt: new Date(),
       errorSummary: truncateDispatchErrorSummary(errorSummary),
+      ...(reason !== undefined ? { reason } : {}),
     });
   }
 
@@ -377,13 +413,25 @@ export class ApiAgentHarness implements SessionHarness {
           reason: outcome.reason,
         });
       case "failed":
-      default:
-        return this.buildFailed(
-          req,
-          startedAt,
-          correlationId,
-          outcome.summary,
-        );
+      default: {
+        // API-P1.4 — a failure from a normalized provider `error` event carries
+        // its kind: shape it onto the full lifecycle table (back-pressure hint
+        // for the transient kinds) and stamp the redacted diagnostics. A
+        // cortex-side failure (wall-clock / inactivity timeout, stream fault,
+        // early-exit) has no `providerError` and stays a plain `failed` terminal.
+        if (outcome.providerError !== undefined) {
+          const shape = shapeProviderFailure(outcome.providerError);
+          const env = this.buildFailed(
+            req,
+            startedAt,
+            correlationId,
+            outcome.summary,
+            shape.reason,
+          );
+          return stampFailureDiagnostics(env, shape, outcome.providerRequestId);
+        }
+        return this.buildFailed(req, startedAt, correlationId, outcome.summary);
+      }
     }
   }
 }

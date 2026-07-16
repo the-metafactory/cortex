@@ -24,10 +24,13 @@
 // the underlying HTTP connection — no leaked sockets.
 //
 // PROVIDER ERROR SEAM (D2 — providers YIELD an `{type:"error"}` event, never
-// throw): the loop consumes that event and maps it to a `failed` outcome
-// carrying ONLY the redacted `ProviderError.summary` — never raw detail, headers,
-// or secrets. A provider that nonetheless rejects `next()` (contract violation)
-// is caught and collapsed to a fixed, secret-free `failed` summary.
+// throw): the loop consumes that event and reduces it to a `failed` outcome
+// carrying ONLY the redacted `ProviderError.summary` PLUS the normalized
+// secret-free facts (kind, retryability, `retryAfterMs`) the harness needs for
+// the API-P1.4 error-kind→lifecycle mapping + back-pressure — never raw detail,
+// headers, or secrets. A provider that nonetheless rejects `next()` (contract
+// violation) is caught and collapsed to a fixed, secret-free `failed` summary
+// (no `providerError` facts — a rejection is not a normalized error).
 //
 // NO TOOLS (D5): Phase 1 is text-only. If a provider emits a `tool_call.*` event
 // the loop IGNORES it (never executes anything) — tool execution is Phase 3.
@@ -38,7 +41,7 @@ import type {
   ModelProvider,
   ModelRequest,
 } from "../../common/inference/types";
-import type { ProviderError } from "../../common/inference/errors";
+import type { ProviderError, ProviderErrorKind } from "../../common/inference/errors";
 
 /** Token accounting accumulated from the provider's `usage` event. */
 export interface AgentLoopUsage {
@@ -65,6 +68,18 @@ export type AgentLoopOutcome =
       /** REDACTED summary only — never raw provider detail or secrets. */
       summary: string;
       providerRequestId?: string;
+      /**
+       * API-P1.4 — the normalized-provider-error facts, present ONLY when this
+       * failure came from a yielded provider `error` event (not a cortex-side
+       * timeout / stream fault). The harness maps these onto the lifecycle
+       * envelope's diagnostic fields + back-pressure hint. Carries the normalized
+       * kind + numeric retry hint ONLY — never the raw body, headers, or secrets.
+       */
+      providerError?: {
+        errorKind: ProviderErrorKind;
+        retryable: boolean;
+        retryAfterMs?: number;
+      };
     }
   | { kind: "aborted"; reason: string };
 
@@ -171,14 +186,22 @@ function errorOutcome(
   accumulatedRequestId: string | undefined,
 ): AgentLoopOutcome {
   // Prefer the error's own provider request id for correlation; fall back to any
-  // id seen earlier in the stream. API-P1.4 refines the error-kind→lifecycle
-  // mapping (e.g. rate_limit back-pressure); here every provider error is a
-  // `failed` terminal carrying ONLY the redacted summary.
+  // id seen earlier in the stream. API-P1.4 — carry the normalized kind +
+  // retryability + retry hint alongside the redacted summary so the harness can
+  // map the kind onto the lifecycle outcome + back-pressure. Only these
+  // SECRET-FREE facts cross the seam — never the raw body, headers, or key.
   const requestId = error.providerRequestId ?? accumulatedRequestId;
   return {
     kind: "failed",
     summary: error.summary,
     ...(requestId !== undefined ? { providerRequestId: requestId } : {}),
+    providerError: {
+      errorKind: error.kind,
+      retryable: error.retryable,
+      ...(error.retryAfterMs !== undefined
+        ? { retryAfterMs: error.retryAfterMs }
+        : {}),
+    },
   };
 }
 

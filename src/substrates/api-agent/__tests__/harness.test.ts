@@ -407,6 +407,138 @@ describe("provider contract · api-agent-harness (live, #2063)", () => {
   });
 });
 
+// ── API-P1.4 · normalized error → lifecycle mapping + back-pressure (#2064) ────
+describe("api-agent-harness · error→lifecycle mapping + back-pressure (#2064)", () => {
+  test("a rate-limit (429 + retry-after) → failed with a not_now back-pressure hint", async () => {
+    server.enqueue({
+      status: 429,
+      headers: { "retry-after": "3" },
+      chunks: [{ data: '{"error":{"message":"slow-down-should-not-leak"}}' }],
+    });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+
+    const terminals = terminalsOf(envs);
+    expect(terminals).toHaveLength(1);
+    const t = terminals[0];
+    expect(t?.type).toBe("dispatch.task.failed");
+    // Diagnostic fields carried onto the lifecycle envelope.
+    expect(t?.payload.provider_error_kind).toBe("rate_limit");
+    expect(t?.payload.retryable).toBe(true);
+    expect(t?.payload.retry_after_ms).toBe(3000);
+    // Back-pressure reason mirrors the dispatch-listener `not_now` shape.
+    expect(t?.payload.reason).toEqual({
+      kind: "not_now",
+      detail: "provider back-pressure (rate_limit)",
+      retry_after_ms: 3000,
+    });
+    // Redacted summary only — no raw body, no key.
+    const summary = String(t?.payload.error_summary);
+    expect(summary).not.toContain("slow-down-should-not-leak");
+    expect(summary).not.toContain(API_KEY);
+  });
+
+  test("a 503 → unavailable failed with back-pressure, even without a retry-after hint", async () => {
+    server.enqueue({ status: 503, chunks: [{ data: '{"error":{"message":"down"}}' }] });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+
+    const t = terminalsOf(envs)[0];
+    expect(t?.type).toBe("dispatch.task.failed");
+    expect(t?.payload.provider_error_kind).toBe("unavailable");
+    expect(t?.payload.retryable).toBe(true);
+    // No provider-supplied hint → no retry_after_ms surfaced, but still not_now.
+    expect(t?.payload.retry_after_ms).toBeUndefined();
+    expect((t?.payload.reason as { kind: string } | undefined)?.kind).toBe("not_now");
+  });
+
+  test("a non-retryable auth failure (401) carries NO retry hint and NO reason", async () => {
+    server.enqueue({ status: 401, chunks: [{ data: '{"error":{"message":"nope"}}' }] });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+
+    const t = terminalsOf(envs)[0];
+    expect(t?.type).toBe("dispatch.task.failed");
+    expect(t?.payload.provider_error_kind).toBe("authentication");
+    expect(t?.payload.retryable).toBe(false);
+    expect(t?.payload.retry_after_ms).toBeUndefined();
+    expect(t?.payload.reason).toBeUndefined();
+  });
+
+  test("SECRET LEAK GUARD — no key/header/raw-body in the envelope or captured request path", async () => {
+    // A retryable failure whose scripted body carries a decoy secret + the API
+    // key. The emitted envelope must carry ONLY the redacted summary + numeric
+    // diagnostics — never the key, the retry-after header value verbatim as a
+    // secret, or the raw body.
+    server.enqueue({
+      status: 429,
+      headers: { "retry-after": "2", "x-secret-header": API_KEY },
+      chunks: [{ data: `{"error":{"message":"leak-me ${API_KEY}"}}` }],
+    });
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+
+    const serialized = JSON.stringify(envs);
+    expect(serialized).not.toContain(API_KEY);
+    expect(serialized).not.toContain("leak-me");
+    expect(serialized).not.toContain("x-secret-header");
+    // The retry hint IS present as a normalized number (2s → 2000ms) — proving
+    // we surface the hint without echoing the raw header string.
+    const t = terminalsOf(envs)[0];
+    expect(t?.payload.retry_after_ms).toBe(2000);
+  });
+
+  test("mid-stream (post-200) provider error → exactly ONE terminal, carrying diagnostics", async () => {
+    // A committed 200 then an in-stream error frame the openai parser normalizes.
+    const payload =
+      contentChunk("partial ") +
+      sse({ error: { type: "server_error", code: "internal", message: "boom-should-not-leak" } });
+    server.enqueue({ status: 200, headers: SSE_HEADERS, chunks: [{ data: payload }] });
+
+    const envs = await drain(makeHarness().dispatch(makeRequest()));
+    expect(startedOf(envs)).toHaveLength(1);
+    const terminals = terminalsOf(envs);
+    expect(terminals).toHaveLength(1); // one-terminal invariant holds post-200
+    expect(terminals[0]?.type).toBe("dispatch.task.failed");
+    // A normalized in-stream error carries its kind diagnostic; body stays out.
+    expect(terminals[0]?.payload.provider_error_kind).toBeDefined();
+    expect(String(terminals[0]?.payload.error_summary)).not.toContain(
+      "boom-should-not-leak",
+    );
+  });
+});
+
+// ── API-P1.4 · boot pre-flight (validateAll surfaces bad profiles at load) ─────
+describe("api-agent boot pre-flight · createInferenceRegistry().validateAll (#2064)", () => {
+  test("a fully-resolvable inference config pre-flights with zero errors", () => {
+    const config = InferenceConfigSchema.parse({
+      providers: {
+        test: {
+          protocol: "openai-chat-completions",
+          baseUrl: `${server.url}/v1`,
+          apiKey: "env:TEST_KEY",
+        },
+      },
+      profiles: {
+        fast: { provider: "test", model: "test-model", modelClass: "any" },
+      },
+    });
+    const registry = createInferenceRegistry(config, { env: TEST_ENV });
+    expect(registry.validateAll()).toEqual([]);
+  });
+
+  // NOTE: structural failures (unknown profile / missing provider) are rejected
+  // earlier, by `InferenceConfigSchema` at config-load, so they never reach
+  // `validateAll`. What the boot pre-flight adds on top of the schema is the
+  // resolve-time class — `no-factory-for-protocol` / `provider-instantiation-
+  // failed` — exercised directly against injected fakes in
+  // `common/inference/__tests__/registry.test.ts`. Here we prove the REAL
+  // factory composition boot uses pre-flights clean.
+  test("an empty inference config pre-flights clean (no api-agent profiles)", () => {
+    const registry = createInferenceRegistry(
+      { providers: {}, profiles: {} },
+      { env: TEST_ENV },
+    );
+    expect(registry.validateAll()).toEqual([]);
+  });
+});
+
 // ── claude-code NON-REGRESSION (resolver selection unchanged) ──────────────────
 describe("harness resolver — substrate selection (api-agent + non-regression)", () => {
   const deps = {

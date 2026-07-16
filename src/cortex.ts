@@ -3701,6 +3701,21 @@ export async function startCortex(
   const inferenceRegistry = createInferenceRegistry(
     config.inference ?? { providers: {}, profiles: {} },
   );
+  // API-P1.4 — pre-flight EVERY inference profile at boot (design §"fail at
+  // config load"). An unresolvable profile (unknown provider, no factory for
+  // its protocol) surfaces HERE, loudly, rather than lurking until the first
+  // `substrate: api-agent` dispatch. Kept NON-FATAL: the api-agent harness
+  // already fails closed per-dispatch on the same conditions, and one bad
+  // profile must not take down a daemon serving unrelated claude-code agents —
+  // so this reports (stderr, one line per profile) and boot continues. Empty
+  // `inference` config ⇒ no profiles ⇒ no output.
+  for (const err of inferenceRegistry.validateAll()) {
+    process.stderr.write(
+      `[boot/inference] inference profile "${err.profileName}" does not resolve ` +
+        `(${err.code}): ${err.message} — any \`substrate: api-agent\` agent bound ` +
+        `to it will fail closed at dispatch.\n`,
+    );
+  }
 
   const sharedDispatchListenerOpts = {
     runtime,
