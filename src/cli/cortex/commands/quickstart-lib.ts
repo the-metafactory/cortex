@@ -301,8 +301,12 @@ function backupStamp(): string {
 
 function atomicWriteFileSync(path: string, contents: string, mode: number): void {
   const tmpPath = `${path}.tmp`;
-  writeFileSync(tmpPath, contents, "utf-8");
-  chmodSync(tmpPath, mode); // create mode is umask-masked; re-chmod before the rename.
+  // Pass `mode` at creation (closes the window where a secret-bearing tmp
+  // file would otherwise sit at the umask default between create and chmod)
+  // AND re-chmod after (umask can still mask the creation-time mode — belt-
+  // and-braces, mirrors network-config-write.ts's atomicWriteFileSync).
+  writeFileSync(tmpPath, contents, { encoding: "utf-8", mode });
+  chmodSync(tmpPath, mode);
   renameSync(tmpPath, path);
 }
 
@@ -339,8 +343,17 @@ export function patchYamlGuarded(
     return { changed: false };
   }
 
+  // The backup carries the SAME content as the file being patched — which,
+  // on a re-run where the token/discordId was already set by an EARLIER
+  // quickstart run, means the backup carries the live secret too. Every
+  // patched file here is born 0600 (stack.ts's scaffold); write the backup
+  // at that mode from creation (and re-chmod, umask-proof) so it never has a
+  // world-readable window — the same treatment atomicWriteFileSync gives the
+  // main file, applied here because the backup is an equally secret-bearing
+  // copy, not a throwaway.
   const backupPath = `${path}.pre-${backupLabel}-${backupStamp()}.bak`;
-  writeFileSync(backupPath, originalText, "utf-8");
+  writeFileSync(backupPath, originalText, { encoding: "utf-8", mode: originalMode });
+  chmodSync(backupPath, originalMode);
 
   try {
     atomicWriteFileSync(path, nextText, originalMode);

@@ -326,6 +326,32 @@ describe("patchSurfacesYaml", () => {
     const entriesAfterSecond = readdirSync(dir);
     expect(entriesAfterSecond.length).toBe(countBefore);
   });
+
+  test("re-run backup is 0600, never the umask-default 0644 — even though it carries the live token from a PRIOR run", () => {
+    // The exact scenario the "fix one env var and re-run" flow hits: run 1
+    // sets the real token; run 2 only changes guildId (the token is
+    // unchanged). At run 2, `originalText` (what gets backed up) is the
+    // ALREADY-patched file from run 1 — it carries the real token. The
+    // backup must inherit the file's 0600 mode, not fall back to whatever
+    // the process umask would otherwise leave a fresh file at.
+    const dir = freshDir();
+    const path = seed(dir);
+    const first = { token: "MY-REAL-BOT-TOKEN", guildId: "111", agentChannelId: "222", logChannelId: "333" };
+    patchSurfacesYaml(path, first);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+
+    const second = { ...first, guildId: "999" }; // token unchanged, one field changed
+    const result = patchSurfacesYaml(path, second);
+    expect(result.changed).toBe(true);
+    expect(result.backupPath).toBeDefined();
+
+    const backupPath = result.backupPath!;
+    expect(statSync(backupPath).mode & 0o777).toBe(0o600);
+    // The backup DOES legitimately carry the token (it's a snapshot of the
+    // token-bearing file as it stood before this edit) — the fix is the file
+    // MODE being restrictive, not stripping the content from the backup.
+    expect(readFileSync(backupPath, "utf-8")).toContain("MY-REAL-BOT-TOKEN");
+  });
 });
 
 describe("patchStackYaml", () => {
