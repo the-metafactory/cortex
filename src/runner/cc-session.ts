@@ -7,6 +7,7 @@
 
 import { EventEmitter } from "events";
 import { homedir } from "os";
+import { join } from "path";
 import { parseStreamLine, StreamLineBuffer, type UsageStats, type StreamEvent } from "./stream-parser";
 import { buildClaudeArgs, type ClaudeInvocationOpts } from "./claude-invoker";
 import {
@@ -298,10 +299,20 @@ export class CCSession extends EventEmitter {
         : [];
     const isolationArgs: string[] = [];
     if (isolate) {
+      // cortex#990 A1 — granted skills are symlinked from the claude-code
+      // config home's `skills/` dir (the same home the child authenticates
+      // against, #2132), falling back to `~/.claude/skills` when no config
+      // home was declared. Resolved here, at the single spawn site, so every
+      // dispatch path uses the same source without threading it through.
+      const skillSourceDir = join(
+        activeConfigHomeEnv("claude-code")?.value ?? `${homedir()}/.claude`,
+        "skills",
+      );
       this.isolatedSettings = createIsolatedSettings(
         this.opts.claudeDir ?? `${homedir()}/.claude`,
         skillGrants,
         mcpGrants,
+        skillSourceDir,
       );
       isolationArgs.push(...this.isolatedSettings.args);
     }

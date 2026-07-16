@@ -12,14 +12,43 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { readFileSync, existsSync } from "fs";
+import {
+  readFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  lstatSync,
+} from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   CORTEX_SETTING_SOURCES,
   CORTEX_PRESERVED_CLAUDE_ENV,
+  CORTEX_GRANTED_PLUGIN_NAME,
   buildCuratedSettings,
   createIsolatedSettings,
   scopeSessionEnv,
 } from "../session-settings";
+
+/**
+ * Build a throwaway skills-source dir with one sub-dir per named skill, each
+ * carrying a `SKILL.md`. Returns the dir; caller cleans it up. `refs` maps a
+ * skill name → text appended to its SKILL.md (used to plant a sibling-relative
+ * reference like `../other/SKILL.md`).
+ */
+function makeSkillSource(
+  skills: string[],
+  refs: Record<string, string> = {},
+): string {
+  const src = mkdtempSync(join(tmpdir(), "cortex-skillsrc-"));
+  for (const name of skills) {
+    mkdirSync(join(src, name), { recursive: true });
+    writeFileSync(join(src, name, "SKILL.md"), `# ${name}\n${refs[name] ?? ""}`);
+  }
+  return src;
+}
 
 describe("CORTEX_SETTING_SOURCES — no ambient source loaded", () => {
   test("never loads the principal's `user` source", () => {
@@ -208,6 +237,128 @@ describe("createIsolatedSettings — materialised file + args", () => {
     expect(existsSync(iso.settingsPath)).toBe(false);
     // Second call must not throw.
     expect(() => iso.cleanup()).not.toThrow();
+  });
+});
+
+describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () => {
+  test("empty/undefined grants → NO plugin dir, args unchanged from current main", () => {
+    for (const grants of [undefined, []] as const) {
+      const iso = createIsolatedSettings("/fake/.claude", grants);
+      try {
+        expect(iso.pluginDir).toBeUndefined();
+        expect(iso.args).not.toContain("--plugin-dir");
+        // Byte-identical arg shape to the pre-#990 isolation args.
+        expect(iso.args).toEqual([
+          "--setting-sources",
+          "",
+          "--settings",
+          iso.settingsPath,
+        ]);
+        expect(existsSync(join(iso.settingsPath, "..", "plugin"))).toBe(false);
+      } finally {
+        iso.cleanup();
+      }
+    }
+  });
+
+  test("non-empty grants → validating plugin layout with EXACTLY the granted skills symlinked + --plugin-dir arg", () => {
+    const src = makeSkillSource(["alpha", "beta"]);
+    const iso = createIsolatedSettings("/fake/.claude", ["alpha", "beta"], undefined, src);
+    try {
+      // --plugin-dir points at the materialised plugin, inside the temp dir.
+      const pdIdx = iso.args.indexOf("--plugin-dir");
+      expect(pdIdx).toBeGreaterThan(-1);
+      expect(iso.args[pdIdx + 1]).toBe(iso.pluginDir);
+      expect(iso.pluginDir).toBeDefined();
+
+      // plugin.json is present and shaped as the spike requires.
+      const manifest = JSON.parse(
+        readFileSync(join(iso.pluginDir!, ".claude-plugin", "plugin.json"), "utf8"),
+      );
+      expect(manifest.name).toBe(CORTEX_GRANTED_PLUGIN_NAME);
+      expect(typeof manifest.version).toBe("string");
+      expect(manifest.version.length).toBeGreaterThan(0);
+      expect(manifest.description).toBe("cortex per-session granted skills");
+
+      // EXACTLY the granted skills are symlinked, and each is a symlink.
+      const skillsDir = join(iso.pluginDir!, "skills");
+      for (const name of ["alpha", "beta"]) {
+        expect(lstatSync(join(skillsDir, name)).isSymbolicLink()).toBe(true);
+        expect(existsSync(join(skillsDir, name, "SKILL.md"))).toBe(true);
+      }
+      expect(existsSync(join(skillsDir, "gamma"))).toBe(false);
+    } finally {
+      iso.cleanup();
+      rmSync(src, { recursive: true, force: true });
+    }
+  });
+
+  test("missing-skill grant → loud log line + skipped, session still constructs", () => {
+    const src = makeSkillSource(["present"]); // 'absent' has no source dir
+    const logged: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      logged.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let iso: ReturnType<typeof createIsolatedSettings>;
+    try {
+      iso = createIsolatedSettings("/fake/.claude", ["present", "absent"], undefined, src);
+    } finally {
+      process.stderr.write = original;
+    }
+    try {
+      // Session still built with a plugin; present skill symlinked, absent skipped.
+      expect(iso.pluginDir).toBeDefined();
+      expect(existsSync(join(iso.pluginDir!, "skills", "present"))).toBe(true);
+      expect(existsSync(join(iso.pluginDir!, "skills", "absent"))).toBe(false);
+      // Loud log line naming the missing grant + the searched dir.
+      const line = logged.join("");
+      expect(line).toContain("skill grant 'absent' not found");
+      expect(line).toContain(src);
+    } finally {
+      iso!.cleanup();
+      rmSync(src, { recursive: true, force: true });
+    }
+  });
+
+  test("sibling-relative reference between two granted skills resolves through the symlinks", () => {
+    // gws-drive references ../gws-shared/SKILL.md — the canonical case (#990 §3).
+    const src = makeSkillSource(["gws-drive", "gws-shared"], {
+      "gws-drive": "See ../gws-shared/SKILL.md",
+    });
+    const iso = createIsolatedSettings(
+      "/fake/.claude",
+      ["gws-drive", "gws-shared"],
+      undefined,
+      src,
+    );
+    try {
+      const skillsDir = join(iso.pluginDir!, "skills");
+      // Path resolution across the two sibling symlinks must reach the target.
+      const sibling = join(skillsDir, "gws-drive", "..", "gws-shared", "SKILL.md");
+      expect(existsSync(sibling)).toBe(true);
+    } finally {
+      iso.cleanup();
+      rmSync(src, { recursive: true, force: true });
+    }
+  });
+
+  test("cleanup removes the plugin tree (symlinks) but NOT the symlink targets", () => {
+    const src = makeSkillSource(["keeper"]);
+    const iso = createIsolatedSettings("/fake/.claude", ["keeper"], undefined, src);
+    const pluginDir = iso.pluginDir!;
+    expect(existsSync(pluginDir)).toBe(true);
+    expect(existsSync(join(pluginDir, "skills", "keeper"))).toBe(true);
+
+    iso.cleanup();
+
+    // The whole temp tree (settings + plugin + symlinks) is gone…
+    expect(existsSync(pluginDir)).toBe(false);
+    expect(existsSync(iso.settingsPath)).toBe(false);
+    // …but the symlink TARGET (the real source skill) is untouched.
+    expect(existsSync(join(src, "keeper", "SKILL.md"))).toBe(true);
+    rmSync(src, { recursive: true, force: true });
   });
 });
 

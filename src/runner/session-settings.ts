@@ -95,9 +95,18 @@
  * See {@link scopeSessionEnv}.
  */
 
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  symlinkSync,
+  existsSync,
+  readFileSync,
+  rmSync,
+} from "fs";
+import { tmpdir, homedir } from "os";
 import { join } from "path";
+import { parse as parseYaml } from "yaml";
 
 /**
  * The setting sources cortex bot sessions load: NONE. Deliberately empty.
@@ -179,6 +188,103 @@ export const CORTEX_SKILL_GRANTS_ENV = "CORTEX_SKILL_GRANTS";
  * — exactly the {@link CORTEX_SKILL_GRANTS_ENV} pattern.
  */
 export const CORTEX_MCP_GRANTS_ENV = "CORTEX_MCP_GRANTS";
+
+/**
+ * Name of the Claude Code plugin cortex materialises to carry a session's
+ * granted skills (cortex#990 A1). Fixed string — the plugin is per-session
+ * and single-purpose, so its name never varies. The `/`-prefixed skill
+ * invocation the model sees is namespaced under it (`/cortex-granted:<skill>`).
+ */
+export const CORTEX_GRANTED_PLUGIN_NAME = "cortex-granted";
+
+/**
+ * Default source dir for granted skills: `~/.claude/skills`. Used when the
+ * deployment declared no `configHome` for the claude-code substrate (#2132).
+ * The caller (cc-session.ts) overrides this with `<configHome>/skills` when a
+ * config home IS declared, so grants resolve against the SAME home the child
+ * session authenticates and loads config from.
+ */
+export const DEFAULT_SKILL_SOURCE_DIR = join(homedir(), ".claude", "skills");
+
+/**
+ * Cortex's version string for the materialised plugin's `plugin.json`, read
+ * from the repo-root `arc-manifest.yaml` (the same source `getVersion` in
+ * cortex.ts uses) with a `"0.0.0"` fallback. Cosmetic for `claude plugin
+ * validate` — any non-empty string validates — but we carry the real version
+ * so a materialised plugin is self-describing. Computed lazily and cached so
+ * module load stays free of filesystem work.
+ */
+let cachedCortexVersion: string | undefined;
+function cortexPluginVersion(): string {
+  if (cachedCortexVersion !== undefined) return cachedCortexVersion;
+  try {
+    const manifestPath = join(import.meta.dir, "..", "..", "arc-manifest.yaml");
+    const manifest = parseYaml(readFileSync(manifestPath, "utf-8")) as { version?: string };
+    cachedCortexVersion = manifest.version ?? "0.0.0";
+  } catch {
+    cachedCortexVersion = "0.0.0";
+  }
+  return cachedCortexVersion;
+}
+
+/**
+ * Materialise the granted skills as a Claude Code **plugin** inside `dir`
+ * (cortex#990 A1). Layout, matching the validated spike:
+ *
+ *   plugin/
+ *   ├── .claude-plugin/plugin.json   ← {name, version, description}
+ *   └── skills/<grant>/              ← one symlink per granted skill
+ *
+ * Each grant is symlinked from `<skillSourceDir>/<grant>`. A grant whose
+ * source dir does not exist is logged loudly and skipped — never thrown, so a
+ * stale grant can't abort session construction. All grants land in ONE
+ * `skills/` dir, so a skill's sibling-relative reference
+ * (e.g. `../gws-shared/SKILL.md`) resolves through the symlinks.
+ *
+ * Returns the plugin dir when it was created (grants non-empty), else
+ * `undefined`. The caller appends `--plugin-dir <pluginDir>` to the session
+ * args; `cleanup()` removes the whole temp tree (the symlinks, never their
+ * targets).
+ */
+function materialiseGrantedPlugin(
+  dir: string,
+  skillGrants: readonly string[],
+  skillSourceDir: string,
+): string | undefined {
+  if (skillGrants.length === 0) return undefined;
+
+  const pluginDir = join(dir, "plugin");
+  const skillsDir = join(pluginDir, "skills");
+  mkdirSync(join(pluginDir, ".claude-plugin"), { recursive: true });
+  mkdirSync(skillsDir, { recursive: true });
+  writeFileSync(
+    join(pluginDir, ".claude-plugin", "plugin.json"),
+    JSON.stringify(
+      {
+        name: CORTEX_GRANTED_PLUGIN_NAME,
+        version: cortexPluginVersion(),
+        description: "cortex per-session granted skills",
+      },
+      null,
+      2,
+    ),
+  );
+
+  for (const grant of skillGrants) {
+    const target = join(skillSourceDir, grant);
+    if (!existsSync(target)) {
+      process.stderr.write(
+        `cortex: skill grant '${grant}' not found under ${skillSourceDir} — skipped\n`,
+      );
+      continue;
+    }
+    // Symlink the source skill DIR (not its contents) — one link per grant, all
+    // siblings under `skills/`, so intra-skill `../other` refs keep resolving.
+    symlinkSync(target, join(skillsDir, grant));
+  }
+
+  return pluginDir;
+}
 
 /**
  * Build the curated settings object cortex spawns bot sessions under.
@@ -281,11 +387,20 @@ export interface IsolatedSettings {
   settingsPath: string;
   /**
    * CLI args to append: `--setting-sources "" --settings <path>` (empty
-   * source list ⇒ load no ambient source; only the curated file). Order
-   * matters only in that both must precede `-p <prompt>` (handled by
-   * buildClaudeArgs putting the prompt last).
+   * source list ⇒ load no ambient source; only the curated file). When the
+   * session is granted skills, ALSO carries `--plugin-dir <pluginDir>` (the
+   * materialised granted-skills plugin, cortex#990 A1). Order matters only in
+   * that all must precede `-p <prompt>` (handled by buildClaudeArgs putting
+   * the prompt last).
    */
   args: string[];
+  /**
+   * Absolute path to the materialised granted-skills plugin dir, or
+   * `undefined` when the session was granted no skills. Exposed so callers/
+   * tests can locate it (e.g. to run `claude plugin validate`); it lives
+   * INSIDE the temp dir, so `cleanup()` removes it.
+   */
+  pluginDir?: string;
   /** Remove the temp dir. Safe to call multiple times. */
   cleanup: () => void;
 }
@@ -306,11 +421,17 @@ export interface IsolatedSettings {
  *   `[]`) → the curated file registers the MCP Guard PreToolUse hook and the
  *   caller must set the {@link CORTEX_MCP_GRANTS_ENV} env var. Undefined →
  *   no MCP hook (non-policy path, behaviour unchanged).
+ * @param skillSourceDir Dir the granted skills are symlinked FROM (cortex#990
+ *   A1). Defaults to {@link DEFAULT_SKILL_SOURCE_DIR} (`~/.claude/skills`); the
+ *   caller passes `<configHome>/skills` when the deployment relocated the
+ *   claude-code config home (#2132). Only consulted when `skillGrants` is
+ *   non-empty.
  */
 export function createIsolatedSettings(
   claudeDir: string,
   skillGrants?: readonly string[],
   mcpGrants?: readonly string[],
+  skillSourceDir: string = DEFAULT_SKILL_SOURCE_DIR,
 ): IsolatedSettings {
   const dir = mkdtempSync(join(tmpdir(), "cortex-session-"));
   const settingsPath = join(dir, "settings.json");
@@ -322,14 +443,29 @@ export function createIsolatedSettings(
     },
   );
 
+  const args = [
+    "--setting-sources",
+    CORTEX_SETTING_SOURCES.join(","),
+    "--settings",
+    settingsPath,
+  ];
+
+  // cortex#990 A1 — when the session is granted skills, materialise them as a
+  // --plugin-dir plugin ALONGSIDE the curated settings (the isolation posture,
+  // empty --setting-sources included, is untouched). Empty/undefined grants →
+  // no plugin, no extra arg → byte-identical to the pre-#990 behaviour.
+  const pluginDir =
+    skillGrants !== undefined && skillGrants.length > 0
+      ? materialiseGrantedPlugin(dir, skillGrants, skillSourceDir)
+      : undefined;
+  if (pluginDir !== undefined) {
+    args.push("--plugin-dir", pluginDir);
+  }
+
   return {
     settingsPath,
-    args: [
-      "--setting-sources",
-      CORTEX_SETTING_SOURCES.join(","),
-      "--settings",
-      settingsPath,
-    ],
+    args,
+    pluginDir,
     cleanup: () => {
       try {
         rmSync(dir, { recursive: true, force: true });
