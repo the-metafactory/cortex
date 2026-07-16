@@ -20,10 +20,24 @@
 #
 # Usage (in the calling script):
 #   source "${SCRIPT_DIR}/lib/systemd-render.sh"
-#   render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+#   render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 #
-# Functions never write outside ${UNIT_DIR} (the linger/symlink checks are
-# read-only).
+# Functions never write outside ${UNIT_DIR}, the per-stack workspace/log dirs
+# under ${HOME}/.local/{share,state}, and ${HOME}/.local/state/nats/logs (the
+# linger/symlink checks are read-only).
+#
+# PR#2103 adversarial review (two rounds) found this file's first cut
+# unsafe in three ways, all fixed here:
+#   - the shipped units could not start on a fresh host at all (WorkingDirectory/
+#     StandardOutput both fail-closed on a missing directory, BEFORE any exec
+#     command including ExecStartPre runs — see render_cortex_systemd_units'
+#     and ensure_stack_workspace_dirs' docstrings);
+#   - a `systemctl --user` failure under the callers' `set -e` could abort the
+#     whole install/upgrade, or silently truncate the stack-restart loop
+#     (see run_with_timeout + the guarded call sites below);
+#   - render_systemd_unit clobbered a hand-authored unit unconditionally —
+#     Appendix A explicitly invites hand-copying these exact files, so a
+#     marker-less dst is now left untouched (see render_systemd_unit).
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # plist-render.sh provides discover_stack_slugs — stack enumeration is shared,
@@ -34,11 +48,28 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${LIB_DIR}/plist-render.sh"
 
 # Marker contract (coordinates with the rollback issue cortex#2093): every
-# unit this renderer installs carries this header as its FIRST line. Removal
-# (#2093) only deletes marker-bearing files, so a hand-authored unit at the
-# same path (e.g. a principal who followed Appendix A by hand before
-# upgrading) is never silently touched by either render or rollback.
+# unit THIS RENDERER WROTE carries this header as its first line.
+# render_systemd_unit only ever overwrites a dst that already carries it (or
+# doesn't exist yet); a marker-less dst — e.g. a principal who hand-copied
+# Appendix A before this renderer existed — is left untouched, warned about,
+# and never rendered over. Removal (#2093) uses the same rule to decide what
+# it may delete.
 SYSTEMD_UNIT_MARKER="# rendered-by: cortex systemd-render v1"
+
+# Timeout wrapper around every systemctl/loginctl --user call in this file —
+# a wedged --user D-Bus session must not hang `arc install`/`arc upgrade`
+# indefinitely (PR#2103 review). Degrades to a bare call when `timeout`
+# (coreutils) isn't installed, which is rare but not guaranteed on every
+# minimal distro.
+#
+# Args: the command + its args, e.g. `run_with_timeout systemctl --user ...`
+run_with_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 30 "$@"
+  else
+    "$@"
+  fi
+}
 
 # True if this host plausibly runs systemd. Two independent signals so the
 # check doesn't depend on ${UNIT_DIR} already existing:
@@ -59,14 +90,24 @@ systemd_host_detected() {
 }
 
 # Render ONE unit file: read $1 (checked-in template), prepend the marker
-# header, and write it to $2 (dest) ONLY if the result differs from what's
-# already there. On an actual write, bumps the caller-visible
-# SYSTEMD_RENDER_CHANGE_COUNT counter (reset by the caller before the loop) so
-# render_cortex_systemd_units can gate the single daemon-reload call on
-# whether ANY unit changed — systemd's daemon-reload is a global unit-file
-# rescan; firing it every upgrade even when nothing changed is needless churn
-# (#2071 executor addendum: "idempotent render + daemon-reload only on
-# change").
+# header, and write it to $2 (dest) — UNLESS dst already exists WITHOUT the
+# marker, in which case it is left completely untouched (see the
+# hand-authored-unit note below). On an actual write, bumps the
+# caller-visible SYSTEMD_RENDER_CHANGE_COUNT counter (reset by the caller
+# before the loop) so render_cortex_systemd_units can gate the single
+# daemon-reload call on whether ANY unit changed — systemd's daemon-reload is
+# a global unit-file rescan; firing it every upgrade even when nothing
+# changed is needless churn (#2071 executor addendum: "idempotent render +
+# daemon-reload only on change").
+#
+# Hand-authored-unit protection (PR#2103 review MAJOR finding): README-AGENTS.md
+# Appendix A explicitly invited operators to hand-copy these exact files
+# before this renderer existed, and a from-source install may still have a
+# customized unit at this path. A marker-less dst is therefore NOT
+# necessarily stale output from an old version of this renderer — it may be
+# someone's deliberate customization — so it is left alone, not overwritten.
+# The marker is the ONLY ownership signal this function trusts: present →
+# we rendered it, safe to keep in sync; absent → not ours, don't touch it.
 #
 # Args: $1 src file  $2 dst path
 render_systemd_unit() {
@@ -77,6 +118,12 @@ render_systemd_unit() {
     echo "  ⚠ Template missing: ${src}" >&2
     return 1
   fi
+
+  if [ -f "${dst}" ] && [ "$(sed -n '1p' "${dst}" 2>/dev/null)" != "${SYSTEMD_UNIT_MARKER}" ]; then
+    echo "  ⊘ ${name} exists without the cortex systemd-render marker — leaving it untouched (hand-authored or externally managed; delete it or add the marker line yourself to let the renderer manage it)" >&2
+    return 0
+  fi
+
   # G-30-style atomic render (mirrors plist-render.sh's render_stack_plist): a
   # bare redirect onto a live unit path could leave a truncated file visible
   # to systemd if the render is interrupted mid-write.
@@ -112,13 +159,14 @@ verify_cortex_bin_symlink() {
 # user's session — and every --user unit with it — the moment their last
 # login session ends (SSH logout, etc.). loginctl's `Linger` user property is
 # `yes`/`no`; anything else (including loginctl erroring, e.g. no
-# systemd-logind) is treated as "not confirmed enabled" and warned. NEVER sudo
-# here (#2071 executor addendum) — only print the exact remediation command
-# (same shape as Appendix A §A.1) for the operator to run themselves.
+# systemd-logind, or timing out — see run_with_timeout) is treated as "not
+# confirmed enabled" and warned. NEVER sudo here (#2071 executor addendum) —
+# only print the exact remediation command (same shape as Appendix A §A.1)
+# for the operator to run themselves.
 warn_systemd_linger() {
   local user linger
   user="$(id -un)"
-  linger="$(loginctl show-user "${user}" --property=Linger --value 2>/dev/null || true)"
+  linger="$(run_with_timeout loginctl show-user "${user}" --property=Linger --value 2>/dev/null || true)"
   if [ "${linger}" != "yes" ]; then
     echo "  ⚠ linger not enabled for ${user} — systemd will stop your cortex services on logout. Enable with: sudo loginctl enable-linger \"${user}\"" >&2
     return 1
@@ -126,54 +174,48 @@ warn_systemd_linger() {
   return 0
 }
 
-# Restart only ACTIVE cortex@<slug> instances after an upgrade — the systemd
-# mirror of postupgrade.sh's plist reload_stack_unless_skipped loop. Unlike
-# the Darwin side, preupgrade.sh's stop/kill block is Darwin-only (see
-# preupgrade.sh's cortex#1909 note), so there is no RUNNING_STACKS_FILE to
-# replay here; "was it running" is answered directly via `systemctl --user
-# is-active`. A stack that isn't currently active is left alone — this must
-# never START a stack that wasn't running (same "no stack left down; none
-# started that wasn't running" symmetry goal as the plist path, just checked
-# live instead of from recorded state).
+# Ensure the two host-wide log dirs both units' `StandardOutput=`/
+# `StandardError=append:` lines write into actually exist, at RENDER time —
+# not via the units' own `ExecStartPre=mkdir -p` lines, which CANNOT do this
+# job on a cold start.
 #
-# NOTE: CORTEX_UPGRADE_SKIP_RESTART parity (sparing a production stack from
-# restart) is explicitly NOT implemented here — preupgrade.sh documents that
-# gap as Linux/systemd territory for cortex#1909, not this issue.
+# Verified empirically (systemd 257, Debian trixie AND independently on
+# Ubuntu 22.04 / systemd 249): `StandardOutput=append:<path>` is opened
+# BEFORE any exec command of the unit runs, including ExecStartPre — a
+# missing log dir fails the unit outright (systemd exit reason
+# EXIT_STDOUT/209) before ExecStartPre's own `mkdir -p` of that same
+# directory ever gets to execute. The ExecStartPre lines stay in both unit
+# files as belt-and-braces (a harmless no-op once the dir already exists,
+# and they DO help if a warm dir gets deleted between a stop and the next
+# stop — just never on the very first cold start), but the actual
+# cold-start guarantee has to come from here.
 #
-# Args: $1 CONFIG_DIR — cortex config dir (stacks are discovered from here)
-restart_running_systemd_stacks() {
-  local config_dir="$1"
-  local slug unit
-  while IFS= read -r slug; do
-    [ -z "${slug}" ] && continue
-    unit="cortex@${slug}"
-    if systemctl --user is-active --quiet "${unit}" 2>/dev/null; then
-      systemctl --user restart "${unit}"
-      echo "  ✓ ${unit} restarted"
-    else
-      echo "  ⊘ ${unit} not active — not restarted"
-    fi
-  done < <(discover_stack_slugs "${config_dir}")
+# `~/.local/state/nats/logs` — nothing else in the codebase creates this
+# (nats-server is an external dependency; README-AGENTS.md Appendix A §A.1
+# hand-creates it for the manual path, this is the arc-managed equivalent).
+# `~/.local/state/metafactory/cortex/logs` — postinstall.sh's state-bootstrap
+# (§1b, migrate-state-dir-exec.ts) already creates this on install, but only
+# on a genuinely fresh box and only via a bun subprocess that's allowed to
+# no-op on error; recreating it here too makes the guarantee deterministic
+# and host-independent of that script having run first or succeeded.
+ensure_stack_log_dirs() {
+  mkdir -p "${HOME}/.local/state/nats/logs"
+  mkdir -p "${HOME}/.local/state/metafactory/cortex/logs"
 }
 
 # Ensure the per-stack workspace dir exists for every discovered stack
-# (cortex#2097's `WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace`
+# (cortex#2097's `WorkingDirectory=-%h/.local/share/metafactory/cortex/%i/workspace`
 # on cortex@.service).
 #
-# This is NOT optional belt-and-braces — it's load-bearing. Verified
-# empirically (systemd 257, Debian trixie): `WorkingDirectory=` is entered
-# BEFORE *any* exec command of the unit runs, including ExecStartPre — a
-# missing WorkingDirectory fails the unit outright (systemd exit reason
-# EXIT_CHDIR/200) before ExecStartPre's own `mkdir -p` of that same path ever
-# gets to execute. The unit file cannot self-heal this; the directory must
-# already exist by the time `systemctl --user enable/start` runs.
-#
-# Until cortex#2097 ships (stack scaffolding creates this dir itself), NOTHING
-# else in the codebase creates it — so this is the one prerequisite render
-# time can and must cover, mirroring how README-AGENTS.md Appendix A §A.1
-# hand-creates nats-server's log dir as a one-time host-prep step for the
-# same reason (see the ExecStartPre note on render_cortex_systemd_units below
-# for why the *log* dirs don't need this treatment).
+# Defense-in-depth, not the only guard: the unit's `WorkingDirectory=` now
+# carries the `-` prefix (missing dir is non-fatal — ExecStartPre's own
+# `mkdir -p` of the same path then creates it, and ExecStart's chdir
+# succeeds; verified empirically against a real systemd user session with NO
+# other actor pre-creating the dir). This function covers every ALREADY
+# DISCOVERED stack proactively at render time (so an arc-managed upgrade
+# never even needs the self-heal path); later-created stacks (before
+# cortex#2097's stack-scaffold ships its own creation step) fall through to
+# the unit's own self-heal on first enable.
 #
 # Args: $1 CONFIG_DIR — cortex config dir (stacks are discovered from here)
 ensure_stack_workspace_dirs() {
@@ -186,24 +228,16 @@ ensure_stack_workspace_dirs() {
 }
 
 # Render nats@.service + cortex@.service into UNIT_DIR from the templates
-# checked in under CORTEX_DIR/src/services/, ensure every discovered stack's
-# workspace dir exists (see ensure_stack_workspace_dirs), then run the
-# bun-guard-analogue symlink check and the linger check.
-# `systemctl --user daemon-reload` runs at most once, and only when at least
-# one unit's content actually changed.
+# checked in under CORTEX_DIR/src/services/, ensure the host-wide log dirs
+# and every discovered stack's workspace dir exist (see ensure_stack_log_dirs
+# / ensure_stack_workspace_dirs), then run the bun-guard-analogue symlink
+# check and the linger check. `systemctl --user daemon-reload` runs at most
+# once, and only when at least one unit's content actually changed.
 #
-# NOTE on the units' `ExecStartPre=/usr/bin/mkdir -p .../logs` lines: those
-# are NOT dead code the way an un-pre-created WorkingDirectory is, but they
-# are also not a substitute for pre-creating the parent on a truly fresh
-# host — `StandardOutput=append:<path under that dir>` is set up before
-# ExecStartPre runs too, so on a from-nothing host the very first start
-# needs the log dir to already exist (README-AGENTS.md Appendix A §A.1 hand-
-# creates nats-server's; postinstall.sh's state bootstrap creates cortex's,
-# host-independent). The ExecStartPre line's job is the idempotent
-# re-creation case (dir survives; a later restart is a no-op mkdir), which is
-# genuinely useful — it's only the *cold-start* case that needs an external
-# actor, which is why workspace (with no OTHER creator yet, pre-cortex#2097)
-# gets handled here explicitly and logs (which already have one) don't.
+# Never aborts the caller: `daemon-reload` is guarded (a transient bus
+# failure prints a warning and continues — postinstall.sh/postupgrade.sh both
+# run under `set -e`, and an unguarded systemctl call here would silently
+# abort the whole install/upgrade on a flaky bus; PR#2103 review BLOCKER 2).
 #
 # No-ops (silently, exit 0) on Darwin and on a systemd-less host — see
 # systemd_host_detected().
@@ -224,6 +258,7 @@ render_cortex_systemd_units() {
   fi
 
   mkdir -p "${unit_dir}"
+  ensure_stack_log_dirs
 
   SYSTEMD_RENDER_CHANGE_COUNT=0
   local unit
@@ -232,11 +267,60 @@ render_cortex_systemd_units() {
   done
 
   if [ "${SYSTEMD_RENDER_CHANGE_COUNT}" -gt 0 ]; then
-    systemctl --user daemon-reload
-    echo "  ✓ systemd user daemon reloaded (${SYSTEMD_RENDER_CHANGE_COUNT} unit(s) changed)"
+    if run_with_timeout systemctl --user daemon-reload; then
+      echo "  ✓ systemd user daemon reloaded (${SYSTEMD_RENDER_CHANGE_COUNT} unit(s) changed)"
+    else
+      echo "  ⚠ systemctl --user daemon-reload failed (bus unavailable or timed out) — rendered units may not be picked up until the next successful reload; re-run \`arc upgrade cortex\` or \`systemctl --user daemon-reload\` manually" >&2
+    fi
   fi
 
   ensure_stack_workspace_dirs "${config_dir}"
   verify_cortex_bin_symlink || true
   warn_systemd_linger || true
+}
+
+# Restart only ACTIVE cortex@<slug> instances after an upgrade — the systemd
+# mirror of postupgrade.sh's plist reload_stack_unless_skipped loop. Unlike
+# the Darwin side, preupgrade.sh's stop/kill block is Darwin-only (see
+# preupgrade.sh's cortex#1909 note), so there is no RUNNING_STACKS_FILE to
+# replay here; "was it running" is answered directly via `systemctl --user
+# is-active`. A stack that isn't currently active is left alone — this must
+# never START a stack that wasn't running (same "no stack left down; none
+# started that wasn't running" symmetry goal as the plist path, just checked
+# live instead of from recorded state).
+#
+# Never aborts the caller and never stops early on one bad stack (PR#2103
+# review BLOCKER 2): an unguarded `systemctl --user restart` failing under
+# the caller's `set -e` would abort postupgrade.sh mid-loop, silently
+# skipping every stack after the one that failed. Each restart is guarded;
+# failures are collected and reported in a single summary line at the end,
+# and the function itself always returns 0.
+#
+# NOTE: CORTEX_UPGRADE_SKIP_RESTART parity (sparing a production stack from
+# restart) is explicitly NOT implemented here — preupgrade.sh documents that
+# gap as Linux/systemd territory for cortex#1909, not this issue.
+#
+# Args: $1 CONFIG_DIR — cortex config dir (stacks are discovered from here)
+restart_running_systemd_stacks() {
+  local config_dir="$1"
+  local slug unit failed=""
+  while IFS= read -r slug; do
+    [ -z "${slug}" ] && continue
+    unit="cortex@${slug}"
+    if run_with_timeout systemctl --user is-active --quiet "${unit}" 2>/dev/null; then
+      if run_with_timeout systemctl --user restart "${unit}"; then
+        echo "  ✓ ${unit} restarted"
+      else
+        echo "  ✗ ${unit} restart FAILED (bus unavailable, timed out, or the restart itself failed) — check \`systemctl --user status ${unit}\`" >&2
+        failed="${failed}${failed:+ }${unit}"
+      fi
+    else
+      echo "  ⊘ ${unit} not active — not restarted"
+    fi
+  done < <(discover_stack_slugs "${config_dir}")
+
+  if [ -n "${failed}" ]; then
+    echo "  ⚠ restart_running_systemd_stacks: failed to restart: ${failed} — investigate manually, the rest of the upgrade completed" >&2
+  fi
+  return 0
 }

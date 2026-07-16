@@ -1,8 +1,9 @@
 #!/bin/bash
 # cortex#2071 (L1, Linux host support) — unit tests for scripts/lib/systemd-render.sh:
-# marker-header idempotency, daemon-reload-only-on-change, the Darwin/
-# systemd-less no-ops, the bin-symlink + linger warnings, and the
-# restart-only-if-active loop.
+# marker-header idempotency, hand-authored-unit protection, daemon-reload-only-
+# on-change, the Darwin/systemd-less no-ops, the bin-symlink + linger warnings,
+# the restart-only-if-active loop, and (PR#2103 review round 2) the guarded-
+# systemctl / set -e survival behavior plus the timeout wrapper.
 #
 # Tests run entirely in a scratch $HOME; no live ~/.config/systemd/user or
 # systemctl/loginctl is touched — both are mocked via PATH override, same
@@ -71,8 +72,14 @@ export HOME="${TMPHOME}"
 source "${SCRIPT_DIR}/lib/systemd-render.sh"
 
 # Mock bin dir: uname (force "Linux" so the render path runs on any host this
-# suite executes on), systemctl (trace log + controllable is-active), and
-# loginctl (controllable Linger value).
+# suite executes on), systemctl (trace log + controllable is-active/
+# daemon-reload/restart failure injection), and loginctl (controllable
+# Linger value). `timeout` itself is NOT mocked — the real coreutils
+# `timeout` (present on both macOS-via-homebrew dev boxes and every Ubuntu CI
+# runner) transparently wraps the mocked systemctl/loginctl below, so
+# run_with_timeout's normal path is exercised for real; only its "timeout not
+# installed" degrade path needs a PATH trick (see the run_with_timeout
+# section).
 MOCK_BIN="${TMPHOME}/mock-bin"
 mkdir -p "${MOCK_BIN}"
 
@@ -83,18 +90,30 @@ EOF
 chmod +x "${MOCK_BIN}/uname"
 
 export SYSTEMCTL_LOG="${TMPHOME}/systemctl.log"
-# ACTIVE_UNITS: newline-separated unit names `systemctl --user is-active
+# ACTIVE_UNITS_FILE: newline-separated unit names `systemctl --user is-active
 # --quiet <unit>` should report active (exit 0) for; anything else exits 1.
 export ACTIVE_UNITS_FILE="${TMPHOME}/active-units"
 : > "${ACTIVE_UNITS_FILE}"
+# FAIL_DAEMON_RELOAD=1 → `daemon-reload` exits 1 (simulates a wedged/unavailable bus).
+# FAIL_RESTART_UNITS="unit1 unit2" → `restart <unit>` exits 1 iff <unit> is listed.
 cat > "${MOCK_BIN}/systemctl" <<'EOF'
 #!/bin/sh
 printf 'systemctl %s\n' "$*" >> "${SYSTEMCTL_LOG:-/dev/null}"
-# is-active --quiet <unit>: exit 0 iff <unit> is listed in ACTIVE_UNITS_FILE.
 if [ "$1" = "--user" ] && [ "$2" = "is-active" ]; then
   unit="$4"
   grep -qxF "${unit}" "${ACTIVE_UNITS_FILE:-/dev/null}" && exit 0
   exit 1
+fi
+if [ "$1" = "--user" ] && [ "$2" = "daemon-reload" ]; then
+  [ "${FAIL_DAEMON_RELOAD:-0}" = "1" ] && exit 1
+  exit 0
+fi
+if [ "$1" = "--user" ] && [ "$2" = "restart" ]; then
+  unit="$3"
+  for u in ${FAIL_RESTART_UNITS:-}; do
+    [ "$u" = "$unit" ] && exit 1
+  done
+  exit 0
 fi
 exit 0
 EOF
@@ -152,28 +171,44 @@ assert_file_exists "cortex@.service written" "${UNIT_DIR}/cortex@.service"
 assert_eq "first render → change count 1" "1" "${SYSTEMD_RENDER_CHANGE_COUNT}"
 assert_eq "marker is line 1" "# rendered-by: cortex systemd-render v1" \
   "$(sed -n '1p' "${UNIT_DIR}/cortex@.service")"
-assert_grep_file "WorkingDirectory line present (workspace addendum, cortex#2097)" \
-  "${UNIT_DIR}/cortex@.service" 'WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace'
-# NO matching ExecStartPre mkdir line for the workspace dir: verified against a
-# real systemd 257 user session that WorkingDirectory= is entered before ANY
-# exec command (including ExecStartPre) runs, so that line could never have
-# self-healed a missing workspace dir (EXIT_CHDIR before it could run) — it
-# was removed in favor of ensure_stack_workspace_dirs (render-time, slug-aware,
-# actually able to create the directory before systemd ever tries to chdir
-# into it). The logs ExecStartPre line stays (belt-and-braces re-creation).
-assert_false "dead workspace ExecStartPre line NOT present (removed, cortex#2071 PR fixup)" \
-  bash -c "grep -qF 'ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace' '${UNIT_DIR}/cortex@.service'"
+assert_grep_file "WorkingDirectory carries the '-' prefix (PR#2103 BLOCKER 1 fix — missing dir is non-fatal)" \
+  "${UNIT_DIR}/cortex@.service" 'WorkingDirectory=-%h/.local/share/metafactory/cortex/%i/workspace'
+assert_grep_file "matching ExecStartPre workspace mkdir line present (belt-and-braces; works now that '-' lets it run)" \
+  "${UNIT_DIR}/cortex@.service" 'ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace'
 
 # Re-render with IDENTICAL content → no-op, change count NOT bumped again.
 render_systemd_unit "${CORTEX_DIR}/src/services/cortex@.service" "${UNIT_DIR}/cortex@.service"
 assert_eq "unchanged re-render → change count stays 1" "1" "${SYSTEMD_RENDER_CHANGE_COUNT}"
 
-# A hand-edited (drifted) dst → next render overwrites and bumps the count.
-printf 'stale hand-edit\n' > "${UNIT_DIR}/cortex@.service"
+# A MARKED dst with a stale/drifted body (e.g. rendered by an older version of
+# this renderer, or the checked-in template changed) → still OURS (marker
+# present), gets overwritten normally: count bumps, marker stays line 1.
+{ printf '%s\n' "# rendered-by: cortex systemd-render v1"; printf 'stale marked content\n'; } > "${UNIT_DIR}/cortex@.service"
 render_systemd_unit "${CORTEX_DIR}/src/services/cortex@.service" "${UNIT_DIR}/cortex@.service"
-assert_eq "drifted dst → re-rendered, change count bumps to 2" "2" "${SYSTEMD_RENDER_CHANGE_COUNT}"
-assert_eq "drifted dst → marker restored as line 1" "# rendered-by: cortex systemd-render v1" \
+assert_eq "marked-but-stale dst → re-rendered, change count bumps to 2" "2" "${SYSTEMD_RENDER_CHANGE_COUNT}"
+assert_eq "marked-but-stale dst → marker still line 1 after re-render" "# rendered-by: cortex systemd-render v1" \
   "$(sed -n '1p' "${UNIT_DIR}/cortex@.service")"
+
+# ── Hand-authored-unit protection (PR#2103 review MAJOR finding) ──
+# A dst that exists WITHOUT the marker (e.g. hand-copied per Appendix A
+# before this renderer existed, or a from-source operator's customization)
+# must be left COMPLETELY untouched: not overwritten, not deleted,
+# byte-identical before and after, and the change counter must NOT move.
+HAND_REF="$(mktemp)"
+cat > "${HAND_REF}" <<'EOF'
+[Unit]
+Description=My own hand-authored cortex unit, please do not touch
+EOF
+cp "${HAND_REF}" "${UNIT_DIR}/cortex@.service"
+HAND_BEFORE_COUNT="${SYSTEMD_RENDER_CHANGE_COUNT}"
+HAND_WARN="$(mktemp)"
+render_systemd_unit "${CORTEX_DIR}/src/services/cortex@.service" "${UNIT_DIR}/cortex@.service" 2>"${HAND_WARN}"
+assert_true "hand-authored dst is byte-identical after render (never touched)" \
+  cmp -s "${HAND_REF}" "${UNIT_DIR}/cortex@.service"
+assert_eq "hand-authored dst → change count NOT bumped" "${HAND_BEFORE_COUNT}" "${SYSTEMD_RENDER_CHANGE_COUNT}"
+assert_grep_file "hand-authored dst → warns it was left untouched" "${HAND_WARN}" \
+  "exists without the cortex systemd-render marker"
+rm -f "${HAND_WARN}" "${HAND_REF}"
 
 # Missing template source → warns, returns non-zero, nothing written.
 reset_unit_dir
@@ -183,11 +218,23 @@ assert_false "missing template source → non-zero" \
 assert_false "missing template source → nothing written" \
   test -e "${UNIT_DIR}/does-not-exist.service"
 
-# ─── Section 3: render_cortex_systemd_units — orchestration ───────
+# ─── Section 3: ensure_stack_log_dirs ──────────────────────────────
+printf '\n=== ensure_stack_log_dirs ===\n'
+
+rm -rf "${HOME}/.local/state/nats" "${HOME}/.local/state/metafactory"
+ensure_stack_log_dirs
+assert_true "nats log dir created (nothing else creates this on Linux)" \
+  test -d "${HOME}/.local/state/nats/logs"
+assert_true "cortex log dir created (deterministic, independent of postinstall's bootstrap)" \
+  test -d "${HOME}/.local/state/metafactory/cortex/logs"
+# Idempotent — a second call on already-existing dirs is a clean no-op.
+assert_true "re-running is a clean no-op" ensure_stack_log_dirs
+
+# ─── Section 4: render_cortex_systemd_units — orchestration ───────
 printf '\n=== render_cortex_systemd_units ===\n'
 
-# Config-dir fixture with two discoverable stacks — used both for the
-# workspace-dir-creation assertions below and for Section 6's restart tests.
+# Config-dir fixture with two discoverable stacks — used for the
+# workspace-dir-creation assertions below and for the restart-loop tests.
 CONFIG_DIR="${TMPHOME}/config"
 mkdir -p "${CONFIG_DIR}/work/system" "${CONFIG_DIR}/halden/system"
 : > "${CONFIG_DIR}/work/work.yaml"
@@ -225,31 +272,65 @@ assert_eq "systemd-less Linux → zero systemctl calls" "0" "$(wc -l < "${SYSTEM
 export SYSTEMD_HOST_MARKER="${TMPHOME}/fake-run-systemd-system"
 
 # Real systemd Linux host, fresh unit dir → both units rendered, exactly one
-# daemon-reload call (not one per unit), AND both discovered stacks' workspace
-# dirs exist (cortex@.service's WorkingDirectory= must pre-exist before
-# enable/start — see ensure_stack_workspace_dirs's docstring; verified against
-# a real systemd 257 user session, not just asserted here).
+# daemon-reload call (not one per unit), the two host-wide log dirs exist, AND
+# both discovered stacks' workspace dirs exist (defense-in-depth pre-creation
+# — the units also self-heal this via the "-" WorkingDirectory prefix, but a
+# proactive render-time create means an arc-managed upgrade never needs to
+# fall back to that path at all).
 reset_unit_dir
-rm -rf "${HOME}/.local/share/metafactory/cortex"
+rm -rf "${HOME}/.local/share/metafactory/cortex" "${HOME}/.local/state/nats" "${HOME}/.local/state/metafactory"
 : > "${SYSTEMCTL_LOG}"
 render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 assert_file_exists "nats@.service rendered" "${UNIT_DIR}/nats@.service"
 assert_file_exists "cortex@.service rendered" "${UNIT_DIR}/cortex@.service"
 assert_eq "fresh render (2 units changed) → exactly 1 daemon-reload call" "1" \
   "$(grep -c '^systemctl --user daemon-reload$' "${SYSTEMCTL_LOG}")"
+assert_true "render creates the nats log dir" test -d "${HOME}/.local/state/nats/logs"
+assert_true "render creates the cortex log dir" test -d "${HOME}/.local/state/metafactory/cortex/logs"
 assert_true "render also creates 'work' stack's workspace dir" \
   test -d "${HOME}/.local/share/metafactory/cortex/work/workspace"
 assert_true "render also creates 'halden' stack's workspace dir" \
   test -d "${HOME}/.local/share/metafactory/cortex/halden/workspace"
 
-# Re-render with nothing changed → zero daemon-reload calls (workspace-dir
+# Re-render with nothing changed → zero daemon-reload calls (workspace/log-dir
 # creation is idempotent — mkdir -p on an existing dir is a no-op).
 : > "${SYSTEMCTL_LOG}"
 render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 assert_eq "no-op re-render → zero daemon-reload calls" "0" \
   "$(grep -c '^systemctl --user daemon-reload$' "${SYSTEMCTL_LOG}" || true)"
 
-# ─── Section 3b: ensure_stack_workspace_dirs (standalone) ─────────
+# ── BLOCKER 2: a failing daemon-reload must not abort the caller ──
+reset_unit_dir
+: > "${SYSTEMCTL_LOG}"
+export FAIL_DAEMON_RELOAD=1
+RELOAD_ERR="$(mktemp)"
+set +e
+render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}" 2>"${RELOAD_ERR}"
+RELOAD_RC=$?
+set -e
+assert_eq "render_cortex_systemd_units returns 0 even when daemon-reload fails" "0" "${RELOAD_RC}"
+assert_grep_file "failing daemon-reload is warned, not silently swallowed" "${RELOAD_ERR}" \
+  "daemon-reload failed"
+assert_file_exists "units were still rendered despite the reload failure" "${UNIT_DIR}/cortex@.service"
+rm -f "${RELOAD_ERR}"
+unset FAIL_DAEMON_RELOAD
+
+# ── BLOCKER 2, end to end: a `set -e` caller (mirrors postinstall.sh/
+# postupgrade.sh's own shebang) must run PAST a failing daemon-reload, not
+# abort mid-script. ──
+reset_unit_dir
+export FAIL_DAEMON_RELOAD=1
+SETE_OUT="$(mktemp)"
+set +e
+bash -c "set -e; source '${SCRIPT_DIR}/lib/systemd-render.sh'; render_cortex_systemd_units '${CORTEX_DIR}' '${UNIT_DIR}' '${CONFIG_DIR}'; echo SCRIPT_COMPLETED" > "${SETE_OUT}" 2>&1
+SETE_RC=$?
+set -e
+assert_eq "a 'set -e' caller completes (exit 0) despite the failing daemon-reload" "0" "${SETE_RC}"
+assert_grep_file "the caller ran past the guarded daemon-reload call" "${SETE_OUT}" "SCRIPT_COMPLETED"
+rm -f "${SETE_OUT}"
+unset FAIL_DAEMON_RELOAD
+
+# ─── Section 5: ensure_stack_workspace_dirs (standalone) ──────────
 printf '\n=== ensure_stack_workspace_dirs ===\n'
 
 rm -rf "${HOME}/.local/share/metafactory/cortex"
@@ -265,7 +346,7 @@ mkdir -p "${EMPTY_CONFIG_DIR}"
 assert_true "no stacks → ensure_stack_workspace_dirs is a clean no-op" \
   ensure_stack_workspace_dirs "${EMPTY_CONFIG_DIR}"
 
-# ─── Section 4: verify_cortex_bin_symlink ─────────────────────────
+# ─── Section 6: verify_cortex_bin_symlink ─────────────────────────
 printf '\n=== verify_cortex_bin_symlink ===\n'
 
 rm -rf "${HOME}/.local/bin"
@@ -276,7 +357,7 @@ mkdir -p "${HOME}/.local/bin"
 printf '#!/bin/sh\n' > "${HOME}/.local/bin/cortex"
 assert_true "present ~/.local/bin/cortex → passes" verify_cortex_bin_symlink
 
-# ─── Section 5: warn_systemd_linger ───────────────────────────────
+# ─── Section 7: warn_systemd_linger ───────────────────────────────
 printf '\n=== warn_systemd_linger ===\n'
 
 export LINGER_VALUE="yes"
@@ -296,10 +377,10 @@ assert_false "warn_systemd_linger never invokes sudo itself" \
 rm -f "${WARN_OUT}"
 export LINGER_VALUE="yes"
 
-# ─── Section 6: restart_running_systemd_stacks ────────────────────
+# ─── Section 8: restart_running_systemd_stacks ────────────────────
 printf '\n=== restart_running_systemd_stacks ===\n'
 
-# Reuses the CONFIG_DIR fixture (work + halden stacks) set up before Section 3.
+# Reuses the CONFIG_DIR fixture (work + halden stacks) from Section 4.
 
 # Only 'work' is active.
 : > "${ACTIVE_UNITS_FILE}"
@@ -320,6 +401,55 @@ assert_eq "inactive 'halden' IS checked (is-active called)" "1" \
 restart_running_systemd_stacks "${CONFIG_DIR}" > /dev/null
 assert_eq "nothing active → zero restart calls" "0" \
   "$(grep -c '^systemctl --user restart ' "${SYSTEMCTL_LOG}" || true)"
+
+# ── BLOCKER 2: one failed restart must not abort the loop or hide the
+# remaining stacks — it's collected and reported, everything else proceeds. ──
+: > "${ACTIVE_UNITS_FILE}"
+printf 'cortex@work\ncortex@halden\n' >> "${ACTIVE_UNITS_FILE}"
+export FAIL_RESTART_UNITS="cortex@work"
+: > "${SYSTEMCTL_LOG}"
+RESTART_OUT="$(mktemp)"
+set +e
+restart_running_systemd_stacks "${CONFIG_DIR}" > "${RESTART_OUT}" 2>&1
+RESTART_RC=$?
+set -e
+assert_eq "restart_running_systemd_stacks returns 0 even with a failed restart" "0" "${RESTART_RC}"
+assert_grep_file "the failed unit is reported per-unit" "${RESTART_OUT}" "cortex@work restart FAILED"
+assert_grep_file "the failed unit is named in the end-of-run summary" "${RESTART_OUT}" \
+  "failed to restart: cortex@work"
+assert_eq "the OTHER active stack (halden) still restarts despite work's failure" "1" \
+  "$(grep -c '^systemctl --user restart cortex@halden$' "${SYSTEMCTL_LOG}")"
+rm -f "${RESTART_OUT}"
+unset FAIL_RESTART_UNITS
+
+# ── BLOCKER 2, end to end: a `set -e` caller must run PAST a failed restart. ──
+: > "${ACTIVE_UNITS_FILE}"
+printf 'cortex@work\n' >> "${ACTIVE_UNITS_FILE}"
+export FAIL_RESTART_UNITS="cortex@work"
+SETE_RESTART_OUT="$(mktemp)"
+set +e
+bash -c "set -e; source '${SCRIPT_DIR}/lib/systemd-render.sh'; restart_running_systemd_stacks '${CONFIG_DIR}'; echo SCRIPT_COMPLETED" > "${SETE_RESTART_OUT}" 2>&1
+SETE_RESTART_RC=$?
+set -e
+assert_eq "a 'set -e' caller completes (exit 0) despite the failed restart" "0" "${SETE_RESTART_RC}"
+assert_grep_file "the caller ran past the guarded restart call" "${SETE_RESTART_OUT}" "SCRIPT_COMPLETED"
+rm -f "${SETE_RESTART_OUT}"
+unset FAIL_RESTART_UNITS
+: > "${ACTIVE_UNITS_FILE}"
+
+# ─── Section 9: run_with_timeout ───────────────────────────────────
+printf '\n=== run_with_timeout ===\n'
+
+# Normal path: the real `timeout` (present on this dev box / any Ubuntu CI
+# runner via coreutils) transparently wraps the call.
+assert_eq "wraps a successful command through the real timeout binary" "hello" \
+  "$(run_with_timeout echo hello)"
+
+# Degrade path: PATH with no `timeout` on it at all → falls back to a bare
+# call. `echo` is a shell builtin so it needs no PATH resolution, isolating
+# this case to exactly the `command -v timeout` branch under test.
+assert_eq "degrades to a bare call when timeout is absent from PATH" "hi" \
+  "$(PATH="${MOCK_BIN}" run_with_timeout echo hi)"
 
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"

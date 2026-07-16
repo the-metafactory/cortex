@@ -17,10 +17,16 @@
 // Ubuntu runner — still satisfies a bare "is there a systemd-user bus"
 // probe, so that check alone let this test leak into the wrong job) and NOT
 // on "Linux + a live systemd-user session" alone, which would also match a
-// real developer's Linux desktop, where blindly stubbing ~/.local/bin/cortex
-// or enabling/disabling units could clobber a REAL install. Test name and
-// describe block both carry "systemd-e2e" so the CI job's
-// `--test-name-pattern systemd-e2e` picks this up.
+// real developer's Linux desktop, where blindly stubbing ~/.local/bin/cortex,
+// enabling/disabling units, or touching an existing nats@.service/
+// cortex@.service could clobber a REAL install. Test name and describe block
+// both carry "systemd-e2e" so the CI job's `--test-name-pattern systemd-e2e`
+// picks this up.
+//
+// Every mutation this test makes to the real $HOME (stub binaries, unit
+// files, the workspace dir) is backed up before and restored in `finally` —
+// on the off chance this ever ran on a box with a genuine install present
+// (it shouldn't, given the gate above), it must not orphan a live stack.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "fs";
@@ -50,15 +56,16 @@ const SLUG = "e2e2071";
 const HOME_DIR = homedir();
 const UNIT_DIR = join(HOME_DIR, ".config", "systemd", "user");
 const LOCAL_BIN = join(HOME_DIR, ".local", "bin");
-const CORTEX_LOGS_DIR = join(HOME_DIR, ".local", "state", "metafactory", "cortex", "logs");
+const WORKSPACE_DIR = join(HOME_DIR, ".local", "share", "metafactory", "cortex", SLUG);
 const NATS_LOGS_DIR = join(HOME_DIR, ".local", "state", "nats", "logs");
+const CORTEX_LOGS_DIR = join(HOME_DIR, ".local", "state", "metafactory", "cortex", "logs");
 
 // Captures `systemctl --user status` + the tail of `journalctl --user` for a
 // unit so a future CI failure explains itself instead of just reporting "not
 // active" — this is exactly the diagnostic gap that made the cortex#2103
-// review round-trip necessary; verified against a real systemd 257 user
-// session that this is enough to see the actual failing ExecStartPre/exec
-// (e.g. `code=exited, status=200/CHDIR` or `status=209/STDOUT`).
+// review round-trip necessary; verified against a real systemd user session
+// that this is enough to see the actual failing ExecStartPre/exec (e.g.
+// `code=exited, status=200/CHDIR` or `status=209/STDOUT`).
 function diagnose(unit: string): string {
   const status = sh("systemctl", ["--user", "status", unit, "--no-pager", "-l"]);
   const journal = sh("journalctl", ["--user", "-u", unit, "--no-pager"]);
@@ -69,63 +76,82 @@ function diagnose(unit: string): string {
   );
 }
 
+// Backs up path (rename aside) if it already exists, returning a restore
+// function. Used for every real-$HOME path this test touches (stub
+// binaries AND the unit files — PR#2103 review finding: only the binaries
+// were backed up in the previous round, the unit files were unconditionally
+// overwritten/removed) so a pre-existing file is never lost, and only files
+// this test itself created get deleted in cleanup.
+function backup(path: string): () => void {
+  if (!existsSync(path)) {
+    return () => rmSync(path, { force: true, recursive: true });
+  }
+  const savedAt = `${path}.systemd-e2e-backup`;
+  renameSync(path, savedAt);
+  return () => {
+    rmSync(path, { force: true, recursive: true });
+    renameSync(savedAt, path);
+  };
+}
+
 describe("systemd-e2e: real render + enable + restart (cortex#2071)", () => {
   test.skipIf(!RUN_E2E)("render → enable --now nats@/cortex@ → is-active → restart-on-upgrade", () => {
     mkdirSync(LOCAL_BIN, { recursive: true });
+    mkdirSync(UNIT_DIR, { recursive: true });
+
+    const restoreFns: Array<() => void> = [];
+    // Unit files first (mirrors render_cortex_systemd_units writing them),
+    // then the stub binaries, then the workspace dir — order doesn't matter
+    // for correctness, but restoring in reverse in `finally` undoes them
+    // cleanly regardless.
+    restoreFns.push(backup(join(UNIT_DIR, "nats@.service")));
+    restoreFns.push(backup(join(UNIT_DIR, "cortex@.service")));
+    restoreFns.push(backup(WORKSPACE_DIR));
 
     // Stub nats-server/cortex — a real long-running Type=simple process that
     // ignores its args, so `systemctl --user enable --now` has something
     // real to mark active without needing an actual NATS server or a linked
     // cortex CLI on the bare CI runner. `sleep infinity` (not a bounded
-    // duration) so it can never exit on its own during the test. Back up +
-    // restore anything already there (belt-and-braces; a fresh Actions
-    // runner never has these, but a stub must never end up permanently
-    // shadowing a real binary).
-    const backups: Array<{ path: string; backup: string }> = [];
+    // duration) so it can never exit on its own during the test.
     for (const name of ["nats-server", "cortex"]) {
       const p = join(LOCAL_BIN, name);
-      if (existsSync(p)) {
-        const backup = `${p}.systemd-e2e-backup`;
-        renameSync(p, backup);
-        backups.push({ path: p, backup });
-      }
+      restoreFns.push(backup(p));
       writeFileSync(p, "#!/bin/sh\nexec sleep infinity\n");
       chmodSync(p, 0o755);
     }
 
     // Config-dir fixture (created BEFORE render, not after) so render_cortex_
     // systemd_units' ensure_stack_workspace_dirs sees this slug and creates
-    // ~/.local/share/metafactory/cortex/<slug>/workspace before cortex@ is
-    // ever enabled. WorkingDirectory= is entered before ANY exec command of
-    // the unit runs (including ExecStartPre) — verified against a real
-    // systemd 257 user session that a missing workspace dir fails the unit
-    // outright (EXIT_CHDIR) with no way for the unit file to self-heal —
-    // this is exactly why ensure_stack_workspace_dirs exists.
+    // the workspace dir before cortex@ is ever enabled.
     const configDir = mkdtempSync(join(tmpdir(), "cortex-systemd-e2e-config-"));
     mkdirSync(join(configDir, SLUG, "system"), { recursive: true });
     writeFileSync(join(configDir, SLUG, `${SLUG}.yaml`), "");
     writeFileSync(join(configDir, SLUG, "system", "system.yaml"), "");
 
-    // The two units' StandardOutput=/StandardError=append: log dirs need the
-    // SAME pre-existence treatment as WorkingDirectory= (verified: it's also
-    // set up before ExecStartPre runs, so `ExecStartPre=mkdir -p <that dir>`
-    // can't self-heal a missing one either). In the real documented flows
-    // this is already covered — README-AGENTS.md Appendix A §A.1 hand-creates
-    // nats-server's; postinstall.sh's state bootstrap (§1b) creates cortex's,
-    // host-independent — but this test exercises render/enable/restart in
-    // isolation without running either, so it replicates both prerequisites
-    // directly rather than silently depending on a coincidence of test order.
-    mkdirSync(NATS_LOGS_DIR, { recursive: true });
-    mkdirSync(CORTEX_LOGS_DIR, { recursive: true });
+    // Deliberately NOT pre-creating the log dirs or the workspace dir here —
+    // render_cortex_systemd_units (ensure_stack_log_dirs +
+    // ensure_stack_workspace_dirs) must create all three itself. Asserting
+    // that below is the actual regression test for the PR#2103 review
+    // BLOCKER 1 fix (a fresh host with NEITHER pre-created used to fail
+    // EXIT_STDOUT/EXIT_CHDIR before this fix).
+    //
+    // The two log dirs are NOT in restoreFns: they're host-wide permanent
+    // infrastructure (same class as ~/.claude/events — created once, kept
+    // forever), not slug/test-scoped state, so leaving them behind after this
+    // test matches what a real install would do too. Only the workspace dir
+    // (slug-scoped) and the unit/binary files this test wrote are unwound.
 
     try {
       // 1. Render the real checked-in templates into the real unit dir,
-      //    passing the config-dir fixture so the workspace dir gets created.
+      //    passing the config-dir fixture so the workspace + log dirs get
+      //    created deterministically (not relying on test setup order).
       const render = sh("bash", ["-c", `source "${LIB}" && render_cortex_systemd_units "${REPO_ROOT}" "${UNIT_DIR}" "${configDir}"`]);
       if (render.status !== 0) throw new Error(`render_cortex_systemd_units failed:\n${render.stdout}${render.stderr}`);
       expect(existsSync(join(UNIT_DIR, "nats@.service"))).toBe(true);
       expect(existsSync(join(UNIT_DIR, "cortex@.service"))).toBe(true);
-      expect(existsSync(join(HOME_DIR, ".local", "share", "metafactory", "cortex", SLUG, "workspace"))).toBe(true);
+      expect(existsSync(join(WORKSPACE_DIR, "workspace"))).toBe(true);
+      expect(existsSync(NATS_LOGS_DIR)).toBe(true);
+      expect(existsSync(CORTEX_LOGS_DIR)).toBe(true);
 
       // 2. Enable + start both instances for the e2e slug.
       const enableNats = sh("systemctl", ["--user", "enable", "--now", `nats@${SLUG}`]);
@@ -152,22 +178,15 @@ describe("systemd-e2e: real render + enable + restart (cortex#2071)", () => {
       if (stillActive.status !== 0) throw new Error(`cortex@${SLUG} not active after restart:\n${diagnose(`cortex@${SLUG}`)}`);
       expect(stillActive.status).toBe(0);
     } finally {
-      // Stop + disable the e2e instances and remove the rendered units + stub
-      // binaries, restoring any pre-existing binary from its backup — leaves
-      // the runner's systemd-user state exactly as found.
+      // Stop + disable the e2e instances FIRST (before any file is removed/
+      // restored underneath a still-running unit), then unwind every backup
+      // in reverse — restoring any pre-existing unit file/binary/workspace
+      // dir and deleting only what this test itself created.
       sh("systemctl", ["--user", "disable", "--now", `cortex@${SLUG}`]);
       sh("systemctl", ["--user", "disable", "--now", `nats@${SLUG}`]);
-      rmSync(join(UNIT_DIR, "nats@.service"), { force: true });
-      rmSync(join(UNIT_DIR, "cortex@.service"), { force: true });
+      for (const restore of restoreFns.reverse()) restore();
       sh("systemctl", ["--user", "daemon-reload"]);
-      for (const name of ["nats-server", "cortex"]) {
-        rmSync(join(LOCAL_BIN, name), { force: true });
-      }
-      for (const { path, backup } of backups) {
-        renameSync(backup, path);
-      }
       rmSync(configDir, { recursive: true, force: true });
-      rmSync(join(HOME_DIR, ".local", "share", "metafactory", "cortex", SLUG), { recursive: true, force: true });
     }
   });
 });

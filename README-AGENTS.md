@@ -420,13 +420,22 @@ Wants=nats@%i.service
 [Service]
 Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Type=simple
-WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace
+# "-" prefix: a missing WorkingDirectory is not fatal (verified: without it,
+# a cold start fails outright with EXIT_CHDIR before ExecStartPre ever runs).
+# With it, ExecStartPre's mkdir below creates the dir, then ExecStart's own
+# chdir succeeds.
+WorkingDirectory=-%h/.local/share/metafactory/cortex/%i/workspace
 ExecStart=%h/.local/bin/cortex start --config %h/.config/metafactory/cortex/%i/%i.yaml
 Restart=on-failure
 RestartSec=10
+# RestartSteps=/RestartMaxDelaySec= need systemd >= 254 (Debian 13 ships >=
+# 254; verified on systemd 249 they are ignored with a startup journal
+# warning, RestartSec=10 alone still applies — graceful degradation, not a
+# hard failure, on older hosts).
 RestartSteps=5
 RestartMaxDelaySec=300
 
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
@@ -442,26 +451,17 @@ hot-looping. Log paths are the XDG state dir — the same paths §5's
 healthy-boot gate greps. `WorkingDirectory=` points a dispatched session's
 default cwd at a dedicated per-stack workspace dir instead of `$HOME`
 (systemd's default when unset) — see
-[cortex#2097](https://github.com/the-metafactory/cortex/issues/2097).
-**That directory must exist BEFORE you enable the unit** — systemd enters
-`WorkingDirectory=` before running *any* exec command, including
-`ExecStartPre`, so a missing workspace dir fails the unit outright
-(`ExecStartPre` can't rescue it by creating its own prerequisite). An
-arc-managed install creates it for you (the renderer ensures every
-discovered stack's workspace dir exists on every render); §A.4 below has the
-one-time manual `mkdir` for everyone else.
-
-> `RestartSteps=`/`RestartMaxDelaySec=` need systemd ≥ 254 (Debian 13 ships
-> ≥ 254; on older hosts drop those two lines and keep `RestartSec=10`).
+[cortex#2097](https://github.com/the-metafactory/cortex/issues/2097). The
+directory is **self-creating**: the `-` prefix tolerates it being absent at
+enable time, and the matching `ExecStartPre` line creates it before
+`ExecStart`'s own chdir runs — no manual step needed even on a from-nothing
+host. (An arc-managed install also proactively pre-creates it for every
+already-discovered stack at render time — belt-and-braces, not required for
+correctness.)
 
 ### A.4 Enable, start, verify
 
 ```bash
-# Workspace dir for THIS stack — must exist before cortex@ is enabled (see
-# the WorkingDirectory note in §A.3); arc-managed installs get this from the
-# renderer automatically, this is the manual equivalent.
-mkdir -p "$HOME/.local/share/metafactory/cortex/$CTX_SLUG/workspace"
-
 systemctl --user daemon-reload
 systemctl --user enable --now "nats@$CTX_SLUG"
 curl -sf "http://127.0.0.1:$CTX_NATS_MON/healthz"   # → {"status":"ok"}

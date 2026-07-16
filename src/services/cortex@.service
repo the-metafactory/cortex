@@ -6,13 +6,22 @@ Wants=nats@%i.service
 [Service]
 Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Type=simple
-WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace
+# "-" prefix: a missing WorkingDirectory is not fatal (verified: without it,
+# a cold start fails outright with EXIT_CHDIR before ExecStartPre ever runs).
+# With it, ExecStartPre's mkdir below creates the dir, then ExecStart's own
+# chdir succeeds.
+WorkingDirectory=-%h/.local/share/metafactory/cortex/%i/workspace
 ExecStart=%h/.local/bin/cortex start --config %h/.config/metafactory/cortex/%i/%i.yaml
 Restart=on-failure
 RestartSec=10
+# RestartSteps=/RestartMaxDelaySec= need systemd >= 254 (Debian 13 ships >=
+# 254; verified on systemd 249 they are ignored with a startup journal
+# warning, RestartSec=10 alone still applies — graceful degradation, not a
+# hard failure, on older hosts).
 RestartSteps=5
 RestartMaxDelaySec=300
 
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
