@@ -128,18 +128,29 @@ describe("systemd-e2e: real render + enable + restart (cortex#2071)", () => {
     writeFileSync(join(configDir, SLUG, `${SLUG}.yaml`), "");
     writeFileSync(join(configDir, SLUG, "system", "system.yaml"), "");
 
-    // Deliberately NOT pre-creating the log dirs or the workspace dir here —
-    // render_cortex_systemd_units (ensure_stack_log_dirs +
-    // ensure_stack_workspace_dirs) must create all three itself. Asserting
-    // that below is the actual regression test for the PR#2103 review
-    // BLOCKER 1 fix (a fresh host with NEITHER pre-created used to fail
+    // Deliberately NOT pre-creating the nats log dir or the workspace dir
+    // here — render_cortex_systemd_units (ensure_stack_log_dirs +
+    // ensure_stack_workspace_dirs) must create both itself. Asserting that
+    // below is the actual regression test for the PR#2103 review BLOCKER 1
+    // fix (a fresh host with neither pre-created used to fail
     // EXIT_STDOUT/EXIT_CHDIR before this fix).
     //
-    // The two log dirs are NOT in restoreFns: they're host-wide permanent
+    // The CORTEX log dir is the one exception: ensure_stack_log_dirs
+    // deliberately does NOT create it (see its docstring — that's
+    // postinstall.sh's §1b state-bootstrap's authority alone, gated by the
+    // XDG wave-5 migration, cortex#1903; a second PR#2103 review round found
+    // the renderer creating it anyway broke that invariant in CI's plain Test
+    // job). This test drives render_cortex_systemd_units in isolation,
+    // without postinstall.sh's §1b ever running, so — exactly like a real
+    // arc-managed flow, where §1b already ran before anyone gets to enabling
+    // a unit — it has to create this one prerequisite itself.
+    //
+    // Neither log dir is in restoreFns: they're host-wide permanent
     // infrastructure (same class as ~/.claude/events — created once, kept
     // forever), not slug/test-scoped state, so leaving them behind after this
     // test matches what a real install would do too. Only the workspace dir
     // (slug-scoped) and the unit/binary files this test wrote are unwound.
+    mkdirSync(CORTEX_LOGS_DIR, { recursive: true });
 
     try {
       // 1. Render the real checked-in templates into the real unit dir,
