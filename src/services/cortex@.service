@@ -13,7 +13,6 @@ RestartSec=10
 RestartSteps=5
 RestartMaxDelaySec=300
 
-ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log

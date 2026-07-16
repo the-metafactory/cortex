@@ -109,7 +109,7 @@ elif [ "$(uname)" = "Linux" ]; then
   # community-validated on Debian 13, README-AGENTS.md Appendix A). No-ops
   # silently on a systemd-less host (see systemd_host_detected in the lib).
   UNIT_DIR="${HOME}/.config/systemd/user"
-  render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+  render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 fi
 
 echo ""

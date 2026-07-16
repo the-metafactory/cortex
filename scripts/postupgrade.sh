@@ -163,7 +163,7 @@ elif [ "$(uname)" = "Linux" ]; then
   # ─── 3'. Re-template + restart systemd user units (cortex#2071) ──
   # No-ops silently on a systemd-less host (see systemd_host_detected).
   UNIT_DIR="${HOME}/.config/systemd/user"
-  render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+  render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 
   # ─── 4'. Restart running stacks ───────────────────────────────────
   # Unlike the Darwin side, preupgrade.sh never stops anything on Linux (its

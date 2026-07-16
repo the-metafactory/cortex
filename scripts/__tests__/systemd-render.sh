@@ -154,8 +154,15 @@ assert_eq "marker is line 1" "# rendered-by: cortex systemd-render v1" \
   "$(sed -n '1p' "${UNIT_DIR}/cortex@.service")"
 assert_grep_file "WorkingDirectory line present (workspace addendum, cortex#2097)" \
   "${UNIT_DIR}/cortex@.service" 'WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace'
-assert_grep_file "matching ExecStartPre mkdir line present" \
-  "${UNIT_DIR}/cortex@.service" 'ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace'
+# NO matching ExecStartPre mkdir line for the workspace dir: verified against a
+# real systemd 257 user session that WorkingDirectory= is entered before ANY
+# exec command (including ExecStartPre) runs, so that line could never have
+# self-healed a missing workspace dir (EXIT_CHDIR before it could run) — it
+# was removed in favor of ensure_stack_workspace_dirs (render-time, slug-aware,
+# actually able to create the directory before systemd ever tries to chdir
+# into it). The logs ExecStartPre line stays (belt-and-braces re-creation).
+assert_false "dead workspace ExecStartPre line NOT present (removed, cortex#2071 PR fixup)" \
+  bash -c "grep -qF 'ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace' '${UNIT_DIR}/cortex@.service'"
 
 # Re-render with IDENTICAL content → no-op, change count NOT bumped again.
 render_systemd_unit "${CORTEX_DIR}/src/services/cortex@.service" "${UNIT_DIR}/cortex@.service"
@@ -179,6 +186,15 @@ assert_false "missing template source → nothing written" \
 # ─── Section 3: render_cortex_systemd_units — orchestration ───────
 printf '\n=== render_cortex_systemd_units ===\n'
 
+# Config-dir fixture with two discoverable stacks — used both for the
+# workspace-dir-creation assertions below and for Section 6's restart tests.
+CONFIG_DIR="${TMPHOME}/config"
+mkdir -p "${CONFIG_DIR}/work/system" "${CONFIG_DIR}/halden/system"
+: > "${CONFIG_DIR}/work/work.yaml"
+: > "${CONFIG_DIR}/work/system/system.yaml"
+: > "${CONFIG_DIR}/halden/halden.yaml"
+: > "${CONFIG_DIR}/halden/system/system.yaml"
+
 # Darwin (real uname on this suite is overridden to Linux via the mock; drive
 # the Darwin guard directly by shadowing uname with a Darwin-reporting mock
 # for this one case).
@@ -188,7 +204,7 @@ echo "Darwin"
 EOF
 reset_unit_dir
 : > "${SYSTEMCTL_LOG}"
-render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 assert_false "Darwin → no-op, unit dir not even created" test -d "${UNIT_DIR}"
 assert_eq "Darwin → zero systemctl calls" "0" "$(wc -l < "${SYSTEMCTL_LOG}" | tr -d ' ')"
 
@@ -203,26 +219,51 @@ export SYSTEMD_HOST_MARKER="${TMPHOME}/no-such-run-systemd-system"
 rm -rf "${HOME}/.config/systemd/user"
 reset_unit_dir
 : > "${SYSTEMCTL_LOG}"
-render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 assert_false "systemd-less Linux → no-op, unit dir not created" test -d "${UNIT_DIR}"
 assert_eq "systemd-less Linux → zero systemctl calls" "0" "$(wc -l < "${SYSTEMCTL_LOG}" | tr -d ' ')"
 export SYSTEMD_HOST_MARKER="${TMPHOME}/fake-run-systemd-system"
 
 # Real systemd Linux host, fresh unit dir → both units rendered, exactly one
-# daemon-reload call (not one per unit).
+# daemon-reload call (not one per unit), AND both discovered stacks' workspace
+# dirs exist (cortex@.service's WorkingDirectory= must pre-exist before
+# enable/start — see ensure_stack_workspace_dirs's docstring; verified against
+# a real systemd 257 user session, not just asserted here).
 reset_unit_dir
+rm -rf "${HOME}/.local/share/metafactory/cortex"
 : > "${SYSTEMCTL_LOG}"
-render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 assert_file_exists "nats@.service rendered" "${UNIT_DIR}/nats@.service"
 assert_file_exists "cortex@.service rendered" "${UNIT_DIR}/cortex@.service"
 assert_eq "fresh render (2 units changed) → exactly 1 daemon-reload call" "1" \
   "$(grep -c '^systemctl --user daemon-reload$' "${SYSTEMCTL_LOG}")"
+assert_true "render also creates 'work' stack's workspace dir" \
+  test -d "${HOME}/.local/share/metafactory/cortex/work/workspace"
+assert_true "render also creates 'halden' stack's workspace dir" \
+  test -d "${HOME}/.local/share/metafactory/cortex/halden/workspace"
 
-# Re-render with nothing changed → zero daemon-reload calls.
+# Re-render with nothing changed → zero daemon-reload calls (workspace-dir
+# creation is idempotent — mkdir -p on an existing dir is a no-op).
 : > "${SYSTEMCTL_LOG}"
-render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}"
+render_cortex_systemd_units "${CORTEX_DIR}" "${UNIT_DIR}" "${CONFIG_DIR}"
 assert_eq "no-op re-render → zero daemon-reload calls" "0" \
   "$(grep -c '^systemctl --user daemon-reload$' "${SYSTEMCTL_LOG}" || true)"
+
+# ─── Section 3b: ensure_stack_workspace_dirs (standalone) ─────────
+printf '\n=== ensure_stack_workspace_dirs ===\n'
+
+rm -rf "${HOME}/.local/share/metafactory/cortex"
+ensure_stack_workspace_dirs "${CONFIG_DIR}"
+assert_true "'work' workspace dir created" \
+  test -d "${HOME}/.local/share/metafactory/cortex/work/workspace"
+assert_true "'halden' workspace dir created" \
+  test -d "${HOME}/.local/share/metafactory/cortex/halden/workspace"
+
+# A config dir with no discoverable stacks → no-op, no error.
+EMPTY_CONFIG_DIR="${TMPHOME}/empty-config"
+mkdir -p "${EMPTY_CONFIG_DIR}"
+assert_true "no stacks → ensure_stack_workspace_dirs is a clean no-op" \
+  ensure_stack_workspace_dirs "${EMPTY_CONFIG_DIR}"
 
 # ─── Section 4: verify_cortex_bin_symlink ─────────────────────────
 printf '\n=== verify_cortex_bin_symlink ===\n'
@@ -258,12 +299,7 @@ export LINGER_VALUE="yes"
 # ─── Section 6: restart_running_systemd_stacks ────────────────────
 printf '\n=== restart_running_systemd_stacks ===\n'
 
-CONFIG_DIR="${TMPHOME}/config"
-mkdir -p "${CONFIG_DIR}/work/system" "${CONFIG_DIR}/halden/system"
-: > "${CONFIG_DIR}/work/work.yaml"
-: > "${CONFIG_DIR}/work/system/system.yaml"
-: > "${CONFIG_DIR}/halden/halden.yaml"
-: > "${CONFIG_DIR}/halden/system/system.yaml"
+# Reuses the CONFIG_DIR fixture (work + halden stacks) set up before Section 3.
 
 # Only 'work' is active.
 : > "${ACTIVE_UNITS_FILE}"

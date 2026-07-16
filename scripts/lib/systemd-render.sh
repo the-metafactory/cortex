@@ -54,7 +54,7 @@ SYSTEMD_UNIT_MARKER="# rendered-by: cortex systemd-render v1"
 # cortex misconfiguration.
 systemd_host_detected() {
   [ -d "${SYSTEMD_HOST_MARKER:-/run/systemd/system}" ] && return 0
-  [ -d "${HOME}/.config/systemd/user" ] && return 0
+  [ -d "${HOME}/.config/systemd/user" ] && return 0  # xdg-audit:allow(resolver-internal host detection — the canonical systemd user-unit dir is the fallback existence signal, not a legacy path; cortex#2071)
   return 1
 }
 
@@ -156,19 +156,65 @@ restart_running_systemd_stacks() {
   done < <(discover_stack_slugs "${config_dir}")
 }
 
+# Ensure the per-stack workspace dir exists for every discovered stack
+# (cortex#2097's `WorkingDirectory=%h/.local/share/metafactory/cortex/%i/workspace`
+# on cortex@.service).
+#
+# This is NOT optional belt-and-braces — it's load-bearing. Verified
+# empirically (systemd 257, Debian trixie): `WorkingDirectory=` is entered
+# BEFORE *any* exec command of the unit runs, including ExecStartPre — a
+# missing WorkingDirectory fails the unit outright (systemd exit reason
+# EXIT_CHDIR/200) before ExecStartPre's own `mkdir -p` of that same path ever
+# gets to execute. The unit file cannot self-heal this; the directory must
+# already exist by the time `systemctl --user enable/start` runs.
+#
+# Until cortex#2097 ships (stack scaffolding creates this dir itself), NOTHING
+# else in the codebase creates it — so this is the one prerequisite render
+# time can and must cover, mirroring how README-AGENTS.md Appendix A §A.1
+# hand-creates nats-server's log dir as a one-time host-prep step for the
+# same reason (see the ExecStartPre note on render_cortex_systemd_units below
+# for why the *log* dirs don't need this treatment).
+#
+# Args: $1 CONFIG_DIR — cortex config dir (stacks are discovered from here)
+ensure_stack_workspace_dirs() {
+  local config_dir="$1"
+  local slug
+  while IFS= read -r slug; do
+    [ -z "${slug}" ] && continue
+    mkdir -p "${HOME}/.local/share/metafactory/cortex/${slug}/workspace"
+  done < <(discover_stack_slugs "${config_dir}")
+}
+
 # Render nats@.service + cortex@.service into UNIT_DIR from the templates
-# checked in under CORTEX_DIR/src/services/, then run the bun-guard-analogue
-# symlink check and the linger check. `systemctl --user daemon-reload` runs at
-# most once, and only when at least one unit's content actually changed.
+# checked in under CORTEX_DIR/src/services/, ensure every discovered stack's
+# workspace dir exists (see ensure_stack_workspace_dirs), then run the
+# bun-guard-analogue symlink check and the linger check.
+# `systemctl --user daemon-reload` runs at most once, and only when at least
+# one unit's content actually changed.
+#
+# NOTE on the units' `ExecStartPre=/usr/bin/mkdir -p .../logs` lines: those
+# are NOT dead code the way an un-pre-created WorkingDirectory is, but they
+# are also not a substitute for pre-creating the parent on a truly fresh
+# host — `StandardOutput=append:<path under that dir>` is set up before
+# ExecStartPre runs too, so on a from-nothing host the very first start
+# needs the log dir to already exist (README-AGENTS.md Appendix A §A.1 hand-
+# creates nats-server's; postinstall.sh's state bootstrap creates cortex's,
+# host-independent). The ExecStartPre line's job is the idempotent
+# re-creation case (dir survives; a later restart is a no-op mkdir), which is
+# genuinely useful — it's only the *cold-start* case that needs an external
+# actor, which is why workspace (with no OTHER creator yet, pre-cortex#2097)
+# gets handled here explicitly and logs (which already have one) don't.
 #
 # No-ops (silently, exit 0) on Darwin and on a systemd-less host — see
 # systemd_host_detected().
 #
 # Args: $1 CORTEX_DIR — repo root (unit templates live under src/services/)
 #       $2 UNIT_DIR   — target dir, typically ${HOME}/.config/systemd/user
+#       $3 CONFIG_DIR — cortex config dir, for ensure_stack_workspace_dirs
 render_cortex_systemd_units() {
   local cortex_dir="$1"
   local unit_dir="$2"
+  local config_dir="$3"
 
   if [ "$(uname)" = "Darwin" ]; then
     return 0
@@ -190,6 +236,7 @@ render_cortex_systemd_units() {
     echo "  ✓ systemd user daemon reloaded (${SYSTEMD_RENDER_CHANGE_COUNT} unit(s) changed)"
   fi
 
+  ensure_stack_workspace_dirs "${config_dir}"
   verify_cortex_bin_symlink || true
   warn_systemd_linger || true
 }

@@ -290,7 +290,16 @@ jobs:
       # contradicting the issue's own acceptance criterion that zero matches is
       # green at this stage. Guard on the "matched 0 tests" message so a real
       # test failure still fails the job once cortex#2071 lands.
-      - name: bun test (systemd-e2e placeholder — cortex#2071 will populate)
+      #
+      # SYSTEMD_E2E=1 is this job's explicit opt-in for
+      # scripts/__tests__/systemd-render-e2e.test.ts (cortex#2071) — that test
+      # gates on this exact env var (not a broader "CI=true" or "Linux with a
+      # systemd session" signal) precisely so it runs ONLY here and not in the
+      # plain Test job, which has no systemd-user session bootstrap but still
+      # satisfied a looser check (cortex#2103 review finding).
+      - name: bun test (systemd-e2e)
+        env:
+          SYSTEMD_E2E: "1"
         run: |
           set +e
           output=$(bun test --test-name-pattern systemd-e2e 2>&1)
