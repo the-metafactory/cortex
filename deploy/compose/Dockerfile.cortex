@@ -1,0 +1,105 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.cortex — the container image for the L4 compose path (cortex#2095).
+#
+# Design decisions this image encodes (arc design/linux-host-support.md, arc#309):
+#   - DD-L4: containers are a DISTINCT supervision host — compose `restart:`
+#     policies supervise, systemd is absent (its detect() correctly no-ops here).
+#   - Claude Code auth is HEADLESS via CLAUDE_CODE_OAUTH_TOKEN at RUNTIME
+#     (honored by src/runner/cc-session.ts, which suppresses ANTHROPIC_API_KEY
+#     when the token is set). No token is ever baked into a layer — it arrives
+#     via `env_file: .env` at run time only. `docker history` shows zero secrets.
+#   - claude CLI + bun + nats-server are BAKED (reproducible), pinned by ARG.
+#
+# Every pinned version is an ARG so the image is reproducible and a rebuild can
+# bump a single component. CORTEX_REF defaults to a RELEASE TAG, never `main`.
+
+ARG CORTEX_REF=v6.8.5
+ARG BUN_VERSION=1.3.14
+ARG CLAUDE_VERSION=2.1.211
+ARG NATS_SERVER_VERSION=2.14.3
+
+FROM debian:bookworm-slim
+
+# Re-declare the ARGs consumed in this stage (ARGs before FROM are build-global
+# but must be re-stated to be visible in the build stage).
+ARG CORTEX_REF
+ARG BUN_VERSION
+ARG CLAUDE_VERSION
+ARG NATS_SERVER_VERSION
+# Provided automatically by BuildKit; used to fetch the right nats-server binary.
+ARG TARGETARCH
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    BUN_INSTALL=/usr/local \
+    HOME=/home/cortex \
+    CORTEX_CONFIG_DIR=/home/cortex/.config/metafactory/cortex
+
+# 1. Minimum toolchain. git/gh/ripgrep are needed by dispatched Claude Code
+#    sessions inside the container (the assistant's own tool surface); curl,
+#    unzip, ca-certificates, bash for install + the entrypoint.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        gh \
+        ripgrep \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Bun (pinned) — the only supported cortex runtime. Installs to
+#    $BUN_INSTALL/bin = /usr/local/bin (system-wide, on every user's PATH).
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
+    && bun --version
+
+# 3. Claude Code CLI (pinned). Global bun install lands in /usr/local/bin.
+#    Authentication is NOT performed here — it happens at runtime via the
+#    CLAUDE_CODE_OAUTH_TOKEN env var (DD-L4 headless auth).
+RUN bun install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+    && claude --version
+
+# 4. nats-server binary (pinned) — present ONLY to satisfy `cortex quickstart`'s
+#    preflight (step 1), which checks `nats-server` on PATH (a native-host
+#    assumption). The RUNNING bus is the SEPARATE official `nats` service in
+#    docker-compose.yaml — this binary is never launched as the daemon. See the
+#    README section "Why nats-server is baked into the cortex image". A future
+#    L3 follow-up (a quickstart `--container` mode) would let this be dropped.
+RUN arch="${TARGETARCH:-amd64}" \
+    && curl -fsSL -o /tmp/nats.tar.gz \
+        "https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VERSION}/nats-server-v${NATS_SERVER_VERSION}-linux-${arch}.tar.gz" \
+    && tar -xzf /tmp/nats.tar.gz -C /tmp \
+    && mv "/tmp/nats-server-v${NATS_SERVER_VERSION}-linux-${arch}/nats-server" /usr/local/bin/nats-server \
+    && rm -rf /tmp/nats.tar.gz /tmp/nats-server-v${NATS_SERVER_VERSION}-linux-${arch} \
+    && nats-server --version
+
+# 5. Non-root runtime user (uid 1000). All runtime state lives under its home,
+#    on named volumes mounted at run time.
+RUN useradd --create-home --uid 1000 --shell /bin/bash cortex
+
+# 6. cortex source at the pinned RELEASE tag (not main). Clone shallow, install
+#    frozen deps, drop a PATH shim, and hand ownership to the runtime user.
+RUN git clone --depth 1 --branch "${CORTEX_REF}" \
+        https://github.com/the-metafactory/cortex /opt/cortex \
+    && cd /opt/cortex \
+    && bun install --frozen-lockfile \
+    && printf '#!/usr/bin/env bash\nexec bun /opt/cortex/src/cortex.ts "$@"\n' \
+        > /usr/local/bin/cortex \
+    && chmod 0755 /usr/local/bin/cortex \
+    && chown -R cortex:cortex /opt/cortex
+
+# 7. Scaffold runtime dirs + default relay policy as the runtime user. The
+#    systemd render inside postinstall.sh detects the absent host bus and skips
+#    silently (DD-L4 / scripts/lib/systemd-render.sh:systemd_host_detected), so
+#    this is a clean no-op for the container's service story. Guarded with a
+#    tolerant fallback so a scaffolding hiccup never hard-fails the build.
+USER cortex
+WORKDIR /home/cortex
+RUN cd /opt/cortex && ./scripts/postinstall.sh || \
+    echo "cortex: postinstall.sh returned non-zero (systemd-less container) — continuing"
+
+# 8. Entrypoint: idempotent provision (quickstart) then hand off to the daemon.
+COPY --chown=cortex:cortex --chmod=0755 docker-entrypoint.sh /usr/local/bin/cortex-entrypoint
+
+ENTRYPOINT ["cortex-entrypoint"]

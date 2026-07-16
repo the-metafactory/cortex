@@ -1,0 +1,12 @@
+# Keep the build context minimal AND secret-free. The image clones cortex at a
+# pinned release tag (CORTEX_REF) inside the build — it does NOT COPY local
+# source — so the only file the build needs from this directory is
+# docker-entrypoint.sh.
+#
+# .env is excluded FIRST and unconditionally: a filled .env must never enter the
+# build context, so it can never end up in an image layer.
+.env
+
+# Everything else, then re-include only what the build actually COPYs.
+*
+!docker-entrypoint.sh

@@ -3,3 +3,8 @@ dist/
 tmp-screenshots/
 .playwright-cli/
 .specflow/
+
+# L4 compose path (cortex#2095): the filled .env carries the Discord bot token
+# and Claude OAuth token — never commit it. The .env.example placeholder file IS
+# tracked.
+deploy/compose/.env
