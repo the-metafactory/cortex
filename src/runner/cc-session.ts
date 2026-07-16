@@ -233,6 +233,35 @@ export function buildSessionEnv(
   };
 }
 
+/**
+ * Resolve the AUTHORITATIVE `CORTEX_BASH_GUARD` value cortex writes onto every
+ * spawned session env (cortex#2133, defense-in-depth for MAJOR-1). Total —
+ * ALWAYS returns a string — so `start()` can write it unconditionally and no
+ * stale/injected base-env value can survive:
+ *
+ *   - `bashGuardDisabled`  → `{"disabled":true}` — the principal-DM / CLI-trust
+ *     posture (the guard hook's `loadConfig()` returns null ⇒ pass-through).
+ *   - `bashAllowlist`      → the serialised allowlist (guard active, that list).
+ *   - neither              → `{}` — the SAFE DEFAULT. The guard hook's
+ *     `loadConfig()` treats `{}` IDENTICALLY to an unset var: guard ACTIVE with
+ *     the built-in read-only default-deny allowlist (its `DEFAULT_CONFIG`). It
+ *     carries no `disabled:true`, so it never weakens the guard's default-deny.
+ *     Writing it also removes a bot session from the hook's Gate-2 CLI-principal
+ *     bypass (keyed on `CORTEX_BASH_GUARD` being ABSENT), so a bot session with
+ *     no allowlist config falls through to default-deny, never full-trust
+ *     pass-through.
+ *
+ * Extracted so the MAJOR-1 property (a declared `CORTEX_BASH_GUARD` cannot
+ * survive) is unit-testable without spawning the `claude` binary.
+ */
+export function resolveBashGuardEnv(
+  opts: Pick<CCSessionOpts, "bashGuardDisabled" | "bashAllowlist">,
+): string {
+  if (opts.bashGuardDisabled) return JSON.stringify({ disabled: true });
+  if (opts.bashAllowlist) return JSON.stringify(opts.bashAllowlist);
+  return JSON.stringify({});
+}
+
 export class CCSession extends EventEmitter {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private timeoutId: Timer | null = null;
@@ -410,12 +439,15 @@ export class CCSession extends EventEmitter {
       }),
     };
 
-    // Pass bash allowlist config to bash-guard.hook.ts
-    if (this.opts.bashGuardDisabled) {
-      env.CORTEX_BASH_GUARD = JSON.stringify({ disabled: true });
-    } else if (this.opts.bashAllowlist) {
-      env.CORTEX_BASH_GUARD = JSON.stringify(this.opts.bashAllowlist);
-    }
+    // Pass bash allowlist config to bash-guard.hook.ts. CORTEX_BASH_GUARD is
+    // written UNCONDITIONALLY (cortex#2133, defense-in-depth for MAJOR-1): cortex
+    // is always the authoritative writer of this var — this assignment OVERWRITES
+    // whatever the layered base/agent env carried, so a stale/injected value can
+    // never win. The reserved-prefix deny (resolveAgentEnv / AgentEnvSchema)
+    // already blocks a declared CORTEX_* key at the key layer; writing the guard
+    // var here makes it authoritative even if a value reaches the base env by any
+    // other route. See {@link resolveBashGuardEnv} for the value semantics.
+    env.CORTEX_BASH_GUARD = resolveBashGuardEnv(this.opts);
 
     // Suppress ANTHROPIC_API_KEY when OAuth token is present
     if (env.CLAUDE_CODE_OAUTH_TOKEN) {

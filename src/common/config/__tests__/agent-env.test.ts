@@ -13,6 +13,7 @@ import {
   AgentEnvSchema,
   isDeniedAgentEnvKey,
   AGENT_ENV_KEY_PATTERN,
+  RESERVED_ENV_PREFIXES,
 } from "../agent-env";
 
 describe("AgentEnvSchema — accepts valid passthrough maps", () => {
@@ -81,6 +82,43 @@ describe("AgentEnvSchema — REJECTS CLAUDE_* keys (cortex#701 security assertio
   });
 });
 
+describe("AgentEnvSchema — REJECTS the broadened reserved prefixes (cortex#2133)", () => {
+  test("an ANTHROPIC_* key is rejected (auth / endpoint redirect vector)", () => {
+    // Claude Code honours ANTHROPIC_BASE_URL / _API_KEY / _AUTH_TOKEN / _MODEL —
+    // a declared value would redirect auth or the inference endpoint.
+    expect(AgentEnvSchema.safeParse({ ANTHROPIC_BASE_URL: "https://evil" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ ANTHROPIC_API_KEY: "sk-evil" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ ANTHROPIC_AUTH_TOKEN: "t" }).success).toBe(false);
+  });
+
+  test("a CORTEX_* control var is rejected (would disable a cortex guard)", () => {
+    // The MAJOR-1 vector: a declared CORTEX_BASH_GUARD could disable/widen the guard.
+    const result = AgentEnvSchema.safeParse({
+      CORTEX_BASH_GUARD: '{"rules":[{"pattern":".*"}]}',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const msg = JSON.stringify(result.error.issues);
+      expect(msg).toContain("CORTEX_BASH_GUARD");
+      expect(msg).toContain("default-deny");
+    }
+    expect(AgentEnvSchema.safeParse({ CORTEX_SKILL_GRANTS: "[]" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ CORTEX_MCP_GRANTS: "[]" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ CORTEX_CHANNEL: "spoofed" }).success).toBe(false);
+  });
+
+  test("a GROVE_* legacy-alias control var is rejected", () => {
+    expect(AgentEnvSchema.safeParse({ GROVE_CHANNEL: "spoofed" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ GROVE_OPERATOR: "x" }).success).toBe(false);
+  });
+
+  test("the broadened deny is case-insensitive across all reserved prefixes", () => {
+    expect(AgentEnvSchema.safeParse({ anthropic_base_url: "x" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ cortex_bash_guard: "x" }).success).toBe(false);
+    expect(AgentEnvSchema.safeParse({ Grove_Channel: "x" }).success).toBe(false);
+  });
+});
+
 describe("AgentEnvSchema — key/value shape validation", () => {
   test("a non-identifier key is rejected", () => {
     expect(AgentEnvSchema.safeParse({ "bad-key": "x" }).success).toBe(false);
@@ -94,14 +132,36 @@ describe("AgentEnvSchema — key/value shape validation", () => {
 });
 
 describe("isDeniedAgentEnvKey — the single-source deny predicate", () => {
-  test("denies CLAUDE_* case-insensitively; allows everything else", () => {
+  test("denies every reserved prefix case-insensitively; allows everything else", () => {
+    // CLAUDE_
     expect(isDeniedAgentEnvKey("CLAUDE_CONFIG_DIR")).toBe(true);
     expect(isDeniedAgentEnvKey("claude_config_dir")).toBe(true);
     expect(isDeniedAgentEnvKey("Claude_X")).toBe(true);
+    // ANTHROPIC_
+    expect(isDeniedAgentEnvKey("ANTHROPIC_BASE_URL")).toBe(true);
+    expect(isDeniedAgentEnvKey("anthropic_api_key")).toBe(true);
+    // CORTEX_ (now denied — this is the #2133 broadening)
+    expect(isDeniedAgentEnvKey("CORTEX_BASH_GUARD")).toBe(true);
+    expect(isDeniedAgentEnvKey("CORTEX_CHANNEL")).toBe(true);
+    expect(isDeniedAgentEnvKey("cortex_skill_grants")).toBe(true);
+    // GROVE_
+    expect(isDeniedAgentEnvKey("GROVE_CHANNEL")).toBe(true);
+    expect(isDeniedAgentEnvKey("grove_operator")).toBe(true);
+    // Allowed — outside every reserved prefix.
     expect(isDeniedAgentEnvKey("GOOGLE_APPLICATION_CREDENTIALS")).toBe(false);
-    expect(isDeniedAgentEnvKey("CORTEX_CHANNEL")).toBe(false);
-    // Not a CLAUDE_ prefix — a var that merely contains "claude" is fine.
+    expect(isDeniedAgentEnvKey("GWS_PROFILE")).toBe(false);
+    // A var that merely CONTAINS a reserved token (not a prefix) is fine.
     expect(isDeniedAgentEnvKey("MY_CLAUDE_HELPER")).toBe(false);
+    expect(isDeniedAgentEnvKey("MY_CORTEX_HELPER")).toBe(false);
+  });
+
+  test("RESERVED_ENV_PREFIXES lists the four guarded namespaces", () => {
+    expect([...RESERVED_ENV_PREFIXES]).toEqual([
+      "CLAUDE_",
+      "ANTHROPIC_",
+      "CORTEX_",
+      "GROVE_",
+    ]);
   });
 });
 

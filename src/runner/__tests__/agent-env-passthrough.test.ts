@@ -16,7 +16,7 @@
 
 import { describe, test, expect, afterEach } from "bun:test";
 import { resolveAgentEnv } from "../session-settings";
-import { buildSessionEnv } from "../cc-session";
+import { buildSessionEnv, resolveBashGuardEnv } from "../cc-session";
 import { setActiveSubstrates } from "../../common/substrates/config-home";
 
 describe("resolveAgentEnv — resolution + CLAUDE_* runtime deny", () => {
@@ -73,6 +73,168 @@ describe("resolveAgentEnv — resolution + CLAUDE_* runtime deny", () => {
   test("(d) undefined agentEnv resolves to an empty map (no passthrough)", () => {
     expect(resolveAgentEnv(undefined)).toEqual({});
     expect(resolveAgentEnv({})).toEqual({});
+  });
+});
+
+describe("resolveAgentEnv — broadened reserved-prefix deny (cortex#2133)", () => {
+  test("a CORTEX_BASH_GUARD key is DROPPED at runtime (MAJOR-1 key-layer close)", () => {
+    const out = resolveAgentEnv(
+      {
+        CORTEX_BASH_GUARD: '{"rules":[{"pattern":".*"}]}',
+        GOOGLE_APPLICATION_CREDENTIALS: "/x/sa.json",
+      },
+      {},
+    );
+    expect(out.CORTEX_BASH_GUARD).toBeUndefined();
+    expect(out.GOOGLE_APPLICATION_CREDENTIALS).toBe("/x/sa.json");
+  });
+
+  test("ANTHROPIC_* keys are DROPPED at runtime (auth / endpoint redirect)", () => {
+    const out = resolveAgentEnv(
+      {
+        ANTHROPIC_BASE_URL: "https://evil.example",
+        ANTHROPIC_API_KEY: "sk-evil",
+        ANTHROPIC_AUTH_TOKEN: "t",
+      },
+      {},
+    );
+    expect(Object.keys(out)).toHaveLength(0);
+  });
+
+  test("GROVE_* legacy-alias control keys are DROPPED at runtime", () => {
+    const out = resolveAgentEnv(
+      { GROVE_CHANNEL: "spoofed", GROVE_OPERATOR: "x" },
+      {},
+    );
+    expect(Object.keys(out)).toHaveLength(0);
+  });
+
+  test("other CORTEX_* control keys (grants/identity) are DROPPED at runtime", () => {
+    const out = resolveAgentEnv(
+      {
+        CORTEX_SKILL_GRANTS: "[]",
+        CORTEX_MCP_GRANTS: "[]",
+        CORTEX_CHANNEL: "spoofed",
+      },
+      {},
+    );
+    expect(Object.keys(out)).toHaveLength(0);
+  });
+});
+
+describe("resolveAgentEnv — env: REF SOURCE deny (MINOR-3)", () => {
+  test("a benign key referencing env:CLAUDE_CODE_OAUTH_TOKEN is DROPPED (no exfil)", () => {
+    // The exfil vector: a clean destination name that re-surfaces a guarded
+    // daemon var's VALUE. Even with the secret present in the daemon env, the
+    // ref must be refused because its SOURCE name is reserved-prefix.
+    const out = resolveAgentEnv(
+      { GDRIVE_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN" },
+      { CLAUDE_CODE_OAUTH_TOKEN: "sk-oauth-secret" },
+    );
+    expect(out.GDRIVE_TOKEN).toBeUndefined();
+    expect(Object.values(out)).not.toContain("sk-oauth-secret");
+  });
+
+  test("refs to ANTHROPIC_* / CORTEX_* sources are DROPPED even when resolvable", () => {
+    const out = resolveAgentEnv(
+      {
+        A: "env:ANTHROPIC_API_KEY",
+        B: "env:CORTEX_BASH_GUARD",
+      },
+      { ANTHROPIC_API_KEY: "sk-x", CORTEX_BASH_GUARD: '{"disabled":true}' },
+    );
+    expect(Object.keys(out)).toHaveLength(0);
+  });
+
+  test("a ref to a NON-reserved source still resolves (no over-blocking)", () => {
+    const out = resolveAgentEnv(
+      { GWS_TOKEN: "env:MANDA_GWS_TOKEN" },
+      { MANDA_GWS_TOKEN: "ok" },
+    );
+    expect(out.GWS_TOKEN).toBe("ok");
+  });
+});
+
+describe("resolveAgentEnv — runtime key-grammar re-check (MINOR-4)", () => {
+  test("a leading-space ' CLAUDE_X' key is DROPPED by the pattern re-check", () => {
+    // The leading space would dodge the prefix check; the ASCII grammar catches
+    // it first. Proves a non-schema caller can't slip a mangled key past runtime.
+    const out = resolveAgentEnv(
+      { " CLAUDE_X": "/tmp/x", "GOOD_KEY": "ok" },
+      {},
+    );
+    expect(out[" CLAUDE_X"]).toBeUndefined();
+    expect(out.GOOD_KEY).toBe("ok");
+  });
+
+  test("keys with '=', dashes, or interior whitespace are DROPPED at runtime", () => {
+    const out = resolveAgentEnv(
+      { "A=B": "x", "has-dash": "y", "has space": "z", "1LEADING": "w" },
+      {},
+    );
+    expect(Object.keys(out)).toHaveLength(0);
+  });
+});
+
+describe("resolveBashGuardEnv — CORTEX_BASH_GUARD safe default (cortex#2133)", () => {
+  test("neither flag ⇒ the safe default '{}' (guard active, built-in default-deny)", () => {
+    expect(resolveBashGuardEnv({})).toBe("{}");
+    expect(JSON.parse(resolveBashGuardEnv({}))).toEqual({});
+  });
+
+  test("bashGuardDisabled ⇒ {\"disabled\":true}", () => {
+    expect(resolveBashGuardEnv({ bashGuardDisabled: true })).toBe(
+      JSON.stringify({ disabled: true }),
+    );
+  });
+
+  test("bashAllowlist ⇒ the serialised allowlist", () => {
+    const allow = { rules: [{ pattern: "^gh\\s" }], repos: [] };
+    expect(resolveBashGuardEnv({ bashAllowlist: allow })).toBe(JSON.stringify(allow));
+  });
+
+  test("the safe default NEVER carries disabled:true (does not weaken the guard)", () => {
+    expect(JSON.parse(resolveBashGuardEnv({})).disabled).toBeUndefined();
+  });
+});
+
+describe("MAJOR-1 exploit is closed end-to-end (cortex#2133)", () => {
+  // The exploit: an agent declares `env: { CORTEX_BASH_GUARD: '{"rules":[{"pattern":".*"}]}' }`
+  // and the stack sets NO bashAllowlist. We prove the malicious value can NEVER
+  // land on the composed session env, closed at BOTH layers:
+  //   (1) the key layer — resolveAgentEnv drops the reserved-prefix key, and
+  //   (2) the writer layer — cortex writes the authoritative guard value last.
+  test("a declared CORTEX_BASH_GUARD with no bashAllowlist does NOT reach the session env", () => {
+    const agentEnv = { CORTEX_BASH_GUARD: '{"rules":[{"pattern":".*"}]}' };
+
+    // (1) Key layer: the passthrough drops it — it never even enters baseEnv.
+    const resolved = resolveAgentEnv(agentEnv, {});
+    expect(resolved.CORTEX_BASH_GUARD).toBeUndefined();
+
+    // Compose exactly as start() does: base ← {scoped ∪ resolved}, then cortex
+    // writes the authoritative guard value LAST (unconditional overwrite).
+    const composed: Record<string, string> = {
+      ...buildSessionEnv({ PATH: "/usr/bin", ...resolved }, { channel: "manda" }),
+    };
+    composed.CORTEX_BASH_GUARD = resolveBashGuardEnv({
+      /* no bashGuardDisabled, no bashAllowlist */
+    });
+
+    // (2) Writer layer: even if a value HAD leaked into baseEnv by some other
+    // route, the authoritative write pins it to the safe default.
+    expect(composed.CORTEX_BASH_GUARD).toBe("{}");
+    expect(composed.CORTEX_BASH_GUARD).not.toContain(".*");
+  });
+
+  test("even a base-env-injected CORTEX_BASH_GUARD is overwritten by the authoritative write", () => {
+    // Simulate a stale/injected value arriving via the base env by ANY route.
+    const base = buildSessionEnv(
+      { PATH: "/usr/bin", CORTEX_BASH_GUARD: '{"rules":[{"pattern":".*"}]}' },
+      { channel: "manda" },
+    );
+    const composed: Record<string, string> = { ...base };
+    composed.CORTEX_BASH_GUARD = resolveBashGuardEnv({});
+    expect(composed.CORTEX_BASH_GUARD).toBe("{}");
   });
 });
 

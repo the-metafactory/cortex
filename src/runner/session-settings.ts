@@ -110,7 +110,7 @@ import {
 import { tmpdir, homedir } from "os";
 import { join, basename } from "path";
 import { parse as parseYaml } from "yaml";
-import { isDeniedAgentEnvKey } from "../common/config/agent-env";
+import { isDeniedAgentEnvKey, AGENT_ENV_KEY_PATTERN } from "../common/config/agent-env";
 import { SECRET_REF_PATTERN } from "../common/inference/secret-ref";
 
 /**
@@ -635,18 +635,36 @@ export function scopeSessionEnv(
  * the deny below) can never touch the `CLAUDE_*` namespace `scopeSessionEnv`
  * guards.
  *
- * Two responsibilities, both security-relevant:
+ * Four responsibilities, all security-relevant:
  *
- *   1. **Re-assert the `CLAUDE_*` deny (defence-in-depth).** The config schema
- *      already rejects a `CLAUDE_*` key at load ({@link isDeniedAgentEnvKey} in
- *      `common/config/agent-env.ts`, the SHARED predicate), but we DROP it here
- *      too so NO path — a test, a future direct caller, a schema regression —
- *      can layer a `CLAUDE_*` var onto a child session. Dropping (not throwing)
- *      is the fail-closed choice: the var simply never gets set, isolation
- *      holds regardless of how the map arrived, and a crafted map cannot DoS
- *      the session. Each drop is logged.
+ *   1. **Re-assert the reserved-prefix deny on the DESTINATION KEY
+ *      (defence-in-depth).** The config schema already rejects a reserved-prefix
+ *      key at load ({@link isDeniedAgentEnvKey} in `common/config/agent-env.ts`,
+ *      the SHARED predicate — now `CLAUDE_`/`ANTHROPIC_`/`CORTEX_`/`GROVE_`), but
+ *      we DROP it here too so NO path — a test, a future direct caller, a schema
+ *      regression — can layer a reserved-prefix var onto a child session.
+ *      Dropping (not throwing) is the fail-closed choice: the var simply never
+ *      gets set, isolation holds regardless of how the map arrived, and a
+ *      crafted map cannot DoS the session. Each drop is logged.
  *
- *   2. **Resolve secret references at call time.** A value of the form
+ *   2. **Re-assert the reserved-prefix deny on the `env:` REF SOURCE NAME too
+ *      (MINOR-3).** A benign destination key whose value is `env:DENIED_NAME`
+ *      would otherwise re-surface a denied daemon var's VALUE under a clean name
+ *      — e.g. `GDRIVE_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN"` exfiltrates the OAuth
+ *      token. So when a value is an `env:NAME` reference we also drop it if
+ *      `isDeniedAgentEnvKey(NAME)` holds. The stderr line names the key and the
+ *      ref NAME only — NEVER the resolved value — preserving the module's
+ *      no-value-logging property.
+ *
+ *   3. **Re-assert the KEY GRAMMAR at runtime (MINOR-4).** We re-check the
+ *      destination key against {@link AGENT_ENV_KEY_PATTERN} (the ASCII-anchored
+ *      POSIX-identifier grammar the schema enforces at load) so a non-schema
+ *      caller (a future direct caller, a test) cannot slip a whitespace/`=`/dash-
+ *      mangled key like `" CLAUDE_X"` — whose leading space would dodge the
+ *      prefix check — past the runtime layer. A key that fails the pattern is
+ *      dropped and logged.
+ *
+ *   4. **Resolve secret references at call time.** A value of the form
  *      `env:NAME` ({@link SECRET_REF_PATTERN}) is a SECRET REFERENCE, read from
  *      `parentEnv` here (the daemon env) and never stored in config; anything
  *      else is a literal (e.g. a credential PATH) and passes through verbatim.
@@ -667,16 +685,38 @@ export function resolveAgentEnv(
   const resolved: Record<string, string> = {};
   if (agentEnv === undefined) return resolved;
   for (const [key, rawValue] of Object.entries(agentEnv)) {
-    if (isDeniedAgentEnvKey(key)) {
-      // See responsibility (1). Never set a CLAUDE_* var from this map.
+    // Responsibility (3): re-assert the ASCII key grammar at runtime, so a
+    // non-schema caller can't slip a mangled key (e.g. `" CLAUDE_X"` whose
+    // leading space would dodge the prefix check below) past this layer.
+    if (!AGENT_ENV_KEY_PATTERN.test(key)) {
       process.stderr.write(
-        `session-settings: agent env key '${key}' dropped — CLAUDE_* is default-deny (cortex#701 isolation)\n`,
+        `session-settings: agent env key '${key}' dropped — not a POSIX identifier (cortex#2133 runtime key-grammar re-check)\n`,
+      );
+      continue;
+    }
+    if (isDeniedAgentEnvKey(key)) {
+      // Responsibility (1). Never set a reserved-prefix
+      // (CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_) var from this map.
+      process.stderr.write(
+        `session-settings: agent env key '${key}' dropped — reserved-prefix vars are default-deny (cortex#701/#2133 isolation)\n`,
       );
       continue;
     }
     const refMatch = SECRET_REF_PATTERN.exec(rawValue);
     if (refMatch?.[1] !== undefined) {
       const refEnvVar = refMatch[1];
+      // Responsibility (2): deny the REF SOURCE name too. A benign key must not
+      // re-surface a denied daemon var's VALUE under a clean name
+      // (e.g. `GDRIVE_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN"`). Log the key + ref
+      // NAME only — never the value (preserve the no-value-logging property).
+      if (isDeniedAgentEnvKey(refEnvVar)) {
+        process.stderr.write(
+          `session-settings: agent env '${key}' → secret reference env:${refEnvVar} dropped — ` +
+            `the referenced var is in a reserved prefix (CLAUDE_/ANTHROPIC_/CORTEX_/GROVE_); ` +
+            `a passthrough may not re-surface a guarded daemon var's value (cortex#2133)\n`,
+        );
+        continue;
+      }
       const secretVal = parentEnv[refEnvVar];
       if (secretVal === undefined || secretVal.trim() === "") {
         // See responsibility (2): skip an unresolved ref, don't throw.
