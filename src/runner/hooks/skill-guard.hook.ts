@@ -66,6 +66,37 @@ interface HookInput {
 const SKILL_TOOL_NAMES = new Set(["Skill", "skill"]);
 
 /**
+ * The plugin namespace Claude Code prefixes onto a granted skill's name.
+ *
+ * cortex#990 materialises a session's granted skills as a `--plugin-dir`
+ * plugin named `cortex-granted` (session-settings.ts
+ * `CORTEX_GRANTED_PLUGIN_NAME` — kept in sync by a drift test). Claude Code
+ * surfaces every plugin skill — in the session-init `skills` listing AND at
+ * invocation — as `cortex-granted:<name>`, NEVER the bare `<name>` (verified
+ * CC 2.1.211, cortex#2151). Policy grants, by contrast, are written BARE
+ * (`gws-drive`) and reach this hook that way via `CORTEX_SKILL_GRANTS`. So an
+ * invoked name must be stripped of this prefix before matching the bare grant
+ * list — otherwise every real invocation (which is namespaced) would miss.
+ * Duplicated here as a literal rather than imported so the security gate stays
+ * dependency-free (it is spawned per Skill call).
+ */
+const CORTEX_GRANTED_PLUGIN_PREFIX = "cortex-granted:";
+
+/**
+ * Normalise an invoked skill name to its BARE spelling for grant matching:
+ * strip a single leading `cortex-granted:` namespace prefix when present. Both
+ * `cortex-granted:gws-drive` (how CC surfaces the granted skill) and
+ * `gws-drive` (how the grant is written in policy) normalise to `gws-drive`,
+ * so both match the same BARE grant. A name without the prefix is returned
+ * unchanged. Exported for unit tests.
+ */
+export function normaliseSkillName(skillName: string): string {
+  return skillName.startsWith(CORTEX_GRANTED_PLUGIN_PREFIX)
+    ? skillName.slice(CORTEX_GRANTED_PLUGIN_PREFIX.length)
+    : skillName;
+}
+
+/**
  * Parse the per-session grant list from `CORTEX_SKILL_GRANTS` (JSON array of
  * skill-name strings). Returns `[]` (deny-all) on absence or malformed input
  * — fail-closed. Exported for unit tests.
@@ -116,7 +147,12 @@ export function decideSkill(
   grants: string[],
 ): { allow: boolean; reason?: string } {
   if (skillName === null) return { allow: true };
-  if (grants.includes(skillName)) return { allow: true };
+  // Match against the BARE grant list on the normalised (prefix-stripped)
+  // name, so the namespaced `cortex-granted:<name>` spelling CC actually emits
+  // and the bare `<name>` spelling both resolve to the same grant. The grant
+  // list stays canonically BARE (policy authority); only the invoked name is
+  // normalised.
+  if (grants.includes(normaliseSkillName(skillName))) return { allow: true };
   return {
     allow: false,
     reason:

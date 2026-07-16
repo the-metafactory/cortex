@@ -13,8 +13,11 @@
  */
 
 import { describe, test, expect, spyOn, afterEach } from "bun:test";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { CCSession } from "../cc-session";
+import { setActiveSubstrates } from "../../common/substrates/config-home";
 
 interface Captured {
   cmd: string[];
@@ -434,3 +437,77 @@ describe("CCSession — per-principal MCP grants (cortex#2111)", () => {
       restore();
     }
   });
+
+// cortex#2150 (AC4) — the Skill Guard env and the materialiser plugin must
+// carry the SAME grant list, drawn from the SAME decision (CCSession's
+// `opts.allowedSkills`). cc-session feeds that one value to BOTH consumers:
+// `createIsolatedSettings(skillGrants)` (which materialises the plugin) and
+// `CORTEX_SKILL_GRANTS = JSON.stringify(skillGrants)` (the guard env). This
+// proves they never diverge.
+describe("CCSession — grant list is single-sourced to guard env + materialiser (cortex#2150)", () => {
+  /**
+   * Spawn spy that ALSO snapshots the materialised plugin's skills dir at
+   * spawn time — before the throw triggers CCSession's catch/cleanup, which
+   * deletes the temp plugin tree.
+   */
+  function captureSpawnWithPlugin(): {
+    calls: (Captured & { pluginSkills: string[] | undefined })[];
+    restore: () => void;
+  } {
+    const calls: (Captured & { pluginSkills: string[] | undefined })[] = [];
+    const spy = spyOn(Bun, "spawn").mockImplementation(((
+      cmd: string[],
+      opts: { env: Record<string, string> },
+    ) => {
+      const idx = cmd.indexOf("--plugin-dir");
+      const pluginSkills =
+        idx > -1 ? readdirSync(join(cmd[idx + 1]!, "skills")).sort() : undefined;
+      calls.push({ cmd, env: opts.env, pluginSkills });
+      throw new Error("spawn intercepted by test");
+    }) as unknown as typeof Bun.spawn);
+    return { calls, restore: () => spy.mockRestore() };
+  }
+
+  /** Build a config home whose `skills/` dir holds each named skill. */
+  function makeSkillSource(names: string[]): string {
+    const home = mkdtempSync(join(tmpdir(), "cortex-skillsrc-"));
+    for (const n of names) {
+      mkdirSync(join(home, "skills", n), { recursive: true });
+      writeFileSync(join(home, "skills", n, "SKILL.md"), `# ${n}\n`);
+    }
+    return home;
+  }
+
+  afterEach(() => setActiveSubstrates(undefined));
+
+  test("plugin skills and CORTEX_SKILL_GRANTS come from the one allowedSkills list", () => {
+    const grants = ["gws-drive", "gws-shared"];
+    const home = makeSkillSource(grants);
+    // Point cc-session's skillSourceDir at the temp home (its `skills/` dir).
+    setActiveSubstrates({ "claude-code": { configHome: home } });
+    const { calls, restore } = captureSpawnWithPlugin();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        claudeDir: "/fake/.claude",
+        allowedSkills: grants,
+      });
+      session.on("error", () => {/* expected — spawn intercepted */});
+      session.start();
+
+      expect(calls.length).toBe(1);
+      const { env, pluginSkills } = calls[0]!;
+      // Consumer A — the Skill Guard env.
+      expect(env.CORTEX_SKILL_GRANTS).toBe(JSON.stringify(grants));
+      // Consumer B — the materialiser plugin.
+      expect(pluginSkills).toEqual([...grants].sort());
+      // The two are the SAME list. Mutation guard: if cc-session pointed one
+      // consumer at a different source (a hard-coded list, a different opts
+      // field), env and pluginSkills would diverge and one of the above fails.
+      expect(JSON.parse(env.CORTEX_SKILL_GRANTS!).sort()).toEqual(pluginSkills);
+    } finally {
+      restore();
+    }
+  });
+});

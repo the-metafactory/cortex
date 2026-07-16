@@ -20,7 +20,9 @@ import {
   parseGrantList,
   extractSkillName,
   decideSkill,
+  normaliseSkillName,
 } from "../skill-guard.hook";
+import { CORTEX_GRANTED_PLUGIN_NAME } from "../../session-settings";
 
 const HOOK_PATH = join(import.meta.dir, "..", "skill-guard.hook.ts");
 
@@ -139,6 +141,59 @@ describe("decideSkill — allow/deny decision", () => {
   test("null skill name (not a Skill invocation) → allow pass-through", () => {
     expect(decideSkill(null, ["code-review"]).allow).toBe(true);
   });
+
+  // cortex#2150 — name normalisation. Policy grants are BARE; CC surfaces the
+  // granted skill as `cortex-granted:<name>`. The guard must accept BOTH
+  // spellings of a granted skill and deny BOTH spellings of a non-granted one.
+  test("namespaced spelling of a granted skill → allow", () => {
+    expect(decideSkill("cortex-granted:gws-drive", ["gws-drive"]).allow).toBe(true);
+  });
+
+  test("bare spelling of a granted skill → allow", () => {
+    expect(decideSkill("gws-drive", ["gws-drive"]).allow).toBe(true);
+  });
+
+  test("bare non-granted skill → deny", () => {
+    expect(decideSkill("anything-else", ["gws-drive"]).allow).toBe(false);
+  });
+
+  test("namespaced non-granted skill → deny (prefix is not a bypass)", () => {
+    const d = decideSkill("cortex-granted:anything-else", ["gws-drive"]);
+    expect(d.allow).toBe(false);
+    // The reason names the spelling the model actually invoked.
+    expect(d.reason).toContain("cortex-granted:anything-else");
+  });
+
+  test("prefix does NOT widen: a bare grant matches only its own skill", () => {
+    // Regression: normalisation must not let `cortex-granted:` match a grant
+    // that merely CONTAINS the bare name, nor allow an empty tail.
+    expect(decideSkill("cortex-granted:", ["gws-drive"]).allow).toBe(false);
+  });
+});
+
+describe("normaliseSkillName — namespace prefix stripping (cortex#2150)", () => {
+  test("strips a leading cortex-granted: prefix", () => {
+    expect(normaliseSkillName("cortex-granted:gws-drive")).toBe("gws-drive");
+  });
+
+  test("leaves a bare name unchanged", () => {
+    expect(normaliseSkillName("gws-drive")).toBe("gws-drive");
+  });
+
+  test("strips only ONE leading prefix (not recursive)", () => {
+    expect(normaliseSkillName("cortex-granted:cortex-granted:x")).toBe(
+      "cortex-granted:x",
+    );
+  });
+
+  // Drift guard: the hook's hard-coded prefix must track the materialiser's
+  // plugin name. If session-settings renames the plugin, this fails loudly
+  // rather than silently denying every real (namespaced) invocation.
+  test("prefix tracks the materialiser plugin name", () => {
+    expect(normaliseSkillName(`${CORTEX_GRANTED_PLUGIN_NAME}:gws-drive`)).toBe(
+      "gws-drive",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -202,6 +257,29 @@ describe("skill-guard.hook — process behaviour", () => {
 
   test("malformed payload → deny (fail-closed)", () => {
     const r = runHook("not json at all", '["code-review"]');
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecision).toBe(
+      "deny",
+    );
+  });
+
+  // cortex#2150 — the running hook honours normalisation end-to-end: the
+  // namespaced spelling CC actually emits for a granted skill is allowed, and
+  // the namespaced spelling of a non-granted skill is still denied.
+  test("namespaced granted skill → exit 0 (allow)", () => {
+    const r = runHook(
+      { tool_name: "Skill", tool_input: { skill: "cortex-granted:gws-drive" } },
+      '["gws-drive"]',
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("namespaced non-granted skill → exit 2 (deny; prefix is no bypass)", () => {
+    const r = runHook(
+      { tool_name: "Skill", tool_input: { skill: "cortex-granted:art" } },
+      '["gws-drive"]',
+    );
     expect(r.status).toBe(2);
     expect(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecision).toBe(
       "deny",
