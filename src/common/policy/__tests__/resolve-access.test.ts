@@ -759,3 +759,15 @@ describe("intersectMcpGrants — wire may narrow, never widen (cortex#2111 MAJOR
     expect(intersectMcpGrants(["gdrive", "*"], ["gdrive"])).toEqual(["gdrive"]);
   });
 });
+
+describe("deriveMcpGrants — single-arg form derives the short-circuit from the set", () => {
+  test("capability set carrying the reserved short-circuit → full grant", () => {
+    expect(deriveMcpGrants(["keyword.chat", "operator"])).toEqual(["*"]);
+  });
+
+  test("without it → normal derivation", () => {
+    expect(deriveMcpGrants(["keyword.chat", "tool.mcp.gdrive"])).toEqual(["gdrive"]);
+    expect(deriveMcpGrants(["keyword.chat"])).toEqual([]);
+    expect(deriveMcpGrants(undefined)).toEqual([]);
+  });
+});

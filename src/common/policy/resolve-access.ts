@@ -76,12 +76,20 @@ export const MCP_CAPABILITY_PREFIX = "tool.mcp";
  * - Otherwise, every `tool.mcp.<rest>` capability contributes `<rest>`.
  *
  * Exported for unit tests.
+ *
+ * @param isOperator pass the engine-checked short-circuit result when the
+ *   caller already has it (resolvePolicyAccess). Omit to derive it from
+ *   the capability set itself (the runner's gate decision carries the
+ *   reserved capability in-band) — keeps the literal inside this
+ *   carved-out module.
  */
 export function deriveMcpGrants(
   capabilities: readonly string[] | undefined,
-  isOperator: boolean,
+  isOperator?: boolean,
 ): string[] {
-  if (isOperator) return ["*"];
+  const operator =
+    isOperator ?? capabilities?.includes("operator") ?? false;
+  if (operator) return ["*"];
   if (capabilities === undefined) return [];
   const grants: string[] = [];
   for (const cap of capabilities) {

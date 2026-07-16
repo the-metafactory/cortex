@@ -2140,14 +2140,12 @@ async function handleDispatchEnvelope(
   // belt-and-braces fallback derives from `undefined` → `[]` (deny-all),
   // never allow.
   {
-    // TS narrows `gatedCapabilities` to non-nullish here: it is assigned on
-    // the gate's allow path and every deny path returns before this point.
-    // (deriveMcpGrants would still map undefined → [] = deny-all, never
-    // allow, if a future refactor broke that invariant.)
-    const authoritative = deriveMcpGrants(
-      gatedCapabilities,
-      gatedCapabilities.includes("operator"),
-    );
+    // `gatedCapabilities` is assigned on the gate's allow path and every
+    // deny path returns before this point; deriveMcpGrants maps undefined
+    // → [] = deny-all (never allow) if a future refactor broke that. The
+    // reserved short-circuit capability is detected INSIDE deriveMcpGrants
+    // (single-arg form) — the literal stays in the carved-out policy module.
+    const authoritative = deriveMcpGrants(gatedCapabilities);
     req.mcpGrants =
       req.mcpGrants === undefined
         ? authoritative
