@@ -184,8 +184,22 @@ export function buildSessionEnv(
     | "entity"
     | "principal"
     | "parentSessionId"
+    | "configHomeEnv"
   >,
 ): Record<string, string> {
+  // The substrate's config-home var (claude-code → CLAUDE_CONFIG_DIR): explicit
+  // `opts.configHomeEnv` override, else the process-wide `substrates:` block
+  // published at daemon boot. Applied HERE — `baseEnv` is post-`scopeSessionEnv`
+  // — so it survives isolation's CLAUDE_* strip WITHOUT widening the env
+  // allowlist, while staying a pure/testable transform rather than a mutation
+  // buried in `start()`. Without it a child authenticates on the vendor-default
+  // credential, which refreshes independently of the principal's and expires.
+  //
+  // Honest boundary: relocating a config HOME also relocates its `.claude.json`
+  // MCP servers — isolation is strict at the ENV-allowlist layer, but
+  // `--setting-sources ""` does not gate config-dir MCP config. That is inherent
+  // to any config home (default or otherwise), not introduced here.
+  const configHomeEnv = opts.configHomeEnv ?? activeConfigHomeEnv("claude-code");
   return {
     ...baseEnv,
     ...(opts.channel && { CORTEX_CHANNEL: opts.channel }),
@@ -198,6 +212,7 @@ export function buildSessionEnv(
     // ST-P1 (cortex#964) — child-session linkage. The spawned child's
     // EventLogger reads CORTEX_PARENT_SESSION_ID to parent its events.
     ...(opts.parentSessionId && { CORTEX_PARENT_SESSION_ID: opts.parentSessionId }),
+    ...(configHomeEnv && { [configHomeEnv.name]: configHomeEnv.value }),
   };
 }
 
@@ -370,22 +385,6 @@ export class CCSession extends EventEmitter {
     // Suppress ANTHROPIC_API_KEY when OAuth token is present
     if (env.CLAUDE_CODE_OAUTH_TOKEN) {
       delete env.ANTHROPIC_API_KEY;
-    }
-
-    // Export the substrate's config-home var (e.g. CLAUDE_CONFIG_DIR) LAST — the
-    // single chokepoint for EVERY claude-code session cortex spawns (chat, async,
-    // dev-loop, review, agent-team), so none can fall back to the vendor-default
-    // credential and expire. Value comes from `opts.configHomeEnv` (explicit
-    // override, e.g. tests) else the process-wide `substrates:` set at daemon
-    // boot (activeConfigHomeEnv). Set AFTER scopeSessionEnv so it survives
-    // isolation's strip WITHOUT widening the env allowlist. Caveat: relocating
-    // the config HOME also relocates its `.claude.json` MCP servers; isolation
-    // is strict at the ENV-allowlist layer, but `--setting-sources ""` does not
-    // gate config-dir MCP config (that's inherent to any config home, default or
-    // soma, and unchanged by this diff).
-    const configHomeEnv = this.opts.configHomeEnv ?? activeConfigHomeEnv("claude-code");
-    if (configHomeEnv) {
-      env[configHomeEnv.name] = configHomeEnv.value;
     }
 
     try {

@@ -81,6 +81,7 @@
  */
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
+import { activeConfigHomeEnv } from "../common/substrates/config-home";
 import {
   createReviewTaskFailedEvent,
   createReviewVerdictEvent,
@@ -148,7 +149,9 @@ export type SageWhichFn = (cmd: string) => string | undefined;
  *   - Resolve sage binary via `SAGE_BIN` env then `Bun.which("sage")`.
  *   - Use `Bun.spawn` for the subprocess.
  *   - Use the current process env (no scrubbing — sage piggybacks on the
- *     principal's `gh` auth and `GITHUB_TOKEN` via inherited env).
+ *     principal's `gh` auth and `GITHUB_TOKEN` via inherited env), plus the
+ *     configured claude config home layered on top, so a `--substrate claude`
+ *     run's own `claude` grandchild resolves against it (see `defaultSpawn`).
  */
 export interface MakeSageRunnerOpts {
   /**
@@ -382,9 +385,21 @@ function defaultSpawn(
   argv: string[],
   opts: { stdout: "pipe"; stderr: "pipe" },
 ): SageSpawnResult {
+  // SUBPROCESS BOUNDARY: with `--substrate claude`, sage re-execs `claude`
+  // itself — one level BELOW cortex's own spawn chokepoint (cc-session), which
+  // therefore cannot reach it. Export the configured config home here so that
+  // grandchild inherits it instead of authenticating on the vendor-default
+  // credential (which refreshes independently and expires). Layered on top of
+  // the inherited env, which sage relies on for `gh`/`GITHUB_TOKEN`. Harmless
+  // for non-claude substrates — the var is simply unused.
+  // See common/substrates/config-home.ts.
+  const configHome = activeConfigHomeEnv("claude-code");
   const proc = Bun.spawn(argv, {
     stdout: opts.stdout,
     stderr: opts.stderr,
+    ...(configHome && {
+      env: { ...process.env, [configHome.name]: configHome.value },
+    }),
   });
   return {
     stdout: proc.stdout,

@@ -105,7 +105,7 @@ import { GateReplyRouter } from "./bus/gate-reply-router";
 import { DaemonBrainHost } from "./brain/daemon-brain-host";
 import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import { wireReviewConsumers } from "./runner/review-consumer-boot";
-import { setActiveSubstrates } from "./common/substrates/config-home";
+import { setActiveSubstrates, activeConfigHomeEnv } from "./common/substrates/config-home";
 import { wireBrainConsumers } from "./runner/brain-consumer-boot";
 import { wireReleaseConsumers } from "./runner/release-consumer-boot";
 import { wireSurfaceAdapters } from "./runner/surface-adapter-boot";
@@ -915,6 +915,15 @@ export async function startCortex(
   console.log(`  Agent: ${config.agent.displayName}`);
   console.log(`  Config: ${options.configPath ?? "(in-memory)"}`);
   console.log(`  PID: ${process.pid}`);
+  // Make the config home VISIBLE at boot. Sessions fall back to the vendor
+  // default silently when no `substrates.claude-code.configHome` is declared —
+  // which is a legitimate default, but indistinguishable at runtime from a
+  // misconfiguration. Logging it once turns a silent fallback into an
+  // observable fact an operator can check against intent.
+  const bootConfigHome = activeConfigHomeEnv("claude-code");
+  console.log(
+    `  Claude config home: ${bootConfigHome?.value ?? "(vendor default — no substrates.claude-code.configHome)"}`,
+  );
 
   // cortex#427 — resolve the canonical principal id ONCE at boot. Every
   // subsequent `{principal}` segment (NATS subjects, `signed_by` chains,
