@@ -95,13 +95,24 @@ async function runClaude(args: string[]): Promise<{ code: number; stdout: string
   return { code, stdout, stderr };
 }
 
-/** Parse a stream-json (newline-delimited) transcript into events. */
+/**
+ * Parse a stream-json (newline-delimited) transcript into events. Lines that
+ * aren't valid JSON are skipped rather than thrown: if CC ever prints a stray
+ * non-NDJSON line (a warning/deprecation banner), a specific pinned assertion
+ * should shift, not the whole suite error out of beforeAll.
+ */
 function parseStreamJson(stdout: string): Record<string, unknown>[] {
-  return stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => JSON.parse(l) as Record<string, unknown>);
+  const events: Record<string, unknown>[] = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      events.push(JSON.parse(trimmed) as Record<string, unknown>);
+    } catch {
+      continue; // non-NDJSON noise on stdout — ignore
+    }
+  }
+  return events;
 }
 
 describe("CC --plugin-dir skill semantics (pinned @ 2.1.211)", () => {

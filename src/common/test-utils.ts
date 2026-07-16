@@ -18,5 +18,10 @@ export const hasClaude: boolean = which("claude");
  * binary is not on $PATH (i.e. GitHub Actions runners). Use this in any
  * test that ends up calling `Bun.spawn(["claude", ...])` directly or
  * transitively (e.g. via `CCSession.start()` / `AgentTeam.triggerSynthesis`).
+ *
+ * Exception: `src/runner/__tests__/cc-plugin-dir-pin.integration.test.ts`
+ * deliberately does NOT use this helper — it gates on the CLAUDE_BIN env var
+ * instead, because issue #2151's verification contract requires it to skip
+ * when CLAUDE_BIN is unset even on a machine that has `claude` on $PATH.
  */
 export const testClaude = test.skipIf(!hasClaude);
