@@ -120,7 +120,9 @@ default Discord quickstart needs `discord`; a `web:`-only stack should build
 ## Pinned versions
 
 All are build ARGs, overridable from `.env`: `CORTEX_REF` (a release tag, **not**
-`main`), `BUN_VERSION`, `CLAUDE_VERSION`, `NATS_SERVER_VERSION`, `ARC_REF` (the
+`main` — default `v6.10.0`, the first release that carries `cortex quickstart`
+and the L4 container fixes; earlier tags lack `quickstart` and abort at boot,
+cortex#2154), `BUN_VERSION`, `CLAUDE_VERSION`, `NATS_SERVER_VERSION`, `ARC_REF` (the
 arc release tag used to install the surface-adapter package manager),
 `CORTEX_SURFACES` (which adapter bundle(s) to bake — see above), and the
 `NATS_IMAGE` tag. Bump one, rebuild, redeploy.

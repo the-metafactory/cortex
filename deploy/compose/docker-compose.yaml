@@ -45,7 +45,7 @@ services:
       context: .
       dockerfile: Dockerfile.cortex
       args:
-        CORTEX_REF: ${CORTEX_REF:-v6.8.5}
+        CORTEX_REF: ${CORTEX_REF:-v6.10.0}
         BUN_VERSION: ${BUN_VERSION:-1.3.14}
         CLAUDE_VERSION: ${CLAUDE_VERSION:-2.1.211}
         NATS_SERVER_VERSION: ${NATS_SERVER_VERSION:-2.14.3}
