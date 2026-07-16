@@ -105,6 +105,7 @@ import { GateReplyRouter } from "./bus/gate-reply-router";
 import { DaemonBrainHost } from "./brain/daemon-brain-host";
 import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import { wireReviewConsumers } from "./runner/review-consumer-boot";
+import { setActiveSubstrates } from "./common/substrates/config-home";
 import { wireBrainConsumers } from "./runner/brain-consumer-boot";
 import { wireReleaseConsumers } from "./runner/release-consumer-boot";
 import { wireSurfaceAdapters } from "./runner/surface-adapter-boot";
@@ -904,6 +905,11 @@ export async function startCortex(
     : DEFAULT_CONFIG;
 
   const configDir = dirname(expandedConfigPath);
+  // Publish the deployment `substrates:` block process-wide so EVERY claude-code
+  // session this daemon spawns (dispatch, dev-loop, review, agent-team) resolves
+  // against the declared config home (cc-session reads it at spawn). Set-once at
+  // boot; refreshed on config reload below. See common/substrates/config-home.ts.
+  setActiveSubstrates(config.substrates);
   const securityPreamble = buildSecurityPreamble(config, expandedConfigPath);
   console.log("cortex: starting...");
   console.log(`  Agent: ${config.agent.displayName}`);
@@ -4037,6 +4043,9 @@ export async function startCortex(
     && existsSync(expandedConfigPath)
   ) {
     configWatcher = new ConfigWatcher(expandedConfigPath, config, (event) => {
+      // Keep the process-wide config-home current on hot reload (a `substrates:`
+      // edit takes effect for subsequently-spawned sessions without a restart).
+      setActiveSubstrates(event.config.substrates);
       dispatchHandler.updateConfig(event.config, expandedConfigPath);
       for (const adapter of adapters) adapter.updateConfig?.(event.config);
       if (cloudPublisher) {

@@ -29,7 +29,6 @@ import { buildPrompt } from "../runner/prompt-builder";
 import { scanPrompt } from "../runner/prompt-filter";
 import { renderFilterRejection } from "../adapters/filter-rejection";
 import { CCSession, type CCSessionOpts, type CCSessionResult } from "../runner/cc-session";
-import { resolveConfigHomeEnv } from "../common/substrates/config-home";
 import type {
   CCSessionFactory,
   CCSessionLike,
@@ -301,17 +300,7 @@ export class DispatchHandler extends EventEmitter {
         });
     this.runtime = opts.runtime;
     this.systemEventSource = opts.systemEventSource;
-    // Default factory injects the claude-code config-home (from the deployment
-    // `substrates:` block) unless the caller already set it. `this.config` is
-    // read at call time (the closure runs at dispatch), so ordering here is
-    // safe. Tests injecting their own factory opt out entirely.
-    this.ccSessionFactory =
-      opts.ccSessionFactory ??
-      ((sessionOpts) =>
-        new CCSession({
-          configHomeEnv: resolveConfigHomeEnv("claude-code", this.config.substrates),
-          ...sessionOpts,
-        }));
+    this.ccSessionFactory = opts.ccSessionFactory ?? ((sessionOpts) => new CCSession(sessionOpts));
     this.retryMaxAttempts = opts.retry?.maxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS;
     this.retryMaxTotalMs = opts.retry?.maxTotalMs ?? DEFAULT_RETRY_MAX_TOTAL_MS;
     this.stack = opts.stack;
@@ -1516,10 +1505,6 @@ export class DispatchHandler extends EventEmitter {
     await adapter.postResponse(replyTarget, "On it — I'll report back when done.");
 
     const session = new CCSession({
-      // Config-home (e.g. CLAUDE_CONFIG_DIR → ~/.claude-soma) from the
-      // deployment `substrates:` block; set post-scope in cc-session so it
-      // survives isolation. See common/substrates/config-home.ts.
-      configHomeEnv: resolveConfigHomeEnv("claude-code", this.config.substrates),
       prompt,
       channel: channel,
       network: network,

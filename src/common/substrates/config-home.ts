@@ -26,10 +26,11 @@
 import { z } from "zod/v4";
 
 /**
- * Config-facing substrate ids. Mirrors the `substrate` enum on
+ * Config-facing substrate ids. MUST stay in sync with the `substrate` enum on
  * `AgentRuntimeSchema` (cortex-config.ts). Kept as a local tuple so this file
- * stays a leaf (no config-schema import cycle); keep the two lists in sync when
- * a new substrate lands.
+ * stays a leaf (no config-schema import cycle); a drift-guard test
+ * (`config-home.test.ts`) asserts the two lists match so an addition to one
+ * without the other fails CI rather than silently rejecting a valid substrate.
  */
 export const SUBSTRATE_IDS = [
   "claude-code",
@@ -37,6 +38,7 @@ export const SUBSTRATE_IDS = [
   "pi-dev",
   "cursor",
   "custom",
+  "api-agent",
 ] as const;
 
 export type SubstrateId = (typeof SUBSTRATE_IDS)[number];
@@ -85,12 +87,22 @@ export const SubstratesSchema = z.partialRecord(
 
 export type SubstratesConfig = z.infer<typeof SubstratesSchema>;
 
-/** Expand a leading `~`/`~/` and `$HOME`/`${HOME}` using `process.env.HOME`. */
+/**
+ * Expand a leading `~`/`~/` and `${HOME}`/`$HOME` using `process.env.HOME`.
+ * If `HOME` is unset/empty a tilde/`$HOME` path can't be resolved to an
+ * absolute location, so the input is returned UNCHANGED (never silently
+ * rewritten to a root-relative `/.foo`) — the caller/substrate then fails on a
+ * clearly-wrong path rather than on a plausible-but-wrong one. `$HOME` only
+ * matches at a word boundary so `$HOMEDIR` is left intact.
+ */
 function expandHome(p: string): string {
   const home = process.env.HOME ?? "";
+  if (!home && (p === "~" || p.startsWith("~/") || /\$\{HOME\}|\$HOME\b/.test(p))) {
+    return p;
+  }
   if (p === "~") return home;
   if (p.startsWith("~/")) return home + p.slice(1);
-  return p.replace(/\$\{HOME\}|\$HOME/g, home);
+  return p.replace(/\$\{HOME\}|\$HOME\b/g, home);
 }
 
 /**
@@ -110,4 +122,36 @@ export function resolveConfigHomeEnv(
   const name = SUBSTRATE_CONFIG_HOME_ENV[substrate];
   if (!name) return undefined;
   return { name, value: expandHome(configHome) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Process-level active substrates — the single chokepoint.
+//
+// Every claude-code session cortex spawns must resolve against the SAME config
+// home, but sessions are constructed at several scattered sites (chat/async
+// dispatch, the autonomous dev-loop, PR review, agent-team members). Rather than
+// thread `configHomeEnv` through every opts-builder — where a newly-added path
+// can silently forget it and fall back to the vendor-default credential (which
+// then expires independently) — the daemon sets the active `substrates:` block
+// ONCE at boot (and on config reload), and the single spawn site (cc-session.ts)
+// reads it. Set-once / read-at-spawn: no dispatch path can miss it.
+// ─────────────────────────────────────────────────────────────────────────────
+let activeSubstrates: SubstratesConfig | undefined;
+
+/** Set the process-wide `substrates:` config. Called at daemon boot + reload. */
+export function setActiveSubstrates(substrates: SubstratesConfig | undefined): void {
+  activeSubstrates = substrates;
+}
+
+/**
+ * Resolve the config-home env var for `substrate` from the process-wide
+ * `substrates:` config set by {@link setActiveSubstrates}. Returns `undefined`
+ * when nothing was set, the substrate declared no `configHome`, or the substrate
+ * has no known config-home env var — the caller then leaves the child on its
+ * default home. This is the read side of the single chokepoint (cc-session).
+ */
+export function activeConfigHomeEnv(
+  substrate: SubstrateId,
+): { name: string; value: string } | undefined {
+  return resolveConfigHomeEnv(substrate, activeSubstrates);
 }

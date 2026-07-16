@@ -16,6 +16,7 @@ import {
   CORTEX_MCP_GRANTS_ENV,
   type IsolatedSettings,
 } from "./session-settings";
+import { activeConfigHomeEnv } from "../common/substrates/config-home";
 
 // Re-export for convenience
 export type { UsageStats, StreamEvent };
@@ -371,12 +372,20 @@ export class CCSession extends EventEmitter {
       delete env.ANTHROPIC_API_KEY;
     }
 
-    // Export the substrate's config-home var (e.g. CLAUDE_CONFIG_DIR) LAST, so
-    // it survives isolation's scopeSessionEnv strip WITHOUT widening the
-    // allowlist. Driven by the deployment `substrates:` block via the dispatch
-    // layer's resolveConfigHomeEnv — see common/substrates/config-home.ts.
-    if (this.opts.configHomeEnv) {
-      env[this.opts.configHomeEnv.name] = this.opts.configHomeEnv.value;
+    // Export the substrate's config-home var (e.g. CLAUDE_CONFIG_DIR) LAST — the
+    // single chokepoint for EVERY claude-code session cortex spawns (chat, async,
+    // dev-loop, review, agent-team), so none can fall back to the vendor-default
+    // credential and expire. Value comes from `opts.configHomeEnv` (explicit
+    // override, e.g. tests) else the process-wide `substrates:` set at daemon
+    // boot (activeConfigHomeEnv). Set AFTER scopeSessionEnv so it survives
+    // isolation's strip WITHOUT widening the env allowlist. Caveat: relocating
+    // the config HOME also relocates its `.claude.json` MCP servers; isolation
+    // is strict at the ENV-allowlist layer, but `--setting-sources ""` does not
+    // gate config-dir MCP config (that's inherent to any config home, default or
+    // soma, and unchanged by this diff).
+    const configHomeEnv = this.opts.configHomeEnv ?? activeConfigHomeEnv("claude-code");
+    if (configHomeEnv) {
+      env[configHomeEnv.name] = configHomeEnv.value;
     }
 
     try {

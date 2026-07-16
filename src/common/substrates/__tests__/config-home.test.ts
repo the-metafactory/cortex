@@ -1,9 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   SUBSTRATE_CONFIG_HOME_ENV,
+  SUBSTRATE_IDS,
   SubstratesSchema,
   resolveConfigHomeEnv,
+  setActiveSubstrates,
+  activeConfigHomeEnv,
 } from "../config-home";
+import { AgentRuntimeSchema } from "../../types/cortex-config";
 
 describe("SUBSTRATE_CONFIG_HOME_ENV — translation table", () => {
   test("maps known substrates to their config-home env var", () => {
@@ -83,5 +87,66 @@ describe("resolveConfigHomeEnv", () => {
     expect(
       resolveConfigHomeEnv("pi-dev", { "pi-dev": { configHome: "/x" } }),
     ).toBeUndefined();
+  });
+});
+
+describe("SUBSTRATE_IDS ↔ AgentRuntimeSchema.substrate (drift guard)", () => {
+  test("the local id tuple matches the config substrate enum exactly", () => {
+    // config-home.ts keeps a local copy (leaf module, no schema-import cycle);
+    // this fails CI if the two ever drift — e.g. a substrate added to the schema
+    // but not here (which would silently reject a valid `substrates:` key).
+    const enumOptions = AgentRuntimeSchema.shape.substrate.unwrap().options;
+    expect([...SUBSTRATE_IDS].sort()).toEqual([...enumOptions].sort());
+  });
+});
+
+describe("active substrates chokepoint (setActiveSubstrates / activeConfigHomeEnv)", () => {
+  afterEach(() => setActiveSubstrates(undefined));
+
+  test("activeConfigHomeEnv reads the process-wide substrates set at boot", () => {
+    setActiveSubstrates({ "claude-code": { configHome: "/Users/x/.claude-soma" } });
+    expect(activeConfigHomeEnv("claude-code")).toEqual({
+      name: "CLAUDE_CONFIG_DIR",
+      value: "/Users/x/.claude-soma",
+    });
+  });
+
+  test("returns undefined when nothing is set", () => {
+    setActiveSubstrates(undefined);
+    expect(activeConfigHomeEnv("claude-code")).toBeUndefined();
+  });
+
+  test("returns undefined for a substrate absent from the active set", () => {
+    setActiveSubstrates({ codex: { configHome: "/x" } });
+    expect(activeConfigHomeEnv("claude-code")).toBeUndefined();
+  });
+});
+
+describe("expandHome edge cases (via resolveConfigHomeEnv)", () => {
+  const savedHome = process.env.HOME;
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  test("leaves an absolute path unchanged", () => {
+    process.env.HOME = "/Users/tester";
+    expect(
+      resolveConfigHomeEnv("claude-code", { "claude-code": { configHome: "/abs/.claude" } })?.value,
+    ).toBe("/abs/.claude");
+  });
+
+  test("does NOT expand $HOMEDIR (word boundary)", () => {
+    process.env.HOME = "/Users/tester";
+    expect(
+      resolveConfigHomeEnv("claude-code", { "claude-code": { configHome: "$HOMEDIR/x" } })?.value,
+    ).toBe("$HOMEDIR/x");
+  });
+
+  test("returns the tilde path unchanged when HOME is empty (no root-relative rewrite)", () => {
+    process.env.HOME = "";
+    expect(
+      resolveConfigHomeEnv("claude-code", { "claude-code": { configHome: "~/.claude-soma" } })?.value,
+    ).toBe("~/.claude-soma");
   });
 });
