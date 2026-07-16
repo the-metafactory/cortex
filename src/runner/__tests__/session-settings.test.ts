@@ -237,6 +237,15 @@ describe("scopeSessionEnv — principal CLAUDE_* vars dropped", () => {
     expect(CORTEX_PRESERVED_CLAUDE_ENV.has("CLAUDE_CODE_OAUTH_TOKEN")).toBe(true);
   });
 
+  test("does NOT allowlist a substrate config-home var (set post-scope instead)", () => {
+    // Isolation stays strict default-deny for CLAUDE_CONFIG_DIR; the config
+    // home is exported explicitly AFTER scoping (config-home.ts / cc-session
+    // configHomeEnv), never inherited through this allowlist.
+    const scoped = scopeSessionEnv({ CLAUDE_CONFIG_DIR: "/Users/andreas/.claude-soma" });
+    expect(scoped.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(CORTEX_PRESERVED_CLAUDE_ENV.has("CLAUDE_CONFIG_DIR")).toBe(false);
+  });
+
   test("preserves cortex's own pipeline + non-Claude vars", () => {
     const scoped = scopeSessionEnv({
       CORTEX_CHANNEL: "andreas",

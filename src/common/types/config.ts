@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod/v4";
+import { SubstratesSchema } from "../substrates/config-home";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 // API-P1.3 (#2063) — the machine-layer model-provider block. Imported from the
@@ -669,6 +670,15 @@ export const AgentConfigSchema = z.object({
     normalizeToArray,
     z.array(SlackInstanceSchema).default([]),
   ),
+
+  /**
+   * Per-substrate deployment config (config-home per substrate). Carried
+   * through from CortexConfigSchema by the loader's synth path; declared here
+   * too so `AgentConfigSchema.parse` doesn't strip it by default. Read at
+   * dispatch time to export the substrate's config-home env var on spawned
+   * sessions. See common/substrates/config-home.ts.
+   */
+  substrates: SubstratesSchema.optional(),
 
   claude: z.object({
     timeoutMs: z.number().int().positive().default(120_000),

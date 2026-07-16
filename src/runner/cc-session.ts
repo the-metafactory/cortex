@@ -110,6 +110,16 @@ export interface CCSessionOpts {
    * settings; that principal holds the implicit full grant anyway.
    */
   mcpGrants?: string[];
+  /**
+   * The substrate's config-home env var to export on the child, resolved by the
+   * dispatch layer from the deployment `substrates:` block (claude-code →
+   * `{ name: "CLAUDE_CONFIG_DIR", value: <home> }`). Set on the child env AFTER
+   * `scopeSessionEnv`, so isolation stays strict default-deny while the config
+   * home is still an intentional, named export (not an inherited passthrough).
+   * Undefined = use the substrate's default home. See
+   * common/substrates/config-home.ts.
+   */
+  configHomeEnv?: { name: string; value: string };
 }
 
 export interface CCSessionResult {
@@ -359,6 +369,14 @@ export class CCSession extends EventEmitter {
     // Suppress ANTHROPIC_API_KEY when OAuth token is present
     if (env.CLAUDE_CODE_OAUTH_TOKEN) {
       delete env.ANTHROPIC_API_KEY;
+    }
+
+    // Export the substrate's config-home var (e.g. CLAUDE_CONFIG_DIR) LAST, so
+    // it survives isolation's scopeSessionEnv strip WITHOUT widening the
+    // allowlist. Driven by the deployment `substrates:` block via the dispatch
+    // layer's resolveConfigHomeEnv — see common/substrates/config-home.ts.
+    if (this.opts.configHomeEnv) {
+      env[this.opts.configHomeEnv.name] = this.opts.configHomeEnv.value;
     }
 
     try {

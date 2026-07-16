@@ -62,6 +62,7 @@ import {
   NetworkFileSchema,
   SecurityPostureSchema,
 } from "./config";
+import { SubstratesSchema } from "../substrates/config-home";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
@@ -3314,6 +3315,16 @@ export const CortexConfigSchema = z.object({
 
   /** Claude runtime config — shared by all agents' dispatch sessions. */
   claude: ClaudeConfigSchema,
+
+  /**
+   * Per-substrate deployment config — keyed by substrate id. Currently carries
+   * `configHome`: the config+auth home the runner exports for every session it
+   * spawns on that substrate (claude-code → CLAUDE_CONFIG_DIR, codex →
+   * CODEX_HOME). Substrate-neutral by construction; the vendor env-var
+   * translation lives in common/substrates/config-home.ts. Optional — a
+   * deployment declares only the substrates whose home it relocates.
+   */
+  substrates: SubstratesSchema.optional(),
 
   /** Attachment handling — shared by all platform presences. */
   attachments: emptyDefault(AttachmentsConfigSchema),

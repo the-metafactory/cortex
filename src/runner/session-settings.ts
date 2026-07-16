@@ -146,6 +146,12 @@ export const CORTEX_PRESERVED_CLAUDE_ENV = new Set<string>([
   "CLAUDE_CODE_USE_VERTEX",
   // Entitlement / model selection that cortex itself may set.
   "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+  // NOTE: a substrate's config-home var (claude-code → CLAUDE_CONFIG_DIR) is
+  // deliberately NOT allowlisted here. Isolation stays strict default-deny; the
+  // config-home is set EXPLICITLY on the child env AFTER scoping, driven by the
+  // deployment `substrates:` block. See common/substrates/config-home.ts and
+  // cc-session.ts (configHomeEnv). This keeps "which config home" an intentional
+  // named export, not an inherited principal-personal passthrough.
 ]);
 
 /**

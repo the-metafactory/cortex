@@ -1110,6 +1110,11 @@ function loadCortexShape(
     // matter what the principal declared in system.yaml. Silently, too: with no
     // profiles the boot pre-flight has nothing to report.
     inference: cortexConfig.inference,
+    // Per-substrate config-home block — carry through so dispatched sessions
+    // resolve credentials/projects against the declared home (e.g. a Soma-
+    // backed ~/.claude-soma). On AgentConfigSchema too, so the strip-by-default
+    // parse below keeps it. See common/substrates/config-home.ts.
+    ...(cortexConfig.substrates !== undefined && { substrates: cortexConfig.substrates }),
     ...(cortexConfig.nats !== undefined && { nats: cortexConfig.nats }),
   };
 
