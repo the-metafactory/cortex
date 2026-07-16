@@ -64,7 +64,7 @@ export function secretRefEnvVar(ref: string): string | undefined {
 /**
  * Raised when a secret reference cannot be resolved at call time — the
  * referenced environment variable is unset or empty. Carries the env-var NAME
- * (never a value; there is none to carry) so the operator sees exactly which
+ * (never a value; there is none to carry) so the principal sees exactly which
  * variable to export.
  */
 export class SecretRefResolutionError extends Error {
