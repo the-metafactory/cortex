@@ -32,6 +32,20 @@ set -euo pipefail
 
 : "${CTX_SLUG:?CTX_SLUG is required — see .env.example}"
 
+# Container-only OAuth-token guard (cortex#2139). `cortex quickstart` treats
+# CLAUDE_CODE_OAUTH_TOKEN as OPTIONAL — correct for a native host, where a
+# principal can run `claude login` interactively. A container has NO interactive
+# login, so it ALWAYS needs the token; without it the daemon boots, shows
+# "running", and only fails on the first dispatch (the #2068 re-auth message).
+# Hard-fail at boot instead — cleaner container UX. This guard is entrypoint-only
+# and does NOT touch quickstart's native-host optionality.
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  echo "cortex-entrypoint: CLAUDE_CODE_OAUTH_TOKEN is empty or unset — aborting boot." >&2
+  echo "cortex-entrypoint: a container has no interactive 'claude login', so it always needs this token." >&2
+  echo "cortex-entrypoint: set CLAUDE_CODE_OAUTH_TOKEN in your .env (see .env.example) and recreate the container." >&2
+  exit 1
+fi
+
 CONFIG_DIR="${CORTEX_CONFIG_DIR:-${HOME}/.config/metafactory/cortex}"
 POINTER="${CONFIG_DIR}/${CTX_SLUG}/${CTX_SLUG}.yaml"
 
