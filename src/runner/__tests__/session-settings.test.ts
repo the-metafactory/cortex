@@ -20,6 +20,8 @@ import {
   writeFileSync,
   rmSync,
   lstatSync,
+  chmodSync,
+  symlinkSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -261,7 +263,7 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
     }
   });
 
-  test("non-empty grants → validating plugin layout with EXACTLY the granted skills symlinked + --plugin-dir arg", () => {
+  test("non-empty grants → validating plugin layout with EXACTLY the granted skills COPIED (not symlinked) + --plugin-dir arg", () => {
     const src = makeSkillSource(["alpha", "beta"]);
     const iso = createIsolatedSettings("/fake/.claude", ["alpha", "beta"], undefined, src);
     try {
@@ -280,16 +282,77 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
       expect(manifest.version.length).toBeGreaterThan(0);
       expect(manifest.description).toBe("cortex per-session granted skills");
 
-      // EXACTLY the granted skills are symlinked, and each is a symlink.
+      // EXACTLY the granted skills are present, and each is a real COPY dir —
+      // NOT a symlink (review MAJOR 1: symlinks let a session write through to
+      // the shared source).
       const skillsDir = join(iso.pluginDir!, "skills");
       for (const name of ["alpha", "beta"]) {
-        expect(lstatSync(join(skillsDir, name)).isSymbolicLink()).toBe(true);
+        const st = lstatSync(join(skillsDir, name));
+        expect(st.isSymbolicLink()).toBe(false);
+        expect(st.isDirectory()).toBe(true);
         expect(existsSync(join(skillsDir, name, "SKILL.md"))).toBe(true);
       }
       expect(existsSync(join(skillsDir, "gamma"))).toBe(false);
     } finally {
       iso.cleanup();
       rmSync(src, { recursive: true, force: true });
+    }
+  });
+
+  test("MAJOR 1 — writing through a materialised skill CANNOT poison the shared source", () => {
+    const src = makeSkillSource(["poison-me"]);
+    const sourceSkill = join(src, "poison-me", "SKILL.md");
+    const original = readFileSync(sourceSkill, "utf8");
+
+    const iso = createIsolatedSettings("/fake/.claude", ["poison-me"], undefined, src);
+    try {
+      const copied = join(iso.pluginDir!, "skills", "poison-me", "SKILL.md");
+      // Defence-in-depth: the copy is read-only (0444) — the last 3 mode bits.
+      expect(lstatSync(copied).mode & 0o777).toBe(0o444);
+      // Even if a same-uid session chmods its own copy back and writes to it…
+      chmodSync(copied, 0o644);
+      writeFileSync(copied, "# PWNED");
+      // …the SHARED source is untouched, because the copy severed the link.
+      expect(readFileSync(sourceSkill, "utf8")).toBe(original);
+      expect(readFileSync(sourceSkill, "utf8")).not.toContain("PWNED");
+    } finally {
+      iso.cleanup();
+      rmSync(src, { recursive: true, force: true });
+    }
+  });
+
+  test("MAJOR 1 (regression) — SYMLINKED skill source is dereferenced, not re-linked", () => {
+    // Production reality: an installed skill dir is itself a symlink
+    // (~/.claude/skills/gws-drive → ~/.soma/skills/gws-drive). A non-
+    // dereferencing copy would recreate that symlink and the write-through
+    // hole would stay open. Reproduce that layout exactly.
+    const parent = mkdtempSync(join(tmpdir(), "cortex-symlinksrc-"));
+    const realDir = join(parent, "real-store", "linked");
+    mkdirSync(realDir, { recursive: true });
+    const realSkill = join(realDir, "SKILL.md");
+    writeFileSync(realSkill, "# real content");
+    // The skills SOURCE dir holds a SYMLINK to the real store, mirroring
+    // ~/.claude/skills/<name> → <config-home>/skills/<name>.
+    const skillsSrc = join(parent, "skills");
+    mkdirSync(skillsSrc, { recursive: true });
+    symlinkSync(realDir, join(skillsSrc, "linked"));
+
+    const original = readFileSync(realSkill, "utf8");
+    const iso = createIsolatedSettings("/fake/.claude", ["linked"], undefined, skillsSrc);
+    try {
+      const copiedDir = join(iso.pluginDir!, "skills", "linked");
+      // The materialised dir must be a REAL dir, not a recreated symlink.
+      expect(lstatSync(copiedDir).isSymbolicLink()).toBe(false);
+      expect(lstatSync(copiedDir).isDirectory()).toBe(true);
+      // Write through the copy → the real underlying source stays clean.
+      const copiedSkill = join(copiedDir, "SKILL.md");
+      chmodSync(copiedSkill, 0o644);
+      writeFileSync(copiedSkill, "# PWNED");
+      expect(readFileSync(realSkill, "utf8")).toBe(original);
+      expect(readFileSync(realSkill, "utf8")).not.toContain("PWNED");
+    } finally {
+      iso.cleanup();
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 
@@ -308,7 +371,7 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
       process.stderr.write = original;
     }
     try {
-      // Session still built with a plugin; present skill symlinked, absent skipped.
+      // Session still built with a plugin; present skill copied, absent skipped.
       expect(iso.pluginDir).toBeDefined();
       expect(existsSync(join(iso.pluginDir!, "skills", "present"))).toBe(true);
       expect(existsSync(join(iso.pluginDir!, "skills", "absent"))).toBe(false);
@@ -322,7 +385,73 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
     }
   });
 
-  test("sibling-relative reference between two granted skills resolves through the symlinks", () => {
+  test("MAJOR 2 — traversal / dot grant names are rejected before any path use", () => {
+    // Self-contained layout: parent/{skills/ok, secrets}. A '../secrets' grant
+    // resolved from parent/skills would reach parent/secrets — it must NOT.
+    const parent = mkdtempSync(join(tmpdir(), "cortex-trav-"));
+    const skillsSrc = join(parent, "skills");
+    mkdirSync(join(skillsSrc, "ok"), { recursive: true });
+    writeFileSync(join(skillsSrc, "ok", "SKILL.md"), "# ok");
+    const secretsDir = join(parent, "secrets");
+    mkdirSync(secretsDir, { recursive: true });
+    writeFileSync(join(secretsDir, "SKILL.md"), "# top secret");
+
+    const logged: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      logged.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let iso: ReturnType<typeof createIsolatedSettings>;
+    try {
+      iso = createIsolatedSettings(
+        "/fake/.claude",
+        ["../secrets", "..", ".", "", "ok"],
+        undefined,
+        skillsSrc,
+      );
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    try {
+      // Session constructs; only the single valid grant materialised.
+      const skillsDir = join(iso.pluginDir!, "skills");
+      expect(existsSync(join(skillsDir, "ok"))).toBe(true);
+      // No entry escaped skills/ — the traversal grant never reached 'secrets'.
+      expect(existsSync(join(skillsDir, "secrets"))).toBe(false);
+      // And the real out-of-tree secrets dir was never copied/removed.
+      expect(existsSync(join(secretsDir, "SKILL.md"))).toBe(true);
+      // Each invalid name was logged and skipped.
+      const log = logged.join("");
+      expect(log).toContain("skill grant '../secrets' invalid — skipped");
+      expect(log).toContain("skill grant '..' invalid — skipped");
+      expect(log).toContain("skill grant '.' invalid — skipped");
+    } finally {
+      iso!.cleanup();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("MINOR — every grant invalid/missing → NO plugin dir, no --plugin-dir arg", () => {
+    const src = makeSkillSource([]); // empty source: valid names, but nothing present
+    const iso = createIsolatedSettings(
+      "/fake/.claude",
+      ["nope", "also-nope", ".."],
+      undefined,
+      src,
+    );
+    try {
+      expect(iso.pluginDir).toBeUndefined();
+      expect(iso.args).not.toContain("--plugin-dir");
+      // The empty plugin dir was removed, not left on disk.
+      expect(existsSync(join(iso.settingsPath, "..", "plugin"))).toBe(false);
+    } finally {
+      iso.cleanup();
+      rmSync(src, { recursive: true, force: true });
+    }
+  });
+
+  test("sibling-relative reference between two granted skills resolves through the copies", () => {
     // gws-drive references ../gws-shared/SKILL.md — the canonical case (#990 §3).
     const src = makeSkillSource(["gws-drive", "gws-shared"], {
       "gws-drive": "See ../gws-shared/SKILL.md",
@@ -335,7 +464,7 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
     );
     try {
       const skillsDir = join(iso.pluginDir!, "skills");
-      // Path resolution across the two sibling symlinks must reach the target.
+      // Both copies land in the same skills/ dir, so the sibling path resolves.
       const sibling = join(skillsDir, "gws-drive", "..", "gws-shared", "SKILL.md");
       expect(existsSync(sibling)).toBe(true);
     } finally {
@@ -344,19 +473,20 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
     }
   });
 
-  test("cleanup removes the plugin tree (symlinks) but NOT the symlink targets", () => {
+  test("cleanup removes the read-only plugin tree but NOT the copied-from sources", () => {
     const src = makeSkillSource(["keeper"]);
     const iso = createIsolatedSettings("/fake/.claude", ["keeper"], undefined, src);
     const pluginDir = iso.pluginDir!;
     expect(existsSync(pluginDir)).toBe(true);
     expect(existsSync(join(pluginDir, "skills", "keeper"))).toBe(true);
 
-    iso.cleanup();
+    // cleanup must succeed even though the copies are read-only (0444/0555).
+    expect(() => iso.cleanup()).not.toThrow();
 
-    // The whole temp tree (settings + plugin + symlinks) is gone…
+    // The whole temp tree (settings + plugin + copies) is gone…
     expect(existsSync(pluginDir)).toBe(false);
     expect(existsSync(iso.settingsPath)).toBe(false);
-    // …but the symlink TARGET (the real source skill) is untouched.
+    // …but the SOURCE skill (what we copied FROM) is untouched.
     expect(existsSync(join(src, "keeper", "SKILL.md"))).toBe(true);
     rmSync(src, { recursive: true, force: true });
   });

@@ -99,13 +99,16 @@ import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
-  symlinkSync,
+  cpSync,
+  chmodSync,
+  lstatSync,
+  readdirSync,
   existsSync,
   readFileSync,
   rmSync,
 } from "fs";
 import { tmpdir, homedir } from "os";
-import { join } from "path";
+import { join, basename } from "path";
 import { parse as parseYaml } from "yaml";
 
 /**
@@ -233,18 +236,28 @@ function cortexPluginVersion(): string {
  *
  *   plugin/
  *   ├── .claude-plugin/plugin.json   ← {name, version, description}
- *   └── skills/<grant>/              ← one symlink per granted skill
+ *   └── skills/<grant>/              ← a read-only COPY per granted skill
  *
- * Each grant is symlinked from `<skillSourceDir>/<grant>`. A grant whose
- * source dir does not exist is logged loudly and skipped — never thrown, so a
- * stale grant can't abort session construction. All grants land in ONE
- * `skills/` dir, so a skill's sibling-relative reference
- * (e.g. `../gws-shared/SKILL.md`) resolves through the symlinks.
+ * Each grant is COPIED (not symlinked) from `<skillSourceDir>/<grant>`. The
+ * copy is the fix for the review's MAJOR 1: a symlinked source dir let a
+ * Bash-holding session write THROUGH the link and poison the shared skill
+ * source; copying severs that link. All grants land in ONE `skills/` dir, so a
+ * skill's sibling-relative reference (e.g. `../gws-shared/SKILL.md`) still
+ * resolves. Files are set 0444 / dirs 0555 as defence-in-depth (a same-uid
+ * session can chmod its own throwaway copy back — accepted residual; the
+ * shared source is already out of reach because the link is gone).
  *
- * Returns the plugin dir when it was created (grants non-empty), else
- * `undefined`. The caller appends `--plugin-dir <pluginDir>` to the session
- * args; `cleanup()` removes the whole temp tree (the symlinks, never their
- * targets).
+ * Grant names are validated BEFORE any path use (review MAJOR 2): anything
+ * that isn't a bare basename (`../secrets`, `..`, `.`, empty) is logged and
+ * skipped — a crafted grant can neither escape `skills/` nor abort session
+ * construction. Each copy is wrapped in try/catch for the same reason: any
+ * failure (e.g. a pre-existing name) is logged and skipped, never thrown.
+ *
+ * Returns the plugin dir only when ≥1 skill actually materialised; when every
+ * grant was invalid/missing/failed it removes the empty plugin dir and returns
+ * `undefined` (review MINOR — no `--plugin-dir` for a zero-skill plugin). The
+ * caller appends `--plugin-dir <pluginDir>` to the session args; `cleanup()`
+ * removes the whole temp tree (the copies, never the sources).
  */
 function materialiseGrantedPlugin(
   dir: string,
@@ -270,7 +283,22 @@ function materialiseGrantedPlugin(
     ),
   );
 
+  let materialised = 0;
   for (const grant of skillGrants) {
+    // Reject unsafe grant names BEFORE building any path (review MAJOR 2). A
+    // bare character class like /^[\w.-]+$/ is NOT enough — `..` matches it —
+    // so require the name to equal its own basename AND exclude the dot names
+    // and the empty string explicitly.
+    if (
+      grant.length === 0 ||
+      grant === "." ||
+      grant === ".." ||
+      basename(grant) !== grant
+    ) {
+      process.stderr.write(`cortex: skill grant '${grant}' invalid — skipped\n`);
+      continue;
+    }
+
     const target = join(skillSourceDir, grant);
     if (!existsSync(target)) {
       process.stderr.write(
@@ -278,12 +306,78 @@ function materialiseGrantedPlugin(
       );
       continue;
     }
-    // Symlink the source skill DIR (not its contents) — one link per grant, all
-    // siblings under `skills/`, so intra-skill `../other` refs keep resolving.
-    symlinkSync(target, join(skillsDir, grant));
+
+    try {
+      const dest = join(skillsDir, grant);
+      // Recursive COPY (not symlink) severs the write path back to the shared
+      // source. `dereference: true` is LOAD-BEARING, not cosmetic: an installed
+      // skill dir is itself typically a symlink (e.g. ~/.claude/skills/gws-drive
+      // → ~/.soma/skills/gws-drive), and a non-dereferencing copy would just
+      // recreate that symlink — leaving the write-through-to-source hole open.
+      // Dereferencing materialises real files, fully severing the link. Then
+      // lock it down read-only as defence-in-depth.
+      cpSync(target, dest, { recursive: true, dereference: true });
+      chmodTreeReadOnly(dest);
+      materialised++;
+    } catch (err) {
+      // Never let a crafted/racy grant abort session construction.
+      process.stderr.write(
+        `cortex: skill grant '${grant}' — materialise failed, skipped: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
   }
 
+  if (materialised === 0) {
+    // Every grant was invalid/missing/failed — don't advertise an empty plugin.
+    rmSync(pluginDir, { recursive: true, force: true });
+    return undefined;
+  }
   return pluginDir;
+}
+
+/**
+ * Recursively set a materialised skill tree read-only: files 0444, dirs 0555.
+ * Defence-in-depth over the copy (cortex#990 A1, review MAJOR 1). Symlinks
+ * inside a skill are left untouched (chmod would follow to a target outside the
+ * copy); they are removed with the tree at cleanup regardless. 0555 keeps dirs
+ * traversable/readable, so this and a later read both still work.
+ */
+function chmodTreeReadOnly(path: string): void {
+  const st = lstatSync(path);
+  if (st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    for (const entry of readdirSync(path)) chmodTreeReadOnly(join(path, entry));
+    chmodSync(path, 0o555);
+  } else {
+    chmodSync(path, 0o444);
+  }
+}
+
+/**
+ * Restore writable permissions across a tree so `rmSync` can remove it. The
+ * read-only skill copies (0444 files under 0555 dirs) block removal — a
+ * read-only DIRECTORY can't have its entries unlinked. Chmod each dir writable
+ * BEFORE descending (0700 keeps it traversable), same-uid so always permitted.
+ * Best-effort per node; the caller still force-removes afterwards.
+ */
+function restoreWritableTree(path: string): void {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return;
+  }
+  if (st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    try {
+      chmodSync(path, 0o700);
+    } catch {
+      /* best-effort */
+    }
+    for (const entry of readdirSync(path)) restoreWritableTree(join(path, entry));
+  }
 }
 
 /**
@@ -396,9 +490,10 @@ export interface IsolatedSettings {
   args: string[];
   /**
    * Absolute path to the materialised granted-skills plugin dir, or
-   * `undefined` when the session was granted no skills. Exposed so callers/
-   * tests can locate it (e.g. to run `claude plugin validate`); it lives
-   * INSIDE the temp dir, so `cleanup()` removes it.
+   * `undefined` when the session was granted no skills (or every grant was
+   * invalid/missing/failed). Exposed so callers/tests can locate it (e.g. to
+   * run `claude plugin validate`); it lives INSIDE the temp dir, so `cleanup()`
+   * removes it.
    */
   pluginDir?: string;
   /** Remove the temp dir. Safe to call multiple times. */
@@ -469,16 +564,25 @@ export function createIsolatedSettings(
     cleanup: () => {
       try {
         rmSync(dir, { recursive: true, force: true });
-      } catch (err) {
-        // Best-effort cleanup of an OS temp dir. A leftover dir is inert
-        // (mode 0600, no secrets — only hook paths) and the OS reclaims
-        // tmp eventually; log rather than throw so session teardown can't
-        // fail on a transient fs error.
-        process.stderr.write(
-          `session-settings: temp cleanup failed for ${dir}: ${
-            err instanceof Error ? err.message : String(err)
-          }\n`,
-        );
+      } catch {
+        // The granted-skills copies are materialised read-only (0444 files
+        // under 0555 dirs), and a read-only DIRECTORY blocks removal of its
+        // entries. Restore writable perms (same-uid, always permitted) and
+        // retry once before giving up.
+        try {
+          restoreWritableTree(dir);
+          rmSync(dir, { recursive: true, force: true });
+        } catch (err) {
+          // Best-effort cleanup of an OS temp dir. A leftover dir is inert
+          // (no secrets — only hook paths + read-only skill copies) and the OS
+          // reclaims tmp eventually; log rather than throw so session teardown
+          // can't fail on a transient fs error.
+          process.stderr.write(
+            `session-settings: temp cleanup failed for ${dir}: ${
+              err instanceof Error ? err.message : String(err)
+            }\n`,
+          );
+        }
       }
     },
   };
