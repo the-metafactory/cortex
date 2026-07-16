@@ -363,7 +363,7 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
     process.stderr.write = ((chunk: string | Uint8Array) => {
       logged.push(String(chunk));
       return true;
-    }) as typeof process.stderr.write;
+    });
     let iso: ReturnType<typeof createIsolatedSettings>;
     try {
       iso = createIsolatedSettings("/fake/.claude", ["present", "absent"], undefined, src);
@@ -401,7 +401,7 @@ describe("createIsolatedSettings — granted-skills plugin (cortex#990 A1)", () 
     process.stderr.write = ((chunk: string | Uint8Array) => {
       logged.push(String(chunk));
       return true;
-    }) as typeof process.stderr.write;
+    });
     let iso: ReturnType<typeof createIsolatedSettings>;
     try {
       iso = createIsolatedSettings(
