@@ -190,6 +190,16 @@ export class BusInboundSink implements GatewayInboundSink {
       // bound stack's harness would then apply the hook-based grant exactly
       // as the per-stack dispatch path does. Until then: no skills, by design.
       allowedSkills: undefined,
+      // cortex#2111 — the same fail-closed posture for the MCP namespace.
+      // The gateway is a thin demux that grants NOTHING; an omitted
+      // `mcpGrants` would leave the bound stack's session with mcp__* tools
+      // AVAILABLE BY DEFAULT (no deny rule can reach un-enumerable MCP
+      // names — the exact #2111 gap, and the MCP twin of the bare `Skill`
+      // hole above). Explicit empty list → the runner registers the MCP
+      // Guard hook in deny-all mode + adds --strict-mcp-config. If/when a
+      // gateway binding is given an explicit MCP grant set, THIS is the
+      // field to populate.
+      mcpGrants: [],
       // Optional opts — the gateway does not own these; the bound stack applies
       // its own policy and session context.
       resumeSessionId: undefined,

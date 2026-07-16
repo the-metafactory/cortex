@@ -241,6 +241,20 @@ export class CCSession extends EventEmitter {
     // guard (deny-all), unlike skills where empty skips the hook.
     const mcpGrants = this.opts.mcpGrants;
     const hasMcpGuard = isolate && mcpGrants !== undefined;
+    // cortex#2111 — structural backstop, CENTRALIZED here so every
+    // construction path gets it (dispatch-handler direct paths, the bus
+    // harness, agent-team, gateway-published envelopes): a session whose
+    // policy decision granted ZERO MCP patterns loads no MCP servers at
+    // all. Deduped against caller-supplied args (the dispatch-handler also
+    // appends it for agent-level strictMcpConfig). Deliberately NOT gated
+    // on `isolate`: even a non-isolated session must not fail open when a
+    // deny-all MCP decision was made.
+    const strictMcpArgs =
+      mcpGrants !== undefined &&
+      mcpGrants.length === 0 &&
+      !(this.opts.additionalArgs ?? []).includes("--strict-mcp-config")
+        ? ["--strict-mcp-config"]
+        : [];
     const isolationArgs: string[] = [];
     if (isolate) {
       this.isolatedSettings = createIsolatedSettings(
@@ -287,6 +301,7 @@ export class CCSession extends EventEmitter {
         "--verbose",
         "--output-format", "stream-json",
         ...isolationArgs,
+        ...strictMcpArgs,
         ...(this.opts.additionalArgs ?? []),
       ],
     };
