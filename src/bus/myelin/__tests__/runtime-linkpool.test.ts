@@ -133,7 +133,7 @@ function makeFakeConn() {
     ) => {
       // `MsgHdrs.get` returns "" for an absent key; normalize to undefined so
       // the "no header" case is distinguishable from an empty-string id.
-      const msgId = options?.headers?.get("Nats-Msg-Id") || undefined;
+      const msgId = options?.headers?.get("Nats-Msg-Id") ?? undefined;
       publishes.push({ subject, payload, msgId });
     },
   );

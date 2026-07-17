@@ -70,7 +70,7 @@ function makeFakeConnection() {
       options?: { headers?: MsgHdrs },
     ) => {
       // `MsgHdrs.get` returns "" for an absent key; normalize to undefined.
-      const msgId = options?.headers?.get("Nats-Msg-Id") || undefined;
+      const msgId = options?.headers?.get("Nats-Msg-Id") ?? undefined;
       publishes.push({ subject, payload, msgId });
     },
   );
