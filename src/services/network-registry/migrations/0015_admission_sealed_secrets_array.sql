@@ -1,0 +1,41 @@
+-- cortex#1996 D2 (RFC-0006 §8.1) — per-key `sealed_secrets[]` delivery array.
+--
+-- Background
+-- ──────────
+-- An admission is PER-PRINCIPAL (one row, §7), but the leaf-secret seal is a
+-- PER-STACK write (§8.1): a principal may federate more than one covered stack
+-- under a single admission, and each covered stack holds its OWN key + subject
+-- isolation (ADR-0023). The single `sealed_secret` column (migration 0010) seals
+-- to exactly ONE key — the covering row's `peer_pubkey` — so a covered 2nd stack
+-- with a different key cannot obtain transport (the #1748 transport half).
+--
+-- This migration adds `sealed_secrets`, a nullable JSON-TEXT column holding an
+-- array of per-key entries `[{ target_stack_pubkey, sealed_secret }, ...]`, each
+-- `crypto_box_seal`'d to one covered stack's key. The joining stack selects the
+-- entry addressed to its own pubkey; the registry never reads the ciphertext
+-- (same opaque-blob posture as the single `sealed_secret` slot). NULL = no array
+-- delivered — the default for every row, including every pre-0015 row.
+--
+-- Shape: nullable, no CHECK constraint touched (this doesn't extend an enum) — a
+-- plain `ALTER TABLE ... ADD COLUMN`, the SAME shape as migrations 0011
+-- (`admin_pubkeys`) and 0013 (`hub_authorized_at`).
+--
+-- DEPLOY ORDERING — MIGRATION-BEFORE-CODE IS MANDATORY (NOT optional):
+-- ────────────────────────────────────────────────────────────────────
+-- This ADD COLUMN is backward-compatible for READS (a pre-0015 isolate never
+-- sees the column; `rowToAdmissionRequest` coalesces a missing value to absent).
+-- But the D2 code has a HARD dependency on the column at the WRITE path:
+-- `setSealedSecretEntry` reads + rewrites `sealed_secrets`, and
+-- `revokeAdmission` / `departAdmission` now emit `SET ... sealed_secrets = NULL`.
+-- If the NEW code is deployed BEFORE this migration runs, those writes throw
+-- "no such column: sealed_secrets" → 500.
+--
+-- Therefore: APPLY THIS MIGRATION TO THE REGISTRY DB *BEFORE* DEPLOYING THE
+-- cortex#1996 D2 WORKER. It is NOT safe to ship the code first. (Same load-bearing
+-- ordering as migration 0013's incremental ADD against a live schema.)
+--
+-- Apply (migration FIRST, then deploy the code):
+--   bunx wrangler d1 migrations apply cortex-network-registry-dev --env dev --remote
+--   bunx wrangler d1 migrations apply cortex-network-registry      --env production --remote
+
+ALTER TABLE admission_requests ADD COLUMN sealed_secrets TEXT;

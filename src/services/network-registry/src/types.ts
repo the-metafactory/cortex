@@ -366,6 +366,37 @@ export interface CapabilityHit {
 export type AdmissionStatus = "PENDING" | "ADMITTED" | "REJECTED" | "REVOKED" | "DEPARTED";
 
 /**
+ * cortex#1996 D2 / RFC-0006 §8.1 — one per-key entry of the `sealed_secrets[]`
+ * delivery array. An admission is PER-PRINCIPAL (one row, §7), but the seal is a
+ * PER-STACK write: a principal may federate more than one covered stack under a
+ * single admission, and each covered stack holds its OWN key + subject isolation
+ * (ADR-0023). A single `sealed_secret` slot can therefore only ever serve ONE
+ * stack — the covering row's `peer_pubkey` — leaving a covered 2nd stack unable
+ * to obtain transport (the #1748 transport half). This array closes that: each
+ * entry is `crypto_box_seal`'d to exactly one covered stack's
+ * `target_stack_pubkey`, and the joining stack selects the entry matching its
+ * own key.
+ *
+ * The registry stores only the opaque ciphertext (never reads it), exactly as it
+ * does the single-slot {@link AdmissionRequest.sealed_secret}. A shared,
+ * principal-wide seal is FORBIDDEN (RFC-0006 §8.1): it would collapse per-stack
+ * subject isolation.
+ */
+export interface SealedSecretEntry {
+  /**
+   * The covered stack's registered Ed25519 pubkey (base64) the ciphertext is
+   * sealed to — the addressing key the joiner matches against its own pubkey.
+   * §8.3 binds this into the hub-admin write claim (`claim.peer_pubkey`).
+   */
+  target_stack_pubkey: string;
+  /**
+   * The opaque `crypto_box_seal` ciphertext (base64) sealed to
+   * {@link target_stack_pubkey}. Useless to anyone but the holder of that key.
+   */
+  sealed_secret: string;
+}
+
+/**
  * A persisted admission request — the metadata record that a verified
  * registration creates. No secrets; no credentials; mints nothing.
  * The gate controls roster membership for the target network.
@@ -418,6 +449,21 @@ export interface AdmissionRequest {
    * schema change. The registry never interprets the bytes either way.
    */
   sealed_secret: string | null;
+  /**
+   * cortex#1996 D2 / RFC-0006 §8.1 — the PER-KEY sealed-secret delivery array.
+   * Each entry carries one covered stack's `crypto_box_seal` ciphertext, keyed
+   * by `target_stack_pubkey`. This is the multi-stack transport channel that the
+   * single {@link sealed_secret} slot cannot serve (it seals to ONE key only):
+   * a covered 2nd stack federating under this principal's admission fetches the
+   * entry addressed to ITS key (#1748 transport half).
+   *
+   * ADDITIVE + OPTIONAL: absent on every pre-D2 row (the single slot remains the
+   * live path). The receive/read side accepts BOTH shapes; the emit side (a
+   * covered-stack array write) is gated behind `SEALED_SECRETS_ARRAY_EMIT`
+   * (default OFF). Cleared to `undefined` on revoke/depart alongside
+   * {@link sealed_secret} (a departed member retains no fetchable copy).
+   */
+  sealed_secrets?: SealedSecretEntry[];
   /**
    * cortex#1498 (epic #1479 follow-up) — ISO-8601 UTC timestamp the HUB OWNER
    * stamps (via `cortex network authorize`, hub-admin authority — the SAME

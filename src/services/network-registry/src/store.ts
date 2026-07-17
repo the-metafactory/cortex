@@ -33,8 +33,79 @@ import type {
   NetworkRecord,
   NetworkRoster,
   PrincipalRecord,
+  SealedSecretEntry,
   StackIdentity,
 } from "./types";
+
+/**
+ * cortex#1996 D2 — hard cap on `sealed_secrets[]` entries per admission row.
+ * One entry per COVERED STACK a principal federates under a single admission;
+ * a real principal runs a handful of stacks, so 64 is generous headroom while
+ * bounding row growth (defense-in-depth against a hostile hub-admin stuffing
+ * the array). The route + the store both enforce it.
+ */
+export const MAX_SEALED_SECRETS_ENTRIES = 64;
+
+/**
+ * cortex#1996 D2 — parse the stored `sealed_secrets` JSON-TEXT column into a
+ * clean, deduped, bounded `SealedSecretEntry[]`, or `undefined` when the column
+ * is absent/empty/malformed. FAIL-SAFE (never throws): this column is written
+ * only by {@link IssuanceRequestStore.setSealedSecretEntry} (which validates
+ * every entry), so a malformed value is a data-integrity anomaly, not a request
+ * error — degrade to "no array" so one bad row can't take down a read, mirroring
+ * `parseJsonArray` for the principals columns.
+ *
+ * Every entry must carry two non-empty string fields; anything else is dropped.
+ * Duplicate `target_stack_pubkey`s keep the FIRST occurrence (writes dedupe, so
+ * a duplicate is itself an anomaly). The result is capped at
+ * {@link MAX_SEALED_SECRETS_ENTRIES}. Empty after cleaning ⇒ `undefined` (never
+ * an empty array on the wire — absence is the single canonical "no delivery").
+ */
+export function parseSealedSecretsColumn(raw: string | null | undefined): SealedSecretEntry[] | undefined {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_err) {
+    return undefined; // data-integrity anomaly in a column we solely own — degrade to absent.
+  }
+  if (!Array.isArray(parsed)) return undefined;
+  const seen = new Set<string>();
+  const out: SealedSecretEntry[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const e = item as Record<string, unknown>;
+    if (typeof e.target_stack_pubkey !== "string" || e.target_stack_pubkey.length === 0) continue;
+    if (typeof e.sealed_secret !== "string" || e.sealed_secret.length === 0) continue;
+    if (seen.has(e.target_stack_pubkey)) continue;
+    seen.add(e.target_stack_pubkey);
+    out.push({ target_stack_pubkey: e.target_stack_pubkey, sealed_secret: e.sealed_secret });
+    if (out.length >= MAX_SEALED_SECRETS_ENTRIES) break;
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * cortex#1996 D2 — upsert one entry into an in-memory `sealed_secrets[]`,
+ * replace-in-place by `target_stack_pubkey`. Returns the new array, or
+ * `undefined` when adding a NEW key would exceed {@link MAX_SEALED_SECRETS_ENTRIES}
+ * (a replace of an existing key never grows the array, so it is always allowed).
+ * Shared by both store backends so the cap + dedupe are enforced identically.
+ */
+export function upsertSealedSecretEntry(
+  existing: SealedSecretEntry[] | undefined,
+  targetStackPubkey: string,
+  sealedSecret: string,
+): SealedSecretEntry[] | undefined {
+  const base = existing ?? [];
+  const idx = base.findIndex((e) => e.target_stack_pubkey === targetStackPubkey);
+  if (idx === -1 && base.length >= MAX_SEALED_SECRETS_ENTRIES) return undefined;
+  const next = base.slice();
+  const entry: SealedSecretEntry = { target_stack_pubkey: targetStackPubkey, sealed_secret: sealedSecret };
+  if (idx === -1) next.push(entry);
+  else next[idx] = entry;
+  return next;
+}
 
 // Back-compat aliases used in a few existing tests that import by the old names.
 /** @deprecated Use AdmissionRequest */
@@ -250,6 +321,32 @@ export interface IssuanceRequestStore {
   ): Promise<AdmissionRequest | undefined>;
 
   /**
+   * cortex#1996 D2 (RFC-0006 §8.1) — upsert ONE per-key entry into the
+   * `sealed_secrets[]` delivery array of an ADMITTED row, keyed by
+   * `targetStackPubkey`. This is the PER-STACK seal write that the single-slot
+   * {@link setSealedSecret} cannot serve: a covered 2nd stack (a live stack of
+   * the row's principal whose key differs from the row's `peer_pubkey`) gets its
+   * `crypto_box_seal` ciphertext appended here, addressed to its own key, so it
+   * can fetch + open its own transport credential (#1748 transport half).
+   *
+   * Replace-in-place semantics: if an entry for `targetStackPubkey` already
+   * exists, its ciphertext is REPLACED (rotation), never duplicated — the array
+   * carries at most one entry per key. Guarded on `status = 'ADMITTED'` exactly
+   * like {@link setSealedSecret}: a missing or non-ADMITTED row is a no-op
+   * returning `undefined` (the route maps that to 404 / 409). The store persists
+   * the opaque blob it is handed and never reads it. The route validates the
+   * target is a covered stack + bounds the ciphertext BEFORE calling this; the
+   * store additionally refuses to grow the array past
+   * {@link MAX_SEALED_SECRETS_ENTRIES} (defense-in-depth against unbounded row
+   * growth).
+   */
+  setSealedSecretEntry(
+    requestId: string,
+    targetStackPubkey: string,
+    sealedSecret: string,
+  ): Promise<AdmissionRequest | undefined>;
+
+  /**
    * cortex#1498 (epic #1479 follow-up) — persist the hub-owner's authorization
    * stamp onto an ADMITTED admission row (the `cortex network authorize`
    * write). Mirrors {@link setSealedSecret}'s CAS shape exactly: guarded on
@@ -408,6 +505,25 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
     return updated;
   }
 
+  async setSealedSecretEntry(
+    requestId: string,
+    targetStackPubkey: string,
+    sealedSecret: string,
+  ): Promise<AdmissionRequest | undefined> {
+    const existing = this.requests.get(requestId);
+    if (!existing) return undefined;
+    if (existing.status !== "ADMITTED") return undefined; // route → 409 not_admitted
+    const next = upsertSealedSecretEntry(existing.sealed_secrets, targetStackPubkey, sealedSecret);
+    if (next === undefined) return undefined; // route → 409 too_many_sealed_entries
+    const updated: AdmissionRequest = {
+      ...existing,
+      sealed_secrets: next,
+      updated_at: new Date().toISOString(),
+    };
+    this.requests.set(requestId, updated);
+    return updated;
+  }
+
   async markHubAuthorized(
     requestId: string,
     timestampIso: string,
@@ -435,6 +551,9 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
       ...existing,
       status: "REVOKED",
       sealed_secret: null,
+      // cortex#1996 D2 — a revoked member retains NO fetchable copy: clear the
+      // per-key array alongside the single slot (same hygiene as sealed_secret).
+      sealed_secrets: undefined,
       hub_authorized_at: null,
       updated_at: new Date().toISOString(),
     };
@@ -453,6 +572,8 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
       ...existing,
       status: "DEPARTED",
       sealed_secret: null,
+      // cortex#1996 D2 — clear the per-key array too (see revoke).
+      sealed_secrets: undefined,
       hub_authorized_at: null,
       updated_at: new Date().toISOString(),
     };
@@ -617,6 +738,34 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     return { ...existing, sealed_secret: sealedSecret, updated_at: now };
   }
 
+  async setSealedSecretEntry(
+    requestId: string,
+    targetStackPubkey: string,
+    sealedSecret: string,
+  ): Promise<AdmissionRequest | undefined> {
+    const existing = await this.getIssuanceRequest(requestId);
+    if (!existing) return undefined;
+    if (existing.status !== "ADMITTED") return undefined; // route → 409 not_admitted
+    const next = upsertSealedSecretEntry(existing.sealed_secrets, targetStackPubkey, sealedSecret);
+    if (next === undefined) return undefined; // route → 409 too_many_sealed_entries
+    const now = new Date().toISOString();
+    // CAS-ish guard: only an ADMITTED row can carry a sealed entry. A concurrent
+    // revoke/depart between our read and this UPDATE flips the guard false →
+    // changes 0 → undefined (the route maps it to 409). We rewrite the WHOLE
+    // JSON array (read-modify-write) rather than mutate in place — SQLite has no
+    // portable in-place JSON element upsert, and the array is small + bounded.
+    const res = await this.db
+      .prepare(
+        `UPDATE admission_requests
+         SET sealed_secrets = ?, updated_at = ?
+         WHERE request_id = ? AND status = 'ADMITTED'`,
+      )
+      .bind(JSON.stringify(next), now, requestId)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) return undefined;
+    return { ...existing, sealed_secrets: next, updated_at: now };
+  }
+
   async markHubAuthorized(
     requestId: string,
     timestampIso: string,
@@ -651,7 +800,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     const res = await this.db
       .prepare(
         `UPDATE admission_requests
-         SET status = 'REVOKED', sealed_secret = NULL, hub_authorized_at = NULL, updated_at = ?
+         SET status = 'REVOKED', sealed_secret = NULL, sealed_secrets = NULL, hub_authorized_at = NULL, updated_at = ?
          WHERE request_id = ? AND status = 'ADMITTED'`,
       )
       .bind(now, requestId)
@@ -661,7 +810,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       const current = await this.getIssuanceRequest(requestId);
       return current;
     }
-    return { ...existing, status: "REVOKED", sealed_secret: null, hub_authorized_at: null, updated_at: now };
+    return { ...existing, status: "REVOKED", sealed_secret: null, sealed_secrets: undefined, hub_authorized_at: null, updated_at: now };
   }
 
   async departAdmission(requestId: string): Promise<AdmissionRequest | undefined> {
@@ -675,7 +824,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     const res = await this.db
       .prepare(
         `UPDATE admission_requests
-         SET status = 'DEPARTED', sealed_secret = NULL, hub_authorized_at = NULL, updated_at = ?
+         SET status = 'DEPARTED', sealed_secret = NULL, sealed_secrets = NULL, hub_authorized_at = NULL, updated_at = ?
          WHERE request_id = ? AND status = 'ADMITTED'`,
       )
       .bind(now, requestId)
@@ -691,7 +840,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       if (current.status === "DEPARTED") return current;
       throw new AlreadyDecidedError(current);
     }
-    return { ...existing, status: "DEPARTED", sealed_secret: null, hub_authorized_at: null, updated_at: now };
+    return { ...existing, status: "DEPARTED", sealed_secret: null, sealed_secrets: undefined, hub_authorized_at: null, updated_at: now };
   }
 }
 
@@ -708,11 +857,16 @@ interface AdmissionRequestRow {
   granted_by: string | null;
   /** ADR-0018 b′ — opaque sealed ciphertext; NULL until add-member delivers it. */
   sealed_secret: string | null;
+  /** cortex#1996 D2 — JSON-TEXT array of per-key sealed entries; NULL/absent until a covered-stack seal write. */
+  sealed_secrets?: string | null;
   /** cortex#1498 — ISO-8601 UTC hub-owner authorization stamp; NULL until `authorize`. */
   hub_authorized_at: string | null;
 }
 
 function rowToAdmissionRequest(row: AdmissionRequestRow): AdmissionRequest {
+  // cortex#1996 D2 — a row read from a pre-0015 isolate (column absent) parses to
+  // `undefined`; `parseSealedSecretsColumn` fails safe on any malformed JSON.
+  const sealedSecrets = parseSealedSecretsColumn(row.sealed_secrets);
   return {
     request_id: row.request_id,
     principal_id: row.principal_id,
@@ -725,6 +879,9 @@ function rowToAdmissionRequest(row: AdmissionRequestRow): AdmissionRequest {
     granted_by: row.granted_by,
     // A row read from a pre-0010 isolate (column absent) coalesces to null.
     sealed_secret: row.sealed_secret ?? null,
+    // Spread only when present so the field is OMITTED (not `undefined`) on rows
+    // with no array, keeping the wire shape identical to a pre-D2 row.
+    ...(sealedSecrets !== undefined && { sealed_secrets: sealedSecrets }),
     // A row read from a pre-0013 isolate (column absent) coalesces to null.
     hub_authorized_at: row.hub_authorized_at ?? null,
   };
@@ -1319,7 +1476,9 @@ export function rosterFromAdmissions(
       // is a boolean DELIVERY signal (`sealed_secret !== null` — NEVER the
       // ciphertext); `hub_authorized_at` is the cortex#1498 authorize timestamp.
       admission_state: "ADMITTED",
-      sealed: row.sealed_secret !== null,
+      // cortex#1996 D2 — the boolean DELIVERY signal now reflects EITHER the
+      // single slot OR a non-empty per-key array (never the ciphertext).
+      sealed: row.sealed_secret !== null || (row.sealed_secrets?.length ?? 0) > 0,
       hub_authorized_at: row.hub_authorized_at,
       ...(stackId !== undefined && { stack_id: stackId }),
     });

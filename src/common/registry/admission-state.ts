@@ -41,6 +41,19 @@ import {
  * registry `AdmissionRequest` (a separate deploy target — same redeclare
  * rationale as the other consumer-side registry types).
  */
+/**
+ * cortex#1996 D2 / RFC-0006 §8.1 — one per-key entry of the `sealed_secrets[]`
+ * delivery array as `/admission-requests/mine` returns it. Mirrors the registry
+ * `SealedSecretEntry` (separate deploy target — same redeclare rationale as
+ * {@link AdmissionMineRow}).
+ */
+export interface SealedSecretEntry {
+  /** The covered stack's registered ed25519 pubkey (base64) the ciphertext is sealed to. */
+  target_stack_pubkey: string;
+  /** The opaque `crypto_box_seal` ciphertext (base64) for {@link target_stack_pubkey}. */
+  sealed_secret: string;
+}
+
 export interface AdmissionMineRow {
   request_id: string;
   principal_id: string;
@@ -48,6 +61,16 @@ export interface AdmissionMineRow {
   network_id: string | null;
   status: string;
   sealed_secret: string | null;
+  /**
+   * cortex#1996 D2 / RFC-0006 §8.1 — the PER-KEY delivery array. Present iff the
+   * registry carries covered-stack seals for this row; each entry addresses one
+   * covered stack's `target_stack_pubkey`. OPTIONAL on the wire: a pre-D2
+   * registry omits it entirely, so `fetchSealedLeafSecret` falls back to the
+   * single {@link sealed_secret} slot. The joining stack selects the entry keyed
+   * to its OWN pubkey — this is what lets a covered 2nd stack obtain transport
+   * (#1748 transport half).
+   */
+  sealed_secrets?: SealedSecretEntry[];
   /**
    * C-1350 (Slice 2) — ISO-8601 UTC of the row's last transition. On a REVOKED
    * row this IS the revoked-at date (`revokeAdmission` stamps `updated_at` = now

@@ -97,14 +97,19 @@ export async function fetchSealedLeafSecret(
   if (!readRes.ok) return { ok: false, reason: readRes.reason };
   const rows = readRes.rows;
 
-  // 3. Select the ADMITTED row for this network carrying a sealed blob.
-  const row = rows.find(
-    (r) => r.network_id === input.networkId && r.status === "ADMITTED" && typeof r.sealed_secret === "string" && r.sealed_secret.length > 0,
+  // 3. Select the sealed ciphertext to open for THIS stack, across the ADMITTED
+  //    rows for the network. cortex#1996 D2 (RFC-0006 §8.1): PREFER a per-key
+  //    `sealed_secrets[]` entry addressed to this stack's own pubkey (the
+  //    covered-2nd-stack transport path, #1748) over the legacy single slot.
+  //    Fail-closed on a malformed/ambiguous array (see helper).
+  const admittedRows = rows.filter(
+    (r) => r.network_id === input.networkId && r.status === "ADMITTED",
   );
-  if (!row?.sealed_secret) {
+  const selected = selectSealedCiphertextForStack(admittedRows, input.material.pubkeyB64);
+  if (selected === undefined) {
     return {
       ok: false,
-      reason: `no admitted+sealed admission row for network "${input.networkId}" (not yet admitted, or no secret delivered)`,
+      reason: `no admitted+sealed admission material for network "${input.networkId}" (not yet admitted, no secret delivered, or none addressed to this stack's key)`,
     };
   }
 
@@ -113,7 +118,7 @@ export async function fetchSealedLeafSecret(
   //    §5.2 / R9/R12 — never an either-field relaxation).
   try {
     const rawSeed = rawEd25519SeedFromNkeySeed(input.material.seed);
-    const plaintextBytes = await openSealed(row.sealed_secret, rawSeed);
+    const plaintextBytes = await openSealed(selected, rawSeed);
     const env = decodeAnyLeafSecretEnvelope(new TextDecoder().decode(plaintextBytes));
     if (isLeafSecretEnvelopeV2(env)) {
       // R7 identity binding — refuse a credential minted for a DIFFERENT
@@ -157,6 +162,54 @@ export async function fetchSealedLeafSecret(
     // Generic — never echo seed/ciphertext/plaintext.
     return { ok: false, reason: `failed to open sealed leaf secret: ${errText(err)}` };
   }
+}
+
+/**
+ * cortex#1996 D2 (RFC-0006 §8.1) — pick the sealed ciphertext to open for a
+ * stack, given the ADMITTED rows the registry returned. FAIL-CLOSED against
+ * untrusted registry data:
+ *
+ *  1. Scan every row's `sealed_secrets[]` for entries addressed to `myPubkey`
+ *     (`target_stack_pubkey === myPubkey`), keeping only WELL-FORMED entries
+ *     (both fields non-empty strings; a non-array `sealed_secrets` is ignored).
+ *     - Exactly ONE distinct matching ciphertext → use it (the per-key path).
+ *     - MORE than one DISTINCT ciphertext addressed to my key → AMBIGUOUS →
+ *       refuse (`undefined`). Never guess which is authentic — a registry that
+ *       served two different blobs for my key is not to be trusted to break the
+ *       tie. `crypto_box_seal` still guarantees only my seed can open either,
+ *       but refusing is the fail-closed posture (the caller keeps its prior
+ *       transport rather than installing a possibly-substituted credential).
+ *  2. No per-key entry for my key → fall back to the legacy single
+ *     `sealed_secret` slot (own-row read ⇒ sealed to my key). First non-empty
+ *     slot wins, matching the pre-D2 selection.
+ *
+ * Returns the chosen ciphertext, or `undefined` when there is nothing safe to
+ * open. The choice is NOT the security boundary — the seal is — but selecting
+ * only my-key entries keeps a cross-stack blob from ever being handed to
+ * `openSealed` (which would just fail, but we avoid the ambiguity entirely).
+ */
+export function selectSealedCiphertextForStack(
+  rows: readonly { sealed_secret: string | null; sealed_secrets?: unknown }[],
+  myPubkey: string,
+): string | undefined {
+  const matches = new Set<string>();
+  for (const r of rows) {
+    const arr = Array.isArray(r.sealed_secrets) ? r.sealed_secrets : [];
+    for (const entry of arr) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const e = entry as Record<string, unknown>;
+      if (typeof e.target_stack_pubkey !== "string" || e.target_stack_pubkey.length === 0) continue;
+      if (typeof e.sealed_secret !== "string" || e.sealed_secret.length === 0) continue;
+      if (e.target_stack_pubkey === myPubkey) matches.add(e.sealed_secret);
+    }
+  }
+  if (matches.size === 1) return [...matches][0];
+  if (matches.size > 1) return undefined; // ambiguous → fail closed
+  // Legacy single-slot fallback (own row → sealed to my key).
+  for (const r of rows) {
+    if (typeof r.sealed_secret === "string" && r.sealed_secret.length > 0) return r.sealed_secret;
+  }
+  return undefined;
 }
 
 /** The optional ADR-0019 payload-key rider, in result-field casing (one site). */

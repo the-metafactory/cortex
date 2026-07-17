@@ -50,8 +50,21 @@
  */
 
 import { Hono, type Context } from "hono";
-import { parseAdminPubkeys, parseHubAdminPubkeys, parseNetworkAdminPubkeys, type Env } from "../index";
-import { getNonceCache, getIssuanceStore, getStore, AlreadyDecidedError, withDerivedStackId } from "../store";
+import {
+  parseAdminPubkeys,
+  parseHubAdminPubkeys,
+  parseNetworkAdminPubkeys,
+  isSealedSecretsArrayEmitEnabled,
+  type Env,
+} from "../index";
+import {
+  getNonceCache,
+  getIssuanceStore,
+  getStore,
+  AlreadyDecidedError,
+  withDerivedStackId,
+  MAX_SEALED_SECRETS_ENTRIES,
+} from "../store";
 import {
   validateSignedAdmissionDecision,
   validateAdmissionDecisionClaim,
@@ -548,6 +561,15 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
   app.post("/admission-requests/:request_id/sealed-secret", async (c) => {
     const requestId = c.req.param("request_id") ?? "";
     const store = getIssuanceStore(c.env);
+    // cortex#1996 D2 — the per-key array-EMIT era flag (default OFF). OFF keeps
+    // this route byte-identical to today (single-slot only, M17 unchanged).
+    const arrayEmitEnabled = isSealedSecretsArrayEmitEnabled(c.env);
+    // Set by the identity check ONLY when the bound `peer_pubkey` addresses a
+    // COVERED live stack (≠ the row's own `peer_pubkey`): the per-key array-write
+    // target. Left undefined for every single-slot write, so the dispatch below
+    // falls to `setSealedSecret` exactly as before.
+    let arrayWriteTarget: string | undefined;
+
     const gate = await verifyHubAdminWrite(
       c,
       requestId,
@@ -555,28 +577,63 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
       validateSealedSecretClaim,
       // M17 (cortex#2188, RFC-0006 §8.3) — IDENTITY BINDING, run BEFORE the nonce
       // record. When the hub-admin binds `peer_pubkey` it MUST equal the row's
-      // stored peer_pubkey → else 409 identity_mismatch, so a sealed blob can
-      // never land on the wrong member's row. Enforced only when the row exists
-      // (a missing row 404s at the write below).
+      // stored peer_pubkey (single slot) OR — under the D2 array-emit era — a
+      // COVERED live stack of the row's principal (the per-key array target);
+      // anything else is 409 identity_mismatch, so a sealed blob can never land
+      // on the wrong member's row. Enforced only when the row exists (a missing
+      // row 404s at the write below).
       async (claim) => {
         if (claim.peer_pubkey === undefined) return null;
         const row = await store.getIssuanceRequest(requestId);
-        if (row && claim.peer_pubkey !== row.peer_pubkey) {
-          return c.json(
-            { error: "identity_mismatch", details: { field: "peer_pubkey" } },
-            409,
-          );
+        if (!row) return null; // no identity to compare — the write below 404s.
+        // Single-slot write: the bound key IS the row's own key (M17, unchanged).
+        if (claim.peer_pubkey === row.peer_pubkey) return null;
+        // The bound key differs from the row's own key. OFF (default): refuse it
+        // exactly as M17 does today. ON: accept iff it is a COVERED live stack of
+        // the row's principal — the RFC-0006 §8.1 per-key array target (#1748
+        // transport half). A key that is neither the row's own nor a covered
+        // stack (a hub-admin fumbling the target, or sealing to an unrelated key)
+        // is refused. crypto_box_seal is the primary guarantee; this binding is
+        // the §8.3 defense-in-depth + intent signal.
+        if (!arrayEmitEnabled) {
+          return c.json({ error: "identity_mismatch", details: { field: "peer_pubkey" } }, 409);
         }
+        const principal = await getStore(c.env).getPrincipal(row.principal_id);
+        const covered = (principal?.stacks ?? []).some(
+          (s) => s.retired_at === undefined && s.stack_pubkey === claim.peer_pubkey,
+        );
+        if (!covered) {
+          return c.json({ error: "identity_mismatch", details: { field: "peer_pubkey" } }, 409);
+        }
+        arrayWriteTarget = claim.peer_pubkey;
         return null;
       },
     );
     if (!gate.ok) return gate.response;
 
-    const updated = await store.setSealedSecret(requestId, gate.claim.sealed_secret);
+    // cortex#1996 D2 — dispatch: a covered-stack target (array-emit era, validated
+    // above) appends to the per-key `sealed_secrets[]`; every other write is the
+    // unchanged single-slot `setSealedSecret`.
+    const updated = arrayWriteTarget !== undefined
+      ? await store.setSealedSecretEntry(requestId, arrayWriteTarget, gate.claim.sealed_secret)
+      : await store.setSealedSecret(requestId, gate.claim.sealed_secret);
     if (!updated) {
-      // Row missing OR not ADMITTED — distinguish for the caller.
+      // Row missing OR not ADMITTED OR (array write) the per-key cap is hit.
       const existing = await store.getIssuanceRequest(requestId);
       if (!existing) return c.json({ error: "not_found" }, 404);
+      // An array write that failed against an ADMITTED row can only be the
+      // MAX_SEALED_SECRETS_ENTRIES cap (not-found + not-admitted are handled
+      // above/below) — surface it distinctly rather than as a misleading
+      // not_admitted.
+      if (arrayWriteTarget !== undefined && existing.status === "ADMITTED") {
+        return c.json(
+          {
+            error: "too_many_sealed_entries",
+            details: `sealed_secrets[] is capped at ${String(MAX_SEALED_SECRETS_ENTRIES)} entries per row`,
+          },
+          409,
+        );
+      }
       return c.json(
         { error: "not_admitted", details: `request ${requestId} is ${existing.status}, not ADMITTED — cannot deliver a sealed secret` },
         409,
@@ -587,7 +644,8 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     // write is CONFIRMED (updated truthy), for the same anti-poisoning reason as
     // the decision route: an unauthorised / replayed / not-admitted narrow claim
     // must never increment the zero-narrow flip gate (PR #2194 adversarial
-    // BLOCKER). Still honoured during the window; deprecation-warned.
+    // BLOCKER). Still honoured during the window; deprecation-warned. An array
+    // write always carries a bound `peer_pubkey` (wide), so it is never counted.
     if (gate.claim.peer_pubkey === undefined) {
       recordNarrowAdmissionClaim("sealed-secret", requestId);
     }

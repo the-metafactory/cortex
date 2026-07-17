@@ -91,7 +91,36 @@ export interface Env extends RateLimitEnv, StoreEnv {
    * authorities must diverge.
    */
   REGISTRY_HUB_ADMIN_PUBKEYS?: string;
+  /**
+   * cortex#1996 D2 (RFC-0006 §8.1) — ERA FLAG for per-key `sealed_secrets[]`
+   * delivery, DEFAULT OFF. When OFF (the default), the sealed-secret write route
+   * behaves byte-identically to today: it only ever writes the SINGLE
+   * `sealed_secret` slot, and a claim addressing any key other than the row's own
+   * `peer_pubkey` is refused `409 identity_mismatch` (M17 unchanged). When ON, a
+   * hub-admin write whose bound `peer_pubkey` is a COVERED live stack of the
+   * row's principal (≠ the row's `peer_pubkey`) is accepted and appended to the
+   * per-key array — the covered-2nd-stack transport path (#1748). The RECEIVE
+   * side (reading + selecting an array entry) is ALWAYS on and is harmless while
+   * the array is empty; this flag gates only the wire-observable EMIT-acceptance.
+   * The D7 require-present flip is a SEPARATE, dated, gated step — NOT this flag.
+   *
+   * Accepted truthy values: `"true"`, `"1"`, `"on"` (case-insensitive). Anything
+   * else — unset, blank, `"false"`, junk — is OFF (fail-closed default).
+   */
+  SEALED_SECRETS_ARRAY_EMIT?: string;
   ENVIRONMENT?: string;
+}
+
+/**
+ * cortex#1996 D2 — is the per-key `sealed_secrets[]` array-EMIT era enabled?
+ * Fail-closed: only an explicit truthy token flips it on; the default (unset /
+ * blank / anything unrecognised) is OFF, so the single-slot path stays live.
+ */
+export function isSealedSecretsArrayEmitEnabled(env: Env): boolean {
+  const raw = env.SEALED_SECRETS_ARRAY_EMIT;
+  if (typeof raw !== "string") return false;
+  const v = raw.trim().toLowerCase();
+  return v === "true" || v === "1" || v === "on";
 }
 
 /**
