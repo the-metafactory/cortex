@@ -691,6 +691,25 @@ export function validateAdmissionDecisionClaim(
     errors.push({ field: "admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
   }
 
+  // cortex#2188 / RFC-0006 §7.3 (M9/M13) — OPTIONAL identity-binding fields.
+  // Absent = NARROW claim (still valid — dual-accept window OPEN). Present =
+  // WIDE claim, shape-checked here and compared to the row by the route (409
+  // identity_mismatch). SIGNED-bytes discipline (like expected_updated_at): a
+  // present field MUST be preserved verbatim into the reconstructed claim or a
+  // wide claim's canonical bytes change and every one 401s.
+  if (
+    c.peer_pubkey !== undefined &&
+    (typeof c.peer_pubkey !== "string" || !isValidPubkey(c.peer_pubkey))
+  ) {
+    errors.push({ field: "peer_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars) when present" });
+  }
+  if (
+    c.network_id !== undefined &&
+    (typeof c.network_id !== "string" || !isValidNetworkId(c.network_id))
+  ) {
+    errors.push({ field: "network_id", message: "must be a valid network id when present" });
+  }
+
   if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
     errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
   }
@@ -707,6 +726,8 @@ export function validateAdmissionDecisionClaim(
       request_id: c.request_id as string,
       decision: c.decision as "admit" | "reject",
       admin_pubkey: c.admin_pubkey as string,
+      ...(typeof c.peer_pubkey === "string" && { peer_pubkey: c.peer_pubkey }),
+      ...(typeof c.network_id === "string" && { network_id: c.network_id }),
       issued_at: c.issued_at as string,
       nonce: c.nonce as string,
     },
@@ -951,6 +972,16 @@ export function validateSealedSecretClaim(
     errors.push({ field: "hub_admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
   }
 
+  // cortex#2188 / RFC-0006 §8.3 (M17) — OPTIONAL peer_pubkey binding. Same
+  // narrow/wide + signed-bytes discipline as the decision claim: present =
+  // compared to the row (409 identity_mismatch), preserved verbatim.
+  if (
+    c.peer_pubkey !== undefined &&
+    (typeof c.peer_pubkey !== "string" || !isValidPubkey(c.peer_pubkey))
+  ) {
+    errors.push({ field: "peer_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars) when present" });
+  }
+
   if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
     errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
   }
@@ -966,6 +997,7 @@ export function validateSealedSecretClaim(
     claim: {
       request_id: c.request_id as string,
       sealed_secret: c.sealed_secret as string,
+      ...(typeof c.peer_pubkey === "string" && { peer_pubkey: c.peer_pubkey }),
       hub_admin_pubkey: c.hub_admin_pubkey as string,
       issued_at: c.issued_at as string,
       nonce: c.nonce as string,

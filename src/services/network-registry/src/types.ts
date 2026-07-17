@@ -448,6 +448,24 @@ export interface AdmissionDecisionClaim {
   decision: "admit" | "reject";
   /** Base64 Ed25519 pubkey of the admin signing this claim. */
   admin_pubkey: string;
+  /**
+   * cortex#2188 / RFC-0006 §7.3 (M9) — OPTIONAL identity binding. The admin
+   * binds the peer they intend to decide on into the SIGNED claim; the route
+   * compares it to the row's stored `peer_pubkey` and refuses `409
+   * identity_mismatch` on disagreement. Absent on a NARROW claim (still admitted
+   * during the M13 dual-accept window). Preserved verbatim into the reconstructed
+   * claim (signed-bytes discipline).
+   */
+  peer_pubkey?: string;
+  /**
+   * cortex#2188 / RFC-0006 §7.3 (M9/M12) — OPTIONAL identity binding. The
+   * network the admin intends to decide onto, bound into the SIGNED claim.
+   * Compared to the row's `network_id` (→ `409 identity_mismatch` on mismatch,
+   * closing the §7.3 cross-network confused-deputy: an admin authorised on
+   * network B cannot be steered into deciding a network-A row) AND consumed as
+   * the per-network authority key when present (M12). Absent on a narrow claim.
+   */
+  network_id?: string;
   /** ISO-8601 UTC timestamp at which the admin signed this claim. */
   issued_at: string;
   /** Random nonce to prevent replay (same replay cache as network-create). */
@@ -605,6 +623,15 @@ export interface SealedSecretWriteClaim {
    * the member whose pubkey it was sealed to.
    */
   sealed_secret: string;
+  /**
+   * cortex#2188 / RFC-0006 §8.3 (M17) — OPTIONAL identity binding. The
+   * hub-admin binds the peer the blob is sealed TO into the signed claim; the
+   * route compares it to the row's `peer_pubkey` and refuses `409
+   * identity_mismatch` on disagreement — so a sealed secret can never be
+   * delivered onto the wrong member's row. Absent on a narrow claim (still
+   * written during the M13 dual-accept window). Preserved verbatim.
+   */
+  peer_pubkey?: string;
   /** Base64 Ed25519 pubkey of the hub-admin signing this claim. */
   hub_admin_pubkey: string;
   /** ISO-8601 UTC timestamp at which the hub-admin signed this claim. */

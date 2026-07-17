@@ -12,6 +12,7 @@ import type { AdmissionDecisionClaim, AdmissionReadClaim, Capability, Registrati
 import { _setNonceCacheForTest, _setStoreForTest, _setIssuanceStoreForTest } from "../src/store";
 import { _resetDerivedPublicKeyForTest } from "../src/index";
 import { _resetRateLimitBucketsForTest } from "../src/rate-limit";
+import { _resetAdmissionWindowForTest } from "../src/admission-window";
 
 export interface PrincipalKey {
   privateKeyB64: string;
@@ -50,6 +51,7 @@ export function resetStores(): void {
   _setIssuanceStoreForTest(undefined);
   _resetDerivedPublicKeyForTest();
   _resetRateLimitBucketsForTest();
+  _resetAdmissionWindowForTest();
 }
 
 /**
@@ -126,12 +128,20 @@ export async function makeSignedAdminDecision(
     /** Sign with a DIFFERENT key than the claim declares — forged signature tests. */
     signWith?: PrincipalKey;
     adminPubkeyOverride?: string;
+    /** cortex#2188 (M9) — bind peer_pubkey into the signed claim (wide claim). */
+    peerPubkey?: string;
+    /** cortex#2188 (M9/M12) — bind network_id into the signed claim (wide claim). */
+    networkId?: string;
   } = {},
 ): Promise<{ claim: AdmissionDecisionClaim; signature: string }> {
   const claim: AdmissionDecisionClaim = {
     request_id: requestId,
     decision,
     admin_pubkey: opts.adminPubkeyOverride ?? adminKey.publicKeyB64,
+    // Bind identity fields ONLY when supplied — narrow claim otherwise, so the
+    // canonical bytes stay stable for the legacy two-field decision claim.
+    ...(opts.peerPubkey !== undefined && { peer_pubkey: opts.peerPubkey }),
+    ...(opts.networkId !== undefined && { network_id: opts.networkId }),
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
   };

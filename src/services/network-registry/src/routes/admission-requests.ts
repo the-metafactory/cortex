@@ -74,6 +74,7 @@ import {
   retryAfterSeconds,
   TOO_MANY_REQUESTS_BODY,
 } from "../rate-limit";
+import { recordNarrowAdmissionClaim } from "../admission-window";
 import type { AdmissionMineRow, AdmissionStatus } from "../types";
 
 /** Maximum clock skew for admin decision claims — mirrors the network-create route. */
@@ -195,19 +196,64 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "signature_invalid" }, 401);
     }
 
-    // 4b. Authorisation (#1321 per-network admin). The proven key must be
+    const issuanceStore = getIssuanceStore(c.env);
+    const reqForAuth = await issuanceStore.getIssuanceRequest(requestId);
+
+    // 4a. M9 (cortex#2188, RFC-0006 §7.3) — IDENTITY BINDING. When the admin
+    // binds `peer_pubkey` / `network_id` into the signed claim, each MUST equal
+    // the stored row → else `409 identity_mismatch`. This is the §7.3
+    // cross-network confused-deputy fix: an admin legitimately authorised on
+    // network B, whose signed decision is redirected onto a network-A row, is
+    // refused HERE — BEFORE the authority check — because the binding is the row
+    // the admin *intended*, and it must match regardless of where they hold
+    // authority. Only enforced when the row exists (a missing row 404s at the
+    // transition). Narrow claims (no binding) skip this during the M13 window.
+    if (reqForAuth) {
+      if (
+        claim.peer_pubkey !== undefined &&
+        claim.peer_pubkey !== reqForAuth.peer_pubkey
+      ) {
+        return c.json(
+          { error: "identity_mismatch", details: { field: "peer_pubkey" } },
+          409,
+        );
+      }
+      if (
+        claim.network_id !== undefined &&
+        claim.network_id !== (reqForAuth.network_id ?? undefined)
+      ) {
+        return c.json(
+          { error: "identity_mismatch", details: { field: "network_id" } },
+          409,
+        );
+      }
+    }
+
+    // 4b. M13 (cortex#2188) — dual-accept window bookkeeping. A NARROW claim (no
+    // bound network_id) is still authorised + admitted below, but it is counted
+    // and a deprecation warning logged. Do NOT flip to require-present here — the
+    // flip is FUTURE, gated on a zero-narrow signal.
+    if (claim.network_id === undefined) {
+      recordNarrowAdmissionClaim("decision", requestId);
+    }
+
+    // 4c. Authorisation (#1321 per-network admin). The proven key must be
     // authorised to admit onto THIS request's network — either a GLOBAL admin
     // (REGISTRY_ADMIN_PUBKEYS, the metafactory bootstrap) OR a PER-NETWORK admin
     // listed in the target network's `admin_pubkeys` (the **Network posture**
     // authority — each network sovereign over its own roster, CONTEXT.md). A
-    // network-less request (network_id null) is global-admin-only. Authorization
-    // is keyed off the request's stored network_id, NEVER off anything on the
-    // wire — control-plane only.
-    const issuanceStore = getIssuanceStore(c.env);
-    const reqForAuth = await issuanceStore.getIssuanceRequest(requestId);
+    // network-less request (network_id null) is global-admin-only.
+    //
+    // M12 (cortex#2188, RFC-0006 §7) — key the per-network check off the BOUND
+    // claim `network_id` when present (M9 just proved it equals the row), falling
+    // back to the STORED row network_id only for a narrow claim during the
+    // window. Still control-plane only: nothing here rides the wire GRAMMAR (no
+    // subject/source/originator), and a wide claim's network_id was already
+    // matched to the row above, so this cannot widen authority.
+    const authNetworkId = claim.network_id ?? reqForAuth?.network_id ?? null;
     let authorized = adminPubkeys.has(claim.admin_pubkey);
-    if (!authorized && reqForAuth?.network_id) {
-      const net = await getStore(c.env).getNetwork(reqForAuth.network_id);
+    if (!authorized && authNetworkId) {
+      const net = await getStore(c.env).getNetwork(authNetworkId);
       authorized = parseNetworkAdminPubkeys(net?.admin_pubkeys).has(claim.admin_pubkey);
     }
     if (!authorized) {
@@ -493,6 +539,28 @@ export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
     if (!gate.ok) return gate.response;
 
     const store = getIssuanceStore(c.env);
+
+    // M17 (cortex#2188, RFC-0006 §8.3) — IDENTITY BINDING on the seal write.
+    // When the hub-admin binds `peer_pubkey` into the signed claim it MUST equal
+    // the row's stored peer_pubkey → else `409 identity_mismatch`, so a sealed
+    // blob can never be delivered onto the wrong member's row. Enforced only when
+    // the row exists (a missing row 404s below). Narrow claims (no binding) are
+    // still written during the M13 window, but counted + warned.
+    const sealRow = await store.getIssuanceRequest(requestId);
+    if (
+      sealRow &&
+      gate.claim.peer_pubkey !== undefined &&
+      gate.claim.peer_pubkey !== sealRow.peer_pubkey
+    ) {
+      return c.json(
+        { error: "identity_mismatch", details: { field: "peer_pubkey" } },
+        409,
+      );
+    }
+    if (gate.claim.peer_pubkey === undefined) {
+      recordNarrowAdmissionClaim("sealed-secret", requestId);
+    }
+
     const updated = await store.setSealedSecret(requestId, gate.claim.sealed_secret);
     if (!updated) {
       // Row missing OR not ADMITTED — distinguish for the caller.
