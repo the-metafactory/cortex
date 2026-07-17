@@ -530,19 +530,19 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
   // ===========================================================================
 
   test.todo(
-    "WP-6: a peer's resolved identity DID class matches the wire stamp (did:mf:{p}-{s}), so chain verify does not return unknown_agent",
+    "WP-6 (#1882): a peer's resolved identity DID class matches the wire stamp (did:mf:{p}-{s}), so chain verify does not return unknown_agent",
     () => {},
   );
   test.todo(
-    "WP-6: presence folds under signing:'permissive' (resolveFederatedPeer is enforce-only today — cortex.ts:2831)",
+    "WP-6 (#1882): presence folds under signing:'permissive' (resolveFederatedPeer is enforce-only today — cortex.ts:2831)",
     () => {},
   );
   test.todo(
-    "WP-3/WP-4: a principal id containing '-' can never produce a DID equal to another (principal, stack) pair's stack DID",
+    "WP-3/WP-4 (#1879/#1880): a principal id containing '-' can never produce a DID equal to another (principal, stack) pair's stack DID",
     () => {},
   );
   test.todo(
-    "WP-3: deriveAcceptSubjects(self,[peer]) contains exactly the subject the presence producer emits for that peer",
+    "WP-3 (#1879): deriveAcceptSubjects(self,[peer]) contains exactly the subject the presence producer emits for that peer",
     () => {},
   );
 });
