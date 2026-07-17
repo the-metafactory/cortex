@@ -48,7 +48,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@metafactory/content-filter": "github:the-metafactory/content-filter#0e4968c6b48bf9887198fa4c5ef34736dc10a68d",
+    "@metafactory/content-filter": "github:the-metafactory/metafactory-bundle-content-filter#0e4968c6b48bf9887198fa4c5ef34736dc10a68d",
     "@nats-io/jwt": "^0.0.11",
     "@octokit/webhooks": "^14.2.0",
     "@octokit/webhooks-methods": "^6.0.0",
