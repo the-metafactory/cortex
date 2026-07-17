@@ -218,7 +218,7 @@ function runCreate(
   // --- prompt-filter boot gate (cortex#2184) --------------------------------
   // Surface a content-filter load failure at CREATE time — the point Vincent
   // hit it — not just as a WARN buried in `cortex start` output. Fires even in
-  // the dry-run default so an operator sees it before ever running `--apply`.
+  // the dry-run default so the principal sees it before ever running `--apply`.
   try {
     assertPromptFilterReady("cortex stack create");
   } catch (err) {
