@@ -630,7 +630,7 @@ describe("create_private_thread schema", () => {
       v: 1,
       type: "thread_created",
       task_id: "t1",
-      thread_id: "912345678901234567",
+      thread_id: "fake-thread-id-for-test",
     } as const;
     const parsed = parseBrainEvent(encodeBrainEvent(ev));
     expect(parsed.kind).toBe("ok");
