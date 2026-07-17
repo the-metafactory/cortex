@@ -101,6 +101,64 @@ describe("failed_dispatch attention producer (MC-I1.S7)", () => {
     expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-transient`)?.severity).toBe("normal");
   });
 
+  it("normalizes a myelin kebab NAK alias before scoring (RFC-0007 §3.4, #2016 item 2)", () => {
+    const db = freshDb();
+    seedAnchor(db, "corr-kebab-compliance");
+    seedAnchor(db, "corr-kebab-transient");
+
+    // Windowed kebab emissions: `compliance-block` must classify as the hard
+    // `compliance_block` refusal (critical), NOT fall through to the null →
+    // `high` path the snake-only reader used to hit.
+    produceFailedDispatchAttention(
+      db,
+      failedEnvelope("corr-kebab-compliance", { kind: "compliance-block", detail: "STD gate" }),
+      { stackId: STACK },
+    );
+    // `not-now` → the softest `not_now` disposition (normal), not high.
+    produceFailedDispatchAttention(
+      db,
+      failedEnvelope("corr-kebab-transient", { kind: "not-now", detail: "busy" }),
+      { stackId: STACK },
+    );
+
+    expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-kebab-compliance`)?.severity).toBe(
+      "critical",
+    );
+    expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-kebab-transient`)?.severity).toBe(
+      "normal",
+    );
+  });
+
+  it("coerces a genuinely-unknown reason kind to cant_do (RFC-0007 §3.4 coerce)", () => {
+    const db = freshDb();
+    seedAnchor(db, "corr-unknown");
+
+    // A reason object whose kind is outside the closed set (after alias
+    // normalization) coerces to `cant_do` → `high`, never `critical`/`normal`.
+    produceFailedDispatchAttention(
+      db,
+      failedEnvelope("corr-unknown", { kind: "some_future_token", detail: "?" }),
+      { stackId: STACK },
+    );
+
+    expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-unknown`)?.severity).toBe("high");
+  });
+
+  it("does not collapse policy_denied through the transport mapper (#2034 class-4)", () => {
+    const db = freshDb();
+    seedAnchor(db, "corr-pd");
+
+    // `policy_denied` is RFC-0010, not a transport NAK reason: it must stay a
+    // hard refusal (critical), never coerce to `cant_do` (high).
+    produceFailedDispatchAttention(
+      db,
+      failedEnvelope("corr-pd", { kind: "policy_denied", deny: { reason: "insufficient_role" } }),
+      { stackId: STACK },
+    );
+
+    expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-pd`)?.severity).toBe("critical");
+  });
+
   it("opens on an aborted that is NOT a principal-cancel", () => {
     const db = freshDb();
     seedAnchor(db, "corr-timeout");

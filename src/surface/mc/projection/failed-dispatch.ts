@@ -54,6 +54,8 @@
 
 import type { Database } from "bun:sqlite";
 
+import { resolveNakReason } from "@the-metafactory/myelin/wire/transport";
+
 import type { AttentionItem, AttentionSeverity } from "../types";
 import { upsertAttentionItem, getAttentionItem, resolveAttentionItem } from "../db/attention";
 import { findAnchorSession } from "./anchor";
@@ -122,21 +124,49 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/** Read the nak reason kind off a `failed` payload's `reason` union, or null. */
+/**
+ * Read the nak reason kind off a `failed` payload's `reason` union, or null.
+ *
+ * ## Receive-side normalize-then-coerce (RFC-0007 §3.4, #2016 item 2)
+ *
+ * The transport NAK vocabulary is a CLOSED four-token snake_case set (`cant_do`,
+ * `wont_do`, `not_now`, `compliance_block`). During the dual-accept window
+ * myelin also emits the kebab renderings (`cant-do`, …) — so this reader, which
+ * used to match snake_case ONLY, silently fell a live kebab emission through to
+ * `null` and mis-scored its attention severity (the interop defect this fixes).
+ * We delegate the §3.4 receive algorithm — normalize a known kebab alias to its
+ * snake canonical FIRST, then coerce a genuinely-unknown/missing value to
+ * `cant_do` — to `@the-metafactory/myelin/wire`'s `resolveNakReason`, the single
+ * source of truth for that table (never re-hand-rolled). This widens what cortex
+ * ACCEPTS; it does not change what cortex EMITS (the emitter flip rides flag-day
+ * R, #2034).
+ *
+ * ## `policy_denied` is a DIFFERENT vocabulary — matched before the transport map
+ *
+ * `policy_denied` is a cortex-domain pre-spawn authorization-gate refusal (its
+ * taxonomy home is RFC-0010's refusal-object `kind` registry), NOT a transport
+ * NAK reason. It is matched EXPLICITLY here, ahead of `resolveNakReason` —
+ * routing it through the transport mapper would coerce it to `cant_do` and
+ * collapse the two distinct vocabularies (#2034 class-4; the mapping between
+ * them must stay explicit). Its transport-position emission is a conformance
+ * defect fixed at flag-day R (RFC-0007 §3.4); until then it still arrives in
+ * `reason.kind` and must classify as the hard refusal it is.
+ */
 function nakReasonKind(payload: Record<string, unknown>): NakReasonKind | null {
   const reason = payload.reason;
+  // No structured reason object → a genuine substrate error (CC exited non-zero,
+  // parse failure), not a NAK. Stays null; the caller scores it `high`.
   if (typeof reason !== "object" || reason === null) return null;
-  const kind = (reason as Record<string, unknown>).kind;
-  if (
-    kind === "policy_denied" ||
-    kind === "cant_do" ||
-    kind === "wont_do" ||
-    kind === "not_now" ||
-    kind === "compliance_block"
-  ) {
-    return kind;
-  }
-  return null;
+  const rawKind = (reason as Record<string, unknown>).kind;
+
+  // Cortex-domain refusal (RFC-0010), kept out of the transport normalize/coerce.
+  if (rawKind === "policy_denied") return "policy_denied";
+
+  // The four transport canonicals: normalize kebab→snake, coerce unknown → cant_do.
+  // `resolveNakReason` is closed-for-emit / tolerant-for-receive and always
+  // succeeds; the `!ok` arm is unreachable (guarded for the discriminated type).
+  const resolved = resolveNakReason(rawKind);
+  return resolved.ok ? resolved.value.reason : "cant_do";
 }
 
 /**
