@@ -519,14 +519,47 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
   });
 
   // ===========================================================================
-  // Epic progress meter — each todo flips live when its gating slice merges.
+  // WP-3 (#1879) FLIPPED LIVE — the producer/consumer agreement guard. This
+  // todo's ONLY gate was #1879 (this slice), so it flips to a real assertion
+  // here. The exhaustive property version (all presence actions, `default` AND
+  // non-`default`, 256 generated pairs) lives in
+  // `src/common/wire/__tests__/identity.property.test.ts`; this is the E2E
+  // guard pinned to the harness's real non-`default` fixture.
+  // ===========================================================================
+
+  test("WP-3 (#1879): deriveAcceptSubjects(self,[peer]) admits the subject the presence producer emits", async () => {
+    const alpha = buildStack(ALPHA);
+
+    // The REAL subject alpha's producer emits for its federated agent.online —
+    // derived from the emitted envelope's own source triple, not hand-written.
+    const signed = await alphaEmitsOnline(alpha);
+    const [principal, stack] = signed.source.split(".");
+    const producerSubject = `federated.${principal}.${stack}.${signed.type}`;
+    expect(producerSubject).toBe(ALPHA_ONLINE_SUBJECT);
+
+    // Beta's accept-list is DERIVED from self + the alpha peer (never
+    // hand-written) and MUST contain a pattern matching that subject. Their
+    // disagreement was #1812. The fixture slug is NON-`default` on purpose — a
+    // `default` slug would pass too, which is exactly how #1812 hid.
+    const accept = betaAcceptSubjects();
+    expect(accept.some((pattern) => subjectMatches(pattern, producerSubject))).toBe(true);
+  });
+
+  // ===========================================================================
+  // Epic progress meter — each remaining todo flips live when its gating slice
+  // merges.
   //
   // The empty bodies are a TYPE requirement, not a stub: bun-types declares
   // `test.todo` as `Test<T>` (2-3 args), so a one-argument call fails
   // `tsc --noEmit`. The repo's other progress-meter suite works around this with
   // a cast alias (`e2e-lifecycle/lifecycle.test.ts:102`); an empty body is the
   // same thing without the cast. Bun never executes a `.todo` body absent
-  // `--todo`, and reports these as 4 todo.
+  // `--todo`, and reports these as 3 todo.
+  //
+  // The injectivity todo below stays gated: its encoding DECISION (WP-4 #1880)
+  // is HELD and cortex still mints the naive `did:mf:{p}-{s}` form, so the
+  // invariant is genuinely violated today (the property suite asserts the
+  // hazard LIVE and holds the cortex-side invariant as the same #1880 todo).
   // ===========================================================================
 
   test.todo(
@@ -539,10 +572,6 @@ describe("WP-1 — federated presence E2E (two in-process stacks, REAL federated
   );
   test.todo(
     "WP-3/WP-4 (#1879/#1880): a principal id containing '-' can never produce a DID equal to another (principal, stack) pair's stack DID",
-    () => {},
-  );
-  test.todo(
-    "WP-3 (#1879): deriveAcceptSubjects(self,[peer]) contains exactly the subject the presence producer emits for that peer",
     () => {},
   );
 });
