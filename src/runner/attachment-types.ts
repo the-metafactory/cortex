@@ -59,6 +59,19 @@ export const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
   "application/json",
   "application/xml",
+  // Office documents — OOXML (ZIP containers) and legacy binary (OLE2).
+  // Without these, a .docx dropped in chat is fetched then discarded with
+  // "Blocked file type: application/vnd.openxmlformats-officedocument.wordprocessingml.document".
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation", // .pptx
+  "application/msword", // .doc
+  "application/vnd.ms-excel", // .xls
+  "application/vnd.ms-powerpoint", // .ppt
+  // OpenDocument (ZIP containers) — included for completeness.
+  "application/vnd.oasis.opendocument.text", // .odt
+  "application/vnd.oasis.opendocument.spreadsheet", // .ods
+  "application/vnd.oasis.opendocument.presentation", // .odp
   // Archives (read-only — Claude can't extract, but can note them)
   "application/zip",
 ]);
@@ -74,6 +87,23 @@ export const MAGIC_BYTES: { mime: string; bytes: number[]; offset?: number }[] =
   { mime: "image/webp", bytes: [0x52, 0x49, 0x46, 0x46], offset: 0 }, // RIFF header
   { mime: "application/pdf", bytes: [0x25, 0x50, 0x44, 0x46] }, // %PDF
   { mime: "application/zip", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  // Office OOXML + OpenDocument are ZIP containers → PK\x03\x04. Keying each
+  // MIME to the ZIP signature only gates files DECLARED as that type; it admits
+  // no content application/zip did not already admit, and rejects a file that
+  // claims to be a document but isn't even a container (anti-polyglot). The
+  // signature can't distinguish .docx from .xlsx (both ZIP) — magic bytes were
+  // never a full content check, only a container guard.
+  { mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { mime: "application/vnd.oasis.opendocument.text", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { mime: "application/vnd.oasis.opendocument.spreadsheet", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { mime: "application/vnd.oasis.opendocument.presentation", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  // Legacy binary Office (.doc/.xls/.ppt) are OLE2 compound files → D0 CF 11 E0.
+  // Same reasoning: verifies the container, not the specific application.
+  { mime: "application/msword", bytes: [0xd0, 0xcf, 0x11, 0xe0] },
+  { mime: "application/vnd.ms-excel", bytes: [0xd0, 0xcf, 0x11, 0xe0] },
+  { mime: "application/vnd.ms-powerpoint", bytes: [0xd0, 0xcf, 0x11, 0xe0] },
 ];
 
 /** Default limits */
