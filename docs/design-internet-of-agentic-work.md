@@ -20,7 +20,7 @@ The unit isn't the agent, isn't the stack — it's the network, and networks com
 
 ## §1 — OSI layering of the cortex stack
 
-cortex's canonical layered architecture is the **M1–M7 Myelin layer model** (`cortex/docs/architecture.md:69-105`). This document inherits that naming and refines the boundary between cortex (the M7 application) and myelin (the protocol stack M1–M6). Sibling issues land at specific layers; understanding which layer each one belongs to is the spine of this synthesis.
+cortex's canonical layered architecture is the **M1–M7 Myelin layer model** (`cortex/docs/architecture.md:69-105`). This document inherits that naming and refines the boundary between cortex (the M7 application) and myelin (the M1–M6 protocol layers). Sibling issues land at specific layers; understanding which layer each one belongs to is the spine of this synthesis.
 
 ### M1 — Raw connectivity (NATS + TLS + creds-auth)
 

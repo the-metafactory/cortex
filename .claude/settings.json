@@ -1,0 +1,16 @@
+{
+  "$comment": "cortex repo-scoped Claude Code settings. The PreToolUse hook is the edit-time RFC reminder from compass/standards/domain-grounding.md §4 — a non-blocking reminder that names the governing myelin wire RFC when an agent edits a wire-implementing path (src/bus/**). The hook itself scopes to src/bus/** via its RULES table; it is safe to run on every Edit|Write (it emits nothing for non-matching paths). See docs/agents-md/wire-grounding.md and src/bus/CLAUDE.md.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .claude/hooks/wire-grounding-reminder.ts"
+          }
+        ]
+      }
+    ]
+  }
+}

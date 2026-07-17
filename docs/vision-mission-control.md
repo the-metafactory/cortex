@@ -19,7 +19,7 @@ MC is that bridge for agentic work. Underneath it: NATS leaf federation, signed 
 
 We built TCP/IP and got the Internet: a layered stack where hosts, routers, and autonomous systems interoperate without anyone holding the whole thing in their head — and "the network" became something you could **map**.
 
-The Myelin layer model (M1–M7) is the same move for **agents**. It is the protocol stack of the **Internet of Agentic Work** — and MC is its map and its network-operations center. The correspondence is exact enough to design against:
+The Myelin layer model (M1–M7) is the same move for **agents**. It is the layer model of the **Internet of Agentic Work** — and MC is its map and its network-operations center. The correspondence is exact enough to design against:
 
 | TCP/IP Internet | Internet of Agentic Work |
 |---|---|

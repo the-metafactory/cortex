@@ -23,6 +23,13 @@ extra_labels:
 
 # Repo-specific sections injected at marked positions in the template
 sections:
+  # Wire-contract grounding — the `wire_grounding` slot (compass#125,
+  # standards/domain-grounding.md §2). Routes wire-touching work
+  # (src/bus/**) to the governing myelin RFC on demand. Renders empty until
+  # `arc upgrade compass` picks up the template's `after:domain-context`
+  # marker (regen is a held, principal-run step — cortex#2205).
+  - position: "after:domain-context"
+    file: docs/agents-md/wire-grounding.md
   - position: "after:description"
     file: docs/agents-md/architecture.md
   - position: "after:description"

@@ -1,7 +1,7 @@
 # The Internet of Agentic Work
 ### A vision for the meta-factory — cortex · myelin · soma · spawn · signal
 
-**In one line.** We're building the Internet of Agentic Work: a protocol stack and a cockpit where every person commands a swarm of assistants that never sleeps — and where the thing that endures isn't the software, it's the trust between the people who build together.
+**In one line.** We're building the Internet of Agentic Work: a layered protocol and a cockpit where every person commands a swarm of assistants that never sleeps — and where the thing that endures isn't the software, it's the trust between the people who build together.
 
 **The shift.** TCP/IP gave us the Internet — a layered stack where hosts, routers, and whole autonomous systems interoperate without anyone holding the entire thing in their head, until "the network" became something you could *map*. The meta-factory makes the same move for agents. Assistants are the hosts, stacks are the machines, networks are the trust domains, capabilities are the ports, envelopes are the packets, dispatch is the connection. The unit isn't the agent and isn't the stack — it's the network, and networks compose.
 

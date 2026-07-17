@@ -108,6 +108,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # check-wire-vocab.ts (added below) runs under bun.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       # WHOLE-TREE ratchet (cortex#436): the 0002 vocabulary migration is COMPLETE
       # — the v4.0.0 breaking cut (#520) removed the legacy operator readers and the
       # tree is at ZERO ungated violations. The gate now scans the whole tree (its
@@ -116,6 +121,20 @@ jobs:
       # PR happens to touch (the reason the old diff-mode forced --admin merges).
       - name: check-carveouts (whole-tree)
         run: bash scripts/check-carveouts.sh
+
+      # Wire-layer-notation rules (compass#125, standards/domain-grounding.md
+      # §5) — EXTENDS this gate with the M-notation layer-model rule set the
+      # carve-out ratchet never knew. It proved blind to the historical layer
+      # residuals fixed in compass#125 (vocab-allow: names the `L7` residual).
+      # V1–V3 (the banned layer-model aliases)
+      # are BLOCKING; V4 (bare L[1-7]) is warn-only
+      # during the L→M doc-sweep burn-in (promote with --enforce-l4). Also runs
+      # the §2.2 RFC-filename no-drift check against the myelin pack (resolved
+      # via `gh api`; skips non-blocking if myelin is unreachable).
+      - name: check-wire-vocab (layer-model notation + RFC no-drift)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/check-wire-vocab.ts
 
   # ──────────────────────────────────────────────────────────────────
   # Test — `bun test` runs the full unit/integration suite. Pre-cortex#376

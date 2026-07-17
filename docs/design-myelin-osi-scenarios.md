@@ -1,6 +1,6 @@
 # Myelin OSI Layer Model — Dispatch Scenarios
 
-**Status:** Pressure-test of the Direction A Q2 proposal against myelin's M1–M7 protocol stack. Surfaces four corrections to `docs/design-platform-adapter-dispatch-publishing.md`, adds Scenario 4 (cross-principal via shared platform surface) and Scenario 5 (bot-to-bot direct chat — the bus-native baseline). §12 has the locked answers for all four original §10 questions (Andreas, 2026-05-23 review); §14 captures the multi-subscriber / multi-surface pub-sub model.
+**Status:** Pressure-test of the Direction A Q2 proposal against myelin's M1–M7 layer model. Surfaces four corrections to `docs/design-platform-adapter-dispatch-publishing.md`, adds Scenario 4 (cross-principal via shared platform surface) and Scenario 5 (bot-to-bot direct chat — the bus-native baseline). §12 has the locked answers for all four original §10 questions (Andreas, 2026-05-23 review); §14 captures the multi-subscriber / multi-surface pub-sub model.
 **Date:** 2026-05-22 (Scenarios 1–3 + §1–§9); 2026-05-23 (Scenario 4, §11 locked answers)
 **Driver:** Andreas (pushback in #myelin → §10/§11 locked answers) + Jens-Christian (Direction A grilling)
 **Related:**
