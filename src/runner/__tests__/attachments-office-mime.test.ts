@@ -75,16 +75,28 @@ describe("Office attachments pass container magic-byte validation", () => {
     }
   });
 
-  test("a file declaring .docx but not even a ZIP container is rejected (anti-polyglot)", () => {
-    expect(
-      validateMagicBytes(
-        NOT_A_CONTAINER,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      ),
-    ).toBe(false);
+  // Anti-polyglot negatives pin EVERY signature entry. A positive assertion
+  // (right bytes → true) stays green even if a MAGIC_BYTES entry is deleted,
+  // because validateMagicBytes falls back to true when no signature exists for
+  // the MIME. A negative assertion (wrong bytes → false) can ONLY pass while
+  // the entry is present, so deleting any one of the 9 entries turns a test red.
+  const MZ_EXE = new Uint8Array([0x4d, 0x5a, 0x90, 0x00]); // MZ — not PK, not OLE2
+
+  test("every OOXML/ODF type rejects a non-ZIP header (pins each PK signature)", () => {
+    for (const mime of [...OOXML, ...ODF]) {
+      // Both headers are non-PK — either would slip through the no-signature
+      // fallback if this MIME's entry were deleted.
+      expect(validateMagicBytes(NOT_A_CONTAINER, mime)).toBe(false);
+      expect(validateMagicBytes(MZ_EXE, mime)).toBe(false);
+    }
   });
 
-  test("a file declaring .doc but not an OLE2 container is rejected", () => {
-    expect(validateMagicBytes(NOT_A_CONTAINER, "application/msword")).toBe(false);
+  test("every legacy Office type rejects a non-OLE2 header (pins each D0CF signature)", () => {
+    for (const mime of LEGACY) {
+      // ZIP bytes are the wrong container for OLE2 types — rejection is only
+      // possible while the legacy signature entry exists.
+      expect(validateMagicBytes(NOT_A_CONTAINER, mime)).toBe(false);
+      expect(validateMagicBytes(ZIP, mime)).toBe(false);
+    }
   });
 });
