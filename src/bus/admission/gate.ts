@@ -107,8 +107,14 @@ export type AdmissionOutcome =
   | { admit: true; lease: AdmissionLease | undefined; degraded: boolean }
   | {
       admit: false;
-      /** What refused: a rate window, a concurrency cap, or the store itself. */
-      reason: "rate" | "concurrency" | "store_error";
+      /**
+       * What refused: a rate window, a concurrency cap, the store itself, or a
+       * `malformed_principal` — a principal id that violates the RFC-0010 §3.3
+       * key-segment grammar. The first three are TRANSIENT (retry may clear);
+       * `malformed_principal` is PERMANENT (retry cannot fix a malformed id) and
+       * the dispatch-listener maps it to `policy_denied`/term, never `not_now`.
+       */
+      reason: "rate" | "concurrency" | "store_error" | "malformed_principal";
       tier: AdmissionTierName;
       key: string;
       /** Refusing window (`per_minute`|`per_hour`|`per_day`) — rate refusals only. */
@@ -159,10 +165,42 @@ interface ResolvedTier {
   inflightKey: string;
 }
 
-/** KV-key segment guard — principal ids are subject-grammar already; a dot
- * would open a key hierarchy, so anything unexpected maps to `-`. */
+/**
+ * RFC-0010 §3.3 / Appendix A `key-segment` — lowercase kebab (`[a-z0-9-]`), a
+ * strict subset of the NATS KV key alphabet. The charset is VALIDATED, NEVER
+ * COERCED (the RFC-0006 D15 carve, landed in RFC-0010): silent normalisation
+ * (uppercasing, `_`→`-`, truncation) maps distinct principals onto one KV key,
+ * merging their counters — a correctness and isolation failure (§6). cortex
+ * historically coerced here (`s.replace(/[^a-zA-Z0-9_-]/g,"-")`, admitting
+ * `A-Z`/`_`); cortex#2189 (myelin#235 W5) brings it to spec.
+ */
+const KEY_SEGMENT_RE = /^[a-z0-9-]+$/;
+
+/**
+ * Thrown when a principal id is not a valid RFC-0010 §3.3 `key-segment`. A
+ * malformed principal cannot be safely keyed — coercion is forbidden — so the
+ * dispatch is REFUSED (permanently), never admitted onto a coerced,
+ * counter-merging key. Caught by `check()` and mapped to a permanent
+ * `malformed_principal` refusal; never escapes the gate.
+ */
+export class AdmissionKeyError extends Error {
+  readonly segment: string;
+  constructor(segment: string) {
+    super(
+      `admission key segment violates RFC-0010 §3.3 key-segment grammar ` +
+        `(lowercase [a-z0-9-], validated-never-coerced): ${JSON.stringify(segment)}`,
+    );
+    this.name = "AdmissionKeyError";
+    this.segment = segment;
+  }
+}
+
+/** Validate a principal id as an RFC-0010 §3.3 `key-segment` (reject, never
+ * coerce). Returns the id verbatim when valid; throws {@link AdmissionKeyError}
+ * otherwise. The `admissionKeyPrincipalSegment` conformance operation (RFC §8). */
 function keySegment(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_-]/g, "-");
+  if (!KEY_SEGMENT_RE.test(s)) throw new AdmissionKeyError(s);
+  return s;
 }
 
 function hasRateLimits(limits: AdmissionLimits): boolean {
@@ -221,7 +259,19 @@ export class AdmissionGate {
    * failure resolves to a decision per the §4.3 posture.
    */
   async check(req: AdmissionCheckRequest): Promise<AdmissionOutcome> {
-    const tiers = this.resolveTiers(req);
+    let tiers: ResolvedTier[];
+    try {
+      tiers = this.resolveTiers(req);
+    } catch (err) {
+      if (err instanceof AdmissionKeyError) {
+        // A principal id that violates the §3.3 key-segment grammar cannot be
+        // safely keyed (coercion is forbidden — it would merge counters).
+        // PERMANENT refusal; never touches the store, never rides the degraded
+        // fallback. See `malformedPrincipalRefusal`.
+        return this.malformedPrincipalRefusal(err);
+      }
+      throw err;
+    }
     // Nothing configured for this requester ⇒ inert: admit without touching
     // the store (and without flipping any degrade state).
     if (tiers.length === 0) {
@@ -656,6 +706,27 @@ export class AdmissionGate {
       observed: verdict.observed,
       retry_after_ms: verdict.retry_after_ms,
       degraded,
+    };
+  }
+
+  /** Permanent refusal for a principal id that fails the §3.3 key-segment
+   * grammar. LOUD (this is a defensive isolation guard — a malformed principal
+   * should never reach admission, so its arrival is worth a line) and the key
+   * is a SENTINEL — the raw malformed value is never echoed into a KV key. */
+  private malformedPrincipalRefusal(err: AdmissionKeyError): AdmissionOutcome {
+    this.log.warn(
+      `admission-gate: REJECTED malformed principal — key-segment grammar ` +
+        `violation (RFC-0010 §3.3): ${JSON.stringify(err.segment)}. Refusing ` +
+        `dispatch (permanent); coercion is forbidden (it would merge counters).`,
+    );
+    return {
+      admit: false,
+      reason: "malformed_principal",
+      tier: "principal",
+      key: "rate.principal.<malformed>",
+      // Permanent — no retry can make a malformed id valid.
+      retry_after_ms: 0,
+      degraded: false,
     };
   }
 
