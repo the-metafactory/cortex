@@ -18,6 +18,7 @@ import {
   connect as natsConnect,
   credsAuthenticator,
   Events,
+  headers as natsHeaders,
   type ConnectionOptions,
   type NatsConnection,
   type TlsOptions,
@@ -169,14 +170,32 @@ export class NatsLink {
    * opportunistically — there is no per-publish ack on Core NATS. JetStream
    * publishes are a separate API (`jsm.publish`) and are not used here.
    *
+   * `msgId` (RFC-0007 §6.3, grill D12) — when set, attaches a `Nats-Msg-Id`
+   * header carrying the envelope id. cortex publishes on Core NATS to
+   * subjects that JetStream streams capture; a stream deduplicates stored
+   * messages by `Nats-Msg-Id` within its `duplicate_window` regardless of
+   * which publish API produced them, so setting the header here is what
+   * turns JetStream dedup on for every stream-backed subject. The id is the
+   * envelope id — globally unique per envelope — so the header only ever
+   * collapses a genuine duplicate publish of the SAME envelope (e.g. a
+   * publish retry) and never conflates two distinct envelopes. Omitted (or
+   * empty) ⇒ no header ⇒ byte-identical to the pre-#2016 publish, so
+   * non-envelope / non-stream publishes are unaffected.
+   *
    * Errors at publish time are exceedingly rare on Core NATS — typically
    * either "connection closed" (we're shutting down) or "subject too long".
    * The caller decides what to do with them; we don't catch here so the
    * `MyelinRuntime.publish` wrapper can apply its swallow-and-log policy
    * uniformly.
    */
-  publish(subject: string, payload: string | Uint8Array): void {
-    this.raw.publish(subject, payload);
+  publish(subject: string, payload: string | Uint8Array, msgId?: string): void {
+    if (msgId === undefined || msgId === "") {
+      this.raw.publish(subject, payload);
+      return;
+    }
+    const hdrs = natsHeaders();
+    hdrs.set("Nats-Msg-Id", msgId);
+    this.raw.publish(subject, payload, { headers: hdrs });
   }
 
   /**

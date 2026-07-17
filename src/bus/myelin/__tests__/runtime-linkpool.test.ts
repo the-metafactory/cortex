@@ -40,6 +40,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type {
   ConnectionOptions,
+  MsgHdrs,
   NatsConnection,
   Status,
   Subscription,
@@ -62,7 +63,13 @@ function makeConfig(natsBlock: AgentConfig["nats"]): AgentConfig {
 function makeFakeConn() {
   const statusListeners = new Set<(s: Status | null) => void>();
   const subscribePatterns: string[] = [];
-  const publishes: { subject: string; payload: string | Uint8Array }[] = [];
+  const publishes: {
+    subject: string;
+    payload: string | Uint8Array;
+    // RFC-0007 §6.3 (cortex#2016): the `Nats-Msg-Id` header the runtime
+    // stamps for JetStream dedup, or undefined when no header rode the publish.
+    msgId: string | undefined;
+  }[] = [];
 
   const status = () =>
     (async function* () {
@@ -118,9 +125,18 @@ function makeFakeConn() {
     for (const l of statusListeners) l(null);
   });
 
-  const publish = mock((subject: string, payload: string | Uint8Array) => {
-    publishes.push({ subject, payload });
-  });
+  const publish = mock(
+    (
+      subject: string,
+      payload: string | Uint8Array,
+      options?: { headers?: MsgHdrs },
+    ) => {
+      // `MsgHdrs.get` returns "" for an absent key; normalize to undefined so
+      // the "no header" case is distinguishable from an empty-string id.
+      const msgId = options?.headers?.get("Nats-Msg-Id") || undefined;
+      publishes.push({ subject, payload, msgId });
+    },
+  );
 
   const nc = { status, subscribe, drain, publish } as unknown as NatsConnection;
   return { nc, subscribe, subscribePatterns, publishes, publish, drain };
@@ -287,6 +303,33 @@ describe("MyelinRuntime LinkPool (F-3b, cortex#659; ADR 0001)", () => {
     ]);
     // No routing error was logged in the back-compat case.
     expect(logs.some((l) => l.msg.includes("unknown_network_in_publish_subject"))).toBe(false);
+
+    await runtime.stop();
+  });
+
+  // (g) RFC-0007 §6.3 / grill D12 (cortex#2016) — every runtime publish stamps
+  //     the envelope id as the `Nats-Msg-Id` header so JetStream deduplicates a
+  //     duplicated/retried publish within the stream's `duplicate_window`. The
+  //     header rides the SAME single publish funnel every emit uses, so proving
+  //     it on the primary link proves it for every stream-backed subject.
+  test("(g) runtime.publish stamps Nats-Msg-Id = envelope.id on the wire (JetStream dedup, cortex#2016)", async () => {
+    const reg = makeFakeRegistry();
+    const runtime = await startMyelinRuntime(
+      makeConfig({ url: PRIMARY_URL, name: "cortex", subjects: ["local.{principal}.>"] }),
+      { connectImpl: reg.connectImpl, stack: "default" },
+    );
+    const primary = reg.forUrl(PRIMARY_URL)!;
+
+    const id = "abcabcab-1111-4111-8111-abcabcabcabc";
+    await runtime.publish(makeEnvelope({ id, type: "system.adapter.degraded" }));
+
+    expect(primary.publishes).toHaveLength(1);
+    // The dedup key is the envelope id verbatim.
+    expect(primary.publishes[0]?.msgId).toBe(id);
+    // Sanity: the id header rode the publish that carried the envelope subject.
+    expect(primary.publishes[0]?.subject).toBe(
+      "local.metafactory.default.system.adapter.degraded",
+    );
 
     await runtime.stop();
   });

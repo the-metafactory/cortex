@@ -1767,7 +1767,12 @@ export async function startMyelinRuntime(
     //
     // F-3c (cortex#662): publish on the captured non-null `targetLink`
     // (narrowed above) — a down leaf never reaches here.
-    targetLink.publish(subject, JSON.stringify(envelopeToPublish));
+    // RFC-0007 §6.3 (grill D12): carry the envelope id as `Nats-Msg-Id` so
+    // JetStream deduplicates a duplicated/retried publish of the same
+    // envelope within the stream's `duplicate_window`. `envelope.id` is the
+    // canonical, signature-stable id (sealing/signing above never rewrite
+    // it), so it is the dedup key the spec names.
+    targetLink.publish(subject, JSON.stringify(envelopeToPublish), envelope.id);
   };
 
   const publishEnabled = async (envelope: Envelope): Promise<void> => {

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
-import type { ConnectionOptions, NatsConnection } from "nats";
+import type { ConnectionOptions, MsgHdrs, NatsConnection } from "nats";
 import { Events } from "nats";
 import { NatsLink } from "../connection";
 
@@ -35,7 +35,13 @@ SUFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
 
 function makeFakeConnection() {
   const statusEvents: { type: string; data: unknown }[] = [];
-  const publishes: { subject: string; payload: string | Uint8Array }[] = [];
+  const publishes: {
+    subject: string;
+    payload: string | Uint8Array;
+    // cortex#2016: the `Nats-Msg-Id` header the caller attached (JetStream
+    // dedup key), or undefined when the publish carried no header.
+    msgId: string | undefined;
+  }[] = [];
   // Promise the test awaits to know an event has been observed by the status
   // loop. Avoids real-time setTimeout sleeps in tests.
   let observed: Promise<void> = Promise.resolve();
@@ -57,9 +63,17 @@ function makeFakeConnection() {
     if (closeStatus) closeStatus();
   });
 
-  const publish = mock((subject: string, payload: string | Uint8Array) => {
-    publishes.push({ subject, payload });
-  });
+  const publish = mock(
+    (
+      subject: string,
+      payload: string | Uint8Array,
+      options?: { headers?: MsgHdrs },
+    ) => {
+      // `MsgHdrs.get` returns "" for an absent key; normalize to undefined.
+      const msgId = options?.headers?.get("Nats-Msg-Id") || undefined;
+      publishes.push({ subject, payload, msgId });
+    },
+  );
 
   const fakeNc = {
     status: () => statusIterator,
@@ -252,6 +266,7 @@ describe("NatsLink", () => {
     expect(fake.publishes[0]).toEqual({
       subject: "local.metafactory.system.adapter.degraded",
       payload: '{"id":"abc"}',
+      msgId: undefined,
     });
     await link.close();
   });
@@ -266,6 +281,34 @@ describe("NatsLink", () => {
     link.publish("local.metafactory.test", bytes);
     expect(fake.publishes[0]?.subject).toBe("local.metafactory.test");
     expect(fake.publishes[0]?.payload).toBe(bytes);
+    await link.close();
+  });
+
+  test("publish() with a msgId attaches it as the Nats-Msg-Id header (RFC-0007 §6.3, cortex#2016)", async () => {
+    const fake = makeFakeConnection();
+    const link = await NatsLink.connect({
+      url: "nats://localhost:4222",
+      connectImpl: async () => fake.nc,
+    });
+    const id = "11111111-1111-4111-8111-111111111111";
+    link.publish("local.metafactory.default.tasks.code-review.typescript", "{}", id);
+    // JetStream deduplicates stored messages by this header within the
+    // stream's duplicate_window — the id is the dedup key.
+    expect(fake.publishes[0]?.msgId).toBe(id);
+    await link.close();
+  });
+
+  test("publish() without a msgId sends NO header (byte-identical to pre-#2016)", async () => {
+    const fake = makeFakeConnection();
+    const link = await NatsLink.connect({
+      url: "nats://localhost:4222",
+      connectImpl: async () => fake.nc,
+    });
+    link.publish("local.metafactory.system.adapter.degraded", "{}");
+    // An empty string is treated as "no id" too — no header rides the publish.
+    link.publish("local.metafactory.system.adapter.degraded", "{}", "");
+    expect(fake.publishes[0]?.msgId).toBeUndefined();
+    expect(fake.publishes[1]?.msgId).toBeUndefined();
     await link.close();
   });
 
