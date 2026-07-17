@@ -219,6 +219,20 @@ export interface OutboundFile {
 	contentType?: string;
 }
 /**
+ * cortex#2206 — the result of a `createPrivateThread` call. NEVER a throw: a
+ * platform/API failure (or an unsupported surface) resolves `{ ok: false,
+ * detail }` so `daemon-brain-host.ts`'s `create_private_thread` handler can
+ * map it to a retryable `effect_rejected` (`not_now`) instead of an
+ * unhandled rejection.
+ */
+export type CreatePrivateThreadResult = {
+	ok: true;
+	threadId: string;
+} | {
+	ok: false;
+	detail: string;
+};
+/**
  * The core adapter interface. Each platform implements this.
  * Adapters are thin I/O wrappers — all pipeline logic lives in MessageRouter.
  */
@@ -278,6 +292,45 @@ export interface PlatformAdapter {
 	clearProgress(target: ResponseTarget): Promise<void>;
 	/** Create a thread from a message */
 	createThread(msg: InboundMessage, name: string): Promise<ResponseTarget>;
+	/**
+	 * cortex#2206 — create a PRIVATE thread on `channelId` (a channel the
+	 * CALLER already resolved — the brain-protocol host derives it from the
+	 * agent's OWN presence binding, never from brain input) and add
+	 * `memberIds` to it. Distinct from {@link createThread}:
+	 *
+	 *   - `createThread(msg, name)` — MESSAGE-anchored, always a thread the
+	 *     inbound message's author (and anyone in the parent channel, for a
+	 *     public thread) can already see.
+	 *   - `createPrivateThread({ channelId, name, memberIds })` — CHANNEL-
+	 *     anchored (no inbound message required) and PRIVATE: only the bot and
+	 *     the explicitly added `memberIds` can see it.
+	 *
+	 * NEVER throws — a platform/API failure resolves `{ ok: false, detail }`.
+	 * A surface with no private-thread-and-membership primitive resolves
+	 * `{ ok: false, detail }` naming itself as unsupported, rather than
+	 * throwing.
+	 *
+	 * OPTIONAL: most of this interface's existing consumers (the
+	 * message-response pipeline, the review/dashboard surface-router face)
+	 * have nothing to do with this capability at all — it exists for exactly
+	 * one caller today, `daemon-brain-host.ts`'s `create_private_thread`
+	 * effect handler, which already treats an absent implementation as "no
+	 * capability configured" (`effect_rejected`, `not_now` — see
+	 * cortex#2215, the not-yet-built boot-wiring issue) via its own
+	 * `createPrivateThread` constructor option. Making this required would
+	 * force every adapter bundle — including third-party ones with no stake
+	 * in this feature — to implement it; optional keeps the blast radius to
+	 * adapters that actually support it. cortex#2206's first real consumer
+	 * (the `metafactory-cortex-adapter-discord` bundle) implements it
+	 * separately, in that bundle's own repo — adapters are no longer in-tree
+	 * (cortex#1797 S12, ADR-0024) so this repo has no adapter implementation
+	 * to update alongside this interface addition.
+	 */
+	createPrivateThread?(opts: {
+		channelId: string;
+		name: string;
+		memberIds: string[];
+	}): Promise<CreatePrivateThreadResult>;
 	/**
 	 * cortex#502 — resolve a LOGICAL surface address (the review-path
 	 * `response_routing` shape) to a native {@link ResponseTarget}.
