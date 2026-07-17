@@ -389,6 +389,37 @@ describe("dispatchQuickstart — step 3 nats conf", () => {
     expect(res.stdout).toContain("overwritten (--force)");
     expect(readFileSync(confPath, "utf-8")).toContain("listen: 127.0.0.1:4222");
   });
+
+  // cortex#2229 — the DEFAULT nats-dir ("~/.config/nats") must be tilde-expanded.
+  // Prior tests always passed an explicit --nats-dir, so the literal-`~` default
+  // was never exercised: path.join left the `~` literal (a `./~/.config/nats`
+  // dir under cwd) and the rendered store_dir kept a `~` nats-server can't resolve.
+  test("default nats-dir expands ~ — conf lands under $HOME, not a literal ~ (cortex#2229)", async () => {
+    const configDir = freshDir();
+    // Deliberately NO --nats-dir → exercises the "~/.config/nats" default.
+    // $HOME is sandboxed (beforeAll), so it expands inside the sandbox.
+    await withEnv(validCtxEnv(), () =>
+      dispatchQuickstart(["--config-dir", configDir], () => fakePorts()),
+    );
+    const natsHome = join(process.env.HOME!, ".config", "nats");
+    const expandedConf = join(natsHome, "work.conf");
+    // The conf was written at the EXPANDED path (proves join saw an absolute dir).
+    expect(existsSync(expandedConf)).toBe(true);
+    const conf = readFileSync(expandedConf, "utf-8");
+    // store_dir is expanded — no literal `~` that nats-server would choke on.
+    expect(conf).toContain(`store_dir: ${natsHome}/work-jetstream`);
+    expect(conf).not.toContain("store_dir: ~");
+  });
+
+  test("--nats-dir given a literal ~ path is expanded (cortex#2229)", async () => {
+    const configDir = freshDir();
+    await withEnv(validCtxEnv(), () =>
+      dispatchQuickstart(["--config-dir", configDir, "--nats-dir", "~/natsq"], () => fakePorts()),
+    );
+    const expandedConf = join(process.env.HOME!, "natsq", "work.conf");
+    expect(existsSync(expandedConf)).toBe(true);
+    expect(readFileSync(expandedConf, "utf-8")).not.toContain("store_dir: ~");
+  });
 });
 
 // =============================================================================

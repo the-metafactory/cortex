@@ -66,6 +66,7 @@ import { CC_AUTH_FAILURE_MESSAGE, isCcAuthFailure } from "../../../runner/cc-fai
 import type { CCSessionResult } from "../../../runner/cc-session";
 import { resolveConfigDir } from "../../../common/config/config-path";
 import { validateConfigLoads } from "../../../common/config/validate-on-write";
+import { expandTilde } from "../../../common/config/loader";
 
 import { buildQuickstartPorts } from "./quickstart-adapters";
 import type { QuickstartPorts } from "./quickstart-ports";
@@ -753,8 +754,14 @@ export async function dispatchQuickstart(
   }
 
   const ports = portsFactory();
-  const configDir = flags.configDir ?? resolveConfigDir();
-  const natsDir = flags.natsDir ?? "~/.config/nats";
+  // Expand a leading `~` in BOTH the default and any user-supplied flag: these
+  // dirs flow into path.join (natsConfPath) and into the rendered nats.conf
+  // `store_dir` — neither path.join nor nats-server expands `~`, so an
+  // unexpanded default wrote a LITERAL `~/.config/nats` dir under cwd and a
+  // store_dir nats-server could not use (cortex#2229). Mirrors `cortex stack
+  // create` (stack.ts), which already expandTilde's these.
+  const configDir = expandTilde(flags.configDir ?? resolveConfigDir());
+  const natsDir = expandTilde(flags.natsDir ?? "~/.config/nats");
   const reports: StepReport[] = [];
 
   // --- 1. Preflight ----------------------------------------------------------
