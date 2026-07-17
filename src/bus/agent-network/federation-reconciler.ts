@@ -450,6 +450,12 @@ function rosterPeerToWireIdentity(peer: RosterPeer): FederatedWireIdentity {
  * back to `default` (mirrors `roster-read`'s `stackSlugOf` and the CLI's
  * `peerToWireIdentity`, so the accept-list segment matches the peer view).
  */
+// TODO(#2034/flag-day): replace this hand-rolled `{principal}/{stack}` split +
+// fabricated `default` with @the-metafactory/myelin/wire parseStackId (which is
+// fail-loud and NEVER fabricates a `default`, cortex#1812) once the RFC-0001
+// grammar cut lands (blocked-on #1996/#2016/#2020). Behavior-preserving until
+// then: the fabricated-`default` fallback is a current wire behavior, and
+// swapping to the fail-loud codec is a flag-day change, not a drop-in.
 function peerToWireIdentity(
   peer: PolicyFederatedNetwork["peers"][number],
 ): FederatedWireIdentity {

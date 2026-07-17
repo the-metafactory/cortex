@@ -169,6 +169,9 @@ export type CapabilityCost = z.infer<typeof CapabilityCostSchema>;
  * this grammar so a fragment can never smuggle a `>`/`*` wildcard into a pull
  * filter and claim tasks beyond its declared capability.
  */
+// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire capability
+// terminal once RFC-0001 lands (blocked-on #2020 capability-regex tightening).
+// ./wire is kebab-strict; this local copy is looser (accepts `_`).
 export const CAPABILITY_ID_REGEX = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/;
 
 const CapabilityIdSchema = z

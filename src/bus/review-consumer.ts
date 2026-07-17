@@ -1452,6 +1452,14 @@ export function parseRequesterFromOriginator(
   // hyphens). `did:mf:andreas-meta-factory` → principal `andreas`, stack
   // `meta-factory`. The exact inverse of pilot's
   // `encodeRequesterDid` = `did:mf:${principal}-${stack}` (= stack.id `/`→`-`).
+  //
+  // TODO(#2034/flag-day): replace this first-hyphen guesser with
+  // @the-metafactory/myelin/wire decodeDidSegment/parseDid once the RFC-0001
+  // class-explicit grammar cut lands (blocked-on #1996/#2016/#2020). This is
+  // the TRUST-PATH decoder: cortex is still on the OLD loose flat form
+  // (`did:mf:{principal}-{stack}`); ./wire's parseDid expects the class-explicit
+  // dot-form (`did:mf:stack.{principal}.{stack}`) and would REJECT every DID
+  // cortex accepts today. Swapping is a flag-day behavior change, NOT a drop-in.
   const hyphen = body.indexOf("-");
   if (hyphen <= 0 || hyphen === body.length - 1) {
     // No hyphen, leading hyphen, or trailing hyphen → can't split an
@@ -1472,6 +1480,10 @@ export function parseRequesterFromOriginator(
  */
 export const OFFER_DISPATCH_REVIEWER = "capability-dispatch";
 
+// NOTE(#2034): this `SEGMENT_RE` is listed in the #2034 item-2 inventory but is
+// GitHub/GitLab owner+repo validation (mixed-case, dots), NOT a did:mf segment
+// terminal — it is NOT a ./wire candidate. Do not swap it for a wire terminal at
+// flag-day; it validates forge paths, not identity segments.
 const SEGMENT_RE = /^[A-Za-z0-9][\w.-]*$/;
 const OWNER_REPO_RE = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/;
 

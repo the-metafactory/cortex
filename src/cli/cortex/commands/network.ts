@@ -254,6 +254,8 @@ const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 // S5 — capability id grammar (`<domain>.<entity>`, matches the schema's
 // announce_capabilities[] rule) + principal-id grammar for the allowlist.
+// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire capability
+// terminal once RFC-0001 lands (blocked-on #2020 capability-regex tightening).
 const CAPABILITY_ID_RE = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
 
 const SPEC: SubcommandSpec<NetworkSubcommand> = {
@@ -3835,6 +3837,10 @@ export type MakeLivePortsFactory = (mutate: boolean) => MakeLivePorts;
 
 const DEFAULT_MAKE_LIVE_PORTS_FACTORY: MakeLivePortsFactory = (mutate) => buildLiveMakeLivePorts(mutate);
 
+// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire STACK_SLUG_RE
+// once the RFC-0001 grammar cut lands (blocked-on #1996/#2016/#2020). ./wire is
+// kebab-strict; this local copy is looser (accepts `_`, trailing/consecutive
+// `-`), so swapping now would tighten wire behavior — deferred to flag-day.
 const STACK_SLUG_RE = /^[a-z][a-z0-9_-]*$/;
 
 /** Build the {@link MakeLiveInputs} from config + flags, or a usage reason. */

@@ -1063,6 +1063,11 @@ export async function startCortex(
       // consecutive-hyphen guard. Collapse `--` runs to avoid the
       // silent per-publish sign failure that would otherwise downgrade
       // every outbound envelope to unsigned (Echo cortex#211 round 1).
+      // TODO(#2034/flag-day): replace this hand-rolled `/`→`-` + `--`-collapse
+      // DID encoder with @the-metafactory/myelin/wire renderDid/encodeDidSegment
+      // once RFC-0001 lands (blocked-on #1996/#2016/#2020). This emits the OLD
+      // loose flat form; ./wire emits the class-explicit dot-form — a flag-day
+      // change, not a drop-in (paired with the review-consumer decoder swap).
       const principal = `did:mf:${derivedStack.id
         .replace("/", "-")
         .replace(/-+/g, "-")}`;

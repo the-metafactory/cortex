@@ -128,6 +128,8 @@ function defaultConfigDir(): string {
 
 /** Capability id grammar — mirrors CO-1's `OfferingCapabilityIdSchema` (the
  *  `*` quantifier admits SINGLE-segment ids like `chat`). */
+// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire capability
+// terminal once RFC-0001 lands (blocked-on #2020 capability-regex tightening).
 const CAPABILITY_ID_RE = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/;
 
 /**

@@ -28,6 +28,9 @@ import { TrustResolver } from "../../../common/agents/trust-resolver";
 import type { Agent } from "../../../common/types/cortex-config";
 import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { type: "json" };
 import invalidMissingSovereignty from "../vendor/__fixtures__/invalid-missing-sovereignty.json" with { type: "json" };
+// The vendored schema this module validates against — byte-compared below
+// against the installed package schema (cortex#366 stale-install guard).
+import vendoredSchema from "../vendor/envelope.schema.json" with { type: "json" };
 
 describe("envelope-validator", () => {
   test("schema source commit is recorded for upgrade audit", () => {
@@ -591,47 +594,39 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
   // ergonomic side of Echo's suggestion without dragging upstream noise
   // into this PR.
 
-  test("schema source commit points at the vocabulary-migration transition pin", () => {
-    // Lock the pin so future bumps surface in a code review.
-    // Updated at cortex G1 (PR-8) — bump from 3ec0ace to e37b347 to pick
-    // up the myelin vocabulary migration 2026-05 transition release:
-    //   • PR-6 (#169) envelope wire transition (signed_by[].identity,
-    //     originator.identity, target_assistant, distribution_mode "offer")
-    //   • PR-7..PR-13 (#170–#176) the per-cluster downstream landings
-    // The transition schema accepts BOTH the deprecated and the renamed
-    // form so pre-migration / JetStream-replayed envelopes still validate.
-    //
-    // cortex#436 / cortex#81 / PR-R10 — bumped 4c54b8e → f5ec865 (myelin
-    // main post-#184) to land the breaking cut on the routing target field:
-    // `target_principal` is no longer accepted on the wire (the deprecated
-    // key is now rejected as `additionalProperties`); direct/delegate
-    // envelopes must carry `target_assistant`. This is a lockstep companion
-    // to the earlier signed_by[].principal cut (R11). The vendored schema
-    // tracks f5ec865 structurally (verified identical to the npm dep's
-    // schema). The matching cortex-side reader shim drop (getTargetAssistant
-    // no longer dual-reads) ships here per
-    // docs/migrations/0002-vocabulary-finish-2026-05.md §R10.
+  test("schema source commit points at the v0.7.0 tag's commit (breadcrumb lock)", () => {
+    // Lock the provenance breadcrumb so future bumps surface in a code review.
+    // History: 3ec0ace → e37b347 (vocabulary migration 2026-05 transition) →
+    // 4c54b8e → f5ec865 (cortex#436/#81/PR-R10, `target_principal` breaking cut)
+    // → a69ecd7 (v0.6.0). Now the commit that the **v0.7.0** tag dereferences to
+    // (cortex#2034 de-dup prereq — package.json pins the `v0.7.0` tag per
+    // design-rfc-alignment.md D4, carrying the ./wire library). The vendored
+    // schema is byte-unchanged across this bump (loose-flat DID pattern; the
+    // ./wire class-explicit schema is a SEPARATE flag-day, deferred). This is a
+    // cheap constant lock; the real freshness guard is the byte-compare below.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "a69ecd7d760434fd5e2f27b2e3de3b3bcd510be1",
+      "c534a0b9ea66066d5fe2731c2dc62a27561a9e56",
     );
   });
 
-  test("SCHEMA_SOURCE_COMMIT matches the @the-metafactory/myelin pin in package.json (Sage R2 drift guard)", async () => {
-    // The schema is vendored at `SCHEMA_SOURCE_COMMIT` AND the runtime
-    // `deriveSubject` implementation is pulled from the same myelin commit
-    // via the npm dep. If a future bump updates one but forgets the other,
-    // cortex would run new grammar against an old schema (or vice versa).
-    // This test reads package.json's myelin dep ref and asserts equality.
-    const pkgPath = new URL("../../../../package.json", import.meta.url);
-    const pkg = (await import(pkgPath.pathname, { with: { type: "json" } })) as {
-      default: { dependencies?: Record<string, string> };
-    };
-    const myelinDep = pkg.default.dependencies?.["@the-metafactory/myelin"];
-    expect(myelinDep).toBeDefined();
-    // Format: "github:the-metafactory/myelin#<40-char-sha>"
-    const match = /#([0-9a-f]{40})$/.exec(myelinDep!);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe(SCHEMA_SOURCE_COMMIT);
+  test("vendored schema is byte-identical to the installed package schema (cortex#366 stale-install guard)", async () => {
+    // The FRESHNESS/DRIFT contract, pin-format-agnostic (cortex#2034 prereq).
+    // Replaces the old "SCHEMA_SOURCE_COMMIT === the 40-char SHA in the
+    // package.json pin" assertion, which could not survive the switch to a
+    // legible `v0.7.0` **tag** pin (D4). This is the STRONGER guard: it does not
+    // trust a hand-copied SHA string — it byte-compares the vendored copy this
+    // module validates against with the schema that ships in the INSTALLED
+    // `@the-metafactory/myelin` package (the same tree the runtime
+    // `deriveSubject` / signing grammar is pulled from). If a future dep bump
+    // (or a stale `node_modules`, the exact cortex#366 P1 footgun) drifts the
+    // installed schema away from the vendored copy, this fails at test time —
+    // cortex can never silently validate new-grammar envelopes against an old
+    // vendored schema, or vice versa.
+    const installed = (await import(
+      "@the-metafactory/myelin/schemas/envelope.schema.json",
+      { with: { type: "json" } }
+    )) as { default: typeof vendoredSchema };
+    expect(vendoredSchema).toEqual(installed.default);
   });
 });
 

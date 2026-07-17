@@ -430,6 +430,10 @@ export function decideProbeResponse(
     // the spec's "originator.method = federated" maps to this) marks the claim
     // as relayed cross-principal.
     originator: {
+      // TODO(#2034/flag-day): replace this hand-rolled flat-form DID encoder
+      // with @the-metafactory/myelin/wire renderDid once RFC-0001 lands
+      // (blocked-on #1996/#2016/#2020) — emits the OLD loose grammar; ./wire's
+      // class-explicit dot-form is a flag-day change, not a drop-in.
       identity: `did:mf:${inputs.source.principal}-${inputs.stack}`,
       attribution: "federated",
     },

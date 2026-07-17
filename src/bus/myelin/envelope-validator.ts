@@ -64,10 +64,26 @@ import {
   deriveSubject,
   subjectPrefixAligns,
 } from "@the-metafactory/myelin/subjects";
+// TODO(#2034/flag-day): replace this vendored (loose-flat DID pattern) schema
+// with @the-metafactory/myelin/wire's generated class-explicit schema once the
+// RFC-0001 grammar cut lands (blocked-on #1996/#2016/#2020/#233). Deleting the
+// vendored copy pre-flag-day would (a) tighten the DID pattern on the wire and
+// (b) reopen the cortex#366 stale-install class — deferred by design.
 import schema from "./vendor/envelope.schema.json" with { type: "json" };
 
 /**
- * Pin so future maintainers know which myelin commit the schema was lifted from.
+ * Provenance breadcrumb: the myelin commit the vendored schema was lifted from.
+ *
+ * `package.json` now pins the `@the-metafactory/myelin` dep at the legible
+ * **`v0.7.0` tag** (de-dup prereq for cortex#2034 — replaces the raw
+ * `a69ecd7…` v0.6.0 SHA per design-rfc-alignment.md D4). This constant records
+ * the commit that `v0.7.0` dereferences to, so a maintainer can still see at a
+ * glance which upstream tree the schema string tracks. It is a breadcrumb, not
+ * the drift guard: the freshness contract is now enforced by a **byte-compare of
+ * this vendored copy against the installed package schema** (see the
+ * `vendored schema is byte-identical to the installed package schema` test),
+ * which is pin-format-agnostic and keeps the cortex#366 stale-install guard
+ * intact regardless of whether the pin is a tag or a SHA.
  *
  * Upstream issue/PR numbering note: myelin#160 is the design issue for the
  * envelope `originator` field; myelin#161 is the merged PR. The vendored
@@ -76,7 +92,7 @@ import schema from "./vendor/envelope.schema.json" with { type: "json" };
  * comments + tests use `myelin#161` to point at the merge that landed the
  * feature — they're the same change, different ticket facets.
  */
-export const SCHEMA_SOURCE_COMMIT = "a69ecd7d760434fd5e2f27b2e3de3b3bcd510be1";
+export const SCHEMA_SOURCE_COMMIT = "c534a0b9ea66066d5fe2731c2dc62a27561a9e56";
 
 /**
  * Hand-typed Envelope shape matching the JSON Schema. We hand-write rather

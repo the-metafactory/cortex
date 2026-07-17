@@ -454,6 +454,15 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
  * `docs/design-pilot-restructure.md` §4.4 + §6.2 PR-A.0a (pilot-side
  * consumption + this PR's scope), `docs/design-pi-dev-review-agent.md`
  * §4 (envelope grammar).
+ *
+ * TODO(#2034/flag-day): the #2034 inventory names this enum (and the NAK
+ * spelling mirrors in the review/release/dev consumers) as a de-dup target
+ * against @the-metafactory/myelin/wire's refusal enums. Deferred: (a) ./wire's
+ * `resolveNakReason` is an unimplemented conformance stub (throws
+ * NotImplemented, myelin#233 — RFC-0007 flag-day-R not landed yet), and (b)
+ * this taxonomy is a DIFFERENT domain (CC substrate failure modes) from
+ * ./wire's RFC-0010 admission/rate refusals. Revisit at the flag-day
+ * (blocked-on #233) — not a behavior-preserving swap today.
  */
 export type DispatchTaskFailedReason =
   | {

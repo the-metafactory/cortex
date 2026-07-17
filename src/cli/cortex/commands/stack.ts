@@ -74,6 +74,9 @@ type StackSubcommand = "create" | "list" | "delete";
  * no-underscore form. Born-aligning to that schema is the whole point (#808):
  * we never write a stack.id the loader would later reject.
  */
+// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire STACK_SLUG_RE
+// once RFC-0001 lands (blocked-on #1996/#2016/#2020). ./wire is kebab-strict;
+// this local copy is looser, so swapping now would tighten wire behavior.
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/;
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 

@@ -85,6 +85,9 @@ export { type ExitResult } from "./_shared/exit-result";
 type ProvisionSubcommand = "generate" | "claim" | "register" | "retire";
 
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
+// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire STACK_ID_RE
+// once RFC-0001 lands (blocked-on #1996/#2016/#2020). ./wire is kebab-strict;
+// this local copy is looser (accepts `_`), so swapping now tightens the wire.
 const STACK_ID_RE = /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/;
 /** ADR-0018 Gap-A — network id grammar (mirrors the registry's NETWORK_ID_RE). */
 const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
