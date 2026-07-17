@@ -89,6 +89,7 @@ import {
   createDispatchTaskAbortedEvent,
   type LogicalResponseRouting,
 } from "./dispatch-events";
+import { checkSeamConsistency } from "./admission/refusal-seam";
 import {
   runReviewPipeline,
   type ReviewPipelineOpts,
@@ -1705,6 +1706,31 @@ export function failedReasonToAckDecision(
   reason: DispatchTaskFailedReason | undefined,
 ): AckDecision {
   if (!reason) return { kind: "ack" };
+  const decision = mapFailedReasonToDisposition(reason);
+  // RFC-0010 §2.4 seam-consistency tripwire (cortex#2189 / myelin#235 W5). The
+  // JetStream disposition we route on IS the transport token; it MUST agree
+  // with the refusal kind (a mirror kind ↔ its token; `not_now` is transient
+  // and MUST NOT terminate work, §2.3). This can only fire if the mapping below
+  // drifts out of sync with `dispositionForRefusalKind` — the exact class of
+  // the `policy_denied` incident. If it ever does, we route on the TOKEN
+  // (`decision` — delivery is authoritative, §2.4) and emit the named warning.
+  const seam = checkSeamConsistency(reason, { disposition: decision.kind });
+  if (!seam.wellFormed) {
+    process.stderr.write(
+      `[review-consumer] ${seam.warning}: refusal kind="${reason.kind}" ` +
+        `contradicts routed disposition="${decision.kind}" — routing on the ` +
+        `transport token per RFC-0010 §2.4\n`,
+    );
+  }
+  return decision;
+}
+
+/** The kind→disposition map (RFC-0010 §2.2/§2.3). Split out so
+ * {@link failedReasonToAckDecision} can run the §2.4 seam tripwire over its
+ * result before routing. */
+function mapFailedReasonToDisposition(
+  reason: DispatchTaskFailedReason,
+): AckDecision {
   switch (reason.kind) {
     case "cant_do":
       return { kind: "term", reason: `cant_do: ${reason.detail}` };

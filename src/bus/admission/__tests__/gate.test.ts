@@ -462,3 +462,67 @@ describe("AdmissionGate — release robustness", () => {
     expect((await gate.check(named("t2"))).admit).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC-0010 §3.3 — key-segment reject-not-coerce (cortex#2189 / myelin#235 W5).
+// The principal segment charset is VALIDATED, never coerced: a malformed
+// principal is REFUSED (permanently), never admitted onto a coerced key that
+// would merge two principals' counters (§6 isolation failure).
+// ---------------------------------------------------------------------------
+describe("AdmissionGate — malformed principal reject-not-coerce (RFC-0010 §3.3)", () => {
+  test("an out-of-charset principal is REJECTED, not coerced (never touches the store)", async () => {
+    const m = memoryKv();
+    const gate = makeGate({ defaults: { per_minute: 5 } }, m.kv);
+    // `Bad_Name` has an uppercase + `_`; the legacy coercer would have keyed it
+    // as `rate.principal.Bad-Name`. §3.3 requires rejection instead.
+    const outcome = await gate.check(named("t1", "Bad_Name"));
+    expect(outcome.admit).toBe(false);
+    if (!outcome.admit) {
+      expect(outcome.reason).toBe("malformed_principal");
+      // Permanent — no retry hint that would invite a redelivery loop.
+      expect(outcome.retry_after_ms).toBe(0);
+      // The raw malformed value is NEVER echoed into a KV key.
+      expect(outcome.key).toBe("rate.principal.<malformed>");
+      expect(outcome.degraded).toBe(false);
+    }
+    // Read-only refusal: a malformed principal writes nothing and never keys a
+    // (coerced) counter into the store.
+    expect(m.writes()).toBe(0);
+    expect(m.data.has("rate.principal.Bad-Name")).toBe(false);
+    expect(m.data.has("rate.principal.Bad_Name")).toBe(false);
+  });
+
+  test("COLLISION CASE: `amt_surface` and `amt-surface` never merge onto one counter", async () => {
+    const m = memoryKv();
+    const gate = makeGate({ defaults: { per_minute: 1 } }, m.kv);
+    // The valid kebab principal admits and consumes its single token.
+    expect((await gate.check(named("t1", "amt-surface"))).admit).toBe(true);
+    expect((await gate.check(named("t2", "amt-surface"))).admit).toBe(false); // its own window exhausted
+    // The underscore sibling would, under coercion, share `amt-surface`'s
+    // (now-exhausted) counter and be starved. §3.3 rejects it as malformed
+    // instead — its refusal is `malformed_principal`, NOT a borrowed `rate`.
+    const sibling = await gate.check(named("t3", "amt_surface"));
+    expect(sibling.admit).toBe(false);
+    if (!sibling.admit) expect(sibling.reason).toBe("malformed_principal");
+    // The coerced key never came into existence.
+    expect(m.data.has("rate.principal.amt_surface")).toBe(false);
+  });
+
+  test("a valid lowercase-kebab principal passes verbatim", async () => {
+    const m = memoryKv();
+    const gate = makeGate({ defaults: { per_minute: 1 } }, m.kv);
+    const outcome = await gate.check(named("t1", "amt-surface-2"));
+    expect(outcome.admit).toBe(true);
+    expect(m.data.has("rate.principal.amt-surface-2")).toBe(true);
+  });
+
+  test("`check()` still never throws on a malformed principal", async () => {
+    const m = memoryKv();
+    const gate = makeGate({ defaults: { per_minute: 5 } }, m.kv);
+    // Resolves to a decision (never rejects) — the gate's total-function contract.
+    await expect(gate.check(named("t1", "UPPER.dots"))).resolves.toMatchObject({
+      admit: false,
+      reason: "malformed_principal",
+    });
+  });
+});

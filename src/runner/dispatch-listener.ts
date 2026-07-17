@@ -2025,6 +2025,45 @@ async function handleDispatchEnvelope(
         leaseId: payload.task_id,
       });
       if (!admission.admit) {
+        // PERMANENT refusal — a principal id that violates the RFC-0010 §3.3
+        // key-segment grammar cannot be safely keyed (coercion is forbidden;
+        // it would merge two principals' counters). Unlike a rate/concurrency
+        // refusal, retry can never make a malformed id valid — so this maps to
+        // `policy_denied`/term (the registered malformed-principal handling),
+        // NOT the transient `not_now` path below, and skips the `throttled`
+        // audit (which is the transient sibling of `access.denied`).
+        if (admission.reason === "malformed_principal") {
+          trace(
+            traceDispatch,
+            runtime,
+            source,
+            "admission-checked",
+            "fail",
+            traceCtx,
+            "malformed_principal (permanent)",
+          );
+          process.stderr.write(
+            `[runner/dispatch-listener] admission REJECTED malformed principal ` +
+              `on envelope ${envelope.id} (correlation_id=${envelope.correlation_id ?? "<none>"} ` +
+              `task_id=${payload.task_id} principal=${decision.principalId}): ` +
+              `RFC-0010 §3.3 key-segment grammar violation — permanent refusal.\n`,
+          );
+          const now = new Date();
+          const failed = createDispatchTaskFailedEvent({
+            source,
+            taskId: payload.task_id,
+            agentId: payload.agent_id,
+            startedAt: now,
+            failedAt: now,
+            errorSummary: "refused — malformed principal identity",
+            reason: {
+              kind: "policy_denied",
+              deny: { admission_malformed_principal: decision.principalId },
+            },
+          });
+          await runtime.publish(failed);
+          return;
+        }
         const retryAfterMs = admission.retry_after_ms;
         trace(
           traceDispatch,

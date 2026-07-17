@@ -9,6 +9,8 @@
  *   - `provision.ts` — idempotent KV bucket provisioning (boot path)
  *   - `gate.ts`      — the AdmissionGate: CAS arbitration, tiers 1–2,
  *                      degrade-local posture, anonymous fail-closed
+ *   - `refusal-seam.ts` — RFC-0010 §2.4 seam-consistency op (mirror-kind ↔
+ *                      transport-token agreement) + the §2.2 kind registry
  *
  * Config lives in `policy.admission` (`src/common/types/admission.ts`);
  * enforcement point 1 is the runner dispatch-listener (post-policy,
@@ -17,6 +19,7 @@
 
 export {
   AdmissionGate,
+  AdmissionKeyError,
   type AdmissionCheckRequest,
   type AdmissionGateOptions,
   type AdmissionLease,
@@ -24,6 +27,17 @@ export {
   type AdmissionTierName,
   type DegradeMode,
 } from "./gate";
+export {
+  checkSeamConsistency,
+  dispositionForRefusalKind,
+  isMirrorRefusalKind,
+  MIRROR_REFUSAL_KINDS,
+  SEAM_MISMATCH_WARNING,
+  type MirrorRefusalKind,
+  type RefusalKind,
+  type SeamConsistency,
+  type SeamToken,
+} from "./refusal-seam";
 export {
   admissionBucketName,
   provisionAdmissionKv,
