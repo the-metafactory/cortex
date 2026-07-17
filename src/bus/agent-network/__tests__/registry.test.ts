@@ -202,6 +202,33 @@ describe("AgentPresenceRegistry.apply", () => {
     expect(reg.apply(notPresence)).toBeNull();
     expect(reg.getAgents().length).toBe(0);
   });
+
+  test("cortex#2020 window: an underscore capability id STILL folds (online)", () => {
+    // RFC-0008 §4.1 excludes `_` from the ratified grammar, but the dual-accept
+    // fold-gate (capabilitiesFoldableInWindow) keeps folding underscore ids that
+    // are legal pre-flag-day, so the presence path never narrows during the
+    // window. Proves the fold-gate does not drop a legacy underscore id.
+    const reg = new AgentPresenceRegistry();
+    const rec = reg.apply(online(["code_review", "dev.implement"]));
+    expect(rec).not.toBeNull();
+    expect(reg.getAgents().length).toBe(1);
+    expect(reg.getAgents()[0]?.capabilities).toEqual(["code_review", "dev.implement"]);
+  });
+
+  test("cortex#2020 window: underscore capability id STILL folds (capabilities-changed)", () => {
+    const reg = new AgentPresenceRegistry();
+    reg.apply(online(["code-review.typescript"]));
+    const changed = createAgentCapabilitiesChangedEvent({
+      source: SOURCE,
+      identity: IDENTITY,
+      scope: SCOPE,
+      capabilities: ["code_review", "release.cut"],
+      sentAt: new Date("2026-06-10T09:20:00.000Z"),
+    });
+    const rec = reg.apply(changed);
+    expect(rec).not.toBeNull();
+    expect(reg.getAgents()[0]?.capabilities).toEqual(["code_review", "release.cut"]);
+  });
 });
 
 describe("AgentPresenceRegistry.onChange", () => {

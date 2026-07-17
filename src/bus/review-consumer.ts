@@ -99,6 +99,7 @@ import {
 import type { CCSessionFactory, CCSessionLike } from "../substrates/claude-code/harness";
 import { CCSession, type CCSessionOpts } from "../runner/cc-session";
 import { attachHeartbeatToCCSession } from "../runner/heartbeat-ticker";
+import { anyAdvertisedSegmentPrefixMatches } from "../common/types/capability-window";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1037,13 +1038,19 @@ export class ReviewConsumer {
     return null;
   }
 
-  /** Capability claim: exact `code-review.<flavor>` or generic `code-review`. */
+  /** Capability claim: exact `code-review.<flavor>` or generic `code-review`.
+   *  cortex#2020 dual-accept window (RFC-0008 §4.2): the ratified segment-prefix
+   *  matcher is ORed on top of today's exact/generic membership, so an agent
+   *  advertising a deeper specialization (`code-review.<flavor>.<deeper>`) also
+   *  claims the `code-review.<flavor>` request — additive, never removing a
+   *  match that lands today. */
   private claims(flavor: string): boolean {
     const exact = `code-review.${flavor}`;
     return (
       this.flavorSet.has(flavor) ||
       this.agent.capabilities.includes(exact) ||
-      this.agent.capabilities.includes("code-review")
+      this.agent.capabilities.includes("code-review") ||
+      anyAdvertisedSegmentPrefixMatches(exact, this.agent.capabilities)
     );
   }
 

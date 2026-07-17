@@ -363,6 +363,18 @@ describe("DevConsumer.processEnvelope — F-2.1", () => {
     expect(decision).toEqual({ kind: "ack" });
   });
 
+  test("cortex#2020 window: a deeper `dev.implement.<x>` advertiser claims dev.implement", async () => {
+    // RFC-0008 §4.2 segment-prefix: an agent advertising a deeper specialization
+    // matches the shallower `dev.implement` request. Additive — the exact/family
+    // paths (tests above) are untouched; this is the ADDED disjunct.
+    const runtime = createRecordingRuntime();
+    const consumer = new DevConsumer(
+      baseOpts({ runtime, agent: buildAgent({ capabilities: ["dev.implement.strict"] }) }),
+    );
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+  });
+
   test("5. gates red → cant_do (names the gate) + term; PR never opens", async () => {
     const runtime = createRecordingRuntime();
     const forge = fakeForge();

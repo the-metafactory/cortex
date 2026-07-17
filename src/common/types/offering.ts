@@ -69,6 +69,10 @@ import { LETTER_PREFIX_ID_REGEX } from "./id";
  * coupling the offering schema to a non-exported symbol; the cross-field check
  * on `CortexConfigSchema` enforces that the named capability actually EXISTS.
  */
+// TODO(#2020/flag-day): tighten to the ratified RFC-0008 §4.1 converged grammar
+// (@the-metafactory/myelin/wire/capability — kebab-strict, rejects `_`). Held
+// during the dual-accept window; the emitter-side underscore→hyphen migration
+// (config is [principal-hands]) lands first, then this narrows.
 const OfferingCapabilityIdSchema = z
   .string()
   .min(1, "offering.capability is required and must be non-empty")

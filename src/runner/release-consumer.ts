@@ -90,6 +90,7 @@ import {
   type DispatchTaskFailedReason,
 } from "../bus/dispatch-events";
 import type { GateFloorDecision } from "../bus/gate-floor";
+import { anyAdvertisedSegmentPrefixMatches } from "../common/types/capability-window";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -646,11 +647,16 @@ export class ReleaseConsumer {
   // Internals
   // -------------------------------------------------------------------------
 
-  /** Capability claim: exact `release.cut` or the generic `release`. */
+  /** Capability claim: exact `release.cut` or the generic `release`.
+   *  cortex#2020 dual-accept window (RFC-0008 §4.2): the ratified segment-prefix
+   *  matcher is ORed on top of today's exact/generic membership — additive, so an
+   *  agent advertising a deeper `release.cut.<deeper>` also claims the
+   *  `release.cut` request, and no match that lands today is removed. */
   private claims(): boolean {
     return (
       this.agent.capabilities.includes("release.cut") ||
-      this.agent.capabilities.includes("release")
+      this.agent.capabilities.includes("release") ||
+      anyAdvertisedSegmentPrefixMatches("release.cut", this.agent.capabilities)
     );
   }
 

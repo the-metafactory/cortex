@@ -95,6 +95,12 @@ export type AgentPresenceType = (typeof AGENT_PRESENCE_TYPES)[number];
  * presence envelope carries only the capability IDS an agent currently
  * advertises (not the full rate/cost config envelope, which is principal-local).
  */
+// TODO(#2020/flag-day): tighten this presence-side regex to the ratified
+// RFC-0008 §4.1 converged grammar (@the-metafactory/myelin/wire/capability —
+// kebab-strict, rejects `_`). Held during the dual-accept window so underscore
+// ids keep validating; the fold-gate (registry.ts capabilitiesFoldableInWindow)
+// already routes through ./wire. Emitter-side underscore→hyphen migration lands
+// first, then this narrows.
 const PresenceCapabilityIdSchema = z
   .string()
   .min(1, "agent presence capability id is required and must be non-empty")

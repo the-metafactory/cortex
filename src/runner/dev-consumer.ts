@@ -79,6 +79,7 @@ import type { CCSessionOpts, CCSessionResult } from "./cc-session";
 import type { DevSessionStore } from "./dev-session-store";
 import { readLogicalRouting } from "../adapters/response-routing-delivery";
 import { decidePostSessionAction, type DevWorktreeStatus } from "./dev-worktree";
+import { anyAdvertisedSegmentPrefixMatches } from "../common/types/capability-window";
 
 // ---------------------------------------------------------------------------
 // Injected seams — the testability + authority surface
@@ -623,11 +624,16 @@ export class DevConsumer {
   // Internals
   // -------------------------------------------------------------------------
 
-  /** Capability claim: exact `dev.implement` or the bare `dev` family wildcard. */
+  /** Capability claim: exact `dev.implement` or the bare `dev` family wildcard.
+   *  cortex#2020 dual-accept window (RFC-0008 §4.2): the ratified segment-prefix
+   *  matcher is ORed on top of today's exact/family membership — additive, so an
+   *  agent advertising a deeper `dev.implement.<deeper>` also claims the
+   *  `dev.implement` request, and no match that lands today is removed. */
   private claims(): boolean {
     return (
       this.agent.capabilities.includes("dev.implement") ||
-      this.agent.capabilities.includes("dev")
+      this.agent.capabilities.includes("dev") ||
+      anyAdvertisedSegmentPrefixMatches("dev.implement", this.agent.capabilities)
     );
   }
 

@@ -83,6 +83,7 @@ import {
   AgentCapabilitiesChangedPayloadSchema,
   type AgentOfflineReason,
 } from "./envelopes";
+import { capabilityIdAcceptedInWindow } from "../../common/types/capability-window";
 
 /**
  * The liveness TTL — the maximum age (epoch-ms span) a record's
@@ -447,6 +448,9 @@ export class AgentPresenceRegistry {
     const parsed = AgentOnlinePayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
+    // RFC-0008 §7 D5 — validate capabilities through the ./wire fold-gate BEFORE
+    // folding (cortex#2020 dual-accept window; see capabilitiesFoldableInWindow).
+    if (!this.capabilitiesFoldableInWindow(envelope, p.capabilities)) return null;
     const scope = this.resolveScope(envelope, p.scope, verifiedScope);
     if (scope === null) return null; // foreign spoof (scope ≠ verified source)
     const key = recordKey(scope.principal, scope.stack, p.identity.agent_id);
@@ -554,6 +558,9 @@ export class AgentPresenceRegistry {
     const parsed = AgentCapabilitiesChangedPayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
+    // RFC-0008 §7 D5 — validate capabilities through the ./wire fold-gate BEFORE
+    // folding (cortex#2020 dual-accept window; see capabilitiesFoldableInWindow).
+    if (!this.capabilitiesFoldableInWindow(envelope, p.capabilities)) return null;
     const scope = this.resolveScope(envelope, p.scope, verifiedScope);
     if (scope === null) return null; // foreign spoof (scope ≠ verified source)
     const key = recordKey(scope.principal, scope.stack, p.identity.agent_id);
@@ -585,6 +592,46 @@ export class AgentPresenceRegistry {
     this.records.set(key, record);
     this.emit(key, record);
     return record;
+  }
+
+  /**
+   * Presence trust-boundary validation gate (RFC-0008 §7 D5 — validate BEFORE
+   * fold; cortex#2020). Every advertised `capabilities[]` entry is checked
+   * through the ratified ./wire grammar in the dual-accept WINDOW
+   * ({@link capabilityIdAcceptedInWindow}) before the announcement folds into
+   * the liveness registry, closing the §9.1 fold-without-validation defect on
+   * the capability dimension.
+   *
+   * WINDOW semantics: an entry is foldable iff the ratified ./wire grammar OR
+   * the legacy underscore-permissive grammar admits it — so an underscore id
+   * (`code_review`), legal pre-flag-day, KEEPS folding. Only an id ungrammatical
+   * under BOTH grammars is log-and-dropped, and such an id already fails the
+   * payload schema's `PresenceCapabilityIdSchema` upstream, so this gate never
+   * narrows today's behavior; it is the explicit ./wire seam flag-day R flips to
+   * strict (§4.1 grammar + §4.3 reserved-tag rejection). Returns true to fold,
+   * false to drop.
+   */
+  private capabilitiesFoldableInWindow(
+    envelope: Envelope,
+    capabilities: readonly string[],
+  ): boolean {
+    // TODO(#2020/flag-day): at flag-day R this gate flips to STRICT — require the
+    // ratified ./wire grammar only (drop the legacy disjunct in
+    // capabilityIdAcceptedInWindow) AND reject §4.3 reserved tags (`dead-letter`,
+    // `@`-prefixed) from unauthorized advertisers. During the window both keep
+    // folding (they fold today), so neither is rejected here yet.
+    for (const cap of capabilities) {
+      if (!capabilityIdAcceptedInWindow(cap)) {
+        process.stderr.write(
+          `agent-presence-registry: dropping ${envelope.type} envelope ` +
+            `(id=${envelope.id}) — capability "${cap}" is ungrammatical under ` +
+            `both the ratified RFC-0008 §4.1 grammar and the legacy grammar ` +
+            `(fold-gate reject)\n`,
+        );
+        return false;
+      }
+    }
+    return true;
   }
 
   private dropMalformed(envelope: Envelope, err: unknown): null {
