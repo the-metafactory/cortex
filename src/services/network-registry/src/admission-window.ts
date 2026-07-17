@@ -21,9 +21,16 @@ export type AdmissionWindowSurface = "decision" | "sealed-secret";
 let narrowClaimCount = 0;
 
 /**
- * Record that a NARROW (unbound) claim was accepted on the given surface:
- * increment the window counter and log the deprecation warning. Call ONLY on
- * the authentic + authorised path, after the claim is otherwise honoured.
+ * Record that a NARROW (unbound) claim was HONOURED on the given surface:
+ * increment the window counter and log the deprecation warning.
+ *
+ * CONTRACT — call ONLY after the write it counts is CONFIRMED to have taken
+ * effect: past the allowlist gate AND the nonce record AND a successful state
+ * transition / secret write (decision: `updated` truthy; sealed-secret:
+ * `setSealedSecret` truthy). Counting any earlier lets an unauthorised,
+ * replayed, or nonexistent-row claim increment then bounce (403/409/404),
+ * permanently poisoning the §7.3 zero-narrow require-present flip gate (the
+ * PR #2194 adversarial blocker). Every call site must be on the 200 path.
  */
 export function recordNarrowAdmissionClaim(
   surface: AdmissionWindowSurface,

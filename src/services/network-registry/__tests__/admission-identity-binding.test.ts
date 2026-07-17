@@ -299,4 +299,93 @@ describe("M17 — sealed-secret claim identity binding", () => {
     expect(narrowAdmissionClaimCount()).toBe(1);
     expect(warnings.some((w) => w.includes("sealed-secret") && w.includes("narrow"))).toBe(true);
   });
+
+  test("a WRONG-peer seal claim does NOT count (mismatch is not an admission)", async () => {
+    const req = await admittedRow("alice");
+    const other = await makePrincipalKey();
+    const res = await post(
+      `/admission-requests/${req.request_id}/sealed-secret`,
+      await makeSealedWrite(req.request_id, hubAdmin, { peerPubkey: other.publicKeyB64 }),
+    );
+    expect(res.status).toBe(409);
+    // A wide (bound) claim never counts anyway, but assert the counter is clean.
+    expect(narrowAdmissionClaimCount()).toBe(0);
+  });
+});
+
+// =============================================================================
+// M13 — the counter is POISON-RESISTANT: only a CONFIRMED admit counts
+// (PR #2194 adversarial BLOCKER). A narrow claim that bounces pre-transition
+// (403 unauthorised / 404 missing row / 409 nonce-replay) must NOT increment
+// the §7.3 zero-narrow flip gate.
+// =============================================================================
+
+describe("M13 — counter poison-resistance", () => {
+  test("a narrow claim that 403s (stranger signer) does NOT count", async () => {
+    const pna = await makePrincipalKey();
+    const stranger = await makePrincipalKey(); // neither global nor per-network admin
+    await createNetwork("research-collab", pna.publicKeyB64);
+    const req = await registerInto("joel", "research-collab");
+
+    const decision = await makeSignedAdminDecision(req.request_id, "admit", stranger); // narrow
+    const res = await post(`/admission-requests/${req.request_id}/admit`, decision);
+    expect(res.status).toBe(403);
+    expect(narrowAdmissionClaimCount()).toBe(0);
+  });
+
+  test("a narrow claim against a nonexistent row (404) does NOT count", async () => {
+    // Valid-format but nonexistent request_id; global admin passes auth, so it
+    // reaches the transition → 404 not_found, AFTER which counting is gated.
+    const missingId = "0".repeat(32);
+    const decision = await makeSignedAdminDecision(missingId, "admit", globalAdmin); // narrow
+    const res = await post(`/admission-requests/${missingId}/admit`, decision);
+    expect(res.status).toBe(404);
+    expect(narrowAdmissionClaimCount()).toBe(0);
+  });
+
+  test("a replayed narrow claim (nonce reuse) counts only the first, confirmed admit", async () => {
+    const pna = await makePrincipalKey();
+    await createNetwork("research-collab", pna.publicKeyB64);
+    const req = await registerInto("joel", "research-collab");
+
+    const decision = await makeSignedAdminDecision(req.request_id, "admit", pna); // narrow
+    expect((await post(`/admission-requests/${req.request_id}/admit`, decision)).status).toBe(200);
+    expect(narrowAdmissionClaimCount()).toBe(1);
+
+    // Replay the identical signed claim (same nonce) → 409, no second count.
+    const replay = await post(`/admission-requests/${req.request_id}/admit`, decision);
+    expect(replay.status).toBe(409);
+    expect(narrowAdmissionClaimCount()).toBe(1);
+  });
+});
+
+// =============================================================================
+// Strip-downgrade — an attacker cannot strip the binding off a signed WIDE
+// claim to masquerade as narrow: the signature is over the wide bytes, so the
+// stripped (narrow) wire canonical-JSON no longer verifies → 401.
+// =============================================================================
+
+describe("strip-downgrade resistance", () => {
+  test("deleting peer_pubkey + network_id from a signed wide claim → 401", async () => {
+    const pna = await makePrincipalKey();
+    await createNetwork("research-collab", pna.publicKeyB64);
+    const req = await registerInto("joel", "research-collab");
+
+    const decision = await makeSignedAdminDecision(req.request_id, "admit", pna, {
+      peerPubkey: req.peer_pubkey,
+      networkId: "research-collab",
+    });
+    // Tamper the wire: strip the binding AFTER signing (signature is over the
+    // wide claim). The route verifies over canonicalJSON(signed.claim) — now the
+    // narrow bytes — so it can no longer match the wide-claim signature.
+    const wire = decision.claim as unknown as Record<string, unknown>;
+    delete wire.peer_pubkey;
+    delete wire.network_id;
+
+    const res = await post(`/admission-requests/${req.request_id}/admit`, decision);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toBe("signature_invalid");
+    // A rejected forgery is not a narrow admission — counter untouched.
+    expect(narrowAdmissionClaimCount()).toBe(0);
+  });
 });
