@@ -817,7 +817,13 @@ export async function startMyelinRuntime(
       jsmCache: null,
     };
     console.log(
-      `myelin-runtime: connected to ${safeUrlOf(nats.url)} as "${nats.name}" (link=primary)`,
+      // "connected to nats" is the canonical bus-ready signal quickstart's
+      // healthy-boot gate greps for (quickstart-lib.ts HEALTHY_BOOT_PATTERNS,
+      // cortex#2240). Keep the literal "nats" here regardless of whether
+      // nats.url carries a scheme — a scheme-less url (host:port, the
+      // quickstart-generated default) otherwise logged "connected to
+      // 127.0.0.1:4222", which the gate never matched → 60s quickstart hang.
+      `myelin-runtime: connected to nats at ${safeUrlOf(nats.url)} as "${nats.name}" (link=primary)`,
     );
   } catch (err) {
     // Primary down ⇒ runtime disabled, exactly as the pre-F-3b single-link
@@ -1016,7 +1022,7 @@ export async function startMyelinRuntime(
         jsmCache: null,
       });
       console.log(
-        `myelin-runtime: connected to ${safeUrlOf(network.nats.url)} as "${network.nats.name}" (link=${leafId}, network=${network.id})`,
+        `myelin-runtime: connected to nats at ${safeUrlOf(network.nats.url)} as "${network.nats.name}" (link=${leafId}, network=${network.id})`,
       );
     } catch (err) {
       // IAW Phase F-3c (cortex#662) — RATIFIED degrade-don't-crash (design

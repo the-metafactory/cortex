@@ -213,6 +213,28 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
+  test("cortex#2240 — primary-connect log satisfies quickstart's 'connected to nats' gate even for a scheme-less url", async () => {
+    // The quickstart healthy-boot gate greps the daemon log for
+    // "connected to nats" (quickstart-lib.ts HEALTHY_BOOT_PATTERNS). The
+    // quickstart-generated nats.url is host:port with NO scheme, so the old
+    // log ("connected to 127.0.0.1:4222 …") never contained "nats" → the gate
+    // never matched → `cortex quickstart` hung the full gate window (~60s).
+    const fake = makeFakeNatsConnection();
+    const config = makeConfig({
+      url: "127.0.0.1:4222", // scheme-less — Vincent's real config shape
+      name: "cortex",
+      subjects: [],
+    });
+    const runtime = await startMyelinRuntime(config, {
+      connectImpl: async () => fake.nc,
+    });
+    // Plain-substring match — this is exactly the token quickstart's gate greps
+    // for (HEALTHY_BOOT_PATTERNS `/connected to nats/`, quickstart-lib.ts).
+    const connectLog = logs.find((l) => l.msg.includes("connected to nats"));
+    expect(connectLog).toBeDefined();
+    await runtime.stop();
+  });
+
   test("returns disabled when NATS connect fails (logs error, doesn't throw)", async () => {
     const config = makeConfig({
       url: "nats://localhost:9999",
