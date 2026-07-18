@@ -376,6 +376,18 @@ interface BootCtx {
   ) => (msg: InboundMessage) => Promise<void>;
   adapters: PlatformAdapter[];
   liveSurfaces: Set<string>;
+  /**
+   * cortex#2215 — shared, mutable holder mapping `agent.id` → its
+   * constructed `PlatformAdapter`, populated HERE (the adapter-construction
+   * boot lane) so `wireBrainConsumers` (which runs EARLIER in `cortex.ts`'s
+   * boot order) can resolve a `lifecycle: daemon` agent's `create_private_thread`
+   * capability against a live adapter reference without this module needing
+   * to run first. See `brain-consumer-boot.ts`'s
+   * `WireBrainConsumersOpts.agentPlatformAdapters` doc for the read side.
+   * Optional — a caller with no stake in `create_private_thread` (e.g. an
+   * existing test) omits it and this module simply skips the `.set(...)`.
+   */
+  agentPlatformAdapters?: Map<string, PlatformAdapter>;
 }
 
 // =============================================================================
@@ -429,6 +441,13 @@ async function bootPlatformAdapters<
       // hot-reloaded surface joins here).
       ctx.liveSurfaces.add(adapter.platform);
       ctx.adapters.push(adapter);
+      // cortex#2215 — see `BootCtx.agentPlatformAdapters`'s doc. Populated
+      // for every platform (not just Discord) uniformly, mirroring
+      // `ctx.adapters.push` above: the read side already treats a missing-
+      // `createPrivateThread` adapter as "no capability" (see
+      // `brain-consumer-boot.ts`'s `makeCreatePrivateThreadFn`), so there is
+      // no need to special-case which platform gets recorded here.
+      ctx.agentPlatformAdapters?.set(agent.id, adapter);
 
       if (descriptor.trustResolverSupport && ctx.agentRegistry.tryGetById(agent.id)) {
         try {
@@ -600,6 +619,14 @@ export interface WireSurfaceAdaptersOpts {
    * register recording `AdapterPlugin` stubs on a registry they build.
    */
   registry: SurfacePluginRegistry;
+  /**
+   * cortex#2215 — shared, mutable holder mapping `agent.id` → its
+   * constructed `PlatformAdapter`. Threaded straight through to
+   * `BootCtx.agentPlatformAdapters` (see that field's doc for the full
+   * ordering rationale) — optional so existing callers with no stake in
+   * `create_private_thread` need not pass it.
+   */
+  agentPlatformAdapters?: Map<string, PlatformAdapter>;
 }
 
 /**
@@ -639,6 +666,9 @@ export async function wireSurfaceAdapters(opts: WireSurfaceAdaptersOpts): Promis
     inboundWithGateBridge: opts.inboundWithGateBridge,
     adapters: opts.adapters,
     liveSurfaces: opts.liveSurfaces,
+    ...(opts.agentPlatformAdapters !== undefined && {
+      agentPlatformAdapters: opts.agentPlatformAdapters,
+    }),
   };
 
   // ── Discord ─────────────────────────────────────────────────────────────

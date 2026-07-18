@@ -103,7 +103,7 @@ import {
   type PrincipalIdentity,
 } from "./bus/surface-principal-gate";
 import { GateReplyRouter } from "./bus/gate-reply-router";
-import { DaemonBrainHost } from "./brain/daemon-brain-host";
+import { DaemonBrainHost, type DaemonTransport } from "./brain/daemon-brain-host";
 import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import { wireReviewConsumers } from "./runner/review-consumer-boot";
 import { setActiveSubstrates, activeConfigHomeEnv } from "./common/substrates/config-home";
@@ -138,7 +138,11 @@ import {
 
 import { resolveRendererPluginAndConfig, UnimplementedRendererKindError, type Renderer } from "./renderers";
 import { assertRuntimeSystemCoverage } from "./renderers/coverage";
-import { createDefaultSurfacePluginRegistry, validateSurfacesAgainstRegistry } from "./adapters/registry";
+import {
+  createDefaultSurfacePluginRegistry,
+  validateSurfacesAgainstRegistry,
+  type SurfacePluginRegistry,
+} from "./adapters/registry";
 import { loadExternalPlugins } from "./adapters/loader";
 import { createSystemPluginLoadFailedEvent, createSystemPluginLoadedEvent } from "./bus/system-events";
 import { startPluginControlServer } from "./gateway/plugin-control-server";
@@ -511,6 +515,19 @@ export interface CortexHandle {
    * `null` when no registry was configured on this cortex instance.
    */
   readonly registryClient: RegistryClientReader | null;
+  /**
+   * cortex#2215 — the live `lifecycle: daemon` brain hosts this boot
+   * constructed (one per such agent), read-only. Exposed so an integration
+   * test can drive a REAL, boot-constructed `DaemonBrainHost.runTask(...)`
+   * directly — proving the `create_private_thread` capability wiring
+   * (`agentChannelId`/`createPrivateThread`/`anonReachable`) is correct on a
+   * host the real boot path produced, without needing to also fake the
+   * bus/JetStream pull-consumer delivery path (already covered by
+   * `brain-consumer-boot.test.ts` / `bus/__tests__/brain-consumer.test.ts`).
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  readonly daemonBrainHosts: readonly DaemonBrainHost[];
 }
 
 /** Optional test-only injection points. Production callers omit. */
@@ -542,6 +559,29 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   injectRuntime?: MyelinRuntime;
+  /**
+   * cortex#2215 — inject a `SurfacePluginRegistry` instead of building the
+   * default one via `createDefaultSurfacePluginRegistry()`. Lets a test
+   * register a fake adapter plugin (e.g. a "discord" plugin whose
+   * `createAdapter` returns a fake implementing `createPrivateThread`) so a
+   * `lifecycle: daemon` agent's `create_private_thread` capability can be
+   * exercised end-to-end through the REAL boot path — no real Discord
+   * bundle, no network I/O. Production omits this. See
+   * `cortex.brain-daemon-thread-boot.test.ts`.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  injectSurfacePluginRegistry?: SurfacePluginRegistry;
+  /**
+   * cortex#2215 — inject a `DaemonTransport` for every `lifecycle: daemon`
+   * brain host this boot constructs, instead of the real
+   * `makeBunUnixTransport` (spawn-a-real-subprocess) default. Lets a test
+   * drive a daemon brain through the REAL `wireBrainConsumers` boot wiring
+   * against an in-memory fake brain. Production omits this.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  injectDaemonBrainTransport?: DaemonTransport;
   /**
    * S4 (Network Join Control Plane, epic #733) — inject a roster provider for
    * the boot-path federated-peer resolution instead of building a live
@@ -1780,6 +1820,16 @@ export async function startCortex(
   const brainPresenceHolder: { producer: AgentPresenceProducer | null } = {
     producer: null,
   };
+  // cortex#2215 — shared, mutable holder mapping `agent.id` → its
+  // constructed `PlatformAdapter`, threaded into BOTH `wireBrainConsumers`
+  // (below, runs FIRST) and `wireSurfaceAdapters` (much further down boot,
+  // runs LAST — surface adapters construct after brain consumers). A
+  // `lifecycle: daemon` agent's `create_private_thread` capability reads
+  // this map lazily, at the moment the effect actually fires, well after
+  // both boot phases complete — so declaring (and sharing) it here resolves
+  // the construction-ordering problem without reordering boot, mirroring
+  // the `brainPresenceHolder` holder-indirection idiom immediately above.
+  const agentPlatformAdapters = new Map<string, PlatformAdapter>();
   const reviewCapableAgents = mergedAgents.filter((a) => {
     // An exec-brain agent is hosted by the brain path even if it happens to
     // declare a code-review capability — the two consumers are mutually
@@ -2561,6 +2611,10 @@ export async function startCortex(
     reviewJsm,
     brainTasksStream,
     reviewConsumerMaxDeliver,
+    agentPlatformAdapters,
+    ...(options.injectDaemonBrainTransport !== undefined && {
+      daemonTransport: options.injectDaemonBrainTransport,
+    }),
   });
 
   // Boot: start review consumers for every code-review-capable agent. Same
@@ -3170,7 +3224,8 @@ export async function startCortex(
   // gateway (`startGatewayIfEnabled`). All three paths dogfood the SAME
   // in-tree registrations (ADR-0024 §3.3) — extraction later moves a plugin
   // out, it never rewires this composition.
-  const surfacePluginRegistry = createDefaultSurfacePluginRegistry();
+  const surfacePluginRegistry =
+    options.injectSurfacePluginRegistry ?? createDefaultSurfacePluginRegistry();
 
   // cortex#1792 (S6, ADR-0024 D1/D3/D4/D5, OQ9/OQ11) — discover, compat-gate,
   // import, and register out-of-tree plugin bundles into the SAME registry,
@@ -3381,6 +3436,7 @@ export async function startCortex(
     adapterCleanup,
     liveSurfaces,
     registry: surfacePluginRegistry,
+    agentPlatformAdapters,
   });
 
   // MIG-7.2d: non-agent-bound renderers (dashboard, pagerduty, …).
@@ -6273,6 +6329,9 @@ export async function startCortex(
     },
     get registryClient() {
       return registryClient;
+    },
+    get daemonBrainHosts() {
+      return daemonBrainHosts;
     },
   };
 }

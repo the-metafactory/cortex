@@ -74,12 +74,17 @@ import {
 } from "../common/agents/dispatch-state-recorder";
 import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
 import { makeExecBrainRunner } from "../brain/exec-brain-runner";
-import { DaemonBrainHost } from "../brain/daemon-brain-host";
+import {
+  DaemonBrainHost,
+  type CreatePrivateThreadFn,
+  type DaemonTransport,
+} from "../brain/daemon-brain-host";
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { AgentPresenceProducer } from "./agent-presence-producer";
 import type { SurfacePrincipalGate } from "../bus/surface-principal-gate";
 import type { AgentModelClass } from "../bus/sovereignty-gate";
+import type { PlatformAdapter } from "../adapters/types";
 
 // ---------------------------------------------------------------------------
 // The narrow agent shape the boot wiring consumes
@@ -104,6 +109,33 @@ export interface BrainBootAgent {
    * it so the wiring can gate on it without a cast.
    */
   state?: { blueprint: string; version: string };
+  /**
+   * cortex#2215 — the Pier "open-onboarding" gate (`AgentSchema.openOnboarding`,
+   * cortex#1165). `true` ⇒ this agent is reachable by an unmapped, zero-
+   * authority anon principal, which is ALSO the (and, per the ADR, the ONLY)
+   * criterion this boot wiring uses to decide whether a `lifecycle: daemon`
+   * agent gets a live `create_private_thread` capability at all (see
+   * `startForAgent` below). Absent/`false` ⇒ no capability is wired for this
+   * agent — fail-safe: the wider "explicit member list" path for a trusted,
+   * non-anon-reachable agent is deliberately out of scope here (ADR
+   * cortex#2206 #1: "which future agents get [the wider path] is each of
+   * their own onboarding, not a blanket switch").
+   */
+  openOnboarding?: boolean;
+  /**
+   * cortex#2215 — the per-platform presence bindings this wiring reads to
+   * resolve `create_private_thread`'s parent channel. Only Discord's
+   * `agentChannelId` is consulted today (the primitive's first real
+   * consumer); other platforms are structurally absent here rather than
+   * wired to a no-op, so a future platform's own presence shape doesn't need
+   * a dead field on every agent that never uses it.
+   */
+  presence?: {
+    discord?: {
+      /** `presence.discord.agentChannelId` — the agent's own bound channel. */
+      agentChannelId?: string;
+    };
+  };
   runtime?: {
     capabilities?: readonly string[];
     maxConcurrent?: number;
@@ -178,6 +210,32 @@ export interface WireBrainConsumersOpts {
    * assert which agents are wired with a recorder without a real bundle.
    */
   makeDispatchStateRecorder?: (agent: { id: string }) => DispatchStateRecorder;
+  /**
+   * cortex#2215 — shared, mutable holder mapping `agent.id` → its constructed
+   * `PlatformAdapter`, populated by `wireSurfaceAdapters` LATER in boot
+   * (surface adapters construct AFTER brain consumers — see `cortex.ts`'s
+   * boot order). This module never iterates or reads the map at
+   * CONSTRUCTION time; a `lifecycle: daemon` agent's `createPrivateThread`
+   * closure (see `startForAgent` below) captures the map by REFERENCE and
+   * reads `.get(agentId)` LAZILY, only when the `create_private_thread`
+   * effect actually fires — which structurally cannot happen before
+   * `wireSurfaceAdapters` has run (reaching the effect requires a live task
+   * to already have been dispatched to the brain over the bus). Same
+   * holder-indirection idiom `cortex.ts` already uses for
+   * `brainPresenceHolder`; resolves the adapter-construction-ordering
+   * problem without reordering boot.
+   */
+  agentPlatformAdapters: ReadonlyMap<string, PlatformAdapter>;
+  /**
+   * Test-only seam — override the `DaemonBrainHost`'s transport instead of
+   * the real `makeBunUnixTransport` (spawn-a-real-subprocess) default. Lets
+   * an integration test drive a `lifecycle: daemon` agent through this REAL
+   * boot-wiring function against an in-memory fake brain, with no real
+   * socket/subprocess. Production omits this.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  daemonTransport?: DaemonTransport;
 }
 
 /** The callable `cortex.ts` invokes per agent, at both the boot loop and the `agents.d/` hot-reload sites. */
@@ -233,6 +291,39 @@ function loadBrainPersona(
     );
     return undefined;
   }
+}
+
+/**
+ * cortex#2215 — build the `CreatePrivateThreadFn` a `lifecycle: daemon`
+ * `DaemonBrainHost` calls for its `create_private_thread` effect. Reads
+ * `adapters` (the shared, mutable holder — see
+ * {@link WireBrainConsumersOpts.agentPlatformAdapters}) LAZILY, at call time,
+ * not at construction time — so it is correct regardless of whether
+ * `wireSurfaceAdapters` has run yet. NEVER throws: a missing adapter (no
+ * platform binding constructed for this agent — disabled instance, gateway-
+ * owned, construction failure, …) or an adapter that doesn't implement
+ * `createPrivateThread` (a bundle with no stake in this capability) both
+ * resolve `{ ok: false, detail }`, matching {@link CreatePrivateThreadFn}'s
+ * own never-throws contract (mirrors every other injected I/O seam in
+ * `daemon-brain-host.ts`).
+ */
+function makeCreatePrivateThreadFn(
+  agentId: string,
+  adapters: ReadonlyMap<string, PlatformAdapter>,
+): CreatePrivateThreadFn {
+  return async (callOpts) => {
+    const adapter = adapters.get(agentId);
+    if (adapter?.createPrivateThread === undefined) {
+      return {
+        ok: false,
+        detail:
+          adapter === undefined
+            ? `no platform adapter configured for agent "${agentId}"`
+            : `adapter "${adapter.platform}" for agent "${agentId}" does not implement createPrivateThread`,
+      };
+    }
+    return adapter.createPrivateThread(callOpts);
+  };
 }
 
 /**
@@ -327,6 +418,26 @@ export function wireBrainConsumers(
         }),
         ...(stateRecorder !== undefined && { stateRecorder }),
       };
+      // cortex#2215 — wire cortex#2206's `create_private_thread` capability
+      // for exactly the agents its ADR intends: `openOnboarding: true` (the
+      // Pier "open-onboarding" gate, `AgentSchema.openOnboarding`) AND a
+      // bound Discord `agentChannelId`. BOTH conditions are required —
+      // `openOnboarding` alone with no Discord binding has no channel to
+      // open a thread on; a Discord binding alone on a NON-open-onboarding
+      // agent is deliberately left unwired (the wider "explicit member
+      // list" path for a trusted agent is its own future onboarding
+      // decision per the ADR, not something this generic wiring grants by
+      // default). Either condition failing ⇒ `agentChannelId` /
+      // `createPrivateThread` stay UNDEFINED on the host — the fail-safe
+      // "no capability at all" state (every `create_private_thread` effect
+      // this agent's brain emits is refused `effect_rejected`/`cant_do` —
+      // DaemonBrainHost's structural "no thread-capable surface configured"
+      // path — regardless of `anonReachable`'s own true-by-default).
+      const discordAgentChannelId = agent.presence?.discord?.agentChannelId;
+      const isOpenOnboarding = agent.openOnboarding === true;
+      const wireCreatePrivateThread =
+        isOpenOnboarding && discordAgentChannelId !== undefined;
+
       let daemonHost: DaemonBrainHost | undefined;
       let consumer: BrainConsumer;
       if (brain.lifecycle === "daemon") {
@@ -337,6 +448,23 @@ export function wireBrainConsumers(
           secrets,
           maxRestarts: brain.maxRestarts,
           ...(personaText !== undefined && { persona: personaText }),
+          ...(opts.daemonTransport !== undefined && { transport: opts.daemonTransport }),
+          // cortex#2215 — see the `wireCreatePrivateThread` computation
+          // above. `anonReachable: true` is set EXPLICITLY (not left to
+          // `DaemonBrainHost`'s own safe-by-default) because it must track
+          // `isOpenOnboarding`, not just "capability configured" — an
+          // open-onboarding agent's brain may ONLY ever request
+          // `members: "source"` (cortex#2206 policy), never an explicit
+          // member list, and that gate is what `anonReachable: true` turns
+          // on inside the host.
+          ...(wireCreatePrivateThread && {
+            agentChannelId: discordAgentChannelId,
+            anonReachable: true,
+            createPrivateThread: makeCreatePrivateThreadFn(
+              agent.id,
+              opts.agentPlatformAdapters,
+            ),
+          }),
           // On degradation (restart budget exhausted) surface the agent via the
           // presence producer's capability-change signal (drop to empty caps),
           // the same path the reconcile uses (§7.4). Read the holder lazily —

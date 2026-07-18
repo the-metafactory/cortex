@@ -88,6 +88,7 @@ function baseOpts(overrides: Partial<WireBrainConsumersOpts> = {}): WireBrainCon
     reviewJsm: null,
     brainTasksStream: "BRAIN_TASKS",
     reviewConsumerMaxDeliver: 5,
+    agentPlatformAdapters: new Map(),
     ...overrides,
   };
 }
