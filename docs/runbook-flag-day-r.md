@@ -138,9 +138,9 @@ Confirm each is implemented in the R build, not merely tracked:
 
 ### 1.6 DECISION — WP-4 DID-encoding-ambiguity wire decision
 
-> **[DECISION PENDING — [cortex#1876](https://github.com/the-metafactory/cortex/issues/1876), owners Andreas + JC]**
+> **[DECISION RECORDED — [ADR-0025](../adr/0025-federated-did-encoding.md), Andreas 2026-07-19]: option (A), the hard cut.**
 >
-> This runbook does **not** decide it. The DID-flip steps in §3 are gated on this being recorded.
+> cortex adopts the RFC-0001 §6.2 class-explicit dot-form (the sole grammar `./wire` implements); **no dual-accept window** (RFC-0001 §9). The §3 DID-flip steps proceed under this. cortex#1880's stale dual-accept criterion was struck. JC's involvement is the §10 two-party lockstep cut at execution (the history-discard consent that would have needed his co-sign is moot — the `jc↔andreas` leaf has carried `in=0/out=0`, no pre-cut federated history to lose).
 
 **The problem (cortex#1876):** the deployed `did:mf:` prefix is overloaded across three
 structurally-indistinguishable identity classes minted independently — stack `did:mf:{principal}-{stack}`,
@@ -161,8 +161,8 @@ currently held shut only by a hand-written runtime guard and a prose paragraph
   `did:mf:system.reflex`, `did:mf:signal-tap` → `did:mf:system.signal-tap`, `did:mf:public` →
   `did:mf:principal.public`).
 
-- **Verify:** the decision is recorded on cortex#1876 with both principals' names before §1.7 signs.
-- **Owner:** both. **Blocking** — R is not schedulable until this is recorded.
+- **Verify:** ✅ recorded in ADR-0025 (merged, cortex#2236). Option (A), hard cut. This gate is CLEARED.
+- **Owner:** Andreas (decision) + JC (§10 execution coordination). **No longer blocking** — recorded 2026-07-19.
 
 ### 1.7 Sign-off — the schedule gate
 
@@ -454,4 +454,4 @@ present through §2–§8.
 
 **Blocking decision still open at authoring time:**
 [cortex#1876](https://github.com/the-metafactory/cortex/issues/1876) (WP-4 DID-encoding-ambiguity) —
-**[DECISION PENDING — owners Andreas + JC]** (§1.6). R is not schedulable until it is recorded.
+**✅ RECORDED in ADR-0025** (hard cut, Andreas 2026-07-19, §1.6). This precondition is cleared; R remains gated on the §1.1–§1.5 meters + §1.7 two-party sign-off.
