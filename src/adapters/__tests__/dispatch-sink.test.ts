@@ -189,6 +189,38 @@ describe("dispatch-sink — delivery to the originating target", () => {
     });
   });
 
+  test("cortex#2256 — honors a routing channel DIFFERENT from any task origin: a dispatch.task.post routed at a log channel (no thread) posts there", async () => {
+    // The `post_log` seam relies on routing being pure DATA: the brain
+    // consumer emits a dispatch.task.post whose `response_routing` names the
+    // agent's LOG channel — a channel the task did NOT originate from, with
+    // no thread. The sink must deliver to exactly that target (it never
+    // compares routing against an origin — this test pins that property so
+    // it cannot regress into origin-validation).
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("escort-discord");
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      lifecycleEnvelope("dispatch.task.post", {
+        agent_id: "escort",
+        text: "newcomer is ready for review",
+        // Channel-only routing at the log channel — no thread_id at all.
+        response_routing: routing("escort-discord", "stewards-log-channel-fake"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+    const sent = adapter.sentMessages[0]!;
+    expect(sent.text).toBe("newcomer is ready for review");
+    expect(sent.target).toEqual({
+      instanceId: "escort-discord",
+      channelId: "stewards-log-channel-fake",
+    });
+  });
+
   test("posts a failed reply via postResponse", async () => {
     const { runtime, trigger } = fakeRuntime();
     const adapter = new MockAdapter("discord-pai-collab");

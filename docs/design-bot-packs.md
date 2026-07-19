@@ -144,6 +144,7 @@ socket (stdio kept for logs).
 ```jsonc
 { "v": 1, "type": "post",         "task_id": "…", "text": "…",
   "attachment": { "filename": "flow.png", "b64": "…" } }                   // cortex posts to the task's surface/thread
+{ "v": 1, "type": "post_log",     "task_id": "…", "text": "…" }            // cortex posts to the AGENT'S OWN bound log channel (cortex#2256): no channel field — the host derives the target from presence.discord.logChannelId; fire-and-forget (no ack), failures via effect_rejected; daemon lifecycle only
 { "v": 1, "type": "ask_principal", "task_id": "…", "gate": "principal-ack",
   "prompt": "Run this flow?" }                                             // cortex renders the gate, enforces the PRINCIPAL
 { "v": 1, "type": "dispatch",     "task_id": "…", "capability": "soc.triage.email",

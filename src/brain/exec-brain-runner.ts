@@ -31,6 +31,9 @@
  *        - `create_private_thread` → ALWAYS refused `effect_rejected` (this
  *          lifecycle has no live surface-adapter binding; cortex#2206 is
  *          daemon-lifecycle only — see `daemon-brain-host.ts`)
+ *        - `post_log`      → ALWAYS refused `effect_rejected` (cortex#2256 is
+ *          likewise daemon-lifecycle only — the log-channel binding + rate
+ *          limiter live on the supervising host)
  *        - `log`           → `hooks.onLog`
  *        - `result`        → terminal; resolve.
  *   5. task_id correlation: any effect whose `task_id` ≠ the spawned task's id
@@ -63,6 +66,7 @@ import {
   JsonlDecoder,
   type TaskEvent,
   type PostEffect,
+  type PostLogEffect,
   type AskPrincipalEffect,
   type DispatchEffect,
   type LogEffect,
@@ -178,6 +182,26 @@ export interface BrainTaskHooks {
    * tests that don't care about routing) omit it.
    */
   onThreadCreated?(threadId: string): void | Promise<void>;
+
+  /**
+   * cortex#2256 — a `post_log` effect that PASSED the daemon host's gates
+   * (log-channel binding present, length cap, rate limit). The BrainConsumer
+   * publishes the log-channel `dispatch.task.post` envelope routed at
+   * `logChannelId` — the HOST-derived target passed here so the single
+   * source of the binding stays the host (§5 property 1: the brain never
+   * named it; the hook receives only what the host already decided, the
+   * same shape as `onThreadCreated`'s host-resolved `threadId`).
+   *
+   * Resolves `{ ok: false, detail }` on a failed publish so the host can
+   * refuse the effect `not_now` (transient/retryable); never throws by
+   * contract. OPTIONAL: only the `lifecycle: daemon` host wires `post_log`
+   * (the per-task runner refuses it, same as `create_private_thread`), so
+   * per-task callers and routing-agnostic tests omit it.
+   */
+  onPostLog?(
+    post: PostLogEffect,
+    logChannelId: string,
+  ): Promise<{ ok: true } | { ok: false; detail: string }>;
 }
 
 export type BrainDispatchOutcome =
@@ -602,6 +626,19 @@ export function makeExecBrainRunner(
             "create_private_thread",
             "create_private_thread is not supported by the per-task (lifecycle: per-task) " +
               "exec-brain runner — only daemon-lifecycle brains may open private threads (cortex#2206)",
+          );
+          return;
+        }
+        case "post_log": {
+          // cortex#2256 — daemon-lifecycle only, same reasoning as
+          // `create_private_thread`: the log-channel binding + per-agent
+          // rate limiter live on the supervising DaemonBrainHost, which the
+          // per-task runner has no counterpart for. Refuse rather than
+          // silently no-op.
+          await rejectEffect(
+            "post_log",
+            "post_log is not supported by the per-task (lifecycle: per-task) " +
+              "exec-brain runner — only daemon-lifecycle brains may notify their log channel (cortex#2256)",
           );
           return;
         }

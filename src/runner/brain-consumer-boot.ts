@@ -134,6 +134,15 @@ export interface BrainBootAgent {
     discord?: {
       /** `presence.discord.agentChannelId` — the agent's own bound channel. */
       agentChannelId?: string;
+      /**
+       * cortex#2256 — `presence.discord.logChannelId`: the agent's bound
+       * back-office/log channel, the host-derived target of the `post_log`
+       * effect. Wired to the `DaemonBrainHost` whenever bound — unlike
+       * `create_private_thread`, NOT gated on `openOnboarding` (notifying
+       * humans is wanted for trusted and anon-reachable agents alike; the
+       * host's rate/length gates carry the anon safety).
+       */
+      logChannelId?: string;
     };
   };
   runtime?: {
@@ -443,6 +452,13 @@ export function wireBrainConsumers(
       const isOpenOnboarding = agent.openOnboarding === true;
       const wireCreatePrivateThread =
         isOpenOnboarding && discordAgentChannelId !== undefined;
+      // cortex#2256 — the `post_log` target. Wired whenever the binding
+      // exists, with NO `openOnboarding` gate (deliberate asymmetry vs
+      // `create_private_thread` above): notifying humans on the agent's own
+      // log channel is wanted for trusted and anon-reachable agents alike,
+      // and the host's rate/length gates are what carry anon safety (the
+      // effect can only ever reach this one host-derived channel).
+      const discordLogChannelId = agent.presence?.discord?.logChannelId;
 
       let daemonHost: DaemonBrainHost | undefined;
       let consumer: BrainConsumer;
@@ -470,6 +486,10 @@ export function wireBrainConsumers(
               agent.id,
               opts.agentPlatformAdapters,
             ),
+          }),
+          // cortex#2256 — see the `discordLogChannelId` computation above.
+          ...(discordLogChannelId !== undefined && {
+            logChannelId: discordLogChannelId,
           }),
           // On degradation (restart budget exhausted) surface the agent via the
           // presence producer's capability-change signal (drop to empty caps),

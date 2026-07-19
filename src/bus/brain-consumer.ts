@@ -103,6 +103,7 @@ import type {
   TaskEvent,
   TaskSource,
   PostEffect,
+  PostLogEffect,
   AskPrincipalEffect,
   DispatchEffect,
   ResultEffect,
@@ -806,6 +807,51 @@ export class BrainConsumer {
           }),
           "dispatch.task.post",
         );
+      },
+
+      // `post_log` (cortex#2256) — publish a `dispatch.task.post` envelope
+      // routed at the agent's own LOG CHANNEL, not the task's origin. The
+      // daemon host already enforced every policy gate (binding present,
+      // length cap, rate limit) and passes the HOST-derived `logChannelId`
+      // — the brain never named a channel (§5 property 1). Routing details:
+      //   - channel: the log channel; thread: "" — a log note goes to the
+      //     CHANNEL, never a thread (and deliberately NOT the task's
+      //     retargetable `brainPostSource`, so a cortex#2248 thread
+      //     retarget never drags log notes into the newcomer's thread);
+      //   - adapter_instance/surface/user: from the ORIGINAL task source —
+      //     the same adapter the agent is bound to, so the chat
+      //     dispatch-sink delivers it (routing is data; the sink honors a
+      //     channel different from the task origin).
+      // Returns the publish success flag so the host can refuse `not_now`
+      // on a dropped publish — unlike `onPost` (a lost task-thread post is
+      // pure breadcrumb), the host wants to TELL the brain a log note was
+      // lost, since there is no success ack to miss.
+      onPostLog: async (
+        post: PostLogEffect,
+        logChannelId: string,
+      ): Promise<{ ok: true } | { ok: false; detail: string }> => {
+        const ok = await this.safePublish(
+          createDispatchTaskPostEvent({
+            source: this.source,
+            taskId: crypto.randomUUID(),
+            agentId: this.agent.id,
+            correlationId: post.task_id,
+            text: post.text,
+            taskSource: {
+              surface: source.surface,
+              channel: logChannelId,
+              thread: "",
+              user: source.user,
+              ...(source.adapter_instance !== undefined && {
+                adapter_instance: source.adapter_instance,
+              }),
+            },
+          }),
+          "dispatch.task.post(log)",
+        );
+        return ok
+          ? { ok: true }
+          : { ok: false, detail: "log-channel post publish failed" };
       },
 
       // `ask_principal` — resolve through the pluggable principal gate. B-1's

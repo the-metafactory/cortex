@@ -27,7 +27,11 @@
  *      through the per-task hooks: it is host-POLICY (channel binding,
  *      anon-reachable membership gate, rate limit), so this file enforces it
  *      directly and calls an injected {@link CreatePrivateThreadFn} only for
- *      the mechanical create-thread-and-add-members I/O;
+ *      the mechanical create-thread-and-add-members I/O. `post_log`
+ *      (cortex#2256) splits the same way: the POLICY gates (log-channel
+ *      binding, length cap, rate limit) are enforced here, and only a
+ *      gate-passing effect reaches the consumer's `onPostLog` hook — with
+ *      the HOST-derived target channel as an argument, never brain input;
  *   4. enforces, PER TASK (not per process): task_id correlation, scratch
  *      confinement, and the 4 MiB attachment budget (§12.5). Scratch dirs are
  *      created per TASK and removed when the task closes — confinement stays
@@ -207,6 +211,40 @@ export const CREATE_PRIVATE_THREAD_RATE_LIMIT_PER_HOUR = 10;
 const CREATE_PRIVATE_THREAD_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
+// `post_log` policy constants (cortex#2256)
+// ---------------------------------------------------------------------------
+
+/**
+ * Rate limit for `post_log`: 10/hour, PER AGENT (cortex#2256) — the same
+ * constant class and sliding-window mechanics as
+ * {@link CREATE_PRIVATE_THREAD_RATE_LIMIT_PER_HOUR}, and a SEPARATE budget
+ * from it (opening threads and notifying the log channel are independent
+ * capabilities; one must not starve the other). Per-agent for the same
+ * structural reason: each {@link DaemonBrainHost} serves exactly one agent.
+ *
+ * The trigger is stranger-influenced for anon-reachable (`openOnboarding`)
+ * agents — notifying humans about strangers is the PRIMARY use case, so those
+ * agents ARE allowed to use `post_log`; this window (plus the length cap) is
+ * what keeps the steward channel unspammable, matching the ADR posture that
+ * host-side enforcement, not brain trust, carries anon safety.
+ */
+export const POST_LOG_RATE_LIMIT_PER_HOUR = 10;
+
+/** The sliding window `POST_LOG_RATE_LIMIT_PER_HOUR` is measured over. */
+const POST_LOG_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Length cap on `post_log.text` (cortex#2256): 2000 chars — Discord's own
+ * message cap. For hybrid brains the text may be model-authored; the cap plus
+ * the FIXED host-derived target keeps the blast radius at "odd words in the
+ * log channel", never routing. Over-cap → `effect_rejected` (`wont_do`:
+ * the same request will never succeed on retry — mirror of the attachment
+ * budget's over-limit refusal), checked BEFORE the rate window so a
+ * refused-anyway request never burns budget.
+ */
+export const POST_LOG_MAX_TEXT_CHARS = 2000;
+
+// ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
 
@@ -285,6 +323,18 @@ export interface DaemonBrainHostOpts {
    */
   createPrivateThread?: CreatePrivateThreadFn;
   /**
+   * cortex#2256 — the log channel a `post_log` effect targets. ALWAYS the
+   * agent's OWN presence binding (`presence.discord.logChannelId` today),
+   * resolved by the CALLER at construction — never supplied by the brain
+   * (the wire effect carries no channel field at all; that absence is
+   * intentional, see `protocol.ts`'s `PostLogEffectSchema`). Undefined ⇒
+   * this agent has no log channel bound; every `post_log` effect is refused
+   * `effect_rejected` (`cant_do` — structural, never resolves on retry
+   * without a config change, same reasoning as `create_private_thread`'s
+   * missing-binding refusal).
+   */
+  logChannelId?: string;
+  /**
    * cortex#2206 — true when this agent is reachable by an unmapped,
    * zero-authority anon principal (`AgentSchema.openOnboarding`,
    * cortex#1165). Gates `create_private_thread`'s `members` field: while
@@ -362,6 +412,15 @@ export class DaemonBrainHost {
    * the PR/issue for why that's an accepted v1 tradeoff).
    */
   private threadCreateAttempts: number[] = [];
+  /** cortex#2256 — see {@link DaemonBrainHostOpts.logChannelId}. */
+  private readonly logChannelId: string | undefined;
+  /**
+   * cortex#2256 — sliding-window timestamps (ms) of accepted `post_log`
+   * ATTEMPTS. Same mechanics (and the same record-before-I/O and
+   * in-memory-only tradeoffs) as {@link threadCreateAttempts}; a SEPARATE
+   * window so log posts and thread creates never starve each other.
+   */
+  private postLogAttempts: number[] = [];
 
   /** Live process + connection for the CURRENT generation. */
   private proc: DaemonBrainProcess | null = null;
@@ -411,6 +470,7 @@ export class DaemonBrainHost {
     this.agentChannelId = opts.agentChannelId;
     this.createPrivateThreadFn = opts.createPrivateThread;
     this.anonReachable = opts.anonReachable ?? true;
+    this.logChannelId = opts.logChannelId;
   }
 
   /** True once the restart budget is exhausted — the consumer stops dispatching. */
@@ -944,6 +1004,92 @@ export class DaemonBrainHost {
         await record.hooks.onPost(e);
         return;
       }
+      case "post_log": {
+        // cortex#2256 — notify THIS agent's own bound log channel. The
+        // effect carries no channel (intentional — protocol.ts); the target
+        // is derived HERE from the agent's own binding, mirroring
+        // `create_private_thread`'s host-derived-target pattern.
+        //
+        // NO liveness-timer pause, deliberately: the pause exists for
+        // effects the BRAIN blocks on awaiting a response event
+        // (`gate_verdict`, `thread_created` — cortex#1073). `post_log` is
+        // fire-and-forget like `post`: there is no success event, the brain
+        // continues immediately, and the host-side publish is a local bus
+        // op — so brain liveness accounting is unaffected, exactly as it is
+        // for the `post` case above.
+        //
+        // 1. Structural: no log-channel binding / no publish hook wired ⇒
+        // this agent simply cannot do this, full stop. cant_do (not
+        // not_now): it will never resolve on retry without a
+        // redeploy/config change (same reasoning as the
+        // `create_private_thread` structural gate — a brain must not burn
+        // budget retrying a capability that can never appear).
+        const logChannelId = this.logChannelId;
+        // `.bind()` (not a bare method reference) so the hook keeps its own
+        // receiver — the lint-enforced unbound-method discipline.
+        const onPostLog = record.hooks.onPostLog?.bind(record.hooks);
+        if (logChannelId === undefined || onPostLog === undefined) {
+          await this.rejectEffect(
+            e.task_id,
+            "post_log",
+            "cant_do",
+            `agent "${this.agentId}" has no log channel binding configured`,
+          );
+          return;
+        }
+
+        // 2. Length cap — checked BEFORE the rate window so a refused-anyway
+        // request never burns budget. wont_do: retrying the same text will
+        // never succeed (mirror of the attachment budget's refusal kind).
+        if (e.text.length > POST_LOG_MAX_TEXT_CHARS) {
+          await this.rejectEffect(
+            e.task_id,
+            "post_log",
+            "wont_do",
+            `post_log text exceeds ${POST_LOG_MAX_TEXT_CHARS} chars ` +
+              `(got ${e.text.length}) — summarise; the log channel is a breadcrumb surface`,
+          );
+          return;
+        }
+
+        // 3. Rate limit — 10/hour/agent (named constant), a real sliding
+        // window, SEPARATE from the thread-create window. Reserved BEFORE
+        // the publish attempt: an attempt costs real delivery budget
+        // whether or not it succeeds (same reserve-before-I/O rule as
+        // `create_private_thread`).
+        if (this.isPostLogRateLimited()) {
+          await this.rejectEffect(
+            e.task_id,
+            "post_log",
+            "policy_denied",
+            `agent "${this.agentId}" exceeded ${POST_LOG_RATE_LIMIT_PER_HOUR} ` +
+              `post_log calls in the past hour`,
+          );
+          return;
+        }
+        this.recordPostLogAttempt();
+
+        // 4. Publish via the consumer hook, handing it the HOST-derived
+        // target. Fire-and-forget on success (no ack event — a lost log
+        // note is a breadcrumb; the agent-state dashboard is the durable
+        // record). A failed/throwing publish is transient ⇒ not_now.
+        let outcome: { ok: true } | { ok: false; detail: string };
+        try {
+          outcome = await onPostLog(e, logChannelId);
+        } catch (hookErr) {
+          outcome = {
+            ok: false,
+            detail: hookErr instanceof Error ? hookErr.message : String(hookErr),
+          };
+        }
+        // The task may have closed while the publish was in flight — never
+        // send a rejection to a closed/replaced task (§7.5).
+        if (record.settled) return;
+        if (!outcome.ok) {
+          await this.rejectEffect(e.task_id, "post_log", "not_now", outcome.detail);
+        }
+        return;
+      }
       case "ask_principal": {
         // PAUSE the per-task liveness timeout while a human gate is open. The
         // timeout exists to fail a HUNG BRAIN, not a thinking human — an open
@@ -1274,6 +1420,23 @@ export class DaemonBrainHost {
   /** Record one `create_private_thread` attempt against this agent's sliding window. */
   private recordThreadCreateAttempt(): void {
     this.threadCreateAttempts.push(this.now());
+  }
+
+  /**
+   * cortex#2256 — true when this agent has already made
+   * {@link POST_LOG_RATE_LIMIT_PER_HOUR} `post_log` ATTEMPTS within the
+   * trailing hour. Same sliding-window mechanics as
+   * {@link isThreadCreateRateLimited}, over its own separate window.
+   */
+  private isPostLogRateLimited(): boolean {
+    const cutoff = this.now() - POST_LOG_RATE_LIMIT_WINDOW_MS;
+    this.postLogAttempts = this.postLogAttempts.filter((t) => t > cutoff);
+    return this.postLogAttempts.length >= POST_LOG_RATE_LIMIT_PER_HOUR;
+  }
+
+  /** Record one `post_log` attempt against this agent's sliding window. */
+  private recordPostLogAttempt(): void {
+    this.postLogAttempts.push(this.now());
   }
 
   /** Write a line to the live connection, swallowing a closed-socket error. */

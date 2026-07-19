@@ -641,6 +641,75 @@ describe("create_private_thread schema", () => {
 });
 
 // ---------------------------------------------------------------------------
+// post_log (cortex#2256)
+// ---------------------------------------------------------------------------
+
+describe("post_log schema (cortex#2256)", () => {
+  test("a minimal post_log parses ok and round-trips", () => {
+    const effect = {
+      v: 1,
+      type: "post_log",
+      task_id: "t1",
+      text: "newcomer ready for review",
+    } as const;
+    const parsed = parseBrainEffect(encodeBrainEffect(effect));
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok") {
+      expect(parsed.effect).toEqual(effect);
+    }
+  });
+
+  test("task_id is required (non-empty)", () => {
+    const line = JSON.stringify({ v: 1, type: "post_log", task_id: "", text: "x" });
+    expect(parseBrainEffect(line).kind).toBe("invalid");
+  });
+
+  test("text is required", () => {
+    const line = JSON.stringify({ v: 1, type: "post_log", task_id: "t1" });
+    expect(parseBrainEffect(line).kind).toBe("invalid");
+  });
+
+  // Same load-bearing structural guarantee as create_private_thread
+  // (cortex#2206 pattern): the wire schema has NO channel field at all. A
+  // brain that includes one is not "refused" — the field is silently
+  // stripped by the tolerant-ingest codec before the effect ever reaches
+  // host policy, so a brain-named channel cannot influence routing.
+  test("a brain-supplied `channel` field is stripped — there is no such field on the wire", () => {
+    const line = JSON.stringify({
+      v: 1,
+      type: "post_log",
+      task_id: "t1",
+      text: "note",
+      channel: "attacker-chosen-channel-id",
+      thread: "attacker-chosen-thread-id",
+    });
+    const parsed = parseBrainEffect(line);
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok") {
+      expect(parsed.effect).not.toHaveProperty("channel");
+      expect(parsed.effect).not.toHaveProperty("thread");
+    }
+  });
+
+  // No attachment in v1: an attachment field is an unknown key on this type
+  // and is stripped (tolerant ingest) — never delivered.
+  test("an attachment field is stripped (no attachment on post_log in v1)", () => {
+    const line = JSON.stringify({
+      v: 1,
+      type: "post_log",
+      task_id: "t1",
+      text: "note",
+      attachment: { filename: "f.png", b64: "aaaa" },
+    });
+    const parsed = parseBrainEffect(line);
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok") {
+      expect(parsed.effect).not.toHaveProperty("attachment");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // JsonlDecoder — chunked / partial-line input
 // ---------------------------------------------------------------------------
 

@@ -15,10 +15,11 @@
  *     refused one of the brain's effects), a `thread_created` (the answer to
  *     a `create_private_thread` effect), and the daemon `hello` handshake.
  *   - **Brain → cortex (effects).** Things the brain asks the host to do:
- *     `post` to a surface, `ask_principal` (render a gate), `dispatch` fleet
- *     work, `create_private_thread` (open a private thread off the agent's
- *     own channel binding — cortex#2206), `result` (close the task), and
- *     `log`.
+ *     `post` to a surface, `post_log` (notify the agent's own bound log
+ *     channel — cortex#2256), `ask_principal` (render a gate), `dispatch`
+ *     fleet work, `create_private_thread` (open a private thread off the
+ *     agent's own channel binding — cortex#2206), `result` (close the task),
+ *     and `log`.
  *
  * The brain never sees a platform token, a NATS credential, or another
  * agent's identity (§5 property 1). It *asks* for effects; cortex *performs*
@@ -362,6 +363,7 @@ export type BrainEvent = z.infer<typeof BrainEventSchema>;
 // ---------------------------------------------------------------------------
 
 export const BRAIN_EFFECT_POST = "post" as const;
+export const BRAIN_EFFECT_POST_LOG = "post_log" as const;
 export const BRAIN_EFFECT_ASK_PRINCIPAL = "ask_principal" as const;
 export const BRAIN_EFFECT_DISPATCH = "dispatch" as const;
 export const BRAIN_EFFECT_CREATE_PRIVATE_THREAD = "create_private_thread" as const;
@@ -421,6 +423,30 @@ export const PostEffectSchema = z.object({
   attachment: PostAttachmentSchema.optional(),
 });
 export type PostEffect = z.infer<typeof PostEffectSchema>;
+
+/**
+ * `post_log` — cortex posts `text` to the AGENT'S OWN bound log channel
+ * (cortex#2256). Deliberately carries NO channel field — that absence is
+ * intentional, exactly as {@link CreatePrivateThreadEffectSchema}'s missing
+ * channel is (the cortex#2206 host-derived-target pattern): the brain must
+ * never be able to name an arbitrary channel. The host derives the target
+ * from the agent's own presence binding (`presence.discord.logChannelId`
+ * today) — see `daemon-brain-host.ts`'s `post_log` case for the gates (no
+ * binding → `cant_do`; length cap → `wont_do`; rate limit →
+ * `policy_denied`; adapter/publish failure → `not_now`).
+ *
+ * Success is FIRE-AND-FORGET, like `post` — there is no ack event. A lost
+ * log note is a breadcrumb; the agent-state dashboard stays the durable
+ * record. No attachment in v1. Failures reuse the existing
+ * {@link EffectRejectedEventSchema} verbatim (no new event type).
+ */
+export const PostLogEffectSchema = z.object({
+  v: z.literal(BRAIN_PROTOCOL_VERSION),
+  type: z.literal(BRAIN_EFFECT_POST_LOG),
+  task_id: z.string().min(1),
+  text: z.string(),
+});
+export type PostLogEffect = z.infer<typeof PostLogEffectSchema>;
 
 /**
  * `ask_principal` — render a gate. Cortex enforces the principal check; the
@@ -538,6 +564,7 @@ export type LogEffect = z.infer<typeof LogEffectSchema>;
  */
 export const BrainEffectSchema = z.discriminatedUnion("type", [
   PostEffectSchema,
+  PostLogEffectSchema,
   AskPrincipalEffectSchema,
   DispatchEffectSchema,
   CreatePrivateThreadEffectSchema,
@@ -569,6 +596,7 @@ export type ParseBrainEffectResult =
 /** The known brain → cortex effect `type` literals, for the tolerance gate. */
 const KNOWN_EFFECT_TYPES: ReadonlySet<string> = new Set([
   BRAIN_EFFECT_POST,
+  BRAIN_EFFECT_POST_LOG,
   BRAIN_EFFECT_ASK_PRINCIPAL,
   BRAIN_EFFECT_DISPATCH,
   BRAIN_EFFECT_CREATE_PRIVATE_THREAD,

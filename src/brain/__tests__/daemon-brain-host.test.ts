@@ -22,6 +22,8 @@ import { join } from "path";
 import {
   DaemonBrainHost,
   CREATE_PRIVATE_THREAD_RATE_LIMIT_PER_HOUR,
+  POST_LOG_RATE_LIMIT_PER_HOUR,
+  POST_LOG_MAX_TEXT_CHARS,
   type DaemonTransport,
   type DaemonBrainProcess,
   type CreatePrivateThreadFn,
@@ -91,6 +93,8 @@ function makeHooks(over: Partial<BrainTaskHooks> = {}): BrainTaskHooks & {
     // cortex#2248 — optional retarget hook; forwarded only when a test
     // supplies one (the default hooks omit it, mirroring per-task callers).
     ...(over.onThreadCreated !== undefined && { onThreadCreated: over.onThreadCreated }),
+    // cortex#2256 — optional log-post hook; same forwarding rule.
+    ...(over.onPostLog !== undefined && { onPostLog: over.onPostLog }),
   };
 }
 
@@ -1119,6 +1123,331 @@ describe("DaemonBrainHost — onThreadCreated retarget hook (cortex#2248)", () =
 
     brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "rt3", status: "complete" }));
     await runP;
+    await host.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// post_log (cortex#2256)
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#2256 — a recording `onPostLog` hook. Records every gate-passing call
+ * (with the HOST-derived log channel the hook received) and, by default,
+ * succeeds. Tests that need the failed-publish path override via `result`.
+ */
+function makePostLogHook(
+  result?: () => { ok: true } | { ok: false; detail: string },
+): {
+  calls: { text: string; logChannelId: string }[];
+  onPostLog: (
+    post: { text: string },
+    logChannelId: string,
+  ) => Promise<{ ok: true } | { ok: false; detail: string }>;
+} {
+  const calls: { text: string; logChannelId: string }[] = [];
+  return {
+    calls,
+    onPostLog: async (post, logChannelId) => {
+      calls.push({ text: post.text, logChannelId });
+      return result ? result() : { ok: true };
+    },
+  };
+}
+
+describe("DaemonBrainHost — post_log (cortex#2256)", () => {
+  test("a bound agent's post_log reaches the hook with the HOST-derived log channel; success is fire-and-forget (no event back to the brain)", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const postLog = makePostLogHook();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      logChannelId: "stewards-channel-fake",
+    });
+    await host.start();
+
+    const runP = host.runTask(
+      makeTask({ task_id: "pl1" }),
+      makeHooks({ onPostLog: postLog.onPostLog }),
+    );
+    await until(() => brain.lastTask()?.task_id === "pl1");
+
+    // The wire effect names NO channel — an extra `channel` field a hostile
+    // brain smuggles on is not a schema field (protocol.ts PostLogEffectSchema)
+    // and is stripped by the tolerant-ingest codec before the host's switch:
+    // the hook can only ever receive the agent's own binding.
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "post_log",
+        task_id: "pl1",
+        text: "newcomer ready for review",
+        channel: "attacker-chosen-channel",
+      }),
+    );
+    await until(() => postLog.calls.length === 1);
+    expect(postLog.calls).toEqual([
+      { text: "newcomer ready for review", logChannelId: "stewards-channel-fake" },
+    ]);
+
+    // Fire-and-forget: no ack event of any kind went back to the brain.
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "pl1", status: "complete" }));
+    const res = await runP;
+    expect(res.result.status).toBe("complete");
+    expect(brain.hasEvent("effect_rejected")).toBe(false);
+    const eventTypes = new Set(brain.received.map((e) => e.type));
+    expect(eventTypes.has("thread_created")).toBe(false); // nothing post_log-shaped came back
+    await host.stop();
+  });
+
+  test("no log channel bound → effect_rejected cant_do (structural, not policy); the hook is never called", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const postLog = makePostLogHook();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      // no logChannelId
+    });
+    await host.start();
+
+    const runP = host.runTask(
+      makeTask({ task_id: "pl2" }),
+      makeHooks({ onPostLog: postLog.onPostLog }),
+    );
+    await until(() => brain.lastTask()?.task_id === "pl2");
+
+    brain.emit(JSON.stringify({ v: 1, type: "post_log", task_id: "pl2", text: "hello?" }));
+    await until(() => brain.hasEvent("effect_rejected"));
+    const rej = brain.received.find((e) => e.type === "effect_rejected");
+    expect(rej).toMatchObject({ type: "effect_rejected", effect: "post_log" });
+    if (rej?.type === "effect_rejected") {
+      expect(rej.reason.kind).toBe("cant_do");
+    }
+    expect(postLog.calls.length).toBe(0);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "pl2", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test(`text over ${POST_LOG_MAX_TEXT_CHARS} chars → effect_rejected wont_do; never reaches the hook and never burns rate budget`, async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const postLog = makePostLogHook();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      logChannelId: "stewards-channel-fake",
+    });
+    await host.start();
+
+    const runP = host.runTask(
+      makeTask({ task_id: "pl3" }),
+      makeHooks({ onPostLog: postLog.onPostLog }),
+    );
+    await until(() => brain.lastTask()?.task_id === "pl3");
+
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "post_log",
+        task_id: "pl3",
+        text: "x".repeat(POST_LOG_MAX_TEXT_CHARS + 1),
+      }),
+    );
+    await until(() => brain.hasEvent("effect_rejected"));
+    const rej = brain.received.find((e) => e.type === "effect_rejected");
+    expect(rej).toMatchObject({ type: "effect_rejected", effect: "post_log" });
+    if (rej?.type === "effect_rejected") {
+      expect(rej.reason.kind).toBe("wont_do");
+      expect(rej.reason.detail).toMatch(/exceeds/i);
+    }
+    expect(postLog.calls.length).toBe(0);
+
+    // A text at EXACTLY the cap still passes (boundary) — proving the
+    // over-cap refusal above did not burn a rate slot is covered by the
+    // rate-limit test's exact-budget accounting.
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "post_log",
+        task_id: "pl3",
+        text: "y".repeat(POST_LOG_MAX_TEXT_CHARS),
+      }),
+    );
+    await until(() => postLog.calls.length === 1);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "pl3", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test(`rate limit trips at exactly ${POST_LOG_RATE_LIMIT_PER_HOUR}/hour per agent (policy_denied); over-cap refusals never counted; a DIFFERENT agent still succeeds`, async () => {
+    let nowMs = 5_000_000;
+    const clock = () => nowMs;
+
+    const brainA = new FakeBrain();
+    const { transport: transportA } = makeFakeTransport([brainA]);
+    const postLogA = makePostLogHook();
+    const hostA = new DaemonBrainHost({
+      agentId: "agent-a",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: transportA,
+      makeScratchDir: scratchFactory,
+      logChannelId: "log-channel-a",
+      now: clock,
+    });
+    await hostA.start();
+
+    const runA = hostA.runTask(
+      makeTask({ task_id: "plr" }),
+      makeHooks({ onPostLog: postLogA.onPostLog }),
+    );
+    await until(() => brainA.lastTask()?.task_id === "plr");
+
+    // An over-cap request FIRST — refused wont_do, must NOT burn a slot
+    // (the full budget below still fits afterward).
+    brainA.emit(
+      JSON.stringify({
+        v: 1,
+        type: "post_log",
+        task_id: "plr",
+        text: "z".repeat(POST_LOG_MAX_TEXT_CHARS + 1),
+      }),
+    );
+    await until(() => brainA.hasEvent("effect_rejected"));
+
+    for (let i = 0; i < POST_LOG_RATE_LIMIT_PER_HOUR; i++) {
+      nowMs += 1_000; // seconds apart — same window
+      brainA.emit(
+        JSON.stringify({ v: 1, type: "post_log", task_id: "plr", text: `note ${i}` }),
+      );
+      await until(() => postLogA.calls.length === i + 1);
+    }
+    expect(postLogA.calls.length).toBe(POST_LOG_RATE_LIMIT_PER_HOUR);
+
+    // The next within the SAME window is refused policy_denied.
+    nowMs += 1_000;
+    brainA.emit(
+      JSON.stringify({ v: 1, type: "post_log", task_id: "plr", text: "one too many" }),
+    );
+    await until(
+      () =>
+        brainA.received.filter(
+          (e) => e.type === "effect_rejected" && e.reason.kind === "policy_denied",
+        ).length === 1,
+    );
+    const rejs = brainA.received.filter((e) => e.type === "effect_rejected");
+    const rateRej = rejs.find(
+      (e) => e.type === "effect_rejected" && e.reason.kind === "policy_denied",
+    );
+    if (rateRej?.type === "effect_rejected") {
+      expect(rateRej.reason.detail).toMatch(/exceeded|rate|limit/i);
+    }
+    // Never reached the hook.
+    expect(postLogA.calls.length).toBe(POST_LOG_RATE_LIMIT_PER_HOUR);
+
+    // Window slides: an hour later the budget is back.
+    nowMs += 60 * 60 * 1000 + 1;
+    brainA.emit(
+      JSON.stringify({ v: 1, type: "post_log", task_id: "plr", text: "next hour" }),
+    );
+    await until(() => postLogA.calls.length === POST_LOG_RATE_LIMIT_PER_HOUR + 1);
+
+    brainA.emit(JSON.stringify({ v: 1, type: "result", task_id: "plr", status: "complete" }));
+    await runA;
+    await hostA.stop();
+
+    // A DIFFERENT agent (its own host instance, its own window) in the same
+    // hour still succeeds — per-agent budget, not a global ceiling.
+    const brainB = new FakeBrain();
+    const { transport: transportB } = makeFakeTransport([brainB]);
+    const postLogB = makePostLogHook();
+    const hostB = new DaemonBrainHost({
+      agentId: "agent-b",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: transportB,
+      makeScratchDir: scratchFactory,
+      logChannelId: "log-channel-b",
+      now: clock,
+    });
+    await hostB.start();
+    const runB = hostB.runTask(
+      makeTask({ task_id: "plrb" }),
+      makeHooks({ onPostLog: postLogB.onPostLog }),
+    );
+    await until(() => brainB.lastTask()?.task_id === "plrb");
+    brainB.emit(
+      JSON.stringify({ v: 1, type: "post_log", task_id: "plrb", text: "agent-b note" }),
+    );
+    await until(() => postLogB.calls.length === 1);
+
+    brainB.emit(JSON.stringify({ v: 1, type: "result", task_id: "plrb", status: "complete" }));
+    await runB;
+    await hostB.stop();
+  });
+
+  test("a failed publish (hook resolves ok:false) → effect_rejected not_now; a THROWING hook is contained to the same refusal", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const postLog = makePostLogHook(() => ({ ok: false, detail: "bus publish failed" }));
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      logChannelId: "stewards-channel-fake",
+    });
+    await host.start();
+
+    const runP = host.runTask(
+      makeTask({ task_id: "pl5" }),
+      makeHooks({
+        onPostLog: async (post, logChannelId) => {
+          if (post.text === "throw please") throw new Error("adapter exploded");
+          return postLog.onPostLog(post, logChannelId);
+        },
+      }),
+    );
+    await until(() => brain.lastTask()?.task_id === "pl5");
+
+    // ok:false → not_now.
+    brain.emit(JSON.stringify({ v: 1, type: "post_log", task_id: "pl5", text: "will fail" }));
+    await until(() => brain.received.filter((e) => e.type === "effect_rejected").length === 1);
+    const rej1 = brain.received.find((e) => e.type === "effect_rejected");
+    expect(rej1).toMatchObject({ type: "effect_rejected", effect: "post_log" });
+    if (rej1?.type === "effect_rejected") {
+      expect(rej1.reason.kind).toBe("not_now");
+      expect(rej1.reason.detail).toMatch(/publish failed/);
+    }
+
+    // A throwing hook is contained — same not_now refusal, no crash.
+    brain.emit(JSON.stringify({ v: 1, type: "post_log", task_id: "pl5", text: "throw please" }));
+    await until(() => brain.received.filter((e) => e.type === "effect_rejected").length === 2);
+    const rej2 = brain.received.filter((e) => e.type === "effect_rejected")[1];
+    if (rej2?.type === "effect_rejected") {
+      expect(rej2.reason.kind).toBe("not_now");
+      expect(rej2.reason.detail).toMatch(/adapter exploded/);
+    }
+
+    // The task itself is untouched by the failed log notes.
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "pl5", status: "complete" }));
+    const res = await runP;
+    expect(res.result.status).toBe("complete");
     await host.stop();
   });
 });
