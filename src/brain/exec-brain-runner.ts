@@ -163,6 +163,21 @@ export interface BrainTaskHooks {
 
   /** A `log` effect — diagnostic; not surfaced to the principal. */
   onLog(log: LogEffect): void | Promise<void>;
+
+  /**
+   * cortex#2248 — the host successfully created a private thread for THIS
+   * task (`create_private_thread`, cortex#2206). OPTIONAL: the BrainConsumer
+   * uses it to RETARGET the task's subsequent `post` routing into the
+   * created thread — the conversation moves into the thread the host itself
+   * created and verified; without it the posts kept landing in the parent
+   * channel and the thread stayed empty. §5 property 1 is preserved: the
+   * brain STILL never names a target — `threadId` is host-derived (the
+   * adapter's create result), never brain-supplied wire input. Only the
+   * `lifecycle: daemon` host wires `create_private_thread`, so the per-task
+   * runner never fires this hook; it is optional so per-task callers (and
+   * tests that don't care about routing) omit it.
+   */
+  onThreadCreated?(threadId: string): void | Promise<void>;
 }
 
 export type BrainDispatchOutcome =

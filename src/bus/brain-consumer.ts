@@ -883,6 +883,22 @@ export class BrainConsumer {
           `cortex/brain-consumer: [${log.level}] agent=${this.agent.id}: ${log.text}\n`,
         );
       },
+
+      // `thread_created` follow-through (cortex#2248) — the HOST created (and
+      // verified) a private thread for this task (`create_private_thread`,
+      // cortex#2206); retarget the task's subsequent `post` routing into it.
+      // `brainPostSource` is THIS task's own per-task copy (built above), so
+      // the mutation is task-scoped: sibling tasks are untouched, and the
+      // `ask_principal` gate keeps rendering to the ORIGINAL `source` on
+      // purpose — the gate awaits the PRINCIPAL's identity-checked reply,
+      // and a private thread (source user + agent) need not contain the
+      // principal at all; moving the gate prompt there could strand it.
+      // §5 property 1 preserved: the brain still never names a target — the
+      // only routing values ever used are host-derived (the original task
+      // source, or a thread the host itself created for this exact task).
+      onThreadCreated: (threadId: string): void => {
+        brainPostSource.thread = threadId;
+      },
     };
   }
 

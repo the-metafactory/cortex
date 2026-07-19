@@ -88,6 +88,9 @@ function makeHooks(over: Partial<BrainTaskHooks> = {}): BrainTaskHooks & {
       }),
     onDispatch: over.onDispatch ?? ((d) => void dispatches.push(d)),
     onLog: over.onLog ?? (() => {}),
+    // cortex#2248 — optional retarget hook; forwarded only when a test
+    // supplies one (the default hooks omit it, mirroring per-task callers).
+    ...(over.onThreadCreated !== undefined && { onThreadCreated: over.onThreadCreated }),
   };
 }
 
@@ -964,6 +967,158 @@ describe("DaemonBrainHost — create_private_thread (cortex#2206)", () => {
 
     const result = await runP;
     expect(result.result.status).toBe("complete"); // NOT "failed"/timeout
+    await host.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// create_private_thread → onThreadCreated retarget hook (cortex#2248)
+// ---------------------------------------------------------------------------
+
+describe("DaemonBrainHost — onThreadCreated retarget hook (cortex#2248)", () => {
+  test("a successful create_private_thread fires hooks.onThreadCreated with the created thread id BEFORE the brain hears thread_created", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const threadFn = makeThreadFn();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      agentChannelId: "agent-own-channel",
+      createPrivateThread: threadFn,
+      anonReachable: true,
+    });
+    await host.start();
+
+    // Record the hook firing AND whether `thread_created` had already been
+    // sent to the brain at that moment — the ordering is load-bearing: the
+    // retarget must land before the brain can react to the event with a
+    // `post`, or that post races into the parent channel.
+    const hookCalls: { threadId: string; threadCreatedAlreadySent: boolean }[] = [];
+    const hooks = makeHooks({
+      onThreadCreated: (threadId: string): void => {
+        hookCalls.push({
+          threadId,
+          threadCreatedAlreadySent: brain.hasEvent("thread_created"),
+        });
+      },
+    });
+
+    const runP = host.runTask(
+      makeTask({
+        task_id: "rt1",
+        source: { surface: "discord", channel: "arrivals", thread: "", user: "newcomer-a" },
+      }),
+      hooks,
+    );
+    await until(() => brain.lastTask()?.task_id === "rt1");
+
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "create_private_thread",
+        task_id: "rt1",
+        name: "welcome newcomer-a",
+        members: "source",
+      }),
+    );
+    await until(() => brain.hasEvent("thread_created"));
+
+    expect(hookCalls).toEqual([
+      { threadId: "thread-1", threadCreatedAlreadySent: false },
+    ]);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "rt1", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test("a FAILED create_private_thread (adapter failure) never fires onThreadCreated", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const threadFn = makeThreadFn(() => ({ ok: false, detail: "platform exploded" }));
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      agentChannelId: "agent-own-channel",
+      createPrivateThread: threadFn,
+      anonReachable: true,
+    });
+    await host.start();
+
+    const hookCalls: string[] = [];
+    const hooks = makeHooks({
+      onThreadCreated: (threadId: string): void => void hookCalls.push(threadId),
+    });
+
+    const runP = host.runTask(makeTask({ task_id: "rt2" }), hooks);
+    await until(() => brain.lastTask()?.task_id === "rt2");
+
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "create_private_thread",
+        task_id: "rt2",
+        name: "will fail",
+        members: "source",
+      }),
+    );
+    await until(() => brain.hasEvent("effect_rejected"));
+
+    expect(hookCalls).toEqual([]);
+    expect(brain.hasEvent("thread_created")).toBe(false);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "rt2", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test("a THROWING onThreadCreated hook is contained: logged, and thread_created still reaches the brain (the thread exists)", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const threadFn = makeThreadFn();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      agentChannelId: "agent-own-channel",
+      createPrivateThread: threadFn,
+      anonReachable: true,
+    });
+    await host.start();
+
+    const hooks = makeHooks({
+      onThreadCreated: (): void => {
+        throw new Error("consumer routing update blew up");
+      },
+    });
+
+    const runP = host.runTask(makeTask({ task_id: "rt3" }), hooks);
+    await until(() => brain.lastTask()?.task_id === "rt3");
+
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "create_private_thread",
+        task_id: "rt3",
+        name: "hook throws",
+        members: "source",
+      }),
+    );
+    await until(() => brain.hasEvent("thread_created"));
+
+    const created = brain.received.find((e) => e.type === "thread_created");
+    expect(created).toMatchObject({ type: "thread_created", task_id: "rt3", thread_id: "thread-1" });
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "rt3", status: "complete" }));
+    await runP;
     await host.stop();
   });
 });

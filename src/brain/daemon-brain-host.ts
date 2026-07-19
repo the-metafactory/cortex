@@ -1112,6 +1112,25 @@ export class DaemonBrainHost {
             return;
           }
 
+          // cortex#2248 — HOST-SIDE RETARGET: inform the consumer that this
+          // task's conversation moved into the created thread, BEFORE the
+          // brain hears `thread_created`. Effects are handled off the socket
+          // sequentially per line, but ordering the retarget first
+          // guarantees any `post` the brain emits on seeing the event
+          // already routes to the thread — never racing a post into the
+          // parent channel. The hook is optional (per-task runners and
+          // routing-agnostic tests omit it) and guarded: a hook failure is
+          // logged, and `thread_created` still ships — the thread EXISTS,
+          // so the brain must learn its id regardless.
+          try {
+            await record.hooks.onThreadCreated?.(outcome.threadId);
+          } catch (hookErr) {
+            process.stderr.write(
+              `daemon-brain-host: onThreadCreated hook failed for agent="${this.agentId}" ` +
+                `task=${e.task_id}: ${hookErr instanceof Error ? hookErr.message : String(hookErr)}\n`,
+            );
+          }
+
           await this.sendToConn(
             encodeBrainEvent({
               v: 1,
