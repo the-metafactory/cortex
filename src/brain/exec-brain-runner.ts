@@ -34,6 +34,9 @@
  *        - `post_log`      → ALWAYS refused `effect_rejected` (cortex#2256 is
  *          likewise daemon-lifecycle only — the log-channel binding + rate
  *          limiter live on the supervising host)
+ *        - `compose`       → ALWAYS refused `effect_rejected` (cortex#2257 is
+ *          likewise daemon-lifecycle only — the compose opt-in, rate limiter,
+ *          and substrate seam live on the supervising host)
  *        - `log`           → `hooks.onLog`
  *        - `result`        → terminal; resolve.
  *   5. task_id correlation: any effect whose `task_id` ≠ the spawned task's id
@@ -639,6 +642,20 @@ export function makeExecBrainRunner(
             "post_log",
             "post_log is not supported by the per-task (lifecycle: per-task) " +
               "exec-brain runner — only daemon-lifecycle brains may notify their log channel (cortex#2256)",
+          );
+          return;
+        }
+        case "compose": {
+          // cortex#2257 — daemon-lifecycle only, same reasoning as
+          // `create_private_thread`/`post_log`: the compose opt-in, the
+          // per-agent rate limiter, and the substrate seam live on the
+          // supervising DaemonBrainHost, which the per-task runner has no
+          // counterpart for. Refuse rather than silently no-op.
+          await rejectEffect(
+            "compose",
+            "compose is not supported by the per-task (lifecycle: per-task) " +
+              "exec-brain runner — only daemon-lifecycle brains may render " +
+              "substrate voice turns (cortex#2257)",
           );
           return;
         }

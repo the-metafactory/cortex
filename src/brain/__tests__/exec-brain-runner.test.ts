@@ -308,6 +308,31 @@ for await (const ev of it) {
   });
 });
 
+describe("exec-brain-runner — compose (cortex#2257, B-1 unsupported)", () => {
+  test("compose is always refused effect_rejected — the per-task lifecycle has no compose substrate seam", async () => {
+    const fx = writeFixture(
+      "compose-unsupported.ts",
+      `${LINE_ITER}
+const it = lines();
+const task = (await it.next()).value;
+emit({ v: 1, type: "compose", task_id: task.task_id, compose_id: "c1", intent: "greet" });
+for await (const ev of it) {
+  if (ev.type === "effect_rejected") {
+    done({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary: "rejected=" + ev.reason.kind + " effect=" + ev.effect });
+  }
+}
+`,
+    );
+    const hooks = makeHooks();
+    const out = await runner(fx)(makeTask(), hooks);
+
+    expect(out.result.status).toBe("complete");
+    if (out.result.status === "complete") {
+      expect(out.result.summary).toBe("rejected=wont_do effect=compose");
+    }
+  });
+});
+
 describe("exec-brain-runner — brain crash", () => {
   test("brain exits without result → synthesized failed (cant_do) with stderr tail", async () => {
     const fx = writeFixture(

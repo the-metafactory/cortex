@@ -137,6 +137,7 @@ socket (stdio kept for logs).
 { "v": 1, "type": "shutdown", "deadline_ms": 5000 }                        // drain signal (hot-swap)
 { "v": 1, "type": "effect_rejected", "task_id": "…", "effect": "dispatch",
   "reason": { "kind": "wont_do", "detail": "capability outside manifest" } } // cortex refused a brain effect — the brain decides how to degrade
+{ "v": 1, "type": "composed", "task_id": "…", "compose_id": "…", "text": "…" } // answer to compose (cortex#2257): the substrate-rendered voice text, compose_id echoed verbatim; overlong output is host-truncated, never failed
 ```
 
 **Brain → cortex (effects):**
@@ -145,6 +146,8 @@ socket (stdio kept for logs).
 { "v": 1, "type": "post",         "task_id": "…", "text": "…",
   "attachment": { "filename": "flow.png", "b64": "…" } }                   // cortex posts to the task's surface/thread
 { "v": 1, "type": "post_log",     "task_id": "…", "text": "…" }            // cortex posts to the AGENT'S OWN bound log channel (cortex#2256): no channel field — the host derives the target from presence.discord.logChannelId; fire-and-forget (no ack), failures via effect_rejected; daemon lifecycle only
+{ "v": 1, "type": "compose",      "task_id": "…", "compose_id": "…",
+  "intent": "…", "context": "…" }                                          // host-mediated substrate voice (cortex#2257): ONE tool-less model turn — the agent's OWN persona as system prompt, intent+context as the user turn — answered as `composed`. NO model/persona/routing fields (host-derived; smuggled fields are stripped). Opt-in (`runtime.brain.compose: true`; absent ⇒ cant_do), rate-limited (policy_denied), input length-capped (wont_do), timeout/transient ⇒ not_now; daemon lifecycle only
 { "v": 1, "type": "ask_principal", "task_id": "…", "gate": "principal-ack",
   "prompt": "Run this flow?" }                                             // cortex renders the gate, enforces the PRINCIPAL
 { "v": 1, "type": "dispatch",     "task_id": "…", "capability": "soc.triage.email",

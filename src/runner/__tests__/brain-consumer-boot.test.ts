@@ -37,6 +37,19 @@ import type {
 import type { MyelinSubscriber } from "../../bus/myelin/subscriber";
 import { BrainConsumer } from "../../bus/brain-consumer";
 import { DaemonBrainHost } from "../../brain/daemon-brain-host";
+import {
+  FakeDaemonBrain,
+  singleFakeDaemonTransport,
+} from "../../brain/__tests__/fake-daemon-brain";
+
+/** Wait until `cond()` is true (poll), or throw after `timeoutMs`. */
+async function until(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("until() timed out");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
 
 interface RecordingRuntime extends MyelinRuntime {
   subscribePullCalls: MyelinSubscribePullOpts[];
@@ -198,6 +211,220 @@ describe("wireBrainConsumers — daemon lifecycle", () => {
     expect(brainConsumers).toHaveLength(1);
     expect(daemonBrainHosts).toHaveLength(1);
     expect(daemonBrainHosts[0]!.agentId).toBe("yarrow");
+  });
+});
+
+describe("wireBrainConsumers — compose wiring (cortex#2257)", () => {
+  // Drives the REAL boot wiring end-to-end against an in-memory brain + a
+  // fake compose substrate: `runtime.brain.compose: true` ⇒ the daemon host
+  // gets a ComposeFn built over the (injected) CCSessionFactory, so a
+  // `compose` effect comes back as `composed` carrying the substrate's text.
+  test("compose: true wires the substrate seam — a compose effect answers composed with the substrate text", async () => {
+    const brain = new FakeDaemonBrain();
+    const daemonBrainHosts: DaemonBrainHost[] = [];
+    const seenPrompts: string[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({
+        daemonBrainHosts,
+        daemonTransport: singleFakeDaemonTransport(brain),
+        composeCcSessionFactory: (sessionOpts) => {
+          seenPrompts.push(sessionOpts.prompt);
+          return {
+            start() {
+              return this;
+            },
+            wait: async () => ({
+              success: true,
+              response: "substrate-rendered welcome",
+              exitCode: 0,
+              durationMs: 5,
+            }),
+          };
+        },
+      }),
+    );
+
+    await startForAgent(
+      agent("escort", ["chat"], { lifecycle: "daemon", compose: true }),
+    );
+    expect(daemonBrainHosts).toHaveLength(1);
+    const host = daemonBrainHosts[0]!;
+    // The host's start() was fired non-blockingly by the wiring; the fake
+    // transport connects immediately — wait for the hello handshake.
+    await until(() => brain.hasEvent("hello"));
+
+    const runP = host.runTask(
+      {
+        v: 1,
+        type: "task",
+        task_id: "boot-c1",
+        capability: "chat",
+        payload: {},
+        source: { surface: "discord", channel: "c", thread: "t", user: "u" },
+      },
+      {
+        onPost: () => {},
+        onAskPrincipal: async () => ({ verdict: "pass", principal: "p" }),
+        onDispatch: () => undefined,
+        onLog: () => {},
+      },
+    );
+    await until(() => brain.hasTask());
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "boot-c1",
+        compose_id: "bc1",
+        intent: "greet",
+      }),
+    );
+    await until(() => brain.hasEvent("composed"));
+    const composed = brain.received.find((e) => e.type === "composed");
+    expect(composed).toMatchObject({
+      type: "composed",
+      compose_id: "bc1",
+      text: "substrate-rendered welcome",
+    });
+    expect(seenPrompts).toEqual(["greet"]);
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "result", task_id: "boot-c1", status: "complete" }),
+    );
+    await runP;
+    await host.stop();
+  });
+
+  test("compose absent (the default) ⇒ the seam is NOT wired — a compose effect is refused cant_do and the substrate factory is never called", async () => {
+    const brain = new FakeDaemonBrain();
+    const daemonBrainHosts: DaemonBrainHost[] = [];
+    let factoryCalls = 0;
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({
+        daemonBrainHosts,
+        daemonTransport: singleFakeDaemonTransport(brain),
+        composeCcSessionFactory: (sessionOpts) => {
+          factoryCalls += 1;
+          void sessionOpts;
+          return {
+            start() {
+              return this;
+            },
+            wait: async () => ({ success: true, response: "x", exitCode: 0, durationMs: 1 }),
+          };
+        },
+      }),
+    );
+
+    await startForAgent(agent("escort", ["chat"], { lifecycle: "daemon" }));
+    const host = daemonBrainHosts[0]!;
+    await until(() => brain.hasEvent("hello"));
+
+    const runP = host.runTask(
+      {
+        v: 1,
+        type: "task",
+        task_id: "boot-c2",
+        capability: "chat",
+        payload: {},
+        source: { surface: "discord", channel: "c", thread: "t", user: "u" },
+      },
+      {
+        onPost: () => {},
+        onAskPrincipal: async () => ({ verdict: "pass", principal: "p" }),
+        onDispatch: () => undefined,
+        onLog: () => {},
+      },
+    );
+    await until(() => brain.hasTask());
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "boot-c2",
+        compose_id: "bc2",
+        intent: "greet",
+      }),
+    );
+    await until(() => brain.hasEvent("effect_rejected"));
+    const rej = brain.received.find((e) => e.type === "effect_rejected");
+    expect(rej).toMatchObject({ type: "effect_rejected", effect: "compose" });
+    if (rej?.type === "effect_rejected") {
+      expect(rej.reason.kind).toBe("cant_do");
+    }
+    expect(factoryCalls).toBe(0);
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "result", task_id: "boot-c2", status: "complete" }),
+    );
+    await runP;
+    await host.stop();
+  });
+
+  test("compose: true on a local-only agent ⇒ the seam is NOT wired (sovereignty ceiling, downgrade-only)", async () => {
+    const brain = new FakeDaemonBrain();
+    const daemonBrainHosts: DaemonBrainHost[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({ daemonBrainHosts, daemonTransport: singleFakeDaemonTransport(brain) }),
+    );
+
+    await startForAgent({
+      id: "sovereign",
+      persona: personaPath,
+      runtime: {
+        capabilities: ["chat"],
+        modelClass: "local-only",
+        brain: {
+          kind: "exec",
+          run: "bun {pack}/brain/main.ts",
+          lifecycle: "daemon",
+          secrets: [],
+          dispatch_capabilities: [],
+          maxRestarts: 3,
+          compose: true,
+        },
+      },
+    });
+    const host = daemonBrainHosts[0]!;
+    await until(() => brain.hasEvent("hello"));
+
+    const runP = host.runTask(
+      {
+        v: 1,
+        type: "task",
+        task_id: "boot-c3",
+        capability: "chat",
+        payload: {},
+        source: { surface: "discord", channel: "c", thread: "t", user: "u" },
+      },
+      {
+        onPost: () => {},
+        onAskPrincipal: async () => ({ verdict: "pass", principal: "p" }),
+        onDispatch: () => undefined,
+        onLog: () => {},
+      },
+    );
+    await until(() => brain.hasTask());
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "boot-c3",
+        compose_id: "bc3",
+        intent: "greet",
+      }),
+    );
+    await until(() => brain.hasEvent("effect_rejected"));
+    const rej = brain.received.find((e) => e.type === "effect_rejected");
+    if (rej?.type === "effect_rejected") {
+      expect(rej.reason.kind).toBe("cant_do");
+    }
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "result", task_id: "boot-c3", status: "complete" }),
+    );
+    await runP;
+    await host.stop();
   });
 });
 

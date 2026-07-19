@@ -429,7 +429,7 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
     }
   });
 
-  test("brain defaults: kind=builtin, protocol=cortex-brain/v1, lifecycle=per-task, secrets=[], dispatch_capabilities=[], maxRestarts=3", () => {
+  test("brain defaults: kind=builtin, protocol=cortex-brain/v1, lifecycle=per-task, secrets=[], dispatch_capabilities=[], maxRestarts=3, compose=false", () => {
     const parsed = AgentRuntimeSchema.parse(minRuntime({}));
     expect(parsed.brain).toEqual({
       kind: "builtin",
@@ -438,7 +438,21 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
       secrets: [],
       dispatch_capabilities: [],
       maxRestarts: 3,
+      // cortex#2257 — compose is OPT-IN; the default is off.
+      compose: false,
     });
+  });
+
+  test("cortex#2257 — brain.compose: true is accepted and surfaces on the parsed block", () => {
+    const parsed = AgentRuntimeSchema.parse(
+      minRuntime({
+        kind: "exec",
+        run: "bun {pack}/brain/main.ts",
+        lifecycle: "daemon",
+        compose: true,
+      }),
+    );
+    expect(parsed.brain?.compose).toBe(true);
   });
 
   test("kind=exec requires run", () => {

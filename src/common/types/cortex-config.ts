@@ -598,6 +598,18 @@ export const BrainConfigSchema = z
       .int("agent.runtime.brain.maxRestarts must be an integer")
       .nonnegative("agent.runtime.brain.maxRestarts must be >= 0")
       .default(3),
+    /**
+     * cortex#2257 — OPT-IN for the `compose` effect: host-mediated substrate
+     * voice (one tool-less model turn with the agent's own persona as system
+     * prompt, answered as a `composed` event). DECLARED, not ambient — absent
+     * (the default) ⇒ every `compose` the brain emits is refused
+     * `effect_rejected` (`cant_do`). `lifecycle: daemon` only (the per-task
+     * runner refuses it regardless). The model follows the agent's
+     * `runtime.modelClass` ceiling downgrade-only and defaults to the cheap
+     * end (`src/runner/brain-compose.ts`); a `local-only` agent never gets
+     * the seam wired even with this flag set. Defaults to `false`.
+     */
+    compose: z.boolean().default(false),
   })
   .superRefine((brain, ctx) => {
     // `daemon` lifecycle is LIVE as of B-2 (socket transport + supervision +

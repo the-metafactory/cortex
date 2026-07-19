@@ -76,9 +76,15 @@ import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/pro
 import { makeExecBrainRunner } from "../brain/exec-brain-runner";
 import {
   DaemonBrainHost,
+  type ComposeFn,
   type CreatePrivateThreadFn,
   type DaemonTransport,
 } from "../brain/daemon-brain-host";
+import {
+  composeSubstrateAllowed,
+  makeSubstrateComposeFn,
+} from "./brain-compose";
+import type { CCSessionFactory } from "../substrates/claude-code/harness";
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { AgentPresenceProducer } from "./agent-presence-producer";
@@ -161,6 +167,17 @@ export interface BrainBootAgent {
       dispatch_capabilities: readonly string[];
       /** Daemon supervision restart cap (`lifecycle: daemon` only). */
       maxRestarts: number;
+      /**
+       * cortex#2257 — OPT-IN for the `compose` effect (host-mediated
+       * substrate voice). `true` ⇒ this wiring builds the substrate
+       * {@link ComposeFn} for the agent's `DaemonBrainHost` (subject to the
+       * `runtime.modelClass` ceiling — see `startForAgent`). Absent/`false`
+       * ⇒ the seam stays unwired and the host refuses every `compose`
+       * `effect_rejected`/`cant_do`. The full Zod `Agent` carries this
+       * (added in cortex#2257); this structural projection re-declares it
+       * so the wiring can gate on it without a cast.
+       */
+      compose?: boolean;
     };
   };
 }
@@ -251,6 +268,16 @@ export interface WireBrainConsumersOpts {
    * @internal — not part of the public API; semver does not apply.
    */
   daemonTransport?: DaemonTransport;
+  /**
+   * cortex#2257 — test-only seam for the compose substrate: overrides the
+   * `CCSessionFactory` `makeSubstrateComposeFn` builds the {@link ComposeFn}
+   * over, so a test can drive a `compose`-enabled agent through this REAL
+   * boot wiring against a deterministic fake substrate (no `claude` spawn).
+   * Production omits this (a real `CCSession` is constructed per turn).
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  composeCcSessionFactory?: CCSessionFactory;
 }
 
 /** The callable `cortex.ts` invokes per agent, at both the boot loop and the `agents.d/` hot-reload sites. */
@@ -459,6 +486,40 @@ export function wireBrainConsumers(
       // and the host's rate/length gates are what carry anon safety (the
       // effect can only ever reach this one host-derived channel).
       const discordLogChannelId = agent.presence?.discord?.logChannelId;
+      // cortex#2257 — the `compose` substrate seam. Wired ONLY when the
+      // agent has EXPLICITLY opted in (`runtime.brain.compose: true` — the
+      // capability is declared, not ambient) AND its `runtime.modelClass`
+      // ceiling permits the claude-code substrate (downgrade-only: the
+      // substrate is frontier-class, so a `local-only` agent never gets the
+      // seam — `composeSubstrateAllowed`). Either condition failing ⇒
+      // `composeFn` stays UNDEFINED on the host and every `compose` effect
+      // is refused `effect_rejected`/`cant_do` (the structural
+      // "substrate unavailable / not opted in" path). Deliberately NOT
+      // gated on `openOnboarding` (the post_log asymmetry): a voice turn is
+      // wanted for trusted and anon-reachable agents alike; the host's
+      // rate/length gates and the tool-less turn carry the anon safety.
+      const wireCompose =
+        brain.compose === true &&
+        brain.lifecycle === "daemon" &&
+        composeSubstrateAllowed(agent.runtime?.modelClass);
+      const composeFn: ComposeFn | undefined = wireCompose
+        ? makeSubstrateComposeFn({
+            agentId: agent.id,
+            ...(opts.composeCcSessionFactory !== undefined && {
+              ccSessionFactory: opts.composeCcSessionFactory,
+            }),
+          })
+        : undefined;
+      if (brain.compose === true && !wireCompose) {
+        const why =
+          brain.lifecycle !== "daemon"
+            ? "compose is daemon-lifecycle only (lifecycle is per-task)"
+            : "its modelClass (local-only) excludes the claude-code substrate";
+        process.stderr.write(
+          `cortex: brain agent=${agent.id} declares runtime.brain.compose but ${why} — ` +
+            `compose stays unwired (effects will be refused cant_do)\n`,
+        );
+      }
 
       let daemonHost: DaemonBrainHost | undefined;
       let consumer: BrainConsumer;
@@ -491,6 +552,8 @@ export function wireBrainConsumers(
           ...(discordLogChannelId !== undefined && {
             logChannelId: discordLogChannelId,
           }),
+          // cortex#2257 — see the `wireCompose` computation above.
+          ...(composeFn !== undefined && { composeFn }),
           // On degradation (restart budget exhausted) surface the agent via the
           // presence producer's capability-change signal (drop to empty caps),
           // the same path the reconcile uses (§7.4). Read the holder lazily —

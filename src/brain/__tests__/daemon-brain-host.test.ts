@@ -24,9 +24,15 @@ import {
   CREATE_PRIVATE_THREAD_RATE_LIMIT_PER_HOUR,
   POST_LOG_RATE_LIMIT_PER_HOUR,
   POST_LOG_MAX_TEXT_CHARS,
+  COMPOSE_RATE_LIMIT_PER_HOUR,
+  COMPOSE_MAX_INTENT_CHARS,
+  COMPOSE_MAX_CONTEXT_CHARS,
+  COMPOSE_MAX_OUTPUT_CHARS,
   type DaemonTransport,
   type DaemonBrainProcess,
   type CreatePrivateThreadFn,
+  type ComposeFn,
+  type ComposeOutcome,
 } from "../daemon-brain-host";
 import { MAX_TASK_ATTACHMENT_BYTES } from "../attachment-budget";
 import { type TaskEvent, type GateVerdictValue } from "../protocol";
@@ -1448,6 +1454,458 @@ describe("DaemonBrainHost — post_log (cortex#2256)", () => {
     brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "pl5", status: "complete" }));
     const res = await runP;
     expect(res.result.status).toBe("complete");
+    await host.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compose (cortex#2257)
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#2257 — a fake compose substrate seam. Records every call and, by
+ * default, succeeds with a deterministic rendered line. Tests that need the
+ * substrate-failure path override via `result`.
+ */
+function makeComposeFn(
+  result?: (opts: { persona: string; intent: string; context?: string }) => ComposeOutcome,
+): ComposeFn & {
+  calls: { persona: string; intent: string; context?: string }[];
+} {
+  const calls: { persona: string; intent: string; context?: string }[] = [];
+  const fn = async (opts: { persona: string; intent: string; context?: string }) => {
+    calls.push(opts);
+    if (result) return result(opts);
+    return { ok: true as const, text: `voiced: ${opts.intent}` };
+  };
+  return Object.assign(fn, { calls });
+}
+
+/** The `composed` events the host wrote back to the fake brain. */
+function composedEvents(brain: InstanceType<typeof FakeBrain>) {
+  return brain.received.filter(
+    (e): e is Extract<(typeof brain.received)[number], { type: "composed" }> =>
+      e.type === "composed",
+  );
+}
+
+describe("DaemonBrainHost — compose (cortex#2257)", () => {
+  test("a wired agent's compose runs ONE substrate turn with the agent's OWN persona and answers composed with the echoed compose_id", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const composeFn = makeComposeFn();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      persona: "You are the doorkeeper.",
+      transport,
+      makeScratchDir: scratchFactory,
+      composeFn,
+    });
+    await host.start();
+
+    const runP = host.runTask(makeTask({ task_id: "cp1" }), makeHooks());
+    await until(() => brain.lastTask()?.task_id === "cp1");
+
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "cp1",
+        compose_id: "voice-1",
+        intent: "greet this newcomer and walk the three things",
+        context: "hello, I just arrived",
+      }),
+    );
+    await until(() => composedEvents(brain).length === 1);
+
+    // The seam saw the HOST-held persona + the brain's intent/context —
+    // nothing else (no model, no routing: those fields don't exist).
+    expect(composeFn.calls).toEqual([
+      {
+        persona: "You are the doorkeeper.",
+        intent: "greet this newcomer and walk the three things",
+        context: "hello, I just arrived",
+      },
+    ]);
+
+    const composed = composedEvents(brain)[0]!;
+    expect(composed).toMatchObject({
+      type: "composed",
+      task_id: "cp1",
+      compose_id: "voice-1",
+      text: "voiced: greet this newcomer and walk the three things",
+    });
+    expect(brain.hasEvent("effect_rejected")).toBe(false);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp1", status: "complete" }));
+    const res = await runP;
+    expect(res.result.status).toBe("complete");
+    await host.stop();
+  });
+
+  test("no composeFn wired (not opted in / substrate unavailable) → effect_rejected cant_do; the seam is never called", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      // no composeFn
+    });
+    await host.start();
+
+    const runP = host.runTask(makeTask({ task_id: "cp2" }), makeHooks());
+    await until(() => brain.lastTask()?.task_id === "cp2");
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cp2", compose_id: "c", intent: "greet" }),
+    );
+    await until(() => brain.hasEvent("effect_rejected"));
+    const rej = brain.received.find((e) => e.type === "effect_rejected");
+    expect(rej).toMatchObject({ type: "effect_rejected", effect: "compose" });
+    if (rej?.type === "effect_rejected") {
+      expect(rej.reason.kind).toBe("cant_do");
+      expect(rej.reason.detail).toMatch(/compose/);
+    }
+    expect(composedEvents(brain).length).toBe(0);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp2", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test(`input caps: intent over ${COMPOSE_MAX_INTENT_CHARS} or context over ${COMPOSE_MAX_CONTEXT_CHARS} chars → wont_do; never reaches the seam, never burns rate budget`, async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const composeFn = makeComposeFn();
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      composeFn,
+    });
+    await host.start();
+
+    const runP = host.runTask(makeTask({ task_id: "cp3" }), makeHooks());
+    await until(() => brain.lastTask()?.task_id === "cp3");
+
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "cp3",
+        compose_id: "c-long-intent",
+        intent: "i".repeat(COMPOSE_MAX_INTENT_CHARS + 1),
+      }),
+    );
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "cp3",
+        compose_id: "c-long-context",
+        intent: "greet",
+        context: "x".repeat(COMPOSE_MAX_CONTEXT_CHARS + 1),
+      }),
+    );
+    await until(
+      () => brain.received.filter((e) => e.type === "effect_rejected").length === 2,
+    );
+    for (const rej of brain.received.filter((e) => e.type === "effect_rejected")) {
+      if (rej.type === "effect_rejected") {
+        expect(rej.effect).toBe("compose");
+        expect(rej.reason.kind).toBe("wont_do");
+      }
+    }
+    expect(composeFn.calls.length).toBe(0);
+
+    // The refused-anyway requests burned no budget: an at-cap request still
+    // passes (the seam is reached).
+    brain.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "cp3",
+        compose_id: "c-at-cap",
+        intent: "i".repeat(COMPOSE_MAX_INTENT_CHARS),
+        context: "x".repeat(COMPOSE_MAX_CONTEXT_CHARS),
+      }),
+    );
+    await until(() => composedEvents(brain).length === 1);
+    expect(composeFn.calls.length).toBe(1);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp3", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test(`rate limit trips at exactly ${COMPOSE_RATE_LIMIT_PER_HOUR}/hour per agent (policy_denied); window slides; a DIFFERENT agent still succeeds`, async () => {
+    let nowMs = 9_000_000;
+    const clock = () => nowMs;
+
+    const brainA = new FakeBrain();
+    const { transport: transportA } = makeFakeTransport([brainA]);
+    const composeA = makeComposeFn();
+    const hostA = new DaemonBrainHost({
+      agentId: "agent-a",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: transportA,
+      makeScratchDir: scratchFactory,
+      composeFn: composeA,
+      now: clock,
+    });
+    await hostA.start();
+
+    const runA = hostA.runTask(makeTask({ task_id: "cpr" }), makeHooks());
+    await until(() => brainA.lastTask()?.task_id === "cpr");
+
+    for (let i = 0; i < COMPOSE_RATE_LIMIT_PER_HOUR; i++) {
+      nowMs += 1_000; // seconds apart — same window
+      brainA.emit(
+        JSON.stringify({
+          v: 1,
+          type: "compose",
+          task_id: "cpr",
+          compose_id: `c${i}`,
+          intent: `turn ${i}`,
+        }),
+      );
+      await until(() => composeA.calls.length === i + 1);
+    }
+    expect(composeA.calls.length).toBe(COMPOSE_RATE_LIMIT_PER_HOUR);
+
+    // The next within the SAME window is refused policy_denied.
+    nowMs += 1_000;
+    brainA.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "cpr",
+        compose_id: "c-over",
+        intent: "one too many",
+      }),
+    );
+    await until(
+      () =>
+        brainA.received.filter(
+          (e) => e.type === "effect_rejected" && e.reason.kind === "policy_denied",
+        ).length === 1,
+    );
+    expect(composeA.calls.length).toBe(COMPOSE_RATE_LIMIT_PER_HOUR);
+
+    // Window slides: an hour later the budget is back.
+    nowMs += 60 * 60 * 1000 + 1;
+    brainA.emit(
+      JSON.stringify({
+        v: 1,
+        type: "compose",
+        task_id: "cpr",
+        compose_id: "c-next-hour",
+        intent: "next hour",
+      }),
+    );
+    await until(() => composeA.calls.length === COMPOSE_RATE_LIMIT_PER_HOUR + 1);
+
+    brainA.emit(JSON.stringify({ v: 1, type: "result", task_id: "cpr", status: "complete" }));
+    await runA;
+    await hostA.stop();
+
+    // A DIFFERENT agent (its own host instance, its own window) in the same
+    // hour still succeeds — per-agent budget, not a global ceiling.
+    const brainB = new FakeBrain();
+    const { transport: transportB } = makeFakeTransport([brainB]);
+    const composeB = makeComposeFn();
+    const hostB = new DaemonBrainHost({
+      agentId: "agent-b",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: transportB,
+      makeScratchDir: scratchFactory,
+      composeFn: composeB,
+      now: clock,
+    });
+    await hostB.start();
+    const runB = hostB.runTask(makeTask({ task_id: "cprb" }), makeHooks());
+    await until(() => brainB.lastTask()?.task_id === "cprb");
+    brainB.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cprb", compose_id: "b1", intent: "hi" }),
+    );
+    await until(() => composeB.calls.length === 1);
+
+    brainB.emit(JSON.stringify({ v: 1, type: "result", task_id: "cprb", status: "complete" }));
+    await runB;
+    await hostB.stop();
+  });
+
+  test("a substrate failure (ok:false) → effect_rejected not_now; a THROWING seam is contained to the same refusal", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const composeFn = makeComposeFn((opts) => {
+      if (opts.intent === "throw please") throw new Error("substrate exploded");
+      return { ok: false, detail: "substrate turn timed out" };
+    });
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      composeFn,
+    });
+    await host.start();
+
+    const runP = host.runTask(makeTask({ task_id: "cp5" }), makeHooks());
+    await until(() => brain.lastTask()?.task_id === "cp5");
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cp5", compose_id: "f1", intent: "will fail" }),
+    );
+    await until(() => brain.received.filter((e) => e.type === "effect_rejected").length === 1);
+    const rej1 = brain.received.find((e) => e.type === "effect_rejected");
+    expect(rej1).toMatchObject({ type: "effect_rejected", effect: "compose" });
+    if (rej1?.type === "effect_rejected") {
+      expect(rej1.reason.kind).toBe("not_now");
+      expect(rej1.reason.detail).toMatch(/timed out/);
+    }
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cp5", compose_id: "f2", intent: "throw please" }),
+    );
+    await until(() => brain.received.filter((e) => e.type === "effect_rejected").length === 2);
+    const rej2 = brain.received.filter((e) => e.type === "effect_rejected")[1];
+    if (rej2?.type === "effect_rejected") {
+      expect(rej2.reason.kind).toBe("not_now");
+      expect(rej2.reason.detail).toMatch(/substrate exploded/);
+    }
+    expect(composedEvents(brain).length).toBe(0);
+
+    // The task itself is untouched by the failed voice turns.
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp5", status: "complete" }));
+    const res = await runP;
+    expect(res.result.status).toBe("complete");
+    await host.stop();
+  });
+
+  test(`overlong substrate output is TRUNCATED to ${COMPOSE_MAX_OUTPUT_CHARS} chars, never failed`, async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const composeFn = makeComposeFn(() => ({
+      ok: true,
+      text: "y".repeat(COMPOSE_MAX_OUTPUT_CHARS + 500),
+    }));
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      composeFn,
+    });
+    await host.start();
+
+    const runP = host.runTask(makeTask({ task_id: "cp6" }), makeHooks());
+    await until(() => brain.lastTask()?.task_id === "cp6");
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cp6", compose_id: "t1", intent: "verbose" }),
+    );
+    await until(() => composedEvents(brain).length === 1);
+    const composed = composedEvents(brain)[0]!;
+    expect(composed.text.length).toBe(COMPOSE_MAX_OUTPUT_CHARS);
+    expect(composed.text).toBe("y".repeat(COMPOSE_MAX_OUTPUT_CHARS));
+    expect(brain.hasEvent("effect_rejected")).toBe(false);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp6", status: "complete" }));
+    await runP;
+    await host.stop();
+  });
+
+  test("an in-flight compose PAUSES the per-task timeout — no orphan (the ask_principal/create_private_thread precedent, cortex#1073)", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    let composeResolved = false;
+    const composeFn: ComposeFn = async () => {
+      // A slow (but honest) substrate turn holds the call open far longer
+      // than taskTimeoutMs.
+      await new Promise((r) => setTimeout(r, 450));
+      composeResolved = true;
+      return { ok: true, text: "slow but here" };
+    };
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      composeFn,
+      taskTimeoutMs: 150, // deliberately shorter than the compose wait
+    });
+    await host.start();
+
+    const runP = host.runTask(makeTask({ task_id: "cp7" }), makeHooks());
+    await until(() => brain.lastTask()?.task_id === "cp7");
+
+    brain.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cp7", compose_id: "s1", intent: "greet" }),
+    );
+    await until(() => composeResolved, 2000);
+    await until(() => composedEvents(brain).length === 1);
+
+    // Answered → the (re-armed) task still completes normally.
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp7", status: "complete" }));
+    const result = await runP;
+    expect(result.result.status).toBe("complete"); // NOT "failed"/timeout
+    await host.stop();
+  });
+
+  test("ordering: a post emitted immediately after compose (before composed arrives) is delivered unchanged — compose never blocks or reorders sibling effects", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const composeFn: ComposeFn = async () => {
+      await gate; // hold the substrate turn open
+      return { ok: true, text: "late voice" };
+    };
+    const host = new DaemonBrainHost({
+      agentId: "escort",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      composeFn,
+    });
+    await host.start();
+
+    const hooks = makeHooks();
+    const runP = host.runTask(makeTask({ task_id: "cp8" }), makeHooks());
+    void runP;
+    const run2 = host.runTask(makeTask({ task_id: "cp8b" }), hooks);
+    void run2;
+    await until(() => brain.received.filter((e) => e.type === "task").length === 2);
+
+    // compose on one task, an immediate post on another — the post must not
+    // wait for the (held-open) substrate turn.
+    brain.emit(
+      JSON.stringify({ v: 1, type: "compose", task_id: "cp8", compose_id: "o1", intent: "greet" }),
+    );
+    brain.emit(JSON.stringify({ v: 1, type: "post", task_id: "cp8b", text: "immediate" }));
+    await until(() => hooks.posts.length === 1);
+    expect(composedEvents(brain).length).toBe(0); // still held open
+
+    release?.();
+    await until(() => composedEvents(brain).length === 1);
+
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp8", status: "complete" }));
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "cp8b", status: "complete" }));
+    await Promise.all([runP, run2]);
     await host.stop();
   });
 });

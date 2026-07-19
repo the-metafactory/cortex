@@ -13,13 +13,15 @@
  *     a `task` to run, a follow-up `message`, a host-resolved `gate_verdict`,
  *     a `cancel`, a `shutdown` drain signal, an `effect_rejected` (cortex
  *     refused one of the brain's effects), a `thread_created` (the answer to
- *     a `create_private_thread` effect), and the daemon `hello` handshake.
+ *     a `create_private_thread` effect), a `composed` (the answer to a
+ *     `compose` effect — cortex#2257), and the daemon `hello` handshake.
  *   - **Brain → cortex (effects).** Things the brain asks the host to do:
  *     `post` to a surface, `post_log` (notify the agent's own bound log
- *     channel — cortex#2256), `ask_principal` (render a gate), `dispatch`
- *     fleet work, `create_private_thread` (open a private thread off the
- *     agent's own channel binding — cortex#2206), `result` (close the task),
- *     and `log`.
+ *     channel — cortex#2256), `compose` (render prose through the stack's
+ *     model substrate with the agent's own persona — cortex#2257),
+ *     `ask_principal` (render a gate), `dispatch` fleet work,
+ *     `create_private_thread` (open a private thread off the agent's own
+ *     channel binding — cortex#2206), `result` (close the task), and `log`.
  *
  * The brain never sees a platform token, a NATS credential, or another
  * agent's identity (§5 property 1). It *asks* for effects; cortex *performs*
@@ -208,6 +210,7 @@ export const BRAIN_EVENT_SHUTDOWN = "shutdown" as const;
 export const BRAIN_EVENT_EFFECT_REJECTED = "effect_rejected" as const;
 export const BRAIN_EVENT_HELLO = "hello" as const;
 export const BRAIN_EVENT_THREAD_CREATED = "thread_created" as const;
+export const BRAIN_EVENT_COMPOSED = "composed" as const;
 
 /**
  * `task` — start a unit of work. Per-task brains receive `persona` here (§5
@@ -277,6 +280,33 @@ export const ThreadCreatedEventSchema = z.object({
   thread_id: z.string().min(1),
 });
 export type ThreadCreatedEvent = z.infer<typeof ThreadCreatedEventSchema>;
+
+/**
+ * `composed` — the answer to a `compose` effect (cortex#2257), modeled
+ * directly on {@link ThreadCreatedEventSchema}'s shape: the brain asks for an
+ * async host effect, the host performs it (one tool-less substrate turn with
+ * the agent's own persona as system prompt), and this event carries the
+ * rendered `text` back correlated by `task_id` + `compose_id`. The
+ * `compose_id` is echoed verbatim from the effect so a brain with several
+ * composes in flight can match answers to requests; the host never invents
+ * one.
+ *
+ * `text` is HOST-CAPPED (overlong substrate output is truncated host-side,
+ * never failed — see `daemon-brain-host.ts` `COMPOSE_MAX_OUTPUT_CHARS`).
+ * There is no failure variant of this event — a refused or failed `compose`
+ * reuses the EXISTING `effect_rejected` event verbatim (`cant_do` when the
+ * substrate is unavailable / the agent has not opted in via
+ * `runtime.brain.compose`; `not_now` on a timeout or transient substrate
+ * failure; `policy_denied` on a rate-limit trip). No new failure shape.
+ */
+export const ComposedEventSchema = z.object({
+  v: z.literal(BRAIN_PROTOCOL_VERSION),
+  type: z.literal(BRAIN_EVENT_COMPOSED),
+  task_id: z.string().min(1),
+  compose_id: z.string().min(1),
+  text: z.string(),
+});
+export type ComposedEvent = z.infer<typeof ComposedEventSchema>;
 
 /** `cancel` — abandon an in-flight task. */
 export const CancelEventSchema = z.object({
@@ -355,6 +385,7 @@ export const BrainEventSchema = z.discriminatedUnion("type", [
   EffectRejectedEventSchema,
   HelloEventSchema,
   ThreadCreatedEventSchema,
+  ComposedEventSchema,
 ]);
 export type BrainEvent = z.infer<typeof BrainEventSchema>;
 
@@ -364,6 +395,7 @@ export type BrainEvent = z.infer<typeof BrainEventSchema>;
 
 export const BRAIN_EFFECT_POST = "post" as const;
 export const BRAIN_EFFECT_POST_LOG = "post_log" as const;
+export const BRAIN_EFFECT_COMPOSE = "compose" as const;
 export const BRAIN_EFFECT_ASK_PRINCIPAL = "ask_principal" as const;
 export const BRAIN_EFFECT_DISPATCH = "dispatch" as const;
 export const BRAIN_EFFECT_CREATE_PRIVATE_THREAD = "create_private_thread" as const;
@@ -447,6 +479,48 @@ export const PostLogEffectSchema = z.object({
   text: z.string(),
 });
 export type PostLogEffect = z.infer<typeof PostLogEffectSchema>;
+
+/**
+ * `compose` — ask the host to render prose through the STACK'S OWN model
+ * substrate (cortex#2257): one tool-less substrate turn with the agent's own
+ * persona file as the system prompt and `intent` (+ optional `context`) as
+ * the user turn. The answer comes back as a {@link ComposedEvent} correlated
+ * by `compose_id`.
+ *
+ * The hybrid-brain contract this effect exists for: the deterministic shell
+ * decides EVERY effect; the model only renders the words the shell then
+ * places into a post it already decided to send. The effect therefore
+ * deliberately carries NO model field, NO system-prompt field, and NO
+ * routing of any kind — the host derives the persona from the agent's own
+ * manifest binding and the model from the agent's `runtime.modelClass`
+ * ceiling (downgrade-only, the dispatch-effect precedent; a voice turn
+ * defaults to the cheap end). A brain-supplied `model`/`persona`/
+ * `system_prompt` field is silently stripped by the tolerant-ingest codec —
+ * pinned by test, the post_log precedent.
+ *
+ * `intent` is the shell's short instruction ("greet this newcomer and walk
+ * the three things"); `context` is optional recent-turn text. Both are
+ * host-capped (`daemon-brain-host.ts` `COMPOSE_MAX_INTENT_CHARS` /
+ * `COMPOSE_MAX_CONTEXT_CHARS`) — the caps live host-side, not here, because
+ * the codec validates SHAPE and the host owns policy (the same split as the
+ * post_log length cap).
+ *
+ * Gated: opt-in (`runtime.brain.compose: true` on the agent — absent ⇒
+ * `effect_rejected`/`cant_do`), rate-limited per agent, daemon lifecycle
+ * only. Failures reuse {@link EffectRejectedEventSchema} verbatim.
+ */
+export const ComposeEffectSchema = z.object({
+  v: z.literal(BRAIN_PROTOCOL_VERSION),
+  type: z.literal(BRAIN_EFFECT_COMPOSE),
+  task_id: z.string().min(1),
+  /** Brain-chosen correlation id, echoed verbatim on the `composed` answer. */
+  compose_id: z.string().min(1),
+  /** The shell's short instruction for the voice turn. */
+  intent: z.string().min(1),
+  /** Optional recent-turn text (e.g. the user's message), host-capped. */
+  context: z.string().optional(),
+});
+export type ComposeEffect = z.infer<typeof ComposeEffectSchema>;
 
 /**
  * `ask_principal` — render a gate. Cortex enforces the principal check; the
@@ -565,6 +639,7 @@ export type LogEffect = z.infer<typeof LogEffectSchema>;
 export const BrainEffectSchema = z.discriminatedUnion("type", [
   PostEffectSchema,
   PostLogEffectSchema,
+  ComposeEffectSchema,
   AskPrincipalEffectSchema,
   DispatchEffectSchema,
   CreatePrivateThreadEffectSchema,
@@ -597,6 +672,7 @@ export type ParseBrainEffectResult =
 const KNOWN_EFFECT_TYPES: ReadonlySet<string> = new Set([
   BRAIN_EFFECT_POST,
   BRAIN_EFFECT_POST_LOG,
+  BRAIN_EFFECT_COMPOSE,
   BRAIN_EFFECT_ASK_PRINCIPAL,
   BRAIN_EFFECT_DISPATCH,
   BRAIN_EFFECT_CREATE_PRIVATE_THREAD,
@@ -710,6 +786,7 @@ const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   BRAIN_EVENT_EFFECT_REJECTED,
   BRAIN_EVENT_HELLO,
   BRAIN_EVENT_THREAD_CREATED,
+  BRAIN_EVENT_COMPOSED,
 ]);
 
 export function parseBrainEvent(line: string): ParseBrainEventResult {

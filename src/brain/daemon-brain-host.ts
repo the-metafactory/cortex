@@ -31,7 +31,12 @@
  *      (cortex#2256) splits the same way: the POLICY gates (log-channel
  *      binding, length cap, rate limit) are enforced here, and only a
  *      gate-passing effect reaches the consumer's `onPostLog` hook — with
- *      the HOST-derived target channel as an argument, never brain input;
+ *      the HOST-derived target channel as an argument, never brain input.
+ *      `compose` (cortex#2257) splits the same way again: the POLICY gates
+ *      (opt-in, input caps, rate limit, output truncation) are enforced
+ *      here, and only a gate-passing effect reaches the injected
+ *      {@link ComposeFn} — which performs one tool-less substrate turn with
+ *      the agent's OWN persona as system prompt and answers `composed`;
  *   4. enforces, PER TASK (not per process): task_id correlation, scratch
  *      confinement, and the 4 MiB attachment budget (§12.5). Scratch dirs are
  *      created per TASK and removed when the task closes — confinement stays
@@ -245,6 +250,93 @@ const POST_LOG_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 export const POST_LOG_MAX_TEXT_CHARS = 2000;
 
 // ---------------------------------------------------------------------------
+// `compose` substrate seam + policy constants (cortex#2257)
+// ---------------------------------------------------------------------------
+
+/**
+ * The result of a `compose` substrate attempt. NEVER throws by contract — a
+ * substrate/timeout failure resolves `{ ok: false, detail }` so the host maps
+ * it to a retryable `effect_rejected` (`not_now`) instead of an unhandled
+ * rejection (mirrors {@link CreatePrivateThreadOutcome} and every other
+ * injected seam in this file).
+ */
+export type ComposeOutcome =
+  | { ok: true; text: string }
+  | { ok: false; detail: string };
+
+/**
+ * The actual substrate I/O for a `compose` effect (cortex#2257): ONE
+ * tool-less model turn — `persona` as the system prompt, `intent` (+
+ * optional `context`) as the user turn — returning the rendered text. Every
+ * POLICY decision (opt-in, input caps, rate limit, output cap) is made by
+ * {@link DaemonBrainHost} itself; this seam performs only the mechanical
+ * substrate call under parameters the host already decided. The MODEL is the
+ * seam constructor's decision (boot wiring resolves it against the agent's
+ * `runtime.modelClass` ceiling, downgrade-only — see
+ * `src/runner/brain-compose.ts`), never a per-call, never brain input.
+ * Production wires the claude-code substrate (`CCSession`); tests inject a
+ * fake.
+ */
+export type ComposeFn = (opts: {
+  /** The agent's OWN persona text — the system prompt. Host-held, never brain input. */
+  persona: string;
+  /** The shell's short instruction for the voice turn (already length-gated). */
+  intent: string;
+  /** Optional recent-turn context (already length-gated). */
+  context?: string;
+}) => Promise<ComposeOutcome>;
+
+/**
+ * Rate limit for `compose`: 30/hour, PER AGENT (cortex#2257) — one per
+ * conversational turn is the honest usage, so this window is deliberately
+ * wider than `post_log`/`create_private_thread`'s 10/hour. Same constant
+ * class and sliding-window mechanics, and a SEPARATE budget (rendering voice
+ * and notifying the log channel are independent capabilities; one must not
+ * starve the other). Per-agent for the same structural reason: each
+ * {@link DaemonBrainHost} serves exactly one agent.
+ *
+ * The trigger is stranger-influenced for anon-reachable (`openOnboarding`)
+ * agents — the escort IS the driving consumer — so this window is also the
+ * substrate-cost bound: one bad actor can burn at most an hour's budget of
+ * cheap-model turns, and the brain's own canned-line fallback keeps it
+ * functional when the budget is gone.
+ */
+export const COMPOSE_RATE_LIMIT_PER_HOUR = 30;
+
+/** The sliding window `COMPOSE_RATE_LIMIT_PER_HOUR` is measured over. */
+const COMPOSE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Length cap on `compose.intent` (cortex#2257): the intent is the SHELL'S
+ * short instruction ("greet this newcomer and walk the three things"), not a
+ * payload channel — a shell that needs more than this is smuggling context
+ * through the wrong field. Over-cap → `effect_rejected` (`wont_do`: the same
+ * request will never succeed on retry), checked BEFORE the rate window so a
+ * refused-anyway request never burns budget (the post_log precedent).
+ */
+export const COMPOSE_MAX_INTENT_CHARS = 500;
+
+/**
+ * Length cap on `compose.context` (cortex#2257): recent-turn text (e.g. the
+ * triggering user's message). Bounds both the substrate input cost and the
+ * injection surface an anon-reachable agent's stranger-authored context
+ * represents. Over-cap → `effect_rejected` (`wont_do`), same rule as the
+ * intent cap — the BRAIN is expected to truncate context before emitting.
+ */
+export const COMPOSE_MAX_CONTEXT_CHARS = 4000;
+
+/**
+ * Output cap on the `composed.text` the host returns (cortex#2257): 2000
+ * chars — Discord's own message cap, matching {@link POST_LOG_MAX_TEXT_CHARS}'
+ * rationale (the composed text's whole purpose is to land in a post body).
+ * Overlong substrate output is TRUNCATED host-side, never failed — the model
+ * ran and cost real substrate budget; failing the effect would punish the
+ * brain for the model's verbosity and push it onto the canned fallback for
+ * no safety gain. The brain re-caps when placing the text (belt-and-braces).
+ */
+export const COMPOSE_MAX_OUTPUT_CHARS = 2000;
+
+// ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
 
@@ -335,6 +427,17 @@ export interface DaemonBrainHostOpts {
    */
   logChannelId?: string;
   /**
+   * cortex#2257 — the injected substrate seam for the `compose` effect
+   * ({@link ComposeFn}). Wired by the boot layer ONLY when the agent has
+   * opted in (`runtime.brain.compose: true`) AND the substrate is available
+   * under the agent's `runtime.modelClass` ceiling. Undefined ⇒ every
+   * `compose` effect is refused `effect_rejected` (`cant_do` — structural:
+   * "substrate unavailable or not opted in", never resolves on retry
+   * without a config change — the same reasoning as `logChannelId`'s
+   * missing-binding refusal).
+   */
+  composeFn?: ComposeFn;
+  /**
    * cortex#2206 — true when this agent is reachable by an unmapped,
    * zero-authority anon principal (`AgentSchema.openOnboarding`,
    * cortex#1165). Gates `create_private_thread`'s `members` field: while
@@ -421,6 +524,16 @@ export class DaemonBrainHost {
    * window so log posts and thread creates never starve each other.
    */
   private postLogAttempts: number[] = [];
+  /** cortex#2257 — see {@link DaemonBrainHostOpts.composeFn}. */
+  private readonly composeFn: ComposeFn | undefined;
+  /**
+   * cortex#2257 — sliding-window timestamps (ms) of accepted `compose`
+   * ATTEMPTS. Same mechanics (and the same record-before-I/O and
+   * in-memory-only tradeoffs) as {@link threadCreateAttempts}; a SEPARATE
+   * window so voice turns never starve (or are starved by) log posts or
+   * thread creates.
+   */
+  private composeAttempts: number[] = [];
 
   /** Live process + connection for the CURRENT generation. */
   private proc: DaemonBrainProcess | null = null;
@@ -471,6 +584,7 @@ export class DaemonBrainHost {
     this.createPrivateThreadFn = opts.createPrivateThread;
     this.anonReachable = opts.anonReachable ?? true;
     this.logChannelId = opts.logChannelId;
+    this.composeFn = opts.composeFn;
   }
 
   /** True once the restart budget is exhausted — the consumer stops dispatching. */
@@ -1090,6 +1204,145 @@ export class DaemonBrainHost {
         }
         return;
       }
+      case "compose": {
+        // cortex#2257 — render prose through the STACK'S OWN substrate: one
+        // tool-less model turn with THIS agent's persona as system prompt.
+        // The effect carries no model / persona / routing (intentional —
+        // protocol.ts); everything that matters is derived HERE from the
+        // agent's own manifest, mirroring the host-derived-target pattern
+        // of `post_log` / `create_private_thread`.
+        //
+        // PAUSE the per-task liveness timeout while the substrate call is
+        // in flight — the brain BLOCKS awaiting `composed`, exactly the
+        // `ask_principal`/`create_private_thread` precedent (cortex#1073):
+        // this is async substrate I/O, not brain liveness, so a slow (but
+        // honest) model response must never race the timeout and fail a
+        // task that isn't hung. Re-arm once every open gate closes.
+        if (record.openGates === 0 && record.timeoutTimer !== undefined) {
+          clearTimeout(record.timeoutTimer);
+          record.timeoutTimer = undefined;
+        }
+        record.openGates += 1;
+        try {
+          // 1. Structural: no substrate seam wired ⇒ the agent has not
+          // opted in (`runtime.brain.compose`) or the substrate is
+          // unavailable for it. cant_do (not not_now): it will never
+          // resolve on retry without a config change — a brain must not
+          // burn budget retrying a capability that can never appear (the
+          // post_log / create_private_thread structural-gate reasoning).
+          const composeFn = this.composeFn;
+          if (composeFn === undefined) {
+            await this.rejectEffect(
+              e.task_id,
+              "compose",
+              "cant_do",
+              `agent "${this.agentId}" has no compose substrate configured ` +
+                `(runtime.brain.compose opt-in absent, or no substrate available)`,
+            );
+            return;
+          }
+
+          // 2. Input caps — checked BEFORE the rate window so a
+          // refused-anyway request never burns budget. wont_do: retrying
+          // the same overlong input will never succeed (the post_log
+          // length-cap precedent).
+          if (e.intent.length > COMPOSE_MAX_INTENT_CHARS) {
+            await this.rejectEffect(
+              e.task_id,
+              "compose",
+              "wont_do",
+              `compose intent exceeds ${COMPOSE_MAX_INTENT_CHARS} chars ` +
+                `(got ${e.intent.length}) — the intent is a short instruction, not a payload channel`,
+            );
+            return;
+          }
+          if (e.context !== undefined && e.context.length > COMPOSE_MAX_CONTEXT_CHARS) {
+            await this.rejectEffect(
+              e.task_id,
+              "compose",
+              "wont_do",
+              `compose context exceeds ${COMPOSE_MAX_CONTEXT_CHARS} chars ` +
+                `(got ${e.context.length}) — truncate context brain-side before emitting`,
+            );
+            return;
+          }
+
+          // 3. Rate limit — 30/hour/agent (named constant), a real sliding
+          // window, SEPARATE from the post_log / thread-create windows.
+          // Reserved BEFORE the substrate attempt: an attempt costs real
+          // model budget whether or not it succeeds (the same
+          // reserve-before-I/O rule as the sibling effects).
+          if (this.isComposeRateLimited()) {
+            await this.rejectEffect(
+              e.task_id,
+              "compose",
+              "policy_denied",
+              `agent "${this.agentId}" exceeded ${COMPOSE_RATE_LIMIT_PER_HOUR} ` +
+                `compose calls in the past hour`,
+            );
+            return;
+          }
+          this.recordComposeAttempt();
+
+          // 4. Perform the substrate turn. Never throws by contract
+          // (ComposeFn) — a substrate/timeout failure comes back as
+          // `{ ok: false, detail }` — but a throwing injected seam is
+          // still contained to the same transient refusal.
+          let outcome: ComposeOutcome;
+          try {
+            outcome = await composeFn({
+              persona: this.persona ?? "",
+              intent: e.intent,
+              ...(e.context !== undefined && { context: e.context }),
+            });
+          } catch (composeErr) {
+            outcome = {
+              ok: false,
+              detail:
+                composeErr instanceof Error ? composeErr.message : String(composeErr),
+            };
+          }
+
+          // The task may have been drained/cancelled while the call was in
+          // flight — never forward a result to a closed/replaced task
+          // (§7.5, the same rule the sibling async effects follow).
+          if (record.settled) return;
+
+          if (!outcome.ok) {
+            // Substrate failure / timeout is transient/retryable — NOT the
+            // brain's fault and NOT a policy refusal.
+            await this.rejectEffect(e.task_id, "compose", "not_now", outcome.detail);
+            return;
+          }
+
+          // 5. Output cap — TRUNCATE, never fail (the model ran; verbosity
+          // is not a refusal reason). The brain re-caps on placement.
+          const text =
+            outcome.text.length > COMPOSE_MAX_OUTPUT_CHARS
+              ? outcome.text.slice(0, COMPOSE_MAX_OUTPUT_CHARS)
+              : outcome.text;
+
+          await this.sendToConn(
+            encodeBrainEvent({
+              v: 1,
+              type: "composed",
+              task_id: e.task_id,
+              compose_id: e.compose_id,
+              text,
+            }) + "\n",
+          );
+        } finally {
+          record.openGates = Math.max(0, record.openGates - 1);
+          // Last gate closed and the task is still live → re-arm the
+          // liveness timeout for the remaining (deterministic) steps.
+          if (record.openGates === 0 && !record.settled && record.timeoutTimer === undefined) {
+            record.timeoutTimer = setTimeout(() => {
+              void this.failTask(record, "timeout");
+            }, this.taskTimeoutMs);
+          }
+        }
+        return;
+      }
       case "ask_principal": {
         // PAUSE the per-task liveness timeout while a human gate is open. The
         // timeout exists to fail a HUNG BRAIN, not a thinking human — an open
@@ -1437,6 +1690,23 @@ export class DaemonBrainHost {
   /** Record one `post_log` attempt against this agent's sliding window. */
   private recordPostLogAttempt(): void {
     this.postLogAttempts.push(this.now());
+  }
+
+  /**
+   * cortex#2257 — true when this agent has already made
+   * {@link COMPOSE_RATE_LIMIT_PER_HOUR} `compose` ATTEMPTS within the
+   * trailing hour. Same sliding-window mechanics as
+   * {@link isThreadCreateRateLimited}, over its own separate window.
+   */
+  private isComposeRateLimited(): boolean {
+    const cutoff = this.now() - COMPOSE_RATE_LIMIT_WINDOW_MS;
+    this.composeAttempts = this.composeAttempts.filter((t) => t > cutoff);
+    return this.composeAttempts.length >= COMPOSE_RATE_LIMIT_PER_HOUR;
+  }
+
+  /** Record one `compose` attempt against this agent's sliding window. */
+  private recordComposeAttempt(): void {
+    this.composeAttempts.push(this.now());
   }
 
   /** Write a line to the live connection, swallowing a closed-socket error. */
