@@ -6425,7 +6425,7 @@ function structuralEqual(a: unknown, b: unknown): boolean {
 async function resolveReviewProvisioningJsm(
   runtime: MyelinRuntime,
   gatingAgents: readonly Agent[],
-  lane: string = "review",
+  lane = "review",
 ): Promise<import("./bus/jetstream/types").ProvisionJsm | null> {
   if (gatingAgents.length === 0 || !runtime.jetstreamManager) {
     return null;
