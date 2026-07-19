@@ -2090,6 +2090,24 @@ export async function startCortex(
   // try/catch and aborted boot (sage review on #338, round 2).
   const reviewJsm = await resolveReviewProvisioningJsm(runtime, reviewCapableAgents);
 
+  // cortex#2247 — the BRAIN lane's provisioning JSM, resolved INDEPENDENTLY
+  // of review capabilities. The BRAIN_TASKS stream + per-capability brain
+  // durables used to ride the `reviewJsm !== null` gate (the self-documented
+  // "KNOWN COUPLING" below at the DEV_IMPLEMENT/BRAIN_TASKS provisioning
+  // sites) — so a brain-ONLY stack (exec-brain agents, zero review-capable
+  // agents) booted its brain consumer DORMANT and silently dropped every
+  // inbound mention ("not reachable today" was reached by the first live
+  // brain-only stack). Resolution order:
+  //   - `reviewJsm` already resolved (review-capable agents present) → reuse
+  //     it (ONE `jetstreamManager()` resolution; also preserves today's
+  //     behaviour on review stacks, including a brain agent hot-added via
+  //     `agents.d/` to a stack that booted with zero brain agents — the
+  //     stream exists and the captured JSM is live).
+  //   - otherwise resolve over `brainAgents` — non-null iff at least one
+  //     exec-brain agent is present AND the runtime is not dormant.
+  const brainJsm =
+    reviewJsm ?? (await resolveReviewProvisioningJsm(runtime, brainAgents, "brain"));
+
   // cortex#686 — the CODE_REVIEW stream's subject filter carries BOTH the
   // local and (when federation is configured) the federated code-review
   // patterns, so an inbound `federated.{me}.{stack}.tasks.code-review.…`
@@ -2324,17 +2342,24 @@ export async function startCortex(
     }
     // ── /F-2.2 provision DEV_IMPLEMENT ──────────────────────────────────────
 
-    // ── B-3 (cortex#1021) provision BRAIN_TASKS ─────────────────────────────
-    // Same `reviewJsm !== null` gate + posture as CODE_REVIEW / DEV_IMPLEMENT
-    // (Interest retention, File storage, idempotent ensure). The exec-brain
-    // consumer binds its durable here; the inbound dispatch publishes onto
-    // `…brain.{capability}`. A failure does NOT abort boot. Same KNOWN COUPLING
-    // as DEV_IMPLEMENT: the gate is review-capability presence, so a
-    // brain-ONLY stack would skip provisioning — not reachable today (the
-    // switch stack runs sage); the independent-gate fix is the same follow-up.
+  }
+
+  // ── B-3 (cortex#1021) provision BRAIN_TASKS ───────────────────────────────
+  // Same posture as CODE_REVIEW / DEV_IMPLEMENT (Interest retention, File
+  // storage, idempotent ensure). The exec-brain consumer binds its durable
+  // here; the inbound dispatch publishes onto `…brain.{capability}`. A
+  // failure does NOT abort boot.
+  // cortex#2247 — gated on `brainJsm` (its OWN gate), no longer on
+  // `reviewJsm`: the former "KNOWN COUPLING" (review-capability presence)
+  // left a brain-ONLY stack without the stream its brain consumer binds,
+  // silently dropping every inbound mention. `brainJsm` reuses `reviewJsm`
+  // when review agents are present (identical behaviour to before on review
+  // stacks, `exists` path idempotent), and resolves independently over the
+  // exec-brain agents otherwise.
+  if (brainJsm !== null) {
     try {
       const brainOutcome = await provisionReviewStream({
-        jsm: reviewJsm,
+        jsm: brainJsm,
         name: brainTasksStream,
         subjects: brainTasksStreamSubjects,
         maxAgeNs: reviewStreamMaxAgeNs,
@@ -2355,8 +2380,8 @@ export async function startCortex(
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
-    // ── /B-3 provision BRAIN_TASKS ──────────────────────────────────────────
   }
+  // ── /B-3 provision BRAIN_TASKS ──────────────────────────────────────────
 
   // S7 (epic #1514, cortex#1521) — the per-agent review-consumer
   // construction now lives in `wireReviewConsumers` (review-consumer-boot.ts),
@@ -2608,7 +2633,10 @@ export async function startCortex(
     brainPresenceHolder,
     brainConsumers,
     daemonBrainHosts,
-    reviewJsm,
+    // cortex#2247 — the brain lane's OWN provisioning JSM (see the `brainJsm`
+    // resolution above), so per-capability brain durables provision on a
+    // brain-only stack too.
+    brainJsm,
     brainTasksStream,
     reviewConsumerMaxDeliver,
     agentPlatformAdapters,
@@ -6396,16 +6424,17 @@ function structuralEqual(a: unknown, b: unknown): boolean {
  */
 async function resolveReviewProvisioningJsm(
   runtime: MyelinRuntime,
-  reviewCapableAgents: readonly Agent[],
+  gatingAgents: readonly Agent[],
+  lane: string = "review",
 ): Promise<import("./bus/jetstream/types").ProvisionJsm | null> {
-  if (reviewCapableAgents.length === 0 || !runtime.jetstreamManager) {
+  if (gatingAgents.length === 0 || !runtime.jetstreamManager) {
     return null;
   }
   try {
     return await runtime.jetstreamManager();
   } catch (err) {
     process.stderr.write(
-      `cortex: jetstreamManager() resolution failed — review provisioning skipped: ` +
+      `cortex: jetstreamManager() resolution failed — ${lane} provisioning skipped: ` +
         `${err instanceof Error ? err.message : String(err)}\n`,
     );
     return null;

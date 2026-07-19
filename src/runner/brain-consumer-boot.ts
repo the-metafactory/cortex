@@ -48,7 +48,7 @@
  * closure used to be defined) and before either call site runs: `runtime`
  * (a `let`) is assigned once from either `options.injectRuntime` or
  * `startMyelinRuntime(...)`, well before the boot loop or any hot-reload
- * event. `surfacePrincipalGate`, `brainPackBaseDir`, `reviewJsm`,
+ * event. `surfacePrincipalGate`, `brainPackBaseDir`, `brainJsm`,
  * `brainTasksStream`, `reviewConsumerMaxDeliver`, `reviewPrincipalId`, and
  * `systemEventSource` are all `const`s assigned exactly once, earlier in
  * boot. The old closure only ever READ these — it never reassigned any of
@@ -194,8 +194,14 @@ export interface WireBrainConsumersOpts {
    * (hot-swap drain + unconditional shutdown stop).
    */
   daemonBrainHosts: DaemonBrainHost[];
-  /** Resolved JetStream manager, or `null` when the runtime is dormant. */
-  reviewJsm: ProvisionJsm | null;
+  /**
+   * Resolved JetStream manager, or `null` when the runtime is dormant.
+   * cortex#2247 — this is the BRAIN lane's own provisioning JSM (resolved in
+   * `cortex.ts` independently of review-capability presence), so a brain-only
+   * stack provisions its per-capability durables too. Renamed from
+   * `reviewJsm`, whose name encoded the former review-gate coupling.
+   */
+  brainJsm: ProvisionJsm | null;
   /** BRAIN_TASKS stream name (B-3, cortex#1021). */
   brainTasksStream: string;
   /** Durable max-deliver, shared with the review/release lanes. */
@@ -530,14 +536,13 @@ export function wireBrainConsumers(
       const brainPatternFor = (capability: string): string =>
         `local.${opts.reviewPrincipalId}.${opts.stack}.${BRAIN_TASK_SUBJECT_FAMILY}.${capability}`;
 
-      if (opts.reviewJsm !== null) {
+      if (opts.brainJsm !== null) {
         // Hoisted to a local `const` — a narrowed PROPERTY access
-        // (`opts.reviewJsm`) does not survive into the nested `async`
+        // (`opts.brainJsm`) does not survive into the nested `async`
         // closure below (TS drops property narrowing across closure
         // boundaries), while a narrowed `const` binding does. Mirrors the
-        // pre-extraction closure, which narrowed a plain top-level `const
-        // reviewJsm`.
-        const jsm = opts.reviewJsm;
+        // pre-extraction closure, which narrowed a plain top-level `const`.
+        const jsm = opts.brainJsm;
         // Independent durables — provision in one parallel wave (sage
         // cortex#1033 round 2); still awaited as a whole BEFORE start().
         await Promise.all(

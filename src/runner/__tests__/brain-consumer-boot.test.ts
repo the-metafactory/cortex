@@ -85,7 +85,7 @@ function baseOpts(overrides: Partial<WireBrainConsumersOpts> = {}): WireBrainCon
     brainPresenceHolder: { producer: null },
     brainConsumers: [],
     daemonBrainHosts: [],
-    reviewJsm: null,
+    brainJsm: null,
     brainTasksStream: "BRAIN_TASKS",
     reviewConsumerMaxDeliver: 5,
     agentPlatformAdapters: new Map(),
