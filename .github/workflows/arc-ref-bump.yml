@@ -104,10 +104,19 @@ jobs:
       # ── 2. Decide + apply the bump (unit-tested core; --write edits the file) ──
       - name: Compute + apply ARC_REF bump
         id: bump
+        env:
+          # Route the resolved tag through env — NEVER inline `${{ }}` into a
+          # run: shell, where it is expanded to raw text before the shell parses
+          # (quotes give no protection). This value is attacker-influenceable:
+          # it comes from another repo's release tag (supply-chain) and from the
+          # raw workflow_dispatch force_latest input. parseSemver rejects a bad
+          # value, but only AFTER the shell — so the guard must be at the shell
+          # layer. As a quoted shell var it is inert data, never code.
+          LATEST: ${{ steps.resolve.outputs.latest }}
         run: |
           set -euo pipefail
           bun scripts/arc-ref-bump.ts \
-            --latest "${{ steps.resolve.outputs.latest }}" \
+            --latest "$LATEST" \
             --write --github-output
 
       - name: No bump needed
@@ -122,13 +131,19 @@ jobs:
         id: buildgate
         if: steps.bump.outputs.bumped == 'true'
         continue-on-error: true
+        env:
+          # Env-indirection for defense-in-depth/consistency: NEW is post-
+          # semver-validation (charset-constrained, no metacharacters), so this
+          # is lower risk than the LATEST step above — but no `${{ }}` belongs
+          # inside a run: shell regardless.
+          NEW: ${{ steps.bump.outputs.new }}
         run: |
           set -euo pipefail
-          echo "Building Dockerfile.cortex with ARC_REF=${{ steps.bump.outputs.new }} …"
+          echo "Building Dockerfile.cortex with ARC_REF=${NEW} …"
           docker build \
-            --build-arg "ARC_REF=${{ steps.bump.outputs.new }}" \
+            --build-arg "ARC_REF=${NEW}" \
             --file deploy/compose/Dockerfile.cortex \
-            --tag cortex-arc-ref-gate:${{ steps.bump.outputs.new }} \
+            --tag "cortex-arc-ref-gate:${NEW}" \
             deploy/compose
 
       # ── 4a. GREEN → open a labeled PR with the bump ──
