@@ -725,6 +725,136 @@ describe("dispatchQuickstart — --container skips the healthy-boot gate", () =>
 });
 
 // =============================================================================
+// --skip-gate — defer step 8 to the supervisor healthcheck (cortex#2275)
+// =============================================================================
+
+describe("dispatchQuickstart — --skip-gate defers the healthy-boot gate", () => {
+  test("--skip-gate skips step 8 with NO log-grep / healthz probe and exits 0", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    let readLogCalls = 0;
+    let healthzCalls = 0;
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          // A gate that would NEVER pass if it ran (empty log + failing healthz).
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--skip-gate", "--gate-timeout-ms", "5000"],
+          () =>
+            fakePorts({
+              readLog: () => {
+                readLogCalls++;
+                return undefined;
+              },
+              fetchHealthz: () => {
+                healthzCalls++;
+                return Promise.resolve(false);
+              },
+            }),
+        ),
+      ),
+    );
+    // Exit 0 even though the gate ports are rigged to fail — step 8 never ran.
+    expect(res.exitCode).toBe(0);
+    // Explicit deferral marker (mirrors step 7's --skip-services convention).
+    expect(res.stdout).toContain("--skip-gate passed — deferred to supervisor healthcheck");
+    expect(readLogCalls).toBe(0);
+    expect(healthzCalls).toBe(0);
+    expect(res.stdout).not.toContain("timed out after");
+  });
+
+  test("--skip-gate does NOT imply --skip-services (step 7 still runs — and can still fail)", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--skip-gate"],
+          () => fakePorts({ unitFileExists: () => false }), // fails step 7 — proving it RAN
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toContain("systemd template units not found");
+    expect(res.stdout).not.toContain("--skip-services passed");
+  });
+
+  test("--json with --skip-services --skip-gate (the entrypoint shape): step 8 is ok + skipped with the deferral note, envelope is ok", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--skip-services", "--skip-gate", "--json"],
+          // Rigged-to-fail gate ports + unit files absent — neither may matter.
+          () => fakePorts({ unitFileExists: () => false, readLog: () => undefined, fetchHealthz: () => Promise.resolve(false) }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    const parsed = JSON.parse(res.stdout) as {
+      status: string;
+      items?: { step: string; ok: string; skipped?: string; note?: string }[];
+    };
+    expect(parsed.status).toBe("ok");
+    // Step 8 is present, ok, and EXPLICITLY marked deferred — never a bare
+    // green check for work that didn't run, never silently absent.
+    const gate = parsed.items?.find((i) => i.step === "8. Healthy-boot gate");
+    expect(gate).toBeDefined();
+    expect(gate?.ok).toBe("true");
+    expect(gate?.skipped).toBe("true");
+    expect(gate?.note).toBe("deferred to supervisor healthcheck");
+    // Steps 1–7 carry the pre-#2275 shape untouched (no skipped/note keys
+    // except step 7's own skip is NOT marked — only --skip-gate marks one).
+    for (const item of parsed.items ?? []) {
+      if (item.step !== "8. Healthy-boot gate") {
+        expect(item.skipped).toBeUndefined();
+        expect(item.note).toBeUndefined();
+      }
+    }
+    expect(res.stdout).not.toContain(SECRET_TOKEN);
+  });
+
+  test("WITHOUT --skip-gate the gate still runs and its JSON item carries NO skipped/note keys (default unchanged)", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    let readLogCalls = 0;
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--json"],
+          () =>
+            fakePorts({
+              readLog: () => {
+                readLogCalls++;
+                return FULL_HEALTHY_LOG;
+              },
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    // The gate ran — proving --skip-gate is what suppresses it.
+    expect(readLogCalls).toBeGreaterThan(0);
+    const parsed = JSON.parse(res.stdout) as {
+      status: string;
+      items?: { step: string; ok: string; skipped?: string; note?: string }[];
+    };
+    expect(parsed.status).toBe("ok");
+    const gate = parsed.items?.find((i) => i.step === "8. Healthy-boot gate");
+    expect(gate?.ok).toBe("true");
+    expect(gate?.skipped).toBeUndefined();
+    expect(gate?.note).toBeUndefined();
+  });
+
+  test("--help documents --skip-gate", async () => {
+    const res = await dispatchQuickstart(["--help"]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("--skip-gate");
+    expect(res.stdout).toContain("deferred");
+  });
+});
+
+// =============================================================================
 // --surface (cortex#2153) — web/gateway surface mode
 // =============================================================================
 

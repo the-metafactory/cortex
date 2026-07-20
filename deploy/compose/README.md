@@ -59,10 +59,15 @@ this binary be dropped.
 
 quickstart's step 8 greps the cortex daemon's own log for healthy-boot lines, but
 in a container the daemon only starts *after* quickstart returns (`exec cortex
-start`). The entrypoint tolerates a **lone** step-8 failure and aborts on any
-earlier one. The real health signal in a container is the running daemon under
-`restart: unless-stopped` plus the nats healthcheck — verify with the `logs`
-grep in step 5 and by `@mention`.
+start`). The entrypoint therefore runs quickstart with `--skip-gate`
+(cortex#2275): step 8 is reported as an explicit skip ("deferred to supervisor
+healthcheck"), provisioning output is green when steps 1–7 pass, and **any**
+nonzero quickstart exit aborts the boot. The deferral's landing zone is the
+cortex service's compose healthcheck — it probes the same nats-monitor
+`/healthz` the native gate uses (reachable on localhost via the shared network
+namespace), so `docker compose ps` shows cortex healthy/unhealthy from the
+actual bus, and a dead bus flips it unhealthy instead of degrading silently.
+Verify with the `logs` grep in step 5 and by `@mention`.
 
 ## Lifecycle
 

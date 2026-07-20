@@ -14,13 +14,16 @@
 #      process, so compose's `restart: unless-stopped` supervises the daemon and
 #      SIGTERM on `docker compose stop` reaches it directly.
 #
-# The healthy-boot gate (quickstart step 8) is EXPECTED to fail here: it greps
-# the cortex daemon's own log for healthy-boot lines, but the daemon only starts
-# in phase 2 (AFTER quickstart returns). In the split-container model the gate is
-# structurally a post-start check, so a LONE step-8 failure is tolerated; a
-# failure at any EARLIER step (preflight, env validation, scaffold, patch) is a
-# real provisioning error and aborts the boot. The compose healthcheck + restart
-# policy is the container's actual supervision contract.
+# The healthy-boot gate (quickstart step 8) is SKIPPED here (`--skip-gate`,
+# cortex#2275): it greps the cortex daemon's own log for healthy-boot lines, but
+# the daemon only starts in phase 2 (AFTER quickstart returns) — in the
+# split-container model the gate is structurally a post-start check. Step 8 is
+# reported as an explicit skip ("deferred to supervisor healthcheck"), so a
+# successful provisioning run is GREEN — no expected-error JSON. Post-start
+# health is owned by the supervisor: the compose cortex-service healthcheck
+# (the same nats-monitor /healthz the native gate probes, on localhost via the
+# shared network namespace) + `restart: unless-stopped`. With the gate skipped,
+# ANY nonzero quickstart exit is a real provisioning error and aborts the boot.
 #
 # Secret hygiene: this script never echoes CTX_DISCORD_TOKEN or
 # CLAUDE_CODE_OAUTH_TOKEN. quickstart itself only ever prints "set"/"missing" for
@@ -52,25 +55,18 @@ POINTER="${CONFIG_DIR}/${CTX_SLUG}/${CTX_SLUG}.yaml"
 echo "cortex-entrypoint: provisioning stack '${CTX_SLUG}' (idempotent)…"
 
 # Run provisioning. `--json` so we can reason about WHICH step failed without
-# scraping human text. Capture instead of letting `set -e` abort on the expected
-# gate failure.
+# scraping human text. `--skip-gate` (cortex#2275): step 8 is reported as
+# deferred and quickstart exits 0 when steps 1–7 pass, so there is no
+# expected-failure case left — ANY nonzero exit is a real provisioning error
+# → abort (compose will restart us).
 set +e
-qs_out="$(cortex quickstart --skip-services --json 2>&1)"
+cortex quickstart --skip-services --skip-gate --json
 qs_rc=$?
 set -e
 
-printf '%s\n' "${qs_out}"
-
 if [ "${qs_rc}" -ne 0 ]; then
-  # quickstart stops at the FIRST failing step, so if the failing step is the
-  # healthy-boot gate then steps 1–7 all passed. Any other failing step means
-  # provisioning genuinely failed → abort (compose will restart us).
-  if printf '%s' "${qs_out}" | grep -q '8. Healthy-boot gate'; then
-    echo "cortex-entrypoint: provisioning complete; healthy-boot gate deferred to the daemon + compose healthcheck (expected in a container)." >&2
-  else
-    echo "cortex-entrypoint: quickstart failed before the healthy-boot gate — aborting boot." >&2
-    exit "${qs_rc}"
-  fi
+  echo "cortex-entrypoint: quickstart provisioning failed (exit ${qs_rc}) — aborting boot." >&2
+  exit "${qs_rc}"
 fi
 
 if [ ! -f "${POINTER}" ]; then

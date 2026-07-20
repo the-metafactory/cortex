@@ -128,6 +128,7 @@ interface QuickstartFlags {
   force: boolean;
   json: boolean;
   skipServices: boolean;
+  skipGate: boolean;
   container: boolean;
   surface: Surface;
   gateTimeoutMs: number;
@@ -142,6 +143,7 @@ function parseQuickstartArgs(argv: string[]): QuickstartFlags {
     force: false,
     json: false,
     skipServices: false,
+    skipGate: false,
     container: false,
     // Default `discord` — byte-identical to pre-#2153 behaviour for every
     // caller that doesn't pass --surface (the entrypoint + every existing test).
@@ -178,6 +180,15 @@ function parseQuickstartArgs(argv: string[]): QuickstartFlags {
       // exercise steps 1-6+8 without a systemd host at all.
       case "--skip-services":
         flags.skipServices = true;
+        break;
+      // Skip step 8's healthy-boot gate and report it as DEFERRED (cortex#2275).
+      // Sibling of --skip-services: the container entrypoint runs quickstart
+      // BEFORE the daemon exists (`exec cortex start` is phase 2), so the gate
+      // structurally cannot pass — the supervisor's healthcheck (compose) is the
+      // real health signal. Unlike --container this does NOT imply
+      // --skip-services; the entrypoint passes both explicitly.
+      case "--skip-gate":
+        flags.skipGate = true;
         break;
       // Container mode (cortex#2155): skip step 8's healthy-boot gate. Under
       // the L4 split-container model the daemon starts only AFTER quickstart
@@ -230,6 +241,12 @@ interface StepReport {
   name: string;
   ok: boolean;
   lines: string[];
+  /** cortex#2275 — step was deliberately not executed (e.g. --skip-gate).
+   *  Surfaced in the --json items as `skipped: "true"` so an operator sees an
+   *  explicit deferral, never a green check for work that didn't run. */
+  skipped?: boolean;
+  /** Short machine-readable reason accompanying `skipped` (--json `note`). */
+  note?: string;
 }
 
 function step(name: string, ok: boolean, lines: string[]): StepReport {
@@ -706,8 +723,24 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
 
 async function runGate(
   ports: QuickstartPorts,
-  opts: { slug: string; monitorPort: string; timeoutMs: number; skip: boolean },
+  opts: { slug: string; monitorPort: string; timeoutMs: number; skip: boolean; skipGate: boolean },
 ): Promise<StepReport> {
+  // --skip-gate (cortex#2275): the gate is deliberately DEFERRED to the
+  // supervisor's healthcheck (the compose cortex-service healthcheck in the L4
+  // container). Short-circuit BEFORE any ports.gate call — no log-grep, no
+  // /healthz probe, no wall-clock wait — and report an explicit skip so the
+  // provisioning output is green when provisioning succeeded, with the
+  // deferral visible (`skipped`/`note` in --json) rather than an
+  // expected-error status:error envelope.
+  if (opts.skipGate) {
+    return {
+      ...step("8. Healthy-boot gate", true, [
+        "  ○ --skip-gate passed — deferred to supervisor healthcheck",
+      ]),
+      skipped: true,
+      note: "deferred to supervisor healthcheck",
+    };
+  }
   // Container mode (cortex#2155): the daemon isn't up yet (the entrypoint
   // `exec cortex start`s it only AFTER quickstart returns), so the gate could
   // never pass — it would only burn the whole poll window before failing.
@@ -892,6 +925,7 @@ export async function dispatchQuickstart(
     monitorPort: s.natsMon,
     timeoutMs: flags.gateTimeoutMs,
     skip: flags.container,
+    skipGate: flags.skipGate,
   });
   reports.push(gateReport);
   if (!gateReport.ok) {
@@ -906,7 +940,16 @@ function finish(reports: StepReport[], exitCode: number, json: boolean): ExitRes
     const allOk = reports.every((r) => r.ok);
     const envelope = allOk
       ? envelopeOk(
-          reports.map((r) => ({ step: r.name, ok: "true" })),
+          // cortex#2275 — a deliberately-skipped step (e.g. --skip-gate) carries
+          // `skipped: "true"` + a short `note`, so the JSON trace distinguishes
+          // "verified ok" from "deferred". Non-skipped items are byte-identical
+          // to the pre-#2275 shape.
+          reports.map((r) => ({
+            step: r.name,
+            ok: "true",
+            ...(r.skipped === true ? { skipped: "true" } : {}),
+            ...(r.note !== undefined ? { note: r.note } : {}),
+          })),
           {},
         )
       : envelopeError(
@@ -955,6 +998,14 @@ Flags:
                           .conf file (default: refuse).
   --skip-services         Skip step 7 (systemd) entirely — for CI/tests
                           without a systemd host.
+  --skip-gate             Skip step 8 (healthy-boot gate) and report it as
+                          DEFERRED (cortex#2275): step 8 shows ok + skipped
+                          ("deferred to supervisor healthcheck") and quickstart
+                          exits 0 when steps 1–7 pass. For supervised
+                          deployments (the L4 container entrypoint) where the
+                          daemon starts only AFTER quickstart returns and the
+                          supervisor's healthcheck owns post-start health.
+                          Does NOT imply --skip-services.
   --container             L4 container mode (cortex#2155): skip step 8's
                           healthy-boot gate and return after step 7. Implies
                           --skip-services. In the split-container model the
