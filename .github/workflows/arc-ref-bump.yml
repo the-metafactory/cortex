@@ -1,30 +1,43 @@
-# arc-ref-bump — automated, build-gated bumps of the L4 container's ARC_REF pin
-# (cortex#2246).
+# arc-ref-bump — automated, build-gated bumps of the L4 container's pinned refs
+# (cortex#2246; generalized in cortex#2267 to track BOTH ARC_REF and CORTEX_REF).
 #
 # WHY
 # ---
-# deploy/compose/Dockerfile.cortex pins `ARG ARC_REF=<tag>` for reproducible
-# builds. arc releases move and adapter manifests evolve with arc, so a pinned
+# deploy/compose/Dockerfile.cortex pins `ARG ARC_REF=<tag>` AND
+# `ARG CORTEX_REF=<tag>` for reproducible builds. Both upstreams move: a pinned
 # OLDER arc eventually can't parse NEWER adapter manifests and `arc install`
 # fails in the container (cortex#2243: v0.40.2 predated the `{host,reason}`
-# manifest shape). The principal decision is to KEEP the pin (un-pinning to
-# `main` sacrifices reproducibility + adds supply-chain exposure) and instead
-# AUTOMATE the bump dependabot/renovate-style: this workflow proposes bumps as
-# reviewable, BUILD-GATED PRs.
+# manifest shape); a pinned OLDER cortex builds a pre-fix image so a container
+# test still hits already-fixed bugs (cortex#2267). The principal decision is to
+# KEEP the pins (un-pinning to `main` sacrifices reproducibility + adds
+# supply-chain exposure) and instead AUTOMATE the bumps dependabot/renovate-
+# style: this workflow proposes each bump as a reviewable, BUILD-GATED PR.
 #
 # HOW
 # ---
-#   1. Resolve arc's latest RELEASE tag — `gh api …/releases/latest`, falling
-#      back to the highest semver git tag. NEVER tracks raw `main`.
+# A matrix runs the SAME steps per pin (arc -> ARC_REF, cortex -> CORTEX_REF):
+#   1. Resolve the component's latest RELEASE tag — `gh api …/releases/latest`,
+#      falling back to the highest matching semver git tag. NEVER tracks raw
+#      `main`.
 #   2. scripts/arc-ref-bump.ts (unit-tested: semver compare + ARG rewrite)
-#      compares it to the current ARC_REF and decides whether to bump.
+#      compares it to the current ARG value (--arg-name selects the pin) and
+#      decides whether to bump.
 #   3. On a newer release: apply the bump and GATE on a real `docker build` of
-#      Dockerfile.cortex with the new arc — the build runs the `arc install
+#      Dockerfile.cortex with the new ref — the build runs the `arc install
 #      <adapter>` step that failed in #2243, so a green build is the proof the
-#      newer arc is compatible.
-#   4. Green build  -> open a labeled PR (old->new + link to arc's release).
+#      bumped image assembles.
+#   4. Green build  -> open a labeled PR (old->new + link to the release).
 #      Red build    -> open a tracking issue so a human sees the incompatibility
 #                      (never a silent stale pin, never a silent no-op).
+#
+# SECURITY (cortex#2251 lesson): any value that is attacker-influenceable — a
+# resolved release tag from `gh api` (another repo's tag == supply chain) or the
+# raw `workflow_dispatch` inputs — is routed through `env:` and referenced as a
+# QUOTED shell var. It is NEVER inlined as `${{ }}` inside a `run:` block, where
+# it would be expanded to raw text before the shell parses it (quotes give no
+# protection). parseSemver rejects a bad value, but only AFTER the shell, so the
+# guard must also live at the shell layer: as a quoted var the value is inert
+# data, never code.
 #
 # The docker-build gate needs a runner with Docker + network. The scheduled run
 # and a manual `workflow_dispatch` are the real end-to-end confirmation; the
@@ -39,8 +52,16 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
+      force_component:
+        description: "Which pin the force_latest override applies to (the other resolves normally). Ignored when force_latest is blank."
+        required: false
+        default: arc
+        type: choice
+        options:
+          - arc
+          - cortex
       force_latest:
-        description: "Override the resolved arc release tag (e.g. v0.42.1) — for testing the gate. Leave blank to resolve from arc releases."
+        description: "Override the resolved release tag for force_component (e.g. v0.42.1 / v6.10.2) — for testing the gate. Leave blank to resolve from releases."
         required: false
         type: string
 
@@ -58,8 +79,23 @@ concurrency:
 
 jobs:
   bump:
-    name: Resolve, gate, and propose ARC_REF bump
+    name: "Resolve, gate, and propose ${{ matrix.arg_name }} bump"
     runs-on: ubuntu-latest
+    strategy:
+      # Don't let one pin's red gate cancel the other pin's leg.
+      fail-fast: false
+      matrix:
+        include:
+          - component: arc
+            repo: the-metafactory/arc
+            arg_name: ARC_REF
+            # Fallback tag filter: highest semver git tag.
+            tag_grep: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          - component: cortex
+            repo: the-metafactory/cortex
+            arg_name: CORTEX_REF
+            # Fallback tag filter: highest v6.* semver git tag (cortex#2267).
+            tag_grep: '^v6\.[0-9]+\.[0-9]+$'
     steps:
       - name: Checkout cortex
         uses: actions/checkout@v4
@@ -71,60 +107,71 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # ── 1. Resolve arc's latest RELEASE tag (fallback: highest semver git tag) ──
-      # NEVER raw `main`. `workflow_dispatch` may override via force_latest.
-      - name: Resolve latest arc release tag
+      # ── 1. Resolve this component's latest RELEASE tag (fallback: highest ──
+      #      matching semver git tag). NEVER raw `main`. `workflow_dispatch` may
+      #      override via force_latest, but only for the selected force_component.
+      - name: Resolve latest release tag
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
+          # matrix.* is workflow-authored (trusted), but routing through env
+          # keeps every `run:` value a quoted shell var — no `${{ }}` in-shell.
+          REPO: ${{ matrix.repo }}
+          COMPONENT: ${{ matrix.component }}
+          TAG_GREP: ${{ matrix.tag_grep }}
+          # Attacker-influenceable (raw dispatch inputs) — MUST be env, not inline.
+          FORCE_COMPONENT: ${{ github.event.inputs.force_component }}
           FORCE_LATEST: ${{ github.event.inputs.force_latest }}
         run: |
           set -euo pipefail
-          if [ -n "${FORCE_LATEST:-}" ]; then
+          if [ -n "${FORCE_LATEST:-}" ] && [ "${FORCE_COMPONENT:-}" = "${COMPONENT}" ]; then
             latest="${FORCE_LATEST}"
-            echo "Using workflow_dispatch override: ${latest}"
+            echo "Using workflow_dispatch override for ${COMPONENT}: ${latest}"
           else
             # Primary: the GitHub "latest release" (excludes drafts/prereleases).
-            latest="$(gh api repos/the-metafactory/arc/releases/latest --jq '.tag_name' 2>/dev/null || true)"
+            latest="$(gh api "repos/${REPO}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
             if [ -z "${latest}" ] || [ "${latest}" = "null" ]; then
-              echo "releases/latest unavailable — falling back to highest semver git tag."
-              # Fallback: highest semver tag by version sort (vMAJOR.MINOR.PATCH only).
-              latest="$(gh api repos/the-metafactory/arc/tags --jq '.[].name' \
-                | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              echo "releases/latest unavailable for ${REPO} — falling back to highest semver git tag."
+              # Fallback: highest matching semver tag by version sort.
+              latest="$(gh api "repos/${REPO}/tags" --jq '.[].name' \
+                | grep -E "${TAG_GREP}" \
                 | sort -V | tail -1)"
             fi
           fi
           if [ -z "${latest}" ] || [ "${latest}" = "null" ]; then
-            echo "::error::could not resolve any arc release tag (releases/latest and tag fallback both empty)"
+            echo "::error::could not resolve any release tag for ${REPO} (releases/latest and tag fallback both empty)"
             exit 1
           fi
-          echo "Resolved latest arc release: ${latest}"
+          echo "Resolved latest ${COMPONENT} release: ${latest}"
           echo "latest=${latest}" >> "$GITHUB_OUTPUT"
 
       # ── 2. Decide + apply the bump (unit-tested core; --write edits the file) ──
-      - name: Compute + apply ARC_REF bump
+      - name: "Compute + apply ${{ matrix.arg_name }} bump"
         id: bump
         env:
           # Route the resolved tag through env — NEVER inline `${{ }}` into a
-          # run: shell, where it is expanded to raw text before the shell parses
-          # (quotes give no protection). This value is attacker-influenceable:
-          # it comes from another repo's release tag (supply-chain) and from the
-          # raw workflow_dispatch force_latest input. parseSemver rejects a bad
-          # value, but only AFTER the shell — so the guard must be at the shell
-          # layer. As a quoted shell var it is inert data, never code.
+          # run: shell (see the file header). This value is attacker-
+          # influenceable: another repo's release tag (supply-chain) and the raw
+          # workflow_dispatch force_latest input both flow here. As a quoted
+          # shell var it is inert data, never code; --arg-name is validated
+          # against a known allow-list inside the script.
           LATEST: ${{ steps.resolve.outputs.latest }}
+          ARG_NAME: ${{ matrix.arg_name }}
         run: |
           set -euo pipefail
           bun scripts/arc-ref-bump.ts \
             --latest "$LATEST" \
+            --arg-name "$ARG_NAME" \
             --write --github-output
 
       - name: No bump needed
         if: steps.bump.outputs.bumped != 'true'
-        run: echo "ARC_REF is already >= the latest arc release — nothing to do."
+        env:
+          ARG_NAME: ${{ matrix.arg_name }}
+        run: echo "${ARG_NAME} is already >= the latest release — nothing to do."
 
-      # ── 3. BUILD GATE — build Dockerfile.cortex with the new arc; this runs the
-      #      `arc install <adapter>` step that failed in #2243. Green = compatible.
+      # ── 3. BUILD GATE — build Dockerfile.cortex with the new ref; this runs the
+      #      `arc install <adapter>` step that failed in #2243. Green = builds.
       #      continue-on-error so a red build routes to the issue path below
       #      rather than aborting the job (no silent no-op on incompatibility).
       - name: Build gate (docker build exercises `arc install`)
@@ -137,13 +184,15 @@ jobs:
           # is lower risk than the LATEST step above — but no `${{ }}` belongs
           # inside a run: shell regardless.
           NEW: ${{ steps.bump.outputs.new }}
+          ARG_NAME: ${{ matrix.arg_name }}
+          COMPONENT: ${{ matrix.component }}
         run: |
           set -euo pipefail
-          echo "Building Dockerfile.cortex with ARC_REF=${NEW} …"
+          echo "Building Dockerfile.cortex with ${ARG_NAME}=${NEW} …"
           docker build \
-            --build-arg "ARC_REF=${NEW}" \
+            --build-arg "${ARG_NAME}=${NEW}" \
             --file deploy/compose/Dockerfile.cortex \
-            --tag "cortex-arc-ref-gate:${NEW}" \
+            --tag "cortex-${COMPONENT}-ref-gate:${NEW}" \
             deploy/compose
 
       # ── 4a. GREEN → open a labeled PR with the bump ──
@@ -151,11 +200,15 @@ jobs:
         if: steps.bump.outputs.bumped == 'true' && steps.buildgate.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          COMPONENT: ${{ matrix.component }}
+          ARG_NAME: ${{ matrix.arg_name }}
+          REPO: ${{ matrix.repo }}
           OLD_REF: ${{ steps.bump.outputs.old }}
           NEW_REF: ${{ steps.bump.outputs.new }}
         run: |
           set -euo pipefail
-          branch="ci/arc-ref-bump-${NEW_REF}"
+          branch="ci/${COMPONENT}-ref-bump-${NEW_REF}"
+          release_url="https://github.com/${REPO}/releases/tag/${NEW_REF}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -168,27 +221,27 @@ jobs:
           git checkout -b "${branch}"
           git add deploy/compose/Dockerfile.cortex
           commit_msg="$(printf '%s\n' \
-            "ci(deploy): bump L4 container ARC_REF ${OLD_REF} -> ${NEW_REF}" \
+            "ci(deploy): bump L4 container ${ARG_NAME} ${OLD_REF} -> ${NEW_REF}" \
             "" \
-            "Automated, build-gated bump (cortex#2246). The docker build of" \
-            "Dockerfile.cortex with arc ${NEW_REF} passed -- including the" \
-            "\`arc install <adapter>\` step that failed in cortex#2243 -- so the" \
-            "newer arc parses the current adapter manifests." \
+            "Automated, build-gated bump (cortex#2246, cortex#2267). The docker" \
+            "build of Dockerfile.cortex with ${COMPONENT} ${NEW_REF} passed --" \
+            "including the \`arc install <adapter>\` step that failed in" \
+            "cortex#2243 -- so the bumped image assembles cleanly." \
             "" \
-            "arc release: https://github.com/the-metafactory/arc/releases/tag/${NEW_REF}")"
+            "${COMPONENT} release: ${release_url}")"
           git commit -m "${commit_msg}"
           git push --set-upstream origin "${branch}"
 
           pr_body="$(printf '%s\n' \
-            "Automated ARC_REF bump (cortex#2246)." \
+            "Automated ${ARG_NAME} bump (cortex#2246, cortex#2267)." \
             "" \
-            "- **arc:** \`${OLD_REF}\` -> \`${NEW_REF}\`" \
-            "- **arc release:** https://github.com/the-metafactory/arc/releases/tag/${NEW_REF}" \
-            "- **Build gate:** PASSED -- \`docker build\` of \`deploy/compose/Dockerfile.cortex\` with the new arc succeeded, exercising the \`arc install <adapter>\` step that failed in cortex#2243. A green build is the proof the newer arc parses the current adapter manifests." \
+            "- **${COMPONENT}:** \`${OLD_REF}\` -> \`${NEW_REF}\`" \
+            "- **release:** ${release_url}" \
+            "- **Build gate:** PASSED -- \`docker build\` of \`deploy/compose/Dockerfile.cortex\` with \`${ARG_NAME}=${NEW_REF}\` succeeded, exercising the \`arc install <adapter>\` step that failed in cortex#2243. A green build is the proof the bumped image assembles." \
             "" \
-            "Reproducibility preserved: \`ARC_REF\` stays a pinned tag; this is a reviewable, build-gated bump, not an unpinned build-time fetch.")"
+            "Reproducibility preserved: \`${ARG_NAME}\` stays a pinned tag; this is a reviewable, build-gated bump, not an unpinned build-time fetch.")"
           gh pr create \
-            --title "ci(deploy): bump L4 container ARC_REF ${OLD_REF} -> ${NEW_REF}" \
+            --title "ci(deploy): bump L4 container ${ARG_NAME} ${OLD_REF} -> ${NEW_REF}" \
             --body "${pr_body}" \
             --label infrastructure \
             --label next
@@ -198,29 +251,33 @@ jobs:
         if: steps.bump.outputs.bumped == 'true' && steps.buildgate.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
+          COMPONENT: ${{ matrix.component }}
+          ARG_NAME: ${{ matrix.arg_name }}
+          REPO: ${{ matrix.repo }}
           OLD_REF: ${{ steps.bump.outputs.old }}
           NEW_REF: ${{ steps.bump.outputs.new }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          title="arc ${NEW_REF} fails the L4 container build gate -- ARC_REF bump blocked"
+          title="${COMPONENT} ${NEW_REF} fails the L4 container build gate -- ${ARG_NAME} bump blocked"
+          release_url="https://github.com/${REPO}/releases/tag/${NEW_REF}"
           # Don't spam: reuse an open issue with the same title if one exists.
           existing="$(gh issue list --state open --search "in:title ${title}" --json number --jq '.[0].number' || true)"
           body="$(printf '%s\n' \
-            "The scheduled ARC_REF bump (cortex#2246) tried to move the L4 container from \`${OLD_REF}\` to arc's latest release \`${NEW_REF}\`, but the **container build gate FAILED**." \
+            "The scheduled ${ARG_NAME} bump (cortex#2246, cortex#2267) tried to move the L4 container from \`${OLD_REF}\` to ${COMPONENT}'s latest release \`${NEW_REF}\`, but the **container build gate FAILED**." \
             "" \
-            "The \`docker build\` of \`deploy/compose/Dockerfile.cortex\` with arc \`${NEW_REF}\` did not pass -- most likely the \`arc install <adapter>\` step (the exact failure class as cortex#2243). The pin stays at \`${OLD_REF}\` until this is resolved." \
+            "The \`docker build\` of \`deploy/compose/Dockerfile.cortex\` with \`${ARG_NAME}=${NEW_REF}\` did not pass -- most likely the \`arc install <adapter>\` step (the exact failure class as cortex#2243). The pin stays at \`${OLD_REF}\` until this is resolved." \
             "" \
             "- **Build log:** ${RUN_URL}" \
-            "- **arc release:** https://github.com/the-metafactory/arc/releases/tag/${NEW_REF}" \
+            "- **${COMPONENT} release:** ${release_url}" \
             "" \
-            "A human needs to investigate the arc/adapter incompatibility rather than let the pin silently go stale.")"
+            "A human needs to investigate the incompatibility rather than let the pin silently go stale.")"
           if [ -n "${existing}" ]; then
             echo "Reusing open issue #${existing}."
-            gh issue comment "${existing}" --body "Re-observed on a later run: arc ${NEW_REF} still fails the build gate. ${RUN_URL}"
+            gh issue comment "${existing}" --body "Re-observed on a later run: ${COMPONENT} ${NEW_REF} still fails the build gate. ${RUN_URL}"
           else
             gh issue create --title "${title}" --body "${body}" --label infrastructure --label next
           fi
           # Fail the job so the red gate is visible in the Actions UI, not just as an issue.
-          echo "::error::arc ${NEW_REF} failed the container build gate — see the tracking issue."
+          echo "::error::${COMPONENT} ${NEW_REF} failed the container build gate — see the tracking issue."
           exit 1

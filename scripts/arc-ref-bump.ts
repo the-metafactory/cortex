@@ -1,35 +1,44 @@
 #!/usr/bin/env bun
 /**
  * arc-ref-bump.ts — the version-compare + Dockerfile ARG-rewrite core for the
- * automated `ARC_REF` bump workflow (cortex#2246).
+ * automated container ref-bump workflow (cortex#2246, generalized in
+ * cortex#2267 to also track CORTEX_REF).
  *
  * WHY THIS EXISTS
  * ---------------
- * The L4 container (`deploy/compose/Dockerfile.cortex`) pins
- * `ARG ARC_REF=<tag>` for reproducibility. arc releases move, and adapter
- * manifests evolve with arc — so a pinned OLDER arc eventually can't parse
- * NEWER adapter manifests and `arc install` fails in the container (exactly
- * cortex#2243: v0.40.2 predated the `{host,reason}` manifest shape). The
- * principal decision is to KEEP the pin (reproducible builds; un-pinning to
- * `main` sacrifices reproducibility + adds supply-chain exposure) but AUTOMATE
- * the bump dependabot/renovate-style: a scheduled workflow proposes bumps as
- * reviewable, build-gated PRs.
+ * The L4 container (`deploy/compose/Dockerfile.cortex`) pins BOTH
+ * `ARG ARC_REF=<tag>` and `ARG CORTEX_REF=<tag>` for reproducibility. Those
+ * upstreams move, and a pinned OLDER ref eventually drifts out of sync with the
+ * host — e.g. an older arc can't parse newer adapter manifests and `arc install`
+ * fails in the container (cortex#2243: v0.40.2 predated the `{host,reason}`
+ * manifest shape), or an older CORTEX_REF builds a pre-fix cortex so a container
+ * test still hits already-fixed bugs (cortex#2267). The principal decision is to
+ * KEEP the pins (reproducible builds; un-pinning to `main` sacrifices
+ * reproducibility + adds supply-chain exposure) but AUTOMATE the bump
+ * dependabot/renovate-style: a scheduled workflow proposes bumps as reviewable,
+ * build-gated PRs.
  *
  * This module is the small, UNIT-TESTABLE core the workflow (.github/workflows/
  * arc-ref-bump.yml) shells out to — semver compare + ARG rewrite — so that
  * logic is NOT buried in inline YAML. The workflow owns the side effects
  * (resolve latest release via `gh api`, `docker build` gate, open the PR); this
- * script owns the pure decision + the exact byte-level Dockerfile edit.
+ * script owns the pure decision + the exact byte-level Dockerfile edit. The core
+ * is parametrized on the ARG NAME (`ARC_REF` or `CORTEX_REF`) so the workflow
+ * runs the SAME code path for each pin.
  *
  * REPRODUCIBILITY INVARIANT: this script only ever rewrites the ARG to another
  * PINNED TAG. It never converts the Dockerfile to an unpinned build-time fetch.
  *
  * Usage:
- *   bun scripts/arc-ref-bump.ts --latest <tag> [--dockerfile <path>] [--write]
- *                               [--github-output]
+ *   bun scripts/arc-ref-bump.ts --latest <tag> [--arg-name <NAME>]
+ *                               [--dockerfile <path>] [--write] [--github-output]
  *
- *   --latest <tag>        REQUIRED. arc's latest release tag (e.g. v0.42.1),
- *                         resolved by the workflow via `gh api …/releases/latest`.
+ *   --latest <tag>        REQUIRED. The upstream's latest release tag (e.g.
+ *                         v0.42.1 for arc, v6.10.2 for cortex), resolved by the
+ *                         workflow via `gh api …/releases/latest`.
+ *   --arg-name <NAME>     Which pinned ARG to compare/rewrite. One of
+ *                         ARC_REF | CORTEX_REF. Defaults to ARC_REF for
+ *                         backward compatibility.
  *   --dockerfile <path>   Dockerfile to read/rewrite. Defaults to
  *                         deploy/compose/Dockerfile.cortex relative to CWD.
  *   --write               Actually rewrite the file when a bump is warranted.
@@ -39,9 +48,10 @@
  *
  * Exit codes:
  *   0  decision made cleanly (whether or not a bump was warranted)
- *   2  usage error (missing --latest, bad flag)
- *   3  Dockerfile unreadable, or its ARG ARC_REF= line is missing/malformed,
- *      or --latest is not a parseable semver tag — fail LOUD, never silent.
+ *   2  usage error (missing --latest, unknown --arg-name, bad flag)
+ *   3  Dockerfile unreadable, or its `ARG <NAME>=` definition line is
+ *      missing/malformed, or --latest is not a parseable semver tag — fail
+ *      LOUD, never silent.
  */
 
 import { readFileSync, writeFileSync, appendFileSync } from "fs";
@@ -56,6 +66,20 @@ export interface Semver {
 }
 
 export const DEFAULT_DOCKERFILE = "deploy/compose/Dockerfile.cortex";
+
+/** The ARG names this tool knows how to compare/rewrite. */
+export const KNOWN_ARG_NAMES = ["ARC_REF", "CORTEX_REF"] as const;
+export type ArgName = (typeof KNOWN_ARG_NAMES)[number];
+
+/**
+ * Guard: only a known, charset-safe ARG name may be spliced into the line
+ * regexes below. This both restricts the tool to the two pins we track AND
+ * closes any regex-injection surface — the name is never attacker-controlled
+ * once it has passed this gate.
+ */
+export function isKnownArgName(name: string): name is ArgName {
+  return (KNOWN_ARG_NAMES as readonly string[]).includes(name);
+}
 
 /**
  * Parse a semver tag with an optional leading `v`. Returns null for anything
@@ -115,13 +139,15 @@ export function compareSemver(a: Semver, b: Semver): -1 | 0 | 1 {
 }
 
 /**
- * Extract the current pinned value of the `ARG ARC_REF=<value>` line — the ARG
- * DEFINITION that carries a default, NOT the bare `ARG ARC_REF` re-declaration
+ * Extract the current pinned value of the `ARG <argName>=<value>` line — the ARG
+ * DEFINITION that carries a default, NOT the bare `ARG <argName>` re-declaration
  * inside the build stage (which has no `=` and no value). Returns null when no
- * definition line with a value is present (malformed / missing).
+ * definition line with a value is present (malformed / missing). Throws on an
+ * unknown argName so a caller can never inject an arbitrary regex.
  */
-export function readArcRef(dockerfile: string): string | null {
-  const m = /^ARG[ \t]+ARC_REF=(\S+)[ \t]*$/m.exec(dockerfile);
+export function readRef(dockerfile: string, argName: string): string | null {
+  if (!isKnownArgName(argName)) throw new Error(`unknown ARG name: "${argName}"`);
+  const m = new RegExp(`^ARG[ \\t]+${argName}=(\\S+)[ \\t]*$`, "m").exec(dockerfile);
   return m ? (m[1] ?? null) : null;
 }
 
@@ -135,26 +161,27 @@ export interface RewriteResult {
 }
 
 /**
- * Rewrite the `ARG ARC_REF=<value>` definition line to `newRef`. Idempotent:
+ * Rewrite the `ARG <argName>=<value>` definition line to `newRef`. Idempotent:
  * if the current value already equals newRef, content is returned unchanged
  * with changed=false. If the ARG definition line is missing/malformed, oldRef
  * is null and nothing is rewritten (the caller must fail loud).
  *
  * Only the DEFINITION line (with `=<value>`) is touched; the bare re-declaration
- * `ARG ARC_REF` is left intact so the build stage still inherits the default.
+ * `ARG <argName>` is left intact so the build stage still inherits the default.
  */
-export function rewriteArcRef(dockerfile: string, newRef: string): RewriteResult {
-  const oldRef = readArcRef(dockerfile);
+export function rewriteRef(dockerfile: string, argName: string, newRef: string): RewriteResult {
+  const oldRef = readRef(dockerfile, argName); // validates argName
   if (oldRef === null) return { content: dockerfile, changed: false, oldRef: null };
   if (oldRef === newRef) return { content: dockerfile, changed: false, oldRef };
   const content = dockerfile.replace(
-    /^(ARG[ \t]+ARC_REF=)\S+([ \t]*)$/m,
+    new RegExp(`^(ARG[ \\t]+${argName}=)\\S+([ \\t]*)$`, "m"),
     `$1${newRef}$2`,
   );
   return { content, changed: content !== dockerfile, oldRef };
 }
 
 export interface Decision {
+  argName: ArgName;
   oldRef: string;
   latestRef: string;
   /** True when latestRef is strictly newer than oldRef. */
@@ -165,23 +192,29 @@ export interface Decision {
  * Pure decision: given the current pinned ref and the latest release ref,
  * should we bump? Throws on unparseable input so the CLI can exit 3 (loud).
  */
-export function decideBump(oldRef: string, latestRef: string): Decision {
+export function decideBump(argName: ArgName, oldRef: string, latestRef: string): Decision {
   const cur = parseSemver(oldRef);
   const latest = parseSemver(latestRef);
-  if (!cur) throw new Error(`current ARC_REF is not a parseable semver tag: "${oldRef}"`);
+  if (!cur) throw new Error(`current ${argName} is not a parseable semver tag: "${oldRef}"`);
   if (!latest) throw new Error(`--latest is not a parseable semver tag: "${latestRef}"`);
-  return { oldRef, latestRef, shouldBump: compareSemver(latest, cur) > 0 };
+  return { argName, oldRef, latestRef, shouldBump: compareSemver(latest, cur) > 0 };
 }
 
 interface ParsedArgs {
   latest?: string;
+  argName: ArgName;
   dockerfile: string;
   write: boolean;
   githubOutput: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = { dockerfile: DEFAULT_DOCKERFILE, write: false, githubOutput: false };
+  const out: ParsedArgs = {
+    argName: "ARC_REF",
+    dockerfile: DEFAULT_DOCKERFILE,
+    write: false,
+    githubOutput: false,
+  };
   const value = (i: number, flag: string): string => {
     const v = argv[i];
     if (v === undefined) throw new Error(`${flag} requires a value`);
@@ -193,6 +226,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--latest":
         out.latest = value(++i, "--latest");
         break;
+      case "--arg-name": {
+        const name = value(++i, "--arg-name");
+        if (!isKnownArgName(name)) {
+          throw new Error(`--arg-name must be one of ${KNOWN_ARG_NAMES.join(", ")} (got "${name}")`);
+        }
+        out.argName = name;
+        break;
+      }
       case "--dockerfile":
         out.dockerfile = value(++i, "--dockerfile");
         break;
@@ -230,6 +271,7 @@ export function main(argv: string[]): number {
     process.stderr.write("arc-ref-bump: --latest <tag> is required\n");
     return 2;
   }
+  const { argName } = args;
 
   const path = resolve(args.dockerfile);
   let dockerfile: string;
@@ -240,17 +282,17 @@ export function main(argv: string[]): number {
     return 3;
   }
 
-  const oldRef = readArcRef(dockerfile);
+  const oldRef = readRef(dockerfile, argName);
   if (oldRef === null) {
     process.stderr.write(
-      `arc-ref-bump: no 'ARG ARC_REF=<value>' definition line found in ${path} (missing/malformed)\n`,
+      `arc-ref-bump: no 'ARG ${argName}=<value>' definition line found in ${path} (missing/malformed)\n`,
     );
     return 3;
   }
 
   let decision: Decision;
   try {
-    decision = decideBump(oldRef, args.latest);
+    decision = decideBump(argName, oldRef, args.latest);
   } catch (e) {
     process.stderr.write(`arc-ref-bump: ${(e as Error).message}\n`);
     return 3;
@@ -258,28 +300,28 @@ export function main(argv: string[]): number {
 
   if (!decision.shouldBump) {
     process.stdout.write(
-      `arc-ref-bump: no bump — pinned ${oldRef} is already >= latest release ${args.latest}.\n`,
+      `arc-ref-bump: no bump — pinned ${argName}=${oldRef} is already >= latest release ${args.latest}.\n`,
     );
     if (args.githubOutput) emitGithubOutput({ bumped: "false", old: oldRef, new: oldRef });
     return 0;
   }
 
-  const { content, changed } = rewriteArcRef(dockerfile, args.latest);
+  const { content, changed } = rewriteRef(dockerfile, argName, args.latest);
   if (!changed) {
     // shouldBump was true but the rewrite was a no-op — treat as loud failure
     // rather than silently reporting a phantom bump.
     process.stderr.write(
-      `arc-ref-bump: decided to bump ${oldRef} -> ${args.latest} but the ARG rewrite made no change (malformed line?)\n`,
+      `arc-ref-bump: decided to bump ${argName} ${oldRef} -> ${args.latest} but the ARG rewrite made no change (malformed line?)\n`,
     );
     return 3;
   }
 
   if (args.write) {
     writeFileSync(path, content);
-    process.stdout.write(`arc-ref-bump: bumped ARC_REF ${oldRef} -> ${args.latest} in ${path}.\n`);
+    process.stdout.write(`arc-ref-bump: bumped ${argName} ${oldRef} -> ${args.latest} in ${path}.\n`);
   } else {
     process.stdout.write(
-      `arc-ref-bump: WOULD bump ARC_REF ${oldRef} -> ${args.latest} (dry-run; pass --write to apply).\n`,
+      `arc-ref-bump: WOULD bump ${argName} ${oldRef} -> ${args.latest} (dry-run; pass --write to apply).\n`,
     );
   }
   if (args.githubOutput) emitGithubOutput({ bumped: "true", old: oldRef, new: args.latest });
