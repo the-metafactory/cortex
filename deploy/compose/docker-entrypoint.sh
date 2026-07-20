@@ -19,11 +19,12 @@
 # the daemon only starts in phase 2 (AFTER quickstart returns) — in the
 # split-container model the gate is structurally a post-start check. Step 8 is
 # reported as an explicit skip ("deferred to supervisor healthcheck"), so a
-# successful provisioning run is GREEN — no expected-error JSON. Post-start
+# successful provisioning run is GREEN — no expected-error output. Post-start
 # health is owned by the supervisor: the compose cortex-service healthcheck
-# (the same nats-monitor /healthz the native gate probes, on localhost via the
-# shared network namespace) + `restart: unless-stopped`. With the gate skipped,
-# ANY nonzero quickstart exit is a real provisioning error and aborts the boot.
+# (the daemon's own bus connection on the nats monitor's /connz, on localhost
+# via the shared network namespace) + `restart: unless-stopped`. With the gate
+# skipped, ANY nonzero quickstart exit is a real provisioning error and aborts
+# the boot.
 #
 # Secret hygiene: this script never echoes CTX_DISCORD_TOKEN or
 # CLAUDE_CODE_OAUTH_TOKEN. quickstart itself only ever prints "set"/"missing" for
@@ -54,13 +55,14 @@ POINTER="${CONFIG_DIR}/${CTX_SLUG}/${CTX_SLUG}.yaml"
 
 echo "cortex-entrypoint: provisioning stack '${CTX_SLUG}' (idempotent)…"
 
-# Run provisioning. `--json` so we can reason about WHICH step failed without
-# scraping human text. `--skip-gate` (cortex#2275): step 8 is reported as
-# deferred and quickstart exits 0 when steps 1–7 pass, so there is no
-# expected-failure case left — ANY nonzero exit is a real provisioning error
+# Run provisioning. Human step-table output (no --json): nothing here parses
+# the result anymore — the exit code is the whole contract — and the ✓/✗ table
+# reads better in `docker compose logs`. `--skip-gate` (cortex#2275): step 8 is
+# reported as deferred and quickstart exits 0 when steps 1–7 pass, so there is
+# no expected-failure case left — ANY nonzero exit is a real provisioning error
 # → abort (compose will restart us).
 set +e
-cortex quickstart --skip-services --skip-gate --json
+cortex quickstart --skip-services --skip-gate
 qs_rc=$?
 set -e
 

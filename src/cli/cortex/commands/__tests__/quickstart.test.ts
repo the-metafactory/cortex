@@ -778,7 +778,7 @@ describe("dispatchQuickstart — --skip-gate defers the healthy-boot gate", () =
     expect(res.stdout).not.toContain("--skip-services passed");
   });
 
-  test("--json with --skip-services --skip-gate (the entrypoint shape): step 8 is ok + skipped with the deferral note, envelope is ok", async () => {
+  test("--json with --skip-services --skip-gate: step 8 is ok + skipped with the deferral note, envelope is ok", async () => {
     const configDir = freshDir();
     const natsDir = freshDir();
     const res = await withPlatform("linux", () =>

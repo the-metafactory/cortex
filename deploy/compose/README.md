@@ -63,11 +63,16 @@ start`). The entrypoint therefore runs quickstart with `--skip-gate`
 (cortex#2275): step 8 is reported as an explicit skip ("deferred to supervisor
 healthcheck"), provisioning output is green when steps 1–7 pass, and **any**
 nonzero quickstart exit aborts the boot. The deferral's landing zone is the
-cortex service's compose healthcheck — it probes the same nats-monitor
-`/healthz` the native gate uses (reachable on localhost via the shared network
-namespace), so `docker compose ps` shows cortex healthy/unhealthy from the
-actual bus, and a dead bus flips it unhealthy instead of degrading silently.
-Verify with the `logs` grep in step 5 and by `@mention`.
+cortex service's compose healthcheck — it asks the nats monitor's `/connz`
+(reachable on localhost via the shared network namespace) whether the
+**daemon's own bus connection** (`cortex-<slug>`, the scaffolded `nats.name`)
+is present. That is strictly stronger than probing `/healthz`: it fails when
+the monitor is unreachable AND when the daemon's primary bus link is dead
+while the process lives (the cortex#2264 silent-degradation class, which
+`restart: unless-stopped` cannot see). So `docker compose ps` shows cortex
+healthy/unhealthy from the actual daemon↔bus link, and a dead bus or a
+degraded daemon flips it unhealthy instead of looking fine. Verify with the
+`logs` grep in step 5 and by `@mention`.
 
 ## Lifecycle
 
@@ -125,9 +130,11 @@ default Discord quickstart needs `discord`; a `web:`-only stack should build
 ## Pinned versions
 
 All are build ARGs, overridable from `.env`: `CORTEX_REF` (a release tag, **not**
-`main` — default `v6.10.0`, the first release that carries `cortex quickstart`
-and the L4 container fixes; earlier tags lack `quickstart` and abort at boot,
-cortex#2154), `BUN_VERSION`, `CLAUDE_VERSION`, `NATS_SERVER_VERSION`, `ARC_REF` (the
+`main` — default `v6.10.3`. **This compose checkout's entrypoint requires
+`CORTEX_REF` >= `v6.10.3`**: it passes `--skip-gate` (cortex#2275), which older
+`cortex` builds reject as an unknown flag, so quickstart exits 2 and the boot
+restart-loops. Tags before `v6.10.0` lack `quickstart` entirely and abort at
+boot, cortex#2154), `BUN_VERSION`, `CLAUDE_VERSION`, `NATS_SERVER_VERSION`, `ARC_REF` (the
 arc release tag used to install the surface-adapter package manager),
 `CORTEX_SURFACES` (which adapter bundle(s) to bake — see above), and the
 `NATS_IMAGE` tag. Bump one, rebuild, redeploy.

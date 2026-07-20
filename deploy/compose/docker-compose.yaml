@@ -67,14 +67,23 @@ services:
       - cortex-nats:/home/cortex/.config/nats
     # The landing zone for quickstart's deferred healthy-boot gate (cortex#2275):
     # the entrypoint runs `cortex quickstart --skip-services --skip-gate`, so THIS
-    # is the post-start health signal. It probes the same nats-monitor /healthz
-    # the native gate uses — reachable on 127.0.0.1 because cortex shares the
-    # nats network namespace (above) — so a dead/hung bus flips cortex unhealthy
-    # instead of silently degrading. curl is baked into the image
-    # (Dockerfile.cortex, step 1). start_period is first-boot generous: initial
-    # provisioning (scaffold + seed) runs before the daemon starts.
+    # is the post-start health signal. It asks the nats monitor's /connz (open
+    # connections; 200, unauthenticated, no query params needed) whether the
+    # DAEMON'S bus connection is present — the client name `cortex-<slug>` set by
+    # the scaffolded `nats.name` (stack-lib.ts → runtime.ts → connection.ts).
+    # Reachable on 127.0.0.1 because cortex shares the nats network namespace
+    # (above). Strictly stronger than probing /healthz (which only verifies the
+    # bus SERVER — the nats service's own healthcheck already does that): this
+    # also fails when the daemon's primary bus link is dead while the process
+    # lives (the cortex#2264 silent-degradation class) — the exact case
+    # `restart: unless-stopped` cannot see. ${CTX_SLUG} is compose-interpolated
+    # from .env (the same file env_file loads); the grep tolerates optional
+    # whitespace after the colon across server JSON renderings. curl + sh + grep
+    # are baked into the image (Dockerfile.cortex, step 1). start_period is
+    # first-boot generous: initial provisioning (scaffold + seed) runs before
+    # the daemon starts and its connection appears.
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8222/healthz"]
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8222/connz | grep -Eq '\"name\": ?\"cortex-${CTX_SLUG}\"'"]
       interval: 15s
       timeout: 5s
       retries: 5
