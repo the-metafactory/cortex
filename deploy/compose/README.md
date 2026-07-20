@@ -156,6 +156,9 @@ Refresh procedure: regenerate with `claude setup-token`, update `.env`, and
 - **No reply to @mention** — confirm the bot has the Message Content intent, is
   in the guild, and that `CTX_MY_DISCORD_ID` is *your* id (the principal-only
   gate stays silent for non-principals by design).
-- **Verify no secrets in the image** — `docker history cortex:local` and
-  `docker compose config` should show zero tokens (they arrive via `env_file`
-  at runtime only).
+- **Verify no secrets in the image** — `docker history cortex:local` shows zero
+  tokens: secrets are never baked into an image layer; they arrive via
+  `env_file` at **runtime** only. Note that `docker compose config` **will**
+  print your tokens — it renders the *runtime* configuration with your `.env`
+  values interpolated. That output is local to your shell and expected; it is
+  not evidence of a secret baked into the image.
