@@ -137,6 +137,19 @@ RUN git clone --depth 1 --branch "${CORTEX_REF}" \
 #    tolerant fallback so a scaffolding hiccup never hard-fails the build.
 USER cortex
 WORKDIR /home/cortex
+
+# 8a. Pre-create the compose named-volume mount points, owned by cortex. Docker
+#     copies the image dir's ownership into a FRESH named volume on first mount;
+#     if the path is absent from the image the volume comes up root:root and the
+#     non-root cortex user cannot write (EACCES at runNatsConf — cortex#2269).
+#     These three paths are exactly the named volumes in docker-compose.yaml.
+#     Running as cortex, `mkdir -p` creates the whole chain cortex-owned — no
+#     chown needed. Must run before postinstall so nothing writes first.
+RUN mkdir -p \
+      ~/.config/metafactory/cortex \
+      ~/.config/nats \
+      ~/.local/state/metafactory/cortex
+
 RUN cd /opt/cortex && ./scripts/postinstall.sh || \
     echo "cortex: postinstall.sh returned non-zero (systemd-less container) — continuing"
 
