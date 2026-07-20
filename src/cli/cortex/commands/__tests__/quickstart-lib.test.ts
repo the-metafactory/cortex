@@ -520,11 +520,21 @@ describe("detectBusConnectFailure (cortex#2264)", () => {
     expect(surfaced).toContain("ENOENT");
   });
 
-  test("BUS_CONNECT_FAILURE_MARKER matches runtime.ts's literal marker", () => {
+  test("BUS_CONNECT_FAILURE_MARKER matches runtime.ts's PRIMARY-down marker", () => {
     expect("myelin-runtime: failed to connect — continuing without NATS: x".includes(BUS_CONNECT_FAILURE_MARKER)).toBe(
       true,
     );
     expect("myelin-runtime: connected to nats at …".includes(BUS_CONNECT_FAILURE_MARKER)).toBe(false);
+  });
+
+  // cortex#2264 — the marker must NOT over-match a per-network LEAF failure
+  // (runtime.ts:1039), which is a NON-fatal degradation ("primary unaffected").
+  // Tripping the gate on it would false-fail an otherwise-healthy primary bus.
+  test("does NOT match a non-fatal LEAF connect failure (primary unaffected)", () => {
+    const leafLine =
+      'myelin-runtime: failed to connect leaf "halden" (network=halden) at nats://10.0.0.9:4222 — that network is dark; primary unaffected; scheduling background reconnect: ECONNREFUSED';
+    expect(leafLine.includes(BUS_CONNECT_FAILURE_MARKER)).toBe(false);
+    expect(detectBusConnectFailure(["Stack: x", leafLine, "connected to nats"].join("\n"))).toBeUndefined();
   });
 });
 

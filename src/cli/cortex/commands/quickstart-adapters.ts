@@ -14,9 +14,9 @@
  * failing is an ordinary, expected outcome for quickstart, not a bug.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 
 import type {
   CommandResult,
@@ -91,6 +91,20 @@ export function buildServicePort(): ServicePort {
     },
     daemonReload(): CommandResult {
       return runSync(["systemctl", "--user", "daemon-reload"]);
+    },
+    truncateErrorLog(errorLogPath: string): void {
+      // cortex#2264 — clear the append-mode `.error.log` before the (re)start so
+      // the gate reads only CURRENT-boot content. Best-effort: a failure here
+      // must NOT block the restart — the gate simply degrades to its timeout
+      // path (never a false-fail). mkdir -p first so a first-install run (log
+      // dir not yet created by the daemon) still lands an empty file.
+      try {
+        mkdirSync(dirname(errorLogPath), { recursive: true });
+        writeFileSync(errorLogPath, "");
+      } catch (_err) {
+        // Swallow — see above; the gate never depends on this succeeding. Safe
+        // to ignore.
+      }
     },
     enableNow(units: string[]): CommandResult {
       return runSync(["systemctl", "--user", "enable", "--now", ...units]);

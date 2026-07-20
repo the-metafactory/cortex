@@ -678,6 +678,17 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
   }
   lines.push("  ✓ systemctl --user daemon-reload");
 
+  // cortex#2264 — clear the daemon's append-mode `.error.log` IMMEDIATELY before
+  // the (re)start, so step 8's gate only ever sees CURRENT-boot content. Without
+  // this, a bus-connect failure line from a PRIOR boot would linger (systemd
+  // StandardError=append never truncates) and make the gate fast-fail on stale
+  // content before the fresh daemon connects — breaking the "fix creds and
+  // re-run" recovery. Best-effort (the port swallows fs errors); done here,
+  // gated on this Linux branch actually (re)starting the daemon.
+  const errorLogPath = daemonErrorLogPath(process.env.HOME ?? "", opts.slug);
+  ports.service.truncateErrorLog(errorLogPath);
+  lines.push(`  ✓ cleared prior-boot error log (${errorLogPath})`);
+
   const enable = ports.service.enableNow([`nats@${opts.slug}`, `cortex@${opts.slug}`]);
   if (enable.exitCode !== 0) {
     lines.push(`  ✗ systemctl --user enable --now nats@${opts.slug} cortex@${opts.slug} failed: ${enable.stderr.trim()}`);
@@ -722,15 +733,15 @@ async function runGate(
     const logText = ports.gate.readLog(logPath);
     const gateLines = evaluateHealthyBootGate(logText);
     const healthzOk = await ports.gate.fetchHealthz(healthzUrl, 3_000);
-    // Check the SUCCESS gate FIRST: a healthy current boot passes before the
-    // error-log is consulted, so an APPENDED stale failure from a prior boot
-    // never masks a genuinely-healthy re-run (cortex#2264 staleness guard).
     if (gatePassed(gateLines, healthzOk)) {
       return step("8. Healthy-boot gate", true, [renderGateTable(gateLines, healthzOk)]);
     }
     // cortex#2264 — a surfaced bus-connect failure is TERMINAL for this boot:
     // fail fast with the actual error line rather than burning the full
-    // timeout. SCOPE: surface + fast-fail only — the daemon still degrades and
+    // timeout. This is safe on the FIRST poll (before success is logged) because
+    // step 7 TRUNCATED this append-mode `.error.log` right before the daemon
+    // (re)started — so any line here is from THIS boot, never a stale prior-boot
+    // failure. SCOPE: surface + fast-fail only — the daemon still degrades and
     // continues (its fail-closed-abort posture is a separate, deferred call).
     const busFailure = detectBusConnectFailure(ports.gate.readLog(errorLogPath));
     if (busFailure !== undefined) {

@@ -72,6 +72,19 @@ export interface ServicePort {
   unitFileExists(unitTemplate: string): boolean;
   /** `systemctl --user daemon-reload`. */
   daemonReload(): CommandResult;
+  /**
+   * cortex#2264 — truncate the daemon's append-mode `.error.log` to EMPTY,
+   * immediately before the (re)start below, so step 8's gate only ever reads
+   * CURRENT-boot content. The `cortex@.service` unit routes `StandardError` with
+   * `append:` (never truncates), so a failure line from a PRIOR boot would
+   * otherwise persist and make the gate fast-fail on a stale line before the
+   * fresh boot has even connected. Called ONLY in the Linux branch that actually
+   * (re)starts the daemon (never on macOS, where arc/launchd owns the restart).
+   * Best-effort: never throws — a failure here degrades the gate to its honest
+   * timeout path, never a false-fail. `errorLogPath` is the exact path
+   * `daemonErrorLogPath()` computes.
+   */
+  truncateErrorLog(errorLogPath: string): void;
   /** `systemctl --user enable --now <units...>`. */
   enableNow(units: string[]): CommandResult;
 }

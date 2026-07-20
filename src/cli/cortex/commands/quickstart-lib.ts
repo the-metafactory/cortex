@@ -749,11 +749,17 @@ export function daemonErrorLogPath(home: string, slug: string): string {
 /**
  * The marker the myelin runtime logs (to stderr → the `.error.log`) when the
  * PRIMARY bus connect fails and the runtime degrades to disabled
- * (`runtime.ts`: `myelin-runtime: failed to connect — continuing without
+ * (`runtime.ts:834`: `myelin-runtime: failed to connect — continuing without
  * NATS: <err>`). `console.error` renders the marker and the underlying error
  * on ONE line, so the whole line is the surfaceable diagnostic. cortex#2264.
+ *
+ * The marker is the PRIMARY-specific phrase `failed to connect — continuing
+ * without NATS`, NOT the bare `failed to connect`: a per-network LEAF failure
+ * (`runtime.ts:1039`: `failed to connect leaf "…" … primary unaffected`) is a
+ * NON-fatal degradation the gate must NOT trip on — the primary bus is fine.
+ * The `continuing without NATS` clause is unique to the primary-down path.
  */
-export const BUS_CONNECT_FAILURE_MARKER = "myelin-runtime: failed to connect";
+export const BUS_CONNECT_FAILURE_MARKER = "failed to connect — continuing without NATS";
 
 /**
  * Scan the daemon `.error.log` text for a bus-connect failure and return the
@@ -762,9 +768,12 @@ export const BUS_CONNECT_FAILURE_MARKER = "myelin-runtime: failed to connect";
  * caller (quickstart Step 8's gate) decides whether to fast-fail on a non-
  * `undefined` result. cortex#2264 (surface + fast-fail; the daemon's degraded-
  * continue posture is intentionally UNCHANGED — that fail-closed decision is
- * deferred). Returns the FIRST match: on a re-run the systemd unit APPENDS, so
- * a stale prior-boot failure can linger — the caller mitigates this by checking
- * the success gate FIRST (a healthy current boot passes before this is read).
+ * deferred).
+ *
+ * SAFE to fast-fail on the FIRST match because step 7 TRUNCATES this
+ * append-mode `.error.log` immediately before it (re)starts the daemon
+ * (`truncateErrorLog`), so anything present here is CURRENT-boot content — a
+ * stale prior-boot failure line can no longer linger and cause a false-fail.
  */
 export function detectBusConnectFailure(errorLogText: string | undefined): string | undefined {
   if (errorLogText === undefined) return undefined;
