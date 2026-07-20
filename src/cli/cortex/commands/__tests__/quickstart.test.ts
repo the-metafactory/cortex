@@ -182,7 +182,10 @@ interface FakeOverrides {
   daemonReload?: () => CommandResult;
   enableNow?: (units: string[]) => CommandResult;
   provisionSeed?: () => CommandResult;
-  readLog?: () => string | undefined;
+  // cortex#2264 — takes the polled path so a test can return DIFFERENT content
+  // for the main `.log` vs the `.error.log` sibling. Existing zero-arg lambdas
+  // stay assignable (a `() => T` satisfies `(p: string) => T`).
+  readLog?: (logPath: string) => string | undefined;
   fetchHealthz?: () => Promise<boolean>;
 }
 
@@ -494,6 +497,71 @@ describe("dispatchQuickstart — step 8 gate", () => {
     expect(res.stdout).toContain("timed out after 5000ms");
     expect(res.stdout).toContain("✗ Stack:");
     expect(res.stdout).toContain("✗ nats /healthz");
+  });
+
+  // cortex#2264 — a bus-connect failure lands in the .error.log SIBLING, not
+  // the polled .log. The gate must FAIL FAST surfacing the real error, never
+  // silently burn the whole timeout window.
+  test("cortex#2264: a bus-connect failure in the .error.log fast-fails and surfaces the real error", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const FAILURE_LINE =
+      "myelin-runtime: failed to connect — continuing without NATS: ENOENT: no such file or directory, open '~/.config/nats/work-bot.creds'";
+    let sleepCalls = 0;
+    const res = await withEnv(validCtxEnv(), () =>
+      dispatchQuickstart(
+        // A LONG timeout: a pre-fix silent-wait would burn the full window.
+        ["--config-dir", configDir, "--nats-dir", natsDir, "--gate-timeout-ms", "600000"],
+        () => {
+          const ports = fakePorts({
+            // Main .log carries a PARTIAL boot (no "connected to nats" — the
+            // connect failed), so the success gate never passes; the .error.log
+            // sibling carries the real failure. nats-server itself is up →
+            // healthz true (exactly the bench repro: bus dark, nats alive).
+            readLog: (p: string) => (p.endsWith(".error.log") ? FAILURE_LINE : "Stack: andreas/work\npolicy-engine active\n"),
+            fetchHealthz: () => Promise.resolve(true),
+          });
+          // Count sleeps to prove we did NOT poll the full window.
+          const origSleep = ports.gate.sleep;
+          ports.gate.sleep = (ms: number) => {
+            sleepCalls++;
+            return origSleep(ms);
+          };
+          return ports;
+        },
+      ),
+    );
+    expect(res.exitCode).toBe(1);
+    // FAST-FAIL: not the silent timeout message.
+    expect(res.stdout).not.toContain("timed out after");
+    // The ACTUAL error is surfaced, with its root cause.
+    expect(res.stdout).toContain("bus connect FAILED");
+    expect(res.stdout).toContain(FAILURE_LINE);
+    expect(res.stdout).toContain(".error.log");
+    // It fast-failed on the FIRST poll — no wait-window burn.
+    expect(sleepCalls).toBe(0);
+  });
+
+  // cortex#2264 staleness guard — a healthy current boot must PASS even if a
+  // stale prior-boot failure lingers in the appended .error.log.
+  test("cortex#2264: a healthy boot PASSES even with a stale failure in the appended .error.log", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const STALE_FAILURE = "myelin-runtime: failed to connect — continuing without NATS: (a PRIOR boot's failure)";
+    const res = await withEnv(validCtxEnv(), () =>
+      dispatchQuickstart(
+        ["--config-dir", configDir, "--nats-dir", natsDir, "--gate-timeout-ms", "5000"],
+        () =>
+          fakePorts({
+            // Main log is fully healthy; the error log still holds a stale failure.
+            readLog: (p: string) => (p.endsWith(".error.log") ? STALE_FAILURE : FULL_HEALTHY_LOG),
+            fetchHealthz: () => Promise.resolve(true),
+          }),
+      ),
+    );
+    // The success gate is checked FIRST, so the stale failure never masks it.
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).not.toContain("bus connect FAILED");
   });
 });
 

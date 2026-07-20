@@ -427,13 +427,26 @@ nats:
   name: cortex-${slug}
   subjects: []
   # credsPath — the daemon's OWN bus/bot creds, minted under the \`agents\` account
-  # by \`cortex network make-live\` (via add-bot). The \`-bot\` suffix is LOAD-BEARING:
-  # it keeps this path DISTINCT from stacks/${slug}.yaml's
-  # \`stack.nats_infra.creds_path\` (the FEDERATION creds, minted at
-  # \`cortex network join\` under a DIFFERENT account, conventional default
-  # \`~/.config/nats/${slug}.creds\`). Two different NATS accounts MUST be two
-  # different files — a shared path would clobber on the second mint.
-  credsPath: ~/.config/nats/${slug}-bot.creds
+  # by \`cortex network make-live\` (via add-bot). LEFT UNSET (commented) on a
+  # from-scratch single-stack scaffold ON PURPOSE (cortex#2264): a NON-FEDERATED
+  # quickstart never runs make-live, so no \`<slug>-bot.creds\` file is ever
+  # minted. Shipping a LIVE \`credsPath\` here made the runtime try to load a
+  # file that does not exist → the bus connect failed ENOENT and the whole
+  # loopback bus went dark (silently, behind the boot gate). A single-stack
+  # loopback bus connects fine PLAINTEXT with no creds — bench-proven. \`cortex
+  # network make-live\` ADDS this key back when federation is provisioned: it
+  # DEFAULTS the path to \`~/.config/nats/<slug>-bot.creds\`
+  # (deriveMakeLiveInputs → credsPathDefaulted, network.ts) and persists it into
+  # THIS file (writeBusCredsPath, network-make-live-lib.ts step 3.5), so leaving
+  # it unset here does NOT regress federation — it merely triggers the defaulted
+  # write-back path. The \`-bot\` suffix is LOAD-BEARING: it keeps this path
+  # DISTINCT from stacks/${slug}.yaml's \`stack.nats_infra.creds_path\` (the
+  # FEDERATION creds, minted at \`cortex network join\` under a DIFFERENT account,
+  # conventional default \`~/.config/nats/${slug}.creds\`). Two different NATS
+  # accounts MUST be two different files — a shared path would clobber on the
+  # second mint. Uncomment ONLY to point this stack at a pre-existing
+  # operator-mode bus whose bot creds already exist on disk.
+  # credsPath: ~/.config/nats/${slug}-bot.creds
   # NKey identity for envelope signing is PER-STACK and lives in
   # stacks/${slug}.yaml — \`stack.nkey_seed_path\` + \`stack.nkey_pub\`, which
   # \`arc upgrade cortex\` auto-provisions on first install (seed at

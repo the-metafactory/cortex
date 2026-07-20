@@ -356,4 +356,24 @@ describe("cortex network make-live — credsPath write-back (v5.30.2, C-1265c)",
     expect(res.exitCode).toBe(0);
     expect(configWrites).toHaveLength(0);
   });
+
+  // cortex#2264 REGRESSION GUARD: Fix 1 removed the LIVE `nats.credsPath` from
+  // the `cortex stack create` scaffold, so a from-scratch federation-ready stack
+  // now reaches make-live with `config.nats` carrying NO credsPath (exactly the
+  // UNSEEDED_CREDS fixture). Federation MUST still end up with a credsPath —
+  // make-live derives the `-bot` default AND persists it. This asserts the scaffold
+  // change does NOT regress the federation write-back path.
+  test("cortex#2264: a stack scaffolded WITHOUT credsPath still gets one minted + written on make-live --apply", async () => {
+    const { factory, configWrites } = fakeFactory();
+    const res = await run(
+      ["make-live", "community", "--config", "/x/community.yaml", "--apply"],
+      UNSEEDED_CREDS, // the post-Fix-1 scaffold state: config.nats has NO credsPath
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    // Federation is NOT regressed: exactly one credsPath write-back, carrying the
+    // derived `-bot` bus/bot path — the daemon config ends up WITH a credsPath.
+    expect(configWrites).toHaveLength(1);
+    expect(configWrites[0]?.credsPath).toBe(BUS_CREDS_DEFAULT);
+  });
 });

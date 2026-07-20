@@ -16,11 +16,15 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { parse as parseYaml } from "yaml";
 
 import {
+  BUS_CONNECT_FAILURE_MARKER,
   CTX_REQUIRED_KEYS,
   CTX_WEB_REQUIRED_KEYS,
+  daemonErrorLogPath,
   daemonLogPath,
+  detectBusConnectFailure,
   evaluateHealthyBootGate,
   gatePassed,
   natsConfPath,
@@ -36,6 +40,7 @@ import {
   validateWebEnvContract,
   writeWebSurfacesYaml,
 } from "../quickstart-lib";
+import { WebBindingSchema } from "../../../../adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/schema";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -480,6 +485,50 @@ test("daemonLogPath matches §5's target path shape", () => {
 });
 
 // =============================================================================
+// cortex#2264 — daemonErrorLogPath + bus-connect-failure detection
+// =============================================================================
+
+describe("daemonErrorLogPath (cortex#2264)", () => {
+  test("is the .error.log SIBLING of daemonLogPath (matches the cortex@.service StandardError path)", () => {
+    expect(daemonErrorLogPath("/home/andreas", "work")).toBe(
+      "/home/andreas/.local/state/metafactory/cortex/logs/cortex-work.error.log",
+    );
+    // Sibling invariant: same dir, `.error.log` where the gate log is `.log`.
+    expect(daemonErrorLogPath("/home/andreas", "work")).toBe(
+      daemonLogPath("/home/andreas", "work").replace(/\.log$/, ".error.log"),
+    );
+  });
+});
+
+describe("detectBusConnectFailure (cortex#2264)", () => {
+  test("undefined log (error-log not written) → no failure detected", () => {
+    expect(detectBusConnectFailure(undefined)).toBeUndefined();
+  });
+
+  test("an error log with no connect-failure marker → no failure detected", () => {
+    expect(detectBusConnectFailure("some unrelated stderr noise\nanother line\n")).toBeUndefined();
+  });
+
+  test("surfaces the FULL failure line (marker + underlying error on one console.error line)", () => {
+    // The exact shape runtime.ts logs via console.error — marker + err on one line.
+    const line =
+      'myelin-runtime: failed to connect — continuing without NATS: ENOENT: no such file or directory, open \'~/.config/nats/work-bot.creds\'';
+    const errorLog = ["some earlier boot noise", line, "trailing line"].join("\n");
+    const surfaced = detectBusConnectFailure(errorLog);
+    expect(surfaced).toBe(line);
+    // The surfaced line carries the actual root-cause error, not just the marker.
+    expect(surfaced).toContain("ENOENT");
+  });
+
+  test("BUS_CONNECT_FAILURE_MARKER matches runtime.ts's literal marker", () => {
+    expect("myelin-runtime: failed to connect — continuing without NATS: x".includes(BUS_CONNECT_FAILURE_MARKER)).toBe(
+      true,
+    );
+    expect("myelin-runtime: connected to nats at …".includes(BUS_CONNECT_FAILURE_MARKER)).toBe(false);
+  });
+});
+
+// =============================================================================
 // cortex#2153 — web surface env contract
 // =============================================================================
 
@@ -604,6 +653,30 @@ describe("renderWebSurfacesYaml", () => {
     expect(yaml).toContain(`token: "${WEB_SECRET}"`);
     // NO discord binding is written.
     expect(yaml).not.toContain("discord:");
+  });
+
+  // cortex#2264 — the web adapter schema REQUIRES broadcastUrl (http/https, min
+  // length 1). The scaffold must emit it, derived from the ingress host/port.
+  test("cortex#2264: emits a broadcastUrl derived from host/port", () => {
+    const yaml = renderWebSurfacesYaml(WEB_INPUTS);
+    expect(yaml).toContain("broadcastUrl: http://127.0.0.1:8090/broadcast");
+  });
+
+  test("cortex#2264: the rendered binding PASSES the real WebBindingSchema (broadcastUrl present + http/https)", () => {
+    const yaml = renderWebSurfacesYaml(WEB_INPUTS);
+    const parsed = parseYaml(yaml) as {
+      surfaces: { web: { binding: Record<string, unknown> }[] };
+    };
+    const binding = parsed.surfaces.web[0]?.binding;
+    // The authoritative cross-check: validate the scaffolded binding against the
+    // metafactory-cortex-adapter-web bundle's own WebBindingSchema (the schema the
+    // daemon's registry pass runs at boot). Pre-fix this FAILED on the missing
+    // required broadcastUrl.
+    const result = WebBindingSchema.safeParse(binding);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.broadcastUrl).toMatch(/^https?:\/\/.+/);
+    }
   });
 });
 

@@ -601,7 +601,16 @@ export interface WebSurfaceInputs {
  *  inputs — the byte-identical fixed point a re-run compares against for the
  *  "second run mutates nothing" guarantee. `port` is emitted UNQUOTED so YAML
  *  parses it as a number (matching the real web binding shape). `token` is the
- *  secret — quoted, and NEVER echoed anywhere but this file. */
+ *  secret — quoted, and NEVER echoed anywhere but this file. `broadcastUrl` is
+ *  REQUIRED by the web adapter's schema (cortex#2264): the
+ *  `metafactory-cortex-adapter-web` bundle's `WebBindingSchema` mandates it as
+ *  a non-empty http/https URL (`schema.ts` — `.min(1)` + `/^https?:\/\/.+/`).
+ *  Omitting it made the daemon's registry pass FATAL at boot
+ *  (`surfaces.web[0].binding is invalid: broadcastUrl … expected string,
+ *  received undefined`). Derived from the ingress host/port as
+ *  `http://<host>:<port>/broadcast` (the WS Durable-Object `/broadcast`
+ *  endpoint shape the adapter documents); edit it to your real push endpoint
+ *  when the broadcast server is not co-located with the ingress. */
 export function renderWebSurfacesYaml(opts: WebSurfaceInputs): string {
   return `# =============================================================================
 # surfaces/surfaces.yaml — web/gateway surface binding (cortex#2153)
@@ -619,6 +628,10 @@ surfaces:
         instanceId: ${opts.instanceId}
         host: ${opts.host}
         port: ${opts.port}
+        # broadcastUrl — REQUIRED by the web adapter schema (http/https). Derived
+        # from the ingress host/port; point it at your real broadcast/push
+        # endpoint if it is not co-located with the ingress (cortex#2264).
+        broadcastUrl: http://${opts.host}:${opts.port}/broadcast
         token: "${opts.token}"            # web auth secret (chmod 600 the file)
 `;
 }
@@ -717,4 +730,49 @@ export function gatePassed(lines: GateLineResult[], healthzOk: boolean): boolean
  *  grep targets. */
 export function daemonLogPath(home: string, slug: string): string {
   return join(home, ".local", "state", "metafactory", "cortex", "logs", `cortex-${slug}.log`);
+}
+
+/**
+ * The `.error.log` SIBLING of {@link daemonLogPath} —
+ * `~/.local/state/metafactory/cortex/logs/cortex-<slug>.error.log` — where the
+ * daemon's `console.error` output lands (the `cortex@.service` systemd unit
+ * routes `StandardError` here: `append:%h/.local/state/metafactory/cortex/logs/
+ * cortex-%i.error.log`). The bus-connect failure the gate must surface
+ * (`myelin-runtime: failed to connect …`, runtime.ts) is a `console.error`, so
+ * it NEVER reaches the `.log` the healthy-boot gate greps — it reaches THIS
+ * file. cortex#2264.
+ */
+export function daemonErrorLogPath(home: string, slug: string): string {
+  return join(home, ".local", "state", "metafactory", "cortex", "logs", `cortex-${slug}.error.log`);
+}
+
+/**
+ * The marker the myelin runtime logs (to stderr → the `.error.log`) when the
+ * PRIMARY bus connect fails and the runtime degrades to disabled
+ * (`runtime.ts`: `myelin-runtime: failed to connect — continuing without
+ * NATS: <err>`). `console.error` renders the marker and the underlying error
+ * on ONE line, so the whole line is the surfaceable diagnostic. cortex#2264.
+ */
+export const BUS_CONNECT_FAILURE_MARKER = "myelin-runtime: failed to connect";
+
+/**
+ * Scan the daemon `.error.log` text for a bus-connect failure and return the
+ * first matching line (trimmed) — the actual error to surface — or `undefined`
+ * when the log is absent/unwritten or carries no failure marker. Pure; the
+ * caller (quickstart Step 8's gate) decides whether to fast-fail on a non-
+ * `undefined` result. cortex#2264 (surface + fast-fail; the daemon's degraded-
+ * continue posture is intentionally UNCHANGED — that fail-closed decision is
+ * deferred). Returns the FIRST match: on a re-run the systemd unit APPENDS, so
+ * a stale prior-boot failure can linger — the caller mitigates this by checking
+ * the success gate FIRST (a healthy current boot passes before this is read).
+ */
+export function detectBusConnectFailure(errorLogText: string | undefined): string | undefined {
+  if (errorLogText === undefined) return undefined;
+  for (const rawLine of errorLogText.split("\n")) {
+    if (rawLine.includes(BUS_CONNECT_FAILURE_MARKER)) {
+      const line = rawLine.trim();
+      if (line.length > 0) return line;
+    }
+  }
+  return undefined;
 }

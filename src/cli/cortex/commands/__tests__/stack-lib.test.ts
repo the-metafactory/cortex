@@ -11,6 +11,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { parse as parseYaml } from "yaml";
 
 import {
   discoverStacks,
@@ -145,18 +146,36 @@ describe("renderScaffold", () => {
     expect(stack?.contents).toContain("assistant");
   });
 
-  test("system/system.yaml seeds the bus/bot credsPath (~/.config/nats/<slug>-bot.creds), distinct from the federation default", () => {
-    // v5.30.2 (C-1265c): a from-scratch stack carries nats.credsPath explicitly,
-    // so `cortex network make-live` needs no --creds flag. The path is the
-    // daemon's OWN bus/bot creds under the agents account. The `-bot` suffix is
-    // load-bearing: it keeps this DISTINCT from provision's federation-user
-    // default `~/.config/nats/<slug>.creds` (different NATS account → must be a
-    // different file, or the second mint clobbers the first).
+  test("system/system.yaml does NOT emit a LIVE bus/bot credsPath a single-stack never mints (cortex#2264)", () => {
+    // cortex#2264: a from-scratch, NON-federated scaffold must NOT ship an
+    // active `nats.credsPath` — a single-stack quickstart never runs
+    // `cortex network make-live`, so `<slug>-bot.creds` is never minted, and a
+    // live path made the runtime fail the bus connect ENOENT (silent bus death
+    // behind the boot gate). The key is DOCUMENTED (commented) with a note that
+    // make-live adds it back; it must not appear as a live YAML mapping.
     const files = renderScaffold(inputs);
     const system = files.find((f) => f.relPath === "system/system.yaml");
-    expect(system?.contents).toContain("credsPath: ~/.config/nats/demo-bot.creds");
-    // The bus path must NOT equal the federation default for the same slug.
-    expect(system?.contents).not.toContain("credsPath: ~/.config/nats/demo.creds");
+    // No ACTIVE (uncommented, indented mapping) credsPath key.
+    expect(system?.contents).not.toMatch(/^\s*credsPath:/m);
+    // The bot-creds path is still documented as a commented reference so
+    // make-live's derivation + the `-bot` distinction stay discoverable.
+    expect(system?.contents).toContain("# credsPath: ~/.config/nats/demo-bot.creds");
+    // The commented reference names make-live as the thing that adds it back.
+    expect(system?.contents).toMatch(/make-live/);
+    // Guardrail: the bus path (if ever uncommented) must stay DISTINCT from the
+    // federation default `~/.config/nats/<slug>.creds` for the same slug.
+    expect(system?.contents).not.toMatch(/^\s*credsPath: ~\/\.config\/nats\/demo\.creds/m);
+  });
+
+  test("the PARSED system.yaml the daemon loads has no nats.credsPath (cortex#2264)", () => {
+    // The runtime only attempts creds-auth when `nats.credsPath` is a set value
+    // (runtime.ts: `...(nats.credsPath ? { credsPath } : {})`). Prove the daemon's
+    // loaded VIEW carries no such key — a commented line must not parse to one.
+    const files = renderScaffold(inputs);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    const parsed = parseYaml(system?.contents ?? "") as { nats?: { credsPath?: unknown } };
+    expect(parsed.nats).toBeDefined();
+    expect(parsed.nats?.credsPath).toBeUndefined();
   });
 
   test("does NOT inline any signing seed material (key auto-provisioned later)", () => {

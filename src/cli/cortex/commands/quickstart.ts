@@ -71,7 +71,9 @@ import { expandTilde } from "../../../common/config/loader";
 import { buildQuickstartPorts } from "./quickstart-adapters";
 import type { QuickstartPorts } from "./quickstart-ports";
 import {
+  daemonErrorLogPath,
   daemonLogPath,
+  detectBusConnectFailure,
   evaluateHealthyBootGate,
   gatePassed,
   natsConfPath,
@@ -706,7 +708,13 @@ async function runGate(
       "  ○ --container passed — skipping healthy-boot gate (container health is compose restart: + nats healthcheck)",
     ]);
   }
-  const logPath = daemonLogPath(process.env.HOME ?? "", opts.slug);
+  const home = process.env.HOME ?? "";
+  const logPath = daemonLogPath(home, opts.slug);
+  // cortex#2264 — the bus-connect failure the daemon logs on a dead bus is a
+  // `console.error`, so it lands in the `.error.log` SIBLING, NEVER the `.log`
+  // the healthy-boot gate greps. Poll it too and FAIL FAST (surfacing the real
+  // error) instead of silently waiting out the whole timeout window.
+  const errorLogPath = daemonErrorLogPath(home, opts.slug);
   const healthzUrl = `http://127.0.0.1:${opts.monitorPort}/healthz`;
   const deadline = ports.gate.now() + opts.timeoutMs;
 
@@ -714,8 +722,24 @@ async function runGate(
     const logText = ports.gate.readLog(logPath);
     const gateLines = evaluateHealthyBootGate(logText);
     const healthzOk = await ports.gate.fetchHealthz(healthzUrl, 3_000);
+    // Check the SUCCESS gate FIRST: a healthy current boot passes before the
+    // error-log is consulted, so an APPENDED stale failure from a prior boot
+    // never masks a genuinely-healthy re-run (cortex#2264 staleness guard).
     if (gatePassed(gateLines, healthzOk)) {
       return step("8. Healthy-boot gate", true, [renderGateTable(gateLines, healthzOk)]);
+    }
+    // cortex#2264 — a surfaced bus-connect failure is TERMINAL for this boot:
+    // fail fast with the actual error line rather than burning the full
+    // timeout. SCOPE: surface + fast-fail only — the daemon still degrades and
+    // continues (its fail-closed-abort posture is a separate, deferred call).
+    const busFailure = detectBusConnectFailure(ports.gate.readLog(errorLogPath));
+    if (busFailure !== undefined) {
+      return step("8. Healthy-boot gate", false, [
+        renderGateTable(gateLines, healthzOk),
+        `  ✗ bus connect FAILED — the daemon could not reach NATS (surfaced from ${errorLogPath}):`,
+        `    ${busFailure}`,
+        `  (failing fast — not waiting out the ${String(opts.timeoutMs)}ms gate; fix the bus/creds and re-run)`,
+      ]);
     }
     if (ports.gate.now() >= deadline) {
       return step("8. Healthy-boot gate", false, [
