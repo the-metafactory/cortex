@@ -29,9 +29,22 @@
  * REPRODUCIBILITY INVARIANT: this script only ever rewrites the ARG to another
  * PINNED TAG. It never converts the Dockerfile to an unpinned build-time fetch.
  *
+ * COMPOSE DRIFT (cortex#2267): the Dockerfile ARG default is NOT the only place a
+ * pin lives. `deploy/compose/docker-compose.yaml` also carries
+ * `build.args.<NAME>: ${<NAME>:-<tag>}`, and on the PRIMARY deploy path
+ * (`docker compose build` / `up -d`) that `build.args` value is passed as
+ * `--build-arg` and OVERRIDES the Dockerfile ARG default. So bumping ONLY the
+ * Dockerfile would leave the compose default authoritative-but-stale and the
+ * deployed image would silently build the pre-bump ref. Therefore, when `--write`
+ * bumps the Dockerfile ARG, this script ALSO rewrites the matching
+ * `${<NAME>:-<tag>}` default in the compose file — IF that token is present.
+ * `ARC_REF` is Dockerfile-only (absent from compose), so its compose sync is a
+ * clean no-op; `CORTEX_REF` is present in both and is kept in lockstep.
+ *
  * Usage:
  *   bun scripts/arc-ref-bump.ts --latest <tag> [--arg-name <NAME>]
- *                               [--dockerfile <path>] [--write] [--github-output]
+ *                               [--dockerfile <path>] [--compose <path>]
+ *                               [--write] [--github-output]
  *
  *   --latest <tag>        REQUIRED. The upstream's latest release tag (e.g.
  *                         v0.42.1 for arc, v6.10.2 for cortex), resolved by the
@@ -41,7 +54,12 @@
  *                         backward compatibility.
  *   --dockerfile <path>   Dockerfile to read/rewrite. Defaults to
  *                         deploy/compose/Dockerfile.cortex relative to CWD.
- *   --write               Actually rewrite the file when a bump is warranted.
+ *   --compose <path>      Compose file whose `${<NAME>:-<tag>}` default is kept
+ *                         in lockstep with the Dockerfile ARG. Defaults to
+ *                         deploy/compose/docker-compose.yaml relative to CWD. A
+ *                         missing/unreadable compose file is a non-fatal skip;
+ *                         an arg absent from a readable compose is a clean no-op.
+ *   --write               Actually rewrite the file(s) when a bump is warranted.
  *                         Without it the script is a dry-run (decision only).
  *   --github-output       Append bumped/old/new to $GITHUB_OUTPUT (for the
  *                         workflow to gate its build + PR steps on).
@@ -50,8 +68,9 @@
  *   0  decision made cleanly (whether or not a bump was warranted)
  *   2  usage error (missing --latest, unknown --arg-name, bad flag)
  *   3  Dockerfile unreadable, or its `ARG <NAME>=` definition line is
- *      missing/malformed, or --latest is not a parseable semver tag — fail
- *      LOUD, never silent.
+ *      missing/malformed, or --latest is not a parseable semver tag, or a
+ *      READABLE compose file carries a malformed `${<NAME>:-}` default (empty/
+ *      invalid tag) for the arg being bumped — fail LOUD, never silent.
  */
 
 import { readFileSync, writeFileSync, appendFileSync } from "fs";
@@ -66,6 +85,7 @@ export interface Semver {
 }
 
 export const DEFAULT_DOCKERFILE = "deploy/compose/Dockerfile.cortex";
+export const DEFAULT_COMPOSE = "deploy/compose/docker-compose.yaml";
 
 /** The ARG names this tool knows how to compare/rewrite. */
 export const KNOWN_ARG_NAMES = ["ARC_REF", "CORTEX_REF"] as const;
@@ -180,6 +200,63 @@ export function rewriteRef(dockerfile: string, argName: string, newRef: string):
   return { content, changed: content !== dockerfile, oldRef };
 }
 
+export interface ComposeRewriteResult {
+  /** The (possibly unchanged) compose content. */
+  content: string;
+  /** True only when the `${<argName>:-<tag>}` default actually changed. */
+  changed: boolean;
+  /** The default value before rewrite; null when the arg's default form is absent. */
+  oldRef: string | null;
+  /** True when a `${<argName>:-...}` default form is present at all. */
+  present: boolean;
+  /** True when present but the default is empty/whitespace (malformed). */
+  malformed: boolean;
+}
+
+/**
+ * Rewrite the compose `${<argName>:-<tag>}` default to `newRef`, preserving the
+ * `${...:-...}` shape EXACTLY (reproducibility invariant: only ever a pinned
+ * tag). This is the compose-side counterpart to `rewriteRef`, needed because a
+ * compose `build.args` value is passed as `--build-arg` and OVERRIDES the
+ * Dockerfile ARG default on the primary deploy path — so the two must move in
+ * lockstep or the deployed image silently builds the stale ref (cortex#2267).
+ *
+ * The three shapes a caller must distinguish:
+ *   - absent   (present=false): the arg has no `${…:-…}` default here — e.g.
+ *              ARC_REF, which is Dockerfile-only. A clean NO-OP, never an error.
+ *   - malformed (malformed=true): `${<argName>:-}` with an empty/whitespace
+ *              default. Mirrors the Dockerfile's missing/malformed discipline —
+ *              the caller fails LOUD (exit 3) rather than writing garbage.
+ *   - present + valid: rewrite to `newRef` (idempotent when already equal).
+ *
+ * Only the FIRST occurrence is targeted (compose declares each default once),
+ * mirroring the single-line discipline of the Dockerfile rewrite. Throws on an
+ * unknown argName so a caller can never splice an arbitrary regex.
+ */
+export function rewriteComposeDefault(
+  compose: string,
+  argName: string,
+  newRef: string,
+): ComposeRewriteResult {
+  if (!isKnownArgName(argName)) throw new Error(`unknown ARG name: "${argName}"`);
+  const re = new RegExp(`\\$\\{${argName}:-([^}]*)\\}`);
+  const m = re.exec(compose);
+  if (!m) {
+    return { content: compose, changed: false, oldRef: null, present: false, malformed: false };
+  }
+  const current = m[1] ?? "";
+  if (current.trim() === "") {
+    // `${<argName>:-}` — an empty/invalid pinned default. Malformed, fail loud.
+    return { content: compose, changed: false, oldRef: null, present: true, malformed: true };
+  }
+  if (current === newRef) {
+    return { content: compose, changed: false, oldRef: current, present: true, malformed: false };
+  }
+  // Function replacement so a `$` in newRef is never treated as a backreference.
+  const content = compose.replace(re, () => `\${${argName}:-${newRef}}`);
+  return { content, changed: content !== compose, oldRef: current, present: true, malformed: false };
+}
+
 export interface Decision {
   argName: ArgName;
   oldRef: string;
@@ -204,6 +281,7 @@ interface ParsedArgs {
   latest?: string;
   argName: ArgName;
   dockerfile: string;
+  compose: string;
   write: boolean;
   githubOutput: boolean;
 }
@@ -212,6 +290,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = {
     argName: "ARC_REF",
     dockerfile: DEFAULT_DOCKERFILE,
+    compose: DEFAULT_COMPOSE,
     write: false,
     githubOutput: false,
   };
@@ -236,6 +315,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       case "--dockerfile":
         out.dockerfile = value(++i, "--dockerfile");
+        break;
+      case "--compose":
+        out.compose = value(++i, "--compose");
         break;
       case "--write":
         out.write = true;
@@ -316,13 +398,64 @@ export function main(argv: string[]): number {
     return 3;
   }
 
+  // ── Compose side: keep the `${<argName>:-<tag>}` default in lockstep with the
+  //    Dockerfile ARG (cortex#2267). Computed BEFORE any write so a malformed
+  //    compose default fails loud (exit 3) without leaving a half-applied bump.
+  const composePath = resolve(args.compose);
+  const composeToken = "${" + argName + ":-<tag>}";
+  let composeText: string | null = null;
+  try {
+    composeText = readFileSync(composePath, "utf8");
+  } catch {
+    // Compose is optional for a given arg — a missing/unreadable file is a
+    // non-fatal skip (the Dockerfile bump still stands), not an error.
+    process.stderr.write(
+      `arc-ref-bump: compose file at ${composePath} is missing/unreadable — skipping compose sync (non-fatal).\n`,
+    );
+  }
+
+  let composeContent: string | null = null;
+  let composeChanged = false;
+  if (composeText !== null) {
+    const cr = rewriteComposeDefault(composeText, argName, args.latest);
+    if (cr.malformed) {
+      process.stderr.write(
+        `arc-ref-bump: '${composeToken}' default in ${composePath} is malformed (empty/invalid tag)\n`,
+      );
+      return 3;
+    }
+    if (!cr.present) {
+      process.stdout.write(
+        `arc-ref-bump: no '${composeToken}' default in ${composePath} — compose sync is a no-op for ${argName}.\n`,
+      );
+    } else if (!cr.changed) {
+      process.stdout.write(
+        `arc-ref-bump: compose default ${argName} already at ${args.latest} in ${composePath} — no change.\n`,
+      );
+    } else {
+      composeContent = cr.content;
+      composeChanged = true;
+    }
+  }
+
   if (args.write) {
     writeFileSync(path, content);
     process.stdout.write(`arc-ref-bump: bumped ${argName} ${oldRef} -> ${args.latest} in ${path}.\n`);
+    if (composeChanged && composeContent !== null) {
+      writeFileSync(composePath, composeContent);
+      process.stdout.write(
+        `arc-ref-bump: bumped compose default ${argName} -> ${args.latest} in ${composePath}.\n`,
+      );
+    }
   } else {
     process.stdout.write(
       `arc-ref-bump: WOULD bump ${argName} ${oldRef} -> ${args.latest} (dry-run; pass --write to apply).\n`,
     );
+    if (composeChanged) {
+      process.stdout.write(
+        `arc-ref-bump: WOULD also bump compose default ${argName} -> ${args.latest} in ${composePath} (dry-run).\n`,
+      );
+    }
   }
   if (args.githubOutput) emitGithubOutput({ bumped: "true", old: oldRef, new: args.latest });
   return 0;

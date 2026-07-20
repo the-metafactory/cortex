@@ -219,7 +219,14 @@ jobs:
           fi
 
           git checkout -b "${branch}"
-          git add deploy/compose/Dockerfile.cortex
+          # Stage BOTH pin locations. arc-ref-bump.ts rewrites the Dockerfile ARG
+          # default AND, in lockstep, the compose `${ARG_NAME:-<tag>}` default —
+          # the compose value is passed as --build-arg and OVERRIDES the Dockerfile
+          # default on the primary `docker compose build` path (cortex#2267), so
+          # both must move together or the deployed image builds the stale ref.
+          # For a Dockerfile-only pin (ARC_REF), the compose file is unchanged and
+          # `git add` of it is a harmless no-op — only modified files are committed.
+          git add deploy/compose/Dockerfile.cortex deploy/compose/docker-compose.yaml
           commit_msg="$(printf '%s\n' \
             "ci(deploy): bump L4 container ${ARG_NAME} ${OLD_REF} -> ${NEW_REF}" \
             "" \
@@ -227,6 +234,12 @@ jobs:
             "build of Dockerfile.cortex with ${COMPONENT} ${NEW_REF} passed --" \
             "including the \`arc install <adapter>\` step that failed in" \
             "cortex#2243 -- so the bumped image assembles cleanly." \
+            "" \
+            "Both pin locations are bumped in lockstep: the Dockerfile.cortex ARG" \
+            "default AND the docker-compose.yaml \`\${${ARG_NAME}:-<tag>}\` default" \
+            "(when present). The compose default is passed as --build-arg and" \
+            "OVERRIDES the Dockerfile default on the \`docker compose build\` path," \
+            "so leaving it stale would silently build the pre-bump ref." \
             "" \
             "${COMPONENT} release: ${release_url}")"
           git commit -m "${commit_msg}"
@@ -237,6 +250,7 @@ jobs:
             "" \
             "- **${COMPONENT}:** \`${OLD_REF}\` -> \`${NEW_REF}\`" \
             "- **release:** ${release_url}" \
+            "- **Files bumped in lockstep:** \`deploy/compose/Dockerfile.cortex\` (ARG default) AND \`deploy/compose/docker-compose.yaml\` (\`\${${ARG_NAME}:-<tag>}\` default, when present). The compose default is passed as \`--build-arg\` and OVERRIDES the Dockerfile default on the \`docker compose build\` path, so both must move together or the deployed image silently builds the stale ref (cortex#2267). A Dockerfile-only pin (e.g. \`ARC_REF\`) leaves the compose file unchanged." \
             "- **Build gate:** PASSED -- \`docker build\` of \`deploy/compose/Dockerfile.cortex\` with \`${ARG_NAME}=${NEW_REF}\` succeeded, exercising the \`arc install <adapter>\` step that failed in cortex#2243. A green build is the proof the bumped image assembles." \
             "" \
             "Reproducibility preserved: \`${ARG_NAME}\` stays a pinned tag; this is a reviewable, build-gated bump, not an unpinned build-time fetch.")"

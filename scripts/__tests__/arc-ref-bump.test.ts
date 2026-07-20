@@ -21,6 +21,7 @@ import {
   compareSemver,
   readRef,
   rewriteRef,
+  rewriteComposeDefault,
   decideBump,
   isKnownArgName,
   KNOWN_ARG_NAMES,
@@ -64,11 +65,38 @@ function fixtureWith(argName: ArgName, ref: string): string {
     : fixtureDockerfile(OLD.ARC_REF, ref);
 }
 
-function tmpDockerfile(argName: ArgName, ref: string): string {
+// A structurally faithful stand-in for docker-compose.yaml: it carries ONLY the
+// `${CORTEX_REF:-<tag>}` default under build.args (ARC_REF is Dockerfile-only in
+// the real system — cortex#2267), so a CORTEX_REF bump exercises the compose
+// rewrite while an ARC_REF bump exercises the "arg absent -> no-op" path.
+function fixtureCompose(cortexRef: string): string {
+  return [
+    "services:",
+    "  cortex:",
+    "    build:",
+    "      args:",
+    `        CORTEX_REF: \${CORTEX_REF:-${cortexRef}}`,
+    "        BUN_VERSION: ${BUN_VERSION:-1.3.14}",
+    "",
+  ].join("\n");
+}
+
+// The compose default a fixtureWith(argName, ref) Dockerfile should be paired
+// with: the CORTEX_REF leg carries `ref`, the ARC_REF leg leaves CORTEX at OLD.
+function composeRefFor(argName: ArgName, ref: string): string {
+  return argName === "CORTEX_REF" ? ref : OLD.CORTEX_REF;
+}
+
+// Scaffold a temp dir with BOTH a Dockerfile.cortex and a docker-compose.yaml so
+// every main() call can be pointed at an ISOLATED compose via --compose — never
+// the real repo compose. Returns the two paths (same dir, so cleanup via `..`).
+function tmpEnv(argName: ArgName, ref: string): { dockerfile: string; compose: string } {
   const dir = mkdtempSync(join(tmpdir(), "arc-ref-bump-"));
-  const path = join(dir, "Dockerfile.cortex");
-  writeFileSync(path, fixtureWith(argName, ref));
-  return path;
+  const dockerfile = join(dir, "Dockerfile.cortex");
+  const compose = join(dir, "docker-compose.yaml");
+  writeFileSync(dockerfile, fixtureWith(argName, ref));
+  writeFileSync(compose, fixtureCompose(composeRefFor(argName, ref)));
+  return { dockerfile, compose };
 }
 
 describe("parseSemver", () => {
@@ -175,6 +203,47 @@ describe.each(ARG_NAMES)("rewriteRef (%s)", (argName) => {
   });
 });
 
+describe("rewriteComposeDefault", () => {
+  test("CORTEX_REF: rewrites the ${CORTEX_REF:-<tag>} default, preserving shape", () => {
+    const compose = fixtureCompose("v6.10.0");
+    const r = rewriteComposeDefault(compose, "CORTEX_REF", "v6.10.2");
+    expect(r.present).toBe(true);
+    expect(r.malformed).toBe(false);
+    expect(r.changed).toBe(true);
+    expect(r.oldRef).toBe("v6.10.0");
+    // Shape preserved exactly — still a pinned `${...:-<tag>}` default.
+    expect(r.content).toContain("CORTEX_REF: ${CORTEX_REF:-v6.10.2}");
+    // The other default is untouched.
+    expect(r.content).toContain("BUN_VERSION: ${BUN_VERSION:-1.3.14}");
+  });
+  test("ARC_REF: absent from compose -> clean no-op (present=false)", () => {
+    const compose = fixtureCompose("v6.10.0");
+    const r = rewriteComposeDefault(compose, "ARC_REF", "v0.42.1");
+    expect(r.present).toBe(false);
+    expect(r.malformed).toBe(false);
+    expect(r.changed).toBe(false);
+    expect(r.content).toBe(compose);
+  });
+  test("idempotent: default already at target -> no change", () => {
+    const compose = fixtureCompose("v6.10.2");
+    const r = rewriteComposeDefault(compose, "CORTEX_REF", "v6.10.2");
+    expect(r.present).toBe(true);
+    expect(r.changed).toBe(false);
+    expect(r.content).toBe(compose);
+  });
+  test("malformed empty default ${CORTEX_REF:-} -> present + malformed", () => {
+    const compose = "      args:\n        CORTEX_REF: ${CORTEX_REF:-}\n";
+    const r = rewriteComposeDefault(compose, "CORTEX_REF", "v6.10.2");
+    expect(r.present).toBe(true);
+    expect(r.malformed).toBe(true);
+    expect(r.changed).toBe(false);
+  });
+  test("throws on an unknown ARG name (regex-injection guard)", () => {
+    expect(() => rewriteComposeDefault("x", "BUN_VERSION", "1.0.0")).toThrow();
+    expect(() => rewriteComposeDefault("x", "ARC_REF|CORTEX_REF", "1.0.0")).toThrow();
+  });
+});
+
 describe.each(ARG_NAMES)("decideBump (%s)", (argName) => {
   test("newer -> bump; equal/older -> no bump", () => {
     expect(decideBump(argName, OLD[argName], NEW[argName]).shouldBump).toBe(true);
@@ -191,92 +260,193 @@ describe.each(ARG_NAMES)("main CLI (%s)", (argName) => {
   const flag = argName === "ARC_REF" ? [] : ["--arg-name", argName];
 
   test("newer release + --write rewrites the file, exit 0", () => {
-    const path = tmpDockerfile(argName, OLD[argName]);
+    const { dockerfile, compose } = tmpEnv(argName, OLD[argName]);
     try {
-      const code = main(["--latest", NEW[argName], "--dockerfile", path, "--write", ...flag]);
+      const code = main(["--latest", NEW[argName], "--dockerfile", dockerfile, "--compose", compose, "--write", ...flag]);
       expect(code).toBe(0);
-      expect(readRef(readFileSync(path, "utf8"), argName)).toBe(NEW[argName]);
+      expect(readRef(readFileSync(dockerfile, "utf8"), argName)).toBe(NEW[argName]);
     } finally {
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
     }
   });
 
-  test("newer release WITHOUT --write is a dry-run (file unchanged)", () => {
-    const path = tmpDockerfile(argName, OLD[argName]);
+  test("newer release WITHOUT --write is a dry-run (files unchanged)", () => {
+    const { dockerfile, compose } = tmpEnv(argName, OLD[argName]);
+    const composeBefore = readFileSync(compose, "utf8");
     try {
-      const code = main(["--latest", NEW[argName], "--dockerfile", path, ...flag]);
+      const code = main(["--latest", NEW[argName], "--dockerfile", dockerfile, "--compose", compose, ...flag]);
       expect(code).toBe(0);
-      expect(readRef(readFileSync(path, "utf8"), argName)).toBe(OLD[argName]);
+      expect(readRef(readFileSync(dockerfile, "utf8"), argName)).toBe(OLD[argName]);
+      expect(readFileSync(compose, "utf8")).toBe(composeBefore);
     } finally {
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
     }
   });
 
   test("equal/older release is a no-op, exit 0, file unchanged", () => {
-    const path = tmpDockerfile(argName, NEW[argName]);
+    const { dockerfile, compose } = tmpEnv(argName, NEW[argName]);
     try {
-      expect(main(["--latest", NEW[argName], "--dockerfile", path, "--write", ...flag])).toBe(0);
-      expect(main(["--latest", OLD[argName], "--dockerfile", path, "--write", ...flag])).toBe(0);
-      expect(readRef(readFileSync(path, "utf8"), argName)).toBe(NEW[argName]);
+      expect(main(["--latest", NEW[argName], "--dockerfile", dockerfile, "--compose", compose, "--write", ...flag])).toBe(0);
+      expect(main(["--latest", OLD[argName], "--dockerfile", dockerfile, "--compose", compose, "--write", ...flag])).toBe(0);
+      expect(readRef(readFileSync(dockerfile, "utf8"), argName)).toBe(NEW[argName]);
     } finally {
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
     }
   });
 
   test("malformed ARG line -> exit 3 (loud, no phantom bump)", () => {
     const dir = mkdtempSync(join(tmpdir(), "arc-ref-bump-"));
-    const path = join(dir, "Dockerfile.cortex");
-    writeFileSync(path, `FROM debian:bookworm-slim\nARG ${argName}\n`);
+    const dockerfile = join(dir, "Dockerfile.cortex");
+    const compose = join(dir, "docker-compose.yaml");
+    writeFileSync(dockerfile, `FROM debian:bookworm-slim\nARG ${argName}\n`);
+    writeFileSync(compose, fixtureCompose(composeRefFor(argName, OLD[argName])));
     try {
-      expect(main(["--latest", NEW[argName], "--dockerfile", path, "--write", ...flag])).toBe(3);
+      expect(main(["--latest", NEW[argName], "--dockerfile", dockerfile, "--compose", compose, "--write", ...flag])).toBe(3);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("unparseable --latest -> exit 3 (never track main)", () => {
-    const path = tmpDockerfile(argName, OLD[argName]);
+    const { dockerfile, compose } = tmpEnv(argName, OLD[argName]);
     try {
-      expect(main(["--latest", "main", "--dockerfile", path, "--write", ...flag])).toBe(3);
-      expect(readRef(readFileSync(path, "utf8"), argName)).toBe(OLD[argName]);
+      expect(main(["--latest", "main", "--dockerfile", dockerfile, "--compose", compose, "--write", ...flag])).toBe(3);
+      expect(readRef(readFileSync(dockerfile, "utf8"), argName)).toBe(OLD[argName]);
     } finally {
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
+    }
+  });
+});
+
+// The core of cortex#2267: the compose `${<ARG>:-<tag>}` default must move in
+// lockstep with the Dockerfile ARG, since it OVERRIDES the ARG on the primary
+// `docker compose build` path. These cases pin the Dockerfile+compose contract.
+describe("main CLI — compose lockstep (cortex#2267)", () => {
+  test("CORTEX_REF bump rewrites BOTH the Dockerfile ARG and the compose default", () => {
+    const { dockerfile, compose } = tmpEnv("CORTEX_REF", OLD.CORTEX_REF);
+    try {
+      const code = main([
+        "--latest", NEW.CORTEX_REF, "--arg-name", "CORTEX_REF",
+        "--dockerfile", dockerfile, "--compose", compose, "--write",
+      ]);
+      expect(code).toBe(0);
+      // Dockerfile ARG default moved…
+      expect(readRef(readFileSync(dockerfile, "utf8"), "CORTEX_REF")).toBe(NEW.CORTEX_REF);
+      // …AND the compose default moved in lockstep, shape preserved.
+      expect(readFileSync(compose, "utf8")).toContain(`CORTEX_REF: \${CORTEX_REF:-${NEW.CORTEX_REF}}`);
+    } finally {
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("ARC_REF bump rewrites the Dockerfile but leaves compose untouched (arg absent)", () => {
+    const { dockerfile, compose } = tmpEnv("ARC_REF", OLD.ARC_REF);
+    const composeBefore = readFileSync(compose, "utf8");
+    try {
+      const code = main([
+        "--latest", NEW.ARC_REF, "--arg-name", "ARC_REF",
+        "--dockerfile", dockerfile, "--compose", compose, "--write",
+      ]);
+      expect(code).toBe(0);
+      expect(readRef(readFileSync(dockerfile, "utf8"), "ARC_REF")).toBe(NEW.ARC_REF);
+      // Compose has no ${ARC_REF:-…} default -> clean no-op, byte-for-byte equal.
+      expect(readFileSync(compose, "utf8")).toBe(composeBefore);
+    } finally {
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("compose default already at target -> no spurious rewrite (Dockerfile still bumps)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arc-ref-bump-"));
+    const dockerfile = join(dir, "Dockerfile.cortex");
+    const compose = join(dir, "docker-compose.yaml");
+    // Dockerfile ARG is stale (v6.10.0) but compose default is already at target.
+    writeFileSync(dockerfile, fixtureWith("CORTEX_REF", OLD.CORTEX_REF));
+    writeFileSync(compose, fixtureCompose(NEW.CORTEX_REF));
+    const composeBefore = readFileSync(compose, "utf8");
+    try {
+      const code = main([
+        "--latest", NEW.CORTEX_REF, "--arg-name", "CORTEX_REF",
+        "--dockerfile", dockerfile, "--compose", compose, "--write",
+      ]);
+      expect(code).toBe(0);
+      expect(readRef(readFileSync(dockerfile, "utf8"), "CORTEX_REF")).toBe(NEW.CORTEX_REF);
+      // Compose was already at target -> unchanged byte-for-byte (no churn).
+      expect(readFileSync(compose, "utf8")).toBe(composeBefore);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed compose default ${CORTEX_REF:-} (readable file) -> exit 3", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arc-ref-bump-"));
+    const dockerfile = join(dir, "Dockerfile.cortex");
+    const compose = join(dir, "docker-compose.yaml");
+    writeFileSync(dockerfile, fixtureWith("CORTEX_REF", OLD.CORTEX_REF));
+    writeFileSync(compose, "      args:\n        CORTEX_REF: ${CORTEX_REF:-}\n");
+    try {
+      const code = main([
+        "--latest", NEW.CORTEX_REF, "--arg-name", "CORTEX_REF",
+        "--dockerfile", dockerfile, "--compose", compose, "--write",
+      ]);
+      expect(code).toBe(3);
+      // Loud failure BEFORE any write — Dockerfile ARG is left at the stale value.
+      expect(readRef(readFileSync(dockerfile, "utf8"), "CORTEX_REF")).toBe(OLD.CORTEX_REF);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("missing compose file -> non-fatal skip, Dockerfile still bumped, exit 0", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arc-ref-bump-"));
+    const dockerfile = join(dir, "Dockerfile.cortex");
+    const compose = join(dir, "does-not-exist-compose.yaml");
+    writeFileSync(dockerfile, fixtureWith("CORTEX_REF", OLD.CORTEX_REF));
+    try {
+      const code = main([
+        "--latest", NEW.CORTEX_REF, "--arg-name", "CORTEX_REF",
+        "--dockerfile", dockerfile, "--compose", compose, "--write",
+      ]);
+      expect(code).toBe(0);
+      expect(readRef(readFileSync(dockerfile, "utf8"), "CORTEX_REF")).toBe(NEW.CORTEX_REF);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
 
 describe("main (CLI) — shared behavior", () => {
   test("missing --latest -> usage error (exit 2)", () => {
-    const path = tmpDockerfile("ARC_REF", OLD.ARC_REF);
+    const { dockerfile, compose } = tmpEnv("ARC_REF", OLD.ARC_REF);
     try {
-      expect(main(["--dockerfile", path])).toBe(2);
+      expect(main(["--dockerfile", dockerfile, "--compose", compose])).toBe(2);
     } finally {
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
     }
   });
 
   test("unknown --arg-name -> usage error (exit 2)", () => {
-    const path = tmpDockerfile("ARC_REF", OLD.ARC_REF);
+    const { dockerfile, compose } = tmpEnv("ARC_REF", OLD.ARC_REF);
     try {
-      expect(main(["--latest", "v1.0.0", "--arg-name", "BUN_VERSION", "--dockerfile", path])).toBe(2);
+      expect(main(["--latest", "v1.0.0", "--arg-name", "BUN_VERSION", "--dockerfile", dockerfile, "--compose", compose])).toBe(2);
     } finally {
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
     }
   });
 
   test("unreadable Dockerfile -> exit 3 (loud)", () => {
-    expect(main(["--latest", "v0.42.1", "--dockerfile", "/nonexistent/Dockerfile.cortex"])).toBe(3);
+    expect(main(["--latest", "v0.42.1", "--dockerfile", "/nonexistent/Dockerfile.cortex", "--compose", "/nonexistent/docker-compose.yaml"])).toBe(3);
   });
 
   test("--github-output writes bumped/old/new to $GITHUB_OUTPUT (CORTEX_REF)", () => {
-    const path = tmpDockerfile("CORTEX_REF", OLD.CORTEX_REF);
+    const { dockerfile, compose } = tmpEnv("CORTEX_REF", OLD.CORTEX_REF);
     const outDir = mkdtempSync(join(tmpdir(), "arc-ref-out-"));
     const outFile = join(outDir, "gh_output");
     writeFileSync(outFile, "");
     const prev = process.env.GITHUB_OUTPUT;
     process.env.GITHUB_OUTPUT = outFile;
     try {
-      main(["--latest", NEW.CORTEX_REF, "--arg-name", "CORTEX_REF", "--dockerfile", path, "--write", "--github-output"]);
+      main(["--latest", NEW.CORTEX_REF, "--arg-name", "CORTEX_REF", "--dockerfile", dockerfile, "--compose", compose, "--write", "--github-output"]);
       const out = readFileSync(outFile, "utf8");
       expect(out).toContain("bumped=true");
       expect(out).toContain(`old=${OLD.CORTEX_REF}`);
@@ -284,7 +454,7 @@ describe("main (CLI) — shared behavior", () => {
     } finally {
       if (prev === undefined) delete process.env.GITHUB_OUTPUT;
       else process.env.GITHUB_OUTPUT = prev;
-      rmSync(join(path, ".."), { recursive: true, force: true });
+      rmSync(join(dockerfile, ".."), { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });
     }
   });
