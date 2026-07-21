@@ -79,7 +79,7 @@ Synthetic `reflex.activation.fired` envelope on `local.jc.default.reflex.activat
 ## GOTCHAS (from this session)
 
 - **specflow `specify`/`tasks` run headless (`claude -p`) and FAIL/rate-limit** → write `spec.md`/`plan.md`/`tasks.md` MANUALLY, then advance the phase directly: `sqlite3 .specflow/features.db "UPDATE features SET phase='plan' WHERE id='F-6';"` (values: specify→plan→tasks). `specflow edit --spec-path` does NOT advance phase; `--batch` needs enrich. `specflow validate F-6` to confirm.
-- **Sage review (pilot-review-loop):** `SAGE_STACK=default sage dispatch the-metafactory/cortex#<PR> --org jc --post --wait 300`. `--org jc` (NOT metafactory). Verdict in `result_summary`; commented/0-blockers = effective pass. Pre-flight: `tail ~/.config/cortex/logs/cortex-meta-factory.log | grep 'review consumer ready'`.
+- **Sage review (pilot-review-loop):** `SAGE_STACK=default sage dispatch the-metafactory/cortex#<PR> --org jc --post --wait 300`. `--org jc` (NOT metafactory). Verdict in `result_summary`; commented/0-blockers = effective pass. Pre-flight: `tail ~/.local/state/metafactory/cortex/logs/cortex-meta-factory.log | grep 'review consumer ready'`.
 - **Sage is sharp on doc/PR-text overclaims** (HonestOracle) — back every verification claim with embedded command+output; don't cite external issues without evidence; don't mark unrun gates "confirmed".
 - **Sage self-authored PRs** surface as COMMENTED (can't APPROVE own); `reviewDecision` empty is fine; merge gate CLEAN is the signal.
 - This branch's F-6 specflow docs (spec/plan/tasks/HANDOFF) are committed here — `git checkout spec/F-6-reflex-activation-bridge` in cortex to resume.

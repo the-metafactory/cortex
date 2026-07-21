@@ -118,6 +118,15 @@ warn_stack_identity_drift "${CONFIG_DIR}"
 # ─── 3. Re-template launchd plists (shared with postinstall.sh) ──
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
+
+  # cortex#2282 — the stack + relay plists' Standard{Out,Error}Path now live
+  # under the canonical state tree. launchd does NOT create Std*Path parent
+  # directories, and on an UPGRADE box postinstall's §1b state bootstrap is
+  # deliberately inert (gated migration, cortex#1903) — so an existing macOS
+  # install re-rendered onto the new paths would otherwise restart its daemons
+  # logging nowhere. Guarantee the dir here, BEFORE the reloads below.
+  mkdir -p "${HOME}/.local/state/metafactory/cortex/logs"
+
   render_cortex_plists "${CORTEX_DIR}" "${LAUNCH_DIR}" "${CONFIG_DIR}"
 
   # ─── 4. Restart daemons ─────────────────────────────────────────

@@ -668,12 +668,13 @@ function runSeedProvisioning(ports: QuickstartPorts, opts: { slug: string; confi
  * `StandardError=append:` and launchd `StandardErrorPath` append, never
  * truncate) and make the gate fast-fail on stale content before the fresh
  * daemon connects — breaking the "fix creds and re-run" recovery. Best-effort
- * (the port swallows fs errors). Shared by BOTH step-7 branches (cortex#2282
- * extracted it from the Linux-only path so macOS re-runs get the same
- * hygiene): Linux calls it immediately before its `enable --now` (re)start;
- * macOS calls it in the launchd-skip branch, before step 8 polls — no restart
- * there (arc/launchd owns the daemon; restart-on-re-run is A2's scope).
- * Returns the human-readable step line.
+ * (the port swallows fs errors). Extracted (cortex#2282) so it is callable
+ * host-independently, but a truncate is ONLY safe paired atomically with a
+ * (re)start — truncate → restart → gate — otherwise it destroys the
+ * current-boot failure evidence the gate's fast-fail depends on. So today
+ * ONLY the Linux branch calls it, immediately before its `enable --now`;
+ * the darwin call arrives with A2 (cortex#2283), paired with the
+ * restart-on-re-run it needs. Returns the human-readable step line.
  */
 function clearPriorBootErrorLog(ports: QuickstartPorts, slug: string): string {
   const errorLogPath = daemonErrorLogPath(process.env.HOME ?? "", slug);
@@ -686,16 +687,7 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
     return step("7. Services", true, ["  ○ --skip-services passed — skipping"]);
   }
   if (process.platform !== "linux") {
-    const lines = ["  ○ non-Linux host — launchd is handled by arc; skip"];
-    if (process.platform === "darwin") {
-      // cortex#2282 — the launchd plist appends `.error.log` into the SAME
-      // state tree the gate polls (StandardErrorPath never truncates), so a
-      // stale prior-boot failure would false-fail step 8's fast-fail check on
-      // every re-run. Clear it here, before the gate polls. The daemon itself
-      // is NOT restarted (out of scope — A2).
-      lines.push(clearPriorBootErrorLog(ports, opts.slug));
-    }
-    return step("7. Services", true, lines);
+    return step("7. Services", true, ["  ○ non-Linux host — launchd is handled by arc; skip"]);
   }
 
   const lines: string[] = [];
@@ -794,11 +786,16 @@ async function runGate(
     }
     // cortex#2264 — a surfaced bus-connect failure is TERMINAL for this boot:
     // fail fast with the actual error line rather than burning the full
-    // timeout. This is safe on the FIRST poll (before success is logged) because
-    // step 7 TRUNCATED this append-mode `.error.log` right before the daemon
-    // (re)started — so any line here is from THIS boot, never a stale prior-boot
-    // failure. SCOPE: surface + fast-fail only — the daemon still degrades and
-    // continues (its fail-closed-abort posture is a separate, deferred call).
+    // timeout. On LINUX this is safe on the FIRST poll (before success is
+    // logged) because step 7 truncated this append-mode `.error.log` AND
+    // (re)started the daemon right before the gate — so any line here is from
+    // THIS boot, never a stale prior-boot failure. On darwin neither happens
+    // yet: quickstart does not restart the daemon, so a stale prior-boot line
+    // can fast-fail a re-run here — the paired truncate → restart → gate
+    // arrives with A2 (cortex#2283; a lone truncate would instead destroy
+    // current-boot failure evidence and false-GREEN the gate). SCOPE: surface
+    // + fast-fail only — the daemon still degrades and continues (its
+    // fail-closed-abort posture is a separate, deferred call).
     const busFailure = detectBusConnectFailure(ports.gate.readLog(errorLogPath));
     if (busFailure !== undefined) {
       return step("8. Healthy-boot gate", false, [

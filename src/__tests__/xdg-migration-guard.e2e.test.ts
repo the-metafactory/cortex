@@ -232,7 +232,9 @@ function renderFleet(): {
   // cortex#2282 — daemon + relay Std*Path moved onto the canonical state tree
   // (~/.local/state/metafactory/cortex/logs), the same root cortex@.service
   // writes and the quickstart healthy-boot gate greps. On a real install the
-  // dir comes from postinstall's §1b state bootstrap; materialize it here so a
+  // dir is guaranteed by postinstall's §1b state bootstrap on FRESH installs
+  // and by postupgrade.sh's Darwin-side `mkdir -p` on UPGRADE boxes (where §1b
+  // is deliberately inert — cortex#1903/#2282); materialize it here so a
   // correctly-installed fleet verifies fully extant.
   mkdirSync(join(home, ".local", "state", "metafactory", "cortex", "logs"), { recursive: true });
   // cortex#2097 — the stack plist's WorkingDirectory moved off the cortex

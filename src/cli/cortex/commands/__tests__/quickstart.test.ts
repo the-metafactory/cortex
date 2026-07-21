@@ -626,7 +626,7 @@ describe("dispatchQuickstart — step 8 gate", () => {
 // cortex#2282 — macOS: unified log paths make the gate live on darwin
 // =============================================================================
 
-describe("dispatchQuickstart — cortex#2282 macOS gate + error-log hygiene", () => {
+describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", () => {
   // The structural fix itself: the launchd stack plist template writes
   // Std{Out,Error}Path to the EXACT paths the gate greps (daemonLogPath /
   // daemonErrorLogPath). Substitute the renderer's tokens (plist-render.sh
@@ -669,82 +669,39 @@ describe("dispatchQuickstart — cortex#2282 macOS gate + error-log hygiene", ()
     expect(res.stdout).toContain("Healthy-boot gate ✓");
   });
 
-  // cortex#2282 — step 7's darwin branch truncates the .error.log (exact
-  // daemonErrorLogPath) BEFORE step 8 polls, and NEVER (re)starts services
-  // (launchd/arc owns the daemon on macOS; restart-on-re-run is A2's scope).
-  test("cortex#2282: darwin — .error.log truncated (exact path) before the gate polls, with NO service (re)start", async () => {
+  // NEGATIVE SPACE (deliberate deferral, adversarial-review round 1): darwin
+  // must NOT truncate the .error.log on this branch. quickstart never restarts
+  // the daemon on macOS, and a truncate WITHOUT a paired restart destroys
+  // current-boot failure evidence — a bus-dead daemon's one-shot `failed to
+  // connect` line would be wiped while stale healthy `.log` lines persist
+  // (append mode), turning the gate false-GREEN. The paired
+  // truncate → restart → gate lands with A2 (cortex#2283). This test moves
+  // there, inverted, when it does.
+  test("cortex#2282: darwin — .error.log is NOT truncated (deferred to A2/#2283 with restart-on-re-run)", async () => {
     const configDir = freshDir();
     const natsDir = freshDir();
-    const calls: string[] = [];
+    const truncateCalls: string[] = [];
     const res = await withPlatform("darwin", () =>
       withEnv(validCtxEnv(), () =>
         dispatchQuickstart(
           ["--config-dir", configDir, "--nats-dir", natsDir],
           () =>
             fakePorts({
-              truncateErrorLog: (p: string) => calls.push(`truncate:${p}`),
-              enableNow: (u: string[]) => {
-                calls.push(`enable:${u.join(",")}`);
-                return { exitCode: 0, stdout: "", stderr: "" };
-              },
-              readLog: (p: string) => {
-                calls.push(`poll:${p}`);
-                return FULL_HEALTHY_LOG;
-              },
+              truncateErrorLog: (p: string) => truncateCalls.push(p),
             }),
         ),
       ),
     );
     expect(res.exitCode).toBe(0);
-    const expectedPath = daemonErrorLogPath(process.env.HOME ?? "", "work");
-    expect(calls).toContain(`truncate:${expectedPath}`);
-    // Truncation happened BEFORE the gate's first log poll…
-    const truncIdx = calls.findIndex((c) => c.startsWith("truncate:"));
-    const pollIdx = calls.findIndex((c) => c.startsWith("poll:"));
-    expect(truncIdx).toBeGreaterThanOrEqual(0);
-    expect(pollIdx).toBeGreaterThan(truncIdx);
-    // …and nothing was (re)started — the launchd-skip line still reports.
-    expect(calls.some((c) => c.startsWith("enable:"))).toBe(false);
+    expect(truncateCalls).toEqual([]);
+    expect(res.stdout).not.toContain("cleared prior-boot error log");
     expect(res.stdout).toContain("non-Linux host");
   });
 
-  // The darwin mirror of the cortex#2264 staleness case: a re-run with a STALE
-  // prior-boot failure in the append-mode .error.log must NOT false-fail —
-  // step 7's darwin truncate cleared it before the gate ran.
-  test("cortex#2282: darwin re-run — stale prior-boot .error.log failure does NOT false-fail the gate", async () => {
-    const configDir = freshDir();
-    const natsDir = freshDir();
-    let errorLogContent = "myelin-runtime: failed to connect — continuing without NATS: (a PRIOR boot's failure)";
-    let mainPolls = 0;
-    const res = await withPlatform("darwin", () =>
-      withEnv(validCtxEnv(), () =>
-        dispatchQuickstart(
-          ["--config-dir", configDir, "--nats-dir", natsDir, "--gate-timeout-ms", "600000"],
-          () =>
-            fakePorts({
-              truncateErrorLog: () => {
-                errorLogContent = "";
-              },
-              readLog: (p: string) => {
-                if (p.endsWith(".error.log")) return errorLogContent;
-                mainPolls++;
-                // Poll 1: partial boot. Poll 2+: healthy.
-                return mainPolls >= 2 ? FULL_HEALTHY_LOG : "Stack: andreas/work\npolicy-engine active\n";
-              },
-              fetchHealthz: () => Promise.resolve(true),
-            }),
-        ),
-      ),
-    );
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).not.toContain("bus connect FAILED");
-    expect(res.stdout).toContain("Healthy-boot gate ✓");
-  });
-
-  // Linux ordering is byte-identical after the cortex#2282 extraction: the
-  // truncate still happens between daemon-reload and enable --now (covered in
-  // depth by the cortex#2264 tests above — this is the regression tripwire for
-  // the step-7 output line surviving the shared-helper refactor).
+  // Linux ordering is byte-identical after the cortex#2282 helper extraction:
+  // the truncate still happens between daemon-reload and enable --now (covered
+  // in depth by the cortex#2264 tests above — this is the regression tripwire
+  // for the step-7 output line surviving the shared-helper refactor).
   test("cortex#2282: linux — step 7 still emits the cleared-error-log line before enable --now", async () => {
     const configDir = freshDir();
     const natsDir = freshDir();

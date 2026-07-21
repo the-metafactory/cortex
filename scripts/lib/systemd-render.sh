@@ -203,9 +203,12 @@ warn_systemd_linger() {
 #
 # `~/.local/state/metafactory/cortex/logs` is DELIBERATELY NOT created here,
 # even though cortex@.service needs the identical guarantee. That directory
-# is part of the CANONICAL CORTEX STATE TREE, whose creation is owned
-# end-to-end by postinstall.sh's §1b state bootstrap (migrate-state-dir-exec.ts)
-# under the XDG wave-5 gated migration (cortex#1903) — verified via
+# is part of the CANONICAL CORTEX STATE TREE. On a FRESH install it is created
+# by postinstall.sh's §1b state bootstrap (migrate-state-dir-exec.ts); on an
+# UPGRADE box §1b is deliberately inert (the XDG wave-5 gated migration,
+# cortex#1903) and the guarantee comes from postupgrade.sh's Darwin-side
+# `mkdir -p` (cortex#2282) or, on Linux, from the tree the gated migration
+# itself materializes. The §1b upgrade-inertness is verified via
 # scripts/__tests__/postinstall-state-bootstrap.sh's own invariant: on an
 # UPGRADE box (legacy grove state present, not yet migrated) postinstall must
 # write NOTHING state-related, no canonical tree at all, until the gated
