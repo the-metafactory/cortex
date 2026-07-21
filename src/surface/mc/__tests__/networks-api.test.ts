@@ -401,3 +401,85 @@ describe("handleListNetworks — per-principal acceptance (MC-A2, the second tru
     expect(otherAccepts).toEqual({ andreas: "self", zeta: "accepted-named" });
   });
 });
+
+// cortex#2311 — never-5xx hardening: every injected view seam is guarded, so a
+// throwing seam DEGRADES (logged to stderr) instead of taking the route to the
+// catch-all 500. Repro class: post-myelin-RFC mid-migration adapters whose
+// enumeration/resolvers throw on current shapes.
+describe("handleListNetworks — seam-throw degradation (cortex#2311, never 5xx)", () => {
+  it("a throwing view.networks() degrades to an empty list, never 5xx", async () => {
+    const v: NetworksView = {
+      localPrincipal: "andreas",
+      networks: () => {
+        throw new Error("mid-migration enumeration boom");
+      },
+      resolveAdmittedRoster: () =>
+        Promise.resolve({ ok: false, reason: "not_configured", detail: "n/a" }),
+    };
+    const res = await handleListNetworks(v, presenceView([rec({ agentId: "luna" })]));
+    expect(res.status).toBe(200);
+    expect(await body(res)).toEqual({ networks: [] });
+  });
+
+  it("a throwing presence snapshot degrades to no-presence (members absent), never 5xx", async () => {
+    const throwingPresence: AgentPresenceView = {
+      getAgents: () => {
+        throw new Error("presence snapshot boom");
+      },
+    };
+    const res = await handleListNetworks(
+      view({
+        "research-collab": {
+          ok: true,
+          roster: { admitted: ["jc"], pending: [], authoritative: true },
+        },
+      }),
+      throwingPresence,
+    );
+    expect(res.status).toBe(200);
+    const net = (await body(res)).networks[0]!;
+    // No presence observable → every member honestly absent, none present.
+    expect(net.members.every((m) => m.verdict !== "admitted-present")).toBe(true);
+    expect(net.members.map((m) => m.principal).sort()).toEqual(["andreas", "jc"]);
+  });
+
+  it("a throwing acceptsPeer degrades per-member to default-deny, never 5xx", async () => {
+    const v: NetworksView = {
+      localPrincipal: "andreas",
+      networks: () => [
+        { networkId: "research-collab", leafNode: "rc-leaf", confidentiality: CLEARTEXT },
+      ],
+      resolveAdmittedRoster: () =>
+        Promise.resolve({
+          ok: true,
+          roster: { admitted: ["jc"], pending: [], authoritative: true },
+        }),
+      acceptsPeer: () => {
+        throw new Error("acceptance resolver boom");
+      },
+    };
+    const res = await handleListNetworks(v, presenceView([rec({ agentId: "luna" })]));
+    expect(res.status).toBe(200);
+    const accepts = Object.fromEntries(
+      (await body(res)).networks[0]!.members.map((m) => [m.principal, m.accepts]),
+    );
+    // Default-deny honesty: self for the serving principal, not-accepted otherwise.
+    expect(accepts).toEqual({ andreas: "self", jc: "not-accepted" });
+  });
+
+  it("a view with no confidentiality posture omits the field (surface renders 'unknown'), never 5xx", async () => {
+    const v: NetworksView = {
+      localPrincipal: "andreas",
+      networks: () => [
+        // No `confidentiality` — an older/mid-migration posture-less adapter.
+        { networkId: "research-collab", leafNode: "rc-leaf" },
+      ],
+      resolveAdmittedRoster: () =>
+        Promise.resolve({ ok: false, reason: "not_configured", detail: "n/a" }),
+    };
+    const res = await handleListNetworks(v, null);
+    expect(res.status).toBe(200);
+    const net = (await body(res)).networks[0]!;
+    expect(net.confidentiality).toBeUndefined();
+  });
+});

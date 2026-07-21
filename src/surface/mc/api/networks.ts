@@ -80,8 +80,11 @@ export interface JoinedNetworkInfo {
    * posture, derived from config (`encryption` mode + `payload_key` presence +
    * `payload_key_id`). `cortex.ts` supplies it via `confidentialityPosture(n)`;
    * tests supply a stub. The handler maps it to the snake_case wire DTO.
+   * OPTIONAL (cortex#2311): an older/mid-migration adapter that carries no
+   * posture omits it; the handler then omits the wire field and the surface
+   * renders "encryption: unknown" (never assumed encrypted, never a throw).
    */
-  confidentiality: NetworkConfidentialityPosture;
+  confidentiality?: NetworkConfidentialityPosture;
 }
 
 /**
@@ -224,10 +227,13 @@ export interface NetworkMembershipDTO {
   roster_scope: RosterScope | null;
   /**
    * MC-A3 (cortex#1277, ADR-0019/0018) — the network's read-only confidentiality
-   * posture. Always present; the surface badges it honestly (never fakes
-   * "encrypted" for a configured-but-keyless network).
+   * posture. The surface badges it honestly (never fakes "encrypted" for a
+   * configured-but-keyless network). OPTIONAL on the wire (cortex#2311): a view
+   * adapter that predates MC-A3 / carries no posture omits it, and the surface
+   * renders "encryption: unknown" (never assumed encrypted) rather than the
+   * handler throwing into a 500. The live `cortex.ts` view always supplies it.
    */
-  confidentiality: NetworkConfidentialityDTO;
+  confidentiality?: NetworkConfidentialityDTO;
   /** Admitted roster reconciled ⋈ presence into per-member verdicts. */
   members: MembershipMemberDTO[];
   /**
@@ -333,13 +339,37 @@ export async function handleListNetworks(
       return Response.json({ networks: [] } satisfies ListNetworksResponse);
     }
 
-    const records = presence ? presence.getAgents() : [];
+    // cortex#2311 — never-5xx is this route's stated contract, so the injected
+    // view seams are guarded STRUCTURALLY (mirroring the resolveAdmittedRoster
+    // guard below): a throwing presence snapshot degrades to "no presence
+    // observed" (members render absent, honestly) rather than a 500.
+    let records: ReturnType<NonNullable<typeof presence>["getAgents"]> = [];
+    if (presence) {
+      try {
+        records = presence.getAgents();
+      } catch (err) {
+        process.stderr.write(
+          `[api] GET /api/networks: presence snapshot threw (degrading to none): ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
     const presentStacksByPrincipal = derivePresentStacksByPrincipal(
       records,
       view.localPrincipal,
     );
 
-    const joined = view.networks();
+    // cortex#2311 — a throwing networks() enumeration degrades to an empty
+    // list (logged, never silent): "no networks renderable" beats a 500 that
+    // takes the whole Network view down.
+    let joined: JoinedNetworkInfo[];
+    try {
+      joined = view.networks();
+    } catch (err) {
+      process.stderr.write(
+        `[api] GET /api/networks: view.networks() threw (degrading to empty): ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return Response.json({ networks: [] } satisfies ListNetworksResponse);
+    }
 
     // Resolve every roster first so the anomaly candidates can be computed
     // against the union of admitted principals across all AUTHORITATIVE networks
@@ -422,6 +452,26 @@ export async function handleListNetworks(
         ...(everReceivedPresence !== undefined ? { everReceivedPresence } : {}),
       });
 
+      // MC-A2 — the SECOND trust layer (acceptance), orthogonal to the
+      // membership verdict. The view supplies the live resolver; when it's
+      // absent (older wiring / test stub) — or when it THROWS (cortex#2311:
+      // never-5xx; a mid-migration resolver must not take the route down) —
+      // we default-deny honestly (self for the serving principal,
+      // not-accepted otherwise).
+      const acceptsOf = (memberPrincipal: string): PeerAcceptance => {
+        const fallback: PeerAcceptance =
+          memberPrincipal === view.localPrincipal ? "self" : "not-accepted";
+        if (view.acceptsPeer === undefined) return fallback;
+        try {
+          return view.acceptsPeer(info.networkId, memberPrincipal);
+        } catch (err) {
+          process.stderr.write(
+            `[api] GET /api/networks: acceptsPeer("${info.networkId}", "${memberPrincipal}") threw (default-deny): ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+          return fallback;
+        }
+      };
+
       return {
         network_id: info.networkId,
         leaf_node: info.leafNode,
@@ -429,26 +479,21 @@ export async function handleListNetworks(
         roster_scope: rosterScope,
         // MC-A3 — carry the config-derived confidentiality posture through to the
         // wire DTO (camelCase posture → snake_case DTO). Read-only; the surface
-        // badges it honestly. Independent of the roster read above.
-        confidentiality: {
-          mode: info.confidentiality.mode,
-          key_present: info.confidentiality.keyPresent,
-          key_id: info.confidentiality.keyId,
-        },
+        // badges it honestly. Independent of the roster read above. cortex#2311:
+        // a view that carries no posture omits the field — the surface renders
+        // "encryption: unknown" (never assumed encrypted, never a throw).
+        ...(info.confidentiality !== undefined && {
+          confidentiality: {
+            mode: info.confidentiality.mode,
+            key_present: info.confidentiality.keyPresent,
+            key_id: info.confidentiality.keyId,
+          },
+        }),
         members: members.map((m) => ({
           principal: m.principal,
           verdict: m.verdict,
           present_stacks: m.presentStacks,
-          // MC-A2 — the SECOND trust layer (acceptance), orthogonal to the
-          // membership verdict above. The view supplies the live resolver; when
-          // it's absent (older wiring / test stub) we default-deny honestly
-          // (self for the serving principal, not-accepted otherwise).
-          accepts:
-            view.acceptsPeer !== undefined
-              ? view.acceptsPeer(info.networkId, m.principal)
-              : m.principal === view.localPrincipal
-                ? "self"
-                : "not-accepted",
+          accepts: acceptsOf(m.principal),
         })),
         roster_states: rosterStates,
       };

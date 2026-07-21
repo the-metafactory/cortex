@@ -65,6 +65,9 @@ export function NetworkRosterPanel({
           // revoked, kept visually distinct) rendered as a separate group.
           const { byPrincipal: stateByPrincipal, former: formerMembers } =
             partitionRosterStates(net.roster_states ?? []);
+          // cortex#2311 — defensive against a version-skewed/partial payload:
+          // a missing members array renders as an empty roster, never a throw.
+          const members = net.members ?? [];
           return (
             <li key={net.network_id} className="network-roster-group">
               <div className="network-roster-group-header">
@@ -100,30 +103,37 @@ export function NetworkRosterPanel({
                   roster (they are join/onboarding affordances, not roster
                   state). The roster stays a pure trust-group view: group header
                   + membership rows + former members. */}
-              {net.members.length === 0 ? (
+              {members.length === 0 ? (
                 <div className="dim network-roster-empty">
                   No admitted members resolved.
                 </div>
               ) : (
                 <ul className="network-roster-members">
-                  {net.members.map((m) => {
+                  {members.map((m, i) => {
+                    // cortex#2311 — one bad entry must not blank the panel: a
+                    // null/holey entry is skipped; badge derivation is total at
+                    // runtime (the adapter renders honest fallbacks for skewed
+                    // values), so no property read below can throw.
+                    if (m === null || m === undefined) return null;
+                    const principal = m.principal ?? "(unknown principal)";
                     const badge = verdictBadge(m.verdict);
                     const acceptance = acceptanceBadge(m.accepts);
-                    const isYou = localPrincipal !== null && m.principal === localPrincipal;
+                    const isYou = localPrincipal !== null && principal === localPrincipal;
                     // FLG-4 — the member's lifecycle state (seal / hub-authorize /
                     // authorship), when the read carries it. Absent ⇒ no extra
                     // badges (honest: pre-FLG-4 server or facet-less read).
-                    const st = stateByPrincipal.get(m.principal);
+                    const st = stateByPrincipal.get(principal);
                     const seal = st ? sealBadge(st.sealed) : null;
                     const hubAuth = st ? formatHubAuthorized(st.hub_authorized_at) : null;
                     const authorship = st ? authorshipBadge(st.authorship) : null;
+                    const presentStacks = m.present_stacks ?? [];
                     return (
                       <li
-                        key={m.principal}
+                        key={m.principal ?? `member-${i.toString()}`}
                         className="network-roster-member"
                       >
                         <span className="network-roster-principal">
-                          {m.principal}
+                          {principal}
                           {isYou ? (
                             <span className="dim network-roster-you"> (you)</span>
                           ) : null}
@@ -175,9 +185,9 @@ export function NetworkRosterPanel({
                             {authorship.label}
                           </span>
                         ) : null}
-                        {m.present_stacks.length > 0 ? (
+                        {presentStacks.length > 0 ? (
                           <span className="dim network-roster-stacks">
-                            {m.present_stacks.join(", ")}
+                            {presentStacks.join(", ")}
                           </span>
                         ) : null}
                       </li>

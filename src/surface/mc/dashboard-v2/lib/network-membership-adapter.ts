@@ -36,6 +36,13 @@ export interface VerdictBadge {
  * Map a membership verdict → badge. Deterministic + total over the union, so the
  * compiler enforces a case for every verdict (a new verdict won't silently fall
  * through).
+ *
+ * RUNTIME totality (cortex#2311): the dashboard bundle is built at install time
+ * and can skew against the serving daemon across wire renames (e.g. the
+ * pre-FS-6 `admitted-absent` → `absent-offline`/`absent-unheard` split,
+ * cortex#1821). An out-of-union verdict therefore CAN arrive at runtime; the
+ * `default` branch renders an honest fallback badge instead of returning
+ * `undefined` (which crashed the whole roster panel on `.tone`).
  */
 export function verdictBadge(verdict: MembershipVerdict): VerdictBadge {
   switch (verdict) {
@@ -72,6 +79,28 @@ export function verdictBadge(verdict: MembershipVerdict): VerdictBadge {
         tone: "pending",
         title: "Admission request pending — not yet admitted",
       };
+    default: {
+      // Exhaustiveness guard: a new MembershipVerdict must add a case above, or
+      // this assignment fails to compile. The runtime fallback below is for
+      // VERSION-SKEWED payloads only (bundle ≠ daemon).
+      const _exhaustive: never = verdict;
+      const raw = String(_exhaustive);
+      if (raw === "admitted-absent") {
+        // The pre-FS-6 collapsed absence (renamed in cortex#1821): the serving
+        // daemon predates the offline/unheard split. Absent, family unknown.
+        return {
+          label: "absent",
+          tone: "warn",
+          title:
+            "Admitted to the roster but not observed present (legacy 'admitted-absent' verdict — the serving daemon predates the FS-6 offline/unheard split).",
+        };
+      }
+      return {
+        label: "verdict unknown",
+        tone: "warn",
+        title: `Unrecognized membership verdict '${raw}' — likely dashboard/daemon version skew. Not assumed present.`,
+      };
+    }
   }
 }
 
@@ -116,7 +145,9 @@ export type AcceptanceToken =
   | "self"
   | "accepted-network"
   | "accepted-named"
-  | "not-accepted";
+  | "not-accepted"
+  /** cortex#2311 — runtime fallback for a version-skewed payload value. */
+  | "unknown";
 
 /** A render-ready acceptance badge. */
 export interface AcceptanceBadge {
@@ -168,6 +199,17 @@ export function acceptanceBadge(accepts: PeerAcceptance): AcceptanceBadge {
         title:
           "Admitted to the roster but NOT accepted by this principal — no federated offering admits it (default-deny). You dispatch it no federated work.",
       };
+    default: {
+      // cortex#2311 — runtime totality against version-skewed payloads (see
+      // verdictBadge). Compile-time totality is preserved by the `never` guard.
+      const _exhaustive: never = accepts;
+      return {
+        label: "acceptance unknown",
+        tone: "warn",
+        token: "unknown",
+        title: `Unrecognized acceptance '${String(_exhaustive)}' — likely dashboard/daemon version skew. Not assumed accepted.`,
+      };
+    }
   }
 }
 
@@ -216,6 +258,16 @@ export function rosterStatusBadge(
         title:
           "Live admission-rows read not wired (A1) — pending A2 + registry ADR-0018 Q3 roster fix",
       };
+    default: {
+      // cortex#2311 — runtime totality against version-skewed payloads (see
+      // verdictBadge). Compile-time totality is preserved by the `never` guard.
+      const _exhaustive: never = status;
+      return {
+        label: "roster: unknown",
+        tone: "warn",
+        title: `Unrecognized roster status '${String(_exhaustive)}' — likely dashboard/daemon version skew.`,
+      };
+    }
   }
 }
 
@@ -496,6 +548,8 @@ export function partitionRosterStates(states: readonly RosterMemberStateDTO[]): 
   const byPrincipal = new Map<string, RosterMemberStateDTO>();
   const former: RosterMemberStateDTO[] = [];
   for (const s of states) {
+    // cortex#2311 — skip null/holey entries from a skewed payload (defensive).
+    if (s === null || s === undefined) continue;
     if (isFormerMemberState(s.admission_state)) {
       former.push(s);
     } else {
@@ -520,15 +574,20 @@ export interface MembershipSummary {
 export function summarizeMembership(
   net: Pick<NetworkMembershipDTO, "members">,
 ): MembershipSummary {
+  // cortex#2311 — tolerate a version-skewed/partial payload: a missing members
+  // array tallies as empty rather than throwing. Unrecognized verdicts fall
+  // through the switch uncounted (they still appear as rows with an honest
+  // fallback badge; the header stays a coarse count of known states).
+  const members = net.members ?? [];
   const summary: MembershipSummary = {
     present: 0,
     absent: 0,
     unadmitted: 0,
     pending: 0,
-    total: net.members.length,
+    total: members.length,
   };
-  for (const m of net.members) {
-    switch (m.verdict) {
+  for (const m of members) {
+    switch (m?.verdict) {
       case "admitted-present":
         summary.present += 1;
         break;
