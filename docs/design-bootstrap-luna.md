@@ -1,0 +1,146 @@
+# Design Spec — Bootstrap Your Own Luna (zero → working assistant stack)
+
+**Status:** draft
+**Owner:** principal (Andreas)
+**Audience:** a **new user** standing up their first metafactory assistant stack, and the maintainers building the path they follow.
+**Lineage (design-process SOP):** Research (`docs/design-onboarding-tooling-audit.md`) → this Design Spec → `blueprint.yaml` features → issues. Grounds on: `docs/sop-stack-onboarding.md`, `README-AGENTS.md` §3, `docs/config-layout/`, `arc-manifest-pier.yaml` (the bundle exemplar), ADR-0017 (surface tooling as arc bundles).
+**Discussion:** community `#bootstrap` (playbook + process for new users).
+
+---
+
+## 1. Problem
+
+Standing up a working assistant stack (a "Luna") today is a **~15-step recipe spread across 6 SOPs** (`design-onboarding-tooling-audit.md` §rank-1..5). The principal has done it five-plus times by hand; nobody else can. Two things are missing:
+
+1. **A single end-to-end path** — one document a newcomer follows from a clean machine to a responding `@luna`, instead of stitching `sop-stack-onboarding` + `sop-stack-identity` + `sop-network-join` + `README-AGENTS §3` + the config-layout template themselves.
+2. **A packaged shortcut** — an `arc install`-able bundle that scripts the automatable ~80% (persona + agent fragment + the `stack create → provision → make-live` chain), so the newcomer only does the irreducibly-manual edges.
+
+Both are wanted. They are **not alternatives** — the runbook is the specification the bundle automates.
+
+## 2. Goal (Definition of Done — a demonstrable walkthrough)
+
+A new user on a clean machine can reach a **working, bus-routable `@luna`** that responds on their chosen surface, by following ONE path. Concretely, a reviewer can watch:
+
+1. Prereqs installed (bun, NATS, Claude auth) and — *only if choosing Discord* — a bot app created + token in hand.
+2. `arc install cortex` (+ one surface adapter bundle) → cortex present.
+3. `cortex stack create luna --agent luna --apply` → a config-split stack scaffolded, born-aligned (`stack.id = <you>/luna`).
+4. Bus identity + connection stood up — **either** the full account-tree chain (`arc upgrade cortex` → `network provision --apply` → `network make-live --apply`) **or** the simple-bus mode (§6.3) for a solo/local Luna.
+5. `cortex start --config <pointer>` → daemon boots, connects to its bus, subscribes.
+6. A message to the surface reaches `@luna` and she replies.
+7. *(Better Luna, optional)* her persona/skills/memory come from a **soma projection** rather than the scaffold stub.
+
+**Phase 2 target:** steps 3–4 collapse into `arc install luna-stack` + a short prompt, leaving only steps 1 (prereqs/Discord app) and 6 (say hi).
+
+## 3. Grounding — what already exists (reuse, don't rebuild)
+
+| Building block | What it is | Reuse in this spec |
+|---|---|---|
+| **`cortex stack create <slug>`** (#808) | Scaffolds the config-split layout (`system/`, `surfaces/`, `stacks/<slug>.yaml`, pointer, `personas/<agent>.md`, 0700 workspace) born-aligned; **dry-run by default**, `--apply` writes. Does NOT mint the signing seed. | The runbook's Step 3; the bundle's postinstall core. |
+| **The lifecycle chain** | `stack create --apply` → `arc upgrade cortex` (seed) → `network provision --apply` (account tree) → `network make-live --apply` (bus creds + nats restart) → `cortex start` → optional `network join`. `stack create` prints it as "Next steps". | The canonical order the runbook and bundle both follow. |
+| **`pier`** | A **shipped in-process onboarding-concierge agent**, packaged as an arc `type: agent` bundle (`arc-manifest-pier.yaml`: `provides.files` persona+fragment, `lifecycle` hooks, `__ENV__` secret placeholders, `depends_on: cortex`). | The **exemplar bundle shape** to clone. AND Pier is the guided front-door: she greets newcomers in `#onboard-your-fleet` and walks them through this very runbook. |
+| **`vega`** | An in-process dev-loop orchestrator agent shipped as a **template** (copied into a stack's `agents.d/`, not `arc install`ed). | Proof that a stack is a *fleet of fragments*, not one persona — the model for shipping the `luna` fragment. |
+| **`quickstart`** (L3, `src/cli/cortex/commands/quickstart.ts`) | Env-contract-driven one-command provision. | The bundle's non-interactive install spine — but see §6.2 (Discord-hard-wired). |
+| **L4 compose** (`deploy/compose/`) | `docker compose up -d` container path (v6.10.0). | A second delivery target for users who want Luna in a container, not on a host. |
+| **soma projection** | soma owns Luna's *content* (Purpose/Memory/skills) and **projects** it into the substrate config the runtime reads. | The "better Luna" — real identity/memory instead of the scaffold stub. Bundle `depends_on` or a documented follow-on. |
+| **AgentState blueprint** (`state: {blueprint: AgentState}`) | Per-agent durable state (`~/.config/cortex/agents/luna/`). | Optional: gives Luna memory across sessions. |
+
+**What a stack "having Luna" means:** a `luna` agent fragment (`agents.d/luna.yaml`) + `personas/luna.md`, `@luna` as the routed assistant name (`did:mf:luna`), optionally an AgentState blueprint (memory) and a soma projection (content). `stack create` writes a *generic `assistant` placeholder* (#1338); `--agent luna` (or an installed Luna persona) is what makes it Luna.
+
+## 4. The one irreducible truth (scope boundary)
+
+Two edges **cannot** be fully automated — the runbook documents them, the bundle flags them, neither hides them:
+
+- **Discord app creation** — `quickstart.ts` confirms the Developer Portal has no API; creating the bot app + inviting it is manual, principal-only. *(A web/gateway surface avoids this entirely — see §6.2.)*
+- **Federation trust-handoff + hub topology** — the two-party cred handoff and account-topology (`onboarding-audit` rank 1–3) are irreducibly two-party. **A solo Luna doesn't need them** (§6.3); they are opt-in when the user later federates.
+
+Everything between these edges is scriptable.
+
+## 5. Decision — deliver in two phases (runbook first, then bundle)
+
+**DD-1. Ship the runbook first.** A single `docs/runbook-bootstrap-luna.md` (or a `#bootstrap`-pinned playbook) that collapses the 6 SOPs into one zero→Luna path, using today's tooling. It is shippable now, validates the flow end-to-end, and is exactly what `#bootstrap` asked for. It also becomes the executable specification for Phase 2.
+
+**DD-2. Then codify the automatable core into an arc bundle** — `metafactory-bundle-luna-stack` — modeled on `arc-manifest-pier.yaml`. Building the bundle *before* a proven runbook risks automating a flow we haven't nailed; building it *after* means the bundle's postinstall is a mechanical transcription of a validated recipe.
+
+**DD-3. Name things precisely (avoid the "blueprint" trap).** The stack-standup is an **arc bundle** (not a "blueprint"). Its *work* is tracked as a **`blueprint.yaml` feature** (Sense A). Luna's *memory* attaches via **`state: {blueprint: AgentState}`** (Sense B). These are three different "blueprints"; the spec keeps them apart.
+
+**DD-4. Default to the simplest working Luna.** The primary target is a **solo, local, simple-bus Luna** (no federation, no Discord app if the user picks the web surface). Federation and Discord are opt-in upgrades, not prerequisites. This is the lowest-friction "it works" a newcomer can reach.
+
+## 6. Design detail
+
+### 6.1 The bundle (`metafactory-bundle-luna-stack`)
+
+Modeled on `arc-manifest-pier.yaml`:
+
+```yaml
+schema: arc/v1
+name: luna-stack           # identity is manifest.name, not the repo name
+version: 0.1.0
+type: agent                # (candidate: a new `process` type if postinstall grows)
+tier: community
+targets: [cortex]
+provides:
+  files:
+    - personas/luna.md            → ~/.config/metafactory/cortex/personas/
+    - agents.d/luna.yaml          → ~/.config/metafactory/cortex/agents.d/
+depends_on:
+  packages:
+    - { name: cortex, repo: the-metafactory/cortex }
+    - { name: <surface-adapter>, repo: the-metafactory/metafactory-cortex-adapter-<web|discord> }
+    # optional: soma projection, agent-state blueprint
+lifecycle:
+  preinstall:  scripts/check-cortex-version.sh      # (pier's pattern)
+  postinstall: scripts/bootstrap-luna.sh            # runs the §6.4 chain, non-interactive
+```
+
+The bundle **provides** persona + fragment and **runs** the `stack create → provision → make-live` chain in postinstall. It **cannot** mint bus creds itself (that stays a cortex/arc CLI step invoked by the hook) nor cross the §4 edges. Secrets ride as `__ENV__` placeholders resolved at install (pier's pattern), never baked.
+
+### 6.2 Surface choice — web-first for the solo path
+
+`quickstart` is currently Discord-hard-wired (#2153); a `--surface web` mode is in flight (#2153). For the **lowest-friction solo Luna**, the spec prefers the **web/gateway surface** as the default — it removes the manual Discord-app edge (§4) entirely. Discord remains a first-class opt-in for users who want a Discord-facing assistant. The runbook documents both; the bundle takes a `--surface` choice.
+
+### 6.3 Bus tier — simple-bus for solo, account-tree for federation
+
+A solo Luna needs a bus but not the federation account-tree. Per **#2182**, the L4/simple-bus model is: `stack create` + `provision-stack generate` (signing seed only), then connect **anonymously** to a local unauthenticated bus (clear `system.yaml`'s `credsPath`). This is the default for a solo/local/container Luna. The full `network provision → make-live` account-tree chain is the **federation** path, opt-in. **This spec depends on #2182** landing a first-class `--simple-bus` scaffold mode; until then the runbook documents the manual `credsPath`-clear workaround.
+
+### 6.4 The scripted chain (what postinstall / the runbook Step 3–5 runs)
+
+```
+cortex stack create luna --agent luna --apply          # config-split scaffold, born-aligned
+# solo/simple-bus:
+#   provision-stack generate (seed) ; clear system.yaml credsPath ; cortex start   (#2182)
+# federated:
+#   arc upgrade cortex (seed) ; cortex network provision luna --apply ;
+#   cortex network make-live luna --apply ; cortex start ; (later) cortex network join <net>
+```
+
+### 6.5 Pier as the front-door
+
+The community "process for new users" is: a newcomer lands in `#onboard-your-fleet`, **Pier** greets them (she already does this, airgapped/Read-only), and walks them through the runbook — or, in Phase 2, hands them the one-line `arc install luna-stack`. Pier issues nothing; she guides + surfaces admission requests. No new agent needed for the front-door — it exists.
+
+## 7. Open decisions (need a principal call)
+
+1. **Bundle `type`** — `agent` (reuse pier's schema) vs a new `process`/`pipeline` type for a postinstall that orchestrates a multi-step chain. *(Recommend: start `agent`; propose `process` to arc if postinstall outgrows it.)*
+2. **soma projection** — bundle-in (Luna's content ships in the bundle) vs `depends_on` soma vs "connect soma later" as a documented follow-on. *(Recommend: `depends_on` optional; the scaffold stub works without it, soma makes her *your* Luna.)*
+3. **Default surface** — commit web-first for solo (§6.2), or keep Discord the documented default and web the opt-in? *(Recommend: web-first for the solo runbook; both documented.)*
+4. **Naming** — do we ship her as `luna` (the reference assistant) or make the bundle prompt for the user's own assistant name (their Luna, their name)? The `assistant` placeholder (#1338) exists precisely so we don't hard-name. *(Recommend: bundle prompts for a name, defaults to a neutral suggestion — "your own version of Luna".)*
+5. **Dependency on #2182 / #2153** — this spec's solo path assumes the simple-bus mode and web surface land. Sequence those as prerequisites, or ship the runbook against the manual workarounds now?
+
+## 8. Acceptance criteria (binary)
+
+- [ ] `docs/runbook-bootstrap-luna.md` exists: a single path from clean machine → responding `@luna`, no cross-references required to complete it, with the §4 manual edges called out explicitly.
+- [ ] A test user (not the principal) follows the runbook and reaches a responding assistant on the web surface **without touching a Discord Developer Portal**.
+- [ ] The runbook's federated path is a clearly-marked *opt-in upgrade*, not on the solo critical path.
+- [ ] *(Phase 2)* `arc install luna-stack` scaffolds persona + fragment and runs the §6.4 chain in postinstall, leaving only §4 edges + "say hi" to the user.
+- [ ] *(Phase 2)* the bundle refuses/fails-loud on a missing prereq (cortex version, bus, Claude auth) — pier's `check-cortex-version.sh` pattern.
+- [ ] "blueprint" is used in exactly one sense per occurrence (DD-3); no doc conflates the three.
+
+## 9. Rough edges this spec must not paper over
+
+- Discord app creation is manual (§4) — the runbook says so up front.
+- Federation is two-party and out of scope for solo (§4, §6.3) — opt-in.
+- The multi-surface deploy (bot + dashboard + MC worker + registry) has no single orchestrator (`onboarding-audit` rank-5 / G4 `cortex release`) — out of scope here; Luna-solo needs only the daemon + one surface.
+- `nkey_pub` write-back is in 3 sites with silent-fail risk (audit G3) — the chain in §6.4 relies on `arc upgrade cortex` handling it; the runbook verifies signing works before declaring done.
+
+## 10. Provenance
+
+Research: `docs/design-onboarding-tooling-audit.md` (Luna, cortex#1139). Exemplar: `arc-manifest-pier.yaml`, `personas/pier.md`, `agents.d/pier.yaml`. Lifecycle: `src/cli/cortex/commands/stack.ts`, `provision-stack.ts`, `network*.ts`. Bundle grammar: `arc/docs/skill-repo-migration-spec.md`, ADR-0017. Blueprint senses: `blueprint/blueprint.yaml`, `cortex-config.ts:992-1013`. Surface/bus edges: `#2153` (web surface), `#2182` (simple-bus). Community track: `#bootstrap`, `#onboard-your-fleet`.
