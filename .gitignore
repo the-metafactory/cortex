@@ -8,3 +8,7 @@ tmp-screenshots/
 # and Claude OAuth token — never commit it. The .env.example placeholder file IS
 # tracked.
 deploy/compose/.env
+
+# Container bench staging dir (cortex#2284): byte-copies of the compose inputs
+# plus the placeholder fixture staged as `.env` — regenerated every run.
+deploy/test/.work/

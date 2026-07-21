@@ -22,6 +22,7 @@
     }
   },
   "scripts": {
+    "bench:container": "bash deploy/test/container-compose.sh",
     "build:dashboard": "bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting",
     "watch:dashboard": "bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting --watch",
     "deploy:dashboard": "bun run build:dashboard && bun scripts/scan-deploy-surface.ts dashboard --advisory && bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard",
