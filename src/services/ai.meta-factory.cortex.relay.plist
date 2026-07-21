@@ -16,9 +16,13 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- cortex#2282: consolidated into the canonical cortex state tree (same
+         root the stack plist + systemd units + healthy-boot gate use). The old
+         ~/.claude/logs/ root was a third log location nothing else read
+         (verified by repo-wide grep before the move). -->
     <key>StandardOutPath</key>
-    <string>__HOME__/.claude/logs/cortex-relay.log</string>
+    <string>__HOME__/.local/state/metafactory/cortex/logs/cortex-relay.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.claude/logs/cortex-relay.error.log</string>
+    <string>__HOME__/.local/state/metafactory/cortex/logs/cortex-relay.error.log</string>
 </dict>
 </plist>

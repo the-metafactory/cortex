@@ -229,8 +229,12 @@ function renderFleet(): {
   mkdirSync(configDir, { recursive: true });
   const configPath = join(configDir, `${slug}.yaml`);
   writeFileSync(configPath, "principal: {}\n");
-  mkdirSync(join(home, ".config", "cortex", "logs"), { recursive: true });
-  mkdirSync(join(home, ".claude", "logs"), { recursive: true });
+  // cortex#2282 — daemon + relay Std*Path moved onto the canonical state tree
+  // (~/.local/state/metafactory/cortex/logs), the same root cortex@.service
+  // writes and the quickstart healthy-boot gate greps. On a real install the
+  // dir comes from postinstall's §1b state bootstrap; materialize it here so a
+  // correctly-installed fleet verifies fully extant.
+  mkdirSync(join(home, ".local", "state", "metafactory", "cortex", "logs"), { recursive: true });
   // cortex#2097 — the stack plist's WorkingDirectory moved off the cortex
   // install repo (self-editing exposure) onto the per-stack workspace dir;
   // materialize it the same way `render_stack_plist` (plist-render.sh) does

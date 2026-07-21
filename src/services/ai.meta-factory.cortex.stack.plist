@@ -17,10 +17,15 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- cortex#2282: SAME tree the systemd unit (cortex@.service) writes and the
+         quickstart step-8 healthy-boot gate greps (daemonLogPath /
+         daemonErrorLogPath, quickstart-lib.ts). The old ~/.config/cortex/logs/
+         root made the gate structurally inert on macOS — it polled a file
+         launchd never wrote. Keep all three in lockstep. -->
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/cortex/logs/cortex-__STACK_SLUG__.log</string>
+    <string>__HOME__/.local/state/metafactory/cortex/logs/cortex-__STACK_SLUG__.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/cortex/logs/cortex-__STACK_SLUG__.error.log</string>
+    <string>__HOME__/.local/state/metafactory/cortex/logs/cortex-__STACK_SLUG__.error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>

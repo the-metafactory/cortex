@@ -244,6 +244,11 @@ Daemonised — macOS: `~/Library/LaunchAgents/ai.meta-factory.cortex.<slug>.plis
 nats@<slug> cortex@<slug>` (template units — Appendix A). Both log to
 `~/.local/state/metafactory/cortex/logs/cortex-<slug>.{log,error.log}`.
 
+> **Existing macOS installs (pre-cortex#2282):** older rendered plists pointed
+> daemon logs at `~/.config/cortex/logs/`. Re-render the plists — `arc upgrade
+> cortex` (or `./scripts/postinstall.sh` on a from-source clone) — so logs move
+> to the state tree above and quickstart's healthy-boot gate can observe them.
+
 **Healthy-boot gate** — all of these lines must appear:
 
 ```bash

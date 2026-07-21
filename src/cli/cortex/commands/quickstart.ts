@@ -661,12 +661,41 @@ function runSeedProvisioning(ports: QuickstartPorts, opts: { slug: string; confi
 // Step 7 — services (Linux only)
 // =============================================================================
 
+/**
+ * cortex#2264 / cortex#2282 — clear the daemon's append-mode `.error.log` so
+ * step 8's gate only ever sees CURRENT-boot content. Without this, a
+ * bus-connect failure line from a PRIOR boot would linger (both systemd
+ * `StandardError=append:` and launchd `StandardErrorPath` append, never
+ * truncate) and make the gate fast-fail on stale content before the fresh
+ * daemon connects — breaking the "fix creds and re-run" recovery. Best-effort
+ * (the port swallows fs errors). Shared by BOTH step-7 branches (cortex#2282
+ * extracted it from the Linux-only path so macOS re-runs get the same
+ * hygiene): Linux calls it immediately before its `enable --now` (re)start;
+ * macOS calls it in the launchd-skip branch, before step 8 polls — no restart
+ * there (arc/launchd owns the daemon; restart-on-re-run is A2's scope).
+ * Returns the human-readable step line.
+ */
+function clearPriorBootErrorLog(ports: QuickstartPorts, slug: string): string {
+  const errorLogPath = daemonErrorLogPath(process.env.HOME ?? "", slug);
+  ports.service.truncateErrorLog(errorLogPath);
+  return `  ✓ cleared prior-boot error log (${errorLogPath})`;
+}
+
 function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean }): StepReport {
   if (opts.skip) {
     return step("7. Services", true, ["  ○ --skip-services passed — skipping"]);
   }
   if (process.platform !== "linux") {
-    return step("7. Services", true, ["  ○ non-Linux host — launchd is handled by arc; skip"]);
+    const lines = ["  ○ non-Linux host — launchd is handled by arc; skip"];
+    if (process.platform === "darwin") {
+      // cortex#2282 — the launchd plist appends `.error.log` into the SAME
+      // state tree the gate polls (StandardErrorPath never truncates), so a
+      // stale prior-boot failure would false-fail step 8's fast-fail check on
+      // every re-run. Clear it here, before the gate polls. The daemon itself
+      // is NOT restarted (out of scope — A2).
+      lines.push(clearPriorBootErrorLog(ports, opts.slug));
+    }
+    return step("7. Services", true, lines);
   }
 
   const lines: string[] = [];
@@ -695,16 +724,10 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
   }
   lines.push("  ✓ systemctl --user daemon-reload");
 
-  // cortex#2264 — clear the daemon's append-mode `.error.log` IMMEDIATELY before
-  // the (re)start, so step 8's gate only ever sees CURRENT-boot content. Without
-  // this, a bus-connect failure line from a PRIOR boot would linger (systemd
-  // StandardError=append never truncates) and make the gate fast-fail on stale
-  // content before the fresh daemon connects — breaking the "fix creds and
-  // re-run" recovery. Best-effort (the port swallows fs errors); done here,
-  // gated on this Linux branch actually (re)starting the daemon.
-  const errorLogPath = daemonErrorLogPath(process.env.HOME ?? "", opts.slug);
-  ports.service.truncateErrorLog(errorLogPath);
-  lines.push(`  ✓ cleared prior-boot error log (${errorLogPath})`);
+  // cortex#2264 — clear the daemon's append-mode `.error.log` IMMEDIATELY
+  // before the (re)start (see clearPriorBootErrorLog above), so step 8's gate
+  // only ever sees CURRENT-boot content.
+  lines.push(clearPriorBootErrorLog(ports, opts.slug));
 
   const enable = ports.service.enableNow([`nats@${opts.slug}`, `cortex@${opts.slug}`]);
   if (enable.exitCode !== 0) {

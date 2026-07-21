@@ -38,7 +38,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { dispatchQuickstart } from "../quickstart";
-import { daemonErrorLogPath } from "../quickstart-lib";
+import { daemonErrorLogPath, daemonLogPath } from "../quickstart-lib";
 import type {
   CommandResult,
   GatePort,
@@ -619,6 +619,143 @@ describe("dispatchQuickstart — step 8 gate", () => {
     const enableIdx = calls.findIndex((c) => c.startsWith("enable:"));
     expect(truncIdx).toBeGreaterThanOrEqual(0);
     expect(enableIdx).toBeGreaterThan(truncIdx);
+  });
+});
+
+// =============================================================================
+// cortex#2282 — macOS: unified log paths make the gate live on darwin
+// =============================================================================
+
+describe("dispatchQuickstart — cortex#2282 macOS gate + error-log hygiene", () => {
+  // The structural fix itself: the launchd stack plist template writes
+  // Std{Out,Error}Path to the EXACT paths the gate greps (daemonLogPath /
+  // daemonErrorLogPath). Substitute the renderer's tokens (plist-render.sh
+  // sed) and compare byte-for-byte — the three log-path authorities (launchd
+  // plist, systemd unit, gate) can no longer diverge silently on this axis.
+  test("cortex#2282: stack plist template Std{Out,Error}Path match daemonLogPath/daemonErrorLogPath after token substitution", () => {
+    const template = readFileSync(
+      join(import.meta.dir, "..", "..", "..", "..", "services", "ai.meta-factory.cortex.stack.plist"),
+      "utf-8",
+    );
+    const home = "/home/operator";
+    const slug = "work";
+    const rendered = template.split("__HOME__").join(home).split("__STACK_SLUG__").join(slug);
+    const outPath = /<key>StandardOutPath<\/key>\s*<string>([^<]+)<\/string>/.exec(rendered)?.[1];
+    const errPath = /<key>StandardErrorPath<\/key>\s*<string>([^<]+)<\/string>/.exec(rendered)?.[1];
+    expect(outPath).toBe(daemonLogPath(home, slug));
+    expect(errPath).toBe(daemonErrorLogPath(home, slug));
+  });
+
+  // Simulated healthy boot on darwin: the fake readLog is PATH-STRICT — it
+  // returns the 5 healthy lines ONLY for the exact daemonLogPath, so the test
+  // fails if the gate ever polls any other path (the pre-fix macOS symptom:
+  // polling a file launchd never wrote → silent 60s timeout).
+  test("cortex#2282: darwin — healthy lines at daemonLogPath pass the gate", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const expectedLogPath = daemonLogPath(process.env.HOME ?? "", "work");
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir],
+          () =>
+            fakePorts({
+              readLog: (p: string) => (p === expectedLogPath ? FULL_HEALTHY_LOG : undefined),
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("Healthy-boot gate ✓");
+  });
+
+  // cortex#2282 — step 7's darwin branch truncates the .error.log (exact
+  // daemonErrorLogPath) BEFORE step 8 polls, and NEVER (re)starts services
+  // (launchd/arc owns the daemon on macOS; restart-on-re-run is A2's scope).
+  test("cortex#2282: darwin — .error.log truncated (exact path) before the gate polls, with NO service (re)start", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const calls: string[] = [];
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir],
+          () =>
+            fakePorts({
+              truncateErrorLog: (p: string) => calls.push(`truncate:${p}`),
+              enableNow: (u: string[]) => {
+                calls.push(`enable:${u.join(",")}`);
+                return { exitCode: 0, stdout: "", stderr: "" };
+              },
+              readLog: (p: string) => {
+                calls.push(`poll:${p}`);
+                return FULL_HEALTHY_LOG;
+              },
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    const expectedPath = daemonErrorLogPath(process.env.HOME ?? "", "work");
+    expect(calls).toContain(`truncate:${expectedPath}`);
+    // Truncation happened BEFORE the gate's first log poll…
+    const truncIdx = calls.findIndex((c) => c.startsWith("truncate:"));
+    const pollIdx = calls.findIndex((c) => c.startsWith("poll:"));
+    expect(truncIdx).toBeGreaterThanOrEqual(0);
+    expect(pollIdx).toBeGreaterThan(truncIdx);
+    // …and nothing was (re)started — the launchd-skip line still reports.
+    expect(calls.some((c) => c.startsWith("enable:"))).toBe(false);
+    expect(res.stdout).toContain("non-Linux host");
+  });
+
+  // The darwin mirror of the cortex#2264 staleness case: a re-run with a STALE
+  // prior-boot failure in the append-mode .error.log must NOT false-fail —
+  // step 7's darwin truncate cleared it before the gate ran.
+  test("cortex#2282: darwin re-run — stale prior-boot .error.log failure does NOT false-fail the gate", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    let errorLogContent = "myelin-runtime: failed to connect — continuing without NATS: (a PRIOR boot's failure)";
+    let mainPolls = 0;
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir, "--gate-timeout-ms", "600000"],
+          () =>
+            fakePorts({
+              truncateErrorLog: () => {
+                errorLogContent = "";
+              },
+              readLog: (p: string) => {
+                if (p.endsWith(".error.log")) return errorLogContent;
+                mainPolls++;
+                // Poll 1: partial boot. Poll 2+: healthy.
+                return mainPolls >= 2 ? FULL_HEALTHY_LOG : "Stack: andreas/work\npolicy-engine active\n";
+              },
+              fetchHealthz: () => Promise.resolve(true),
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).not.toContain("bus connect FAILED");
+    expect(res.stdout).toContain("Healthy-boot gate ✓");
+  });
+
+  // Linux ordering is byte-identical after the cortex#2282 extraction: the
+  // truncate still happens between daemon-reload and enable --now (covered in
+  // depth by the cortex#2264 tests above — this is the regression tripwire for
+  // the step-7 output line surviving the shared-helper refactor).
+  test("cortex#2282: linux — step 7 still emits the cleared-error-log line before enable --now", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("cleared prior-boot error log");
+    expect(res.stdout).toContain("enable --now");
   });
 });
 
