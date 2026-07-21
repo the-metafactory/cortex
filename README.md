@@ -87,15 +87,32 @@ The same engine already wears three different faces:
 - **cortex builds cortex.** This release was diagnosed, fixed, reviewed, and
   shipped by humans and assistants working together *through* cortex —
   dispatched over its own bus, with community testers in the loop.
-- **A web agent in production.** The AMT project serves its Pylon agent through
-  cortex's Web/SSE adapter — same engine, no chat platform involved.
+- **A web agent in production.** A production web application serves its
+  assistant through cortex's Web/SSE adapter — same engine, no chat platform
+  involved.
 - **A community onboarding engine.** Metafactory Quests runs its onboarding
   assistants on cortex.
 
 An assistant is a thin layer — a persona and a binding. The bus, identity,
-dispatch, supervision, and surfaces underneath are cortex, which is why one
-engine can field a Discord colleague, a web agent, and a community guide at
-the same time.
+dispatch, supervision, guardrails, and surfaces underneath are cortex, which is
+why one engine can field a Discord colleague, a web agent, and a community
+guide at the same time.
+
+---
+
+## Features at a glance
+
+| Area | What ships |
+|---|---|
+| **Dispatch** | Mention an assistant → a signed dispatch envelope → a real working session on your machine, streamed back to the thread. `async:` fire-and-forget and `team:` multi-agent modes. |
+| **Surfaces** | Discord adapter (preview surface) and a Web/SSE adapter — arc-installed bundles on one engine. |
+| **The bus** | NATS-backed myelin envelopes (M2–M6 contracts): every message signed, addressed, and observable. |
+| **Guardrails** | Built in, not bolted on: a policy engine (principals, roles, verified signing chains), inbound prompt scanning, a principal-only gate, and capability declarations enforced at dispatch. |
+| **Supervision** | Mission Control dashboard — live sessions, task queues, attention items, GitHub activity — plus a healthy-boot gate that tells the truth (macOS, Linux, container). |
+| **Capability routing** | Agents claim work by declared capability (e.g. `code-review.*`) over the bus — no point-to-point wiring. |
+| **Agents** | An agent registry (inline + drop-in fragments), personas as thin config, multi-agent teams. |
+| **Operations** | One-command `cortex quickstart`, recovery that actually restarts on re-run, systemd / launchd / compose supervision, arc-native install + upgrade cascade. |
+| **Observability** | Instrument your own terminal sessions with one env var — events appear live on the dashboard. |
 
 ---
 
