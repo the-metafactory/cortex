@@ -22,7 +22,9 @@
 <p align="center">
   <img alt="Version" src="https://img.shields.io/badge/version-6.10.3-2A3F6A?labelColor=0E1726" />
   <img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-2A3F6A?labelColor=0E1726" />
-  <img alt="Runs on" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Debian%20%C2%B7%20container-2A3F6A?labelColor=0E1726" />
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-supported-2A3F6A?labelColor=0E1726&logo=apple&logoColor=white" />
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-supported-2A3F6A?labelColor=0E1726&logo=linux&logoColor=white" />
+  <img alt="Container" src="https://img.shields.io/badge/container-supported-2A3F6A?labelColor=0E1726&logo=docker&logoColor=white" />
 </p>
 
 <p align="center">
@@ -105,12 +107,13 @@ guide at the same time.
 | Area | What ships |
 |---|---|
 | **Dispatch** | Mention an assistant → a signed dispatch envelope → a real working session on your machine, streamed back to the thread. `async:` fire-and-forget and `team:` multi-agent modes. |
-| **Surfaces** | Discord adapter (preview surface) and a Web/SSE adapter — arc-installed bundles on one engine. |
+| **Surfaces** | Discord out of the box; extensible plug-and-play adapters — Web/SSE, Slack, Mattermost — ship as arc-installed bundles that snap onto the same engine. |
 | **The bus** | NATS-backed myelin envelopes (M2–M6 contracts): every message signed, addressed, and observable. |
 | **Guardrails** | Built in, not bolted on: a policy engine (principals, roles, verified signing chains), inbound prompt scanning, a principal-only gate, and capability declarations enforced at dispatch. |
 | **Supervision** | Mission Control dashboard — live sessions, task queues, attention items, GitHub activity — plus a healthy-boot gate that tells the truth (macOS, Linux, container). |
 | **Capability routing** | Agents claim work by declared capability (e.g. `code-review.*`) over the bus — no point-to-point wiring. |
 | **Agents** | An agent registry (inline + drop-in fragments), personas as thin config, multi-agent teams. |
+| **Distribution** | Deterministic, apt-style: [arc](https://github.com/the-metafactory/arc) installs pinned, signed packages with declared capabilities from a trust-based marketplace — an install is a decision you can audit, not a `curl \| bash`. |
 | **Operations** | One-command `cortex quickstart`, recovery that actually restarts on re-run, systemd / launchd / compose supervision, arc-native install + upgrade cascade. |
 | **Observability** | Instrument your own terminal sessions with one env var — events appear live on the dashboard. |
 
@@ -180,9 +183,11 @@ already has the properties an internet of agentic work requires:
   chain — work is attributable to the identity that dispatched it, and the
   policy engine rejects what it cannot verify. An assistant's action is never
   anonymous.
-- **Zones of trust.** A stack is its own trust zone: its own namespace, its own
-  identities, its own policy (principals, roles, capability permissions).
-  Nothing crosses the boundary unless explicitly admitted.
+- **Zones of trust.** Two zones exist today: your **local stack** (its own
+  namespace, identities, and policy — principals, roles, capability
+  permissions) and the **federated network** (stacks that explicitly join one
+  another). Crossing the boundary is always an explicit decision — admission on
+  the way in, sovereignty checks on the way out — never a default.
 - **Encrypted envelopes.** Traffic that crosses a network boundary is encrypted
   with per-network keys — joining a network never means broadcasting to the
   world. (Mechanism shipped; hardening in the open during the preview.)
@@ -445,6 +450,19 @@ hand-edit it.
 
 - Andreas Astrom
 - Jens-Christian Fischer
+
+---
+
+## Contributors
+
+<a href="https://github.com/the-metafactory/cortex/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=the-metafactory/cortex" alt="cortex contributors" />
+</a>
+
+…and the community testers whose Debian, container, and macOS runs shaped the
+6.10.x hardening series. Want in? Say hello on
+[Discord](https://discord.gg/32xa5ev6Tq) — testers, playbook writers, and
+adapter builders all welcome.
 
 ---
 
