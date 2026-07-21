@@ -10,19 +10,53 @@
 
 ## 1. What the bundle is
 
-Luna-Stack is **luna-light's bigger sibling.** Where luna-light ships a persona +
-agent fragment onto a stack you *already run*, Luna-Stack's install **stands up
-the whole stack**: it scaffolds a config-split cortex stack, provisions the
-signing seed, binds the Discord surface, and boots the daemon — so one
-`arc install` plus a bot token plus a slug gives you a responding `@luna` on
-Discord. It is the Phase-2 target of `design-bootstrap-luna.md` §2: steps 3–5 of
-the bootstrap walkthrough collapse into one install, leaving the operator only
-the §4 manual edge (creating the Discord app) and "say hi".
+Luna-Stack is **luna-lite's bigger sibling, standing up the MVP tier.** Where
+luna-lite ships a persona + agent fragment onto a stack you *already run*,
+Luna-Stack's install **stands up the whole stack**: it scaffolds a config-split
+cortex stack, provisions the signing seed, binds the Discord surface, and boots
+the daemon — so one `arc install` plus a bot token plus a slug gives you a
+responding `@luna` on Discord. It is the Phase-2 target of
+`design-bootstrap-luna.md` §2, delivering the **MVP tier** its §1.5 defines: not
+a chat toy but a *working software-factory assistant*.
 
-It keeps luna-light's shape — an in-process cortex agent (persona + `agents.d`
+It keeps luna-lite's shape — an in-process cortex agent (persona + `agents.d`
 fragment) that shares the stack's bus identity and mints no credentials of its
-own — and adds one thing: an install-time **bootstrap hook** that drives the
-cortex CLI.
+own — and adds two things: (1) an install-time **bootstrap hook** that drives the
+cortex CLI, and (2) the **software-factory capability delta** (§1.5) that makes
+Luna a coding assistant, not just a chat one.
+
+## 1.5 MVP constraints + the software-factory capability delta
+
+Per `#bootstrap` (and `design-bootstrap-luna.md` §1.5), the target is a **minimum
+viable software-factory assistant** — pinned to this common denominator:
+
+| Axis | MVP constraint | How this bundle meets it |
+|---|---|---|
+| **OS targets** | macOS · Debian Linux · WSL2 | portable POSIX-bash scripts; OS detection + per-host service path (§4 matrix) |
+| **Install path** | cortex **native** (not container) | drives `cortex quickstart` / native CLI; L4 compose out of scope |
+| **Stack** | **local**, not federated | LOCAL/simple-bus only; no `network provision/make-live` (DD-4) |
+| **Coding agent** | **Claude Code** | cortex's own substrate (`runtime.substrate: claude-code`) |
+| **Communication** | **Discord** | DD-5 Discord-first; the fragment carries `presence.discord` |
+| **Cloud repo** | **GitHub** | `gh`/`git` tool deps + `github.com` network grant |
+
+**The software-factory delta over the luna-lite floor.** Luna-lite is the *floor*
+(chat + async, read-only, zero tools). The MVP is luna-lite **plus** a coding
+surface. Each grant is explicit in the bundle and is a deliberate widening of
+luna-lite's zero-tool posture:
+
+| Grant | luna-lite floor | luna-stack MVP (the delta) | Where declared |
+|---|---|---|---|
+| **shell** | `bash.allowed: false` | `bash.allowed: true` | manifest `capabilities.bash` |
+| **filesystem** | read `~/.config/cortex`, no write | read+write **one** repo (`LUNA_REPO`) — least-privilege, not a broad `~/Developer` write | manifest `capabilities.filesystem` |
+| **network** | `[]` | `github.com` + `api.github.com` (git/gh over HTTPS) | manifest `capabilities.network` |
+| **tools** | none | `gh` (GitHub CLI) + `git` on PATH | manifest `depends_on.tools` + preinstall gate |
+| **agent tools** | `[Read]`-class | `[Read, Edit, Write, Bash, Grep, Glob]` | persona `allowedTools` |
+| **capability label** | `chat`, `async` | `+ code` | fragment `runtime.capabilities` |
+
+`gh` holds its own auth (`gh auth login`) — **no secret is baked into the bundle**
+(`capabilities.secrets: []`); the preinstall gate checks `gh auth status`
+(WARN-only). That is the honest privilege boundary: the bundle grants the
+*ability* to reach GitHub; the principal's own `gh` credentials authorize it.
 
 ### Name + class (recommendation, with justification)
 
@@ -42,12 +76,12 @@ The choice is between `metafactory-bundle-luna-stack` and
   bundle inseparable from cortex's runtime and CLI. That is exactly Luna-Stack
   (it drives `cortex stack create` / `cortex quickstart`). It also keeps it
   sorting adjacent to its documented siblings — the shipped `metafactory-cortex-
-  agent-escort` and `metafactory-cortex-agent-luna-light` (per
-  `bundle-blueprints.md`).
+  agent-escort` and `metafactory-cortex-agent-luna-lite` (per
+  `bundle-blueprints.md`; the floor bundle was renamed luna-light → luna-lite).
 
 On the **manifest `type`**: keep `type: agent` for v0.1.0. It reuses the proven
-pier/luna-light schema (arc validates it today), and the orchestration is a
-`lifecycle` hook — the same way luna-light runs a reload hook while declaring
+pier/luna-lite schema (arc validates it today), and the orchestration is a
+`lifecycle` hook — the same way luna-lite runs a reload hook while declaring
 `bash.allowed: false` for the agent. `process` is the candidate **upgrade** (it
 exists in arc's `ArtifactType`) if the orchestration ever outgrows the agent
 shape, but arc's `process` type carries extra pulse-process requirements this
@@ -77,7 +111,8 @@ Verified against `arc validate` (passes). Full source:
 | `provides.files` | **LIST** of `{source, target}` | drops `personas/luna.md` + `agents.d/luna.yaml` (arc `types.ts:420` — a list, never a map; pier's map form is legacy) |
 | `dependencies` | `cortex >=6.10.0`, `metafactory-cortex-adapter-discord >=0.1.0` | read **by name** for the first-party load exemption (cortex's own loader lane) |
 | `depends_on.packages` | `{name, repo}` for the discord adapter | the arc **auto-install** contract (cortex#2028) — arc clones + installs it on `arc install luna-stack` |
-| `capabilities` | fs read `~/.config/cortex`, `network: []`, `bash.allowed: false`, `secrets: []` | describes the **agent** (Luna reads her own config, rides the stack bus identity). The install-time chain is a *lifecycle hook*, a separate axis — same modeling as luna-light |
+| `depends_on.tools` | `gh`, `git` | software-factory host prereqs; the preinstall gate verifies both |
+| `capabilities` | fs read+write **one** repo (`LUNA_REPO`, least-privilege), network `github.com`/`api.github.com`, `bash.allowed: true`, `secrets: []` | the **software-factory delta** (§1.5) — a coding agent, not luna-lite's read-only floor. The install-time chain stays a separate *lifecycle hook* |
 | `lifecycle.preinstall` | `scripts/preinstall-gate.sh` | cortex-version + `LUNA_BOT_TOKEN` gate |
 | `lifecycle.postinstall` | `scripts/postinstall-bootstrap.sh` | the stand-up orchestration |
 
@@ -141,22 +176,32 @@ cortex agents reload
 **Discord-first, front-loaded manual edge.** Per DD-5, the Discord-app creation
 (§4) is on the critical path. The bundle handles it as the **preinstall gate**
 (§below), not the postinstall — the install refuses to even start until
-`LUNA_BOT_TOKEN` is present, so the operator hits the clearest possible stop
+`LUNA_BOT_TOKEN` is present, so the principal hits the clearest possible stop
 *before* anything is scaffolded.
 
 ### The preinstall gate
 
-`scripts/preinstall-gate.sh` (mirrors luna-light's `check-cortex-version.sh` +
-pier's `PIER_BOT_TOKEN` gate). It fails loud, before any file is written, on:
+`scripts/preinstall-gate.sh` (mirrors luna-lite's `check-cortex-version.sh` +
+pier's `PIER_BOT_TOKEN` gate, extended for the software-factory + OS-matrix
+prereqs). It **detects the host** (macOS / Debian / WSL2) and prints the service
+path first, then gates. **HARD (abort, nothing written):**
 
-1. `cortex` not on PATH → tells you to `arc install cortex`.
-2. cortex `< 6.10.0` → tells you to `arc upgrade cortex` (quickstart is the spine).
-3. **`LUNA_BOT_TOKEN` unset** → prints the full Discord Developer-Portal
-   click-path (create app → Bot → Reset Token → Message Content Intent → OAuth2
-   invite → Copy IDs). This is the DD-5 manual edge, made the loudest thing.
-4. `LUNA_GUILD_ID` / `LUNA_CHANNEL_ID` unset → **WARN only** (fail SOFT: the
-   stack still stands up; the Discord surface is disabled until they're set),
-   matching pier's soft-warn discipline.
+1. `cortex` not on PATH → `arc install cortex`.
+2. cortex `< 6.10.0` → `arc upgrade cortex` (quickstart is the spine).
+3. `git` not on PATH → software-factory prereq, with the per-OS install hint.
+4. `gh` not on PATH → software-factory prereq (MVP cloud repo is GitHub).
+5. **`LUNA_BOT_TOKEN` unset** → the full Discord Developer-Portal click-path
+   (create app → Bot → Reset Token → Message Content Intent → OAuth2 invite →
+   Copy IDs). The DD-5 manual edge, made the loudest thing.
+
+**SOFT (WARN, install continues — pier's fail-soft discipline):**
+
+6. `LUNA_GUILD_ID` / `LUNA_CHANNEL_ID` unset → Discord surface disabled at load.
+7. `gh auth status` not authenticated → Luna codes locally but can't push /
+   open PRs until `gh auth login`.
+8. `claude` (Claude Code) not on PATH → cortex's substrate; usually present.
+9. WSL2 without systemd → warns to enable it or rely on the `cortex start`
+   backstop (see §4 matrix).
 
 ## 4. What it can't do (the irreducible edges) — and how it degrades honestly
 
@@ -164,17 +209,24 @@ pier's `PIER_BOT_TOKEN` gate). It fails loud, before any file is written, on:
   quickstart's own doc-comment confirms "the Developer Portal has no API").
   Degrade: the preinstall gate **refuses** with the exact click-path, before
   scaffolding. It never pretends to have done it.
-- **Federation is out of scope for solo** (§4, DD-4). The bundle stands up a
-  **solo/local/simple-bus** Luna; `cortex network provision/make-live/join` are
-  the opt-in upgrade, never on this path. Degrade: not attempted, documented as
-  the next step.
-- **`cortex quickstart` is Linux/systemd-first.** Its service step renders
-  systemd user units on Linux; on **macOS** it only restarts an *already-loaded*
-  launchd service (load/unload stays arc-owned). On a fresh macOS host the
-  daemon may need an explicit `cortex start --config <pointer>` / `arc upgrade
-  cortex` to register the plist. Degrade: the postinstall prints this caveat and
-  the exact command; Path B's `cortex start` covers it. (This matters — the
-  primary principal is on macOS. See F2.)
+- **Federation is out of scope for the MVP** (DD-4). The bundle stands up a
+  **local/simple-bus** Luna; `cortex network provision/make-live/join` are the
+  opt-in upgrade, never on this path. Degrade: not attempted, documented as the
+  next step.
+- **The service step is not uniform across the OS matrix.** `cortex quickstart`
+  handles systemd on Linux and a launchctl-restart on macOS, but neither covers
+  every fresh host. The bundle's postinstall detects the host and backstops with
+  an explicit `cortex start --config <pointer>` (idempotent) so all three OS
+  targets reach a running daemon:
+
+  | Host | quickstart service step | Bundle handling |
+  |---|---|---|
+  | **macOS** | restarts an *already-loaded* launchd service only (load/unload stays arc-owned) | `cortex start` backstop registers/starts the daemon on a fresh host |
+  | **Debian Linux** | renders + starts systemd user units (native path; hard-requires cortex#2071) | works directly; `cortex start` is a no-op backstop |
+  | **WSL2** | systemd path **only if** WSL2 systemd is enabled (`/etc/wsl.conf [boot] systemd=true`) | preinstall WARNs; `cortex start` backstop covers a systemd-less WSL2 |
+
+  Degrade: the postinstall prints the exact `cortex start` line for the detected
+  host; Path B uses the same backstop. See F2 (macOS) + F5 (WSL2 systemd).
 - **soma content is not bundled.** Luna ships the scaffold persona, not the
   principal's projected identity/memory. Degrade: honest in the persona ("no
   private memory yet"); soma projection is the documented upgrade.
@@ -190,8 +242,15 @@ pier's `PIER_BOT_TOKEN` gate). It fails loud, before any file is written, on:
 - [ ] The postinstall is **idempotent** — a re-run after fixing one env var does
       not clobber an already-stood-up stack (inherited from quickstart's
       idempotence; Path B guards each step).
-- [ ] The stood-up stack is **solo/simple-bus** — no `network provision` /
+- [ ] The stood-up stack is **local/simple-bus** — no `network provision` /
       `make-live` runs; federation stays opt-in.
+- [ ] **Software-factory surface present**: the installed Luna has `bash.allowed:
+      true`, `github.com` network, read+write on the single `LUNA_REPO`, and `gh`+`git`
+      on PATH — i.e. she can clone, branch, run tests, and open a PR, not just
+      chat. *(Met by the prototype's manifest + persona + gate.)*
+- [ ] **OS matrix**: the preinstall gate + postinstall run on macOS, Debian, and
+      WSL2, detecting the host and reaching a running daemon on each (via
+      quickstart's service step or the `cortex start` backstop).
 - [ ] **Content-safe**: no live token or snowflake in any shipped file; every id
       is a `__LUNA_*__` / `<REPLACE_ME>` placeholder.
 - [ ] `arc validate` passes on the bundle. *(Met by the prototype.)*
@@ -199,11 +258,13 @@ pier's `PIER_BOT_TOKEN` gate). It fails loud, before any file is written, on:
 ## 6. Prototype status
 
 Validated skeleton at `~/Developer/metafactory-bundle-luna-stack-proto/`:
-`arc-manifest.yaml` (passes `arc validate`), `personas/luna.md` (public-safe,
-adapted from luna-light), `agents.d/luna.yaml` (Discord presence, `__LUNA_*__`
-placeholders), `scripts/preinstall-gate.sh` + `scripts/postinstall-bootstrap.sh`
-(executable, `bash -n` clean). No git remote, not published, never installed on
-a live stack — authored for review.
+`arc-manifest.yaml` (passes `arc validate`; software-factory `capabilities` +
+`depends_on.tools`), `personas/luna.md` (public-safe software-factory persona
+with `allowedTools`), `agents.d/luna.yaml` (Discord presence + `code` capability,
+`__LUNA_*__` placeholders), `scripts/preinstall-gate.sh` (cortex+git+gh+token
+gate, OS detection) + `scripts/postinstall-bootstrap.sh` (quickstart-preferred,
+OS-matrix daemon backstop) — both executable, `bash -n` clean. No git remote, not
+published, never installed on a live stack — authored for review.
 
 ## 7. CLI-surface findings (real gaps to file)
 
@@ -235,11 +296,18 @@ a live stack — authored for review.
   `metafactory-cortex-agent-` / `-adapter-` / `-renderer-` classes.** It only
   strips `metafactory-skill-`, `metafactory-bundle-`, and
   `metafactory-<app>-skill-`. So for the shipped cortex agent bundles (escort,
-  luna-light, this one) the derivation guard **returns null and silently does
+  luna-lite, this one) the derivation guard **returns null and silently does
   not apply** — `name` is unchecked against the dir. Not blocking (permissive,
   not wrong), but the validator's §4.2 enforcement has a blind spot for the
   exact classes cortex ships. **File against arc** (extend `toStrictName` to the
   `-agent-`/`-adapter-`/`-renderer-` app classes).
+- **F5 — WSL2 systemd is not guaranteed.** quickstart's Linux service step
+  assumes systemd user units, but WSL2 only runs systemd when the distro opts in
+  (`/etc/wsl.conf [boot] systemd=true`, newer WSL). On a systemd-less WSL2 the
+  service step can't complete. *Mitigation in place:* the preinstall gate detects
+  WSL2 and WARNs; the postinstall backstops with `cortex start`. **File: make
+  quickstart's service step degrade explicitly on a systemd-less host** (detect +
+  fall back to a foreground/`cortex start` path) rather than assuming systemd.
 
 ## 8. Open questions for the principal
 
@@ -250,7 +318,7 @@ a live stack — authored for review.
    with the bundle; reserve `surfaces.yaml` for shared cross-agent gateway
    bindings.)
 2. **`luna` vs a prompted name.** Ship her as the reference `@luna`, or prompt
-   for the operator's own assistant name (their Luna, their name)? The
+   for the principal's own assistant name (their Luna, their name)? The
    `assistant` placeholder (#1338) exists so we needn't hard-name. (Recommend:
    default `luna`, allow `LUNA_AGENT_ID` override — matches
    `design-bootstrap-luna.md` open Q4.)
@@ -262,9 +330,16 @@ a live stack — authored for review.
    nats solo path (works today), or block on a first-class `--simple-bus`
    scaffold flag so Path B is self-sufficient? (Recommend: ship against
    quickstart now; F1 is a nice-to-have, not a blocker.)
-5. **macOS parity (F2).** Is a Linux-first stand-up acceptable for v0.1.0 (with
-   the documented macOS `cortex start` follow-up), or is macOS parity a release
-   gate given the primary principal runs macOS?
+5. **macOS parity (F2) + WSL2 systemd (F5).** Is a Linux-first stand-up
+   acceptable for v0.1.0 (with the documented macOS/WSL2 `cortex start`
+   backstop), or is full three-OS parity a release gate? The MVP names all three
+   as targets, which argues for the backstop being a *tested* path, not just a
+   printed hint.
+6. **Repo scope default.** ✅ **RESOLVED (epic #2319):** it's a sample bundle, so
+   it ships least-privilege by construction — the coding grant is a **single
+   repo the principal names** (`LUNA_REPO`), NOT a broad `~/Developer` write.
+   Widen only via an explicit reviewed allowlist edit to `capabilities.filesystem`.
+   The shipped bundle and the runbook both reflect this single-repo scope.
 
 ## 9. Provenance
 
