@@ -16,7 +16,7 @@
 
 <p align="center">
   Humans and assistants working together as one team: your surfaces, your machines, one supervised bus.<br />
-  Built on the <a href="https://github.com/the-metafactory/myelin">myelin</a> protocol stack below; an assistant is a thin persona on top — cortex is everything in between.
+  Built on the <a href="https://github.com/the-metafactory/myelin">myelin</a> layer model below; an assistant is a thin persona on top — cortex is everything in between.
 </p>
 
 <p align="center">
