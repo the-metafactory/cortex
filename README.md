@@ -11,12 +11,12 @@
 <h1 align="center">cortex</h1>
 
 <p align="center">
-  <strong>Your assistant, on your surfaces — a collaboration bus for principals and their agents.</strong>
+  <strong>The foundation for an internet of agentic work — starting with your own stack.</strong>
 </p>
 
 <p align="center">
-  Named AI assistants in the chat channels you already use, doing real work on your machines —<br />
-  dispatched, supervised, and observed over one message bus.
+  Humans and assistants working together as one team: your surfaces, your machines, one supervised bus.<br />
+  An assistant is a thin persona on top — cortex is everything underneath.
 </p>
 
 <p align="center">
@@ -77,6 +77,25 @@ Work reaches an assistant in one of three **dispatch modes**:
 | **Direct** | You name the assistant (`@echo`); it does the task, one shot. |
 | **Offer** | You publish to a capability (`code-review.typescript`); exactly one capable assistant claims it. |
 | **Delegate** | You name an assistant that orchestrates a multi-step outcome via a multi-agent team. |
+
+---
+
+## In the wild
+
+The same engine already wears three different faces:
+
+- **cortex builds cortex.** This release was diagnosed, fixed, reviewed, and
+  shipped by humans and assistants working together *through* cortex —
+  dispatched over its own bus, with a community tester in the loop.
+- **A web agent in production.** The AMT project serves its Pylon agent through
+  cortex's Web/SSE adapter — same engine, no chat platform involved.
+- **A community onboarding engine.** Metafactory Quests runs its onboarding
+  assistants on cortex.
+
+An assistant is a thin layer — a persona and a binding. The bus, identity,
+dispatch, supervision, and surfaces underneath are cortex, which is why one
+engine can field a Discord colleague, a web agent, and a community guide at
+the same time.
 
 ---
 
