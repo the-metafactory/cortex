@@ -29,8 +29,11 @@
  *   6. Seed provisioning — the SAME entry postupgrade.sh uses.
  *   7. Services          — Linux: systemd user units (L1, cortex#2071
  *                          REQUIRED — declared as a hard dependency, not
- *                          re-implemented here). macOS: arc handles launchd;
- *                          skip.
+ *                          re-implemented here); a re-run also try-restarts
+ *                          running units so fixed configs are picked up
+ *                          (cortex#2283). macOS: restart a LOADED stack
+ *                          service via launchctl kickstart -k (load/unload
+ *                          stays arc-owned); not loaded → skip.
  *   8. Gate              — the §5 healthy-boot grep table + nats /healthz,
  *                          bounded wait.
  *
@@ -76,6 +79,7 @@ import {
   detectBusConnectFailure,
   evaluateHealthyBootGate,
   gatePassed,
+  launchdStackLabel,
   natsConfPath,
   nkeyBasenameForSlug,
   patchStackYaml,
@@ -245,7 +249,10 @@ interface StepReport {
    *  Surfaced in the --json items as `skipped: "true"` so an operator sees an
    *  explicit deferral, never a green check for work that didn't run. */
   skipped?: boolean;
-  /** Short machine-readable reason accompanying `skipped` (--json `note`). */
+  /** Short machine-readable annotation (--json `note`): the reason
+   *  accompanying `skipped` (cortex#2275), and — cortex#2283 — step 7's
+   *  action-taken line ("restarted (config re-applied)" / "started (first
+   *  boot)" / "skip (not loaded — arc owns launchd load)"). */
   note?: string;
 }
 
@@ -658,40 +665,56 @@ function runSeedProvisioning(ports: QuickstartPorts, opts: { slug: string; confi
 }
 
 // =============================================================================
-// Step 7 — services (Linux only)
+// Step 7 — services (Linux: systemd; darwin: launchd restart-only)
 // =============================================================================
 
 /**
- * cortex#2264 / cortex#2282 — clear the daemon's append-mode `.error.log` so
- * step 8's gate only ever sees CURRENT-boot content. Without this, a
- * bus-connect failure line from a PRIOR boot would linger (both systemd
- * `StandardError=append:` and launchd `StandardErrorPath` append, never
- * truncate) and make the gate fast-fail on stale content before the fresh
- * daemon connects — breaking the "fix creds and re-run" recovery. Best-effort
- * (the port swallows fs errors). Extracted (cortex#2282) so it is callable
- * host-independently, but a truncate is ONLY safe paired atomically with a
- * (re)start — truncate → restart → gate — otherwise it destroys the
- * current-boot failure evidence the gate's fast-fail depends on. So today
- * ONLY the Linux branch calls it, immediately before its `enable --now`;
- * the darwin call arrives with A2 (cortex#2283), paired with the
- * restart-on-re-run it needs. Returns the human-readable step line.
+ * cortex#2264 / cortex#2282 / cortex#2283 — clear BOTH of the daemon's
+ * append-mode log files (`.log` + `.error.log`) so step 8's gate only ever
+ * sees CURRENT-boot content in EITHER file. Both stale directions poison the
+ * gate (systemd `append:` and launchd `Std{Out,Error}Path` never truncate):
+ *   - a stale `.error.log` failure line from a PRIOR boot fast-fails the gate
+ *     before the fresh daemon connects — breaking "fix creds and re-run"
+ *     recovery (cortex#2264);
+ *   - stale HEALTHY lines in the prior boot's `.log` satisfy the gate's
+ *     POSITIVE signal — try-restart/kickstart succeed at fork time regardless
+ *     of whether the relaunched daemon survives, so a daemon that dies on a
+ *     still-broken config would leave the old 5 healthy lines standing and
+ *     turn the gate green over a dead daemon (cortex#2283 adversarial review
+ *     F1).
+ * Best-effort (the port swallows fs errors). A truncate is ONLY safe paired
+ * atomically with a (re)start — truncate → restart → gate — otherwise it
+ * destroys the current-boot evidence the gate depends on. Both callers honor
+ * that pairing: the Linux branch calls it immediately before its
+ * `enable --now` + per-unit `try-restart`, and the darwin branch immediately
+ * before its `launchctl kickstart -k` — and ONLY when the service is loaded
+ * (no restart → no truncate). Returns the human-readable step line.
  */
-function clearPriorBootErrorLog(ports: QuickstartPorts, slug: string): string {
-  const errorLogPath = daemonErrorLogPath(process.env.HOME ?? "", slug);
-  ports.service.truncateErrorLog(errorLogPath);
-  return `  ✓ cleared prior-boot error log (${errorLogPath})`;
+function clearPriorBootLogs(ports: QuickstartPorts, slug: string): string {
+  const home = process.env.HOME ?? "";
+  const logPath = daemonLogPath(home, slug);
+  const errorLogPath = daemonErrorLogPath(home, slug);
+  ports.service.truncateLog(logPath);
+  ports.service.truncateLog(errorLogPath);
+  return `  ✓ cleared prior-boot logs (${logPath}, ${errorLogPath})`;
 }
 
 function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean }): StepReport {
   if (opts.skip) {
     return step("7. Services", true, ["  ○ --skip-services passed — skipping"]);
   }
-  if (process.platform !== "linux") {
-    return step("7. Services", true, ["  ○ non-Linux host — launchd is handled by arc; skip"]);
+  if (process.platform === "linux") {
+    return runServicesLinux(ports, opts.slug);
   }
+  if (process.platform === "darwin") {
+    return runServicesDarwin(ports, opts.slug);
+  }
+  return step("7. Services", true, ["  ○ non-Linux host — launchd is handled by arc; skip"]);
+}
 
+function runServicesLinux(ports: QuickstartPorts, slug: string): StepReport {
   const lines: string[] = [];
-  let ok = true;
+  const units = [`nats@${slug}`, `cortex@${slug}`];
 
   // L1 (cortex#2071) REQUIRED, not re-implemented here — an install without
   // it has no template units to enable an instance of.
@@ -716,20 +739,93 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
   }
   lines.push("  ✓ systemctl --user daemon-reload");
 
-  // cortex#2264 — clear the daemon's append-mode `.error.log` IMMEDIATELY
-  // before the (re)start (see clearPriorBootErrorLog above), so step 8's gate
-  // only ever sees CURRENT-boot content.
-  lines.push(clearPriorBootErrorLog(ports, opts.slug));
+  // cortex#2283 — per-unit PRE-start run-state probe. It selects which units
+  // get try-restart below AND names the per-unit action taken. This is
+  // run-state selection, NOT the out-of-scope config-changed detection: every
+  // probed-active unit is restarted unconditionally on every re-run.
+  const activeUnits = units.filter((u) => ports.service.isActive(u));
+  const inactiveUnits = units.filter((u) => !activeUnits.includes(u));
 
-  const enable = ports.service.enableNow([`nats@${opts.slug}`, `cortex@${opts.slug}`]);
+  // cortex#2264 / cortex#2283 — pair-truncate BOTH append-mode daemon logs
+  // IMMEDIATELY before the (re)start (see clearPriorBootLogs above), so step
+  // 8's gate only ever sees CURRENT-boot content in either file.
+  lines.push(clearPriorBootLogs(ports, slug));
+
+  const enable = ports.service.enableNow(units);
   if (enable.exitCode !== 0) {
-    lines.push(`  ✗ systemctl --user enable --now nats@${opts.slug} cortex@${opts.slug} failed: ${enable.stderr.trim()}`);
-    ok = false;
-  } else {
-    lines.push(`  ✓ systemctl --user enable --now nats@${opts.slug} cortex@${opts.slug}`);
+    lines.push(`  ✗ systemctl --user enable --now ${units.join(" ")} failed: ${enable.stderr.trim()}`);
+    return step("7. Services", false, lines);
+  }
+  lines.push(`  ✓ systemctl --user enable --now ${units.join(" ")}`);
+
+  // cortex#2283 — `enable --now` STARTS stopped units but is a silent no-op
+  // on ACTIVE ones (`--now` = `start`), so a recovery re-run never picked up
+  // fixed configs. try-restart the PROBED-ACTIVE units only: they are exactly
+  // the ones enable --now skipped. Never the probed-inactive ones —
+  // enable --now just started those, and restarting the fresh instance
+  // mid-bus-connect would land its one-shot `failed to connect` marker in the
+  // just-truncated `.error.log` and fast-fail the gate on a healthy system
+  // (adversarial review F2 — the issue spec's unconditional try-restart was
+  // wrong on this point).
+  if (activeUnits.length > 0) {
+    const restart = ports.service.tryRestart(activeUnits);
+    if (restart.exitCode !== 0) {
+      lines.push(`  ✗ systemctl --user try-restart ${activeUnits.join(" ")} failed: ${restart.stderr.trim()}`);
+      return step("7. Services", false, lines);
+    }
+    lines.push(`  ✓ systemctl --user try-restart ${activeUnits.join(" ")}`);
   }
 
-  return step("7. Services", ok, lines);
+  // Output honesty (per unit): only units that were actually running are
+  // reported restarted; cold ones were started by enable --now.
+  const actions: string[] = [];
+  if (activeUnits.length > 0) actions.push(`restarted (config re-applied): ${activeUnits.join(" ")}`);
+  if (inactiveUnits.length > 0) actions.push(`started (first boot): ${inactiveUnits.join(" ")}`);
+  for (const a of actions) lines.push(`  ✓ ${a}`);
+  return { ...step("7. Services", true, lines), note: actions.join("; ") };
+}
+
+/**
+ * cortex#2283 — darwin branch: RESTART-ONLY. arc owns the launchd load/
+ * unload lifecycle; quickstart never takes that over. When the stack service
+ * is loaded (`launchctl print gui/$UID/<label>` exit 0), a re-run restarts it
+ * via `launchctl kickstart -k` so the daemon picks up the configs step 5
+ * patched — with the both-logs truncate (`.log` + `.error.log`) paired
+ * IMMEDIATELY before it (truncate → restart → gate, same ordering contract
+ * as Linux). When it is not loaded, keep the pre-#2283 "handled by arc" skip:
+ * no restart means no truncate (an unpaired truncate would wipe current-boot
+ * failure evidence and false-GREEN the gate — A1/#2297 adversarial finding).
+ */
+function runServicesDarwin(ports: QuickstartPorts, slug: string): StepReport {
+  const label = launchdStackLabel(slug);
+  if (!ports.service.launchdServiceLoaded(label)) {
+    const action = "skip (not loaded — arc owns launchd load)";
+    return {
+      ...step("7. Services", true, [`  ○ launchd is handled by arc; ${action}`]),
+      note: action,
+    };
+  }
+
+  const lines: string[] = [];
+  // Paired atomically with the kickstart below — never called on the
+  // not-loaded path above.
+  lines.push(clearPriorBootLogs(ports, slug));
+
+  const restart = ports.service.launchdKickstart(label);
+  if (restart.exitCode !== 0) {
+    // Fail the step (exit 1, gate never runs): the truncate above already
+    // wiped the prior boot's logs, so letting the gate run against a daemon
+    // we FAILED to restart could only ever time out dishonestly — the daemon
+    // that IS running was never re-pointed at the fixed config. Failing here
+    // keeps the truncate → restart → gate pairing honest.
+    lines.push(`  ✗ launchctl kickstart -k gui/$UID/${label} failed: ${restart.stderr.trim()}`);
+    return step("7. Services", false, lines);
+  }
+  lines.push(`  ✓ launchctl kickstart -k gui/$UID/${label}`);
+
+  const action = "restarted (config re-applied)";
+  lines.push(`  ✓ ${action}`);
+  return { ...step("7. Services", true, lines), note: action };
 }
 
 // =============================================================================
@@ -786,16 +882,21 @@ async function runGate(
     }
     // cortex#2264 — a surfaced bus-connect failure is TERMINAL for this boot:
     // fail fast with the actual error line rather than burning the full
-    // timeout. On LINUX this is safe on the FIRST poll (before success is
-    // logged) because step 7 truncated this append-mode `.error.log` AND
-    // (re)started the daemon right before the gate — so any line here is from
-    // THIS boot, never a stale prior-boot failure. On darwin neither happens
-    // yet: quickstart does not restart the daemon, so a stale prior-boot line
-    // can fast-fail a re-run here — the paired truncate → restart → gate
-    // arrives with A2 (cortex#2283; a lone truncate would instead destroy
-    // current-boot failure evidence and false-GREEN the gate). SCOPE: surface
-    // + fast-fail only — the daemon still degrades and continues (its
-    // fail-closed-abort posture is a separate, deferred call).
+    // timeout. This is safe on the FIRST poll (before success is logged)
+    // because step 7 pair-truncated BOTH append-mode logs (`.log` +
+    // `.error.log`) AND (re)started the daemon right before the gate — Linux
+    // via enable --now + per-unit try-restart, darwin via launchctl
+    // kickstart -k when the service is loaded (cortex#2283) — so any line in
+    // EITHER file is from THIS boot: no stale prior-boot failure can
+    // fast-fail here, and no stale prior-boot HEALTHY lines can satisfy the
+    // positive gate over a daemon that died on relaunch (review F1).
+    // Residual: on darwin with the service NOT loaded
+    // (arc owns the load; quickstart neither restarts nor truncates), a stale
+    // prior-boot line can still fast-fail here — conservative-honest: with no
+    // loaded daemon the gate could never turn green anyway, and the stale
+    // line names the last real failure. SCOPE: surface + fast-fail only — the
+    // daemon still degrades and continues (its fail-closed-abort posture is a
+    // separate, deferred call).
     const busFailure = detectBusConnectFailure(ports.gate.readLog(errorLogPath));
     if (busFailure !== undefined) {
       return step("8. Healthy-boot gate", false, [

@@ -75,13 +75,22 @@ export function buildPreflightPorts(): PreflightPorts {
 }
 
 // =============================================================================
-// Service (systemd user units, Linux only)
+// Service (systemd user units on Linux; launchd restart-only on darwin)
 // =============================================================================
 
 /** Where L1 (cortex#2071) renders the two template units. Mirrors the path
  *  Appendix A (README-AGENTS.md) documents. */
 function systemdUserUnitDir(): string {
   return join(homedir(), ".config", "systemd", "user");
+}
+
+/** cortex#2283 — launchd domain target for the current user's GUI domain:
+ *  `gui/<uid>/<label>`. `process.getuid` exists on every POSIX platform
+ *  (darwin included); the 0 fallback is unreachable in practice — these
+ *  methods are only invoked on darwin. */
+function launchdGuiTarget(label: string): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  return `gui/${String(uid)}/${label}`;
 }
 
 export function buildServicePort(): ServicePort {
@@ -92,15 +101,17 @@ export function buildServicePort(): ServicePort {
     daemonReload(): CommandResult {
       return runSync(["systemctl", "--user", "daemon-reload"]);
     },
-    truncateErrorLog(errorLogPath: string): void {
-      // cortex#2264 — clear the append-mode `.error.log` before the (re)start so
-      // the gate reads only CURRENT-boot content. Best-effort: a failure here
-      // must NOT block the restart — the gate simply degrades to its timeout
-      // path (never a false-fail). mkdir -p first so a first-install run (log
-      // dir not yet created by the daemon) still lands an empty file.
+    truncateLog(logPath: string): void {
+      // cortex#2264 / cortex#2283 — clear ONE append-mode daemon log before
+      // the (re)start so the gate reads only CURRENT-boot content (step 7
+      // pair-truncates both the `.log` and the `.error.log`). Best-effort: a
+      // failure here must NOT block the restart — the gate simply degrades to
+      // its timeout path (never a false-fail). mkdir -p first so a
+      // first-install run (log dir not yet created by the daemon) still lands
+      // an empty file.
       try {
-        mkdirSync(dirname(errorLogPath), { recursive: true });
-        writeFileSync(errorLogPath, "");
+        mkdirSync(dirname(logPath), { recursive: true });
+        writeFileSync(logPath, "");
       } catch (_err) {
         // Swallow — see above; the gate never depends on this succeeding. Safe
         // to ignore.
@@ -108,6 +119,29 @@ export function buildServicePort(): ServicePort {
     },
     enableNow(units: string[]): CommandResult {
       return runSync(["systemctl", "--user", "enable", "--now", ...units]);
+    },
+    tryRestart(units: string[]): CommandResult {
+      // cortex#2283 — restart the probed-active units so the recovery re-run
+      // picks up patched configs; the orchestrator passes ONLY units the
+      // isActive pre-probe found running (a blanket try-restart would kill
+      // units enable --now just started, mid-bus-connect — review F2).
+      return runSync(["systemctl", "--user", "try-restart", ...units]);
+    },
+    isActive(unit: string): boolean {
+      // Read-only pre-start probe (cortex#2283) — exit 0 ⇔ active. Selects
+      // the tryRestart set + names the per-unit action in step 7's output.
+      // `--quiet` suppresses the state word; we only need the code.
+      return runSync(["systemctl", "--user", "is-active", "--quiet", unit]).exitCode === 0;
+    },
+    launchdServiceLoaded(label: string): boolean {
+      // cortex#2283 — exit 0 ⇔ loaded in the user's GUI domain. Quickstart
+      // never loads/unloads (arc owns that); this only gates the kickstart.
+      return runSync(["launchctl", "print", launchdGuiTarget(label)]).exitCode === 0;
+    },
+    launchdKickstart(label: string): CommandResult {
+      // cortex#2283 — `-k`: kill the running instance, then restart it, so a
+      // re-run applies patched configs on macOS.
+      return runSync(["launchctl", "kickstart", "-k", launchdGuiTarget(label)]);
     },
   };
 }

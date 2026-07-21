@@ -57,13 +57,16 @@ export interface PreflightPorts {
 // =============================================================================
 
 /**
- * The injectable systemd seam. NEVER exercised on macOS in production
- * (quickstart's orchestrator skips the whole step off `process.platform`;
- * `truncateErrorLog` — pure fs — joins the darwin path only with A2 /
- * cortex#2283, paired with the restart it needs). This interface exists so a
- * test can inject a fake systemctl and assert the exact invocations
- * quickstart makes, without a real systemd on the test host (arc's L2
- * pattern, referenced in cortex#2094's acceptance criteria).
+ * The injectable host-service seam. The orchestrator branches off
+ * `process.platform`: Linux drives the systemd methods
+ * (`unitFileExists`/`daemonReload`/`enableNow`/`tryRestart`/`isActive`),
+ * darwin drives the launchd methods (`launchdServiceLoaded`/
+ * `launchdKickstart`) — restart-only; arc owns the launchd load/unload
+ * lifecycle (cortex#2283). `truncateLog` — pure fs — is shared by both
+ * branches, always paired with the (re)start that follows it. This interface
+ * exists so a test can inject a fake systemctl/launchctl and assert the exact
+ * invocations quickstart makes, without a real systemd/launchd on the test
+ * host (arc's L2 pattern, referenced in cortex#2094's acceptance criteria).
  */
 export interface ServicePort {
   /** Absolute path a systemd user unit named `unit` would be rendered at —
@@ -75,24 +78,67 @@ export interface ServicePort {
   /** `systemctl --user daemon-reload`. */
   daemonReload(): CommandResult;
   /**
-   * cortex#2264 — truncate the daemon's append-mode `.error.log` to EMPTY,
-   * immediately before the (re)start below, so step 8's gate only ever reads
-   * CURRENT-boot content. The `cortex@.service` unit routes `StandardError` with
-   * `append:` (never truncates), so a failure line from a PRIOR boot would
-   * otherwise persist and make the gate fast-fail on a stale line before the
-   * fresh boot has even connected. Called ONLY in the Linux branch that
-   * actually (re)starts the daemon — a truncate is only safe paired with a
-   * restart (truncate → restart → gate), else it destroys current-boot
-   * failure evidence. launchd's `StandardErrorPath` appends too (cortex#2282
-   * unified the paths), so the darwin call arrives with A2 (cortex#2283)
-   * alongside restart-on-re-run.
+   * cortex#2264 / cortex#2283 — truncate ONE append-mode daemon log file to
+   * EMPTY, immediately before the (re)start below, so step 8's gate only ever
+   * reads CURRENT-boot content. Called once per log file — step 7
+   * pair-truncates BOTH the `.error.log` (a stale prior-boot failure line
+   * would make the gate fast-fail before the fresh boot connects,
+   * cortex#2264) AND the main `.log` (stale prior-boot HEALTHY lines would
+   * otherwise satisfy the gate's positive signal even when the relaunched
+   * daemon dies on a still-broken config — a sub-second false-GREEN over a
+   * dead daemon; cortex#2283 adversarial review F1). Both systemd (`append:`)
+   * and launchd (`Std{Out,Error}Path`, cortex#2282-unified) append and never
+   * truncate on their own. Called ONLY in branches that actually (re)start
+   * the daemon — a truncate is only safe paired with a restart
+   * (truncate → restart → gate), else it destroys current-boot evidence; the
+   * darwin branch calls it immediately before its `launchctl kickstart -k`,
+   * and ONLY when the service is loaded (i.e. only when a restart follows).
    * Best-effort: never throws — a failure here degrades the gate to its honest
-   * timeout path, never a false-fail. `errorLogPath` is the exact path
-   * `daemonErrorLogPath()` computes.
+   * timeout path, never a false-fail. `logPath` is an exact path computed by
+   * `daemonLogPath()` / `daemonErrorLogPath()`.
    */
-  truncateErrorLog(errorLogPath: string): void;
-  /** `systemctl --user enable --now <units...>`. */
+  truncateLog(logPath: string): void;
+  /** `systemctl --user enable --now <units...>` — enables (idempotent) and
+   *  STARTS any stopped unit (`--now` = `start`); a silent no-op only for
+   *  units already active. */
   enableNow(units: string[]): CommandResult;
+  /**
+   * cortex#2283 — `systemctl --user try-restart <units...>`: restart the
+   * given units (restart-if-running; stopped units are untouched). Issued for
+   * exactly the units the `isActive` pre-probe found RUNNING — those are the
+   * ones `enableNow` silently no-ops on, so this is what re-applies fixed
+   * configs on a recovery re-run. NEVER issued for units the probe found
+   * stopped: `enable --now` just STARTED those, and a blanket try-restart
+   * would kill the fresh instance mid-bus-connect, landing its one-shot
+   * `failed to connect` marker in the just-truncated `.error.log` and
+   * fast-failing the gate on a healthy system (cortex#2283 adversarial
+   * review F2 — the unconditional sequence in the original issue spec was
+   * wrong). Restart of RUNNING units remains unconditional — this is
+   * run-state selection, not the out-of-scope config-changed detection.
+   */
+  tryRestart(units: string[]): CommandResult;
+  /**
+   * cortex#2283 — `systemctl --user is-active --quiet <unit>` (exit 0 →
+   * active). READ-ONLY pre-start probe with two consumers: it selects which
+   * units get `tryRestart` (probed-active only — see tryRestart above), and
+   * it names the per-unit action taken in step 7's output ("restarted
+   * (config re-applied)" vs "started (first boot)"). It never gates WHETHER
+   * a running unit is restarted — that stays unconditional.
+   */
+  isActive(unit: string): boolean;
+  /**
+   * cortex#2283 — darwin guard: `launchctl print gui/$UID/<label>` exit 0 ⇔
+   * the service is loaded in the user's GUI domain. Quickstart restarts ONLY
+   * a loaded service; load/unload stays arc-owned (out of scope).
+   */
+  launchdServiceLoaded(label: string): boolean;
+  /**
+   * cortex#2283 — `launchctl kickstart -k gui/$UID/<label>`: kill + restart
+   * the loaded service, so a re-run picks up patched configs on macOS. The
+   * `gui/$UID/` domain target is built inside the live adapter (real UID);
+   * callers pass the bare plist Label (`launchdStackLabel()`).
+   */
+  launchdKickstart(label: string): CommandResult;
 }
 
 // =============================================================================

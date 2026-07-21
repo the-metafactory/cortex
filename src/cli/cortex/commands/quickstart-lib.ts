@@ -747,6 +747,20 @@ export function daemonErrorLogPath(home: string, slug: string): string {
 }
 
 /**
+ * The launchd `Label` of the per-slug stack service — the plist template
+ * (`src/services/ai.meta-factory.cortex.stack.plist`) declares
+ * `ai.meta-factory.cortex.__STACK_SLUG__`, and the renderer
+ * (`scripts/lib/plist-render.sh`) substitutes `__STACK_SLUG__` with the slug.
+ * cortex#2283 — step 7's darwin restart targets `gui/$UID/<this label>` via
+ * `launchctl kickstart -k` (the gui target itself is built in the live
+ * adapter, where the real UID lives). A test pins this helper against the
+ * actual plist template so the two authorities cannot diverge silently.
+ */
+export function launchdStackLabel(slug: string): string {
+  return `ai.meta-factory.cortex.${slug}`;
+}
+
+/**
  * The marker the myelin runtime logs (to stderr → the `.error.log`) when the
  * PRIMARY bus connect fails and the runtime degrades to disabled
  * (`runtime.ts:834`: `myelin-runtime: failed to connect — continuing without
@@ -770,10 +784,12 @@ export const BUS_CONNECT_FAILURE_MARKER = "failed to connect — continuing with
  * continue posture is intentionally UNCHANGED — that fail-closed decision is
  * deferred).
  *
- * SAFE to fast-fail on the FIRST match because step 7 TRUNCATES this
- * append-mode `.error.log` immediately before it (re)starts the daemon
- * (`truncateErrorLog`), so anything present here is CURRENT-boot content — a
- * stale prior-boot failure line can no longer linger and cause a false-fail.
+ * SAFE to fast-fail on the FIRST match because step 7 pair-truncates BOTH
+ * append-mode daemon logs (`.log` + `.error.log`, `truncateLog` via
+ * `clearPriorBootLogs`) immediately before it (re)starts the daemon, so
+ * anything present here is CURRENT-boot content — a stale prior-boot failure
+ * line can no longer linger and cause a false-fail (and, symmetrically, stale
+ * prior-boot healthy `.log` lines can no longer cause a false-pass).
  */
 export function detectBusConnectFailure(errorLogText: string | undefined): string | undefined {
   if (errorLogText === undefined) return undefined;
