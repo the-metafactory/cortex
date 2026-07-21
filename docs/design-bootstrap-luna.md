@@ -17,6 +17,39 @@ Standing up a working assistant stack (a "Luna") today is a **~15-step recipe sp
 
 Both are wanted. They are **not alternatives** — the runbook is the specification the bundle automates.
 
+## 1.5 What "MVP" means (per Vincent + `#bootstrap`, 2026-07)
+
+`#bootstrap` defines the target as *"fresh cortex install → a **minimum viable
+product (MVP) software factory assistant**"* — not a chat toy, an assistant that
+can do the software-factory work. The MVP is pinned by these constraints (the
+common denominator of how this community actually runs):
+
+| Axis | MVP constraint |
+|---|---|
+| **OS targets** | macOS · Debian-based Linux · WSL2 |
+| **Install path** | cortex **native** install (not container — L4 compose is a parallel option, not the MVP path) |
+| **Stack** | **local** (not federated) |
+| **Coding agent** | **Claude Code** (already cortex's substrate) |
+| **Communication** | **Discord** (aligns with DD-5) |
+| **Cloud repo** | **GitHub** |
+
+**This tiers cleanly onto what we've built:**
+- **Luna-Light** is the *floor* — chat + async, zero tools. It is NOT the MVP; it's
+  the front door and the persona base.
+- **The MVP = Luna-Light + software-factory capability**: Claude-Code coding with
+  the tool surface a dev assistant needs (bash, `gh`/GitHub, access to
+  checked-out repos), bound to Discord, on a local stack, across the three OS
+  targets. These are the "extensions to Luna" — each an explicit capability grant
+  on the fragment, not baked into the light floor.
+- **Full Luna** (memory via AgentState, soma-projected identity/skills, federation)
+  is the ceiling — beyond MVP.
+
+So the bootstrap journey's real deliverable is **the MVP tier**: the runbook and the
+Phase-2 bundle must stand up not just a chat Luna but a *working software-factory
+assistant* under the constraints above. The OS matrix (mac/Debian/WSL2) and the
+capability set (Claude-Code + bash + `gh` + repo access) become first-class
+acceptance criteria, not afterthoughts.
+
 ## 2. Goal (Definition of Done — a demonstrable walkthrough)
 
 A new user on a clean machine can reach a **working, bus-routable `@luna`** that responds on their chosen surface, by following ONE path. Concretely, a reviewer can watch:
