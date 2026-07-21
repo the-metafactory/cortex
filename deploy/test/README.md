@@ -1,3 +1,36 @@
+# Deploy test benches
+
+## Scenario index
+
+| Scenario | Kind | Entry point | Guards |
+|----------|------|-------------|--------|
+| Container bench | scripted, exit-coded | `deploy/test/container-compose.sh` (`bun run bench:container`) | compose stack boot, volume perms, quickstart honesty, healthcheck flip (#2284) |
+| Debian install-rehearsal | scripted, exit-coded, multipass VM | `deploy/test/install-rehearsal-debian.sh` (`bun run bench:install:debian`) | fresh-machine `arc install cortex` path: deps → arc → install + capability display → depends_on cascade → symlinks → placeholder-env quickstart (#2287) |
+| macOS install-rehearsal | manual runbook | [`deploy/test/install-rehearsal-macos.md`](install-rehearsal-macos.md) | same install path on macOS by a human operator, incl. the A1 gate-pass (#2282) and A2 recovery-restart (#2283) checks (#2287) |
+
+All benches are **assert-only** (a failing assertion that exposes a product
+bug gets FILED, not fixed here), **idempotent**, and **placeholder-only** in
+everything committed (`fixtures/` — never put real tokens/snowflakes there;
+tokens reach the scripts only via operator env).
+
+# Install rehearsal (`bench:install:debian` + macOS runbook)
+
+The cortex#2287 pair rehearses the fresh-machine registry install path before
+the cohort is pointed at the published package (D2):
+
+- **Debian (scripted)**: `deploy/test/install-rehearsal-debian.sh` launches a
+  fresh Ubuntu LTS multipass VM (`cortex-rehearsal`), installs the quickstart
+  prerequisites + arc (per arc's QUICKSTART), runs `arc install` (git mode by
+  default; `--mode registry` for D2 reuse — see `--help`), and asserts the
+  capability display, the depends_on cascade, symlink integrity, and the
+  placeholder-env quickstart outcome (steps 1-6 ✓, expected fail at the
+  token-requiring gate leg). Teardown purges the VM unless `--keep`. Tokens
+  only via operator env (`ARC_REGISTRY_TOKEN`, registry mode only).
+- **macOS (manual)**: [`install-rehearsal-macos.md`](install-rehearsal-macos.md)
+  — the same path as a numbered, copy-pasteable runbook with expected output
+  per step, the A1 gate-pass check (#2282) and A2 recovery-restart check
+  (#2283), and a results table for operator sign-off.
+
 # Container bench (`bench:container`)
 
 `deploy/test/container-compose.sh` — the container-compose regression bench
