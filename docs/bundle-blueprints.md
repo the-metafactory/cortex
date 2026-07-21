@@ -144,5 +144,5 @@ and clone the one they need.
 Bundle shape: `arc/docs/skill-repo-migration-spec.md`, ADR-0017. Pier:
 `arc-manifest-pier.yaml` + `personas/pier.md` + `agents.d/pier.yaml`. Escort:
 guildhall quests + `src/brain/protocol.ts` (`create_private_thread`, ADR cortex#2206).
-Luna-Lite: `the-metafactory/metafactory-bundle-luna-lite`. Companion spec:
+Luna-Lite: `the-metafactory/metafactory-cortex-agent-luna-lite`. Companion spec:
 `design-bootstrap-luna.md`.
