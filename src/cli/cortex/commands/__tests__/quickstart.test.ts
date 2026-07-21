@@ -189,6 +189,14 @@ interface FakeOverrides {
   isActive?: (unit: string) => boolean;
   launchdServiceLoaded?: (label: string) => boolean;
   launchdKickstart?: (label: string) => CommandResult;
+  // cortex#2322 — darwin fresh-host backstop seams. Defaults: no backstop
+  // daemon running (so the not-loaded path starts one), and the start succeeds.
+  daemonBackstopRunning?: (pointerConfigPath: string) => boolean;
+  startDaemonBackstop?: (opts: {
+    pointerConfigPath: string;
+    logPath: string;
+    errorLogPath: string;
+  }) => CommandResult;
   // cortex#2264/#2283 — records the per-file log truncations step 7 performs
   // before the (re)start: called TWICE, once for the main `.log` and once for
   // the `.error.log` (so a test can assert both ran, with what paths, and in
@@ -218,6 +226,9 @@ function fakePorts(overrides: FakeOverrides = {}): QuickstartPorts {
     isActive: overrides.isActive ?? (() => false),
     launchdServiceLoaded: overrides.launchdServiceLoaded ?? (() => false),
     launchdKickstart: overrides.launchdKickstart ?? (() => ({ exitCode: 0, stdout: "", stderr: "" })),
+    daemonBackstopRunning: overrides.daemonBackstopRunning ?? (() => false),
+    startDaemonBackstop:
+      overrides.startDaemonBackstop ?? (() => ({ exitCode: 0, stdout: "backstop started (pid 4242)", stderr: "" })),
   };
   const provision: ProvisionPort = {
     provisionSeed: overrides.provisionSeed ?? (() => ({ exitCode: 0, stdout: "  ⊘ NKey already exists — reusing\n", stderr: "" })),
@@ -686,16 +697,17 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
     expect(res.stdout).toContain("Healthy-boot gate ✓");
   });
 
-  // A1's (#2297) negative-space tripwire — "darwin NEVER truncates" — guarded
-  // the UNPAIRED state and is superseded by cortex#2283: darwin now truncates
-  // exactly when a restart follows (loaded → truncate + kickstart, covered in
-  // the #2283 block below). What survives of the invariant is its real core:
-  // NO restart → NO truncate. This test pins that on the not-loaded path.
-  test("cortex#2283: darwin, service NOT loaded — no truncate, no kickstart (unpaired truncate stays impossible)", async () => {
+  // cortex#2322 — the not-loaded path is no longer a printed skip. On a fresh
+  // Mac (launchd service NOT loaded AND no backstop daemon running) it STARTS
+  // the daemon directly via the `cortex start --config <pointer>` backstop,
+  // paired with the both-logs truncate (truncate → start → gate). It must NOT
+  // touch launchctl kickstart (that's the arc-loaded path only).
+  test("cortex#2322: darwin, NOT loaded + not running (fresh Mac) — truncate + cortex start backstop, no kickstart", async () => {
     const configDir = freshDir();
     const natsDir = freshDir();
     const truncateCalls: string[] = [];
     const kickstartCalls: string[] = [];
+    const backstopCalls: { pointerConfigPath: string; logPath: string; errorLogPath: string }[] = [];
     const res = await withPlatform("darwin", () =>
       withEnv(validCtxEnv(), () =>
         dispatchQuickstart(
@@ -703,7 +715,12 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
           () =>
             fakePorts({
               launchdServiceLoaded: () => false,
+              daemonBackstopRunning: () => false,
               truncateLog: (p: string) => truncateCalls.push(p),
+              startDaemonBackstop: (opts) => {
+                backstopCalls.push(opts);
+                return { exitCode: 0, stdout: "backstop started (pid 4242)", stderr: "" };
+              },
               launchdKickstart: (label: string) => {
                 kickstartCalls.push(label);
                 return { exitCode: 0, stdout: "", stderr: "" };
@@ -713,12 +730,82 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
       ),
     );
     expect(res.exitCode).toBe(0);
-    expect(truncateCalls).toEqual([]);
+    // Both logs truncated (paired with the start), and the backstop ran exactly
+    // once against the pointer config path + the gate-visible log files.
+    expect(truncateCalls.length).toBe(2);
+    expect(backstopCalls.length).toBe(1);
+    expect(backstopCalls[0]?.pointerConfigPath).toBe(join(configDir, "work", "work.yaml"));
+    expect(backstopCalls[0]?.logPath).toBe(daemonLogPath(process.env.HOME ?? "", "work"));
+    expect(backstopCalls[0]?.errorLogPath).toBe(daemonErrorLogPath(process.env.HOME ?? "", "work"));
+    // The arc-loaded kickstart path is NEVER taken on a fresh (unloaded) host.
     expect(kickstartCalls).toEqual([]);
+    expect(res.stdout).toContain("cleared prior-boot logs");
+    expect(res.stdout).toContain("detached backstop");
+    expect(res.stdout).toContain("started (fresh host — cortex start backstop)");
+  });
+
+  // cortex#2322 — idempotency: a RE-RUN where the backstop daemon is already
+  // running (launchd still not loaded, but the pointer's pidfile names a live
+  // pid) is a CLEAN no-op skip — no double-start, and no truncate (a truncate
+  // is only ever paired with an actual (re)start; the A1/#2297 "unpaired
+  // truncate impossible" core survives on this sub-case).
+  test("cortex#2322: darwin, NOT loaded + already running (re-run) — clean skip, no truncate, no start", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const truncateCalls: string[] = [];
+    let startCalls = 0;
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir],
+          () =>
+            fakePorts({
+              launchdServiceLoaded: () => false,
+              daemonBackstopRunning: () => true,
+              truncateLog: (p: string) => truncateCalls.push(p),
+              startDaemonBackstop: () => {
+                startCalls++;
+                return { exitCode: 0, stdout: "", stderr: "" };
+              },
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(truncateCalls).toEqual([]);
+    expect(startCalls).toBe(0);
     expect(res.stdout).not.toContain("cleared prior-boot");
-    // Today's arc-owned skip survives, and names the action taken.
-    expect(res.stdout).toContain("launchd is handled by arc");
-    expect(res.stdout).toContain("skip (not loaded — arc owns launchd load)");
+    expect(res.stdout).toContain("cortex daemon already running");
+  });
+
+  // cortex#2322 — a failed backstop start FAILS the step (exit 1) so the gate
+  // never runs against a daemon we couldn't launch (the truncate already wiped
+  // prior-boot evidence — same honesty contract as the loaded-kickstart-failed
+  // path).
+  test("cortex#2322: darwin, backstop start fails → exit 1, surfaces the error, gate never runs", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("darwin", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(
+          ["--config-dir", configDir, "--nats-dir", natsDir],
+          () =>
+            fakePorts({
+              launchdServiceLoaded: () => false,
+              daemonBackstopRunning: () => false,
+              startDaemonBackstop: () => ({
+                exitCode: 127,
+                stdout: "",
+                stderr: "cortex binary not found",
+              }),
+            }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toContain("backstop failed: cortex binary not found");
+    // Step 8's gate line never printed — the run stopped at step 7.
+    expect(res.stdout).not.toContain("healthy-boot gate:");
   });
 
   // Linux ordering survives the cortex#2282 helper extraction (+ the
@@ -1128,9 +1215,24 @@ describe("dispatchQuickstart — cortex#2283 restart-on-re-run", () => {
     expect(darwinLoaded.exitCode).toBe(0);
     expect(stepNote(darwinLoaded.stdout)).toBe("restarted (config re-applied)");
 
-    const darwinNotLoaded = await runJson("darwin", { launchdServiceLoaded: () => false });
-    expect(darwinNotLoaded.exitCode).toBe(0);
-    expect(stepNote(darwinNotLoaded.stdout)).toBe("skip (not loaded — arc owns launchd load)");
+    // cortex#2322 — not loaded + not running (fresh Mac): the note now records
+    // the backstop START, not a skip.
+    const darwinFresh = await runJson("darwin", {
+      launchdServiceLoaded: () => false,
+      daemonBackstopRunning: () => false,
+    });
+    expect(darwinFresh.exitCode).toBe(0);
+    expect(stepNote(darwinFresh.stdout)).toBe("started (fresh host — cortex start backstop)");
+
+    // cortex#2322 — not loaded + already running (re-run): clean skip note.
+    const darwinReRun = await runJson("darwin", {
+      launchdServiceLoaded: () => false,
+      daemonBackstopRunning: () => true,
+    });
+    expect(darwinReRun.exitCode).toBe(0);
+    expect(stepNote(darwinReRun.stdout)).toBe(
+      "skip (not loaded; cortex daemon already running — backstop)",
+    );
   });
 });
 

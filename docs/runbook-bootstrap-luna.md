@@ -407,19 +407,37 @@ software-factory capability delta added.
 
 The known edges, front-loaded so you recognize them before they bite.
 
-### F2 — macOS: a fresh host needs an explicit `cortex start`
+### F2 — macOS: a fresh host reaches a running daemon automatically (cortex#2322)
 
-`cortex quickstart`'s Step 7 on macOS only *restarts* a launchd stack service
-that arc has already **loaded** (load/unload stays arc-owned); on a fresh Mac
-it prints a skip instead. Symptom: quickstart's gate can't find a running daemon,
-or `@luna` never comes online. Fix — start the daemon directly (idempotent):
+`cortex quickstart`'s Step 7 on macOS has two paths, split on whether arc has
+already **loaded** the launchd stack service (load/unload stays arc-owned):
+
+- **arc-loaded service** → Step 7 restarts it (`launchctl kickstart -k`) so the
+  daemon picks up the configs Step 5 patched.
+- **fresh Mac (not loaded)** → Step 7 now **starts the daemon directly** via a
+  detached `cortex start --config <pointer>` backstop, so the healthy-boot gate
+  (Step 8) reaches a **running** daemon. No manual pre-load step is required.
+  A re-run is idempotent: if that backstop daemon is already running, Step 7
+  skips cleanly (no double-start).
+
+Symptom you should NO LONGER see: quickstart's gate can't find a running daemon
+on a fresh Mac. If you do (e.g. the `cortex` binary isn't on `PATH` at
+`~/.local/bin/cortex`), Step 7 fails with the reason — start the daemon by hand
+(idempotent):
 
 ```bash
 cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
 ```
 
-`arc upgrade cortex` (which loads the launchd plist) is the alternative. Then
-re-check with `cortex status --config <pointer>`.
+`arc upgrade cortex` (which loads the launchd plist, converting the deployment
+to the arc-loaded path above) is the alternative. Then re-check with
+`cortex status --config <pointer>`.
+
+> **Backstop config re-apply.** The fresh-Mac backstop does not restart an
+> already-running backstop daemon to pick up a *later* config edit (only the
+> arc-loaded launchd path does). To apply a config change on the backstop
+> daemon, `cortex stop && cortex start --config <pointer>` (see "Stopping /
+> restarting the stack" below).
 
 ### Missing / wrong token: the gate stops cleanly
 
