@@ -86,7 +86,7 @@ The same engine already wears three different faces:
 
 - **cortex builds cortex.** This release was diagnosed, fixed, reviewed, and
   shipped by humans and assistants working together *through* cortex —
-  dispatched over its own bus, with a community tester in the loop.
+  dispatched over its own bus, with community testers in the loop.
 - **A web agent in production.** The AMT project serves its Pylon agent through
   cortex's Web/SSE adapter — same engine, no chat platform involved.
 - **A community onboarding engine.** Metafactory Quests runs its onboarding
