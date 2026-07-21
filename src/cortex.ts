@@ -2970,6 +2970,19 @@ export async function startCortex(
     | ((peerPrincipal: string) => Promise<FederatedPeerResolution>)
     | undefined;
   const federationRegistryConfig = resolvedPolicy?.federated?.registry;
+  // TODO(#1882/flag-day): WP-6 defect (2) — resolve-on-membership. At flag-day R
+  // this gate widens from `enforce`-only to ALSO fold under `permissive` (fold
+  // on verified admission-roster membership — `isAdmittedMemberOfNetwork`, FS-1
+  // / #1846 — drop on bad bytes). It is deferred to R, NOT staged live, on
+  // purpose: wiring the resolver under `permissive` pre-cut would (a) reach the
+  // registry on every inbound federated envelope — the ZERO-I/O-under-permissive
+  // invariant the #635 note protects — AND (b) still DROP jc's presence, because
+  // the resolved-peer relabel (`RESOLVED_PEER_DID_CLASS_EXPLICIT`,
+  // identity-registry.ts) only matches the class-explicit wire AFTER the #2034
+  // emitter flip at R. The per-stack resolve+cache machinery this needs already
+  // exists (C-787, identity-registry `resolve()`); the remaining delta is this
+  // availability widening, which is a pure flag-day activation. Flip together
+  // with the relabel gate + emitter (runbook §3 atomic cut).
   const federationVerifyEnabled = config.security.signing === "enforce";
   if (
     federationVerifyEnabled &&

@@ -24,6 +24,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+  classExplicitResolvedPeerDid,
   MultiPrincipalIdentityRegistry,
   type RegistryResolveOutcome,
 } from "../identity-registry";
@@ -472,6 +473,67 @@ describe("C-787 — per-stack peer resolution", () => {
     });
     const out = await reg.resolveFederatedPeer("andreas");
     expect(out.resolved && out.identity.public_key).toBe(PEER_PUBKEY_A);
+  });
+});
+
+// =============================================================================
+// WP-6 (#1882) / ADR-0025 — STAGED class-explicit resolved-peer relabel.
+//
+// `classExplicitResolvedPeerDid` is the flag-day-R relabel, computed + proven
+// against ./wire NOW but SELECTED by `resolve()` only when
+// `RESOLVED_PEER_DID_CLASS_EXPLICIT` flips at R. These tests vet the relabel
+// logic so the flag-day change is a one-const flip, not net-new trust-path
+// code. The `resolve()` byte-identical pre-cut behaviour is proven LIVE by the
+// C-787 tests above (they still assert the flat `did:mf:andreas` stamp).
+// =============================================================================
+
+describe("WP-6 — classExplicitResolvedPeerDid (staged flag-day relabel)", () => {
+  test("renders the class-explicit STACK DID from a qualified {principal}/{stack}", () => {
+    expect(classExplicitResolvedPeerDid("jc", "jc/sage-host")).toBe(
+      "did:mf:stack.jc.sage-host",
+    );
+    expect(
+      classExplicitResolvedPeerDid("andreas", "andreas/meta-factory"),
+    ).toBe("did:mf:stack.andreas.meta-factory");
+  });
+
+  test("the class-explicit stack DID never collides with the flat principal DID (injective by construction)", () => {
+    // The whole point of ADR-0025 option (C): the flat encoding made
+    // `principalDid("andreas-meta-factory") === "did:mf:andreas-meta-factory"`
+    // collide with the stack `andreas/meta-factory`. The class tag + dot-form
+    // makes them structurally distinct, so the boot-anchor displacement the
+    // `resolve()` SECURITY refuse guards against is not constructible.
+    const stackDid = classExplicitResolvedPeerDid(
+      "andreas",
+      "andreas/meta-factory",
+    );
+    const flatPrincipalCollision = "did:mf:andreas-meta-factory";
+    expect(stackDid).not.toBe(flatPrincipalCollision);
+    // And a hyphenated principal id still renders a distinct, well-formed DID.
+    expect(
+      classExplicitResolvedPeerDid("andreas-meta-factory", "andreas-meta-factory/prod"),
+    ).toBe("did:mf:stack.andreas-meta-factory.prod");
+  });
+
+  test("no stack id → undefined (root/principal-level resolve falls back to the flat principal stamp)", () => {
+    expect(classExplicitResolvedPeerDid("andreas", undefined)).toBeUndefined();
+  });
+
+  test("a BARE stack slug (not the qualified {principal}/{stack}) → undefined (WP-1 trap: the seam threads the qualified pair)", () => {
+    expect(classExplicitResolvedPeerDid("andreas", "meta-factory")).toBeUndefined();
+  });
+
+  test("anti-spoof: a qualified pair whose principal disagrees with the resolved principal → undefined (never stamp under another principal's name)", () => {
+    expect(
+      classExplicitResolvedPeerDid("jc", "andreas/meta-factory"),
+    ).toBeUndefined();
+  });
+
+  test("an ungrammatical stack slug → undefined (fail-closed via the ./wire codec)", () => {
+    // Trailing hyphen is kebab-strict-illegal; the codec rejects, we fall back.
+    expect(classExplicitResolvedPeerDid("andreas", "andreas/bad-")).toBeUndefined();
+    // Uppercase is illegal too.
+    expect(classExplicitResolvedPeerDid("andreas", "andreas/Prod")).toBeUndefined();
   });
 });
 

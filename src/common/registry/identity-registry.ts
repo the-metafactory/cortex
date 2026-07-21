@@ -78,6 +78,14 @@ import {
   type Identity,
   type IdentityRegistry,
 } from "@the-metafactory/myelin/identity";
+// WP-6 (#1882) / ADR-0025 — ADDITIVE import of the RFC-0001 class-explicit
+// codec. Consumed ONLY by the STAGED, flag-day-gated resolved-peer relabel
+// (`classExplicitResolvedPeerDid`, selected in `resolve()` when
+// `RESOLVED_PEER_DID_CLASS_EXPLICIT` flips at flag-day R). It does NOT touch
+// the flat form this module emits/expects today — pre-cut every stamp is
+// byte-identical to prior releases (see the const's docblock for the no-emit
+// argument). Never hand-roll a `{p}-{s}` join; the codec is the sole owner.
+import { renderDid, parseStackId } from "@the-metafactory/myelin/wire/identity";
 
 import type { PrincipalPubkeyResolver } from "./resolve-pubkey";
 
@@ -177,6 +185,79 @@ export interface MultiPrincipalIdentityRegistryOptions {
  */
 function peerDid(principalId: string): string {
   return `did:mf:${principalId}`;
+}
+
+/**
+ * WP-6 (#1882) / ADR-0025 — flag-day R gate for the resolved-peer DID class.
+ *
+ * **Pre-cut (`false`, today):** a resolved peer's materialised identity is
+ * stamped with the flat PRINCIPAL-class DID (`peerDid`, `did:mf:<principal>`),
+ * byte-identical to every release since TC-2b. This is a no-emit constant: it
+ * changes nothing this module produces or expects on the wire.
+ *
+ * **Flag-day R (`true`, ADR-0025 hard cut):** the resolved peer is stamped
+ * with its true STACK-class DID via the ./wire codec
+ * (`did:mf:stack.<principal>.<stack>`), so the structural short-circuit in
+ * `verify-signed-by-chain` (`principal === federatedPeerDid`,
+ * verify-signed-by-chain.ts) matches the class-explicit wire stamp cortex's
+ * emitter ALSO flips to at R (#2034) — and jc's presence FOLDS. See the WP-6
+ * finding in the PR: the live drop is defect (a), the structural `===`
+ * class-label mismatch, NOT (b) the just-in-time crypto merge (the structural
+ * walk rejects `unknown_agent` BEFORE the crypto pass merges the per-stack
+ * key, so the per-stack key never gets a chance to win).
+ *
+ * This is a clean SWAP, never a dual-accept window: ADR-0025 §Compatibility is
+ * a HARD CUT (no both-forms tolerance, no staged emitter window). Flipping
+ * this const WITHOUT the paired #2034 emitter flip would relabel the peer to a
+ * class-explicit DID that no longer matches the still-flat wire — re-breaking
+ * the fold. The two flip together at R (runbook §3 atomic cut).
+ *
+ * WHY NOT relabel to the flat stack form (`did:mf:<p>-<s>`) NOW — which would
+ * match today's flat wire and fold jc immediately: it re-entrenches the
+ * NON-injective flat encoding in the trust path, the exact collision the
+ * SECURITY refuse in `resolve()` (and epic #1876) exists to eliminate. WP-6
+ * does not buy the fold at the cost of that vigilance debt.
+ *
+ * Widened to `boolean` (via `as`, not the `false` literal type) so the
+ * flag-day branch stays live to the type-checker and the ./wire relabel is
+ * type-checked pre-cut rather than narrowed away as dead.
+ */
+const RESOLVED_PEER_DID_CLASS_EXPLICIT = false as boolean;
+
+/**
+ * WP-6 (#1882) — compute a resolved peer's class-explicit STACK-class DID from
+ * the peer principal + the QUALIFIED `{principal}/{stack}` stack id the verify
+ * seam threads (`stackFromEnvelope`, envelope-validator.ts — NOTE it is the
+ * qualified pair, not a bare slug; passing the bare slug silently drops). Uses
+ * ./wire's `parseStackId` + `renderDid` (RFC-0001 §6.2 class-explicit codec),
+ * never a hand-rolled join.
+ *
+ * Returns `undefined` — so the caller falls back to the flat principal-class
+ * stamp — when there is no stack id (a root/principal-level resolve), the pair
+ * is ungrammatical, or (anti-spoof) the pair's principal segment disagrees
+ * with the resolved peer principal. `stackFromEnvelope` derives both the
+ * principal and the stack from the SAME `envelope.source`, so a disagreement
+ * is a malformed/foreign source and must never mint a stack DID under another
+ * principal's name.
+ *
+ * Exported + unit-tested now, but SELECTED by `resolve()` only when
+ * {@link RESOLVED_PEER_DID_CLASS_EXPLICIT} flips at flag-day R — so the
+ * relabel logic is reviewed and proven against ./wire BEFORE the cut, and the
+ * flag-day change is a one-const flip rather than net-new trust-path code.
+ */
+export function classExplicitResolvedPeerDid(
+  principalId: string,
+  stackId: string | undefined,
+): string | undefined {
+  if (stackId === undefined) return undefined;
+  const scope = parseStackId(stackId);
+  if (!scope.ok) return undefined;
+  // Anti-spoof: never stamp a peer under a `{principal}` other than the one we
+  // resolved. Both segments come from the same envelope.source, so a mismatch
+  // is malformed/foreign — refuse (fall back to the flat principal stamp).
+  if (scope.value.principal !== principalId) return undefined;
+  const did = renderDid("stack", scope.value.principal, scope.value.stack);
+  return did.ok ? did.value : undefined;
 }
 
 /**
@@ -344,18 +425,32 @@ export class MultiPrincipalIdentityRegistry {
           );
           return { resolved: false, reason: "unresolved" };
         }
+        // WP-6 (#1882) / ADR-0025 — STAGED, flag-day-gated resolved-peer DID.
+        // Pre-cut: `stampDid === did` (the flat principal-class DID) — the
+        // stamp is byte-identical to prior releases. At flag-day R the gate
+        // flips and the peer is stamped with its true class-explicit STACK DID
+        // (paired with the #2034 emitter flip), which is what makes the verify
+        // short-circuit match and jc's presence fold. The `?? did` fallback
+        // keeps the principal-class stamp for a root/ungrammatical resolve.
+        // See `RESOLVED_PEER_DID_CLASS_EXPLICIT` for the full no-emit argument.
+        const stampDid = RESOLVED_PEER_DID_CLASS_EXPLICIT
+          ? (classExplicitResolvedPeerDid(principalId, stackId) ?? did)
+          : did;
         const entry: PrincipalEntry = {
           principalId,
           identity: {
-            // The federated stamp DID is principal-level (`did:mf:<peer>` —
-            // see `principalFromEnvelope`), so the materialised identity keeps
-            // that DID even for a per-stack resolve. C-787: `public_key` is the
+            // Pre-cut the stamp DID is principal-level (`did:mf:<peer>` — see
+            // `principalFromEnvelope`); the materialised identity keeps that
+            // DID even for a per-stack resolve. C-787: `public_key` is the
             // resolved PER-STACK key (when a stackId was supplied and the stack
             // carried one) — that is the key the peer's envelope from THAT
-            // stack is signed with. The verifier merges this just-in-time
-            // before the active envelope's crypto pass (verify-signed-by-chain
-            // line ~459), so the correct per-stack key wins for that envelope.
-            id: peerDid(principalId),
+            // stack is signed with. At flag-day R (`stampDid` above) the id
+            // flips to the class-explicit STACK DID so the structural
+            // short-circuit matches the wire; until then the per-stack key is
+            // merged just-in-time before the active envelope's crypto pass, but
+            // the class-label mismatch rejects `unknown_agent` structurally
+            // first (the WP-6 finding) — which is exactly why the fold rides R.
+            id: stampDid,
             display_name: principalId,
             network: this.peerNetwork(principalId),
             public_key: result.principalPubkey,
