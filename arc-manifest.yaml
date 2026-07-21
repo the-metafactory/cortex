@@ -11,11 +11,33 @@ name: "cortex"
 version: "6.10.3"
 type: component
 tier: community
-description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin layer model"
+# Preview-scope description (cortex#2285 C1): states the supported envelope up
+# front so the registry listing sets expectations before anyone installs.
+description: "Layer-7 collaboration surface for the metafactory ecosystem (preview: single principal · Discord surface · macOS/Debian/container · federation experimental, unreleased)"
 authors:
   - "Andreas Astrom"
   - "Jens-Christian Fischer"
 repository: "the-metafactory/cortex"
+# Publish scope (cortex#2285 C1). `arc publish` resolves the namespace with
+# three-tier priority — --scope flag, then THIS key (`manifest.namespace`,
+# arc src/lib/publish.ts resolvePublishScope), then the account default from
+# /auth/me — so declaring it here makes `arc publish . --dry-run` pass with
+# no flag.
+namespace: "the-metafactory"
+
+# Registry listing status — documented STOP-AND-ASK outcome (cortex#2285 C1).
+# Target label is `beta` (arc's closed union is shipped|beta|deprecated,
+# arc src/types.ts:32). Verified 2026-07-21 against arc v0.42-era main:
+# there is NO client-side mechanism to carry it — ArcManifest has no status
+# field, `arc publish` has no status flag (only --dry-run/--source/--scope/
+# --allow-unsigned-official), and toServerManifest/registerVersion
+# (arc src/lib/publish.ts) send no status in the payload; the published
+# entry's status is server-defaulted. The REGISTRY.yaml lane is curated
+# registry-side too (DEFAULT_STATUS "shipped", status preserved from the
+# existing entry — arc src/lib/registry-generator.ts:126). Setting `beta`
+# therefore requires an arc/meta-factory-side change or registry-side
+# curation — held for Andreas' decision per the issue; do NOT add a dead
+# `status:` key here.
 
 # Provides surface at MIG-7.7 cutover: bot binary + relay + operator CLIs +
 # hooks + launchd plists. Mirrors grove-v2's deliverables under cortex names.
@@ -127,6 +149,68 @@ provides:
     - event: PreToolUse
       command: ${PAI_DIR}/hooks/CortexBashGuard.hook.ts
       matcher: Bash
+
+# Capability declarations (cortex#2285 C1 honesty pass, house rule: an
+# undeclared capability is a security bug). First deliberate review of this
+# manifest's capability surface — the block did not exist before. Each entry
+# carries a one-line justification naming the code surface that exercises it.
+capabilities:
+  filesystem:
+    read:
+      - "~/.config/metafactory/cortex"      # stack/agent config: cortex.yaml, stacks/, agents.d/ (src/common/config/loader.ts, src/cli/cortex/commands/stack-lib.ts)
+      - "~/.config/nats"                    # NATS creds/conf the daemon + relay connect with (stack-lib.ts natsDir, taps/cc-events/relay.ts)
+      - "~/.claude"                         # runner mounts skills/hooks/settings into bot sessions; statusline reads caches (src/runner/session-settings.ts)
+    write:
+      - "~/.config/metafactory/cortex"      # quickstart/stack render config + cortex_config fragment merges (src/cli/cortex/commands/quickstart.ts, stack-lib.ts)
+      - "~/.config/nats"                    # network provision renders <slug>.conf/creds/nk seeds (src/cli/cortex/commands/network-provision-lib.ts)
+      - "~/.local/state/metafactory/cortex" # daemon/runner logs + runtime state (src/common/migrate-state-dir.ts canonical state root)
+      - "~/.local/share/metafactory/cortex" # MC db, published events, per-stack agent workspaces (src/common/data-path.ts)
+      - "~/Library/LaunchAgents"            # darwin service registration — plist render/load (src/cli/cortex/commands/daemon-locator.ts, network-lib.ts)
+      - "~/.config/systemd/user"            # linux service registration — unit render/enable (src/common/xdg.ts systemdUserDir, scripts/preremove.sh)
+  network:
+    - host: "discord.com"
+      reason: "Discord REST + webhooks: notify-discord webhook posts, roles CLI (src/bus/notify-discord.ts, src/cli/cortex/lib/discord-roles.ts DISCORD_API v10); gateway itself lives in the extracted adapter bundle"
+    - host: "cdn.discordapp.com"
+      reason: "attachment downloads allowlisted by the brain consumer (src/bus/brain-consumer.ts host allowlist)"
+    - host: "media.discordapp.net"
+      reason: "attachment downloads allowlisted by the brain consumer (src/bus/brain-consumer.ts host allowlist)"
+    - host: "api.anthropic.com"
+      reason: "Anthropic messages provider + OAuth usage monitor (src/providers/anthropic/messages-provider.ts, src/common/usage/monitor.ts); model calls also occur inside spawned claude sessions"
+    - host: "api.openai.com"
+      reason: "optional OpenAI-compatible provider; base URL is principal-configured and may point at a local server instead (src/providers/openai-compatible/chat-completions-provider.ts)"
+    - host: "api.github.com"
+      reason: "Mission Control repo/issue/PR sync + gh CLI calls (src/surface/mc/adapters/github/fetch.ts, worker sync routes)"
+    - host: "github.com"
+      reason: "git clone/pull of repos into agent workspaces and bundle installs (dev consumer, arc-driven installs)"
+    - host: "api.cloudflare.com"
+      reason: "`cortex cloud` deploys the MC worker via spawned npx wrangler (src/cli/cortex/commands/cloud.ts)"
+    - host: "localhost"
+      reason: "loopback-only services: NATS bus :4222, cc-events relay ingest :8766, Mission Control embed, gh-webhook receiver :8770 (binds 127.0.0.1, never 0.0.0.0)"
+  bash:
+    allowed: true
+    # Deliberately unrestricted: the daemon's job is spawning long-lived
+    # `claude` agent sessions (src/runner/cc-session.ts Bun.spawn) which run
+    # arbitrary tools under their own permission system, plus bun scripts,
+    # git/gh, npx wrangler, launchctl/systemctl, nats-server. A restricted_to
+    # list would be dishonest — the effective surface is unrestricted.
+  secrets:
+    - "ANTHROPIC_API_KEY"       # model auth for provider + spawned sessions (src/common/config/agent-env.ts)
+    - "CLAUDE_CODE_OAUTH_TOKEN" # session auth alternative to API key (src/runner/cc-session.ts, session-settings.ts)
+    - "NATS_TOKEN"              # relay bus auth (src/taps/cc-events/relay.ts)
+    - "CTX_DISCORD_TOKEN"       # quickstart surface-token env seam (src/cli/cortex/commands/quickstart.ts)
+    - "CTX_WEB_TOKEN"           # quickstart surface-token env seam (src/cli/cortex/commands/quickstart.ts)
+    - "GH_TOKEN"                # cloud deploy + gh-backed sync (src/cli/cortex/commands/cloud.ts)
+    - "GITHUB_TOKEN"            # alternate gh auth var, same surface (src/cli/cortex/commands/cloud.ts)
+    - "CLOUDFLARE_API_TOKEN"    # wrangler auth for `cortex cloud` (src/cli/cortex/commands/cloud.ts)
+  # Claude Code hook events this package registers globally (mirrors the
+  # `hooks:` block above; the Skill/MCP guard hooks are per-session-only by
+  # design and deliberately NOT global registrations).
+  hooks:
+    - "SessionStart"
+    - "PostToolUse"
+    - "Stop"
+    - "UserPromptSubmit"
+    - "PreToolUse"
 
 # Lifecycle scripts (mirror grove-v2 three-stage pattern):
 #   - preupgrade.sh  — stop daemons + clean stale symlinks before swap
