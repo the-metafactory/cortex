@@ -34,9 +34,9 @@ common denominator of how this community actually runs):
 | **Cloud repo** | **GitHub** |
 
 **This tiers cleanly onto what we've built:**
-- **Luna-Light** is the *floor* — chat + async, zero tools. It is NOT the MVP; it's
+- **Luna-Lite** is the *floor* — chat + async, zero tools. It is NOT the MVP; it's
   the front door and the persona base.
-- **The MVP = Luna-Light + software-factory capability**: Claude-Code coding with
+- **The MVP = Luna-Lite + software-factory capability**: Claude-Code coding with
   the tool surface a dev assistant needs (bash, `gh`/GitHub, access to
   checked-out repos), bound to Discord, on a local stack, across the three OS
   targets. These are the "extensions to Luna" — each an explicit capability grant

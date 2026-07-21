@@ -22,13 +22,13 @@ capabilities, `presence`). They differ only in **behavior, surface, and privileg
 > naming class, all public and `arc install`-able:
 > `metafactory-cortex-agent-escort` (the canonical concierge sample) and
 > `metafactory-cortex-agent-example-{deterministic,hybrid,non-deterministic}` (the
-> three brain-class teaching samples). **Luna-Light joins them** as
-> `metafactory-cortex-agent-luna-light` — the simplest one, the assistant floor.
+> three brain-class teaching samples). **Luna-Lite joins them** as
+> `metafactory-cortex-agent-luna-lite` — the simplest one, the assistant floor.
 > A newcomer can `arc install` any of these and read the source as a template.
 
 ---
 
-## Blueprint 1 — **Luna-Light** · the assistant (the floor)
+## Blueprint 1 — **Luna-Lite** · the assistant (the floor)
 
 *Clone this when you want: a plain, capable assistant on your own stack.*
 
@@ -37,7 +37,7 @@ The "hello world" of agent bundles, and the front door for a new user.
 
 | Facet | Shape |
 |---|---|
-| **Purpose** | General chat assistant (`@luna-light`) |
+| **Purpose** | General chat assistant (`@luna-lite`) |
 | **Capabilities** | `chat`, `async` |
 | **Surface** | **neutral** — `presence: {}` (binds nothing; you bind it in `surfaces.yaml`, or dispatch over the bus) |
 | **Privilege** | minimal — reads its own config; **no** write/network/bash/secrets |
@@ -48,15 +48,15 @@ The "hello world" of agent bundles, and the front door for a new user.
 # arc-manifest.yaml (essence)
 type: agent
 targets: [cortex]
-provides: { files: [{source: personas/luna-light.md, target: ~/.config/cortex/personas/luna-light.md},
-                    {source: agents.d/luna-light.yaml, target: ~/.config/cortex/agents.d/luna-light.yaml}] }
+provides: { files: [{source: personas/luna-lite.md, target: ~/.config/cortex/personas/luna-lite.md},
+                    {source: agents.d/luna-lite.yaml, target: ~/.config/cortex/agents.d/luna-lite.yaml}] }
 capabilities: { filesystem: {read: [~/.config/cortex], write: []}, network: [], bash: {allowed: false}, secrets: [] }
 lifecycle: { preinstall: [scripts/check-cortex-version.sh], postinstall: [scripts/signal-cortex-reload.sh] }
 ```
 
-Repo: `the-metafactory/metafactory-cortex-agent-luna-light` (grammar class
+Repo: `the-metafactory/metafactory-cortex-agent-luna-lite` (grammar class
 `metafactory-cortex-agent-<name>`, alongside escort + the examples). Install (once
-public + published): `arc install luna-light` — or from URL today.
+public + published): `arc install luna-lite` — or from URL today.
 
 ---
 
@@ -80,7 +80,7 @@ the principal — it issues nothing**. The load-bearing pattern: an agent that
 | **Teaches** | the **surfaces-not-issues** boundary (a principal — never the agent — runs the grant), resolve-at-install secret placeholders, and `openOnboarding: true` (a stranger can reach it before holding any role) |
 
 ```yaml
-# the distinguishing bits vs Luna-Light
+# the distinguishing bits vs Luna-Lite
 identity: { id: pier }
 runtime: { capabilities: [onboarding, chat] }
 presence: { discord: { enabled: true, guildId: __PIER_GUILD_ID__, agentChannelId: __PIER_AGENT_CHANNEL_ID__, ... } }
@@ -123,14 +123,14 @@ greeter, Escort is a personal guide with memory of *where you are* in the flow.
 ```
          guides                    delivers               is the script
    ┌────────────────┐         ┌──────────────┐        ┌──────────────┐
-   │  Pier → Escort │  ──────▶│  Luna-Light  │◀───────│  the runbook │
+   │  Pier → Escort │  ──────▶│  Luna-Lite  │◀───────│  the runbook │
    │  (concierge)   │  hand   │  (the bundle)│  reads  │  (the spec)  │
    └────────────────┘  over   └──────────────┘        └──────────────┘
 ```
 
 - **Pier** is the front-door **now**: it can walk a newcomer through the runbook and
-  hand them `arc install luna-light`.
-- **Luna-Light** is the **payload**: the one-command assistant they end up with.
+  hand them `arc install luna-lite`.
+- **Luna-Lite** is the **payload**: the one-command assistant they end up with.
 - **Escort** is where the concierge **grows**: each runbook step becomes a quest step
   with a check (✅ stack created · ✅ bus connected · ✅ `@luna` responds), per person,
   resumable.
@@ -144,5 +144,5 @@ and clone the one they need.
 Bundle shape: `arc/docs/skill-repo-migration-spec.md`, ADR-0017. Pier:
 `arc-manifest-pier.yaml` + `personas/pier.md` + `agents.d/pier.yaml`. Escort:
 guildhall quests + `src/brain/protocol.ts` (`create_private_thread`, ADR cortex#2206).
-Luna-Light: `the-metafactory/metafactory-bundle-luna-light`. Companion spec:
+Luna-Lite: `the-metafactory/metafactory-bundle-luna-lite`. Companion spec:
 `design-bootstrap-luna.md`.
