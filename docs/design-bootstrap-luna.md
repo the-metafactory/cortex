@@ -63,7 +63,9 @@ Everything between these edges is scriptable.
 
 **DD-3. Name things precisely (avoid the "blueprint" trap).** The stack-standup is an **arc bundle** (not a "blueprint"). Its *work* is tracked as a **`blueprint.yaml` feature** (Sense A). Luna's *memory* attaches via **`state: {blueprint: AgentState}`** (Sense B). These are three different "blueprints"; the spec keeps them apart.
 
-**DD-4. Default to the simplest working Luna.** The primary target is a **solo, local, simple-bus Luna** (no federation, no Discord app if the user picks the web surface). Federation and Discord are opt-in upgrades, not prerequisites. This is the lowest-friction "it works" a newcomer can reach.
+**DD-4. Default to the simplest working Luna — solo, local, simple-bus.** The primary target is a **solo, local, simple-bus Luna** (no federation). Federation is an opt-in upgrade, not a prerequisite.
+
+**DD-5. Discord-first surface (principal decision, 2026-07).** The default surface a newcomer binds Luna to is **Discord**, not web. Rationale: the entire fleet UX is Discord-native — `pier`/`escort` greet newcomers in Discord, releases + admissions flow through Discord, and the community *is* on Discord; landing a newcomer's Luna where the community already lives beats an isolated web endpoint. **Consequence, stated plainly:** this puts the one irreducible manual edge — creating a Discord bot app + inviting it (§4) — **on the critical path** of the default flow. The runbook must therefore front-load the Discord-app step and make it the clearest part of the walkthrough. The web surface stays a documented, first-class *alternative* (it's the right pick for a headless/gateway Luna and the one that avoids the manual edge), but it is no longer the recommended default.
 
 ## 6. Design detail
 
@@ -94,9 +96,23 @@ lifecycle:
 
 The bundle **provides** persona + fragment and **runs** the `stack create → provision → make-live` chain in postinstall. It **cannot** mint bus creds itself (that stays a cortex/arc CLI step invoked by the hook) nor cross the §4 edges. Secrets ride as `__ENV__` placeholders resolved at install (pier's pattern), never baked.
 
-### 6.2 Surface choice — web-first for the solo path
+### 6.2 Surface choice — Discord-first (DD-5)
 
-`quickstart` is currently Discord-hard-wired (#2153); a `--surface web` mode is in flight (#2153). For the **lowest-friction solo Luna**, the spec prefers the **web/gateway surface** as the default — it removes the manual Discord-app edge (§4) entirely. Discord remains a first-class opt-in for users who want a Discord-facing assistant. The runbook documents both; the bundle takes a `--surface` choice.
+The default surface is **Discord** (DD-5): it lands the newcomer's Luna where the
+fleet UX and the community already live (`pier`/`escort` greet there, releases +
+admissions flow there). `quickstart` is already Discord-oriented, which fits.
+
+The cost this accepts, stated plainly: creating the Discord bot app + inviting it
+is the one irreducible manual edge (§4), and Discord-first puts it **on the
+critical path**. So the runbook front-loads it — the Discord-app step is the first
+and most carefully-documented part of the walkthrough, with the Developer-Portal
+click-path spelled out (quickstart only *validates* the token; it can't create the
+app).
+
+The **web/gateway surface stays first-class** — it's the right default for a
+headless/gateway Luna and the one path that avoids the manual edge, so the runbook
+documents it as the explicit alternative. The bundle takes a `--surface
+<discord|web>` choice (defaulting to `discord`).
 
 ### 6.3 Bus tier — simple-bus for solo, account-tree for federation
 
@@ -121,7 +137,7 @@ The community "process for new users" is: a newcomer lands in `#onboard-your-fle
 
 1. **Bundle `type`** — `agent` (reuse pier's schema) vs a new `process`/`pipeline` type for a postinstall that orchestrates a multi-step chain. *(Recommend: start `agent`; propose `process` to arc if postinstall outgrows it.)*
 2. **soma projection** — bundle-in (Luna's content ships in the bundle) vs `depends_on` soma vs "connect soma later" as a documented follow-on. *(Recommend: `depends_on` optional; the scaffold stub works without it, soma makes her *your* Luna.)*
-3. **Default surface** — commit web-first for solo (§6.2), or keep Discord the documented default and web the opt-in? *(Recommend: web-first for the solo runbook; both documented.)*
+3. ~~**Default surface**~~ — **RESOLVED (DD-5): Discord-first.** The runbook front-loads the Discord-app step; web is the documented alternative.
 4. **Naming** — do we ship her as `luna` (the reference assistant) or make the bundle prompt for the user's own assistant name (their Luna, their name)? The `assistant` placeholder (#1338) exists precisely so we don't hard-name. *(Recommend: bundle prompts for a name, defaults to a neutral suggestion — "your own version of Luna".)*
 5. **Dependency on #2182 / #2153** — this spec's solo path assumes the simple-bus mode and web surface land. Sequence those as prerequisites, or ship the runbook against the manual workarounds now?
 
