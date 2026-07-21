@@ -16,7 +16,7 @@
 
 <p align="center">
   Humans and assistants working together as one team: your surfaces, your machines, one supervised bus.<br />
-  An assistant is a thin persona on top — cortex is everything underneath.
+  Built on the <a href="https://github.com/the-metafactory/myelin">myelin</a> protocol stack below; an assistant is a thin persona on top — cortex is everything in between.
 </p>
 
 <p align="center">
@@ -170,6 +170,31 @@ cortex deliberately does not own:
   cortex only joins them as an adapter
 - **the protocol layers** — envelope, identity, discovery, and transport
   contracts are [myelin](https://github.com/the-metafactory/myelin)'s
+
+### Why the myelin foundation matters
+
+Because cortex speaks myelin all the way down, the local stack you run today
+already has the properties an internet of agentic work requires:
+
+- **Signed envelopes.** Every message on the bus carries a verifiable signing
+  chain — work is attributable to the identity that dispatched it, and the
+  policy engine rejects what it cannot verify. An assistant's action is never
+  anonymous.
+- **Zones of trust.** A stack is its own trust zone: its own namespace, its own
+  identities, its own policy (principals, roles, capability permissions).
+  Nothing crosses the boundary unless explicitly admitted.
+- **Encrypted envelopes.** Traffic that crosses a network boundary is encrypted
+  with per-network keys — joining a network never means broadcasting to the
+  world. (Mechanism shipped; hardening in the open during the preview.)
+- **Sovereignty.** The whole stack runs in your tenancy — your machines, your
+  keys, your bus. No third party sits in the message path.
+
+**This first release is the local stack — and the local stack is the on-ramp.**
+Federation (connecting stacks into shared networks) is experimental and
+unreleased, but every property above exists to enable it: when stacks connect,
+trust extends explicitly — signed, encrypted, zone by zone — never implicitly.
+Standing up a local stack today is standing up your own sovereign node of that
+future network.
 
 The full picture — event architecture, visibility tiers, the agent/assistant
 model, internal componentisation — lives in
