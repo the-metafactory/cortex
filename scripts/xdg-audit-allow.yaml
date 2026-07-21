@@ -100,9 +100,19 @@ allow:
   # rewrite — a separate stack-log StandardOut move (tracked under cortex#1983).
   - pattern: config-tree
     path: src/services/*.plist
-    match: \.config/cortex/logs/cortex-
-    reason: residual committed launchd plist StandardOut/Err path — legacy stack-log location; StandardOut move tracked under cortex#1983
-    owner: cortex#1983
+    match: \.config/cortex/logs
+    reason: cortex#2282 migration comment — documents the OLD ~/.config/cortex/logs root the daemon moved OFF (logs now land in the state tree; the comment explains why the macOS healthy-boot gate was inert on the old path). Reference-only; not a live write path.
+    owner: cortex#2282
+  - pattern: config-tree
+    path: README-AGENTS.md
+    match: \.config/cortex/logs
+    reason: cortex#2282 migration note — documents the pre-#2282 macOS daemon log path (~/.config/cortex/logs) being moved to the state tree, telling existing installs to re-render. Reference-only doc of the OLD path.
+    owner: cortex#2282
+  - pattern: systemd-userdir
+    path: arc-manifest.yaml
+    match: \.config/systemd/user
+    reason: systemd's CANONICAL user-unit directory (systemd itself honors $XDG_CONFIG_HOME) — the linux service-registration comment naming where units render/enable (cortex#2071). Same rationale as the README-AGENTS systemd-userdir carve-out.
+    owner: cortex#2071
   - pattern: config-tree
     path: scripts/federation-selftest.sh
     match: s\|~/\.config/cortex/logs\|

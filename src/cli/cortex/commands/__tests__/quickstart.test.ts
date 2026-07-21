@@ -654,7 +654,7 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
       join(import.meta.dir, "..", "..", "..", "..", "services", "ai.meta-factory.cortex.stack.plist"),
       "utf-8",
     );
-    const home = "/home/operator";
+    const home = "/home/principal";
     const slug = "work";
     const rendered = template.split("__HOME__").join(home).split("__STACK_SLUG__").join(slug);
     const outPath = /<key>StandardOutPath<\/key>\s*<string>([^<]+)<\/string>/.exec(rendered)?.[1];

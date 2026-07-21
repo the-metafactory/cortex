@@ -246,7 +246,7 @@ interface StepReport {
   ok: boolean;
   lines: string[];
   /** cortex#2275 — step was deliberately not executed (e.g. --skip-gate).
-   *  Surfaced in the --json items as `skipped: "true"` so an operator sees an
+   *  Surfaced in the --json items as `skipped: "true"` so a principal sees an
    *  explicit deferral, never a green check for work that didn't run. */
   skipped?: boolean;
   /** Short machine-readable annotation (--json `note`): the reason
