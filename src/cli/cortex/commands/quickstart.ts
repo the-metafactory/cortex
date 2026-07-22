@@ -31,9 +31,14 @@
  *                          REQUIRED — declared as a hard dependency, not
  *                          re-implemented here); a re-run also try-restarts
  *                          running units so fixed configs are picked up
- *                          (cortex#2283). macOS: restart a LOADED stack
- *                          service via launchctl kickstart -k (load/unload
- *                          stays arc-owned); not loaded → skip.
+ *                          (cortex#2283). macOS: LOADED stack service →
+ *                          restart via launchctl kickstart -k (load/unload
+ *                          stays arc-owned, cortex#2283); NOT loaded (a fresh
+ *                          Mac) → start the daemon DIRECTLY via a detached
+ *                          `cortex start --config <pointer>` backstop so the
+ *                          gate reaches a RUNNING daemon, not a printed hint
+ *                          (cortex#2322) — idempotent (a re-run skips when the
+ *                          backstop daemon is already running).
  *   8. Gate              — the §5 healthy-boot grep table + nats /healthz,
  *                          bounded wait.
  *
@@ -699,7 +704,10 @@ function clearPriorBootLogs(ports: QuickstartPorts, slug: string): string {
   return `  ✓ cleared prior-boot logs (${logPath}, ${errorLogPath})`;
 }
 
-function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean }): StepReport {
+function runServices(
+  ports: QuickstartPorts,
+  opts: { slug: string; configDir: string; skip: boolean },
+): StepReport {
   if (opts.skip) {
     return step("7. Services", true, ["  ○ --skip-services passed — skipping"]);
   }
@@ -707,7 +715,10 @@ function runServices(ports: QuickstartPorts, opts: { slug: string; skip: boolean
     return runServicesLinux(ports, opts.slug);
   }
   if (process.platform === "darwin") {
-    return runServicesDarwin(ports, opts.slug);
+    // cortex#2322 — the darwin branch needs the pointer config path (for the
+    // fresh-host `cortex start --config <pointer>` backstop + its pidfile
+    // running-probe), not just the slug.
+    return runServicesDarwin(ports, opts.slug, pointerConfigPath(opts.configDir, opts.slug));
   }
   return step("7. Services", true, ["  ○ non-Linux host — launchd is handled by arc; skip"]);
 }
@@ -786,29 +797,83 @@ function runServicesLinux(ports: QuickstartPorts, slug: string): StepReport {
 }
 
 /**
- * cortex#2283 — darwin branch: RESTART-ONLY. arc owns the launchd load/
- * unload lifecycle; quickstart never takes that over. When the stack service
- * is loaded (`launchctl print gui/$UID/<label>` exit 0), a re-run restarts it
- * via `launchctl kickstart -k` so the daemon picks up the configs step 5
- * patched — with the both-logs truncate (`.log` + `.error.log`) paired
- * IMMEDIATELY before it (truncate → restart → gate, same ordering contract
- * as Linux). When it is not loaded, keep the pre-#2283 "handled by arc" skip:
- * no restart means no truncate (an unpaired truncate would wipe current-boot
- * failure evidence and false-GREEN the gate — A1/#2297 adversarial finding).
+ * darwin branch. arc owns the launchd load/unload lifecycle; quickstart never
+ * takes that over. Two paths, split on whether arc has ALREADY loaded the
+ * stack service (`launchctl print gui/$UID/<label>` exit 0):
+ *
+ *   - LOADED (cortex#2283) — an arc-managed install: `launchctl kickstart -k`
+ *     restarts it so the daemon picks up the configs step 5 patched, with the
+ *     both-logs truncate paired IMMEDIATELY before it (truncate → restart →
+ *     gate, same ordering contract as Linux).
+ *
+ *   - NOT LOADED (cortex#2322) — a FRESH Mac: the pre-#2322 code just SKIPPED
+ *     here ("handled by arc"), leaving the daemon down so Step 8's gate could
+ *     only ever time out — the backstop was a printed hint, never a tested
+ *     path. Now the not-loaded path STARTS the daemon directly via a detached
+ *     `cortex start --config <pointer>` backstop (the exact command the
+ *     luna-stack bundle + runbook §F2 document), so the gate reaches a RUNNING
+ *     daemon. Idempotent: a re-run probes the pointer's pidfile
+ *     (`daemonBackstopRunning`) and skips cleanly when the backstop daemon is
+ *     already up — no double-start, no truncate (a truncate is only ever
+ *     paired with an actual (re)start; an unpaired truncate would wipe
+ *     current-boot evidence and false-GREEN the gate — A1/#2297). The start is
+ *     paired with the both-logs truncate exactly as the loaded path is.
+ *
+ * NOTE (idempotency limit, documented): the not-loaded backstop path does NOT
+ * restart an already-running backstop daemon to re-apply a config edit (unlike
+ * the launchd kickstart path). Picking up a changed config on the backstop
+ * daemon needs an explicit `cortex stop && cortex start --config <pointer>`
+ * (runbook §"Stopping / restarting the stack"). The fresh-host FIRST run — the
+ * cortex#2322 release gate — reaches a running daemon; re-run safety is a clean
+ * no-op, never a crash or duplicate.
  */
-function runServicesDarwin(ports: QuickstartPorts, slug: string): StepReport {
+function runServicesDarwin(ports: QuickstartPorts, slug: string, pointerPath: string): StepReport {
   const label = launchdStackLabel(slug);
+
+  // --- NOT LOADED: fresh-Mac backstop (cortex#2322) --------------------------
   if (!ports.service.launchdServiceLoaded(label)) {
-    const action = "skip (not loaded — arc owns launchd load)";
-    return {
-      ...step("7. Services", true, [`  ○ launchd is handled by arc; ${action}`]),
-      note: action,
-    };
+    // Idempotency guard: a prior quickstart run's backstop daemon is not a
+    // launchd service (launchdServiceLoaded stays false for it), so gate on
+    // the pointer's pidfile instead. Already running → clean skip.
+    if (ports.service.daemonBackstopRunning(pointerPath)) {
+      const action = "skip (not loaded; cortex daemon already running — backstop)";
+      return {
+        ...step("7. Services", true, [
+          `  ○ launchd not loaded (arc owns load); cortex daemon already running — skip`,
+        ]),
+        note: action,
+      };
+    }
+
+    const lines: string[] = [];
+    // Paired atomically with the backstop start below (truncate → start →
+    // gate) — never reached on the already-running skip above.
+    lines.push(clearPriorBootLogs(ports, slug));
+
+    const home = process.env.HOME ?? "";
+    const started = ports.service.startDaemonBackstop({
+      pointerConfigPath: pointerPath,
+      logPath: daemonLogPath(home, slug),
+      errorLogPath: daemonErrorLogPath(home, slug),
+    });
+    if (started.exitCode !== 0) {
+      // Fail the step (exit 1, gate never runs): the truncate above already
+      // wiped any prior boot's logs, so letting the gate run against a daemon
+      // we FAILED to launch could only time out dishonestly. Failing here
+      // keeps the truncate → start → gate pairing honest.
+      lines.push(`  ✗ cortex start --config <pointer> backstop failed: ${started.stderr.trim()}`);
+      return step("7. Services", false, lines);
+    }
+    lines.push(`  ✓ cortex start --config ${pointerPath} (detached backstop)`);
+    const action = "started (fresh host — cortex start backstop)";
+    lines.push(`  ✓ ${action}`);
+    return { ...step("7. Services", true, lines), note: action };
   }
 
+  // --- LOADED: arc-managed install, restart to re-apply (cortex#2283) --------
   const lines: string[] = [];
   // Paired atomically with the kickstart below — never called on the
-  // not-loaded path above.
+  // not-loaded paths above.
   lines.push(clearPriorBootLogs(ports, slug));
 
   const restart = ports.service.launchdKickstart(label);
@@ -1034,7 +1099,7 @@ export async function dispatchQuickstart(
   reports.push(provisionReport);
 
   // --- 7. Services -------------------------------------------------------------
-  const servicesReport = runServices(ports, { slug: s.slug, skip: flags.skipServices });
+  const servicesReport = runServices(ports, { slug: s.slug, configDir, skip: flags.skipServices });
   reports.push(servicesReport);
   if (!servicesReport.ok) {
     return finish(reports, 1, flags.json);

@@ -139,6 +139,44 @@ export interface ServicePort {
    * callers pass the bare plist Label (`launchdStackLabel()`).
    */
   launchdKickstart(label: string): CommandResult;
+  /**
+   * cortex#2322 — darwin FRESH-HOST backstop probe: is a `cortex start`
+   * daemon for this pointer config already running? Reads the pointer's
+   * pidfile (`pidFileFor()`, the SAME derivation `cortex start` writes) and
+   * liveness-probes the pid (`process.kill(pid, 0)`; EPERM counts as alive).
+   *
+   * This is the idempotency guard for the not-loaded path: arc owns the
+   * launchd load/unload lifecycle, so on a fresh Mac the stack service is
+   * never loaded — {@link launchdServiceLoaded} is false and the pre-#2322
+   * code just SKIPPED, leaving the daemon down and Step 8's gate to time out.
+   * Now the not-loaded path starts the daemon directly via
+   * {@link startDaemonBackstop}; this probe lets a RE-RUN see the already-
+   * running backstop daemon and skip cleanly instead of double-starting.
+   */
+  daemonBackstopRunning(pointerConfigPath: string): boolean;
+  /**
+   * cortex#2322 — darwin FRESH-HOST backstop start: launch the stack daemon
+   * DETACHED via `cortex start --config <pointerConfigPath>`, redirecting the
+   * child's stdout → `logPath` and stderr → `errorLogPath` (the SAME two files
+   * the launchd plist's `Std{Out,Error}Path` target and Step 8's gate greps —
+   * `daemonLogPath()` / `daemonErrorLogPath()`), so the gate reads this boot's
+   * output on darwin exactly as it does under launchd (cortex#2282).
+   *
+   * Detached + `unref`'d: the daemon runs on past quickstart's own exit (it is
+   * a long-lived process, quickstart is a one-shot CLI). Returns a
+   * `CommandResult` whose `exitCode === 0` ⇔ the spawn LAUNCHED (the daemon's
+   * own health is then confirmed by Step 8's gate, not by this call). It does
+   * NOT touch the launchd load/unload lifecycle — that stays arc-owned; this
+   * is the exact `cortex start --config <pointer>` backstop the luna-stack
+   * bundle + runbook §F2 document, lifted into quickstart so every consumer
+   * benefits (cortex#2322). Paired with a preceding both-logs truncate
+   * (truncate → start → gate), same ordering contract as the loaded path.
+   */
+  startDaemonBackstop(opts: {
+    pointerConfigPath: string;
+    logPath: string;
+    errorLogPath: string;
+  }): CommandResult;
 }
 
 // =============================================================================

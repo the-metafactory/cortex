@@ -410,6 +410,16 @@ allow:
     match: ~/\.config/cortex/agents
     reason: agent instance-state path — future agent-instance-state wave (live in arc)
     owner: agent-instance-state
+  - pattern: config-tree
+    path: docs/bundle-blueprints.md
+    match: ~/\.config/cortex
+    reason: documents the real arc `provides.files` install targets for the agent-bundle blueprints (personas/ + agents.d/) — same config-tree the shipped manifests are carved for
+    owner: bootstrap-luna
+  - pattern: config-tree
+    path: docs/design-bootstrap-luna.md
+    match: ~/\.config/cortex
+    reason: documents the AgentState durable-state install path (~/.config/cortex/agents/) in the bootstrap design spec
+    owner: bootstrap-luna
   - pattern: bin-home
     path: CLAUDE.md
     match: ~/bin/discord

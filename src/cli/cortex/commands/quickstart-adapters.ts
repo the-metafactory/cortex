@@ -14,10 +14,12 @@
  * failing is an ordinary, expected outcome for quickstart, not a bug.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { spawn } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 
+import { pidFileFor } from "../../../common/pidfile";
 import type {
   CommandResult,
   GatePort,
@@ -93,6 +95,19 @@ function launchdGuiTarget(label: string): string {
   return `gui/${String(uid)}/${label}`;
 }
 
+/** cortex#2322 — resolve the `cortex` binary for the fresh-host backstop start.
+ *  Prefers `~/.local/bin/cortex` — the EXACT binary the launchd stack plist
+ *  invokes (`__HOME__/.local/bin/cortex start …`, `ai.meta-factory.cortex.stack.plist`),
+ *  so the backstop daemon and a later arc-loaded launchd daemon are the same
+ *  binary — then falls back to whatever `cortex` resolves to on PATH.
+ *  `undefined` when neither is found (surfaced as a clean step failure, never a
+ *  spawn throw). */
+function resolveCortexBin(): string | undefined {
+  const canonical = join(homedir(), ".local", "bin", "cortex");
+  if (existsSync(canonical)) return canonical;
+  return Bun.which("cortex") ?? undefined;
+}
+
 export function buildServicePort(): ServicePort {
   return {
     unitFileExists(unitTemplate: string): boolean {
@@ -142,6 +157,83 @@ export function buildServicePort(): ServicePort {
       // cortex#2283 — `-k`: kill the running instance, then restart it, so a
       // re-run applies patched configs on macOS.
       return runSync(["launchctl", "kickstart", "-k", launchdGuiTarget(label)]);
+    },
+    daemonBackstopRunning(pointerConfigPath: string): boolean {
+      // cortex#2322 — read the pointer's pidfile (the SAME derivation
+      // `cortex start --config <pointer>` writes, so the two converge across
+      // path spellings) and liveness-probe the pid. A missing/stale/unparseable
+      // pidfile ⇒ not running (safe to start); EPERM (a live pid owned by
+      // another user) counts as alive — conservatively skip rather than
+      // double-start.
+      const pidPath = pidFileFor(pointerConfigPath);
+      if (!existsSync(pidPath)) return false;
+      let pid: number;
+      try {
+        pid = parseInt(readFileSync(pidPath, "utf-8").trim(), 10);
+      } catch (_err) {
+        // Unreadable pidfile (race / permissions) — treat as not running; the
+        // start below is idempotent at the daemon layer (checkSingleton).
+        return false;
+      }
+      if (Number.isNaN(pid)) return false;
+      try {
+        process.kill(pid, 0); // signal 0 = liveness probe, delivers nothing
+        return true;
+      } catch (err) {
+        return (err as NodeJS.ErrnoException).code === "EPERM";
+      }
+    },
+    startDaemonBackstop(opts: {
+      pointerConfigPath: string;
+      logPath: string;
+      errorLogPath: string;
+    }): CommandResult {
+      // cortex#2322 — the fresh-Mac backstop: `cortex start --config <pointer>`
+      // launched DETACHED, redirecting stdout/stderr to the SAME log files the
+      // launchd plist targets and Step 8's gate greps (cortex#2282). This does
+      // NOT load a launchd service (arc owns that lifecycle); it starts the
+      // daemon process directly, exactly as the luna-stack bundle / runbook §F2
+      // document — lifted here so every consumer reaches a running daemon.
+      const cortexBin = resolveCortexBin();
+      if (cortexBin === undefined) {
+        return {
+          exitCode: 127,
+          stdout: "",
+          stderr:
+            "cortex binary not found (~/.local/bin/cortex or on PATH) — cannot start the fresh-host daemon backstop",
+        };
+      }
+      try {
+        // Both files were just truncated by clearPriorBootLogs (paired
+        // truncate → start → gate); open append so the detached daemon writes
+        // this boot's output into the gate-visible files.
+        mkdirSync(dirname(opts.logPath), { recursive: true });
+        const outFd = openSync(opts.logPath, "a");
+        const errFd = openSync(opts.errorLogPath, "a");
+        // node:child_process `detached: true` → setsid (own session/pgid), so
+        // the daemon survives quickstart's exit + any controlling-terminal
+        // SIGHUP; `unref()` lets quickstart exit without waiting on it.
+        const child = spawn(cortexBin, ["start", "--config", opts.pointerConfigPath], {
+          detached: true,
+          stdio: ["ignore", outFd, errFd],
+        });
+        child.unref();
+        // The child dup'd both fds at spawn; close our copies so quickstart
+        // doesn't hold them open past this call.
+        closeSync(outFd);
+        closeSync(errFd);
+        return {
+          exitCode: 0,
+          stdout: `cortex daemon backstop started (pid ${child.pid !== undefined ? String(child.pid) : "?"})`,
+          stderr: "",
+        };
+      } catch (err) {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: err instanceof Error ? err.message : String(err),
+        };
+      }
     },
   };
 }
