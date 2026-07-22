@@ -23,7 +23,9 @@ import {
   retiredSeedPath,
   codeCapabilityBashAllowlist,
   CODE_GIT_VERBS,
+  CODE_GIT_WRITE_VERBS,
   CODE_GH_PR_VERBS,
+  CODE_GH_ISSUE_VERBS,
   type ScaffoldInputs,
 } from "../stack-lib";
 
@@ -249,6 +251,69 @@ describe("renderScaffold", () => {
 // =============================================================================
 
 describe("codeCapabilityBashAllowlist", () => {
+  // ---------------------------------------------------------------------------
+  // cortex#2331 (7a) review F3 — VERB-SET LOCK. Pin the exact verb sets so a
+  // future edit that widens them (adds `merge`, `reset`, `gh api`, …) trips a
+  // failing test, not a silent authority expansion. Exact-equality on the
+  // approved lists + negative assertions against the dangerous verbs.
+  // ---------------------------------------------------------------------------
+  test("(F3) the gh pr verb set is EXACTLY [create, view, list, diff, checks]", () => {
+    expect([...CODE_GH_PR_VERBS]).toEqual(["create", "view", "list", "diff", "checks"]);
+  });
+
+  test("(F3) the git WRITE verb set is EXACTLY the approved eight", () => {
+    expect([...CODE_GIT_WRITE_VERBS]).toEqual([
+      "checkout",
+      "switch",
+      "add",
+      "commit",
+      "push",
+      "pull",
+      "restore",
+      "stash",
+    ]);
+  });
+
+  test("(F3) the gh issue verb set is EXACTLY [view, list, comment, create]", () => {
+    expect([...CODE_GH_ISSUE_VERBS]).toEqual(["view", "list", "comment", "create"]);
+  });
+
+  test("(F3 negative) the git rule pattern contains NO reset/rebase/merge", () => {
+    const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
+    const gitRule = al.rules.find((r) => r.pattern.startsWith("^git"));
+    expect(gitRule).toBeDefined();
+    for (const forbidden of ["reset", "rebase", "merge"]) {
+      expect(gitRule?.pattern).not.toContain(forbidden);
+    }
+  });
+
+  test("(F3 negative) no gh rule pattern contains 'merge' or 'api'", () => {
+    const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
+    const ghRules = al.rules.filter((r) => r.pattern.startsWith("^gh"));
+    expect(ghRules.length).toBeGreaterThan(0);
+    for (const ghRule of ghRules) {
+      expect(ghRule.pattern).not.toContain("merge");
+      expect(ghRule.pattern).not.toContain("api");
+    }
+  });
+
+  test("(F2) the gh issue rule is present and pinned to the granted repo", () => {
+    const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
+    const issueRule = al.rules.find((r) => r.pattern.startsWith("^gh\\s+issue"));
+    expect(issueRule).toBeDefined();
+    for (const verb of CODE_GH_ISSUE_VERBS) {
+      expect(issueRule?.pattern).toContain(verb);
+    }
+    expect(issueRule?.repos).toEqual(["the-metafactory/cortex"]);
+  });
+
+  test("(F2) the gh pr comment rule is present and pinned to the granted repo", () => {
+    const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
+    const prCommentRule = al.rules.find((r) => r.pattern === "^gh\\s+pr\\s+comment\\b");
+    expect(prCommentRule).toBeDefined();
+    expect(prCommentRule?.repos).toEqual(["the-metafactory/cortex"]);
+  });
+
   test("git rule carries the exact read + write verb set, unscoped (repo scoping is cwd)", () => {
     const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
     const gitRule = al.rules.find((r) => r.pattern.startsWith("^git"));

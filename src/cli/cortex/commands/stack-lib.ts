@@ -384,12 +384,9 @@ export interface ScaffoldFile {
 // self-complete: the read-only utility floor + git READ verbs are re-declared
 // alongside the write delta.
 
-/** git verbs the code allowlist permits: the read-only floor (mirrors the hook's
- *  DEFAULT_CONFIG git rule) PLUS the write verbs the coding loop needs. Repo
- *  scoping for git is via the session cwd/allowedDirs, NOT a per-rule `repos`
- *  field — that field governs only `gh` commands (bash-guard.hook.ts). */
-export const CODE_GIT_VERBS = [
-  // read-only floor (kept in sync with DEFAULT_CONFIG's git rule)
+/** git READ verbs the code allowlist permits — the read-only floor, mirrors the
+ *  hook's DEFAULT_CONFIG git rule. */
+export const CODE_GIT_READ_VERBS = [
   "log",
   "diff",
   "show",
@@ -398,7 +395,13 @@ export const CODE_GIT_VERBS = [
   "fetch",
   "remote",
   "rev-parse",
-  // write delta — the software-factory loop (branch/commit/push, cortex#2331 7a)
+] as const;
+
+/** git WRITE verbs the code allowlist permits — the software-factory loop
+ *  (branch/commit/push, cortex#2331 7a). Locked to exactly these eight: it must
+ *  NEVER include history-rewriters (reset/rebase/merge) — those are the verbs
+ *  the 7a review flags as out-of-scope for an unattended code agent. */
+export const CODE_GIT_WRITE_VERBS = [
   "checkout",
   "switch",
   "add",
@@ -409,8 +412,25 @@ export const CODE_GIT_VERBS = [
   "stash",
 ] as const;
 
-/** `gh pr` verbs the code allowlist permits — repo-scoped to the granted repo. */
+/** git verbs the code allowlist permits: the read-only floor PLUS the write
+ *  verbs the coding loop needs. Repo scoping for git is via the session
+ *  cwd/allowedDirs, NOT a per-rule `repos` field — that field governs only `gh`
+ *  commands (bash-guard.hook.ts). */
+export const CODE_GIT_VERBS = [
+  ...CODE_GIT_READ_VERBS,
+  ...CODE_GIT_WRITE_VERBS,
+] as const;
+
+/** `gh pr` verbs the code allowlist permits — repo-scoped to the granted repo.
+ *  Locked to exactly these five: NEVER `merge` (a merge belongs to pilot/the
+ *  reviewer, not an unattended code agent) and NEVER a catch-all that could
+ *  reach `gh api`. */
 export const CODE_GH_PR_VERBS = ["create", "view", "list", "diff", "checks"] as const;
+
+/** `gh issue` verbs the code allowlist permits — repo-scoped to the granted
+ *  repo. Restores the CLAUDE.md issue-tracking workflow (comment on start,
+ *  create/view/list) for code agents (cortex#2331 7a review F2). */
+export const CODE_GH_ISSUE_VERBS = ["view", "list", "comment", "create"] as const;
 
 /** Read-only shell utilities carried into the code allowlist. The hook's
  *  DEFAULT_CONFIG floor, re-declared because a stack `bashAllowlist` REPLACES
@@ -448,17 +468,28 @@ export interface BashAllowlist {
  */
 export function codeCapabilityBashAllowlist(grantedRepos: string[]): BashAllowlist {
   const gitPattern = `^git\\s+(${CODE_GIT_VERBS.join("|")})\\b`;
-  const ghPattern = `^gh\\s+pr\\s+(${CODE_GH_PR_VERBS.join("|")})\\b`;
-  // Pin the gh rule to the granted repo(s) when known; else ship it unscoped so
+  const ghPrPattern = `^gh\\s+pr\\s+(${CODE_GH_PR_VERBS.join("|")})\\b`;
+  const ghIssuePattern = `^gh\\s+issue\\s+(${CODE_GH_ISSUE_VERBS.join("|")})\\b`;
+  const ghPrCommentPattern = `^gh\\s+pr\\s+comment\\b`;
+  // Pin every gh rule to the granted repo(s) when known; else ship unscoped so
   // `gh` falls back to the stack's own `github.repos` (empty on a fresh
   // scaffold). git rules carry NO `repos` — git scoping is cwd/allowedDirs.
-  const ghRule: BashAllowRule =
-    grantedRepos.length > 0 ? { pattern: ghPattern, repos: grantedRepos } : { pattern: ghPattern };
+  //
+  // NOTE: with the bash-guard's F1 fail-closed change, a pinned gh rule now
+  // REQUIRES the agent to pass `--repo owner/name` (a cwd-inferred gh call is
+  // denied). That is intended — it matches the security-preamble's "Always pass
+  // --repo" instruction. We deliberately DO NOT add `gh api` / `gh repo` /
+  // `gh run` here: `gh api` can reach arbitrary REST endpoints (including
+  // PR-merge) and must stay off the code allowlist.
+  const pin = (pattern: string): BashAllowRule =>
+    grantedRepos.length > 0 ? { pattern, repos: grantedRepos } : { pattern };
   return {
     rules: [
       ...CODE_READONLY_UTIL_PATTERNS.map((pattern) => ({ pattern })),
       { pattern: gitPattern },
-      ghRule,
+      pin(ghPrPattern),
+      pin(ghIssuePattern),
+      pin(ghPrCommentPattern),
     ],
     repos: [],
   };

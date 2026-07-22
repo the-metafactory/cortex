@@ -546,6 +546,78 @@ describe("bash-guard.hook — structured deny output", () => {
   });
 });
 
+// =============================================================================
+// cortex#2331 (7a) review F1 — the gh repo-pin bypass close.
+//
+// extractGhRepo previously matched only the WHITESPACE flag form
+// (`--repo owner/name` / `-R owner/name`). gh ALSO accepts the `=` form
+// (`--repo=owner/name` / `-R=owner/name`), so an agent on a repo-pinned rule
+// could reach any repo via `gh pr view --repo=other/repo`. And a pinned rule
+// with NO repo flag at all (cwd-inferred) fell through to a grant — the pin was
+// silently skippable. Both are now closed: the `=` form is extracted, and a
+// pinned rule with no extractable repo FAILS CLOSED (deny). Rules WITHOUT a
+// `repos` restriction are unchanged (the read-only floor keeps its behaviour).
+// =============================================================================
+describe("bash-guard.hook — gh repo-pin bypass close (F1)", () => {
+  // A repo-pinned gh rule: only the-metafactory/cortex is reachable.
+  const pinnedConfig = JSON.stringify({
+    rules: [{ pattern: "^gh\\s+(pr|issue)\\s", repos: ["the-metafactory/cortex"] }],
+  });
+  // An UNRESTRICTED gh rule (no repos on the rule, no top-level repos) — the
+  // floor behaviour that must stay unchanged by the fail-closed direction.
+  const floorConfig = JSON.stringify({
+    rules: [{ pattern: "^gh\\s+(pr|issue)\\s" }],
+  });
+
+  function runPinned(cmd: string) {
+    return runHook(cmd, {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: pinnedConfig,
+    });
+  }
+
+  test("`--repo=evil/other` (= form) on a pinned rule is DENIED (bypass closed)", () => {
+    const r = runPinned("gh pr view --repo=the-metafactory/some-other-repo 1");
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain(
+      "the-metafactory/some-other-repo",
+    );
+  });
+
+  test("`--repo=granted/repo` (= form) on a pinned rule is GRANTED", () => {
+    const r = runPinned("gh pr view --repo=the-metafactory/cortex 1");
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("`-R=granted/repo` (short = form) on a pinned rule is GRANTED", () => {
+    const r = runPinned("gh pr view -R=the-metafactory/cortex 1");
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("pinned rule with NO repo flag FAILS CLOSED (deny, pass --repo reason)", () => {
+    const r = runPinned("gh pr create --title x --body y");
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("--repo owner/name");
+  });
+
+  test("unrestricted floor rule with NO repo flag is still ALLOWED (unchanged)", () => {
+    const r = runHook("gh pr list", {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: floorConfig,
+    });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+
 describe("bash-guard.hook — block telemetry", () => {
   let homeDir: string;
 

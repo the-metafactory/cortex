@@ -140,11 +140,19 @@ function loadConfig(): GuardConfig | null {
 }
 
 /**
- * Extract repo from gh CLI command (--repo owner/name or -R owner/name).
- * Also handles: gh api repos/owner/name/...
+ * Extract repo from a gh CLI command. Matches BOTH the whitespace form
+ * (`--repo owner/name`, `-R owner/name`) AND the `=` form (`--repo=owner/name`,
+ * `-R=owner/name`) — gh accepts either, and matching only whitespace left the
+ * `=` form as a repo-pin bypass (cortex#2331 7a review F1). Also handles the
+ * `gh api repos/owner/name/...` path form.
+ *
+ * Returns null when no repo can be determined from the command. Callers that
+ * carry a `repos` restriction treat null as FAIL-CLOSED (deny) — a pin you can
+ * silently skip is not a pin.
  */
 function extractGhRepo(command: string): string | null {
-  const repoFlag = /(?:--repo|-R)\s+([^\s]+)/.exec(command);
+  // `(?:\s+|=)` accepts the space form and the `=` form for both flag spellings.
+  const repoFlag = /(?:--repo|-R)(?:\s+|=)([^\s]+)/.exec(command);
   if (repoFlag) return repoFlag[1] ?? null;
 
   const apiPath = /gh\s+api\s+repos\/([^/]+\/[^/\s]+)/.exec(command);
@@ -484,7 +492,24 @@ async function main(): Promise<void> {
             const repos = rule.repos ?? config.repos ?? [];
             if (repos.length > 0) {
               const repo = extractGhRepo(trimmed);
-              if (repo && !repos.includes(repo)) {
+              // FAIL-CLOSED (cortex#2331 7a review F1): a rule pinned to a repo
+              // set but no repo could be extracted (e.g. `gh pr create` with no
+              // --repo, cwd-inferred) must DENY — a pin you can silently skip by
+              // omitting the flag is not a pin. Rules WITHOUT a `repos`
+              // restriction are unaffected (repos.length === 0 skips this block).
+              if (!repo) {
+                const reason =
+                  `[Cortex Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
+                  `this gh rule is pinned to repo(s) [${repos.join(", ")}] but no ` +
+                  `repo could be determined from the command. Pass ` +
+                  `--repo owner/name explicitly.`;
+                // Write the security decision FIRST — telemetry I/O
+                // (a filesystem appendFileSync) must never delay a deny.
+                deny(reason);
+                await emitBlockEvent(sessionId, reason, command);
+                return;
+              }
+              if (!repos.includes(repo)) {
                 const reason =
                   `[Cortex Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
                   `repo "${repo}" is not in the allowed repo list ` +
