@@ -405,8 +405,20 @@ else:
    Rulesets**, target `main` and **require a pull request before merging** with
    **at least 1 approving review**.
 
+   > **Solo-repo caveat:** GitHub won't let you approve your *own* PRs — and
+   > Luna's PRs are opened with *your* credential, so on a solo repo a
+   > 1-approval rule can wedge you. Two outs, one soft, one hard:
+   > - **Soft (fine for a solo test repo):** set required approvals to **0**.
+   >   Direct pushes to `main` are still blocked — everything must arrive as a
+   >   PR — but be aware a 0-approval rule means the credential *could* merge
+   >   a PR too; you're relying on Luna's confirm-before-merge behavior, not
+   >   an enforced gate.
+   > - **Hard:** give Luna her **own** GitHub identity (a machine account with
+   >   the scoped grant). Her PRs are then authored by a different user, your
+   >   1-approval rule works normally, and self-merge is impossible.
+
 The result is exactly the loop you want: Luna can branch, push, and open PRs
-freely, but **nothing reaches `main` without your approving review**. The merge
+freely, but **nothing reaches `main` without you merging it**. The merge
 gate lives on the branch ruleset — where credential scope can't reach — not on
 a token you'd otherwise have to over-trust.
 
@@ -440,6 +452,10 @@ software-factory capability delta added.
 ## 7. Troubleshooting
 
 The known edges, front-loaded so you recognize them before they bite.
+
+> The commands below reuse `$CTX_SLUG` from your `cortex.env`. In a **fresh
+> shell**, load it first — `set -a; . ./cortex.env; set +a` (same incantation
+> as Step 4) — so the copy-paste commands resolve.
 
 ### F2 — macOS: a fresh host needs an explicit `cortex start`
 
