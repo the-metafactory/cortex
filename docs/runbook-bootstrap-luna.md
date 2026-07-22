@@ -252,16 +252,16 @@ Each step prints a ✓/✗ table before the next runs. On success you'll see
    on Linux, systemd linger enabled.
 2. **Validate env** — every `CTX_*` present and shape-checked (the token shows
    only `set`/`missing`, never its value).
-3. **nats conf** — writes `~/.config/nats/<slug>.conf` (skips if identical).
-4. **Scaffold** — runs `cortex stack create <slug> --principal <principal>
+3. **nats conf** — writes `~/.config/nats/$CTX_SLUG.conf` (skips if identical).
+4. **Scaffold** — runs `cortex stack create $CTX_SLUG --principal $CTX_PRINCIPAL
    --apply`: a born-aligned config-split stack at
-   `~/.config/metafactory/cortex/<slug>/`, with `stack.id = <principal>/<slug>`.
+   `~/.config/metafactory/cortex/$CTX_SLUG/`, with `stack.id = <principal>/<slug>`.
 5. **Patch configs** — writes your Discord binding into `surfaces/surfaces.yaml`
-   and `stacks/<slug>.yaml` (token set, never echoed).
+   and `stacks/$CTX_SLUG.yaml` (token set, never echoed).
 6. **Seed provisioning** — provisions the stack's ed25519 signing seed (the same
    entry `arc upgrade cortex` uses). A solo/local Luna needs only this seed — no
    federation account-tree.
-7. **Services** — Linux: enables + starts the `nats@<slug>` + `cortex@<slug>`
+7. **Services** — Linux: enables + starts the `nats@$CTX_SLUG` + `cortex@$CTX_SLUG`
    systemd user units. macOS: restarts an *already-loaded* launchd service (see
    the macOS note below).
 8. **Healthy-boot gate** — waits (bounded) for the daemon to log a healthy boot
@@ -278,7 +278,7 @@ upgrade.
 > explicitly with the backstop (idempotent, works on every OS):
 >
 > ```bash
-> cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
+> cortex start --config ~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml
 > ```
 >
 > See [Troubleshooting F2](#f2-macos-a-fresh-host-needs-an-explicit-cortex-start).
@@ -303,7 +303,7 @@ upgrade.
 Check the daemon from the shell any time:
 
 ```bash
-cortex status --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
+cortex status --config ~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml
 ```
 
 If she's silent, jump to [Troubleshooting](#7-troubleshooting) — the usual cause
@@ -324,15 +324,16 @@ read+write access scoped to **one repo you name**. That delta ships as the
 grants exactly those capabilities — least-privilege by construction.
 
 > **Status.** The luna-stack bundle is the Phase-2 deliverable of
-> `docs/design-luna-stack-bundle.md` (a validated prototype exists; the public
-> repo is being finalized). Until it's published, Steps 1–5 above already give
-> you a working chat Luna, and the bundle below is the one-command wrapper that
-> automates them plus the coding grant. Its published siblings you can install
-> and read *today* as reference shapes are cited at the end of this step.
+> `docs/design-luna-stack-bundle.md`, and it is **live and installable now** —
+> public at
+> <https://github.com/the-metafactory/metafactory-cortex-agent-luna-stack>.
+> Steps 1–5 above already give you a working chat Luna; the bundle below is the
+> one-command wrapper that automates them plus the coding grant. Its published
+> siblings, cited at the end of this step, are worth reading as reference shapes.
 
 ### What the bundle does
 
-Once published, one command stands up the whole MVP:
+One command stands up the whole MVP:
 
 ```bash
 # set the bundle's env (it maps LUNA_* → the CTX_* contract internally),
@@ -376,6 +377,39 @@ authorizes it. Luna confirms before she pushes or opens a PR, and her write
 scope is that single named repo — widen it only by a reviewed allowlist edit,
 never by default.
 
+### GitHub permissions for your coding Luna
+
+Luna's write loop is deliberately human-gated. **She works locally in the
+cloned repo → cuts a local branch → pushes it → opens a PR — and then *you*,
+the principal, merge.** The safeguard against Luna landing her own work is that
+final human step, and getting it right hinges on one fact about GitHub's
+fine-grained permissions.
+
+**Scope alone cannot be the merge safeguard.** GitHub's fine-grained
+**Contents** permission covers pushing a branch *and* merging a PR alike —
+there is no permission setting that grants "can propose" while withholding "can
+land". Any credential that lets Luna push is, by the same scope, a credential
+that could merge. So the protection has to live on the **branch**, not on the
+credential.
+
+The recipe, applied to the **one** repo you named as `LUNA_REPO` and nothing
+else:
+
+1. **Grant on that single repo only** — a fine-grained token scoped to just
+   the granted repo, with:
+   - **Contents: read and write** — clone, branch, push.
+   - **Pull requests: read and write** — open and update PRs.
+   - *(optional)* **Issues: read and write** — only if you also want Luna
+     filing issues.
+2. **Add a branch ruleset on `main`** — in the repo's **Settings → Rules →
+   Rulesets**, target `main` and **require a pull request before merging** with
+   **at least 1 approving review**.
+
+The result is exactly the loop you want: Luna can branch, push, and open PRs
+freely, but **nothing reaches `main` without your approving review**. The merge
+gate lives on the branch ruleset — where credential scope can't reach — not on
+a token you'd otherwise have to over-trust.
+
 ### Verify she can code
 
 Ask her in the Discord channel to do a real task in `LUNA_REPO` — e.g.
@@ -415,7 +449,7 @@ it prints a skip instead. Symptom: quickstart's gate can't find a running daemon
 or `@luna` never comes online. Fix — start the daemon directly (idempotent):
 
 ```bash
-cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
+cortex start --config ~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml
 ```
 
 `arc upgrade cortex` (which loads the launchd plist) is the alternative. Then
@@ -457,7 +491,7 @@ wsl --shutdown
 On a systemd-less WSL2, fall back to the same daemon backstop used on macOS:
 
 ```bash
-cortex start --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
+cortex start --config ~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml
 ```
 
 Full three-OS parity (macOS + Debian gating this release; WSL2 fast-follow) is
@@ -476,13 +510,13 @@ cortex agents reload                 # validate agents.d/ fragments + reload the
 ### Stopping / restarting the stack
 
 ```bash
-cortex stop   --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
-cortex start  --config ~/.config/metafactory/cortex/<slug>/<slug>.yaml
+cortex stop   --config ~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml
+cortex start  --config ~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml
 ```
 
 > **Always pass `--config <pointer>`.** The bare `cortex start` default points at
 > the legacy single-file config path, not your new config-split stack. Point it
-> at your pointer file — `~/.config/metafactory/cortex/<slug>/<slug>.yaml` — every
+> at your pointer file — `~/.config/metafactory/cortex/$CTX_SLUG/$CTX_SLUG.yaml` — every
 > time.
 
 ---
