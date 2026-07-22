@@ -39,6 +39,7 @@ import { join } from "path";
 
 import { dispatchQuickstart } from "../quickstart";
 import { daemonErrorLogPath, daemonLogPath, launchdStackLabel } from "../quickstart-lib";
+import { loadConfigWithAgents } from "../../../../common/config/loader";
 import type {
   CommandResult,
   GatePort,
@@ -116,6 +117,9 @@ const CTX_KEYS = [
   "CTX_WEB_PORT",
   "CTX_WEB_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  // cortex#2331 (7a) — OPTIONAL code-stack repo grant (sandboxed so a stray
+  // value never leaks a code allowlist into an unrelated test).
+  "CTX_REPO",
 ] as const;
 
 function withEnv<T>(env: Partial<Record<(typeof CTX_KEYS)[number], string>>, fn: () => Promise<T>): Promise<T> {
@@ -684,6 +688,42 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
     );
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("Healthy-boot gate ✓");
+  });
+
+  // cortex#2331 (7a) — CTX_REPO scaffolds a software-factory ("code") stack with
+  // a repo-scoped bash allowlist; its absence leaves a chat-only stack (the
+  // read-only floor). The MVP coding-Luna path the finding was about.
+  test("cortex#2331 7a: CTX_REPO scaffolds a code stack with a repo-scoped bash allowlist", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv({ CTX_REPO: "the-metafactory/cortex" }), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    const loaded = loadConfigWithAgents(join(configDir, "work", "work.yaml"));
+    const al = loaded.config.claude.bashAllowlist;
+    expect(al).toBeDefined();
+    const gitRule = al?.rules.find((r) => r.pattern.startsWith("^git"));
+    for (const verb of ["checkout", "commit", "push"]) {
+      expect(gitRule?.pattern).toContain(verb);
+    }
+    const ghRule = al?.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule?.repos).toEqual(["the-metafactory/cortex"]);
+  });
+
+  test("cortex#2331 7a: NO CTX_REPO leaves a chat-only stack (no bash allowlist)", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv(), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () => fakePorts()),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    const loaded = loadConfigWithAgents(join(configDir, "work", "work.yaml"));
+    expect(loaded.config.claude.bashAllowlist).toBeUndefined();
   });
 
   // A1's (#2297) negative-space tripwire — "darwin NEVER truncates" — guarded

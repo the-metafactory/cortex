@@ -102,6 +102,14 @@ const SPEC: SubcommandSpec<StackSubcommand> = {
         "--principal": "value",
         "--display-name": "value",
         "--agent": "value",
+        // cortex#2331 (7a) — declare an extra runtime capability beyond the
+        // implied `chat` floor. `code` opts the stack into the software-factory
+        // bash allowlist (git write verbs + gh pr). Repeatable; only `code` is
+        // recognised today.
+        "--capability": "value-list",
+        // cortex#2331 (7a) — the repo the `code` grant is scoped to
+        // (`owner/repo`). Pins the allowlist's gh rules. Repeatable.
+        "--repo": "value-list",
         "--config-dir": "value",
         "--apply": "bool",
         "--dry-run": "bool",
@@ -157,6 +165,20 @@ function optionalValueFlag(
   const v = flags[name];
   return typeof v === "string" ? v : undefined;
 }
+
+/** Read a repeatable `value-list` flag as a string[] (empty when absent). */
+function listValueFlag(flags: FlagMap, name: string): string[] {
+  const v = flags[name];
+  return Array.isArray(v) ? v : [];
+}
+
+/** cortex#2331 (7a) — extra runtime capabilities the scaffolder knows how to
+ *  wire beyond the implied `chat` floor. Only `code` is recognised today (it
+ *  carries the software-factory bash allowlist). */
+const KNOWN_EXTRA_CAPABILITIES = new Set(["code"]);
+
+/** `owner/repo` shape for `--repo` (GitHub full-name grammar, permissive). */
+const REPO_FULLNAME_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 /**
  * `create` writes to disk; the DEFAULT is dry-run (safe). `--apply` opts into
@@ -276,6 +298,46 @@ function runCreate(
     );
   }
 
+  // --- capabilities + granted repos (cortex#2331 7a) -----------------------
+  // `chat` is the always-present floor; `--capability code` opts the stack into
+  // the software-factory bash allowlist. Reject any capability the scaffolder
+  // doesn't know how to wire (a typo must not silently produce a dead catalog
+  // entry). `--repo owner/repo` pins the code allowlist's gh rules.
+  const extraCapabilities: string[] = [];
+  for (const cap of listValueFlag(flags, "--capability")) {
+    if (cap === "chat") continue; // the implied floor — accepted, deduped
+    if (!KNOWN_EXTRA_CAPABILITIES.has(cap)) {
+      return usageError(
+        "create",
+        `--capability "${cap}" is not recognised (known: ${[...KNOWN_EXTRA_CAPABILITIES].join(", ")})`,
+        json,
+      );
+    }
+    if (!extraCapabilities.includes(cap)) extraCapabilities.push(cap);
+  }
+  const capabilities = ["chat", ...extraCapabilities];
+
+  const grantedRepos: string[] = [];
+  for (const repo of listValueFlag(flags, "--repo")) {
+    if (!REPO_FULLNAME_RE.test(repo)) {
+      return usageError(
+        "create",
+        `--repo "${repo}" must be an "owner/repo" GitHub full name`,
+        json,
+      );
+    }
+    if (!grantedRepos.includes(repo)) grantedRepos.push(repo);
+  }
+  // A --repo without the `code` capability has nothing to scope — reject rather
+  // than silently drop it (the principal likely forgot `--capability code`).
+  if (grantedRepos.length > 0 && !extraCapabilities.includes("code")) {
+    return usageError(
+      "create",
+      `--repo requires --capability code (there is nothing to repo-scope without the code capability)`,
+      json,
+    );
+  }
+
   // --- derive the born-aligned stack id ------------------------------------
   const stackId = `${principal}/${slug}`;
   const seedPath = `~/.config/nats/cortex-${slug}.nk`;
@@ -328,11 +390,11 @@ function runCreate(
   }
 
   // --- render --------------------------------------------------------------
-  const files = renderScaffold({ slug, principal, stackId, agentId, displayName, seedPath });
+  const files = renderScaffold({ slug, principal, stackId, agentId, displayName, seedPath, capabilities, grantedRepos });
 
   // --- dry-run (DEFAULT): print the file set, touch NOTHING ----------------
   if (!applyRes.apply) {
-    return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, false, json, workspaceDir);
+    return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, false, json, workspaceDir, capabilities, grantedRepos);
   }
 
   // --- apply: write the file set -------------------------------------------
@@ -402,7 +464,7 @@ function runCreate(
     );
   }
 
-  return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, true, json, workspaceDir);
+  return renderPlan(slug, principal, stackId, agentId, seedPath, targetDir, files, true, json, workspaceDir, capabilities, grantedRepos);
 }
 
 function renderPlan(
@@ -416,7 +478,10 @@ function renderPlan(
   applied: boolean,
   json: boolean,
   workspaceDir: string,
+  capabilities: string[],
+  grantedRepos: string[],
 ): ExitResult {
+  const hasCode = capabilities.includes("code");
   if (json) {
     return ok(
       renderJson(
@@ -433,6 +498,9 @@ function renderPlan(
             workspace_dir: workspaceDir,
             aligned: "true",
             applied: applied ? "true" : "false",
+            // cortex#2331 (7a) — capability set + (for code) the repo scoping.
+            capabilities: capabilities.join(","),
+            ...(hasCode && { code_allowlist: "true", granted_repos: grantedRepos.join(",") }),
           },
         ),
       ),
@@ -446,6 +514,11 @@ function renderPlan(
   lines.push(`  principal:  ${principal}`);
   lines.push(`  stack.id:   ${stackId}   (born aligned: dir == slug == trailing segment)`);
   lines.push(`  agent:      ${agentId}`);
+  lines.push(`  caps:       ${capabilities.join(", ")}`);
+  if (hasCode) {
+    const scope = grantedRepos.length > 0 ? grantedRepos.join(", ") : "(unscoped — falls back to github.repos)";
+    lines.push(`  code grant: bash allowlist written (git write verbs + gh pr) — gh repo scope: ${scope}`);
+  }
   lines.push(`  seed path:  ${seedPath}   (auto-provisioned by 'arc upgrade cortex' — NOT generated here)`);
   lines.push(`  workspace:  ${workspaceDir}   (${applied ? "created" : "would create"}, 0700 — the dispatch cwd fallback dir, cortex#2097)`);
   lines.push("");
@@ -929,6 +1002,12 @@ Flags (create):
                         zero or 2+ principals are present, it is REQUIRED.
   --display-name <name> The agent's display name (default: capitalized agent id).
   --agent <id>          The agent id on the scaffolded stack (default: assistant).
+  --capability <cap>    Declare an extra runtime capability beyond the implied
+                        chat floor (repeatable). \`code\` opts the stack into the
+                        software-factory bash allowlist (git write verbs + gh pr,
+                        cortex#2331 7a). Only \`code\` is recognised today.
+  --repo <owner/repo>   Repo the \`code\` grant is scoped to (repeatable); pins the
+                        allowlist's gh rules. Requires --capability code.
   --config-dir <path>   Config dir to create the stack under (default:
                         ~/.config/cortex). The stack lands at <config-dir>/<slug>/.
   --apply               Write the files (default: dry-run).

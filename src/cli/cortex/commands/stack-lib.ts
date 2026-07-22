@@ -339,12 +339,158 @@ export interface ScaffoldInputs {
   /** Conventional seed path (`~/.config/nats/cortex-<slug>.nk`). NOT generated
    *  here — `arc upgrade cortex` auto-provisions the seed on first install. */
   seedPath: string;
+  /**
+   * cortex#2331 (7a) — the agent's declared runtime capabilities. `chat` is
+   * always implied (the floor); when this list includes `code`, the agent is a
+   * software-factory tier assistant and the scaffold ALSO writes a
+   * `claude.bashAllowlist` carrying the git write verbs (branch/commit/push) +
+   * `gh pr` verbs on top of the read-only floor. Absent/omitting `code` ⇒ a
+   * chat-only stack with NO allowlist (unchanged behaviour — the bash guard's
+   * read-only DEFAULT_CONFIG floor applies). Default: `["chat"]`.
+   */
+  capabilities?: string[];
+  /**
+   * cortex#2331 (7a) — the repo(s) the code capability is scoped to, in
+   * `owner/repo` (full) form. Pins the code allowlist's `gh pr` rules via their
+   * `repos:` field. When empty and `code` is declared, the gh rules ship
+   * unscoped (the caller had no granted repo — `gh` then falls back to the
+   * stack's own `github.repos`, empty on a fresh scaffold). Ignored when `code`
+   * is not among `capabilities`. Default: `[]`.
+   */
+  grantedRepos?: string[];
 }
 
 /** A scaffold file to write, relative to the new stack's dir. */
 export interface ScaffoldFile {
   relPath: string;
   contents: string;
+}
+
+// =============================================================================
+// cortex#2331 (7a) — the code-capability bash allowlist
+// =============================================================================
+//
+// Finding 7a: a fresh quickstart/luna-stack scaffold shipped NO
+// `claude.bashAllowlist`, so its dispatched sessions fell back to
+// bash-guard.hook.ts's read-only DEFAULT_CONFIG — git log/diff/status but NO
+// checkout/commit/push. A software-factory ("code") agent could not run its
+// core loop. The approved fix (issue #2331, 7a-CONFIRMED) does NOT widen the
+// global guard defaults (they stay the correct floor for chat agents); instead
+// the `code` CAPABILITY carries its allowlist — a stack whose agent declares
+// `code` gets this block written into its scaffolded config.
+//
+// A stack config's `bashAllowlist` REPLACES the hook's DEFAULT_CONFIG (it is
+// not merged — see loadConfig() in bash-guard.hook.ts), so this set must be
+// self-complete: the read-only utility floor + git READ verbs are re-declared
+// alongside the write delta.
+
+/** git verbs the code allowlist permits: the read-only floor (mirrors the hook's
+ *  DEFAULT_CONFIG git rule) PLUS the write verbs the coding loop needs. Repo
+ *  scoping for git is via the session cwd/allowedDirs, NOT a per-rule `repos`
+ *  field — that field governs only `gh` commands (bash-guard.hook.ts). */
+export const CODE_GIT_VERBS = [
+  // read-only floor (kept in sync with DEFAULT_CONFIG's git rule)
+  "log",
+  "diff",
+  "show",
+  "status",
+  "branch",
+  "fetch",
+  "remote",
+  "rev-parse",
+  // write delta — the software-factory loop (branch/commit/push, cortex#2331 7a)
+  "checkout",
+  "switch",
+  "add",
+  "commit",
+  "push",
+  "pull",
+  "restore",
+  "stash",
+] as const;
+
+/** `gh pr` verbs the code allowlist permits — repo-scoped to the granted repo. */
+export const CODE_GH_PR_VERBS = ["create", "view", "list", "diff", "checks"] as const;
+
+/** Read-only shell utilities carried into the code allowlist. The hook's
+ *  DEFAULT_CONFIG floor, re-declared because a stack `bashAllowlist` REPLACES
+ *  (not extends) the default — a code agent must not lose `ls`/`cat`/`pwd`. */
+const CODE_READONLY_UTIL_PATTERNS = [
+  "^ls\\b",
+  "^pwd$",
+  "^echo\\b",
+  "^cat\\b",
+  "^head\\b",
+  "^tail\\b",
+  "^wc\\b",
+  "^which\\b",
+  "^file\\b",
+] as const;
+
+/** One allowlist rule (mirrors the `bashAllowlist.rules[]` schema — a regex
+ *  pattern + an optional gh repo whitelist). */
+export interface BashAllowRule {
+  pattern: string;
+  repos?: string[];
+}
+
+/** The `claude.bashAllowlist` shape (mirrors config.ts's schema). */
+export interface BashAllowlist {
+  rules: BashAllowRule[];
+  repos: string[];
+}
+
+/**
+ * Build the code-capability bash allowlist for a stack scoped to `grantedRepos`
+ * (`owner/repo` full form). The single source of truth for the verb set — the
+ * scaffold renderer and its tests both read it, so the "exact verb set"
+ * assertion can never drift from what ships (cortex#2331 7a).
+ */
+export function codeCapabilityBashAllowlist(grantedRepos: string[]): BashAllowlist {
+  const gitPattern = `^git\\s+(${CODE_GIT_VERBS.join("|")})\\b`;
+  const ghPattern = `^gh\\s+pr\\s+(${CODE_GH_PR_VERBS.join("|")})\\b`;
+  // Pin the gh rule to the granted repo(s) when known; else ship it unscoped so
+  // `gh` falls back to the stack's own `github.repos` (empty on a fresh
+  // scaffold). git rules carry NO `repos` — git scoping is cwd/allowedDirs.
+  const ghRule: BashAllowRule =
+    grantedRepos.length > 0 ? { pattern: ghPattern, repos: grantedRepos } : { pattern: ghPattern };
+  return {
+    rules: [
+      ...CODE_READONLY_UTIL_PATTERNS.map((pattern) => ({ pattern })),
+      { pattern: gitPattern },
+      ghRule,
+    ],
+    repos: [],
+  };
+}
+
+/**
+ * Render a `claude.bashAllowlist` block as YAML indented to sit INSIDE the
+ * `claude:` mapping (2-space base indent). Patterns/repos are emitted via
+ * `JSON.stringify` — a JSON-quoted scalar is a valid YAML double-quoted scalar,
+ * so backslashes in the regexes survive intact and can never inject YAML.
+ * Returns the empty string for a chat-only stack (no `code` capability) so the
+ * template omits the block entirely.
+ */
+function renderBashAllowlistYaml(allowlist: BashAllowlist): string {
+  const lines: string[] = [];
+  lines.push("  # cortex#2331 7a — code-capability bash allowlist. This stack's agent declares");
+  lines.push("  # the `code` runtime capability (software-factory tier), so its bash guard adds");
+  lines.push("  # the git write verbs (branch/commit/push) + `gh pr` verbs on top of the read-");
+  lines.push("  # only floor. A stack bashAllowlist REPLACES the guard's DEFAULT_CONFIG, so the");
+  lines.push("  # read-only utilities + git-read verbs are re-declared here. `gh` rules are repo-");
+  lines.push("  # scoped via `repos:`; git repo-scoping is the session cwd/allowedDirs, not a");
+  lines.push("  # per-rule field (bash-guard.hook.ts). Chat-only stacks omit this block.");
+  lines.push("  bashAllowlist:");
+  lines.push("    rules:");
+  for (const rule of allowlist.rules) {
+    lines.push(`      - pattern: ${JSON.stringify(rule.pattern)}`);
+    if (rule.repos !== undefined) {
+      lines.push(`        repos: ${JSON.stringify(rule.repos)}`);
+    }
+  }
+  lines.push(`    repos: ${JSON.stringify(allowlist.repos)}`);
+  return lines.join("\n");
 }
 
 /**
@@ -359,16 +505,25 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   const { slug, principal, stackId, agentId, displayName, seedPath } = inputs;
   const Display = displayName;
 
+  // cortex#2331 (7a) — `chat` is the always-present floor; `code` opts the stack
+  // into the software-factory bash allowlist. Dedupe + keep chat first.
+  const declared = inputs.capabilities ?? ["chat"];
+  const hasCode = declared.includes("code");
+  const grantedRepos = inputs.grantedRepos ?? [];
+  const bashAllowlistBlock = hasCode
+    ? renderBashAllowlistYaml(codeCapabilityBashAllowlist(grantedRepos))
+    : "";
+
   return [
-    { relPath: "system/system.yaml", contents: systemYaml(slug, seedPath) },
+    { relPath: "system/system.yaml", contents: systemYaml(slug, seedPath, bashAllowlistBlock) },
     { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
-    { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath) },
+    { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath, hasCode) },
     { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
     { relPath: `personas/${agentId}.md`, contents: personaStub(agentId, Display, stackId) },
   ];
 }
 
-function systemYaml(slug: string, seedPath: string): string {
+function systemYaml(slug: string, seedPath: string, bashAllowlistBlock: string): string {
   // The cross-cutting substrate layer — substituted from
   // docs/config-layout/system/system.yaml. NO active `identity:` block: the
   // authoritative, auto-provisioned signing identity is per-stack and lives in
@@ -391,7 +546,7 @@ claude:
   allowedTools: []
   disallowedTools:
     - Write
-  # workspaceDir — the dispatched CC session's cwd when no allowedDirs/
+${bashAllowlistBlock === "" ? "" : bashAllowlistBlock + "\n"}  # workspaceDir — the dispatched CC session's cwd when no allowedDirs/
   # dirRestrictions resolve one (a bare stack — cortex#2097). Scoped to this
   # stack so its dispatched sessions never inherit the daemon's own cwd
   # ($HOME / the cortex install repo). \`cortex stack create\` already
@@ -528,7 +683,22 @@ function stackYaml(
   agentId: string,
   displayName: string,
   seedPath: string,
+  hasCode: boolean,
 ): string {
+  // cortex#2331 (7a) — a `code` agent declares chat + code in its stack catalog
+  // AND its runtime.capabilities; the paired bash allowlist lives in the
+  // system.yaml `claude` block (where `claude` is owned in the config-split
+  // layout). A chat-only stack keeps just `chat`.
+  const codeCatalogEntry = hasCode
+    ? `  - id: code
+    description: Software-factory dispatch (branch/commit/push + gh pr) — cortex#2331 7a
+    provided_by: [${agentId}]
+`
+    : "";
+  const agentRuntimeCapabilities = hasCode
+    ? `        - chat
+        - code`
+    : `        - chat`;
   // The per-deployment stack layer — substituted from
   // docs/config-layout/stacks/research.yaml. principal-only policy pattern.
   return `# =============================================================================
@@ -569,7 +739,7 @@ capabilities:
   - id: chat
     description: Conversational dispatch (no-prefix synchronous chat)
     provided_by: [${agentId}]
-
+${codeCatalogEntry}
 # -----------------------------------------------------------------------------
 # policy — PRINCIPAL-ONLY pattern (CRITICAL for any guild others can join)
 # -----------------------------------------------------------------------------
@@ -621,7 +791,7 @@ agents:
       substrate: claude-code
       mode: in-process
       capabilities:
-        - chat
+${agentRuntimeCapabilities}
     # EMPTY — the Discord binding folds in from surfaces/surfaces.yaml.
     presence: {}
 

@@ -414,6 +414,91 @@ describe("create --apply", () => {
 });
 
 // =============================================================================
+// create --capability code (cortex#2331 7a)
+// =============================================================================
+
+describe("create --capability code", () => {
+  test("(c) code stack composes + loads via the real loader with the repo-scoped allowlist", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas",
+      "--capability", "code", "--repo", "the-metafactory/cortex",
+      "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(0);
+
+    // The real loader (compose + zod-validate) accepts the written config — this
+    // IS the "parses against the schema" assertion (the apply path itself also
+    // runs validateConfigLoads, so exit 0 already proves it; assert the shape).
+    const loaded = loadConfigWithAgents(join(cfg, "demo", "demo.yaml"));
+    const al = loaded.config.claude.bashAllowlist;
+    expect(al).toBeDefined();
+    const gitRule = al?.rules.find((r) => r.pattern.startsWith("^git"));
+    for (const verb of ["checkout", "commit", "push", "branch", "log"]) {
+      expect(gitRule?.pattern).toContain(verb);
+    }
+    const ghRule = al?.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule?.repos).toEqual(["the-metafactory/cortex"]);
+  });
+
+  test("(b) a chat-only stack (no --capability) writes NO bashAllowlist", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const loaded = loadConfigWithAgents(join(cfg, "demo", "demo.yaml"));
+    expect(loaded.config.claude.bashAllowlist).toBeUndefined();
+  });
+
+  test("code stack without --repo still loads; gh rule is unscoped", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--capability", "code",
+      "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(0);
+    const loaded = loadConfigWithAgents(join(cfg, "demo", "demo.yaml"));
+    const ghRule = loaded.config.claude.bashAllowlist?.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule).toBeDefined();
+    expect(ghRule?.repos ?? []).toEqual([]);
+  });
+
+  test("--repo without --capability code is a usage error (nothing to scope)", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--repo", "the-metafactory/cortex",
+      "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("requires --capability code");
+    expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+
+  test("an unrecognised --capability is a usage error", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--capability", "root",
+      "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("not recognised");
+    expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+
+  test("a malformed --repo is a usage error", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--capability", "code",
+      "--repo", "not-a-full-name", "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("owner/repo");
+    expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+});
+
+// =============================================================================
 // create — refuse overwrite
 // =============================================================================
 

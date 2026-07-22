@@ -438,12 +438,20 @@ async function runScaffold(opts: {
   slug: string;
   principal: string;
   configDir: string;
+  /** cortex#2331 (7a) — when set (from CTX_REPO), scaffold a software-factory
+   *  ("code") stack scoped to this `owner/repo`: the stack's agent declares the
+   *  `code` capability and gets the git-write + gh-pr bash allowlist, repo-
+   *  scoped. Absent ⇒ a chat-only stack (unchanged). */
+  grantedRepo?: string;
 }): Promise<StepReport> {
   const create = await dispatchStack([
     "create",
     opts.slug,
     "--principal",
     opts.principal,
+    ...(opts.grantedRepo !== undefined
+      ? ["--capability", "code", "--repo", opts.grantedRepo]
+      : []),
     "--apply",
     "--config-dir",
     opts.configDir,
@@ -985,7 +993,19 @@ export async function dispatchQuickstart(
   }
 
   // --- 4. Scaffold ---------------------------------------------------------
-  const scaffoldReport = await runScaffold({ slug: s.slug, principal: s.principal, configDir });
+  // cortex#2331 (7a) — OPTIONAL: naming one repo via CTX_REPO scaffolds a
+  // software-factory ("code") stack — the agent declares the `code` capability
+  // and gets a repo-scoped git-write + gh-pr bash allowlist (least-privilege,
+  // one repo). This is the luna-stack MVP path ("read+write access scoped to
+  // one repo you name"). Absent ⇒ a chat-only stack (unchanged). A malformed
+  // value is rejected by `cortex stack create --repo` (surfaced as a step fail).
+  const ctxRepo = (process.env.CTX_REPO ?? "").trim();
+  const scaffoldReport = await runScaffold({
+    slug: s.slug,
+    principal: s.principal,
+    configDir,
+    ...(ctxRepo.length > 0 ? { grantedRepo: ctxRepo } : {}),
+  });
   reports.push(scaffoldReport);
   if (!scaffoldReport.ok) {
     return finish(reports, 1, flags.json);

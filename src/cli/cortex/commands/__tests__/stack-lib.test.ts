@@ -21,6 +21,9 @@ import {
   readJoinedNetworkIds,
   parseLeafIncludeFiles,
   retiredSeedPath,
+  codeCapabilityBashAllowlist,
+  CODE_GIT_VERBS,
+  CODE_GH_PR_VERBS,
   type ScaffoldInputs,
 } from "../stack-lib";
 
@@ -238,6 +241,113 @@ describe("renderScaffold", () => {
     // Commented, not active — `stack create` never forces the key into the
     // parsed config; the daemon resolves the same default at runtime absent it.
     expect(system?.contents).not.toMatch(/^\s*workspaceDir:/m);
+  });
+});
+
+// =============================================================================
+// cortex#2331 (7a) — the code-capability bash allowlist
+// =============================================================================
+
+describe("codeCapabilityBashAllowlist", () => {
+  test("git rule carries the exact read + write verb set, unscoped (repo scoping is cwd)", () => {
+    const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
+    const gitRule = al.rules.find((r) => r.pattern.startsWith("^git"));
+    expect(gitRule).toBeDefined();
+    // Every declared git verb appears in the alternation…
+    for (const verb of CODE_GIT_VERBS) {
+      expect(gitRule?.pattern).toContain(verb);
+    }
+    // …the write verbs the coding loop needs are present…
+    for (const verb of ["checkout", "switch", "add", "commit", "push", "pull", "restore", "stash"]) {
+      expect(gitRule?.pattern).toContain(verb);
+    }
+    // …and git rules are NEVER repo-scoped (that field governs gh only).
+    expect(gitRule?.repos).toBeUndefined();
+  });
+
+  test("gh rule carries the exact pr verbs, pinned to the granted repo", () => {
+    const al = codeCapabilityBashAllowlist(["the-metafactory/cortex"]);
+    const ghRule = al.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule).toBeDefined();
+    for (const verb of CODE_GH_PR_VERBS) {
+      expect(ghRule?.pattern).toContain(verb);
+    }
+    expect(ghRule?.repos).toEqual(["the-metafactory/cortex"]);
+  });
+
+  test("with no granted repo the gh rule ships UNSCOPED (falls back to github.repos)", () => {
+    const al = codeCapabilityBashAllowlist([]);
+    const ghRule = al.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule?.repos).toBeUndefined();
+  });
+
+  test("retains the read-only utility floor (bashAllowlist REPLACES DEFAULT_CONFIG)", () => {
+    const al = codeCapabilityBashAllowlist([]);
+    const patterns = al.rules.map((r) => r.pattern);
+    // A code agent must not lose ls/cat/pwd when its allowlist replaces the floor.
+    expect(patterns).toContain("^ls\\b");
+    expect(patterns).toContain("^cat\\b");
+    expect(patterns).toContain("^pwd$");
+  });
+});
+
+describe("renderScaffold — code capability (cortex#2331 7a)", () => {
+  const base: ScaffoldInputs = {
+    slug: "demo",
+    principal: "andreas",
+    stackId: "andreas/demo",
+    agentId: "luna",
+    displayName: "Luna",
+    seedPath: "~/.config/nats/cortex-demo.nk",
+  };
+
+  test("(b) chat-only scaffold writes NO bashAllowlist (unchanged floor)", () => {
+    const files = renderScaffold(base);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    expect(system?.contents).not.toContain("bashAllowlist");
+    const parsed = parseYaml(system?.contents ?? "") as { claude?: { bashAllowlist?: unknown } };
+    expect(parsed.claude?.bashAllowlist).toBeUndefined();
+    // And the agent stays chat-only in the stack catalog + runtime.
+    const stack = files.find((f) => f.relPath === "stacks/demo.yaml");
+    expect(stack?.contents).not.toContain("id: code");
+  });
+
+  test("(a) code scaffold writes the allowlist with the exact verb set + repo pinning", () => {
+    const files = renderScaffold({ ...base, capabilities: ["chat", "code"], grantedRepos: ["the-metafactory/cortex"] });
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    const parsed = parseYaml(system?.contents ?? "") as {
+      claude?: { bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] } };
+    };
+    const al = parsed.claude?.bashAllowlist;
+    expect(al).toBeDefined();
+    const gitRule = al?.rules.find((r) => r.pattern.startsWith("^git"));
+    for (const verb of ["checkout", "switch", "add", "commit", "push", "pull", "restore", "stash", "log", "status"]) {
+      expect(gitRule?.pattern).toContain(verb);
+    }
+    const ghRule = al?.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule?.pattern).toContain("create");
+    expect(ghRule?.repos).toEqual(["the-metafactory/cortex"]);
+
+    // The agent declares chat + code in BOTH the catalog and its runtime.
+    const stack = files.find((f) => f.relPath === "stacks/demo.yaml");
+    expect(stack?.contents).toContain("id: code");
+    const parsedStack = parseYaml(stack?.contents ?? "") as {
+      agents?: { runtime?: { capabilities?: string[] } }[];
+      capabilities?: { id: string }[];
+    };
+    expect(parsedStack.agents?.[0]?.runtime?.capabilities).toEqual(["chat", "code"]);
+    expect((parsedStack.capabilities ?? []).map((c) => c.id).sort()).toEqual(["chat", "code"]);
+  });
+
+  test("code scaffold WITHOUT a granted repo writes the allowlist but leaves gh unscoped", () => {
+    const files = renderScaffold({ ...base, capabilities: ["chat", "code"], grantedRepos: [] });
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    const parsed = parseYaml(system?.contents ?? "") as {
+      claude?: { bashAllowlist?: { rules: { pattern: string; repos?: string[] }[] } };
+    };
+    const ghRule = parsed.claude?.bashAllowlist?.rules.find((r) => r.pattern.startsWith("^gh"));
+    expect(ghRule).toBeDefined();
+    expect(ghRule?.repos).toBeUndefined();
   });
 });
 

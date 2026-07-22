@@ -19,6 +19,16 @@
  * a blocking hook beats allow-by-default), it denies every `mcp__*` invocation
  * that is not covered by the session's grant list.
  *
+ * ## Where this hook is wired (it is NOT in cortex-hooks.json)
+ *
+ * This hook is registered DYNAMICALLY, per session, by cc-session
+ * (`src/runner/cc-session.ts:97-111`) into the curated `--settings` file it
+ * writes for each dispatched CC session — the same dynamic pattern skill-guard
+ * uses, gated on `mcpGrants` being defined. It is deliberately ABSENT from
+ * `src/settings/cortex-hooks.json` (that file wires the cc-events tap, not the
+ * per-session policy guards). A tester inspecting the hooks dir or that JSON
+ * won't see it wired — it isn't unwired, it's session-scoped. See cc-session.ts.
+ *
  * ## Grant grammar
  *
  * The grant list reaches this hook via the `CORTEX_MCP_GRANTS` env var (a
