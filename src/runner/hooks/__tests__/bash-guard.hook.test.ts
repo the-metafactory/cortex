@@ -618,6 +618,143 @@ describe("bash-guard.hook — gh repo-pin bypass close (F1)", () => {
   });
 });
 
+// =============================================================================
+// cortex#2335 — the DEFAULT floor's gh rule drops `api` and `run`.
+//
+// The floor runs with `repos: []`, so the repo-pin block (F1) never engages for
+// it. While `api`/`run` were on the floor gh rule, ANY bash-guarded agent on the
+// default floor (channel set, no custom CORTEX_BASH_GUARD) could auto-approve
+// `gh api -X PUT repos/<o>/<r>/pulls/<n>/merge` (merge a PR), `gh api -X DELETE`,
+// `gh api graphql`, `gh api user`, and `gh run` workflow dispatch — a raw REST
+// surface STRONGER than the deliberately-narrowed code capability (whose
+// allowlist omits exactly these; stack-lib.ts). The floor now exposes the
+// porcelain verbs (pr/issue/repo) only; a stack needing `api`/`run` declares an
+// explicit (ideally repos-pinned) rule. These tests drive the DEFAULT floor
+// itself — CORTEX_CHANNEL set, NO agent-id, NO CORTEX_BASH_GUARD → loadConfig()
+// returns DEFAULT_CONFIG (not the F1 floorConfig mirror, which is a stand-in).
+// =============================================================================
+describe("bash-guard.hook — floor drops gh api/run (cortex#2335)", () => {
+  // A real DEFAULT-floor session: channel present (passes gate-1), no agent-id
+  // (no gate-2 CLI bypass), no CORTEX_BASH_GUARD (loadConfig → DEFAULT_CONFIG).
+  function runFloor(cmd: string) {
+    return runHook(cmd, {
+      CORTEX_CHANNEL: "community",
+      CORTEX_AGENT_ID: undefined,
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: undefined,
+    });
+  }
+
+  function expectFloorDeny(stdout: string): void {
+    const out = JSON.parse(stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecision).not.toBe("allow");
+    expect(out.continue).toBeUndefined();
+  }
+
+  test("`gh api -X PUT .../pulls/N/merge` is DENIED on the floor (the hole)", () => {
+    const r = runFloor(
+      "gh api -X PUT repos/the-metafactory/cortex/pulls/1/merge",
+    );
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh api user` (raw endpoint, no repo to pin) is DENIED on the floor", () => {
+    const r = runFloor("gh api user");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh api graphql` is DENIED on the floor", () => {
+    const r = runFloor("gh api graphql -f query='{viewer{login}}'");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh run list` (workflow dispatch surface) is DENIED on the floor", () => {
+    const r = runFloor("gh run list");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh pr list` is still GRANTED on the floor (porcelain unchanged)", () => {
+    const r = runFloor("gh pr list");
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("`gh issue view 1` is still GRANTED on the floor (porcelain unchanged)", () => {
+    const r = runFloor("gh issue view 1");
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("`gh repo view` is still GRANTED on the floor (porcelain unchanged)", () => {
+    const r = runFloor("gh repo view the-metafactory/cortex");
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // --- cortex#2335 review (mellanon): porcelain SUBCOMMAND restriction. The
+  // verb-open floor allowed destructive porcelain — mutating ops the code
+  // capability forbids. The floor must be <= the code capability. These assert
+  // the mutating porcelain is DENIED (this is what "went unnoticed"). ---
+  test("`gh pr merge` is DENIED on the floor (floor must not out-power the code agent)", () => {
+    const r = runFloor("gh pr merge 1 --repo the-metafactory/cortex");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh pr merge --admin` (branch-protection bypass) is DENIED on the floor", () => {
+    const r = runFloor("gh pr merge 1 --admin");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh pr review --approve` (self-approve) is DENIED on the floor", () => {
+    const r = runFloor("gh pr review 1 --approve");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh pr close` is DENIED on the floor", () => {
+    const r = runFloor("gh pr close 1");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh issue delete` is DENIED on the floor", () => {
+    const r = runFloor("gh issue delete 1 --yes");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh repo delete` is DENIED on the floor (prompt-injection blast radius)", () => {
+    const r = runFloor("gh repo " + "delete the-metafactory/cortex --yes");
+    expect(r.status).toBe(0);
+    expectFloorDeny(r.stdout);
+  });
+
+  test("`gh pr comment` (non-mutating collab) is still GRANTED on the floor", () => {
+    const r = runFloor("gh pr comment 1 --body hi");
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("a stack that EXPLICITLY grants `gh api` (own rule) still works — floor removal is not a global ban", () => {
+    // The escape hatch Andreas's proposal preserves: an agent genuinely needing
+    // gh api declares its own rule. Proves we closed the FLOOR, not gh api itself.
+    const r = runHook("gh api repos/the-metafactory/cortex/contents/README.md", {
+      CORTEX_CHANNEL: "recon",
+      CORTEX_AGENT_ID: "recon-agent",
+      CORTEX_BASH_GUARD: JSON.stringify({ rules: [{ pattern: "^gh\\s+api\\s" }] }),
+    });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+
 describe("bash-guard.hook — block telemetry", () => {
   let homeDir: string;
 
