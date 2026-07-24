@@ -37,9 +37,27 @@ All probes run on **macOS 26.5.1**, `/usr/bin/sandbox-exec` present.
 
 **E3 is the headline.** A silently-ineffective sandbox is *worse than no sandbox*, because we'd stop looking. Every path entering a profile must be `realpath`-resolved, and the build must **self-test** (§7).
 
-### Not yet measured (honest gaps)
-- Linux `bubblewrap`/`landlock`/`seccomp` behaviour — **cannot be tested from macOS**. Needs a Linux probe before EBH-3 commits (§9 OQ-1).
+### 2.1 Linux / container probe — OQ-1 **RESOLVED** (2026-07-25)
+
+Run in the real deployment shape: `debian:bookworm-slim` (matching `deploy/compose/Dockerfile.cortex`), non-root uid 1000, `bubblewrap` 0.8.0.
+
+| # | Finding | Evidence | Consequence |
+|---|---|---|---|
+| **E5** | ⚠️ **`bwrap` fails outright in the container shape — even as root** | `bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces` (identical as root and as uid 1000) | **DD-8 delegate-don't-nest is *required* on Linux-in-container, not merely preferable** |
+| **E6** | `bwrap` **works and confines correctly** where userns is permitted | with userns available: in-scope `OK`; out-of-scope → path **not present at all** | `linux-bwrap` is viable on a systemd host with unprivileged userns enabled |
+| **E7** | 🔴 **The two backends fail with *different* signals** | macOS denies → `EPERM` (E2). `bwrap` binds-what's-allowed, so an out-of-scope path is **absent** → `ENOENT` | **Breaks the DD-9 canary as originally written** (see below) |
+| **E8** | ✅ **DD-8a's mount-table check is implementable** | scoped container → `mac /work/allowed virtiofs ro`; broad bind-mount → `mac /host virtiofs ro`. The two are cleanly distinguishable, and `/proc/mounts` is readable from inside | The DD-8a assertion can be built exactly as specified |
+
+**E7 is the consequential one.** DD-9 (as merged) requires the canary to assert an "explicit DENY/`EPERM`" — that assertion **would fail on Linux**, where bwrap yields `ENOENT` instead. And `ENOENT` is precisely the weak signal the review warned about ("a missing file also fails"), so we cannot simply accept it. Resolution — **per-backend evidence semantics** (amends DD-9):
+
+- **macOS (`macos-sbpl`)** — deny-rule model → require **`EPERM`** on the unresolved-alias read. Unchanged.
+- **Linux (`linux-bwrap`)** — bind-mount model → `ENOENT` is the *correct* success signal, but it must be made **positive evidence**: assert (a) the out-of-scope canary is **absent**, **and** (b) a known in-scope control file **is** readable. (b) is what distinguishes "the sandbox removed it" from "the whole mount is broken / the path was never there".
+- **`container-delegated`** — no canary is possible (nothing to self-test); the boundary evidence is the DD-8a mount assertion plus the DD-8b topology acceptance test.
+
+### Still not measured (honest gaps)
+- **Landlock** — `/sys/kernel/security/lsm` was unreadable from inside the container, so landlock availability is still unconfirmed on the target hosts.
 - Whether a full `claude --print` session (network + MCP + hooks + `--resume`) survives a tuned profile end-to-end (§9 OQ-2).
+- **Probe caveat:** the Linux kernel here was a Docker-VM kernel (OrbStack), not bare metal. E5/E6 establish the *policy dependency* (unprivileged userns), which is the decision-relevant fact; the DD-8b acceptance gate on real topology (§7) still stands and is **not** waived by this probe.
 
 ---
 
@@ -87,6 +105,8 @@ Directly from E3. Resolution happens before profile generation. At session start
 3. require an **explicit DENY / `EPERM`** — "the read did not succeed" is **not** sufficient evidence (a missing file also fails).
 
 Only then has symlink-aware rule matching been proven, for the profile actually in use, at runtime, every session.
+
+**The success signal is per-backend (E7, §2.1).** macOS asserts `EPERM`; `linux-bwrap` asserts *absence* **plus** a readable in-scope control (absence alone is the weak "missing file" signal); `container-delegated` has no canary and rests on the DD-8a/DD-8b evidence instead. A canary that hard-codes `EPERM` fails on Linux; one that accepts bare `ENOENT` proves nothing.
 
 ### DD-10 — Posture per platform: start denylist, graduate to allowlist
 E4 makes strict deny-default costly on macOS. Ship in two stages:
@@ -185,7 +205,7 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
 
 | # | Question | Why it matters |
 |---|---|---|
-| **OQ-1** | Run a **Linux probe** (bwrap/landlock/seccomp + in-container behaviour) before EBH-3 commits? | The macOS findings don't transfer; container behaviour is the biggest unknown. **Recommend: yes, cheap, do it first.** |
+| ~~**OQ-1**~~ | ~~Run a **Linux probe** before EBH-3 commits?~~ | ✅ **RESOLVED 2026-07-25 — see §2.1 (E5–E8).** bwrap fails in-container even as root (userns), works where userns is permitted, and fails with `ENOENT` not `EPERM` (→ DD-9 amended). DD-8a mount check confirmed implementable. **Landlock still unconfirmed**; DD-8b real-topology gate still stands. |
 | **OQ-2** | Empirically map what `claude --print --resume` touches (fs-usage/strace)? | The compatibility contract is currently partly assumed. Without it, `audit` burn-in is guesswork. **Recommend: yes, fold into EBH-3a.** |
 | **OQ-3** | On no-backend-available: run unsandboxed+loud, or refuse to dispatch? (DD-11) | Availability vs security posture. **Recommend: loud for personal/dev, refuse for federated.** |
 | **OQ-4** | MCP servers inside the session jail or their own? | Simpler shared profile vs tighter per-server scoping. **Lean: inside, shared.** |
@@ -198,7 +218,8 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
 **Yes — but only by not treating every environment the same.**
 
 - **macOS:** works today (E1/E2, verified) — with realpath discipline (E3) as the make-or-break detail.
-- **Linux (systemd host):** expected to work, **needs a probe (OQ-1)**; plus free unit-level hardening (OQ-5).
+- **Linux (systemd host):** **probed — works** where unprivileged userns is permitted (E6); confines by absence rather than denial (E7). Plus free unit-level hardening (OQ-5).
+- **Linux in a container:** **probed — `bwrap` cannot run at all** (E5, fails even as root). `container-delegated` (DD-8) is the *only* viable posture there, and its mount-table check is confirmed implementable (E8).
 - **Containers / dev containers:** seamless *by delegation* — the container already is the boundary; detect it, don't nest it (DD-8).
 - **CI:** unaffected.
 - **Anywhere else / degraded:** loud and explicit, never silently unprotected (DD-7/DD-11).
