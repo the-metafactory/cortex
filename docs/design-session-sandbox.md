@@ -42,7 +42,7 @@ The sandbox wraps the `claude` child-process spawn in `claude-invoker.ts` — th
 
 ### DD-3 — Kernel boundary is the security control; `--add-dir` becomes advisory
 
-Once the profile is the real boundary, `--add-dir` is retained for Claude Code's own UX/scoping behavior but is **no longer relied on for security**. This retires F1's open repro question (does `claude --print --add-dir` deny an out-of-scope read?) *by construction* — the kernel denies it whether or not `--add-dir` does. We stop needing to know the answer.
+Once the profile is the real boundary, `--add-dir` is retained for Claude Code's own UX/scoping behavior but is **no longer relied on for security**. This retires F1's open repro question (does `claude --print --add-dir` deny an out-of-scope read?) *by construction* — the kernel denies it whether or not `--add-dir` does. (The EBH-0 repro on 2026-07-24 confirmed the premise: `--add-dir` is an additive grant, **allows** out-of-scope reads for both Read and Bash — [result](security/reviews/2026-07-24-ebh0-add-dir-repro.md). So the kernel boundary is not merely belt-and-suspenders; it is the *only* real filesystem boundary.)
 
 ### DD-4 — Pluggable backend behind a `SessionSandbox` interface
 

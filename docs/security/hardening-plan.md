@@ -33,7 +33,7 @@ A ladder, cheapest-and-most-owned first. Maps onto the review's Tier 0–3 (§6)
 
 | Layer | What | Fixes | Cost | Depends on |
 |---|---|---|---|---|
-| **L0** | **Repro** the `--add-dir` question (does `claude --print --add-dir` deny an out-of-scope read?) | decides F1 severity | ~1h | — |
+| **L0** | ~~**Repro** the `--add-dir` question~~ **✅ DONE 2026-07-24** — `--add-dir` is an *additive grant, not a jail*; both Read and Bash `cat` read an out-of-scope canary ([result](reviews/2026-07-24-ebh0-add-dir-repro.md)) | **F1 = clean High** (severity locked) | done | — |
 | **L1** | Cortex-owned `PreToolUse` **path guard** for file tools + Bash read-command paths; reuse `loader.ts` normalize+contain | F1 (cortex-owned side), F6 | S | — |
 | **L2** | **OS session jail** per `claude --print` (sandbox-exec / bwrap+landlock+seccomp) | F1, F6 by construction | M | choke point |
 | **L3** | **Egress allowlist** (filtering proxy, deny-by-default) | exfiltration containment | M | L2 net-ns |
