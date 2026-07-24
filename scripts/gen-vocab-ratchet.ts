@@ -238,6 +238,9 @@ const CARVEOUT_PATHS: string[] = [
   "src/services/network-registry/migrations/0014_network_hub_mode.sql",
   // #1598 working doc (design/worklog class, like design-federation-hub-mode)
   "docs/federation-1598-admit-mint-worklog.md",
+  // External security review (NWS, 2026-07-23) — imported VERBATIM; not ours to
+  // vocab-migrate. Bare "operator" appears in the third-party author's prose.
+  "docs/security/reviews/2026-07-23-nws-security-review.md",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
