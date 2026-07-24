@@ -14,6 +14,12 @@ EBH-1 (merged, PR #2355) gave cortex an in-process path guard. Getting it safe t
 
 L2 exists because a kernel boundary **does not parse anything**. It doesn't care whether the path was written `~root/.ssh/id_rsa`, `{/etc,x}/passwd`, `/a/""/../secret`, or `$HOME/x` — the read is denied at the syscall. That is the property L1 structurally cannot have.
 
+**A seventh round confirmed the structural limit, twice over** *(NWS swarm, 2026-07-25, both verified in-tree)*:
+- **Coverage drift** — `file -flist` / `--files0-from=list`: a *bare relative* filename as a value-taking flag's value was not path-shaped by L1's heuristic, so it went unchecked and the command read out-of-scope paths listed inside it. Fixable in L1 (and being fixed), but it is the **fourth** distinct shape of the same "L1 must model the tool's own path-reading behaviour" problem.
+- **TOCTOU** — *architecturally unfixable at L1.* The guard authorises a path **string**; the tool then **re-opens** that path. Nothing binds the checked object to the opened object, so a check-then-swap (replace an in-scope name with a symlink) escapes. The usual remedy — `openat2(..., RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)` and passing the *fd* to the operation — is **not available to cortex at L1: we do not control the open.** Claude Code's own Read/Write/Bash perform it. Only a kernel boundary around the process can bind authorisation to the actual inode.
+
+That second finding is the cleanest statement of why this layer exists: **L1 can be made fail-closed, but it can never be made sound.**
+
 **This is a major change** — it changes how every dispatched session is executed, on every platform we deploy to. This spec is the "understand the implications before we build" artifact.
 
 ---
@@ -62,12 +68,25 @@ So the correct design is **not** "make bwrap work everywhere." It is: **detect t
 ### DD-7 — Capability **detection at boot**, never assumption
 Cortex probes at startup (and caches): does `sandbox-exec` exist and can it exec a trivial process? does `bwrap --version` work *and* can it actually unshare? is landlock present? am I already in a container? The resolved backend is logged and exposed on the dashboard. **We never assume a platform capability** — E4 shows even "present" ≠ "works with our profile."
 
-### DD-8 — Container isolation is **delegated, not nested**
+### DD-8 — Container isolation is **delegated, not nested** — but "already scoped" is a **programmatic check**, never an assumption
 If the boot probe detects (a) we're in a container **and** (b) the mounted filesystem is already scoped to the work dirs, the backend resolves to **`container-delegated`**: no nested sandbox, and cortex records *why* the boundary is considered satisfied. If we're in a container that is **not** scoped (e.g. the host FS bind-mounted in), that is a **misconfiguration warning**, not silent acceptance.
 > This is what makes dev containers "seamless": the answer is *don't sandbox twice*, and say so out loud.
 
-### DD-9 — Every profile path is `realpath`-resolved, and the profile is **self-tested**
-Directly from E3. Resolution happens before profile generation. Additionally, at session start in `enforce` mode, the backend runs a **canary check**: attempt one read that *must* fail. If the canary is NOT denied, the sandbox is not working → **fail closed** (refuse to launch the session) rather than run an unprotected session believing it is protected.
+**Detection must be verified, not inferred** *(NWS review, 2026-07-25)*. If the "already scoped" judgement is wrong, `container-delegated` means **unsandboxed execution labelled as protected** — the worst possible fail-open, and the same failure shape as E3. So:
+
+- **(a) Assert scoping from the mount table.** Inspect `/proc/mounts` / `findmnt` and require that **only** `allowedDirs`/`readOnlyDirs` are host-mounted and the container root is isolated. A broad host bind-mount (e.g. `/` or `$HOME`) resolves to **misconfiguration-warning, NOT delegated**.
+- **(b) Linux is gated on Linux.** `linux-bwrap` and `container-delegated` may only report a satisfied boundary after an acceptance test **in the real systemd/container topology** proves an out-of-scope host path stays unreadable. **macOS-green must never imply Linux-safe** — every finding in §2 is macOS-only (see OQ-1).
+
+### DD-9 — Every profile path is `realpath`-resolved, and the profile is **self-tested against the E3 failure specifically**
+Directly from E3. Resolution happens before profile generation. At session start in `enforce` mode the backend runs a **canary check** and **fails closed** (refuses to launch) unless it passes.
+
+**The canary must exercise the symlink-alias failure, not a proxy for it** *(NWS review of this spec, 2026-07-25)*. A canary that authors its deny rule on a realpath-resolved target and then reads *that same resolved path* proves only that **something** was denied — it would still pass while every other rule in the profile silently failed open on symlinks, which is exactly E3. Required shape:
+
+1. author the deny rule against the **resolved** path (`/private/tmp/<canary>`);
+2. attempt the read via the **unresolved symlink alias** (`/tmp/<canary>`);
+3. require an **explicit DENY / `EPERM`** — "the read did not succeed" is **not** sufficient evidence (a missing file also fails).
+
+Only then has symlink-aware rule matching been proven, for the profile actually in use, at runtime, every session.
 
 ### DD-10 — Posture per platform: start denylist, graduate to allowlist
 E4 makes strict deny-default costly on macOS. Ship in two stages:
@@ -139,7 +158,10 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
 **Acceptance for `enforce` (each must be demonstrated, not argued):**
 - The four "must be denied" classes (§5) are blocked **and logged** in a test harness.
 - The **E3 regression test**: a deliberately symlinked path is still denied (proves realpath normalization held).
-- The **canary self-test** fails the session when the sandbox is inert.
+- The **canary self-test** (DD-9) fails the session when the sandbox is inert — asserted via the **unresolved-alias read returning an explicit DENY/`EPERM`**, not merely a failed read.
+- **Linux-topology gate (DD-8b):** `linux-bwrap` and `container-delegated` each proved, **in the real systemd/container topology**, that an out-of-scope host path is unreadable. macOS-green does not satisfy this.
+- **Container mis-scoping test (DD-8a):** a container with a broad host bind-mount resolves to *misconfiguration-warning*, **not** `container-delegated`.
+- **TOCTOU harness (§1):** a check-then-swap race that escapes the L1 string guard is **denied** under the kernel boundary.
 - A real dispatched session completes end-to-end: streaming, `--resume`, hooks, event pipeline, `gh`.
 
 ---
