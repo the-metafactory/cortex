@@ -1503,3 +1503,170 @@ describe("bash-guard.hook — round 3: brace expansion + wildcard CLASS matrix",
     expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
 });
+
+// =============================================================================
+// Bypass #4 (cortex#2343 adversarial review round 4) — bash quote-removal.
+// `extractCommandPaths` only stripped a quote pair that wraps a WHOLE
+// token; an EMBEDDED quote pair (including bash's `""`/`''`
+// empty-string-concatenation form, which real bash quote-REMOVES —
+// `/a/""/../b` reads as `/a/../b`) survived verbatim, so the guard resolved
+// a DIFFERENT string than the shell actually runs. Fixed by refusing to
+// predict shell quote-removal at all: any candidate path token that STILL
+// contains a `"`/`'` after the whole-token strip DENIES THE WHOLE COMMAND.
+// Each deny case below is verified against REAL bash (`bash -c`) to
+// confirmed it reads outside allowedDirs (or fails to parse at all) — the
+// guard's deny is not over-cautious, it is the ONLY safe answer.
+// =============================================================================
+describe("bash-guard.hook — round 4: bash quote-removal CLASS matrix", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r4-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(join(allowedDir, "sub"), { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "canary\n");
+    writeFileSync(join(allowedDir, "sub", "b"), "inside\n");
+    writeFileSync(join(allowedDir, "my file.txt"), "spacefile\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  test('cat /a/""/../secret/x — embedded EMPTY double-quote segment ⇒ DENY (real bash reads OUTSIDE allowedDirs)', () => {
+    // Ground truth: `bash -c` on this exact command reads secretDir/canary.txt
+    // — the "" segment vanishes via bash quote-removal, so the ".." cancels
+    // "sub" instead of a phantom empty segment. Confirmed live.
+    const realBash = spawnSync("bash", ["-c", `cat ${allowedDir}/sub/""/../../secret/canary.txt`], {
+      encoding: "utf-8",
+    });
+    expect(realBash.stdout.trim()).toBe("canary");
+
+    const r = runHook(`cat ${allowedDir}/sub/""/../../secret/canary.txt`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/''/../secret/x — embedded EMPTY single-quote segment ⇒ DENY (real bash reads OUTSIDE allowedDirs)", () => {
+    const realBash = spawnSync("bash", ["-c", `cat ${allowedDir}/sub/''/../../secret/canary.txt`], {
+      encoding: "utf-8",
+    });
+    expect(realBash.stdout.trim()).toBe("canary");
+
+    const r = runHook(`cat ${allowedDir}/sub/''/../../secret/canary.txt`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test('cat /a/"b"/c — embedded double-quote wrapping mid-token text ⇒ DENY', () => {
+    // Real bash resolves this to the SAME file (quote-removal of "sub" just
+    // unquotes it back to `sub`), so it stays inside allowedDirs — but the
+    // guard denies anyway per the fail-closed-on-ambiguity policy: it must
+    // not GUESS that an embedded quote is harmless just because it happens
+    // to resolve safely in one case. Confirmed real bash still reads it
+    // (proving the command IS a live, parseable bash invocation, not a
+    // syntax error the guard could safely ignore).
+    const realBash = spawnSync("bash", ["-c", `cat ${allowedDir}/"sub"/b`], { encoding: "utf-8" });
+    expect(realBash.stdout.trim()).toBe("inside");
+
+    const r = runHook(`cat ${allowedDir}/"sub"/b`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/'b'c — embedded single-quote NOT wrapping the whole token ⇒ DENY", () => {
+    const realBash = spawnSync("bash", ["-c", `cat ${allowedDir}/sub/'b'`], { encoding: "utf-8" });
+    expect(realBash.stdout.trim()).toBe("inside");
+
+    const r = runHook(`cat ${allowedDir}/sub/'b'`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test('cat "my file.txt" — WHOLE-TOKEN quoted (legit space-in-path) inside allowedDirs ⇒ ALLOW', () => {
+    const realBash = spawnSync("bash", ["-c", `cd ${allowedDir} && cat "my file.txt"`], { encoding: "utf-8" });
+    expect(realBash.stdout.trim()).toBe("spacefile");
+
+    const r = runHook('cat "my file.txt"', policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test('cat "/abs/outside" — WHOLE-TOKEN quoted, outside allowedDirs ⇒ DENY (by normal containment, not quote-ambiguity)', () => {
+    const realBash = spawnSync("bash", ["-c", `cat "${join(secretDir, "canary.txt")}"`], { encoding: "utf-8" });
+    expect(realBash.stdout.trim()).toBe("canary");
+
+    const r = runHook(`cat "${join(secretDir, "canary.txt")}"`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    // Distinguish from the quote-ambiguity deny reason — this one denies via
+    // ordinary containment (the reducer produced a clean real path, and it
+    // just wasn't inside allowedDirs).
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain(
+      "resolves outside every configured allowedDirs",
+    );
+  });
+
+  test('cat "/a/b (dangling/unbalanced quote) ⇒ DENY (real bash fails to even PARSE the command)', () => {
+    const realBash = spawnSync("bash", ["-c", `cat "${join(allowedDir, "sub", "b")}`], { encoding: "utf-8" });
+    expect(realBash.status).not.toBe(0); // bash: unexpected EOF while looking for matching `"'
+
+    const r = runHook(`cat "${join(allowedDir, "sub", "b")}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+});
+
+describe("bash-guard.hook — round 4: malformed CORTEX_BASH_GUARD fails closed", () => {
+  test("present-but-unparseable CORTEX_BASH_GUARD ⇒ DENY (was DEFAULT_CONFIG fallback — fail OPEN — before this fix)", () => {
+    const r = runHook("ls", {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_BASH_GUARD: "{not valid json",
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("present-but-non-object CORTEX_BASH_GUARD (a JSON array) ⇒ DENY", () => {
+    const r = runHook("ls", {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_BASH_GUARD: "[1,2,3]",
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("absent CORTEX_BASH_GUARD still behaves as DEFAULT_CONFIG (unaffected by this fix)", () => {
+    const r = runHook("ls", { CORTEX_CHANNEL: "test-channel", CORTEX_BASH_GUARD: undefined });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test('{"disabled":true} still passes through (unaffected by this fix — a well-formed instruction, not malformed)', () => {
+    const r = runHook("rm -rf /tmp/x", {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_BASH_GUARD: JSON.stringify({ disabled: true }),
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+});

@@ -143,20 +143,63 @@ interface GuardConfigRaw {
   repos?: string[];
 }
 
-function loadConfig(): GuardConfig | null {
+/**
+ * Result of loading `CORTEX_BASH_GUARD`. Mirrors `path-guard.hook.ts`'s
+ * `parsePathGuardConfig` posture (cortex#2343 adversarial review round 4 —
+ * aligning a fail-OPEN the review flagged):
+ *
+ *   - `ok:true, config:GuardConfig` — a usable config (absent/empty env ⇒
+ *     `DEFAULT_CONFIG`; valid JSON, not disabled ⇒ the parsed config).
+ *   - `ok:true, config:null` — G-300: the principal DM explicitly disabled
+ *     the guard (`{"disabled":true}`). Distinct from `ok:false` — this is
+ *     an intentional, well-formed instruction, not a failure.
+ *   - `ok:false, config:null` — `CORTEX_BASH_GUARD` is PRESENT but
+ *     unparseable JSON, or parses to something other than an object. This
+ *     used to silently fall back to `DEFAULT_CONFIG` (fail OPEN — a
+ *     corrupted/tampered env var got the safe default instead of a deny).
+ *     Now the caller must DENY, matching `parsePathGuardConfig`'s posture:
+ *     absence/empty is a legitimate "no config" state, but a PRESENT,
+ *     malformed value is a genuine failure. `disabled`/`rules`/`repos`
+ *     fields with the WRONG type (e.g. `rules` not an array) are tolerated
+ *     (coerced via the existing `??` fallbacks) — only a JSON parse
+ *     failure or a non-object top level is treated as malformed.
+ */
+interface LoadConfigResult {
+  ok: boolean;
+  config: GuardConfig | null;
+  reason: string;
+}
+
+function loadConfig(): LoadConfigResult {
   const raw = process.env.CORTEX_BASH_GUARD;
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as GuardConfigRaw;
-      // G-300: Principal DM disables bash guard entirely
-      if (parsed.disabled) return null;
-      return {
-        rules: parsed.rules ?? DEFAULT_CONFIG.rules,
-        repos: parsed.repos ?? [],
-      };
-    } catch { /* fall through */ }
+  if (!raw) return { ok: true, config: DEFAULT_CONFIG, reason: "" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return {
+      ok: false,
+      config: null,
+      reason: `CORTEX_BASH_GUARD is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
-  return DEFAULT_CONFIG;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, config: null, reason: "CORTEX_BASH_GUARD did not parse to a JSON object" };
+  }
+
+  const guardRaw = parsed as GuardConfigRaw;
+  // G-300: Principal DM disables bash guard entirely — a well-formed
+  // instruction, not a failure.
+  if (guardRaw.disabled) return { ok: true, config: null, reason: "" };
+  return {
+    ok: true,
+    config: {
+      rules: guardRaw.rules ?? DEFAULT_CONFIG.rules,
+      repos: guardRaw.repos ?? [],
+    },
+    reason: "",
+  };
 }
 
 /**
@@ -248,6 +291,18 @@ function rejectsChaining(command: string): boolean {
 /** Bash read commands whose path argument(s) get containment-checked. */
 const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file"]);
 
+export interface ExtractedCommandPaths {
+  /**
+   * null = the WHOLE COMMAND must be denied — a candidate path token still
+   * carries an embedded or unbalanced quote character after the whole-token
+   * strip below (cortex#2343 adversarial review round 4, finding: bash
+   * quote-removal). See {@link reason}.
+   */
+  paths: string[] | null;
+  /** Populated when `paths` is null — WHY the command must be denied. */
+  reason?: string;
+}
+
 /**
  * Extract candidate path arguments from a single, already env-stripped,
  * already-segment-split shell command string. Deliberately NOT a full shell
@@ -262,10 +317,34 @@ const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file"
  * it falls through and is conservatively treated as a candidate path — this
  * can under-deny (a numeric flag value resolves relative to the session's
  * already-allowed cwd, so it almost always still resolves inside policy
- * scope) but never OVER-denies a real flag as an escaping path. Exported for
- * unit tests.
+ * scope) but never OVER-denies a real flag as an escaping path.
+ *
+ * A token that is wrapped ENTIRELY in one matching pair of quotes (e.g. the
+ * whole `"my file.txt"` argument, used for a path containing a space) is
+ * unwrapped and kept — this is the one shell-quoting form we DO replicate,
+ * because it's unambiguous: the regex below only ever captures a `"…"`/`'…'`
+ * span as ONE token when it starts and ends the token, so a legitimate
+ * whole-token quote can only ever produce a clean strip.
+ *
+ * cortex#2343 adversarial review round 4 (bash quote-removal, the 4th
+ * bypass in this series): real bash performs quote-REMOVAL, including the
+ * `""`/`''` EMPTY-STRING-CONCATENATION form — `/a/""/../b` is read by bash
+ * as `/a/../b` (the empty quoted segment vanishes, so the `..` cancels the
+ * PREVIOUS segment instead of a phantom one), which silently changes which
+ * directory a `..` escapes from. We do NOT attempt to replicate this or any
+ * other embedded-quote form — tilde-user and brace-expansion were BOTH
+ * bypassed by trying to predict one more corner of shell parsing, so the
+ * line now is: don't predict, refuse. Any token that STILL contains a `"`
+ * or `'` after the whole-token strip above (an embedded quote mid-token, OR
+ * a dangling/unbalanced quote that the strip couldn't cleanly remove) DENIES
+ * THE WHOLE COMMAND — `paths: null` — rather than resolving a string that
+ * might not be the one the shell actually reads. Legitimate file reads
+ * never embed a quote character mid-path; whole-token-quoted paths (for
+ * spaces) are unaffected, since those are fully stripped clean above.
+ *
+ * Exported for unit tests.
  */
-export function extractCommandPaths(command: string): string[] {
+export function extractCommandPaths(command: string): ExtractedCommandPaths {
   const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const paths: string[] = [];
   for (let i = 1; i < tokens.length; i++) {
@@ -277,9 +356,18 @@ export function extractCommandPaths(command: string): string[] {
     ) {
       tok = tok.slice(1, -1);
     }
-    if (tok.length > 0) paths.push(tok);
+    if (tok.length === 0) continue;
+    if (tok.includes('"') || tok.includes("'")) {
+      return {
+        paths: null,
+        reason:
+          `embedded or unbalanced quote character in path argument "${tok.slice(0, 80)}" — ` +
+          `cannot safely resolve what the shell would actually run, denying fail-closed`,
+      };
+    }
+    paths.push(tok);
   }
-  return paths;
+  return { paths };
 }
 
 /**
@@ -314,7 +402,14 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
     return { allow: true, reason: "" };
   }
 
-  const candidatePaths = extractCommandPaths(trimmedCommand);
+  const extracted = extractCommandPaths(trimmedCommand);
+  if (extracted.paths === null) {
+    return {
+      allow: false,
+      reason: `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": ${extracted.reason}.`,
+    };
+  }
+  const candidatePaths = extracted.paths;
   const cwd = process.cwd();
 
   for (const rawPath of candidatePaths) {
@@ -573,7 +668,22 @@ async function main(): Promise<void> {
   const sessionId =
     input.session_id ?? process.env.CLAUDE_SESSION_ID ?? "unknown";
 
-  const config = loadConfig();
+  const configResult = loadConfig();
+
+  // cortex#2343 adversarial review round 4 — a PRESENT but malformed
+  // CORTEX_BASH_GUARD used to silently fall back to DEFAULT_CONFIG (fail
+  // OPEN). Now it's a genuine failure: DENY, matching path-guard.hook.ts's
+  // parsePathGuardConfig posture. Absence/empty stays "no config" (handled
+  // inside loadConfig() as ok:true, config:DEFAULT_CONFIG) — only a
+  // present-but-unparseable value reaches this branch.
+  if (!configResult.ok) {
+    const reason = `[Cortex Bash Guard] Blocked: ${configResult.reason} — denying to stay fail-closed.`;
+    deny(reason);
+    await emitBlockEvent(sessionId, reason, command);
+    return;
+  }
+
+  const config = configResult.config;
 
   // G-300: Guard disabled (principal DM) — pass through, defer to the already-
   // permissive bypass session. Intentionally NOT a grant: this path is out of
