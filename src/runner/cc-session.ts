@@ -41,6 +41,18 @@ export interface CCSessionOpts {
   allowedTools?: string[];
   disallowedTools?: string[];
   allowedDirs?: string[];
+  /**
+   * EBH-1 (cortex#2343) — directories the session may READ but not modify.
+   * Passed to path-guard.hook.ts / bash-guard.hook.ts's path checks via the
+   * `CORTEX_PATH_GUARD` env var (mirrors `allowedDirs`'s own role there).
+   * Distinct from `allowedDirs` so a write into one of these is DENIED while
+   * a read is permitted — see {@link resolvePathGuardEnv}. NOTE: this field
+   * is wired and unit-tested but NOT YET populated by any live dispatch
+   * path (dispatch-handler.ts still flattens readOnlyDirs into the merged
+   * allowedDirs list it builds) — F6 closes in production once that
+   * threading lands (EBH-1b, a separate slice).
+   */
+  readOnlyDirs?: string[];
   timeoutMs?: number;
   cwd?: string;
   additionalArgs?: string[];
@@ -262,6 +274,29 @@ export function resolveBashGuardEnv(
   return JSON.stringify({});
 }
 
+/**
+ * Resolve the AUTHORITATIVE `CORTEX_PATH_GUARD` value cortex writes onto
+ * every spawned session env (EBH-1, cortex#2343 step 5) — mirrors
+ * {@link resolveBashGuardEnv}'s "always a string, always written" contract
+ * so a stale/injected value can never survive and so path-guard.hook.ts /
+ * bash-guard.hook.ts's path checks always read the SAME policy this
+ * session's `--add-dir`/preamble were built from (design spec DD-1).
+ *
+ * Total — ALWAYS returns a JSON string:
+ *   - `{allowedDirs:[...], readOnlyDirs:[...]}` from the opts the caller
+ *     resolved (may legitimately both be `[]` — the hooks treat an empty
+ *     policy as "no restriction configured", matching the EXISTING
+ *     `security-preamble.ts` contract; see path-guard.hook.ts's module doc).
+ */
+export function resolvePathGuardEnv(
+  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,
+): string {
+  return JSON.stringify({
+    allowedDirs: opts.allowedDirs ?? [],
+    readOnlyDirs: opts.readOnlyDirs ?? [],
+  });
+}
+
 export class CCSession extends EventEmitter {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private timeoutId: Timer | null = null;
@@ -449,6 +484,13 @@ export class CCSession extends EventEmitter {
     // even if a value reaches the base env by any other route. See
     // {@link resolveBashGuardEnv} for the value semantics.
     env.CORTEX_BASH_GUARD = resolveBashGuardEnv(this.opts);
+
+    // EBH-1 (cortex#2343 step 5) — pass allowedDirs/readOnlyDirs to
+    // path-guard.hook.ts / bash-guard.hook.ts's path checks. Written
+    // UNCONDITIONALLY for the same reason CORTEX_BASH_GUARD is: cortex is
+    // always the authoritative writer, so this OVERWRITES anything the
+    // layered base/agent env carried.
+    env.CORTEX_PATH_GUARD = resolvePathGuardEnv(this.opts);
 
     // Suppress ANTHROPIC_API_KEY when OAuth token is present
     if (env.CLAUDE_CODE_OAUTH_TOKEN) {

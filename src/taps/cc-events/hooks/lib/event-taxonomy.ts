@@ -20,6 +20,11 @@ export const EVENT_TYPES = {
   // `reason` + `command_preview` in the payload so blocks are observable
   // on the dashboard instead of being lost in the Cortex→Discord relay.
   BASH_BLOCKED: "tool.bash.blocked",
+  // EBH-1 (cortex#2343) — emitted by path-guard.hook.ts when a file-tool
+  // (Read/Write/Edit/Glob/Grep) call is denied for resolving outside
+  // allowedDirs, or a write into a readOnlyDir. Mirrors BASH_BLOCKED's
+  // shape/purpose for the new file-tool guard.
+  PATH_BLOCKED: "tool.path.blocked",
   FILE_CHANGED: "tool.file.changed",
   FILE_READ: "tool.file.read",
   AGENT_SPAWNED: "tool.agent.spawned",

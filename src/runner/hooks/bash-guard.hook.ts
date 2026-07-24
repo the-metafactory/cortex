@@ -23,6 +23,43 @@
  *     pipeline (HTTP POST to the dashboard ingest endpoint, with a JSONL
  *     fallback) so blocks are observable. Best-effort — never blocks the
  *     deny decision.
+ *
+ * ## Known limitations (cortex#2343 adversarial review, 5 rounds — L1's last)
+ *
+ * This guard inspects the command STRING, not a real shell parse tree — it
+ * is a best-effort classifier against bash's word-evaluation rules and each
+ * path-checked command's own path-reading behavior, not a formal shell
+ * parser. Five adversarial rounds each found ONE way the guard's literal-
+ * token resolution diverged from what bash/the tool would actually read
+ * (tilde-user expansion, brace expansion, quote-removal, backslash-escaping,
+ * flag-glued path values) — the fix each time was to FAIL CLOSED on
+ * whatever couldn't be confidently classified/resolved, culminating in
+ * round 5's character whitelist (deny anything outside a closed safe set)
+ * and round 6's flag-value classification (deny anything `-`-prefixed that
+ * looks path-shaped). That posture — fail closed on ambiguity — is what
+ * makes this guard SAFE, but it is NOT airtight by construction the way a
+ * real parser + kernel boundary would be. The kernel sandbox (L2, EBH-2/
+ * EBH-3, `docs/design-session-sandbox.md`) is the actual boundary; this
+ * guard is Tier-0 defense-in-depth in front of it.
+ *
+ * Accepted residuals (deliberately not chased further — over-deny, not
+ * under-deny, direction):
+ *   - Bash special parameters (`$_`, `$0`, `$#`, `$@`, `$*`, `$-`, `$$`,
+ *     `$!`, `$?`) are NOT expanded by `expandUserPath`'s `$VAR`/`${VAR}`
+ *     regex (it only matches `[A-Za-z_][A-Za-z0-9_]*` identifiers) — a
+ *     token containing one still has a residual `$` after expansion and is
+ *     denied by `isUnresolvedShellToken`, even in the rare case a special
+ *     parameter would have expanded to something harmless. Over-deny, safe
+ *     direction.
+ *   - A future command added to `PATH_CHECKED_COMMANDS` with a not-yet-
+ *     modeled value-taking flag (some GNU option this review didn't
+ *     enumerate) is mitigated by round 6's path-shaped-flag-value deny —
+ *     any `-`-prefixed token containing `/`/`~`/a `.`-leading `=`-value
+ *     denies outright rather than being silently skipped — but a flag
+ *     whose value is path-shaped WITHOUT any of those characters (there is
+ *     no such known case among GNU coreutils/`file`) would not be caught by
+ *     construction. Any new addition to `PATH_CHECKED_COMMANDS` should be
+ *     reviewed against this class specifically.
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -31,6 +68,8 @@ import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
+import { isContainedIn, reduceTokenToRealPathOrReject } from "../../common/path-containment";
+import { parsePathGuardConfig } from "./path-guard.hook";
 
 interface HookInput {
   session_id?: string;
@@ -141,20 +180,63 @@ interface GuardConfigRaw {
   repos?: string[];
 }
 
-function loadConfig(): GuardConfig | null {
+/**
+ * Result of loading `CORTEX_BASH_GUARD`. Mirrors `path-guard.hook.ts`'s
+ * `parsePathGuardConfig` posture (cortex#2343 adversarial review round 4 —
+ * aligning a fail-OPEN the review flagged):
+ *
+ *   - `ok:true, config:GuardConfig` — a usable config (absent/empty env ⇒
+ *     `DEFAULT_CONFIG`; valid JSON, not disabled ⇒ the parsed config).
+ *   - `ok:true, config:null` — G-300: the principal DM explicitly disabled
+ *     the guard (`{"disabled":true}`). Distinct from `ok:false` — this is
+ *     an intentional, well-formed instruction, not a failure.
+ *   - `ok:false, config:null` — `CORTEX_BASH_GUARD` is PRESENT but
+ *     unparseable JSON, or parses to something other than an object. This
+ *     used to silently fall back to `DEFAULT_CONFIG` (fail OPEN — a
+ *     corrupted/tampered env var got the safe default instead of a deny).
+ *     Now the caller must DENY, matching `parsePathGuardConfig`'s posture:
+ *     absence/empty is a legitimate "no config" state, but a PRESENT,
+ *     malformed value is a genuine failure. `disabled`/`rules`/`repos`
+ *     fields with the WRONG type (e.g. `rules` not an array) are tolerated
+ *     (coerced via the existing `??` fallbacks) — only a JSON parse
+ *     failure or a non-object top level is treated as malformed.
+ */
+interface LoadConfigResult {
+  ok: boolean;
+  config: GuardConfig | null;
+  reason: string;
+}
+
+function loadConfig(): LoadConfigResult {
   const raw = process.env.CORTEX_BASH_GUARD;
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as GuardConfigRaw;
-      // G-300: Principal DM disables bash guard entirely
-      if (parsed.disabled) return null;
-      return {
-        rules: parsed.rules ?? DEFAULT_CONFIG.rules,
-        repos: parsed.repos ?? [],
-      };
-    } catch { /* fall through */ }
+  if (!raw) return { ok: true, config: DEFAULT_CONFIG, reason: "" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return {
+      ok: false,
+      config: null,
+      reason: `CORTEX_BASH_GUARD is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
-  return DEFAULT_CONFIG;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, config: null, reason: "CORTEX_BASH_GUARD did not parse to a JSON object" };
+  }
+
+  const guardRaw = parsed as GuardConfigRaw;
+  // G-300: Principal DM disables bash guard entirely — a well-formed
+  // instruction, not a failure.
+  if (guardRaw.disabled) return { ok: true, config: null, reason: "" };
+  return {
+    ok: true,
+    config: {
+      rules: guardRaw.rules ?? DEFAULT_CONFIG.rules,
+      repos: guardRaw.repos ?? [],
+    },
+    reason: "",
+  };
 }
 
 /**
@@ -230,6 +312,264 @@ function rejectsChaining(command: string): boolean {
   // / job-control). Same collapse trick.
   if (command.replace(/&&/g, "").includes("&")) return true;
   return false;
+}
+
+// =============================================================================
+// Path containment for read-command rules (EBH-1, cortex#2343 step 3).
+//
+// Command-shape allow (the DEFAULT_CONFIG rules above) is necessary but no
+// longer sufficient: `^cat\b` matches `cat ~/.config/metafactory/cortex/
+// system/system.yaml` with no path check. These commands additionally
+// containment-check their path argument(s) against the SAME
+// `CORTEX_PATH_GUARD` policy `path-guard.hook.ts` enforces for the file
+// tools — one resolved policy, two enforcement points (design spec DD-1).
+// =============================================================================
+
+/** Bash read commands whose path argument(s) get containment-checked. */
+const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file"]);
+
+export interface ExtractedCommandPaths {
+  /**
+   * null = the WHOLE COMMAND must be denied — a candidate path token still
+   * carries an embedded/unbalanced quote character after the whole-token
+   * strip (round 4: bash quote-removal), or a character outside the safe
+   * whitelist (round 5: bash backslash-escaping and the whole unenumerated
+   * class of char-based tricks). See {@link reason}.
+   */
+  paths: string[] | null;
+  /** Populated when `paths` is null — WHY the command must be denied. */
+  reason?: string;
+}
+
+/**
+ * cortex#2343 adversarial review round 5 — the WHITELIST that replaces
+ * blacklisting individual shell tricks. Rounds 1–4 each closed ONE
+ * predicted bypass (tilde-user, brace expansion, quote-removal) only for
+ * the review to find the NEXT unmodelled char trick — round 5 is backslash
+ * escaping: bash removes a backslash before the char it escapes
+ * (`\.` → `.`), so `cat /a/\../secret/x` reads `/a/../secret/x` while the
+ * guard's literal-token resolution saw an unescaped `\` byte and either
+ * mis-resolved it or (worse) let it through unchecked entirely.
+ *
+ * We stop predicting bash's word-evaluation rules and instead require every
+ * character in a path token to come from a closed, conservative safe set:
+ * letters, digits, and `/ . _ - ~ $ { } [ ] * ? @ : + % , =`. ANYTHING else
+ * — backslash, quotes (already denied separately, round 4), backticks,
+ * parens, `!`, `#`, `^`, whitespace, control characters, and any char-based
+ * trick not yet enumerated by an adversarial review — is OUTSIDE the set
+ * and DENIES the command. This is closed-by-construction against the whole
+ * class, not just the instances found so far, at the cost of over-denying
+ * some exotic-but-legit paths (a filename with a literal `!` or `#`, say).
+ * That is the correct trade for a security guard: the kernel sandbox (L2,
+ * EBH-2/EBH-3) is the real boundary behind this one, so an occasional
+ * legitimate command needing a wider character has an escape hatch (widen
+ * `allowedDirs`, or route through a tool other than these six bash
+ * commands) that a silently-bypassed guard does not.
+ *
+ * The reducer (`reduceTokenToRealPathOrReject`) still does all the actual
+ * `~`/`$VAR`/brace/glob interpretation — this whitelist runs BEFORE it and
+ * only ever narrows what reaches it; it never widens anything.
+ */
+const SAFE_PATH_CHAR_RE = /^[A-Za-z0-9/._~$@:+%,={}[\]*?-]*$/;
+
+/**
+ * cortex#2343 adversarial review round 6 — True when a `-`-prefixed token
+ * LOOKS like it carries a path glued to the flag, and must therefore be
+ * denied rather than blanket-skipped as "just a flag":
+ *
+ *   - the token contains a `/` anywhere (`-f/tmp/x`, `--files-from=/tmp/x`), or
+ *   - the token contains a `~` anywhere (`-f~/x`), or
+ *   - the token has a `--flag=value` form whose value starts with `.`
+ *     (`--files-from=.hidden`) — a relative/dotfile path with no `/`, which
+ *     the first two checks alone would miss.
+ *
+ * A boolean/non-path flag (`-l`, `-d`, `--mime-type`, `--color=auto`) hits
+ * none of these and is still skipped/allowed, unchanged. This function is
+ * used ONLY to decide "deny outright", never to decide "this is safe" — it
+ * has no false-negative cost in the safe direction (see the call site: a
+ * `false` result still just `continue`s past the token as before; it is
+ * NEVER treated as ok-to-resolve on its own).
+ */
+function isPathShapedFlagValue(tok: string): boolean {
+  if (tok.includes("/") || tok.includes("~")) return true;
+  const eqIdx = tok.indexOf("=");
+  if (eqIdx !== -1 && tok.slice(eqIdx + 1).startsWith(".")) return true;
+  return false;
+}
+
+/**
+ * Extract candidate path arguments from a single, already env-stripped,
+ * already-segment-split shell command string. Deliberately NOT a full shell
+ * parser: `rejectsChaining()` (above, runs BEFORE this) already refuses
+ * every construct that could smuggle a hidden argument (pipes, command
+ * substitution, backticks, redirects, background `&`, newlines), so this
+ * only has to tokenize a single simple invocation (`cat foo.txt`,
+ * `ls -la /some/dir`, `head -n 20 bar.log`).
+ *
+ * Tokens starting with `-` are treated as flags and skipped. A flag's VALUE
+ * token (e.g. the `20` in `head -n 20 file`) is NOT itself `-`-prefixed, so
+ * it falls through and is conservatively treated as a candidate path — this
+ * can under-deny (a numeric flag value resolves relative to the session's
+ * already-allowed cwd, so it almost always still resolves inside policy
+ * scope) but never OVER-denies a real flag as an escaping path.
+ *
+ * A token that is wrapped ENTIRELY in one matching pair of quotes (e.g. the
+ * whole `"my file.txt"` argument, used for a path containing a space) is
+ * unwrapped and kept — this is the one shell-quoting form we DO replicate,
+ * because it's unambiguous: the regex below only ever captures a `"…"`/`'…'`
+ * span as ONE token when it starts and ends the token, so a legitimate
+ * whole-token quote can only ever produce a clean strip.
+ *
+ * cortex#2343 adversarial review round 4 (bash quote-removal, the 4th
+ * bypass in this series): real bash performs quote-REMOVAL, including the
+ * `""`/`''` EMPTY-STRING-CONCATENATION form — `/a/""/../b` is read by bash
+ * as `/a/../b` (the empty quoted segment vanishes, so the `..` cancels the
+ * PREVIOUS segment instead of a phantom one), which silently changes which
+ * directory a `..` escapes from. We do NOT attempt to replicate this or any
+ * other embedded-quote form — tilde-user and brace-expansion were BOTH
+ * bypassed by trying to predict one more corner of shell parsing, so the
+ * line now is: don't predict, refuse. Any token that STILL contains a `"`
+ * or `'` after the whole-token strip above (an embedded quote mid-token, OR
+ * a dangling/unbalanced quote that the strip couldn't cleanly remove) DENIES
+ * THE WHOLE COMMAND — `paths: null` — rather than resolving a string that
+ * might not be the one the shell actually reads. Legitimate file reads
+ * never embed a quote character mid-path; whole-token-quoted paths (for
+ * spaces) are unaffected, since those are fully stripped clean above.
+ *
+ * cortex#2343 adversarial review round 6 (flag-value classification, the
+ * FINAL L1 round): a `-`-prefixed token was unconditionally skipped as "just
+ * a flag" — never classified as a path, so never whitelisted or reduced.
+ * `file`'s `-f`/`--files-from` and `wc`'s `--files0-from` read the PATH
+ * GLUED to the flag and can echo that file's contents back on error —
+ * `file -f/tmp/secret/x` / `file --files-from=/tmp/secret/x` exfiltrated
+ * arbitrary file content while the guard saw "just a flag" and allowed it.
+ * Fixed by {@link isPathShapedFlagValue}: any `-`-prefixed token that LOOKS
+ * like it carries a path is denied outright rather than being classified
+ * (deny-broadening only — a boolean/non-path flag like `-l`/`--mime-type`/
+ * `--color=auto` still contains none of `/`/`~`/a `.`-leading `=`-value, so
+ * it's still skipped, still allowed; this can never turn a previously-
+ * denied command into an allowed one).
+ *
+ * Exported for unit tests.
+ */
+export function extractCommandPaths(command: string): ExtractedCommandPaths {
+  const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  const paths: string[] = [];
+  for (let i = 1; i < tokens.length; i++) {
+    let tok = tokens[i];
+    if (tok === undefined) continue;
+    if (tok.startsWith("-")) {
+      if (isPathShapedFlagValue(tok)) {
+        return {
+          paths: null,
+          reason:
+            `path-shaped value glued to a flag ("${tok.slice(0, 80)}") — cannot safely ` +
+            `classify what this flag consumes, denying fail-closed`,
+        };
+      }
+      continue;
+    }
+    if (
+      (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) ||
+      (tok.startsWith("'") && tok.endsWith("'") && tok.length >= 2)
+    ) {
+      tok = tok.slice(1, -1);
+    }
+    if (tok.length === 0) continue;
+    if (tok.includes('"') || tok.includes("'")) {
+      return {
+        paths: null,
+        reason:
+          `embedded or unbalanced quote character in path argument "${tok.slice(0, 80)}" — ` +
+          `cannot safely resolve what the shell would actually run, denying fail-closed`,
+      };
+    }
+    // Round 5 fix: character WHITELIST. Do not try to interpret whatever the
+    // offending character means to bash (backslash-escape, or anything
+    // else) — a token containing ANY character outside SAFE_PATH_CHAR_RE
+    // denies the whole command.
+    if (!SAFE_PATH_CHAR_RE.test(tok)) {
+      return {
+        paths: null,
+        reason:
+          `unsafe character in path argument "${tok.slice(0, 80)}" (outside the safe ` +
+          `character whitelist) — denying fail-closed`,
+      };
+    }
+    paths.push(tok);
+  }
+  return { paths };
+}
+
+/**
+ * Containment-check every path argument of a path-checked command against
+ * `CORTEX_PATH_GUARD`. Mirrors path-guard.hook.ts's own policy semantics
+ * exactly (same parser, same "empty policy = no restriction configured"
+ * contract, same fail-closed-on-malformed-config posture) — see that file's
+ * module doc for the full rationale.
+ *
+ * cortex#2343 adversarial review round 3: every raw token reduces to zero
+ * or more real paths through {@link reduceTokenToRealPathOrReject} — the
+ * ONE shared reducer both this hook and path-guard.hook.ts call. This is
+ * what closed the root cause of the R1 (`~user`) and bash-brace-expansion
+ * bypasses: those fixes previously lived in divergent, hook-local code, so
+ * a fix landing on one surface (e.g. path-guard's Glob branch) left the
+ * other (bash-guard's command-path check) open. Exported for unit tests.
+ */
+export function checkCommandPaths(trimmedCommand: string): { allow: boolean; reason: string } {
+  const configResult = parsePathGuardConfig(process.env.CORTEX_PATH_GUARD);
+  if (!configResult.ok) {
+    return {
+      allow: false,
+      reason:
+        `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": ${configResult.reason} ` +
+        `— denying to stay fail-closed.`,
+    };
+  }
+  const { policy } = configResult;
+  if (policy.allowedDirs.length === 0 && policy.readOnlyDirs.length === 0) {
+    // No restriction configured for this session — matches the existing
+    // security-preamble.ts contract (allDirs.length === 0 ⇒ no restriction).
+    return { allow: true, reason: "" };
+  }
+
+  const extracted = extractCommandPaths(trimmedCommand);
+  if (extracted.paths === null) {
+    return {
+      allow: false,
+      reason: `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": ${extracted.reason}.`,
+    };
+  }
+  const candidatePaths = extracted.paths;
+  const cwd = process.cwd();
+
+  for (const rawPath of candidatePaths) {
+    const reduced = reduceTokenToRealPathOrReject(rawPath, cwd);
+    if (!reduced.ok) {
+      return {
+        allow: false,
+        reason:
+          `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": ${reduced.reason} ` +
+          `— denying to stay fail-closed.`,
+      };
+    }
+    for (const realPath of reduced.reals) {
+      const contained =
+        policy.allowedDirs.some((d) => isContainedIn(d, realPath)) ||
+        policy.readOnlyDirs.some((d) => isContainedIn(d, realPath));
+      if (!contained) {
+        return {
+          allow: false,
+          reason:
+            `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": path "${realPath}" ` +
+            `resolves outside every configured allowedDirs/readOnlyDirs entry (EBH-1, ` +
+            `cortex#2343). Ask the principal to widen allowedDirs if this path is genuinely ` +
+            `needed.`,
+        };
+      }
+    }
+  }
+  return { allow: true, reason: "" };
 }
 
 // =============================================================================
@@ -459,7 +799,22 @@ async function main(): Promise<void> {
   const sessionId =
     input.session_id ?? process.env.CLAUDE_SESSION_ID ?? "unknown";
 
-  const config = loadConfig();
+  const configResult = loadConfig();
+
+  // cortex#2343 adversarial review round 4 — a PRESENT but malformed
+  // CORTEX_BASH_GUARD used to silently fall back to DEFAULT_CONFIG (fail
+  // OPEN). Now it's a genuine failure: DENY, matching path-guard.hook.ts's
+  // parsePathGuardConfig posture. Absence/empty stays "no config" (handled
+  // inside loadConfig() as ok:true, config:DEFAULT_CONFIG) — only a
+  // present-but-unparseable value reaches this branch.
+  if (!configResult.ok) {
+    const reason = `[Cortex Bash Guard] Blocked: ${configResult.reason} — denying to stay fail-closed.`;
+    deny(reason);
+    await emitBlockEvent(sessionId, reason, command);
+    return;
+  }
+
+  const config = configResult.config;
 
   // G-300: Guard disabled (principal DM) — pass through, defer to the already-
   // permissive bypass session. Intentionally NOT a grant: this path is out of
@@ -556,6 +911,19 @@ async function main(): Promise<void> {
       deny(reason);
       await emitBlockEvent(sessionId, reason, command);
       return;
+    }
+
+    // EBH-1 (cortex#2343 step 3) — path-containment for the read-command
+    // rules. Runs AFTER the shape-allowlist match (matched === true), so it
+    // only tightens an already-allowed command, never widens one.
+    const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(trimmed)?.[1]?.toLowerCase();
+    if (headWord && PATH_CHECKED_COMMANDS.has(headWord)) {
+      const pathCheck = checkCommandPaths(trimmed);
+      if (!pathCheck.allow) {
+        deny(pathCheck.reason);
+        await emitBlockEvent(sessionId, pathCheck.reason, command);
+        return;
+      }
     }
   }
 

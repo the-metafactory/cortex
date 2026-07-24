@@ -34,6 +34,15 @@
             "command": "${CLAUDE_DIR}/hooks/CortexBashGuard.hook.ts"
           }
         ]
+      },
+      {
+        "matcher": "Read|Write|Edit|Glob|Grep|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_DIR}/hooks/CortexPathGuard.hook.ts"
+          }
+        ]
       }
     ]
   }
