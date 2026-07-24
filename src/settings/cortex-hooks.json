@@ -36,7 +36,7 @@
         ]
       },
       {
-        "matcher": "Read|Write|Edit|Glob|Grep",
+        "matcher": "Read|Write|Edit|Glob|Grep|NotebookEdit",
         "hooks": [
           {
             "type": "command",

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Cortex Path Guard — PreToolUse hook for the file tools (Read/Write/Edit/
- * Glob/Grep) in cortex sessions (EBH-1, cortex#2343, F1/F6).
+ * Glob/Grep/NotebookEdit) in cortex sessions (EBH-1, cortex#2343, F1/F6).
  *
  * ## Why this exists
  *
@@ -36,7 +36,7 @@
  * So instead it reads stdin to EOF (bounded by a hang-stop cap, mirroring
  * skill-guard.hook.ts's more recent, more conservative pattern) and treats
  * an empty/unparseable payload as a DENY, never a pass-through — this hook
- * is registered ONLY on the `Read|Write|Edit|Glob|Grep` matcher, so if it
+ * is registered ONLY on the `Read|Write|Edit|Glob|Grep|NotebookEdit` matcher, so if it
  * runs at all the call is one of ours to gate; an empty read means the
  * payload capture failed, not "this isn't governed".
  *
@@ -61,7 +61,7 @@ import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
-import { isContainedIn } from "../../common/path-containment";
+import { isContainedIn, expandUserPath } from "../../common/path-containment";
 
 // =============================================================================
 // Hook I/O types
@@ -73,20 +73,66 @@ interface FilePathToolInput {
 
 interface GlobGrepToolInput {
   path?: unknown;
-  pattern?: unknown; // Grep: content regex. Glob: filename glob. NEVER a path.
+  // Grep: content regex — NEVER a path. Glob: a filesystem glob — its
+  // LITERAL directory prefix (everything before the first glob metachar)
+  // IS a path and must be containment-checked (cortex#2343 adversarial
+  // review finding B2) — see {@link derivePatternGlobRoot}.
+  pattern?: unknown;
+}
+
+interface NotebookEditToolInput {
+  notebook_path?: unknown;
 }
 
 interface HookInput {
   session_id?: string;
   tool_name?: string;
-  tool_input?: FilePathToolInput | GlobGrepToolInput | string | null;
+  tool_input?: FilePathToolInput | GlobGrepToolInput | NotebookEditToolInput | string | null;
 }
 
-/** Tools this hook governs. Matches the `cortex-hooks.json` matcher exactly. */
-const GOVERNED_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep"]);
+/**
+ * Tools this hook governs. Matches the `cortex-hooks.json` matcher exactly.
+ * `NotebookEdit` added per cortex#2343 adversarial review finding B4: it is
+ * a grantable, mutating file tool (`src/common/policy/tool-inventory.ts`)
+ * that was previously omitted entirely — any stack granting it got
+ * unchecked arbitrary-path read/write via `notebook_path`. `MultiEdit` is
+ * NOT in `CLAUDE_TOOL_INVENTORY` (verified against tool-inventory.ts) — not
+ * a grantable cortex tool at this version, so it is out of scope here.
+ */
+const GOVERNED_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"]);
 
 /** Tools whose call MUTATES the filesystem — denied on a `readOnlyDirs` hit. */
-const WRITE_TOOLS = new Set(["Write", "Edit"]);
+const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
+
+/**
+ * Glob metacharacters that mark the end of a pattern's LITERAL directory
+ * prefix. `minimatch`/glob syntax uses `*`, `?`, `[...]`, and `{...}` for
+ * wildcarding — the first occurrence of any of these ends the literal
+ * (containment-checkable) portion of the pattern.
+ */
+const GLOB_METACHAR_RE = /[*?[{]/;
+
+/**
+ * Derive the containment-checkable directory prefix from a Glob `pattern`
+ * (cortex#2343 adversarial review finding B2 — Glob's `pattern`, unlike
+ * Grep's, IS a filesystem path and can itself be absolute or carry `../`
+ * traversal, e.g. `/etc/*` or `../secret/*`).
+ *
+ * Takes everything before the first glob metachar, then trims back to the
+ * last `/` in that prefix — a partial trailing SEGMENT (e.g. the `fo` in
+ * `fo*o`) is not a real directory boundary and is dropped rather than
+ * mis-containment-checked. Returns `""` when the pattern has no directory
+ * prefix worth checking (e.g. `*.ts`, `**\/*.ts`) — that case relies on the
+ * `path` field (if given) or the session's already-scoped cwd, unaffected
+ * by this fix. Exported for unit tests.
+ */
+export function derivePatternGlobRoot(pattern: string): string {
+  const metaIdx = pattern.search(GLOB_METACHAR_RE);
+  const prefix = metaIdx === -1 ? pattern : pattern.slice(0, metaIdx);
+  const lastSlash = prefix.lastIndexOf("/");
+  if (lastSlash === -1) return "";
+  return prefix.slice(0, lastSlash + 1);
+}
 
 // =============================================================================
 // CORTEX_PATH_GUARD config
@@ -163,13 +209,20 @@ export interface ExtractedPaths {
  *
  *   - Read/Write/Edit: `tool_input.file_path` — REQUIRED; missing/non-string
  *     is malformed (`paths: null`).
- *   - Glob/Grep: `tool_input.path` — OPTIONAL (both tools default to
- *     searching the invoking process's cwd when omitted, which
- *     `dispatch-handler.ts` already sets to an allowed dir — see the module
- *     doc). Absent → `paths: []` (nothing to containment-check, not a
- *     failure). `pattern` is NEVER treated as a path for either tool — for
- *     Grep it's a content regex, for Glob it's a filename glob; neither is a
- *     filesystem root.
+ *   - NotebookEdit: `tool_input.notebook_path` — REQUIRED, same treatment
+ *     (cortex#2343 finding B4).
+ *   - Grep: `tool_input.path` — OPTIONAL (defaults to searching the
+ *     invoking process's cwd when omitted, which `dispatch-handler.ts`
+ *     already sets to an allowed dir — see the module doc). Absent →
+ *     `paths: []` (nothing to containment-check, not a failure). `pattern`
+ *     is NEVER treated as a path for Grep — it's a content regex.
+ *   - Glob: `tool_input.path` (OPTIONAL root) PLUS the literal directory
+ *     prefix of `tool_input.pattern` (cortex#2343 finding B2 — unlike
+ *     Grep's, Glob's `pattern` IS a filesystem path/glob and can itself be
+ *     absolute or carry `../` traversal). A relative pattern prefix is
+ *     resolved against `path` when given; an absolute one is checked as-is
+ *     regardless of `path`. Both candidates are checked when both are
+ *     present. Neither present ⇒ `paths: []` (relies on cwd scope).
  */
 export function extractCandidatePaths(toolName: string, toolInput: HookInput["tool_input"]): ExtractedPaths {
   const input = toolInput && typeof toolInput === "object" ? toolInput : {};
@@ -180,10 +233,41 @@ export function extractCandidatePaths(toolName: string, toolInput: HookInput["to
     return { paths: [fp] };
   }
 
-  if (toolName === "Glob" || toolName === "Grep") {
+  if (toolName === "NotebookEdit") {
+    const np = (input as NotebookEditToolInput).notebook_path;
+    if (typeof np !== "string" || np.trim() === "") return { paths: null };
+    return { paths: [np] };
+  }
+
+  if (toolName === "Grep") {
     const p = (input as GlobGrepToolInput).path;
     if (typeof p !== "string" || p.trim() === "") return { paths: [] };
     return { paths: [p] };
+  }
+
+  if (toolName === "Glob") {
+    const pathField = (input as GlobGrepToolInput).path;
+    const hasExplicitPath = typeof pathField === "string" && pathField.trim() !== "";
+    const explicitPath = hasExplicitPath ? (pathField as string) : undefined;
+
+    const patternField = (input as GlobGrepToolInput).pattern;
+    const patternRoot = typeof patternField === "string" ? derivePatternGlobRoot(patternField) : "";
+
+    const paths: string[] = [];
+    if (explicitPath !== undefined) paths.push(explicitPath);
+    if (patternRoot) {
+      // Absolute prefix (e.g. `/etc/*`) is checked as-is regardless of
+      // `path`. A relative prefix resolves against `path` when given
+      // (mirrors how Glob itself would search relative to `path`); with no
+      // `path`, it's pushed as-is and resolved against cwd downstream (same
+      // treatment as every other relative candidate).
+      paths.push(
+        isAbsolute(patternRoot) || explicitPath === undefined
+          ? patternRoot
+          : join(explicitPath, patternRoot),
+      );
+    }
+    return { paths };
   }
 
   // Not a tool this hook governs (defensive — the matcher should already
@@ -349,8 +433,11 @@ export function decidePath(toolName: string, absPath: string, policy: PathGuardP
       allow: false,
       reason:
         `[Cortex Path Guard] Blocked ${toolName} "${absPath}": this path is inside a ` +
-        `READ-ONLY directory — writes are refused (closes F6, docs/security/reviews/` +
-        `2026-07-23-nws-security-review.md). Reads remain permitted.`,
+        `READ-ONLY directory — writes are refused (docs/security/reviews/` +
+        `2026-07-23-nws-security-review.md F6). Reads remain permitted. Note: this is ` +
+        `the read-only-write MECHANISM; F6 is fully closed in production once ` +
+        `dispatch-handler.ts threads a distinct readOnlyDirs value through to ` +
+        `CORTEX_PATH_GUARD on live sessions (EBH-1b).`,
     };
   }
 
@@ -438,7 +525,13 @@ async function main(): Promise<void> {
   }
 
   for (const rawPath of extracted.paths) {
-    const absPath = isAbsolute(rawPath) ? rawPath : resolvePath(process.cwd(), rawPath);
+    // B1 fix (cortex#2343 adversarial review): expand `~`/`$VAR` BEFORE
+    // isAbsolute/resolve — see the identical rationale in bash-guard.hook.ts's
+    // checkCommandPaths(). A file_path/path token of `~/.ssh/id_rsa` is not
+    // absolute on its own, so without this it gets joined onto cwd as a
+    // literal relative path and resolves harmlessly inside the allowed dir.
+    const expandedPath = expandUserPath(rawPath);
+    const absPath = isAbsolute(expandedPath) ? expandedPath : resolvePath(process.cwd(), expandedPath);
     const decision = decidePath(toolName, absPath, policy);
     if (!decision.allow) {
       deny(decision.reason);

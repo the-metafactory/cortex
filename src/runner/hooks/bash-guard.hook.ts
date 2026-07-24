@@ -31,7 +31,7 @@ import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
-import { isContainedIn } from "../../common/path-containment";
+import { isContainedIn, expandUserPath } from "../../common/path-containment";
 import { parsePathGuardConfig } from "./path-guard.hook";
 
 interface HookInput {
@@ -308,7 +308,13 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
 
   const candidatePaths = extractCommandPaths(trimmedCommand);
   for (const rawPath of candidatePaths) {
-    const absPath = isAbsolute(rawPath) ? rawPath : resolvePath(process.cwd(), rawPath);
+    // B1 fix (cortex#2343 adversarial review): expand `~`/`$VAR` BEFORE
+    // isAbsolute/resolve — otherwise `~/.ssh/id_rsa` or `$HOME/.ssh/id_rsa`
+    // isn't recognised as absolute, gets joined onto cwd as a LITERAL
+    // relative path, and resolves harmlessly inside the allowed dir while
+    // the real shell reads the actual home directory outside it.
+    const expandedPath = expandUserPath(rawPath);
+    const absPath = isAbsolute(expandedPath) ? expandedPath : resolvePath(process.cwd(), expandedPath);
     const contained =
       policy.allowedDirs.some((d) => isContainedIn(d, absPath)) ||
       policy.readOnlyDirs.some((d) => isContainedIn(d, absPath));

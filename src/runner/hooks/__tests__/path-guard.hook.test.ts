@@ -3,25 +3,43 @@
  *
  * Covers every acceptance-criterion bullet from issue #2343:
  *   - Read/Write/Edit/Glob/Grep of a path outside `allowedDirs` → deny.
- *   - Write/Edit targeting a `readOnlyDir` → deny (F6); Read → allow.
+ *   - Write/Edit/NotebookEdit targeting a `readOnlyDir` → deny (the
+ *     read-only-write MECHANISM this hook enforces; F6 goes fully live once
+ *     dispatch-handler.ts threads a distinct readOnlyDirs through to
+ *     CORTEX_PATH_GUARD on live sessions — EBH-1b, a separate slice); Read →
+ *     allow.
  *   - A symlink INSIDE an allowed dir pointing OUTSIDE it → deny (realpath'd
  *     before the containment check).
  *   - Non-cortex session (no CORTEX_CHANNEL) → pass through, no behavior change.
  *   - Fail-closed on malformed CORTEX_PATH_GUARD / unreadable stdin.
  *   - Pure-function unit coverage for parsePathGuardConfig / extractCandidatePaths
  *     / decidePath, mirroring bash-guard.hook.test.ts's style.
+ *
+ * Plus the cortex#2343 adversarial-review fixes (B1/B2/B4):
+ *   - B1: `~`/`$VAR` in a file_path/path token must expand to the REAL path
+ *     before containment (a naive isAbsolute/resolve on the raw token treats
+ *     `~/.ssh/id_rsa` as a literal relative path under cwd — the "guard
+ *     checks a different path than the shell runs" bypass).
+ *   - B2: Glob's `pattern` argument is itself a path (unlike Grep's, which
+ *     is a content regex) — its literal directory prefix must be
+ *     containment-checked too, closing an unchecked absolute-pattern /
+ *     `../` traversal-via-pattern hole.
+ *   - B4: `NotebookEdit` is a grantable, mutating file tool
+ *     (tool-inventory.ts) that the matcher/GOVERNED_TOOLS previously
+ *     omitted entirely — any stack granting it got unchecked file access.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, existsSync, readFileSync, readdirSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { tmpdir, homedir } from "os";
 import {
   parsePathGuardConfig,
   extractCandidatePaths,
   decidePath,
 } from "../path-guard.hook";
+import { expandUserPath } from "../../../common/path-containment";
 
 const HOOK_PATH = join(import.meta.dir, "..", "path-guard.hook.ts");
 
@@ -57,6 +75,7 @@ function runHook(
   toolInput: Record<string, unknown>,
   env: Record<string, string | undefined>,
   sessionId = "test-session",
+  cwd?: string,
 ): RunResult {
   const input = JSON.stringify({
     session_id: sessionId,
@@ -75,6 +94,7 @@ function runHook(
     encoding: "utf-8",
     input,
     env: merged,
+    ...(cwd !== undefined && { cwd }),
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -208,13 +228,13 @@ describe("decidePath", () => {
     expect(d.allow).toBe(true);
   });
 
-  test("Write inside readOnlyDir ⇒ deny (F6)", () => {
+  test("Write inside readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
     const d = decidePath("Write", join(readOnlyDir, "f.txt"), { allowedDirs: [], readOnlyDirs: [readOnlyDir] });
     expect(d.allow).toBe(false);
     expect(d.reason).toContain("READ-ONLY");
   });
 
-  test("Edit inside readOnlyDir ⇒ deny (F6)", () => {
+  test("Edit inside readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
     const d = decidePath("Edit", join(readOnlyDir, "f.txt"), { allowedDirs: [], readOnlyDirs: [readOnlyDir] });
     expect(d.allow).toBe(false);
   });
@@ -323,7 +343,7 @@ describe("path-guard.hook — containment enforcement (spawned)", () => {
     });
   }
 
-  test("Write into readOnlyDir ⇒ deny (closes F6)", () => {
+  test("Write into readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
     const r = runHook("Write", { file_path: join(readOnlyDir, "secret.yaml") }, policyEnv());
     expect(r.status).toBe(0);
     expectDenyDecision(r.stdout);
@@ -331,7 +351,7 @@ describe("path-guard.hook — containment enforcement (spawned)", () => {
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("READ-ONLY");
   });
 
-  test("Edit into readOnlyDir ⇒ deny (closes F6)", () => {
+  test("Edit into readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
     const r = runHook(
       "Edit",
       { file_path: join(readOnlyDir, "secret.yaml"), old_string: "a", new_string: "b" },
@@ -475,5 +495,244 @@ describe("path-guard.hook — block telemetry", () => {
     expect(r.status).toBe(0);
     const rawFile = join(homeDir, ".claude", "events", "raw", `${sessionId}.jsonl`);
     expect(existsSync(rawFile)).toBe(false);
+  });
+});
+
+// =============================================================================
+// B1 (CRITICAL) — `~`/`$VAR` must expand to the REAL path before containment.
+// =============================================================================
+
+describe("expandUserPath (B1 fix)", () => {
+  test("bare ~ expands to HOME", () => {
+    expect(expandUserPath("~")).toBe(process.env.HOME ?? homedir());
+  });
+
+  test("~/ prefix expands to HOME", () => {
+    expect(expandUserPath("~/.ssh/id_rsa")).toBe((process.env.HOME ?? homedir()) + "/.ssh/id_rsa");
+  });
+
+  test("$HOME expands via process.env", () => {
+    const prev = process.env.HOME;
+    process.env.HOME = "/fake/home";
+    try {
+      expect(expandUserPath("$HOME/.ssh/id_rsa")).toBe("/fake/home/.ssh/id_rsa");
+    } finally {
+      process.env.HOME = prev;
+    }
+  });
+
+  test("${VAR} braced form expands", () => {
+    const prev = process.env.EBH1_TEST_VAR;
+    process.env.EBH1_TEST_VAR = "/somewhere";
+    try {
+      expect(expandUserPath("${EBH1_TEST_VAR}/leak")).toBe("/somewhere/leak");
+    } finally {
+      if (prev === undefined) delete process.env.EBH1_TEST_VAR;
+      else process.env.EBH1_TEST_VAR = prev;
+    }
+  });
+
+  test("unset $VAR expands to empty string (matches real shell)", () => {
+    delete process.env.EBH1_DEFINITELY_UNSET;
+    expect(expandUserPath("$EBH1_DEFINITELY_UNSET/leak")).toBe("/leak");
+  });
+
+  test("a plain path with no ~ or $ is unchanged", () => {
+    expect(expandUserPath("/a/b/c.txt")).toBe("/a/b/c.txt");
+    expect(expandUserPath("relative/file.ts")).toBe("relative/file.ts");
+  });
+});
+
+describe("path-guard.hook — B1: ~/$VAR expansion before containment (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-b1-"));
+    allowedDir = join(root, "allowed");
+    fakeHome = join(root, "fakehome");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(join(fakeHome, ".ssh"), { recursive: true });
+    writeFileSync(join(fakeHome, ".ssh", "id_rsa"), "fake-key\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      HOME: fakeHome,
+    };
+  }
+
+  test("Read with file_path '~/.ssh/id_rsa' (HOME outside allowedDirs) ⇒ deny, cwd inside allowedDir", () => {
+    const r = runHook("Read", { file_path: "~/.ssh/id_rsa" }, policyEnv(), "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("Read with file_path '$HOME/.ssh/id_rsa' (HOME outside allowedDirs) ⇒ deny, cwd inside allowedDir", () => {
+    const r = runHook("Read", { file_path: "$HOME/.ssh/id_rsa" }, policyEnv(), "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("control: Read with file_path '/etc/hosts' still denies (sanity)", () => {
+    const r = runHook("Read", { file_path: "/etc/hosts" }, policyEnv(), "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("legitimate '~/...' path that DOES resolve inside allowedDirs still allows", () => {
+    // allowedDirs itself is configured as an absolute path here (not under
+    // HOME), so exercise the positive case with HOME pointed AT allowedDir's
+    // parent so `~/allowed/...` resolves into policy scope.
+    const homeAsRoot = root; // HOME = root, allowedDir = root/allowed
+    const r = runHook(
+      "Read",
+      { file_path: "~/allowed/ok.txt" },
+      {
+        CORTEX_CHANNEL: "test",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+        HOME: homeAsRoot,
+      },
+      "test-session",
+      allowedDir,
+    );
+    // File doesn't need to exist for Read to be judged in-policy by the
+    // guard (existence is the tool's concern, not the guard's) — only
+    // containment matters here.
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+
+// =============================================================================
+// B2 — Glob's `pattern` argument is itself a path (unlike Grep's).
+// =============================================================================
+
+describe("path-guard.hook — B2: Glob pattern path-traversal (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-b2-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "leak.txt"), "nope\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  test("Glob with an ABSOLUTE pattern outside allowedDirs (no `path` field) ⇒ deny", () => {
+    const r = runHook("Glob", { pattern: `${secretDir}/*` }, policyEnv());
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("Glob with path=allowedDir and a `../` traversal pattern ⇒ deny", () => {
+    const r = runHook("Glob", { path: allowedDir, pattern: "../secret/*" }, policyEnv());
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("Glob with a harmless relative pattern (no path prefix) still allows", () => {
+    const r = runHook("Glob", { pattern: "*.ts" }, policyEnv());
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("Glob with a relative directory-prefixed pattern resolving INSIDE allowedDirs allows", () => {
+    mkdirSync(join(allowedDir, "src"), { recursive: true });
+    const r = runHook("Glob", { path: allowedDir, pattern: "src/**/*.ts" }, policyEnv());
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("Grep's `pattern` (content regex) is still NEVER treated as a path even after the B2 fix", () => {
+    const r = runHook("Grep", { pattern: secretDir }, policyEnv());
+    expect(r.status).toBe(0);
+    // No `path` field given ⇒ nothing to containment-check for Grep ⇒ allow
+    // (relies on session cwd scope, unaffected by the B2 Glob-only fix).
+    expectGrantDecision(r.stdout);
+  });
+});
+
+// =============================================================================
+// B4 — NotebookEdit must be governed (was a complete bypass before the fix).
+// =============================================================================
+
+describe("path-guard.hook — B4: NotebookEdit coverage (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-b4-"));
+    allowedDir = join(root, "allowed");
+    outsideDir = join(root, "outside");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, "secret.ipynb"), "{}\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  test("NotebookEdit outside allowedDirs ⇒ deny (was pass-through before the fix)", () => {
+    const r = runHook("NotebookEdit", { notebook_path: join(outsideDir, "secret.ipynb") }, policyEnv());
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("NotebookEdit inside allowedDirs ⇒ allow", () => {
+    const r = runHook("NotebookEdit", { notebook_path: join(allowedDir, "nb.ipynb") }, policyEnv());
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("NotebookEdit into a readOnlyDir ⇒ deny (mutating tool, same as Write/Edit)", () => {
+    const readOnlyDir = join(root, "readonly");
+    mkdirSync(readOnlyDir, { recursive: true });
+    const r = runHook(
+      "NotebookEdit",
+      { notebook_path: join(readOnlyDir, "nb.ipynb") },
+      {
+        CORTEX_CHANNEL: "test",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [], readOnlyDirs: [readOnlyDir] }),
+      },
+    );
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("NotebookEdit with no notebook_path (malformed) under an active policy ⇒ deny", () => {
+    const r = runHook("NotebookEdit", {}, policyEnv());
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
   });
 });

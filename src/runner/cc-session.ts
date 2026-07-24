@@ -45,8 +45,12 @@ export interface CCSessionOpts {
    * EBH-1 (cortex#2343) — directories the session may READ but not modify.
    * Passed to path-guard.hook.ts / bash-guard.hook.ts's path checks via the
    * `CORTEX_PATH_GUARD` env var (mirrors `allowedDirs`'s own role there).
-   * Distinct from `allowedDirs` so a write into one of these is DENIED
-   * (closes F6) while a read is permitted — see {@link resolvePathGuardEnv}.
+   * Distinct from `allowedDirs` so a write into one of these is DENIED while
+   * a read is permitted — see {@link resolvePathGuardEnv}. NOTE: this field
+   * is wired and unit-tested but NOT YET populated by any live dispatch
+   * path (dispatch-handler.ts still flattens readOnlyDirs into the merged
+   * allowedDirs list it builds) — F6 closes in production once that
+   * threading lands (EBH-1b, a separate slice).
    */
   readOnlyDirs?: string[];
   timeoutMs?: number;

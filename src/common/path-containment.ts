@@ -36,6 +36,52 @@ export function expandHome(path: string): string {
 }
 
 /**
+ * Expand shell-style `~`/`~/` and `$VAR`/`${VAR}` references in a raw path
+ * token to the values a real shell would substitute — BEFORE the token is
+ * ever classified as absolute/relative or joined with a cwd.
+ *
+ * Without this, a token like `~/.ssh/id_rsa` or `$HOME/.ssh/id_rsa` is NOT
+ * absolute (`path.isAbsolute` doesn't know shell syntax), so a naive
+ * `resolve(cwd, token)` treats it as a LITERAL relative path
+ * (`<cwd>/~/.ssh/id_rsa`) — which usually resolves harmlessly inside an
+ * allowed dir — while the real shell/tool expands it to the ACTUAL home
+ * directory, almost always OUTSIDE the sandbox. This is the "guard checks a
+ * different path than the shell runs" bypass (cortex#2343 adversarial
+ * review finding B1). Every raw path token extracted from a tool call or a
+ * Bash command MUST be passed through this BEFORE `isAbsolute`/`resolve`.
+ *
+ * Rules (the subset of POSIX shell expansion that matters for a path
+ * argument):
+ *   - A single leading `~` or `~/` expands to `process.env.HOME`.
+ *   - `$VAR` / `${VAR}` anywhere in the string expands to `process.env.VAR`
+ *     — an UNSET var expands to the EMPTY STRING, exactly like a real shell
+ *     (`echo $NOPE` prints nothing) — never left as a literal `$VAR`
+ *     substring that could dodge containment by resolving to a path that
+ *     doesn't match anything in particular.
+ *
+ * Deliberately NOT handled:
+ *   - Command substitution `$(...)` / backticks, glob expansion, `~otheruser`
+ *     forms, and full shell quote-removal/word-splitting semantics.
+ *     `rejectsChaining()` in bash-guard.hook.ts already refuses any command
+ *     containing `$(`/backticks BEFORE any path check runs, so a token
+ *     carrying one never reaches this function from that hook.
+ *   - path-guard.hook.ts's file-tool inputs aren't shell-evaluated at all;
+ *     `~`/`$VAR` expansion there is pure defense-in-depth (this hook has no
+ *     way to know whether the specific tool implementation would itself
+ *     expand them before touching the filesystem).
+ */
+export function expandUserPath(raw: string): string {
+  const homeExpanded = expandHome(raw);
+  return homeExpanded.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+    (_match: string, braced: string | undefined, bare: string | undefined) => {
+      const name = braced ?? bare ?? "";
+      return process.env[name] ?? "";
+    },
+  );
+}
+
+/**
  * True when `realTarget` is `realBase` itself or a path underneath it.
  * Both arguments MUST already be realpath'd (symlinks resolved) — this
  * function does no I/O, it only compares strings. Exported so callers that
@@ -118,9 +164,9 @@ export function resolveProspectiveRealpath(absPath: string): RealpathResolution 
  * "contained".
  */
 export function isContainedIn(baseDir: string, candidatePath: string): boolean {
-  const realBaseRes = resolveProspectiveRealpath(expandHome(baseDir));
+  const realBaseRes = resolveProspectiveRealpath(expandUserPath(baseDir));
   if (!realBaseRes.ok) return false;
-  const realCandidateRes = resolveProspectiveRealpath(expandHome(candidatePath));
+  const realCandidateRes = resolveProspectiveRealpath(expandUserPath(candidatePath));
   if (!realCandidateRes.ok) return false;
   return isWithin(realBaseRes.real, realCandidateRes.real);
 }

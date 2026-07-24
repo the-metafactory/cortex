@@ -157,7 +157,7 @@ provides:
       matcher: Bash
     - event: PreToolUse
       command: ${PAI_DIR}/hooks/CortexPathGuard.hook.ts
-      matcher: Read|Write|Edit|Glob|Grep
+      matcher: Read|Write|Edit|Glob|Grep|NotebookEdit
 
 # Capability declarations (cortex#2285 C1 honesty pass, house rule: an
 # undeclared capability is a security bug). First deliberate review of this

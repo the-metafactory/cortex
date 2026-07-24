@@ -75,6 +75,7 @@ function runHook(
   env: Record<string, string | undefined>,
   toolName = "Bash",
   sessionId = "test-session",
+  cwd?: string,
 ): RunResult {
   const input = JSON.stringify({
     session_id: sessionId,
@@ -95,6 +96,7 @@ function runHook(
     encoding: "utf-8",
     input,
     env: merged,
+    ...(cwd !== undefined && { cwd }),
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -1266,5 +1268,77 @@ describe("bash-guard.hook — path containment for read commands (EBH-1, cortex#
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout.trim());
     expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+});
+
+// =============================================================================
+// B1 (CRITICAL, cortex#2343 adversarial review) — `~`/`$VAR` must expand to
+// the REAL path before the containment check, or the guard checks a
+// DIFFERENT path than the shell actually runs (a token like
+// `~/.ssh/id_rsa` / `$HOME/.ssh/id_rsa` is not absolute, so a naive
+// resolve(cwd, token) treats it as a literal relative path under an
+// already-allowed cwd — silently ALLOWING an escape into the real home dir).
+// =============================================================================
+describe("bash-guard.hook — B1: ~/$VAR expansion before path containment", () => {
+  let root: string;
+  let allowedDir: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-b1-"));
+    allowedDir = join(root, "allowed");
+    fakeHome = join(root, "fakehome");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(join(fakeHome, ".ssh"), { recursive: true });
+    writeFileSync(join(fakeHome, ".ssh", "id_rsa"), "fake-key\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      HOME: fakeHome,
+    };
+  }
+
+  test("DENY 'cat $HOME/.ssh/id_rsa' when HOME is outside allowedDirs, cwd inside allowedDir", () => {
+    const r = runHook("cat $HOME/.ssh/id_rsa", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("DENY 'cat ~/.ssh/id_rsa' when HOME is outside allowedDirs, cwd inside allowedDir", () => {
+    const r = runHook("cat ~/.ssh/id_rsa", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("control: 'cat /etc/hosts' still denies (sanity — proves the policy IS active)", () => {
+    const r = runHook("cat /etc/hosts", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("legitimate 'cat ~/allowed/ok.txt' resolving INSIDE allowedDirs still grants", () => {
+    const r = runHook(
+      `cat ~/allowed/ok.txt`,
+      {
+        CORTEX_CHANNEL: "test-channel",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+        HOME: root, // ~/allowed resolves to <root>/allowed === allowedDir
+      },
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
   });
 });
