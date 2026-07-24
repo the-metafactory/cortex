@@ -257,8 +257,7 @@ export function extractCandidatePaths(
 
   if (toolName === "Glob") {
     const pathField = (input as GlobGrepToolInput).path;
-    const hasExplicitPath = typeof pathField === "string" && pathField.trim() !== "";
-    const explicitPath = hasExplicitPath ? (pathField as string) : undefined;
+    const explicitPath = typeof pathField === "string" && pathField.trim() !== "" ? pathField : undefined;
     const patternField = (input as GlobGrepToolInput).pattern;
 
     const tokens: CandidateToken[] = [];
@@ -427,7 +426,7 @@ export function decidePath(toolName: string, absPath: string, policy: PathGuardP
     };
   }
 
-  if (WRITE_TOOLS.has(toolName) && inReadOnly && !inAllowed) {
+  if (WRITE_TOOLS.has(toolName) && inReadOnly) {
     return {
       allow: false,
       reason:
