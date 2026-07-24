@@ -3,7 +3,8 @@
 **Prepared by:** NorthWoods Sentinel Labs (Rob Chuvala)
 **For:** Andreas Åström / the-metafactory
 **Date:** 2026-07-23
-**Subject:** `the-metafactory/cortex` — M7 collaboration surface for the Myelin stack
+**Subject:** `the-metafactory/cortex` — M7 collaboration surface for the Myelin stack <!-- vocab-allow: verbatim external review — third-party author's original "Myelin stack" wording preserved -->
+
 **Repository state:** commit `f6f4b06d5fdd412350225a79bc21fed3689ad87f` (`v6.11.0`, main, cloned 2026-07-23)
 **Classification:** Confidential. Findings are as of the commit above and the surfaces named in §2 — not a whole-repository audit.
 
