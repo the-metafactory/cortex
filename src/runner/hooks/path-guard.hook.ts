@@ -55,13 +55,13 @@
  * object) is a genuine failure, not "empty" — DENY.
  */
 
-import { isAbsolute, join, resolve as resolvePath } from "path";
+import { join } from "path";
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
 import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
-import { isContainedIn, expandUserPath, isUnresolvedShellToken } from "../../common/path-containment";
+import { isContainedIn, reduceTokenToRealPathOrReject } from "../../common/path-containment";
 
 // =============================================================================
 // Hook I/O types
@@ -103,91 +103,6 @@ const GOVERNED_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep", "Notebo
 
 /** Tools whose call MUTATES the filesystem — denied on a `readOnlyDirs` hit. */
 const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
-
-/**
- * Glob metacharacters that mark the end of a pattern's LITERAL directory
- * prefix, EXCLUDING `{` — brace groups are handled separately by
- * {@link expandBraceAlternatives} so their CONTENTS get inspected rather
- * than treated as an opaque metachar boundary (cortex#2343 adversarial
- * review round 2, finding R2: `{../secret,x}/*` used to stop at `{` and
- * never see the `../secret` traversal hiding inside it).
- */
-const GLOB_METACHAR_RE = /[*?[]/;
-
-/**
- * Derive the containment-checkable directory prefix from a single Glob
- * pattern ALTERNATIVE (braces already resolved — see
- * {@link expandBraceAlternatives}). Takes everything before the first glob
- * metachar, then trims back to the last `/` in that prefix — a partial
- * trailing SEGMENT (e.g. the `fo` in `fo*o`) is not a real directory
- * boundary and is dropped rather than mis-containment-checked. Returns `""`
- * when the pattern has no directory prefix worth checking (e.g. `*.ts`,
- * `**\/*.ts`) — that case relies on the `path` field (if given) or the
- * session's already-scoped cwd. Exported for unit tests.
- */
-export function derivePatternGlobRoot(pattern: string): string {
-  const metaIdx = pattern.search(GLOB_METACHAR_RE);
-  const prefix = metaIdx === -1 ? pattern : pattern.slice(0, metaIdx);
-  const lastSlash = prefix.lastIndexOf("/");
-  if (lastSlash === -1) return "";
-  return prefix.slice(0, lastSlash + 1);
-}
-
-export type BraceExpansionResult =
-  | { kind: "none" } // no brace group at all — treat `pattern` as the sole alternative
-  | { kind: "expanded"; alternatives: string[] } // one clean brace group, resolved
-  | { kind: "ambiguous" }; // nested/unbalanced/multiple brace groups — FAIL CLOSED
-
-/**
- * Expand ONE level of brace alternatives in a Glob pattern:
- * `"{a,b,c}/x"` → `["a/x", "b/x", "c/x"]` (cortex#2343 adversarial review
- * round 2, finding R2 — `derivePatternGlobRoot` alone stops at the first
- * metachar, so `{../secret,x}/*` never got its `../secret` alternative
- * inspected at all).
- *
- * FAILS CLOSED (`kind: "ambiguous"`) rather than guessing on anything this
- * simple one-level parser can't confidently handle: a nested brace group
- * inside the first one, more than one top-level brace group, or an
- * unbalanced `{`/`}`. The instruction from the adversarial review is
- * explicit: "if brace parsing is at all uncertain, DENY the pattern" —
- * legitimate Glob patterns never need nested/multiple brace groups, so
- * denying that shape costs nothing real. Exported for unit tests.
- */
-export function expandBraceAlternatives(pattern: string): BraceExpansionResult {
-  const firstOpen = pattern.indexOf("{");
-  if (firstOpen === -1) return { kind: "none" };
-
-  const firstClose = pattern.indexOf("}", firstOpen);
-  if (firstClose === -1) return { kind: "ambiguous" }; // unbalanced
-
-  const inner = pattern.slice(firstOpen + 1, firstClose);
-  if (inner.includes("{") || inner.includes("}")) return { kind: "ambiguous" }; // nested
-
-  const rest = pattern.slice(firstClose + 1);
-  if (rest.includes("{") || rest.includes("}")) return { kind: "ambiguous" }; // a second group
-
-  const prefix = pattern.slice(0, firstOpen);
-  const options = inner.split(",");
-  const alternatives = options.map((opt) => prefix + opt + rest);
-  return { kind: "expanded", alternatives };
-}
-
-/**
- * True when `patternRoot` (a derived literal directory prefix — may be `""`
- * when the pattern has none) is inherently unsafe for a Glob `pattern`
- * argument: absolute, or carrying a `..` path segment. Per the adversarial
- * review: "legit globs never need `..`, absolute, or escaping braces" — a
- * risky alternative denies the WHOLE Glob call outright rather than being
- * handed to the normal containment check (which could, in principle, still
- * ALLOW an absolute pattern that happens to resolve inside scope — the
- * review wants a strictly narrower, unconditional rule for Glob's pattern
- * argument specifically). Exported for unit tests.
- */
-export function isRiskyGlobPatternRoot(patternRoot: string): boolean {
-  if (patternRoot === "") return false;
-  if (isAbsolute(patternRoot)) return true;
-  return patternRoot.split("/").some((segment) => segment === "..");
-}
 
 // =============================================================================
 // CORTEX_PATH_GUARD config
@@ -253,122 +168,110 @@ export function parsePathGuardConfig(raw: string | undefined): PathGuardConfigRe
 // tool_input path extraction
 // =============================================================================
 
+/**
+ * A raw path/pattern token this hook must reduce+containment-check, paired
+ * with the BASE directory it resolves against when relative. Almost always
+ * `process.cwd()`; the one exception is a Glob `pattern`'s literal prefix,
+ * which resolves against `path` when the call ALSO supplied one (mirroring
+ * how Glob itself would search relative to `path`) — see the Glob branch
+ * below.
+ */
+export interface CandidateToken {
+  raw: string;
+  base: string;
+}
+
 export interface ExtractedPaths {
   /**
-   * null = the call must be DENIED for this tool — either a required path is
-   * missing (malformed call), or (Glob only) the `pattern` argument is
-   * itself unsafe/ambiguous (absolute, carries a `..` segment, or brace
-   * parsing was uncertain — cortex#2343 adversarial review round 2, R2).
+   * null = the call must be DENIED for this tool — a required path is
+   * missing (malformed call). Any AMBIGUITY/RISK in a token's shell/brace/
+   * glob syntax is now detected uniformly by the shared
+   * {@link reduceTokenToRealPathOrReject} reducer at containment-check
+   * time (cortex#2343 adversarial review round 3), not here.
    */
-  paths: string[] | null;
-  /** Populated when `paths` is null — WHY the call must be denied. Falls
+  tokens: CandidateToken[] | null;
+  /** Populated when `tokens` is null — WHY the call must be denied. Falls
    *  back to a generic reason at the call site when absent. */
   reason?: string;
 }
 
 /**
- * Extract the filesystem path(s) this tool call touches, for the tools this
- * hook governs. Exported for unit tests.
+ * Extract the raw filesystem path/pattern token(s) this tool call touches,
+ * for the tools this hook governs. Exported for unit tests. Deliberately
+ * does NO shell/brace/wildcard interpretation itself — that is entirely
+ * {@link reduceTokenToRealPathOrReject}'s job now (cortex#2343 adversarial
+ * review round 3: unifying the token→real-path reduction into ONE shared
+ * function is what stops a fix from landing on one hook/surface and
+ * missing the other).
  *
  *   - Read/Write/Edit: `tool_input.file_path` — REQUIRED; missing/non-string
- *     is malformed (`paths: null`).
+ *     is malformed (`tokens: null`).
  *   - NotebookEdit: `tool_input.notebook_path` — REQUIRED, same treatment
  *     (cortex#2343 finding B4).
  *   - Grep: `tool_input.path` — OPTIONAL (defaults to searching the
  *     invoking process's cwd when omitted, which `dispatch-handler.ts`
  *     already sets to an allowed dir — see the module doc). Absent →
- *     `paths: []` (nothing to containment-check, not a failure). `pattern`
+ *     `tokens: []` (nothing to containment-check, not a failure). `pattern`
  *     is NEVER treated as a path for Grep — it's a content regex.
- *   - Glob: `tool_input.path` (OPTIONAL root) PLUS the literal directory
- *     prefix of `tool_input.pattern` (cortex#2343 finding B2 — unlike
- *     Grep's, Glob's `pattern` IS a filesystem path/glob and can itself be
- *     absolute or carry `../` traversal). A relative pattern prefix is
- *     resolved against `path` when given; an absolute one is checked as-is
- *     regardless of `path`. Both candidates are checked when both are
- *     present. Neither present ⇒ `paths: []` (relies on cwd scope).
+ *   - Glob: `tool_input.path` (OPTIONAL root, base=cwd) PLUS
+ *     `tool_input.pattern` itself (cortex#2343 finding B2 — unlike Grep's,
+ *     Glob's `pattern` IS a filesystem path/glob and can itself be absolute
+ *     or carry `../` traversal) — the pattern token's `base` is `path` when
+ *     given, else cwd, so the reducer resolves a relative pattern prefix
+ *     the same way Glob itself would search relative to `path`.
  */
-export function extractCandidatePaths(toolName: string, toolInput: HookInput["tool_input"]): ExtractedPaths {
+export function extractCandidatePaths(
+  toolName: string,
+  toolInput: HookInput["tool_input"],
+  cwd: string,
+): ExtractedPaths {
   const input = toolInput && typeof toolInput === "object" ? toolInput : {};
 
   if (toolName === "Read" || toolName === "Write" || toolName === "Edit") {
     const fp = (input as FilePathToolInput).file_path;
-    if (typeof fp !== "string" || fp.trim() === "") return { paths: null };
-    return { paths: [fp] };
+    if (typeof fp !== "string" || fp.trim() === "") {
+      return {
+        tokens: null,
+        reason: `[Cortex Path Guard] Blocked ${toolName}: no resolvable file_path in the tool input — denying to stay fail-closed.`,
+      };
+    }
+    return { tokens: [{ raw: fp, base: cwd }] };
   }
 
   if (toolName === "NotebookEdit") {
     const np = (input as NotebookEditToolInput).notebook_path;
-    if (typeof np !== "string" || np.trim() === "") return { paths: null };
-    return { paths: [np] };
+    if (typeof np !== "string" || np.trim() === "") {
+      return {
+        tokens: null,
+        reason: `[Cortex Path Guard] Blocked NotebookEdit: no resolvable notebook_path in the tool input — denying to stay fail-closed.`,
+      };
+    }
+    return { tokens: [{ raw: np, base: cwd }] };
   }
 
   if (toolName === "Grep") {
     const p = (input as GlobGrepToolInput).path;
-    if (typeof p !== "string" || p.trim() === "") return { paths: [] };
-    return { paths: [p] };
+    if (typeof p !== "string" || p.trim() === "") return { tokens: [] };
+    return { tokens: [{ raw: p, base: cwd }] };
   }
 
   if (toolName === "Glob") {
     const pathField = (input as GlobGrepToolInput).path;
     const hasExplicitPath = typeof pathField === "string" && pathField.trim() !== "";
     const explicitPath = hasExplicitPath ? (pathField as string) : undefined;
-
     const patternField = (input as GlobGrepToolInput).pattern;
-    const paths: string[] = [];
-    if (explicitPath !== undefined) paths.push(explicitPath);
 
+    const tokens: CandidateToken[] = [];
+    if (explicitPath !== undefined) tokens.push({ raw: explicitPath, base: cwd });
     if (typeof patternField === "string") {
-      // R2 fix (cortex#2343 adversarial review round 2): brace-aware
-      // traversal/absolute check. Expand ONE level of brace alternatives
-      // FIRST — `{../secret,x}/*` must have its `../secret` alternative
-      // inspected, not hidden behind the `{` metachar boundary — then
-      // treat every alternative (or the pattern itself, when there are no
-      // braces) identically: any alternative whose derived literal
-      // directory prefix is absolute or carries a `..` segment DENIES the
-      // WHOLE Glob call outright (fail-closed; "legit globs never need
-      // `..`, absolute, or escaping braces"). Ambiguous brace parsing
-      // (nested/unbalanced/multiple groups) denies outright too.
-      const braceResult = expandBraceAlternatives(patternField);
-      const alternatives = braceResult.kind === "expanded" ? braceResult.alternatives : [patternField];
-
-      if (braceResult.kind === "ambiguous") {
-        return {
-          paths: null,
-          reason:
-            `[Cortex Path Guard] Blocked Glob: pattern "${patternField}" has brace syntax ` +
-            `this guard cannot confidently parse (nested, unbalanced, or multiple brace ` +
-            `groups) — denying to stay fail-closed.`,
-        };
-      }
-
-      for (const alt of alternatives) {
-        const altRoot = derivePatternGlobRoot(alt);
-        if (isRiskyGlobPatternRoot(altRoot)) {
-          return {
-            paths: null,
-            reason:
-              `[Cortex Path Guard] Blocked Glob: pattern "${patternField}" resolves to an ` +
-              `absolute path or a ".." traversal segment ("${altRoot}") — Glob's pattern ` +
-              `argument may never be absolute or traverse outside its root; use the ` +
-              `\`path\` argument to point at a different (allowed) root instead.`,
-          };
-        }
-        if (altRoot) {
-          // Safe relative prefix — resolves against `path` when given
-          // (mirrors how Glob itself would search relative to `path`);
-          // with no `path`, pushed as-is and resolved against cwd
-          // downstream (same treatment as every other relative candidate).
-          paths.push(explicitPath === undefined ? altRoot : join(explicitPath, altRoot));
-        }
-      }
+      tokens.push({ raw: patternField, base: explicitPath ?? cwd });
     }
-
-    return { paths };
+    return { tokens };
   }
 
   // Not a tool this hook governs (defensive — the matcher should already
   // exclude this call from ever reaching us).
-  return { paths: [] };
+  return { tokens: [] };
 }
 
 // =============================================================================
@@ -599,18 +502,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  const extracted = extractCandidatePaths(toolName, input.tool_input);
-  if (extracted.paths === null) {
+  const extracted = extractCandidatePaths(toolName, input.tool_input, process.cwd());
+  if (extracted.tokens === null) {
     const reason =
       extracted.reason ??
-      `[Cortex Path Guard] Blocked ${toolName}: no resolvable file_path in the tool ` +
+      `[Cortex Path Guard] Blocked ${toolName}: no resolvable path argument in the tool ` +
         `input — denying to stay fail-closed.`;
     deny(reason);
     await emitBlockEvent(sessionId, reason, toolName, "");
     return;
   }
 
-  if (extracted.paths.length === 0) {
+  if (extracted.tokens.length === 0) {
     // Glob/Grep with no explicit `path` argument — nothing to containment-
     // check; relies on the session's cwd already being scoped inside
     // allowedDirs (dispatch-handler.ts sets cwd to the first allowed dir).
@@ -621,34 +524,28 @@ async function main(): Promise<void> {
     return;
   }
 
-  for (const rawPath of extracted.paths) {
-    // B1 fix (cortex#2343 adversarial review): expand `~`/`$VAR` BEFORE
-    // isAbsolute/resolve — see the identical rationale in bash-guard.hook.ts's
-    // checkCommandPaths(). A file_path/path token of `~/.ssh/id_rsa` is not
-    // absolute on its own, so without this it gets joined onto cwd as a
-    // literal relative path and resolves harmlessly inside the allowed dir.
-    const expandedPath = expandUserPath(rawPath);
-
-    // R1 fix (cortex#2343 adversarial review round 2): FAIL CLOSED on
-    // anything expandUserPath couldn't confidently resolve (a `~user` form,
-    // or a literal `$` left over from an unmodelled expansion) — see the
-    // identical rationale in bash-guard.hook.ts's checkCommandPaths().
-    if (isUnresolvedShellToken(expandedPath)) {
-      const reason =
-        `[Cortex Path Guard] Blocked ${toolName}: path argument "${rawPath}" contains an ` +
-        `unresolvable shell expansion (a ~user form or a literal "$") — denying to stay ` +
-        `fail-closed.`;
+  // cortex#2343 adversarial review round 3: EVERY raw token reduces to zero
+  // or more real paths through the ONE shared reducer
+  // (reduceTokenToRealPathOrReject) — the single place `~`/`$VAR` expansion,
+  // fail-closed ambiguity detection, and brace/wildcard-aware traversal
+  // checks happen for BOTH this hook and bash-guard.hook.ts. This hook's
+  // job after that point is unchanged: containment-check every resolved
+  // real path via decidePath().
+  for (const token of extracted.tokens) {
+    const reduced = reduceTokenToRealPathOrReject(token.raw, token.base);
+    if (!reduced.ok) {
+      const reason = `[Cortex Path Guard] Blocked ${toolName}: ${reduced.reason} — denying to stay fail-closed.`;
       deny(reason);
-      await emitBlockEvent(sessionId, reason, toolName, rawPath);
+      await emitBlockEvent(sessionId, reason, toolName, token.raw);
       return;
     }
-
-    const absPath = isAbsolute(expandedPath) ? expandedPath : resolvePath(process.cwd(), expandedPath);
-    const decision = decidePath(toolName, absPath, policy);
-    if (!decision.allow) {
-      deny(decision.reason);
-      await emitBlockEvent(sessionId, decision.reason, toolName, absPath);
-      return;
+    for (const realPath of reduced.reals) {
+      const decision = decidePath(toolName, realPath, policy);
+      if (!decision.allow) {
+        deny(decision.reason);
+        await emitBlockEvent(sessionId, decision.reason, toolName, realPath);
+        return;
+      }
     }
   }
 

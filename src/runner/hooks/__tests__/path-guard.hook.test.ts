@@ -32,16 +32,20 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, existsSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, existsSync, readFileSync, readdirSync, writeFileSync, realpathSync } from "fs";
 import { tmpdir, homedir } from "os";
 import {
   parsePathGuardConfig,
   extractCandidatePaths,
   decidePath,
-  expandBraceAlternatives,
-  isRiskyGlobPatternRoot,
 } from "../path-guard.hook";
-import { expandUserPath, isUnresolvedShellToken } from "../../../common/path-containment";
+import {
+  expandUserPath,
+  isUnresolvedShellToken,
+  expandBraceAlternatives,
+  deriveLiteralPathPrefix,
+  reduceTokenToRealPathOrReject,
+} from "../../../common/path-containment";
 
 const HOOK_PATH = join(import.meta.dir, "..", "path-guard.hook.ts");
 
@@ -164,30 +168,63 @@ describe("parsePathGuardConfig", () => {
 });
 
 describe("extractCandidatePaths", () => {
+  const CWD = "/cwd";
+
   test("Read/Write/Edit require file_path", () => {
-    expect(extractCandidatePaths("Read", { file_path: "/a/b.ts" })).toEqual({ paths: ["/a/b.ts"] });
-    expect(extractCandidatePaths("Write", { file_path: "/a/b.ts" })).toEqual({ paths: ["/a/b.ts"] });
-    expect(extractCandidatePaths("Edit", { file_path: "/a/b.ts" })).toEqual({ paths: ["/a/b.ts"] });
+    expect(extractCandidatePaths("Read", { file_path: "/a/b.ts" }, CWD)).toEqual({
+      tokens: [{ raw: "/a/b.ts", base: CWD }],
+    });
+    expect(extractCandidatePaths("Write", { file_path: "/a/b.ts" }, CWD)).toEqual({
+      tokens: [{ raw: "/a/b.ts", base: CWD }],
+    });
+    expect(extractCandidatePaths("Edit", { file_path: "/a/b.ts" }, CWD)).toEqual({
+      tokens: [{ raw: "/a/b.ts", base: CWD }],
+    });
   });
 
-  test("Read with no file_path ⇒ malformed (null)", () => {
-    expect(extractCandidatePaths("Read", {})).toEqual({ paths: null });
+  test("Read with no file_path ⇒ malformed (null, with a reason)", () => {
+    const r = extractCandidatePaths("Read", {}, CWD);
+    expect(r.tokens).toBeNull();
+    expect(typeof r.reason).toBe("string");
   });
 
-  test("Glob/Grep with explicit path ⇒ that path", () => {
-    expect(extractCandidatePaths("Glob", { pattern: "**/*.ts", path: "/a" })).toEqual({ paths: ["/a"] });
-    expect(extractCandidatePaths("Grep", { pattern: "foo", path: "/a" })).toEqual({ paths: ["/a"] });
+  test("NotebookEdit requires notebook_path", () => {
+    expect(extractCandidatePaths("NotebookEdit", { notebook_path: "/a/b.ipynb" }, CWD)).toEqual({
+      tokens: [{ raw: "/a/b.ipynb", base: CWD }],
+    });
+    const r = extractCandidatePaths("NotebookEdit", {}, CWD);
+    expect(r.tokens).toBeNull();
   });
 
-  test("Glob/Grep with no path ⇒ [] (nothing to check, not malformed)", () => {
-    expect(extractCandidatePaths("Glob", { pattern: "**/*.ts" })).toEqual({ paths: [] });
-    expect(extractCandidatePaths("Grep", { pattern: "foo" })).toEqual({ paths: [] });
+  test("Glob with explicit path ⇒ BOTH path (base=cwd) and pattern (base=path) become tokens", () => {
+    expect(extractCandidatePaths("Glob", { pattern: "**/*.ts", path: "/a" }, CWD)).toEqual({
+      tokens: [
+        { raw: "/a", base: CWD },
+        { raw: "**/*.ts", base: "/a" },
+      ],
+    });
+  });
+
+  test("Grep with explicit path ⇒ that path only (pattern never becomes a token)", () => {
+    expect(extractCandidatePaths("Grep", { pattern: "foo", path: "/a" }, CWD)).toEqual({
+      tokens: [{ raw: "/a", base: CWD }],
+    });
+  });
+
+  test("Glob with no path ⇒ pattern token alone, base=cwd", () => {
+    expect(extractCandidatePaths("Glob", { pattern: "**/*.ts" }, CWD)).toEqual({
+      tokens: [{ raw: "**/*.ts", base: CWD }],
+    });
+  });
+
+  test("Grep with no path ⇒ [] (nothing to check, not malformed)", () => {
+    expect(extractCandidatePaths("Grep", { pattern: "foo" }, CWD)).toEqual({ tokens: [] });
   });
 
   test("Grep's `pattern` (content regex) is NEVER treated as a path", () => {
     // A pattern that LOOKS like a path must not leak into the containment check.
-    const r = extractCandidatePaths("Grep", { pattern: "/etc/passwd" });
-    expect(r.paths).toEqual([]);
+    const r = extractCandidatePaths("Grep", { pattern: "/etc/passwd" }, CWD);
+    expect(r.tokens).toEqual([]);
   });
 });
 
@@ -820,23 +857,85 @@ describe("expandBraceAlternatives (R2 fix)", () => {
   test("two top-level brace groups ⇒ ambiguous", () => {
     expect(expandBraceAlternatives("{a,b}/{c,d}").kind).toBe("ambiguous");
   });
+
+  test("single-option brace (no comma) ⇒ ambiguous (not a real bash alternation)", () => {
+    // A real shell only performs brace expansion with ≥2 alternatives —
+    // `{solo}` with no comma is usually left LITERAL by bash. Expanding it
+    // anyway would containment-check a DIFFERENT string than the one bash
+    // actually reads, so this is refused rather than guessed at.
+    expect(expandBraceAlternatives("{solo}/x").kind).toBe("ambiguous");
+  });
 });
 
-describe("isRiskyGlobPatternRoot (R2 fix)", () => {
-  test("empty root ⇒ not risky", () => {
-    expect(isRiskyGlobPatternRoot("")).toBe(false);
+describe("deriveLiteralPathPrefix (round 2/3 fix)", () => {
+  test("no metachar at all ⇒ the token is returned UNCHANGED (fully literal)", () => {
+    expect(deriveLiteralPathPrefix("/etc/passwd")).toBe("/etc/passwd");
+    expect(deriveLiteralPathPrefix("relative/file.ts")).toBe("relative/file.ts");
   });
 
-  test("absolute root ⇒ risky", () => {
-    expect(isRiskyGlobPatternRoot("/etc/")).toBe(true);
+  test("wildcard with a directory prefix ⇒ trimmed to the last complete segment", () => {
+    expect(deriveLiteralPathPrefix("/etc/pa*")).toBe("/etc/");
+    expect(deriveLiteralPathPrefix("../secret/*")).toBe("../secret/");
+    expect(deriveLiteralPathPrefix("src/**")).toBe("src/");
   });
 
-  test("relative root with a .. segment ⇒ risky", () => {
-    expect(isRiskyGlobPatternRoot("../secret/")).toBe(true);
+  test("wildcard with NO directory prefix ⇒ empty", () => {
+    expect(deriveLiteralPathPrefix("*.ts")).toBe("");
+    expect(deriveLiteralPathPrefix("**/x")).toBe("");
+  });
+});
+
+describe("reduceTokenToRealPathOrReject — unifies both hooks' token reduction (round 3 fix)", () => {
+  let root: string;
+  let allowedDir: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    // realpathSync the mkdtemp root up front (macOS symlinks /tmp →
+    // /private/tmp) so every path this suite asserts on already matches
+    // what resolveProspectiveRealpath() itself returns.
+    root = realpathSync(mkdtempSync(join(tmpdir(), "reducer-unit-")));
+    allowedDir = join(root, "allowed");
+    outsideDir = join(root, "outside");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
   });
 
-  test("relative root with no .. segment ⇒ not risky", () => {
-    expect(isRiskyGlobPatternRoot("src/")).toBe(false);
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("plain literal absolute path resolves to exactly one real path (normal containment applies)", () => {
+    const r = reduceTokenToRealPathOrReject(join(outsideDir, "f.txt"), allowedDir);
+    expect(r.ok).toBe(true);
+    expect(r.reals).toEqual([join(outsideDir, "f.txt")]);
+  });
+
+  test("~user form ⇒ rejected outright (R1)", () => {
+    const r = reduceTokenToRealPathOrReject("~root/.ssh/id_rsa", allowedDir);
+    expect(r.ok).toBe(false);
+  });
+
+  test("brace alternative with an absolute option ⇒ rejected outright, regardless of scope (R2/R3)", () => {
+    const r = reduceTokenToRealPathOrReject(`{${outsideDir},x}/f.txt`, allowedDir);
+    expect(r.ok).toBe(false);
+  });
+
+  test("brace alternative with a .. option ⇒ rejected outright (R2/R3)", () => {
+    const r = reduceTokenToRealPathOrReject("{../outside,x}/f.txt", allowedDir);
+    expect(r.ok).toBe(false);
+  });
+
+  test("brace with 2 safe relative alternatives ⇒ BOTH become real paths to containment-check", () => {
+    const r = reduceTokenToRealPathOrReject("{a,b}/f.txt", allowedDir);
+    expect(r.ok).toBe(true);
+    expect(r.reals.sort()).toEqual([join(allowedDir, "a", "f.txt"), join(allowedDir, "b", "f.txt")].sort());
+  });
+
+  test("bare wildcard with no directory prefix ⇒ empty reals (nothing to check, not a failure)", () => {
+    const r = reduceTokenToRealPathOrReject("*.ts", allowedDir);
+    expect(r.ok).toBe(true);
+    expect(r.reals).toEqual([]);
   });
 });
 

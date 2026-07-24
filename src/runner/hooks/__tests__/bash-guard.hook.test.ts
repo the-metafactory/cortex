@@ -1411,3 +1411,95 @@ describe("bash-guard.hook — R1: shell-expansion CLASS matrix", () => {
     expectGrantDecision(r.stdout);
   });
 });
+
+// =============================================================================
+// "Still-open bypass" (cortex#2343 adversarial review round 3) — bash brace
+// expansion. `rejectsChaining` does not (and should not) block `{` — brace
+// expansion is not a chaining primitive — but the R2 brace-awareness fix
+// only ever landed in path-guard's Glob branch, never in bash-guard's own
+// command-path check, so `cat {/tmp/secret,x}/f` (a REAL bash brace
+// expansion — bash genuinely reads BOTH `/tmp/secret/f` and `x/f`) sailed
+// through unrecognised. Root-caused + fixed by routing BOTH hooks through
+// the ONE shared `reduceTokenToRealPathOrReject` (path-containment.ts) —
+// this matrix proves bash-guard now shares the exact same brace/wildcard
+// treatment path-guard's Glob branch does.
+// =============================================================================
+describe("bash-guard.hook — round 3: brace expansion + wildcard CLASS matrix", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r3-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "canary\n");
+    writeFileSync(join(allowedDir, "ok.log"), "fine\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  test("cat {/abs,x}/f — absolute alternative HIDDEN inside a brace ⇒ DENY", () => {
+    const r = runHook(`cat {${secretDir},x}/canary.txt`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat {../rel,x}/f — .. traversal alternative HIDDEN inside a brace ⇒ DENY", () => {
+    const r = runHook("cat {../secret,x}/canary.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("control: cat /tmp/.../secret/canary.txt (plain absolute, no braces) still denies", () => {
+    // Proves the two brace repros above are specifically about braces, not
+    // about the absolute path being denied for some unrelated reason.
+    const r = runHook(`cat ${join(secretDir, "canary.txt")}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat *.log — bare cwd-relative wildcard with no directory component ⇒ ALLOW", () => {
+    const r = runHook("cat *.log", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat /etc/pa* — absolute pathname glob (shell pathname expansion) ⇒ DENY", () => {
+    const r = runHook("cat /etc/pa*", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat {a,b}/ok.log — two SAFE relative brace alternatives, both resolving inside allowedDir ⇒ ALLOW", () => {
+    mkdirSync(join(allowedDir, "a"), { recursive: true });
+    mkdirSync(join(allowedDir, "b"), { recursive: true });
+    writeFileSync(join(allowedDir, "a", "ok.log"), "a\n");
+    writeFileSync(join(allowedDir, "b", "ok.log"), "b\n");
+    const r = runHook("cat {a,b}/ok.log", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat {a,../secret}/ok.log — ONE safe + ONE escaping alternative ⇒ DENY (any risky alternative vetoes the whole token)", () => {
+    const r = runHook("cat {a,../secret}/canary.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+});

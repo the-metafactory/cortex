@@ -26,12 +26,12 @@
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
-import { isAbsolute, join, resolve as resolvePath } from "path";
+import { join } from "path";
 import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
-import { isContainedIn, expandUserPath, isUnresolvedShellToken } from "../../common/path-containment";
+import { isContainedIn, reduceTokenToRealPathOrReject } from "../../common/path-containment";
 import { parsePathGuardConfig } from "./path-guard.hook";
 
 interface HookInput {
@@ -287,7 +287,15 @@ export function extractCommandPaths(command: string): string[] {
  * `CORTEX_PATH_GUARD`. Mirrors path-guard.hook.ts's own policy semantics
  * exactly (same parser, same "empty policy = no restriction configured"
  * contract, same fail-closed-on-malformed-config posture) — see that file's
- * module doc for the full rationale. Exported for unit tests.
+ * module doc for the full rationale.
+ *
+ * cortex#2343 adversarial review round 3: every raw token reduces to zero
+ * or more real paths through {@link reduceTokenToRealPathOrReject} — the
+ * ONE shared reducer both this hook and path-guard.hook.ts call. This is
+ * what closed the root cause of the R1 (`~user`) and bash-brace-expansion
+ * bypasses: those fixes previously lived in divergent, hook-local code, so
+ * a fix landing on one surface (e.g. path-guard's Glob branch) left the
+ * other (bash-guard's command-path check) open. Exported for unit tests.
  */
 export function checkCommandPaths(trimmedCommand: string): { allow: boolean; reason: string } {
   const configResult = parsePathGuardConfig(process.env.CORTEX_PATH_GUARD);
@@ -307,43 +315,32 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
   }
 
   const candidatePaths = extractCommandPaths(trimmedCommand);
-  for (const rawPath of candidatePaths) {
-    // B1 fix (cortex#2343 adversarial review): expand `~`/`$VAR` BEFORE
-    // isAbsolute/resolve — otherwise `~/.ssh/id_rsa` or `$HOME/.ssh/id_rsa`
-    // isn't recognised as absolute, gets joined onto cwd as a LITERAL
-    // relative path, and resolves harmlessly inside the allowed dir while
-    // the real shell reads the actual home directory outside it.
-    const expandedPath = expandUserPath(rawPath);
+  const cwd = process.cwd();
 
-    // R1 fix (cortex#2343 adversarial review round 2): FAIL CLOSED on
-    // anything expandUserPath couldn't confidently resolve — a `~user` form
-    // (e.g. `~root/.ssh/id_rsa`) or a literal `$` left over from an
-    // expansion form we don't model. Resolving it against cwd instead (the
-    // R1 bug) treats it as a harmless literal relative path when the real
-    // shell would read a DIFFERENT, unresolvable-by-us location.
-    if (isUnresolvedShellToken(expandedPath)) {
+  for (const rawPath of candidatePaths) {
+    const reduced = reduceTokenToRealPathOrReject(rawPath, cwd);
+    if (!reduced.ok) {
       return {
         allow: false,
         reason:
-          `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": path token ` +
-          `"${rawPath}" contains an unresolvable shell expansion (a ~user form or a ` +
-          `literal "$") — denying to stay fail-closed.`,
+          `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": ${reduced.reason} ` +
+          `— denying to stay fail-closed.`,
       };
     }
-
-    const absPath = isAbsolute(expandedPath) ? expandedPath : resolvePath(process.cwd(), expandedPath);
-    const contained =
-      policy.allowedDirs.some((d) => isContainedIn(d, absPath)) ||
-      policy.readOnlyDirs.some((d) => isContainedIn(d, absPath));
-    if (!contained) {
-      return {
-        allow: false,
-        reason:
-          `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": path "${absPath}" ` +
-          `resolves outside every configured allowedDirs/readOnlyDirs entry (EBH-1, ` +
-          `cortex#2343). Ask the principal to widen allowedDirs if this path is genuinely ` +
-          `needed.`,
-      };
+    for (const realPath of reduced.reals) {
+      const contained =
+        policy.allowedDirs.some((d) => isContainedIn(d, realPath)) ||
+        policy.readOnlyDirs.some((d) => isContainedIn(d, realPath));
+      if (!contained) {
+        return {
+          allow: false,
+          reason:
+            `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": path "${realPath}" ` +
+            `resolves outside every configured allowedDirs/readOnlyDirs entry (EBH-1, ` +
+            `cortex#2343). Ask the principal to widen allowedDirs if this path is genuinely ` +
+            `needed.`,
+        };
+      }
     }
   }
   return { allow: true, reason: "" };
