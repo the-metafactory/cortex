@@ -1342,3 +1342,72 @@ describe("bash-guard.hook — B1: ~/$VAR expansion before path containment", () 
     expectGrantDecision(r.stdout);
   });
 });
+
+// =============================================================================
+// R1 (cortex#2343 adversarial review ROUND 2) — table-driven matrix covering
+// the CLASS of shell-expansion tokens for the Bash read-command path, not
+// just the two repros the review gave.
+// =============================================================================
+describe("bash-guard.hook — R1: shell-expansion CLASS matrix", () => {
+  let root: string;
+  let allowedDir: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r1-matrix-"));
+    allowedDir = join(root, "allowed");
+    fakeHome = join(root, "fakehome");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(fakeHome, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      HOME: fakeHome, // outside allowedDir — any HOME-based resolution must deny
+    };
+  }
+
+  interface Row {
+    label: string;
+    arg: string;
+    expectDeny: boolean;
+  }
+
+  const rows: Row[] = [
+    { label: "~root/x (other user's home)", arg: "~root/x", expectDeny: true },
+    { label: "~someuser/x (other user's home)", arg: "~someuser/x", expectDeny: true },
+    { label: "~/x (HOME outside allowedDirs)", arg: "~/x", expectDeny: true },
+    { label: "~ bare (HOME outside allowedDirs)", arg: "~", expectDeny: true },
+    { label: "${HOME}/x (HOME outside allowedDirs)", arg: "${HOME}/x", expectDeny: true },
+    { label: "$HOME/x (HOME outside allowedDirs)", arg: "$HOME/x", expectDeny: true },
+    { label: "$UNSET_EBH1_VAR/x (unset ⇒ empty string ⇒ /x ⇒ outside)", arg: "$UNSET_EBH1_VAR/x", expectDeny: true },
+    { label: "a/$5/mid-path ($5 unresolvable — not a valid var name)", arg: "a/$5/mid-path", expectDeny: true },
+    { label: "/etc/hosts (plain absolute, no shell syntax — sanity control)", arg: "/etc/hosts", expectDeny: true },
+  ];
+
+  for (const { label, arg, expectDeny } of rows) {
+    test(`cat ${label} → ${expectDeny ? "DENY" : "ALLOW"}`, () => {
+      delete process.env.UNSET_EBH1_VAR;
+      const r = runHook(`cat ${arg}`, policyEnv(), "Bash", "test-session", allowedDir);
+      expect(r.status).toBe(0);
+      const out = JSON.parse(r.stdout.trim());
+      if (expectDeny) {
+        expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+      } else {
+        expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
+      }
+    });
+  }
+
+  test("positive control: 'cat ok.txt' (plain relative, resolves inside allowedDir) allows", () => {
+    const r = runHook("cat ok.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});

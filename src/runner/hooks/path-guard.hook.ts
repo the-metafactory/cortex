@@ -61,7 +61,7 @@ import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
-import { isContainedIn, expandUserPath } from "../../common/path-containment";
+import { isContainedIn, expandUserPath, isUnresolvedShellToken } from "../../common/path-containment";
 
 // =============================================================================
 // Hook I/O types
@@ -106,25 +106,24 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
 
 /**
  * Glob metacharacters that mark the end of a pattern's LITERAL directory
- * prefix. `minimatch`/glob syntax uses `*`, `?`, `[...]`, and `{...}` for
- * wildcarding — the first occurrence of any of these ends the literal
- * (containment-checkable) portion of the pattern.
+ * prefix, EXCLUDING `{` — brace groups are handled separately by
+ * {@link expandBraceAlternatives} so their CONTENTS get inspected rather
+ * than treated as an opaque metachar boundary (cortex#2343 adversarial
+ * review round 2, finding R2: `{../secret,x}/*` used to stop at `{` and
+ * never see the `../secret` traversal hiding inside it).
  */
-const GLOB_METACHAR_RE = /[*?[{]/;
+const GLOB_METACHAR_RE = /[*?[]/;
 
 /**
- * Derive the containment-checkable directory prefix from a Glob `pattern`
- * (cortex#2343 adversarial review finding B2 — Glob's `pattern`, unlike
- * Grep's, IS a filesystem path and can itself be absolute or carry `../`
- * traversal, e.g. `/etc/*` or `../secret/*`).
- *
- * Takes everything before the first glob metachar, then trims back to the
- * last `/` in that prefix — a partial trailing SEGMENT (e.g. the `fo` in
- * `fo*o`) is not a real directory boundary and is dropped rather than
- * mis-containment-checked. Returns `""` when the pattern has no directory
- * prefix worth checking (e.g. `*.ts`, `**\/*.ts`) — that case relies on the
- * `path` field (if given) or the session's already-scoped cwd, unaffected
- * by this fix. Exported for unit tests.
+ * Derive the containment-checkable directory prefix from a single Glob
+ * pattern ALTERNATIVE (braces already resolved — see
+ * {@link expandBraceAlternatives}). Takes everything before the first glob
+ * metachar, then trims back to the last `/` in that prefix — a partial
+ * trailing SEGMENT (e.g. the `fo` in `fo*o`) is not a real directory
+ * boundary and is dropped rather than mis-containment-checked. Returns `""`
+ * when the pattern has no directory prefix worth checking (e.g. `*.ts`,
+ * `**\/*.ts`) — that case relies on the `path` field (if given) or the
+ * session's already-scoped cwd. Exported for unit tests.
  */
 export function derivePatternGlobRoot(pattern: string): string {
   const metaIdx = pattern.search(GLOB_METACHAR_RE);
@@ -132,6 +131,62 @@ export function derivePatternGlobRoot(pattern: string): string {
   const lastSlash = prefix.lastIndexOf("/");
   if (lastSlash === -1) return "";
   return prefix.slice(0, lastSlash + 1);
+}
+
+export type BraceExpansionResult =
+  | { kind: "none" } // no brace group at all — treat `pattern` as the sole alternative
+  | { kind: "expanded"; alternatives: string[] } // one clean brace group, resolved
+  | { kind: "ambiguous" }; // nested/unbalanced/multiple brace groups — FAIL CLOSED
+
+/**
+ * Expand ONE level of brace alternatives in a Glob pattern:
+ * `"{a,b,c}/x"` → `["a/x", "b/x", "c/x"]` (cortex#2343 adversarial review
+ * round 2, finding R2 — `derivePatternGlobRoot` alone stops at the first
+ * metachar, so `{../secret,x}/*` never got its `../secret` alternative
+ * inspected at all).
+ *
+ * FAILS CLOSED (`kind: "ambiguous"`) rather than guessing on anything this
+ * simple one-level parser can't confidently handle: a nested brace group
+ * inside the first one, more than one top-level brace group, or an
+ * unbalanced `{`/`}`. The instruction from the adversarial review is
+ * explicit: "if brace parsing is at all uncertain, DENY the pattern" —
+ * legitimate Glob patterns never need nested/multiple brace groups, so
+ * denying that shape costs nothing real. Exported for unit tests.
+ */
+export function expandBraceAlternatives(pattern: string): BraceExpansionResult {
+  const firstOpen = pattern.indexOf("{");
+  if (firstOpen === -1) return { kind: "none" };
+
+  const firstClose = pattern.indexOf("}", firstOpen);
+  if (firstClose === -1) return { kind: "ambiguous" }; // unbalanced
+
+  const inner = pattern.slice(firstOpen + 1, firstClose);
+  if (inner.includes("{") || inner.includes("}")) return { kind: "ambiguous" }; // nested
+
+  const rest = pattern.slice(firstClose + 1);
+  if (rest.includes("{") || rest.includes("}")) return { kind: "ambiguous" }; // a second group
+
+  const prefix = pattern.slice(0, firstOpen);
+  const options = inner.split(",");
+  const alternatives = options.map((opt) => prefix + opt + rest);
+  return { kind: "expanded", alternatives };
+}
+
+/**
+ * True when `patternRoot` (a derived literal directory prefix — may be `""`
+ * when the pattern has none) is inherently unsafe for a Glob `pattern`
+ * argument: absolute, or carrying a `..` path segment. Per the adversarial
+ * review: "legit globs never need `..`, absolute, or escaping braces" — a
+ * risky alternative denies the WHOLE Glob call outright rather than being
+ * handed to the normal containment check (which could, in principle, still
+ * ALLOW an absolute pattern that happens to resolve inside scope — the
+ * review wants a strictly narrower, unconditional rule for Glob's pattern
+ * argument specifically). Exported for unit tests.
+ */
+export function isRiskyGlobPatternRoot(patternRoot: string): boolean {
+  if (patternRoot === "") return false;
+  if (isAbsolute(patternRoot)) return true;
+  return patternRoot.split("/").some((segment) => segment === "..");
 }
 
 // =============================================================================
@@ -199,8 +254,16 @@ export function parsePathGuardConfig(raw: string | undefined): PathGuardConfigRe
 // =============================================================================
 
 export interface ExtractedPaths {
-  /** null = the call is malformed for this tool (a required path is missing). */
+  /**
+   * null = the call must be DENIED for this tool — either a required path is
+   * missing (malformed call), or (Glob only) the `pattern` argument is
+   * itself unsafe/ambiguous (absolute, carries a `..` segment, or brace
+   * parsing was uncertain — cortex#2343 adversarial review round 2, R2).
+   */
   paths: string[] | null;
+  /** Populated when `paths` is null — WHY the call must be denied. Falls
+   *  back to a generic reason at the call site when absent. */
+  reason?: string;
 }
 
 /**
@@ -251,22 +314,55 @@ export function extractCandidatePaths(toolName: string, toolInput: HookInput["to
     const explicitPath = hasExplicitPath ? (pathField as string) : undefined;
 
     const patternField = (input as GlobGrepToolInput).pattern;
-    const patternRoot = typeof patternField === "string" ? derivePatternGlobRoot(patternField) : "";
-
     const paths: string[] = [];
     if (explicitPath !== undefined) paths.push(explicitPath);
-    if (patternRoot) {
-      // Absolute prefix (e.g. `/etc/*`) is checked as-is regardless of
-      // `path`. A relative prefix resolves against `path` when given
-      // (mirrors how Glob itself would search relative to `path`); with no
-      // `path`, it's pushed as-is and resolved against cwd downstream (same
-      // treatment as every other relative candidate).
-      paths.push(
-        isAbsolute(patternRoot) || explicitPath === undefined
-          ? patternRoot
-          : join(explicitPath, patternRoot),
-      );
+
+    if (typeof patternField === "string") {
+      // R2 fix (cortex#2343 adversarial review round 2): brace-aware
+      // traversal/absolute check. Expand ONE level of brace alternatives
+      // FIRST — `{../secret,x}/*` must have its `../secret` alternative
+      // inspected, not hidden behind the `{` metachar boundary — then
+      // treat every alternative (or the pattern itself, when there are no
+      // braces) identically: any alternative whose derived literal
+      // directory prefix is absolute or carries a `..` segment DENIES the
+      // WHOLE Glob call outright (fail-closed; "legit globs never need
+      // `..`, absolute, or escaping braces"). Ambiguous brace parsing
+      // (nested/unbalanced/multiple groups) denies outright too.
+      const braceResult = expandBraceAlternatives(patternField);
+      const alternatives = braceResult.kind === "expanded" ? braceResult.alternatives : [patternField];
+
+      if (braceResult.kind === "ambiguous") {
+        return {
+          paths: null,
+          reason:
+            `[Cortex Path Guard] Blocked Glob: pattern "${patternField}" has brace syntax ` +
+            `this guard cannot confidently parse (nested, unbalanced, or multiple brace ` +
+            `groups) — denying to stay fail-closed.`,
+        };
+      }
+
+      for (const alt of alternatives) {
+        const altRoot = derivePatternGlobRoot(alt);
+        if (isRiskyGlobPatternRoot(altRoot)) {
+          return {
+            paths: null,
+            reason:
+              `[Cortex Path Guard] Blocked Glob: pattern "${patternField}" resolves to an ` +
+              `absolute path or a ".." traversal segment ("${altRoot}") — Glob's pattern ` +
+              `argument may never be absolute or traverse outside its root; use the ` +
+              `\`path\` argument to point at a different (allowed) root instead.`,
+          };
+        }
+        if (altRoot) {
+          // Safe relative prefix — resolves against `path` when given
+          // (mirrors how Glob itself would search relative to `path`);
+          // with no `path`, pushed as-is and resolved against cwd
+          // downstream (same treatment as every other relative candidate).
+          paths.push(explicitPath === undefined ? altRoot : join(explicitPath, altRoot));
+        }
+      }
     }
+
     return { paths };
   }
 
@@ -506,8 +602,9 @@ async function main(): Promise<void> {
   const extracted = extractCandidatePaths(toolName, input.tool_input);
   if (extracted.paths === null) {
     const reason =
+      extracted.reason ??
       `[Cortex Path Guard] Blocked ${toolName}: no resolvable file_path in the tool ` +
-      `input — denying to stay fail-closed.`;
+        `input — denying to stay fail-closed.`;
     deny(reason);
     await emitBlockEvent(sessionId, reason, toolName, "");
     return;
@@ -531,6 +628,21 @@ async function main(): Promise<void> {
     // absolute on its own, so without this it gets joined onto cwd as a
     // literal relative path and resolves harmlessly inside the allowed dir.
     const expandedPath = expandUserPath(rawPath);
+
+    // R1 fix (cortex#2343 adversarial review round 2): FAIL CLOSED on
+    // anything expandUserPath couldn't confidently resolve (a `~user` form,
+    // or a literal `$` left over from an unmodelled expansion) — see the
+    // identical rationale in bash-guard.hook.ts's checkCommandPaths().
+    if (isUnresolvedShellToken(expandedPath)) {
+      const reason =
+        `[Cortex Path Guard] Blocked ${toolName}: path argument "${rawPath}" contains an ` +
+        `unresolvable shell expansion (a ~user form or a literal "$") — denying to stay ` +
+        `fail-closed.`;
+      deny(reason);
+      await emitBlockEvent(sessionId, reason, toolName, rawPath);
+      return;
+    }
+
     const absPath = isAbsolute(expandedPath) ? expandedPath : resolvePath(process.cwd(), expandedPath);
     const decision = decidePath(toolName, absPath, policy);
     if (!decision.allow) {

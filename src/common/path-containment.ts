@@ -82,6 +82,31 @@ export function expandUserPath(raw: string): string {
 }
 
 /**
+ * True when an ALREADY-`expandUserPath()`-processed string still carries a
+ * form we cannot confidently resolve (cortex#2343 adversarial-review round 2,
+ * finding R1). `expandUserPath` only handles the bare `~`/`~/` and `$VAR`/
+ * `${VAR}` forms; anything else it leaves untouched:
+ *
+ *   - `~user` / `~otheruser` (any `~` NOT followed immediately by `/` or
+ *     end-of-string) — the OTHER user's home directory. There is no
+ *     portable, dependency-free way to resolve an arbitrary system
+ *     account's home dir, and no legitimate cortex use ever needs one.
+ *     Left unexpanded, the string still starts with `~`.
+ *   - Any `$` that didn't match the `$VAR`/`${VAR}` regex (e.g. `$1`, `$(`,
+ *     a bare trailing `$`) — an expansion form we don't model.
+ *
+ * The FIX PHILOSOPHY (per the adversarial review): don't keep chasing
+ * individual shell-expansion variants one repro at a time — expand only the
+ * known-safe forms, and FAIL CLOSED on anything else. A result that still
+ * starts with `~` or still contains `$` after `expandUserPath` MUST be
+ * denied by the caller, never resolved-against-cwd (which is exactly the
+ * "guard checks a different path than the shell runs" bypass class).
+ */
+export function isUnresolvedShellToken(expanded: string): boolean {
+  return expanded.startsWith("~") || expanded.includes("$");
+}
+
+/**
  * True when `realTarget` is `realBase` itself or a path underneath it.
  * Both arguments MUST already be realpath'd (symlinks resolved) — this
  * function does no I/O, it only compares strings. Exported so callers that

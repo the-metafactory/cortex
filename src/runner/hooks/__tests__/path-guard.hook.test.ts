@@ -38,8 +38,10 @@ import {
   parsePathGuardConfig,
   extractCandidatePaths,
   decidePath,
+  expandBraceAlternatives,
+  isRiskyGlobPatternRoot,
 } from "../path-guard.hook";
-import { expandUserPath } from "../../../common/path-containment";
+import { expandUserPath, isUnresolvedShellToken } from "../../../common/path-containment";
 
 const HOOK_PATH = join(import.meta.dir, "..", "path-guard.hook.ts");
 
@@ -543,6 +545,50 @@ describe("expandUserPath (B1 fix)", () => {
   });
 });
 
+// =============================================================================
+// R1 (cortex#2343 adversarial review ROUND 2) — table-driven matrix covering
+// the CLASS of shell-expansion tokens, not just the two repros the review
+// gave. Every row exercises expandUserPath() + isUnresolvedShellToken()
+// together — this is the exact pair both hooks call before isAbsolute/resolve.
+// =============================================================================
+describe("expandUserPath + isUnresolvedShellToken — R1 class matrix", () => {
+  const FAKE_HOME = "/tmp/ebh1-r1-matrix-fakehome";
+
+  interface Row {
+    label: string;
+    token: string;
+    expectAmbiguous: boolean; // true ⇒ the hook must fail-closed DENY
+  }
+
+  const rows: Row[] = [
+    { label: "~root/x (other user's home)", token: "~root/x", expectAmbiguous: true },
+    { label: "~someuser/x (other user's home)", token: "~someuser/x", expectAmbiguous: true },
+    { label: "~/x (bare-slash form — resolves via HOME, not ambiguous)", token: "~/x", expectAmbiguous: false },
+    { label: "~ (bare tilde alone — resolves via HOME, not ambiguous)", token: "~", expectAmbiguous: false },
+    { label: "${HOME}/x (braced var — resolves, not ambiguous)", token: "${HOME}/x", expectAmbiguous: false },
+    { label: "$HOME/x (bare var — resolves, not ambiguous)", token: "$HOME/x", expectAmbiguous: false },
+    { label: "$UNSET_EBH1_VAR/x (unset var ⇒ empty string, not ambiguous)", token: "$UNSET_EBH1_VAR/x", expectAmbiguous: false },
+    { label: "a/$5/mid-path (unresolvable — $5 isn't a valid var name)", token: "a/$5/mid-path", expectAmbiguous: true },
+    { label: "plain/relative/path.txt (no shell syntax at all)", token: "plain/relative/path.txt", expectAmbiguous: false },
+    { label: "/already/absolute/path.txt (no shell syntax at all)", token: "/already/absolute/path.txt", expectAmbiguous: false },
+  ];
+
+  for (const { label, token, expectAmbiguous } of rows) {
+    test(`${label} → ${expectAmbiguous ? "AMBIGUOUS (must deny)" : "resolves cleanly"}`, () => {
+      const prevHome = process.env.HOME;
+      process.env.HOME = FAKE_HOME;
+      delete process.env.UNSET_EBH1_VAR;
+      try {
+        const expanded = expandUserPath(token);
+        expect(isUnresolvedShellToken(expanded)).toBe(expectAmbiguous);
+      } finally {
+        if (prevHome === undefined) delete process.env.HOME;
+        else process.env.HOME = prevHome;
+      }
+    });
+  }
+});
+
 describe("path-guard.hook — B1: ~/$VAR expansion before containment (spawned)", () => {
   let root: string;
   let allowedDir: string;
@@ -611,6 +657,69 @@ describe("path-guard.hook — B1: ~/$VAR expansion before containment (spawned)"
   });
 });
 
+describe("path-guard.hook — R1: shell-expansion CLASS matrix (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-r1-matrix-"));
+    allowedDir = join(root, "allowed");
+    fakeHome = join(root, "fakehome");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(fakeHome, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      HOME: fakeHome, // outside allowedDir — any HOME-based resolution must deny
+    };
+  }
+
+  interface Row {
+    label: string;
+    file_path: string;
+    expectDeny: boolean;
+  }
+
+  const rows: Row[] = [
+    { label: "~root/x (other user's home)", file_path: "~root/x", expectDeny: true },
+    { label: "~someuser/x (other user's home)", file_path: "~someuser/x", expectDeny: true },
+    { label: "~/x (HOME outside allowedDirs)", file_path: "~/x", expectDeny: true },
+    { label: "~ bare (HOME outside allowedDirs)", file_path: "~", expectDeny: true },
+    { label: "${HOME}/x (HOME outside allowedDirs)", file_path: "${HOME}/x", expectDeny: true },
+    { label: "$HOME/x (HOME outside allowedDirs)", file_path: "$HOME/x", expectDeny: true },
+    { label: "$UNSET_EBH1_VAR/x (unset ⇒ empty string ⇒ /x ⇒ outside)", file_path: "$UNSET_EBH1_VAR/x", expectDeny: true },
+    { label: "a/$5/mid-path ($5 unresolvable — not a valid var name)", file_path: "a/$5/mid-path", expectDeny: true },
+    { label: "/etc/hosts (plain absolute, no shell syntax — sanity control)", file_path: "/etc/hosts", expectDeny: true },
+  ];
+
+  for (const { label, file_path, expectDeny } of rows) {
+    test(`${label} → ${expectDeny ? "DENY" : "ALLOW"}`, () => {
+      delete process.env.UNSET_EBH1_VAR;
+      const r = runHook("Read", { file_path }, policyEnv(), "test-session", allowedDir);
+      expect(r.status).toBe(0);
+      if (expectDeny) {
+        expectDenyDecision(r.stdout);
+      } else {
+        expectGrantDecision(r.stdout);
+      }
+    });
+  }
+
+  test("positive control: a plain relative path resolving INSIDE allowedDirs allows", () => {
+    const r = runHook("Read", { file_path: "ok.txt" }, policyEnv(), "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+
 // =============================================================================
 // B2 — Glob's `pattern` argument is itself a path (unlike Grep's).
 // =============================================================================
@@ -672,6 +781,113 @@ describe("path-guard.hook — B2: Glob pattern path-traversal (spawned)", () => 
     // (relies on session cwd scope, unaffected by the B2 Glob-only fix).
     expectGrantDecision(r.stdout);
   });
+});
+
+// =============================================================================
+// R2 (cortex#2343 adversarial review ROUND 2) — pure-function unit coverage
+// for the brace-expansion + risky-root primitives, plus a table-driven
+// SPAWNED matrix covering the CLASS of Glob pattern shapes, not just the
+// one repro the review gave.
+// =============================================================================
+
+describe("expandBraceAlternatives (R2 fix)", () => {
+  test("no braces at all ⇒ kind:none", () => {
+    expect(expandBraceAlternatives("src/**/*.ts")).toEqual({ kind: "none" });
+  });
+
+  test("one clean brace group ⇒ expanded alternatives", () => {
+    expect(expandBraceAlternatives("{../secret,x}/*")).toEqual({
+      kind: "expanded",
+      alternatives: ["../secret/*", "x/*"],
+    });
+  });
+
+  test("brace group with 3 alternatives", () => {
+    expect(expandBraceAlternatives("{/etc,x,../y}/passwd")).toEqual({
+      kind: "expanded",
+      alternatives: ["/etc/passwd", "x/passwd", "../y/passwd"],
+    });
+  });
+
+  test("unbalanced brace ⇒ ambiguous", () => {
+    expect(expandBraceAlternatives("{a,b/*").kind).toBe("ambiguous");
+  });
+
+  test("nested brace ⇒ ambiguous", () => {
+    expect(expandBraceAlternatives("{a,{b,c}}/*").kind).toBe("ambiguous");
+  });
+
+  test("two top-level brace groups ⇒ ambiguous", () => {
+    expect(expandBraceAlternatives("{a,b}/{c,d}").kind).toBe("ambiguous");
+  });
+});
+
+describe("isRiskyGlobPatternRoot (R2 fix)", () => {
+  test("empty root ⇒ not risky", () => {
+    expect(isRiskyGlobPatternRoot("")).toBe(false);
+  });
+
+  test("absolute root ⇒ risky", () => {
+    expect(isRiskyGlobPatternRoot("/etc/")).toBe(true);
+  });
+
+  test("relative root with a .. segment ⇒ risky", () => {
+    expect(isRiskyGlobPatternRoot("../secret/")).toBe(true);
+  });
+
+  test("relative root with no .. segment ⇒ not risky", () => {
+    expect(isRiskyGlobPatternRoot("src/")).toBe(false);
+  });
+});
+
+describe("path-guard.hook — R2: Glob pattern CLASS matrix (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-r2-matrix-"));
+    allowedDir = join(root, "allowed");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(join(allowedDir, "src"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  interface Row {
+    label: string;
+    pattern: string;
+    expectDeny: boolean;
+  }
+
+  const rows: Row[] = [
+    { label: "../x (plain traversal, no brace)", pattern: "../x", expectDeny: true },
+    { label: "{../x,y}/* (traversal HIDDEN inside a brace alternative)", pattern: "{../x,y}/*", expectDeny: true },
+    { label: "{/etc,x}/passwd (absolute HIDDEN inside a brace alternative)", pattern: "{/etc,x}/passwd", expectDeny: true },
+    { label: "**/x (legit — no directory prefix at all)", pattern: "**/x", expectDeny: false },
+    { label: "*.ts (legit — no directory prefix at all)", pattern: "*.ts", expectDeny: false },
+    { label: "src/** (legit — relative prefix resolving inside allowedDirs)", pattern: "src/**", expectDeny: false },
+  ];
+
+  for (const { label, pattern, expectDeny } of rows) {
+    test(`${label} → ${expectDeny ? "DENY" : "ALLOW"}`, () => {
+      const r = runHook("Glob", { path: allowedDir, pattern }, policyEnv());
+      expect(r.status).toBe(0);
+      if (expectDeny) {
+        expectDenyDecision(r.stdout);
+      } else {
+        expectGrantDecision(r.stdout);
+      }
+    });
+  }
 });
 
 // =============================================================================

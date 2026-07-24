@@ -31,7 +31,7 @@ import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
-import { isContainedIn, expandUserPath } from "../../common/path-containment";
+import { isContainedIn, expandUserPath, isUnresolvedShellToken } from "../../common/path-containment";
 import { parsePathGuardConfig } from "./path-guard.hook";
 
 interface HookInput {
@@ -314,6 +314,23 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
     // relative path, and resolves harmlessly inside the allowed dir while
     // the real shell reads the actual home directory outside it.
     const expandedPath = expandUserPath(rawPath);
+
+    // R1 fix (cortex#2343 adversarial review round 2): FAIL CLOSED on
+    // anything expandUserPath couldn't confidently resolve — a `~user` form
+    // (e.g. `~root/.ssh/id_rsa`) or a literal `$` left over from an
+    // expansion form we don't model. Resolving it against cwd instead (the
+    // R1 bug) treats it as a harmless literal relative path when the real
+    // shell would read a DIFFERENT, unresolvable-by-us location.
+    if (isUnresolvedShellToken(expandedPath)) {
+      return {
+        allow: false,
+        reason:
+          `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": path token ` +
+          `"${rawPath}" contains an unresolvable shell expansion (a ~user form or a ` +
+          `literal "$") — denying to stay fail-closed.`,
+      };
+    }
+
     const absPath = isAbsolute(expandedPath) ? expandedPath : resolvePath(process.cwd(), expandedPath);
     const contained =
       policy.allowedDirs.some((d) => isContainedIn(d, absPath)) ||
