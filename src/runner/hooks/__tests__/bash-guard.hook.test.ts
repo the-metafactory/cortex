@@ -1598,11 +1598,30 @@ describe("bash-guard.hook — round 4: bash quote-removal CLASS matrix", () => {
     expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
 
-  test('cat "my file.txt" — WHOLE-TOKEN quoted (legit space-in-path) inside allowedDirs ⇒ ALLOW', () => {
+  test('cat "my file.txt" — WHOLE-TOKEN quoted space-in-path ⇒ DENY (round 5 supersedes round 4 here)', () => {
+    // Round 4 allowed this (a cleanly whole-token-quoted path with a space
+    // is unambiguous — bash really does read exactly "my file.txt"). Round
+    // 5's character WHITELIST deliberately excludes whitespace (the
+    // adversarial review's own explicit character list + required-ALLOW
+    // list did NOT carve out an exception for it), so this is now denied —
+    // an intentional, documented over-denial of a legitimate-but-rare case
+    // via these six read-only bash commands, traded for closing the whole
+    // unenumerated char-trick class by construction. A space-containing
+    // path is still reachable through the Read tool (path-guard.hook.ts,
+    // which is NOT whitelisted — file_path is taken literally, no shell
+    // involved) or by widening allowedDirs.
     const realBash = spawnSync("bash", ["-c", `cd ${allowedDir} && cat "my file.txt"`], { encoding: "utf-8" });
-    expect(realBash.stdout.trim()).toBe("spacefile");
+    expect(realBash.stdout.trim()).toBe("spacefile"); // real bash CAN read it — the guard still refuses, deliberately
 
     const r = runHook('cat "my file.txt"', policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat ok.txt (no space, whitelisted chars only) inside allowedDirs ⇒ ALLOW — proves round 5 didn't break the common case", () => {
+    writeFileSync(join(allowedDir, "ok.txt"), "fine\n");
+    const r = runHook("cat ok.txt", policyEnv(), "Bash", "test-session", allowedDir);
     expect(r.status).toBe(0);
     expectGrantDecision(r.stdout);
   });
@@ -1668,5 +1687,170 @@ describe("bash-guard.hook — round 4: malformed CORTEX_BASH_GUARD fails closed"
     });
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+});
+
+// =============================================================================
+// Bypass #5 (cortex#2343 adversarial review round 5) — bash backslash
+// escaping, the signal to stop blacklisting individual shell tricks and
+// flip to a character WHITELIST. `\.` → `.` under bash's escape removal,
+// so `cat /a/\../secret/x` reads `/a/../secret/x` — a DIFFERENT path than
+// the guard's literal-token resolution saw. Every DENY case below is
+// cross-checked against REAL bash (`bash -c`) to confirm the guard's
+// refusal matches what the shell would actually do (or, for the safe
+// ALLOW cases, that the whitelist does NOT over-deny ordinary paths).
+// =============================================================================
+describe("bash-guard.hook — round 5: character whitelist matrix", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r5-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    fakeHome = join(root, "fakehome");
+    mkdirSync(join(allowedDir, "src"), { recursive: true });
+    mkdirSync(join(allowedDir, "sub", "dir"), { recursive: true });
+    mkdirSync(join(allowedDir, "repo"), { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    mkdirSync(fakeHome, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "canary\n");
+    writeFileSync(join(allowedDir, "src", "foo.ts"), "ts\n");
+    writeFileSync(join(allowedDir, "sub", "dir", "file.txt"), "nested\n");
+    writeFileSync(join(allowedDir, "repo", "file"), "repofile\n");
+    writeFileSync(join(allowedDir, "ok.log"), "log\n");
+    writeFileSync(join(allowedDir, "file-name_v2.txt"), "v2\n");
+    writeFileSync(join(allowedDir, "file.txt"), "plain\n");
+    writeFileSync(join(allowedDir, "b.c@1"), "at1\n");
+    writeFileSync(join(allowedDir, "x y"), "spacefile\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  function denyEnv(): Record<string, string> {
+    // HOME deliberately OUTSIDE allowedDirs — matches round 1/2's fixture
+    // convention so a `~`-based escape denies via containment as expected.
+    return { ...policyEnv(), HOME: fakeHome };
+  }
+
+  // ---- DENY: backslash + unenumerated character tricks ----
+
+  test("cat /a/\\../secret/x — backslash-escaped dot-dot ⇒ DENY (real bash reads OUTSIDE allowedDirs)", () => {
+    const realBash = spawnSync("bash", ["-c", `cat ${allowedDir}/\\../secret/canary.txt`], { encoding: "utf-8" });
+    // The backslash is a no-op escape (`\.` → `.`), so bash resolves this
+    // relative to allowedDir's PARENT — it escapes allowedDir entirely.
+    expect(realBash.stdout.trim()).toBe("canary");
+
+    const r = runHook(`cat ${allowedDir}/\\../secret/canary.txt`, denyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/\\secret/x — backslash before a plain char (no-op escape) ⇒ DENY (real bash reads the secret)", () => {
+    const realBash = spawnSync("bash", ["-c", `cat ${root}/\\secret/canary.txt`], { encoding: "utf-8" });
+    expect(realBash.stdout.trim()).toBe("canary");
+
+    const r = runHook(`cat ${root}/\\secret/canary.txt`, denyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/x\\ y — backslash-escaped space ⇒ DENY (real bash reads the space-named file inside allowedDirs; denied anyway — backslash is never whitelisted)", () => {
+    const realBash = spawnSync("bash", ["-c", `cat ${allowedDir}/x\\ y`], { encoding: "utf-8" });
+    expect(realBash.stdout.trim()).toBe("spacefile");
+
+    const r = runHook(`cat ${allowedDir}/x\\ y`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/$(echo x) — command substitution ⇒ DENY (already via rejectsChaining — round 5 keeps this intact)", () => {
+    const r = runHook(`cat ${allowedDir}/$(echo x)`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/foo^bar — caret (bash quick-substitution char) ⇒ DENY", () => {
+    const r = runHook(`cat ${allowedDir}/foo^bar`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat /a/foo!bar — bang (bash history-expansion char) ⇒ DENY", () => {
+    const r = runHook(`cat ${allowedDir}/foo!bar`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- ALLOW: ordinary paths must not be over-denied ----
+
+  test("cat /src/foo.ts (absolute, whitelisted chars, inside allowedDirs) ⇒ ALLOW", () => {
+    const r = runHook(`cat ${allowedDir}/src/foo.ts`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat ~/repo/file (tilde, HOME resolves INSIDE allowedDirs) ⇒ ALLOW", () => {
+    // HOME points AT allowedDir itself so `~/repo/file` resolves inside
+    // scope — proves the whitelist lets `~` through to the reducer rather
+    // than blocking it itself (unlike round 1/2's fixtures, which
+    // deliberately point HOME OUTSIDE to prove the opposite: a DENY).
+    const r = runHook("cat ~/repo/file", { ...policyEnv(), HOME: allowedDir }, "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat sub/dir/file.txt (relative, nested, whitelisted chars) ⇒ ALLOW", () => {
+    const r = runHook("cat sub/dir/file.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat *.log (bare wildcard, no directory component) ⇒ ALLOW", () => {
+    const r = runHook("cat *.log", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat file-name_v2.txt (hyphen + underscore + digit, all whitelisted) ⇒ ALLOW", () => {
+    const r = runHook("cat file-name_v2.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("head -n 20 file.txt (flag + numeric value + plain filename) ⇒ ALLOW", () => {
+    const r = runHook("head -n 20 file.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat a/b.c@1 (@ is whitelisted) ⇒ ALLOW", () => {
+    const r = runHook("cat b.c@1", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat $HOME/x style (reducer-expanded $VAR, resolves INSIDE allowedDirs) ⇒ ALLOW", () => {
+    writeFileSync(join(allowedDir, "x"), "homefile\n");
+    const r = runHook("cat $HOME/x", { ...policyEnv(), HOME: allowedDir }, "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
   });
 });

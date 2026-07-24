@@ -294,14 +294,46 @@ const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file"
 export interface ExtractedCommandPaths {
   /**
    * null = the WHOLE COMMAND must be denied — a candidate path token still
-   * carries an embedded or unbalanced quote character after the whole-token
-   * strip below (cortex#2343 adversarial review round 4, finding: bash
-   * quote-removal). See {@link reason}.
+   * carries an embedded/unbalanced quote character after the whole-token
+   * strip (round 4: bash quote-removal), or a character outside the safe
+   * whitelist (round 5: bash backslash-escaping and the whole unenumerated
+   * class of char-based tricks). See {@link reason}.
    */
   paths: string[] | null;
   /** Populated when `paths` is null — WHY the command must be denied. */
   reason?: string;
 }
+
+/**
+ * cortex#2343 adversarial review round 5 — the WHITELIST that replaces
+ * blacklisting individual shell tricks. Rounds 1–4 each closed ONE
+ * predicted bypass (tilde-user, brace expansion, quote-removal) only for
+ * the review to find the NEXT unmodelled char trick — round 5 is backslash
+ * escaping: bash removes a backslash before the char it escapes
+ * (`\.` → `.`), so `cat /a/\../secret/x` reads `/a/../secret/x` while the
+ * guard's literal-token resolution saw an unescaped `\` byte and either
+ * mis-resolved it or (worse) let it through unchecked entirely.
+ *
+ * We stop predicting bash's word-evaluation rules and instead require every
+ * character in a path token to come from a closed, conservative safe set:
+ * letters, digits, and `/ . _ - ~ $ { } [ ] * ? @ : + % , =`. ANYTHING else
+ * — backslash, quotes (already denied separately, round 4), backticks,
+ * parens, `!`, `#`, `^`, whitespace, control characters, and any char-based
+ * trick not yet enumerated by an adversarial review — is OUTSIDE the set
+ * and DENIES the command. This is closed-by-construction against the whole
+ * class, not just the instances found so far, at the cost of over-denying
+ * some exotic-but-legit paths (a filename with a literal `!` or `#`, say).
+ * That is the correct trade for a security guard: the kernel sandbox (L2,
+ * EBH-2/EBH-3) is the real boundary behind this one, so an occasional
+ * legitimate command needing a wider character has an escape hatch (widen
+ * `allowedDirs`, or route through a tool other than these six bash
+ * commands) that a silently-bypassed guard does not.
+ *
+ * The reducer (`reduceTokenToRealPathOrReject`) still does all the actual
+ * `~`/`$VAR`/brace/glob interpretation — this whitelist runs BEFORE it and
+ * only ever narrows what reaches it; it never widens anything.
+ */
+const SAFE_PATH_CHAR_RE = /^[A-Za-z0-9/._~$@:+%,={}[\]*?-]*$/;
 
 /**
  * Extract candidate path arguments from a single, already env-stripped,
@@ -363,6 +395,18 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
         reason:
           `embedded or unbalanced quote character in path argument "${tok.slice(0, 80)}" — ` +
           `cannot safely resolve what the shell would actually run, denying fail-closed`,
+      };
+    }
+    // Round 5 fix: character WHITELIST. Do not try to interpret whatever the
+    // offending character means to bash (backslash-escape, or anything
+    // else) — a token containing ANY character outside SAFE_PATH_CHAR_RE
+    // denies the whole command.
+    if (!SAFE_PATH_CHAR_RE.test(tok)) {
+      return {
+        paths: null,
+        reason:
+          `unsafe character in path argument "${tok.slice(0, 80)}" (outside the safe ` +
+          `character whitelist) — denying fail-closed`,
       };
     }
     paths.push(tok);
