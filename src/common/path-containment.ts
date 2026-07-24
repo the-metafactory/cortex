@@ -140,6 +140,18 @@ export interface RealpathResolution {
  * plain "create this new file" request isn't spuriously denied just because
  * the leaf doesn't exist yet.
  *
+ * cortex#2343 adversarial review round 6: ascending on ANY `realpathSync`
+ * failure was itself a fail-open pattern — a NUL-byte path (EINVAL),
+ * a permission-denied ancestor (EACCES), or a symlink loop (ELOOP) would
+ * ALSO ascend past the un-resolvable segment and re-append it, UN-
+ * REVALIDATED, onto whatever ancestor happened to resolve — silently
+ * granting on an error class that has nothing to do with "not created yet".
+ * Only `ENOENT`/`ENOTDIR` (the legitimate "this segment doesn't exist as a
+ * directory yet" case the Write-tool tolerance above exists for) may
+ * ascend; every OTHER errno is a genuine resolution failure and returns
+ * `ok: false` immediately, matching this module's own "any resolution
+ * error ⇒ ok:false" invariant instead of quietly special-casing it away.
+ *
  * Bounded to 1024 ascents so a pathological input (or a filesystem that
  * NEVER resolves, e.g. every ancestor including `/` throws) cannot spin
  * forever — that case reports `ok: false`, never a silent success.
@@ -156,6 +168,17 @@ export function resolveProspectiveRealpath(absPath: string): RealpathResolution 
         : real;
       return { ok: true, real: real2, reason: "" };
     } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        // A genuine resolution failure (NUL byte ⇒ EINVAL, permission
+        // denied ⇒ EACCES, symlink loop ⇒ ELOOP, or anything else) — do
+        // NOT ascend past it. FAIL CLOSED.
+        return {
+          ok: false,
+          real: "",
+          reason: `"${absPath}" does not resolve to a real path: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
       const parent = dirname(current);
       if (parent === current) {
         // Reached the filesystem root and even IT doesn't resolve — give up.

@@ -1854,3 +1854,105 @@ describe("bash-guard.hook — round 5: character whitelist matrix", () => {
     expectGrantDecision(r.stdout);
   });
 });
+
+// =============================================================================
+// Bypass #6 (cortex#2343 adversarial review round 6, FINAL L1 round) —
+// flag-value classification / arbitrary file-content exfil. A `-`-prefixed
+// token was unconditionally skipped as "just a flag" — never classified as
+// a path, so never whitelisted or containment-checked. `file -f<path>` /
+// `file --files-from=<path>` read the path GLUED to the flag and echo that
+// file's CONTENTS back on error (a real, live exfil primitive, confirmed
+// against the actual `file` binary below) — a different class from the
+// character-based bypasses rounds 1-5 closed.
+// =============================================================================
+describe("bash-guard.hook — round 6: flag-value classification matrix", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r6-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "SECRET_CANARY_LINE\n");
+    writeFileSync(join(allowedDir, "file.txt"), "plain\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  test("file -f/x — path glued to a short flag ⇒ DENY (real `file` echoes the secret line on error)", () => {
+    const canaryPath = join(secretDir, "canary.txt");
+    // Ground truth: the real `file` binary reads canaryPath as a LIST of
+    // filenames-to-check (one per line) and, since "SECRET_CANARY_LINE" is
+    // not a real file, echoes it back verbatim in its error output — an
+    // exfil primitive, not a hypothetical.
+    const realFile = spawnSync("file", [`-f${canaryPath}`], { encoding: "utf-8" });
+    expect(realFile.stdout + realFile.stderr).toContain("SECRET_CANARY_LINE");
+
+    const r = runHook(`file -f${canaryPath}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("path-shaped value glued to a flag");
+  });
+
+  test("file --files-from=/x — path glued via = ⇒ DENY (real `file` echoes the secret line on error)", () => {
+    const canaryPath = join(secretDir, "canary.txt");
+    const realFile = spawnSync("file", [`--files-from=${canaryPath}`], { encoding: "utf-8" });
+    expect(realFile.stdout + realFile.stderr).toContain("SECRET_CANARY_LINE");
+
+    const r = runHook(`file --files-from=${canaryPath}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("wc --files0-from=/x — path glued via = on a different path-checked command ⇒ DENY", () => {
+    const r = runHook(
+      `wc --files0-from=${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("ls -l — boolean flag, no path-shaped content ⇒ ALLOW (no over-deny regression)", () => {
+    const r = runHook("ls -l", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("head -n 20 file.txt — value-taking flag with a NUMERIC (non-path) value ⇒ ALLOW", () => {
+    const r = runHook("head -n 20 file.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("file --color=auto file.txt — = flag with a non-path value ⇒ ALLOW", () => {
+    const r = runHook("file --color=auto file.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("file --mime-type file.txt — bare boolean-ish flag with no value at all ⇒ ALLOW", () => {
+    const r = runHook("file --mime-type file.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+

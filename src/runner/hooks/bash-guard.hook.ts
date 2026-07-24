@@ -23,6 +23,43 @@
  *     pipeline (HTTP POST to the dashboard ingest endpoint, with a JSONL
  *     fallback) so blocks are observable. Best-effort — never blocks the
  *     deny decision.
+ *
+ * ## Known limitations (cortex#2343 adversarial review, 5 rounds — L1's last)
+ *
+ * This guard inspects the command STRING, not a real shell parse tree — it
+ * is a best-effort classifier against bash's word-evaluation rules and each
+ * path-checked command's own path-reading behavior, not a formal shell
+ * parser. Five adversarial rounds each found ONE way the guard's literal-
+ * token resolution diverged from what bash/the tool would actually read
+ * (tilde-user expansion, brace expansion, quote-removal, backslash-escaping,
+ * flag-glued path values) — the fix each time was to FAIL CLOSED on
+ * whatever couldn't be confidently classified/resolved, culminating in
+ * round 5's character whitelist (deny anything outside a closed safe set)
+ * and round 6's flag-value classification (deny anything `-`-prefixed that
+ * looks path-shaped). That posture — fail closed on ambiguity — is what
+ * makes this guard SAFE, but it is NOT airtight by construction the way a
+ * real parser + kernel boundary would be. The kernel sandbox (L2, EBH-2/
+ * EBH-3, `docs/design-session-sandbox.md`) is the actual boundary; this
+ * guard is Tier-0 defense-in-depth in front of it.
+ *
+ * Accepted residuals (deliberately not chased further — over-deny, not
+ * under-deny, direction):
+ *   - Bash special parameters (`$_`, `$0`, `$#`, `$@`, `$*`, `$-`, `$$`,
+ *     `$!`, `$?`) are NOT expanded by `expandUserPath`'s `$VAR`/`${VAR}`
+ *     regex (it only matches `[A-Za-z_][A-Za-z0-9_]*` identifiers) — a
+ *     token containing one still has a residual `$` after expansion and is
+ *     denied by `isUnresolvedShellToken`, even in the rare case a special
+ *     parameter would have expanded to something harmless. Over-deny, safe
+ *     direction.
+ *   - A future command added to `PATH_CHECKED_COMMANDS` with a not-yet-
+ *     modeled value-taking flag (some GNU option this review didn't
+ *     enumerate) is mitigated by round 6's path-shaped-flag-value deny —
+ *     any `-`-prefixed token containing `/`/`~`/a `.`-leading `=`-value
+ *     denies outright rather than being silently skipped — but a flag
+ *     whose value is path-shaped WITHOUT any of those characters (there is
+ *     no such known case among GNU coreutils/`file`) would not be caught by
+ *     construction. Any new addition to `PATH_CHECKED_COMMANDS` should be
+ *     reviewed against this class specifically.
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -336,6 +373,31 @@ export interface ExtractedCommandPaths {
 const SAFE_PATH_CHAR_RE = /^[A-Za-z0-9/._~$@:+%,={}[\]*?-]*$/;
 
 /**
+ * cortex#2343 adversarial review round 6 — True when a `-`-prefixed token
+ * LOOKS like it carries a path glued to the flag, and must therefore be
+ * denied rather than blanket-skipped as "just a flag":
+ *
+ *   - the token contains a `/` anywhere (`-f/tmp/x`, `--files-from=/tmp/x`), or
+ *   - the token contains a `~` anywhere (`-f~/x`), or
+ *   - the token has a `--flag=value` form whose value starts with `.`
+ *     (`--files-from=.hidden`) — a relative/dotfile path with no `/`, which
+ *     the first two checks alone would miss.
+ *
+ * A boolean/non-path flag (`-l`, `-d`, `--mime-type`, `--color=auto`) hits
+ * none of these and is still skipped/allowed, unchanged. This function is
+ * used ONLY to decide "deny outright", never to decide "this is safe" — it
+ * has no false-negative cost in the safe direction (see the call site: a
+ * `false` result still just `continue`s past the token as before; it is
+ * NEVER treated as ok-to-resolve on its own).
+ */
+function isPathShapedFlagValue(tok: string): boolean {
+  if (tok.includes("/") || tok.includes("~")) return true;
+  const eqIdx = tok.indexOf("=");
+  if (eqIdx !== -1 && tok.slice(eqIdx + 1).startsWith(".")) return true;
+  return false;
+}
+
+/**
  * Extract candidate path arguments from a single, already env-stripped,
  * already-segment-split shell command string. Deliberately NOT a full shell
  * parser: `rejectsChaining()` (above, runs BEFORE this) already refuses
@@ -374,6 +436,20 @@ const SAFE_PATH_CHAR_RE = /^[A-Za-z0-9/._~$@:+%,={}[\]*?-]*$/;
  * never embed a quote character mid-path; whole-token-quoted paths (for
  * spaces) are unaffected, since those are fully stripped clean above.
  *
+ * cortex#2343 adversarial review round 6 (flag-value classification, the
+ * FINAL L1 round): a `-`-prefixed token was unconditionally skipped as "just
+ * a flag" — never classified as a path, so never whitelisted or reduced.
+ * `file`'s `-f`/`--files-from` and `wc`'s `--files0-from` read the PATH
+ * GLUED to the flag and can echo that file's contents back on error —
+ * `file -f/tmp/secret/x` / `file --files-from=/tmp/secret/x` exfiltrated
+ * arbitrary file content while the guard saw "just a flag" and allowed it.
+ * Fixed by {@link isPathShapedFlagValue}: any `-`-prefixed token that LOOKS
+ * like it carries a path is denied outright rather than being classified
+ * (deny-broadening only — a boolean/non-path flag like `-l`/`--mime-type`/
+ * `--color=auto` still contains none of `/`/`~`/a `.`-leading `=`-value, so
+ * it's still skipped, still allowed; this can never turn a previously-
+ * denied command into an allowed one).
+ *
  * Exported for unit tests.
  */
 export function extractCommandPaths(command: string): ExtractedCommandPaths {
@@ -381,7 +457,18 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
   const paths: string[] = [];
   for (let i = 1; i < tokens.length; i++) {
     let tok = tokens[i];
-    if (tok === undefined || tok.startsWith("-")) continue;
+    if (tok === undefined) continue;
+    if (tok.startsWith("-")) {
+      if (isPathShapedFlagValue(tok)) {
+        return {
+          paths: null,
+          reason:
+            `path-shaped value glued to a flag ("${tok.slice(0, 80)}") — cannot safely ` +
+            `classify what this flag consumes, denying fail-closed`,
+        };
+      }
+      continue;
+    }
     if (
       (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) ||
       (tok.startsWith("'") && tok.endsWith("'") && tok.length >= 2)

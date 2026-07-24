@@ -1051,3 +1051,40 @@ describe("path-guard.hook — B4: NotebookEdit coverage (spawned)", () => {
     expectDenyDecision(r.stdout);
   });
 });
+
+// =============================================================================
+// cortex#2343 adversarial review round 6 — resolveProspectiveRealpath
+// (path-containment.ts) must FAIL CLOSED on any realpathSync error OTHER
+// than ENOENT/ENOTDIR, not silently ascend past it. A NUL-byte file_path is
+// the concrete repro (Bun/Node's realpathSync throws ERR_INVALID_ARG_VALUE
+// for it, NOT ENOENT) — this is path-guard.hook.ts's file_path specifically
+// BECAUSE it carries NO character whitelist (round 5 deliberately left this
+// hook un-whitelisted: file_path is taken literally by Claude Code, no
+// shell involved), so this is the one surface where the reducer's own
+// resolution discipline is the ENTIRE defense against a malformed path.
+// =============================================================================
+describe("path-guard.hook — round 6: NUL-byte file_path fails closed (reducer, not the whitelist)", () => {
+  let root: string;
+  let allowedDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-r6-nul-"));
+    allowedDir = join(root, "allowed");
+    mkdirSync(allowedDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("Read file_path with an embedded NUL byte ⇒ deny", () => {
+    const nulPath = join(allowedDir, "a") + String.fromCharCode(0) + "b";
+    const r = runHook(
+      "Read",
+      { file_path: nulPath },
+      { CORTEX_CHANNEL: "test", CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }) },
+    );
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+});
