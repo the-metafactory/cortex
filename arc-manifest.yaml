@@ -95,6 +95,12 @@ provides:
       target: ~/.claude/hooks/CortexEventLogger.hook.ts
     - source: src/runner/hooks/bash-guard.hook.ts
       target: ~/.claude/hooks/CortexBashGuard.hook.ts
+    # EBH-1 (cortex#2343) — cortex-owned PreToolUse path guard for the file
+    # tools (Read/Write/Edit/Glob/Grep). Registered GLOBALLY below (unlike
+    # the Skill/MCP guards) because — like CortexBashGuard — it gates every
+    # bot session's file access, not a per-session grant list.
+    - source: src/runner/hooks/path-guard.hook.ts
+      target: ~/.claude/hooks/CortexPathGuard.hook.ts
     # cortex#710 (C-701 Part B) — per-skill grant PreToolUse hook. Installed
     # as a symlink ONLY (no `hooks:` entry below) so it is NEVER registered in
     # the principal's GLOBAL settings.json — it would otherwise gate the
@@ -149,6 +155,9 @@ provides:
     - event: PreToolUse
       command: ${PAI_DIR}/hooks/CortexBashGuard.hook.ts
       matcher: Bash
+    - event: PreToolUse
+      command: ${PAI_DIR}/hooks/CortexPathGuard.hook.ts
+      matcher: Read|Write|Edit|Glob|Grep
 
 # Capability declarations (cortex#2285 C1 honesty pass, house rule: an
 # undeclared capability is a security bug). First deliberate review of this

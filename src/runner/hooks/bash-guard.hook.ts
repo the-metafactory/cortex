@@ -26,11 +26,13 @@
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
-import { join } from "path";
+import { isAbsolute, join, resolve as resolvePath } from "path";
 import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
 import { eventsDir } from "../../common/events-path";
 import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
 import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
+import { isContainedIn } from "../../common/path-containment";
+import { parsePathGuardConfig } from "./path-guard.hook";
 
 interface HookInput {
   session_id?: string;
@@ -230,6 +232,98 @@ function rejectsChaining(command: string): boolean {
   // / job-control). Same collapse trick.
   if (command.replace(/&&/g, "").includes("&")) return true;
   return false;
+}
+
+// =============================================================================
+// Path containment for read-command rules (EBH-1, cortex#2343 step 3).
+//
+// Command-shape allow (the DEFAULT_CONFIG rules above) is necessary but no
+// longer sufficient: `^cat\b` matches `cat ~/.config/metafactory/cortex/
+// system/system.yaml` with no path check. These commands additionally
+// containment-check their path argument(s) against the SAME
+// `CORTEX_PATH_GUARD` policy `path-guard.hook.ts` enforces for the file
+// tools — one resolved policy, two enforcement points (design spec DD-1).
+// =============================================================================
+
+/** Bash read commands whose path argument(s) get containment-checked. */
+const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file"]);
+
+/**
+ * Extract candidate path arguments from a single, already env-stripped,
+ * already-segment-split shell command string. Deliberately NOT a full shell
+ * parser: `rejectsChaining()` (above, runs BEFORE this) already refuses
+ * every construct that could smuggle a hidden argument (pipes, command
+ * substitution, backticks, redirects, background `&`, newlines), so this
+ * only has to tokenize a single simple invocation (`cat foo.txt`,
+ * `ls -la /some/dir`, `head -n 20 bar.log`).
+ *
+ * Tokens starting with `-` are treated as flags and skipped. A flag's VALUE
+ * token (e.g. the `20` in `head -n 20 file`) is NOT itself `-`-prefixed, so
+ * it falls through and is conservatively treated as a candidate path — this
+ * can under-deny (a numeric flag value resolves relative to the session's
+ * already-allowed cwd, so it almost always still resolves inside policy
+ * scope) but never OVER-denies a real flag as an escaping path. Exported for
+ * unit tests.
+ */
+export function extractCommandPaths(command: string): string[] {
+  const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  const paths: string[] = [];
+  for (let i = 1; i < tokens.length; i++) {
+    let tok = tokens[i];
+    if (tok === undefined || tok.startsWith("-")) continue;
+    if (
+      (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) ||
+      (tok.startsWith("'") && tok.endsWith("'") && tok.length >= 2)
+    ) {
+      tok = tok.slice(1, -1);
+    }
+    if (tok.length > 0) paths.push(tok);
+  }
+  return paths;
+}
+
+/**
+ * Containment-check every path argument of a path-checked command against
+ * `CORTEX_PATH_GUARD`. Mirrors path-guard.hook.ts's own policy semantics
+ * exactly (same parser, same "empty policy = no restriction configured"
+ * contract, same fail-closed-on-malformed-config posture) — see that file's
+ * module doc for the full rationale. Exported for unit tests.
+ */
+export function checkCommandPaths(trimmedCommand: string): { allow: boolean; reason: string } {
+  const configResult = parsePathGuardConfig(process.env.CORTEX_PATH_GUARD);
+  if (!configResult.ok) {
+    return {
+      allow: false,
+      reason:
+        `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": ${configResult.reason} ` +
+        `— denying to stay fail-closed.`,
+    };
+  }
+  const { policy } = configResult;
+  if (policy.allowedDirs.length === 0 && policy.readOnlyDirs.length === 0) {
+    // No restriction configured for this session — matches the existing
+    // security-preamble.ts contract (allDirs.length === 0 ⇒ no restriction).
+    return { allow: true, reason: "" };
+  }
+
+  const candidatePaths = extractCommandPaths(trimmedCommand);
+  for (const rawPath of candidatePaths) {
+    const absPath = isAbsolute(rawPath) ? rawPath : resolvePath(process.cwd(), rawPath);
+    const contained =
+      policy.allowedDirs.some((d) => isContainedIn(d, absPath)) ||
+      policy.readOnlyDirs.some((d) => isContainedIn(d, absPath));
+    if (!contained) {
+      return {
+        allow: false,
+        reason:
+          `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": path "${absPath}" ` +
+          `resolves outside every configured allowedDirs/readOnlyDirs entry (EBH-1, ` +
+          `cortex#2343). Ask the principal to widen allowedDirs if this path is genuinely ` +
+          `needed.`,
+      };
+    }
+  }
+  return { allow: true, reason: "" };
 }
 
 // =============================================================================
@@ -556,6 +650,19 @@ async function main(): Promise<void> {
       deny(reason);
       await emitBlockEvent(sessionId, reason, command);
       return;
+    }
+
+    // EBH-1 (cortex#2343 step 3) — path-containment for the read-command
+    // rules. Runs AFTER the shape-allowlist match (matched === true), so it
+    // only tightens an already-allowed command, never widens one.
+    const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(trimmed)?.[1]?.toLowerCase();
+    if (headWord && PATH_CHECKED_COMMANDS.has(headWord)) {
+      const pathCheck = checkCommandPaths(trimmed);
+      if (!pathCheck.allow) {
+        deny(pathCheck.reason);
+        await emitBlockEvent(sessionId, pathCheck.reason, command);
+        return;
+      }
     }
   }
 

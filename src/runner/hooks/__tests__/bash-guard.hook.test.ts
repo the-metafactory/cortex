@@ -31,7 +31,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, existsSync, readFileSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 
 const HOOK_PATH = join(import.meta.dir, "..", "bash-guard.hook.ts");
@@ -1149,5 +1149,122 @@ describe("bash-guard.hook — read-only aws (integration via hook + halden confi
 
   test("DENY describe piped into a destructive command (no-bypass)", () => {
     expectDeny("aws ec2 describe-instances | aws ec2 terminate-instances");
+  });
+});
+
+// =============================================================================
+// EBH-1 (cortex#2343 step 3) — path containment for the read-command rules
+// (cat/head/tail/ls/wc/file). Command-shape allow alone is no longer
+// sufficient: these tests prove the SAME CORTEX_PATH_GUARD policy
+// path-guard.hook.ts enforces for the file tools also gates these Bash
+// read commands' path argument(s).
+// =============================================================================
+describe("bash-guard.hook — path containment for read commands (EBH-1, cortex#2343)", () => {
+  let root: string;
+  let allowedDir: string;
+  let readOnlyDir: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-path-"));
+    allowedDir = join(root, "allowed");
+    readOnlyDir = join(root, "readonly");
+    outsideDir = join(root, "outside");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(readOnlyDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(allowedDir, "ok.txt"), "fine\n");
+    writeFileSync(join(readOnlyDir, "system.yaml"), "secret: true\n");
+    writeFileSync(join(outsideDir, "secret.txt"), "nope\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [readOnlyDir] }),
+    };
+  }
+
+  for (const cmd of ["cat", "head", "tail", "ls", "wc", "file"]) {
+    test(`DENY "${cmd} <path outside allowedDirs/readOnlyDirs>"`, () => {
+      const r = runHook(`${cmd} ${join(outsideDir, "secret.txt")}`, policyEnv());
+      expect(r.status).toBe(0);
+      const out = JSON.parse(r.stdout.trim());
+      expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("EBH-1");
+    });
+
+    test(`ALLOW "${cmd} <path inside allowedDirs>"`, () => {
+      const target = cmd === "ls" || cmd === "wc" ? join(allowedDir, "ok.txt") : join(allowedDir, "ok.txt");
+      const r = runHook(`${cmd} ${target}`, policyEnv());
+      expect(r.status).toBe(0);
+      expectGrantDecision(r.stdout);
+    });
+
+    test(`ALLOW "${cmd} <path inside readOnlyDir>" (read command, read-only dir is fine)`, () => {
+      const r = runHook(`${cmd} ${join(readOnlyDir, "system.yaml")}`, policyEnv());
+      expect(r.status).toBe(0);
+      expectGrantDecision(r.stdout);
+    });
+  }
+
+  test("DENY cat of the cortex-config-shaped path outside allowedDirs (repro from issue #2343)", () => {
+    const configLikeDir = join(root, "config-like", "metafactory", "cortex", "system");
+    mkdirSync(configLikeDir, { recursive: true });
+    writeFileSync(join(configLikeDir, "system.yaml"), "token: abc\n");
+    const r = runHook(`cat ${join(configLikeDir, "system.yaml")}`, policyEnv());
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("DENY via a symlink inside allowedDir pointing outside it (realpath'd before check)", () => {
+    const linkPath = join(allowedDir, "escape-link");
+    symlinkSync(outsideDir, linkPath);
+    const r = runHook(`cat ${join(linkPath, "secret.txt")}`, policyEnv());
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("no CORTEX_PATH_GUARD configured (no restriction) ⇒ command-shape allow alone still GRANTS", () => {
+    // Preserves EXISTING behaviour for sessions that haven't configured
+    // allowedDirs — matches security-preamble.ts's "no dirs ⇒ no restriction"
+    // contract. Uses `ls` (no args) which is always allowlisted.
+    const r = runHook("ls", { CORTEX_CHANNEL: "test-channel", CORTEX_PATH_GUARD: undefined });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("malformed CORTEX_PATH_GUARD ⇒ DENY even for an otherwise-allowlisted read command", () => {
+    const r = runHook("ls", { CORTEX_CHANNEL: "test-channel", CORTEX_PATH_GUARD: "{not json" });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("path check does not apply to non-path-checked commands (gh/git unaffected)", () => {
+    // `gh pr view` isn't in PATH_CHECKED_COMMANDS — the containment check
+    // must not fire for it even under an active, narrow allowedDirs policy.
+    const r = runHook("gh pr view 1 --repo the-metafactory/cortex", {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("existing #2337 gh-floor rules are untouched: gh pr merge still DENIES", () => {
+    const r = runHook("gh pr merge 1 --admin", {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
 });
