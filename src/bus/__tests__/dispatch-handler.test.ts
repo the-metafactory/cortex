@@ -2763,3 +2763,184 @@ describe("agentDisallowedTools — WEB-2/B1 per-agent structural confinement (co
     await handler.shutdown();
   });
 });
+
+// cortex#2386 (EBH-7a) — persona-declared `allowedTools` enforcement.
+// A persona's frontmatter `allowedTools` was, until this fix, pure prose
+// (folded into the system prompt, never parsed into a structured value —
+// see `targetAgentPersonaPreamble`). This merges its complement into
+// `effectiveDisallowed` via the SAME seam `agentDisallowedTools` (WEB-2/B1)
+// already uses, tested directly above.
+describe("persona allowedTools — EBH-7a dispatch-seam enforcement (cortex#2386)", () => {
+  let personaDir: string;
+
+  beforeEach(() => {
+    personaDir = mkdtempSync(join(tmpdir(), "cortex-persona-allowedtools-test-"));
+  });
+  afterEach(() => {
+    rmSync(personaDir, { recursive: true, force: true });
+  });
+
+  function writePersona(contents: string): string {
+    const path = join(personaDir, "persona.md");
+    writeFileSync(path, contents, "utf-8");
+    return path;
+  }
+
+  test("persona declaring allowedTools: [Read] denies every other inventory tool AND still permits Read", async () => {
+    let capturedDisallowed: string[] = [];
+    let capturedAdditionalArgs: string[] = [];
+    const factory: CCSessionFactory = (opts) => {
+      capturedDisallowed = [...(opts.disallowedTools ?? [])];
+      capturedAdditionalArgs = [...(opts.additionalArgs ?? [])];
+      const session: CCSessionLike = {
+        start() { return session; },
+        async wait(): Promise<CCSessionResult> {
+          return { success: true, response: "ok", exitCode: 0, durationMs: 1, sessionId: "test-sess" };
+        },
+      };
+      return session;
+    };
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    const personaPath = writePersona(
+      "---\ndisplayName: Pier\nallowedTools: [Read]\n---\n\nYou are Pier.\n",
+    );
+
+    await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+      id: "pier",
+      displayName: "Pier",
+      persona: personaPath,
+    });
+
+    // Every CLAUDE_TOOL_INVENTORY tool except Read must be denied.
+    for (const tool of CLAUDE_TOOL_INVENTORY) {
+      if (tool === "Read") {
+        expect(capturedDisallowed).not.toContain(tool);
+      } else {
+        expect(capturedDisallowed).toContain(tool);
+      }
+    }
+    // MCP note: a persona declaring allowedTools implies --strict-mcp-config
+    // too (the canonical v1.0 set never names an mcp__* tool).
+    expect(capturedAdditionalArgs).toContain("--strict-mcp-config");
+    await handler.shutdown();
+  });
+
+  test("persona declaring allowedTools: [] (explicit empty) denies the FULL inventory", async () => {
+    let capturedDisallowed: string[] = [];
+    const factory: CCSessionFactory = (opts) => {
+      capturedDisallowed = [...(opts.disallowedTools ?? [])];
+      const session: CCSessionLike = {
+        start() { return session; },
+        async wait(): Promise<CCSessionResult> {
+          return { success: true, response: "ok", exitCode: 0, durationMs: 1, sessionId: "test-sess" };
+        },
+      };
+      return session;
+    };
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    const personaPath = writePersona(
+      "---\ndisplayName: Pylon\nallowedTools: []\n---\n\nYou are Pylon.\n",
+    );
+
+    await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+      id: "pylon-persona-only",
+      displayName: "Pylon",
+      persona: personaPath,
+    });
+
+    for (const tool of CLAUDE_TOOL_INVENTORY) {
+      expect(capturedDisallowed).toContain(tool);
+    }
+    await handler.shutdown();
+  });
+
+  test("NO allowedTools declaration in the persona changes NOTHING (pre-#2386 behaviour preserved)", async () => {
+    let capturedDisallowed: string[] = [];
+    const factory: CCSessionFactory = (opts) => {
+      capturedDisallowed = [...(opts.disallowedTools ?? [])];
+      const session: CCSessionLike = {
+        start() { return session; },
+        async wait(): Promise<CCSessionResult> {
+          return { success: true, response: "ok", exitCode: 0, durationMs: 1, sessionId: "test-sess" };
+        },
+      };
+      return session;
+    };
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    // Persona with NO allowedTools field at all — absence of a declaration
+    // is not a declaration of nothing.
+    const personaPath = writePersona("---\ndisplayName: Echo\n---\n\nYou are Echo.\n");
+
+    await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+      id: "echo",
+      displayName: "Echo",
+      persona: personaPath,
+    });
+
+    // No policy toolRestrictions, no agentDisallowedTools, no persona
+    // declaration → nothing NEW is denied. `Skill` is still denied by
+    // default (cortex#710 — default-deny absent an explicit
+    // `allowedSkills` grant, unrelated to this fix); asserting the exact
+    // baseline pins that #2386 didn't change it.
+    expect(capturedDisallowed).toEqual(["Skill"]);
+    await handler.shutdown();
+  });
+
+  test("persona allowedTools MERGES with an existing agentDisallowedTools declaration", async () => {
+    let capturedDisallowed: string[] = [];
+    const factory: CCSessionFactory = (opts) => {
+      capturedDisallowed = [...(opts.disallowedTools ?? [])];
+      const session: CCSessionLike = {
+        start() { return session; },
+        async wait(): Promise<CCSessionResult> {
+          return { success: true, response: "ok", exitCode: 0, durationMs: 1, sessionId: "test-sess" };
+        },
+      };
+      return session;
+    };
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    const personaPath = writePersona(
+      "---\ndisplayName: Multi\nallowedTools: [Read, Grep]\n---\n\nbody\n",
+    );
+
+    await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+      id: "multi",
+      displayName: "Multi",
+      persona: personaPath,
+      // Task/ExitPlanMode aren't in CLAUDE_TOOL_INVENTORY, so the persona
+      // complement can't reach them — agentDisallowedTools still must.
+      agentDisallowedTools: ["Task", "ExitPlanMode"],
+    });
+
+    expect(capturedDisallowed).not.toContain("Read");
+    expect(capturedDisallowed).not.toContain("Grep");
+    expect(capturedDisallowed).toContain("Bash");
+    expect(capturedDisallowed).toContain("Task");
+    expect(capturedDisallowed).toContain("ExitPlanMode");
+    await handler.shutdown();
+  });
+});

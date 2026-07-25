@@ -53,6 +53,8 @@ import {
   cleanupExpiredDirs,
 } from "../runner/attachments";
 import { resolveChannelContext, type ChannelContext } from "../common/channel-context";
+import { loadPersonaAllowedTools } from "../common/agents/persona-frontmatter";
+import { deriveDisallowedFromAllowlist } from "../common/policy/tool-inventory";
 import { getNetworkForGuild, getNetworkForChannel } from "./network-resolver";
 import type { MyelinRuntime } from "./myelin/runtime";
 import {
@@ -94,6 +96,15 @@ function getCortexVersion(): string {
 interface DispatchTargetAgent {
   id: string;
   displayName: string;
+  /**
+   * Path to the agent's persona markdown file. Folded into the system
+   * prompt as prose by `targetAgentPersonaPreamble`. Since cortex#2386
+   * (EBH-7a), ALSO consulted structurally: if the persona's YAML
+   * frontmatter declares `allowedTools`, `handleMessage` merges the
+   * complement into `effectiveDisallowed` (see `personaAllowedTools()`) —
+   * the field is no longer prompt-only advisory for personas that declare
+   * it. A persona with no `allowedTools` field is unaffected.
+   */
   persona?: string;
   /**
    * cortex#1165 — the Pier open-onboarding gate. When `true`, an inbound
@@ -298,6 +309,14 @@ export class DispatchHandler extends EventEmitter {
    */
   private readonly policyEngine: PolicyEngine | undefined;
   private readonly personaPromptCache = new Map<string, string | null>();
+  /**
+   * cortex#2386 (EBH-7a) — cache of a persona's declared `allowedTools`
+   * frontmatter field, keyed by persona path. `null` means "resolved, no
+   * declaration" (distinct from "not yet resolved", the unset-key case) so
+   * a persona with no `allowedTools` field is cached too, not re-parsed on
+   * every dispatch.
+   */
+  private readonly personaAllowedToolsCache = new Map<string, string[] | null>();
 
   constructor(opts: DispatchHandlerOpts) {
     super();
@@ -393,6 +412,27 @@ export class DispatchHandler extends EventEmitter {
     return persona === null || persona.length === 0
       ? identity
       : `${identity}${persona}\n\n`;
+  }
+
+  /**
+   * cortex#2386 (EBH-7a) — resolve a persona's declared `allowedTools`
+   * frontmatter field (cached per persona path), so `handleMessage` can
+   * merge its complement into `effectiveDisallowed` — the SAME seam
+   * `agentDisallowedTools` (WEB-2/B1) already uses, not a new deny path.
+   *
+   * Returns `undefined` when the persona has no `allowedTools` declaration
+   * (or the file/frontmatter can't be read/parsed — see
+   * `loadPersonaAllowedTools`'s doc comment for the full fail-open list).
+   * `undefined` here means "apply no persona-derived restriction" — the
+   * agent keeps exactly its pre-#2386 behaviour, per the hard requirement
+   * that absence of a declaration is not a declaration of nothing.
+   */
+  private personaAllowedTools(personaPath: string): string[] | undefined {
+    const cached = this.personaAllowedToolsCache.get(personaPath);
+    if (cached !== undefined) return cached ?? undefined;
+    const loaded = loadPersonaAllowedTools(personaPath) ?? null;
+    this.personaAllowedToolsCache.set(personaPath, loaded);
+    return loaded ?? undefined;
   }
 
   /**
@@ -938,6 +978,44 @@ export class DispatchHandler extends EventEmitter {
         }
       }
 
+      // cortex#2386 (EBH-7a) — persona-declared `allowedTools` enforcement.
+      // A persona's frontmatter `allowedTools` (docs/persona-format.md) was
+      // advisory-only: it was baked into the prompt as prose (see
+      // `targetAgentPersonaPreamble`) but nothing filtered the substrate
+      // tool palette to it — a persona declaring `allowedTools: [Read]` was
+      // NOT actually read-only. This closes that gap through the SAME seam
+      // `agentDisallowedTools` (WEB-2/B1) already uses, not a new deny path:
+      // when the persona declares a list, everything in the canonical
+      // CLAUDE_TOOL_INVENTORY that ISN'T in it is merged into
+      // `effectiveDisallowed`. A persona with NO `allowedTools` field
+      // (`personaAllowedTools() === undefined`) changes NOTHING — absence of
+      // a declaration is not a declaration of nothing.
+      //
+      // MCP note: `allowedTools`'s canonical v1.0 tool set never names an
+      // `mcp__*` tool, so a persona that declares `allowedTools` at all is
+      // read below (strictMcp) as also implying "no MCP" — otherwise a
+      // persona saying `[Read]` would still leave every `mcp__*` tool the
+      // principal's role grants wide open, the exact half-enforced shape
+      // this epic exists to eliminate.
+      const personaAllowedTools = targetAgent?.persona !== undefined
+        ? this.personaAllowedTools(targetAgent.persona)
+        : undefined;
+      if (personaAllowedTools !== undefined) {
+        const { disallowed: personaDisallowed, unknown: personaUnknownTools } =
+          deriveDisallowedFromAllowlist(personaAllowedTools);
+        for (const t of personaDisallowed) {
+          if (!effectiveDisallowed.includes(t)) effectiveDisallowed.push(t);
+        }
+        if (personaUnknownTools.length > 0) {
+          process.stderr.write(
+            `dispatch-handler: persona for ${targetAgent?.id ?? "<unknown>"} at ` +
+              `${targetAgent?.persona ?? "<unknown>"} declares allowedTools entries not in ` +
+              `CLAUDE_TOOL_INVENTORY: ${JSON.stringify(personaUnknownTools)} — they grant ` +
+              `nothing and deny nothing (check for a typo against the canonical tool names)\n`,
+          );
+        }
+      }
+
       // cortex#1167 review — PATH-INDEPENDENT tool allowlist. `access.allowedTools`
       // (set only by the anon open-onboarding path) takes precedence over the
       // config default on EVERY path: the bus path (via the publish payload
@@ -1030,8 +1108,14 @@ export class DispatchHandler extends EventEmitter {
       // MCP Guard hook stays armed as the in-session backstop). A principal
       // with partial grants must NOT get the flag — their granted servers
       // have to load; the hook enforces the per-server/per-tool boundary.
+      // cortex#2386 (EBH-7a) — a persona that declares `allowedTools` gets
+      // the flag too: the canonical v1.0 tool set the field draws from never
+      // names an `mcp__*` tool, so a declared allowlist implicitly means "no
+      // MCP" — without this, `allowedTools: [Read]` would still leave every
+      // `mcp__*` tool the principal's role grants reachable.
       const strictMcp = targetAgent?.strictMcpConfig === true ||
-        mcpGrants?.length === 0;
+        mcpGrants?.length === 0 ||
+        personaAllowedTools !== undefined;
       const effectiveAdditionalArgs = strictMcp
         ? [...this.config.claude.additionalArgs, "--strict-mcp-config"]
         : this.config.claude.additionalArgs;

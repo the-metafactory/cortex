@@ -183,6 +183,32 @@ export class BusInboundSink implements GatewayInboundSink {
       // Without this, an envelope carrying empty allow/deny lists spawns a
       // session where the `Skill` tool is AVAILABLE BY DEFAULT (verified,
       // CLI 2.1.158) — a fail-open hole on the gateway path. Fail-closed.
+      //
+      // cortex#2386 (EBH-7a) — for the SAME #1758 reason, a target agent's
+      // persona-declared `allowedTools` (enforced in dispatch-handler.ts by
+      // merging its complement into effectiveDisallowed) is ALSO inert on
+      // THIS path: the gateway never loads the bound stack's agent config
+      // (it only has `match.agent`, an id string, not the resolved
+      // `DispatchTargetAgent` with a `persona` path), so it cannot compute
+      // that complement itself. Confirmed live, not just structurally: the
+      // pylon facilitator agent (`agents.d/pylon.yaml`) ALREADY declares an
+      // explicit `agentDisallowedTools` covering every CC tool plus
+      // `strictMcpConfig: true` — the same WEB-2/B1 mechanism this file
+      // hardcodes `["Skill"]` for — and pylon is dispatched via the AMT web
+      // surface, i.e. through THIS sink. Cortex's own event telemetry still
+      // shows pylon sessions invoking `Edit`/`Write`/`Agent` (published
+      // `tool.file.changed` / `tool.agent.spawned` events, agent_id=pylon,
+      // e.g. session `5dee443d-2246-4b7f-b3bc-0c9505b2922f`), because THIS
+      // sink never reads `agentDisallowedTools` either — it only ever emits
+      // the hardcoded `["Skill"]` below. So: neither the pre-existing
+      // `agentDisallowedTools` mechanism NOR the new persona-`allowedTools`
+      // derivation (cortex#2386) reaches a message routed through this
+      // gateway — only `["Skill"]` here + the empty `mcpGrants` below apply.
+      // See `docs/security/hardening-plan.md` and `design-session-sandbox.md`
+      // for the kernel-level (L1-L3) fix that closes this class of hole for
+      // good; a real fix at THIS layer needs the gateway to resolve the
+      // bound stack's agent config before publishing, which is out of scope
+      // here (tracked under #1758, not reopened by this comment).
       disallowedTools: ["Skill"],
       // cortex#710 — the per-skill grant mechanism now exists (PreToolUse
       // hook + broad `Skill` allow, applied when `allowedSkills` is a
