@@ -24,26 +24,36 @@
  *     fallback) so blocks are observable. Best-effort — never blocks the
  *     deny decision.
  *
- * ## Known limitations (cortex#2343/#2359 adversarial review, 7 rounds — L1's last)
+ * ## Known limitations (cortex#2343/#2359/#2365 adversarial review, 8 rounds)
  *
  * This guard inspects the command STRING, not a real shell parse tree — it
  * is a best-effort classifier against bash's word-evaluation rules and each
  * path-checked command's own path-reading behavior, not a formal shell
- * parser. Seven adversarial rounds each found ONE way the guard's literal-
+ * parser. Eight adversarial rounds each found ONE way the guard's literal-
  * token resolution diverged from what bash/the tool would actually read
  * (tilde-user expansion, brace expansion, quote-removal, backslash-escaping,
- * flag-glued path values, bare-relative flag-value coverage) — the fix each
- * time was to FAIL CLOSED on whatever couldn't be confidently classified/
- * resolved, culminating in round 5's character whitelist (deny anything
- * outside a closed safe set), round 6's flag-value SHAPE classification
- * (deny anything `-`-prefixed that looks path-shaped), and round 7's
- * per-command flag-name WHITELIST (deny anything `-`-prefixed that isn't an
- * explicitly-modeled boolean/numeric flag for that command — see
- * `COMMAND_FLAG_POLICIES`). That posture — fail closed on ambiguity — is
- * what makes this guard SAFE, but it is NOT airtight by construction the
- * way a real parser + kernel boundary would be. The kernel sandbox (L2,
- * EBH-2/EBH-3, `docs/design-session-sandbox.md`) is the actual boundary;
- * this guard is Tier-0 defense-in-depth in front of it.
+ * flag-glued path values, bare-relative flag-value coverage, a whole
+ * PATH_CHECKED_COMMANDS coverage gap) — the fix each time was to FAIL CLOSED
+ * on whatever couldn't be confidently classified/resolved, culminating in
+ * round 5's character whitelist (deny anything outside a closed safe set),
+ * round 6's flag-value SHAPE classification (deny anything `-`-prefixed
+ * that looks path-shaped), round 7's per-command flag-name WHITELIST (deny
+ * anything `-`-prefixed that isn't an explicitly-modeled boolean/numeric
+ * flag for that command — see `COMMAND_FLAG_POLICIES`), and round 8
+ * (cortex#2365) adding `git` to `PATH_CHECKED_COMMANDS`/
+ * `COMMAND_FLAG_POLICIES` — `git diff --no-index` is a standalone diff
+ * utility that needs no repository and ignores git's own repo-boundary
+ * checks, so it was a live full-content-read primitive on any two paths
+ * while `git` sat outside the containment-checked command set entirely —
+ * plus fixing a round-7 regression where a bare `--` (the POSIX
+ * end-of-options marker) was misclassified as an unrecognised flag and
+ * denied the whole command; it now correctly stops flag classification and
+ * containment-checks every token after it as a literal path. That posture
+ * — fail closed on ambiguity — is what makes this guard SAFE, but it is NOT
+ * airtight by construction the way a real parser + kernel boundary would
+ * be. The kernel sandbox (L2, EBH-2/EBH-3,
+ * `docs/design-session-sandbox.md`) is the actual boundary; this guard is
+ * Tier-0 defense-in-depth in front of it.
  *
  * Accepted residuals (deliberately not chased further — over-deny, not
  * under-deny, direction):
@@ -85,6 +95,13 @@
  *     boundary around the process (L2, EBH-2/EBH-3) can bind authorisation
  *     to the actual inode instead of a path string. No L1 fix was attempted
  *     for this — see `docs/design-session-sandbox.md` for the L2 remedy.
+ *   - `echo <glob>` glob-expands BEFORE the guard ever sees the exec (bash
+ *     performs pathname expansion on the argument as part of building
+ *     `argv`, prior to the shell invoking `echo` at all) — `echo
+ *     /outside/*` enumerates out-of-scope FILENAMES (directory listing
+ *     leakage), never file CONTENTS. Low-severity, accepted residual
+ *     (cortex#2365 finding 3) — not chased further, same over-deny-not-
+ *     under-deny direction as the rest of this list.
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -350,8 +367,20 @@ function rejectsChaining(command: string): boolean {
 // tools — one resolved policy, two enforcement points (design spec DD-1).
 // =============================================================================
 
-/** Bash read commands whose path argument(s) get containment-checked. */
-const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file"]);
+/**
+ * Bash read commands whose path argument(s) get containment-checked.
+ *
+ * `git` was added at round 8 (cortex#2365 finding 1) — it was allowed by
+ * `DEFAULT_CONFIG`'s `^git\s+(log|diff|show|status|branch|fetch|remote|
+ * rev-parse)\b` shape rule but absent here, so its arguments were NEVER
+ * containment-checked. `git diff --no-index` is a standalone diff utility
+ * that needs no repository and is not subject to git's own repo-boundary
+ * checks (unlike `git show <rev>:<path>` / `git log -- <path>`, which git
+ * itself refuses with "outside repository") — it will diff ANY two
+ * readable paths and print full file contents. See `COMMAND_FLAG_POLICIES.
+ * git` for how its flags are modeled.
+ */
+const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file", "git"]);
 
 export interface ExtractedCommandPaths {
   /**
@@ -515,6 +544,54 @@ const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
     // non-path value must not be denied".
     longValue: new Set(["color"]),
   },
+  // cortex#2365 (EBH-1d, round 8) — `git` joins PATH_CHECKED_COMMANDS. The
+  // whitelisted subcommands (log|diff|show|status|branch|fetch|remote|
+  // rev-parse — see DEFAULT_CONFIG) all take REVS/refs as positional
+  // arguments (`HEAD`, `HEAD~1`, a branch name, a commit SHA) — these never
+  // start with "-", so they are never classified as flags here at all; they
+  // flow through the generic non-flag candidate-path fallthrough below like
+  // any other bareword argument (harmless — they resolve relative to cwd,
+  // which is itself inside the session's allowedDirs).
+  git: {
+    shortBoolean: new Set(),
+    // "-n <num>" (`git log -n 5`) — separate-token numeric value; handled
+    // by the same generic fallthrough as any other shortValue flag (the
+    // NEXT token isn't `-`-prefixed, so it's captured as a candidate path
+    // automatically — see extractCommandPaths).
+    //
+    // "-C <dir>" is git's OWN repo-redirect flag — it relocates git's root
+    // the same way `--git-dir`/`--work-tree` below do. Modeled as
+    // shortValue (NOT boolean, and NOT silently skipped) so its value
+    // token is ALWAYS captured by the same generic fallthrough and
+    // containment-checked like any other argument — an out-of-scope
+    // `git -C /outside status` denies via containment (on top of already
+    // failing DEFAULT_CONFIG's shape rule, since `-C` precedes the
+    // subcommand there). A glued form (`-C/outside`) is denied outright,
+    // earlier, by `isPathShapedFlagValue` (contains "/").
+    shortValue: new Set(["n", "C"]),
+    // Common read-only long flags for log/diff/status output shaping. None
+    // of these read a path as their value.
+    longBoolean: new Set(["oneline", "stat", "name-only"]),
+    // "--git-dir"/"--work-tree" relocate git's root the same way `-C`
+    // does. Deliberately WHITELISTED (not silently denied by omission) so
+    // the value routes through the SAME containment pipeline `-C` uses: a
+    // bare `--git-dir <dir>` (no `=`) is captured by the generic non-flag
+    // fallthrough and containment-checked; a `--git-dir=<dir>` glued value
+    // containing "/" is caught earlier by `isPathShapedFlagValue` and
+    // denied outright (this guard's universal posture for any `=`-glued
+    // path-shaped flag value, same as every other path-checked command).
+    // Either way, an out-of-scope target denies — it can never silently
+    // relocate git's root past the containment check.
+    longValue: new Set(["git-dir", "work-tree"]),
+    // "--no-index" is DELIBERATELY ABSENT from every set above — this is
+    // the round-8 fix itself (cortex#2365 finding 1). `git diff --no-index`
+    // is a pure read-arbitrary-files primitive: a standalone diff utility
+    // that needs no repository and ignores git's own repo-boundary checks,
+    // with no legitimate use for a confined agent. Omission means
+    // `classifyFlagToken` denies it BY CONSTRUCTION — the same
+    // "enumerate only the safe ones" discipline as every other command's
+    // policy, not a special-cased blacklist entry.
+  },
 };
 
 type FlagClassification =
@@ -633,6 +710,19 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
  * value-taking flag this review didn't enumerate is refused (unrecognised
  * ⇒ deny), never silently skipped, unlike round 6's shape-only check.
  *
+ * cortex#2365 adversarial review round 8 (EBH-1d finding 2): round 7's
+ * whitelist gate had an unintended side effect — `classifyFlagToken("--")`
+ * treated the bare POSIX end-of-options marker as an unrecognised long
+ * flag (empty body, never on any whitelist) and denied the whole command,
+ * so `cat -- file.txt` / `ls --` / `file -- x` all regressed to a deny.
+ * Fixed by tracking `endOfOptions`: once a bare `--` token is seen, every
+ * token after it — even one that still starts with `-` — skips flag
+ * classification ENTIRELY and is containment-checked as a literal
+ * positional path, same as any other bareword argument. More correct AND
+ * more secure than the pre-round-7 behavior of silently skipping `--`
+ * tokens as flags: a dash-led literal filename after `--` (e.g. `-flist`)
+ * is now actually checked, not waved through.
+ *
  * Exported for unit tests.
  */
 export function extractCommandPaths(command: string): ExtractedCommandPaths {
@@ -644,10 +734,31 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
   // self-contained (its own module-doc "Exported for unit tests" contract).
   const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(command)?.[1]?.toLowerCase();
   const flagPolicy = headWord ? COMMAND_FLAG_POLICIES[headWord] : undefined;
+  // cortex#2365 (EBH-1d, round 8 finding 2) — POSIX end-of-options marker.
+  // A bare `--` stops flag parsing for every standard tool; everything
+  // after it is a positional argument EVEN IF it starts with `-`. Before
+  // this fix, `classifyFlagToken("--")` saw an empty long-flag body (never
+  // on any policy's longBoolean/longValue) and denied the WHOLE COMMAND —
+  // `cat -- file.txt`, `ls --`, `file -- x` were all denied outright, a
+  // real usability regression (round 7 introduced the whitelist gate that
+  // caught this as a side effect). Once `endOfOptions` flips true here, the
+  // `!endOfOptions` guard below is false for every remaining token — even
+  // one that still starts with `-` — so it falls straight through to the
+  // SAME quote-strip/character-whitelist/containment pipeline as any other
+  // literal path argument. This is not just a usability fix: it is MORE
+  // secure than skipping `--`, because a token like `-flist` after `--` is
+  // now containment-checked as the literal filename it is, instead of
+  // either being denied on principle or (pre-round-7) silently
+  // reinterpreted as a flag.
+  let endOfOptions = false;
   for (let i = 1; i < tokens.length; i++) {
     let tok = tokens[i];
     if (tok === undefined) continue;
-    if (tok.startsWith("-")) {
+    if (!endOfOptions && tok === "--") {
+      endOfOptions = true;
+      continue;
+    }
+    if (!endOfOptions && tok.startsWith("-")) {
       if (isPathShapedFlagValue(tok)) {
         return {
           paths: null,
