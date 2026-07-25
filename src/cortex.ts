@@ -886,7 +886,7 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime" | "agentDisallowedTools" | "strictMcpConfig" | "env">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding" | "openOnboardingAllowedTools" | "runtime" | "agentDisallowedTools" | "strictMcpConfig" | "env" | "github">,
   configDir: string,
 ): {
   id: string;
@@ -898,6 +898,7 @@ function targetAgentForDispatch(
   agentDisallowedTools?: string[];
   strictMcpConfig?: boolean;
   env?: Record<string, string>;
+  github?: { identityName: string };
 } {
   const expandedPersona = expandTilde(agent.persona);
   return {
@@ -933,6 +934,12 @@ function targetAgentForDispatch(
     // (resolved + CLAUDE_* re-denied in cc-session). The canonical bus-mediated
     // sync path is injected receiving-stack-authoritatively in the listener.
     ...(agent.env !== undefined && { env: agent.env }),
+    // cortex#2406 (vision#11) — carry the agent's declared GitHub identity so
+    // the DIRECT dispatch paths mint a fresh GH_TOKEN per dispatch (never a
+    // boot-time snapshot — see dispatch-handler.ts). Same asymmetry as `env`
+    // above: the bus-mediated path mints via its own boot-time-resolved
+    // agentGithubIdentityById map in the listener.
+    ...(agent.github !== undefined && { github: agent.github }),
   };
 }
 
@@ -3877,6 +3884,18 @@ export async function startCortex(
   for (const a of mergedAgents) {
     if (a.env !== undefined) agentEnvById.set(a.id, a.env);
   }
+  // cortex#2406 (vision#11) — BOOT snapshot of each agent's declared GitHub App
+  // IDENTITY NAME, keyed by agent id. Safe to snapshot at boot (unlike the
+  // minted TOKEN itself, which is never cached — see resolveGithubEnvForAgent):
+  // `identityName` is a small, non-expiring config string, not a credential.
+  // The dispatch-listener uses it to mint a FRESH installation token per
+  // dispatch, receiving-stack-authoritatively (same asymmetry as agentEnvById).
+  const agentGithubIdentityById = new Map<string, string>();
+  for (const a of mergedAgents) {
+    if (a.github?.identityName !== undefined) {
+      agentGithubIdentityById.set(a.id, a.github.identityName);
+    }
+  }
   const inferenceRegistry = createInferenceRegistry(
     config.inference ?? { providers: {}, profiles: {} },
   );
@@ -3902,6 +3921,7 @@ export async function startCortex(
     stack: derivedStack.stack,
     agentRuntimesById,
     agentEnvById,
+    agentGithubIdentityById,
     inferenceRegistry,
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,

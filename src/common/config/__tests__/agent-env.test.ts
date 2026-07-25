@@ -59,8 +59,12 @@ describe("AgentEnvSchema — accepts ONLY allowlisted keys", () => {
     expect(AgentEnvSchema.safeParse({}).success).toBe(true);
   });
 
-  test("ALLOWED_AGENT_ENV_KEYS is seeded with exactly GOOGLE_APPLICATION_CREDENTIALS", () => {
-    expect([...ALLOWED_AGENT_ENV_KEYS]).toEqual(["GOOGLE_APPLICATION_CREDENTIALS"]);
+  test("ALLOWED_AGENT_ENV_KEYS is seeded with exactly GOOGLE_APPLICATION_CREDENTIALS and GH_TOKEN", () => {
+    // cortex#2406 (vision#11) — GH_TOKEN added for per-dispatch-minted
+    // GitHub App installation tokens. See the module doc's "GH_TOKEN"
+    // paragraph for why a dynamically-minted value still fits this
+    // allowlist's destination-key-safety invariant.
+    expect([...ALLOWED_AGENT_ENV_KEYS]).toEqual(["GOOGLE_APPLICATION_CREDENTIALS", "GH_TOKEN"]);
   });
 });
 

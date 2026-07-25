@@ -285,3 +285,81 @@ describe("agent env reaches the session env via buildSessionEnv (start() composi
     expect(env.CLAUDE_CONFIG_DIR).toBe("/real/home");
   });
 });
+
+/**
+ * cortex#2406 (vision#11) — `GH_TOKEN` is the FIRST allowlisted key whose value
+ * is a live secret rather than a path or an unresolved `env:NAME` reference.
+ * `agent-env.ts` states the old invariant plainly: "a config dump shows
+ * `env:NAME` and never the secret value". A minted installation token voids
+ * that assumption, so the no-value-logging property `resolveAgentEnv` relies on
+ * has to be PINNED here rather than inherited.
+ */
+describe("resolveAgentEnv — GH_TOKEN value containment (cortex#2406)", () => {
+  /** Obviously fake, distinctive enough that a substring search can't collide. */
+  const SENTINEL = "ghs_SENTINEL_r3s0lv3_pr0be_NOT_A_REAL_TOKEN";
+
+  function captureStderr(): { dump: () => string; restore: () => void } {
+    const chunks: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: unknown): boolean => {
+      chunks.push(String(chunk));
+      return true;
+    };
+    return {
+      dump: () => chunks.join(""),
+      restore: () => {
+        process.stderr.write = orig;
+      },
+    };
+  }
+
+  test("a minted GH_TOKEN passes through as a literal and is never written to stderr", () => {
+    const cap = captureStderr();
+    let resolved: Record<string, string>;
+    try {
+      resolved = resolveAgentEnv({ GH_TOKEN: SENTINEL }, {});
+    } finally {
+      cap.restore();
+    }
+
+    // Positive control — it really did travel the resolve path, so the
+    // negative assertion below is not vacuous. A raw token is a LITERAL (it
+    // has no `env:` prefix), so it must pass through verbatim rather than
+    // being mistaken for an unresolvable secret reference and dropped.
+    expect(resolved.GH_TOKEN).toBe(SENTINEL);
+    expect(cap.dump()).not.toContain(SENTINEL);
+  });
+
+  test("even on the DROP paths, no value is echoed — only keys and ref NAMES", () => {
+    const cap = captureStderr();
+    try {
+      // A denied key, and a denied ref source, both carrying the sentinel as
+      // their VALUE. These are the paths that DO log — so they are exactly
+      // where a careless diagnostic would leak a credential.
+      resolveAgentEnv({ LD_PRELOAD: SENTINEL }, {});
+      resolveAgentEnv({ GH_TOKEN: "env:CLAUDE_CODE_OAUTH_TOKEN" }, {});
+      resolveAgentEnv({ GH_TOKEN: "env:UNSET_VAR_NAME" }, {});
+    } finally {
+      cap.restore();
+    }
+
+    const logged = cap.dump();
+    // The drop lines were emitted (the paths really ran)...
+    expect(logged).toContain("LD_PRELOAD");
+    expect(logged).toContain("GH_TOKEN");
+    // ...but no VALUE ever appears.
+    expect(logged).not.toContain(SENTINEL);
+  });
+
+  test("a resolved GH_TOKEN secret-ref value is not echoed either", () => {
+    const cap = captureStderr();
+    let resolved: Record<string, string>;
+    try {
+      resolved = resolveAgentEnv({ GH_TOKEN: "env:SOME_PAT" }, { SOME_PAT: SENTINEL });
+    } finally {
+      cap.restore();
+    }
+    expect(resolved.GH_TOKEN).toBe(SENTINEL);
+    expect(cap.dump()).not.toContain(SENTINEL);
+  });
+});

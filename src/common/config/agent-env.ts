@@ -47,10 +47,21 @@
 // is simply not passed), which is the only safe direction for a trust-path
 // control.
 //
-// The allowlist is seeded with exactly one name — `GOOGLE_APPLICATION_CREDENTIALS`,
-// the credential PATH the `gws` Google Drive skill needs and the sole motivating
-// case today. {@link isAllowedAgentEnvKey} is the SINGLE SOURCE OF TRUTH for the
-// permit, used in BOTH places that must agree:
+// The allowlist is seeded with `GOOGLE_APPLICATION_CREDENTIALS` — the credential
+// PATH the `gws` Google Drive skill needs — plus `GH_TOKEN` (cortex#2406,
+// vision#11): a scoped, short-lived, revocable GitHub App installation token, not
+// a loader/shell/PATH hijack vector (it cannot execute code, redirect a process,
+// or widen the session's own authority the way the classes above do — its risk
+// plane is "misuse of a scoped API credential", a different concern from "session
+// hijack via env var shape"). UNLIKE every other allowlisted key, `GH_TOKEN`'s
+// value is NEVER a static config literal or `env:NAME` reference — it is minted
+// FRESH per dispatch by the caller (`dispatch-handler.ts` / `dispatch-listener.ts`,
+// via `resolveGithubEnvForAgent`) and merged into the env map at dispatch time.
+// The trigger for minting is a SEPARATE schema field
+// (`AgentSchema.github.identityName`), not this map's literal/ref grammar — this
+// allowlist only gates which DESTINATION keys may land on a child session's env,
+// independent of how the value was produced. {@link isAllowedAgentEnvKey} is the
+// SINGLE SOURCE OF TRUTH for the permit, used in BOTH places that must agree:
 //
 //   1. Config LOAD  — {@link AgentEnvSchema} rejects any non-allowlisted key at
 //      parse time, so a stack whose config declares an unblessed passthrough
@@ -114,9 +125,13 @@ export const AGENT_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * passthrough permits. Deny-by-default: a name not in this set is refused at
  * BOTH config load ({@link AgentEnvSchema}) and session build (`resolveAgentEnv`).
  *
- * Seeded with EXACTLY the one var a supported skill needs today:
+ * Seeded with:
  *   - `GOOGLE_APPLICATION_CREDENTIALS` — the service-account credential PATH the
  *     `gws` Google Drive skill reads.
+ *   - `GH_TOKEN` (cortex#2406, vision#11) — a freshly-minted, per-dispatch GitHub
+ *     App installation token for an agent with a declared `github.identityName`.
+ *     See the module doc's "GH_TOKEN" paragraph for why a dynamically-minted
+ *     value still fits this allowlist's destination-key-safety invariant.
  *
  * To permit a NEW variable, add its exact name here in a cortex PR and have a
  * reviewer weigh it against the session-hijack classes in the module doc. This
@@ -125,7 +140,7 @@ export const AGENT_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * (epic #2164 + the PR #2171 adversarial finding: the denylist was proven
  * un-completable).
  */
-export const ALLOWED_AGENT_ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS"] as const;
+export const ALLOWED_AGENT_ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GH_TOKEN"] as const;
 
 /** O(1) membership backing for {@link isAllowedAgentEnvKey}. */
 const ALLOWED_AGENT_ENV_KEY_SET: ReadonlySet<string> = new Set(ALLOWED_AGENT_ENV_KEYS);

@@ -252,3 +252,52 @@ export async function mintTokenForIdentity(
     nowSeconds: opts.nowSeconds,
   });
 }
+
+/**
+ * cortex#2406 (vision#11) — the runner-wiring entry point. Given an agent's
+ * declared `AgentSchema.github.identityName` (or `undefined` for an agent
+ * with no GitHub identity), resolve the env map to merge onto that agent's
+ * session: `{ GH_TOKEN: <freshly minted token> }`, or `{}` when the agent
+ * has no declared identity.
+ *
+ * DELIBERATELY throws (does not catch) on mint failure — the caller
+ * (`dispatch-handler.ts` / `dispatch-listener.ts`) MUST fail the dispatch
+ * closed rather than start a session without its declared identity's
+ * token. Swallowing the error here would make that fail-open by default,
+ * one `catch {}` away from silently letting `gh`/`git` fall back to
+ * whatever ambient credential the host has.
+ *
+ * ## `GH_TOKEN` only — deliberately NOT also `GITHUB_TOKEN`
+ *
+ * `gh` reads `GH_TOKEN` first and falls back to `GITHUB_TOKEN`, so setting the
+ * higher-priority name alone covers both `gh` and the `git` credential helper
+ * `gh auth setup-git` installs. cortex's own scoped-forge path already made
+ * this call — `runner/dev-consumer-boot.ts` sets exactly `GH_TOKEN` on the
+ * child env for every `gh` invocation — so matching it keeps ONE idiom.
+ *
+ * Setting both would also cost a second entry in the deny-by-default
+ * `ALLOWED_AGENT_ENV_KEYS` allowlist (`agent-env.ts`) — widening a reviewed
+ * trust-path control to buy an alias the higher-priority name already covers.
+ * If a substrate is ever found that reads ONLY `GITHUB_TOKEN`, add it then, as
+ * its own reviewed allowlist change with the motivating case named. That is
+ * precisely the process that file documents.
+ *
+ * ## The returned value is a LIVE CREDENTIAL — never log it
+ *
+ * Unlike every other value in an agent's `env:` passthrough map (a non-secret
+ * literal such as a path, or an unresolved `env:NAME` reference), this map's
+ * value is the secret ITSELF. It is handed straight to the session's process
+ * env and must not be logged, echoed into a bus event, or written to disk.
+ * `resolveAgentEnv` (session-settings.ts) upholds this — it logs keys and ref
+ * NAMES only, never values. Pinned by the containment suites in
+ * `runner/__tests__/agent-env-passthrough.test.ts` (the resolve layer) and
+ * `runner/__tests__/dispatch-listener.test.ts` (logs + bus event payloads).
+ */
+export async function resolveGithubEnvForAgent(
+  identityName: string | undefined,
+  opts: MintTokenForIdentityOptions = {},
+): Promise<Record<string, string>> {
+  if (identityName === undefined) return {};
+  const { token } = await mintTokenForIdentity(identityName, opts);
+  return { GH_TOKEN: token };
+}

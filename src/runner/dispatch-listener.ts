@@ -126,6 +126,9 @@ import {
   createDispatchTaskFailedEvent,
   type ResponseRouting,
 } from "../bus/dispatch-events";
+// cortex#2406 (vision#11) — mint a fresh GH_TOKEN for a receiving agent's
+// declared GitHub App identity, receiving-stack-authoritatively.
+import { resolveGithubEnvForAgent } from "../common/auth/github-app-token";
 import type { TrustResolver } from "../common/agents/trust-resolver";
 import type { FederatedPeerResolution } from "../common/registry";
 import {
@@ -311,6 +314,15 @@ export interface DispatchListenerOptions {
    */
   ccSessionFactory?: CCSessionFactory;
   /**
+   * cortex#2406 (vision#11) — Optional GitHub identity env resolver
+   * injection. Default calls the real `resolveGithubEnvForAgent` (mints a
+   * live installation token via the GitHub Apps API). Tests inject a
+   * deterministic fake (resolve for the happy path, reject for the
+   * fail-closed path) without touching real GitHub credentials or network.
+   * Mirrors the `ccSessionFactory` injection pattern immediately above.
+   */
+  githubEnvResolver?: (identityName: string) => Promise<Record<string, string>>;
+  /**
    * Optional AgentTeam factory for delegate-mode dispatches. Production
    * omits this; tests inject a fake to prove routing without spawning
    * moderator/participant CC sessions.
@@ -445,6 +457,17 @@ export interface DispatchListenerOptions {
    * receiving-side authority. Absent / no entry ⇒ no passthrough.
    */
   agentEnvById?: Map<string, Record<string, string>>;
+  /**
+   * cortex#2406 (vision#11) — the RECEIVING agents' declared GitHub App identity
+   * NAMES indexed by agent id (a boot snapshot of `AgentSchema.github.identityName`
+   * — the name itself doesn't expire; only the token minted from it does, so a
+   * boot-time map is safe here unlike `agentEnvById`'s values). When present, the
+   * handler mints a FRESH installation token for the `receivingAgentId`'s declared
+   * identity and injects `GH_TOKEN` onto `req.runtime.agentEnv`
+   * receiving-stack-AUTHORITATIVELY (same trust boundary as `agentEnvById` — never
+   * the inbound wire). Absent / no entry ⇒ no identity ⇒ no token minted.
+   */
+  agentGithubIdentityById?: Map<string, string>;
   /**
    * API-P1.3 (#2063) — the inference registry the `api-agent` substrate resolves
    * its profile through. Threaded to `HarnessResolver`. Absent on stacks with no
@@ -844,12 +867,14 @@ export function createDispatchListener(
     runtime,
     source,
     ccSessionFactory,
+    githubEnvResolver,
     agentTeamFactory,
     policyEngine,
     trustResolver,
     receivingAgentId,
     agentRuntimesById,
     agentEnvById,
+    agentGithubIdentityById,
     inferenceRegistry,
     principalId,
     stackIdentity,
@@ -924,6 +949,7 @@ export function createDispatchListener(
         runtime,
         source,
         ccSessionFactory,
+        githubEnvResolver,
         agentTeamFactory,
         policyEngine,
         stack: opts.stack,
@@ -934,6 +960,7 @@ export function createDispatchListener(
         receivingAgentId,
         agentRuntimesById,
         agentEnvById,
+        agentGithubIdentityById,
         inferenceRegistry,
         stackIdentity,
         stackNKeyPub,
@@ -1355,6 +1382,8 @@ interface DispatchHandlerContext {
   runtime: MyelinRuntime;
   source: SystemEventSource;
   ccSessionFactory: CCSessionFactory | undefined;
+  /** cortex#2406 (vision#11) — GitHub identity env resolver. Default (when undefined) is `resolveGithubEnvForAgent`. */
+  githubEnvResolver: ((identityName: string) => Promise<Record<string, string>>) | undefined;
   agentTeamFactory: AgentTeamFactory | undefined;
   policyEngine: PolicyEngine | undefined;
   stack: string | undefined;
@@ -1373,6 +1402,8 @@ interface DispatchHandlerContext {
   agentRuntimesById: Map<string, AgentRuntime> | undefined;
   /** cortex#2133 — receiving agents' declared `env:` passthrough maps by id (receiving-stack-authoritative). */
   agentEnvById: Map<string, Record<string, string>> | undefined;
+  /** cortex#2406 (vision#11) — receiving agents' declared GitHub App identity names by id (receiving-stack-authoritative; a fresh token is minted per dispatch from the name, never boot-cached). */
+  agentGithubIdentityById: Map<string, string> | undefined;
   /** API-P1.3 (#2063) — inference registry the `api-agent` substrate resolves through. */
   inferenceRegistry: InferenceRegistry | undefined;
   /** cortex#480 — receiving stack's signing DID for own-stack trust. */
@@ -1440,6 +1471,7 @@ async function handleDispatchEnvelope(
     runtime,
     source,
     ccSessionFactory,
+    githubEnvResolver,
     agentTeamFactory,
     policyEngine,
     stack,
@@ -1450,6 +1482,7 @@ async function handleDispatchEnvelope(
     receivingAgentId,
     agentRuntimesById,
     agentEnvById,
+    agentGithubIdentityById,
     inferenceRegistry,
     stackIdentity,
     stackNKeyPub,
@@ -2200,10 +2233,78 @@ async function handleDispatchEnvelope(
   // nothing injected (default: no passthrough).
   const receivingAgentEnv =
     receivingAgentId !== undefined ? agentEnvById?.get(receivingAgentId) : undefined;
-  if (receivingAgentEnv !== undefined) {
-    const runtime = req.runtime ?? {};
-    runtime.agentEnv = receivingAgentEnv;
-    req.runtime = runtime;
+  let effectiveAgentEnv = receivingAgentEnv;
+
+  // cortex#2406 (vision#11) — RECEIVING-STACK-AUTHORITATIVE GitHub identity.
+  // Same trust boundary as the `env:` passthrough directly above: the
+  // identity NAME is looked up in the EXECUTING stack's own boot-snapshotted
+  // config, never the wire. Unlike that passthrough, the TOKEN is minted
+  // FRESH right here, every dispatch — installation tokens expire in ~1hr
+  // and this listener can run for days between two dispatches to the same
+  // agent, so caching the token (rather than just the identity name) would
+  // silently hand a session an expired credential.
+  //
+  // FAIL CLOSED on mint failure: refuse the dispatch rather than let the
+  // session start without its declared identity's token, which could
+  // silently fall back to whatever ambient `gh` credential the host has
+  // (the principal's own). Mirrors the `malformed_principal` refusal above.
+  const receivingGithubIdentity =
+    receivingAgentId !== undefined ? agentGithubIdentityById?.get(receivingAgentId) : undefined;
+  if (receivingGithubIdentity !== undefined) {
+    try {
+      const resolveEnv = githubEnvResolver ?? resolveGithubEnvForAgent;
+      const githubEnv = await resolveEnv(receivingGithubIdentity);
+      // Spread order is load-bearing: the MINTED value goes LAST so it wins
+      // over any static `GH_TOKEN` in the passthrough map. `AgentSchema`
+      // already refuses that pair at config load (cortex#2406); this is the
+      // runtime half of that pairing, defending non-schema callers the
+      // load-time check cannot see. Backwards, it would silently run the
+      // session on a long-lived credential while config claims a bot identity.
+      effectiveAgentEnv = { ...receivingAgentEnv, ...githubEnv };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      // LOCAL stderr carries the diagnostic detail (mint failed ⇒ no token
+      // exists to leak, and this stream stays on the executing host).
+      process.stderr.write(
+        `[runner/dispatch-listener] GitHub identity mint FAILED for agent=${receivingAgentId} ` +
+          `identity=${receivingGithubIdentity} on envelope ${envelope.id} — refusing dispatch ` +
+          `rather than starting a session without its declared identity: ${detail}\n`,
+      );
+      const now = new Date();
+      const failed = createDispatchTaskFailedEvent({
+        source,
+        taskId: payload.task_id,
+        agentId: payload.agent_id,
+        startedAt: now,
+        failedAt: now,
+        errorSummary: "refused — GitHub identity credential could not be minted",
+        // cortex#2406 — the PUBLISHED reason is a FIXED string, deliberately
+        // NOT the raw `detail` above. This event crosses the bus to the
+        // dispatching stack and lands in the audit trail, so it must not echo
+        // an error message whose content we do not control end-to-end: mint
+        // errors can carry the host's key PATH, the App/installation IDs, and
+        // a 500-char slice of GitHub's raw response body
+        // (`GithubAppTokenError` context, `github-app-token.ts`). Keeping the
+        // wire copy fixed means no credential-adjacent material can ride an
+        // error path off this host; the principal reads the specific cause in
+        // the local stderr line above, where it belongs.
+        reason: {
+          kind: "cant_do",
+          detail:
+            "the receiving stack could not mint this agent's GitHub App identity " +
+            "credential; the dispatch was refused rather than run under an " +
+            "unintended identity (see the receiving stack's logs for the cause)",
+        },
+      });
+      await runtime.publish(failed);
+      return;
+    }
+  }
+
+  if (effectiveAgentEnv !== undefined) {
+    const reqRuntime = req.runtime ?? {};
+    reqRuntime.agentEnv = effectiveAgentEnv;
+    req.runtime = reqRuntime;
   }
 
   // cortex#2111 (adversarial-review MAJOR) — RECEIVING-STACK-AUTHORITATIVE

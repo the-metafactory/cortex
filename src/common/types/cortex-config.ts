@@ -1064,6 +1064,58 @@ export const AgentSchema = z.object({
    * to the pre-#2133 session env).
    */
   env: AgentEnvSchema.optional(),
+  /**
+   * cortex#2406 (vision#11) — OPT-IN GitHub App identity for this agent.
+   * `identityName` names an entry in `~/.config/metafactory/github-apps/apps.yaml`
+   * (see `src/common/auth/github-app-token.ts`). When set, cortex mints a
+   * FRESH installation access token PER DISPATCH (never a boot-time snapshot
+   * — installation tokens expire in ~1hr, the daemon can run for days) and
+   * injects it as `GH_TOKEN` via the SAME `env:` passthrough mechanism above
+   * (`GH_TOKEN` is one of the names in `ALLOWED_AGENT_ENV_KEYS`), so this
+   * agent's `gh`/`git` calls act as its own bot identity (e.g. `atlas[bot]`)
+   * instead of the principal's own account.
+   *
+   * Fail-closed: if minting fails, the dispatch is REFUSED rather than
+   * starting the session without `GH_TOKEN` — silently proceeding could let
+   * `gh`/`git` fall back to whatever ambient credential the host has (the
+   * principal's own `gh auth`), which is the exact identity leak this field
+   * exists to close. See `dispatch-handler.ts` / `dispatch-listener.ts`.
+   *
+   * Additive: existing agents omit this key and are unaffected.
+   */
+  github: z
+    .object({
+      identityName: z.string().min(1),
+    })
+    .optional(),
+}).superRefine((agent, ctx) => {
+  // cortex#2406 — REJECT the contradictory pair at LOAD time. An agent that
+  // declares BOTH a `github.identityName` (⇒ cortex mints a fresh installation
+  // token and sets it as GH_TOKEN) AND a static `env.GH_TOKEN` passthrough has
+  // named two different GitHub identities for one session, and exactly one of
+  // them wins SILENTLY. That silence IS the identity-confusion class this field
+  // exists to close: the agent reads as acting like `atlas[bot]` while actually
+  // carrying whatever long-lived credential the static entry resolves to.
+  //
+  // Refusing the combination is the only honest resolution — any precedence
+  // rule still leaves a reader unable to tell which identity a session ran as.
+  // The runtime independently re-asserts the same outcome as defence-in-depth
+  // (both dispatch paths let the MINTED value win over the passthrough map), so
+  // a non-schema caller cannot reintroduce the ambiguity. Two layers, one
+  // answer — the same load-time/runtime pairing `agent-env.ts` documents.
+  if (agent.github !== undefined && agent.env?.GH_TOKEN !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["env", "GH_TOKEN"],
+      message:
+        `agent declares BOTH 'github.identityName' (cortex mints a fresh, short-lived ` +
+        `GitHub App installation token per dispatch) AND a static 'env.GH_TOKEN' ` +
+        `passthrough. Those are two different GitHub identities for one session and ` +
+        `only one can win, leaving the agent's effective identity ambiguous. Declare ` +
+        `exactly ONE: keep 'github.identityName' for a short-lived, revocable bot ` +
+        `identity (preferred), or drop it and keep the static 'env.GH_TOKEN' reference.`,
+    });
+  }
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

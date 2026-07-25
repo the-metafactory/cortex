@@ -2123,3 +2123,59 @@ describe("ReflexTargetSchema (F-6 prompt XOR handler)", () => {
     expect(ReflexTargetSchema.safeParse({ ...reviewBase, capability: "code-review.elvish", review: true }).success).toBe(false);
   });
 });
+
+/**
+ * cortex#2406 (vision#11) — the OPT-IN GitHub App identity field, and the
+ * load-time rejection of the one configuration that would make an agent's
+ * effective GitHub identity ambiguous.
+ */
+describe("AgentSchema.github — per-agent GitHub App identity (cortex#2406)", () => {
+  test("OPT-IN: the field is optional — an agent that omits it parses unchanged", () => {
+    const parsed = AgentSchema.parse(minAgent());
+    // Absence is the DEFAULT, not an error. Every pre-#2406 agent config must
+    // keep parsing byte-identically and get NO GitHub credential at dispatch.
+    expect(parsed.github).toBeUndefined();
+  });
+
+  test("a declared identity name parses", () => {
+    const parsed = AgentSchema.parse(minAgent({ github: { identityName: "atlas" } }));
+    expect(parsed.github?.identityName).toBe("atlas");
+  });
+
+  test("an empty identity name is rejected (it would name no apps.yaml entry)", () => {
+    expect(() => AgentSchema.parse(minAgent({ github: { identityName: "" } }))).toThrow();
+  });
+
+  test("REJECTS declaring both github.identityName and a static env.GH_TOKEN", () => {
+    // Two different GitHub identities for one session: one minted per dispatch
+    // and short-lived, one static and long-lived. Whichever wins, the other is
+    // silently ignored and the agent's effective identity becomes unauditable.
+    // Refusing at load is the only honest resolution.
+    const result = AgentSchema.safeParse(
+      minAgent({
+        github: { identityName: "atlas" },
+        env: { GH_TOKEN: "env:SOME_LONG_LIVED_PAT" },
+      }),
+    );
+    expect(result.success).toBe(false);
+    const message = result.success ? "" : result.error.issues.map((i) => i.message).join(" ");
+    expect(message).toMatch(/two different GitHub identities/i);
+  });
+
+  test("github.identityName WITHOUT a colliding env key is fine (other passthroughs unaffected)", () => {
+    const parsed = AgentSchema.parse(
+      minAgent({
+        github: { identityName: "atlas" },
+        env: { GOOGLE_APPLICATION_CREDENTIALS: "/tmp/sa.json" },
+      }),
+    );
+    expect(parsed.github?.identityName).toBe("atlas");
+    expect(parsed.env?.GOOGLE_APPLICATION_CREDENTIALS).toBe("/tmp/sa.json");
+  });
+
+  test("a static env.GH_TOKEN alone still parses (no github block ⇒ no contradiction)", () => {
+    const parsed = AgentSchema.parse(minAgent({ env: { GH_TOKEN: "env:MY_PAT" } }));
+    expect(parsed.env?.GH_TOKEN).toBe("env:MY_PAT");
+    expect(parsed.github).toBeUndefined();
+  });
+});
