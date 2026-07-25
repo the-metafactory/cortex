@@ -2129,3 +2129,252 @@ describe("bash-guard.hook — round 7: bare-relative flag-value coverage (cortex
   });
 });
 
+// =============================================================================
+// Round 8 (cortex#2365, EBH-1d) — Finding 1: `git` was allowlisted by
+// DEFAULT_CONFIG's shape rule but absent from PATH_CHECKED_COMMANDS, so
+// `git diff --no-index` (a standalone diff utility needing no repository,
+// NOT subject to git's own repo-boundary checks) could read and print the
+// full contents of any two readable paths. Finding 2: `--` (POSIX
+// end-of-options) regressed to a deny at round 7.
+// =============================================================================
+describe("bash-guard.hook — round 8: git path-check coverage + `--` end-of-options (cortex#2365)", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r8-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "GIT-EXFIL-CANARY-MARKER\n");
+    writeFileSync(join(allowedDir, "ok.txt"), "fine\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  // ---- DENY: the live bypass from the issue repro (Finding 1) ----
+
+  test("git diff --no-index /dev/null <out-of-scope> ⇒ DENY (real git leaks full file contents)", () => {
+    // Ground truth: the real `git diff --no-index` prints the out-of-scope
+    // file's contents verbatim — proving live exfiltration, not a
+    // hypothetical (matches the issue's verified repro).
+    const realGit = spawnSync(
+      "git",
+      ["diff", "--no-index", "/dev/null", join(secretDir, "canary.txt")],
+      { encoding: "utf-8", cwd: allowedDir },
+    );
+    expect(realGit.stdout).toContain("GIT-EXFIL-CANARY-MARKER");
+
+    const r = runHook(
+      `git diff --no-index /dev/null ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("git diff --no-index <in-scope> <out-of-scope> ⇒ DENY (two-file form)", () => {
+    const realGit = spawnSync(
+      "git",
+      ["diff", "--no-index", join(allowedDir, "ok.txt"), join(secretDir, "canary.txt")],
+      { encoding: "utf-8", cwd: allowedDir },
+    );
+    expect(realGit.stdout).toContain("GIT-EXFIL-CANARY-MARKER");
+
+    const r = runHook(
+      `git diff --no-index ${join(allowedDir, "ok.txt")} ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("git -C /outside status ⇒ DENY (repo-redirect flag)", () => {
+    const r = runHook(`git -C ${secretDir} status`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("git --git-dir=/outside log ⇒ DENY (repo-redirect flag)", () => {
+    const r = runHook(`git --git-dir=${secretDir} log`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("git --work-tree=/outside status ⇒ DENY (repo-redirect flag)", () => {
+    const r = runHook(`git --work-tree=${secretDir} status`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- DENY: repo-redirect flags placed AFTER the subcommand, which is
+  // the shape the guard's own COMMAND_FLAG_POLICIES.git containment
+  // routing actually processes (a redirect flag BEFORE the subcommand
+  // already fails DEFAULT_CONFIG's `^git\s+(log|diff|...)\b` shape rule on
+  // its own, regardless of this round's fix — these prove the new git
+  // flag policy itself, not just the pre-existing shape rule). ----
+
+  test("git diff -C <out-of-scope dir> ⇒ DENY (shortValue containment routing)", () => {
+    const r = runHook(`git diff -C ${secretDir}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("EBH-1");
+  });
+
+  test("git status --work-tree <out-of-scope dir> ⇒ DENY (bare longValue form, containment routing)", () => {
+    const r = runHook(`git status --work-tree ${secretDir}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("EBH-1");
+  });
+
+  test("git log --git-dir=<out-of-scope dir> ⇒ DENY (`=`-glued longValue, denied by path-shaped-value gate)", () => {
+    const r = runHook(`git log --git-dir=${secretDir}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("git diff -C <in-scope dir> ⇒ ALLOW (no over-deny: an in-scope -C target still passes containment)", () => {
+    const r = runHook(`git diff -C ${allowedDir}`, policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- ALLOW: no over-deny regression on ordinary safe git usage ----
+
+  test("git status ⇒ ALLOW", () => {
+    const r = runHook("git status", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git log --oneline ⇒ ALLOW", () => {
+    const r = runHook("git log --oneline", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git diff ⇒ ALLOW", () => {
+    const r = runHook("git diff", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git diff HEAD~1 ⇒ ALLOW (rev is a positional non-flag, not misclassified as a path)", () => {
+    const r = runHook("git diff HEAD~1", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git show ⇒ ALLOW", () => {
+    const r = runHook("git show", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git rev-parse HEAD ⇒ ALLOW", () => {
+    const r = runHook("git rev-parse HEAD", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git branch ⇒ ALLOW", () => {
+    const r = runHook("git branch", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git diff -- <in-scope path> ⇒ ALLOW (`--` end-of-options, path containment-checked)", () => {
+    const r = runHook(
+      `git diff -- ${join(allowedDir, "ok.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("git diff -- <out-of-scope path> ⇒ DENY (`--` doesn't bypass containment)", () => {
+    const r = runHook(
+      `git diff -- ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- Finding 2: `--` end-of-options no longer denies the whole command ----
+
+  test("cat -- f.txt (in-scope) ⇒ ALLOW", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("cat -- f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat -- /etc/passwd ⇒ DENY (out-of-scope absolute path, containment-checked not skipped)", () => {
+    const r = runHook("cat -- /etc/passwd", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("EBH-1");
+  });
+
+  test("ls -- ⇒ ALLOW (bare end-of-options marker, no trailing args)", () => {
+    const r = runHook("ls --", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("file -- -flist ⇒ DENY (a dash-led token after `--` is a LITERAL filename, containment-checked against a cwd outside allowedDirs — not reinterpreted as the `-f`/`--files-from` flag)", () => {
+    // cwd is secretDir (outside allowedDirs) — proves "-flist" is resolved
+    // as a real positional path relative to cwd and containment-checked,
+    // rather than either (a) being denied outright as "unrecognised flag"
+    // (the pre-fix, round-7-only behaviour for ANY leading "-" token) or
+    // (b) being silently skipped.
+    const r = runHook("file -- -flist", policyEnv(), "Bash", "test-session", secretDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("EBH-1");
+  });
+
+  test("file -- -flist ⇒ ALLOW when cwd IS inside allowedDirs (same literal-path resolution, now in-scope)", () => {
+    const r = runHook("file -- -flist", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+
