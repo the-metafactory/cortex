@@ -145,6 +145,7 @@ import {
   type SurfacePluginRegistry,
 } from "./adapters/registry";
 import { loadExternalPlugins } from "./adapters/loader";
+import { assertPluginSigningTrustRootConfigured, PLUGIN_TRUST_ROOT } from "./adapters/plugin-signing";
 import { createSystemPluginLoadFailedEvent, createSystemPluginLoadedEvent } from "./bus/system-events";
 import { startPluginControlServer } from "./gateway/plugin-control-server";
 import type { PluginRuntimeDeps, RendererHandle } from "./gateway/plugin-runtime";
@@ -3328,14 +3329,28 @@ export async function startCortex(
   // runtime-hard-fail half of OQ9 (does `system.>` coverage still hold two
   // classes after this?) is cortex#1893, a separate issue; this loop only
   // SURFACES what loaded so that check has something to read.
+  // cortex#2347 (EBH-5 follow-up, adversarial review Finding 2 —
+  // availability) — REFUSE TO BOOT immediately, with a named/actionable
+  // error, if `enforce` is on with nothing to verify against. Left
+  // unchecked, this exact misconfiguration crashes several boot-stages
+  // later at the renderer-coverage guard below with an error that looks
+  // unrelated to `signing` — see `assertPluginSigningTrustRootConfigured`'s
+  // own doc. Must run BEFORE `loadExternalPlugins` — no point discovering
+  // and gating bundles this posture is guaranteed to refuse anyway.
+  assertPluginSigningTrustRootConfigured(config.plugins.signing, PLUGIN_TRUST_ROOT);
+
   const pluginLoadResult = await loadExternalPlugins({
     registry: surfacePluginRegistry,
     externalEnabled: config.plugins.external,
     // cortex#2347 (EBH-5, ADR-0024 D4) — `system.plugins.signing` posture.
     // Default "off" (the schema default) keeps this call byte-identical to
-    // pre-EBH-5 boot; `pluginTrustedSigners` is left unset so the loader
-    // reads its own in-tree `PLUGIN_TRUST_ROOT` constant.
+    // pre-EBH-5 boot. `pluginTrustedSigners` is passed explicitly (not left
+    // to the loader's internal default) so this call and `pluginRuntimeDeps`
+    // below (which reload/load thread to `reimportRendererPlugin`) provably
+    // share the exact SAME trust-root reference — boot and reload are held
+    // to the identical trust bar, not two independently-resolved ones.
     pluginSigning: config.plugins.signing,
+    pluginTrustedSigners: PLUGIN_TRUST_ROOT,
   });
   // cortex#1792 — ONE stderr line per outcome, not two: `loadOneBundle`
   // (`src/adapters/loader.ts`) already writes a `cortex plugin-loader: …`
@@ -5979,6 +5994,12 @@ export async function startCortex(
     ...(gw !== undefined && { gateway: gw }),
     skippedRendererConfigs,
     registry: surfacePluginRegistry,
+    // cortex#2347 (EBH-5 follow-up) — the SAME posture + trust root the
+    // boot-time `loadExternalPlugins` call above used, so `reload`/`load`
+    // (which re-`import()` a bundle's entry module a SECOND time via
+    // `reimportRendererPlugin`) are held to the identical trust bar as boot.
+    pluginSigning: config.plugins.signing,
+    pluginTrustedSigners: PLUGIN_TRUST_ROOT,
   };
   const pluginControlServer = await startPluginControlServer(runtime, pluginRuntimeDeps, systemEventSource);
 

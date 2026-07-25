@@ -90,10 +90,18 @@
  * signed (an `arc publish` pipeline step? a manual `cortex plugin sign`
  * CLI, not built here?) — is an ecosystem/operational decision, not a
  * cortex-code decision, and is out of scope for this slice. Shipping
- * with an empty trust root is safe BECAUSE verification is default-off
- * (`system.plugins.signing: "off"`, see `PluginsConfigSchema`) and
- * verification-enabled is itself an explicit opt-in — an empty trust
- * root cannot brick a deployment that never opts in.
+ * with an empty trust root is safe under `off` (the default) and
+ * `permissive` (verify-and-log, never refuses). It is NOT automatically
+ * safe under `enforce` — an empty trust root there refuses every bundle,
+ * including a FIRST-PARTY one a stack may depend on for the ADR-0024
+ * §OQ9 renderer-coverage floor (see `docs/security/hardening-plan.md`),
+ * which downstream surfaces as an unrelated-looking boot crash at the
+ * coverage guard. {@link assertPluginSigningTrustRootConfigured} is the
+ * boot-time guard that catches this BEFORE it reaches that point — see
+ * its own doc for why this is a "make the failure loud and immediate,"
+ * not a "prevent the failure" fix (`enforce` with nothing to verify
+ * against genuinely cannot safely proceed; that refusal is correct, not
+ * a bug — only its confusing, three-layers-downstream presentation was).
  *
  * ## Posture (mirrors `security.signing`, `src/common/types/config.ts`)
  *
@@ -102,9 +110,43 @@
  * (verify + log, NEVER refuse — the shadow rung to prove verification
  * against live bundles before gating) · `enforce` (refuse any bundle
  * whose signature is missing, malformed, tampered, or signed by a key
- * outside {@link PLUGIN_TRUST_ROOT}). The posture read + branch lives in
- * `loader.ts`'s `loadOneBundle`; this module only ever answers "does
- * this bundle verify", never "what should happen if it doesn't".
+ * outside {@link PLUGIN_TRUST_ROOT}). This module only ever answers
+ * "does this bundle verify right now", never "what should happen if it
+ * doesn't" — that branch lives at EVERY call site listed in "Coverage"
+ * below, independently, because each is a distinct point where plugin
+ * code is about to execute.
+ *
+ * ## Coverage — every `import()` call site that loads plugin bundle code
+ *
+ * There are exactly two, both in `loader.ts`, both verified (audited
+ * cortex#2347 follow-up, adversarial-review finding — a bundle that
+ * verified once must NOT get a lifetime pass):
+ *
+ *   1. **Boot** — `loadOneBundle` (called from `loadExternalPlugins`).
+ *      Verifies once, at first load, before that bundle's entry module
+ *      is ever imported for this daemon process's lifetime.
+ *   2. **Reload** — `reimportRendererPlugin` (called from
+ *      `src/gateway/plugin-runtime.ts`'s `reloadLivePlugin`/
+ *      `loadLivePlugin`, reachable via the `system.plugin.control-request`
+ *      bus subject and the `cortex plugin reload`/`load` CLI). This is a
+ *      SEPARATE, later `import()` of the SAME bundle's entry module — the
+ *      file on disk may have changed since boot (that is the entire point
+ *      of a reload command). It therefore RE-VERIFIES from CURRENT on-disk
+ *      bytes, every time, using the same posture + trust root as boot —
+ *      never "trusts" a boot-time result that has gone stale. A bundle
+ *      tampered with after boot is refused at reload under `enforce`, and
+ *      its (tampered) code is never imported.
+ *
+ * Every other `import()`/`require()`/`eval()`-shaped call in the codebase
+ * (audited alongside this fix — `grep -rn "await import(" src/` minus
+ * `__tests__`) loads a static npm dependency (`@metafactory/content-filter`,
+ * `bun`, `fs`, `fs/promises`) or an internal cortex module by literal
+ * path — never third-party bundle code reached through the plugin loader.
+ * If a THIRD call site is ever added (a future runtime-adapter-reload verb,
+ * cortex#1896's tracked follow-up, is the most likely candidate), it MUST
+ * verify through this module before importing, and this list MUST grow to
+ * three — a call site missing from this list is the bug class this note
+ * exists to prevent recurring.
  *
  * ## What this module does NOT do
  *
@@ -114,7 +156,11 @@
  * still runs in-process with full daemon authority (ADR-0024 D4
  * unchanged). Signature verification answers "is this the bundle a
  * trusted publisher produced", not "what can this bundle do once it
- * runs".
+ * runs". It does NOT protect against a bundle that re-signs itself with
+ * a DIFFERENT, still-trusted key between boot and reload — that is not a
+ * gap, it is the system working as designed (a trusted publisher legally
+ * re-publishing); what it defends against is untrusted or tampered bytes
+ * being imported, at every point bytes are about to become code.
  */
 
 import { createHash } from "node:crypto";
@@ -152,6 +198,64 @@ export type PluginSigningPosture = "off" | "permissive" | "enforce";
 export const PLUGIN_TRUST_ROOT: ReadonlySet<string> = new Set([
   // INTENTIONALLY EMPTY — see module doc header.
 ]);
+
+/**
+ * cortex#2347 (EBH-5 follow-up, adversarial review Finding 2 — availability)
+ * — boot-time precondition: `system.plugins.signing === "enforce"` with an
+ * EMPTY effective trust root cannot deliver a working boot. Under `enforce`
+ * EVERY bundle fails to verify (there is nothing to verify against),
+ * including a FIRST-PARTY bundle a stack may depend on for the ADR-0024
+ * §OQ9 renderer-coverage floor (today: `metafactory-cortex-renderer-pagerduty`
+ * — see `docs/security/hardening-plan.md`). Left unchecked, THIS function's
+ * absence is exactly how that surfaces: several boot-stages later, as an
+ * uncaught `RendererCoverageInstallStateError` (`src/renderers/coverage.ts`)
+ * that names a coverage shortfall, not the `signing` flag that actually
+ * caused it — a confusing, accidental-looking outage from a config change
+ * that was one field, in one place, days or commits away from the crash.
+ *
+ * This function turns that into an IMMEDIATE, NAMED, actionable refusal,
+ * called from `src/cortex.ts` BEFORE `loadExternalPlugins` even runs — the
+ * earliest point the boot sequence can know both facts (the resolved
+ * posture, and the trust root it will verify against). It deliberately does
+ * NOT:
+ *   - weaken `enforce`'s semantics (a stack genuinely cannot safely verify
+ *     anything against an empty trust root — refusing to boot IS correct;
+ *     only the previous failure's presentation was the bug), or
+ *   - auto-exempt first-party bundles from signature verification (that
+ *     would be exactly the "solve availability by widening trust" shape
+ *     this review explicitly forbids — see `plugin-signing.ts`'s own
+ *     "Coverage" section: EVERY bundle verifies, first-party included).
+ * It only makes the SAME necessary refusal loud and immediate instead of
+ * an accidental-looking crash three layers downstream.
+ *
+ * `permissive` is deliberately EXEMPT from this hard-fail: it never refuses
+ * a bundle (verify-and-log only), so an empty trust root under `permissive`
+ * cannot cause an availability outage — `loadExternalPlugins` already logs
+ * a one-line heads-up for that case (see its own "empty trust root" check).
+ * `off` is exempt because this module is never consulted under `off`.
+ *
+ * @throws a plain `Error` (matching this codebase's `bootVerifierSelfCheck`
+ *   "REFUSING TO BOOT" convention, `src/bus/verifier-self-check.ts`) when
+ *   `posture === "enforce"` and `trustedSigners.size === 0`. Never throws
+ *   otherwise.
+ */
+export function assertPluginSigningTrustRootConfigured(
+  posture: PluginSigningPosture,
+  trustedSigners: ReadonlySet<string>,
+): void {
+  if (posture !== "enforce") return;
+  if (trustedSigners.size > 0) return;
+  throw new Error(
+    `cortex plugin-loader: REFUSING TO BOOT — system.plugins.signing="enforce" but the plugin ` +
+      `trust root is EMPTY (src/adapters/plugin-signing.ts PLUGIN_TRUST_ROOT has zero entries). ` +
+      `Every bundle's signature would fail to verify, INCLUDING first-party bundles this stack may ` +
+      `depend on for ADR-0024 §OQ9 renderer coverage (e.g. metafactory-cortex-renderer-pagerduty) — ` +
+      `left unchecked this crashes several boot-stages later at the renderer-coverage guard with an ` +
+      `error that looks unrelated to this setting. Populate PLUGIN_TRUST_ROOT with a real production ` +
+      `signing key before enabling enforce, or set system.plugins.signing to "off" or "permissive" ` +
+      `until one is provisioned. See plugin-signing.ts's module doc "Open question" section.`,
+  );
+}
 
 // =============================================================================
 // Signature file schema

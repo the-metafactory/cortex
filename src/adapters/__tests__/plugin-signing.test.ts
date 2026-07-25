@@ -17,6 +17,7 @@ import { join } from "path";
 import { createUser } from "nkeys.js";
 
 import {
+  assertPluginSigningTrustRootConfigured,
   computeBundleDigest,
   PLUGIN_SIGNATURE_FILENAME,
   renderSignatureFile,
@@ -304,5 +305,25 @@ describe("test-helper sanity", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("assertPluginSigningTrustRootConfigured (cortex#2347 follow-up, Finding 2 — availability)", () => {
+  test("throws when posture is 'enforce' and the trust root is empty", () => {
+    expect(() => assertPluginSigningTrustRootConfigured("enforce", new Set())).toThrow(
+      /REFUSING TO BOOT.*system\.plugins\.signing="enforce".*trust root is EMPTY/s,
+    );
+  });
+
+  test("does NOT throw when posture is 'enforce' and the trust root is non-empty", () => {
+    expect(() => assertPluginSigningTrustRootConfigured("enforce", new Set(["U" + "A".repeat(55)]))).not.toThrow();
+  });
+
+  test("does NOT throw for 'permissive' even with an empty trust root — permissive never refuses a bundle, so it cannot cause an availability outage", () => {
+    expect(() => assertPluginSigningTrustRootConfigured("permissive", new Set())).not.toThrow();
+  });
+
+  test("does NOT throw for 'off' even with an empty trust root — this module is never consulted under off", () => {
+    expect(() => assertPluginSigningTrustRootConfigured("off", new Set())).not.toThrow();
   });
 });

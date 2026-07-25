@@ -1267,6 +1267,22 @@ export type ReimportRendererResult =
  * boot, applied to the SAME bundle a second time, so a reload is held to the
  * identical trust bar as a fresh boot-time load — no relaxed re-import path.
  *
+ * **cortex#2347 (EBH-5 follow-up, adversarial review DO-NOT-MERGE finding)
+ * — this is the SECOND `import()` call site that loads plugin bundle code,
+ * and it RE-VERIFIES the signature every time, from CURRENT on-disk bytes.**
+ * A bundle that verified at boot does not get a lifetime pass: the file on
+ * disk may have changed since boot (that is the entire point of a reload
+ * command existing), so `opts.pluginSigning`/`opts.pluginTrustedSigners`
+ * are threaded through and checked via {@link verifyBundleSignature} BEFORE
+ * the entry module is imported below — same posture semantics as
+ * `loadOneBundle` (`off` no-ops, `permissive` verifies-and-logs-never-
+ * refuses, `enforce` refuses and the tampered code is never imported).
+ * `pluginSigning` is a REQUIRED param (no default) precisely so a caller
+ * cannot silently omit it the way this call site silently omitted
+ * verification entirely before this fix — see `src/adapters/plugin-signing.ts`'s
+ * module doc "Coverage" section for the full audit of both `import()` call
+ * sites.
+ *
  * Does NOT touch the {@link SurfacePluginRegistry} — the registry is a
  * `(kind, id)`-keyed CLASS registry (ADR-0024 D5), and a reload replaces a
  * live INSTANCE, not the class binding config-parsing resolves against. The
@@ -1292,7 +1308,20 @@ export type ReimportRendererResult =
  */
 export async function reimportRendererPlugin(
   bundle: DiscoveredBundle,
-  opts: { bust: boolean },
+  opts: {
+    bust: boolean;
+    /**
+     * cortex#2347 (EBH-5 follow-up) — `system.plugins.signing` posture.
+     * REQUIRED, no default: boot-time verification does not carry forward
+     * to a reload (this is a distinct `import()` call site), and every
+     * caller must make an explicit, visible choice rather than one that
+     * silently reintroduces the gap this fix closes.
+     */
+    pluginSigning: PluginSigningPosture;
+    /** Trust root override — defaults to {@link PLUGIN_TRUST_ROOT}, same
+     *  default {@link loadExternalPlugins} uses. */
+    pluginTrustedSigners?: ReadonlySet<string>;
+  },
 ): Promise<ReimportRendererResult> {
   const { manifest, bundleName } = bundle;
   const fail = (stage: string, reason: string): ReimportRendererResult => {
@@ -1304,6 +1333,32 @@ export async function reimportRendererPlugin(
 
   if (manifest.kind !== "renderer") {
     return fail("kind_check", `reimportRendererPlugin only supports renderer bundles; "${bundleName}" is kind "${manifest.kind}"`);
+  }
+
+  // Signature re-verification — cortex#2347 (EBH-5 follow-up). From CURRENT
+  // on-disk bytes, every reload, strictly BEFORE the entry module is
+  // imported below. See this function's doc + `plugin-signing.ts`'s
+  // "Coverage" section.
+  if (opts.pluginSigning !== "off") {
+    const trustedSigners = opts.pluginTrustedSigners ?? PLUGIN_TRUST_ROOT;
+    const sigResult = await verifyBundleSignature({
+      installPath: bundle.installPath,
+      trustedSigners,
+    });
+    if (!sigResult.ok) {
+      if (opts.pluginSigning === "enforce") {
+        return fail(`signature_verify:${sigResult.stage}`, sigResult.reason);
+      }
+      process.stderr.write(
+        `cortex plugin-loader: reload of ${bundleName} (renderer:${manifest.id}) signature verification ` +
+          `FAILED (permissive — continuing) at ${sigResult.stage}: ${sigResult.reason}\n`,
+      );
+    } else {
+      process.stderr.write(
+        `cortex plugin-loader: reload of ${bundleName} (renderer:${manifest.id}) signature verified ` +
+          `(signer=${sigResult.signer.slice(0, 12)}…)\n`,
+      );
+    }
   }
 
   const resolved = resolveEntryWithinBundle(bundle.installPath, manifest.entry);

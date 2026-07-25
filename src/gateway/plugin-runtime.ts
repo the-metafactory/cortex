@@ -37,6 +37,14 @@
  *     entry cortex.ts retained is reused verbatim, so `load` constructs
  *     EXACTLY what boot would have. Refused for adapters (same #1896
  *     rationale as reload).
+ *
+ * cortex#2347 (EBH-5 follow-up, adversarial review DO-NOT-MERGE finding) —
+ * BOTH `reload` and `load` re-`import()` a bundle's entry module (via
+ * `reimportRendererPlugin`), which is a SECOND, independent signature-
+ * verification point (`src/adapters/plugin-signing.ts`), not a reuse of
+ * whatever verified at boot. `PluginRuntimeDeps.pluginSigning` (REQUIRED,
+ * no default) is threaded to every `reimportRendererPlugin` call in this
+ * file for exactly that reason — see that field's own doc.
  */
 
 import type { PlatformAdapter } from "../adapters/types";
@@ -48,6 +56,7 @@ import {
   type ReimportRendererResult,
 } from "../adapters/loader";
 import type { RendererPlugin, SurfacePluginRegistry } from "../adapters/registry";
+import type { PluginSigningPosture } from "../adapters/plugin-signing";
 import type { Renderer } from "../renderers/types";
 import type { SurfaceGateway } from "./surface-gateway";
 
@@ -130,6 +139,22 @@ export interface PluginRuntimeDeps {
   /** Forwarded to `discoverPluginBundles`/tests; `undefined` = arc's real
    *  install root. */
   pkgRoot?: string;
+  /**
+   * cortex#2347 (EBH-5 follow-up, adversarial review DO-NOT-MERGE finding)
+   * — `system.plugins.signing` posture, threaded to `reimportRendererPlugin`
+   * for BOTH `reload` and `load` (both re-`import()` a bundle's entry
+   * module — see `src/adapters/plugin-signing.ts`'s "Coverage" section).
+   * REQUIRED, no default: `src/cortex.ts` sets this from the SAME
+   * `config.plugins.signing` the boot-time loader uses, so reload is held
+   * to the identical posture as boot, always — a caller cannot construct
+   * `PluginRuntimeDeps` without deciding this.
+   */
+  pluginSigning: PluginSigningPosture;
+  /** Trust root override — defaults to `PLUGIN_TRUST_ROOT`
+   *  (`src/adapters/plugin-signing.ts`), same default the boot-time loader
+   *  uses. Production callers never set this; tests inject a throwaway
+   *  keypair's pubkey. */
+  pluginTrustedSigners?: ReadonlySet<string>;
   /** Test seam — defaults to the real `discoverPluginBundles`. Production
    *  callers never set this. */
   discoverBundles?: (opts: {
@@ -139,7 +164,11 @@ export interface PluginRuntimeDeps {
    *  callers never set this. */
   reimportRenderer?: (
     bundle: DiscoveredBundle,
-    opts: { bust: boolean },
+    opts: {
+      bust: boolean;
+      pluginSigning: PluginSigningPosture;
+      pluginTrustedSigners?: ReadonlySet<string>;
+    },
   ) => Promise<ReimportRendererResult>;
 }
 
@@ -256,7 +285,11 @@ export async function reloadLivePlugin(
   }
 
   const reimportRenderer = deps.reimportRenderer ?? reimportRendererPlugin;
-  const reimport = await reimportRenderer(bundle, { bust: true });
+  const reimport = await reimportRenderer(bundle, {
+    bust: true,
+    pluginSigning: deps.pluginSigning,
+    ...(deps.pluginTrustedSigners !== undefined && { pluginTrustedSigners: deps.pluginTrustedSigners }),
+  });
   if (!reimport.ok) {
     return {
       ok: false,
@@ -315,7 +348,11 @@ export async function loadLivePlugin(
   }
 
   const reimportRenderer = deps.reimportRenderer ?? reimportRendererPlugin;
-  const reimport = await reimportRenderer(bundle, { bust: false });
+  const reimport = await reimportRenderer(bundle, {
+    bust: false,
+    pluginSigning: deps.pluginSigning,
+    ...(deps.pluginTrustedSigners !== undefined && { pluginTrustedSigners: deps.pluginTrustedSigners }),
+  });
   if (!reimport.ok) {
     return { ok: false, detail: `load failed at ${reimport.stage}: ${reimport.reason}` };
   }

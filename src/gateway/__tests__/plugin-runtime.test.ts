@@ -101,6 +101,12 @@ function baseDeps(overrides: Partial<PluginRuntimeDeps> = {}): PluginRuntimeDeps
     router: makeRouter(),
     skippedRendererConfigs: new Map(),
     registry: new SurfacePluginRegistry(),
+    // cortex#2347 (EBH-5 follow-up) — "off" reproduces this file's pre-fix
+    // behaviour (`reimportRenderer` is a fully injected fake in every test
+    // here, so the real signature-verification branch never engages
+    // regardless of posture); tests that specifically want to exercise the
+    // posture override it explicitly.
+    pluginSigning: "off",
     ...overrides,
   };
 }

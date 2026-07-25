@@ -13,12 +13,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createUser } from "nkeys.js";
 
-import { loadExternalPlugins, type ArcListRunResult } from "../loader";
+import { discoverPluginBundles, loadExternalPlugins, reimportRendererPlugin, type ArcListRunResult } from "../loader";
 import {
   computeBundleDigest,
   PLUGIN_SIGNATURE_FILENAME,
@@ -362,6 +362,246 @@ describe("loadExternalPlugins — system.plugins.signing (cortex#2347, EBH-5)", 
       expect(result.loaded).toEqual([]);
       expect(result.failed).toEqual([]);
       expect(result.skipped.map((s) => s.bundleName)).toEqual(["no-external-bundle"]);
+    } finally {
+      rmSync(pkgRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// =============================================================================
+// reimportRendererPlugin — reload re-verification (cortex#2347 follow-up,
+// adversarial review DO-NOT-MERGE finding: a bundle that verified once at
+// boot must NOT get a lifetime pass — `reimportRendererPlugin` is a SECOND,
+// independent `import()` call site and must re-verify from CURRENT on-disk
+// bytes at reload time, not trust whatever verified at boot).
+// =============================================================================
+
+/** Renderer entry whose top-level code has a real, observable, EXECUTION
+ *  side effect (an `appendFileSync` at MODULE-EVALUATION time, not inside
+ *  any function) — so a test can prove "this code ran" by checking the
+ *  sentinel file's CONTENT, not merely "no error was thrown". `marker` is
+ *  embedded in the appended line so the ORIGINAL and TAMPERED versions of
+ *  the same file are trivially distinguishable in the sentinel's content. */
+function rendererIndexWithExecutionMarker(id: string, sentinelPath: string, marker: string): string {
+  return [
+    "import { appendFileSync } from \"fs\";",
+    // Runs at IMPORT time — this is the exact statement that must never
+    // execute for a bundle refused before `import()`.
+    `appendFileSync(${JSON.stringify(sentinelPath)}, ${JSON.stringify(marker)} + "\\n");`,
+    "const plugin = {",
+    "  kind: \"renderer\",",
+    `  id: ${JSON.stringify(id)},`,
+    `  rendererKind: ${JSON.stringify(id)},`,
+    "  configSchema: { safeParse: (v) => ({ success: true, data: v }) },",
+    "  createRenderer: (config) => ({",
+    `    kind: ${JSON.stringify(id)},`,
+    `    id: ${JSON.stringify(id)},`,
+    "    subjects: [\"local.andreas.>\"],",
+    "    async start() {},",
+    "    async stop() {},",
+    "    get surfaceConfig() { return { id: this.id, subjects: this.subjects, render: () => this.render() }; },",
+    "    async render() {},",
+    "  }),",
+    "};",
+    "export default plugin;",
+    "",
+  ].join("\n");
+}
+
+describe("reimportRendererPlugin — reload re-verification (cortex#2347 follow-up)", () => {
+  test("a bundle that verified at BOOT but is TAMPERED before RELOAD is refused, and the tampered code NEVER EXECUTES", async () => {
+    const pkgRoot = mkdtempSync(join(tmpdir(), "cortex-signing-reload-tamper-"));
+    const sentinelPath = join(pkgRoot, "executed.marker");
+    try {
+      const signer = freshKeypair();
+      const dir = join(pkgRoot, "reload-bundle");
+      const { mkdirSync } = await import("fs");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "cortex-plugin.yaml"),
+        "kind: renderer\nid: reload-fixture\nentry: ./index.ts\nsdkRange: \"^1\"\n",
+      );
+      writeFileSync(join(dir, "index.ts"), rendererIndexWithExecutionMarker("reload-fixture", sentinelPath, "ORIGINAL"));
+
+      // Sign the ORIGINAL content.
+      const digestResult = computeBundleDigest(dir);
+      if (!digestResult.ok) throw new Error(`test setup: digest failed: ${digestResult.reason}`);
+      const signature = await signBundleDigest(signer.seed, digestResult.digest);
+      writeFileSync(
+        join(dir, PLUGIN_SIGNATURE_FILENAME),
+        renderSignatureFile({
+          version: 1,
+          algorithm: "ed25519",
+          signer: signer.pubkey,
+          digest: digestResult.digest,
+          signature,
+        }),
+      );
+
+      const pkg: ArcPackage = {
+        name: "reload-bundle",
+        version: "0.0.0",
+        type: "component",
+        status: "active",
+        tier: "community",
+        repoUrl: TRUSTED_REPO,
+        installPath: dir,
+      };
+      const trustedSigners = new Set([signer.pubkey]);
+
+      // 1. BOOT — loads under enforce; the ORIGINAL code legitimately runs
+      //    once (proves the harness itself is sound, not just the refusal).
+      const registry = new SurfacePluginRegistry();
+      const bootResult = await loadExternalPlugins({
+        registry,
+        externalEnabled: true,
+        pkgRoot,
+        runner: runnerFor([pkg]),
+        pluginSigning: "enforce",
+        pluginTrustedSigners: trustedSigners,
+      });
+      expect(bootResult.failed).toEqual([]);
+      expect(bootResult.loaded.map((l) => l.id)).toEqual(["reload-fixture"]);
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(readFileSync(sentinelPath, "utf-8")).toBe("ORIGINAL\n");
+
+      // 2. TAMPER — mutate the entry file ON DISK after boot. The signature
+      //    file is untouched, so it now names a STALE digest. Also swap the
+      //    marker so any execution would be unmistakable in the sentinel.
+      writeFileSync(join(dir, "index.ts"), rendererIndexWithExecutionMarker("reload-fixture", sentinelPath, "TAMPERED-EXECUTED"));
+
+      // 3. RELOAD — re-discover the SAME bundle (as `reloadLivePlugin` does)
+      //    and call `reimportRendererPlugin` with the SAME posture + trust
+      //    root the boot call used.
+      const { bundles } = await discoverPluginBundles({ pkgRoot, runner: runnerFor([pkg]) });
+      const bundle = bundles.find((b) => b.bundleName === "reload-bundle");
+      if (!bundle) throw new Error("test setup: bundle not discoverable for reload");
+
+      const reimportResult = await reimportRendererPlugin(bundle, {
+        bust: true,
+        pluginSigning: "enforce",
+        pluginTrustedSigners: trustedSigners,
+      });
+
+      // ASSERTION 1 — the reload is REFUSED (not merely "an error", the
+      // SPECIFIC signature-verify stage this fix adds).
+      expect(reimportResult.ok).toBe(false);
+      if (!reimportResult.ok) {
+        expect(reimportResult.stage).toBe("signature_verify:digest_mismatch");
+      }
+
+      // ASSERTION 2 — the tampered code NEVER EXECUTED. This is the sharp
+      // assertion the review specifically asked for: not "no plugin object
+      // was returned" (which a refusal-before-import trivially satisfies by
+      // construction) but "the file's top-level side effect never ran" —
+      // proof `import()` itself was never reached for the tampered bytes.
+      // If it HAD executed, the sentinel would now read
+      // "ORIGINAL\nTAMPERED-EXECUTED\n"; it must be UNCHANGED from step 1.
+      expect(readFileSync(sentinelPath, "utf-8")).toBe("ORIGINAL\n");
+    } finally {
+      rmSync(pkgRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("a bundle that is NOT tampered reloads fine under enforce (still loads the good one — same lesson as boot)", async () => {
+    const pkgRoot = mkdtempSync(join(tmpdir(), "cortex-signing-reload-good-"));
+    const sentinelPath = join(pkgRoot, "executed.marker");
+    try {
+      const signer = freshKeypair();
+      const dir = join(pkgRoot, "reload-bundle");
+      const { mkdirSync } = await import("fs");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "cortex-plugin.yaml"),
+        "kind: renderer\nid: reload-fixture-good\nentry: ./index.ts\nsdkRange: \"^1\"\n",
+      );
+      writeFileSync(
+        join(dir, "index.ts"),
+        rendererIndexWithExecutionMarker("reload-fixture-good", sentinelPath, "RUN"),
+      );
+      const digestResult = computeBundleDigest(dir);
+      if (!digestResult.ok) throw new Error(`test setup: digest failed: ${digestResult.reason}`);
+      const signature = await signBundleDigest(signer.seed, digestResult.digest);
+      writeFileSync(
+        join(dir, PLUGIN_SIGNATURE_FILENAME),
+        renderSignatureFile({
+          version: 1,
+          algorithm: "ed25519",
+          signer: signer.pubkey,
+          digest: digestResult.digest,
+          signature,
+        }),
+      );
+      const pkg: ArcPackage = {
+        name: "reload-bundle",
+        version: "0.0.0",
+        type: "component",
+        status: "active",
+        tier: "community",
+        repoUrl: TRUSTED_REPO,
+        installPath: dir,
+      };
+      const trustedSigners = new Set([signer.pubkey]);
+
+      const { bundles } = await discoverPluginBundles({ pkgRoot, runner: runnerFor([pkg]) });
+      const bundle = bundles.find((b) => b.bundleName === "reload-bundle");
+      if (!bundle) throw new Error("test setup: bundle not discoverable for reload");
+
+      const reimportResult = await reimportRendererPlugin(bundle, {
+        bust: true,
+        pluginSigning: "enforce",
+        pluginTrustedSigners: trustedSigners,
+      });
+
+      expect(reimportResult.ok).toBe(true);
+      if (reimportResult.ok) {
+        expect(reimportResult.plugin.id).toBe("reload-fixture-good");
+      }
+      // Executed exactly once — this reload's import.
+      expect(readFileSync(sentinelPath, "utf-8")).toBe("RUN\n");
+    } finally {
+      rmSync(pkgRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("reload with pluginSigning 'off' skips verification entirely (byte-identical pre-fix behaviour when posture is off)", async () => {
+    const pkgRoot = mkdtempSync(join(tmpdir(), "cortex-signing-reload-off-"));
+    try {
+      const dir = join(pkgRoot, "unsigned-reload-bundle");
+      const { mkdirSync } = await import("fs");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "cortex-plugin.yaml"),
+        "kind: renderer\nid: reload-fixture-off\nentry: ./index.ts\nsdkRange: \"^1\"\n",
+      );
+      writeFileSync(
+        join(dir, "index.ts"),
+        "const plugin = { kind: \"renderer\", id: \"reload-fixture-off\", rendererKind: \"reload-fixture-off\", " +
+          "configSchema: { safeParse: (v) => ({ success: true, data: v }) }, createRenderer: (c) => ({ " +
+          "kind: \"reload-fixture-off\", id: \"reload-fixture-off\", subjects: [], async start(){}, async stop(){}, " +
+          "get surfaceConfig(){return {id:this.id, subjects:this.subjects, render:()=>this.render()};}, async render(){} }) };\n" +
+          "export default plugin;\n",
+      );
+      const pkg: ArcPackage = {
+        name: "unsigned-reload-bundle",
+        version: "0.0.0",
+        type: "component",
+        status: "active",
+        tier: "community",
+        repoUrl: TRUSTED_REPO,
+        installPath: dir,
+      };
+      const { bundles } = await discoverPluginBundles({ pkgRoot, runner: runnerFor([pkg]) });
+      const bundle = bundles.find((b) => b.bundleName === "unsigned-reload-bundle");
+      if (!bundle) throw new Error("test setup: bundle not discoverable for reload");
+
+      // No cortex-plugin.sig anywhere — under any non-"off" posture this
+      // would refuse at signature_missing. Under "off" it must load fine.
+      const reimportResult = await reimportRendererPlugin(bundle, { bust: true, pluginSigning: "off" });
+      expect(reimportResult.ok).toBe(true);
+      if (reimportResult.ok) {
+        expect(reimportResult.plugin.id).toBe("reload-fixture-off");
+      }
     } finally {
       rmSync(pkgRoot, { recursive: true, force: true });
     }
