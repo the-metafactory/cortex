@@ -37,6 +37,7 @@ import {
   PolicyFederatedSchema,
   PolicyPublicSchema,
   PolicySchema,
+  SandboxConfigSchema,
   RendererSchema,
   WebhookOutRendererSchema,
   isFederatedSubjectInOwnScope,
@@ -1703,6 +1704,39 @@ describe("PolicySchema — sovereignty.enforce (EBH-6b, cortex#2380)", () => {
   test("policy.sovereignty.enforce: false parses false", () => {
     const parsed = PolicySchema.parse({ sovereignty: { enforce: false } });
     expect(parsed.sovereignty?.enforce).toBe(false);
+  });
+});
+
+/**
+ * EBH-4 (cortex#2346) — `SandboxConfigSchema.egressAllow`. Same
+ * default-off/default-empty, posture-visibility-not-a-flip discipline as
+ * EBH-6b's `sovereignty.enforce` tests above: an absent/empty block parses
+ * to the safe "seed-only allowlist" default, and the field is present and
+ * settable so a `system.yaml` CAN declare additional hosts — with the
+ * dispatch-path wiring deliberately still deferred (see the schema's own
+ * doc comment in `cortex-config.ts`).
+ */
+describe("SandboxConfigSchema — egressAllow (EBH-4, cortex#2346)", () => {
+  test("absent block ⇒ mode off, backend auto, egressAllow empty", () => {
+    const parsed = SandboxConfigSchema.parse({});
+    expect(parsed.mode).toBe("off");
+    expect(parsed.backend).toBe("auto");
+    expect(parsed.egressAllow).toEqual([]);
+  });
+
+  test("egressAllow declared with extra hosts parses through unchanged", () => {
+    const parsed = SandboxConfigSchema.parse({ egressAllow: ["extra.example.com", "another.example.org"] });
+    expect(parsed.egressAllow).toEqual(["extra.example.com", "another.example.org"]);
+  });
+
+  test("egressAllow does not require mode/backend to also be set", () => {
+    const parsed = SandboxConfigSchema.parse({ egressAllow: ["extra.example.com"] });
+    expect(parsed.mode).toBe("off");
+    expect(parsed.backend).toBe("auto");
+  });
+
+  test("non-string entries in egressAllow are rejected (fail closed on malformed config)", () => {
+    expect(() => SandboxConfigSchema.parse({ egressAllow: [123] })).toThrow();
   });
 });
 

@@ -7,6 +7,43 @@
 
 ---
 
+## 0. Implementation status — EBH-4 (cortex#2346, epic #2341)
+
+**§4.3's Layer-3 egress design is now implemented — `src/runner/egress-proxy.ts`
+— with one deliberate scope narrowing worth stating plainly (claim hygiene,
+per the epic's own §"three times now" lesson):**
+
+- **Built:** a per-session, deny-by-default HTTP `CONNECT` filtering proxy.
+  `SandboxProfile.egressAllow` (seeded since EBH-2) is now genuinely
+  enforced: `mode: "audit"` observes+logs denials without blocking
+  (`system.security.egress-denial`), `mode: "enforce"` blocks them. Fail-
+  closed on ambiguity (a malformed/unparseable proxy request is denied in
+  EVERY mode, never just `enforce`). Ships with the SAME HARD HOLD as every
+  prior EBH-2/3a slice: `mode: "off"` everywhere by default, no template/
+  example/dispatch path flips it.
+- **NOT built (this slice):** the §4.3 "physically unable to reach anything
+  but the proxy" story — no Linux network-namespace, no macOS PF anchor.
+  Building either needs root and/or the `linux-bwrap` topology, both
+  explicitly out of scope for EBH-4 (no Linux-specific dependency; macOS-only
+  target). **What actually ships is a cooperating-client proxy**: it works
+  because `cc-session.ts` points the child at it via `HTTP_PROXY`/
+  `HTTPS_PROXY` env vars, and because well-behaved HTTP clients honor those
+  vars. **A process that opens a raw socket and ignores the proxy env vars
+  bypasses this completely** — there is no kernel rule forcing egress
+  through it. Do not read "egress-denial events exist" as "egress is
+  contained" without that qualifier. Full rationale + the exact bypass
+  surface: the module doc at the top of `src/runner/egress-proxy.ts`.
+- This is the SAME shape as every other layer in this epic: FS confinement
+  (L1) is a string-parsing guard that can be made fail-closed but not sound;
+  L2 is a real kernel boundary on macOS but denylist-posture (v1 `guarded`,
+  not deny-default) and PF-anchor-less on the network side; L3 (this doc)
+  is deny-by-default on the hosts it filters, but only for traffic that
+  goes through it in the first place. Defense in depth, not a single
+  silver-bullet boundary — see §5 below, which this note extends rather
+  than replaces.
+
+---
+
 ## 1. Problem statement
 
 Cortex drives `claude --print` child processes from **untrusted inbound content** (Discord messages, GitHub events). Today the filesystem/exec/network boundary for those sessions is:
