@@ -24,23 +24,23 @@
  *     fallback) so blocks are observable. Best-effort — never blocks the
  *     deny decision.
  *
- * ## Known limitations (cortex#2343/#2359/#2365 adversarial review, 8 rounds)
+ * ## Known limitations (cortex#2343/#2359/#2365/#2370 adversarial review, 9 rounds)
  *
  * This guard inspects the command STRING, not a real shell parse tree — it
  * is a best-effort classifier against bash's word-evaluation rules and each
  * path-checked command's own path-reading behavior, not a formal shell
- * parser. Eight adversarial rounds each found ONE way the guard's literal-
+ * parser. Nine adversarial rounds each found ONE way the guard's literal-
  * token resolution diverged from what bash/the tool would actually read
  * (tilde-user expansion, brace expansion, quote-removal, backslash-escaping,
  * flag-glued path values, bare-relative flag-value coverage, a whole
- * PATH_CHECKED_COMMANDS coverage gap) — the fix each time was to FAIL CLOSED
- * on whatever couldn't be confidently classified/resolved, culminating in
- * round 5's character whitelist (deny anything outside a closed safe set),
- * round 6's flag-value SHAPE classification (deny anything `-`-prefixed
- * that looks path-shaped), round 7's per-command flag-name WHITELIST (deny
- * anything `-`-prefixed that isn't an explicitly-modeled boolean/numeric
- * flag for that command — see `COMMAND_FLAG_POLICIES`), and round 8
- * (cortex#2365) adding `git` to `PATH_CHECKED_COMMANDS`/
+ * PATH_CHECKED_COMMANDS coverage gap, TWICE) — the fix each time was to FAIL
+ * CLOSED on whatever couldn't be confidently classified/resolved, culminating
+ * in round 5's character whitelist (deny anything outside a closed safe
+ * set), round 6's flag-value SHAPE classification (deny anything
+ * `-`-prefixed that looks path-shaped), round 7's per-command flag-name
+ * WHITELIST (deny anything `-`-prefixed that isn't an explicitly-modeled
+ * boolean/numeric flag for that command — see `COMMAND_FLAG_POLICIES`),
+ * round 8 (cortex#2365) adding `git` to `PATH_CHECKED_COMMANDS`/
  * `COMMAND_FLAG_POLICIES` — `git diff --no-index` is a standalone diff
  * utility that needs no repository and ignores git's own repo-boundary
  * checks, so it was a live full-content-read primitive on any two paths
@@ -48,10 +48,26 @@
  * plus fixing a round-7 regression where a bare `--` (the POSIX
  * end-of-options marker) was misclassified as an unrecognised flag and
  * denied the whole command; it now correctly stops flag classification and
- * containment-checks every token after it as a literal path. That posture
- * — fail closed on ambiguity — is what makes this guard SAFE, but it is NOT
- * airtight by construction the way a real parser + kernel boundary would
- * be. The kernel sandbox (L2, EBH-2/EBH-3,
+ * containment-checks every token after it as a literal path. Round 9
+ * (cortex#2370, EBH-1e) found the SAME coverage gap a third time — `gh` was
+ * permitted by the floor but absent from `PATH_CHECKED_COMMANDS`, so
+ * `gh pr comment 1 --body-file <out-of-scope>` read an arbitrary file and
+ * POSTED IT TO GITHUB (remote exfiltration, worse than a local read) — and
+ * closed the whole CLASS rather than the one instance: `PATH_CHECKED_COMMANDS`
+ * is no longer a hand-maintained opt-IN list (the root cause all three
+ * rounds share) but a computed opt-OUT one — every command head word
+ * `DEFAULT_CONFIG`'s floor permits is path-checked by default, with only a
+ * small justified `PATH_CHECK_OPT_OUT_COMMANDS` exemption set, and a command
+ * that is neither opted out nor carries a `COMMAND_FLAG_POLICIES` entry now
+ * fails CLOSED (`checkCommandPaths` denies it outright) instead of silently
+ * skipping the check. A regression test derives the floor's command list
+ * from `DEFAULT_CONFIG.rules` itself and fails if any of them lacks a policy
+ * or an opt-out — see `bash-guard.hook.test.ts`'s "round 9" describe block —
+ * so widening the floor without declaring the new command's path posture is
+ * now a CI failure, not a silent bypass. That posture — fail closed on
+ * ambiguity AND on coverage gaps — is what makes this guard SAFE, but it is
+ * NOT airtight by construction the way a real parser + kernel boundary
+ * would be. The kernel sandbox (L2, EBH-2/EBH-3,
  * `docs/design-session-sandbox.md`) is the actual boundary; this guard is
  * Tier-0 defense-in-depth in front of it.
  *
@@ -368,7 +384,66 @@ function rejectsChaining(command: string): boolean {
 // =============================================================================
 
 /**
- * Bash read commands whose path argument(s) get containment-checked.
+ * cortex#2370 (EBH-1e, round 9) — INVERT the coverage model from opt-IN to
+ * opt-OUT. Rounds 7 (`file`, cortex#2359), 8 (`git`, cortex#2365), and 9
+ * (`gh`, this issue) each found a DIFFERENT command silently missing from
+ * this set — the opt-in model itself was the standing defect: every command
+ * added to `DEFAULT_CONFIG`'s floor was silently EXEMPT from path/flag
+ * checking until someone remembered to add it here by hand. Three rounds of
+ * the exact same mistake is a pattern in the MODEL, not a coincidence in the
+ * instances.
+ *
+ * The new model: every command head word `DEFAULT_CONFIG`'s own floor rules
+ * permit is path-checked by DEFAULT — {@link FLOOR_COMMAND_HEAD_WORDS} is
+ * derived PROGRAMMATICALLY from those rules (never hand-maintained, so it
+ * cannot drift from what the floor actually allows). A command is exempted
+ * ONLY via the small, explicitly-justified
+ * {@link PATH_CHECK_OPT_OUT_COMMANDS} set below. Anything neither opted out
+ * NOR carrying a {@link COMMAND_FLAG_POLICIES} entry fails CLOSED —
+ * `checkCommandPaths` denies it outright once a restriction is configured,
+ * rather than silently skipping it (see the flagPolicy-presence check
+ * there).
+ *
+ * `bash-guard.hook.test.ts`'s "round 9: floor coverage" describe block is
+ * the regression test that makes a round 10 of this class impossible: it
+ * derives the same command list from the SAME live `DEFAULT_CONFIG.rules`
+ * this module ships and fails if any of them is neither opted out nor
+ * flag-policied — so widening the floor without declaring the new command's
+ * path posture is now a CI failure, not a silent bypass.
+ */
+export function deriveFloorCommandHeadWords(rules: readonly AllowRule[]): Set<string> {
+  const words = new Set<string>();
+  for (const rule of rules) {
+    // Every DEFAULT_CONFIG pattern is anchored `^<command>` followed by a
+    // `\s`/`\b`/`$` boundary (see DEFAULT_CONFIG above) — the same shape
+    // main()/extractCommandPaths already assume when reading a COMMAND
+    // string's head word, applied here to a RULE PATTERN string instead.
+    const m = /^\^([A-Za-z][A-Za-z0-9_]*)/.exec(rule.pattern);
+    if (m?.[1]) words.add(m[1].toLowerCase());
+  }
+  return words;
+}
+
+/** The command head words `DEFAULT_CONFIG`'s floor currently permits —
+ *  computed, never hand-maintained (see the module doc above this block). */
+export const FLOOR_COMMAND_HEAD_WORDS = deriveFloorCommandHeadWords(DEFAULT_CONFIG.rules);
+
+/**
+ * Commands PROVEN not to take a path argument at all — the only legitimate
+ * way to skip path/flag checking entirely under the opt-out model above.
+ * Each entry carries a one-line justification; this set must stay SMALL —
+ * every addition is a claim that has to hold for every invocation shape the
+ * floor's own rule for that command permits.
+ */
+export const PATH_CHECK_OPT_OUT_COMMANDS = new Set<string>([
+  "pwd", // POSIX pwd takes no operand at all — nothing to check.
+  "echo", // Prints its argv verbatim; never opens/reads a file by path.
+  "which", // Searches $PATH for a command NAME; never reads file content.
+]);
+
+/**
+ * Bash read commands whose path argument(s) get containment-checked — every
+ * floor command word EXCEPT the explicit opt-outs above.
  *
  * `git` was added at round 8 (cortex#2365 finding 1) — it was allowed by
  * `DEFAULT_CONFIG`'s `^git\s+(log|diff|show|status|branch|fetch|remote|
@@ -379,8 +454,14 @@ function rejectsChaining(command: string): boolean {
  * itself refuses with "outside repository") — it will diff ANY two
  * readable paths and print full file contents. See `COMMAND_FLAG_POLICIES.
  * git` for how its flags are modeled.
+ *
+ * `gh` was added at round 9 (cortex#2370) — the SAME gap, a third time. See
+ * `COMMAND_FLAG_POLICIES.gh` for how its flags (including the `--body-file`
+ * exfil vector) are modeled.
  */
-const PATH_CHECKED_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file", "git"]);
+const PATH_CHECKED_COMMANDS = new Set(
+  [...FLOOR_COMMAND_HEAD_WORDS].filter((word) => !PATH_CHECK_OPT_OUT_COMMANDS.has(word)),
+);
 
 export interface ExtractedCommandPaths {
   /**
@@ -499,7 +580,7 @@ interface CommandFlagPolicy {
   longValue: ReadonlySet<string>;
 }
 
-const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
+export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
   cat: {
     shortBoolean: new Set(["n", "b", "s", "v", "e", "t", "A", "E", "T"]),
     shortValue: new Set(),
@@ -591,6 +672,75 @@ const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
     // `classifyFlagToken` denies it BY CONSTRUCTION — the same
     // "enumerate only the safe ones" discipline as every other command's
     // policy, not a special-cased blacklist entry.
+  },
+  // cortex#2370 (EBH-1e, round 9) — `gh` joins the checked set. Its
+  // `pr comment`/`issue comment` subcommands (both allowed by
+  // DEFAULT_CONFIG's floor) accept `-F`/`--body-file <path>`, which reads an
+  // arbitrary local file and POSTS ITS CONTENTS TO GITHUB — a live, verified
+  // REMOTE-exfiltration primitive (worse than a local read: the data leaves
+  // the machine and lands somewhere persistent/potentially public). `gh` was
+  // permitted by the floor (`^gh\s+pr\s+(view|list|diff|checks|status|
+  // comment)\b`, `^gh\s+issue\s+(view|list|status|comment)\b`, `^gh\s+repo\s+
+  // view\b`) but absent from the (then opt-in) PATH_CHECKED_COMMANDS, so its
+  // arguments were NEVER containment-checked — `gh pr comment 1 --body-file
+  // <out-of-scope>` verified live on `main`.
+  //
+  // `-F`/`--body-file` are DELIBERATELY MODELED here (as shortValue/
+  // longValue, NOT boolean and NOT omitted) so the value is pushed through
+  // the SAME candidate-path/containment pipeline every other value flag
+  // uses — same discipline as git's `-C`/`--git-dir` at round 8. An
+  // in-scope body file still works (containment-checked, not blanket-
+  // denied); an out-of-scope one denies via containment, not via a
+  // blanket ban on the flag itself.
+  gh: {
+    // -w (--web) is the only common single-char BOOLEAN flag across the
+    // floor's read-only subcommands; every other short flag below takes a
+    // value.
+    shortBoolean: new Set(["w"]),
+    // -R/--repo (repo-pin value — extractGhRepo() enforces the pin
+    // separately; routing it through containment too is harmless, since an
+    // `owner/repo` value resolves relative to cwd), -S/--search, -L/--limit
+    // (numeric), -b/--body (free text, not a path, but costs nothing to
+    // route through containment), -F/--body-file (THE round-9 finding — a
+    // real local path, MUST be containment-checked, never boolean-skipped).
+    shortValue: new Set(["R", "S", "L", "b", "F"]),
+    // Boolean output/behaviour flags for view/list/diff/checks/comment.
+    // None of these read a path as their value.
+    longBoolean: new Set([
+      "web",
+      "comments",
+      "draft",
+      "patch",
+      "name-only",
+      "watch",
+      "required",
+      "edit-last",
+      "create-if-none",
+      "delete-last",
+    ]),
+    // Value flags whose value is text/identifiers, not a local path —
+    // EXCEPT `body-file`, which genuinely IS a path and is deliberately
+    // included here (not omitted) so its value routes through containment,
+    // same discipline as git's `-C`/`--git-dir` at round 8.
+    longValue: new Set([
+      "repo",
+      "json",
+      "state",
+      "search",
+      "limit",
+      "label",
+      "assignee",
+      "author",
+      "base",
+      "head",
+      "title",
+      "body",
+      "body-file",
+      "color",
+      "interval",
+      "template",
+      "milestone",
+    ]),
   },
 };
 
@@ -858,6 +1008,26 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
     // No restriction configured for this session — matches the existing
     // security-preamble.ts contract (allDirs.length === 0 ⇒ no restriction).
     return { allow: true, reason: "" };
+  }
+
+  // cortex#2370 (EBH-1e, round 9) — the runtime half of the opt-in→opt-out
+  // inversion: a command only ever reaches this function when its head word
+  // is NOT on PATH_CHECK_OPT_OUT_COMMANDS (see the call site in main()), so
+  // it MUST carry an explicit COMMAND_FLAG_POLICIES entry. This is checked
+  // UNCONDITIONALLY here — not just when a `-`-prefixed token happens to be
+  // present — so a policy-less command with an all-positional invocation
+  // (no flags at all) still fails CLOSED instead of silently sailing through
+  // extractCommandPaths' generic non-flag fallthrough. (extractCommandPaths
+  // still carries its own flagPolicy-presence check too, for the case where
+  // it's ever called directly — defense in depth, not the primary gate.)
+  const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(trimmedCommand)?.[1]?.toLowerCase();
+  if (!headWord || !COMMAND_FLAG_POLICIES[headWord]) {
+    return {
+      allow: false,
+      reason:
+        `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": no COMMAND_FLAG_POLICIES ` +
+        `entry declared for this command (cortex#2370) — denying to stay fail-closed.`,
+    };
   }
 
   const extracted = extractCommandPaths(trimmedCommand);
