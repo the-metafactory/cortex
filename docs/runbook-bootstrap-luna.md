@@ -1,9 +1,11 @@
 # Runbook — Bootstrap Luna (zero → MVP software-factory assistant)
 
-**What this is.** One path, followed top to bottom, from a clean machine to a
-`@luna` that responds in Discord **and can write code** — clone a repo, run
-tests, open a PR. No cross-doc stitching: everything you need to reach a
-responding, coding Luna is on this page.
+**What this is.** A single path from a clean machine to a `@luna` that responds
+in Discord **and can write code** — clone a repo, run tests, open a PR. It forks
+exactly once, at the stand-up: you either run `cortex quickstart` by hand
+(Steps 4–5) **or** let the luna-stack bundle do the whole stand-up for you
+(Step 6) — the two are alternatives, never both. No cross-doc stitching:
+everything you need is on this page.
 
 **Audience.** A newcomer standing up their first metafactory assistant stack on
 **macOS** or **Debian-based Linux**. (WSL2 works too, with one caveat called out
@@ -20,11 +22,22 @@ GitHub repo you name**, confirming before she pushes or opens a PR.
 1. Prereqs        bun · nats-server · Claude Code (authenticated) · gh · git
 2. Discord bot    create the app + token + IDs   ← the ONE manual edge, front-loaded
 3. Install cortex arc install cortex             (native; renders your service units)
-4. Stand up Luna  cortex quickstart --surface discord   (scaffold → bind → seed → boot → gate)
-5. Verify         say hi in the channel → @luna replies
-6. Make her code  install the luna-stack bundle (the software-factory capability delta)
+                  ── then pick ONE stand-up path (they are alternatives, never both) ──
+4. Stand up Luna  cortex quickstart --surface discord   (scaffold → bind → seed → boot → gate)   ┐ MANUAL path:
+5. Verify         say hi in the channel → @luna replies                                          ┘ a chat Luna, by hand
+6. Make her code  install the luna-stack bundle — the one-install stand-up + coding delta        ← BUNDLE path: does 4+5 FOR you
 7. Troubleshoot   the known edges (macOS load, missing token, WSL2 systemd)
 ```
+
+> **Steps 4 and 6 are two ways to stand up the SAME stack — do exactly one.**
+> The luna-stack bundle (Step 6) *is* the stand-up; it replaces the manual
+> `cortex quickstart` in Step 4, it does not follow it. Running the manual
+> quickstart **and then** the bundle was the field-test catch-22
+> ([luna-stack#5](https://github.com/the-metafactory/metafactory-cortex-agent-luna-stack/issues/5)):
+> the bundle is now idempotent and will reuse an existing stack rather than
+> collide, but the coherent path is still to choose one. **Want a coding Luna in
+> one install?** Do Steps 1–3, then jump to Step 6 and skip Step 4. **Want to
+> stand up by hand first (chat only)?** Do Steps 1–5 and stop.
 
 > **Design provenance.** This runbook is the executable form of
 > `docs/design-bootstrap-luna.md` (DD-1 runbook-first, DD-4 solo/local/simple-bus,
@@ -190,6 +203,13 @@ re-provisions your stack's signing seed).
 
 ## 4. Stand up Luna
 
+> **Planning to install the luna-stack bundle (Step 6)? SKIP this step.** The
+> bundle *is* this stand-up — it runs the same `cortex quickstart` spine for you
+> and then adds the coding grant. Doing both means standing up the same stack
+> twice; the bundle now reuses an existing stack rather than erroring, but the
+> clean path is to pick one. This Step 4 is the **manual** path — walk it only if
+> you want a chat Luna by hand and are **not** going to Step 6.
+
 `cortex quickstart` is the verified one-command stand-up spine. Driven entirely
 by a set of `CTX_*` environment variables, it runs eight idempotent steps —
 **preflight → validate env → write nats conf → scaffold the stack → patch the
@@ -310,18 +330,33 @@ If she's silent, jump to [Troubleshooting](#7-troubleshooting) — the usual cau
 is a missing/incorrect token (Step 8's gate stops on it) or, on macOS, the
 daemon not yet started (F2).
 
-**At this point you have a responding chat Luna.** To make her a *software-factory*
-assistant that can code, continue to Step 6.
+**At this point you have a responding chat Luna** — the end of the **manual**
+stand-up path. Adding the software-factory (coding) capability by hand is a
+separate manual capability edit; the supported one-command way to get there is
+the luna-stack bundle. **Note:** the bundle re-runs the stand-up, so if you took
+this manual Step 4 you have already stood the stack up — installing the bundle
+now will **reuse** that stack (it won't re-scaffold), and it exists mainly for
+people who **skipped** Step 4 and want the one-install stand-up **plus** the
+coding delta in a single command. If that's you, read Step 6.
 
 ---
 
 ## 6. Make her code — install the luna-stack bundle
 
+> **The bundle REPLACES the manual `cortex quickstart` in Step 4 — never run
+> both as a fresh stand-up.** If you came straight here from Step 3 (skipping
+> Step 4), the bundle does the entire stand-up in one install. If you already
+> ran Step 4, the bundle detects your existing stack and **reuses** it (no
+> re-scaffold, no `already exists` collision) — this idempotency is the fix for
+> [luna-stack#5](https://github.com/the-metafactory/metafactory-cortex-agent-luna-stack/issues/5).
+> Either way you end up with one stack, stood up once.
+
 A chat Luna is the *floor*. The **MVP** is that floor **plus a software-factory
 capability delta**: Claude Code coding tools, `bash`, `gh`/`git`, and
 read+write access scoped to **one repo you name**. That delta ships as the
-**luna-stack** arc bundle, whose install stands up (or extends) the stack and
-grants exactly those capabilities — least-privilege by construction.
+**luna-stack** arc bundle, whose install stands up the stack (or reuses an
+existing one) and grants exactly those capabilities — least-privilege by
+construction.
 
 > **Status.** The luna-stack bundle is the Phase-2 deliverable of
 > `docs/design-luna-stack-bundle.md`, and it is **live and installable now** —
@@ -356,10 +391,13 @@ Under the hood the bundle:
   missing/too old, if `git` or `gh` aren't on `PATH`, or if `LUNA_BOT_TOKEN` is
   unset (it prints the exact Step 2 click-path). Softer warnings for an
   unauthenticated `gh auth status` or a systemd-less WSL2.
-- **Drives `cortex quickstart` (postinstall).** The same verified spine from
-  Step 4 — scaffold → bind Discord → seed → boot → gate — with a
+- **Drives `cortex quickstart` (postinstall), idempotently.** The same verified
+  spine from Step 4 — scaffold → bind Discord → seed → boot → gate — with a
   `cortex start --config <pointer>` backstop so macOS and WSL2 reach a running
-  daemon too.
+  daemon too. If a stack for your slug already exists it is **reused** (no
+  re-scaffold, no `already exists` collision); if quickstart isn't available the
+  explicit fallback chain now **writes the NATS conf itself** and refuses to
+  start a busless daemon — the two failure modes fixed in luna-stack#5.
 - **Grants the software-factory delta**, each an explicit, least-privilege
   widening over the chat floor:
 
