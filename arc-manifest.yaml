@@ -15,7 +15,7 @@ tier: community
 # front so the registry listing sets expectations before anyone installs.
 description: "Layer-7 collaboration surface for the metafactory ecosystem (preview: single principal · Discord surface · macOS/Debian/container · federation experimental, unreleased)"
 authors:
-  - "Andreas Astrom"
+  - "Andreas Aastroem"
   - "Jens-Christian Fischer"
 repository: "the-metafactory/cortex"
 # Publish scope (cortex#2285 C1). `arc publish` resolves the namespace with
@@ -23,7 +23,7 @@ repository: "the-metafactory/cortex"
 # arc src/lib/publish.ts resolvePublishScope), then the account default from
 # /auth/me — so declaring it here makes `arc publish . --dry-run` pass with
 # no flag.
-namespace: "the-metafactory"
+namespace: "metafactory"
 
 # Registry listing status — documented STOP-AND-ASK outcome (cortex#2285 C1).
 # Target label is `beta` (arc's closed union is shipped|beta|deprecated,
