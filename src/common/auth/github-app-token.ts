@@ -201,14 +201,23 @@ export function loadGithubAppIdentity(
   configPath: string = DEFAULT_GITHUB_APP_IDENTITIES_PATH,
 ): GithubAppIdentityConfig {
   const identities = loadGithubAppIdentities(configPath);
-  const identity = identities[name];
-  if (!identity) {
+  // Object.hasOwn (not `identities[name]` + truthy-check) — a bare index
+  // lookup on a plain object resolves prototype-chain members for magic
+  // names like "constructor"/"toString"/"__proto__", silently defeating
+  // this fail-closed check instead of throwing the intended clear error
+  // (adversarial review finding, cortex#2396 PR #2399).
+  if (!Object.hasOwn(identities, name)) {
     const known = Object.keys(identities).join(", ") || "(none)";
     throw new GithubAppTokenError(`unknown GitHub App identity "${name}" — configured: ${known}`, {
       name,
     });
   }
-  return identity;
+  // `noUncheckedIndexedAccess` types this `| undefined`; TS doesn't connect
+  // `Object.hasOwn` to index-signature narrowing. Safe: the hasOwn check
+  // above guarantees this is a genuine own property that passed
+  // GithubAppIdentitySchema validation on load.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return identities[name]!;
 }
 
 // =============================================================================

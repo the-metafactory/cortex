@@ -173,6 +173,19 @@ describe("identity config", () => {
     });
   });
 
+  test("loadGithubAppIdentity throws on prototype-chain names instead of resolving Object.prototype members", () => {
+    // Adversarial review finding (cortex#2396 PR #2399): a bare `identities[name]`
+    // + truthy-check resolves "constructor"/"toString"/"__proto__" etc. to
+    // inherited Object.prototype members instead of throwing. Object.hasOwn
+    // closes this; pin it so it can't regress.
+    for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+      expect(() => loadGithubAppIdentity(name, configPath)).toThrow(GithubAppTokenError);
+      expect(() => loadGithubAppIdentity(name, configPath)).toThrow(
+        new RegExp(`unknown GitHub App identity "${name}"`),
+      );
+    }
+  });
+
   test("loadGithubAppIdentity throws listing known identities when the name is unknown", () => {
     expect(() => loadGithubAppIdentity("luna-dev", configPath)).toThrow(/unknown.*luna-dev.*atlas/s);
   });
