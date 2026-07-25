@@ -53,6 +53,28 @@
  * instead of advisory, it does not change WHEN restriction applies. A
  * MALFORMED `CORTEX_PATH_GUARD` (present but not parseable JSON, or not an
  * object) is a genuine failure, not "empty" — DENY.
+ *
+ * ## Known limitations
+ *
+ * TOCTOU (cortex#2359 finding 2, architecturally unfixable at L1): this
+ * hook authorises a path STRING — it realpath-resolves the tool's
+ * `file_path`/`path`/`pattern` argument and proves containment, then
+ * RETURNS. The actual file operation (Claude Code's own Read/Write/Edit/
+ * Glob/Grep implementation, which runs AFTER this hook returns) then
+ * RE-OPENS that same path by name. Nothing binds the checked object to the
+ * opened object: a check-then-swap between this hook's `realpathSync` and
+ * the tool's own `open()` (e.g. replacing an in-scope path with a symlink
+ * to an out-of-scope target in the intervening window) escapes the check.
+ * This is NOT fixable at L1. The standard remedy —
+ * `openat2(dirfd, rel, RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`, binding
+ * authorisation to a file DESCRIPTOR rather than a re-resolved path —
+ * requires controlling the open() call itself; cortex does not (Claude
+ * Code's own tooling performs it), and `openat2` is Linux-only regardless.
+ * Only a kernel boundary around the process (L2, EBH-2/EBH-3) can bind
+ * authorisation to the actual inode instead of a path string. No L1 fix was
+ * attempted for this — see `docs/design-session-sandbox.md` for the L2
+ * remedy. `bash-guard.hook.ts`'s module doc carries the same note for the
+ * equivalent Bash read-command surface.
  */
 
 import { join } from "path";

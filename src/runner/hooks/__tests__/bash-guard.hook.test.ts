@@ -1956,3 +1956,176 @@ describe("bash-guard.hook — round 6: flag-value classification matrix", () => 
   });
 });
 
+// =============================================================================
+// Bypass #7 (cortex#2359, EBH-1c finding 1, round 7 — the coverage-drift
+// finding) — a BARE RELATIVE flag value. Round 6's `isPathShapedFlagValue`
+// only denies a `-`-prefixed token that itself contains `/`/`~`, or is a
+// `.`-leading `=`-value. `file -flist` / `file --files-from=list` / `wc
+// --files0-from=list` match NONE of those shapes (no `/`, no `~`, and the
+// value doesn't start with `.`) — verified LIVE on `main` @ c25a7c3d as an
+// actual bypass: the guard allowed all three, and the real `file` binary
+// (cross-checked below) reads the OUT-OF-SCOPE path named inside `list`.
+// Fixed by the per-command flag-name WHITELIST (`COMMAND_FLAG_POLICIES` +
+// `classifyFlagToken`): a flag not on the calling command's explicit safe
+// list denies the WHOLE command, regardless of what shape its value takes.
+// =============================================================================
+describe("bash-guard.hook — round 7: bare-relative flag-value coverage (cortex#2359 finding 1)", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r7-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "SECRET_CANARY_LINE\n");
+    // The "list" file itself lives INSIDE allowedDir (so referencing it by a
+    // bare relative name is otherwise unremarkable) but its CONTENTS name an
+    // OUT-OF-SCOPE path — the exact cortex#2359 repro shape.
+    writeFileSync(join(allowedDir, "list"), `${join(secretDir, "canary.txt")}\n`);
+    writeFileSync(join(allowedDir, "file.txt"), "plain\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  // ---- DENY: the live bypasses from the issue repro ----
+
+  test("file -flist — bare relative value glued to a short flag ⇒ DENY (real `file` reads the out-of-scope path)", () => {
+    // Ground truth: the real `file` binary, run from allowedDir exactly like
+    // the guard's cwd, follows the relative "list" argument, reads the
+    // out-of-scope canary path named inside it, and reports on THAT file —
+    // proving out-of-scope file access, not a hypothetical.
+    const realFile = spawnSync("file", ["-flist"], { encoding: "utf-8", cwd: allowedDir });
+    expect(realFile.stdout + realFile.stderr).toContain(join(secretDir, "canary.txt"));
+
+    const r = runHook("file -flist", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("file --files-from=list — bare relative value via `=` ⇒ DENY (real `file` reads the out-of-scope path)", () => {
+    const realFile = spawnSync("file", ["--files-from=list"], { encoding: "utf-8", cwd: allowedDir });
+    expect(realFile.stdout + realFile.stderr).toContain(join(secretDir, "canary.txt"));
+
+    const r = runHook("file --files-from=list", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("wc --files0-from=list — bare relative value on a different path-checked command ⇒ DENY", () => {
+    // No real-tool cross-check here: this dev box's default `wc` is the BSD
+    // build, which doesn't implement --files0-from at all (GNU coreutils —
+    // the production Linux target — does; see the issue). The guard decision
+    // does not depend on which `wc` build is installed, only on the command
+    // shape, so the assertion below is meaningful regardless.
+    const r = runHook("wc --files0-from=list", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("wc --files0-from=list — value file names an out-of-scope path ⇒ DENY (denied by flag-name alone, contents never inspected)", () => {
+    // Same fixture as the DENY case above, restated to make explicit that
+    // the deny does not depend on reading `list`'s contents at all — the
+    // whole command is refused before the guard would ever open it.
+    const r = runHook("wc --files0-from=list", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- ALLOW: no over-deny regression on ordinary safe-flag usage ----
+
+  test("ls -l ⇒ ALLOW", () => {
+    const r = runHook("ls -l", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("head -n 20 f.txt ⇒ ALLOW", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("head -n 20 f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("wc -l f.txt ⇒ ALLOW", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("wc -l f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("file --mime-type f.txt ⇒ ALLOW", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("file --mime-type f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("cat -n f.txt ⇒ ALLOW", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("cat -n f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- ALLOW: bundled / glued safe-flag forms ----
+
+  test("ls -la ⇒ ALLOW (bundled boolean short flags)", () => {
+    const r = runHook("ls -la", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("head -n20 f.txt ⇒ ALLOW (glued numeric short-flag value)", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("head -n20 f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- DENY: unrecognised flags on each path-checked command (no silent skip) ----
+
+  test("tail --retry f.txt ⇒ DENY (long flag not on tail's whitelist)", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("tail --retry f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("ls --hide=list ⇒ DENY (long flag not on ls's whitelist, `=list` value never reached)", () => {
+    const r = runHook("ls --hide=list", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("cat --references f.txt ⇒ DENY (long flag not on cat's whitelist)", () => {
+    writeFileSync(join(allowedDir, "f.txt"), "x\n");
+    const r = runHook("cat --references f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+});
+

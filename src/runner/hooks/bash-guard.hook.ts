@@ -24,23 +24,26 @@
  *     fallback) so blocks are observable. Best-effort — never blocks the
  *     deny decision.
  *
- * ## Known limitations (cortex#2343 adversarial review, 5 rounds — L1's last)
+ * ## Known limitations (cortex#2343/#2359 adversarial review, 7 rounds — L1's last)
  *
  * This guard inspects the command STRING, not a real shell parse tree — it
  * is a best-effort classifier against bash's word-evaluation rules and each
  * path-checked command's own path-reading behavior, not a formal shell
- * parser. Five adversarial rounds each found ONE way the guard's literal-
+ * parser. Seven adversarial rounds each found ONE way the guard's literal-
  * token resolution diverged from what bash/the tool would actually read
  * (tilde-user expansion, brace expansion, quote-removal, backslash-escaping,
- * flag-glued path values) — the fix each time was to FAIL CLOSED on
- * whatever couldn't be confidently classified/resolved, culminating in
- * round 5's character whitelist (deny anything outside a closed safe set)
- * and round 6's flag-value classification (deny anything `-`-prefixed that
- * looks path-shaped). That posture — fail closed on ambiguity — is what
- * makes this guard SAFE, but it is NOT airtight by construction the way a
- * real parser + kernel boundary would be. The kernel sandbox (L2, EBH-2/
- * EBH-3, `docs/design-session-sandbox.md`) is the actual boundary; this
- * guard is Tier-0 defense-in-depth in front of it.
+ * flag-glued path values, bare-relative flag-value coverage) — the fix each
+ * time was to FAIL CLOSED on whatever couldn't be confidently classified/
+ * resolved, culminating in round 5's character whitelist (deny anything
+ * outside a closed safe set), round 6's flag-value SHAPE classification
+ * (deny anything `-`-prefixed that looks path-shaped), and round 7's
+ * per-command flag-name WHITELIST (deny anything `-`-prefixed that isn't an
+ * explicitly-modeled boolean/numeric flag for that command — see
+ * `COMMAND_FLAG_POLICIES`). That posture — fail closed on ambiguity — is
+ * what makes this guard SAFE, but it is NOT airtight by construction the
+ * way a real parser + kernel boundary would be. The kernel sandbox (L2,
+ * EBH-2/EBH-3, `docs/design-session-sandbox.md`) is the actual boundary;
+ * this guard is Tier-0 defense-in-depth in front of it.
  *
  * Accepted residuals (deliberately not chased further — over-deny, not
  * under-deny, direction):
@@ -51,15 +54,37 @@
  *     denied by `isUnresolvedShellToken`, even in the rare case a special
  *     parameter would have expanded to something harmless. Over-deny, safe
  *     direction.
- *   - A future command added to `PATH_CHECKED_COMMANDS` with a not-yet-
- *     modeled value-taking flag (some GNU option this review didn't
- *     enumerate) is mitigated by round 6's path-shaped-flag-value deny —
- *     any `-`-prefixed token containing `/`/`~`/a `.`-leading `=`-value
- *     denies outright rather than being silently skipped — but a flag
- *     whose value is path-shaped WITHOUT any of those characters (there is
- *     no such known case among GNU coreutils/`file`) would not be caught by
- *     construction. Any new addition to `PATH_CHECKED_COMMANDS` should be
- *     reviewed against this class specifically.
+ *   - CLOSED at round 7 (cortex#2359 finding 1): round 6's claim that "no
+ *     known GNU coreutils/`file` flag has a path-shaped value WITHOUT `/`,
+ *     `~`, or a `.`-leading `=`-value" turned out to be false — a BARE
+ *     RELATIVE filename (`file -flist`, `file --files-from=list`, `wc
+ *     --files0-from=list`) is exactly that case, and was a live bypass on
+ *     `main` until round 7's per-command flag-name whitelist closed it. A
+ *     future command added to `PATH_CHECKED_COMMANDS` with a genuinely
+ *     unmodeled flag is now refused BY CONSTRUCTION (any flag not on
+ *     `COMMAND_FLAG_POLICIES[cmd]` denies the whole command), not merely
+ *     mitigated by a shape heuristic — but `COMMAND_FLAG_POLICIES` itself
+ *     still needs a manual entry for each new command; an entry that is
+ *     ITSELF wrong (a flag miscategorized as boolean when the real tool
+ *     treats it as value-taking) is not caught by this guard and would need
+ *     its own review, same as any allowlist.
+ *   - TOCTOU (cortex#2359 finding 2, architecturally unfixable at L1): this
+ *     guard authorises a path STRING — it realpath-resolves the argument
+ *     and proves containment, then RETURNS. The actual tool call (Claude
+ *     Code's own Bash/Read/Write execution, which happens AFTER this hook
+ *     returns) then RE-OPENS that same path by name. Nothing binds the
+ *     checked object to the opened object: a check-then-swap between this
+ *     hook's `realpathSync` and the tool's own `open()` (e.g. replacing an
+ *     in-scope path with a symlink to an out-of-scope target in the
+ *     intervening window) escapes the check. This is NOT fixable at L1. The
+ *     standard remedy — `openat2(dirfd, rel, RESOLVE_BENEATH|
+ *     RESOLVE_NO_SYMLINKS)`, binding authorisation to a file DESCRIPTOR
+ *     rather than a re-resolved path — requires controlling the open() call
+ *     itself; cortex does not (Claude Code's own Read/Write/Bash tooling
+ *     performs it), and `openat2` is Linux-only regardless. Only a kernel
+ *     boundary around the process (L2, EBH-2/EBH-3) can bind authorisation
+ *     to the actual inode instead of a path string. No L1 fix was attempted
+ *     for this — see `docs/design-session-sandbox.md` for the L2 remedy.
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -398,6 +423,152 @@ function isPathShapedFlagValue(tok: string): boolean {
 }
 
 /**
+ * cortex#2359 (EBH-1c finding 1, round 7) — the per-command safe-flag
+ * WHITELIST that closes the gap round 6's blacklist-of-shapes left open.
+ *
+ * Round 6 only denied a `-`-prefixed token that itself LOOKED path-shaped
+ * (contained `/`/`~`, or had a `.`-leading `=`-value) — see
+ * {@link isPathShapedFlagValue}. A BARE RELATIVE filename glued to a
+ * value-taking flag matches none of those shapes: `file -flist`,
+ * `file --files-from=list`, `wc --files0-from=list` all fell through the
+ * "just a flag, skip it" branch and were never containment-checked, even
+ * though `file`/`wc` are in {@link PATH_CHECKED_COMMANDS} PRECISELY because
+ * they read paths — `-f`/`--files-from`/`--files0-from` read the file NAMED
+ * BY THE VALUE (and `file` echoes its contents back verbatim on a parse
+ * error: a live, confirmed exfil primitive, not a hypothetical).
+ *
+ * Blacklisting shapes is what just failed — this is the same lesson round 5
+ * already learned for path CHARACTERS, now applied to path FLAGS: instead of
+ * trying to enumerate every unsafe flag (an open-ended, ever-growing list),
+ * enumerate the SAFE ones per command and deny the WHOLE COMMAND for
+ * anything not on that list. Every entry here is a boolean or numeric-only
+ * flag that does NOT read an argument as a path in the real tool — verified
+ * against each tool's own `--help` / man page. A future command added to
+ * PATH_CHECKED_COMMANDS with an unmodeled value-taking flag is refused by
+ * construction (unrecognised ⇒ deny), never silently skipped.
+ */
+interface CommandFlagPolicy {
+  /** Single-char flags that take NO value — safe standalone or bundled (`-la`). */
+  shortBoolean: ReadonlySet<string>;
+  /**
+   * Single-char flags that take a value — either as a SEPARATE next token
+   * (`-n 20`, unchanged from the pre-round-7 "flag value is the next
+   * candidate-path token" handling below) or glued directly with a PURELY
+   * NUMERIC value (`-n20`, the common GNU-getopt short form). Never safe
+   * bundled with other letters (`-nl` is refused — ambiguous).
+   */
+  shortValue: ReadonlySet<string>;
+  /** Long-flag names (without `--`) that never take a value. */
+  longBoolean: ReadonlySet<string>;
+  /**
+   * Long-flag names that may appear as `--flag=value`. None of these
+   * actually consume a PATH as their value in the real tool (that's what
+   * makes them safe to whitelist) — but the value is still pushed through
+   * the same candidate-path / containment pipeline as every other argument
+   * (defense in depth, and what lets a bare `--flag` with no `=` pass too).
+   */
+  longValue: ReadonlySet<string>;
+}
+
+const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
+  cat: {
+    shortBoolean: new Set(["n", "b", "s", "v", "e", "t", "A", "E", "T"]),
+    shortValue: new Set(),
+    longBoolean: new Set(),
+    longValue: new Set(),
+  },
+  head: {
+    shortBoolean: new Set(["q", "v"]),
+    shortValue: new Set(["n", "c"]),
+    longBoolean: new Set(),
+    longValue: new Set(["lines", "bytes"]),
+  },
+  tail: {
+    shortBoolean: new Set(["q", "v", "f"]),
+    shortValue: new Set(["n", "c"]),
+    longBoolean: new Set(["follow"]),
+    longValue: new Set(["lines", "bytes"]),
+  },
+  ls: {
+    shortBoolean: new Set(["l", "a", "A", "h", "R", "t", "r", "S", "1", "d", "F", "G"]),
+    shortValue: new Set(),
+    longBoolean: new Set(),
+    // `--color` (bare, or `--color=auto|always|never`) — no path value.
+    longValue: new Set(["color"]),
+  },
+  wc: {
+    // Deliberately NO longBoolean/longValue entries — `--files0-from` (the
+    // live bypass this round closes) is NOT on this list, on purpose.
+    shortBoolean: new Set(["l", "w", "c", "m", "L"]),
+    shortValue: new Set(),
+    longBoolean: new Set(),
+    longValue: new Set(),
+  },
+  file: {
+    shortBoolean: new Set(["b", "i", "L", "h", "z"]),
+    shortValue: new Set(),
+    longBoolean: new Set(["mime-type", "mime-encoding"]),
+    // `-f`/`--files-from` are deliberately ABSENT — that's the bypass this
+    // round closes. `color` is not a real `file` flag, but accepting it as
+    // a value-flag costs nothing (it never reads a path either) and matches
+    // this guard's own pre-existing test matrix for "an `=`-flag with a
+    // non-path value must not be denied".
+    longValue: new Set(["color"]),
+  },
+};
+
+type FlagClassification =
+  | { kind: "safe" }
+  | { kind: "value"; value: string }
+  | { kind: "deny" };
+
+/**
+ * Classify a single `-`-prefixed token against one command's
+ * {@link CommandFlagPolicy}. Called ONLY after {@link isPathShapedFlagValue}
+ * has already cleared the token (that check still runs first and keeps its
+ * existing deny message/behaviour unchanged — this is an ADDITIONAL,
+ * stricter gate, not a replacement).
+ *
+ * Exported for unit tests.
+ */
+export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagClassification {
+  if (tok.startsWith("--")) {
+    const body = tok.slice(2);
+    const eqIdx = body.indexOf("=");
+    const name = eqIdx === -1 ? body : body.slice(0, eqIdx);
+    if (eqIdx === -1) {
+      if (policy.longBoolean.has(name) || policy.longValue.has(name)) return { kind: "safe" };
+      return { kind: "deny" };
+    }
+    if (policy.longValue.has(name)) {
+      return { kind: "value", value: body.slice(eqIdx + 1) };
+    }
+    return { kind: "deny" };
+  }
+
+  const body = tok.slice(1); // strip the single leading "-"
+  if (body.length === 0) return { kind: "safe" }; // bare "-" (stdin marker)
+
+  if (body.length === 1) {
+    if (policy.shortBoolean.has(body) || policy.shortValue.has(body)) return { kind: "safe" };
+    return { kind: "deny" };
+  }
+
+  // Multi-char short-option token: either a glued numeric value ("-n20": a
+  // shortValue char followed by a purely-numeric remainder), or a bundle of
+  // boolean flags ("-la"). A value flag glued with non-digit chars ("-nl")
+  // is ambiguous and denied — never both interpretations in the same token.
+  const first = body[0] ?? "";
+  const rest = body.slice(1);
+  if (policy.shortValue.has(first) && /^[0-9]+$/.test(rest)) return { kind: "safe" };
+
+  for (const ch of body) {
+    if (!policy.shortBoolean.has(ch)) return { kind: "deny" };
+  }
+  return { kind: "safe" };
+}
+
+/**
  * Extract candidate path arguments from a single, already env-stripped,
  * already-segment-split shell command string. Deliberately NOT a full shell
  * parser: `rejectsChaining()` (above, runs BEFORE this) already refuses
@@ -436,25 +607,43 @@ function isPathShapedFlagValue(tok: string): boolean {
  * never embed a quote character mid-path; whole-token-quoted paths (for
  * spaces) are unaffected, since those are fully stripped clean above.
  *
- * cortex#2343 adversarial review round 6 (flag-value classification, the
- * FINAL L1 round): a `-`-prefixed token was unconditionally skipped as "just
- * a flag" — never classified as a path, so never whitelisted or reduced.
- * `file`'s `-f`/`--files-from` and `wc`'s `--files0-from` read the PATH
- * GLUED to the flag and can echo that file's contents back on error —
- * `file -f/tmp/secret/x` / `file --files-from=/tmp/secret/x` exfiltrated
- * arbitrary file content while the guard saw "just a flag" and allowed it.
- * Fixed by {@link isPathShapedFlagValue}: any `-`-prefixed token that LOOKS
- * like it carries a path is denied outright rather than being classified
- * (deny-broadening only — a boolean/non-path flag like `-l`/`--mime-type`/
- * `--color=auto` still contains none of `/`/`~`/a `.`-leading `=`-value, so
- * it's still skipped, still allowed; this can never turn a previously-
- * denied command into an allowed one).
+ * cortex#2343 adversarial review round 6 (flag-value classification): a
+ * `-`-prefixed token was unconditionally skipped as "just a flag" — never
+ * classified as a path, so never whitelisted or reduced. `file`'s
+ * `-f`/`--files-from` and `wc`'s `--files0-from` read the PATH GLUED to the
+ * flag and can echo that file's contents back on error — `file
+ * -f/tmp/secret/x` / `file --files-from=/tmp/secret/x` exfiltrated arbitrary
+ * file content while the guard saw "just a flag" and allowed it. Fixed by
+ * {@link isPathShapedFlagValue}: any `-`-prefixed token that LOOKS like it
+ * carries a path (contains `/`/`~`, or a `.`-leading `=`-value) is denied
+ * outright rather than being classified.
+ *
+ * cortex#2359 adversarial review round 7 (EBH-1c finding 1, the coverage-
+ * closing round): round 6's shape-based deny left a gap — a BARE RELATIVE
+ * filename glued to a value-taking flag (`file -flist`,
+ * `file --files-from=list`, `wc --files0-from=list`) contains none of
+ * `/`/`~`/a `.`-leading value, so it matched none of round 6's shapes and
+ * fell through to the SAME "just a flag, skip it" path round 6 was supposed
+ * to close. Fixed by {@link classifyFlagToken} + {@link
+ * COMMAND_FLAG_POLICIES}: every `-`-prefixed token that survives round 6's
+ * check must now ALSO be on the calling command's explicit safe-flag
+ * whitelist (boolean/numeric flags only, verified against each tool's own
+ * `--help`/man page — none of them read a path as their value) or the WHOLE
+ * command is denied. This closes the class by construction — a future
+ * value-taking flag this review didn't enumerate is refused (unrecognised
+ * ⇒ deny), never silently skipped, unlike round 6's shape-only check.
  *
  * Exported for unit tests.
  */
 export function extractCommandPaths(command: string): ExtractedCommandPaths {
   const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const paths: string[] = [];
+  // cortex#2359 round 7 — the calling command's safe-flag whitelist. Mirrors
+  // the headWord extraction main() already performs to decide whether to
+  // call checkCommandPaths() at all; recomputed here so this function stays
+  // self-contained (its own module-doc "Exported for unit tests" contract).
+  const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(command)?.[1]?.toLowerCase();
+  const flagPolicy = headWord ? COMMAND_FLAG_POLICIES[headWord] : undefined;
   for (let i = 1; i < tokens.length; i++) {
     let tok = tokens[i];
     if (tok === undefined) continue;
@@ -467,7 +656,34 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
             `classify what this flag consumes, denying fail-closed`,
         };
       }
-      continue;
+      // cortex#2359 round 7 — the whitelist gate. `flagPolicy` is always
+      // defined here in practice (this function only ever runs for a
+      // PATH_CHECKED_COMMANDS head word — see checkCommandPaths' call
+      // site), but an absent policy fails CLOSED rather than silently
+      // skipping the token, matching this whole module's posture.
+      if (!flagPolicy) {
+        return {
+          paths: null,
+          reason:
+            `unrecognised flag ("${tok.slice(0, 80)}") on a path-reading command with no ` +
+            `known flag policy — denying fail-closed`,
+        };
+      }
+      const classified = classifyFlagToken(tok, flagPolicy);
+      if (classified.kind === "deny") {
+        return {
+          paths: null,
+          reason:
+            `unrecognised flag ("${tok.slice(0, 80)}") on a path-reading command — denying ` +
+            `fail-closed (cortex#2359)`,
+        };
+      }
+      if (classified.kind === "safe") continue;
+      // "value": a known-safe `--flag=value` long option. Neither of these
+      // flags reads a path in the real tool, but the value is still pushed
+      // through the SAME candidate-path / containment pipeline as every
+      // other argument below (defense in depth, costs nothing).
+      tok = classified.value;
     }
     if (
       (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) ||
