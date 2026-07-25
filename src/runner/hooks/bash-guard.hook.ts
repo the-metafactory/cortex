@@ -160,17 +160,36 @@
  *     doesn't itself look path-shaped is trusted as a non-path flag and
  *     skipped, rather than denying the whole command for lacking a
  *     cataloged policy — denying it would defeat G-300's entire purpose.
- *   - PROTECTED: pipes/command-substitution/backticks/redirects/background
- *     `&`/newlines — `rejectsChaining()` still runs in guard-off mode, NOT
- *     as a reintroduction of the command-shape allowlist, but because it is
- *     what makes the per-segment containment check above SOUND (those
- *     constructs let one command interact with another's arguments/output
- *     in ways the single-invocation tokenizer cannot decompose). This is
- *     the one narrow capability reduction relative to pre-EBH-1g: a
- *     guard-off session can no longer chain via `|`/`` ` ``/`$()`/`<`/`>`/
- *     `&`/newline in a single Bash call — `&&`/`||`/`;`-joined SIMPLE
- *     commands are unaffected (each segment is containment-checked
- *     independently, same split as the allowlisted path).
+ *   - ALLOWED, and containment-checked per segment: `|` pipes. A pipeline is
+ *     just more segments — `cat f.txt | wc -l` splits into "cat f.txt" and
+ *     "wc -l" the exact same way `&&`/`||`/`;` chains already did, and each
+ *     segment is containment-checked independently (see the `main()`
+ *     guard-off segment split, which now also splits on a bare `|`).
+ *     Everyday principal-DM commands like `cat x | wc -l` or
+ *     `git log --oneline | head` are unaffected. This is deliberately
+ *     asymmetric with guard-ON, where a bare pipe is STILL denied by
+ *     `rejectsChaining()`'s default call (no options) — there, a pipe could
+ *     smuggle a command past the command-SHAPE allowlist the RHS is never
+ *     matched against; in guard-off there is no shape-allowlist to smuggle
+ *     past (G-300 permits any command already), so denying a pipe bought no
+ *     containment once each side is independently checked. `cat
+ *     <out-of-scope> | wc -l` still denies (the "cat" segment fails
+ *     containment).
+ *   - STILL PROTECTED (genuinely, not just for symmetry):
+ *     command-substitution/backticks/redirects/background `&`/newlines —
+ *     `rejectsChaining()` still runs in guard-off mode (with
+ *     `allowPipes: true`) for these. Command substitution (`$(...)`,
+ *     backticks) computes its argument at RUN time — this guard only ever
+ *     sees the command STRING, so a substituted path can never be
+ *     containment-checked ahead of execution. A redirect (`<`/`>`) reads
+ *     from or writes to a target this guard never extracts as a "path
+ *     argument" at all (the tokenizer only inspects the command's own
+ *     argv-shaped tokens). Both genuinely defeat static path analysis, so
+ *     denying them is real containment, not friction — this is the one
+ *     narrow, deliberate capability reduction relative to pre-EBH-1g: a
+ *     guard-off session can no longer use `` ` ``/`$()`/`<`/`>`/background
+ *     `&`/newline in a single Bash call. `&&`/`||`/`;`/`|`-joined SIMPLE
+ *     commands are fully unaffected.
  *   - PROTECTED: the trigger itself cannot be forged — guard-off is keyed
  *     to the platform's own authenticated sender id, resolved per-message;
  *     no traced producer (bus dispatch, GitHub webhook relay, web gateway,
@@ -434,8 +453,30 @@ function stripEnvPrefix(command: string): string {
  * quoting — a `|` inside a quoted argument is rare in the read-only command
  * surface this guard governs, and denying it (false positive) is the safe
  * direction. When in doubt, deny.
+ *
+ * `opts.allowPipes` (EBH-1g, cortex#2377) — used ONLY by `main()`'s guard-off
+ * (G-300) branch, never by the normal/guard-on call site (which always calls
+ * this with no options — behaviour there is BYTE-IDENTICAL to before EBH-1g).
+ * The reasoning that makes a bare `|` dangerous in the guard-ON path is
+ * specific to that path: the RHS of a pipe is a command the SHAPE-allowlist
+ * matcher never inspects, so a pipe could smuggle an arbitrary command past
+ * an allowed prefix (`ls | rm -rf /`). In a guard-OFF session there is no
+ * shape-allowlist to smuggle past — ANY command is already permitted by
+ * design (G-300) — so a pipe carries no privilege a segment-split command
+ * doesn't already have. What still matters in guard-off mode is PATH
+ * CONTAINMENT, and a pipeline decomposes into simple-command segments the
+ * exact same way `&&`/`||`/`;` already do (see `main()`'s guard-off segment
+ * split) — so `allowPipes` skips ONLY the bare-pipe check below; every other
+ * check (subst, backticks, redirects, background `&`, newline) is
+ * unconditional in BOTH modes. Command substitution and redirects stay
+ * denied even with `allowPipes` because they genuinely defeat static path
+ * analysis — a substituted path is computed at RUN time (this guard only
+ * ever sees the command STRING), and a redirect can write to or read from a
+ * target this guard never extracts as a "path argument" at all. Denying
+ * those is real containment; denying a bare pipe bought none once segments
+ * are containment-checked independently.
  */
-function rejectsChaining(command: string): boolean {
+function rejectsChaining(command: string, opts?: { allowPipes?: boolean }): boolean {
   // Newline (any flavour) → a second command line.
   if (/[\r\n]/.test(command)) return true;
   // Command substitution `$(` (covers `$(( ))` too) and backticks.
@@ -443,11 +484,18 @@ function rejectsChaining(command: string): boolean {
   if (command.includes("`")) return true;
   // Redirection — can clobber files or read secrets.
   if (/[<>]/.test(command)) return true;
-  // A single pipe `|` that is NOT one half of the `||` chain token. We
-  // collapse every `||` to a placeholder first, then look for a remaining `|`.
-  if (command.replace(/\|\|/g, "").includes("|")) return true;
+  if (!opts?.allowPipes) {
+    // A single pipe `|` that is NOT one half of the `||` chain token. We
+    // collapse every `||` to a placeholder first, then look for a remaining
+    // `|`.
+    if (command.replace(/\|\|/g, "").includes("|")) return true;
+  }
   // A single `&` that is NOT part of the `&&` chain token (i.e. background
-  // / job-control). Same collapse trick.
+  // / job-control). Same collapse trick. NOTE: this also still denies `|&`
+  // (bash's pipe-with-stderr shorthand) even when allowPipes is set — `|&`
+  // contains a lone `&` once `&&` is collapsed out, so it is caught here
+  // regardless. Accepted: `|&` is rare, and denying it is the safe
+  // direction, same as everywhere else in this function.
   if (command.replace(/&&/g, "").includes("&")) return true;
   return false;
 }
@@ -1604,32 +1652,48 @@ async function main(): Promise<void> {
   // the same pass()-or-deny() outcomes that existed before.
   if (config === null) {
     // rejectsChaining() is NOT the command-shape allowlist this branch
-    // otherwise skips — see the module doc's "No-bypass guard" section.
-    // It is what makes the per-segment containment check below SOUND:
-    // pipes, command substitution, and redirects let one command's
-    // argument list interact with another's (or hide a second invocation
-    // entirely) in ways `extractCommandPaths`' single-invocation tokenizer
-    // cannot decompose. Denying those forms in a guard-off session is a
-    // narrow, structural carve-out for containment's soundness — the
-    // principal still runs any INDIVIDUAL command unrestricted; a
-    // multi-command pipeline/substitution is refused only because this
-    // guard cannot verify path containment across it, not because the
-    // commands themselves are disallowed.
-    if (rejectsChaining(rawCommand)) {
+    // otherwise skips — see the module doc's "No-bypass guard" section and
+    // that function's own `opts.allowPipes` doc. It is what makes the
+    // per-segment containment check below SOUND: command substitution and
+    // redirects let a path be COMPUTED at run time, or a write/read target
+    // hide outside the argument list this guard extracts — neither is
+    // something a segment split can decompose, so both stay denied
+    // unconditionally, in EITHER mode.
+    //
+    // A bare pipe `|` is different: `allowPipes: true` here (guard-off
+    // ONLY — the guard-on call site below passes no options and is
+    // unaffected). A pipeline is JUST MORE SEGMENTS — `cat f.txt | wc -l`
+    // decomposes into "cat f.txt" and "wc -l" exactly the way
+    // `cat f.txt && wc -l` already does below, and each is
+    // containment-checked independently. Denying it bought no containment
+    // guard-on didn't already have a reason to deny it FOR (there, a pipe
+    // could smuggle a command past the shape-allowlist — a concern that
+    // doesn't exist here, since G-300 has no shape-allowlist to smuggle
+    // past). Confirmed: `cat <out-of-scope> | wc -l` and
+    // `wc -l < <out-of-scope>` still deny — the first via the containment
+    // check on the "cat" segment, the second because `<` redirection stays
+    // in the unconditional deny set above.
+    if (rejectsChaining(rawCommand, { allowPipes: true })) {
       const reason =
         `[Cortex Bash Guard] Blocked "${rawCommand.slice(0, 80)}" (guard-off session, EBH-1g): ` +
-        `command contains a shell metacharacter (pipe, command substitution, backtick, ` +
-        `redirect, background '&', or newline) that path-containment cannot safely verify ` +
-        `across. Split it into separate commands — G-300 still allows any individual command.`;
+        `command contains a shell metacharacter (command substitution, backtick, redirect, ` +
+        `background '&', or newline) that path-containment cannot safely verify across ` +
+        `(pipes are fine — each command in the pipeline is containment-checked separately). ` +
+        `Split it into separate commands — G-300 still allows any individual command.`;
       deny(reason);
       await emitBlockEvent(sessionId, reason, command);
       return;
     }
 
-    // Same segment split as the allowlisted path below (&&/||/;) — each
-    // segment is one simple invocation, containment-checked independently
-    // and leniently (no COMMAND_FLAG_POLICIES entry required to run).
-    const guardOffParts = command.split(/\s*(?:&&|\|\||;)\s*/);
+    // Same segment split as the allowlisted path below (&&/||/;), PLUS a
+    // bare pipe `|` (guard-off only — see the allowPipes note above). Order
+    // matters: `\|\|` must precede the bare `\|` alternative so a `||`
+    // token is matched as ONE two-character separator, not split into two
+    // single-pipe separators that would leave stray `|` characters glued to
+    // the neighbouring segment. Each resulting segment is one simple
+    // invocation, containment-checked independently and leniently (no
+    // COMMAND_FLAG_POLICIES entry required to run).
+    const guardOffParts = command.split(/\s*(?:&&|\|\||;|\|)\s*/);
     for (const part of guardOffParts) {
       const trimmed = part.trim();
       if (!trimmed) continue;

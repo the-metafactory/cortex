@@ -2980,11 +2980,42 @@ describe("bash-guard.hook — EBH-1g: guard-off (G-300) path containment (cortex
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
   });
 
-  // ---- Chaining: still refused, because it is what makes per-segment containment sound ----
+  // ---- Pipes: ALLOWED in guard-off mode, containment-checked per segment
+  // (coordinator follow-up, same issue #2377). A pipeline is just more
+  // segments — no shape-allowlist exists in guard-off mode for a pipe to
+  // smuggle a command past, so once each side is independently
+  // containment-checked, denying the bare `|` bought nothing but friction
+  // on everyday principal-DM commands. ----
 
-  test("cat <in-scope> | rm -rf / in a guard-off session ⇒ DENY (pipe — containment cannot verify across it)", () => {
+  test("cat <in-scope> | wc -l in a guard-off session ⇒ ALLOW (pipe decomposes into containment-checked segments)", () => {
     const r = runHook(
-      `cat ${join(allowedDir, "body.md")} | rm -rf /`,
+      `cat ${join(allowedDir, "body.md")} | wc -l`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // NOTE: `git log --oneline | head -5` (the coordinator's literal example)
+  // is substituted with `| wc -l` here — `head -5` (bare numeric shorthand,
+  // no space before the digit) hits a PRE-EXISTING, unrelated round-7 gap:
+  // COMMAND_FLAG_POLICIES.head never modeled a bare `-N` short flag, so
+  // `head -5` already denies in NORMAL (guard-on) sessions too, verified
+  // unchanged by this fix. Out of scope here (touching head's policy would
+  // change guard-ON behaviour, which this fix must not do) — tracked as a
+  // separate, pre-existing limitation, not a regression from EBH-1g.
+  test("git log --oneline | wc -l in a guard-off session ⇒ ALLOW (everyday git pipe)", () => {
+    const r = runHook("git log --oneline | wc -l", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("cat <out-of-scope> | wc -l in a guard-off session ⇒ DENY (LHS segment fails containment)", () => {
+    const r = runHook(
+      `cat ${join(secretDir, "canary.txt")} | wc -l`,
       guardOffEnv(),
       "Bash",
       "test-session",
@@ -2994,6 +3025,78 @@ describe("bash-guard.hook — EBH-1g: guard-off (G-300) path containment (cortex
     const out = JSON.parse(r.stdout.trim());
     expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
+
+  test("echo hi | cat <out-of-scope> in a guard-off session ⇒ DENY (RHS segment fails containment)", () => {
+    const r = runHook(
+      `echo hi | cat ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat <in-scope1> | cat <in-scope2> | wc -l in a guard-off session ⇒ ALLOW (3-stage pipeline, every segment checked)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} | cat ${join(allowedDir, "other.md")} | wc -l`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // ---- Command substitution / backticks / redirects: STILL denied in
+  // guard-off mode — these genuinely defeat static path analysis (a
+  // substituted path is computed at run time; a redirect target is never
+  // extracted as a "path argument" at all), unlike a bare pipe. ----
+
+  test("echo $(date) in a guard-off session ⇒ DENY (command substitution still denied)", () => {
+    const r = runHook("echo $(date)", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("echo `date` in a guard-off session ⇒ DENY (backtick substitution still denied)", () => {
+    const r = runHook("echo `date`", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("wc -l < <out-of-scope> in a guard-off session ⇒ DENY (input redirect still denied)", () => {
+    const r = runHook(
+      `wc -l < ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat <in-scope> > /tmp/somewhere in a guard-off session ⇒ DENY (output redirect still denied)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} > /tmp/ebh1g-redirect-test`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- &&/||/; chaining: unaffected by the pipe change ----
 
   test("cat <in-scope1> && cat <in-scope2> in a guard-off session ⇒ ALLOW (both segments containment-checked)", () => {
     const r = runHook(
