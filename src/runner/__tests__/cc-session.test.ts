@@ -247,7 +247,7 @@ describe("CCSession — EBH-2 SessionSandbox routing", () => {
 
     expect(securityEvents).toHaveLength(1);
     expect(securityEvents[0]).toMatchObject({
-      type: "system.security.sandbox_unavailable",
+      type: "system.security.sandbox-unavailable",
       backend: "none",
     });
   }, 60_000);

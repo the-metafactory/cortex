@@ -56,7 +56,7 @@ describe("NoneSandbox — the EBH-2 pass-through backend", () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({
-      type: "system.security.sandbox_unavailable",
+      type: "system.security.sandbox-unavailable",
       backend: "none",
       mode: "off",
       timestamp: events[0]!.timestamp,

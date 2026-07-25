@@ -131,16 +131,25 @@ export interface SandboxSpawnOpts {
 }
 
 /**
- * `system.security.sandbox_unavailable` observability payload (DD-4/DD-6).
+ * `system.security.sandbox-unavailable` observability payload (DD-4/DD-6).
+ * HYPHEN, not underscore, in the leaf — cortex#1935's regression gate
+ * (`src/bus/__tests__/envelope-type-no-underscore.test.ts`) pins every
+ * bus-envelope `type` literal to the vendored schema's
+ * `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$` pattern (hyphens only): an
+ * underscored `system.*` type PUBLISHES without error and is then silently
+ * DROPPED by every standard subscriber on delivery. Getting this wrong is
+ * exactly the "documented but not real" failure this slice exists to avoid.
+ *
  * Not yet a myelin wire envelope — a new `system.*` type is a wire/schema
  * change under `src/bus/CLAUDE.md`'s RFC governance, out of scope for this
  * structure-only slice. Emitted here as a plain, observable event so a
  * future bus publisher (EBH-3, or a follow-up) can turn it into one without
- * this module changing shape. See `CCSession`'s `"security-event"`
- * EventEmitter emission in `cc-session.ts`.
+ * this module changing shape — the hyphenated name is what that publisher
+ * MUST use verbatim. See `CCSession`'s `"security-event"` EventEmitter
+ * emission in `cc-session.ts`.
  */
 export interface SandboxUnavailableEvent {
-  type: "system.security.sandbox_unavailable";
+  type: "system.security.sandbox-unavailable";
   backend: "none";
   mode: SandboxMode;
   timestamp: string;
@@ -186,7 +195,7 @@ export class NoneSandbox implements SessionSandbox {
     if (!this.announced) {
       this.announced = true;
       this.onUnavailable?.({
-        type: "system.security.sandbox_unavailable",
+        type: "system.security.sandbox-unavailable",
         backend: "none",
         mode: profile.mode,
         timestamp: new Date().toISOString(),

@@ -60,7 +60,7 @@ Epic: **Execution-boundary hardening (NWS review response)**. Sub-issues:
 |---|---|---|---|---|
 | EBH-0 | L0 | Repro: does `claude --print --add-dir` deny an out-of-scope read? | infrastructure | now |
 | EBH-1 | L1 | Cortex-owned `PreToolUse` path guard (file tools + Bash read paths) | feature | now |
-| EBH-2 | L2 | `SessionSandbox` interface + `none` backend (choke point + `sandbox_unavailable` event) | feature | next |
+| EBH-2 | L2 | `SessionSandbox` interface + `none` backend (choke point + `sandbox-unavailable` event) | feature | next |
 | EBH-3 | L2 | `macos-sbpl` + `linux-bwrap` backends in `audit` mode | feature | next |
 | EBH-4 | L3 | Egress allowlist via filtering proxy (extends #1192) | feature | next |
 | EBH-5 | L4 | Plugin process isolation + registry signing (F2) — trigger-gated | infrastructure | future |
