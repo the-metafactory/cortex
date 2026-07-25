@@ -2683,6 +2683,34 @@ export const PolicySchema = z.object({
    * (role keys, principal ids) are checked in the superRefine below.
    */
   admission: AdmissionPolicySchema.optional(),
+  /**
+   * EBH-6b (cortex#2380) — posture-VISIBILITY for the consumer-side
+   * sovereignty gate (`evaluateSovereignty`, `src/bus/sovereignty-gate.ts`).
+   * `enforce: true` threads to the `sovereigntyEnforce` constructor option on
+   * BOTH `ReviewConsumer` (`src/bus/review-consumer.ts`) and `BrainConsumer`
+   * (`src/bus/brain-consumer.ts`) — before this field, that option was
+   * reachable ONLY from a test constructor arg, so no config edit could ever
+   * turn it on (the gap the EBH-6 investigation found,
+   * `docs/security/ebh-6-posture-findings.md` §F3).
+   *
+   * **`.optional()`, deliberately no default** — mirrors `federated`/`public`/
+   * `offerings`/`admission`: an absent block resolves to `enforce: false` at
+   * the read site (`resolvedPolicy?.sovereignty?.enforce ?? false` in
+   * `cortex.ts`), byte-identical to today's constructor-only-false posture.
+   *
+   * **This is a posture-VISIBILITY change, not a posture flip.** The decision
+   * core (`evaluateSovereignty`) is sound and fail-closed; the gap this field
+   * closes is purely "no config key could reach the flag." Setting
+   * `enforce: true` in a stack's own `policy:` block is a deliberate
+   * principal decision — no default, template, or example ships it on. Do
+   * NOT flip it without the model-class↔signing-identity binding (#2117,
+   * PR #2201, open/CI-red as of EBH-6): until that lands, an agent's
+   * `runtime.modelClass` is self-declared and spoofable, so `enforce: true`
+   * denies less than a principal reading "enforce" would expect.
+   */
+  sovereignty: z.object({
+    enforce: z.boolean().default(false),
+  }).optional(),
   // v2.0.0 cutover (cortex#297) — `parallel_mode_enabled` retired with
   // the parallel-mode plumbing in adapters. PolicyEngine is the sole
   // authorisation gate; legacy role-resolver is gone.

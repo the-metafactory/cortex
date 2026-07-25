@@ -15,7 +15,12 @@ import type { AgentConfig } from "../common/types/config";
  * read the conversation. Verification and config-immutability rules remain
  * enforced even when bash/filesystem restrictions are skipped.
  *
- * See G-301 (issue #42) for planned additional authentication controls.
+ * EBH-6b (cortex#2380) correction: this docblock used to cite "G-301 (issue
+ * #42)" for planned additional authentication controls — that citation was
+ * stale. #42 is an unrelated, already-merged migration PR, and G-301 has no
+ * design section, blueprint entry, or issue anywhere in the repo (see
+ * `docs/security/ebh-6-posture-findings.md` §F4-4). The real follow-up
+ * tracking this gap is #2377.
  */
 export interface SecurityPreambleOpts {
   /** Skip bash guard guidance (principal DM mode) */

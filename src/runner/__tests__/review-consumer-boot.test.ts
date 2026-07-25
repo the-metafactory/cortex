@@ -35,6 +35,7 @@ import type {
 } from "../../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../../bus/myelin/subscriber";
 import { ReviewConsumer } from "../../bus/review-consumer";
+import { createReviewRequestEvent, type ReviewEventSource } from "../../bus/review-events";
 
 interface RecordingRuntime extends MyelinRuntime {
   subscribePullCalls: MyelinSubscribePullOpts[];
@@ -231,5 +232,91 @@ describe("wireReviewConsumers — per-agent failure isolation", () => {
     expect(stderr).toContain("synthetic buildSessionOpts failure");
     // The failure happened before `makeConsumer`/`.push()` ran.
     expect(reviewConsumers).toHaveLength(0);
+  });
+});
+
+describe("wireReviewConsumers — EBH-6b sovereignty.enforce threading (cortex#2380)", () => {
+  const SOURCE: ReviewEventSource = {
+    principal: "andreas",
+    agent: "cortex",
+    instance: "local",
+  };
+
+  /** A frontier-declared agent — mismatched against the default local-only
+   *  request built by `mismatchedRequest()` below (Stage 1b violation). */
+  function frontierAgent(maxConcurrent?: number): ReviewBootAgent {
+    return {
+      id: "echo",
+      displayName: "Echo",
+      trust: [],
+      runtime: {
+        substrate: "claude-code",
+        capabilities: ["code-review.typescript"],
+        modelClass: "frontier",
+        ...(maxConcurrent !== undefined && { maxConcurrent }),
+      },
+    };
+  }
+
+  /** `createReviewRequestEvent` defaults sovereignty to local/local-only/
+   *  frontier_ok:false — a frontier-declared agent claiming this is the
+   *  consumer-side sovereignty gate's violation case. */
+  function mismatchedRequest(): Envelope {
+    return createReviewRequestEvent({
+      source: SOURCE,
+      flavor: "typescript",
+      payload: { repo: "the-metafactory/cortex", pr: 1, reviewer: "echo" },
+    });
+  }
+
+  test("sovereigntyEnforce: true threads through — the constructed consumer denies before the pipeline runs", async () => {
+    const runtime = fakeRuntime();
+    const reviewConsumers: ReviewConsumer[] = [];
+    const { startForAgent } = wireReviewConsumers(
+      baseOpts({ runtime, reviewConsumers, sovereigntyEnforce: true }),
+    );
+
+    await startForAgent(frontierAgent());
+    expect(reviewConsumers).toHaveLength(1);
+
+    const decision = await reviewConsumers[0]!.processEnvelope(
+      mismatchedRequest(),
+      "local.andreas.work.tasks.code-review.typescript",
+      null,
+    );
+
+    // The sovereignty gate runs BEFORE the pipeline is ever invoked (§3b in
+    // review-consumer.ts), so "term" here proves the opt threaded all the
+    // way from `WireReviewConsumersOpts.sovereigntyEnforce` into the
+    // constructed `ReviewConsumer`'s private `sovereigntyEnforce` field —
+    // no real CC session spawns.
+    expect(decision.kind).toBe("term");
+    if (decision.kind === "term") expect(decision.reason).toContain("wont_do");
+  });
+
+  test("sovereigntyEnforce omitted ⇒ the constructed consumer stays audit-only (default false)", async () => {
+    const runtime = fakeRuntime();
+    const reviewConsumers: ReviewConsumer[] = [];
+    const { startForAgent } = wireReviewConsumers(
+      baseOpts({ runtime, reviewConsumers }), // sovereigntyEnforce omitted
+    );
+
+    // maxConcurrent: 0 forces the concurrency gate (§4, immediately AFTER the
+    // sovereignty gate) to nak before the pipeline ever spawns a CC session —
+    // proves the sovereignty gate did NOT terminate the request above it,
+    // without needing a real pipeline run.
+    await startForAgent(frontierAgent(0));
+    expect(reviewConsumers).toHaveLength(1);
+
+    const decision = await reviewConsumers[0]!.processEnvelope(
+      mismatchedRequest(),
+      "local.andreas.work.tasks.code-review.typescript",
+      null,
+    );
+
+    // NOT "term" — if sovereigntyEnforce had somehow defaulted true, this
+    // mismatched request would have been denied (term) before ever reaching
+    // the concurrency gate below it.
+    expect(decision.kind).toBe("nak");
   });
 });

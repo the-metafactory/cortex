@@ -539,3 +539,105 @@ describe("wireBrainConsumers — per-agent failure isolation", () => {
     expect(brainConsumers).toHaveLength(1);
   });
 });
+
+describe("wireBrainConsumers — EBH-6b sovereignty.enforce threading (cortex#2380)", () => {
+  /** A frontier-declared agent — mismatched against `mismatchedEnvelope()`
+   *  below (Stage 1b violation), mirroring `review-consumer-boot.test.ts`'s
+   *  companion coverage for the review lane. */
+  function frontierAgent(maxConcurrent?: number): BrainBootAgent {
+    return {
+      id: "yarrow",
+      persona: personaPath,
+      runtime: {
+        capabilities: ["soc.compose.flow"],
+        modelClass: "frontier",
+        ...(maxConcurrent !== undefined && { maxConcurrent }),
+        brain: {
+          kind: "exec",
+          run: "bun {pack}/brain/main.ts",
+          lifecycle: "per-task",
+          secrets: [],
+          dispatch_capabilities: [],
+          maxRestarts: 3,
+        },
+      },
+    };
+  }
+
+  /** local/local-only/frontier_ok:false — a frontier-declared agent claiming
+   *  this is the consumer-side sovereignty gate's violation case. */
+  function mismatchedEnvelope(): Envelope {
+    return {
+      id: crypto.randomUUID(),
+      source: "andreas.work.pilot",
+      type: "tasks.soc.compose.flow",
+      timestamp: new Date().toISOString(),
+      sovereignty: {
+        classification: "local",
+        data_residency: "NZ",
+        max_hop: 0,
+        frontier_ok: false,
+        model_class: "local-only",
+      },
+      payload: { scenario: "test" },
+    };
+  }
+
+  test("sovereigntyEnforce: true threads through — the constructed consumer denies before the brain runs", async () => {
+    const runtime = fakeRuntime();
+    const brainConsumers: BrainConsumer[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({ runtime, brainConsumers, sovereigntyEnforce: true }),
+    );
+
+    await startForAgent(frontierAgent());
+    expect(brainConsumers).toHaveLength(1);
+
+    const decision = await brainConsumers[0]!.processEnvelope(
+      mismatchedEnvelope(),
+      "local.andreas.work.brain.soc.compose.flow",
+      null,
+      "soc.compose.flow",
+    );
+
+    // The sovereignty gate runs BEFORE the brain is ever invoked
+    // (brain-consumer.ts step 2, before spawn), so "term" here proves the
+    // opt threaded from `WireBrainConsumersOpts.sovereigntyEnforce` into the
+    // constructed `BrainConsumer`'s private `sovereigntyEnforce` field — no
+    // real brain process spawns.
+    expect(decision.kind).toBe("term");
+    if (decision.kind === "term") expect(decision.reason).toContain("wont_do");
+  });
+
+  test("sovereigntyEnforce omitted ⇒ the constructed consumer stays audit-only (default false)", async () => {
+    const runtime = fakeRuntime();
+    const brainConsumers: BrainConsumer[] = [];
+    const { startForAgent } = wireBrainConsumers(
+      baseOpts({ runtime, brainConsumers }), // sovereigntyEnforce omitted
+    );
+
+    await startForAgent(frontierAgent());
+    expect(brainConsumers).toHaveLength(1);
+    const consumer = brainConsumers[0]!;
+
+    // Force the SHUTDOWN guard (brain-consumer.ts step 2b, immediately AFTER
+    // the sovereignty gate) to nak before the brain ever spawns — a safe way
+    // to prove the sovereignty gate did NOT terminate the request above it,
+    // without needing a real per-task brain run. No subscribers/in-flight
+    // tasks are registered (start() was never called), so stop() settles
+    // immediately.
+    await consumer.stop();
+
+    const decision = await consumer.processEnvelope(
+      mismatchedEnvelope(),
+      "local.andreas.work.brain.soc.compose.flow",
+      null,
+      "soc.compose.flow",
+    );
+
+    // NOT "term" — if sovereigntyEnforce had somehow defaulted true, this
+    // mismatched request would have been denied (term) before ever reaching
+    // the shutdown guard below it.
+    expect(decision.kind).toBe("nak");
+  });
+});
