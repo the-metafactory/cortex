@@ -3136,3 +3136,124 @@ describe("bash-guard.hook — EBH-1g: guard-off (G-300) path containment (cortex
   });
 });
 
+// =============================================================================
+// EBH-1h (cortex#2384) — bare numeric short flags (`head -5`, `tail -3`).
+//
+// `head`/`tail` accept a bare numeric count as shorthand for `-n <count>`
+// (`head -5` == `head -n 5`). COMMAND_FLAG_POLICIES never modeled this shape,
+// and since round 9 an unrecognised flag on a path-checked command denies the
+// WHOLE command — so this ordinary, everyday form was wrongly denied. Fixed
+// by `CommandFlagPolicy.bareNumericCount`, set ONLY on `head`/`tail`.
+// =============================================================================
+describe("bash-guard.hook — EBH-1h: bare numeric short flags (cortex#2384)", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-ebh1h-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "EBH-1H-CANARY-MARKER\n");
+    writeFileSync(join(allowedDir, "f.txt"), "one\ntwo\nthree\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  // ---- ALLOW: bare numeric short flag, in-scope path ----
+
+  test("head -5 f.txt ⇒ ALLOW", () => {
+    const r = runHook("head -5 f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("tail -3 f.txt ⇒ ALLOW", () => {
+    const r = runHook("tail -3 f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("head -20 f.txt ⇒ ALLOW", () => {
+    const r = runHook("head -20 f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- DENY: bare numeric short flag, out-of-scope path (path still containment-checked) ----
+
+  test("head -5 <out-of-scope> ⇒ DENY (the path argument is still containment-checked)", () => {
+    const r = runHook(
+      `head -5 ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("tail -3 <out-of-scope> ⇒ DENY (the path argument is still containment-checked)", () => {
+    const r = runHook(
+      `tail -3 ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- DENY: unknown, non-numeric flags on head/tail still deny (round-9 behaviour preserved) ----
+
+  test("head -x f.txt ⇒ DENY (unrecognised non-numeric short flag)", () => {
+    const r = runHook("head -x f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("tail --bogus f.txt ⇒ DENY (unrecognised long flag)", () => {
+    const r = runHook("tail --bogus f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  // ---- DENY: NOT generalised beyond head/tail — same bare-numeric shape on
+  // an unrelated path-checked command still denies exactly as before. ----
+
+  test("ls -5 ⇒ DENY (bare numeric short flag NOT modeled for ls)", () => {
+    const r = runHook("ls -5", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  test("cat -5 f.txt ⇒ DENY (bare numeric short flag NOT modeled for cat)", () => {
+    const r = runHook("cat -5 f.txt", policyEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+});
+
