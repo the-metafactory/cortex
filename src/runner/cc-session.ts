@@ -19,6 +19,14 @@ import {
   type IsolatedSettings,
 } from "./session-settings";
 import { activeConfigHomeEnv } from "../common/substrates/config-home";
+import {
+  createSessionSandbox,
+  SANDBOX_EXEC_ALLOW_SEED,
+  SANDBOX_EGRESS_ALLOW_SEED,
+  type SandboxMode,
+  type SandboxProfile,
+  type SandboxUnavailableEvent,
+} from "./session-sandbox";
 
 // Re-export for convenience
 export type { UsageStats, StreamEvent };
@@ -54,6 +62,18 @@ export interface CCSessionOpts {
    * emitting, so a dir in both wins as read-only, the safe default).
    */
   readOnlyDirs?: string[];
+  /**
+   * EBH-2 (cortex#2344) — DD-5 staged-rollout posture for the `SessionSandbox`
+   * kernel-level projection of this SAME `allowedDirs`/`readOnlyDirs` policy
+   * (see {@link deriveSandboxProfile}). Undefined behaves exactly like
+   * `"off"` — the cortex#2344 HARD HOLD default — so every existing caller
+   * that doesn't set this field is unaffected. No dispatch path threads a
+   * config-resolved value through here yet (deliberately out of scope for
+   * EBH-2's structure-only slice); wiring `system.sandbox.mode` from config
+   * through to this field is follow-up work for the backend that actually
+   * enforces it (EBH-3).
+   */
+  sandboxMode?: SandboxMode;
   timeoutMs?: number;
   cwd?: string;
   additionalArgs?: string[];
@@ -306,9 +326,54 @@ export function resolveBashGuardEnv(
 export function resolvePathGuardEnv(
   opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,
 ): string {
+  const { allowedDirs, readOnlyDirs } = splitGuardDirs(opts);
+  return JSON.stringify({ allowedDirs, readOnlyDirs });
+}
+
+/**
+ * The actual `allowedDirs MINUS readOnlyDirs` subtraction (EBH-1b,
+ * cortex#2352) — extracted from {@link resolvePathGuardEnv} so EBH-2's
+ * {@link deriveSandboxProfile} projects from the SAME computed split rather
+ * than re-implementing it (DD-1: one resolved policy, N projections; two
+ * copies of this subtraction is exactly the drift DD-1 exists to prevent).
+ * See `resolvePathGuardEnv`'s doc comment for the full correctness
+ * rationale — this function IS that rationale's code.
+ */
+function splitGuardDirs(
+  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,
+): { allowedDirs: string[]; readOnlyDirs: string[] } {
   const readOnlyDirs = opts.readOnlyDirs ?? [];
   const allowedDirs = (opts.allowedDirs ?? []).filter((d) => !readOnlyDirs.includes(d));
-  return JSON.stringify({ allowedDirs, readOnlyDirs });
+  return { allowedDirs, readOnlyDirs };
+}
+
+/**
+ * EBH-2 (cortex#2344) — project the SAME resolved `CCSessionOpts` policy
+ * `resolvePathGuardEnv` reads into a kernel-level {@link SandboxProfile}
+ * (DD-1's third projection, alongside the preamble text and the CC
+ * `--allowedTools`/`--add-dir` flags). Consumes {@link splitGuardDirs}
+ * directly — NOT a re-derivation — so the read-only/read-write split can
+ * never disagree between the L1 path guard and the L2 sandbox profile: a
+ * dir in both `allowedDirs` and `readOnlyDirs` resolves to `readOnly` here
+ * for the identical reason it resolves to read-only in
+ * `CORTEX_PATH_GUARD` (the safe default, EBH-1b).
+ *
+ * `execAllow`/`egressAllow` are NOT derived from `opts` — they're the
+ * static compatibility-contract seed (see `session-sandbox.ts`), unenforced
+ * until a real backend exists (EBH-3/EBH-4).
+ */
+export function deriveSandboxProfile(
+  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,
+  mode: SandboxMode,
+): SandboxProfile {
+  const { allowedDirs, readOnlyDirs } = splitGuardDirs(opts);
+  return {
+    readWrite: allowedDirs,
+    readOnly: readOnlyDirs,
+    execAllow: [...SANDBOX_EXEC_ALLOW_SEED],
+    egressAllow: [...SANDBOX_EGRESS_ALLOW_SEED],
+    mode,
+  };
 }
 
 export class CCSession extends EventEmitter {
@@ -511,8 +576,45 @@ export class CCSession extends EventEmitter {
       delete env.ANTHROPIC_API_KEY;
     }
 
+    // EBH-2 (cortex#2344, DD-2) — the choke point. Every `claude --print`
+    // spawn in cortex funnels through `SessionSandbox.spawn`, not a direct
+    // `Bun.spawn`. This build ships exactly the `none` backend
+    // (`createSessionSandbox` — see session-sandbox.ts): it spawns
+    // byte-identically to the pre-EBH-2 call below and fires
+    // `onUnavailable` once (DD-4/DD-6) so an un-jailed host is never
+    // silent. The `mode` on the projected profile is advisory only in this
+    // build — `none` does not branch on it — see `CCSessionOpts.sandboxMode`.
+    const sandboxMode: SandboxMode = this.opts.sandboxMode ?? "off";
+    const sandboxProfile = deriveSandboxProfile(this.opts, sandboxMode);
+    const sandbox = createSessionSandbox({
+      onUnavailable: (event: SandboxUnavailableEvent) => {
+        // Observable to any listener (a future bus publisher included) —
+        // see the "security-event" doc on this emit for why this stays an
+        // EventEmitter emission rather than a direct bus publish in EBH-2.
+        this.emit("security-event", event);
+        process.stderr.write(
+          `[cc-session] ${event.type} backend=${event.backend} mode=${event.mode} — ` +
+            `no kernel execution boundary is enforcing this session (EBH-2; EBH-3 lands ` +
+            `real backends). See docs/design-session-sandbox.md.\n`,
+        );
+      },
+    });
+    // DD-7's boot capability probe (`getSandboxCapabilityProbe`,
+    // session-sandbox.ts) is DELIBERATELY NOT warmed from here. It shells
+    // out to `sandbox-exec`/`bwrap` to test viability (E1/E5's own repro
+    // shape), and this is the single choke point every CCSession —
+    // including the many tests across this repo that mock `Bun.spawn` to
+    // assert an exact claude-spawn call count — passes through. Triggering
+    // a real subprocess spawn from inside that choke point breaks those
+    // counts (confirmed: cc-session-isolation.test.ts) and adds
+    // platform-dependent flakiness to every boot in the test suite. The
+    // probe itself is fully implemented and independently unit-tested
+    // (session-sandbox.test.ts); wiring its FIRST call into an actual boot
+    // path (`cortex.ts`'s `startCortex`, most likely) is left to a
+    // dedicated follow-up that can address the test-suite fan-out
+    // deliberately rather than as a side effect of this choke-point change.
     try {
-      this.proc = Bun.spawn(["claude", ...args], {
+      this.proc = sandbox.spawn(["claude", ...args], sandboxProfile, {
         stdout: "pipe",
         stderr: "pipe",
         env,

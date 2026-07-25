@@ -1664,6 +1664,38 @@ export const ExecutionConfigSchema = z.object({
 
 export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
 
+/**
+ * EBH-2 (cortex#2344, epic #2341) — the `SessionSandbox` staged-rollout knob
+ * (design-session-sandbox.md DD-5, -platforms.md §6 "Config"). Lives in the
+ * `system/system.yaml` layer (repo CLAUDE.md's config-split table) beside
+ * `execution`/`plugins` — whole-stack blast radius, machine-wide.
+ *
+ * `mode: "off"` (default) is the cortex#2344 HARD HOLD: this build ships
+ * only the `none` `SessionSandbox` backend (`src/runner/session-sandbox.ts`),
+ * which never enforces anything regardless of this value — `off` is simply
+ * the honest, non-misleading default until EBH-3 lands a backend capable of
+ * `audit`/`enforce`. NO template or example in this repo may set a
+ * non-`"off"` mode (cortex#2344 acceptance criterion) — flipping it is a
+ * principal decision (design-session-sandbox.md §6 rollout), never an
+ * agent-authored default.
+ *
+ * `backend: "auto"` defers to the boot capability probe
+ * (`getSandboxCapabilityProbe`/`resolveSandboxBackend`) — which, in this
+ * build, always resolves to `"none"` regardless of what it detects (see
+ * that module's HARD HOLD doc). An explicit non-`"auto"`/`"none"` value is
+ * accepted by the schema (so a `system.yaml` written against the FUTURE
+ * shape doesn't fail to parse today) but has NO effect yet — EBH-3 is what
+ * makes `resolveSandboxBackend` branch on it.
+ */
+export const SandboxConfigSchema = z.object({
+  mode: z.enum(["off", "audit", "enforce"]).default("off"),
+  backend: z
+    .enum(["auto", "macos-sbpl", "linux-bwrap", "container-delegated", "none"])
+    .default("auto"),
+});
+
+export type SandboxConfig = z.infer<typeof SandboxConfigSchema>;
+
 // =============================================================================
 // Inference — model-provider config (API-P0.2, epic #2055, Phase 0, D6)
 // =============================================================================
@@ -3409,6 +3441,11 @@ export const CortexConfigSchema = z.object({
 
   /** Execution backends — local default, plus optional remotes. */
   execution: emptyDefault(ExecutionConfigSchema),
+
+  /** EBH-2 (cortex#2344) — `SessionSandbox` staged-rollout mode + backend
+   *  selection. Default-off; see {@link SandboxConfigSchema} for the full
+   *  HARD HOLD rationale (this build enforces nothing regardless of value). */
+  sandbox: emptyDefault(SandboxConfigSchema),
 
   /**
    * API-P0.2 (epic #2055, D6) — model-provider config: `providers` (egress
