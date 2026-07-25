@@ -71,6 +71,9 @@ import {
   handleOrchestratorCommand,
   ORCHESTRATOR_CAPABILITY,
 } from "../runner/orchestrator-command";
+// cortex#2406 (vision#11) — mint a fresh GH_TOKEN for the target agent's
+// declared GitHub App identity, if any.
+import { resolveGithubEnvForAgent } from "../common/auth/github-app-token";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -155,6 +158,17 @@ interface DispatchTargetAgent {
    * injected receiving-stack-authoritatively in the dispatch-listener.
    */
   env?: Record<string, string>;
+  /**
+   * cortex#2406 (vision#11) — the agent's declared GitHub App identity (see
+   * `AgentSchema.github`). Carried per-target-agent (narrowest scope). When
+   * set, `handleMessage` mints a FRESH installation token for this identity
+   * before routing to the sync/async/team handlers and merges `GH_TOKEN`
+   * onto the env object passed as their `agentEnv` argument — never a
+   * boot-time snapshot, since installation tokens expire in ~1hr. Applies to
+   * the DIRECT dispatch paths; the canonical bus-mediated path mints via its
+   * own `agentGithubIdentityById` map in the dispatch-listener.
+   */
+  github?: { identityName: string };
 }
 
 export interface DispatchHandlerOpts {
@@ -191,6 +205,15 @@ export interface DispatchHandlerOpts {
    * binary. Mirrors the `ClaudeCodeHarness` factory-injection pattern.
    */
   ccSessionFactory?: CCSessionFactory;
+  /**
+   * cortex#2406 (vision#11) — Optional GitHub identity env resolver
+   * injection. Default calls the real `resolveGithubEnvForAgent` (mints a
+   * live installation token via the GitHub Apps API). Tests inject a
+   * deterministic fake (resolve for the happy path, reject for the
+   * fail-closed path) without touching real GitHub credentials or network.
+   * Mirrors the `ccSessionFactory` injection pattern immediately above.
+   */
+  githubEnvResolver?: (identityName: string) => Promise<Record<string, string>>;
   /**
    * cortex#360 — Optional chat-path retry tuning. Default 3 total
    * attempts (initial + 2 retries) bounded by a 20-minute wall-clock
@@ -294,6 +317,11 @@ export class DispatchHandler extends EventEmitter {
    * factory (only the `CCSession` instance is fresh per attempt).
    */
   private readonly ccSessionFactory: CCSessionFactory;
+  /**
+   * cortex#2406 (vision#11) — GitHub identity env resolver. Default calls
+   * the real `resolveGithubEnvForAgent`. Tests inject a fake.
+   */
+  private readonly githubEnvResolver: (identityName: string) => Promise<Record<string, string>>;
   /** cortex#360 — Chat-path retry config (maxAttempts + wall-clock cap). */
   private readonly retryMaxAttempts: number;
   private readonly retryMaxTotalMs: number;
@@ -331,6 +359,7 @@ export class DispatchHandler extends EventEmitter {
     this.runtime = opts.runtime;
     this.systemEventSource = opts.systemEventSource;
     this.ccSessionFactory = opts.ccSessionFactory ?? ((sessionOpts) => new CCSession(sessionOpts));
+    this.githubEnvResolver = opts.githubEnvResolver ?? ((name) => resolveGithubEnvForAgent(name));
     this.retryMaxAttempts = opts.retry?.maxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS;
     this.retryMaxTotalMs = opts.retry?.maxTotalMs ?? DEFAULT_RETRY_MAX_TOTAL_MS;
     this.stack = opts.stack;
@@ -1175,16 +1204,43 @@ export class DispatchHandler extends EventEmitter {
         );
       }
 
+      // cortex#2406 (vision#11) — mint a FRESH GH_TOKEN for the target agent's
+      // declared GitHub identity, if any, right before routing. Never a
+      // boot-time snapshot (installation tokens expire in ~1hr). FAIL CLOSED:
+      // a mint failure refuses the dispatch rather than starting a session
+      // without its declared identity's token — silently proceeding could let
+      // `gh`/`git` fall back to whatever ambient credential the host has
+      // (the principal's own `gh auth`), the exact identity leak this exists
+      // to close.
+      let effectiveAgentEnv = targetAgent?.env;
+      if (targetAgent?.github?.identityName !== undefined) {
+        try {
+          const githubEnv = await this.githubEnvResolver(targetAgent.github.identityName);
+          effectiveAgentEnv = { ...githubEnv, ...targetAgent?.env };
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          console.error(
+            `dispatch-handler: GH_TOKEN mint FAILED for agent=${targetAgent.id} ` +
+              `identity=${targetAgent.github.identityName} — refusing dispatch: ${detail}`,
+          );
+          await adapter.postResponse(
+            { instanceId: msg.instanceId, channelId: msg.channelId, threadId: msg.threadId },
+            "I can't process that message right now — my GitHub identity credential couldn't be minted.",
+          );
+          return;
+        }
+      }
+
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, readOnlyDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, readOnlyDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, effectiveAgentEnv);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, readOnlyDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, readOnlyDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, effectiveAgentEnv);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, readOnlyDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, readOnlyDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, effectiveAgentEnv);
           break;
       }
     } catch (error) {

@@ -252,3 +252,26 @@ export async function mintTokenForIdentity(
     nowSeconds: opts.nowSeconds,
   });
 }
+
+/**
+ * cortex#2406 (vision#11) — the runner-wiring entry point. Given an agent's
+ * declared `AgentSchema.github.identityName` (or `undefined` for an agent
+ * with no GitHub identity), resolve the env map to merge onto that agent's
+ * session: `{ GH_TOKEN: <freshly minted token> }`, or `{}` when the agent
+ * has no declared identity.
+ *
+ * DELIBERATELY throws (does not catch) on mint failure — the caller
+ * (`dispatch-handler.ts` / `dispatch-listener.ts`) MUST fail the dispatch
+ * closed rather than start a session without its declared identity's
+ * token. Swallowing the error here would make that fail-open by default,
+ * one `catch {}` away from silently letting `gh`/`git` fall back to
+ * whatever ambient credential the host has.
+ */
+export async function resolveGithubEnvForAgent(
+  identityName: string | undefined,
+  opts: MintTokenForIdentityOptions = {},
+): Promise<Record<string, string>> {
+  if (identityName === undefined) return {};
+  const { token } = await mintTokenForIdentity(identityName, opts);
+  return { GH_TOKEN: token };
+}

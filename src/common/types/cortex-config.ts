@@ -1064,6 +1064,30 @@ export const AgentSchema = z.object({
    * to the pre-#2133 session env).
    */
   env: AgentEnvSchema.optional(),
+  /**
+   * cortex#2406 (vision#11) — OPT-IN GitHub App identity for this agent.
+   * `identityName` names an entry in `~/.config/metafactory/github-apps/apps.yaml`
+   * (see `src/common/auth/github-app-token.ts`). When set, cortex mints a
+   * FRESH installation access token PER DISPATCH (never a boot-time snapshot
+   * — installation tokens expire in ~1hr, the daemon can run for days) and
+   * injects it as `GH_TOKEN` via the SAME `env:` passthrough mechanism above
+   * (`GH_TOKEN` is one of the names in `ALLOWED_AGENT_ENV_KEYS`), so this
+   * agent's `gh`/`git` calls act as its own bot identity (e.g. `atlas[bot]`)
+   * instead of the principal's own account.
+   *
+   * Fail-closed: if minting fails, the dispatch is REFUSED rather than
+   * starting the session without `GH_TOKEN` — silently proceeding could let
+   * `gh`/`git` fall back to whatever ambient credential the host has (the
+   * principal's own `gh auth`), which is the exact identity leak this field
+   * exists to close. See `dispatch-handler.ts` / `dispatch-listener.ts`.
+   *
+   * Additive: existing agents omit this key and are unaffected.
+   */
+  github: z
+    .object({
+      identityName: z.string().min(1),
+    })
+    .optional(),
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

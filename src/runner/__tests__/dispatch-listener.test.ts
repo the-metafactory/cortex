@@ -4022,3 +4022,140 @@ describe("dispatch-listener — M3 payload encryption (cortex#1241, ADR-0019)", 
     await listener.stop();
   });
 });
+
+describe("dispatch-listener — GH_TOKEN identity minting (cortex#2406, vision#11)", () => {
+  test("receiving agent with a declared GitHub identity gets a freshly-minted GH_TOKEN on its session env", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    let mintCalls = 0;
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      agentGithubIdentityById: new Map([["cortex", "atlas"]]),
+      githubEnvResolver: async (identityName) => {
+        mintCalls++;
+        expect(identityName).toBe("atlas");
+        return { GH_TOKEN: "ghs_minted_test_token" };
+      },
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(mintCalls).toBe(1);
+    expect(optsCaptured[0]?.agentEnv).toEqual({ GH_TOKEN: "ghs_minted_test_token" });
+    expect(r.published.map((e) => e.type)).toContain("dispatch.task.completed");
+    await listener.stop();
+  });
+
+  test("a declared env: passthrough is preserved alongside the minted GH_TOKEN (no clobber)", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      agentEnvById: new Map([["cortex", { GOOGLE_APPLICATION_CREDENTIALS: "/sa.json" }]]),
+      agentGithubIdentityById: new Map([["cortex", "atlas"]]),
+      githubEnvResolver: async () => ({ GH_TOKEN: "ghs_minted_test_token" }),
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(optsCaptured[0]?.agentEnv).toEqual({
+      GH_TOKEN: "ghs_minted_test_token",
+      GOOGLE_APPLICATION_CREDENTIALS: "/sa.json",
+    });
+    await listener.stop();
+  });
+
+  test("FAIL CLOSED: mint failure refuses the dispatch — no CC session spawned, no ambient-credential fallback", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      agentGithubIdentityById: new Map([["cortex", "atlas"]]),
+      githubEnvResolver: async () => {
+        throw new Error("installation token exchange failed: 401 Unauthorized");
+      },
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    // No CC session ever spawned — the fail-closed path must return BEFORE
+    // reaching the harness, never fall through to a session without GH_TOKEN
+    // (which could silently use whatever ambient `gh` credential the host has).
+    expect(optsCaptured).toHaveLength(0);
+
+    const failed = r.published.find((e) => e.type === "dispatch.task.failed");
+    expect(failed).toBeDefined();
+    const payload = failed?.payload as { reason?: { kind?: string }; error_summary?: string };
+    expect(payload.reason?.kind).toBe("cant_do");
+    expect(payload.error_summary).toMatch(/GitHub identity credential could not be minted/);
+    await listener.stop();
+  });
+
+  test("an agent with NO declared GitHub identity is byte-unchanged (no mint call, no GH_TOKEN)", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    let mintCalls = 0;
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      // agentGithubIdentityById omitted entirely — the pre-#2406 shape.
+      githubEnvResolver: async () => {
+        mintCalls++;
+        return { GH_TOKEN: "should-never-be-called" };
+      },
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(mintCalls).toBe(0);
+    expect(optsCaptured[0]?.agentEnv).toBeUndefined();
+    await listener.stop();
+  });
+});
