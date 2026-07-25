@@ -89,6 +89,11 @@ import type {
   RendererPlugin,
   SurfacePluginRegistry,
 } from "./registry";
+import {
+  PLUGIN_TRUST_ROOT,
+  verifyBundleSignature,
+  type PluginSigningPosture,
+} from "./plugin-signing";
 
 // =============================================================================
 // arc subprocess driver — injectable for tests. Same "spawn, capture
@@ -833,6 +838,22 @@ export interface LoadPluginsOptions {
    * depending on (or mutating) the real file.
    */
   cortexManifestPath?: string;
+  /**
+   * cortex#2347 (EBH-5, ADR-0024 D4) — `system.plugins.signing` posture.
+   * Default `"off"` — byte-identical to pre-EBH-5 behaviour, no bundle is
+   * ever read for a signature file. `"permissive"` verifies and logs but
+   * never refuses; `"enforce"` refuses any bundle whose signature is
+   * missing, malformed, tampered, or signed outside the trust root. See
+   * `src/adapters/plugin-signing.ts` module doc for the full design.
+   */
+  pluginSigning?: PluginSigningPosture;
+  /**
+   * cortex#2347 (EBH-5) test seam — pre-resolved plugin-signing trust
+   * root (NKey pubkeys). Production callers never set this: it defaults
+   * to {@link PLUGIN_TRUST_ROOT}, the in-tree constant. Tests inject a
+   * throwaway keypair's pubkey here instead of mutating the real constant.
+   */
+  pluginTrustedSigners?: ReadonlySet<string>;
 }
 
 export interface LoadPluginsResult {
@@ -875,6 +896,25 @@ export async function loadExternalPlugins(
   const firstPartyRendererRepos =
     options.firstPartyRendererRepos ?? readCortexDeclaredRendererRepos(manifestPath);
 
+  // cortex#2347 (EBH-5) — resolve the signing posture + trust root ONCE per
+  // load, same treatment as the first-party allowlists above. Default `off`
+  // keeps every existing caller (and every existing test) byte-identical.
+  const pluginSigning = options.pluginSigning ?? "off";
+  const pluginTrustedSigners = options.pluginTrustedSigners ?? PLUGIN_TRUST_ROOT;
+  if (pluginSigning !== "off" && pluginTrustedSigners.size === 0) {
+    // Loud, non-fatal (the loader NEVER throws) heads-up: a posture was
+    // enabled with nothing to verify against. Under `enforce` this refuses
+    // EVERY bundle (fail-closed, not silent); under `permissive` every
+    // bundle logs a verify-failed warning. Either way this is very likely a
+    // misconfiguration, not an intentional state — surfaced once per load
+    // rather than buried in per-bundle stderr noise.
+    process.stderr.write(
+      `cortex plugin-loader: system.plugins.signing="${pluginSigning}" but the plugin trust root ` +
+        `is EMPTY — no bundle can verify. See src/adapters/plugin-signing.ts PLUGIN_TRUST_ROOT ` +
+        `(populating it is a deliberate open decision, not yet made — see that module's doc).\n`,
+    );
+  }
+
   const { bundles, issues: discoveryIssues } = await discoverPluginBundles({
     pkgRoot: options.pkgRoot,
     runner: options.runner,
@@ -893,6 +933,8 @@ export async function loadExternalPlugins(
         externalEnabled,
         firstPartyRendererRepos,
         firstPartyAdapterRepos,
+        pluginSigning,
+        pluginTrustedSigners,
         loaded,
         skipped,
         failed,
@@ -927,6 +969,10 @@ interface LoadOneBundleSinks {
   /** cortex#1794 (S9a) — pre-resolved once in {@link loadExternalPlugins},
    *  never re-read per bundle. */
   firstPartyAdapterRepos: ReadonlySet<string>;
+  /** cortex#2347 (EBH-5) — `system.plugins.signing` posture, resolved once. */
+  pluginSigning: PluginSigningPosture;
+  /** cortex#2347 (EBH-5) — plugin-signing trust root, resolved once. */
+  pluginTrustedSigners: ReadonlySet<string>;
   loaded: LoadedPluginInfo[];
   skipped: SkippedPluginInfo[];
   failed: FailedPluginInfo[];
@@ -1012,6 +1058,39 @@ async function loadOneBundle(bundle: DiscoveredBundle, sinks: LoadOneBundleSinks
       `a ${manifest.kind} plugin with id "${manifest.id}" is already registered (in-tree plugins and earlier-loaded bundles always win) — refusing to shadow it`,
     );
     return;
+  }
+
+  // (d.5) Signature verification — cortex#2347 (EBH-5, ADR-0024 D4). Gated
+  // by `system.plugins.signing` (default "off" — this whole block is a
+  // no-op then, byte-identical to pre-EBH-5 behaviour). Runs from bytes on
+  // disk ONLY — no `import()`, directly or indirectly — strictly BEFORE
+  // the entry module is ever loaded (stage (e) below). This is an
+  // ADDITIONAL, independent gate: it composes with (never replaces or
+  // widens) the org-trust gate (a) and the first-party exemption (b) —
+  // neither of those computations is touched here, and a bundle that
+  // failed either gate already returned above and never reaches this line.
+  if (sinks.pluginSigning !== "off") {
+    const sigResult = await verifyBundleSignature({
+      installPath,
+      trustedSigners: sinks.pluginTrustedSigners,
+    });
+    if (!sigResult.ok) {
+      if (sinks.pluginSigning === "enforce") {
+        fail(`signature_verify:${sigResult.stage}`, sigResult.reason);
+        return;
+      }
+      // permissive — verify + log, NEVER refuse. The shadow rung: prove
+      // verification against real installed bundles before gating.
+      process.stderr.write(
+        `cortex plugin-loader: ${bundleName} (${manifest.kind}:${manifest.id}) signature verification ` +
+          `FAILED (permissive — continuing) at ${sigResult.stage}: ${sigResult.reason}\n`,
+      );
+    } else {
+      process.stderr.write(
+        `cortex plugin-loader: ${bundleName} (${manifest.kind}:${manifest.id}) signature verified ` +
+          `(signer=${sigResult.signer.slice(0, 12)}…)\n`,
+      );
+    }
   }
 
   // (e) Entry containment + import.

@@ -117,7 +117,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
     // EBH-4 (cortex#2346) added `egressAllow` to the same schema.
     sandbox: { mode: "off", backend: "auto", egressAllow: [] },
     inference: { providers: {}, profiles: {} },
-    plugins: { external: false },
+    plugins: { external: false, signing: "off" },
     github: {
       webhookSecret: "",
       repos: [],

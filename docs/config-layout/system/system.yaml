@@ -274,8 +274,32 @@ paths:
 # surface outage behind a flag nobody flipped. `external` keeps its real job
 # of gating genuinely THIRD-party plugins — nothing cortex itself declares as
 # a first-party adapter bundle by name.
+#
+# `signing` (cortex#2347, EBH-5, ADR-0024 D4 "named future escalation:
+# registry signing") — staged posture gating bundle SIGNATURE verification,
+# INDEPENDENT of `external` above (it applies to every bundle the loader
+# considers, first-party or not — an ADDITIONAL gate, never a replacement
+# for the org-trust/first-party checks). Mirrors `security.signing` exactly:
+#   off        — (default) byte-identical to pre-EBH-5 behaviour; no bundle
+#                is ever read for a signature file.
+#   permissive — verify every bundle's `cortex-plugin.sig` and log the
+#                outcome, but NEVER refuse a bundle on a bad/missing
+#                signature. The shadow rung — prove verification against
+#                real installed bundles before gating anything.
+#   enforce    — refuse to load any bundle whose `cortex-plugin.sig` is
+#                missing, malformed, tampered, or signed by a key outside
+#                the in-tree trust root (`src/adapters/plugin-signing.ts`
+#                PLUGIN_TRUST_ROOT).
+# As of this writing PLUGIN_TRUST_ROOT ships EMPTY — no bundle in the
+# ecosystem is signed yet, so `enforce` refuses everything and `permissive`
+# logs a verify-failed warning for everything. Flipping either away from
+# `off` before a production trust root is populated is a no-op at best
+# (permissive) or a self-inflicted outage (enforce, refuses every bundle).
+# See that module's doc header for the open question this leaves for a
+# principal decision (who holds the signing key, how bundles get signed).
 plugins:
   external: false
+  signing: off
 
 # =============================================================================
 # nats — M2 transport. THE SINGLE PLACE SUBJECT OVERRIDES LIVE (IAW CFG.b.2)

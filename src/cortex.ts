@@ -3331,6 +3331,11 @@ export async function startCortex(
   const pluginLoadResult = await loadExternalPlugins({
     registry: surfacePluginRegistry,
     externalEnabled: config.plugins.external,
+    // cortex#2347 (EBH-5, ADR-0024 D4) — `system.plugins.signing` posture.
+    // Default "off" (the schema default) keeps this call byte-identical to
+    // pre-EBH-5 boot; `pluginTrustedSigners` is left unset so the loader
+    // reads its own in-tree `PLUGIN_TRUST_ROOT` constant.
+    pluginSigning: config.plugins.signing,
   });
   // cortex#1792 — ONE stderr line per outcome, not two: `loadOneBundle`
   // (`src/adapters/loader.ts`) already writes a `cortex plugin-loader: …`
