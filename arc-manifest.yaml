@@ -1,6 +1,10 @@
 # arc-manifest.yaml -- cortex
 # See: https://github.com/the-metafactory/arc
 
+# Strict arc/v1 schema (cortex#2397). Declaring the canonical literal is what
+# lets `arc validate` certify this manifest; the deprecated `pai/v1` alias is
+# rejected in strict mode (arc#280).
+schema: arc/v1
 name: "cortex"
 # v4.0.0 BREAKING (cortex#436 R2.I/R2.G/R3) — the legacy principal-identity
 # config keys are no longer accepted: the top-level `operator:` block, the cloud
@@ -14,15 +18,41 @@ tier: community
 # Preview-scope description (cortex#2285 C1): states the supported envelope up
 # front so the registry listing sets expectations before anyone installs.
 description: "Layer-7 collaboration surface for the metafactory ecosystem (preview: single principal · Discord surface · macOS/Debian/container · federation experimental, unreleased)"
-authors:
-  - "Andreas Aastroem"
-  - "Jens-Christian Fischer"
+# SPDX identifier, matching LICENSE (GNU AGPL v3) and package.json's
+# "license": "AGPL-3.0-only". Required by strict arc/v1 (cortex#2397).
+license: "AGPL-3.0-only"
+# Singular `author` map (cortex#2397). Strict arc/v1 rejects the plural
+# `authors:` list shape — it is the shape behind arc's authors-list display bug
+# (arc#278/#275) — and requires exactly one `{ name, github }` maintainer.
+#
+# This is a SCHEMA change, not an attribution change. Co-author
+# Jens-Christian Fischer (github.com/jcfischer) is unchanged and remains
+# credited in README.md ("Authors:" line and the footer), which is the surface
+# that carries full attribution. The manifest field names the primary
+# maintainer contact only, because the schema admits exactly one.
+author:
+  name: "Andreas Aastroem"
+  github: "mellanon"
 repository: "the-metafactory/cortex"
 # Publish scope (cortex#2285 C1). `arc publish` resolves the namespace with
 # three-tier priority — --scope flag, then THIS key (`manifest.namespace`,
 # arc src/lib/publish.ts resolvePublishScope), then the account default from
 # /auth/me — so declaring it here makes `arc publish . --dry-run` pass with
 # no flag.
+#
+# DELIBERATELY BARE — do NOT add a leading `@` without reading cortex#2397.
+# `arc validate` currently flags this key (`must match ^@[a-z0-9-]+$`,
+# arc src/lib/validate-manifest.ts NAMESPACE_RE), but arc's own publish client
+# contradicts that rule: `ensurePackageExists` builds its URL as
+# encodeURIComponent(`@${scope}`) (arc src/lib/publish.ts) where `scope` is
+# THIS value verbatim from `resolvePublishScope`. Writing "@metafactory" here
+# would therefore request `%40%40metafactory` — a double sigil — and send the
+# sigil-bearing string as the create-package body's bare `namespace` field.
+# arc's README documents the bare form too ("namespace: my-namespace").
+# The sigil belongs to the DISPLAY/server representation, not to this key.
+# Resolving this is a cross-repo decision (fix arc's regex vs. fix arc's
+# publish path vs. change the published scope) — tracked in cortex#2397, held
+# for Andreas. This is the one violation intentionally left open.
 namespace: "metafactory"
 
 # Registry listing status — documented STOP-AND-ASK outcome (cortex#2285 C1).
