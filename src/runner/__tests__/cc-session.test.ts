@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { CCSession, type CCSessionOpts, resolvePathGuardEnv, deriveSandboxProfile } from "../cc-session";
+import { resetSandboxCapabilityProbeForTests } from "../session-sandbox";
 import { testClaude } from "../../common/test-utils";
 
 describe("CCSession", () => {
@@ -232,6 +233,17 @@ describe("deriveSandboxProfile — EBH-2 policy → SandboxProfile projection (c
  */
 describe("CCSession — EBH-2 SessionSandbox routing", () => {
   testClaude("emits exactly one security-event (none backend) per session", async () => {
+    // EBH-3a (cortex#2345) — `createSessionSandbox` now resolves a REAL
+    // `macos-sbpl` backend when the boot capability probe has been warmed
+    // AND resolves it (session-sandbox.ts). In the full test-suite run
+    // (one process, `bun test` default), an EARLIER file's `startCortex()`
+    // call can warm that MODULE-LEVEL sync cache before this test runs —
+    // this test's whole point is the `none` backend's OWN observable
+    // contract (fires `sandbox-unavailable`), so it resets the cache first
+    // to deterministically get `NoneSandbox`, regardless of suite ordering
+    // or what ran before it. Mirrors `session-sandbox.test.ts`'s own
+    // `afterEach(resetSandboxCapabilityProbeForTests)` discipline.
+    resetSandboxCapabilityProbeForTests();
     const session = new CCSession({
       prompt: "Say just the word hi",
       channel: "test",
