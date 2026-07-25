@@ -48,7 +48,9 @@ So the tree now holds three answers to one question:
 | #2408 `AgentSchema.github` | per-dispatch mint | fail-closed | no |
 | This spec | per-operation resolve | fail-closed | yes |
 
-**DD-0 — one mechanism, not three. This spec REPLACES both predecessors; it does not become a third option beside them.**
+**DD-0 — one mechanism. Not three, and not four.**
+
+This is a **standing invariant, not a one-time consolidation.** There is exactly one way an agent's git credential is resolved, and any new path must REPLACE it rather than sit beside it. That rule binds this spec first: added alongside §3.5b and #2408 it would simply be the fourth mechanism, and the fourth is worse than the third for the same reason the third was worse than the second.
 
 The problem DD-0 exists to prevent, concretely: today the credential an agent ends up with depends on **how the work reached it**, not on its config. The same agent, on the same stack, against the same forge, resolves its identity differently through the dev loop than through chat — and one of those paths silently resolves to *the principal*. A reader looking at `agents[]` cannot tell which applies; it is decided by plumbing three files away.
 
