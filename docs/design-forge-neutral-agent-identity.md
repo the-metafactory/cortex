@@ -48,7 +48,13 @@ So the tree now holds three answers to one question:
 | #2408 `AgentSchema.github` | per-dispatch mint | fail-closed | no |
 | This spec | per-operation resolve | fail-closed | yes |
 
-**DD-0 — one mechanism.** This spec REPLACES both predecessors rather than sitting beside them. §3.5b's boot-time read and its ambient fallback are retired: a fail-open credential path is exactly what an identity feature exists to remove, and leaving it live means the dev consumer can still push as the principal while config claims a bot identity. Two mechanisms with different failure modes is worse than either alone, because which one applies depends on wiring the reader cannot see.
+**DD-0 — one mechanism, not three. This spec REPLACES both predecessors; it does not become a third option beside them.**
+
+The problem DD-0 exists to prevent, concretely: today the credential an agent ends up with depends on **how the work reached it**, not on its config. The same agent, on the same stack, against the same forge, resolves its identity differently through the dev loop than through chat — and one of those paths silently resolves to *the principal*. A reader looking at `agents[]` cannot tell which applies; it is decided by plumbing three files away.
+
+That is strictly worse than either mechanism alone. A single fail-open path is a known risk you can reason about. Two paths with **opposite failure modes**, selected invisibly, is a system where "does this agent act as itself?" has no answer without tracing the dispatch route.
+
+So: §3.5b's boot-time read and ambient fallback are retired (M8), and #2408's per-dispatch env injection is rewired to this spec's resolution (M4). One question, one answer, regardless of route.
 
 ### Why now
 
@@ -223,13 +229,13 @@ M1–M2 are near-free now and expensive later; they should land first regardless
 
 | # | Question | Bias |
 |---|---|---|
-| Q1 | Does any real agent need forge-**API** calls across two orgs in one dispatch (§4.3's excluded case)? | defer until observed; fail loudly meanwhile |
+| Q1 | ~~Does any real agent need forge-**API** calls across two orgs in one dispatch (§4.3's excluded case)?~~ | **DECIDED 2026-07-26 (principal): leave as-is, fail loud.** §4.3's exclusion stands for v1 — the case is not known to occur, stacks are org-aligned, and a loud failure surfaces it if it ever does. Revisit only on an observed instance, not in anticipation. |
 | Q2 | Cache in the helper process, or a short-lived daemon-side cache shared across a session's operations? | start in-process; measure before adding shared state |
 | Q3 | Should `gitIdentity` be per-agent only, or also declarable per-stack as a default? | per-agent only in v1 — matches how `env:`/`github` already scope, and avoids an inheritance rule nobody asked for |
 | Q4 | Do SSH remotes need equivalent treatment (signing keys / deploy keys), or is HTTPS-only acceptable for v1? | HTTPS-only v1; SSH is a separate credential class |
 | Q5 | Does `arc` need to provision identity registry entries at bundle install, or stays principal-managed? | principal-managed v1 (mirrors `stack.nkey_seed_path`) |
 | Q6 | Does a third-party (non-first-party) forge adapter ever get loaded? DD-5 bounds the damage, but EBH-5 plugin isolation is still unbuilt, and `system.plugins.external` is the only gate. | no third-party forge adapters until EBH-5 ships — the first one is arguably EBH-5's trigger |
-| Q7 | §3.5b's ambient fallback (DD-0/M8) is a live fail-open path on any stack with a dev agent and no `devGhTokenEnv`. Retire it with this spec, or sooner as a standalone fix? | sooner is defensible — it's a fail-open credential path today, independent of everything else here |
+| Q7 | ~~§3.5b's ambient fallback (DD-0/M8) is a live fail-open path. Retire it with this spec, or sooner?~~ | **DECIDED 2026-07-26 (principal): fix now, standalone.** Confirmed live on the `meta-factory` stack — the warning has fired 62×, most recently today, and `CORTEX_DEV_GH_TOKEN` is set in no plist, so `dev.implement` currently pushes and opens PRs as the principal. Split out of this spec and landed independently; DD-0's §3.5b half is thereby settled ahead of M3–M4. |
 
 ---
 
