@@ -21,25 +21,26 @@ RestartSec=10
 RestartSteps=5
 RestartMaxDelaySec=300
 
-# "+" prefix: run unsandboxed (bypasses NoNewPrivileges=/ProtectSystem=/
-# ProtectHome=/ReadWritePaths= below). Sandboxing directives build a fresh
-# mount namespace per exec'd command, including ExecStartPre — so WITHOUT
-# "+" here, a virgin host (tree doesn't exist yet) would hit a chicken-and-egg
-# failure: ReadWritePaths= below hard-requires its target paths to already
-# exist, but the very mkdir meant to create them would itself be denied
-# write access by ProtectHome=read-only first. "+" sidesteps that: these
-# three lines always run with the invoking principal's own full (unsandboxed)
-# authority, so `mkdir -p` never fails here regardless of hardening state.
-# ExecStart itself is NOT "+"-prefixed — it runs fully sandboxed, by which
-# point these three trees are guaranteed to already exist.
-ExecStartPre=+/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
-ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
+# NOT "+"-prefixed (plain, matching the pre-hardening form). A "+" prefix
+# (run unsandboxed) was tried first, out of caution that ReadWritePaths=
+# below might hard-require these targets to pre-exist before a sandboxed
+# process could create them (a chicken-and-egg first-boot failure) — but
+# that broke the literal-string assertion scripts/__tests__/systemd-
+# render.sh pins for this exact line (cortex#2103's regression test), and
+# per the real systemd-e2e CI job (cortex#2071/OQ-5) the plain, sandboxed
+# form is what actually ships and passes: systemd's ReadWritePaths= appears
+# to auto-vivify a missing mountpoint rather than requiring it pre-exist.
+# If a future kernel/systemd-version combination proves that wrong, the "+"
+# prefix is the fix — but it will also need scripts/__tests__/systemd-
+# render.sh updated to match (out of scope for this unit-file-only slice).
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
 # ~/.claude/events/raw is normally created lazily by Claude Code's own
 # EventLogger hook on first write, not by cortex. Pre-creating it here means
-# a hardened first boot never races that lazy creation against
-# ReadWritePaths='s hard existence requirement (see OQ-5 / docs/design-
-# session-sandbox-platforms.md §5 "Event pipeline").
-ExecStartPre=+/usr/bin/mkdir -p %h/.claude/events/raw
+# a hardened first boot never races that lazy creation against the
+# ReadWritePaths= hole for it below (see OQ-5 / docs/design-session-sandbox-
+# platforms.md §5 "Event pipeline").
+ExecStartPre=/usr/bin/mkdir -p %h/.claude/events/raw
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
 
@@ -125,16 +126,29 @@ ReadWritePaths=%h/.local/share/metafactory/cortex
 ReadWritePaths=%h/.local/state/metafactory/cortex
 ReadWritePaths=%h/.claude/events/raw
 
-# No legitimate reason for this daemon to write /proc/sys or /sys kernel
-# tunables, load/unload kernel modules, or write to cgroupfs (systemd itself
-# manages this unit's cgroup from outside). Standard, zero known-functional-
-# need hardening for a network/application daemon.
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
+# ProtectKernelTunables=, ProtectKernelModules=, ProtectControlGroups= were
+# tried and REVERTED (real systemd-e2e CI failure, cortex#2071/OQ-5): a
+# `systemctl --user` manager runs unprivileged and cannot apply them —
+# `journalctl` showed "Failed to drop capabilities: Operation not
+# permitted" and the unit exited 218/CAPABILITIES on every start, an
+# outright daemon-down regression, not a degraded-but-working one. These
+# are SYSTEM-UNIT-ONLY (they need real host CAP_SYS_ADMIN/CAP_SYS_MODULE to
+# set up, which this unprivileged manager never has) — do not re-add them
+# here. What each would have bought, for whenever cortex ships a system-
+# unit variant: ProtectKernelTunables= blocks writes to /proc/sys and /sys
+# kernel tunables; ProtectKernelModules= blocks kernel module load/unload;
+# ProtectControlGroups= makes cgroupfs read-only. None of these are needed
+# by a `--user` unit's own cgroup (systemd itself manages that from
+# outside the unit's mount namespace regardless).
 
 # No legitimate reason to create setuid/setgid binaries or files with
-# inheritable capabilities.
+# inheritable capabilities. Kept (unlike the trio above): this is enforced
+# via seccomp, which a process can install on itself with no host
+# capability required (that's the whole point of NoNewPrivileges= + a
+# self-seccomp filter) — mechanically different from the mount/capability-
+# bounding-set work the removed trio needed. If the systemd-e2e job (the
+# real Linux boot test) turns up a 218/CAPABILITIES on THIS line too, pull
+# it next — bisected one at a time, per OQ-5.
 RestrictSUIDSGID=yes
 
 # Explicit "no", NOT omitted: bun/node's JIT needs writable+executable
