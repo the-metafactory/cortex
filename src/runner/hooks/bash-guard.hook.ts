@@ -63,13 +63,22 @@
  * skipping the check. A regression test derives the floor's command list
  * from `DEFAULT_CONFIG.rules` itself and fails if any of them lacks a policy
  * or an opt-out — see `bash-guard.hook.test.ts`'s "round 9" describe block —
- * so widening the floor without declaring the new command's path posture is
- * now a CI failure, not a silent bypass. That posture — fail closed on
- * ambiguity AND on coverage gaps — is what makes this guard SAFE, but it is
- * NOT airtight by construction the way a real parser + kernel boundary
- * would be. The kernel sandbox (L2, EBH-2/EBH-3,
- * `docs/design-session-sandbox.md`) is the actual boundary; this guard is
- * Tier-0 defense-in-depth in front of it.
+ * so widening the floor with a rule of the SUPPORTED pattern shape (see
+ * `deriveFloorCommandHeadWords`) without declaring the new command's path
+ * posture is a CI failure, not a silent bypass. That guarantee is scoped to
+ * the supported shape: `deriveFloorCommandHeadWords` only understands an
+ * anchored `^` + plain word + `\b`/`\s`/`$` boundary; a floor rule of ANY
+ * other shape (alternation, a character class, a leading `\s*`, an optional
+ * suffix like `s?`, …) THROWS at module load (EBH-1f, cortex#2374) rather
+ * than silently deriving nothing or the wrong word — the round-9 coverage
+ * test above shares the same derivation and so shares the same scope: it
+ * protects supported-shape rules; unsupported shapes now hard-fail the
+ * build instead of passing it silently. That two-part posture — fail
+ * closed on ambiguity, on coverage gaps, AND on an unparseable floor rule
+ * — is what makes this guard SAFE, but it is NOT airtight by construction
+ * the way a real parser + kernel boundary would be. The kernel sandbox
+ * (L2, EBH-2/EBH-3, `docs/design-session-sandbox.md`) is the actual
+ * boundary; this guard is Tier-0 defense-in-depth in front of it.
  *
  * Accepted residuals (deliberately not chased further — over-deny, not
  * under-deny, direction):
@@ -195,7 +204,12 @@ interface GuardConfig {
   repos?: string[];  // Global repo whitelist (applies to all gh commands)
 }
 
-const DEFAULT_CONFIG: GuardConfig = {
+// Exported (read-only in practice — see AllowRule) so tests can assert
+// against the REAL floor patterns directly, e.g. the EBH-1f (cortex#2374)
+// independent shape test that hard-codes an expected head word per pattern
+// WITHOUT calling deriveFloorCommandHeadWords, so it cannot share that
+// function's blind spot.
+export const DEFAULT_CONFIG: GuardConfig = {
   rules: [
     // gh: READ-ONLY porcelain SUBCOMMANDS only (cortex#2335). Two vectors are
     // closed here:
@@ -408,9 +422,35 @@ function rejectsChaining(command: string): boolean {
  * the regression test that makes a round 10 of this class impossible: it
  * derives the same command list from the SAME live `DEFAULT_CONFIG.rules`
  * this module ships and fails if any of them is neither opted out nor
- * flag-policied — so widening the floor without declaring the new command's
- * path posture is now a CI failure, not a silent bypass.
+ * flag-policied — so widening the floor with a rule of the shape this
+ * derivation supports, without declaring the new command's path posture,
+ * is a CI failure.
+ *
+ * That guarantee is scoped to the shape `deriveFloorCommandHeadWords` can
+ * parse (EBH-1f, cortex#2374 — adversarial review of this very function):
+ * derivation used to match ONLY `^plainword` and silently return NOTHING
+ * for any other legal rule shape — `^(cat|less)\b`, `^[Cc]at\b`, and
+ * `^\s*cat\b` each derived no word at all (both exempting their command
+ * from path-checking with zero signal), and `^cats?\b` derived the WRONG
+ * word ("cats") while the real runtime head word ("cat") stayed
+ * unchecked. Because a word missing from `FLOOR_COMMAND_HEAD_WORDS` never
+ * enters `PATH_CHECKED_COMMANDS`, and the runtime gate is `if (headWord &&
+ * PATH_CHECKED_COMMANDS.has(headWord))`, that was a SILENT FULL BYPASS —
+ * `checkCommandPaths` was never even called — not a fail-closed deny. The
+ * round-9 coverage test could not catch it either: it derives its own
+ * "ground truth" via this same function, so it shares the blind spot.
+ * `deriveFloorCommandHeadWords` now parses a narrow, PRECISELY-checked
+ * shape and THROWS (at module load, since `FLOOR_COMMAND_HEAD_WORDS` below
+ * calls it eagerly) for any pattern it cannot confidently reduce to a
+ * single head word — see the shape regex and its comment just below. An
+ * independent test in `bash-guard.hook.test.ts` (the "EBH-1f: floor rule
+ * shape hardening" describe block) hard-codes the expected word for every
+ * `DEFAULT_CONFIG` pattern WITHOUT calling this function, so it cannot
+ * share this function's blind spot and will fail if a pattern's shape
+ * changes unexpectedly.
  */
+const SUPPORTED_FLOOR_RULE_SHAPE = /^\^([A-Za-z][A-Za-z0-9_]*)(?:\\b|\\s|\$)/;
+
 export function deriveFloorCommandHeadWords(rules: readonly AllowRule[]): Set<string> {
   const words = new Set<string>();
   for (const rule of rules) {
@@ -418,8 +458,40 @@ export function deriveFloorCommandHeadWords(rules: readonly AllowRule[]): Set<st
     // `\s`/`\b`/`$` boundary (see DEFAULT_CONFIG above) — the same shape
     // main()/extractCommandPaths already assume when reading a COMMAND
     // string's head word, applied here to a RULE PATTERN string instead.
-    const m = /^\^([A-Za-z][A-Za-z0-9_]*)/.exec(rule.pattern);
-    if (m?.[1]) words.add(m[1].toLowerCase());
+    // This parses the pattern's SOURCE TEXT (it does not compile/execute
+    // the pattern as a regex) — `SUPPORTED_FLOOR_RULE_SHAPE` requires the
+    // captured identifier to be IMMEDIATELY followed by one of the three
+    // literal boundary forms above; the regex engine backtracks the greedy
+    // identifier match, so a shape like `^cats?\b` (where "cats" is
+    // followed by "?", "cat" by "s", "ca" by "t", … — none a boundary)
+    // fails to match ANY prefix rather than settling for the wrong one.
+    const m = SUPPORTED_FLOOR_RULE_SHAPE.exec(rule.pattern);
+    if (!m?.[1]) {
+      // FAIL LOUD, not silent. A rule this parser cannot confidently
+      // reduce to a single head word must never be treated as
+      // contributing NO word — that is exactly how `^(cat|less)\b`,
+      // `^[Cc]at\b`, and `^\s*cat\b` each silently exempted their command
+      // from path-checking (EBH-1f, cortex#2374). Throwing at module load
+      // turns an unparseable floor rule into a build/boot failure instead
+      // of a silent exemption.
+      throw new Error(
+        // NOTE: the pattern is interpolated RAW (not JSON.stringify'd) so
+        // its literal backslashes appear in the message exactly as they do
+        // in the source rule — JSON.stringify would double-escape them
+        // (`\b` → `\\b` in the JSON text), which is confusing to read and
+        // awkward for a caller/test to substring-match against the pattern
+        // it passed in.
+        `[Cortex Bash Guard] deriveFloorCommandHeadWords: floor rule pattern ` +
+          `"${rule.pattern}" does not match the supported shape ` +
+          `(anchored "^" + a plain command word + one of \\b / \\s / $ as the ` +
+          `next literal characters). An unparseable floor rule must not ` +
+          `silently exempt its command from path-checking — rewrite the ` +
+          `pattern to the supported shape, or extend this parser (and its ` +
+          `independent, non-re-derived shape test in bash-guard.hook.test.ts) ` +
+          `to cover the new shape before shipping it.`,
+      );
+    }
+    words.add(m[1].toLowerCase());
   }
   return words;
 }

@@ -2409,6 +2409,8 @@ describe("bash-guard.hook — round 8: git path-check coverage + `--` end-of-opt
 import {
   checkCommandPaths,
   COMMAND_FLAG_POLICIES,
+  DEFAULT_CONFIG,
+  deriveFloorCommandHeadWords,
   FLOOR_COMMAND_HEAD_WORDS,
   PATH_CHECK_OPT_OUT_COMMANDS,
 } from "../bash-guard.hook";
@@ -2601,6 +2603,152 @@ describe("bash-guard.hook — round 9: floor coverage (cortex#2370 regression gu
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// =============================================================================
+// EBH-1f (cortex#2374) — adversarial review of round 9 (#2371) found that
+// `deriveFloorCommandHeadWords` only ever understood ONE regex shape
+// (`^plainword`). Every other legal floor-rule shape either derived NOTHING
+// (silently exempting that command from path-checking — the exact bypass
+// class rounds 7/8/9 each closed) or, for `^cats?\b`, derived the WRONG word
+// ("cats") while the real runtime head word ("cat") stayed unchecked.
+//
+// The round-9 "floor coverage" test above CANNOT catch this: it derives its
+// own ground truth via `FLOOR_COMMAND_HEAD_WORDS`, i.e. the very function
+// with the blind spot. This describe block covers the gap two ways:
+//   1. Feeds each problem shape through the REAL exported
+//      `deriveFloorCommandHeadWords` and asserts it now throws LOUDLY
+//      (naming the offending pattern) instead of silently returning nothing
+//      or the wrong word.
+//   2. An INDEPENDENT shape assertion against the live `DEFAULT_CONFIG.rules`
+//      that hard-codes the expected head word per pattern and does NOT call
+//      `deriveFloorCommandHeadWords` at all — so it cannot share that
+//      function's blind spot, and fails if a pattern's shape (not just its
+//      command) changes unexpectedly.
+// =============================================================================
+describe("bash-guard.hook — EBH-1f: floor rule shape hardening (cortex#2374 regression guard)", () => {
+  describe("deriveFloorCommandHeadWords — unsupported shapes throw loudly (no silent empty/wrong derivation)", () => {
+    test("alternation ^(curl|wget)\\s+ throws naming the pattern (the issue's own example)", () => {
+      const pattern = "^(curl|wget)\\s+";
+      expect(() => deriveFloorCommandHeadWords([{ pattern }])).toThrow(
+        expect.objectContaining({
+          message: expect.stringContaining(pattern),
+        }),
+      );
+    });
+
+    test("alternation ^(cat|less)\\b throws — previously derived NOTHING, silently exempting both commands", () => {
+      const pattern = "^(cat|less)\\b";
+      expect(() => deriveFloorCommandHeadWords([{ pattern }])).toThrow(
+        expect.objectContaining({ message: expect.stringContaining(pattern) }),
+      );
+    });
+
+    test("character class ^[Cc]at\\b throws — previously derived NOTHING, silently exempting the command", () => {
+      const pattern = "^[Cc]at\\b";
+      expect(() => deriveFloorCommandHeadWords([{ pattern }])).toThrow(
+        expect.objectContaining({ message: expect.stringContaining(pattern) }),
+      );
+    });
+
+    test("leading whitespace ^\\s*cat\\b throws — previously derived NOTHING, silently exempting the command", () => {
+      const pattern = "^\\s*cat\\b";
+      expect(() => deriveFloorCommandHeadWords([{ pattern }])).toThrow(
+        expect.objectContaining({ message: expect.stringContaining(pattern) }),
+      );
+    });
+
+    test("optional-suffix ^cats?\\b throws — previously derived the WRONG word (\"cats\" instead of \"cat\")", () => {
+      const pattern = "^cats?\\b";
+      // Guard the OLD behaviour didn't sneak back in: the buggy derivation
+      // used to silently succeed with "cats". Assert throw, not a wrong word.
+      expect(() => deriveFloorCommandHeadWords([{ pattern }])).toThrow(
+        expect.objectContaining({ message: expect.stringContaining(pattern) }),
+      );
+    });
+
+    test("a single bad rule throws even when mixed with otherwise-good rules", () => {
+      const rules = [{ pattern: "^cat\\b" }, { pattern: "^(curl|wget)\\s+" }];
+      expect(() => deriveFloorCommandHeadWords(rules)).toThrow();
+    });
+  });
+
+  describe("deriveFloorCommandHeadWords — supported shapes still derive correctly (no regression)", () => {
+    test("^cat\\b derives \"cat\"", () => {
+      expect(deriveFloorCommandHeadWords([{ pattern: "^cat\\b" }])).toEqual(new Set(["cat"]));
+    });
+
+    test("^pwd$ derives \"pwd\"", () => {
+      expect(deriveFloorCommandHeadWords([{ pattern: "^pwd$" }])).toEqual(new Set(["pwd"]));
+    });
+
+    test("^gh\\s+pr\\s+(view|list)\\b derives \"gh\" (alternation LATER in the pattern is fine — only the HEAD word must be a plain identifier)", () => {
+      expect(
+        deriveFloorCommandHeadWords([{ pattern: "^gh\\s+pr\\s+(view|list)\\b" }]),
+      ).toEqual(new Set(["gh"]));
+    });
+  });
+
+  test("FLOOR_COMMAND_HEAD_WORDS itself loaded without throwing — proves every live DEFAULT_CONFIG rule is currently the supported shape", () => {
+    // This is really just re-asserting module load succeeded (if a live rule
+    // had an unsupported shape, importing this module at the top of this
+    // test file would already have thrown and no test here would run) — but
+    // spelled out explicitly so a future reader doesn't have to infer it.
+    expect(FLOOR_COMMAND_HEAD_WORDS.size).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Independent, non-re-derived shape assertion. Deliberately does NOT call
+  // deriveFloorCommandHeadWords — it hard-codes the expected head word for
+  // every CURRENT DEFAULT_CONFIG pattern and checks the live rule list
+  // against that fixed map. A future edit that changes a pattern's TEXT
+  // (e.g. `^cat\b` → `^cats?\b`) has no matching entry in this map and fails
+  // this test, independent of whatever deriveFloorCommandHeadWords does with
+  // it.
+  // ---------------------------------------------------------------------------
+  test("independent shape assertion: every DEFAULT_CONFIG pattern matches its hard-coded expected head word (does not call deriveFloorCommandHeadWords)", () => {
+    const EXPECTED_PATTERN_TO_HEAD_WORD: Readonly<Record<string, string>> = {
+      "^gh\\s+pr\\s+(view|list|diff|checks|status|comment)\\b": "gh",
+      "^gh\\s+issue\\s+(view|list|status|comment)\\b": "gh",
+      "^gh\\s+repo\\s+view\\b": "gh",
+      "^git\\s+(log|diff|show|status|branch|fetch|remote|rev-parse)\\b": "git",
+      "^ls\\b": "ls",
+      "^pwd$": "pwd",
+      "^echo\\b": "echo",
+      "^cat\\b": "cat",
+      "^head\\b": "head",
+      "^tail\\b": "tail",
+      "^wc\\b": "wc",
+      "^which\\b": "which",
+      "^file\\b": "file",
+    };
+
+    // Same length, in EITHER direction: catches a rule ADDED to DEFAULT_CONFIG
+    // without a matching hard-coded entry above, and an entry above that no
+    // longer corresponds to a live rule.
+    expect(DEFAULT_CONFIG.rules.length).toBe(Object.keys(EXPECTED_PATTERN_TO_HEAD_WORD).length);
+
+    for (const rule of DEFAULT_CONFIG.rules) {
+      const expectedWord = EXPECTED_PATTERN_TO_HEAD_WORD[rule.pattern];
+      // Pattern TEXT must be a key in the hard-coded map at all — if a
+      // pattern's shape (or command) silently changed, it won't match any
+      // key here and this fails, without ever calling the derivation.
+      expect(expectedWord).toBeDefined();
+
+      // Independent (non-regex-parser) check that the pattern's head word is
+      // what we expect: the pattern string, minus its leading "^", must
+      // start with the expected word, and the character immediately after
+      // the word must be a boundary character/sequence — checked with plain
+      // string operations, not the SUPPORTED_FLOOR_RULE_SHAPE regex, so this
+      // assertion cannot share that regex's own blind spot either.
+      const word = expectedWord!;
+      const afterCaret = rule.pattern.slice(1);
+      expect(afterCaret.startsWith(word)).toBe(true);
+      const boundary = afterCaret.slice(word.length, word.length + 2);
+      const isBoundary = boundary.startsWith("\\b") || boundary.startsWith("\\s") || boundary.startsWith("$");
+      expect(isBoundary).toBe(true);
     }
   });
 });
