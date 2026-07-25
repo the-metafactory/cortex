@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-6.10.3--beta-2A3F6A?labelColor=0E1726" />
+  <img alt="Version" src="https://img.shields.io/badge/version-6.12.0--beta-2A3F6A?labelColor=0E1726" />
   <img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-2A3F6A?labelColor=0E1726" />
   <img alt="macOS" src="https://img.shields.io/badge/macOS-supported-2A3F6A?labelColor=0E1726&logo=apple&logoColor=white" />
   <img alt="Linux" src="https://img.shields.io/badge/Linux-supported-2A3F6A?labelColor=0E1726&logo=linux&logoColor=white" />
@@ -91,7 +91,7 @@ Click the receipts, don't take the screenshots' word:
 [#1915](https://github.com/the-metafactory/cortex/pull/1915) ·
 [#1927](https://github.com/the-metafactory/cortex/pull/1927) ·
 [#1936](https://github.com/the-metafactory/cortex/pull/1936) ·
-[the v6.10.x fixes](https://github.com/the-metafactory/cortex/releases).
+[the v6.1x fixes](https://github.com/the-metafactory/cortex/releases).
 
 **Where it goes:** stacks connect. Federation — **experimental and
 unreleased** — joins independent stacks into shared networks where work
