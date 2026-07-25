@@ -11,11 +11,11 @@
 <h1 align="center">cortex</h1>
 
 <p align="center">
-  <strong>The foundation for an internet of agentic work — starting with your own stack.</strong>
+  <strong>In one sentence:</strong> cortex is a self-hosted message bus that turns an @mention into a signed, policy-gated Claude Code session on your own machine, with progress streamed back to the thread.
 </p>
 
 <p align="center">
-  Humans and assistants working together as one team: your surfaces, your machines, one supervised bus.<br />
+  Humans and assistants working together as one team: your surfaces, your machines — gated, signed, and auditable; the supervision dashboard (Mission Control) is in progress.<br />
   Built on the <a href="https://github.com/the-metafactory/myelin">myelin</a> layer model below; an assistant is a thin persona on top — cortex is everything in between.
 </p>
 
@@ -209,12 +209,14 @@ model, internal componentisation — lives in
 
 ---
 
-## See it work (~10 minutes)
+## See it work (~10 minutes, tested on macOS/Debian/container)
 
 The fastest way to understand cortex is to stand up one stack with one
 assistant and @mention it. Three host paths below — macOS, Debian, container —
 all driven by the same `CTX_*` env contract and the same idempotent
-`cortex quickstart` command.
+`cortex quickstart` command. WSL2 is not one of the tested paths yet; a
+community install gist exists for it — tracked in
+[#2323](https://github.com/the-metafactory/cortex/issues/2323).
 
 ### Prerequisites (all hosts)
 
