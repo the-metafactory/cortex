@@ -246,6 +246,84 @@ scripts:
   # arc#138) — the first thing `arc remove` does, non-aborting on failure.
   # No-ops on Darwin / systemd-less hosts.
   preremove: ./scripts/preremove.sh
+  # cortex#2338: `arc purge`'s non-declarable cleanup (arc#359 step 4) — the
+  # ONE leftover class `owns:` below cannot express as a static path: LIVE
+  # supervised per-stack instances (systemd `cortex@<slug>`/`nats@<slug>`;
+  # darwin `ai.meta-factory.{cortex,nats}.<slug>.plist`, never arc-tracked —
+  # plist-render.sh writes these directly, not via `provides.files`). Fires
+  # via arc's `scripts.purge` hook, AFTER `owns.config`/`owns.state` are
+  # already deleted — see scripts/lib/purge-supervision.sh's header for why
+  # that ordering means this script deliberately does NOT read the (by then
+  # gone) cortex config dir to discover stacks, unlike `preremove.sh` above.
+  # Non-aborting on failure, matching every other lifecycle script here.
+  purge: ./scripts/purge.sh
+
+# owns: the runtime-created config/state trees `arc purge cortex` deletes,
+# plus the one workspace root it must NEVER touch (cortex#2338, arc#359).
+#
+# Scope is DELIBERATELY narrower than the field-test leftover inventory this
+# issue started from (cortex#2331) — two trees this manifest does NOT declare,
+# and why:
+#
+#   - `~/.config/nats` (rendered <slug>.conf / <slug>.creds / cortex-<slug>.nk
+#     signing seed): NOT declared. This directory is SHARED — arc's OWN nats
+#     identity provisioning writes here too (arc/src/lib/identity-provision.ts
+#     ~/.config/nats/<agent-id>.nk, ~/.config/nats/creds/), independent of
+#     cortex. Only the seed carries a "cortex-" prefix; the rendered
+#     `<slug>.conf`/`<slug>.creds` do not, and <slug> is principal-chosen, so a
+#     glob can't safely distinguish cortex's files from a neighbor's without
+#     risking a false-positive delete. cortex's OWN teardown code
+#     (stack-lib.ts resolveStackArtifacts, `cortex stack delete`) treats the
+#     seed as RETIRED-not-deleted by default (key destruction is a conscious
+#     `--purge-seeds` act) — a blanket owns.config sweep here would be MORE
+#     destructive than cortex's own explicit teardown UX. Left out; the
+#     principal cleans this by hand (`cortex stack delete --purge-seeds`) if
+#     seed destruction is actually wanted.
+#   - `~/.claude/{relay,events}` (relay-policy.yaml, raw/published event
+#     JSONL): NOT declared. postinstall.sh creates these, but per this issue's
+#     own review, `~/.claude` is Claude-Code-hook territory another hook or
+#     package could also write into (events-path.ts explicitly calls
+#     `~/.claude/events/raw` the "hook-substrate boundary" that stays put
+#     across every XDG wave for exactly this reason). Left out with this note
+#     rather than guessed at.
+#
+# The per-stack DATA dir (`~/.local/share/metafactory/cortex`,
+# src/common/data-path.ts) is ALSO entirely excluded from owns.config/state —
+# not an oversight, see the userData entry below.
+owns:
+  config:
+    # Exclusively cortex's own — canonical XDG config root
+    # (src/common/config/config-path.ts cortexConfigDir). No userData lives
+    # under it; personas/agents.d/stacks/system are all cortex-generated.
+    - "~/.config/metafactory/cortex"
+  state:
+    # Exclusively cortex's own — canonical XDG state root
+    # (src/common/state-path.ts cortexStateDir): pidfiles, degraded markers,
+    # rotating logs, the relay pidfile, and the DD-10 network-cache. No
+    # userData lives under it.
+    - "~/.local/state/metafactory/cortex"
+  userData:
+    # THE never-sweep guarantee this issue exists to protect (arc#359's
+    # apt `/home` guarantee). Per-stack coding-tier agent workspaces
+    # (src/common/data-path.ts canonicalWorkspaceDir, cortex#2097) —
+    # `<dataDir>/<slug>/workspace` — are the dispatch cwd a bot session
+    # actually reads/writes as its checkout. They live NESTED inside the
+    # broader data dir (`~/.local/share/metafactory/cortex`, which also holds
+    # the MC db + published-events buffer) — see the manifest-level note
+    # above for why that whole tree is left OUT of owns.config/state rather
+    # than declaring the MC-db/events siblings as purgeable: arc's owns
+    # containment validator (arc/src/lib/owns.ts validateOwns) computes a
+    # glob's containment root at the segment BEFORE the first glob character,
+    # so a wildcarded slug (`*/workspace`) roots at the DATA DIR ITSELF —
+    # identical to any sibling config/state entry declared one level down
+    # (`.../cortex/mc`, `.../cortex/events`), which `validateOwns` would then
+    # reject as an overlap (the never-delete class must not contain, nor be
+    # contained by, a deletable one). Declaring the workspace glob here with
+    # NO sibling config/state entries inside the data dir avoids that
+    # conflict — and is the safer read anyway: better to leave real state
+    # (MC db, published events) as an undeclared leftover than to risk a
+    # containment shape arc might resolve unsafely on a future host layout.
+    - "~/.local/share/metafactory/cortex/*/workspace"
 
 # Dependencies — cortex#79 pins arc >= 0.25.0. That's the release that
 # ships the stable `arc.nats.v1` JSON contract on the four `arc nats *`
