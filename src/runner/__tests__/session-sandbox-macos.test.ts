@@ -109,6 +109,54 @@ describe("generateMacosSbplProfile", () => {
     expect(generated.text).toContain(`(deny file-write* (subpath "${aws}"))`);
   });
 
+  test("cortex#2409 — denies read+write on every extended sensitive-set entry (except Keychains, see next test)", () => {
+    const generated = generateMacosSbplProfile(baseProfile(), { homeDir: fixtureHome });
+    const extended = [
+      join(fixtureHome, ".gnupg"),
+      join(fixtureHome, ".docker", "config.json"),
+      join(fixtureHome, ".config", "gh", "hosts.yml"),
+      join(fixtureHome, ".netrc"),
+      join(fixtureHome, ".git-credentials"),
+      join(fixtureHome, ".kube", "config"),
+      join(fixtureHome, ".npmrc"),
+      join(fixtureHome, ".pypirc"),
+      join(fixtureHome, ".cargo", "credentials.toml"),
+      join(fixtureHome, ".config", "op"),
+    ];
+    for (const p of extended) {
+      expect(generated.text).toContain(`(deny file-read* (subpath "${p}"))`);
+      expect(generated.text).toContain(`(deny file-write* (subpath "${p}"))`);
+    }
+  });
+
+  test("cortex#2409 — ~/Library/Keychains denies WRITE only, read stays open (empirically forced — see module doc's two-round story)", () => {
+    // Measured on a real host, TWICE: a real `claude --print` session both
+    // stats the keychain (file-read-metadata) AND reads its login-
+    // credential DATA (file-read-data) on every start — `claude` itself
+    // uses the OS keychain for auth state. `file-read*` broke a real
+    // session outright; even the narrower `file-read-data` still broke
+    // login ("Not logged in · Please run /login"). Read must stay fully
+    // open here; only WRITE (tamper) is denied. See the module doc + the
+    // real end-to-end acceptance test (cc-session-macos-sandbox-e2e).
+    const generated = generateMacosSbplProfile(baseProfile(), { homeDir: fixtureHome });
+    const keychains = join(fixtureHome, "Library", "Keychains");
+    expect(generated.text).toContain(`(deny file-write* (subpath "${keychains}"))`);
+    expect(generated.text).not.toContain(`(deny file-read* (subpath "${keychains}"))`);
+    expect(generated.text).not.toContain(`(deny file-read-data (subpath "${keychains}"))`);
+  });
+
+  test("cortex#2409 — deliberately does NOT deny ~/.gitconfig or shell histories (see module doc rationale)", () => {
+    const generated = generateMacosSbplProfile(baseProfile(), { homeDir: fixtureHome });
+    const excluded = [
+      join(fixtureHome, ".gitconfig"),
+      join(fixtureHome, ".zsh_history"),
+      join(fixtureHome, ".bash_history"),
+    ];
+    for (const p of excluded) {
+      expect(generated.text).not.toContain(`(subpath "${p}")`);
+    }
+  });
+
   test("denies WRITE (not read) on settings.json and hooks/ — self-modification, compat contract needs hook read+exec", () => {
     const generated = generateMacosSbplProfile(baseProfile(), { homeDir: fixtureHome });
     const settings = join(fixtureHome, ".claude", "settings.json");
@@ -447,6 +495,118 @@ describe.skipIf(!isDarwin)("The four §5 'stops' — real sandbox-exec, fixture 
     expect(r.stdout).toContain("ro-content");
   });
 });
+
+describe.skipIf(!isDarwin)(
+  "cortex#2409 — sensitive-set extension, real sandbox-exec against a fixture $HOME",
+  () => {
+    let fixtureHome: string;
+
+    beforeEach(() => {
+      // Same realpathSync-immediately discipline as the other fixture blocks
+      // above (E3 shape under macOS's /var → /private/var symlink).
+      fixtureHome = realpathSync(mkdtempSync(join(tmpdir(), "cortex-sbpl-2409-home-")));
+    });
+
+    afterEach(() => {
+      rmSync(fixtureHome, { recursive: true, force: true });
+    });
+
+    function runProbe(relPath: string[], content: string, argv: (target: string) => string[]) {
+      const dir = join(fixtureHome, ...relPath.slice(0, -1));
+      mkdirSync(dir, { recursive: true });
+      const target = join(fixtureHome, ...relPath);
+      writeFileSync(target, content);
+
+      const generated = generateMacosSbplProfile(baseProfile(), { homeDir: fixtureHome });
+      const profileDir = mkdtempSync(join(tmpdir(), "cortex-sbpl-2409-profile-"));
+      try {
+        const profilePath = join(profileDir, "probe.sb");
+        writeFileSync(profilePath, generated.text);
+        const result = Bun.spawnSync(["sandbox-exec", "-f", profilePath, ...argv(target)], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        return {
+          exitCode: result.exitCode,
+          stdout: result.stdout.toString(),
+          stderr: result.stderr.toString(),
+        };
+      } finally {
+        rmSync(profileDir, { recursive: true, force: true });
+      }
+    }
+
+    const readDenyCases: { name: string; relPath: string[] }[] = [
+      { name: "~/.gnupg", relPath: [".gnupg", "secring.gpg"] },
+      { name: "~/.docker/config.json", relPath: [".docker", "config.json"] },
+      { name: "~/.config/gh/hosts.yml", relPath: [".config", "gh", "hosts.yml"] },
+      { name: "~/.netrc", relPath: [".netrc"] },
+      { name: "~/.git-credentials", relPath: [".git-credentials"] },
+      { name: "~/.kube/config", relPath: [".kube", "config"] },
+      { name: "~/.npmrc", relPath: [".npmrc"] },
+      { name: "~/.pypirc", relPath: [".pypirc"] },
+      { name: "~/.cargo/credentials.toml", relPath: [".cargo", "credentials.toml"] },
+      { name: "~/.config/op", relPath: [".config", "op", "session.json"] },
+    ];
+
+    for (const c of readDenyCases) {
+      test(`${c.name} read is denied — explicit EPERM ("Operation not permitted"), no content leak`, () => {
+        const marker = `SECRET-${c.name}`;
+        const r = runProbe(c.relPath, marker, (target) => ["/bin/cat", target]);
+        expect(r.exitCode).not.toBe(0);
+        expect(r.stderr).toContain("Operation not permitted");
+        expect(r.stdout).not.toContain(marker);
+      });
+    }
+
+    test("~/Library/Keychains WRITE is denied — explicit EPERM", () => {
+      // Read is deliberately NOT tested as denied here — see the module doc
+      // + the unit test above: read must stay open (empirically forced,
+      // twice) for a real session's `claude` login-state check to work.
+      const target = join(fixtureHome, "Library", "Keychains", "login.keychain-db");
+      mkdirSync(join(fixtureHome, "Library", "Keychains"), { recursive: true });
+      writeFileSync(target, "not-a-real-keychain");
+      const generated = generateMacosSbplProfile(baseProfile(), { homeDir: fixtureHome });
+      const profileDir = mkdtempSync(join(tmpdir(), "cortex-sbpl-2409-profile-"));
+      try {
+        const profilePath = join(profileDir, "probe.sb");
+        writeFileSync(profilePath, generated.text);
+        // A shell redirect (not `tee`) — it never reads stdin, so the
+        // denied open() is the entire command; no stdin-lifecycle question
+        // (same pattern as the "stop 4" / "enforce" write-deny tests above).
+        const result = Bun.spawnSync(
+          ["sandbox-exec", "-f", profilePath, "/bin/sh", "-c", `echo appended >> ${target}`],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        expect(result.stderr.toString()).toContain("Operation not permitted");
+      } finally {
+        rmSync(profileDir, { recursive: true, force: true });
+      }
+    });
+
+    test("control — ~/Library/Keychains READ stays allowed (empirically forced compat exception)", () => {
+      const r = runProbe(
+        ["Library", "Keychains", "login.keychain-db"],
+        "not-a-real-keychain",
+        (target) => ["/bin/cat", target],
+      );
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("not-a-real-keychain");
+    });
+
+    test("control — ~/.gitconfig stays readable (deliberately NOT in the deny set)", () => {
+      const r = runProbe([".gitconfig"], "[user]\n\tname = fixture\n", (target) => ["/bin/cat", target]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("[user]");
+    });
+
+    test("control — an ordinary workspace file stays readable ((allow default) still holds)", () => {
+      const r = runProbe(["project", "README.md"], "hello world", (target) => ["/bin/cat", target]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("hello world");
+    });
+  },
+);
 
 describe.skipIf(!isDarwin)("MacosSbplSandbox — spawn() mode gating", () => {
   test("mode 'off' — byte-identical Bun.spawn pass-through, no .sb profile, no canary", () => {
