@@ -34,6 +34,22 @@ cortex **already decided to be forge-neutral** and #2408 broke that consistency:
 
 So the codebase models forges as a variable, and #2408 introduced a field named `github` with a GitHub-App-shaped value and a `GH_TOKEN`-shaped output. That is a GitHub-shaped hole in a forge-aware tree. The principal's requirement is explicit: the standard approach must work for GitLab and self-hosted git, not only GitHub.
 
+### R3 — there are already THREE mechanisms; this must unify, not add a fourth
+
+Discovered while scoping this spec. `src/runner/dev-consumer-boot.ts:242` reads a scoped forge token from **`CORTEX_DEV_GH_TOKEN`** (`DEFAULT_TOKEN_ENV`, `:196`; overridable via `devGhTokenEnv`) **at boot**, injects it as `GH_TOKEN` for push + `gh pr create` (`:493`, `:651`), and on absence emits a loud warning then **falls back to the principal's ambient `gh` authority** — verified: when `scopedToken` is unset the child env is `{...opts.env}` with no `GH_TOKEN` override (`:491-494`), so whatever ambient credential the daemon holds applies. The in-code comment names it "the warned ambient-fallback path" (`:489-490`); recorded as the accepted F-2 residual in `docs/design-agentic-dev-pipeline.md` §3.5b.
+
+Its own warning text says *"Set `<tokenEnv>` to a repo-scoped machine-user token"* — §3.5b anticipated precisely this problem and reached for the machine-account answer that vision#11 later superseded with GitHub Apps.
+
+So the tree now holds three answers to one question:
+
+| Mechanism | Resolution | Failure mode | Multi-org |
+|---|---|---|---|
+| §3.5b `devGhTokenEnv` | boot-time env read | **fail-OPEN** (ambient fallback, warned) | no |
+| #2408 `AgentSchema.github` | per-dispatch mint | fail-closed | no |
+| This spec | per-operation resolve | fail-closed | yes |
+
+**DD-0 — one mechanism.** This spec REPLACES both predecessors rather than sitting beside them. §3.5b's boot-time read and its ambient fallback are retired: a fail-open credential path is exactly what an identity feature exists to remove, and leaving it live means the dev consumer can still push as the principal while config claims a bot identity. Two mechanisms with different failure modes is worse than either alone, because which one applies depends on wiring the reader cannot see.
+
 ### Why now
 
 **Zero agents declare the field in production.** The switching cost is a schema edit. After the first live agent depends on it, it is a migration across live stacks. This is the cheapest moment in the feature's life to change its shape, and the cost only rises.
@@ -110,6 +126,24 @@ luna-gitlab:
 
 **DD-2 — backends are a closed, discriminated set.** `github-app` | `token-ref` initially. Adding `gitlab-app`, or a self-hosted variant, adds a backend; it never touches `AgentSchema`. A malformed/unknown backend fails at config load (fail-closed, per the `agent-env.ts` precedent).
 
+### 3.2 Where forge code lives — adapters, and the line they don't cross
+
+cortex extracts every platform surface to a bundle (`metafactory-cortex-adapter-{discord,slack,mattermost,web}`), loaded through `src/adapters/` registry+loader against the versioned `src/surface-sdk/` contract, with ZERO in-tree platform adapters (ADR-0024 D2). The obvious question is whether git forges should follow that shape. **Partly — and the dividing line is a trust boundary, not a taste call.**
+
+**DD-4 — forge OPERATIONS are bundle-pluggable.** `DevForge` is already an interface, and `review-prompt.ts` already selects `gh pr review` vs `glab`. A `metafactory-cortex-forge-gitlab` bundle implementing open-PR / comment / review is directly analogous to a surface adapter: same registry and loader machinery, same versioned-SDK discipline, provider specifics out of core. This is the right shape and should reuse the existing plugin infrastructure rather than inventing a parallel one.
+
+**DD-5 — credential and key material stay in core. A forge adapter receives a resolved credential, never a key, and never the minting path.**
+
+The blast radii are not comparable. Surface plugins load with **full daemon authority and no sandbox** (ADR-0024 D4), and plugin process isolation is EBH-5 — **trigger-gated and unbuilt**. A compromised chat adapter posts bad messages. A compromised forge adapter holding an App private key exfiltrates write access to every repo in the installation (71 today) *and* the ability to mint fresh credentials on demand, indefinitely, until a human notices and rotates the key.
+
+So: `ForgeAdapter.openPr(...)` is handed a credential by core; the credential helper, `backend: github-app` resolution, and every `.pem` read stay in `src/common/auth/`. Adding GitLab is then a bundle plus a `token-ref` registry entry — no plugin ever touches key material.
+
+This is not a new principle, which is the strongest argument for it: it is exactly D8 in `design-arc-agent-bots.md`, where `cortex creds` shells out to `arc nats` specifically so the operator account signing key is never loaded into cortex daemon memory. Same reasoning, same shape — *the thing that can mint stays smaller and less pluggable than the thing that acts*. Symmetry of shape is not symmetry of authority: the plugin architecture that is correct for chat surfaces is not automatically correct for credential material, and reasoning by analogy from one to the other is the specific trap this decision exists to name.
+
+**Proposed for `compass/ecosystem/principles.md` §Authority** (which today constrains *how much* scope a component gets, but is silent on *what form* crosses a trust boundary — so it can be fully satisfied while still handing a plugin a private key):
+
+> **Capabilities cross trust boundaries; keys don't.** A component that acts on a credential receives the credential — scoped, short-lived, revocable. The thing that can *mint* stays smaller and less pluggable than the thing that *acts*. Symmetry of shape is not symmetry of authority.
+
 ---
 
 ## 4. Transport: a git credential helper, not an env var
@@ -177,8 +211,11 @@ Nothing in production declares `AgentSchema.github`, so this is a rename plus a 
 - [ ] **M5** — Validation warning (§5, closes #2419).
 - [ ] **M6** — Docs: config-layout template + `sop-stack-onboarding.md` gain the field, the multi-org example, and the pairing rule. Explicitly disambiguate from the **existing** top-level `github:` key in `stacks/*.yaml`, which is webhook/repo scoping and unrelated.
 - [ ] **M7** — `token-ref` backend + one real non-GitHub target, to prove R2 rather than assert it.
+- [ ] **M8** — Retire §3.5b (DD-0): remove the boot-time `devGhTokenEnv` read and its **ambient fallback** from `dev-consumer-boot.ts`; the dev consumer resolves through this spec's path like every other consumer. Update `design-agentic-dev-pipeline.md` §3.5b, which currently records the machine-user-token plan vision#11 superseded.
+- [ ] **M9** — `ForgeAdapter` extraction (DD-4/DD-5): forge operations move behind the surface-plugin registry as a bundle contract; credential resolution stays in `src/common/auth/`. Sequence AFTER M3–M4 — extracting operations before the credential seam is stable would bake the current `GH_TOKEN` assumption into a versioned SDK contract, which is the expensive mistake to make here.
+- [ ] **M10** — Land the Authority principle in `compass/ecosystem/principles.md` (§3.2). Separate repo, separate PR; not a cortex blocker.
 
-M1–M2 are near-free now and expensive later; they should land first regardless of when M3+ follows.
+M1–M2 are near-free now and expensive later; they should land first regardless of when M3+ follows. **M9 is deliberately last of the code items** — DD-4 is the right destination, but a versioned plugin contract is the worst place to discover the credential shape was wrong.
 
 ---
 
@@ -191,6 +228,8 @@ M1–M2 are near-free now and expensive later; they should land first regardless
 | Q3 | Should `gitIdentity` be per-agent only, or also declarable per-stack as a default? | per-agent only in v1 — matches how `env:`/`github` already scope, and avoids an inheritance rule nobody asked for |
 | Q4 | Do SSH remotes need equivalent treatment (signing keys / deploy keys), or is HTTPS-only acceptable for v1? | HTTPS-only v1; SSH is a separate credential class |
 | Q5 | Does `arc` need to provision identity registry entries at bundle install, or stays principal-managed? | principal-managed v1 (mirrors `stack.nkey_seed_path`) |
+| Q6 | Does a third-party (non-first-party) forge adapter ever get loaded? DD-5 bounds the damage, but EBH-5 plugin isolation is still unbuilt, and `system.plugins.external` is the only gate. | no third-party forge adapters until EBH-5 ships — the first one is arguably EBH-5's trigger |
+| Q7 | §3.5b's ambient fallback (DD-0/M8) is a live fail-open path on any stack with a dev agent and no `devGhTokenEnv`. Retire it with this spec, or sooner as a standalone fix? | sooner is defensible — it's a fail-open credential path today, independent of everything else here |
 
 ---
 
