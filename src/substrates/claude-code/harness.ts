@@ -403,6 +403,9 @@ export class ClaudeCodeHarness implements SessionHarness {
     if (runtime) {
       if (runtime.cwd !== undefined) opts.cwd = runtime.cwd;
       if (runtime.allowedDirs !== undefined) opts.allowedDirs = runtime.allowedDirs;
+      // EBH-1b (cortex#2352) — carried distinctly so resolvePathGuardEnv can
+      // subtract it from allowedDirs when projecting CORTEX_PATH_GUARD.
+      if (runtime.readOnlyDirs !== undefined) opts.readOnlyDirs = runtime.readOnlyDirs;
       if (runtime.bashAllowlist !== undefined) opts.bashAllowlist = runtime.bashAllowlist;
       if (runtime.bashGuardDisabled !== undefined) opts.bashGuardDisabled = runtime.bashGuardDisabled;
       if (runtime.additionalArgs !== undefined) opts.additionalArgs = runtime.additionalArgs;

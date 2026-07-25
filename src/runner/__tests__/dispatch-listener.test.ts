@@ -707,6 +707,8 @@ describe("dispatch-listener — success path", () => {
         allowed_tools: ["Read", "Edit"],
         disallowed_tools: ["Bash"],
         allowed_dirs: ["/tmp"],
+        // EBH-1b (cortex#2352) — carried distinctly from allowed_dirs.
+        read_only_dirs: ["/tmp/ro"],
         timeout_ms: 60_000,
         cwd: "/tmp",
         additional_args: ["--verbose"],
@@ -732,6 +734,9 @@ describe("dispatch-listener — success path", () => {
     expect(opts.disallowedTools).toEqual(["Bash", "Skill"]);
     expect(opts.allowedSkills).toBeUndefined();
     expect(opts.allowedDirs).toEqual(["/tmp"]);
+    // EBH-1b (cortex#2352) — the bus-mediated path (payload → buildDispatchRequest
+    // → ClaudeCodeHarness.buildCCOpts) carries readOnlyDirs distinctly end-to-end.
+    expect(opts.readOnlyDirs).toEqual(["/tmp/ro"]);
     expect(opts.timeoutMs).toBe(60_000);
     expect(opts.cwd).toBe("/tmp");
     expect(opts.additionalArgs).toEqual(["--verbose"]);
@@ -739,6 +744,39 @@ describe("dispatch-listener — success path", () => {
     expect(opts.entity).toBe("issue/12");
     expect(opts.principal).toBe("andreas");
     expect(opts.resumeSessionId).toBe("prior-session");
+  });
+
+  // EBH-1b (cortex#2352) — old-listener compatibility. A payload from a
+  // pre-EBH-1b publisher (or any source that never sets read_only_dirs)
+  // must not crash the listener and must leave the guard's readOnlyDirs at
+  // today's empty-policy behaviour.
+  test("payload omitting read_only_dirs ⇒ opts.readOnlyDirs stays undefined, no crash (old-listener compat)", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope({
+        prompt: "do the work",
+        allowed_dirs: ["/tmp"],
+        // read_only_dirs deliberately omitted.
+      }),
+      CANONICAL_CORTEX_CHAT_SUBJECT,
+    );
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    const opts = optsCaptured[0]!;
+    expect(opts.allowedDirs).toEqual(["/tmp"]);
+    expect(opts.readOnlyDirs).toBeUndefined();
   });
 
   // GV-2 (cortex#1077) — channel/network label vocabulary migration. The

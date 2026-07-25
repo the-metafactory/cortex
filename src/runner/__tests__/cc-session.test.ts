@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { CCSession, type CCSessionOpts } from "../cc-session";
+import { CCSession, type CCSessionOpts, resolvePathGuardEnv } from "../cc-session";
 import { testClaude } from "../../common/test-utils";
 
 describe("CCSession", () => {
@@ -113,5 +113,60 @@ describe("CCSession args", () => {
       additionalArgs: ["--verbose"],
     });
     expect(session).toBeInstanceOf(CCSession);
+  });
+});
+
+/**
+ * EBH-1b (cortex#2352) — `resolvePathGuardEnv` is the single projection point
+ * that turns `CCSessionOpts.allowedDirs`/`readOnlyDirs` into the
+ * `CORTEX_PATH_GUARD` value path-guard.hook.ts's `decidePath` reads. THE
+ * correctness subtlety this slice closes: without subtracting `readOnlyDirs`
+ * from `allowedDirs`, a dispatch path that builds `allowedDirs` as a UNION
+ * including the read-only set (dispatch-handler.ts's `invokeDirs`) would put
+ * a read-only dir in BOTH emitted lists — `decidePath`'s `inAllowed` check
+ * would be `true` and the write-deny branch (which requires `!inAllowed`)
+ * would never fire, leaving F6 silently inert even with `readOnlyDirs`
+ * populated. These tests prove the subtraction actually happens.
+ */
+describe("resolvePathGuardEnv — EBH-1b allowedDirs/readOnlyDirs subtraction (cortex#2352)", () => {
+  test("no opts ⇒ the safe default {allowedDirs:[],readOnlyDirs:[]} (no restriction configured)", () => {
+    expect(JSON.parse(resolvePathGuardEnv({}))).toEqual({ allowedDirs: [], readOnlyDirs: [] });
+  });
+
+  test("disjoint allowedDirs/readOnlyDirs pass through unchanged", () => {
+    const out = JSON.parse(
+      resolvePathGuardEnv({ allowedDirs: ["/work"], readOnlyDirs: ["/ro"] }),
+    );
+    expect(out).toEqual({ allowedDirs: ["/work"], readOnlyDirs: ["/ro"] });
+  });
+
+  test("THE subtraction: a dir in BOTH lists is excluded from the emitted allowedDirs and kept in readOnlyDirs (read-only wins)", () => {
+    // Mirrors dispatch-handler.ts's invokeDirs shape: allowedDirs is a UNION
+    // that also contains the read-only dir (kept that way so --add-dir still
+    // grants read access via claude-invoker.ts, which reads opts.allowedDirs
+    // directly and never sees this function's output).
+    const out = JSON.parse(
+      resolvePathGuardEnv({
+        allowedDirs: ["/work", "/ro"],
+        readOnlyDirs: ["/ro"],
+      }),
+    );
+    expect(out).toEqual({ allowedDirs: ["/work"], readOnlyDirs: ["/ro"] });
+    // The proof that matters: the overlapping dir does NOT appear in the
+    // emitted allowedDirs, so decidePath's `inAllowed` is false for it and
+    // the write-deny branch (WRITE_TOOLS && inReadOnly) can fire.
+    expect(out.allowedDirs).not.toContain("/ro");
+  });
+
+  test("readOnlyDirs without a matching allowedDirs entry is unaffected (no accidental exclusion)", () => {
+    const out = JSON.parse(
+      resolvePathGuardEnv({ allowedDirs: ["/work"], readOnlyDirs: ["/ro"] }),
+    );
+    expect(out.allowedDirs).toEqual(["/work"]);
+  });
+
+  test("undefined allowedDirs with a defined readOnlyDirs ⇒ allowedDirs stays []", () => {
+    const out = JSON.parse(resolvePathGuardEnv({ readOnlyDirs: ["/ro"] }));
+    expect(out).toEqual({ allowedDirs: [], readOnlyDirs: ["/ro"] });
   });
 });

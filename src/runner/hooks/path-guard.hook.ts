@@ -453,11 +453,8 @@ export function decidePath(toolName: string, absPath: string, policy: PathGuardP
       allow: false,
       reason:
         `[Cortex Path Guard] Blocked ${toolName} "${absPath}": this path is inside a ` +
-        `READ-ONLY directory — writes are refused (docs/security/reviews/` +
-        `2026-07-23-nws-security-review.md F6). Reads remain permitted. Note: this is ` +
-        `the read-only-write MECHANISM; F6 is fully closed in production once ` +
-        `dispatch-handler.ts threads a distinct readOnlyDirs value through to ` +
-        `CORTEX_PATH_GUARD on live sessions (EBH-1b).`,
+        `READ-ONLY directory — writes are refused (closes F6, docs/security/reviews/` +
+        `2026-07-23-nws-security-review.md). Reads remain permitted.`,
     };
   }
 

@@ -172,6 +172,10 @@ export class BusInboundSink implements GatewayInboundSink {
       // responseRoutingFromMessage() — consistent with decision.responseRouting.
       // We do NOT double-stamp it here.
       allowedDirs: [],
+      // EBH-1b (cortex#2352) — the gateway grants no dirs at all (allowedDirs
+      // above is already `[]`), so there is nothing to carve a read-only
+      // subset out of. Mirrors allowedDirs for forward-compat.
+      readOnlyDirs: [],
       // cortex#701 — the gateway grants NO skills and emits the bare `Skill`
       // deny so the bound stack's harness (which consumes this envelope via
       // the runner subscription, NOT via dispatch-handler — so it never runs

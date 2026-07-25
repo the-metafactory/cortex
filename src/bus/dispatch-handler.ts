@@ -507,6 +507,8 @@ export class DispatchHandler extends EventEmitter {
     targetAgent?: DispatchTargetAgent;
     resumeSessionId: string | undefined;
     allowedDirs: string[];
+    /** EBH-1b (cortex#2352) — read-only dirs, carried distinctly (see InboundChatDispatchPublishOpts). */
+    readOnlyDirs: string[];
     disallowedTools: string[];
     /** cortex#1167 — explicit tool allowlist (anon open-onboarding path only). */
     allowedTools?: string[];
@@ -1047,6 +1049,10 @@ export class DispatchHandler extends EventEmitter {
           targetAgent,
           resumeSessionId: existingSession?.sessionId,
           allowedDirs: invokeDirs,
+          // EBH-1b (cortex#2352) — the distinct read-only set, carried
+          // alongside the union `invokeDirs` so the runner's guard
+          // projection can subtract it (see cc-session.ts resolvePathGuardEnv).
+          readOnlyDirs,
           disallowedTools: effectiveDisallowed,
           // cortex#1167 — explicit tool ALLOWLIST. Set only on the anon
           // open-onboarding path (`access.allowedTools`); undefined for every
@@ -1088,13 +1094,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, readOnlyDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, readOnlyDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, readOnlyDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools, effectiveAdditionalArgs, mcpGrants, targetAgent?.env);
           break;
       }
     } catch (error) {
@@ -1118,6 +1124,8 @@ export class DispatchHandler extends EventEmitter {
     prompt: string,
     resumeSessionId: string | undefined,
     invokeDirs: string[],
+    /** EBH-1b (cortex#2352) — the distinct read-only subset of invokeDirs. */
+    readOnlyDirs: string[],
     disallowedTools: string[],
     attachmentSessionId: string,
     sessionKey: string,
@@ -1188,6 +1196,10 @@ export class DispatchHandler extends EventEmitter {
       // re-denied in cc-session's resolveAgentEnv before it hits the child env).
       ...(agentEnv !== undefined && { agentEnv }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
+      // EBH-1b (cortex#2352) — the distinct read-only set; cc-session's
+      // resolvePathGuardEnv subtracts this from allowedDirs before writing
+      // CORTEX_PATH_GUARD, so a write into one of these is denied.
+      readOnlyDirs: readOnlyDirs.length > 0 ? readOnlyDirs : undefined,
       cwd,
       bashAllowlist,
       bashGuardDisabled,
@@ -1491,6 +1503,8 @@ export class DispatchHandler extends EventEmitter {
     prompt: string,
     resumeSessionId: string | undefined,
     invokeDirs: string[],
+    /** EBH-1b (cortex#2352) — the distinct read-only subset of invokeDirs. */
+    readOnlyDirs: string[],
     disallowedTools: string[],
     attachmentSessionId: string,
     sessionKey: string,
@@ -1541,6 +1555,8 @@ export class DispatchHandler extends EventEmitter {
       // re-denied in cc-session's resolveAgentEnv before it hits the child env).
       ...(agentEnv !== undefined && { agentEnv }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
+      // EBH-1b (cortex#2352) — see the handleSync literal's comment.
+      readOnlyDirs: readOnlyDirs.length > 0 ? readOnlyDirs : undefined,
       cwd,
       project: groveProject,
       entity: groveEntity,
@@ -1641,6 +1657,8 @@ export class DispatchHandler extends EventEmitter {
     msg: InboundMessage,
     teamContent: string,
     invokeDirs: string[],
+    /** EBH-1b (cortex#2352) — the distinct read-only subset of invokeDirs. */
+    readOnlyDirs: string[],
     disallowedTools: string[],
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
@@ -1690,6 +1708,8 @@ export class DispatchHandler extends EventEmitter {
       // env passthrough (resolved + CLAUDE_* re-denied in cc-session).
       ...(agentEnv !== undefined && { agentEnv }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
+      // EBH-1b (cortex#2352) — see the handleSync literal's comment.
+      readOnlyDirs: readOnlyDirs.length > 0 ? readOnlyDirs : undefined,
       timeoutMs: this.config.claude.asyncTimeoutMs,
       bashGuardDisabled,
       bashAllowlist,

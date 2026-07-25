@@ -138,6 +138,13 @@ export interface AgentTeamOpts {
    */
   agentEnv?: Record<string, string>;
   allowedDirs?: string[];
+  /**
+   * EBH-1b (cortex#2352) — propagated to ALL team sessions (moderator +
+   * participants + synthesis) exactly like `allowedDirs`. Distinct field so
+   * cc-session's `resolvePathGuardEnv` can subtract it from `allowedDirs`
+   * when projecting `CORTEX_PATH_GUARD` — see cc-session.ts.
+   */
+  readOnlyDirs?: string[];
   timeoutMs?: number;
   /** Bash guard config — propagated to all team sessions (moderator + participants) */
   bashGuardDisabled?: boolean;
@@ -317,6 +324,8 @@ export class AgentTeamHarness implements SessionHarness {
       ...(req.tools.allow.length > 0 && { allowedTools: [...req.tools.allow] }),
       ...(req.tools.deny !== undefined && { disallowedTools: [...req.tools.deny] }),
       ...(req.runtime?.allowedDirs !== undefined && { allowedDirs: req.runtime.allowedDirs }),
+      // EBH-1b (cortex#2352) — see AgentTeamOpts.readOnlyDirs doc.
+      ...(req.runtime?.readOnlyDirs !== undefined && { readOnlyDirs: req.runtime.readOnlyDirs }),
       // ST-P1 (cortex#964) — thread the dispatch-level parent session id onto
       // the team so the moderator session is parented to the dispatch.
       ...(req.runtime?.parentSessionId !== undefined && { parentSessionId: req.runtime.parentSessionId }),
@@ -606,6 +615,8 @@ export class AgentTeam extends EventEmitter {
       ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
       ...(this.opts.agentEnv !== undefined && { agentEnv: this.opts.agentEnv }),
       allowedDirs: this.opts.allowedDirs,
+      // EBH-1b (cortex#2352) — see AgentTeamOpts.readOnlyDirs doc.
+      readOnlyDirs: this.opts.readOnlyDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
       bashAllowlist: this.opts.bashAllowlist,
@@ -729,6 +740,11 @@ export class AgentTeam extends EventEmitter {
       ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
       ...(this.opts.agentEnv !== undefined && { agentEnv: this.opts.agentEnv }),
       allowedDirs: config.dirs ?? this.opts.allowedDirs,
+      // EBH-1b (cortex#2352) — see AgentTeamOpts.readOnlyDirs doc. No
+      // per-participant readOnlyDirs override exists (mirrors `dirs`'s
+      // absence of one for readOnlyDirs specifically); the team-level set
+      // always applies.
+      readOnlyDirs: this.opts.readOnlyDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
       bashAllowlist: this.opts.bashAllowlist,
@@ -911,6 +927,8 @@ export class AgentTeam extends EventEmitter {
       ...(this.opts.mcpGrants !== undefined && { mcpGrants: this.opts.mcpGrants }),
       ...(this.opts.agentEnv !== undefined && { agentEnv: this.opts.agentEnv }),
       allowedDirs: this.opts.allowedDirs,
+      // EBH-1b (cortex#2352) — see AgentTeamOpts.readOnlyDirs doc.
+      readOnlyDirs: this.opts.readOnlyDirs,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       bashGuardDisabled: this.opts.bashGuardDisabled,
       bashAllowlist: this.opts.bashAllowlist,

@@ -3,10 +3,7 @@
  *
  * Covers every acceptance-criterion bullet from issue #2343:
  *   - Read/Write/Edit/Glob/Grep of a path outside `allowedDirs` → deny.
- *   - Write/Edit/NotebookEdit targeting a `readOnlyDir` → deny (the
- *     read-only-write MECHANISM this hook enforces; F6 goes fully live once
- *     dispatch-handler.ts threads a distinct readOnlyDirs through to
- *     CORTEX_PATH_GUARD on live sessions — EBH-1b, a separate slice); Read →
+ *   - Write/Edit/NotebookEdit targeting a `readOnlyDir` → deny (F6); Read →
  *     allow.
  *   - A symlink INSIDE an allowed dir pointing OUTSIDE it → deny (realpath'd
  *     before the containment check).
@@ -267,13 +264,13 @@ describe("decidePath", () => {
     expect(d.allow).toBe(true);
   });
 
-  test("Write inside readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
+  test("Write inside readOnlyDir ⇒ deny (F6)", () => {
     const d = decidePath("Write", join(readOnlyDir, "f.txt"), { allowedDirs: [], readOnlyDirs: [readOnlyDir] });
     expect(d.allow).toBe(false);
     expect(d.reason).toContain("READ-ONLY");
   });
 
-  test("Edit inside readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
+  test("Edit inside readOnlyDir ⇒ deny (F6)", () => {
     const d = decidePath("Edit", join(readOnlyDir, "f.txt"), { allowedDirs: [], readOnlyDirs: [readOnlyDir] });
     expect(d.allow).toBe(false);
   });
@@ -382,7 +379,7 @@ describe("path-guard.hook — containment enforcement (spawned)", () => {
     });
   }
 
-  test("Write into readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
+  test("Write into readOnlyDir ⇒ deny (closes F6)", () => {
     const r = runHook("Write", { file_path: join(readOnlyDir, "secret.yaml") }, policyEnv());
     expect(r.status).toBe(0);
     expectDenyDecision(r.stdout);
@@ -390,7 +387,7 @@ describe("path-guard.hook — containment enforcement (spawned)", () => {
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("READ-ONLY");
   });
 
-  test("Edit into readOnlyDir ⇒ deny (read-only-write mechanism)", () => {
+  test("Edit into readOnlyDir ⇒ deny (closes F6)", () => {
     const r = runHook(
       "Edit",
       { file_path: join(readOnlyDir, "secret.yaml"), old_string: "a", new_string: "b" },

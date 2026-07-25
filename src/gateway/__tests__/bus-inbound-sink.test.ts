@@ -158,6 +158,9 @@ describe("BusInboundSink", () => {
     if (opts === undefined) throw new Error("expected publishFn to have been called");
 
     expect(opts.allowedDirs).toEqual([]);
+    // EBH-1b (cortex#2352) — the gateway grants no dirs at all, so there is
+    // nothing to carve a read-only subset out of.
+    expect(opts.readOnlyDirs).toEqual([]);
   });
 
   // ── Test 3: fail-closed Skill deny on the gateway path (cortex#701) ──────────

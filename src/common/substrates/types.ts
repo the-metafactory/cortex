@@ -255,6 +255,16 @@ export interface DispatchRuntime {
    */
   allowedDirs?: string[];
   /**
+   * EBH-1b (cortex#2352) — filesystem read-only subset. Substrates that
+   * enforce a filesystem boundary distinguishing read from write (CC's
+   * `path-guard.hook.ts` / `bash-guard.hook.ts` via `CORTEX_PATH_GUARD`)
+   * consume this; others ignore. Distinct from `allowedDirs` above: the CC
+   * harness's `resolvePathGuardEnv` subtracts this set from `allowedDirs`
+   * before projecting the guard policy, so a dir present in both resolves
+   * to read-only (the safe default) rather than silently writable.
+   */
+  readOnlyDirs?: string[];
+  /**
    * Bash guard allowlist config. CC's `bash-guard.hook.ts` reads this
    * via the `CORTEX_BASH_GUARD` env var and refuses any `Bash` tool
    * invocation whose command doesn't match the allowlist. Future

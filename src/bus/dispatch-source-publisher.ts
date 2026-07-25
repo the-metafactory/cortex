@@ -29,6 +29,17 @@ export interface InboundChatDispatchPublishOpts {
   prompt: string;
   resumeSessionId: string | undefined;
   allowedDirs: string[];
+  /**
+   * EBH-1b (cortex#2352) — directories the session may READ but not modify.
+   * Emitted on the payload as `read_only_dirs` (see below) so the runner's
+   * `CORTEX_PATH_GUARD` projection (`resolvePathGuardEnv`, cc-session.ts)
+   * carries a distinct value instead of a dispatch-handler-side flatten
+   * into `allowedDirs` — that flatten is what left F6 silently inert in
+   * production before this slice. `allowedDirs` (above) is UNCHANGED and
+   * still carries the union including these dirs, so `--add-dir` keeps
+   * granting read access to them (claude-invoker.ts is untouched).
+   */
+  readOnlyDirs: string[];
   disallowedTools: string[];
   /**
    * cortex#1167 — EXPLICIT tool ALLOWLIST emitted as `allowed_tools` on the
@@ -297,6 +308,9 @@ export async function publishInboundChatDispatchEnvelope(
       mcp_grants: opts.mcpGrants,
     }),
     ...(opts.allowedDirs.length > 0 && { allowed_dirs: opts.allowedDirs }),
+    // EBH-1b (cortex#2352) — carry the distinct read-only set so the runner
+    // can project a `CORTEX_PATH_GUARD` that actually denies writes into it.
+    ...(opts.readOnlyDirs.length > 0 && { read_only_dirs: opts.readOnlyDirs }),
     ...(opts.timeoutMs !== undefined && { timeout_ms: opts.timeoutMs }),
     ...(opts.cwd !== undefined && { cwd: opts.cwd }),
     ...(opts.additionalArgs !== undefined &&

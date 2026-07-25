@@ -389,6 +389,8 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
       runtime: {
         cwd: "/work",
         allowedDirs: ["/work", "/tmp"],
+        // EBH-1b (cortex#2352) — carried distinctly from allowedDirs.
+        readOnlyDirs: ["/tmp"],
         additionalArgs: ["--verbose"],
         channel: "grove",
         network: "metafactory",
@@ -402,6 +404,8 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
 
     expect(cap.opts[0]?.cwd).toBe("/work");
     expect(cap.opts[0]?.allowedDirs).toEqual(["/work", "/tmp"]);
+    // EBH-1b (cortex#2352)
+    expect(cap.opts[0]?.readOnlyDirs).toEqual(["/tmp"]);
     expect(cap.opts[0]?.additionalArgs).toEqual(["--verbose"]);
     expect(cap.opts[0]?.channel).toBe("grove");
     expect(cap.opts[0]?.network).toBe("metafactory");

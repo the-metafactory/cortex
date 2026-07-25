@@ -130,6 +130,7 @@ function baseOpts(
     prompt: "user prompt",
     resumeSessionId: undefined,
     allowedDirs: [],
+    readOnlyDirs: [],
     disallowedTools: [],
     allowedSkills: undefined,
     timeoutMs: undefined,
@@ -280,6 +281,31 @@ describe("dispatch-source-publisher — F-1b subject principal derivation (corte
     );
     const payload = runtime.subjectPublishes[0]!.envelope.payload;
     expect("allowed_skills" in payload).toBe(false);
+  });
+
+  // ── EBH-1b (cortex#2352) — readOnlyDirs rides the payload read_only_dirs ────
+
+  test("readOnlyDirs non-empty → payload carries read_only_dirs distinctly from allowed_dirs", async () => {
+    const runtime = makeRecordingRuntime();
+    await publishInboundChatDispatchEnvelope(
+      baseOpts(runtime, {
+        allowedDirs: ["/work", "/ro"],
+        readOnlyDirs: ["/ro"],
+      }),
+    );
+    const payload = runtime.subjectPublishes[0]!.envelope.payload;
+    // allowed_dirs is the UNCHANGED union (still grants --add-dir read access
+    // to the read-only dir); read_only_dirs is the distinct EBH-1b field the
+    // runner's guard projection subtracts from allowedDirs.
+    expect(payload.allowed_dirs).toEqual(["/work", "/ro"]);
+    expect(payload.read_only_dirs).toEqual(["/ro"]);
+  });
+
+  test("readOnlyDirs empty → payload OMITS read_only_dirs (mirrors allowed_dirs' own omit-when-empty rule)", async () => {
+    const runtime = makeRecordingRuntime();
+    await publishInboundChatDispatchEnvelope(baseOpts(runtime, { readOnlyDirs: [] }));
+    const payload = runtime.subjectPublishes[0]!.envelope.payload;
+    expect("read_only_dirs" in payload).toBe(false);
   });
 
   // ── GV-2 (cortex#1077) — channel/network label dual-write shim ──────────────

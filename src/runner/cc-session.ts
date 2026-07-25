@@ -45,12 +45,13 @@ export interface CCSessionOpts {
    * EBH-1 (cortex#2343) — directories the session may READ but not modify.
    * Passed to path-guard.hook.ts / bash-guard.hook.ts's path checks via the
    * `CORTEX_PATH_GUARD` env var (mirrors `allowedDirs`'s own role there).
-   * Distinct from `allowedDirs` so a write into one of these is DENIED while
-   * a read is permitted — see {@link resolvePathGuardEnv}. NOTE: this field
-   * is wired and unit-tested but NOT YET populated by any live dispatch
-   * path (dispatch-handler.ts still flattens readOnlyDirs into the merged
-   * allowedDirs list it builds) — F6 closes in production once that
-   * threading lands (EBH-1b, a separate slice).
+   * Distinct from `allowedDirs` so a write into one of these is DENIED
+   * (closes F6) while a read is permitted — see {@link resolvePathGuardEnv}.
+   * EBH-1b (cortex#2352) threads a distinct value through every live
+   * dispatch path (dispatch-handler.ts no longer flattens this into the
+   * merged `allowedDirs` it builds for `CORTEX_PATH_GUARD` purposes —
+   * `resolvePathGuardEnv` subtracts `readOnlyDirs` from `allowedDirs` before
+   * emitting, so a dir in both wins as read-only, the safe default).
    */
   readOnlyDirs?: string[];
   timeoutMs?: number;
@@ -287,14 +288,27 @@ export function resolveBashGuardEnv(
  *     resolved (may legitimately both be `[]` — the hooks treat an empty
  *     policy as "no restriction configured", matching the EXISTING
  *     `security-preamble.ts` contract; see path-guard.hook.ts's module doc).
+ *
+ * **EBH-1b (cortex#2352) correctness subtlety — the subtraction.**
+ * `opts.allowedDirs` is `invokeDirs`, a caller-built UNION that also
+ * includes `readOnlyDirs` (kept that way deliberately so `--add-dir` still
+ * grants read access to read-only dirs — see `claude-invoker.ts`, which
+ * reads `opts.allowedDirs` UNCHANGED and never sees this function's output).
+ * If this function emitted that union verbatim as the guard's `allowedDirs`,
+ * a read-only dir would sit in BOTH lists, `decidePath`'s `inAllowed` check
+ * would be `true`, and the write-deny branch (which requires `!inAllowed`)
+ * would never fire — F6 would stay silently inert even with `readOnlyDirs`
+ * populated. So the guard's `allowedDirs` is the caller's `allowedDirs`
+ * MINUS `readOnlyDirs`; `readOnlyDirs` is carried unchanged. Overlap rule:
+ * a dir present in both inputs resolves to READ-ONLY in the emitted policy —
+ * the safe default.
  */
 export function resolvePathGuardEnv(
   opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,
 ): string {
-  return JSON.stringify({
-    allowedDirs: opts.allowedDirs ?? [],
-    readOnlyDirs: opts.readOnlyDirs ?? [],
-  });
+  const readOnlyDirs = opts.readOnlyDirs ?? [];
+  const allowedDirs = (opts.allowedDirs ?? []).filter((d) => !readOnlyDirs.includes(d));
+  return JSON.stringify({ allowedDirs, readOnlyDirs });
 }
 
 export class CCSession extends EventEmitter {
