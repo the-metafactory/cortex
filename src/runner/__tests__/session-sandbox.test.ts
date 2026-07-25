@@ -1,7 +1,13 @@
 /**
  * EBH-2 (cortex#2344) — unit tests for the `SessionSandbox` choke point:
  * the `none` backend's pass-through + once-per-instance event, and the
- * boot capability probe's memoization + HARD-HOLD resolution.
+ * boot capability probe's memoization + resolution.
+ *
+ * EBH-3a (cortex#2345) updates the resolution tests: the HARD HOLD is
+ * LIFTED for macOS specifically (`resolveSandboxBackend` now resolves
+ * `"macos-sbpl"` on a Darwin probe with `sandboxExecAvailable: true`) and
+ * REMAINS for every other platform/container case (EBH-3b territory). See
+ * `resolveSandboxBackend`'s doc comment in `session-sandbox.ts`.
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
@@ -92,7 +98,7 @@ describe("NoneSandbox — the EBH-2 pass-through backend", () => {
   });
 });
 
-describe("resolveSandboxBackend — cortex#2344 HARD HOLD", () => {
+describe("resolveSandboxBackend — EBH-3a: macOS HARD HOLD lifted, Linux/container held", () => {
   const baseProbe: SandboxCapabilityProbe = {
     platform: "darwin",
     sandboxExecAvailable: false,
@@ -104,7 +110,17 @@ describe("resolveSandboxBackend — cortex#2344 HARD HOLD", () => {
     probedAt: new Date().toISOString(),
   };
 
-  test("always resolves to 'none', even when every capability is available", () => {
+  test("darwin + sandboxExecAvailable → resolves 'macos-sbpl'", () => {
+    expect(resolveSandboxBackend({ ...baseProbe, sandboxExecAvailable: true })).toBe(
+      "macos-sbpl",
+    );
+  });
+
+  test("darwin WITHOUT sandboxExecAvailable → resolves 'none' (E1 not proven viable)", () => {
+    expect(resolveSandboxBackend({ ...baseProbe, sandboxExecAvailable: false })).toBe("none");
+  });
+
+  test("darwin resolution ignores bwrap/landlock fields entirely", () => {
     expect(
       resolveSandboxBackend({
         ...baseProbe,
@@ -113,17 +129,31 @@ describe("resolveSandboxBackend — cortex#2344 HARD HOLD", () => {
         bwrapUnshareWorks: true,
         landlockAvailable: true,
       }),
+    ).toBe("macos-sbpl");
+  });
+
+  test("linux HARD HOLD still stands — 'none' even when bwrap fully viable (EBH-3b territory)", () => {
+    expect(
+      resolveSandboxBackend({
+        ...baseProbe,
+        platform: "linux",
+        sandboxExecAvailable: false,
+        bwrapAvailable: true,
+        bwrapUnshareWorks: true,
+        landlockAvailable: true,
+      }),
     ).toBe("none");
   });
 
-  test("always resolves to 'none' when every capability is unavailable", () => {
-    expect(resolveSandboxBackend(baseProbe)).toBe("none");
+  test("in-container HARD HOLD still stands — 'none' regardless of mount scoping (DD-8, EBH-3b)", () => {
+    expect(
+      resolveSandboxBackend({ ...baseProbe, platform: "linux", inContainer: true }),
+    ).toBe("none");
   });
 
-  test("resolution is independent of platform/container state", () => {
-    expect(resolveSandboxBackend({ ...baseProbe, platform: "linux", inContainer: true })).toBe(
-      "none",
-    );
+  test("every capability unavailable on any platform → 'none'", () => {
+    expect(resolveSandboxBackend(baseProbe)).toBe("none");
+    expect(resolveSandboxBackend({ ...baseProbe, platform: "linux" })).toBe("none");
   });
 });
 
@@ -150,9 +180,17 @@ describe("getSandboxCapabilityProbe — DD-7 boot probe caching", () => {
     expect(first).not.toBe(second);
   });
 
-  test("resolvedBackend on the live probe is 'none' (HARD HOLD, this build)", async () => {
+  test("resolvedBackend on the live probe matches resolveSandboxBackend(probe) — no drift between boot and the pure resolver", async () => {
     const probe = await getSandboxCapabilityProbe();
-    expect(probe.resolvedBackend).toBe("none");
+    // EBH-3a: on a real macOS host with a working sandbox-exec (this repo's
+    // dev/CI-adjacent machines), the live probe now legitimately resolves
+    // "macos-sbpl" — the OLD hardcoded 'none' assertion no longer reflects
+    // reality. What must ALWAYS hold, on every platform this runs on, is
+    // that the probe's own resolution never drifts from the pure resolver.
+    expect(probe.resolvedBackend).toBe(resolveSandboxBackend(probe));
+    if (probe.platform !== "darwin" || !probe.sandboxExecAvailable) {
+      expect(probe.resolvedBackend).toBe("none");
+    }
   });
 
   test("probe never throws and always returns booleans, on whatever platform CI runs", async () => {

@@ -63,6 +63,7 @@ import {
 
 import { buildSecurityPreamble } from "./runner/security-preamble";
 import { assertPromptFilterReady } from "./runner/prompt-filter";
+import { getSandboxCapabilityProbe } from "./runner/session-sandbox";
 import { DispatchHandler } from "./bus/dispatch-handler";
 import {
   makeSubjectPlaceholderSubstituter,
@@ -955,6 +956,20 @@ export async function startCortex(
   // wrapper) maps a throw here to `console.error` + `process.exit(1)`, same as
   // every other fatal boot check.
   assertPromptFilterReady("cortex start");
+
+  // EBH-3a (cortex#2345) — warm the sandbox capability probe at boot. This is
+  // the "live boot path" DD-7 always intended (`session-sandbox.ts`'s DD-7
+  // doc) — EBH-2 deliberately did NOT call it from `CCSession.start()`
+  // itself, because that per-session choke point is where many tests assert
+  // an exact `Bun.spawn` call count (a probe-triggered subprocess spawn from
+  // inside it perturbs those counts — see that module's HARD-HOLD doc).
+  // AWAITED (not fire-and-forget) so: (a) the resolved backend is logged
+  // deterministically as part of boot output, and (b) every `CCSession`
+  // spawned by this daemon after `startCortex` resolves sees the WARMED sync
+  // snapshot (`createSessionSandbox` reads it synchronously — an unwarmed
+  // probe falls back to `none`, byte-identical to pre-EBH-3a). The probe
+  // itself never throws (see its own doc) — this call cannot fail boot.
+  await getSandboxCapabilityProbe();
 
   const expandedConfigPath = options.configPath
     ? options.configPath.replace(/^~/, process.env.HOME ?? "~")

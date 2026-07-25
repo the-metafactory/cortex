@@ -1,5 +1,11 @@
 /**
  * EBH-2 (cortex#2344) — `SessionSandbox` choke point + the `none` backend.
+ * EBH-3a (cortex#2345) — lifts the HARD HOLD for macOS: {@link resolveSandboxBackend}
+ * now resolves `"macos-sbpl"` when the boot probe proves it viable. The real
+ * implementation lives in `session-sandbox-macos.ts` (kept out of this file
+ * so the interfaces/probe/none-backend stay the small, stable core EBH-2
+ * shipped — see that module's doc comment for the profile-generation,
+ * canary, and denial-observation design).
  *
  * ## What this closes
  *
@@ -9,28 +15,44 @@
  * child, because EBH-1's six adversarial rounds proved a **string-parsing**
  * guard can be made fail-closed but never sound (TOCTOU, coverage drift —
  * see -platforms.md §1). This module is that jail's *shape* — the
- * `SessionSandbox` interface every real backend (EBH-3: `macos-sbpl`,
- * `linux-bwrap`, `container-delegated`) will implement — plus the ONE
- * backend EBH-2 actually ships: `none`.
+ * `SessionSandbox` interface every real backend (`macos-sbpl`, EBH-3b's
+ * `linux-bwrap`/`container-delegated`) implements — plus the `none` backend
+ * (EBH-2) and the resolution wiring (EBH-3a) that picks between them.
  *
  * `none` spawns byte-identically to the pre-EBH-2 code (no kernel
  * enforcement — that's what "none" means) and loudly records that fact
  * (DD-4/DD-6/DD-7) so an unsandboxed host is never silent. It exists so
  * `cc-session.ts`'s spawn call has exactly ONE shape regardless of backend,
- * and so `macos-sbpl`/`linux-bwrap` (EBH-3) drop in without touching the
- * choke point (`cc-session.ts`'s `start()`) at all.
+ * and so `macos-sbpl` (this slice) and `linux-bwrap`/`container-delegated`
+ * (EBH-3b) drop in without touching the choke point (`cc-session.ts`'s
+ * `start()`) at all.
  *
- * ## HARD HOLD (cortex#2344 — this is EBH-2, not EBH-3)
+ * ## HARD HOLD — REMAINING SCOPE (EBH-3a is macOS-only; EBH-3b is not this slice)
  *
- * `macos-sbpl` and `linux-bwrap` are NOT implemented here. The boot
- * capability probe below (DD-7) detects whether their prerequisites are
- * present and records that for EBH-3 to consume, but {@link resolveSandboxBackend}
- * ALWAYS resolves to `"none"` in this build, regardless of what the probe
- * finds — there is no enforcement backend yet to resolve to.
+ * `linux-bwrap` and `container-delegated` are NOT implemented here — DD-8b's
+ * real-topology acceptance gate (E5: `bwrap` fails even as root inside a
+ * container's default seccomp/userns policy) needs its own dedicated slice.
+ * {@link resolveSandboxBackend} resolves `"macos-sbpl"` on a Darwin host
+ * where the probe proved `sandbox-exec` viable (E1/E2); every Linux/container
+ * probe result still resolves to `"none"`, exactly as EBH-2 shipped.
+ *
+ * The **`mode` default is unaffected by this change** — {@link SandboxMode}
+ * still defaults to `"off"` everywhere (`CCSessionOpts.sandboxMode`), and no
+ * dispatch path threads a config-resolved `"audit"`/`"enforce"` value through
+ * yet. Resolving a real `macos-sbpl` `SessionSandbox` instance is not the
+ * same as ENFORCING anything: with `mode: "off"` (the only value any live
+ * caller sets), `MacosSbplSandbox.spawn()` is a byte-identical pass-through,
+ * identical to `NoneSandbox` — see `session-sandbox-macos.ts`.
  */
 
 import { existsSync, readFileSync } from "fs";
 import type { Subprocess } from "bun";
+// EBH-3a — the real macOS backend. Kept in its own module (profile
+// generation, the DD-9 canary, and unified-log denial parsing are
+// substantial enough to want their own file); `session-sandbox-macos.ts`
+// imports ONLY types back from this module (never a runtime value), so this
+// is a one-directional runtime edge, not a circular import.
+import { MacosSbplSandbox } from "./session-sandbox-macos";
 
 // -----------------------------------------------------------------------------
 // SandboxProfile — DD-1's kernel-level projection of the resolved policy
@@ -107,8 +129,10 @@ export const SANDBOX_EGRESS_ALLOW_SEED: readonly string[] = Object.freeze([
 
 /** One denied access, surfaced by a real backend's kernel/audit log (DD-6).
  *  The `none` backend's {@link SessionSandbox.denials} never yields one —
- *  it enforces nothing, so nothing can be denied — but the shape exists now
- *  so EBH-3 doesn't change the `SessionSandbox` interface to add it. */
+ *  it enforces nothing, so nothing can be denied. `macos-sbpl` (EBH-3a,
+ *  `session-sandbox-macos.ts`) parses macOS unified-log `Sandbox: NAME(PID)
+ *  deny(N) OPERATION PATH` lines scoped to the spawned child's pid — see that
+ *  module for the empirically-verified log shape. */
 export interface SandboxDenial {
   path?: string;
   host?: string;
@@ -152,6 +176,25 @@ export interface SandboxUnavailableEvent {
   type: "system.security.sandbox-unavailable";
   backend: "none";
   mode: SandboxMode;
+  timestamp: string;
+}
+
+/**
+ * `system.security.sandbox-denial` observability payload (DD-6, EBH-3a) —
+ * the bus-event projection of a {@link SandboxDenial} a real backend
+ * observed. Same hyphenated-leaf discipline as {@link SandboxUnavailableEvent}
+ * (cortex#1935's regression gate) and the same "not yet a myelin wire
+ * envelope, plain EventEmitter payload for now" scoping: see that type's doc
+ * comment — it applies here verbatim. Emitted by `CCSession` (`cc-session.ts`)
+ * as it drains `SessionSandbox.denials()`, one event per observed denial.
+ */
+export interface SandboxDenialEvent {
+  type: "system.security.sandbox-denial";
+  backend: SandboxBackendId;
+  mode: SandboxMode;
+  path?: string;
+  host?: string;
+  reason: string;
   timestamp: string;
 }
 
@@ -217,16 +260,27 @@ export class NoneSandbox implements SessionSandbox {
 }
 
 /**
- * Construct the resolved `SessionSandbox` for a spawn. EBH-2 ships exactly
- * one backend, so this is currently a thin (but real) seam: EBH-3 extends
- * the switch, not the call sites that call this function.
+ * Construct the resolved `SessionSandbox` for a spawn.
+ *
+ * EBH-3a (cortex#2345) — now a REAL switch: when the boot probe has been
+ * warmed (see {@link getCachedSandboxCapabilityProbeSync}) and resolves to
+ * `"macos-sbpl"`, this constructs the real backend (`session-sandbox-macos.ts`).
+ * Every other case — probe not yet warmed, resolves to `"none"`, or any
+ * EBH-3b backend not yet implemented — falls back to `NoneSandbox`, BYTE-
+ * IDENTICAL to EBH-2. This is a synchronous function (called from
+ * `CCSession.start()`, itself synchronous) so it can only ever consult the
+ * SYNC snapshot, never the async probe directly — see that getter's doc for
+ * why an un-warmed probe is a safe, deliberate no-op fallback rather than a
+ * blocking wait.
  */
 export function createSessionSandbox(opts?: {
   onUnavailable?: (event: SandboxUnavailableEvent) => void;
 }): SessionSandbox {
-  // `resolveSandboxBackend` is intentionally NOT consulted here yet — every
-  // resolution collapses to `"none"` until EBH-3 adds a real implementation
-  // to construct. Once it does, this factory is where the switch lives.
+  const probe = getCachedSandboxCapabilityProbeSync();
+  const backend = probe ? resolveSandboxBackend(probe) : "none";
+  if (backend === "macos-sbpl") {
+    return new MacosSbplSandbox();
+  }
   return new NoneSandbox(opts?.onUnavailable);
 }
 
@@ -347,16 +401,56 @@ function checkInContainer(): boolean {
 
 /**
  * Resolve the backend this build will construct, given a capability probe.
- * HARD-PINNED to `"none"` (cortex#2344 HARD HOLD — see the module doc).
  * Takes the probe as a parameter (rather than reading the cache itself) so
- * it stays a pure, directly-testable function; EBH-3 is expected to grow
- * real branches here keyed on the probe's fields.
+ * it stays a pure, directly-testable function.
+ *
+ * EBH-3a (cortex#2345) lifts the EBH-2 HARD HOLD for macOS ONLY: a Darwin
+ * probe that proved `sandbox-exec` viable (E1/E2 — {@link
+ * SandboxCapabilityProbe.sandboxExecAvailable}) resolves to `"macos-sbpl"`.
+ * Every other case — non-Darwin, or Darwin without a viable `sandbox-exec` —
+ * still resolves to `"none"`, exactly as EBH-2 shipped. `linux-bwrap` and
+ * `container-delegated` remain UNRESOLVABLE (never returned) until EBH-3b
+ * lands DD-8b's real-topology acceptance gate — that HARD HOLD is unchanged
+ * by this slice.
+ *
+ * Resolving `"macos-sbpl"` here is NOT the same as enforcing anything: the
+ * constructed `MacosSbplSandbox`'s behaviour is gated on `SandboxProfile.mode`
+ * (still defaulted to `"off"` everywhere a real dispatch path sets it) — see
+ * `session-sandbox-macos.ts`.
  */
-export function resolveSandboxBackend(_probe: SandboxCapabilityProbe): SandboxBackendId {
+export function resolveSandboxBackend(probe: SandboxCapabilityProbe): SandboxBackendId {
+  if (probe.platform === "darwin" && probe.sandboxExecAvailable) return "macos-sbpl";
   return "none";
 }
 
 let cachedProbe: Promise<SandboxCapabilityProbe> | undefined;
+
+/**
+ * A SYNCHRONOUS snapshot of the boot probe, set the instant {@link
+ * runSandboxCapabilityProbe}'s promise settles (EBH-3a). Exists ONLY so
+ * {@link createSessionSandbox} — called from `CCSession.start()`, a
+ * synchronous method — can pick a real backend without awaiting anything.
+ *
+ * `undefined` until the FIRST `getSandboxCapabilityProbe()` call resolves —
+ * `createSessionSandbox` treats that as "not yet warmed" and falls back to
+ * `none`, so a session spawned before boot has warmed the probe (or in any
+ * test that never calls `getSandboxCapabilityProbe`) behaves EXACTLY as
+ * EBH-2 shipped. This is what keeps `cc-session-isolation.test.ts`'s exact
+ * `Bun.spawn` call-count assertions green: those tests construct `CCSession`
+ * directly and never warm the probe, so `createSessionSandbox` always
+ * resolves `NoneSandbox` for them, on every platform, in CI and locally.
+ */
+let syncProbeCache: SandboxCapabilityProbe | undefined;
+
+/**
+ * Synchronous read of the memoized probe, or `undefined` if it hasn't been
+ * warmed (or has been reset — see {@link resetSandboxCapabilityProbeForTests}).
+ * Exported for `createSessionSandbox` and for tests that want to assert on
+ * the sync-cache boundary directly without racing the async probe.
+ */
+export function getCachedSandboxCapabilityProbeSync(): SandboxCapabilityProbe | undefined {
+  return syncProbeCache;
+}
 
 async function runSandboxCapabilityProbe(): Promise<SandboxCapabilityProbe> {
   const sandboxExecAvailable = await checkSandboxExec();
@@ -406,7 +500,13 @@ async function runSandboxCapabilityProbe(): Promise<SandboxCapabilityProbe> {
  * concurrent first-callers still only trigger one probe.
  */
 export function getSandboxCapabilityProbe(): Promise<SandboxCapabilityProbe> {
-  cachedProbe ??= runSandboxCapabilityProbe();
+  cachedProbe ??= runSandboxCapabilityProbe().then((probe) => {
+    // EBH-3a — populate the sync snapshot the instant the async probe
+    // settles, so `createSessionSandbox` (a synchronous call from
+    // `CCSession.start()`) can read a resolved backend without awaiting.
+    syncProbeCache = probe;
+    return probe;
+  });
   return cachedProbe;
 }
 
@@ -419,4 +519,5 @@ export function getSandboxCapabilityProbe(): Promise<SandboxCapabilityProbe> {
  */
 export function resetSandboxCapabilityProbeForTests(): void {
   cachedProbe = undefined;
+  syncProbeCache = undefined;
 }

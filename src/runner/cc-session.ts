@@ -26,6 +26,7 @@ import {
   type SandboxMode,
   type SandboxProfile,
   type SandboxUnavailableEvent,
+  type SandboxDenialEvent,
 } from "./session-sandbox";
 
 // Re-export for convenience
@@ -578,12 +579,15 @@ export class CCSession extends EventEmitter {
 
     // EBH-2 (cortex#2344, DD-2) — the choke point. Every `claude --print`
     // spawn in cortex funnels through `SessionSandbox.spawn`, not a direct
-    // `Bun.spawn`. This build ships exactly the `none` backend
-    // (`createSessionSandbox` — see session-sandbox.ts): it spawns
-    // byte-identically to the pre-EBH-2 call below and fires
-    // `onUnavailable` once (DD-4/DD-6) so an un-jailed host is never
-    // silent. The `mode` on the projected profile is advisory only in this
-    // build — `none` does not branch on it — see `CCSessionOpts.sandboxMode`.
+    // `Bun.spawn`. EBH-3a (cortex#2345) adds the real `macos-sbpl` backend
+    // — `createSessionSandbox` (session-sandbox.ts) resolves it from the
+    // BOOT-warmed capability probe's sync snapshot; a session spawned before
+    // boot warms the probe (or any test that never calls
+    // `getSandboxCapabilityProbe`) still gets `none`, byte-identical to
+    // EBH-2. The `mode` on the projected profile still defaults to `"off"`
+    // on every live dispatch path (`CCSessionOpts.sandboxMode`) — resolving
+    // a real backend class is not the same as enforcing anything; see
+    // `session-sandbox-macos.ts`'s class doc for the `mode` gate.
     const sandboxMode: SandboxMode = this.opts.sandboxMode ?? "off";
     const sandboxProfile = deriveSandboxProfile(this.opts, sandboxMode);
     const sandbox = createSessionSandbox({
@@ -594,8 +598,8 @@ export class CCSession extends EventEmitter {
         this.emit("security-event", event);
         process.stderr.write(
           `[cc-session] ${event.type} backend=${event.backend} mode=${event.mode} — ` +
-            `no kernel execution boundary is enforcing this session (EBH-2; EBH-3 lands ` +
-            `real backends). See docs/design-session-sandbox.md.\n`,
+            `no kernel execution boundary is enforcing this session (EBH-2; EBH-3a landed the ` +
+            `macos-sbpl backend). See docs/design-session-sandbox.md.\n`,
         );
       },
     });
@@ -607,12 +611,9 @@ export class CCSession extends EventEmitter {
     // assert an exact claude-spawn call count — passes through. Triggering
     // a real subprocess spawn from inside that choke point breaks those
     // counts (confirmed: cc-session-isolation.test.ts) and adds
-    // platform-dependent flakiness to every boot in the test suite. The
-    // probe itself is fully implemented and independently unit-tested
-    // (session-sandbox.test.ts); wiring its FIRST call into an actual boot
-    // path (`cortex.ts`'s `startCortex`, most likely) is left to a
-    // dedicated follow-up that can address the test-suite fan-out
-    // deliberately rather than as a side effect of this choke-point change.
+    // platform-dependent flakiness to every boot in the test suite. EBH-3a
+    // wires the FIRST call into `cortex.ts`'s `startCortex` instead (a
+    // one-time boot-path call, well away from this per-session choke point).
     try {
       this.proc = sandbox.spawn(["claude", ...args], sandboxProfile, {
         stdout: "pipe",
@@ -620,6 +621,43 @@ export class CCSession extends EventEmitter {
         env,
         cwd: this.opts.cwd,
       });
+
+      // EBH-3a (DD-6) — drain the backend's denial stream in the background
+      // for the lifetime of this session and surface each one the same way
+      // `onUnavailable` is surfaced above: a "security-event" EventEmitter
+      // payload (not yet a direct bus publish — same "future bus publisher"
+      // scoping as sandbox-unavailable) plus a stderr line. `none`'s
+      // `denials()` never yields (nothing enforced, nothing to deny), so
+      // this loop is a permanent no-op for every session until a real
+      // backend resolves AND its mode is audit/enforce — see
+      // `session-sandbox-macos.ts`.
+      void (async () => {
+        try {
+          for await (const denial of sandbox.denials()) {
+            const event: SandboxDenialEvent = {
+              type: "system.security.sandbox-denial",
+              backend: sandbox.backend,
+              mode: sandboxProfile.mode,
+              ...(denial.path && { path: denial.path }),
+              ...(denial.host && { host: denial.host }),
+              reason: denial.reason,
+              timestamp: denial.timestamp,
+            };
+            this.emit("security-event", event);
+            process.stderr.write(
+              `[cc-session] ${event.type} backend=${event.backend} mode=${event.mode} ` +
+                `path=${event.path ?? "-"} host=${event.host ?? "-"} reason="${event.reason}"\n`,
+            );
+          }
+        } catch (err) {
+          // A denial-stream failure (e.g. `log stream` itself crashed) must
+          // never take the session down with it — log and move on.
+          console.warn(
+            "cc-session: sandbox denial stream ended unexpectedly:",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      })();
 
       // Start inactivity-based timeout (resets on every stream event)
       this.resetInactivityTimer();
