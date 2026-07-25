@@ -21,6 +21,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CLAUDE_TOOL_INVENTORY,
+  deriveDisallowedFromAllowlist,
   invertDisallowedTools,
   toolCapability,
 } from "../tool-inventory";
@@ -176,5 +177,63 @@ describe("invertDisallowedTools", () => {
   test("denying every inventory tool produces an empty grant set", () => {
     const all = [...CLAUDE_TOOL_INVENTORY];
     expect(invertDisallowedTools(all)).toEqual([]);
+  });
+});
+
+// cortex#2386 (EBH-7a) — the allowlist→denylist complement helper.
+describe("deriveDisallowedFromAllowlist", () => {
+  test("Read-only allowlist denies every other inventory tool", () => {
+    const { disallowed, unknown } = deriveDisallowedFromAllowlist(["Read"]);
+    expect(disallowed).toHaveLength(CLAUDE_TOOL_INVENTORY.length - 1);
+    expect(disallowed).not.toContain("Read");
+    expect(disallowed).toContain("Bash");
+    expect(disallowed).toContain("Edit");
+    expect(disallowed).toContain("Write");
+    expect(disallowed).toContain("Agent");
+    expect(unknown).toEqual([]);
+  });
+
+  test("declared-and-allowed tool is never in the deny complement (still permits X)", () => {
+    // Pins the "still works" half of the narrowing contract: Read is
+    // declared allowed, so it must not appear in `disallowed`.
+    const { disallowed } = deriveDisallowedFromAllowlist(["Read", "Grep"]);
+    expect(disallowed).not.toContain("Read");
+    expect(disallowed).not.toContain("Grep");
+  });
+
+  test("non-declared tool IS in the deny complement (still denies Y)", () => {
+    const { disallowed } = deriveDisallowedFromAllowlist(["Read"]);
+    expect(disallowed).toContain("Bash");
+  });
+
+  test("empty allowlist ([]) is a real declaration — denies the FULL inventory", () => {
+    const { disallowed, unknown } = deriveDisallowedFromAllowlist([]);
+    expect(disallowed).toEqual([...CLAUDE_TOOL_INVENTORY]);
+    expect(unknown).toEqual([]);
+  });
+
+  test("full allowlist denies nothing", () => {
+    const { disallowed } = deriveDisallowedFromAllowlist([...CLAUDE_TOOL_INVENTORY]);
+    expect(disallowed).toEqual([]);
+  });
+
+  test("case-insensitive match on the allowlist side", () => {
+    const { disallowed } = deriveDisallowedFromAllowlist(["read"]);
+    expect(disallowed).not.toContain("Read");
+  });
+
+  test("unknown / typo'd tool names are reported, not silently treated as a grant", () => {
+    // "Reed" (typo of "Read") must NOT accidentally grant Read — Read
+    // still lands in `disallowed`, and "Reed" surfaces in `unknown` so
+    // the caller can warn the persona author.
+    const { disallowed, unknown } = deriveDisallowedFromAllowlist(["Reed"]);
+    expect(disallowed).toContain("Read");
+    expect(unknown).toEqual(["Reed"]);
+  });
+
+  test("output order matches CLAUDE_TOOL_INVENTORY declaration order", () => {
+    const { disallowed } = deriveDisallowedFromAllowlist(["Bash"]);
+    const expected = CLAUDE_TOOL_INVENTORY.filter((t) => t !== "Bash");
+    expect(disallowed).toEqual(expected);
   });
 });

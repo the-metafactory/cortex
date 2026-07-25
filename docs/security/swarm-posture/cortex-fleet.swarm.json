@@ -3,14 +3,14 @@
   "_provenance": {
     "modeled_by": "hand-modeled from source, not adapter-generated — swarm-posture's adapt.ts has no cortex mode (only pai, pi, langgraph, crewai); see docs/security/swarm-posture/README.md '#Method' for why invoking an adapter was not an option and what was read instead",
     "upstream_tool": "https://github.com/NorthwoodsSentinel/swarm-posture @ 12d042d9f936bc99fed9bd00c29da5e06211b953",
-    "as_of_cortex_commit": "93d0d5df",
+    "as_of_cortex_commit": "cb6cf854",
     "sources_read": [
       "cortex.yaml.example (policy.roles[], policy.principals[], agents[])",
-      "docs/persona-format.md (allowedTools is advisory-only in v1 — not runtime-enforced)",
+      "docs/persona-format.md (allowedTools was advisory-only through v6.11.0; since cortex#2386 (EBH-7a) it is enforced for DispatchHandler-routed dispatch — see the field's row for the web-gateway/#1758 residual gap)",
       "agents.d/pier.yaml + personas/pier.md (Pier's shipped persona + openOnboarding confinement)",
       "src/common/policy/resolve-access.ts (resolvePolicyAccess, deriveMcpGrants, anonOnboardingAccess)",
-      "src/common/policy/tool-inventory.ts (CLAUDE_TOOL_INVENTORY, tool.<name> capability grammar)",
-      "src/bus/dispatch-handler.ts (handleTeam — the three hardcoded team-mode participants + how allowedTools/mcpGrants/agentEnv flow into AgentTeamOpts unchanged)",
+      "src/common/policy/tool-inventory.ts (CLAUDE_TOOL_INVENTORY, tool.<name> capability grammar, deriveDisallowedFromAllowlist added cortex#2386)",
+      "src/bus/dispatch-handler.ts (handleTeam — the three hardcoded team-mode participants + how allowedTools/mcpGrants/agentEnv flow into AgentTeamOpts unchanged; cortex#2386 — persona-declared allowedTools now merged into effectiveDisallowed + --strict-mcp-config for EVERY sender of a DispatchHandler-routed agent, not just the anon-onboarding gate — concierge-authenticated below narrowed to match concierge-anon as a result)",
       "src/runner/agent-team.ts (AgentTeamOpts propagation to every team session; bus-peer TeamParticipantConfig.kind)",
       "src/runner/cc-session.ts (effectiveAllowedTools/effectiveDisallowedTools actually reaching the claude CLI invocation — the real enforcement point)",
       "docs/security/ebh-6-posture-findings.md (independent corroboration: bashGuardDisabled also propagates unchanged to every team participant, agent-team.ts:610,733,915)"
@@ -93,10 +93,7 @@
       "id": "concierge-authenticated",
       "role": "concierge",
       "reads": [
-        { "class": "repo-and-config-files", "max_sensitivity": 1 },
-        { "class": "shell-and-secrets", "max_sensitivity": 4 },
-        { "class": "third-party-services", "max_sensitivity": 3 },
-        { "class": "full-authority", "max_sensitivity": 5 }
+        { "class": "repo-and-config-files", "max_sensitivity": 1 }
       ],
       "invokes": []
     },

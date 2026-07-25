@@ -129,3 +129,44 @@ export function invertDisallowedTools(disallowed: string[]): string[] {
     (t) => !denySet.has(t.toLowerCase()),
   ).map(toolCapability);
 }
+
+/**
+ * cortex#2386 (EBH-7a) — the mirror-image operation of
+ * {@link invertDisallowedTools}: given an ALLOWLIST (e.g. a persona's
+ * declared `allowedTools`), derive the DENY-LIST complement against the
+ * canonical inventory, for merging into `effectiveDisallowed` via the same
+ * seam `agentDisallowedTools` (WEB-2/B1) already uses.
+ *
+ * Matching is case-insensitive on the input side (same rationale as
+ * {@link invertDisallowedTools} — operators/persona authors write casing
+ * inconsistently). `disallowed` is returned in {@link CLAUDE_TOOL_INVENTORY}
+ * declaration order, canonical casing, for a deterministic merge.
+ *
+ * `unknown` carries every input entry that does NOT match a
+ * {@link CLAUDE_TOOL_INVENTORY} name (case-insensitively) — e.g. a typo, or
+ * a forward-looking / substrate-specific tool name outside the canonical
+ * v1.0 set (`docs/persona-format.md` documents `allowedTools` as a
+ * non-closed enum). These names grant nothing and deny nothing here: they
+ * can't be projected onto a known tool, so they have no effect on
+ * `disallowed`. Callers SHOULD log `unknown` (a persona author almost
+ * certainly meant to grant a real tool) rather than silently dropping it —
+ * mirrors the "warning logged with the name" contract
+ * `docs/persona-format.md` documents for unknown `allowedTools` entries.
+ *
+ * Empty `allowedTools` (`[]`) is a valid, meaningful declaration — "this
+ * persona gets zero tools" — and correctly produces the FULL inventory as
+ * `disallowed`. Distinguishing "declared empty" from "no declaration at
+ * all" is the caller's job (this function only ever sees an array that was
+ * already determined to be a declaration).
+ */
+export function deriveDisallowedFromAllowlist(
+  allowedTools: readonly string[],
+): { disallowed: string[]; unknown: string[] } {
+  const allowSet = new Set(allowedTools.map((t) => t.toLowerCase()));
+  const disallowed = CLAUDE_TOOL_INVENTORY.filter(
+    (t) => !allowSet.has(t.toLowerCase()),
+  );
+  const knownSet = new Set(CLAUDE_TOOL_INVENTORY.map((t) => t.toLowerCase()));
+  const unknown = allowedTools.filter((t) => !knownSet.has(t.toLowerCase()));
+  return { disallowed, unknown };
+}

@@ -64,7 +64,7 @@ escalation classes.
 | `team-moderator` | `team-council` | shell-and-secrets, third-party-services | `team-analyst`, `team-creative`, `team-critic` |
 | `team-analyst` / `team-creative` / `team-critic` | `team-council` | shell-and-secrets, third-party-services | — |
 | `concierge-anon` | `concierge` | filesystem only | — |
-| `concierge-authenticated` | `concierge` | shell-and-secrets, third-party-services, full-authority | — |
+| `concierge-authenticated` | `concierge` | filesystem only (cortex#2386 — see "Finding 1" below) | — |
 | `review-bot` | `code-reviewer` | shell-and-secrets | — |
 
 **Why these eight, and not a bigger or smaller roster:**
@@ -88,8 +88,15 @@ escalation classes.
   worker is the `openOnboarding` path (`resolve-access.ts`'s
   `anonOnboardingAccess`): a hardcoded, enforced `["Read"]` allowlist,
   `mcpGrants: []`, `trusted: false`. The authenticated worker models what
-  happens when a *mapped, non-anonymous* principal messages Pier — see
-  "Finding 1" below.
+  happens when a *mapped, non-anonymous* principal messages Pier. Until
+  cortex#2386 this was Finding 1 below — persona `allowedTools` was
+  advisory-only, so an authenticated sender's tool reach came from the
+  sender's own role, not Pier's declared `[Read]`. Since #2386,
+  `dispatch-handler.ts` enforces the persona's `allowedTools` for EVERY
+  sender (not only the anon gate), so `concierge-authenticated` is modeled
+  identically to `concierge-anon` here — see "Finding 1" for the resolution
+  and its residual scope (dispatch-only; the web-gateway path is a separate,
+  still-open hole, cortex#1758).
 - `review-bot` models Echo, using the `agent-echo` role literally declared in
   the committed `cortex.yaml.example` (`policy.roles: id: agent-echo →
   keyword.chat, tool.bash, tool.read, tool.glob, tool.grep`).
@@ -120,7 +127,17 @@ reachable config.
 This was decided *before* running the check, not adjusted afterward to make
 the report look clean — see "Findings" below for what it actually flagged.
 
-## Findings (as of cortex commit `93d0d5df`)
+## Findings (as of cortex commit `93d0d5df`, PRE-cortex#2386)
+
+**This console block is a historical snapshot, preserved verbatim** — it was
+NOT re-run against the upstream tool after cortex#2386 landed (this repo does
+not vendor `swarm-posture.ts`; regenerating it requires the pinned
+NorthwoodsSentinel/swarm-posture checkout CI uses). Finding 1 below is
+annotated **RESOLVED (cortex#2386)** based on updating
+`cortex-fleet.swarm.json`'s `concierge-authenticated` worker to match the
+code's new (enforced) reach — see the resolution note directly under Finding
+1 for what changed and what did NOT. Findings 2–4 are untouched by #2386 and
+remain open.
 
 Ran `bun <pinned-swarm-posture-checkout>/swarm-posture.ts
 docs/security/swarm-posture/cortex-fleet.swarm.json`:
@@ -176,6 +193,44 @@ concrete**: declare `agentDisallowedTools` (or an equivalent enforced
 allowlist) on Pier's agent config so its confinement is enforced at the same
 layer as everything else, not left to an advisory persona field the runner
 admits it ignores.
+
+**RESOLVED (cortex#2386 / EBH-7a).** Rather than hand-adding
+`agentDisallowedTools` to `agents.d/pier.yaml` alone (the narrow fix this
+finding proposed), `dispatch-handler.ts` now derives the SAME kind of
+deny-list from the persona's `allowedTools` frontmatter directly — every
+`DispatchHandler`-routed agent whose persona declares `allowedTools` gets it
+enforced this way, not just Pier. Mechanically: `personaAllowedTools()`
+reads `personas/<id>.md`'s frontmatter (cached per path), and its complement
+against `CLAUDE_TOOL_INVENTORY` is merged into `effectiveDisallowed` right
+alongside `agentDisallowedTools` — declaring `allowedTools` at all also adds
+`--strict-mcp-config` (the canonical tool set never names an `mcp__*` tool,
+so a declared allowlist implicitly means "no MCP" too). This applies
+regardless of who the sender is — the authenticated-vs-anonymous distinction
+this finding turned on no longer matters for the tool-reach question, which
+is why `concierge-authenticated` above is now modeled identically to
+`concierge-anon`.
+
+**What this does NOT resolve:**
+- **The web-gateway path (cortex#1758) still bypasses this entirely.**
+  `src/gateway/bus-inbound-sink.ts` never loads the bound stack's agent
+  config, so it can't compute the persona complement — confirmed live, not
+  just structurally: `pylon` (`agents.d/pylon.yaml`) already declares an
+  explicit `agentDisallowedTools` covering the full CC tool set plus
+  `strictMcpConfig: true`, is dispatched via the AMT web surface (i.e.
+  through this gateway), and cortex's own event telemetry shows pylon
+  sessions invoking `Edit`/`Write`/`Agent` anyway (e.g. session
+  `5dee443d-2246-4b7f-b3bc-0c9505b2922f`). Pier itself is Discord-bound, not
+  gateway-routed, so this residual gap does not apply to Pier's real deployed
+  path — but it means neither `agentDisallowedTools` nor the new persona
+  `allowedTools` derivation is a complete answer for any FUTURE
+  gateway-routed agent. See `docs/security/hardening-plan.md` /
+  `design-session-sandbox.md` for the kernel-level (L1–L3) fix.
+- **Unknown/typo'd tool names in `allowedTools` are not rejected**, only
+  logged (to stderr, at dispatch time) — a persona author who typos a tool
+  name gets a narrower allowlist than intended, not an install-time error.
+  `docs/persona-format.md`'s aspirational "reject registration" validator for
+  malformed persona frontmatter does not exist in code today (pre-dates
+  #2386; out of this fix's scope).
 
 ### Finding 2 — the built-in `team:` council has no per-agent least privilege
 
