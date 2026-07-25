@@ -1323,6 +1323,48 @@ describe("DispatchHandler — dispatch cwd fallback (cortex#2097)", () => {
     await handler.shutdown();
   });
 
+  // EBH-1b (cortex#2352) — readOnlyDirs threading through the direct
+  // (non-bus) dispatch path into CCSessionOpts. Proves acceptance criterion
+  // 1: a live-shaped dispatch with a configured readOnlyDirs produces a
+  // CCSessionOpts with a NON-EMPTY readOnlyDirs, AND acceptance criterion 3:
+  // the `--add-dir` union (opts.allowedDirs) is UNCHANGED — it still
+  // includes the read-only dir, exactly as before this slice — only the
+  // guard projection (resolvePathGuardEnv, tested separately in
+  // cc-session.test.ts) subtracts it.
+  test("configured readOnlyDirs: CCSessionOpts.readOnlyDirs is non-empty AND allowedDirs union is unchanged (EBH-1b)", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig({
+        claude: {
+          timeoutMs: 120_000,
+          asyncTimeoutMs: 900_000,
+          additionalArgs: [],
+          allowedTools: [],
+          disallowedTools: [],
+          allowedDirs: ["/configured/dir"],
+          readOnlyDirs: ["/configured/readonly"],
+        },
+      }),
+      securityPreamble: "",
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      stack: "acme",
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    const opts = optsLog()[0]!;
+    // The distinct field the guard projection consumes.
+    expect(opts.readOnlyDirs).toEqual(["/configured/readonly"]);
+    // The union `--add-dir` still receives — byte-identical to pre-EBH-1b:
+    // both the writable and the read-only dir are present so reads of the
+    // read-only dir keep working via Claude Code's own --add-dir grant.
+    expect(opts.allowedDirs).toEqual(["/configured/dir", "/configured/readonly"]);
+
+    await handler.shutdown();
+  });
+
   test("claude.workspaceDir set explicitly: dispatch uses it verbatim, `~` expands", async () => {
     const { factory, optsLog } = makeStubFactory([successResult()]);
     const adapter = new MockAdapter();
@@ -1808,6 +1850,8 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     prompt: "user prompt here",
     resumeSessionId: undefined,
     allowedDirs: ["/Users/andreas/Developer/cortex"],
+    // EBH-1b (cortex#2352)
+    readOnlyDirs: [],
     disallowedTools: ["WebSearch"],
     timeoutMs: 120_000,
     cwd: "/Users/andreas/Developer/cortex",

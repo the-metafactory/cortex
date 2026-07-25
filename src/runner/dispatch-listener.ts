@@ -245,6 +245,15 @@ export interface DispatchTaskReceivedPayload {
    */
   mcp_grants?: string[];
   allowed_dirs?: string[];
+  /**
+   * EBH-1b (cortex#2352) — the distinct read-only subset of `allowed_dirs`.
+   * `undefined` (a pre-EBH-1b publisher, or any source that doesn't set it)
+   * → `buildDispatchRequest` leaves `runtime.readOnlyDirs` unset, and
+   * `resolvePathGuardEnv` (cc-session.ts) treats an unset `readOnlyDirs` as
+   * `[]` — today's behaviour, unchanged, no crash. See
+   * `DispatchRuntime.readOnlyDirs`.
+   */
+  read_only_dirs?: string[];
   timeout_ms?: number;
   cwd?: string;
   additional_args?: string[];
@@ -1267,6 +1276,8 @@ function buildDispatchRequest(
   const runtime: NonNullable<DispatchRequest["runtime"]> = {};
   if (payload.cwd !== undefined) runtime.cwd = payload.cwd;
   if (payload.allowed_dirs !== undefined) runtime.allowedDirs = payload.allowed_dirs;
+  // EBH-1b (cortex#2352) — mirrors allowed_dirs's mapping exactly.
+  if (payload.read_only_dirs !== undefined) runtime.readOnlyDirs = payload.read_only_dirs;
   if (payload.additional_args !== undefined) runtime.additionalArgs = payload.additional_args;
   // GV-2 (cortex#1077): read the canonical `cortex_*` label first, fall back
   // to the legacy `grove_*` alias (a pre-GV-2 source still sends grove only).
