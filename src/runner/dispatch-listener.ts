@@ -2286,7 +2286,7 @@ async function handleDispatchEnvelope(
         // a 500-char slice of GitHub's raw response body
         // (`GithubAppTokenError` context, `github-app-token.ts`). Keeping the
         // wire copy fixed means no credential-adjacent material can ride an
-        // error path off this host; the operator reads the specific cause in
+        // error path off this host; the principal reads the specific cause in
         // the local stderr line above, where it belongs.
         reason: {
           kind: "cant_do",
