@@ -15,7 +15,7 @@
 |---|---|---|
 | **F1** | File tools have no `PreToolUse` hook; `cat`/`head`/`tail` allowlisted, no path check | `cortex-hooks.json:30`; `bash-guard.hook.ts:126–128` |
 | **F6** | `readOnlyDirs` write-protection is a preamble sentence | `security-preamble.ts:67–77` |
-| **F3** | Sovereignty (confidential-never-reaches-frontier) defaults to log-only | `review-consumer.ts:500` (`?? false`) |
+| **F3** | Sovereignty (confidential-never-reaches-frontier) audit-only by default, in BOTH consumers | `review-consumer.ts:500`, `brain-consumer.ts:390` (`?? false`) |
 | **F4** | Principal-DM disables the Bash guard entirely | `bash-guard.hook.ts:150` |
 
 > Line numbers pinned to `origin/main` @ `059f619d` (2026-07-24). The review was authored against `f6f4b06d`; the bash-guard anchors shifted +18 after #2337 (cortex#2335) tightened the same file's `gh` floor — F1/F4 remain valid, EBH-1 must coordinate with that direction.
@@ -45,8 +45,8 @@ L1–L3 are designed in [`design-session-sandbox.md`](../design-session-sandbox.
 
 ## 3. Cross-cutting decisions (not sandboxing, but owed a call)
 
-- **F3 — Sovereignty posture.** Decide and *document* whether production runs `sovereigntyEnforce: true`. The decision core is already fail-closed; this is a config + model-class↔signing-identity binding question. If log-only is a deliberate staging step, say so in the posture doc so no one mistakes "observed" for "enforced."
-- **F4 — Principal-DM integrity.** The guard-off DM context is only as safe as (a) no relay path forwarding untrusted content into it and (b) the principal↔platform-ID mapping being immutable config. Treat the mapping as security-critical; land G-301 (#42 lineage).
+- **F3 — Sovereignty posture. Resolved (EBH-6b, cortex#2380).** The EBH-6 investigation (`docs/security/ebh-6-posture-findings.md`) found the deeper gap: `sovereigntyEnforce` wasn't just defaulted off, it was **constructor-only** — no `cortex.yaml` / config-split field could reach it in either consumer, so no principal action could turn it on. EBH-6b promoted it to a real config key, `policy.sovereignty.enforce` (boolean, **default `false`**), threaded to BOTH `review-consumer.ts` and `brain-consumer.ts`'s `sovereigntyEnforce` option from the SAME resolved value in `cortex.ts`. The decision core (`sovereignty-gate.ts`) is sound and fail-closed. **This is posture-visibility, not enforcement:** every deployment today still runs audit-only (violations are detected and logged via `system.access.denied`, never denied) until a principal explicitly sets the key — and setting it before the model-class↔signing-identity binding lands (#2117; PR #2201, open, CI-red as of EBH-6) buys less than it appears to, because `runtime.modelClass` is self-declared and spoofable until then. No default, template, or example ships `enforce: true`.
+- **F4 — Principal-DM integrity.** The guard-off DM context is only as safe as (a) no relay path forwarding untrusted content into it and (b) the principal↔platform-ID mapping being immutable config. Treat the mapping as security-critical. (The review's compensating-control citation here — "land G-301 (#42 lineage)" — was stale: `#42` is an unrelated, already-merged migration PR, and G-301 has no design section, blueprint entry, or issue anywhere in the repo; see `docs/security/ebh-6-posture-findings.md` §F4-4. The real follow-up is **#2377** (F4 residual — Bash guard-off path-awareness).)
 - **Structural posture as CI (swarm-posture).** cortex spawns multi-agent teams (`agent-team.ts`: moderator + participants) — a real invoke-graph where composed escalation can hide ("security doesn't compose"). Wire a structural least-privilege + attack-path check as a continuous gate on the fleet's tool grants. Rob's paid horizon — behavioral simulation / intent-fidelity measurement under live injection — is the dynamic complement; this static review is half one.
 
 ---

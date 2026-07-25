@@ -1239,6 +1239,24 @@ export async function startCortex(
     );
   }
 
+  // EBH-6b (cortex#2380) — resolve `policy.sovereignty.enforce` ONCE here,
+  // then thread the SAME value into both `wireReviewConsumers` and
+  // `wireBrainConsumers` below (never resolve it twice — that's exactly the
+  // review-consumer/brain-consumer asymmetry the EBH-6 investigation found,
+  // `docs/security/ebh-6-posture-findings.md` §F3). Default `false`
+  // (audit-only: a sovereignty violation is logged via `system.access.denied`
+  // but not denied) — this is a posture-VISIBILITY change, not a posture
+  // flip; nothing here enables enforcement, it only makes "turn it on" a
+  // config edit instead of a code change. Logged unconditionally (like the
+  // `security.signing` posture line below) so "is sovereignty enforced
+  // here?" is answerable from the boot log without reading code.
+  const sovereigntyEnforce = resolvedPolicy?.sovereignty?.enforce ?? false;
+  console.log(
+    `cortex: security posture — sovereignty.enforce=${String(sovereigntyEnforce)} ` +
+      `(${sovereigntyEnforce ? "violations DENIED" : "violations logged, NOT denied — audit-only"}; ` +
+      `see docs/security/hardening-plan.md §F3)`,
+  );
+
   // Bus runtime (M2-M6) — no-op when `config.nats?` is absent. Tests inject
   // a recording fake via `options.injectRuntime` to assert observable
   // wire-up side-effects without standing up a real NATS server.
@@ -2399,6 +2417,7 @@ export async function startCortex(
     ...(stackNKeyPubForVerifier !== undefined && { stackNKeyPubForVerifier }),
     systemEventSource,
     runtime,
+    sovereigntyEnforce,
     buildSessionOpts: (agent) => buildReviewSessionOpts(config, agent),
     makeOfferAdmission,
     federatedNetworks: resolvedPolicy?.federated?.networks ?? [],
@@ -2629,6 +2648,7 @@ export async function startCortex(
     stack: derivedStack.stack,
     systemEventSource,
     runtime,
+    sovereigntyEnforce,
     ...(surfacePrincipalGate !== undefined && { surfacePrincipalGate }),
     brainPresenceHolder,
     brainConsumers,

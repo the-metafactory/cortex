@@ -1681,6 +1681,31 @@ describe("PolicySchema — CO-1 offerings (epic cortex#939)", () => {
   });
 });
 
+describe("PolicySchema — sovereignty.enforce (EBH-6b, cortex#2380)", () => {
+  test("absent policy.sovereignty ⇒ undefined (read site defaults to false)", () => {
+    // Mirrors federated/public/offerings/admission: no default object at the
+    // schema layer — `resolvedPolicy?.sovereignty?.enforce ?? false` at the
+    // read site (`cortex.ts`) is the single source of the false default.
+    const parsed = PolicySchema.parse({});
+    expect(parsed.sovereignty).toBeUndefined();
+  });
+
+  test("policy.sovereignty declared with no enforce ⇒ enforce defaults false", () => {
+    const parsed = PolicySchema.parse({ sovereignty: {} });
+    expect(parsed.sovereignty?.enforce).toBe(false);
+  });
+
+  test("policy.sovereignty.enforce: true parses true", () => {
+    const parsed = PolicySchema.parse({ sovereignty: { enforce: true } });
+    expect(parsed.sovereignty?.enforce).toBe(true);
+  });
+
+  test("policy.sovereignty.enforce: false parses false", () => {
+    const parsed = PolicySchema.parse({ sovereignty: { enforce: false } });
+    expect(parsed.sovereignty?.enforce).toBe(false);
+  });
+});
+
 describe("MIRROR sync — cortex cross-cutting schemas vs AgentConfigSchema", () => {
   // Minimum AgentConfig that exposes inner defaults on every cross-cutting block.
   //

@@ -195,6 +195,15 @@ export interface WireBrainConsumersOpts {
   /** The (possibly dormant) MyelinRuntime the consumer subscribes against. */
   runtime: MyelinRuntime;
   /**
+   * EBH-6b (cortex#2380) — resolved `policy.sovereignty.enforce` (default
+   * `false`), threaded verbatim to every `BrainConsumer` this wiring
+   * constructs. Omitted/`false` ⇒ the consumer's own `?? false` default
+   * (audit-only — see `docs/security/hardening-plan.md` §F3). `cortex.ts`
+   * resolves this ONCE and passes the SAME value here and to
+   * `wireReviewConsumers` — the two lanes must never diverge on this flag.
+   */
+  sovereigntyEnforce?: boolean;
+  /**
    * B-3 (design-bot-packs.md §4, §6, §8) — the shared surface-reply gate for
    * `ask_principal` effects. Undefined ⇒ the consumer keeps its DenyAll
    * default (fail-closed — no configured surface identity to verify a reply
@@ -459,6 +468,12 @@ export function wireBrainConsumers(
           principalGate: opts.surfacePrincipalGate,
         }),
         ...(stateRecorder !== undefined && { stateRecorder }),
+        // EBH-6b (cortex#2380) — resolved `policy.sovereignty.enforce`,
+        // verbatim from opts. Omitted ⇒ BrainConsumer's own `?? false`
+        // default (audit-only), same as before this field existed.
+        ...(opts.sovereigntyEnforce !== undefined && {
+          sovereigntyEnforce: opts.sovereigntyEnforce,
+        }),
       };
       // cortex#2215 — wire cortex#2206's `create_private_thread` capability
       // for exactly the agents its ADR intends: `openOnboarding: true` (the

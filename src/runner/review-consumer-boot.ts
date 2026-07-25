@@ -116,6 +116,17 @@ export interface WireReviewConsumersOpts {
   /** The (possibly dormant) MyelinRuntime the consumer subscribes against. */
   runtime: MyelinRuntime;
   /**
+   * EBH-6b (cortex#2380) — resolved `policy.sovereignty.enforce` (default
+   * `false`), threaded verbatim to every `ReviewConsumer` this wiring
+   * constructs. Omitted/`false` ⇒ the consumer's own `?? false` default
+   * (audit-only: a sovereignty violation is logged, not denied — see
+   * `docs/security/hardening-plan.md` §F3). `cortex.ts` resolves this ONCE
+   * from `resolvedPolicy?.sovereignty?.enforce ?? false` and passes the SAME
+   * value here and to `wireBrainConsumers` — the two consumer lanes must
+   * never diverge on this flag.
+   */
+  sovereigntyEnforce?: boolean;
+  /**
    * §3 review-session opts, pre-curried with `config` + `process.cwd()` by
    * the caller (`buildReviewSessionOpts` stays exported from `cortex.ts`
    * — this module doesn't import it, avoiding a `cortex.ts` ⇄
@@ -319,6 +330,12 @@ export function wireReviewConsumers(
           agent: consumerAgent,
           source: opts.systemEventSource,
           runtime: opts.runtime,
+          // EBH-6b (cortex#2380) — resolved `policy.sovereignty.enforce`,
+          // verbatim from opts. Omitted ⇒ ReviewConsumer's own `?? false`
+          // default (audit-only), same as before this field existed.
+          ...(opts.sovereigntyEnforce !== undefined && {
+            sovereigntyEnforce: opts.sovereigntyEnforce,
+          }),
           // CC session factory — spawns a real `claude` process. Mirrors the
           // default factory inside `ClaudeCodeHarness` (the harness keeps its
           // own copy private; we don't re-export to avoid the symbol leaking
