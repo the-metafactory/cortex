@@ -52,7 +52,7 @@ macOS and Linux need different mechanisms, and macOS `sandbox-exec` is officiall
 |---|---|---|
 | `macos-sbpl` | Darwin | `sandbox-exec -f <profile>.sb` (Seatbelt / SBPL) |
 | `linux-bwrap` | Linux | `bubblewrap` bind-mounts + `--unshare-all --die-with-parent`, `landlock` FS ruleset where available (≥5.13), `seccomp-bpf` syscall filter |
-| `none` | any | opt-out / unsupported host — **logs a loud `system.security.sandbox_unavailable` event** so an un-jailed host is never silent |
+| `none` | any | opt-out / unsupported host — **logs a loud `system.security.sandbox-unavailable` event** so an un-jailed host is never silent |
 
 Deprecation of any one mechanism is then a backend swap, not a redesign.
 
@@ -68,7 +68,9 @@ Per-stack config, default `off`, promoted deliberately. This de-risks "the jail 
 
 ### DD-6 — Every denial is an observable event
 
-A denied syscall is otherwise an opaque failure. Each backend's denial signal (macOS unified-log sandbox violations; Linux seccomp/landlock audit) is parsed and emitted as `system.security.sandbox_denial` onto the bus → dashboard. This does double duty: operational debuggability **and** the measurement signal the behavioral-simulation layer (Rob's intent-fidelity tier) consumes. A denial spike under a given inbound message *is* an injection-attempt indicator.
+A denied syscall is otherwise an opaque failure. Each backend's denial signal (macOS unified-log sandbox violations; Linux seccomp/landlock audit) is parsed and emitted as `system.security.sandbox-denial` onto the bus → dashboard. This does double duty: operational debuggability **and** the measurement signal the behavioral-simulation layer (Rob's intent-fidelity tier) consumes. A denial spike under a given inbound message *is* an injection-attempt indicator.
+
+**Naming — hyphens, never underscores, in the leaf (cortex#1935).** The vendored myelin envelope schema pins `/type` to `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,4}$` — hyphens only. `validateEnvelope` runs on the *subscriber* (delivery) side, so an underscore-typed `system.*` type PUBLISHES without error and is then silently dropped by every standard subscriber — the event looks shipped and never reaches a soul. `system.security.sandbox-unavailable` and `system.security.sandbox-denial` are the only correct spellings; a CI regression gate (`src/bus/__tests__/envelope-type-no-underscore.test.ts`) enforces this across every non-test publisher/matcher.
 
 ---
 
@@ -114,7 +116,7 @@ The profile is deny-by-default, so the hard part is the **allow-list of legitima
       │
       ├─ macos-sbpl:  sandbox-exec -f prof.sb claude --print …
       ├─ linux-bwrap: bwrap --ro-bind … --bind … --unshare-all -- claude --print …
-      └─ none:        spawn claude … + emit sandbox_unavailable
+      └─ none:        spawn claude … + emit sandbox-unavailable
       │
       ▼
    jailed `claude` child ─┬─ file tools → kernel-scoped FS
@@ -182,7 +184,7 @@ This converts F1's worst case from **silent exfiltration** to a **contained, log
 
 ## 6. Rollout
 
-1. **Land `SessionSandbox` interface + `none` backend** (emits `sandbox_unavailable`). Zero behavior change; establishes the choke point (DD-2) and the event.
+1. **Land `SessionSandbox` interface + `none` backend** (emits `sandbox-unavailable`). Zero behavior change; establishes the choke point (DD-2) and the event.
 2. **`macos-sbpl` + `linux-bwrap` in `audit` mode.** Profiles computed and applied report-only. Run a burn-in on real dispatch traffic; every denial is a candidate missing-grant. Tune profiles until the audit log is quiet on legitimate traffic.
 3. **Flip `enforce` per stack**, most-trusted-last (personal DM stacks first, federated/community stacks earliest need — decide with F4's principal-map work).
 4. **Egress proxy** (Layer 3) lands alongside step 2 in `audit`, enforced in step 3.

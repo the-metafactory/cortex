@@ -21,10 +21,11 @@
 # their own rarely-edited, reviewed-as-a-transport-change file, away from the
 # routine per-stack edits in `stacks/*.yaml`.
 #
-# What lives here (and ONLY here): claude / execution / attachments / paths /
-# nats / bus. `LoadedConfig` shape is unchanged — these fold into the identical
-# slots the single-file `cortex.yaml` populated. Single-file deployments keep
-# working via the transitional fallback; you do not have to split.
+# What lives here (and ONLY here): claude / execution / sandbox / attachments /
+# paths / nats / bus. `LoadedConfig` shape is unchanged — these fold into the
+# identical slots the single-file `cortex.yaml` populated. Single-file
+# deployments keep working via the transitional fallback; you do not have to
+# split.
 
 # -----------------------------------------------------------------------------
 # claude — runtime config passed to spawned Claude Code sessions
@@ -43,6 +44,21 @@ claude:
 execution:
   default: local
   backends: []
+
+# -----------------------------------------------------------------------------
+# sandbox — SessionSandbox staged-rollout mode (EBH-2, cortex#2344)
+# -----------------------------------------------------------------------------
+# `mode: off` is the ONLY default this repo ships or documents. This build's
+# `SessionSandbox` has exactly one backend — `none` — which spawns every
+# `claude --print` child exactly as before EBH-2 and enforces nothing,
+# regardless of `mode`. `audit`/`enforce` become meaningful once EBH-3 lands a
+# real kernel backend (`macos-sbpl` / `linux-bwrap`); flipping this is a
+# PRINCIPAL decision at that point (docs/design-session-sandbox.md §6), never
+# a template default. See docs/design-session-sandbox.md and
+# docs/design-session-sandbox-platforms.md for the full design.
+sandbox:
+  mode: off      # off | audit | enforce — off is the only value shipped here
+  backend: auto  # auto | macos-sbpl | linux-bwrap | container-delegated | none
 
 # =============================================================================
 # inference — model-provider config for `substrate: api-agent` (epic #2055, D6)

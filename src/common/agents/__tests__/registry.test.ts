@@ -29,9 +29,13 @@ function discordPresence() {
   return {
     enabled: true,
     token: "discord-bot-token",
-    guildId: "1111111111111111111",
-    agentChannelId: "2222222222222222222",
-    logChannelId: "3333333333333333333",
+    // Confidentiality gate (compass/tools/gate-local.ts) accepts all-zero
+    // ids as the placeholder convention for a Discord-snowflake-shaped
+    // string — a repeated-nonzero-digit id still reads as "realistic" to
+    // the scanner. Not read for value elsewhere in this file.
+    guildId: "0000000000000000000",
+    agentChannelId: "0000000000000000000",
+    logChannelId: "0000000000000000000",
     contextDepth: 10,
     enableAgentLog: false,
     dm: {
@@ -107,6 +111,10 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       maxAttachmentsPerMessage: 10,
     },
     execution: { default: "local", backends: [] },
+    // EBH-2 (cortex#2344) — same `.default()`-but-required-on-output story
+    // as `execution`/`plugins` above: `SandboxConfigSchema` fills defaults
+    // after parse, so a hand-built `CortexConfig` fixture must include it.
+    sandbox: { mode: "off", backend: "auto" },
     inference: { providers: {}, profiles: {} },
     plugins: { external: false },
     github: {

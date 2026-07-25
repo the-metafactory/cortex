@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { CCSession, type CCSessionOpts, resolvePathGuardEnv } from "../cc-session";
+import { CCSession, type CCSessionOpts, resolvePathGuardEnv, deriveSandboxProfile } from "../cc-session";
 import { testClaude } from "../../common/test-utils";
 
 describe("CCSession", () => {
@@ -169,4 +169,86 @@ describe("resolvePathGuardEnv — EBH-1b allowedDirs/readOnlyDirs subtraction (c
     const out = JSON.parse(resolvePathGuardEnv({ readOnlyDirs: ["/ro"] }));
     expect(out).toEqual({ allowedDirs: [], readOnlyDirs: ["/ro"] });
   });
+});
+
+/**
+ * EBH-2 (cortex#2344) — `deriveSandboxProfile` projects the SAME resolved
+ * `CCSessionOpts.{allowedDirs,readOnlyDirs}` `resolvePathGuardEnv` reads
+ * into a `SandboxProfile` (DD-1: one policy, N projections). These tests
+ * prove the projection stays byte-consistent with the L1 path guard's
+ * split — in particular that the EBH-1b overlap rule (a dir in BOTH
+ * `allowedDirs` and `readOnlyDirs` resolves to read-only) holds for the
+ * kernel-level profile too, not just for `CORTEX_PATH_GUARD`.
+ */
+describe("deriveSandboxProfile — EBH-2 policy → SandboxProfile projection (cortex#2344)", () => {
+  test("no opts ⇒ empty readWrite/readOnly, mode passed through", () => {
+    const profile = deriveSandboxProfile({}, "off");
+    expect(profile.readWrite).toEqual([]);
+    expect(profile.readOnly).toEqual([]);
+    expect(profile.mode).toBe("off");
+  });
+
+  test("disjoint allowedDirs/readOnlyDirs project straight across", () => {
+    const profile = deriveSandboxProfile(
+      { allowedDirs: ["/work"], readOnlyDirs: ["/ro"] },
+      "audit",
+    );
+    expect(profile.readWrite).toEqual(["/work"]);
+    expect(profile.readOnly).toEqual(["/ro"]);
+    expect(profile.mode).toBe("audit");
+  });
+
+  test("a dir in BOTH lists resolves to readOnly, never readWrite (EBH-1b overlap rule, honoured at the kernel-profile layer too)", () => {
+    const profile = deriveSandboxProfile(
+      { allowedDirs: ["/work", "/ro"], readOnlyDirs: ["/ro"] },
+      "enforce",
+    );
+    expect(profile.readWrite).toEqual(["/work"]);
+    expect(profile.readOnly).toEqual(["/ro"]);
+    expect(profile.readWrite).not.toContain("/ro");
+  });
+
+  test("execAllow/egressAllow are populated from the compatibility-contract seed, not opts", () => {
+    const profile = deriveSandboxProfile({ allowedDirs: ["/work"] }, "off");
+    expect(profile.execAllow.length).toBeGreaterThan(0);
+    expect(profile.execAllow).toContain("claude");
+    expect(profile.egressAllow).toContain("api.anthropic.com");
+  });
+
+  test("mode threads through unchanged for every SandboxMode value", () => {
+    expect(deriveSandboxProfile({}, "off").mode).toBe("off");
+    expect(deriveSandboxProfile({}, "audit").mode).toBe("audit");
+    expect(deriveSandboxProfile({}, "enforce").mode).toBe("enforce");
+  });
+});
+
+/**
+ * EBH-2 (cortex#2344) — `start()` now routes every spawn through
+ * `SessionSandbox.spawn` instead of a direct `Bun.spawn`. This is a
+ * behaviour-preservation test for the `none` backend: a real session still
+ * runs end-to-end (gated on a local `claude` binary, like the rest of this
+ * file's live-invocation tests) and the new `"security-event"` fires
+ * exactly once, carrying `backend: "none"`.
+ */
+describe("CCSession — EBH-2 SessionSandbox routing", () => {
+  testClaude("emits exactly one security-event (none backend) per session", async () => {
+    const session = new CCSession({
+      prompt: "Say just the word hi",
+      channel: "test",
+      timeoutMs: 30_000,
+    });
+
+    const securityEvents: unknown[] = [];
+    session.on("security-event", (event: unknown) => {
+      securityEvents.push(event);
+    });
+
+    await session.start().wait();
+
+    expect(securityEvents).toHaveLength(1);
+    expect(securityEvents[0]).toMatchObject({
+      type: "system.security.sandbox-unavailable",
+      backend: "none",
+    });
+  }, 60_000);
 });

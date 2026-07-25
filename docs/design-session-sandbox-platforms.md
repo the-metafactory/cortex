@@ -123,7 +123,7 @@ When no backend resolves, behaviour keys on **whether the stack processes input 
 | **Untrusted input** | `policy.federated.networks[]` non-empty **or** `openOnboarding: true` | **REFUSE to dispatch.** Untrusted content with no execution boundary is exactly the F1 threat; that session does not run. |
 | **Principal-driven** | neither signal | **RUN**, with a **persistent degraded state** (below). |
 
-**"Loud" means persistent, not a log line.** A one-shot boot event scrolls away, and a sandbox that is off-forever-but-nobody-noticed is the same failure shape as E3 — looks protected, isn't. So the degraded state MUST surface as standing status (`cortex stack list`/status **and** the dashboard) in addition to the `system.security.sandbox_unavailable` event, and persist for as long as no backend resolves.
+**"Loud" means persistent, not a log line.** A one-shot boot event scrolls away, and a sandbox that is off-forever-but-nobody-noticed is the same failure shape as E3 — looks protected, isn't. So the degraded state MUST surface as standing status (`cortex stack list`/status **and** the dashboard) in addition to the `system.security.sandbox-unavailable` event, and persist for as long as no backend resolves.
 
 **Why not the alternatives.** *Always-refuse* goes dark on any host without `bubblewrap` (a package, not in-box — E5/E6), which invites the classic failure: set `mode: off` permanently to get work done, losing the sandbox everywhere. *Always-run* lets a federated stack sit on L1-only indefinitely.
 
@@ -176,7 +176,7 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
    `auto` + `audit` is the intended shipping default for a release cycle.
 3. **Dev containers / Codespaces** — resolves to `container-delegated`; **no behaviour change, no nested sandbox, no surprise failures.**
 4. **CI** — untouched (no untrusted dispatch).
-5. **Diagnostics** — `cortex stack list`/status shows the resolved backend + mode per stack, so "is my sandbox on?" is answerable without reading logs. Every denial is a `system.security.sandbox_denial` event on the dashboard.
+5. **Diagnostics** — `cortex stack list`/status shows the resolved backend + mode per stack, so "is my sandbox on?" is answerable without reading logs. Every denial is a `system.security.sandbox-denial` event on the dashboard.
 6. **When it breaks a legitimate workflow** — `audit` mode is exactly for this: it logs what *would* have been denied without blocking, so we tune the profile against real traffic before enforcing.
 
 ---
