@@ -336,6 +336,7 @@ import { dispatchQuickstart } from "./cli/cortex/commands/quickstart";
 import { dispatchPlugin } from "./cli/cortex/commands/plugin";
 import { dispatchConfig } from "./cli/cortex/commands/config";
 import { dispatchCreds } from "./cli/cortex/commands/creds";
+import { dispatchGithubToken } from "./cli/cortex/commands/github-token";
 import { dispatchStepUp } from "./cli/cortex/commands/stepup";
 // #1352 — `agents` + `migrate-config` were complete standalone `import.meta.main`
 // scripts, unreachable from the installed binary while docs
@@ -7020,6 +7021,23 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchCreds(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // cortex#2396 (vision#11) — mint GitHub App installation tokens for
+  // cortex-hosted bot identities (atlas, luna-dev). Same passthrough shape
+  // as `creds`: `dispatchGithubToken` owns its own arg parsing.
+  program
+    .command("github-token")
+    .description("Mint GitHub App installation tokens for cortex-hosted bot identities")
+    .argument("[args...]", "github-token subcommand + flags (see `cortex github-token --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchGithubToken(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
