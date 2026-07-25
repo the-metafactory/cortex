@@ -140,4 +140,21 @@ describe("arc-manifest.yaml — scripts.purge (cortex#2338)", () => {
     expect(script).toContain("purge_systemd_instances");
     expect(script).toContain("purge_launchd_instances");
   });
+
+  test("scripts/purge.sh reports the intentionally-kept shared-substrate dirs (cortex#2420)", () => {
+    const script = readFileSync(join(REPO_ROOT, "scripts", "purge.sh"), "utf-8");
+    expect(script).toContain("report_intentionally_kept_shared_state");
+  });
+
+  test("purge-supervision.sh's report names each shared dir left out of owns (cortex#2420)", () => {
+    const lib = readFileSync(join(REPO_ROOT, "scripts", "lib", "purge-supervision.sh"), "utf-8");
+    // The reporting function exists...
+    expect(lib).toContain("report_intentionally_kept_shared_state()");
+    // ...and it names exactly the shared trees the owns: block deliberately
+    // leaves undeclared — so the purge log explains every leftover the
+    // field test (cortex#2420) found.
+    expect(lib).toContain(".claude/events");
+    expect(lib).toContain(".claude/relay");
+    expect(lib).toContain(".config/nats");
+  });
 });

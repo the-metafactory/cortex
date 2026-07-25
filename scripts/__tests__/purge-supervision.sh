@@ -213,6 +213,58 @@ purge_launchd_instances "${LAUNCH_DIR}"
 assert_eq "Linux → zero launchctl calls" "0" "$(wc -l < "${LAUNCHCTL_LOG}" | tr -d ' ')"
 assert_file_exists "Linux → plist left untouched" "${LAUNCH_DIR}/ai.meta-factory.cortex.work.plist"
 
+# ─── Section 3: report_intentionally_kept_shared_state (cortex#2420) ─
+printf '\n=== report_intentionally_kept_shared_state ===\n'
+
+REPORT_HOME="${TMPHOME}/report-home"
+
+# All three shared dirs present → each is named as KEPT, with the "on purpose"
+# footer and NO "none present" line.
+rm -rf "${REPORT_HOME}"
+mkdir -p "${REPORT_HOME}/.claude/events" "${REPORT_HOME}/.claude/relay" "${REPORT_HOME}/.config/nats"
+REPORT_OUT="$(report_intentionally_kept_shared_state "${REPORT_HOME}")"
+assert_true "names ~/.claude/events as kept" \
+  grep -qF "${REPORT_HOME}/.claude/events" <<<"${REPORT_OUT}"
+assert_true "names ~/.claude/relay as kept" \
+  grep -qF "${REPORT_HOME}/.claude/relay" <<<"${REPORT_OUT}"
+assert_true "names ~/.config/nats as kept" \
+  grep -qF "${REPORT_HOME}/.config/nats" <<<"${REPORT_OUT}"
+assert_true "prints the intentionally-KEPT header" \
+  grep -qF "Intentionally KEPT" <<<"${REPORT_OUT}"
+assert_true "prints the on-purpose footer when dirs are present" \
+  grep -qF "Left in place on purpose" <<<"${REPORT_OUT}"
+assert_true "no 'none present' line when dirs exist" \
+  bash -c "! grep -qF 'none of the shared dirs' <<<\"\${1}\"" _ "${REPORT_OUT}"
+
+# Only one of the three present → only that one is named; the absent two are
+# silently skipped (report only reflects reality on this host).
+rm -rf "${REPORT_HOME}"
+mkdir -p "${REPORT_HOME}/.claude/events"
+REPORT_OUT="$(report_intentionally_kept_shared_state "${REPORT_HOME}")"
+assert_true "names the one present dir" \
+  grep -qF "${REPORT_HOME}/.claude/events" <<<"${REPORT_OUT}"
+assert_true "does NOT name an absent dir (relay)" \
+  bash -c "! grep -qF '.claude/relay' <<<\"\${1}\"" _ "${REPORT_OUT}"
+
+# None present → the "nothing kept" line, and NO bullet paths.
+rm -rf "${REPORT_HOME}"
+mkdir -p "${REPORT_HOME}"
+REPORT_OUT="$(report_intentionally_kept_shared_state "${REPORT_HOME}")"
+assert_true "prints the 'none present' line when no shared dir exists" \
+  grep -qF "none of the shared dirs are present" <<<"${REPORT_OUT}"
+assert_true "prints no bullet path when nothing is kept" \
+  bash -c "! grep -qF '    • ' <<<\"\${1}\"" _ "${REPORT_OUT}"
+
+# A `set -e` caller survives the report call (best-effort, never aborts purge).
+REPORT_SETE_OUT="$(mktemp)"
+set +e
+bash -c "set -e; source '${SCRIPT_DIR}/lib/purge-supervision.sh'; report_intentionally_kept_shared_state '${REPORT_HOME}'; echo REPORT_COMPLETED" > "${REPORT_SETE_OUT}" 2>&1
+REPORT_SETE_RC=$?
+set -e
+assert_eq "a 'set -e' caller completes past the report call" "0" "${REPORT_SETE_RC}"
+assert_true "the caller ran past the report call" grep -qF "REPORT_COMPLETED" "${REPORT_SETE_OUT}"
+rm -f "${REPORT_SETE_OUT}"
+
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

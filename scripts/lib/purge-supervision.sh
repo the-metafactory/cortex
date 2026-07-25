@@ -92,3 +92,54 @@ purge_launchd_instances() {
     echo "  ⊘ no cortex/nats launchd plists found in ${launch_dir} — nothing to purge"
   fi
 }
+
+# Report the shared-substrate dirs `arc purge cortex` DELIBERATELY leaves in
+# place (cortex#2420). cortex writes into each of these, but NONE is
+# cortex-exclusive, so a blanket delete on purge could take out a neighbor's
+# state:
+#
+#   ~/.claude/events  — the raw Claude-Code event buffer. events-path.ts calls
+#                       `~/.claude/events/raw` the "hook-substrate boundary"
+#                       that stays put across every XDG wave; ANY Claude Code
+#                       hook or package can write here, not just cortex.
+#   ~/.claude/relay   — the cortex-relay dir. Holds relay-policy.yaml, which is
+#                       CONFIG that STAYS (migrate-state-dir.ts moves only
+#                       relay.pid out — "relay-policy.yaml is CONFIG and stays
+#                       put"); ~/.claude is likewise shared hook territory.
+#   ~/.config/nats    — NATS identity. arc's OWN nats provisioning
+#                       (identity-provision.ts) writes signing seeds + creds
+#                       here independent of cortex; only the seed carries a
+#                       "cortex-" prefix, so a glob can't safely tell cortex's
+#                       files from a neighbor's.
+#
+# These are documented as intentionally NOT-declared in arc-manifest.yaml's
+# `owns:` block; this surfaces that same decision at purge time so the operator
+# knows they remain and why — the arc#359 purge log would otherwise leave the
+# leftover unexplained (the cortex#2420 field-test surprise).
+#
+# Args: $1 HOME_DIR — defaults to ${HOME} (overridable for tests).
+report_intentionally_kept_shared_state() {
+  local home_dir="${1:-${HOME}}"
+  # path|reason pairs — the reason is shown so the operator can judge the risk
+  # of removing it by hand.
+  local kept=(
+    "${home_dir}/.claude/events|raw Claude-Code event buffer — hook-substrate boundary, shared by any CC hook"  # xdg-audit:allow(the hook-substrate boundary this reports as INTENTIONALLY KEPT — naming it is the point, cortex#2420)
+    "${home_dir}/.claude/relay|cortex-relay dir — holds relay-policy.yaml (config that stays) beside the pidfile"  # xdg-audit:allow(shared relay dir this reports as INTENTIONALLY KEPT — naming it is the point, cortex#2420)
+    "${home_dir}/.config/nats|NATS identity — arc's own nats provisioning writes signing seeds/creds here too"
+  )
+  echo "  Intentionally KEPT (shared state, not cortex-exclusive — see arc-manifest.yaml owns: note, cortex#2420):"
+  local entry path desc present=0
+  for entry in "${kept[@]}"; do
+    path="${entry%%|*}"
+    desc="${entry#*|}"
+    if [ -e "${path}" ]; then
+      present=1
+      echo "    • ${path} — ${desc}"
+    fi
+  done
+  if [ "${present}" -eq 0 ]; then
+    echo "    (none of the shared dirs are present on this host — nothing kept)"
+  else
+    echo "    Left in place on purpose. Remove by hand only if no other stack/hook/relay uses them."
+  fi
+}
