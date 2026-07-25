@@ -274,11 +274,17 @@ That is the practical meaning of "hot".
 - **No ambient fleet credentials.** Per-task brains get none. Daemon brains
   get their own scoped NATS creds (A.2) — addressable, revocable
   (`cortex creds revoke yarrow`), never the stack key.
-- **Policy stays in cortex.** M6 trust lists, capability gates,
-  `modelClass` sovereignty enforcement, envelope signing (M3) all happen on
-  the cortex side of the seam. A brain emitting `dispatch` for a capability
+- **Policy stays in cortex.** M6 trust lists, capability gates, the
+  `modelClass` sovereignty gate, envelope signing (M3) all happen on the
+  cortex side of the seam. A brain emitting `dispatch` for a capability
   outside its manifest is refused with `wont_do` — same fail-closed posture
-  as pulse's enforcement gate.
+  as pulse's enforcement gate. **Caveat (EBH-6b, cortex#2380):** the
+  sovereignty gate itself is audit-only by default — a violation is detected
+  and logged (`system.access.denied`), not denied, until a principal opts
+  in via `policy.sovereignty.enforce` (default `false`); see
+  `docs/security/hardening-plan.md` §F3 for the prerequisite (#2117/#2201)
+  before that opt-in is meaningful. The capability-outside-manifest
+  `wont_do` refusal above is a separate, always-on check.
 - **Resource caps** (v1: timeouts + maxConcurrent + maxRestarts; later:
   rlimits/containers) are host-side manifest fields.
 
