@@ -28,6 +28,7 @@ import {
   type SandboxUnavailableEvent,
   type SandboxDenialEvent,
 } from "./session-sandbox";
+import { EgressProxy, type EgressDenialEvent } from "./egress-proxy";
 
 // Re-export for convenience
 export type { UsageStats, StreamEvent };
@@ -75,6 +76,18 @@ export interface CCSessionOpts {
    * enforces it (EBH-3).
    */
   sandboxMode?: SandboxMode;
+  /**
+   * EBH-4 (cortex#2346) — additional egress hostnames for THIS session, on
+   * top of {@link SANDBOX_EGRESS_ALLOW_SEED}'s static seed (the compat-
+   * ibility-contract hosts every session needs: the model API, GitHub).
+   * Merged into {@link SandboxProfile.egressAllow} by {@link
+   * deriveSandboxProfile} — see that function's doc for the merge shape.
+   * Undefined/empty behaves exactly like today (seed-only allowlist).
+   * UNENFORCED unless `sandboxMode` is `"audit"`/`"enforce"` — see
+   * `egress-proxy.ts`'s module doc for what "enforced" means here (a
+   * cooperating-client proxy, not a kernel boundary).
+   */
+  egressAllow?: string[];
   timeoutMs?: number;
   cwd?: string;
   additionalArgs?: string[];
@@ -359,12 +372,15 @@ function splitGuardDirs(
  * for the identical reason it resolves to read-only in
  * `CORTEX_PATH_GUARD` (the safe default, EBH-1b).
  *
- * `execAllow`/`egressAllow` are NOT derived from `opts` — they're the
- * static compatibility-contract seed (see `session-sandbox.ts`), unenforced
- * until a real backend exists (EBH-3/EBH-4).
+ * `execAllow` is NOT derived from `opts` — it's the static compatibility-
+ * contract seed (see `session-sandbox.ts`), unenforced until a real exec
+ * jail exists (no backend enforces it yet). `egressAllow` IS now enforced
+ * (EBH-4, `egress-proxy.ts`) — it's the seed PLUS `opts.egressAllow`
+ * (deduplicated), so a caller can extend the allowlist per session without
+ * touching the static compatibility-contract list.
  */
 export function deriveSandboxProfile(
-  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,
+  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs" | "egressAllow">,
   mode: SandboxMode,
 ): SandboxProfile {
   const { allowedDirs, readOnlyDirs } = splitGuardDirs(opts);
@@ -372,7 +388,7 @@ export function deriveSandboxProfile(
     readWrite: allowedDirs,
     readOnly: readOnlyDirs,
     execAllow: [...SANDBOX_EXEC_ALLOW_SEED],
-    egressAllow: [...SANDBOX_EGRESS_ALLOW_SEED],
+    egressAllow: [...new Set([...SANDBOX_EGRESS_ALLOW_SEED, ...(opts.egressAllow ?? [])])],
     mode,
   };
 }
@@ -614,13 +630,111 @@ export class CCSession extends EventEmitter {
     // platform-dependent flakiness to every boot in the test suite. EBH-3a
     // wires the FIRST call into `cortex.ts`'s `startCortex` instead (a
     // one-time boot-path call, well away from this per-session choke point).
+    // EBH-4 (cortex#2346) — the L3 egress allowlist. Declared at function
+    // scope (not inside the try block below) so the `catch` can tear a
+    // successfully-started proxy back down if `sandbox.spawn` itself throws
+    // after the proxy bound its port — see `egress-proxy.ts` for the
+    // mechanism and its claim-hygiene doc (cooperating-client proxy, NOT a
+    // kernel boundary).
+    let egressProxy: EgressProxy | undefined;
     try {
+      // `mode: "off"` (the only value any live dispatch path sets —
+      // `sandboxMode` HARD HOLD, same as the FS backend) never constructs an
+      // `EgressProxy` at all: zero behaviour change, no listening socket, no
+      // env mutation. Only `audit`/`enforce` reach this branch.
+      if (sandboxProfile.mode !== "off") {
+        try {
+          egressProxy = new EgressProxy(sandboxProfile.egressAllow, sandboxProfile.mode);
+          const bound = egressProxy.start();
+          // Force the child through the proxy. Written UNCONDITIONALLY
+          // (upper+lowercase — different tools honor different casing) —
+          // same "cortex is the authoritative writer" discipline as
+          // CORTEX_BASH_GUARD/CORTEX_PATH_GUARD above. A NO_PROXY the parent
+          // env carried is deleted: leaving it would hand a cooperating
+          // client an explicit, config-driven bypass of the very proxy we
+          // just stood up (see egress-proxy.ts's module doc for the OTHER,
+          // non-cooperating bypass this does NOT close).
+          env.HTTP_PROXY = bound.proxyUrl;
+          env.HTTPS_PROXY = bound.proxyUrl;
+          env.http_proxy = bound.proxyUrl;
+          env.https_proxy = bound.proxyUrl;
+          delete env.NO_PROXY;
+          delete env.no_proxy;
+        } catch (proxyErr) {
+          const message = proxyErr instanceof Error ? proxyErr.message : String(proxyErr);
+          egressProxy = undefined;
+          if (sandboxProfile.mode === "enforce") {
+            // Fail closed (repo hard constraint) — "proxy unavailable while
+            // enabled" denies, it never silently launches with unfiltered
+            // egress. Thrown here so the outer catch's existing
+            // cleanupSettings + emit("error")/emit("exit") path handles it
+            // identically to a spawn failure.
+            throw new Error(
+              `[cc-session] EBH-4 egress proxy failed to start under mode "enforce" — refusing ` +
+                `to launch (fail-closed): ${message}`,
+              { cause: proxyErr },
+            );
+          }
+          // audit — no worse than "off" (mirrors MacosSbplSandbox's
+          // audit-canary-fail precedent): warn loudly, launch anyway,
+          // WITHOUT proxy env vars, so this run simply has no egress
+          // observability rather than a broken/inconsistent proxy config.
+          process.stderr.write(
+            `[cc-session] WARNING: EBH-4 egress proxy failed to start in audit mode (${message}) — ` +
+              `this session launches WITHOUT egress filtering or observability this run. ` +
+              `See docs/design-session-sandbox.md §4.3.\n`,
+          );
+        }
+      }
+
       this.proc = sandbox.spawn(["claude", ...args], sandboxProfile, {
         stdout: "pipe",
         stderr: "pipe",
         env,
         cwd: this.opts.cwd,
       });
+
+      if (egressProxy) {
+        const proxy = egressProxy;
+        // Tear the proxy down with the session — a listener left running
+        // past the child's exit is a leaked local port, not a security
+        // issue (127.0.0.1-only, deny-by-default even while orphaned), but
+        // leaking it is still sloppy and would eventually exhaust ephemeral
+        // ports on a long-lived daemon.
+        void this.proc.exited.finally(() => {
+          proxy.stop();
+        });
+        // EBH-4 (DD-6-style observability) — drain the proxy's denial
+        // stream for the lifetime of this session, mirroring EXACTLY the
+        // `SessionSandbox.denials()` loop below (same AsyncIterable
+        // consumption shape, same "security-event" EventEmitter payload,
+        // same never-let-the-drain-loop-crash-the-session discipline).
+        void (async () => {
+          try {
+            for await (const denial of proxy.denials()) {
+              const event: EgressDenialEvent = {
+                type: "system.security.egress-denial",
+                mode: sandboxProfile.mode as "audit" | "enforce",
+                host: denial.host,
+                port: denial.port,
+                reason: denial.reason,
+                blocked: denial.blocked,
+                timestamp: denial.timestamp,
+              };
+              this.emit("security-event", event);
+              process.stderr.write(
+                `[cc-session] ${event.type} mode=${event.mode} host=${event.host} ` +
+                  `port=${event.port} blocked=${event.blocked} reason="${event.reason}"\n`,
+              );
+            }
+          } catch (err) {
+            console.warn(
+              "cc-session: egress-proxy denial stream ended unexpectedly:",
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        })();
+      }
 
       // EBH-3a (DD-6) — drain the backend's denial stream in the background
       // for the lifetime of this session and surface each one the same way
@@ -674,8 +788,12 @@ export class CCSession extends EventEmitter {
       void this.wireExit();
     } catch (error) {
       // Spawn failed before the process existed — clean up the curated
-      // settings temp dir we just created (cortex#701).
+      // settings temp dir we just created (cortex#701), and any EBH-4
+      // egress proxy that bound its port before the failure (whether the
+      // failure WAS the proxy — the enforce fail-closed throw above — or a
+      // later `sandbox.spawn` failure with a proxy already listening).
       this.cleanupSettings();
+      egressProxy?.stop();
       const err = error instanceof Error ? error : new Error(String(error));
       this.emit("error", err);
       this.emit("exit", 1);

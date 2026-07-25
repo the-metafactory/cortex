@@ -1686,12 +1686,31 @@ export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
  * accepted by the schema (so a `system.yaml` written against the FUTURE
  * shape doesn't fail to parse today) but has NO effect yet — EBH-3 is what
  * makes `resolveSandboxBackend` branch on it.
+ *
+ * EBH-4 (cortex#2346) adds `egressAllow` — extra hostnames for the L3
+ * egress-filtering proxy (`src/runner/egress-proxy.ts`), ON TOP OF the
+ * static compatibility-contract seed (`SANDBOX_EGRESS_ALLOW_SEED`,
+ * `session-sandbox.ts`: `api.anthropic.com`, `github.com`, …) every session
+ * already carries. **Posture-visibility, not a posture flip — mirrors
+ * EBH-6b's `policy.sovereignty.enforce` pattern** (`PolicySchema.sovereignty`
+ * below): the schema exists and is parseable so a `system.yaml` CAN declare
+ * additional allowed hosts, but — exactly like `mode`/`backend` above —
+ * **no live dispatch path threads this config block into
+ * `CCSessionOpts`/`deriveSandboxProfile` yet.** `deriveSandboxProfile`
+ * currently reads `CCSessionOpts.egressAllow` (a per-call override, e.g. for
+ * tests or a future dispatch-path wiring), never this config field directly.
+ * Wiring `system.sandbox.egressAllow` (and `mode`) from a loaded config into
+ * a live `CCSessionOpts` is the SAME deferred step EBH-3a already deferred
+ * for `mode`/`backend` — a principal decision, not an agent-authored default
+ * (design-session-sandbox.md §6 rollout). `default([])` keeps an absent/
+ * empty block byte-identical to "seed-only allowlist", the safe default.
  */
 export const SandboxConfigSchema = z.object({
   mode: z.enum(["off", "audit", "enforce"]).default("off"),
   backend: z
     .enum(["auto", "macos-sbpl", "linux-bwrap", "container-delegated", "none"])
     .default("auto"),
+  egressAllow: z.array(z.string()).default([]),
 });
 
 export type SandboxConfig = z.infer<typeof SandboxConfigSchema>;

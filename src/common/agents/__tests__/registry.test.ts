@@ -114,7 +114,8 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
     // EBH-2 (cortex#2344) — same `.default()`-but-required-on-output story
     // as `execution`/`plugins` above: `SandboxConfigSchema` fills defaults
     // after parse, so a hand-built `CortexConfig` fixture must include it.
-    sandbox: { mode: "off", backend: "auto" },
+    // EBH-4 (cortex#2346) added `egressAllow` to the same schema.
+    sandbox: { mode: "off", backend: "auto", egressAllow: [] },
     inference: { providers: {}, profiles: {} },
     plugins: { external: false },
     github: {

@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, spyOn } from "bun:test";
 import { CCSession, type CCSessionOpts, resolvePathGuardEnv, deriveSandboxProfile } from "../cc-session";
 import { resetSandboxCapabilityProbeForTests } from "../session-sandbox";
 import { testClaude } from "../../common/test-utils";
@@ -221,6 +221,29 @@ describe("deriveSandboxProfile — EBH-2 policy → SandboxProfile projection (c
     expect(deriveSandboxProfile({}, "audit").mode).toBe("audit");
     expect(deriveSandboxProfile({}, "enforce").mode).toBe("enforce");
   });
+
+  /**
+   * EBH-4 (cortex#2346) — `opts.egressAllow` extends, never replaces, the
+   * static seed. This is the "wire egressAllow from the profile through to
+   * the proxy" contract's INPUT half — `egress-proxy.ts`'s tests cover the
+   * enforcement half.
+   */
+  test("opts.egressAllow is MERGED with the static seed, not a replacement", () => {
+    const profile = deriveSandboxProfile({ egressAllow: ["extra.example.com"] }, "audit");
+    expect(profile.egressAllow).toContain("api.anthropic.com"); // seed survives
+    expect(profile.egressAllow).toContain("extra.example.com"); // caller addition present
+  });
+
+  test("no opts.egressAllow ⇒ exactly the static seed, no duplication with itself", () => {
+    const profile = deriveSandboxProfile({}, "audit");
+    expect(profile.egressAllow).toEqual([...new Set(profile.egressAllow)]); // no dupes
+    expect(profile.egressAllow.length).toBeGreaterThan(0);
+  });
+
+  test("a duplicate of a seed entry in opts.egressAllow is deduplicated", () => {
+    const profile = deriveSandboxProfile({ egressAllow: ["api.anthropic.com"] }, "audit");
+    expect(profile.egressAllow.filter((h) => h === "api.anthropic.com")).toHaveLength(1);
+  });
 });
 
 /**
@@ -263,4 +286,121 @@ describe("CCSession — EBH-2 SessionSandbox routing", () => {
       backend: "none",
     });
   }, 60_000);
+});
+
+/**
+ * EBH-4 (cortex#2346) — proves `CCSession.start()` actually wires a spawned
+ * child through the `EgressProxy`: env vars set when `sandboxMode` is
+ * `"audit"`/`"enforce"`, absent when it's `"off"` (the HARD HOLD default,
+ * byte-identical to every session that exists today). Uses the same
+ * intercept-`Bun.spawn`-and-throw strategy as `cc-session-isolation.test.ts`
+ * — no real `claude` binary needed, deterministic, CI-safe. The REAL
+ * `EgressProxy` still binds a REAL ephemeral port in the "audit"/"enforce"
+ * cases (this is what proves the wiring, not a mock of it); the outer catch
+ * path (`egressProxy?.stop()`) tears it down when the intercepted spawn
+ * throws, so no port leaks across tests.
+ */
+describe("CCSession — EBH-4 egress proxy env wiring", () => {
+  interface Captured {
+    env: Record<string, string>;
+  }
+
+  function captureSpawn(): { calls: Captured[]; restore: () => void } {
+    const calls: Captured[] = [];
+    const spy = spyOn(Bun, "spawn").mockImplementation(((
+      _cmd: string[],
+      opts: { env: Record<string, string> },
+    ) => {
+      calls.push({ env: opts.env });
+      throw new Error("spawn intercepted by test");
+    }) as unknown as typeof Bun.spawn);
+    return { calls, restore: () => spy.mockRestore() };
+  }
+
+  test("mode 'off' (default) — no proxy env vars, byte-identical to pre-EBH-4", () => {
+    resetSandboxCapabilityProbeForTests();
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({ prompt: "hi", channel: "test" });
+      session.on("error", () => {/* expected — spawn intercepted */});
+      session.start();
+
+      expect(calls).toHaveLength(1);
+      const env = calls[0]!.env;
+      expect(env.HTTP_PROXY).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.http_proxy).toBeUndefined();
+      expect(env.https_proxy).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("mode 'audit' — HTTP_PROXY/HTTPS_PROXY point at a real local proxy port, NO_PROXY stripped", () => {
+    resetSandboxCapabilityProbeForTests();
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        sandboxMode: "audit",
+      });
+      session.on("error", () => {/* expected — spawn intercepted */});
+      session.start();
+
+      expect(calls).toHaveLength(1);
+      const env = calls[0]!.env;
+      expect(env.HTTP_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(env.HTTPS_PROXY).toBe(env.HTTP_PROXY);
+      expect(env.http_proxy).toBe(env.HTTP_PROXY);
+      expect(env.https_proxy).toBe(env.HTTP_PROXY);
+      expect(env.NO_PROXY).toBeUndefined();
+      expect(env.no_proxy).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("mode 'enforce' — same env wiring as audit", () => {
+    resetSandboxCapabilityProbeForTests();
+    const { calls, restore } = captureSpawn();
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        sandboxMode: "enforce",
+      });
+      session.on("error", () => {/* expected — spawn intercepted */});
+      session.start();
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.env.HTTP_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    } finally {
+      restore();
+    }
+  });
+
+  test("a NO_PROXY set on the parent env does not survive into a mode 'enforce' child (bypass-escape-hatch closed)", () => {
+    resetSandboxCapabilityProbeForTests();
+    const { calls, restore } = captureSpawn();
+    const priorNoProxy = process.env.NO_PROXY;
+    process.env.NO_PROXY = "*";
+    try {
+      const session = new CCSession({
+        prompt: "hi",
+        channel: "test",
+        sandboxMode: "enforce",
+        settingsIsolation: false, // inherits process.env as the base env
+      });
+      session.on("error", () => {/* expected — spawn intercepted */});
+      session.start();
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.env.NO_PROXY).toBeUndefined();
+    } finally {
+      if (priorNoProxy === undefined) delete process.env.NO_PROXY;
+      else process.env.NO_PROXY = priorNoProxy;
+      restore();
+    }
+  });
 });
