@@ -2944,3 +2944,158 @@ describe("persona allowedTools — EBH-7a dispatch-seam enforcement (cortex#2386
     await handler.shutdown();
   });
 });
+
+
+/**
+ * cortex#2406 (vision#11) — per-session GitHub App identity injection on the
+ * DIRECT dispatch path (`handleMessage` → handleSync/handleAsync/handleTeam).
+ *
+ * The bus-mediated path is covered separately in
+ * `runner/__tests__/dispatch-listener.test.ts`. BOTH need their own coverage:
+ * a single injection point would leave the other silently uncovered, which is
+ * exactly the coverage-drift class EBH-1e/1g hit twice for path-checking.
+ */
+describe("DispatchHandler — GitHub identity injection (cortex#2406)", () => {
+  /** An obvious placeholder — never a real credential (PUBLIC repo). */
+  const FAKE_MINTED_TOKEN = "ghs_EXAMPLE_PLACEHOLDER_NOT_A_REAL_TOKEN";
+
+  test("target agent with a declared identity gets a freshly-minted GH_TOKEN on its session env", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const mintedFor: string[] = [];
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+      githubEnvResolver: async (identityName) => {
+        mintedFor.push(identityName);
+        return { GH_TOKEN: FAKE_MINTED_TOKEN };
+      },
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "open a PR" }), {
+      id: "atlas",
+      displayName: "Atlas",
+      github: { identityName: "atlas" },
+    });
+
+    // Minted exactly once, for the declared identity, at dispatch time.
+    expect(mintedFor).toEqual(["atlas"]);
+    expect(optsLog()[0]?.agentEnv).toEqual({ GH_TOKEN: FAKE_MINTED_TOKEN });
+    await handler.shutdown();
+  });
+
+  test("OPT-IN: an agent with NO declared identity never mints and gets NO GitHub credential", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    let mintCalls = 0;
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+      githubEnvResolver: async () => {
+        mintCalls++;
+        return { GH_TOKEN: "should-never-be-minted" };
+      },
+    });
+
+    // `github` omitted entirely — the pre-#2406 agent shape.
+    await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+      id: "holly",
+      displayName: "Holly",
+    });
+
+    // Absence is the DEFAULT, not an error: no mint attempted, no credential,
+    // and the session still runs exactly as it did before #2406.
+    expect(mintCalls).toBe(0);
+    expect(optsLog()).toHaveLength(1);
+    expect(optsLog()[0]?.agentEnv?.GH_TOKEN).toBeUndefined();
+    expect(adapter.sentMessages.map((m) => m.text)).toEqual([
+      "All good — here's your answer.",
+    ]);
+    await handler.shutdown();
+  });
+
+  test("FAIL CLOSED: mint failure refuses the dispatch — no session spawns, no ambient-credential fallback", async () => {
+    const { factory, optsLog, spawnCount } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+      githubEnvResolver: async () => {
+        throw new Error("installation token exchange failed: 401 Unauthorized");
+      },
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "open a PR" }), {
+      id: "atlas",
+      displayName: "Atlas",
+      github: { identityName: "atlas" },
+    });
+
+    // The load-bearing assertion: the session must NOT start. Starting it
+    // without GH_TOKEN would let `gh`/`git` silently fall back to whatever
+    // ambient credential the host has (the principal's own `gh auth`) — the
+    // exact identity leak this feature exists to close. An empty-string or
+    // stale token would be just as wrong, so we assert on "no spawn at all".
+    expect(spawnCount()).toBe(0);
+    expect(optsLog()).toHaveLength(0);
+
+    // ...and it is AUDIBLE: the principal is told, rather than left to puzzle
+    // over a confusing downstream `gh` auth error.
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]?.text).toMatch(/GitHub identity credential/i);
+    await handler.shutdown();
+  });
+
+  test("the MINTED token wins over a static env.GH_TOKEN (runtime half of the load-time reject)", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+      githubEnvResolver: async () => ({ GH_TOKEN: FAKE_MINTED_TOKEN }),
+    });
+
+    // `AgentSchema` refuses this pair at config LOAD (cortex#2406), so it can
+    // only arrive from a non-schema caller. If the static value won, the
+    // session would run on a long-lived credential while the config claims a
+    // short-lived bot identity — silent identity confusion, unauditable after
+    // the fact. The minted value must win.
+    await handler.handleMessage(adapter, makeMsg({ content: "open a PR" }), {
+      id: "atlas",
+      displayName: "Atlas",
+      github: { identityName: "atlas" },
+      env: { GH_TOKEN: "static-long-lived-value-that-must-not-win" },
+    });
+
+    expect(optsLog()[0]?.agentEnv?.GH_TOKEN).toBe(FAKE_MINTED_TOKEN);
+    await handler.shutdown();
+  });
+
+  test("a non-colliding env: passthrough survives alongside the minted token", async () => {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+      githubEnvResolver: async () => ({ GH_TOKEN: FAKE_MINTED_TOKEN }),
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "open a PR" }), {
+      id: "atlas",
+      displayName: "Atlas",
+      github: { identityName: "atlas" },
+      env: { GOOGLE_APPLICATION_CREDENTIALS: "/tmp/sa.json" },
+    });
+
+    expect(optsLog()[0]?.agentEnv).toEqual({
+      GH_TOKEN: FAKE_MINTED_TOKEN,
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/sa.json",
+    });
+    await handler.shutdown();
+  });
+});

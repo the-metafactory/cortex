@@ -1216,7 +1216,15 @@ export class DispatchHandler extends EventEmitter {
       if (targetAgent?.github?.identityName !== undefined) {
         try {
           const githubEnv = await this.githubEnvResolver(targetAgent.github.identityName);
-          effectiveAgentEnv = { ...githubEnv, ...targetAgent?.env };
+          // Spread order is load-bearing: the MINTED value goes LAST so it wins
+          // over any static `env.GH_TOKEN` in the passthrough map. `AgentSchema`
+          // already refuses that pair at config load (cortex#2406), so in
+          // practice this collision cannot reach here from config — this is the
+          // runtime half of that pairing, defending the non-schema callers
+          // (a test, a future direct constructor) the load-time check can't see.
+          // Getting the order backwards would silently run the session on a
+          // long-lived credential while the config claims a bot identity.
+          effectiveAgentEnv = { ...targetAgent.env, ...githubEnv };
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           console.error(

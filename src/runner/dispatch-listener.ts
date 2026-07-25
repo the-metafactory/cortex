@@ -2254,11 +2254,19 @@ async function handleDispatchEnvelope(
     try {
       const resolveEnv = githubEnvResolver ?? resolveGithubEnvForAgent;
       const githubEnv = await resolveEnv(receivingGithubIdentity);
-      effectiveAgentEnv = { ...githubEnv, ...receivingAgentEnv };
+      // Spread order is load-bearing: the MINTED value goes LAST so it wins
+      // over any static `GH_TOKEN` in the passthrough map. `AgentSchema`
+      // already refuses that pair at config load (cortex#2406); this is the
+      // runtime half of that pairing, defending non-schema callers the
+      // load-time check cannot see. Backwards, it would silently run the
+      // session on a long-lived credential while config claims a bot identity.
+      effectiveAgentEnv = { ...receivingAgentEnv, ...githubEnv };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      // LOCAL stderr carries the diagnostic detail (mint failed ⇒ no token
+      // exists to leak, and this stream stays on the executing host).
       process.stderr.write(
-        `[runner/dispatch-listener] GH_TOKEN mint FAILED for agent=${receivingAgentId} ` +
+        `[runner/dispatch-listener] GitHub identity mint FAILED for agent=${receivingAgentId} ` +
           `identity=${receivingGithubIdentity} on envelope ${envelope.id} — refusing dispatch ` +
           `rather than starting a session without its declared identity: ${detail}\n`,
       );
@@ -2270,7 +2278,23 @@ async function handleDispatchEnvelope(
         startedAt: now,
         failedAt: now,
         errorSummary: "refused — GitHub identity credential could not be minted",
-        reason: { kind: "cant_do", detail },
+        // cortex#2406 — the PUBLISHED reason is a FIXED string, deliberately
+        // NOT the raw `detail` above. This event crosses the bus to the
+        // dispatching stack and lands in the audit trail, so it must not echo
+        // an error message whose content we do not control end-to-end: mint
+        // errors can carry the host's key PATH, the App/installation IDs, and
+        // a 500-char slice of GitHub's raw response body
+        // (`GithubAppTokenError` context, `github-app-token.ts`). Keeping the
+        // wire copy fixed means no credential-adjacent material can ride an
+        // error path off this host; the operator reads the specific cause in
+        // the local stderr line above, where it belongs.
+        reason: {
+          kind: "cant_do",
+          detail:
+            "the receiving stack could not mint this agent's GitHub App identity " +
+            "credential; the dispatch was refused rather than run under an " +
+            "unintended identity (see the receiving stack's logs for the cause)",
+        },
       });
       await runtime.publish(failed);
       return;

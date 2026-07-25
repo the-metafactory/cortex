@@ -4159,3 +4159,202 @@ describe("dispatch-listener — GH_TOKEN identity minting (cortex#2406, vision#1
     await listener.stop();
   });
 });
+
+/**
+ * cortex#2406 (vision#11) — THE credential-containment regression suite.
+ *
+ * `GH_TOKEN` breaks an invariant the rest of the per-agent `env:` machinery
+ * was built on. Every OTHER value in that map is either a non-secret literal
+ * (a credential PATH) or an UNRESOLVED `env:NAME` reference — `agent-env.ts`
+ * says so explicitly: "a config dump shows `env:NAME` and never the secret
+ * value". A minted installation token is the secret ITSELF, travelling through
+ * the same pipes. Nothing downstream was written with that in mind, so the
+ * containment has to be PINNED rather than assumed.
+ *
+ * These tests fail loudly if any future change starts echoing the session env
+ * into a log line, a bus event, or an error path.
+ */
+describe("dispatch-listener — GitHub credential containment (cortex#2406)", () => {
+  /**
+   * A distinctive, obviously-fake sentinel. Never a real credential (PUBLIC
+   * repo). Distinctive enough that a substring search over captured output
+   * cannot collide with unrelated text.
+   */
+  const SENTINEL = "ghs_SENTINEL_c0nt41nm3nt_pr0be_NOT_A_REAL_TOKEN";
+
+  /** Capture EVERY console/stream sink a leak could plausibly reach. */
+  function captureAllOutput(): { dump: () => string; restore: () => void } {
+    const chunks: string[] = [];
+    const record = (...args: unknown[]): void => {
+      chunks.push(args.map((a) => (typeof a === "string" ? a : String(a))).join(" "));
+    };
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const origLog = console.log;
+    const origError = console.error;
+    const origWarn = console.warn;
+    const origInfo = console.info;
+    const origDebug = console.debug;
+
+    process.stdout.write = (chunk: unknown): boolean => {
+      chunks.push(String(chunk));
+      return true;
+    };
+    process.stderr.write = (chunk: unknown): boolean => {
+      chunks.push(String(chunk));
+      return true;
+    };
+    console.log = record;
+    console.error = record;
+    console.warn = record;
+    console.info = record;
+    console.debug = record;
+
+    return {
+      dump: () => chunks.join("\n"),
+      restore: () => {
+        process.stdout.write = origOut;
+        process.stderr.write = origErr;
+        console.log = origLog;
+        console.error = origError;
+        console.warn = origWarn;
+        console.info = origInfo;
+        console.debug = origDebug;
+      },
+    };
+  }
+
+  test("the minted token reaches the session env and NOTHING else — not logs, not event payloads", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      agentGithubIdentityById: new Map([["cortex", "atlas"]]),
+      githubEnvResolver: async () => ({ GH_TOKEN: SENTINEL }),
+    });
+    await listener.start();
+
+    const cap = captureAllOutput();
+    try {
+      r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+      await settle(() => r.published);
+    } finally {
+      cap.restore();
+    }
+
+    // POSITIVE control: the token DID travel the intended path. Without this
+    // the negative assertions below could pass by simply never minting, which
+    // would make the whole suite vacuous.
+    expect(optsCaptured[0]?.agentEnv?.GH_TOKEN).toBe(SENTINEL);
+
+    // (1) Never logged. Covers cortex-trace stage lines, the dispatch-listener's
+    // own stderr diagnostics, and any console sink in the spawn path.
+    expect(cap.dump()).not.toContain(SENTINEL);
+
+    // (2) Never in a bus event payload. These envelopes cross to the
+    // dispatching stack and land in the audit trail — a credential riding one
+    // would outlive the session and escape the host entirely.
+    const publishedJson = JSON.stringify(r.published);
+    expect(publishedJson).not.toContain(SENTINEL);
+
+    // (3) Belt-and-braces: the envelopes did carry real content, so (2) is not
+    // passing merely because nothing was published.
+    expect(r.published.length).toBeGreaterThan(0);
+    expect(r.published.map((e) => e.type)).toContain("dispatch.task.completed");
+
+    await listener.stop();
+  });
+
+  test("the fail-closed event payload carries a FIXED reason, never the raw mint error", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    // A mint error shaped like the real one: `GithubAppTokenError` interpolates
+    // the host key PATH and a 500-char slice of GitHub's raw response body, so
+    // an error path that echoes `err.message` onto the bus ships host- and
+    // credential-adjacent material off the executing stack.
+    const LEAKY_ERROR_DETAIL =
+      "installation token exchange failed: 401 — key /home/principal/.config/" +
+      "metafactory/github-apps/atlas-private-key.pem appId 000000 installationId 000000";
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      agentGithubIdentityById: new Map([["cortex", "atlas"]]),
+      githubEnvResolver: async () => {
+        throw new Error(LEAKY_ERROR_DETAIL);
+      },
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    // Fail-closed: no session at all.
+    expect(optsCaptured).toHaveLength(0);
+
+    const failed = r.published.find((e) => e.type === "dispatch.task.failed");
+    expect(failed).toBeDefined();
+
+    // The raw error must NOT ride the bus — not in `reason.detail`, not
+    // anywhere else in the envelope.
+    expect(JSON.stringify(failed)).not.toContain("private-key.pem");
+    expect(JSON.stringify(failed)).not.toContain(LEAKY_ERROR_DETAIL);
+
+    // But the refusal is still AUDIBLE and self-explanatory to the dispatcher.
+    const payload = failed?.payload as { reason?: { kind?: string; detail?: string } };
+    expect(payload.reason?.kind).toBe("cant_do");
+    expect(payload.reason?.detail).toMatch(/could not mint .*GitHub App identity/i);
+    expect(payload.reason?.detail).toMatch(/refused/i);
+
+    await listener.stop();
+  });
+
+  test("an agent with no declared identity leaves the session env free of any GitHub credential", async () => {
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      // No agentGithubIdentityById at all — absence is the DEFAULT, not an error.
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    // Not an empty string, not a stale value — absent. An empty GH_TOKEN would
+    // produce a confusing downstream `gh` auth error instead of clean fallback.
+    expect(optsCaptured[0]?.agentEnv?.GH_TOKEN).toBeUndefined();
+    expect(r.published.map((e) => e.type)).toContain("dispatch.task.completed");
+
+    await listener.stop();
+  });
+});

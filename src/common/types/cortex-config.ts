@@ -1088,6 +1088,34 @@ export const AgentSchema = z.object({
       identityName: z.string().min(1),
     })
     .optional(),
+}).superRefine((agent, ctx) => {
+  // cortex#2406 — REJECT the contradictory pair at LOAD time. An agent that
+  // declares BOTH a `github.identityName` (⇒ cortex mints a fresh installation
+  // token and sets it as GH_TOKEN) AND a static `env.GH_TOKEN` passthrough has
+  // named two different GitHub identities for one session, and exactly one of
+  // them wins SILENTLY. That silence IS the identity-confusion class this field
+  // exists to close: the agent reads as acting like `atlas[bot]` while actually
+  // carrying whatever long-lived credential the static entry resolves to.
+  //
+  // Refusing the combination is the only honest resolution — any precedence
+  // rule still leaves a reader unable to tell which identity a session ran as.
+  // The runtime independently re-asserts the same outcome as defence-in-depth
+  // (both dispatch paths let the MINTED value win over the passthrough map), so
+  // a non-schema caller cannot reintroduce the ambiguity. Two layers, one
+  // answer — the same load-time/runtime pairing `agent-env.ts` documents.
+  if (agent.github !== undefined && agent.env?.GH_TOKEN !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["env", "GH_TOKEN"],
+      message:
+        `agent declares BOTH 'github.identityName' (cortex mints a fresh, short-lived ` +
+        `GitHub App installation token per dispatch) AND a static 'env.GH_TOKEN' ` +
+        `passthrough. Those are two different GitHub identities for one session and ` +
+        `only one can win, leaving the agent's effective identity ambiguous. Declare ` +
+        `exactly ONE: keep 'github.identityName' for a short-lived, revocable bot ` +
+        `identity (preferred), or drop it and keep the static 'env.GH_TOKEN' reference.`,
+    });
+  }
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no
