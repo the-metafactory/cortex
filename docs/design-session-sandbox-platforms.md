@@ -223,7 +223,7 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
 | **OQ-2** | Empirically map what `claude --print --resume` touches (fs-usage/strace)? | The compatibility contract is currently partly assumed. Without it, `audit` burn-in is guesswork. **Recommend: yes, fold into EBH-3a.** |
 | ~~**OQ-3**~~ | ~~On no-backend-available: run+loud or refuse?~~ | ✅ **DECIDED 2026-07-25 (principal) — see DD-11.** Split on input trust: federated/`openOnboarding` → **refuse**; principal-driven → **run + persistent degraded state** (not a one-shot event). Capability-degrade deferred. |
 | **OQ-4** | MCP servers inside the session jail or their own? | Simpler shared profile vs tighter per-server scoping. **Lean: inside, shared.** |
-| **OQ-5** | Add systemd hardening (`ProtectHome=`, `ReadOnlyPaths=`) to `cortex@.service` as a cheap complementary layer? | Free daemon-level defence on Linux, independent of per-session work. **Recommend: yes, separate small slice.** |
+| ~~**OQ-5**~~ | ~~Add systemd hardening (`ProtectHome=`, `ReadOnlyPaths=`) to `cortex@.service` as a cheap complementary layer?~~ | ✅ **RESOLVED — shipped.** `src/services/cortex@.service` now carries `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectSystem=strict` + `ProtectHome=read-only` (chosen over `true`/`tmpfs` — the daemon reads broadly under `$HOME` and a full hide/replace risked breaking an unenumerated legitimate read) with `ReadWritePaths=` punched for the three trees it actually writes (`~/.config/metafactory/cortex`, `~/.local/share/metafactory/cortex`, `~/.local/state/metafactory/cortex`) plus `~/.claude/events/raw` (the hook-substrate write target), `ProtectKernelTunables/Modules/ControlGroups=yes`, `RestrictSUIDSGID=yes`. Two directives were deliberately **not** set: `MemoryDenyWriteExecute` stays `no` (explicit, not omitted) — bun/node's JIT needs W+X pages, `yes` would SIGSYS the runtime; `RestrictNamespaces=` is **omitted entirely** — the not-yet-built `linux-bwrap` backend (E5/E6) will need to create its own namespaces as a child of this same daemon, and its exact minimal set isn't pinned yet, so guessing a value now risks silently blocking L2 the day it ships. Revisit `RestrictNamespaces=` alongside EBH-3b once that set is known. **Not yet verified on a real Linux boot** — `systemd-analyze verify` and functional testing were not available from the macOS environment this shipped from. |
 
 ---
 
@@ -232,7 +232,7 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
 **Yes — but only by not treating every environment the same.**
 
 - **macOS:** works today (E1/E2, verified) — with realpath discipline (E3) as the make-or-break detail.
-- **Linux (systemd host):** **probed — works** where unprivileged userns is permitted (E6); confines by absence rather than denial (E7). Plus free unit-level hardening (OQ-5).
+- **Linux (systemd host):** **probed — works** where unprivileged userns is permitted (E6); confines by absence rather than denial (E7). Plus free unit-level hardening — **shipped (OQ-5)**, unverified on a real Linux boot.
 - **Linux in a container:** **probed — `bwrap` cannot run at all** (E5, fails even as root). `container-delegated` (DD-8) is the *only* viable posture there, and its mount-table check is confirmed implementable (E8).
 - **Containers / dev containers:** seamless *by delegation* — the container already is the boundary; detect it, don't nest it (DD-8).
 - **CI:** unaffected.
