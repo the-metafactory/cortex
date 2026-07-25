@@ -21,10 +21,153 @@ RestartSec=10
 RestartSteps=5
 RestartMaxDelaySec=300
 
+# NOT "+"-prefixed (plain, matching the pre-hardening form). A "+" prefix
+# (run unsandboxed) was tried first, out of caution that ReadWritePaths=
+# below might hard-require these targets to pre-exist before a sandboxed
+# process could create them (a chicken-and-egg first-boot failure) — but
+# that broke the literal-string assertion scripts/__tests__/systemd-
+# render.sh pins for this exact line (cortex#2103's regression test), and
+# per the real systemd-e2e CI job (cortex#2071/OQ-5) the plain, sandboxed
+# form is what actually ships and passes: systemd's ReadWritePaths= appears
+# to auto-vivify a missing mountpoint rather than requiring it pre-exist.
+# If a future kernel/systemd-version combination proves that wrong, the "+"
+# prefix is the fix — but it will also need scripts/__tests__/systemd-
+# render.sh updated to match (out of scope for this unit-file-only slice).
 ExecStartPre=/usr/bin/mkdir -p %h/.local/share/metafactory/cortex/%i/workspace
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
+# ~/.claude/events/raw is normally created lazily by Claude Code's own
+# EventLogger hook on first write, not by cortex. Pre-creating it here means
+# a hardened first boot never races that lazy creation against the
+# ReadWritePaths= hole for it below (see OQ-5 / docs/design-session-sandbox-
+# platforms.md §5 "Event pipeline").
+ExecStartPre=/usr/bin/mkdir -p %h/.claude/events/raw
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
+
+# =============================================================================
+# Unit-level hardening (OQ-5, epic #2341 execution-boundary hardening).
+#
+# This is daemon-wide defence-in-depth, INDEPENDENT of and complementary to
+# the per-session sandbox (L2, docs/design-session-sandbox-platforms.md). It
+# bounds what the cortex process (and everything it forks — `claude`, `git`,
+# `gh`, CC hook scripts) can touch on the HOST filesystem/kernel, regardless
+# of whether a per-session backend is available.
+#
+# Scope note: this is a `systemctl --user` unit (see docs/getting-started.md,
+# docs/runbook-bootstrap-luna.md — %h/%i specifiers above only resolve this
+# way under a per-user systemd manager). Several directives below build a
+# private mount namespace via unprivileged user namespaces to sandbox an
+# UNPRIVILEGED unit — the SAME kernel capability the design doc's E5/E6 probe
+# found can be unavailable in some container/kernel-policy shapes ("No
+# permissions to create new namespace..."). Where that capability is absent,
+# systemd is expected to fail the unit closed at activation (loud, in the
+# journal) rather than silently skip the protection — but this has NOT been
+# verified on a real target host from this (macOS) environment. Confirm on
+# first Linux boot.
+# =============================================================================
+
+# No legitimate reason for this daemon (or claude/git/gh/bun children) to
+# gain privileges it didn't start with (setuid/setgid binaries, file
+# capabilities). Blocks a whole privilege-escalation class for free.
+NoNewPrivileges=yes
+
+# Give /tmp and /var/tmp a private, process-exclusive namespace instead of
+# the shared host ones. Cortex spawns sessions into `mkdtempSync(tmpdir())`
+# scratch dirs (src/runner/session-settings.ts) — those still work; they're
+# just no longer visible to (or poisonable by) anything else on the host.
+PrivateTmp=yes
+
+# Mounts the whole filesystem hierarchy read-only except the API vfs
+# (/dev,/proc,/sys) and (thanks to PrivateTmp=yes above) /tmp,/var/tmp. Holes
+# are punched explicitly below via ReadWritePaths= for the three trees this
+# daemon genuinely writes at runtime (traced from src/common/config/last-
+# good.ts, src/common/config/degraded-state.ts, src/common/data-path.ts,
+# src/common/pidfile.ts — NOT guessed). Everything else on the host —
+# /usr, /etc, /opt, other users' data, etc. — becomes structurally
+# unwritable, independent of any application-level check.
+ProtectSystem=strict
+
+# ProtectHome=read-only (not "true"/"tmpfs"): cortex and its `claude` child
+# legitimately READ broadly under $HOME — ~/.config/metafactory/cortex
+# (config + the nkey seed under ~/.config/nats), ~/.claude/hooks (exec),
+# ~/.claude/settings.json, ~/.local/bin + ~/.bun/bin (the runtime itself),
+# and plausibly other dotfiles (~/.gitconfig, gh's config, etc.) that were
+# not each individually enumerated here. "true" hides $HOME outright and
+# "tmpfs" replaces it with an empty overlay needing an exhaustive BindPaths=
+# allowlist — either risks silently breaking a legitimate read this audit
+# didn't catch. "read-only" keeps every one of those reads working while
+# still denying WRITE to everything under $HOME by default — which, as a
+# side effect, is also exactly the "must be denied" self-modification
+# guarantee for ~/.claude/settings.json and ~/.claude/hooks/** that the L2
+# compatibility contract (design doc §5) wants, now enforced a second way, at
+# the daemon boundary, for free.
+ProtectHome=read-only
+
+# The three trees this daemon actually writes at runtime (traced, not
+# assumed — see the ProtectSystem= comment above for the source modules):
+#   - config snapshot-on-successful-boot (`.last-good/` beside the config
+#     pointer, last-good.ts) — this is the daemon managing its OWN last-
+#     known-good fallback, not an agent session touching config; the L2
+#     "config immutability" denial (design doc §5) is a session-level
+#     concern and is unaffected by this hole.
+#   - published events, the Mission Control db, and each stack's workspace
+#     (all under the canonical XDG data root, data-path.ts).
+#   - logs, the pidfile, and the degraded-boot marker (the XDG state root,
+#     pidfile.ts / degraded-state.ts).
+# Plus ~/.claude/events/raw: the hook-substrate boundary CC's own spawned
+# EventLogger hook process writes JSONL into (design doc §5 "Event
+# pipeline"), and this daemon's in-process poller (src/surface/mc/hooks/
+# poller.ts) tails. Deliberately NOT punched: ~/.config/nats (the daemon
+# never writes there at runtime — only the manually-invoked `cortex network
+# join`/`make-live` CLI commands do, via src/common/nats/config-backup.ts,
+# outside this unit's ExecStart).
+ReadWritePaths=%h/.config/metafactory/cortex
+ReadWritePaths=%h/.local/share/metafactory/cortex
+ReadWritePaths=%h/.local/state/metafactory/cortex
+ReadWritePaths=%h/.claude/events/raw
+
+# ProtectKernelTunables=, ProtectKernelModules=, ProtectControlGroups= were
+# tried and REVERTED (real systemd-e2e CI failure, cortex#2071/OQ-5): a
+# `systemctl --user` manager runs unprivileged and cannot apply them —
+# `journalctl` showed "Failed to drop capabilities: Operation not
+# permitted" and the unit exited 218/CAPABILITIES on every start, an
+# outright daemon-down regression, not a degraded-but-working one. These
+# are SYSTEM-UNIT-ONLY (they need real host CAP_SYS_ADMIN/CAP_SYS_MODULE to
+# set up, which this unprivileged manager never has) — do not re-add them
+# here. What each would have bought, for whenever cortex ships a system-
+# unit variant: ProtectKernelTunables= blocks writes to /proc/sys and /sys
+# kernel tunables; ProtectKernelModules= blocks kernel module load/unload;
+# ProtectControlGroups= makes cgroupfs read-only. None of these are needed
+# by a `--user` unit's own cgroup (systemd itself manages that from
+# outside the unit's mount namespace regardless).
+
+# No legitimate reason to create setuid/setgid binaries or files with
+# inheritable capabilities. Kept (unlike the trio above): this is enforced
+# via seccomp, which a process can install on itself with no host
+# capability required (that's the whole point of NoNewPrivileges= + a
+# self-seccomp filter) — mechanically different from the mount/capability-
+# bounding-set work the removed trio needed. If the systemd-e2e job (the
+# real Linux boot test) turns up a 218/CAPABILITIES on THIS line too, pull
+# it next — bisected one at a time, per OQ-5.
+RestrictSUIDSGID=yes
+
+# Explicit "no", NOT omitted: bun/node's JIT needs writable+executable
+# memory pages. Setting MemoryDenyWriteExecute=yes would SIGSYS the runtime
+# on its first JIT compilation. This is systemd's own default, stated here
+# so a future reviewer sees a deliberate decision, not an oversight.
+MemoryDenyWriteExecute=no
+
+# RestrictNamespaces= deliberately OMITTED. The L2 per-session sandbox's
+# Linux backend (linux-bwrap, design doc §2.1 E5/E6) needs `bwrap` to create
+# its own namespaces (at minimum mount + user; the exact set isn't pinned
+# yet) — that work does not exist in this codebase today, but this unit
+# hosts it once it lands (bwrap runs as a child of THIS daemon). Setting
+# RestrictNamespaces= to anything narrower than that future need, without
+# yet knowing the exact minimal set bwrap requires, risks silently blocking
+# L2 the day it ships (a set-namespaces failure inside a `+`-less sandboxed
+# unit is easy to miss). Revisit alongside EBH-3b (linux-bwrap) once the
+# exact namespace set is known, and pin it explicitly then rather than
+# guessing it now.
 
 [Install]
 WantedBy=default.target
