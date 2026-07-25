@@ -748,12 +748,22 @@ export const AgentConfigSchema = z.object({
    *  `CortexConfigSchema.plugins`/`PluginsConfigSchema` in `./cortex-config.ts`
    *  for the full rationale (first-party-renderer exemption, etc). Drop
    *  both on 7.2e. Explicit object default (not `emptyDefault()`) so an
-   *  absent `plugins:` block yields `{external: false}`, not `{}` — see
-   *  `cortex-config.ts`'s `emptyDefault` docstring for the Zod v4 quirk
-   *  this sidesteps. */
+   *  absent `plugins:` block yields `{external: false, signing: "off"}`,
+   *  not `{}` — see `cortex-config.ts`'s `emptyDefault` docstring for the
+   *  Zod v4 quirk this sidesteps.
+   *
+   *  cortex#2347 (EBH-5) — `signing` MIRRORS
+   *  `PluginsConfigSchema.signing` (`./cortex-config.ts`) field-for-field.
+   *  Without it here, `AgentConfigSchema.parse(merged)` (the cortex-shape
+   *  synthesis path, `src/common/config/loader.ts`) would silently STRIP
+   *  a principal-declared `plugins.signing` off the merged object (Zod
+   *  drops unknown keys by default) — the exact "passthrough must mirror
+   *  the field" trap the `security`/`mc`/`plugins.external` comments in
+   *  `loader.ts`'s `loadCortexShape` already warn about for this file. */
   plugins: z.object({
     external: z.boolean().default(false),
-  }).default({ external: false }),
+    signing: z.enum(["off", "permissive", "enforce"]).default("off"),
+  }).default({ external: false, signing: "off" }),
 
   /** G-203b: GitHub webhook ingestion */
   github: z.object({

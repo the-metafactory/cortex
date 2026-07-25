@@ -1836,9 +1836,27 @@ export type {
  * this flag is off, because "don't load third-party code" (secure for
  * adapters) is fail-open for a paging sink (a stack with an uninstalled or
  * unloaded pager silently never pages).
+ *
+ * cortex#2347 (EBH-5, ADR-0024 D4 "named future escalation: registry
+ * signing") — `signing` is the staged posture gating bundle SIGNATURE
+ * verification (`src/adapters/plugin-signing.ts`), mirroring
+ * `SecurityPostureSchema.signing` (`./config.ts`) exactly: `off` (default —
+ * byte-identical to pre-EBH-5 behaviour, `plugin-signing.ts` is never
+ * consulted) · `permissive` (verify + log every outcome, NEVER refuse a
+ * bundle on a bad/missing signature — the shadow rung to prove
+ * verification against real installed bundles before gating anything) ·
+ * `enforce` (refuse to load any bundle whose `cortex-plugin.sig` is
+ * missing, malformed, tampered, or signed by a key outside the in-tree
+ * trust root). This is INDEPENDENT of `external`: signature verification
+ * (when non-`off`) applies to every bundle the loader considers, first-
+ * party or not — it is an ADDITIONAL gate layered on top of the existing
+ * org-trust / first-party checks, never a replacement for them, and never
+ * a new way to GRANT the first-party exemption (`isFirstPartyBundle` and
+ * its allowlist readers are untouched by this field).
  */
 export const PluginsConfigSchema = z.object({
   external: z.boolean().default(false),
+  signing: z.enum(["off", "permissive", "enforce"]).default("off"),
 });
 
 export type PluginsConfig = z.infer<typeof PluginsConfigSchema>;

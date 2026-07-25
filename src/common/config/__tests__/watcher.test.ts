@@ -94,6 +94,7 @@ const TEST_CONFIG: AgentConfig = {
   },
   plugins: {
     external: false,
+    signing: "off",
   },
   github: {
     webhookSecret: "",
