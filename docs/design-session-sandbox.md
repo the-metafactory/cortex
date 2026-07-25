@@ -44,6 +44,25 @@ per the epic's own §"three times now" lesson):**
 
 ---
 
+## 0.1 Implementation status — cortex#2409 part 2 (epic #2341)
+
+**L2 gained a SECOND posture — `SandboxProfile.posture: "strict"`
+(`generateMacosSbplStrictProfile`, `session-sandbox-macos.ts`) — updating the
+line above about L2 being "denylist-posture, not deny-default".** That was
+true of v1 `guarded` only; `strict` is genuine `(deny default)` + a derived,
+evidence-traced explicit-allow set, closing F1 **by construction** for
+everything outside that set. `posture` defaults to `"guarded"` and no live
+caller sets `"strict"` — same HARD HOLD shape as every prior EBH slice
+(mechanism ships, nothing flips it on). The E4 SIGABRT this doc's DD-10
+(via `-platforms.md`) treated as a reason to defer deny-default was
+diagnosed rather than routed around — see `-platforms.md`'s DD-10 addendum
+and the generator's own module doc for the full derivation. `strict` does
+NOT change L3's status above (network is still not confined at L2 — that
+stays L3's job) or L2's PF-anchor-less network story; it only closes the
+filesystem gap.
+
+---
+
 ## 1. Problem statement
 
 Cortex drives `claude --print` child processes from **untrusted inbound content** (Discord messages, GitHub events). Today the filesystem/exec/network boundary for those sessions is:

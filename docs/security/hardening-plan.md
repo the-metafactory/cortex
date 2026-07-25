@@ -35,7 +35,7 @@ A ladder, cheapest-and-most-owned first. Maps onto the review's Tier 0–3 (§6)
 |---|---|---|---|---|
 | **L0** | ~~**Repro** the `--add-dir` question~~ **✅ DONE 2026-07-24** — `--add-dir` is an *additive grant, not a jail*; both Read and Bash `cat` read an out-of-scope canary ([result](reviews/2026-07-24-ebh0-add-dir-repro.md)) | **F1 = clean High** (severity locked) | done | — |
 | **L1** | Cortex-owned `PreToolUse` **path guard** for file tools + Bash read-command paths; reuse `loader.ts` normalize+contain | F1 (cortex-owned side), F6 | S | — |
-| **L2** | **OS session jail** per `claude --print` (sandbox-exec / bwrap+landlock+seccomp) | **v1 `guarded`:** F6 by construction; F1 **only for the enumerated sensitive set** — *not* by construction. **v2 `strict`:** F1 by construction | M | choke point |
+| **L2** | **OS session jail** per `claude --print` (sandbox-exec / bwrap+landlock+seccomp) | **v1 `guarded`** (shipped, EBH-3a): F6 by construction; F1 **only for the enumerated sensitive set** — *not* by construction. **v2 `strict`** (shipped, mechanism-only, cortex#2409 part 2 — HARD HOLD `posture: "guarded"` default, no live caller sets `"strict"`): F1 by construction | M | choke point |
 | **L3** | **Egress allowlist** (filtering proxy, deny-by-default) | exfiltration containment | M | L2 net-ns |
 | **L4** | **Plugin process isolation** + registry signing | F2 | L | trigger-gated |
 
@@ -57,6 +57,31 @@ L1–L3 are designed in [`design-session-sandbox.md`](../design-session-sandbox.
 > Practical consequence: **do not describe L2 v1 as "the session is jailed."** It is
 > "these specific secrets are protected, and read-only means read-only." The sensitive-set
 > gap must be closed before `mode: audit` is ever enabled anywhere — tracked as **#2409**.
+
+> **✅ L2 v2 `strict` landed (2026-07-26, cortex#2409 part 2).** `generateMacosSbplStrictProfile`
+> (`session-sandbox-macos.ts`) is `(deny default)` + a DERIVED, evidence-traced explicit-allow
+> set — F1 is now closed **by construction** for everything outside that set, not merely
+> narrowed. `SandboxProfile.posture: "guarded" | "strict"` selects between the two generators;
+> `"guarded"` stays the default (HARD HOLD unchanged — no caller sets `"strict"`, `mode` still
+> defaults `"off"` everywhere). E4's SIGABRT (naive `(deny default)` aborting before any denial
+> is even logged) turned out to be dyld's own bootstrap failing on a handful of syscalls/reads
+> `(deny default)` silently blocks — fixed by importing Apple's own `dyld-support.sb`/`system.sb`
+> profile fragments (the SAME base every real macOS daemon profile uses), not by abandoning
+> deny-default. Proven both directions with a real `sandbox-exec` harness: legitimate workspace
+> access and a real `claude --print` + `--resume` round-trip succeed; an out-of-scope read is
+> denied with **no enumerated rule naming it** (the F1-by-construction proof). **Disclosed
+> residuals, not bugs to chase:** (1) keychain READ stays unconditionally allowed — denying it
+> (even narrowed to `file-read-data`) breaks `claude` login outright, empirically forced, same
+> finding as v1's write-only carve-out — so `strict` cannot protect keychain *contents* from a
+> compromised session, only keychain *tamper* (write stays denied by omission); (2) network is
+> NOT confined at L2 (`(allow network*)`, unconditional) — per-host egress filtering is L3's job
+> (`egress-proxy.ts`), and `strict` doesn't attempt to duplicate that boundary at the kernel
+> level; (3) the Homebrew-package-root heuristic for `git`/`gh`'s sibling files is a disclosed,
+> host-specific finding — unverified on a non-Homebrew git install. See
+> `session-sandbox-macos.ts`'s `generateMacosSbplStrictProfile` module doc for the full
+> round-by-round derivation (what was measured, not assumed, at each step) and
+> `session-sandbox-macos-strict.test.ts` for the regression pinning the keychain constraint
+> specifically.
 
 ---
 

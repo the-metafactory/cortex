@@ -28,6 +28,8 @@ const BASE_PROFILE: SandboxProfile = {
   execAllow: ["claude"],
   egressAllow: ["api.anthropic.com"],
   mode: "off",
+  posture: "guarded",
+  internalReadOnly: [],
 };
 
 afterEach(() => {
