@@ -1,0 +1,113 @@
+{
+  "swarm": "cortex-fleet",
+  "_provenance": {
+    "modeled_by": "hand-modeled from source, not adapter-generated — swarm-posture's adapt.ts has no cortex mode (only pai, pi, langgraph, crewai); see docs/security/swarm-posture/README.md '#Method' for why invoking an adapter was not an option and what was read instead",
+    "upstream_tool": "https://github.com/NorthwoodsSentinel/swarm-posture @ 12d042d9f936bc99fed9bd00c29da5e06211b953",
+    "as_of_cortex_commit": "93d0d5df",
+    "sources_read": [
+      "cortex.yaml.example (policy.roles[], policy.principals[], agents[])",
+      "docs/persona-format.md (allowedTools is advisory-only in v1 — not runtime-enforced)",
+      "agents.d/pier.yaml + personas/pier.md (Pier's shipped persona + openOnboarding confinement)",
+      "src/common/policy/resolve-access.ts (resolvePolicyAccess, deriveMcpGrants, anonOnboardingAccess)",
+      "src/common/policy/tool-inventory.ts (CLAUDE_TOOL_INVENTORY, tool.<name> capability grammar)",
+      "src/bus/dispatch-handler.ts (handleTeam — the three hardcoded team-mode participants + how allowedTools/mcpGrants/agentEnv flow into AgentTeamOpts unchanged)",
+      "src/runner/agent-team.ts (AgentTeamOpts propagation to every team session; bus-peer TeamParticipantConfig.kind)",
+      "src/runner/cc-session.ts (effectiveAllowedTools/effectiveDisallowedTools actually reaching the claude CLI invocation — the real enforcement point)",
+      "docs/security/ebh-6-posture-findings.md (independent corroboration: bashGuardDisabled also propagates unchanged to every team participant, agent-team.ts:610,733,915)"
+    ]
+  },
+  "data_tiers": {
+    "0": "public",
+    "1": "filesystem",
+    "2": "network-egress",
+    "3": "external-service",
+    "4": "secrets",
+    "5": "full-authority"
+  },
+  "sensitive_at_or_above": 3,
+  "role_owns": {
+    "principal": ["repo-and-config-files", "shell-and-secrets", "third-party-services", "full-authority"],
+    "code-reviewer": ["repo-and-config-files"],
+    "concierge": ["repo-and-config-files"],
+    "team-council": ["repo-and-config-files"]
+  },
+  "workers": [
+    {
+      "id": "principal-session",
+      "role": "principal",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "full-authority", "max_sensitivity": 5 }
+      ],
+      "invokes": ["team-moderator"]
+    },
+    {
+      "id": "team-moderator",
+      "role": "team-council",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "shell-and-secrets", "max_sensitivity": 4 },
+        { "class": "third-party-services", "max_sensitivity": 3 }
+      ],
+      "invokes": ["team-analyst", "team-creative", "team-critic"]
+    },
+    {
+      "id": "team-analyst",
+      "role": "team-council",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "shell-and-secrets", "max_sensitivity": 4 },
+        { "class": "third-party-services", "max_sensitivity": 3 }
+      ],
+      "invokes": []
+    },
+    {
+      "id": "team-creative",
+      "role": "team-council",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "shell-and-secrets", "max_sensitivity": 4 },
+        { "class": "third-party-services", "max_sensitivity": 3 }
+      ],
+      "invokes": []
+    },
+    {
+      "id": "team-critic",
+      "role": "team-council",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "shell-and-secrets", "max_sensitivity": 4 },
+        { "class": "third-party-services", "max_sensitivity": 3 }
+      ],
+      "invokes": []
+    },
+    {
+      "id": "concierge-anon",
+      "role": "concierge",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 }
+      ],
+      "invokes": []
+    },
+    {
+      "id": "concierge-authenticated",
+      "role": "concierge",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "shell-and-secrets", "max_sensitivity": 4 },
+        { "class": "third-party-services", "max_sensitivity": 3 },
+        { "class": "full-authority", "max_sensitivity": 5 }
+      ],
+      "invokes": []
+    },
+    {
+      "id": "review-bot",
+      "role": "code-reviewer",
+      "reads": [
+        { "class": "repo-and-config-files", "max_sensitivity": 1 },
+        { "class": "shell-and-secrets", "max_sensitivity": 4 }
+      ],
+      "invokes": []
+    }
+  ]
+}
