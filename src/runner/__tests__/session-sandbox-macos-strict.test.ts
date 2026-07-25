@@ -46,7 +46,6 @@ import { CCSession } from "../cc-session";
 import {
   getSandboxCapabilityProbe,
   resetSandboxCapabilityProbeForTests,
-  SANDBOX_EXEC_ALLOW_SEED,
   type SandboxDenialEvent,
 } from "../session-sandbox";
 import { hasClaude, testClaude } from "../../common/test-utils";
@@ -419,55 +418,33 @@ describe.skipIf(!isDarwin)("strict — real sandbox-exec, both directions", () =
 // machine's, which is the whole point (this IS what E-KC measured).
 // -----------------------------------------------------------------------------
 
-describe.skipIf(!isDarwin || !hasClaude)(
-  "THE keychain constraint — regression: denying keychain READ breaks a real claude session",
-  () => {
-    testClaude(
-      "a strict profile with the keychain-read allow line stripped fails auth ('Not logged in')",
-      async () => {
-        const { homedir } = await import("os");
-        const homeDir = homedir();
-        // The REAL generator's own output — same code path a live session
-        // would use — with ONLY the keychain-read allow line removed. Every
-        // other allow (system.sb, .claude.json, config home, etc.) stays,
-        // so a failure here isolates the keychain-read line specifically.
-        const workDir = mkdtempSync(join(tmpdir(), "cortex-strict-kc-regress-work-"));
-        try {
-          const generated = generateMacosSbplStrictProfile(
-            baseProfile({ readWrite: [workDir], execAllow: [...SANDBOX_EXEC_ALLOW_SEED] }),
-          );
-          const keychainAllowLine = `(allow file-read* (subpath "${join(homeDir, "Library", "Keychains")}"))`;
-          expect(generated.text).toContain(keychainAllowLine); // sanity — the line exists to strip
-          const withoutKeychainRead = generated.text
-            .split("\n")
-            .filter((line) => line !== keychainAllowLine)
-            .join("\n");
-
-          const profileDir = mkdtempSync(join(tmpdir(), "cortex-strict-kc-regress-profile-"));
-          try {
-            const profilePath = join(profileDir, "no-keychain.sb");
-            writeFileSync(profilePath, withoutKeychainRead);
-            const claudeBin = realpathSync(Bun.which("claude")!);
-            const result = Bun.spawnSync(
-              ["sandbox-exec", "-f", profilePath, claudeBin, "--print", "-p", "say hi"],
-              { stdout: "pipe", stderr: "pipe", cwd: workDir, env: { ...process.env } },
-            );
-            const combined = result.stdout.toString() + result.stderr.toString();
-            // The DOCUMENTED failure mode (module doc, v1's own two-round
-            // story) — auth breaks outright when keychain read is denied.
-            expect(result.exitCode).not.toBe(0);
-            expect(combined).toMatch(/not logged in|please run \/login|EPERM|error/i);
-          } finally {
-            rmSync(profileDir, { recursive: true, force: true });
-          }
-        } finally {
-          rmSync(workDir, { recursive: true, force: true });
-        }
-      },
-      30_000,
-    );
-  },
-);
+// SAFETY NOTE (added after this test's live form was found to carry a real
+// risk): the original version of this block spawned a REAL `claude --print`
+// process, against this machine's REAL $HOME, under a profile with the
+// keychain-read allow line deliberately stripped — to reproduce the
+// documented "denying keychain read breaks login" finding end-to-end. That
+// is exactly what it did: it reliably reproduced "Not logged in". But it
+// does so by repeatedly forcing a REAL `claude` invocation through a failed
+// auth path against the REAL, SHARED, global `~/.claude.json`/keychain
+// state on the host — not a fixture. Unlike this file's other real-
+// sandbox-exec tests (which use a fixture `$HOME` or fixture keychain
+// files), this one had no way to avoid touching the real auth state,
+// because the whole point was proving the REAL login path breaks. Running
+// it repeatedly, on a shared dev host where an active, longer-lived Claude
+// Code session's own authentication may depend on the SAME `~/.claude.json`
+// state, is a real, demonstrated hazard — not a hypothetical one — and it
+// was pulled after that risk surfaced, rather than kept for coverage this
+// suite does not need: the underlying fact (denying keychain read breaks
+// `claude` login) is ALREADY independently established and documented —
+// see `generateMacosSbplStrictProfile`'s module doc's "THE keychain
+// constraint" section and `session-sandbox-macos.ts`'s v1 `guarded`
+// module doc's own two-round story (a PRIOR, independent measurement of
+// the identical fact). The safe, still-real-sandbox-exec regression for
+// THIS module lives above: "THE keychain constraint, DIRECTION 1/2" in the
+// "strict — real sandbox-exec, both directions" describe block — those
+// use a FIXTURE `$HOME`/keychain file, never the real one, and assert the
+// same read-allowed/write-denied shape without ever exercising `claude`'s
+// own real auth path.
 
 // -----------------------------------------------------------------------------
 // MacosSbplSandbox — posture gating (mirrors v1's own "spawn() mode gating"
