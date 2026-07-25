@@ -127,6 +127,91 @@
  *     leakage), never file CONTENTS. Low-severity, accepted residual
  *     (cortex#2365 finding 3) — not chased further, same over-deny-not-
  *     under-deny direction as the rest of this list.
+ *
+ * ## Guard-off (G-300, principal DM) posture — EBH-1g, cortex#2377
+ *
+ * DECIDED (principal, 2026-07-25, option (b) of the EBH-6/F4 investigation,
+ * `docs/security/ebh-6-posture-findings.md` §F4): a guard-off session
+ * (`CORTEX_BASH_GUARD={"disabled":true}`) SKIPS the command-shape allowlist
+ * entirely — the principal may still run ANY command, unchanged — but now
+ * runs the SAME rounds 7-9 path-containment machinery (`checkCommandPaths`/
+ * `extractCommandPaths` in `"lenient"` mode) before deferring to Claude
+ * Code's own permission gate. Before this fix, `config === null` returned
+ * `pass()` immediately: Bash had ZERO cortex-owned protection in a guard-off
+ * session, even though the file tools (Read/Write/Edit/Glob/Grep/
+ * NotebookEdit, via the separate `path-guard.hook.ts`) were already
+ * containment-checked in the very same sessions (EBH-1). What is now
+ * protected, and what is not:
+ *   - PROTECTED: an out-of-scope path argument on ANY command — still
+ *     denies. `cat`/`head`/`tail`/`wc`/`ls`/`file` (single, non-subcommand
+ *     tools with a small, STABLE, exhaustively-modeled flag surface) keep
+ *     the exact strict round 7 flag classification, so `file -flist` stays
+ *     closed. `git`/`gh` are exempted from strict classification in
+ *     guard-off mode (see `SUBCOMMAND_SCOPED_FLAG_POLICIES` — their
+ *     `COMMAND_FLAG_POLICIES` entries only ever modeled the floor's narrow
+ *     read-only subcommands, so enforcing them strictly against an
+ *     arbitrary guard-off invocation denied ordinary usage like
+ *     `git commit -m`/`git push -u`/`gh pr create -t`); their round 8/9
+ *     findings (`git diff --no-index <path> <path>`, `gh … --body-file`)
+ *     still close via `isPathShapedFlagValue` (unconditional in both
+ *     modes) and the generic bareword-argument fallthrough, neither of
+ *     which the exemption touches. Every other (fully uncatalogued)
+ *     command uses the same lenient heuristic: a `-`-prefixed token that
+ *     doesn't itself look path-shaped is trusted as a non-path flag and
+ *     skipped, rather than denying the whole command for lacking a
+ *     cataloged policy — denying it would defeat G-300's entire purpose.
+ *   - ALLOWED, and containment-checked per segment: `|` pipes. A pipeline is
+ *     just more segments — `cat f.txt | wc -l` splits into "cat f.txt" and
+ *     "wc -l" the exact same way `&&`/`||`/`;` chains already did, and each
+ *     segment is containment-checked independently (see the `main()`
+ *     guard-off segment split, which now also splits on a bare `|`).
+ *     Everyday principal-DM commands like `cat x | wc -l` or
+ *     `git log --oneline | head` are unaffected. This is deliberately
+ *     asymmetric with guard-ON, where a bare pipe is STILL denied by
+ *     `rejectsChaining()`'s default call (no options) — there, a pipe could
+ *     smuggle a command past the command-SHAPE allowlist the RHS is never
+ *     matched against; in guard-off there is no shape-allowlist to smuggle
+ *     past (G-300 permits any command already), so denying a pipe bought no
+ *     containment once each side is independently checked. `cat
+ *     <out-of-scope> | wc -l` still denies (the "cat" segment fails
+ *     containment).
+ *   - STILL PROTECTED (genuinely, not just for symmetry):
+ *     command-substitution/backticks/redirects/background `&`/newlines —
+ *     `rejectsChaining()` still runs in guard-off mode (with
+ *     `allowPipes: true`) for these. Command substitution (`$(...)`,
+ *     backticks) computes its argument at RUN time — this guard only ever
+ *     sees the command STRING, so a substituted path can never be
+ *     containment-checked ahead of execution. A redirect (`<`/`>`) reads
+ *     from or writes to a target this guard never extracts as a "path
+ *     argument" at all (the tokenizer only inspects the command's own
+ *     argv-shaped tokens). Both genuinely defeat static path analysis, so
+ *     denying them is real containment, not friction — this is the one
+ *     narrow, deliberate capability reduction relative to pre-EBH-1g: a
+ *     guard-off session can no longer use `` ` ``/`$()`/`<`/`>`/background
+ *     `&`/newline in a single Bash call. `&&`/`||`/`;`/`|`-joined SIMPLE
+ *     commands are fully unaffected.
+ *   - PROTECTED: the trigger itself cannot be forged — guard-off is keyed
+ *     to the platform's own authenticated sender id, resolved per-message;
+ *     no traced producer (bus dispatch, GitHub webhook relay, web gateway,
+ *     `async:`/`team:`) can induce it for content it didn't itself author
+ *     as the mapped principal (§F4 investigation).
+ *   - NOT PROTECTED (residual, matches the file-tool surface's own
+ *     limitations above, applied to Bash): TOCTOU, a scripting language
+ *     invoked via Bash reading a path from WITHIN its own script text
+ *     (e.g. `python -c "open('/etc/passwd')"` — the guard sees a string
+ *     literal, not a file open), and — the one thing this fix does NOT
+ *     change — how BROAD the configured `allowedDirs` actually is for a
+ *     DM session. `allowedDirs` is resolved identically for DM and
+ *     non-DM sessions (`access.dirRestrictions ?? networkClaude.allowedDirs
+ *     ?? config.claude.allowedDirs`, `dispatch-handler.ts`) unless the
+ *     principal explicitly widens it via `session_config.dm.allowed_dirs`
+ *     — containment is only as narrow as that configured value; a
+ *     deployment that leaves it broad (or unset) gets correspondingly
+ *     little from this fix, by design, matching the "empty policy = no
+ *     restriction" contract every cortex-owned guard shares.
+ *   - The L2 sandbox (EBH-2/EBH-3, `docs/design-session-sandbox.md`) is
+ *     still the actual boundary that makes this moot regardless of the L1
+ *     posture chosen here — see that doc for the un-bypassable remedy.
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -368,8 +453,30 @@ function stripEnvPrefix(command: string): string {
  * quoting — a `|` inside a quoted argument is rare in the read-only command
  * surface this guard governs, and denying it (false positive) is the safe
  * direction. When in doubt, deny.
+ *
+ * `opts.allowPipes` (EBH-1g, cortex#2377) — used ONLY by `main()`'s guard-off
+ * (G-300) branch, never by the normal/guard-on call site (which always calls
+ * this with no options — behaviour there is BYTE-IDENTICAL to before EBH-1g).
+ * The reasoning that makes a bare `|` dangerous in the guard-ON path is
+ * specific to that path: the RHS of a pipe is a command the SHAPE-allowlist
+ * matcher never inspects, so a pipe could smuggle an arbitrary command past
+ * an allowed prefix (`ls | rm -rf /`). In a guard-OFF session there is no
+ * shape-allowlist to smuggle past — ANY command is already permitted by
+ * design (G-300) — so a pipe carries no privilege a segment-split command
+ * doesn't already have. What still matters in guard-off mode is PATH
+ * CONTAINMENT, and a pipeline decomposes into simple-command segments the
+ * exact same way `&&`/`||`/`;` already do (see `main()`'s guard-off segment
+ * split) — so `allowPipes` skips ONLY the bare-pipe check below; every other
+ * check (subst, backticks, redirects, background `&`, newline) is
+ * unconditional in BOTH modes. Command substitution and redirects stay
+ * denied even with `allowPipes` because they genuinely defeat static path
+ * analysis — a substituted path is computed at RUN time (this guard only
+ * ever sees the command STRING), and a redirect can write to or read from a
+ * target this guard never extracts as a "path argument" at all. Denying
+ * those is real containment; denying a bare pipe bought none once segments
+ * are containment-checked independently.
  */
-function rejectsChaining(command: string): boolean {
+function rejectsChaining(command: string, opts?: { allowPipes?: boolean }): boolean {
   // Newline (any flavour) → a second command line.
   if (/[\r\n]/.test(command)) return true;
   // Command substitution `$(` (covers `$(( ))` too) and backticks.
@@ -377,11 +484,18 @@ function rejectsChaining(command: string): boolean {
   if (command.includes("`")) return true;
   // Redirection — can clobber files or read secrets.
   if (/[<>]/.test(command)) return true;
-  // A single pipe `|` that is NOT one half of the `||` chain token. We
-  // collapse every `||` to a placeholder first, then look for a remaining `|`.
-  if (command.replace(/\|\|/g, "").includes("|")) return true;
+  if (!opts?.allowPipes) {
+    // A single pipe `|` that is NOT one half of the `||` chain token. We
+    // collapse every `||` to a placeholder first, then look for a remaining
+    // `|`.
+    if (command.replace(/\|\|/g, "").includes("|")) return true;
+  }
   // A single `&` that is NOT part of the `&&` chain token (i.e. background
-  // / job-control). Same collapse trick.
+  // / job-control). Same collapse trick. NOTE: this also still denies `|&`
+  // (bash's pipe-with-stderr shorthand) even when allowPipes is set — `|&`
+  // contains a lone `&` once `&&` is collapsed out, so it is caught here
+  // regardless. Accepted: `|&` is rare, and denying it is the safe
+  // direction, same as everywhere else in this function.
   if (command.replace(/&&/g, "").includes("&")) return true;
   return false;
 }
@@ -816,6 +930,57 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
   },
 };
 
+/**
+ * EBH-1g (cortex#2377) — commands whose {@link COMMAND_FLAG_POLICIES} entry
+ * is a SUBCOMMAND-SCOPED fragment, not a whole-tool policy, and therefore
+ * must NOT be strictly enforced against an arbitrary invocation in a
+ * guard-off (G-300, `extractCommandPaths(cmd, "lenient")`) session.
+ *
+ * `git`'s and `gh`'s entries above were built to cover exactly the
+ * subcommands `DEFAULT_CONFIG`'s floor allows (`log|diff|show|status|
+ * branch|fetch|remote|rev-parse` for git; `pr {view,list,diff,checks,
+ * status,comment}` / `issue {view,list,status,comment}` / `repo view` for
+ * gh) — every flag whitelisted there was verified safe FOR THOSE
+ * subcommands specifically. A guard-off session is not restricted to the
+ * floor's subcommands (that restriction is exactly what G-300 lifts), so
+ * `git commit -m`, `git push -u`, `git checkout -b`, `gh pr create -t`, …
+ * would all hit "unrecognised flag" and deny outright under the SAME
+ * strict classification every other known command gets — a crippling
+ * false-positive regression for the ordinary git/gh write workflows G-300
+ * exists to allow (`docs/design-dm-operator-channel.md` names "git write
+ * ops" explicitly), not a real security gap being closed.
+ *
+ * Exempting these two from strict classification in lenient mode falls
+ * back to the same generic heuristic an uncatalogued command gets: a
+ * `-`-prefixed token is denied outright ONLY if `isPathShapedFlagValue`
+ * flags it (still unconditional, in BOTH modes — catches `/`, `~`, and any
+ * dot-leading `=`-value regardless of command), otherwise trusted as a
+ * non-path flag and skipped. The round 8/9 findings this guard closed for
+ * git/gh (`git diff --no-index <path> <path>`, `gh … --body-file=<path>`)
+ * remain closed under this exemption too — both rely on
+ * `isPathShapedFlagValue` and/or the generic bareword-argument fallthrough
+ * (a SPACE-separated flag value, e.g. `--body-file <path>`, is always a
+ * SEPARATE token from the flag and is containment-checked regardless of
+ * flag classification), neither of which this exemption touches.
+ *
+ * Accepted residual (over-deny-not-under-deny direction intentionally NOT
+ * taken here, in favour of usability): a SHORT flag GLUED to a BARE
+ * RELATIVE value with no `/`/`~`/dot (e.g. a hypothetical `git -Cfoo` or
+ * `gh -Flist`, mirroring the exact round-7 `file -flist` shape) is not
+ * caught by `isPathShapedFlagValue` and, with the strict classifier
+ * exempted, is skipped rather than containment-checked in a guard-off
+ * session. This is narrower than round 7's `file` finding (`git`'s only
+ * value-taking short flags are `-n`/`-C`, `gh`'s are `-R`/`-S`/`-L`/`-b`/
+ * `-F` — none of which is `git`/`gh`'s own idiomatic form for chaining a
+ * value with no space or `=`) and is judged an acceptable trade for not
+ * breaking ordinary git/gh usage in the one context that most needs it to
+ * keep working (G-300). `cat`/`head`/`tail`/`wc`/`ls`/`file` are NOT on
+ * this list — they are single, non-subcommand tools with a small, STABLE,
+ * exhaustively-modeled flag surface, so strict classification stays
+ * correct (and load-bearing, per round 7) for them in every mode.
+ */
+export const SUBCOMMAND_SCOPED_FLAG_POLICIES = new Set(["git", "gh"]);
+
 type FlagClassification =
   | { kind: "safe" }
   | { kind: "value"; value: string }
@@ -945,9 +1110,30 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
  * tokens as flags: a dash-led literal filename after `--` (e.g. `-flist`)
  * is now actually checked, not waved through.
  *
+ * EBH-1g (cortex#2377) added the `mode` parameter. `"strict"` (the default,
+ * used for every normal-session allowlisted command) is unchanged from
+ * round 9: a `-`-prefixed token on a command with no `COMMAND_FLAG_POLICIES`
+ * entry denies the whole command. `"lenient"` is used ONLY for a guard-off
+ * (G-300) session's path-containment pass (see `checkCommandPaths`'
+ * `opts.lenient` and `main()`'s `config === null` branch): since G-300's
+ * entire point is that the principal may run a command this guard has never
+ * catalogued, a `-`-prefixed token that isn't itself path-shaped
+ * (`isPathShapedFlagValue` still runs FIRST, in both modes) is trusted as a
+ * boolean/non-path flag and skipped rather than denying the command. A
+ * command that DOES have a `COMMAND_FLAG_POLICIES` entry is normally
+ * unaffected by `mode` — its flags are still classified precisely, so the
+ * round 7 finding (`file -flist`) stays closed even in a guard-off session
+ * — EXCEPT `git`/`gh` (see {@link SUBCOMMAND_SCOPED_FLAG_POLICIES}), whose
+ * policy entries are deliberately scoped to the floor's narrow read-only
+ * subcommands, not the whole tool, and would otherwise deny ordinary
+ * guard-off usage (`git commit -m`, `git push -u`, `gh pr create -t`, …).
+ *
  * Exported for unit tests.
  */
-export function extractCommandPaths(command: string): ExtractedCommandPaths {
+export function extractCommandPaths(
+  command: string,
+  mode: "strict" | "lenient" = "strict",
+): ExtractedCommandPaths {
   const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const paths: string[] = [];
   // cortex#2359 round 7 — the calling command's safe-flag whitelist. Mirrors
@@ -955,7 +1141,14 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
   // call checkCommandPaths() at all; recomputed here so this function stays
   // self-contained (its own module-doc "Exported for unit tests" contract).
   const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(command)?.[1]?.toLowerCase();
-  const flagPolicy = headWord ? COMMAND_FLAG_POLICIES[headWord] : undefined;
+  // EBH-1g (cortex#2377): in LENIENT mode only, a command on
+  // SUBCOMMAND_SCOPED_FLAG_POLICIES is treated as if it had no policy at
+  // all — see that set's doc for why `git`/`gh` specifically must not be
+  // strictly classified against a policy that was only ever calibrated for
+  // the floor's narrow subcommand set.
+  const lenientExempt = mode === "lenient" && headWord !== undefined
+    && SUBCOMMAND_SCOPED_FLAG_POLICIES.has(headWord);
+  const flagPolicy = headWord && !lenientExempt ? COMMAND_FLAG_POLICIES[headWord] : undefined;
   // cortex#2365 (EBH-1d, round 8 finding 2) — POSIX end-of-options marker.
   // A bare `--` stops flag parsing for every standard tool; everything
   // after it is a positional argument EVEN IF it starts with `-`. Before
@@ -990,11 +1183,23 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
         };
       }
       // cortex#2359 round 7 — the whitelist gate. `flagPolicy` is always
-      // defined here in practice (this function only ever runs for a
+      // defined here in STRICT mode (this function only ever runs for a
       // PATH_CHECKED_COMMANDS head word — see checkCommandPaths' call
-      // site), but an absent policy fails CLOSED rather than silently
+      // site), so an absent policy fails CLOSED rather than silently
       // skipping the token, matching this whole module's posture.
+      //
+      // EBH-1g (cortex#2377) LENIENT mode is the one exception, used ONLY
+      // for a guard-off (G-300) session: G-300's whole point is that the
+      // principal may run a command this guard has never catalogued, so
+      // hard-failing on "no known flag policy" would defeat it. A flag
+      // token that survived `isPathShapedFlagValue` above (i.e. does not
+      // itself look like it carries a path) is trusted as a boolean/
+      // non-path flag and skipped, rather than denying the whole command.
+      // This is a heuristic, not per-command flag knowledge — see the
+      // module doc's "guard-off lenient mode" note for the accepted
+      // residual this trades away.
       if (!flagPolicy) {
+        if (mode === "lenient") continue;
         return {
           paths: null,
           reason:
@@ -1004,6 +1209,13 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
       }
       const classified = classifyFlagToken(tok, flagPolicy);
       if (classified.kind === "deny") {
+        // EBH-1g: deliberately NOT relaxed by `mode === "lenient"`. A
+        // COMMAND_FLAG_POLICIES entry exists precisely because one of this
+        // command's flags reads a path (rounds 7-9: `file -flist`,
+        // `git diff --no-index`, `gh … --body-file`) — relaxing this for
+        // guard-off sessions would silently reopen those exact findings in
+        // the one context that most needs the defense-in-depth (indirect
+        // prompt injection into an already-trusted session, per EBH-6/F4).
         return {
           paths: null,
           reason:
@@ -1064,8 +1276,25 @@ export function extractCommandPaths(command: string): ExtractedCommandPaths {
  * bypasses: those fixes previously lived in divergent, hook-local code, so
  * a fix landing on one surface (e.g. path-guard's Glob branch) left the
  * other (bash-guard's command-path check) open. Exported for unit tests.
+ *
+ * `opts.lenient` (EBH-1g, cortex#2377) — used ONLY by `main()`'s guard-off
+ * (G-300, `CORTEX_BASH_GUARD={"disabled":true}`) branch. Normal
+ * (`opts.lenient` unset/false) callers keep the round-9 posture EXACTLY:
+ * a command with no `COMMAND_FLAG_POLICIES` entry denies outright. Lenient
+ * callers skip that gate — G-300's whole point is that the principal may
+ * run a command this guard has never catalogued — and pass `"lenient"`
+ * through to {@link extractCommandPaths} instead, which does the actual
+ * flag-vs-path heuristic (see that function's doc). Everything else
+ * (policy load, the "no restriction configured" shortcut, path reduction +
+ * containment) is IDENTICAL in both modes — lenient only changes how a
+ * command's FLAGS are classified, never whether an extracted path must be
+ * contained.
  */
-export function checkCommandPaths(trimmedCommand: string): { allow: boolean; reason: string } {
+export function checkCommandPaths(
+  trimmedCommand: string,
+  opts?: { lenient?: boolean },
+): { allow: boolean; reason: string } {
+  const lenient = opts?.lenient ?? false;
   const configResult = parsePathGuardConfig(process.env.CORTEX_PATH_GUARD);
   if (!configResult.ok) {
     return {
@@ -1083,17 +1312,33 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
   }
 
   // cortex#2370 (EBH-1e, round 9) — the runtime half of the opt-in→opt-out
-  // inversion: a command only ever reaches this function when its head word
-  // is NOT on PATH_CHECK_OPT_OUT_COMMANDS (see the call site in main()), so
-  // it MUST carry an explicit COMMAND_FLAG_POLICIES entry. This is checked
-  // UNCONDITIONALLY here — not just when a `-`-prefixed token happens to be
-  // present — so a policy-less command with an all-positional invocation
-  // (no flags at all) still fails CLOSED instead of silently sailing through
-  // extractCommandPaths' generic non-flag fallthrough. (extractCommandPaths
-  // still carries its own flagPolicy-presence check too, for the case where
-  // it's ever called directly — defense in depth, not the primary gate.)
+  // inversion: a NORMAL-mode command only ever reaches this function when
+  // its head word is NOT on PATH_CHECK_OPT_OUT_COMMANDS (see the call site
+  // in main()), so it MUST carry an explicit COMMAND_FLAG_POLICIES entry.
+  // This is checked UNCONDITIONALLY here — not just when a `-`-prefixed
+  // token happens to be present — so a policy-less command with an
+  // all-positional invocation (no flags at all) still fails CLOSED instead
+  // of silently sailing through extractCommandPaths' generic non-flag
+  // fallthrough. (extractCommandPaths still carries its own flagPolicy-
+  // presence check too, for the case where it's ever called directly —
+  // defense in depth, not the primary gate.)
+  //
+  // EBH-1g: a `lenient` (guard-off) caller SKIPS this gate — a command
+  // with no cataloged policy must still be allowed to run (G-300); its
+  // flags are heuristically classified by extractCommandPaths' lenient
+  // mode instead. A missing/malformed head word is still a fail-closed
+  // deny in EITHER mode — that is not a "no policy" case, it means the
+  // command string itself could not be parsed at all.
   const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(trimmedCommand)?.[1]?.toLowerCase();
-  if (!headWord || !COMMAND_FLAG_POLICIES[headWord]) {
+  if (!headWord) {
+    return {
+      allow: false,
+      reason:
+        `[Cortex Bash Guard] Blocked "${trimmedCommand.slice(0, 80)}": could not determine a ` +
+        `command head word — denying fail-closed.`,
+    };
+  }
+  if (!lenient && !COMMAND_FLAG_POLICIES[headWord]) {
     return {
       allow: false,
       reason:
@@ -1102,7 +1347,7 @@ export function checkCommandPaths(trimmedCommand: string): { allow: boolean; rea
     };
   }
 
-  const extracted = extractCommandPaths(trimmedCommand);
+  const extracted = extractCommandPaths(trimmedCommand, lenient ? "lenient" : "strict");
   if (extracted.paths === null) {
     return {
       allow: false,
@@ -1385,11 +1630,88 @@ async function main(): Promise<void> {
 
   const config = configResult.config;
 
-  // G-300: Guard disabled (principal DM) — pass through, defer to the already-
-  // permissive bypass session. Intentionally NOT a grant: this path is out of
-  // the allowlist's scope, and broadening it to auto-approve would be a strictly
-  // wider authority than the disabled-guard contract promises (cortex#777).
+  // G-300: Guard disabled (principal DM). EBH-1g (cortex#2377, principal-
+  // decided option (b)): the command-SHAPE allowlist (config.rules) is
+  // still SKIPPED entirely — the principal may run ANY command; that is
+  // the whole point of G-300 (docs/design-dm-operator-channel.md) — but
+  // the rounds 7-9 path-containment machinery now runs before deferring to
+  // Claude Code's own gate. Before this fix, this branch returned pass()
+  // unconditionally: Bash had ZERO cortex-owned protection in a guard-off
+  // session, even though the file tools (Read/Write/Edit/Glob/Grep/
+  // NotebookEdit, via the separate path-guard.hook.ts) were already
+  // containment-checked in the very same sessions (EBH-1). The residual
+  // this closes is INDIRECT prompt injection into an already-legitimate
+  // guard-off session — the trigger itself cannot be forged (verified in
+  // docs/security/ebh-6-posture-findings.md §F4); the realistic risk is
+  // the principal asking the agent to read a PR/issue/URL whose fetched
+  // content carries an injection, with a previously-unbounded Bash tool.
+  //
+  // Still intentionally NOT a grant() at the end of this branch: it stays
+  // out of the allowlist's auto-approve scope, matching the pre-EBH-1g
+  // contract (cortex#777) — this only ADDS a containment gate in front of
+  // the same pass()-or-deny() outcomes that existed before.
   if (config === null) {
+    // rejectsChaining() is NOT the command-shape allowlist this branch
+    // otherwise skips — see the module doc's "No-bypass guard" section and
+    // that function's own `opts.allowPipes` doc. It is what makes the
+    // per-segment containment check below SOUND: command substitution and
+    // redirects let a path be COMPUTED at run time, or a write/read target
+    // hide outside the argument list this guard extracts — neither is
+    // something a segment split can decompose, so both stay denied
+    // unconditionally, in EITHER mode.
+    //
+    // A bare pipe `|` is different: `allowPipes: true` here (guard-off
+    // ONLY — the guard-on call site below passes no options and is
+    // unaffected). A pipeline is JUST MORE SEGMENTS — `cat f.txt | wc -l`
+    // decomposes into "cat f.txt" and "wc -l" exactly the way
+    // `cat f.txt && wc -l` already does below, and each is
+    // containment-checked independently. Denying it bought no containment
+    // guard-on didn't already have a reason to deny it FOR (there, a pipe
+    // could smuggle a command past the shape-allowlist — a concern that
+    // doesn't exist here, since G-300 has no shape-allowlist to smuggle
+    // past). Confirmed: `cat <out-of-scope> | wc -l` and
+    // `wc -l < <out-of-scope>` still deny — the first via the containment
+    // check on the "cat" segment, the second because `<` redirection stays
+    // in the unconditional deny set above.
+    if (rejectsChaining(rawCommand, { allowPipes: true })) {
+      const reason =
+        `[Cortex Bash Guard] Blocked "${rawCommand.slice(0, 80)}" (guard-off session, EBH-1g): ` +
+        `command contains a shell metacharacter (command substitution, backtick, redirect, ` +
+        `background '&', or newline) that path-containment cannot safely verify across ` +
+        `(pipes are fine — each command in the pipeline is containment-checked separately). ` +
+        `Split it into separate commands — G-300 still allows any individual command.`;
+      deny(reason);
+      await emitBlockEvent(sessionId, reason, command);
+      return;
+    }
+
+    // Same segment split as the allowlisted path below (&&/||/;), PLUS a
+    // bare pipe `|` (guard-off only — see the allowPipes note above). Order
+    // matters: `\|\|` must precede the bare `\|` alternative so a `||`
+    // token is matched as ONE two-character separator, not split into two
+    // single-pipe separators that would leave stray `|` characters glued to
+    // the neighbouring segment. Each resulting segment is one simple
+    // invocation, containment-checked independently and leniently (no
+    // COMMAND_FLAG_POLICIES entry required to run).
+    const guardOffParts = command.split(/\s*(?:&&|\|\||;|\|)\s*/);
+    for (const part of guardOffParts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+
+      const headWord = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(trimmed)?.[1]?.toLowerCase();
+      // Commands PROVEN not to take a path argument at all (see
+      // PATH_CHECK_OPT_OUT_COMMANDS above) skip containment even here —
+      // `echo /etc/passwd` prints a string, it never opens the path.
+      if (headWord && PATH_CHECK_OPT_OUT_COMMANDS.has(headWord)) continue;
+
+      const pathCheck = checkCommandPaths(trimmed, { lenient: true });
+      if (!pathCheck.allow) {
+        deny(pathCheck.reason);
+        await emitBlockEvent(sessionId, pathCheck.reason, command);
+        return;
+      }
+    }
+
     pass();
     return;
   }

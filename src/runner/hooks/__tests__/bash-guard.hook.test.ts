@@ -2753,3 +2753,386 @@ describe("bash-guard.hook — EBH-1f: floor rule shape hardening (cortex#2374 re
   });
 });
 
+// =============================================================================
+// EBH-1g (cortex#2377, principal-decided option (b)) — guard-off (G-300,
+// CORTEX_BASH_GUARD={"disabled":true}) sessions still run path containment.
+//
+// Before this fix, `config === null` (disabled) returned pass() immediately —
+// Bash had ZERO cortex-owned protection in a principal-DM session, even
+// though the file tools (Read/Write/Edit/Glob/Grep/NotebookEdit, via the
+// separate path-guard.hook.ts) were already containment-checked in the very
+// same sessions (EBH-1). The fix: the disabled branch SKIPS the command-shape
+// allowlist (config.rules) entirely — any command may still run, preserving
+// the whole point of G-300 — but now runs the SAME reduceTokenToRealPathOrReject
+// + containment machinery rounds 7-9 built, in a LENIENT mode: a command with
+// no COMMAND_FLAG_POLICIES entry doesn't hard-fail on an unrecognised flag
+// (that would defeat "any command must be runnable"); it just treats a
+// non-path-shaped flag as safe and skips it, while a KNOWN command (one that
+// DOES have a COMMAND_FLAG_POLICIES entry — cat/head/tail/wc/ls/file/git/gh)
+// keeps the EXACT round 7-9 strict flag classification, so the specific
+// findings those rounds closed (file -flist, git diff --no-index, gh
+// --body-file) stay closed even in a guard-off session.
+// =============================================================================
+describe("bash-guard.hook — EBH-1g: guard-off (G-300) path containment (cortex#2377)", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-ebh1g-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "EBH-1G-EXFIL-CANARY-MARKER\n");
+    writeFileSync(join(allowedDir, "body.md"), "an ordinary in-scope file\n");
+    writeFileSync(join(allowedDir, "other.md"), "a second ordinary in-scope file\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function guardOffEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_BASH_GUARD: JSON.stringify({ disabled: true }),
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  // ---- DENY: the F4 gap this closes — a known, path-checked command ----
+
+  test("cat <out-of-scope> in a guard-off session ⇒ DENY (the F4 gap: Bash had zero containment)", () => {
+    const r = runHook(
+      `cat ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("outside every configured");
+  });
+
+  // ---- ALLOW: in-scope reads on a known command still work, deferring to CC's gate (pass, not grant) ----
+
+  test("cat <in-scope> in a guard-off session ⇒ ALLOW via pass-through (not an auto-approve grant)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    // Guard-off never grant()s — it defers to Claude Code's own permission
+    // gate either way (cortex#777 posture, unchanged by EBH-1g).
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // ---- ALLOW: a non-allowlisted (unknown) command with in-scope paths — G-300 preserved ----
+
+  test("sort <in-scope> — a command with NO COMMAND_FLAG_POLICIES entry and no DEFAULT_CONFIG rule ⇒ ALLOW (G-300: any command runs)", () => {
+    const r = runHook(
+      `sort ${join(allowedDir, "body.md")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("sort -u <in-scope> — an unmodeled but non-path-shaped flag on an unknown command ⇒ ALLOW (lenient: skipped, not denied)", () => {
+    const r = runHook(
+      `sort -u ${join(allowedDir, "body.md")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // ---- DENY: the same unknown command with an out-of-scope path ----
+
+  test("sort <out-of-scope> — an unknown command with an out-of-scope positional path ⇒ DENY (lenient containment still applies)", () => {
+    const r = runHook(
+      `sort ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- DENY preserved for the exact round 7 finding — a KNOWN command's unmodeled path-glued flag ----
+
+  test("file -flist in a guard-off session ⇒ still DENY (round 7 defense-in-depth preserved for known commands)", () => {
+    writeFileSync(join(allowedDir, "list"), `${join(secretDir, "canary.txt")}\n`);
+    const r = runHook("file -flist", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("unrecognised flag");
+  });
+
+  // ---- DENY preserved for the exact round 8 finding — git diff --no-index ----
+
+  test("git diff --no-index <out-of-scope> <in-scope> in a guard-off session ⇒ still DENY (round 8 finding preserved)", () => {
+    const r = runHook(
+      `git diff --no-index ${join(secretDir, "canary.txt")} ${join(allowedDir, "body.md")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("gh pr comment 1 --body-file=<out-of-scope> in a guard-off session ⇒ still DENY (round 9 finding preserved, `=` glued form)", () => {
+    const r = runHook(
+      `gh pr comment 1 --body-file=${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("gh pr comment 1 --body-file <out-of-scope> in a guard-off session ⇒ still DENY (round 9 finding preserved, space-separated form)", () => {
+    const r = runHook(
+      `gh pr comment 1 --body-file ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- ALLOW: git/gh subcommands OUTSIDE the floor's narrow read-only set —
+  // the SUBCOMMAND_SCOPED_FLAG_POLICIES exemption. Without it, EVERY ordinary
+  // git write / gh mutate flag denies outright (COMMAND_FLAG_POLICIES.git/.gh
+  // was only ever calibrated for the floor's log|diff|show|status|branch|
+  // fetch|remote|rev-parse / pr-view-list-diff-checks-status-comment set), a
+  // crippling false-positive regression for the exact git/gh write workflows
+  // G-300 exists to allow (docs/design-dm-operator-channel.md names "git
+  // write ops" explicitly). Verified as a real regression before this fix
+  // landed (an earlier draft of EBH-1g denied every one of these). ----
+
+  test("git commit -m \"msg\" in a guard-off session ⇒ ALLOW (not a floor subcommand, not a real path-read risk)", () => {
+    const r = runHook('git commit -m "msg"', guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("git push -u origin main in a guard-off session ⇒ ALLOW", () => {
+    const r = runHook("git push -u origin main", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("git checkout -b feat/x in a guard-off session ⇒ ALLOW", () => {
+    const r = runHook("git checkout -b feat/x", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test('gh pr create -t "title" -b "body" in a guard-off session ⇒ ALLOW', () => {
+    const r = runHook('gh pr create -t "title" -b "body"', guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("gh pr merge --squash in a guard-off session ⇒ ALLOW", () => {
+    const r = runHook("gh pr merge --squash", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // ---- ALLOW: the opt-out set (pwd/echo/which) is never containment-checked, even in guard-off mode ----
+
+  test("echo <out-of-scope-looking string> in a guard-off session ⇒ ALLOW (echo never reads a path)", () => {
+    const r = runHook(
+      `echo ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // ---- Pipes: ALLOWED in guard-off mode, containment-checked per segment
+  // (coordinator follow-up, same issue #2377). A pipeline is just more
+  // segments — no shape-allowlist exists in guard-off mode for a pipe to
+  // smuggle a command past, so once each side is independently
+  // containment-checked, denying the bare `|` bought nothing but friction
+  // on everyday principal-DM commands. ----
+
+  test("cat <in-scope> | wc -l in a guard-off session ⇒ ALLOW (pipe decomposes into containment-checked segments)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} | wc -l`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // NOTE: `git log --oneline | head -5` (the coordinator's literal example)
+  // is substituted with `| wc -l` here — `head -5` (bare numeric shorthand,
+  // no space before the digit) hits a PRE-EXISTING, unrelated round-7 gap:
+  // COMMAND_FLAG_POLICIES.head never modeled a bare `-N` short flag, so
+  // `head -5` already denies in NORMAL (guard-on) sessions too, verified
+  // unchanged by this fix. Out of scope here (touching head's policy would
+  // change guard-ON behaviour, which this fix must not do) — tracked as a
+  // separate, pre-existing limitation, not a regression from EBH-1g.
+  test("git log --oneline | wc -l in a guard-off session ⇒ ALLOW (everyday git pipe)", () => {
+    const r = runHook("git log --oneline | wc -l", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("cat <out-of-scope> | wc -l in a guard-off session ⇒ DENY (LHS segment fails containment)", () => {
+    const r = runHook(
+      `cat ${join(secretDir, "canary.txt")} | wc -l`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("echo hi | cat <out-of-scope> in a guard-off session ⇒ DENY (RHS segment fails containment)", () => {
+    const r = runHook(
+      `echo hi | cat ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat <in-scope1> | cat <in-scope2> | wc -l in a guard-off session ⇒ ALLOW (3-stage pipeline, every segment checked)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} | cat ${join(allowedDir, "other.md")} | wc -l`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  // ---- Command substitution / backticks / redirects: STILL denied in
+  // guard-off mode — these genuinely defeat static path analysis (a
+  // substituted path is computed at run time; a redirect target is never
+  // extracted as a "path argument" at all), unlike a bare pipe. ----
+
+  test("echo $(date) in a guard-off session ⇒ DENY (command substitution still denied)", () => {
+    const r = runHook("echo $(date)", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("echo `date` in a guard-off session ⇒ DENY (backtick substitution still denied)", () => {
+    const r = runHook("echo `date`", guardOffEnv(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("wc -l < <out-of-scope> in a guard-off session ⇒ DENY (input redirect still denied)", () => {
+    const r = runHook(
+      `wc -l < ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("cat <in-scope> > /tmp/somewhere in a guard-off session ⇒ DENY (output redirect still denied)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} > /tmp/ebh1g-redirect-test`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- &&/||/; chaining: unaffected by the pipe change ----
+
+  test("cat <in-scope1> && cat <in-scope2> in a guard-off session ⇒ ALLOW (both segments containment-checked)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} && cat ${join(allowedDir, "other.md")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("cat <in-scope> && cat <out-of-scope> in a guard-off session ⇒ DENY (second segment fails containment)", () => {
+    const r = runHook(
+      `cat ${join(allowedDir, "body.md")} && cat ${join(secretDir, "canary.txt")}`,
+      guardOffEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- No CORTEX_PATH_GUARD configured ⇒ unaffected (matches pre-fix behaviour) ----
+
+  test("no CORTEX_PATH_GUARD configured in a guard-off session ⇒ still allows everything (no restriction configured)", () => {
+    const r = runHook(`cat ${join(secretDir, "canary.txt")}`, {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_BASH_GUARD: JSON.stringify({ disabled: true }),
+      CORTEX_PATH_GUARD: undefined,
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+});
+
