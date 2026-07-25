@@ -114,8 +114,22 @@ E4 makes strict deny-default costly on macOS. Ship in two stages:
 - **v2 `strict`** — true deny-default allowlist once the compatibility contract (§5) is empirically pinned.
 Linux `bwrap` starts at v2-equivalent natively (bind-mount only what's allowed), so the platforms converge from opposite directions. **Posture is reported, never guessed.**
 
-### DD-11 — Sandbox unavailability is a **loud, policy-driven** decision (principal's call)
-If no backend resolves, cortex can (a) run unsandboxed + loud `system.security.sandbox_unavailable` event, or (b) refuse to dispatch. Default proposed: **(a) for dev/personal stacks, (b) for federated/community stacks** — an untrusted-input deployment should not silently lose its boundary. See OQ-3.
+### DD-11 — Sandbox unavailability splits on **input trust** — ✅ DECIDED (principal, 2026-07-25, OQ-3)
+
+When no backend resolves, behaviour keys on **whether the stack processes input from someone other than the principal** — not on platform. Both signals already exist in config:
+
+| Stack shape | Signal | Behaviour |
+|---|---|---|
+| **Untrusted input** | `policy.federated.networks[]` non-empty **or** `openOnboarding: true` | **REFUSE to dispatch.** Untrusted content with no execution boundary is exactly the F1 threat; that session does not run. |
+| **Principal-driven** | neither signal | **RUN**, with a **persistent degraded state** (below). |
+
+**"Loud" means persistent, not a log line.** A one-shot boot event scrolls away, and a sandbox that is off-forever-but-nobody-noticed is the same failure shape as E3 — looks protected, isn't. So the degraded state MUST surface as standing status (`cortex stack list`/status **and** the dashboard) in addition to the `system.security.sandbox_unavailable` event, and persist for as long as no backend resolves.
+
+**Why not the alternatives.** *Always-refuse* goes dark on any host without `bubblewrap` (a package, not in-box — E5/E6), which invites the classic failure: set `mode: off` permanently to get work done, losing the sandbox everywhere. *Always-run* lets a federated stack sit on L1-only indefinitely.
+
+**What the fallback actually is.** "No sandbox" is **not** "no protection" — L1 (the path guard) is in-process and still runs. But L1 is fail-closed, **not sound**: TOCTOU is unfixable there (§1), and rounds 7–8 were both *coverage drift* (`file -flist`, `git diff --no-index` — path-reading commands that weren't on the checked list). That list's completeness cannot be proven, which is why an untrusted-input stack refuses rather than leaning on it.
+
+**Deferred (not v1):** capability-degrade for federated stacks — run with the filesystem/Bash tools stripped, so the session still answers but cannot touch files. Revisit if refusing proves operationally too harsh.
 
 ### DD-12 — L1 stays. Defense in depth, and it's the *observable* layer
 L2 denials are opaque kernel `EPERM`s; L1 denials carry a reason string back to the agent and the relay. Keep both: L1 for precise, explainable, agent-visible refusals; L2 as the wall that holds when L1's parser is out-predicted.
@@ -207,7 +221,7 @@ The hard part of a sandbox isn't denying; it's **not breaking the legitimate 95%
 |---|---|---|
 | ~~**OQ-1**~~ | ~~Run a **Linux probe** before EBH-3 commits?~~ | ✅ **RESOLVED 2026-07-25 — see §2.1 (E5–E8).** bwrap fails in-container even as root (userns), works where userns is permitted, and fails with `ENOENT` not `EPERM` (→ DD-9 amended). DD-8a mount check confirmed implementable. **Landlock still unconfirmed**; DD-8b real-topology gate still stands. |
 | **OQ-2** | Empirically map what `claude --print --resume` touches (fs-usage/strace)? | The compatibility contract is currently partly assumed. Without it, `audit` burn-in is guesswork. **Recommend: yes, fold into EBH-3a.** |
-| **OQ-3** | On no-backend-available: run unsandboxed+loud, or refuse to dispatch? (DD-11) | Availability vs security posture. **Recommend: loud for personal/dev, refuse for federated.** |
+| ~~**OQ-3**~~ | ~~On no-backend-available: run+loud or refuse?~~ | ✅ **DECIDED 2026-07-25 (principal) — see DD-11.** Split on input trust: federated/`openOnboarding` → **refuse**; principal-driven → **run + persistent degraded state** (not a one-shot event). Capability-degrade deferred. |
 | **OQ-4** | MCP servers inside the session jail or their own? | Simpler shared profile vs tighter per-server scoping. **Lean: inside, shared.** |
 | **OQ-5** | Add systemd hardening (`ProtectHome=`, `ReadOnlyPaths=`) to `cortex@.service` as a cheap complementary layer? | Free daemon-level defence on Linux, independent of per-session work. **Recommend: yes, separate small slice.** |
 
