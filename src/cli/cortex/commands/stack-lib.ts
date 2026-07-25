@@ -525,6 +525,35 @@ function renderBashAllowlistYaml(allowlist: BashAllowlist): string {
 }
 
 /**
+ * cortex#2331 finding 8 — the `claude.disallowedTools` block for a CHAT-only
+ * stack: `Write` stays disallowed (the default floor — a chat agent can Edit
+ * existing files but never CREATE new ones). Byte-for-byte the block that
+ * shipped before finding 8. Emitted indented to sit INSIDE the `claude:` mapping.
+ */
+function renderChatDisallowedTools(): string {
+  return "  disallowedTools:\n    - Write";
+}
+
+/**
+ * cortex#2331 finding 8 — the `claude.disallowedTools` block for a CODE-capable
+ * stack: `Write` is NOT disallowed, so the software-factory agent gets the Write
+ * tool and can CREATE new files (add a module/test), not only Edit existing
+ * ones. This is a capability-scoped widening (code stacks only) — the exact
+ * complement of 7a's code-capability bash allowlist. Chat scaffolds are
+ * unchanged (see `renderChatDisallowedTools`).
+ */
+function renderCodeDisallowedTools(): string {
+  return [
+    "  # cortex#2331 finding 8 — this stack declares the `code` capability, so `Write`",
+    "  # is NOT disallowed: a software-factory agent must CREATE new files (add a",
+    "  # module/test), not only Edit existing ones. Chat-only scaffolds keep",
+    "  # `disallowedTools: [Write]`. This is the capability-scoped complement of the",
+    "  # 7a code bash allowlist above.",
+    "  disallowedTools: []",
+  ].join("\n");
+}
+
+/**
  * Render the full born-aligned config-split skeleton for a new stack. Derived
  * from `docs/config-layout/` with the `research`/`andreas`/`ivy` placeholders
  * substituted for the real slug / principal / agent, keeping `<REPLACE_ME>`
@@ -544,9 +573,17 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   const bashAllowlistBlock = hasCode
     ? renderBashAllowlistYaml(codeCapabilityBashAllowlist(grantedRepos))
     : "";
+  // cortex#2331 finding 8 — the scaffolded system.yaml disallows the `Write`
+  // tool by default, which lets a chat agent Edit existing files but never
+  // CREATE new ones. A `code`-capability stack (software-factory tier) MUST be
+  // able to add a new module/test file, so a code scaffold DROPS `Write` from
+  // `disallowedTools` (grants the tool). Chat-only scaffolds are UNCHANGED —
+  // they keep `disallowedTools: [Write]` exactly as today. Same seam as 7a's
+  // bash allowlist: the capability, not the global floor, carries the widening.
+  const disallowedToolsBlock = hasCode ? renderCodeDisallowedTools() : renderChatDisallowedTools();
 
   return [
-    { relPath: "system/system.yaml", contents: systemYaml(slug, seedPath, bashAllowlistBlock) },
+    { relPath: "system/system.yaml", contents: systemYaml(slug, seedPath, bashAllowlistBlock, disallowedToolsBlock) },
     { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
     { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath, hasCode) },
     { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
@@ -554,7 +591,12 @@ export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
   ];
 }
 
-function systemYaml(slug: string, seedPath: string, bashAllowlistBlock: string): string {
+function systemYaml(
+  slug: string,
+  seedPath: string,
+  bashAllowlistBlock: string,
+  disallowedToolsBlock: string,
+): string {
   // The cross-cutting substrate layer — substituted from
   // docs/config-layout/system/system.yaml. NO active `identity:` block: the
   // authoritative, auto-provisioned signing identity is per-stack and lives in
@@ -575,8 +617,7 @@ claude:
   asyncTimeoutMs: 900000
   additionalArgs: []
   allowedTools: []
-  disallowedTools:
-    - Write
+${disallowedToolsBlock}
 ${bashAllowlistBlock === "" ? "" : bashAllowlistBlock + "\n"}  # workspaceDir — the dispatched CC session's cwd when no allowedDirs/
   # dirRestrictions resolve one (a bare stack — cortex#2097). Scoped to this
   # stack so its dispatched sessions never inherit the daemon's own cwd

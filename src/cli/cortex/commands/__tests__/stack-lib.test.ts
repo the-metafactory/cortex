@@ -28,6 +28,7 @@ import {
   CODE_GH_ISSUE_VERBS,
   type ScaffoldInputs,
 } from "../stack-lib";
+import { NetworkClaudeSchema } from "../../../../common/types/config";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -413,6 +414,37 @@ describe("renderScaffold — code capability (cortex#2331 7a)", () => {
     const ghRule = parsed.claude?.bashAllowlist?.rules.find((r) => r.pattern.startsWith("^gh"));
     expect(ghRule).toBeDefined();
     expect(ghRule?.repos).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // cortex#2331 finding 8 — the `code` capability grants the Write tool
+  // ---------------------------------------------------------------------------
+
+  test("(finding 8, a) code scaffold does NOT disallow Write (grants file creation)", () => {
+    const files = renderScaffold({ ...base, capabilities: ["chat", "code"], grantedRepos: ["the-metafactory/cortex"] });
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    const parsed = parseYaml(system?.contents ?? "") as { claude?: { disallowedTools?: string[] } };
+    expect(parsed.claude?.disallowedTools).toEqual([]);
+    expect(parsed.claude?.disallowedTools).not.toContain("Write");
+  });
+
+  test("(finding 8, b) chat-only scaffold STILL disallows Write (unchanged floor)", () => {
+    const files = renderScaffold(base);
+    const system = files.find((f) => f.relPath === "system/system.yaml");
+    const parsed = parseYaml(system?.contents ?? "") as { claude?: { disallowedTools?: string[] } };
+    expect(parsed.claude?.disallowedTools).toEqual(["Write"]);
+    expect(parsed.claude?.disallowedTools).toContain("Write");
+  });
+
+  test("(finding 8, c) both scaffolds' claude block parses against the config schema", () => {
+    for (const caps of [["chat"], ["chat", "code"]]) {
+      const files = renderScaffold({ ...base, capabilities: caps, grantedRepos: ["the-metafactory/cortex"] });
+      const system = files.find((f) => f.relPath === "system/system.yaml");
+      const parsed = parseYaml(system?.contents ?? "") as { claude?: unknown };
+      // The `claude` mapping (allowedTools/disallowedTools/bashAllowlist shape)
+      // must satisfy the security-override schema after the finding-8 change.
+      expect(() => NetworkClaudeSchema.parse(parsed.claude)).not.toThrow();
+    }
   });
 });
 
