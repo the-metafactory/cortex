@@ -212,6 +212,21 @@
  *   - The L2 sandbox (EBH-2/EBH-3, `docs/design-session-sandbox.md`) is
  *     still the actual boundary that makes this moot regardless of the L1
  *     posture chosen here — see that doc for the un-bypassable remedy.
+ *
+ * ## EBH-1h — bare numeric short flags (cortex#2384)
+ *
+ * A pre-existing round-7 gap, surfaced by the EBH-1g work: `head`/`tail`
+ * accept a bare numeric short flag (`head -5` == `head -n 5`) that
+ * `COMMAND_FLAG_POLICIES` never modeled, so — since round 9's "unrecognised
+ * flag on a path-checked command denies the whole command" posture — ordinary
+ * `head -5 f.txt` / `tail -3 f.txt` were wrongly denied (over-deny, not a
+ * bypass, but everyday friction). Fixed by a new, narrowly-scoped
+ * `CommandFlagPolicy.bareNumericCount` flag, set ONLY on `head`'s and
+ * `tail`'s policy entries: `classifyFlagToken` now recognises a token
+ * matching `^-\d+$` as a safe numeric-count flag for those two commands
+ * specifically (see that function and the flag's own doc comment) — never
+ * captured as a candidate path, and never generalised to any other
+ * path-checked command (`ls -5` / `cat -5` remain denied exactly as before).
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -764,6 +779,25 @@ interface CommandFlagPolicy {
    * (defense in depth, and what lets a bare `--flag` with no `=` pass too).
    */
   longValue: ReadonlySet<string>;
+  /**
+   * EBH-1h (cortex#2384) — when true, a BARE NUMERIC short flag (a token
+   * matching `^-\d+$`, e.g. `-5`, `-20`) is classified as a numeric COUNT
+   * flag: safe, and — same as any other classified-safe flag — NOT captured
+   * as a candidate path. Modeled ONLY for `head`/`tail` (see their policy
+   * entries below): they are the two POSIX commands whose short-option
+   * grammar accepts a bare count as shorthand for `-n <count>` (`head -5` ==
+   * `head -n 5`). `COMMAND_FLAG_POLICIES` never modeled this shorthand, and
+   * since round 9 (cortex#2370) an unrecognised flag on a path-checked
+   * command denies the WHOLE command — so `head -5 f.txt` / `tail -3 f.txt`
+   * were denied outright even though they're ordinary, safe, everyday usage
+   * (not a security hole: fails safe, over-deny not under-deny — but
+   * friction real enough to train people to widen the allowlist or turn the
+   * guard off). Deliberately narrow and opt-in per command, not a global
+   * `^-\d+$` carve-out: `ls`/`cat`/`wc`/`file`/`git`/`gh` have no such
+   * shorthand in their own flag grammars, so a bare `-5` there stays exactly
+   * as unrecognised (and denied) as it was before this fix.
+   */
+  bareNumericCount?: boolean;
 }
 
 export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
@@ -778,12 +812,16 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     shortValue: new Set(["n", "c"]),
     longBoolean: new Set(),
     longValue: new Set(["lines", "bytes"]),
+    // EBH-1h (cortex#2384) — `head -5` is POSIX shorthand for `head -n 5`.
+    bareNumericCount: true,
   },
   tail: {
     shortBoolean: new Set(["q", "v", "f"]),
     shortValue: new Set(["n", "c"]),
     longBoolean: new Set(["follow"]),
     longValue: new Set(["lines", "bytes"]),
+    // EBH-1h (cortex#2384) — `tail -3` is POSIX shorthand for `tail -n 3`.
+    bareNumericCount: true,
   },
   ls: {
     shortBoolean: new Set(["l", "a", "A", "h", "R", "t", "r", "S", "1", "d", "F", "G"]),
@@ -987,6 +1025,14 @@ type FlagClassification =
   | { kind: "deny" };
 
 /**
+ * cortex#2384 (EBH-1h) — a token matching exactly one leading `-` followed by
+ * one or more digits and nothing else (`-5`, `-20`; NOT `-5x`, NOT `--5`,
+ * NOT `-5.0`). Checked against {@link CommandFlagPolicy.bareNumericCount}
+ * before any other classification in {@link classifyFlagToken} below.
+ */
+const BARE_NUMERIC_FLAG_RE = /^-\d+$/;
+
+/**
  * Classify a single `-`-prefixed token against one command's
  * {@link CommandFlagPolicy}. Called ONLY after {@link isPathShapedFlagValue}
  * has already cleared the token (that check still runs first and keeps its
@@ -996,6 +1042,17 @@ type FlagClassification =
  * Exported for unit tests.
  */
 export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagClassification {
+  // EBH-1h (cortex#2384) — `head -5` / `tail -3`: a bare numeric short flag
+  // is POSIX shorthand for `-n <count>` on these two commands only (see
+  // {@link CommandFlagPolicy.bareNumericCount}). Checked first, ahead of the
+  // long-flag and short-flag classification below, since `-5` would
+  // otherwise fall into the single-char-body branch (`body === "5"`, which
+  // is on neither command's `shortBoolean` nor `shortValue` set — every
+  // digit AS A FLAG LETTER is deliberately absent from both) and deny. This
+  // classifies the token as "safe" — same as any other whitelisted flag — so
+  // it is skipped by the caller and never captured as a candidate path.
+  if (policy.bareNumericCount && BARE_NUMERIC_FLAG_RE.test(tok)) return { kind: "safe" };
+
   if (tok.startsWith("--")) {
     const body = tok.slice(2);
     const eqIdx = body.indexOf("=");
