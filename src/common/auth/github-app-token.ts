@@ -146,9 +146,19 @@ export async function mintInstallationToken(
 // Identity config — ~/.config/metafactory/github-apps/apps.yaml
 // =============================================================================
 
+// GitHub App IDs and installation IDs are always numeric on the wire — both
+// get interpolated straight into the JWT `iss` claim and the installation-
+// token URL path. Constraining the format here catches a config typo/paste
+// error at load time instead of surfacing it as a confusing GitHub 404/401,
+// and keeps the interpolation points working only with values that can
+// never contain path or claim-breaking characters.
+const NUMERIC_ID_REGEX = /^\d+$/;
+
 const GithubAppIdentitySchema = z.object({
-  appId: z.string().min(1),
-  installationId: z.string().min(1),
+  appId: z.string().regex(NUMERIC_ID_REGEX, "appId must be numeric (GitHub App ID)"),
+  installationId: z
+    .string()
+    .regex(NUMERIC_ID_REGEX, "installationId must be numeric (GitHub installation ID)"),
   /** Path to the PKCS#1 private key (`.pem`). Tilde-expanded, must be chmod 600. */
   keyPath: z.string().min(1),
 });
