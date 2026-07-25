@@ -26,4 +26,9 @@ source "${SCRIPT_DIR}/lib/purge-supervision.sh"
 echo "Running Cortex purge..."
 purge_systemd_instances
 purge_launchd_instances
+# cortex#2420: name the shared-substrate dirs purge deliberately leaves behind
+# (~/.claude/{events,relay}, ~/.config/nats) so a field tester who finds them
+# still on disk knows they were KEPT on purpose, not missed — closing the
+# arc#359 "purge left leftovers" surprise without deleting a neighbor's state.
+report_intentionally_kept_shared_state
 echo "✓ Cortex purge complete"

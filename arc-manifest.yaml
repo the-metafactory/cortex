@@ -314,8 +314,15 @@ scripts:
 #     own review, `~/.claude` is Claude-Code-hook territory another hook or
 #     package could also write into (events-path.ts explicitly calls
 #     `~/.claude/events/raw` the "hook-substrate boundary" that stays put
-#     across every XDG wave for exactly this reason). Left out with this note
-#     rather than guessed at.
+#     across every XDG wave for exactly this reason; and `~/.claude/relay`  # xdg-audit:allow(prose naming the kept relay dir, not a code path — cortex#2420)
+#     holds relay-policy.yaml, CONFIG that even cortex's own state migration
+#     keeps in place — migrate-state-dir.ts moves only relay.pid out). Left
+#     out with this note rather than guessed at. cortex#2420: because a field
+#     tester who runs `arc purge cortex` and then finds these still on disk
+#     can't tell "kept on purpose" from "purge missed it", scripts/purge.sh
+#     now NAMES them at purge time (report_intentionally_kept_shared_state in
+#     scripts/lib/purge-supervision.sh) — the reporting complement to leaving
+#     them undeclared here.
 #
 # The per-stack DATA dir (`~/.local/share/metafactory/cortex`,
 # src/common/data-path.ts) is ALSO entirely excluded from owns.config/state —
