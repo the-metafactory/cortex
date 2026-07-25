@@ -35,11 +35,28 @@ A ladder, cheapest-and-most-owned first. Maps onto the review's Tier 0–3 (§6)
 |---|---|---|---|---|
 | **L0** | ~~**Repro** the `--add-dir` question~~ **✅ DONE 2026-07-24** — `--add-dir` is an *additive grant, not a jail*; both Read and Bash `cat` read an out-of-scope canary ([result](reviews/2026-07-24-ebh0-add-dir-repro.md)) | **F1 = clean High** (severity locked) | done | — |
 | **L1** | Cortex-owned `PreToolUse` **path guard** for file tools + Bash read-command paths; reuse `loader.ts` normalize+contain | F1 (cortex-owned side), F6 | S | — |
-| **L2** | **OS session jail** per `claude --print` (sandbox-exec / bwrap+landlock+seccomp) | F1, F6 by construction | M | choke point |
+| **L2** | **OS session jail** per `claude --print` (sandbox-exec / bwrap+landlock+seccomp) | **v1 `guarded`:** F6 by construction; F1 **only for the enumerated sensitive set** — *not* by construction. **v2 `strict`:** F1 by construction | M | choke point |
 | **L3** | **Egress allowlist** (filtering proxy, deny-by-default) | exfiltration containment | M | L2 net-ns |
 | **L4** | **Plugin process isolation** + registry signing | F2 | L | trigger-gated |
 
 L1–L3 are designed in [`design-session-sandbox.md`](../design-session-sandbox.md). L1 (in-process guard) and L2 (kernel jail) are **not redundant** — L1 is the precise, observable, agent-visible boundary for the common case; L2 is the un-bypassable floor that holds even when L1 is missing or bypassed (which #1758 proves happens). L3 ensures a read that clears both still can't leave the box.
+
+> **⚠️ What L2 v1 does NOT close (measured, 2026-07-26, EBH-3a review).** The v1 `guarded`
+> posture is `(allow default)` + an enumerated denylist, because E4 measured that a strict
+> `(deny default)` SIGABRTs the session. So **F1 is narrowed, not closed**: everything not
+> named is still readable. Probing the generated profile on a real host read **11** credential
+> stores straight through it — `~/.gnupg`, `~/.docker/config.json`, `~/.config/gh/hosts.yml`,
+> `~/Library/Keychains`, `~/.gitconfig`, shell histories, `~/.claude.json`, `~/.soma`, … (only
+> `~/.ssh`, `~/.aws` and the cortex config tree are denied).
+>
+> **A denylist cannot be completed by adding entries** — that is the structural point, not a
+> backlog item. Enumerating more paths raises the cost of the attack; it never establishes a
+> boundary. The boundary arrives with v2 `strict` (deny-default + explicit allow), and only
+> there is "by construction" an honest phrase.
+>
+> Practical consequence: **do not describe L2 v1 as "the session is jailed."** It is
+> "these specific secrets are protected, and read-only means read-only." The sensitive-set
+> gap must be closed before `mode: audit` is ever enabled anywhere — tracked as **#2409**.
 
 ---
 
