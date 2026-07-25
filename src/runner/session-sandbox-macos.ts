@@ -44,6 +44,17 @@
  *
  *   - `~/.config/metafactory/cortex/**` (config dir — CONFIG IMMUTABILITY, F1)
  *   - `~/.ssh`, `~/.aws` (arbitrary-secret read, F1)
+ *   - `~/.gnupg`, `~/.docker/config.json`, `~/.config/gh/hosts.yml`,
+ *     `~/.netrc`, `~/.git-credentials`, `~/.kube/config`, `~/.npmrc`,
+ *     `~/.pypirc`, `~/.cargo/credentials.toml`, `~/.config/op` (cortex#2409
+ *     sensitive-set extension — read+write)
+ *   - `~/Library/Keychains` (cortex#2409) — WRITE only, unlike every other
+ *     entry above: a real session both stats the keychain AND reads its
+ *     login-credential DATA on every start (`claude` itself uses the OS
+ *     keychain for auth state) — ANY read-deny here broke a real session
+ *     empirically (see {@link builtinSensitiveDenyEntries} for the full,
+ *     two-round story). Read stays open; this is a known, disclosed gap
+ *     in the set, not an oversight.
  *   - `~/.claude/settings.json` — WRITE only (self-modification)
  *   - `~/.claude/hooks/**` — WRITE only (self-modification; READ+EXEC stays
  *     allowed — the compatibility contract requires it)
@@ -51,6 +62,36 @@
  *   - any caller-supplied `extraDenyPaths` (read+write) — the generic escape
  *     hatch a caller (a test, or a future "other stacks" enumeration) uses to
  *     deny an out-of-scope root this module doesn't know about by name.
+ *
+ * **cortex#2409 is cost-raising, NOT a fix.** A denylist cannot be completed
+ * — the next unenumerated credential store is always available; adding
+ * entries raises the attacker's cost, it never establishes a boundary. The
+ * real fix is v2 `strict` (deny-default + explicit allow), where the
+ * property holds by construction. See `docs/security/hardening-plan.md`
+ * §"What L2 v1 does NOT close" — do not describe this set, however long it
+ * gets, as closing F1.
+ *
+ * Deliberately NOT in the set (considered and rejected, cortex#2409):
+ *
+ *   - `~/.gitconfig` — read constantly by ordinary `git` usage (identity for
+ *     every commit, `core.*`, aliases) that this harness itself performs
+ *     routinely (CLAUDE.md's own workflow is git-commit-heavy). Denying it
+ *     would break everyday sessions, not just hostile ones. It rarely holds
+ *     a literal secret itself — at most a pointer to a credential helper —
+ *     and the credential STORES those helpers actually use
+ *     (`~/.git-credentials`, `gh`'s `hosts.yml`, and `~/Library/Keychains`
+ *     for tamper via WRITE) are already denied above.
+ *   - `~/.zsh_history`, `~/.bash_history` — secret-adjacent (a pasted token
+ *     or password can land in history) but this module cannot verify from
+ *     cortex's own source what shell mode the `claude` binary's own Bash
+ *     tool invokes internally (interactive vs. non-interactive changes
+ *     whether a shell reads/appends these files at all). A wrong WRITE-deny
+ *     here risks the exact failure mode this issue warns against — a
+ *     silent, session-breaking regression in ordinary Bash-tool use — for a
+ *     class of secret exposure that requires a prior unsafe practice
+ *     (typing a raw credential on a command line) rather than an at-rest
+ *     store by design. Left out until that shell-mode question is measured
+ *     directly against the real binary, not guessed at.
  *
  * ## Denial observability (DD-6)
  *
@@ -151,6 +192,84 @@ function builtinSensitiveDenyEntries(profile: SandboxProfile, homeDir: string): 
     { input: join(homeDir, ".ssh"), op: "file-write*" },
     { input: join(homeDir, ".aws"), op: "file-read*" },
     { input: join(homeDir, ".aws"), op: "file-write*" },
+
+    // ---------------------------------------------------------------------
+    // cortex#2409 sensitive-set extension. Probing a generated profile on a
+    // real host found 11 credential/state stores readable straight through
+    // the original set above. Every entry below is a CREDENTIAL STORE the
+    // harness itself never needs to read to function (unlike hooks/ below,
+    // there is no compat-contract reason to leave read open), so each
+    // follows the ~/.ssh / ~/.aws precedent: deny BOTH read (secret
+    // exposure) and write (tamper — e.g. a planted malicious docker
+    // credential helper, a kube config repointed at an attacker-controlled
+    // API server, an injected GPG key). THIS IS STILL AN ENUMERATED
+    // DENYLIST (module doc) — it raises the attacker's cost, it does not
+    // close F1; the next unenumerated store is always available. See the
+    // module doc's "Deliberately NOT in the set" for the two candidates
+    // (`~/.gitconfig`, shell histories) considered and rejected.
+    // ---------------------------------------------------------------------
+
+    // GPG secret keyring + trustdb — private keys and signing material.
+    { input: join(homeDir, ".gnupg"), op: "file-read*" },
+    { input: join(homeDir, ".gnupg"), op: "file-write*" },
+    // Docker registry auth (base64-encoded or a credsStore pointer).
+    { input: join(homeDir, ".docker", "config.json"), op: "file-read*" },
+    { input: join(homeDir, ".docker", "config.json"), op: "file-write*" },
+    // gh CLI's stored OAuth token.
+    { input: join(homeDir, ".config", "gh", "hosts.yml"), op: "file-read*" },
+    { input: join(homeDir, ".config", "gh", "hosts.yml"), op: "file-write*" },
+    // Plaintext machine/login/password entries (curl, ftp, and others).
+    { input: join(homeDir, ".netrc"), op: "file-read*" },
+    { input: join(homeDir, ".netrc"), op: "file-write*" },
+    // git's plaintext credential-store helper output.
+    { input: join(homeDir, ".git-credentials"), op: "file-read*" },
+    { input: join(homeDir, ".git-credentials"), op: "file-write*" },
+    // macOS keychain databases — WRITE only, unlike every other entry in
+    // this set. TWO ROUNDS of empirical correction (cortex#2409, this
+    // host), both caught by the real end-to-end acceptance test
+    // (`cc-session-macos-sandbox-e2e.test.ts`), NOT reasoned out in
+    // advance:
+    //   1. The original `file-read*` version broke a real session with
+    //      spurious denials — a real `claude --print` session performs a
+    //      `file-read-metadata` (stat/access) against the keychain on
+    //      every start.
+    //   2. Narrowing to `file-read-data` (deny content reads, allow
+    //      metadata) was STILL wrong: the real session then failed
+    //      authentication outright ("Not logged in · Please run /login",
+    //      `success: false`) — `claude`'s own login-state check reads the
+    //      keychain's actual DATA, not just its metadata. This module's
+    //      earlier assumption (that keychain access is exclusively
+    //      securityd/XPC-mediated and therefore untouched by ANY read-deny
+    //      here) was wrong on both counts.
+    // So read access — data AND metadata — must stay allowed, same
+    // compatibility-contract reasoning as `.claude/hooks` below (self-
+    // modification is denied via write; the mechanism the harness itself
+    // depends on stays open). This still closes the WRITE/tamper vector
+    // (a planted or corrupted keychain entry); it does NOT close the
+    // offline-copy read vector for Keychains specifically — a real, known
+    // gap in this enumerated set, consistent with the module doc's "cannot
+    // be completed by adding entries" framing.
+    { input: join(homeDir, "Library", "Keychains"), op: "file-write*" },
+    // kubectl cluster/user credentials (tokens, client certs).
+    { input: join(homeDir, ".kube", "config"), op: "file-read*" },
+    { input: join(homeDir, ".kube", "config"), op: "file-write*" },
+    // May embed a registry `_authToken`. Same accepted trade-off as ~/.aws
+    // above: a session that legitimately needs an authenticated npm install
+    // loses that ability, same as one that legitimately needs AWS already
+    // does — least privilege over convenience for an untrusted-content-
+    // driven session.
+    { input: join(homeDir, ".npmrc"), op: "file-read*" },
+    { input: join(homeDir, ".npmrc"), op: "file-write*" },
+    // PyPI upload (twine) credentials.
+    { input: join(homeDir, ".pypirc"), op: "file-read*" },
+    { input: join(homeDir, ".pypirc"), op: "file-write*" },
+    // crates.io publish token. Not needed for ordinary `cargo build`/`test`.
+    { input: join(homeDir, ".cargo", "credentials.toml"), op: "file-read*" },
+    { input: join(homeDir, ".cargo", "credentials.toml"), op: "file-write*" },
+    // 1Password CLI session/cache state.
+    { input: join(homeDir, ".config", "op"), op: "file-read*" },
+    { input: join(homeDir, ".config", "op"), op: "file-write*" },
+
     // Self-modification — WRITE only. Read+exec of hooks is a compatibility-
     // contract REQUIREMENT (design doc §3), so hooks are not read-denied.
     { input: join(homeDir, ".claude", "settings.json"), op: "file-write*" },
