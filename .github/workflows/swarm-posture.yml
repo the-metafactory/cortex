@@ -1,0 +1,111 @@
+# swarm-posture — EBH-7 structural least-privilege / attack-path gate (cortex#2349,
+# epic #2341, execution-boundary hardening).
+#
+# ─── WARN-ONLY (READ THIS) ───────────────────────────────────────────────────
+# This gate is intentionally ADVISORY today. Two things make it non-blocking,
+# mirroring the exact posture `confidentiality-gate.yml` already uses in this repo:
+#
+#   1. It runs in THIS standalone workflow, separate from the required jobs in
+#      `ci.yml` (Test / Lint / Typecheck / Compass-gov / Vocab / Shippable-hygiene).
+#      A finding here never turns those required checks red.
+#   2. It is NOT enrolled in the `protect-main` ruleset's required status checks.
+#      An un-required check cannot block a merge.
+#
+# `scripts/security/run-swarm-posture.ts` also always exits 0 once the upstream
+# tool ran successfully, regardless of finding count — belt and braces with (2).
+# It exits non-zero only when the CHECK ITSELF is broken (missing tool checkout,
+# missing/malformed swarm.json), which SHOULD fail the job.
+#
+# See docs/security/swarm-posture/README.md "What it would take to make this
+# blocking" for the promotion path — a held ops step, not something this
+# workflow does on its own.
+#
+# ─── Vendor vs. invoke ────────────────────────────────────────────────────────
+# cortex does not vendor a copy of swarm-posture.ts (a single, small,
+# zero-dependency file) — a copy would be a second, unreviewable source of the
+# check's logic that silently drifts from upstream. Instead this job checks out
+# NorthwoodsSentinel/swarm-posture at a PINNED COMMIT SHA into a sibling path and
+# invokes it as a subprocess. Bump the pin below deliberately, in a reviewable
+# diff, when adopting an upstream update — never track a branch/tag.
+name: swarm-posture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agents.d/**"
+      - "personas/**"
+      - "cortex.yaml.example"
+      - "docs/config-layout/**"
+      - "src/common/policy/**"
+      - "src/runner/agent-team.ts"
+      - "src/bus/dispatch-handler.ts"
+      - "docs/security/swarm-posture/**"
+      - "scripts/security/run-swarm-posture.ts"
+      - ".github/workflows/swarm-posture.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "agents.d/**"
+      - "personas/**"
+      - "cortex.yaml.example"
+      - "docs/config-layout/**"
+      - "src/common/policy/**"
+      - "src/runner/agent-team.ts"
+      - "src/bus/dispatch-handler.ts"
+      - "docs/security/swarm-posture/**"
+      - "scripts/security/run-swarm-posture.ts"
+      - ".github/workflows/swarm-posture.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  posture:
+    name: Structural fleet posture (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout cortex
+        uses: actions/checkout@v4
+        with:
+          path: cortex
+
+      # Pinned-SHA checkout of the upstream tool — see the header comment.
+      # Bumping this SHA is the ONLY way this job picks up an upstream change.
+      - name: Checkout swarm-posture (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: NorthwoodsSentinel/swarm-posture
+          ref: 12d042d9f936bc99fed9bd00c29da5e06211b953
+          path: swarm-posture-tool
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Run swarm-posture (advisory — see header)
+        working-directory: cortex
+        run: bun scripts/security/run-swarm-posture.ts ../swarm-posture-tool/swarm-posture.ts
+
+  # Always-green advisory signal, same pattern as confidentiality-gate.yml's
+  # burn-in-summary — makes the non-blocking posture explicit in the Actions UI
+  # even if someone skims only the job list.
+  advisory-summary:
+    needs: [posture]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Report advisory posture (never fails)
+        env:
+          POSTURE_RESULT: ${{ needs.posture.result }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### swarm-posture — ADVISORY (not a required check)"
+            echo ""
+            echo "- posture job result: **${POSTURE_RESULT}**"
+            echo "- this workflow is NOT in required status checks; a finding here does not block merges."
+            echo "- see docs/security/swarm-posture/README.md for the fleet model, findings, and the promotion-to-blocking checklist."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "swarm-posture advisory: posture job result=${POSTURE_RESULT} (not a required check)"
