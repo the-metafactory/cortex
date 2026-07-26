@@ -1,6 +1,8 @@
 /**
  * EBH-4 (cortex#2346, epic #2341) — the L3 **egress allowlist**: a local,
- * deny-by-default HTTP `CONNECT` filtering proxy.
+ * deny-by-default forward proxy filtering both HTTP `CONNECT` (TLS tunnels)
+ * and plain-HTTP absolute-URI requests (cortex#2412 follow-up — see the
+ * module doc's "Mechanism" section below).
  *
  * ## What this closes
  *
@@ -52,13 +54,32 @@
  * ## Mechanism
  *
  * A per-session `Bun.listen` TCP server on `127.0.0.1:0` (OS-assigned
- * ephemeral port — never a fixed/predictable port). It speaks exactly ONE
- * proxy verb: HTTP `CONNECT host:port HTTP/1.1`. On a well-formed CONNECT
- * whose `host` is on the allowlist (exact, case-insensitive match — see
- * "no wildcards" below), it dials the target and becomes a raw byte tunnel
- * (the standard forward-proxy shape every HTTPS-over-proxy client expects).
- * Anything else — a host not on the allowlist, or a request this parser
- * cannot make sense of — is a deny.
+ * ephemeral port — never a fixed/predictable port). It speaks TWO proxy
+ * shapes:
+ *
+ *   - HTTP `CONNECT host:port HTTP/1.1` — the TLS-tunnel form every
+ *     HTTPS-over-proxy client uses. On a well-formed CONNECT whose `host`
+ *     is on the allowlist (exact, case-insensitive match — see "no
+ *     wildcards" below), it dials the target and becomes a raw byte tunnel.
+ *   - The plain-HTTP absolute-URI forward-proxy form (`POST
+ *     http://host[:port]/path HTTP/1.1`, per RFC 7230 §5.3.2 — any of
+ *     `GET`/`POST`/`PUT`/`DELETE`/`PATCH`/`HEAD`/`OPTIONS`/`TRACE`). This
+ *     is what `HTTP_PROXY` (as opposed to `HTTPS_PROXY`) actually sends —
+ *     cortex's OWN hook telemetry (`event-logger.hook.ts` et al. POSTing to
+ *     `http://localhost:8766/...`) takes exactly this shape, not CONNECT
+ *     (cortex#2412 follow-up). On a well-formed request whose `host` is on
+ *     the allowlist, the proxy dials the target and forwards the request
+ *     rewritten to origin-form (path only, `Host` header added if the
+ *     client didn't send one — RFC 7230 §5.3.2's proxy obligation), then
+ *     relays the response back verbatim; no synthetic reply is sent to the
+ *     client the way CONNECT's "200 Connection Established" is, because the
+ *     client is expecting a real HTTP response from the target, not a
+ *     tunnel handshake.
+ *
+ * Both forms funnel through the SAME allow/deny-by-mode decision (see
+ * "Fail-closed discipline" below) — a host not on the allowlist, or a
+ * request this parser cannot make sense of at all (no verb it recognizes,
+ * no destination it can extract), is a deny.
  *
  * **No wildcard/suffix matching, deliberately.** `api.anthropic.com` matches
  * only `api.anthropic.com`, never `*.anthropic.com`. This is the SAFER
@@ -71,17 +92,34 @@
  *
  * ## Fail-closed discipline (repo CLAUDE.md hard constraint)
  *
- *   - A CONNECT line this parser cannot understand (bad syntax, non-numeric
- *     port, out-of-range port, or any non-CONNECT proxy verb — plain-HTTP
- *     forward-proxying is NOT implemented in this slice) is **always
- *     denied**, in EVERY mode including `audit`. "We could not determine
- *     the destination" is ambiguity, and ambiguity denies — it is never
- *     treated as "well, let it through, we're only auditing."
- *   - A host recognized but NOT on the allowlist follows {@link SandboxMode}:
- *     `audit` logs the would-be-denial and STILL connects through (DD-5's
- *     report-only semantics — unlike the macOS FS backend, this mechanism
- *     genuinely CAN report without blocking, so it does); `enforce` blocks
- *     with `403` and never dials the target.
+ * The dividing line is NOT "which mode" — it's "does this request have a
+ * destination at all":
+ *
+ *   - A request with **no determinable destination** — garbage bytes, a
+ *     verb this parser doesn't recognize in either shape above, a CONNECT
+ *     with a non-numeric/out-of-range port, an absolute-URI request with an
+ *     unparseable host/port, or a header that never terminates within
+ *     {@link MAX_HEADER_BYTES} — is **always denied, in EVERY mode
+ *     including `audit`**. This is NOT a policy choice `audit` could relax:
+ *     there is no host to dial, so there is no "traffic" for `audit` to
+ *     "let proceed." `enforce` would refuse this identically (an
+ *     unaddressable request isn't a destination *enforce* would reach
+ *     either), so `audit` denying it too is `audit` correctly PREDICTING
+ *     `enforce` — not a departure from DD-5's report-only contract, which
+ *     is specifically about mode-governed ALLOWLIST decisions, not about
+ *     requests with no destination to evaluate one against.
+ *   - A request WITH a determinable destination (CONNECT or the plain-HTTP
+ *     absolute-URI form) whose host is recognized but NOT on the allowlist
+ *     follows {@link SandboxMode}: `audit` logs the would-be-denial and
+ *     STILL connects/forwards through — no error response, no socket
+ *     termination (DD-5's report-only semantics — unlike the macOS FS
+ *     backend, this mechanism genuinely CAN report without blocking, so it
+ *     does); `enforce` blocks with `403`/`400` and never dials the target.
+ *     This is the ONLY axis `audit` vs `enforce` actually differ on — see
+ *     cortex#2412's follow-up fix, which closed a bug where an unparseable
+ *     plain-HTTP request (a shape this module simply didn't parse yet) was
+ *     wrongly routed into the no-destination branch above and killed even
+ *     under `audit`, defeating `audit`'s entire dry-run purpose.
  *   - If the proxy itself fails to bind, the caller (`cc-session.ts`)
  *     decides: `enforce` refuses to launch the session at all (fail closed);
  *     `audit` logs a loud warning and launches WITHOUT the proxy (no worse
@@ -211,24 +249,34 @@ class DenialQueue implements AsyncIterable<EgressDenial> {
 }
 
 // -----------------------------------------------------------------------------
-// CONNECT parsing
+// Proxy-request parsing — CONNECT (TLS tunnel) and plain-HTTP absolute-URI
+// forward-proxy requests (see the module doc's "Mechanism" section)
 // -----------------------------------------------------------------------------
 
-/** `CONNECT host:port HTTP/1.1` — the ONE proxy verb this module speaks.
- *  Anything else (a plain-HTTP forward-proxy `GET http://…` request, an
- *  unrecognized verb, malformed syntax) does not match and is fail-closed
- *  denied by the caller — see the module doc's fail-closed discipline. */
+/** `CONNECT host:port HTTP/1.1` — the TLS-tunnel proxy verb. */
 const CONNECT_LINE_RE = /^CONNECT\s+([^\s:/]+):(\d{1,5})\s+HTTP\/\d\.\d\s*$/i;
 
-/** Hard cap on buffered pre-CONNECT header bytes — a client that never
+/** The plain-HTTP absolute-URI forward-proxy form (RFC 7230 §5.3.2) —
+ *  `POST http://host[:port][/path] HTTP/1.1`. This is what `HTTP_PROXY`
+ *  clients send for non-TLS requests; `HTTPS_PROXY` clients send `CONNECT`
+ *  instead (see {@link CONNECT_LINE_RE}). `https://` absolute-URIs are
+ *  deliberately NOT matched here — a proxy-respecting client always
+ *  CONNECTs for TLS, never sends an `https://` absolute-URI in the request
+ *  line, so accepting one here would just be extra surface for no real
+ *  client to ever exercise. */
+const ABSOLUTE_HTTP_LINE_RE =
+  /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)\s+http:\/\/([^\s:/]+)(?::(\d{1,5}))?(\/[^\s]*)?\s+HTTP\/\d\.\d\s*$/i;
+
+/** Hard cap on buffered pre-request header bytes — a client that never
  *  sends a terminating `\r\n\r\n` (or sends an absurdly long "header")
  *  is fail-closed denied rather than buffered forever. Generous for a
- *  CONNECT request (which is normally under 200 bytes) while still bounding
- *  memory per connection. */
+ *  CONNECT/small-request header (normally well under 1KB) while still
+ *  bounding memory per connection. */
 const MAX_HEADER_BYTES = 8192;
 
 interface ParsedConnect {
   ok: true;
+  kind: "connect";
   host: string;
   port: number;
   /** Bytes received AFTER the `\r\n\r\n` header terminator, if the client
@@ -236,6 +284,21 @@ interface ParsedConnect {
    *  response (unusual for CONNECT but not disallowed) — queued and
    *  forwarded once the target connection is up. */
   trailing: Uint8Array;
+}
+interface ParsedHttpForward {
+  ok: true;
+  kind: "http-forward";
+  host: string;
+  port: number;
+  /** The exact bytes to write to the freshly dialed target once its socket
+   *  opens — the request line rewritten to origin-form (RFC 7230 §5.3.2:
+   *  a proxy forwarding a request MUST NOT forward the absolute-URI form
+   *  to the origin server), the original header lines (a `Host` header
+   *  added if the client didn't send one), the terminator, and any body
+   *  bytes the client had already sent ahead of the terminator. Built once
+   *  at parse time (not re-derived per write) so `EgressProxy` never has to
+   *  re-parse or mutate headers in the hot path. */
+  forwardBytes: Uint8Array;
 }
 interface ParsedConnectFailure {
   ok: false;
@@ -248,41 +311,101 @@ interface ParsedConnectFailure {
 
 /** Pure parse function — exported for unit tests. Returns `undefined` when
  *  the header terminator hasn't arrived yet (caller should keep buffering,
- *  up to {@link MAX_HEADER_BYTES}). */
-export function tryParseConnect(buffered: Uint8Array): ParsedConnect | ParsedConnectFailure | undefined {
+ *  up to {@link MAX_HEADER_BYTES}). Tries the CONNECT shape first, then the
+ *  plain-HTTP absolute-URI shape; a request matching neither (or matching
+ *  one with an unusable host/port) is a parse failure — see the module
+ *  doc's fail-closed discipline for what that means per mode. */
+export function tryParseConnect(
+  buffered: Uint8Array,
+): ParsedConnect | ParsedHttpForward | ParsedConnectFailure | undefined {
   const buf = Buffer.from(buffered.buffer, buffered.byteOffset, buffered.byteLength);
   const terminatorIdx = buf.indexOf("\r\n\r\n");
   if (terminatorIdx === -1) return undefined;
 
   const headerText = buf.subarray(0, terminatorIdx).toString("utf8");
   const firstLine = (headerText.split("\r\n")[0] ?? "").trim();
-  const match = CONNECT_LINE_RE.exec(firstLine);
-  if (!match) {
+
+  const connectMatch = CONNECT_LINE_RE.exec(firstLine);
+  if (connectMatch) {
+    const host = connectMatch[1] ?? "";
+    const portNum = Number(connectMatch[2]);
+    if (host.length === 0 || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return {
+        ok: false,
+        host: host || "?",
+        port: Number.isFinite(portNum) ? portNum : 0,
+        reason: `malformed CONNECT target ("${firstLine.slice(0, 120)}")`,
+      };
+    }
     return {
-      ok: false,
-      host: "?",
-      port: 0,
-      reason: `unparseable proxy request (only CONNECT is supported): "${firstLine.slice(0, 120)}"`,
+      ok: true,
+      kind: "connect",
+      host,
+      port: portNum,
+      trailing: new Uint8Array(buf.subarray(terminatorIdx + 4)),
     };
   }
 
-  const host = match[1] ?? "";
-  const portNum = Number(match[2]);
-  if (host.length === 0 || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+  const httpMatch = ABSOLUTE_HTTP_LINE_RE.exec(firstLine);
+  if (httpMatch) {
+    const method = (httpMatch[1] ?? "").toUpperCase();
+    const host = httpMatch[2] ?? "";
+    const portStr = httpMatch[3];
+    const portNum = portStr ? Number(portStr) : 80; // absolute-URI http:// defaults to port 80
+    const path = httpMatch[4] ?? "/";
+    if (host.length === 0 || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return {
+        ok: false,
+        host: host || "?",
+        port: Number.isFinite(portNum) ? portNum : 0,
+        reason: `malformed absolute-URI target ("${firstLine.slice(0, 120)}")`,
+      };
+    }
+    const body = new Uint8Array(buf.subarray(terminatorIdx + 4));
     return {
-      ok: false,
-      host: host || "?",
-      port: Number.isFinite(portNum) ? portNum : 0,
-      reason: `malformed CONNECT target ("${firstLine.slice(0, 120)}")`,
+      ok: true,
+      kind: "http-forward",
+      host,
+      port: portNum,
+      forwardBytes: buildForwardRequest(headerText, method, path, host, portNum, body),
     };
   }
 
   return {
-    ok: true,
-    host,
-    port: portNum,
-    trailing: new Uint8Array(buf.subarray(terminatorIdx + 4)),
+    ok: false,
+    host: "?",
+    port: 0,
+    reason:
+      `unparseable proxy request (only CONNECT and plain-HTTP absolute-URI ` +
+      `requests are supported): "${firstLine.slice(0, 120)}"`,
   };
+}
+
+/** Rewrite a plain-HTTP absolute-URI request into the origin-form a real
+ *  origin server expects (RFC 7230 §5.3.2) — `POST http://host/path
+ *  HTTP/1.1` becomes `POST /path HTTP/1.1`, with every other header line
+ *  preserved verbatim and a `Host` header synthesized only if the client
+ *  didn't already send one. `body` is the raw bytes the client had already
+ *  sent past the header terminator (untouched, never decoded as text — it
+ *  may be arbitrary binary) and is appended after the rewritten headers. */
+function buildForwardRequest(
+  headerText: string,
+  method: string,
+  path: string,
+  host: string,
+  port: number,
+  body: Uint8Array,
+): Uint8Array {
+  const headerLines = headerText.split("\r\n");
+  const restHeaders = headerLines.slice(1);
+  const hasHostHeader = restHeaders.some((line) => /^host\s*:/i.test(line));
+  const rewrittenHeaders = hasHostHeader
+    ? restHeaders
+    : [`Host: ${port === 80 ? host : `${host}:${port}`}`, ...restHeaders];
+  const rewritten = [`${method} ${path} HTTP/1.1`, ...rewrittenHeaders, "", ""].join("\r\n");
+  const headBytes = new Uint8Array(Buffer.from(rewritten, "utf8"));
+  if (body.length === 0) return headBytes;
+  return concatChunks([headBytes, body], headBytes.length + body.length);
 }
 
 // -----------------------------------------------------------------------------
@@ -333,11 +456,12 @@ const BAD_REQUEST = "HTTP/1.1 400 Bad Request\r\n\r\n";
 const BAD_GATEWAY = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
 
 /**
- * A per-session deny-by-default CONNECT proxy. One instance per spawned
- * session (`cc-session.ts` constructs and tears one down per `CCSession`,
- * mirroring `MacosSbplSandbox`'s per-session `.sb` profile lifecycle) — never
- * shared across sessions, so one session's allowlist can never leak into
- * another's traffic.
+ * A per-session deny-by-default forward proxy (CONNECT tunnel + plain-HTTP
+ * absolute-URI forwarding — see the module doc's "Mechanism" section). One
+ * instance per spawned session (`cc-session.ts` constructs and tears one
+ * down per `CCSession`, mirroring `MacosSbplSandbox`'s per-session `.sb`
+ * profile lifecycle) — never shared across sessions, so one session's
+ * allowlist can never leak into another's traffic.
  */
 export class EgressProxy {
   private readonly allowSet: ReadonlySet<string>;
@@ -415,7 +539,7 @@ export class EgressProxy {
       state.headerChunks.push(chunk);
       state.headerLength += chunk.length;
       if (state.headerLength > MAX_HEADER_BYTES) {
-        this.denyFailClosed(socket, "?", 0, "CONNECT header exceeded size limit without a terminator");
+        this.denyFailClosed(socket, "?", 0, "proxy request header exceeded size limit without a terminator");
         return;
       }
       const buffered =
@@ -436,8 +560,14 @@ export class EgressProxy {
         return;
       }
 
-      if (parsed.trailing.length > 0) state.preTunnelQueue.push(parsed.trailing);
-      this.handleConnect(socket, state, parsed.host, parsed.port);
+      // "connect"'s trailing bytes (TLS ClientHello pipelined ahead of the
+      // 200 response) still need queuing here; "http-forward"'s equivalent
+      // body-so-far is already folded into `parsed.forwardBytes` at parse
+      // time (see `buildForwardRequest`), so there is nothing to queue.
+      if (parsed.kind === "connect" && parsed.trailing.length > 0) {
+        state.preTunnelQueue.push(parsed.trailing);
+      }
+      this.handleConnect(socket, state, parsed);
       return;
     }
 
@@ -452,7 +582,15 @@ export class EgressProxy {
     }
   }
 
-  private handleConnect(socket: Socket<ConnState>, state: ConnState, host: string, port: number): void {
+  /**
+   * Common allow/deny-by-mode path for BOTH proxy shapes (CONNECT tunnel
+   * and plain-HTTP absolute-URI forward). `parsed` carries a `kind`
+   * discriminant that only affects what gets written once the target dial
+   * succeeds — see the `open` handler below — everything about the
+   * allowlist/mode decision itself is identical for both.
+   */
+  private handleConnect(socket: Socket<ConnState>, state: ConnState, parsed: ParsedConnect | ParsedHttpForward): void {
+    const { host, port } = parsed;
     const allowed = isHostAllowed(host, this.allowSet);
     if (!allowed) {
       const blocked = this.mode === "enforce";
@@ -469,7 +607,10 @@ export class EgressProxy {
         return;
       }
       // audit — DD-5 report-only: log the would-be-denial, still connect
-      // through, so a burn-in window measures real traffic without breaking it.
+      // through (and, for http-forward, still relay the request through to
+      // the target — see the `open` handler below), so a burn-in window
+      // measures real traffic without breaking it. No error response, no
+      // socket termination — that is the entire point of `audit`.
     }
 
     void Bun.connect({
@@ -485,7 +626,18 @@ export class EgressProxy {
             return;
           }
           state.target = targetSocket;
-          this.writeSafely(socket, CONNECTION_ESTABLISHED);
+          if (parsed.kind === "connect") {
+            // TLS-tunnel handshake: tell the client the tunnel is up before
+            // relaying anything — this IS the expected reply for CONNECT.
+            this.writeSafely(socket, CONNECTION_ESTABLISHED);
+          } else {
+            // Plain-HTTP forward: no synthetic reply to the client — it is
+            // expecting the target's real HTTP response, not a tunnel
+            // handshake. Write the rewritten request FIRST so it can never
+            // race behind response bytes the `data` handler below relays
+            // back to the client.
+            this.writeSafely(targetSocket, parsed.forwardBytes);
+          }
           for (const queued of state.preTunnelQueue) this.writeSafely(targetSocket, queued);
           state.preTunnelQueue = [];
         },
@@ -504,7 +656,8 @@ export class EgressProxy {
       // The target refused/was unreachable — a connectivity failure, NOT a
       // security denial (the host WAS allowed; the network just failed), so
       // this is not pushed onto the denial queue. Respond 502 like any real
-      // forward proxy would.
+      // forward proxy would (correct for both CONNECT and plain-HTTP
+      // clients — both understand a raw HTTP/1.1 status line reply here).
       process.stderr.write(
         `[egress-proxy] failed to connect upstream ${host}:${port}: ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
