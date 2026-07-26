@@ -846,6 +846,58 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
     expect(res.stdout).not.toContain("Workspace checkout");
   });
 
+  // cortex#2462 — defense-in-depth: a malformed CTX_REPO FAILS the scaffold step
+  // LOUD (exit 1) BEFORE scaffolding or cloning, independently of stack-create's
+  // own check. This closes the idempotent-re-run gap where runScaffold's
+  // principal/slug-keyed "already exists" skip would let a changed/hostile
+  // CTX_REPO reach the clone unvalidated. A `..` segment and a leading `-` are
+  // both rejected; the clone port is NEVER invoked and no config dir is written.
+  for (const badRepo of ["-x/y", "a/../b", "x/y.", "foo/bar; rm"]) {
+    test(`cortex#2462: malformed CTX_REPO "${badRepo}" fails step 4, never clones or scaffolds`, async () => {
+      const configDir = freshDir();
+      const natsDir = freshDir();
+      const cloneCalls: { ownerRepo: string; dest: string }[] = [];
+      const res = await withPlatform("linux", () =>
+        withEnv(validCtxEnv({ CTX_SLUG: "codebad", CTX_REPO: badRepo }), () =>
+          dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () =>
+            fakePorts({
+              cloneGrantedRepo: (opts) => {
+                cloneCalls.push(opts);
+                return { exitCode: 0, stdout: "", stderr: "" };
+              },
+            }),
+          ),
+        ),
+      );
+      // Loud failure — NOT a fail-soft warn.
+      expect(res.exitCode).toBe(1);
+      expect(res.stdout).toContain("is not a valid");
+      expect(res.stdout).toContain("refusing to scaffold or clone");
+      // The clone port was never reached.
+      expect(cloneCalls).toHaveLength(0);
+      // Nothing was scaffolded (aborted before stack create).
+      expect(existsSync(join(configDir, "codebad"))).toBe(false);
+    });
+  }
+
+  // cortex#2462 — the --json trace records the loud failure too (exit 1 + the
+  // erroring step surfaced), not a green skip.
+  test("cortex#2462: malformed CTX_REPO surfaces as a --json error envelope", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv({ CTX_SLUG: "codebadjson", CTX_REPO: "-x/y" }), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir, "--json"], () =>
+          fakePorts({
+            cloneGrantedRepo: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+          }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toContain("4. Scaffold");
+  });
+
   // cortex#2322 — the not-loaded path is no longer a printed skip. On a fresh
   // Mac (launchd service NOT loaded AND no backstop daemon running) it STARTS
   // the daemon directly via the `cortex start --config <pointer>` backstop,

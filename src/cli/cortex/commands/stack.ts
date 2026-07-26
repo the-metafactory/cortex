@@ -177,8 +177,28 @@ function listValueFlag(flags: FlagMap, name: string): string[] {
  *  carries the software-factory bash allowlist). */
 const KNOWN_EXTRA_CAPABILITIES = new Set(["code"]);
 
-/** `owner/repo` shape for `--repo` (GitHub full-name grammar, permissive). */
-const REPO_FULLNAME_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/**
+ * `owner/repo` shape for `--repo` (GitHub full-name grammar, anchored).
+ *
+ * cortex#2462 — each side is anchored alphanumeric at BOTH ends, with
+ * `[A-Za-z0-9._-]` permitted only internally, so a leading/trailing `-`/`.`/`_`
+ * is rejected. Paired with `isValidRepoFullName`, which also rejects any `..`
+ * segment. The old form (`/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/`) admitted a
+ * leading `-` and `..` — both closed here.
+ */
+export const REPO_FULLNAME_RE =
+  /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
+/**
+ * True iff `repo` is a well-formed `owner/repo` GitHub full name: anchored
+ * alphanumeric on both ends of each side, no `..` path segment. Shared by
+ * `cortex stack create --repo` and `cortex quickstart`'s CTX_REPO gate so both
+ * enforce the SAME grammar. A pure predicate — sharing it does NOT couple
+ * quickstart's check to stack-create's (non-idempotent) runtime validation.
+ */
+export function isValidRepoFullName(repo: string): boolean {
+  return REPO_FULLNAME_RE.test(repo) && !repo.includes("..");
+}
 
 /**
  * `create` writes to disk; the DEFAULT is dry-run (safe). `--apply` opts into
@@ -319,7 +339,7 @@ function runCreate(
 
   const grantedRepos: string[] = [];
   for (const repo of listValueFlag(flags, "--repo")) {
-    if (!REPO_FULLNAME_RE.test(repo)) {
+    if (!isValidRepoFullName(repo)) {
       return usageError(
         "create",
         `--repo "${repo}" must be an "owner/repo" GitHub full name`,
