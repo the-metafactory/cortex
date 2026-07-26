@@ -76,7 +76,14 @@ function baseOpts(
     principalId: "andreas",
     stack: "work",
     seamsOverride: NOOP_SEAMS,
-    env: {},
+    // cortex#2436 — the DEFAULT fixture is a CORRECTLY CONFIGURED stack: a
+    // scoped forge identity is present, so consumers wire. Before the
+    // fail-closed change an empty env still wired (with an ambient-authority
+    // warning), so `env: {}` was a fine default; now it means "no identity"
+    // and correctly yields dormancy. Tests exercising the fail-closed path
+    // override this with `env: {}` explicitly, so the intent is visible at the
+    // call site rather than inherited from a helper.
+    env: { CORTEX_DEV_GH_TOKEN: "fake-scoped-forge-token" },
     log: { info: () => {}, warn: () => {} },
     ...overrides,
   };
@@ -129,10 +136,10 @@ describe("wireDevConsumers — dormancy", () => {
   });
 });
 
-describe("wireDevConsumers — §3.5b authority warning", () => {
-  test("no scoped token → LOUD warning citing the accepted-risk note", () => {
+describe("wireDevConsumers — forge-identity authority (cortex#2436, fail-closed)", () => {
+  test("no scoped identity → NO consumers wired (fail closed, never ambient authority)", () => {
     const logs = { info: [] as string[], warn: [] as string[] };
-    wireDevConsumers({
+    const consumers = wireDevConsumers({
       agents: [{ id: "forge", runtime: { capabilities: ["dev.implement"] } }],
       runtime: fakeRuntime(),
       source: SOURCE,
@@ -142,10 +149,43 @@ describe("wireDevConsumers — §3.5b authority warning", () => {
       env: {}, // CORTEX_DEV_GH_TOKEN unset
       log: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m) },
     });
+
+    // THE load-bearing assertion (cortex#2436): nothing is wired, so nothing
+    // can push. Before this change the consumer wired anyway and pushed under
+    // the daemon's ambient `gh` credential — i.e. as the principal — with only
+    // a warning. A warning is not a control.
+    expect(consumers).toHaveLength(0);
+
+    // Still loud, and still actionable: the principal must be able to tell
+    // immediately WHY the dev loop is inert and what to set.
     expect(logs.warn).toHaveLength(1);
-    expect(logs.warn[0]).toContain("AMBIENT");
-    expect(logs.warn[0]).toContain("§3.5b");
+    expect(logs.warn[0]).toContain("NOT wired");
+    expect(logs.warn[0]).toContain("REFUSING");
     expect(logs.warn[0]).toContain("CORTEX_DEV_GH_TOKEN");
+    // Names the consequence in the principal's terms, not just the mechanism.
+    expect(logs.warn[0]).toContain("INERT");
+    // ...and must NOT claim the old ambient-authority behaviour still applies.
+    expect(logs.warn[0]).not.toContain("it will push branches");
+  });
+
+  test("regression fence: the ambient-fallback path is gone, not merely re-worded", () => {
+    // A future edit that restores wiring-without-identity would keep the
+    // warning (it reads plausibly) while silently reinstating pushes as the
+    // principal. Pin the BEHAVIOUR — zero consumers — independently of any
+    // log text, so re-wording the message cannot mask a reverted control.
+    for (const env of [{}, { CORTEX_DEV_GH_TOKEN: "" }]) {
+      const consumers = wireDevConsumers({
+        agents: [{ id: "forge", runtime: { capabilities: ["dev.implement"] } }],
+        runtime: fakeRuntime(),
+        source: SOURCE,
+        principalId: "andreas",
+        stack: "work",
+        seamsOverride: NOOP_SEAMS,
+        env,
+        log: { info: () => {}, warn: () => {} },
+      });
+      expect(consumers).toHaveLength(0);
+    }
   });
 
   test("scoped token present → info line, no warning", () => {
