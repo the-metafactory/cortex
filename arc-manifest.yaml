@@ -232,15 +232,49 @@ capabilities:
     # arbitrary tools under their own permission system, plus bun scripts,
     # git/gh, npx wrangler, launchctl/systemctl, nats-server. A restricted_to
     # list would be dishonest — the effective surface is unrestricted.
+  # Object form (name/reason/optional) so arc's install-time questionnaire can
+  # show each secret's PURPOSE and a needed-now-vs-optional marker (arc#358).
+  # `optional: true` ⇒ a solo/MVP local stack can leave it unset; only the
+  # GitHub credential is needed-now for the coding tier. Consuming file cited
+  # per entry.
   secrets:
-    - "ANTHROPIC_API_KEY"       # model auth for provider + spawned sessions (src/common/config/agent-env.ts)
-    - "CLAUDE_CODE_OAUTH_TOKEN" # session auth alternative to API key (src/runner/cc-session.ts, session-settings.ts)
-    - "NATS_TOKEN"              # relay bus auth (src/taps/cc-events/relay.ts)
-    - "CTX_DISCORD_TOKEN"       # quickstart surface-token env seam (src/cli/cortex/commands/quickstart.ts)
-    - "CTX_WEB_TOKEN"           # quickstart surface-token env seam (src/cli/cortex/commands/quickstart.ts)
-    - "GH_TOKEN"                # cloud deploy + gh-backed sync (src/cli/cortex/commands/cloud.ts)
-    - "GITHUB_TOKEN"            # alternate gh auth var, same surface (src/cli/cortex/commands/cloud.ts)
-    - "CLOUDFLARE_API_TOKEN"    # wrangler auth for `cortex cloud` (src/cli/cortex/commands/cloud.ts)
+    # GitHub credential (two spellings, same token — arc dedupes the prompt via
+    # githubAliasCanonical). Needed-now: the coding tier clones/syncs granted
+    # repos over gh (src/cli/cortex/commands/cloud.ts reads either var).
+    - name: "GH_TOKEN"
+      reason: "GitHub API + cloud deploy (gh-backed repo sync/clone for the coding tier)"
+      optional: false
+    - name: "GITHUB_TOKEN"
+      reason: "GitHub API + cloud deploy (gh-backed repo sync/clone for the coding tier)"
+      optional: false
+    # Model auth — ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are alternatives:
+    # cc-session suppresses the API key when the OAuth token is present
+    # (src/runner/cc-session.ts). Either satisfies the coding agent, so both are
+    # optional at the manifest level.
+    - name: "ANTHROPIC_API_KEY"
+      reason: "Anthropic API for the coding agent — not needed if you use a Claude OAuth login (src/common/config/agent-env.ts)"
+      optional: true
+    - name: "CLAUDE_CODE_OAUTH_TOKEN"
+      reason: "Claude OAuth session auth — login alternative to ANTHROPIC_API_KEY (src/runner/cc-session.ts, session-settings.ts)"
+      optional: true
+    # Bus auth — only a federated/secured NATS bus needs a token; the relay
+    # falls back to no token for a solo/local bus (src/taps/cc-events/relay.ts).
+    - name: "NATS_TOKEN"
+      reason: "NATS auth for a federated/secured bus — a solo/local bus needs none (src/taps/cc-events/relay.ts)"
+      optional: true
+    # Surface tokens — each only if that surface is enabled; quickstart defaults
+    # both to "" (src/cli/cortex/commands/quickstart.ts).
+    - name: "CTX_DISCORD_TOKEN"
+      reason: "Bot token for the Discord surface (only if the Discord surface is enabled)"
+      optional: true
+    - name: "CTX_WEB_TOKEN"
+      reason: "Auth for the web surface (only if the web surface is enabled)"
+      optional: true
+    # Cloudflare — only for the Mission Control dashboard/worker deploy via
+    # `cortex cloud`; a local stack never deploys (src/cli/cortex/commands/cloud.ts).
+    - name: "CLOUDFLARE_API_TOKEN"
+      reason: "Cloudflare API for the dashboard/worker deploy (cortex cloud) — not needed for a local stack"
+      optional: true
   # Claude Code hook events this package registers globally (mirrors the
   # `hooks:` block above; the Skill/MCP guard hooks are per-session-only by
   # design and deliberately NOT global registrations).
