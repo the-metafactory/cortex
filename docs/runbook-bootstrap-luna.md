@@ -239,6 +239,12 @@ export CTX_MY_DISCORD_ID=<your-user-id>        # Step 2c — Copy User ID (the p
 # --- secret (from Step 2a) — never echoed by quickstart ---
 export CTX_DISCORD_TOKEN=<your-bot-token>      # Step 2a — Reset Token → Copy. GATES success.
 
+# --- optional: turn on the SOFTWARE-FACTORY (coding) tier ---
+export CTX_REPO=<owner/repo>                   # e.g. your-org/your-repo. Set it and quickstart scaffolds
+                                               # the coding grant (branch/commit/push + gh pr/issue),
+                                               # pinned to THIS repo. Omit it → a chat-only Luna. Must be
+                                               # an owner/repo SLUG, not a filesystem path.
+
 # --- optional: only needed on a headless host with no interactive `claude` login ---
 # export CLAUDE_CODE_OAUTH_TOKEN=<token>       # native hosts with a `claude` login don't need this
 ```
@@ -256,6 +262,7 @@ export CTX_DISCORD_TOKEN=<your-bot-token>      # Step 2a — Reset Token → Cop
 | `CTX_LOG_CHANNEL_ID` | ✅ | numeric snowflake | Step 2c — worklog channel (may equal `CTX_CHANNEL_ID`) |
 | `CTX_MY_DISCORD_ID` | ✅ | numeric snowflake | Step 2c — your own Copy User ID |
 | `CTX_DISCORD_TOKEN` | ✅ (gates) | non-empty secret | Step 2a — Reset Token → Copy. Never printed; a miss stops the run cleanly |
+| `CTX_REPO` | optional | `owner/repo` slug | **Turns on the coding tier** — the one GitHub repo Luna may branch/commit/push + open PRs on. Omit → chat-only. A path is rejected; use the slug |
 | `CLAUDE_CODE_OAUTH_TOKEN` | optional | non-empty secret | Only for a headless host with no interactive `claude` login — native hosts skip it |
 
 ### 4b. Run quickstart
@@ -380,7 +387,10 @@ export LUNA_PRINCIPAL=<your-handle>
 export LUNA_GUILD_ID=<your-guild-id>
 export LUNA_CHANNEL_ID=<your-channel-id>
 export LUNA_MY_DISCORD_ID=<your-user-id>
-export LUNA_REPO=<owner/repo>               # the ONE repo Luna may read+write
+export LUNA_REPO=~/path/to/your-repo        # the ONE local checkout PATH Luna may read+write (fs scope)
+export LUNA_GH_REPO=<owner/repo>            # the GitHub owner/repo SLUG the coding grant pins to — set it
+                                            # to turn coding on; omit → chat-only. (Two values on purpose:
+                                            # a path can't be a gh pin, a slug can't be a filesystem scope.)
 
 arc install https://github.com/the-metafactory/metafactory-cortex-agent-luna-stack
 ```
