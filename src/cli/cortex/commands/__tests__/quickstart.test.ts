@@ -749,7 +749,7 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
   // cortex#2452 — a code stand-up must PRE-PLACE the granted repo in the
   // workspace (the runtime allowlist has no clone verb, by design). The clone
   // lands at `<canonicalWorkspaceDir(slug)>/<repo>` — the SAME dir the dispatch
-  // handler opens the CC session cwd in — using the operator's gh/git auth.
+  // handler opens the CC session cwd in — using the principal's gh/git auth.
   test("cortex#2452: code stack + granted repo → clones owner/repo into <workspace>/<repo>", async () => {
     const configDir = freshDir();
     const natsDir = freshDir();
@@ -818,7 +818,7 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("WARNING");
     expect(res.stdout).toContain("CODING LOOP WILL NOT WORK");
-    // The exact by-hand command the operator can run.
+    // The exact by-hand command the principal can run.
     expect(res.stdout).toContain(`gh repo clone the-metafactory/cortex ${join(canonicalWorkspaceDir("codefail"), "cortex")}`);
     // The underlying failure reason is surfaced.
     expect(res.stdout).toContain("repository not found");

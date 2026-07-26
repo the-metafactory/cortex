@@ -282,17 +282,17 @@ function shellQuote(s: string): string {
 export function buildWorkspacePort(): WorkspacePort {
   return {
     cloneGrantedRepo(opts: { ownerRepo: string; dest: string }): CommandResult {
-      // cortex#2452 — PREFER `gh repo clone`: it reuses the operator's gh auth
+      // cortex#2452 — PREFER `gh repo clone`: it reuses the principal's gh auth
       // that is present at `cortex quickstart` time, so a PRIVATE granted repo
       // clones without a separately-configured git credential helper. `gh repo
       // clone owner/repo dest` is a distinct verb from the runtime allowlist's
-      // gh-pr rules — this runs as the OPERATOR at stand-up, never inside a
+      // gh-pr rules — this runs as the PRINCIPAL at stand-up, never inside a
       // dispatched agent session (the allowlist stays unchanged).
       const gh = runSync(["gh", "repo", "clone", opts.ownerRepo, opts.dest]);
       if (gh.exitCode === 0) return gh;
 
       // FALLBACK — plain `git clone` over HTTPS (a box with git auth but no gh,
-      // or a public repo). Surface BOTH failures' stderr so the operator sees
+      // or a public repo). Surface BOTH failures' stderr so the principal sees
       // why each path failed, not just the last one.
       const git = runSync(["git", "clone", `https://github.com/${opts.ownerRepo}`, opts.dest]);
       if (git.exitCode === 0) return git;

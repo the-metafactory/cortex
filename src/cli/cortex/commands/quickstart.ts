@@ -503,7 +503,7 @@ async function runScaffold(opts: {
  * The coding-tier runtime allowlist DELIBERATELY excludes `clone`/`gh repo`/
  * `gh api` (`review-session-lockdown.ts` — an agent must not clone arbitrary
  * repos), so the STAND-UP owns placing the one granted repo. This runs with the
- * operator's own `gh`/`git` auth (present at `cortex quickstart` time) and lands
+ * principal's own `gh`/`git` auth (present at `cortex quickstart` time) and lands
  * the checkout at `<canonicalWorkspaceDir(slug)>/<repo>` — the SAME workspace
  * dir the dispatch handler opens the CC session's cwd in (dispatch-handler.ts's
  * `canonicalWorkspaceDir(this.stack)` fallback, cortex#2097), so the agent sees
@@ -511,7 +511,7 @@ async function runScaffold(opts: {
  *
  * ALWAYS returns `ok: true` — a clone failure is FAIL-SOFT (the stack is already
  * stood up; only the coding loop is degraded), surfaced as a prominent ⚠ with
- * the exact `gh repo clone` command the operator can run by hand. Idempotent: an
+ * the exact `gh repo clone` command the principal can run by hand. Idempotent: an
  * existing `<repo>/.git` checkout is skipped, never re-cloned or clobbered.
  */
 function runWorkspaceCheckout(
@@ -557,7 +557,7 @@ function runWorkspaceCheckout(
 
   // FAIL-SOFT — the stack is already stood up; a clone failure (auth, network,
   // repo-not-found) must NOT abort quickstart. WARN prominently: this means the
-  // coding loop can't start until the operator resolves it and clones by hand.
+  // coding loop can't start until the principal resolves it and clones by hand.
   return step("4b. Workspace checkout", true, [
     `  ⚠ WARNING: could not clone the granted repo ${ownerRepo} into the workspace.`,
     `    The stack is stood up, but the CODING LOOP WILL NOT WORK until the checkout`,
@@ -1159,7 +1159,7 @@ export async function dispatchQuickstart(
   // A `code` stack with a granted repo needs the repo PRE-PLACED in its
   // workspace: the runtime allowlist has no clone verb (by design — an agent
   // must not clone arbitrary repos), so the stand-up owns the checkout. Runs
-  // with the operator's own gh/git auth. FAIL-SOFT: a clone failure warns but
+  // with the principal's own gh/git auth. FAIL-SOFT: a clone failure warns but
   // never aborts the already-stood-up stack. Chat-only stacks skip this step.
   if (ctxRepo.length > 0) {
     reports.push(runWorkspaceCheckout(ports, { slug: s.slug, grantedRepo: ctxRepo }));

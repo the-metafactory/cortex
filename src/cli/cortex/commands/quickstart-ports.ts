@@ -208,7 +208,7 @@ export interface ProvisionPort {
  * repo in the workspace; without it the coding loop starts against an empty dir
  * with no way to fetch the code.
  *
- * `cortex quickstart` runs with the operator's own `gh`/`git` auth, so this is
+ * `cortex quickstart` runs with the principal's own `gh`/`git` auth, so this is
  * where the pre-placement belongs. The orchestrator handles idempotency (skip an
  * existing checkout) and fail-soft (a clone failure WARNS but never aborts the
  * already-stood-up stack); this port only performs the clone itself.
@@ -216,7 +216,7 @@ export interface ProvisionPort {
 export interface WorkspacePort {
   /**
    * Clone `owner/repo` into `dest` (an absolute `<workspace>/<repo>` path).
-   * Prefers `gh repo clone owner/repo dest` (reuses the operator's gh auth
+   * Prefers `gh repo clone owner/repo dest` (reuses the principal's gh auth
    * present at quickstart time) and falls back to
    * `git clone https://github.com/owner/repo dest`. Never throws — a clone
    * failure (auth, network, repo-not-found, missing binary) is reported as a
