@@ -7,7 +7,7 @@
 
 import { EventEmitter } from "events";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { parseStreamLine, StreamLineBuffer, type UsageStats, type StreamEvent } from "./stream-parser";
 import { buildClaudeArgs, type ClaudeInvocationOpts } from "./claude-invoker";
 import {
@@ -24,6 +24,7 @@ import {
   SANDBOX_EXEC_ALLOW_SEED,
   SANDBOX_EGRESS_ALLOW_SEED,
   type SandboxMode,
+  type SandboxPosture,
   type SandboxProfile,
   type SandboxUnavailableEvent,
   type SandboxDenialEvent,
@@ -76,6 +77,16 @@ export interface CCSessionOpts {
    * enforces it (EBH-3).
    */
   sandboxMode?: SandboxMode;
+  /**
+   * cortex#2409 part 2 — DD-10's filesystem posture (`"guarded"` v1's
+   * `(allow default)` + denylist, or `"strict"` v2's `(deny default)` +
+   * derived explicit-allow). Undefined behaves exactly like `"guarded"` —
+   * the HARD HOLD default, unchanged from every prior EBH slice: no live
+   * dispatch path sets `"strict"`. Orthogonal to {@link sandboxMode}: mode
+   * gates whether the profile enforces at all; posture gates what its
+   * default rule is. See `session-sandbox.ts`'s `SandboxPosture` doc.
+   */
+  sandboxPosture?: SandboxPosture;
   /**
    * EBH-4 (cortex#2346) — additional egress hostnames for THIS session, on
    * top of {@link SANDBOX_EGRESS_ALLOW_SEED}'s static seed (the compat-
@@ -380,8 +391,19 @@ function splitGuardDirs(
  * touching the static compatibility-contract list.
  */
 export function deriveSandboxProfile(
-  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs" | "egressAllow">,
+  opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs" | "egressAllow" | "sandboxPosture">,
   mode: SandboxMode,
+  /**
+   * cortex#2409 part 2 — session-internal read-only paths ONLY the STRICT
+   * generator needs (see `SandboxProfile.internalReadOnly`'s doc): today,
+   * the per-session isolated-settings temp dir. A separate parameter
+   * (not folded into `opts`) because it is NOT part of the caller-facing
+   * policy `opts` represents — it's plumbing `CCSession.start()` computes
+   * for itself (`createIsolatedSettings`'s `settingsPath`) and threads
+   * through explicitly, so `deriveSandboxProfile` stays a pure function of
+   * its own inputs rather than reaching into session-construction state.
+   */
+  internalReadOnly: string[] = [],
 ): SandboxProfile {
   const { allowedDirs, readOnlyDirs } = splitGuardDirs(opts);
   return {
@@ -390,6 +412,11 @@ export function deriveSandboxProfile(
     execAllow: [...SANDBOX_EXEC_ALLOW_SEED],
     egressAllow: [...new Set([...SANDBOX_EGRESS_ALLOW_SEED, ...(opts.egressAllow ?? [])])],
     mode,
+    // cortex#2409 part 2 HARD HOLD — defaults to "guarded" (DD-10 v1,
+    // unchanged) whenever the caller doesn't set `sandboxPosture`, which is
+    // every live dispatch path today. See `SandboxPosture`'s doc.
+    posture: opts.sandboxPosture ?? "guarded",
+    internalReadOnly,
   };
 }
 
@@ -605,7 +632,20 @@ export class CCSession extends EventEmitter {
     // a real backend class is not the same as enforcing anything; see
     // `session-sandbox-macos.ts`'s class doc for the `mode` gate.
     const sandboxMode: SandboxMode = this.opts.sandboxMode ?? "off";
-    const sandboxProfile = deriveSandboxProfile(this.opts, sandboxMode);
+    // cortex#2409 part 2 — the isolated-settings temp dir (when isolating)
+    // is cortex-internal plumbing, not part of the caller's `allowedDirs`/
+    // `readOnlyDirs` policy, but the STRICT posture's `(deny default)` still
+    // needs an explicit allow for it (`claude` reads its own `--settings
+    // <path>` argument at startup) or every isolated session breaks under
+    // `strict`. `dirname`, not the file itself — the strict generator
+    // realpath-resolves + subpath-allows the directory (also covers the
+    // materialised skills plugin dir, cortex#990 A1, which lives alongside
+    // `settings.json` in the SAME temp dir).
+    const sandboxProfile = deriveSandboxProfile(
+      this.opts,
+      sandboxMode,
+      this.isolatedSettings ? [dirname(this.isolatedSettings.settingsPath)] : [],
+    );
     const sandbox = createSessionSandbox({
       onUnavailable: (event: SandboxUnavailableEvent) => {
         // Observable to any listener (a future bus publisher included) —

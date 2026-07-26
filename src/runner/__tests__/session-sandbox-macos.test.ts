@@ -50,6 +50,8 @@ function baseProfile(overrides: Partial<SandboxProfile> = {}): SandboxProfile {
     execAllow: [],
     egressAllow: [],
     mode: "audit",
+    posture: "guarded",
+    internalReadOnly: [],
     ...overrides,
   };
 }

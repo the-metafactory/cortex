@@ -114,6 +114,23 @@ E4 makes strict deny-default costly on macOS. Ship in two stages:
 - **v2 `strict`** — true deny-default allowlist once the compatibility contract (§5) is empirically pinned.
 Linux `bwrap` starts at v2-equivalent natively (bind-mount only what's allowed), so the platforms converge from opposite directions. **Posture is reported, never guessed.**
 
+> **✅ v2 `strict` landed on macOS (2026-07-26, cortex#2409 part 2), mechanism-only.**
+> `SandboxProfile.posture: "guarded" | "strict"` (default `"guarded"` — HARD HOLD, no live
+> caller sets `"strict"`). E4's SIGABRT was diagnosed, not routed around: a naive
+> `(deny default)` aborts inside dyld's own bootstrap (`dyld4::CacheFinder` → `ignition_halt`,
+> confirmed via the macOS crash reporter, not the unified log — the abort happens before any
+> per-operation denial is even logged) because it's missing the handful of syscalls/reads
+> Apple's own `dyld-support.sb`/`system.sb` profile fragments grant every real daemon profile on
+> the system; importing them (`(import "system.sb")`) fixes it outright — no allowance beyond
+> what Apple's own minimal bootstrap set already grants. The compatibility contract (§5) was
+> pinned empirically the way OQ-2 asked for, just not via `fs_usage`/`strace` (still no
+> passwordless root here) — via this same design's own denial-log observation loop
+> (`log stream`/`MacosSbplSandbox.denials()`), iterating a REAL `claude --print` + `--resume`
+> session against successive profile candidates until it completed clean. Full round-by-round
+> derivation, the keychain-read residual, and the disclosed non-Homebrew-git gap are documented
+> in `session-sandbox-macos.ts`'s `generateMacosSbplStrictProfile` module doc (not repeated
+> here to avoid the two docs drifting).
+
 ### DD-11 — Sandbox unavailability splits on **input trust** — ✅ DECIDED (principal, 2026-07-25, OQ-3)
 
 When no backend resolves, behaviour keys on **whether the stack processes input from someone other than the principal** — not on platform. Both signals already exist in config:

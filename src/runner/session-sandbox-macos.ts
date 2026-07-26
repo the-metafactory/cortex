@@ -113,12 +113,14 @@
  * lifetimes are seconds-to-minutes); flagged here rather than assumed away.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import type { Subprocess } from "bun";
 import { resolveProspectiveRealpath } from "../common/path-containment";
+import { activeConfigHomeEnv } from "../common/substrates/config-home";
+import { resolveArcPackReposDir } from "../common/config/arc-pack-repos-dir";
 import type {
   SandboxDenial,
   SandboxProfile,
@@ -325,6 +327,532 @@ export function generateMacosSbplProfile(
     text: lines.join("\n") + "\n",
     unresolved,
     resolvedDenyPaths: [...resolvedDenyPaths],
+  };
+}
+
+// -----------------------------------------------------------------------------
+// v2 `strict` SBPL text generation (cortex#2409 part 2) — DD-10's deny-
+// default posture: `(deny default)` + a DERIVED, documented, minimal
+// explicit-allow set. This is the boundary that holds "by construction" —
+// everything NOT on the allow set below is denied, full stop, no enumeration
+// to complete.
+//
+// ## How this allow set was derived (the evidence trail the issue asked for)
+//
+// Every entry below was found by the SAME loop, run against this real host
+// (macOS 26.5.1, arm64, `sandbox-exec` present):
+//
+//   1. write a candidate `(deny default)` profile;
+//   2. spawn a REAL `claude --print` session under it (via `sandbox-exec -f`);
+//   3. read what the kernel denied from the macOS unified log (the SAME
+//      `Sandbox: NAME(PID) deny(N) OPERATION PATH` shape `session-sandbox-
+//      macos.ts`'s own `denials()`/`parseSandboxDenialLogLine` already parses
+//      — no `fs_usage`/`dtruss`, no root, exactly the EBH-3a-established
+//      observation mechanism);
+//   4. add the MINIMUM allow that resolves that denial;
+//   5. repeat until a full fresh-session + `--resume` round-trip completed
+//      with ZERO denials (the same bar EBH-3a's own e2e test holds `guarded`
+//      to).
+//
+// Round-by-round findings (each is what iteration on step 3 actually showed —
+// not reasoned out in advance):
+//
+//   - **Round 1 (E4's SIGABRT, exit 134).** A naive `(deny default)` with
+//     only a `process-exec` allow for the target binary SIGABRTs before any
+//     denial is even logged — the unified log shows NOTHING for the crash
+//     (verified: `log show` around the crash window is empty). The macOS
+//     crash reporter (`~/Library/Logs/DiagnosticReports/*.ips`) tells the
+//     real story: the fault is in `dyld4::CacheFinder::CacheFinder` →
+//     `ProcessConfig::DyldCache` → `ignition_halt`/`abort_with_reason` —
+//     dyld's OWN bootstrap (locating/validating the shared cache, resolving
+//     cryptex graft points) aborts when it can't complete a handful of
+//     specific syscalls/reads `(deny default)` blocks silently (no Seatbelt
+//     denial line is logged for whatever dyld's `ignition`/`libignition`
+//     layer hits — it aborts before the normal per-operation denial
+//     mechanism even applies). FIX: `(import "dyld-support.sb")` — Apple's
+//     OWN shipped profile fragment for exactly this
+//     (`/System/Library/Sandbox/Profiles/dyld-support.sb`, "Rules required to
+//     bootstrap a process with dyld"), used verbatim by Apple's real daemon
+//     profiles (`bsd.sb` imports `system.sb`, which imports this). Verified:
+//     `(deny default)(import "dyld-support.sb")(allow process-exec …)` runs
+//     `/usr/bin/true` to a clean exit 0, no crash, no denial.
+//   - **Round 2.** Importing the WIDER `system.sb` (which itself imports
+//     `dyld-support.sb`, plus grants `file-read-metadata`, `sysctl-read`,
+//     the standard `mach-lookup` set for cfprefsd/notification_center/
+//     opendirectoryd/trustd/logd, and the base `/System`, `/usr/lib`,
+//     `/usr/share` reads) took a real `claude --version` invocation from
+//     SIGABRT to a clean run with ZERO denials, once the target binary + its
+//     cwd were allow-listed. `system.sb` is the SAME base every real Apple
+//     daemon profile in `/System/Library/Sandbox/Profiles/` builds on
+//     (`bsd.sb`'s `(import "system.sb")` — inspected directly on this host);
+//     reusing it is "don't hand-roll dyld/mach bootstrap", the same
+//     philosophy as reusing `loader.ts`'s path-containment code elsewhere in
+//     this repo.
+//   - **Round 3 (a real `claude --print` prompt, not just `--version`).**
+//     Denials observed: `process-fork` + `posix_spawn 'security'` — `claude`
+//     shells out to macOS's `/usr/bin/security` CLI to query keychain state
+//     at startup. Then, once `security` could exec: `mach-lookup
+//     com.apple.securityd.xpc`, `mach-lookup com.apple.SecurityServer`,
+//     `user-preference-read kcfpreferencesanyapplication`/`com.apple.security`
+//     — `security`'s own keychain-query path. FIX: allow `process-fork`
+//     (matches Apple's own `application.sb` baseline for ordinary sandboxed
+//     apps — inspected directly), explicit exec+read allow for the resolved
+//     `security` binary, the two `mach-lookup` names, and a broad
+//     `user-preference-read` (matches `application.sb`'s own posture —
+//     preference reads are stat-adjacent metadata, not secret content).
+//   - **Round 4.** `process-exec* /bin/sh` denied — Claude Code's OWN Bash
+//     tool execs `/bin/sh` internally (measured directly: this denial fires
+//     the moment the Bash tool runs, with no cortex-side shell invocation of
+//     our own in the repro). FIX: added `"sh"` to the shared
+//     `SANDBOX_EXEC_ALLOW_SEED` (session-sandbox.ts) — a genuine
+//     compatibility-contract requirement, not strict-specific (the guarded
+//     posture never enforced `execAllow` at all, so this addition is
+//     previously-dead data becoming used, not a behavior change for
+//     `guarded`).
+//   - **Round 5.** Cortex's OWN hooks (`~/.claude/hooks/*.hook.ts`, or the
+//     equivalent under a relocated config home) carry a `#!/usr/bin/env bun`
+//     shebang (verified: `head -1` on this repo's installed hooks). The
+//     kernel-level exec chain for EVERY hook invocation is therefore `env` →
+//     `bun`, not just `bun` — `/usr/bin/env` itself needs `process-exec`.
+//     FIX: added `"env"` to the same seed.
+//   - **Round 6.** `file-read-data` denied on the bare `$HOME` and `/Users`
+//     directories (not their contents — the literal directory entries
+//     themselves; something in `claude`'s startup enumerates its own home's
+//     top level). FIX: a narrow, NON-recursive `(literal …)` allow (not
+//     `subpath`) for exactly those two paths — lists directory NAMES one
+//     level deep, not file contents; the lowest-risk grant that resolved the
+//     denial.
+//   - **Round 7.** `/private/etc/ssl/cert.pem` (TLS root bundle) and
+//     `/Library/Preferences/com.apple.networkd.plist` denied once the
+//     session reached actual network I/O. FIX: explicit reads for both —
+//     baseline OS/TLS plumbing every networked process needs, not session-
+//     specific.
+//   - **Git/gh.** The compatibility contract (design-session-sandbox.md §3,
+//     -platforms.md §5) explicitly requires `git`/`gh` to keep working.
+//     `execAllow`'s entries are resolved via `Bun.which` (the SAME `$PATH`
+//     the spawned child inherits — `session-settings.ts` preserves `PATH`
+//     unchanged for isolated sessions, so parent-side resolution and child-
+//     side resolution agree) then realpath'd. On THIS host both are Homebrew
+//     installs (`/opt/homebrew/bin/{git,gh}` → `Cellar/{git,gh}/<ver>/bin/…`)
+//     — resolved binaries under a `/Cellar/<pkg>/<ver>/` tree get that whole
+//     package root allow-listed too (read + map-executable), since Homebrew
+//     binaries commonly dlopen/reference sibling files (share/templates,
+//     libexec) within their OWN package tree. This is a DERIVED, HOST-
+//     SPECIFIC finding, not a general guarantee — a non-Homebrew git install
+//     (e.g. Xcode CLT's `/usr/bin/git`, or a bare-metal Linux-shaped install)
+//     is NOT covered by the Cellar heuristic and gets only its literal binary
+//     allow-listed; this is a disclosed residual (see the function doc)
+//     pending measurement on a non-Homebrew host.
+//
+// ## THE keychain constraint (do not "fix" this away)
+//
+// `~/Library/Keychains` READ is unconditionally allowed (`file-read*`, both
+// data and metadata) — `claude` authenticates via the OS keychain, and E-KC
+// (measured on a real host, this epic) found that denying keychain reads —
+// even narrowed to `file-read-data` alone — breaks login outright ("Not
+// logged in · Please run /login"). This is the IDENTICAL empirical finding
+// `builtinSensitiveDenyEntries` (v1 `guarded`) already documents for its own
+// WRITE-only keychain carve-out; `strict` inherits the SAME constraint in
+// allow-set form: keychain read is unconditionally on the allow list, write
+// is NOT (omitted from every allow rule ⇒ denied by `(deny default)`,
+// exactly like every other unlisted operation). **`strict` therefore cannot
+// protect keychain CONTENTS from a compromised session** — an injected
+// prompt that gets the agent to read+exfiltrate its own keychain data still
+// succeeds at the FS layer (the egress-proxy/L3 layer is the only thing that
+// could then contain exfiltration, and only for cooperating-client traffic).
+// This is a disclosed, permanent residual, not a bug to chase — see the
+// design doc's own residual list (§5) for the parallel `gh`/git-credential
+// finding this generalizes.
+//
+// ## Network — NOT this layer's job
+//
+// `(allow network*)` is unconditional here. `strict`'s whole point is
+// FILESYSTEM confinement (F1); per-host network filtering is Layer 3's job
+// (`egress-proxy.ts`'s cooperating-client HTTP CONNECT proxy) — SBPL's own
+// host-based network primitives are coarse/unreliable (design doc §4.3), and
+// `strict` does not attempt to duplicate that boundary at the kernel level.
+// This is the SAME scope split `guarded` (v1) already has (it also allows
+// all network via `(allow default)`) — `strict` is not a regression here,
+// only an improvement on the FS dimension.
+// -----------------------------------------------------------------------------
+
+export interface MacosSbplStrictProfileOpts {
+  /** Override `$HOME` (tests). Defaults to `os.homedir()`. */
+  homeDir?: string;
+  /**
+   * Override the resolved claude-code config home (hooks/settings/session-
+   * state/events dir). Defaults to the SAME resolution `cc-session.ts` uses
+   * for `skillSourceDir` — `activeConfigHomeEnv("claude-code")?.value ??
+   * join(homeDir, ".claude")` — so a deployment that relocated its config
+   * home (the `substrates:` block) gets the SAME directory allow-listed
+   * here that the session actually reads/writes. Tests override this
+   * directly rather than mutating the process-wide `activeConfigHomeEnv`
+   * singleton.
+   */
+  configHomeDir?: string;
+  /**
+   * Additional session-internal read-only paths (cortex#2409 part 2 — see
+   * `SandboxProfile.internalReadOnly`'s doc: today, the per-session
+   * isolated-settings temp dir). Named to mirror v1's `extraDenyPaths` —
+   * the generic escape hatch for "another path this generator doesn't know
+   * about by name".
+   */
+  internalReadOnlyPaths?: string[];
+}
+
+export interface MacosSbplStrictProfile {
+  /** The compiled SBPL text — write verbatim to a `.sb` file. */
+  text: string;
+  /** Every input path that failed to realpath-resolve, and why — FAIL
+   *  CLOSED: an unresolvable ALLOW input is excluded from `text` (never
+   *  silently trusted unresolved), exactly like v1's `unresolved` handling,
+   *  just mirrored for the opposite (allow, not deny) direction. */
+  unresolved: { input: string; reason: string }[];
+  /** Every resolved (realpath'd) root actually allowed — for tests/logging. */
+  resolvedAllowPaths: string[];
+}
+
+/** `.../Cellar/<pkg>/<version>/...` → `.../Cellar/<pkg>/<version>` — the
+ *  Homebrew package-root heuristic from Round "Git/gh" above. `undefined`
+ *  when `resolvedPath` isn't under a `/Cellar/` tree (a non-Homebrew
+ *  install) — the caller then allow-lists only the literal binary, a
+ *  disclosed residual for non-Homebrew hosts. Exported for unit tests. */
+export function homebrewPackageRoot(resolvedPath: string): string | undefined {
+  const marker = "/Cellar/";
+  const idx = resolvedPath.indexOf(marker);
+  if (idx === -1) return undefined;
+  const afterCellar = resolvedPath.slice(idx + marker.length);
+  const segments = afterCellar.split("/");
+  const pkg = segments[0];
+  const version = segments[1];
+  if (!pkg || !version) return undefined;
+  return resolvedPath.slice(0, idx + marker.length) + pkg + "/" + version;
+}
+
+/**
+ * Classify a hook file's realpath against arc's package-repos root
+ * (`resolveArcPackReposDir` — the SAME resolver `cortex.ts`'s exec-brain pack
+ * loader uses, reused rather than re-derived) — Round 5's discovery that
+ * cortex's own hooks are commonly symlinks INTO an arc-managed repo checkout
+ * (`~/.local/share/metafactory/arc/repos/<repo>/…`, verified on this host:
+ * `~/.claude/hooks/CortexBashGuard.hook.ts` → `…/arc/repos/cortex/src/runner/
+ * hooks/bash-guard.hook.ts`). A hook run via `bun <file>` needs its sibling
+ * source files too (bun resolves `import`s at the FILE level), so a symlink
+ * target under the arc root gets its WHOLE repo checkout allow-listed
+ * (read + map-executable, never write — self-modification of arc-managed
+ * source stays denied); a target that resolves OUTSIDE the arc root (a
+ * custom, non-arc-managed hook) gets only its own literal file allow-listed
+ * — least-privilege for the case this function can't generalize about.
+ * Exported for unit tests.
+ */
+export function classifyHookTarget(
+  resolvedTarget: string,
+  homeDir: string,
+): { subpath: string } | { literal: string } {
+  const arcRoot = resolveArcPackReposDir({ home: homeDir });
+  const arcRootWithSep = arcRoot.endsWith("/") ? arcRoot : arcRoot + "/";
+  if (resolvedTarget.startsWith(arcRootWithSep)) {
+    const rest = resolvedTarget.slice(arcRootWithSep.length);
+    const repo = rest.split("/")[0];
+    if (repo) return { subpath: join(arcRoot, repo) };
+  }
+  return { literal: resolvedTarget };
+}
+
+/** One allow rule's inputs, kept structured (like v1's `DenyEntry`) so
+ *  `generateMacosSbplStrictProfile` can report exactly which INPUT produced
+ *  which resolved allow, for `unresolved` reporting. `"regex-in-dir"` is
+ *  Round 8's addition: `input` is realpath-resolved as a DIRECTORY (the
+ *  SAME E3 discipline as `subpath`/`literal`), then `regexSuffix` is
+ *  appended after the escaped, resolved dir to match a whole FAMILY of
+ *  sibling files whose exact names aren't individually predictable (atomic-
+ *  write lockfile/tempfile siblings — see the `.claude.json` allow below). */
+interface AllowEntry {
+  input: string;
+  kind: "subpath" | "literal" | "regex-in-dir";
+  ops: readonly string[];
+  regexSuffix?: string;
+}
+
+function pushAllow(
+  entries: AllowEntry[],
+  input: string,
+  kind: "subpath" | "literal",
+  ops: readonly string[],
+): void {
+  entries.push({ input, kind, ops });
+}
+
+function pushRegexInDirAllow(
+  entries: AllowEntry[],
+  dir: string,
+  regexSuffix: string,
+  ops: readonly string[],
+): void {
+  entries.push({ input: dir, kind: "regex-in-dir", ops, regexSuffix });
+}
+
+/** Escape ERE metacharacters in a literal path so it can be embedded in an
+ *  SBPL `(regex #"…")` pattern as a LITERAL prefix (not reinterpreted as
+ *  regex syntax) — the path-side half of Round 8's `.claude.json` family
+ *  match. Applied BEFORE {@link sbplQuoteRegexLiteral} (the separate SBPL-
+ *  string-literal escaping for the resulting pattern text). */
+function regexEscapePathForSbpl(path: string): string {
+  return path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Escape a completed REGEX PATTERN string for embedding in an SBPL
+ * `(regex #"…")` literal. Deliberately NOT {@link sbplQuote}: measured
+ * directly on this host (`sandbox-exec`, two minimal profiles differing
+ * only in this) that SBPL's `#"…"` string literal does NOT process `\\` as
+ * a backslash-escape the way `sbplQuote` assumes for `subpath`/`literal`
+ * paths — doubling a pattern's regex backslashes (`\.` → `\\.`) makes the
+ * SBPL parser treat them as two LITERAL characters (`\` then `.`, i.e. an
+ * escaped backslash followed by a wildcard-any-char `.`), which no longer
+ * matches the intended literal dot and silently stops matching the target
+ * file at all — confirmed: a `(regex #"…a\\.txt$")` profile denied a read
+ * `(regex #"…a\.txt$")` correctly allowed, same file, same profile
+ * otherwise. Only `"` needs escaping here — a regex pattern built by THIS
+ * module never legitimately contains one (paths don't), but the discipline
+ * (never trust a segment to not need it) matches `sbplQuote`'s own stance
+ * on `"`. */
+function sbplQuoteRegexLiteral(pattern: string): string {
+  return pattern.replace(/"/g, '\\"');
+}
+
+/**
+ * EBH-3a follow-on, cortex#2409 part 2 — generate the DD-10 v2 `strict`
+ * SBPL profile: `(deny default)` + the derived explicit-allow set documented
+ * in this module's section doc above. Every allow root is realpath-resolved
+ * via {@link resolveProspectiveRealpath} BEFORE being written into the
+ * profile text — the SAME E3 discipline v1's generator applies to its DENY
+ * rules, mirrored here for ALLOW rules: under `(deny default)`, an allow
+ * authored against an unresolved symlink alias would silently fail to
+ * match — the analogous failure to E3, just inverted (a control that looks
+ * granted and isn't, instead of denied and isn't).
+ */
+export function generateMacosSbplStrictProfile(
+  profile: SandboxProfile,
+  opts: MacosSbplStrictProfileOpts = {},
+): MacosSbplStrictProfile {
+  const homeDir = opts.homeDir ?? homedir();
+  const defaultConfigHomeDir = join(homeDir, ".claude");
+  const configHomeDir = opts.configHomeDir ?? activeConfigHomeEnv("claude-code")?.value ?? defaultConfigHomeDir;
+
+  const entries: AllowEntry[] = [];
+
+  // --- claude-code top-level JSON state file (Round 8 — measured directly
+  //     on a real host): `claude` reads/writes a `.claude.json` (auth/
+  //     project-history bookkeeping) that is NOT a child of the config-home
+  //     DIRECTORY in the default case — it sits at `<homeDir>/.claude.json`,
+  //     a SIBLING of `<homeDir>/.claude/` (verified: file mtime updated by a
+  //     real session run against the default config home). When the config
+  //     home is RELOCATED (`CLAUDE_CONFIG_DIR`/`activeConfigHomeEnv`), the
+  //     json file moves WITH it, nested INSIDE the relocated dir instead
+  //     (verified the same way against a relocated config home on this
+  //     host: `<relocated-dir>/.claude.json`). Neither shape is a `subpath`
+  //     of `configHomeDir` in the default case, so this needs its own
+  //     explicit allow rather than falling out of the broad configHomeDir
+  //     grant below. `claude` ALSO writes this file via the standard
+  //     atomic-write idiom — a `.claude.json.lock` lockfile plus
+  //     `.claude.json.tmp.<pid>.<hash>` scratch files with unpredictable
+  //     names (both measured directly: denied on a real run) — so a single
+  //     `literal` allow for `.claude.json` itself is not enough; the whole
+  //     sibling FAMILY needs an allow, hence `regex-in-dir` rather than
+  //     `literal`.
+  const claudeJsonDir = configHomeDir === defaultConfigHomeDir ? homeDir : configHomeDir;
+  pushRegexInDirAllow(entries, claudeJsonDir, "/\\.claude\\.json(\\..*)?$", [
+    "file-read*",
+    "file-write*",
+  ]);
+
+  // --- per-project tool/MCP cache dir (Round 8) — `claude` creates
+  //     `~/Library/Caches/claude-cli-nodejs/<escaped-cwd>/` keyed by the
+  //     session's escaped absolute cwd; the exact per-project leaf name
+  //     isn't predictable without re-implementing claude's own escaping, so
+  //     the stable PARENT is allow-listed (cache data, not credentials —
+  //     same low-sensitivity class as `file-read-metadata`/network prefs
+  //     above).
+  pushAllow(
+    entries,
+    join(homeDir, "Library", "Caches", "claude-cli-nodejs"),
+    "subpath",
+    ["file-read*", "file-write*"],
+  );
+
+  // --- claude CLI's own version-lock dir (Round 8) — `~/.local/state/
+  //     claude/locks/<version>.lock`, written via the same atomic-write
+  //     idiom as `.claude.json` (an unpredictable `.lock.tmp.<hash>`
+  //     scratch file first — measured directly: denied on a real run).
+  //     Unlike `.claude.json` (a file with SIBLINGS in a shared directory
+  //     that must not be broadly opened up), this whole dir is claude's OWN
+  //     dedicated lock-file directory — a plain `subpath` allow is simpler
+  //     and just as correctly scoped.
+  pushAllow(
+    entries,
+    join(homeDir, ".local", "state", "claude", "locks"),
+    "subpath",
+    ["file-read*", "file-write*"],
+  );
+
+  // --- workspace: readWrite / readOnly / internalReadOnly (session policy) ---
+  for (const dir of profile.readWrite) {
+    pushAllow(entries, dir, "subpath", ["file-read*", "file-write*"]);
+  }
+  for (const dir of profile.readOnly) {
+    // F6, same construction as v1: read-only means read-only, no write allow.
+    pushAllow(entries, dir, "subpath", ["file-read*"]);
+  }
+  for (const dir of [...profile.internalReadOnly, ...(opts.internalReadOnlyPaths ?? [])]) {
+    pushAllow(entries, dir, "subpath", ["file-read*"]);
+  }
+
+  // --- claude-code config home: hooks / settings / session+resume state / events ---
+  pushAllow(entries, configHomeDir, "subpath", ["file-read*", "file-write*"]);
+
+  // --- execAllow: resolve each compat-contract binary via $PATH, then realpath ---
+  const execResolutions: { name: string; real: string }[] = [];
+  const unresolvedInputs: { input: string; reason: string }[] = [];
+  for (const name of profile.execAllow) {
+    const which = Bun.which(name);
+    if (which === null) {
+      unresolvedInputs.push({ input: name, reason: `"${name}" not found on $PATH` });
+      continue;
+    }
+    const resolved = resolveProspectiveRealpath(which);
+    if (!resolved.ok) {
+      unresolvedInputs.push({ input: which, reason: resolved.reason });
+      continue;
+    }
+    execResolutions.push({ name, real: resolved.real });
+    pushAllow(entries, resolved.real, "literal", ["process-exec", "file-read*", "file-map-executable"]);
+    const pkgRoot = homebrewPackageRoot(resolved.real);
+    if (pkgRoot) {
+      pushAllow(entries, pkgRoot, "subpath", ["file-read*", "file-map-executable"]);
+    }
+  }
+
+  // --- security CLI (keychain access helper `claude` shells out to, Round 3) ---
+  const securityWhich = Bun.which("security") ?? "/usr/bin/security";
+  const securityResolved = resolveProspectiveRealpath(securityWhich);
+  if (securityResolved.ok) {
+    pushAllow(entries, securityResolved.real, "literal", ["process-exec", "file-read*"]);
+  } else {
+    unresolvedInputs.push({ input: securityWhich, reason: securityResolved.reason });
+  }
+
+  // --- hooks: symlinked targets outside configHomeDir (Round 5) ---
+  const hooksDir = join(configHomeDir, "hooks");
+  let hookEntries: string[] = [];
+  try {
+    hookEntries = readdirSync(hooksDir);
+  } catch {
+    // No hooks dir (yet) — nothing to enumerate. Not a resolution failure;
+    // the broad configHomeDir allow above already covers hooksDir once it
+    // exists (a non-symlinked hook file is read straight from there).
+  }
+  const seenHookAllows = new Set<string>();
+  for (const name of hookEntries) {
+    const hookPath = join(hooksDir, name);
+    const resolved = resolveProspectiveRealpath(hookPath);
+    if (!resolved.ok) {
+      unresolvedInputs.push({ input: hookPath, reason: resolved.reason });
+      continue;
+    }
+    // Only symlink TARGETS that land OUTSIDE configHomeDir need a separate
+    // allow — a hook whose realpath is still under configHomeDir (a plain,
+    // non-symlinked file, or a symlink within the same tree) is already
+    // covered by the broad configHomeDir allow above.
+    const configHomeWithSep = configHomeDir.endsWith("/") ? configHomeDir : configHomeDir + "/";
+    if (resolved.real === configHomeDir || resolved.real.startsWith(configHomeWithSep)) continue;
+    const classified = classifyHookTarget(resolved.real, homeDir);
+    const key = "subpath" in classified ? classified.subpath : classified.literal;
+    if (seenHookAllows.has(key)) continue;
+    seenHookAllows.add(key);
+    if ("subpath" in classified) {
+      pushAllow(entries, classified.subpath, "subpath", ["file-read*", "file-map-executable"]);
+    } else {
+      pushAllow(entries, classified.literal, "literal", ["file-read*", "file-map-executable"]);
+    }
+  }
+
+  // --- keychain: READ only (THE keychain constraint — see section doc) ---
+  pushAllow(entries, join(homeDir, "Library", "Keychains"), "subpath", ["file-read*"]);
+
+  // --- realpath-resolve + emit every collected allow entry ---
+  const unresolved: { input: string; reason: string }[] = [...unresolvedInputs];
+  const resolvedAllowPaths = new Set<string>();
+  const bodyLines: string[] = [];
+  for (const entry of entries) {
+    const resolution = resolveProspectiveRealpath(entry.input);
+    if (!resolution.ok) {
+      unresolved.push({ input: entry.input, reason: resolution.reason });
+      continue;
+    }
+    resolvedAllowPaths.add(resolution.real);
+    if (entry.kind === "regex-in-dir") {
+      const pattern =
+        "^" + regexEscapePathForSbpl(resolution.real) + (entry.regexSuffix ?? "");
+      bodyLines.push(`(allow ${entry.ops.join(" ")} (regex #"${sbplQuoteRegexLiteral(pattern)}"))`);
+      continue;
+    }
+    const matcher = entry.kind === "subpath" ? "subpath" : "literal";
+    bodyLines.push(
+      `(allow ${entry.ops.join(" ")} (${matcher} "${sbplQuote(resolution.real)}"))`,
+    );
+  }
+
+  // --- self-modification carve-out WITHIN the allowed config home (parity
+  //     with v1's F6/self-mod deny — a narrower deny still wins over a
+  //     broader allow that precedes it in SBPL's rule evaluation, the same
+  //     mechanism v1 relies on for its readOnly-dir write-denies) ---
+  const configHomeReal = resolveProspectiveRealpath(configHomeDir);
+  const selfModDenyLines: string[] = [];
+  if (configHomeReal.ok) {
+    selfModDenyLines.push(
+      `(deny file-write* (subpath "${sbplQuote(join(configHomeReal.real, "hooks"))}"))`,
+      `(deny file-write* (literal "${sbplQuote(join(configHomeReal.real, "settings.json"))}"))`,
+    );
+  }
+
+  const lines: string[] = [
+    "(version 1)",
+    "(deny default)",
+    '(import "system.sb")', // Round 1/2 — fixes E4's SIGABRT; dyld/mach/sysctl bootstrap base.
+    "(allow file-read-metadata)", // matches application.sb/bsd.sb baseline — stat-only, not content.
+    "(allow process-fork)", // matches application.sb baseline — needed for security/git/env/bun.
+    "(allow network*)", // NOT this layer's job — see section doc "Network".
+    "(allow user-preference-read)", // Round 3 — security's keychain-query preference reads.
+    '(allow mach-lookup (global-name "com.apple.securityd.xpc") (global-name "com.apple.SecurityServer"))', // Round 3
+    `(allow file-read-data (literal "${sbplQuote(homeDir)}") (literal "/Users"))`, // Round 6 — bare-dir listing only, non-recursive.
+    '(allow file-read* (subpath "/private/etc/ssl"))', // Round 7 — TLS root bundle.
+    '(allow file-read* (literal "/Library/Preferences/com.apple.networkd.plist"))', // Round 7
+    '(allow file-read* (literal "/private/etc/hosts"))',
+    '(allow file-read* (literal "/private/etc/resolv.conf"))',
+    '(allow file-ioctl (literal "/dev/null"))', // Round 8 — a tty-check-shaped ioctl on /dev/null, denied on a real run.
+    '(allow process-exec file-read* (literal "/bin/ps"))', // Round 8 — claude's own process-tree probing at startup.
+    // Round 9 — `/bin/sh` on this macOS (26.5.1) is a small ~100KB "variant
+    // selector" stub that internally re-execs a FIXED system path
+    // (`/bin/bash`) for a shell invocation shape a real Bash-tool command
+    // uses — NOT whatever `bash` resolves to on $PATH (measured directly:
+    // this dev host's $PATH resolves `bash` to a Homebrew install via
+    // `execAllow`'s normal Bun.which resolution, which does NOT satisfy the
+    // OS's internal fixed-path re-exec — `sandbox-exec` reported "Failed to
+    // exec /bin/bash as variant for /bin/sh" even with Homebrew's bash
+    // allow-listed). So the SYSTEM `/bin/sh` and `/bin/bash` are allow-
+    // listed here as fixed literals, unconditionally — independent of
+    // whatever `execAllow`'s "sh"/"bash" entries resolve to via $PATH.
+    '(allow process-exec file-read* (literal "/bin/sh"))',
+    '(allow process-exec file-read* (literal "/bin/bash"))',
+    ...bodyLines,
+    ...selfModDenyLines,
+  ];
+
+  return {
+    text: lines.join("\n") + "\n",
+    unresolved,
+    resolvedAllowPaths: [...resolvedAllowPaths],
   };
 }
 
@@ -740,12 +1268,23 @@ export class MacosSbplSandbox implements SessionSandbox {
       );
     }
 
-    const generated = generateMacosSbplProfile(profile);
+    // cortex#2409 part 2 — DD-10's TWO postures. `profile.posture` defaults
+    // to `"guarded"` (deriveSandboxProfile's HARD HOLD) — only a caller that
+    // EXPLICITLY sets `sandboxPosture: "strict"` reaches the new generator.
+    const generated =
+      profile.posture === "strict"
+        ? generateMacosSbplStrictProfile(profile)
+        : generateMacosSbplProfile(profile);
     if (generated.unresolved.length > 0) {
+      const label = profile.posture === "strict" ? "allow-set" : "sensitive-set";
+      const consequence =
+        profile.posture === "strict"
+          ? "NOT allowed this session (fail-closed exclusion — an unresolvable ALLOW input is " +
+            "dropped, never silently trusted; the corresponding access is denied by (deny default))"
+          : "NOT denied this session (fail-closed exclusion, not a fail-open grant)";
       process.stderr.write(
-        `[session-sandbox-macos] ${generated.unresolved.length} sensitive-set path(s) could ` +
-          `not be realpath-resolved and are NOT denied this session (fail-closed exclusion, ` +
-          `not a fail-open grant): ` +
+        `[session-sandbox-macos] ${generated.unresolved.length} ${label} path(s) could not be ` +
+          `realpath-resolved and are ${consequence}: ` +
           generated.unresolved.map((u) => `"${u.input}" (${u.reason})`).join("; ") +
           "\n",
       );

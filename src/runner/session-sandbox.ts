@@ -62,6 +62,29 @@ import { MacosSbplSandbox } from "./session-sandbox-macos";
  *  ONLY default this build ships — see the cortex#2344 HARD HOLD. */
 export type SandboxMode = "off" | "audit" | "enforce";
 
+/**
+ * cortex#2409 part 2 — DD-10's TWO filesystem postures, orthogonal to
+ * {@link SandboxMode} (mode gates WHETHER the profile is enforced; posture
+ * gates WHAT the profile's default rule is):
+ *
+ *   - `"guarded"` (DD-10 v1, EBH-3a) — `(allow default)` + an enumerated
+ *     denylist of the sensitive set. Raises attacker cost; does NOT
+ *     establish a boundary — the next unenumerated path is always
+ *     available. THE DEFAULT, and the only posture any live caller sets.
+ *   - `"strict"` (DD-10 v2, this slice) — `(deny default)` + a derived,
+ *     documented, minimal explicit-allow set. F1 closed BY CONSTRUCTION for
+ *     everything outside the allow set, not merely narrowed. See
+ *     `session-sandbox-macos.ts`'s `generateMacosSbplStrictProfile` doc for
+ *     the full allow-set derivation and its evidence trail.
+ *
+ * `"strict"` is additive — `"guarded"` keeps working unchanged, selected by
+ * config the same way `"guarded"` always has been. HARD HOLD (cortex#2409
+ * part 2, unchanged from every prior EBH slice): no caller in this build
+ * sets `"strict"`; `deriveSandboxProfile` defaults every profile to
+ * `"guarded"` when `CCSessionOpts.sandboxPosture` is unset.
+ */
+export type SandboxPosture = "guarded" | "strict";
+
 /** Every backend `SessionSandbox` can resolve to. Only `"none"` has an
  *  implementation in this build (EBH-2); the rest are EBH-3/DD-8. */
 export type SandboxBackendId =
@@ -98,6 +121,33 @@ export interface SandboxProfile {
    */
   egressAllow: string[];
   mode: SandboxMode;
+  /**
+   * cortex#2409 part 2 — DD-10's filesystem posture. Defaults to
+   * `"guarded"` (see {@link SandboxPosture}'s doc for the HARD HOLD).
+   * `generateMacosSbplProfile` (v1) ignores this field entirely — it is
+   * ALWAYS `(allow default)` regardless of what's here, so an accidental
+   * `"strict"` value reaching that generator can never silently upgrade
+   * enforcement; only `generateMacosSbplStrictProfile` reads it (and only
+   * `MacosSbplSandbox.spawn()`'s own posture branch decides which generator
+   * runs — this field is data, not itself a switch).
+   */
+  posture: SandboxPosture;
+  /**
+   * cortex#2409 part 2 — session-internal read-only paths the STRICT
+   * generator must allow that are neither the caller's `readWrite`/
+   * `readOnly` policy dirs nor part of the static compatibility-contract
+   * seed below: today, exactly the per-session isolated-settings temp dir
+   * (`session-settings.ts`'s `IsolatedSettings.settingsPath`'s directory) —
+   * `claude` reads its `--settings <path>` argument at startup, and under
+   * `(deny default)` that random `os.tmpdir()`-rooted path needs an
+   * explicit allow or every isolated session breaks. Distinct from
+   * `readOnly` (F6's user-configured "read but never write" policy dirs) —
+   * this is cortex's OWN plumbing, not part of the agent's granted work
+   * scope, so it is kept as its own field rather than silently widening
+   * `readOnly`'s meaning. `generateMacosSbplProfile` (v1) ignores this too
+   * — `(allow default)` already covers it.
+   */
+  internalReadOnly: string[];
 }
 
 /**
@@ -114,6 +164,29 @@ export const SANDBOX_EXEC_ALLOW_SEED: readonly string[] = Object.freeze([
   "node",
   "git",
   "gh",
+  // cortex#2409 part 2 — added while deriving the v2 `strict` allow set
+  // (previously dead data: `execAllow` had NO enforcing consumer before
+  // this slice — grep confirms zero non-test reads — so this addition
+  // changes no prior behavior). Both are genuine compatibility-contract
+  // needs, not strict-specific: cortex's own hooks carry a
+  // `#!/usr/bin/env bun` shebang (verified against this repo's installed
+  // `~/.claude/hooks/*.hook.ts`), so the kernel-level exec chain for EVERY
+  // hook invocation is `env` → `bun` — the shebang interpreter itself must
+  // be exec-allowed, not just the ultimate `bun` it launches. `sh` is what
+  // Claude Code's own Bash tool execs internally (measured directly: a real
+  // `claude --print` session run under a naive strict profile denied
+  // `process-exec* /bin/sh` the moment the Bash tool ran). `bash` is a
+  // SEPARATE finding, also measured directly on this host (macOS 26.5.1):
+  // `/bin/sh` here is not the interpreter itself but a small ~100KB
+  // "variant selector" stub that internally re-execs `/bin/bash` for a
+  // shell invocation of the shape a Bash-tool command actually uses (`sh -c
+  // "…"` with a redirect) — `sandbox-exec` reported this exactly:
+  // `Failed to exec /bin/bash as variant for /bin/sh (1: Operation not
+  // permitted)`. Without `bash` on the seed too, `sh` alone is necessary
+  // but not sufficient for a REAL shell command to run under `strict`.
+  "env",
+  "sh",
+  "bash",
 ]);
 
 export const SANDBOX_EGRESS_ALLOW_SEED: readonly string[] = Object.freeze([
