@@ -62,7 +62,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname } from "path";
+import { dirname, join } from "path";
 
 import { discoverStacks } from "./stack-lib";
 import { dispatchStack } from "./stack";
@@ -72,6 +72,7 @@ import { type ExitResult } from "./_shared/exit-result";
 
 import { CC_AUTH_FAILURE_MESSAGE, isCcAuthFailure } from "../../../runner/cc-failure-classifier";
 import type { CCSessionResult } from "../../../runner/cc-session";
+import { canonicalWorkspaceDir } from "../../../common/data-path";
 import { resolveConfigDir } from "../../../common/config/config-path";
 import { validateConfigLoads } from "../../../common/config/validate-on-write";
 import { expandTilde } from "../../../common/config/loader";
@@ -488,6 +489,84 @@ async function runScaffold(opts: {
   return step("4. Scaffold", false, [
     `  ✗ cortex stack create failed:`,
     ...create.stderr.split("\n").filter((l) => l.length > 0).map((l) => `    ${l}`),
+  ]);
+}
+
+// =============================================================================
+// Step 4b — workspace checkout (cortex#2452, code stacks only)
+// =============================================================================
+
+/**
+ * cortex#2452 — clone the granted repo into the stack's workspace so a coding
+ * stack starts against a real checkout, not an empty dir.
+ *
+ * The coding-tier runtime allowlist DELIBERATELY excludes `clone`/`gh repo`/
+ * `gh api` (`review-session-lockdown.ts` — an agent must not clone arbitrary
+ * repos), so the STAND-UP owns placing the one granted repo. This runs with the
+ * principal's own `gh`/`git` auth (present at `cortex quickstart` time) and lands
+ * the checkout at `<canonicalWorkspaceDir(slug)>/<repo>` — the SAME workspace
+ * dir the dispatch handler opens the CC session's cwd in (dispatch-handler.ts's
+ * `canonicalWorkspaceDir(this.stack)` fallback, cortex#2097), so the agent sees
+ * `<repo>/` as a subdir of its session cwd.
+ *
+ * ALWAYS returns `ok: true` — a clone failure is FAIL-SOFT (the stack is already
+ * stood up; only the coding loop is degraded), surfaced as a prominent ⚠ with
+ * the exact `gh repo clone` command the principal can run by hand. Idempotent: an
+ * existing `<repo>/.git` checkout is skipped, never re-cloned or clobbered.
+ */
+function runWorkspaceCheckout(
+  ports: QuickstartPorts,
+  opts: { slug: string; grantedRepo: string },
+): StepReport {
+  const ownerRepo = opts.grantedRepo;
+  const repoName = ownerRepo.slice(ownerRepo.indexOf("/") + 1);
+  // The SAME resolution dispatch-handler.ts uses for the session cwd fallback
+  // (canonicalWorkspaceDir(this.stack), off process.env.HOME) — the checkout
+  // MUST land where the agent's session actually opens or it won't see it.
+  const workspaceDir = canonicalWorkspaceDir(opts.slug);
+  const dest = join(workspaceDir, repoName);
+  const byHand = `gh repo clone ${ownerRepo} ${dest}`;
+
+  // IDEMPOTENT — an existing checkout (a `.git` dir) is left untouched. A
+  // re-run of quickstart never re-clones or clobbers local work.
+  if (existsSync(join(dest, ".git"))) {
+    return step("4b. Workspace checkout", true, [
+      `  ⊘ workspace already has ${repoName} (${dest}) — skip`,
+    ]);
+  }
+
+  // Ensure the workspace dir exists (0700, matching stack create + the dispatch
+  // fallback). `stack create --apply` already made it; this covers a
+  // hand-scaffolded or pre-#2097 stack.
+  try {
+    mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    return step("4b. Workspace checkout", true, [
+      `  ⚠ WARNING: could not create workspace dir ${workspaceDir}: ${errMsg(err)}`,
+      `    the coding loop will NOT work until the checkout is placed. Run by hand:`,
+      `      ${byHand}`,
+    ]);
+  }
+
+  const cloned = ports.workspace.cloneGrantedRepo({ ownerRepo, dest });
+  if (cloned.exitCode === 0) {
+    return step("4b. Workspace checkout", true, [
+      `  ✓ cloned ${ownerRepo} → ${dest}`,
+    ]);
+  }
+
+  // FAIL-SOFT — the stack is already stood up; a clone failure (auth, network,
+  // repo-not-found) must NOT abort quickstart. WARN prominently: this means the
+  // coding loop can't start until the principal resolves it and clones by hand.
+  return step("4b. Workspace checkout", true, [
+    `  ⚠ WARNING: could not clone the granted repo ${ownerRepo} into the workspace.`,
+    `    The stack is stood up, but the CODING LOOP WILL NOT WORK until the checkout`,
+    `    is placed (the runtime allowlist has no clone verb — by design). Run by hand:`,
+    `      ${byHand}`,
+    ...cloned.stderr
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => `    · ${l}`),
   ]);
 }
 
@@ -1074,6 +1153,16 @@ export async function dispatchQuickstart(
   reports.push(scaffoldReport);
   if (!scaffoldReport.ok) {
     return finish(reports, 1, flags.json);
+  }
+
+  // --- 4b. Workspace checkout (cortex#2452) ----------------------------------
+  // A `code` stack with a granted repo needs the repo PRE-PLACED in its
+  // workspace: the runtime allowlist has no clone verb (by design — an agent
+  // must not clone arbitrary repos), so the stand-up owns the checkout. Runs
+  // with the principal's own gh/git auth. FAIL-SOFT: a clone failure warns but
+  // never aborts the already-stood-up stack. Chat-only stacks skip this step.
+  if (ctxRepo.length > 0) {
+    reports.push(runWorkspaceCheckout(ports, { slug: s.slug, grantedRepo: ctxRepo }));
   }
 
   // --- 5. Patch configs from env ---------------------------------------------

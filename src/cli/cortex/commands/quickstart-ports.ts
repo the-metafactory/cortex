@@ -196,6 +196,38 @@ export interface ProvisionPort {
 }
 
 // =============================================================================
+// Workspace checkout — step 4b (cortex#2452, code stacks only)
+// =============================================================================
+
+/**
+ * cortex#2452 — the coding-tier stand-up seam. A `code` stack scaffolded with a
+ * granted repo (`CTX_REPO`) gets a repo-scoped git-write + gh-pr bash allowlist,
+ * but the runtime allowlist DELIBERATELY excludes `clone`/`gh repo`/`gh api`
+ * (`review-session-lockdown.ts` — "cannot widen to gh repo clone") — an agent
+ * must not clone arbitrary repos. So the STAND-UP owns placing the one granted
+ * repo in the workspace; without it the coding loop starts against an empty dir
+ * with no way to fetch the code.
+ *
+ * `cortex quickstart` runs with the principal's own `gh`/`git` auth, so this is
+ * where the pre-placement belongs. The orchestrator handles idempotency (skip an
+ * existing checkout) and fail-soft (a clone failure WARNS but never aborts the
+ * already-stood-up stack); this port only performs the clone itself.
+ */
+export interface WorkspacePort {
+  /**
+   * Clone `owner/repo` into `dest` (an absolute `<workspace>/<repo>` path).
+   * Prefers `gh repo clone owner/repo dest` (reuses the principal's gh auth
+   * present at quickstart time) and falls back to
+   * `git clone https://github.com/owner/repo dest`. Never throws — a clone
+   * failure (auth, network, repo-not-found, missing binary) is reported as a
+   * non-zero `exitCode` so the orchestrator can WARN-and-continue. The caller
+   * has already ensured `dest`'s parent workspace dir exists (0700) and that
+   * `dest` is not an existing checkout.
+   */
+  cloneGrantedRepo(opts: { ownerRepo: string; dest: string }): CommandResult;
+}
+
+// =============================================================================
 // Gate — step 8 (bounded healthy-boot wait)
 // =============================================================================
 
@@ -222,5 +254,6 @@ export interface QuickstartPorts {
   preflight: PreflightPorts;
   service: ServicePort;
   provision: ProvisionPort;
+  workspace: WorkspacePort;
   gate: GatePort;
 }
