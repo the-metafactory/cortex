@@ -14,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 import {
   wireDevConsumers,
   buildDevSessionOpts,
+  buildShellSeams,
   devSubjectPattern,
   devDurableName,
   DEFAULT_DEV_BASH_ALLOWLIST,
@@ -188,20 +189,58 @@ describe("wireDevConsumers — forge-identity authority (cortex#2436, fail-close
     }
   });
 
-  test("scoped token present → info line, no warning", () => {
+  test("static token override present → wires, no warning, and says it is the weaker option", () => {
     const logs = { info: [] as string[], warn: [] as string[] };
-    wireDevConsumers({
+    const consumers = wireDevConsumers({
       agents: [{ id: "forge", runtime: { capabilities: ["dev.implement"] } }],
       runtime: fakeRuntime(),
       source: SOURCE,
       principalId: "andreas",
       stack: "work",
       seamsOverride: NOOP_SEAMS,
-      env: { CORTEX_DEV_GH_TOKEN: "ghp_scoped_machine_user" },
+      env: { CORTEX_DEV_GH_TOKEN: "ghp_static_override" },
       log: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m) },
     });
+    expect(consumers).toHaveLength(1);
     expect(logs.warn).toHaveLength(0);
-    expect(logs.info.some((m) => m.includes("scoped forge identity"))).toBe(true);
+    // cortex#2438 — the static path still works, but the log must point at the
+    // per-operation identity as the preferred shape rather than presenting a
+    // long-lived credential as the good outcome.
+    expect(logs.info.some((m) => m.includes("static") && m.includes("identityName"))).toBe(true);
+  });
+
+  test("declared identity wins over the static override (precedence)", () => {
+    const logs = { info: [] as string[], warn: [] as string[] };
+    const minted: string[] = [];
+    const consumers = wireDevConsumers({
+      agents: [
+        {
+          id: "forge",
+          github: { identityName: "luna-dev" },
+          runtime: { capabilities: ["dev.implement"] },
+        },
+      ],
+      runtime: fakeRuntime(),
+      source: SOURCE,
+      principalId: "andreas",
+      stack: "work",
+      seamsOverride: NOOP_SEAMS,
+      // BOTH configured — the declared identity must win, because it is the
+      // short-lived per-operation credential; silently preferring the static
+      // one would mean config claims a bot identity while pushes carry a
+      // long-lived credential (the precedence bug caught in #2408 review).
+      env: { CORTEX_DEV_GH_TOKEN: "ghp_static_override" },
+      mintForIdentity: async (name) => {
+        minted.push(name);
+        return "ghs_minted";
+      },
+      log: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m) },
+    });
+    expect(consumers).toHaveLength(1);
+    expect(logs.warn).toHaveLength(0);
+    expect(logs.info.some((m) => m.includes("luna-dev") && m.includes("per operation"))).toBe(true);
+    // Minting is LAZY — declaring the identity must not mint at boot.
+    expect(minted).toHaveLength(0);
   });
 
   test("custom token env name honoured", () => {
@@ -292,5 +331,44 @@ describe("naming helpers", () => {
       "local.andreas.work.tasks.dev.implement",
     );
     expect(devDurableName("andreas", "forge")).toBe("cortex-dev-consumer-andreas-forge");
+  });
+});
+
+describe("buildShellSeams — credential resolution is per-operation and fail-closed (cortex#2438)", () => {
+  test("a resolution FAILURE refuses the operation — never degrades to ambient authority", async () => {
+    const seams = buildShellSeams({
+      repoRoot: "/tmp/does-not-matter",
+      resolveToken: () =>
+        Promise.reject(new Error("installation token exchange failed: 401 Unauthorized")),
+      // An ambient credential IS present in the env — this is precisely the
+      // condition under which a fallback would silently succeed and attribute
+      // the push to the principal. The operation must fail anyway.
+      env: { GH_TOKEN: "ghp_AMBIENT_PRINCIPAL_CREDENTIAL", PATH: process.env.PATH },
+    });
+
+    await expect(
+      seams.forge.openPr({
+        repo: "the-metafactory/cortex",
+        branch: "feat/x",
+        base: "main",
+        cwd: "/tmp/does-not-matter",
+        brief: "b",
+      }),
+    ).rejects.toThrow(/401|token/i);
+  });
+
+  test("the credential is resolved LAZILY — constructing seams mints nothing", () => {
+    let calls = 0;
+    buildShellSeams({
+      repoRoot: "/tmp/does-not-matter",
+      resolveToken: async () => {
+        calls++;
+        return "ghs_minted";
+      },
+      env: {},
+    });
+    // Boot-time construction must not mint: that is the ~1hr-expiry bug this
+    // change exists to remove. Minting happens when an operation runs.
+    expect(calls).toBe(0);
   });
 });
