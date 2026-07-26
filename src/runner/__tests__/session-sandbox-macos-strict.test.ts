@@ -6,7 +6,9 @@
  * every test that exercises the sensitive set does so against a FIXTURE
  * `$HOME`/`configHomeDir` override — never the real developer machine's
  * `~/.ssh` etc. macOS-ONLY (`describe.skipIf(!isDarwin)`) for every test
- * that spawns a real `sandbox-exec` — matches the established pattern.
+ * that spawns a real `sandbox-exec` — matches the established pattern. One
+ * pure-generator test is ALSO gated (`test.skipIf`): it realpaths
+ * `/usr/bin/security`, which does not exist on Linux CI.
  *
  * ## Why this file doesn't assert "zero denials" the way the v1 e2e test does
  *
@@ -208,7 +210,11 @@ describe("generateMacosSbplStrictProfile", () => {
     );
   });
 
-  test("the security CLI (keychain helper) always gets process-exec + file-read*, even with an empty execAllow", () => {
+  // macOS-ONLY. Asserts on `/usr/bin/security`, the macOS keychain helper —
+  // `realpathSync` on it throws ENOENT on Linux CI. Only THIS test needs the
+  // gate: the rest of this describe block is platform-independent profile-
+  // generation logic and stays enabled everywhere, which is worth keeping.
+  test.skipIf(!isDarwin)("the security CLI (keychain helper) always gets process-exec + file-read*, even with an empty execAllow", () => {
     const generated = generateMacosSbplStrictProfile(baseProfile(), { homeDir: fixtureHome, configHomeDir });
     const securityPath = Bun.which("security") ?? "/usr/bin/security";
     const resolved = realpathSync(securityPath);
