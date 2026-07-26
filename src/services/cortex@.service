@@ -41,6 +41,13 @@ ExecStartPre=/usr/bin/mkdir -p %h/.local/state/metafactory/cortex/logs
 # ReadWritePaths= hole for it below (see OQ-5 / docs/design-session-sandbox-
 # platforms.md §5 "Event pipeline").
 ExecStartPre=/usr/bin/mkdir -p %h/.claude/events/raw
+# ~/.claude/session-env/<id> is a per-session env dir Claude Code writes for
+# EVERY session it starts (its own child-process env plumbing, not cortex's).
+# Under ProtectHome=read-only the CC child's `mkdir` of this dir fails EROFS
+# and no shell can start — breaking bash for every coding/bash agent on a
+# systemd host (cortex#2451). Pre-create the parent here (mirroring events/raw
+# above) so the ReadWritePaths= hole below never races CC's lazy first write.
+ExecStartPre=/usr/bin/mkdir -p %h/.claude/session-env
 StandardOutput=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.log
 StandardError=append:%h/.local/state/metafactory/cortex/logs/cortex-%i.error.log
 
@@ -121,10 +128,17 @@ ProtectHome=read-only
 # never writes there at runtime — only the manually-invoked `cortex network
 # join`/`make-live` CLI commands do, via src/common/nats/config-backup.ts,
 # outside this unit's ExecStart).
+# Plus ~/.claude/session-env: Claude Code's per-session env dir (mkdir'd by the
+# `claude` child for every session). Without this hole the mkdir fails EROFS
+# under ProtectHome=read-only → no shell for any bash/coding agent (cortex#2451).
+# Scoped to session-env ALONE — NOT the whole ~/.claude — so the L2 self-
+# modification denial for ~/.claude/settings.json and ~/.claude/hooks/**
+# (design-session-sandbox-platforms.md §5) stays enforced at this boundary too.
 ReadWritePaths=%h/.config/metafactory/cortex
 ReadWritePaths=%h/.local/share/metafactory/cortex
 ReadWritePaths=%h/.local/state/metafactory/cortex
 ReadWritePaths=%h/.claude/events/raw
+ReadWritePaths=%h/.claude/session-env
 
 # ProtectKernelTunables=, ProtectKernelModules=, ProtectControlGroups= were
 # tried and REVERTED (real systemd-e2e CI failure, cortex#2071/OQ-5): a
