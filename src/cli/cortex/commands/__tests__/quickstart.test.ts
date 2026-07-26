@@ -47,7 +47,9 @@ import type {
   ProvisionPort,
   QuickstartPorts,
   ServicePort,
+  WorkspacePort,
 } from "../quickstart-ports";
+import { canonicalWorkspaceDir } from "../../../../common/data-path";
 
 const SECRET_TOKEN = "THE-REAL-DISCORD-BOT-TOKEN-VALUE-abc123";
 
@@ -207,6 +209,10 @@ interface FakeOverrides {
   // what order relative to the restart).
   truncateLog?: (logPath: string) => void;
   provisionSeed?: () => CommandResult;
+  // cortex#2452 — code-stack workspace checkout seam. Default: clone succeeds
+  // (a chat-only stack never reaches it). A capturing override records the
+  // owner/repo + dest the orchestrator asks to clone.
+  cloneGrantedRepo?: (opts: { ownerRepo: string; dest: string }) => CommandResult;
   // cortex#2264 — takes the polled path so a test can return DIFFERENT content
   // for the main `.log` vs the `.error.log` sibling. Existing zero-arg lambdas
   // stay assignable (a `() => T` satisfies `(p: string) => T`).
@@ -237,6 +243,9 @@ function fakePorts(overrides: FakeOverrides = {}): QuickstartPorts {
   const provision: ProvisionPort = {
     provisionSeed: overrides.provisionSeed ?? (() => ({ exitCode: 0, stdout: "  ⊘ NKey already exists — reusing\n", stderr: "" })),
   };
+  const workspace: WorkspacePort = {
+    cloneGrantedRepo: overrides.cloneGrantedRepo ?? (() => ({ exitCode: 0, stdout: "Cloning…", stderr: "" })),
+  };
   const gate: GatePort = {
     readLog: overrides.readLog ?? (() => FULL_HEALTHY_LOG),
     fetchHealthz: overrides.fetchHealthz ?? (() => Promise.resolve(true)),
@@ -246,7 +255,7 @@ function fakePorts(overrides: FakeOverrides = {}): QuickstartPorts {
     },
     now: () => clock,
   };
-  return { preflight, service, provision, gate };
+  return { preflight, service, provision, workspace, gate };
 }
 
 /** Recursive snapshot of every file's size + mtime under `dirs` — used to
@@ -735,6 +744,106 @@ describe("dispatchQuickstart — cortex#2282 macOS gate (unified log paths)", ()
     expect(res.exitCode).toBe(0);
     const loaded = loadConfigWithAgents(join(configDir, "work", "work.yaml"));
     expect(loaded.config.claude.bashAllowlist).toBeUndefined();
+  });
+
+  // cortex#2452 — a code stand-up must PRE-PLACE the granted repo in the
+  // workspace (the runtime allowlist has no clone verb, by design). The clone
+  // lands at `<canonicalWorkspaceDir(slug)>/<repo>` — the SAME dir the dispatch
+  // handler opens the CC session cwd in — using the operator's gh/git auth.
+  test("cortex#2452: code stack + granted repo → clones owner/repo into <workspace>/<repo>", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const cloneCalls: { ownerRepo: string; dest: string }[] = [];
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv({ CTX_SLUG: "codeclone", CTX_REPO: "the-metafactory/cortex" }), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () =>
+          fakePorts({
+            cloneGrantedRepo: (opts) => {
+              cloneCalls.push(opts);
+              return { exitCode: 0, stdout: "Cloning…", stderr: "" };
+            },
+          }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]?.ownerRepo).toBe("the-metafactory/cortex");
+    // dest MUST be the dispatch-handler session-cwd fallback + the repo name.
+    expect(cloneCalls[0]?.dest).toBe(join(canonicalWorkspaceDir("codeclone"), "cortex"));
+    expect(res.stdout).toContain("cloned the-metafactory/cortex");
+  });
+
+  // cortex#2452 — IDEMPOTENT: an existing `<repo>/.git` checkout is left
+  // untouched (never re-cloned or clobbered on a re-run).
+  test("cortex#2452: existing checkout → skipped, clone NOT invoked", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    // Pre-place a checkout at the exact dest the orchestrator resolves.
+    const dest = join(canonicalWorkspaceDir("codeidem"), "cortex");
+    mkdirSync(join(dest, ".git"), { recursive: true });
+    const cloneCalls: { ownerRepo: string; dest: string }[] = [];
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv({ CTX_SLUG: "codeidem", CTX_REPO: "the-metafactory/cortex" }), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () =>
+          fakePorts({
+            cloneGrantedRepo: (opts) => {
+              cloneCalls.push(opts);
+              return { exitCode: 0, stdout: "", stderr: "" };
+            },
+          }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(cloneCalls).toHaveLength(0);
+    expect(res.stdout).toContain("workspace already has cortex");
+  });
+
+  // cortex#2452 — FAIL-SOFT: a clone failure WARNS prominently (with the exact
+  // by-hand command) but does NOT abort the already-stood-up stack.
+  test("cortex#2452: clone failure → warns + quickstart still succeeds", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv({ CTX_SLUG: "codefail", CTX_REPO: "the-metafactory/cortex" }), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () =>
+          fakePorts({
+            cloneGrantedRepo: () => ({ exitCode: 1, stdout: "", stderr: "repository not found" }),
+          }),
+        ),
+      ),
+    );
+    // Fail-soft: the whole run still succeeds.
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("WARNING");
+    expect(res.stdout).toContain("CODING LOOP WILL NOT WORK");
+    // The exact by-hand command the operator can run.
+    expect(res.stdout).toContain(`gh repo clone the-metafactory/cortex ${join(canonicalWorkspaceDir("codefail"), "cortex")}`);
+    // The underlying failure reason is surfaced.
+    expect(res.stdout).toContain("repository not found");
+  });
+
+  // cortex#2452 — a chat-only stack (no CTX_REPO) never reaches the clone step.
+  test("cortex#2452: chat-only stack (no CTX_REPO) → no clone invoked", async () => {
+    const configDir = freshDir();
+    const natsDir = freshDir();
+    const cloneCalls: { ownerRepo: string; dest: string }[] = [];
+    const res = await withPlatform("linux", () =>
+      withEnv(validCtxEnv({ CTX_SLUG: "codechat" }), () =>
+        dispatchQuickstart(["--config-dir", configDir, "--nats-dir", natsDir], () =>
+          fakePorts({
+            cloneGrantedRepo: (opts) => {
+              cloneCalls.push(opts);
+              return { exitCode: 0, stdout: "", stderr: "" };
+            },
+          }),
+        ),
+      ),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(cloneCalls).toHaveLength(0);
+    expect(res.stdout).not.toContain("Workspace checkout");
   });
 
   // cortex#2322 — the not-loaded path is no longer a printed skip. On a fresh
