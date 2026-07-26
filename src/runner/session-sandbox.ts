@@ -189,11 +189,59 @@ export const SANDBOX_EXEC_ALLOW_SEED: readonly string[] = Object.freeze([
   "bash",
 ]);
 
+/**
+ * cortex#2412 follow-up (the `egress-proxy.ts` audit-mode fix) — a real
+ * `audit`-mode run against this seed surfaced two hosts a hardened session
+ * actually reaches that weren't on it. Both calls below were made
+ * explicitly, not defaulted:
+ *
+ *   - `"mcp-proxy.anthropic.com"` — ADDED. claude.ai-connected MCP servers
+ *     (task list, Drive, and the rest of that family) route through this
+ *     host. Functional requirement, same tier as `"api.anthropic.com"`, not
+ *     a convenience: under `enforce`, denying it silently breaks every MCP
+ *     tool a session tries to use.
+ *   - `"http-intake.logs.us5.datadoghq.com"` (third-party telemetry) —
+ *     DELIBERATELY LEFT OUT. A hardened session has no functional need to
+ *     reach it, and the entire point of a deny-by-default egress policy is
+ *     that destinations without a functional need stay unreachable. It
+ *     WILL be denied under `enforce` — documented here so that's discovered
+ *     by reading this comment, not by a mystery failure.
+ *   - `"localhost"` — ADDED. cortex's OWN hook scripts
+ *     (`event-logger.hook.ts`, `path-guard.hook.ts`, `bash-guard.hook.ts`)
+ *     run AS the sandboxed child (they're `claude` CC hooks, invoked BY the
+ *     spawned `claude` process this proxy wraps) and POST their telemetry to
+ *     `http://localhost:8766/api/events/ingest` by default
+ *     (`CORTEX_INGEST_URL`, overridable). That's cortex's OWN control-plane
+ *     event pipeline reaching cortex's OWN daemon on the SAME host — the
+ *     opposite direction from what L3 defends against (a session
+ *     exfiltrating data OUT to an attacker-controlled host). Denying it
+ *     doesn't hold a security boundary; it just breaks cortex's own
+ *     instrumentation for every hardened session — the exact failure that
+ *     surfaced this whole bug (a real `audit` run showed this traffic being
+ *     killed even in report-only mode, before the `egress-proxy.ts` fix that
+ *     made `audit` non-terminating). Seeding it here means `enforce` won't
+ *     newly break it either, once enforcement is ever turned on.
+ *
+ *     SCOPE CAVEAT: {@link isHostAllowed} (`egress-proxy.ts`) matches on
+ *     HOSTNAME ONLY — `egressAllow` carries no port/path granularity. So
+ *     this allows a session to reach ANY port on loopback, not just 8766;
+ *     there's no mechanism today to say "8766 only." Same granularity every
+ *     other seed entry already has (`"api.anthropic.com"` is really "any
+ *     port on that host," every real client just happens to only use 443)
+ *     — not a new category of looseness, but worth naming since loopback is
+ *     more likely than a public hostname to have OTHER locally-run services
+ *     behind it on the principal's machine. Port/path-scoped allowlisting
+ *     would close that gap; it needs `egressAllow`/`isHostAllowed` to carry
+ *     an optional port (and the proxy to check it) — a real follow-up, not
+ *     something this fix does.
+ */
 export const SANDBOX_EGRESS_ALLOW_SEED: readonly string[] = Object.freeze([
   "api.anthropic.com",
   "github.com",
   "api.github.com",
   "codeload.github.com",
+  "mcp-proxy.anthropic.com",
+  "localhost",
 ]);
 
 // -----------------------------------------------------------------------------
