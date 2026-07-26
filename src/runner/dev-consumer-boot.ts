@@ -241,23 +241,45 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
   const tokenEnv = opts.devGhTokenEnv ?? DEFAULT_TOKEN_ENV;
   const scopedToken = env[tokenEnv];
 
-  // §3.5b authority — loud boot warning when the dev agent will push with
-  // AMBIENT authority instead of a scoped forge identity. This is the honest
-  // F-2 caveat surfaced, not hidden.
+  // cortex#2436 (vision#11; #2423 DD-0/M8) — FAIL CLOSED on a missing scoped
+  // forge identity.
+  //
+  // This branch used to WARN and continue, leaving the consumer wired with the
+  // daemon's AMBIENT `gh` credential — i.e. the dev agent pushed branches and
+  // opened PRs as the PRINCIPAL. That was `docs/design-agentic-dev-pipeline.md`
+  // §3.5b's accepted F-2 residual, written before per-agent forge identities
+  // existed; its own text recommended "a repo-scoped machine-user token", the
+  // answer vision#11 superseded with GitHub App identities.
+  //
+  // Retired because a warning is not a control, and because the chat dispatch
+  // path already REFUSES in the same situation (#2408). Two paths answering
+  // "which identity does this agent act as?" with OPPOSITE failure modes —
+  // selected by how the work arrived, invisible from `agents[]` — is worse than
+  // either alone: the question stops having an answer a reader can get from the
+  // config. One mechanism, one failure mode (#2423 DD-0).
+  //
+  // Fail-closed here REUSES the dormancy contract above rather than inventing a
+  // refusal path: return no consumers, so nothing binds and nothing pushes.
+  // Dispatches stay on the stream (JetStream retention unchanged) and are picked
+  // up once an identity is configured — nothing is lost, the loop is inert
+  // rather than misattributing. Boot is the right place to say so: a missing
+  // credential is a configuration fault, not a per-request one.
   if (scopedToken === undefined || scopedToken.length === 0) {
     log.warn(
-      `cortex: dev.implement consumer wired WITHOUT a scoped forge token ` +
-        `(${tokenEnv} unset) — it will push branches + open PRs using AMBIENT gh ` +
-        `authority. Per docs/design-agentic-dev-pipeline.md §3.5b this residual ` +
-        `risk is accepted for v1 on the principal's OWN stacks (identical to the ` +
-        `in-session posture) and is what F-5b sandboxing retires. Set ${tokenEnv} ` +
-        `to a repo-scoped machine-user token to bound it.`,
+      `cortex: dev.implement consumer NOT wired — no scoped forge identity ` +
+        `(${tokenEnv} unset). REFUSING to wire rather than pushing branches and ` +
+        `opening PRs under the daemon's ambient gh credential (the principal's own ` +
+        `account). The dev loop is INERT on this stack until an identity is ` +
+        `configured; queued dispatches remain on the stream and run once it is. ` +
+        `Set ${tokenEnv} to a scoped forge credential. This retires the ` +
+        `docs/design-agentic-dev-pipeline.md §3.5b ambient fallback (cortex#2436); ` +
+        `the durable per-agent identity model is cortex#2423.`,
     );
-  } else {
-    log.info(
-      `cortex: dev.implement consumer using scoped forge identity from ${tokenEnv} (§3.5b)`,
-    );
+    return [];
   }
+  log.info(
+    `cortex: dev.implement consumer using scoped forge identity from ${tokenEnv}`,
+  );
 
   const repoRoot = opts.repoRoot ?? process.cwd();
   const seams =
