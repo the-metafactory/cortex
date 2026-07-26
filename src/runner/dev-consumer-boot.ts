@@ -98,6 +98,19 @@ export interface DevBootAgent {
    * re-declares it so the wiring can select the store without a cast.
    */
   state?: { blueprint: string; version: string };
+  /**
+   * cortex#2438 — OPT-IN per-agent forge identity (the same field the chat
+   * dispatch paths read, `AgentSchema.github`, added in #2408). Names an entry
+   * in the identity registry; cortex mints a fresh installation credential from
+   * it per forge operation. Structural re-declaration for the same reason
+   * {@link state} is one: the wiring selects on it without depending on the
+   * full Zod `Agent`.
+   *
+   * Absent ⇒ this agent has no identity of its own, and the dev consumer falls
+   * back to the `CORTEX_DEV_GH_TOKEN` static override if set, or refuses to
+   * wire (cortex#2436). It never falls back to ambient authority.
+   */
+  github?: { identityName: string };
   runtime?: {
     capabilities?: readonly string[];
     maxConcurrent?: number;
@@ -157,8 +170,21 @@ export interface WireDevConsumersOpts {
    * {@link perAgentFileStorePath} so two agents never share one file.
    */
   sessionStorePath?: string;
-  /** Env var name carrying the scoped forge token. Default `CORTEX_DEV_GH_TOKEN`. */
+  /**
+   * Env var name carrying a STATIC scoped forge token. Default
+   * `CORTEX_DEV_GH_TOKEN`. Since cortex#2438 this is the lower-precedence
+   * fallback: a declared `agents[].github.identityName` wins, because a minted
+   * credential is short-lived and per-operation where this one is long-lived
+   * and read once. Retained for stacks on a non-App credential, and for tests.
+   */
   devGhTokenEnv?: string;
+  /**
+   * cortex#2438 — test seam for credential minting. Production defaults to
+   * {@link defaultMintForIdentity} (a real GitHub App installation token via
+   * `common/auth/github-app-token`). Tests inject a fake so the dev-boot suite
+   * stays hermetic — no network, no key material, no `apps.yaml` on disk.
+   */
+  mintForIdentity?: (identityName: string) => Promise<string>;
   /** Test seam — env lookup. Defaults to `process.env`. */
   env?: Record<string, string | undefined>;
   /**
@@ -194,6 +220,24 @@ export interface WireDevConsumersOpts {
 }
 
 const DEFAULT_TOKEN_ENV = "CORTEX_DEV_GH_TOKEN";
+
+/**
+ * cortex#2438 — production credential minting for a declared forge identity.
+ * Thin adapter over the shared minting library (#2399), which owns key reading
+ * (chmod-600 enforced), JWT signing, and the installation-token exchange.
+ *
+ * Deliberately NOT caching across calls here. An installation token lives ~1
+ * hour and a dev push is rare relative to that, so a cache would add
+ * invalidation risk for no measurable gain; within a single operation the
+ * caller resolves once and reuses (see `openPr`). If minting ever becomes hot,
+ * `docs/design-forge-neutral-agent-identity.md` §4.4 is where caching belongs —
+ * keyed by identity+installation and expiry-aware — not here.
+ */
+async function defaultMintForIdentity(identityName: string): Promise<string> {
+  const { mintTokenForIdentity } = await import("../common/auth/github-app-token");
+  const { token } = await mintTokenForIdentity(identityName);
+  return token;
+}
 
 /** True when the agent claims `dev.implement` (exact) or the bare `dev` family. */
 function claimsDevImplement(agent: DevBootAgent): boolean {
@@ -264,29 +308,83 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[]
   // up once an identity is configured — nothing is lost, the loop is inert
   // rather than misattributing. Boot is the right place to say so: a missing
   // credential is a configuration fault, not a per-request one.
-  if (scopedToken === undefined || scopedToken.length === 0) {
+  // cortex#2438 — resolve WHICH identity backs this stack's dev pushes, in
+  // precedence order. The result is a RESOLVER, not a token: it is invoked per
+  // forge operation (see `ShellSeamsOpts.resolveToken`).
+  //
+  // 1. A declared per-agent identity (`agents[].github.identityName`) — the
+  //    durable model. Minted fresh per operation, so expiry is a non-issue and
+  //    the credential is scoped to that identity's installations.
+  // 2. `CORTEX_DEV_GH_TOKEN` — an explicit STATIC override, retained for stacks
+  //    running a non-App credential and for tests. Long-lived by nature, so it
+  //    is the weaker option; it stays supported rather than recommended.
+  //
+  // Deliberately NO third branch. Neither present ⇒ refuse to wire.
+  const identityName = capable.find((a) => a.github?.identityName)?.github
+    ?.identityName;
+
+  let resolveToken: (() => Promise<string>) | undefined;
+  if (identityName !== undefined) {
+    const mint = opts.mintForIdentity ?? defaultMintForIdentity;
+    resolveToken = () => mint(identityName);
+    log.info(
+      `cortex: dev.implement consumer using forge identity "${identityName}" ` +
+        `(minted per operation)`,
+    );
+  } else if (scopedToken !== undefined && scopedToken.length > 0) {
+    const staticToken = scopedToken;
+    resolveToken = () => Promise.resolve(staticToken);
+    log.info(
+      `cortex: dev.implement consumer using the static ${tokenEnv} override — ` +
+        `consider declaring \`github.identityName\` on the agent instead, which ` +
+        `mints a short-lived credential per operation (cortex#2438).`,
+    );
+  }
+
+  // cortex#2436 (vision#11; #2423 DD-0/M8) — FAIL CLOSED on a missing forge
+  // identity.
+  //
+  // This branch used to WARN and continue, leaving the consumer wired with the
+  // daemon's AMBIENT `gh` credential — i.e. the dev agent pushed branches and
+  // opened PRs as the PRINCIPAL. That was `docs/design-agentic-dev-pipeline.md`
+  // §3.5b's accepted F-2 residual, written before per-agent forge identities
+  // existed; its own text recommended "a repo-scoped machine-user token", the
+  // answer vision#11 superseded with GitHub App identities.
+  //
+  // Retired because a warning is not a control, and because the chat dispatch
+  // path already REFUSES in the same situation (#2408). Two paths answering
+  // "which identity does this agent act as?" with OPPOSITE failure modes —
+  // selected by how the work arrived, invisible from `agents[]` — is worse than
+  // either alone: the question stops having an answer a reader can get from the
+  // config. One mechanism, one failure mode (#2423 DD-0).
+  //
+  // Fail-closed here REUSES the dormancy contract above rather than inventing a
+  // refusal path: return no consumers, so nothing binds and nothing pushes.
+  // Dispatches stay on the stream (JetStream retention unchanged) and are picked
+  // up once an identity is configured — nothing is lost, the loop is inert
+  // rather than misattributing. Boot is the right place to say so: a missing
+  // credential is a configuration fault, not a per-request one.
+  if (resolveToken === undefined) {
     log.warn(
-      `cortex: dev.implement consumer NOT wired — no scoped forge identity ` +
-        `(${tokenEnv} unset). REFUSING to wire rather than pushing branches and ` +
-        `opening PRs under the daemon's ambient gh credential (the principal's own ` +
-        `account). The dev loop is INERT on this stack until an identity is ` +
-        `configured; queued dispatches remain on the stream and run once it is. ` +
-        `Set ${tokenEnv} to a scoped forge credential. This retires the ` +
-        `docs/design-agentic-dev-pipeline.md §3.5b ambient fallback (cortex#2436); ` +
-        `the durable per-agent identity model is cortex#2423.`,
+      `cortex: dev.implement consumer NOT wired — no forge identity. REFUSING ` +
+        `to wire rather than pushing branches and opening PRs under the daemon's ` +
+        `ambient gh credential (the principal's own account). The dev loop is ` +
+        `INERT on this stack until an identity is configured; queued dispatches ` +
+        `remain on the stream and run once it is. Fix: declare ` +
+        `\`github: { identityName: … }\` on the dev agent (preferred — mints a ` +
+        `short-lived credential per operation), or set ${tokenEnv} to a static ` +
+        `scoped credential. This retires the docs/design-agentic-dev-pipeline.md ` +
+        `§3.5b ambient fallback (cortex#2436); the durable model is cortex#2423.`,
     );
     return [];
   }
-  log.info(
-    `cortex: dev.implement consumer using scoped forge identity from ${tokenEnv}`,
-  );
 
   const repoRoot = opts.repoRoot ?? process.cwd();
   const seams =
     opts.seamsOverride ??
     buildShellSeams({
       repoRoot,
-      scopedToken,
+      resolveToken,
       env,
     });
 
@@ -478,7 +576,31 @@ export function perAgentFileStorePath(basePath: string, agentId: string): string
 
 interface ShellSeamsOpts {
   repoRoot: string;
-  scopedToken: string | undefined;
+  /**
+   * cortex#2438 — resolves the scoped forge credential **per operation**.
+   *
+   * Previously a `scopedToken: string` read once at boot and captured in these
+   * closures. That is wrong for a GitHub App identity: an installation token
+   * expires in ~1 hour while the daemon runs for days, so a boot-read token
+   * starts 401-ing every push mid-life — failing LATE, and looking like an
+   * unrelated forge problem rather than an expiry.
+   *
+   * Resolving per operation also means the credential is obtained at the moment
+   * of use and never sits in the seam's captured state between operations.
+   *
+   * This is the intended END STATE for forge-API calls, not a stopgap:
+   * `docs/design-forge-neutral-agent-identity.md` §4.3 keeps `gh`-family
+   * operations on `GH_TOKEN` deliberately (only *git* operations move to the
+   * credential helper in M3), so what changes here is WHEN the token is
+   * obtained, not HOW it is delivered.
+   *
+   * REQUIRED, not optional: `wireDevConsumers` refuses to wire a consumer at
+   * all when no identity can be resolved (cortex#2436's fail-closed rule), so
+   * by the time seams are built a resolver always exists. A rejection here
+   * propagates out of the seam method and the consumer maps it to `cant_do` —
+   * it must never degrade to ambient authority.
+   */
+  resolveToken: () => Promise<string>;
   env: Record<string, string | undefined>;
 }
 
@@ -502,18 +624,35 @@ interface BuiltSeams {
  * exists (the dormancy contract) — `buildShellSeams` itself does no I/O; the
  * I/O happens inside the seam methods when a task arrives.
  */
-function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
+/**
+ * Exported for tests (cortex#2438). The property that needs pinning is that a
+ * credential-resolution FAILURE refuses the operation and never degrades to
+ * ambient authority — i.e. that no `catch` ever grows around `resolveToken()`.
+ * That is a claim about this function's internals, so the test has to reach it.
+ * This file's history is the argument: the ambient fallback retired in #2436
+ * and the credential precedence bug caught in #2408's review were both
+ * fail-open defects in exactly this code path.
+ */
+export function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
   const slugify = (branch: string): string =>
     branch.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "dev";
 
-  // §3.5b — the scoped forge token (when set) is injected into the child env as
-  // GH_TOKEN for every `gh` call (the open-PR-lookup probe + the actual push),
-  // never the principal's ambient PAT unless the scoped token is absent (the
-  // warned ambient-fallback path).
-  const ghEnv: Record<string, string | undefined> = { ...opts.env };
-  if (opts.scopedToken !== undefined && opts.scopedToken.length > 0) {
-    ghEnv.GH_TOKEN = opts.scopedToken;
-  }
+  // cortex#2438 — build the `gh` child env AT CALL TIME, resolving the scoped
+  // forge credential per operation.
+  //
+  // This used to be a single `ghEnv` object constructed here, at seam-build
+  // (i.e. boot) time, with the token baked in. That object outlived the
+  // credential: an App installation token expires in ~1 hour, so every `gh`
+  // call after that failed 401 until the daemon restarted.
+  //
+  // A rejection propagates to the caller — the consumer maps it to `cant_do`
+  // and the operation refuses. It MUST NOT fall back to `opts.env` alone,
+  // which would silently re-enter the ambient-authority path cortex#2436
+  // retired: the push would succeed, attributed to the principal.
+  const ghEnvNow = async (): Promise<Record<string, string | undefined>> => ({
+    ...opts.env,
+    GH_TOKEN: await opts.resolveToken(),
+  });
 
   // cortex#1230 Bug 1 — the IO seam the branch-collision handling drives. Each
   // verb is a thin `git`/`gh` spawn; the decision (create-fresh / recreate-stale
@@ -545,7 +684,7 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
       const r = await run(
         "gh",
         ["pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number // empty"],
-        { cwd: opts.repoRoot, env: ghEnv, allowFailure: true },
+        { cwd: opts.repoRoot, env: await ghEnvNow(), allowFailure: true },
       );
       // FAIL SAFE: a `gh` ERROR is "unknown", NEVER null — an "I couldn't check
       // for a PR" must not read as "there is no PR → deletable". A CONFIRMED
@@ -665,13 +804,18 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
 
   const forge: DevForge = {
     openPr: async ({ branch, base, cwd, title, issue, brief }): Promise<DevPrRef> => {
-      // §3.5b — push + PR with the SCOPED token when provided (injected into
-      // the child env as GH_TOKEN), never the principal's ambient PAT unless
-      // the scoped token is absent (the warned ambient-fallback path).
-      const childEnv: Record<string, string | undefined> = { ...opts.env };
-      if (opts.scopedToken !== undefined && opts.scopedToken.length > 0) {
-        childEnv.GH_TOKEN = opts.scopedToken;
-      }
+      // cortex#2438 — push + PR under a credential resolved NOW, not one read
+      // at boot. Resolved ONCE per `openPr` and reused across this operation's
+      // several `git`/`gh` spawns (signature probe, push, PR create) so a
+      // single logical operation cannot straddle two different credentials —
+      // and so one push does not mint repeatedly.
+      //
+      // A rejection propagates out of `openPr`; the consumer maps the throw to
+      // `cant_do` and the push never happens. There is deliberately no fallback
+      // to `opts.env` alone: that is the ambient-authority path cortex#2436
+      // retired, and here it would be worse than inert — the push would
+      // SUCCEED, silently attributed to the principal.
+      const childEnv = await ghEnvNow();
 
       // W5.0 (cortex#924) — signed-commit enforcement, fail-closed at the push
       // boundary. Every commit on the branch about to be pushed MUST carry a
