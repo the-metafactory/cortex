@@ -65,7 +65,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 
 import { discoverStacks } from "./stack-lib";
-import { dispatchStack } from "./stack";
+import { dispatchStack, isValidRepoFullName } from "./stack";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
@@ -1144,6 +1144,29 @@ export async function dispatchQuickstart(
   // one repo you name"). Absent ⇒ a chat-only stack (unchanged). A malformed
   // value is rejected by `cortex stack create --repo` (surfaced as a step fail).
   const ctxRepo = (process.env.CTX_REPO ?? "").trim();
+
+  // cortex#2462 — defense-in-depth: validate CTX_REPO HERE, before BOTH the
+  // scaffold (step 4) and the clone (step 4b), independently of what
+  // `cortex stack create --repo` does. On an idempotent RE-run, runScaffold
+  // maps create's non-zero exit to an ok:true "already exists" skip keyed only
+  // on principal/slug — repo-INDEPENDENT — so a changed/hostile CTX_REPO would
+  // otherwise sail past stack-create's own validation and reach the clone
+  // unchecked. CTX_REPO is the coding grant (config, not code) and cannot be
+  // trusted: a bad value FAILS this step LOUD (we refuse to scaffold or clone
+  // an unvalidated grant) rather than silently proceeding. Anchored grammar +
+  // `..`-segment rejection live in `isValidRepoFullName` (shared with
+  // stack-create, a pure predicate — no coupling to its runtime path).
+  if (ctxRepo.length > 0 && !isValidRepoFullName(ctxRepo)) {
+    reports.push(
+      step("4. Scaffold", false, [
+        `  ✗ CTX_REPO "${ctxRepo}" is not a valid "owner/repo" GitHub full name`,
+        `    each side must be alphanumeric-anchored at both ends ([A-Za-z0-9._-] only internally) with no ".." segment`,
+        `    refusing to scaffold or clone an unvalidated code-repo grant`,
+      ]),
+    );
+    return finish(reports, 1, flags.json);
+  }
+
   const scaffoldReport = await runScaffold({
     slug: s.slug,
     principal: s.principal,

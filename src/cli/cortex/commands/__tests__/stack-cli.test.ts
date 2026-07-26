@@ -16,7 +16,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { dispatchStack } from "../stack";
+import { dispatchStack, isValidRepoFullName } from "../stack";
 import { loadConfigWithAgents } from "../../../../common/config/loader";
 import { __setPromptFilterLoadErrorForTests } from "../../../../runner/prompt-filter";
 
@@ -495,6 +495,69 @@ describe("create --capability code", () => {
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain("owner/repo");
     expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+
+  // cortex#2462 — the tightened, anchored REPO_FULLNAME grammar: each side is
+  // alphanumeric-anchored at BOTH ends (no leading/trailing `-`/`.`/`_`) with
+  // no `..` segment. A legitimate slug with INTERNAL `-`/`.`/`_` must still pass.
+  test("a --repo with a leading '-' is rejected (was permitted pre-#2462)", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--capability", "code",
+      "--repo", "-x/y", "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("owner/repo");
+    expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+
+  test("a --repo with a '..' segment is rejected (was permitted pre-#2462)", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "demo", "--principal", "andreas", "--capability", "code",
+      "--repo", "a/../b", "--config-dir", cfg, "--apply",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("owner/repo");
+    expect(existsSync(join(cfg, "demo"))).toBe(false);
+  });
+});
+
+// =============================================================================
+// isValidRepoFullName — the anchored owner/repo grammar (cortex#2462)
+// =============================================================================
+
+describe("isValidRepoFullName (cortex#2462 anchored grammar)", () => {
+  test("accepts legitimate owner/repo slugs (internal -/./_ allowed)", () => {
+    for (const ok of [
+      "the-metafactory/cortex",
+      "vpzed-dev/gir-test",
+      "a.b_c/d-e.f",
+      "the-metafactory/metafactory-cortex-agent-luna-stack",
+      "a/b", // single-char sides
+    ]) {
+      expect(isValidRepoFullName(ok)).toBe(true);
+    }
+  });
+
+  test("rejects leading/trailing junk, '..' segments, whitespace, and shell metachars", () => {
+    for (const bad of [
+      "-x/y", // leading '-' on owner
+      "x/-y", // leading '-' on repo
+      "x/y.", // trailing '.' on repo
+      "x.-/y", // trailing junk on owner
+      "a/../b", // '..' path segment (also two slashes)
+      "a/..", // '..' as the whole repo
+      "foo/bar; rm", // shell metachars + space
+      "x/y ", // trailing space
+      " x/y", // leading space
+      "x/y/z", // too many segments
+      "xy", // no slash
+      "/y", // empty owner
+      "x/", // empty repo
+    ]) {
+      expect(isValidRepoFullName(bad)).toBe(false);
+    }
   });
 });
 
