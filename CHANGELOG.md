@@ -1,5 +1,48 @@
 # Cortex — Changelog
 
+## 6.13.0 — 2026-07-26 — Execution-boundary hardening: the NWS review response (epic #2341)
+
+The response to NorthWoods Sentinel Labs' 2026-07-23 adversarial review is
+code-complete. That review had one diagnosis under every finding: **cortex
+enforced at the gate, not at execution** — boundaries were declared at
+load-time and prompt-time, but once an agent driven by untrusted content was
+running, most boundaries were an instruction the model was asked to obey rather
+than a wall that stopped it. This release turns the ladder prose → code →
+kernel.
+
+**Live by default:** the cortex-owned `PreToolUse` path guard for file tools and
+Bash read-command paths (nine adversarial rounds — each round closed a real
+bypass found by trying to break the previous one), read-only directories
+enforced through the dispatch seam, path containment applied even in
+principal-DM guard-off sessions, and persona-declared `allowedTools` enforced at
+dispatch instead of being decorative.
+
+**Shipped switched off, deliberately:** the session-sandbox choke point, the
+macOS `sandbox-exec` backend, the L3 egress allowlist proxy, plugin bundle
+signature verification, and the v2 `strict` posture. Building a boundary and
+enabling it are separate decisions with separate blast radius, so every one of
+these defaults to inert and no caller turns it on.
+
+The headline technical result is `strict`: `(deny default)` plus a derived allow
+set, where an out-of-scope path is refused **because nothing permits it** rather
+than because someone remembered to forbid it. Getting there meant root-causing
+why deny-default aborted every session — dyld's own bootstrap was being blocked
+before any denial could even be logged, found in the crash reporter rather than
+the security log, and fixed by importing Apple's own baseline fragments instead
+of loosening the boundary.
+
+Two honest limits are documented rather than papered over. The v1 `guarded`
+posture is a denylist and therefore **not** a boundary — a denylist cannot be
+completed by adding entries, and the docs say so. And the macOS keychain cannot
+be protected from the session at all: denying the read kills authentication
+outright, which is permanent, not a bug awaiting a fix.
+
+Also in: an `audit` mode that no longer terminates connections (it was killing
+cortex's own event ingest — found by running it against a live session), plugin
+reload brought under the same signature gate as boot after an adversarial pass
+found it bypassed the feature entirely, and test specifications for the second
+NWS adversarial round and for Linux field validation.
+
 ## 6.3.0 — 2026-07-07 — Federation payload swap (epic #1595)
 
 The operator-mode federation credential path — epic #1595's payload swap — is
