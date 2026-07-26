@@ -35,6 +35,7 @@ import {
   parsePathGuardConfig,
   extractCandidatePaths,
   decidePath,
+  validateDirsField,
 } from "../path-guard.hook";
 import {
   expandUserPath,
@@ -157,10 +158,84 @@ describe("parsePathGuardConfig", () => {
     expect(r.ok).toBe(false);
   });
 
-  test("non-array allowedDirs value is coerced to [] (tolerant, still ok)", () => {
-    const r = parsePathGuardConfig(JSON.stringify({ allowedDirs: "not-an-array" }));
+  // -- cortex#2359 round 2, finding F2 --------------------------------------
+  // A present-but-wrong-type field must FAIL CLOSED (ok:false), never
+  // silently coerce to [] — coercion is how a config-shape MISTAKE (a
+  // string where an array was required) became indistinguishable from a
+  // deliberately empty policy and disabled all containment.
+
+  test("F2 exact repro: allowedDirs is a string (not an array) ⇒ ok:false, fail closed", () => {
+    // The literal shape from the NWS report:
+    // CORTEX_PATH_GUARD='{"allowedDirs":"/repo","readOnlyDirs":[]}'
+    const r = parsePathGuardConfig(JSON.stringify({ allowedDirs: "/repo", readOnlyDirs: [] }));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("allowedDirs");
+  });
+
+  test("non-array readOnlyDirs value ⇒ ok:false, fail closed", () => {
+    const r = parsePathGuardConfig(JSON.stringify({ readOnlyDirs: "/repo" }));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("readOnlyDirs");
+  });
+
+  test("array containing a non-string element ⇒ ok:false, fail closed", () => {
+    const r = parsePathGuardConfig(JSON.stringify({ allowedDirs: ["/repo", 123] }));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("allowedDirs");
+  });
+
+  test("null value for a dirs field ⇒ ok:false, fail closed (not treated as absent)", () => {
+    const r = parsePathGuardConfig(JSON.stringify({ allowedDirs: null }));
+    expect(r.ok).toBe(false);
+  });
+
+  // -- still-permits controls: a malformed field must not break the
+  // legitimately-empty or well-formed cases ---------------------------------
+
+  test("a field simply ABSENT from the object (never mentioned) ⇒ still legitimate empty, ok:true", () => {
+    const r = parsePathGuardConfig(JSON.stringify({ readOnlyDirs: ["/b"] }));
     expect(r.ok).toBe(true);
-    expect(r.policy.allowedDirs).toEqual([]);
+    expect(r.policy).toEqual({ allowedDirs: [], readOnlyDirs: ["/b"] });
+  });
+
+  test("well-formed policy with both fields present ⇒ unchanged, ok:true", () => {
+    const r = parsePathGuardConfig(JSON.stringify({ allowedDirs: ["/a", "/c"], readOnlyDirs: ["/b"] }));
+    expect(r.ok).toBe(true);
+    expect(r.policy).toEqual({ allowedDirs: ["/a", "/c"], readOnlyDirs: ["/b"] });
+  });
+});
+
+describe("validateDirsField", () => {
+  test("key absent ⇒ ok:true, value:[]", () => {
+    expect(validateDirsField({}, "allowedDirs")).toEqual({ ok: true, value: [], reason: "" });
+  });
+
+  test("key present, well-formed array of strings ⇒ ok:true, value passed through", () => {
+    expect(validateDirsField({ allowedDirs: ["/a", "/b"] }, "allowedDirs")).toEqual({
+      ok: true,
+      value: ["/a", "/b"],
+      reason: "",
+    });
+  });
+
+  test("key present, empty array ⇒ ok:true, value:[] (deliberately empty, not malformed)", () => {
+    expect(validateDirsField({ allowedDirs: [] }, "allowedDirs")).toEqual({ ok: true, value: [], reason: "" });
+  });
+
+  test("key present, a string instead of an array ⇒ ok:false", () => {
+    const r = validateDirsField({ allowedDirs: "/repo" }, "allowedDirs");
+    expect(r.ok).toBe(false);
+    expect(r.value).toEqual([]);
+  });
+
+  test("key present, an object instead of an array ⇒ ok:false", () => {
+    const r = validateDirsField({ readOnlyDirs: { foo: "bar" } }, "readOnlyDirs");
+    expect(r.ok).toBe(false);
+  });
+
+  test("key present, a number instead of an array ⇒ ok:false", () => {
+    const r = validateDirsField({ allowedDirs: 42 }, "allowedDirs");
+    expect(r.ok).toBe(false);
   });
 });
 
@@ -275,12 +350,73 @@ describe("decidePath", () => {
     expect(d.allow).toBe(false);
   });
 
-  test("a dir listed in BOTH allowedDirs and readOnlyDirs ⇒ write allowed (allow wins)", () => {
+  // -- cortex#2359 round 2, finding F1 --------------------------------------
+  // Read-only must win on overlap, independent of whether the overlap is an
+  // EXACT string match or one dir merely CONTAINING the other — deny wins
+  // (deny-precedence), never "most specific match" (see the hook's module
+  // doc, "Read-only vs. allowed on overlap", for the full reasoning).
+
+  test("a dir listed in BOTH allowedDirs and readOnlyDirs (exact match) ⇒ write DENIED (deny wins, the safe default)", () => {
+    // This inverts the PRE-FIX behavior (which asserted allow-wins here) —
+    // deny-precedence generalizes cc-session.ts's already-documented
+    // exact-match overlap contract ("a dir in both wins as read-only") to
+    // decidePath itself, rather than relying solely on the caller-side
+    // subtraction to keep the two lists disjoint.
     const d = decidePath("Write", join(allowedDir, "f.txt"), {
       allowedDirs: [allowedDir],
       readOnlyDirs: [allowedDir],
     });
+    expect(d.allow).toBe(false);
+  });
+
+  test("F1 exact repro: readOnlyDirs nested INSIDE a broader allowedDirs ⇒ write DENIED", () => {
+    // The literal shape from the NWS report:
+    // allowedDirs:["/repo"], readOnlyDirs:["/repo/.claude"] →
+    // Write /repo/.claude/settings.json used to return allow:true.
+    const nestedReadOnly = join(allowedDir, ".claude");
+    mkdirSync(nestedReadOnly, { recursive: true });
+    const d = decidePath("Write", join(nestedReadOnly, "settings.json"), {
+      allowedDirs: [allowedDir],
+      readOnlyDirs: [nestedReadOnly],
+    });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain("READ-ONLY");
+  });
+
+  test("F1 still-permits #1: reads inside the nested read-only dir remain allowed", () => {
+    const nestedReadOnly = join(allowedDir, ".claude");
+    mkdirSync(nestedReadOnly, { recursive: true });
+    const d = decidePath("Read", join(nestedReadOnly, "settings.json"), {
+      allowedDirs: [allowedDir],
+      readOnlyDirs: [nestedReadOnly],
+    });
     expect(d.allow).toBe(true);
+  });
+
+  test("F1 still-permits #2: writes to the surrounding allowedDir (outside the nested read-only pocket) remain allowed", () => {
+    const nestedReadOnly = join(allowedDir, ".claude");
+    mkdirSync(nestedReadOnly, { recursive: true });
+    const d = decidePath("Write", join(allowedDir, "src", "index.ts"), {
+      allowedDirs: [allowedDir],
+      readOnlyDirs: [nestedReadOnly],
+    });
+    expect(d.allow).toBe(true);
+  });
+
+  test("deny-precedence (not most-specific-match): a writable dir nested INSIDE a broader read-only dir is still denied", () => {
+    // The scenario that distinguishes deny-precedence from most-specific-
+    // match: readOnlyDirs is the BROADER root, allowedDirs is a narrower
+    // dir nested inside it. Most-specific-match would let the narrower
+    // (deeper) allowedDirs entry win and permit the write; deny-precedence
+    // — the rule this hook deliberately implements — denies it regardless,
+    // because the path is still contained in a readOnlyDirs entry.
+    const writableCarveOut = join(readOnlyDir, "build-output");
+    mkdirSync(writableCarveOut, { recursive: true });
+    const d = decidePath("Write", join(writableCarveOut, "out.js"), {
+      allowedDirs: [writableCarveOut],
+      readOnlyDirs: [readOnlyDir],
+    });
+    expect(d.allow).toBe(false);
   });
 });
 
@@ -1083,5 +1219,165 @@ describe("path-guard.hook — round 6: NUL-byte file_path fails closed (reducer,
     );
     expect(r.status).toBe(0);
     expectDenyDecision(r.stdout);
+  });
+});
+
+// =============================================================================
+// cortex#2359 round 2, finding F1 (HIGH) — full-process regression for the
+// exact repro: a readOnlyDirs entry NESTED inside a broader allowedDirs
+// entry used to be silently overridden (never read-only) because
+// decidePath's `inReadOnly` was gated on `!inAllowed`. Covers both
+// directions (deny writes to the nested pocket; still permit reads there;
+// still permit writes to the surrounding allowed dir) per the spawned
+// process, not just the pure decidePath unit above.
+// =============================================================================
+describe("path-guard.hook — F1: nested read-only inside a broader allowed dir (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+  let nestedReadOnlyDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-f1-nested-"));
+    allowedDir = join(root, "repo");
+    nestedReadOnlyDir = join(allowedDir, ".claude");
+    mkdirSync(nestedReadOnlyDir, { recursive: true });
+    writeFileSync(join(nestedReadOnlyDir, "settings.json"), "{}\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function policyEnv(): Record<string, string> {
+    // The exact repro shape from the NWS report:
+    // allowedDirs:["/repo"], readOnlyDirs:["/repo/.claude"]
+    return {
+      CORTEX_CHANNEL: "test",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [nestedReadOnlyDir] }),
+    };
+  }
+
+  test("F1 exact repro: Write into the nested readOnlyDirs pocket ⇒ deny (was allow:true before the fix)", () => {
+    const r = runHook("Write", { file_path: join(nestedReadOnlyDir, "settings.json") }, policyEnv());
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("READ-ONLY");
+  });
+
+  test("F1 exact repro: Edit into the nested readOnlyDirs pocket ⇒ deny", () => {
+    const r = runHook(
+      "Edit",
+      { file_path: join(nestedReadOnlyDir, "settings.json"), old_string: "{}", new_string: "{\"x\":1}" },
+      policyEnv(),
+    );
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("F1 still-permits: Read of the nested readOnlyDirs pocket ⇒ allow", () => {
+    const r = runHook("Read", { file_path: join(nestedReadOnlyDir, "settings.json") }, policyEnv());
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("F1 still-permits: Write to the surrounding allowedDir (outside the nested pocket) ⇒ allow", () => {
+    const r = runHook("Write", { file_path: join(allowedDir, "src", "index.ts") }, policyEnv());
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+});
+
+// =============================================================================
+// cortex#2359 round 2, finding F2 (HIGH) — full-process regression for the
+// exact repro: a present-but-malformed CORTEX_PATH_GUARD field (a string
+// where an array was required) used to coerce to [] and, combined with an
+// empty readOnlyDirs, produce a fully-empty policy that reads as "no
+// restriction configured" — every path passed. Covers both directions
+// (malformed ⇒ deny; genuinely-empty/well-formed policies still work).
+// =============================================================================
+describe("path-guard.hook — F2: malformed CORTEX_PATH_GUARD field fails closed (spawned)", () => {
+  let root: string;
+  let allowedDir: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "path-guard-f2-malformed-"));
+    allowedDir = join(root, "repo");
+    outsideDir = join(root, "outside");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, "secret.txt"), "nope\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("F2 exact repro: allowedDirs is a string (not an array) ⇒ deny, not pass-through", () => {
+    // CORTEX_PATH_GUARD='{"allowedDirs":"/repo","readOnlyDirs":[]}' — the
+    // literal shape from the NWS report, with the real allowedDir path
+    // substituted for the fixture's temp dir.
+    const r = runHook(
+      "Read",
+      { file_path: join(outsideDir, "secret.txt") },
+      {
+        CORTEX_CHANNEL: "test",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: allowedDir, readOnlyDirs: [] }),
+      },
+    );
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("allowedDirs");
+  });
+
+  test("F2 still-permits #1: a genuinely empty policy ({}) still passes through with no restriction", () => {
+    const r = runHook(
+      "Read",
+      { file_path: join(outsideDir, "secret.txt") },
+      { CORTEX_CHANNEL: "test", CORTEX_PATH_GUARD: "{}" },
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("F2 still-permits #2: a genuinely empty policy (both fields explicitly []) still passes through", () => {
+    const r = runHook(
+      "Read",
+      { file_path: join(outsideDir, "secret.txt") },
+      {
+        CORTEX_CHANNEL: "test",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [], readOnlyDirs: [] }),
+      },
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("F2 still-permits #3: a well-formed policy behaves unchanged (containment still enforced)", () => {
+    const r = runHook(
+      "Read",
+      { file_path: join(outsideDir, "secret.txt") },
+      {
+        CORTEX_CHANNEL: "test",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      },
+    );
+    expect(r.status).toBe(0);
+    expectDenyDecision(r.stdout);
+  });
+
+  test("F2 still-permits #4: a well-formed policy still ALLOWS an in-scope path", () => {
+    const r = runHook(
+      "Read",
+      { file_path: join(allowedDir, "ok.txt") },
+      {
+        CORTEX_CHANNEL: "test",
+        CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      },
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
   });
 });

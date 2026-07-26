@@ -339,14 +339,29 @@ export function resolveBashGuardEnv(
  * includes `readOnlyDirs` (kept that way deliberately so `--add-dir` still
  * grants read access to read-only dirs — see `claude-invoker.ts`, which
  * reads `opts.allowedDirs` UNCHANGED and never sees this function's output).
- * If this function emitted that union verbatim as the guard's `allowedDirs`,
- * a read-only dir would sit in BOTH lists, `decidePath`'s `inAllowed` check
- * would be `true`, and the write-deny branch (which requires `!inAllowed`)
- * would never fire — F6 would stay silently inert even with `readOnlyDirs`
- * populated. So the guard's `allowedDirs` is the caller's `allowedDirs`
- * MINUS `readOnlyDirs`; `readOnlyDirs` is carried unchanged. Overlap rule:
- * a dir present in both inputs resolves to READ-ONLY in the emitted policy —
- * the safe default.
+ * So the guard's `allowedDirs` is the caller's `allowedDirs` MINUS
+ * `readOnlyDirs` (exact-string membership); `readOnlyDirs` is carried
+ * unchanged. Overlap rule: a dir present in both inputs resolves to
+ * READ-ONLY in the emitted policy — the safe default.
+ *
+ * cortex#2359 round 2 (F1) note: this subtraction is EXACT-STRING only (see
+ * {@link splitGuardDirs}) — it does NOT catch a `readOnlyDirs` entry that is
+ * merely CONTAINED WITHIN a broader `allowedDirs` entry rather than equal to
+ * it (`allowedDirs:["/repo"], readOnlyDirs:["/repo/.claude"]` subtracts
+ * nothing, since neither string equals the other). That nested case used to
+ * be a live bypass because `decidePath`'s `inReadOnly` check was ALSO gated
+ * on `!inAllowed`, so the two gaps compounded. `decidePath` now computes
+ * `inAllowed`/`inReadOnly` independently and lets read-only win by
+ * CONTAINMENT, not exact-string overlap (see path-guard.hook.ts's module
+ * doc, "Read-only vs. allowed on overlap") — so the nested case is closed at
+ * the DECISION layer regardless of what this subtraction does or doesn't
+ * catch. This function's exact-match subtraction is therefore no longer the
+ * mechanism F6/F1 depend on; it remains as defense-in-depth (it keeps a
+ * read-only dir out of the emitted `allowedDirs` list at all, for any other
+ * consumer — e.g. {@link deriveSandboxProfile} — that might read that field
+ * without going through `decidePath`'s precedence logic). Made
+ * containment-aware here too would be redundant work for zero behavior
+ * change at the hook, so it was deliberately left as-is.
  */
 export function resolvePathGuardEnv(
   opts: Pick<CCSessionOpts, "allowedDirs" | "readOnlyDirs">,

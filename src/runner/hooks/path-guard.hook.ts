@@ -51,8 +51,53 @@
  * already encodes (`allDirs.length > 0` gates whether the FILESYSTEM
  * RESTRICTION prose even appears); this hook makes that SAME contract real
  * instead of advisory, it does not change WHEN restriction applies. A
- * MALFORMED `CORTEX_PATH_GUARD` (present but not parseable JSON, or not an
- * object) is a genuine failure, not "empty" — DENY.
+ * MALFORMED `CORTEX_PATH_GUARD` is a genuine failure, not "empty" — DENY.
+ * "Malformed" is checked at TWO levels (cortex#2359 round 2 finding F2):
+ * present-but-not-parseable-JSON / not-an-object (as before), AND — new —
+ * present-but-wrong-shape on a per-field basis: `allowedDirs`/`readOnlyDirs`
+ * that ARE PRESENT in the parsed object but are not themselves an array of
+ * strings (e.g. `{"allowedDirs":"/repo"}`, a string where an array was
+ * required) is a config-shape MISTAKE, not a deliberate empty policy, and
+ * must DENY rather than silently coerce to `[]` — see
+ * {@link validateDirsField}. A field that is simply ABSENT from the object
+ * (never mentioned at all) is unaffected — that's the legitimate "no
+ * restriction on this axis" case and still resolves to `[]`, `ok:true`.
+ *
+ * ## Read-only vs. allowed on overlap — deny wins (precedence, not specificity)
+ *
+ * When a candidate path is contained in BOTH an `allowedDirs` entry and a
+ * `readOnlyDirs` entry — whether because the two entries are the exact same
+ * string, or because one CONTAINS the other (a `readOnlyDirs` entry nested
+ * inside a broader `allowedDirs` entry, or vice versa) — {@link decidePath}
+ * resolves the overlap as READ-ONLY, unconditionally, for every write tool.
+ * This is DENY-PRECEDENCE, not "most specific match wins": a narrower
+ * *writable* carve-out nested inside a broader read-only root does NOT
+ * regain write access. Two reasons this is the correct rule, not just the
+ * simpler one:
+ *
+ *   1. It is the SAME contract `cc-session.ts`'s `resolvePathGuardEnv` /
+ *      `splitGuardDirs` already documents for the exact-match case ("a dir
+ *      in both wins as read-only, the safe default") — deny-precedence
+ *      generalizes that existing, deliberate policy to containment instead
+ *      of silently diverging from it for the nested case. There is no
+ *      config-authoring signal anywhere in this system that the ORDER or
+ *      NESTING of two directory entries is meant to encode "this narrower
+ *      grant overrides that broader restriction" — most-specific-match
+ *      would be inventing an override mechanism nothing currently expresses
+ *      or intends.
+ *   2. Most-specific-match is strictly MORE code and MORE state to get right
+ *      (computing "specificity" from two realpath'd strings, deciding ties,
+ *      documenting it, testing it) to buy a carve-out feature nobody asked
+ *      for and no live config uses — pure attack surface for a control that
+ *      has already needed nine adversarial rounds to reach fail-closed. A
+ *      principal who genuinely wants a writable exception inside an
+ *      otherwise read-only tree can express it today by NOT nesting the two
+ *      — list sibling directories instead of overlapping ones.
+ *
+ * If a future need for a genuine writable carve-out emerges, that should be
+ * its own deliberately-reviewed feature (an explicit third list, e.g.
+ * `writableExceptions`), not an implicit consequence of directory nesting
+ * order that a config author could get backwards without realizing it.
  *
  * ## Known limitations
  *
@@ -142,17 +187,68 @@ export interface PathGuardConfigResult {
   reason: string;
 }
 
-function toStringArray(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  return v.filter((x): x is string => typeof x === "string");
+export interface DirsFieldValidation {
+  /** false only when the field is PRESENT but the WRONG shape. */
+  ok: boolean;
+  value: string[];
+  reason: string;
+}
+
+/**
+ * Validate ONE `CORTEX_PATH_GUARD` field (`allowedDirs` or `readOnlyDirs`)
+ * that is expected to be an array of strings, distinguishing three cases
+ * (cortex#2359 round 2 finding F2):
+ *
+ *   - ABSENT from the parsed object entirely (`key in obj` is false) — a
+ *     LEGITIMATE "nothing configured on this axis" — `ok:true, value:[]`.
+ *     JSON has no `undefined`, so a present key is never `undefined`; the
+ *     only way to be "absent" is to not appear in the object at all.
+ *   - PRESENT but not an array, OR an array containing a non-string element
+ *     — a config-SHAPE MISTAKE (e.g. a bare string where an array was
+ *     required, cortex#2359's exact repro
+ *     `{"allowedDirs":"/repo","readOnlyDirs":[]}`) — `ok:false`. The OLD
+ *     behavior silently coerced this to `[]` (see the module doc's git
+ *     history / PR description), which combined with an already-empty
+ *     `readOnlyDirs` produced a fully-empty policy that reads as
+ *     "session author deliberately configured no restriction" — a
+ *     malformed value must never be indistinguishable from a deliberately
+ *     empty one.
+ *   - PRESENT, an array, every element a string — the well-formed case,
+ *     unchanged from before — `ok:true, value:[...]`.
+ *
+ * Exported for unit tests.
+ */
+export function validateDirsField(obj: Record<string, unknown>, key: string): DirsFieldValidation {
+  if (!(key in obj)) {
+    return { ok: true, value: [], reason: "" };
+  }
+  const v = obj[key];
+  if (!Array.isArray(v)) {
+    return {
+      ok: false,
+      value: [],
+      reason: `CORTEX_PATH_GUARD.${key} must be an array of strings (got ${v === null ? "null" : typeof v})`,
+    };
+  }
+  const badIndex = v.findIndex((x) => typeof x !== "string");
+  if (badIndex !== -1) {
+    return {
+      ok: false,
+      value: [],
+      reason: `CORTEX_PATH_GUARD.${key}[${badIndex}] must be a string (got ${typeof v[badIndex]})`,
+    };
+  }
+  return { ok: true, value: v as string[], reason: "" };
 }
 
 /**
  * Parse `CORTEX_PATH_GUARD`. Absence is a LEGITIMATE empty policy (not a
  * failure) — see the module doc's "Policy source" section. A present value
- * that isn't parseable JSON, or doesn't parse to an object, IS a failure —
- * `ok:false` — callers must DENY rather than silently substitute an empty
- * policy for a malformed one. Exported for unit tests.
+ * that isn't parseable JSON, doesn't parse to an object, or has a
+ * present-but-wrong-shape `allowedDirs`/`readOnlyDirs` field (see
+ * {@link validateDirsField}) IS a failure — `ok:false` — callers must DENY
+ * rather than silently substitute an empty policy for a malformed one.
+ * Exported for unit tests.
  */
 export function parsePathGuardConfig(raw: string | undefined): PathGuardConfigResult {
   if (raw === undefined || raw.trim() === "") {
@@ -176,12 +272,19 @@ export function parsePathGuardConfig(raw: string | undefined): PathGuardConfigRe
     };
   }
   const obj = parsed as Record<string, unknown>;
+
+  const allowedDirs = validateDirsField(obj, "allowedDirs");
+  if (!allowedDirs.ok) {
+    return { ok: false, policy: { allowedDirs: [], readOnlyDirs: [] }, reason: allowedDirs.reason };
+  }
+  const readOnlyDirs = validateDirsField(obj, "readOnlyDirs");
+  if (!readOnlyDirs.ok) {
+    return { ok: false, policy: { allowedDirs: [], readOnlyDirs: [] }, reason: readOnlyDirs.reason };
+  }
+
   return {
     ok: true,
-    policy: {
-      allowedDirs: toStringArray(obj.allowedDirs),
-      readOnlyDirs: toStringArray(obj.readOnlyDirs),
-    },
+    policy: { allowedDirs: allowedDirs.value, readOnlyDirs: readOnlyDirs.value },
     reason: "",
   };
 }
@@ -432,10 +535,23 @@ export interface PathDecision {
  * Pure — does its own realpath/containment I/O via `isContainedIn` but
  * takes no other state, so it's directly unit-testable against a real
  * temp-dir fixture. Exported for unit tests.
+ *
+ * `inAllowed` and `inReadOnly` are computed INDEPENDENTLY — cortex#2359
+ * round 2 finding F1. The prior `!inAllowed &&` guard on `inReadOnly` made
+ * read-only membership STRUCTURALLY UNREACHABLE for any path also contained
+ * in an `allowedDirs` entry, so a `readOnlyDirs` entry nested inside a
+ * broader `allowedDirs` entry (e.g. `allowedDirs:["/repo"],
+ * readOnlyDirs:["/repo/.claude"]`) was silently never read-only — `inAllowed`
+ * was true (the broader root contains it) and `inReadOnly` could then never
+ * even be evaluated. Computing both independently and letting read-only WIN
+ * on the write-tool check below (deny-precedence — see the module doc's
+ * "Read-only vs. allowed on overlap" section for why this, not
+ * most-specific-match, is correct) closes that gap for both the exact-match
+ * AND the nested case uniformly.
  */
 export function decidePath(toolName: string, absPath: string, policy: PathGuardPolicy): PathDecision {
   const inAllowed = policy.allowedDirs.some((d) => isContainedIn(d, absPath));
-  const inReadOnly = !inAllowed && policy.readOnlyDirs.some((d) => isContainedIn(d, absPath));
+  const inReadOnly = policy.readOnlyDirs.some((d) => isContainedIn(d, absPath));
 
   if (!inAllowed && !inReadOnly) {
     return {
