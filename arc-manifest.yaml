@@ -126,9 +126,21 @@ provides:
     - source: src/runner/hooks/bash-guard.hook.ts
       target: ~/.claude/hooks/CortexBashGuard.hook.ts
     # EBH-1 (cortex#2343) — cortex-owned PreToolUse path guard for the file
-    # tools (Read/Write/Edit/Glob/Grep). Registered GLOBALLY below (unlike
-    # the Skill/MCP guards) because — like CortexBashGuard — it gates every
-    # bot session's file access, not a per-session grant list.
+    # tools (Read/Write/Edit/Glob/Grep/NotebookEdit). Registered GLOBALLY
+    # below (unlike the Skill/MCP guards) because — like CortexBashGuard —
+    # it gates every bot session's file access, not a per-session grant
+    # list. NOTE (cortex#2482): global registration here is NOT, by itself,
+    # sufficient for dispatched bot sessions — those spawn with an empty
+    # --setting-sources and load ONLY the curated file
+    # src/runner/session-settings.ts builds (buildCuratedSettings), never
+    # this manifest-driven principal-global settings.json. CortexBashGuard
+    # is registered in BOTH places (here AND buildCuratedSettings); this
+    # hook now is too. A hook that is manifest-registered but
+    # curated-file-absent is REGISTERED for the principal's own interactive
+    # sessions only — it does not run in a dispatched session at all. This
+    # exact gap (manifest registration without curated-file registration)
+    # was the R1-F1-A defect this issue closed; do not re-derive "global
+    # registration alone covers bot sessions" from this comment again.
     - source: src/runner/hooks/path-guard.hook.ts
       target: ~/.claude/hooks/CortexPathGuard.hook.ts
     # cortex#710 (C-701 Part B) — per-skill grant PreToolUse hook. Installed

@@ -28,11 +28,12 @@
  * principal's global settings (hooks, skills, plugins, permissions) — and
  * nothing from the working-repo cwd — is loaded. We then layer cortex's OWN
  * curated settings on top via `--settings <path>`, containing only cortex's
- * hooks (EventLogger, bash-guard, context) plus, when the session is granted
- * skills, the Skill Guard PreToolUse hook (cortex#710). See the "Why drop
- * `project` and `local`, not just `user`?" self-check below for why the
- * tighter empty-source default (rather than `project,local`) is the only
- * sound posture.
+ * hooks (EventLogger, bash-guard, path-guard, context) plus, when the
+ * session is granted skills, the Skill Guard PreToolUse hook (cortex#710),
+ * and, when the session carries an MCP grant decision, the MCP Guard
+ * PreToolUse hook (cortex#2111). See the "Why drop `project` and `local`,
+ * not just `user`?" self-check below for why the tighter empty-source
+ * default (rather than `project,local`) is the only sound posture.
  *
  * ### Why `--setting-sources ` (empty) and not `--bare`?
  *
@@ -403,6 +404,22 @@ function restoreWritableTree(path: string): void {
  * passes an EMPTY `--setting-sources` so no ambient source (`user`,
  * `project`, `local`) loads alongside it.
  *
+ * ## Path gating (EBH-1, cortex#2343 / R1-F1-A)
+ *
+ * The **Path Guard** PreToolUse hook (see its matcher string on the
+ * registration below) is registered UNCONDITIONALLY — exactly like the Bash
+ * guard above, and NOT gated on any parameter this function receives (no
+ * `allowedDirs`/`readOnlyDirs` param exists here).
+ * The allowed/read-only directory POLICY itself does not live in this
+ * file: it reaches the hook via the `CORTEX_PATH_GUARD` env var, set on the
+ * child by `cc-session.ts` (also unconditionally). The hook self-gates to a
+ * no-op pass-through when either `CORTEX_CHANNEL` is unset (not a cortex
+ * session) or the resolved policy is empty (no `allowedDirs`/`readOnlyDirs`
+ * configured) — see `path-guard.hook.ts`'s two pass-through gates. Before
+ * this entry existed (cortex#2482), the env var was projected onto every
+ * session but no curated hook ever read it — registration and policy were
+ * disjoint, and the boundary failed OPEN silently.
+ *
  * ## Skill gating (cortex#710, Part B)
  *
  * When `skillGrants` is a NON-EMPTY array, the session is meant to have
@@ -454,11 +471,24 @@ export function buildCuratedSettings(
     command: `${claudeDir}/hooks/${name}`,
   });
 
-  // PreToolUse always carries the Bash guard. When the session is granted
-  // skills, ALSO register the Skill guard (matcher `Skill`) — the per-skill
-  // gate that backs the broad `Skill` allow the caller layers in.
+  // PreToolUse always carries the Bash guard AND the Path guard (EBH-1,
+  // cortex#2343 / R1-F1-A). When the session is granted skills, ALSO
+  // register the Skill guard (matcher `Skill`) — the per-skill gate that
+  // backs the broad `Skill` allow the caller layers in.
   const preToolUse: { matcher: string; hooks: ReturnType<typeof hook>[] }[] = [
     { matcher: "Bash", hooks: [hook("CortexBashGuard.hook.ts")] },
+    // EBH-1 (cortex#2343) / R1-F1-A — the file-tool half of the path
+    // boundary. Registered UNCONDITIONALLY, mirroring the Bash guard above:
+    // cc-session.ts:631 writes CORTEX_PATH_GUARD onto every session
+    // unconditionally, and arc-manifest.yaml:188-190 registers this hook
+    // unconditionally in the principal's global settings. Before this entry
+    // the policy was projected onto a child that never ran the hook that
+    // reads it — the mirror image of the MCP guard's stated atomicity rule
+    // (cc-session.ts:605-609), and it failed OPEN.
+    // The matcher string is byte-identical to arc-manifest.yaml:190 and
+    // src/settings/cortex-hooks.json:39 — enforced by
+    // src/runner/__tests__/hook-registration-parity.test.ts.
+    { matcher: "Read|Write|Edit|Glob|Grep|NotebookEdit", hooks: [hook("CortexPathGuard.hook.ts")] },
   ];
   if (skillGrants !== undefined && skillGrants.length > 0) {
     preToolUse.push({ matcher: "Skill", hooks: [hook("CortexSkillGuard.hook.ts")] });
@@ -472,8 +502,15 @@ export function buildCuratedSettings(
 
   // Mirrors src/settings/cortex-hooks.json (the reference fallback) but
   // pinned to ABSOLUTE installed paths so it stands alone without relying
-  // on the principal's settings.json having registered anything. These are
-  // cortex's hooks and ONLY cortex's hooks.
+  // on the principal's settings.json having registered anything. As of
+  // EBH-1 / R1-F1-A the PreToolUse set here is a genuine mirror of
+  // cortex-hooks.json's Bash + path-guard entries (previously the path
+  // guard was manifest-registered but curated-file-absent — a defect,
+  // cortex#2482). The mirror is deliberately NOT total: the Skill and MCP
+  // guards are PER-SESSION grants, registered ONLY here, and NEVER in the
+  // manifest/global settings.json (arc-manifest.yaml:134-140 and :143-148 —
+  // registering them globally would gate the principal's own Skill/MCP tool
+  // use). These are cortex's hooks and ONLY cortex's hooks.
   return {
     hooks: {
       SessionStart: [{ hooks: [hook("CortexContext.hook.ts")] }],
