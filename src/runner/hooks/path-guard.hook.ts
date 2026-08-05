@@ -158,8 +158,14 @@ interface HookInput {
 }
 
 /**
- * Tools this hook governs. Matches the `cortex-hooks.json` matcher exactly.
- * `NotebookEdit` added per cortex#2343 adversarial review finding B4: it is
+ * Tools this hook governs. Matches the PreToolUse matcher string exactly in
+ * BOTH places that register it: `src/runner/session-settings.ts`
+ * (`buildCuratedSettings` — LOAD-BEARING; this is the settings file every
+ * dispatched cortex session actually loads) and `src/settings/cortex-hooks.json`
+ * (an inert reference/fallback that arc auto-derives from
+ * `arc-manifest.yaml`'s `provides.hooks` — it writes nothing itself, per its
+ * own `_comment`; see cortex#2482). `NotebookEdit` added per cortex#2343
+ * adversarial review finding B4: it is
  * a grantable, mutating file tool (`src/common/policy/tool-inventory.ts`)
  * that was previously omitted entirely — any stack granting it got
  * unchecked arbitrary-path read/write via `notebook_path`. `MultiEdit` is
