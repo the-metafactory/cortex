@@ -3257,3 +3257,220 @@ describe("bash-guard.hook — EBH-1h: bare numeric short flags (cortex#2384)", (
   });
 });
 
+// =============================================================================
+// Round 10 (cortex#2493) — `gh --title`/`--body` free-text values were
+// misclassified as path candidates. Round 9 modeled `-t`/`--title`,
+// `-b`/`--body`, `-F`/`--body-file` all as ordinary path-pipeline value
+// flags; the space-separated form's value fell through to the generic
+// bareword-argument handler (a candidate path that never resolves — titles
+// aren't filenames) and the `=`-glued form routed the same free text through
+// `reduceTokenToRealPathOrReject` for the same fate. Fixed by
+// `CommandFlagPolicy.longTextValue`/`shortTextValue`: `title`/`body` (both
+// flag forms) never enter the candidate-path pipeline at all. `-F`/
+// `--body-file` is UNCHANGED — it stays on `shortValue`/`longValue`, still
+// containment-checked, because it genuinely reads a local file (the round-9
+// remote-exfil finding).
+// =============================================================================
+
+import { classifyFlagToken as classifyFlagTokenR10, extractCommandPaths as extractCommandPathsR10 } from "../bash-guard.hook";
+
+describe("bash-guard.hook — round 10: classifyFlagToken unit coverage for text-value flags (cortex#2493)", () => {
+  const ghPolicy = COMMAND_FLAG_POLICIES.gh;
+  if (!ghPolicy) throw new Error("gh policy missing from COMMAND_FLAG_POLICIES — test setup invariant broken");
+
+  test('--title (no "=") classifies as "text" — caller must skip the next token', () => {
+    expect(classifyFlagTokenR10("--title", ghPolicy)).toEqual({ kind: "text" });
+  });
+
+  test('--body (no "=") classifies as "text"', () => {
+    expect(classifyFlagTokenR10("--body", ghPolicy)).toEqual({ kind: "text" });
+  });
+
+  test("--title=value (glued) classifies as \"safe\" — never routed through the path pipeline", () => {
+    expect(classifyFlagTokenR10("--title=Regression-in-bash-guard", ghPolicy)).toEqual({ kind: "safe" });
+  });
+
+  test("--body=value (glued) classifies as \"safe\"", () => {
+    expect(classifyFlagTokenR10("--body=Ordinary-prose-body", ghPolicy)).toEqual({ kind: "safe" });
+  });
+
+  test('-t (short, no value attached) classifies as "text"', () => {
+    expect(classifyFlagTokenR10("-t", ghPolicy)).toEqual({ kind: "text" });
+  });
+
+  test('-b (short, no value attached) classifies as "text"', () => {
+    expect(classifyFlagTokenR10("-b", ghPolicy)).toEqual({ kind: "text" });
+  });
+
+  test("-tGluedTitle (short, glued value) classifies as \"safe\"", () => {
+    expect(classifyFlagTokenR10("-tGluedTitle", ghPolicy)).toEqual({ kind: "safe" });
+  });
+
+  test("-F/--body-file are UNCHANGED — still route through the path pipeline, never \"text\"", () => {
+    expect(classifyFlagTokenR10("-F", ghPolicy)).toEqual({ kind: "safe" });
+    expect(classifyFlagTokenR10("--body-file", ghPolicy)).toEqual({ kind: "safe" });
+    expect(classifyFlagTokenR10("--body-file=./out.md", ghPolicy)).toEqual({
+      kind: "value",
+      value: "./out.md",
+    });
+  });
+
+  test("extractCommandPaths: --title's space-separated value never appears in the extracted candidate paths", () => {
+    const extracted = extractCommandPathsR10(
+      'gh issue create --title "A title with spaces" --body-file ./body.md',
+    );
+    expect(extracted.paths).not.toBeNull();
+    // The bareword subcommand tokens ("issue", "create") are harmless
+    // pre-existing candidate paths (they resolve relative to cwd, same as
+    // git's REV/ref positionals — see COMMAND_FLAG_POLICIES.git's own
+    // comment) and are NOT what this fix changes. What matters here: the
+    // quoted title text — however many words — must be fully ABSENT from
+    // the list, and --body-file's value must be the only flag-sourced path.
+    expect(extracted.paths).toEqual(["issue", "create", "./body.md"]);
+  });
+
+  test("extractCommandPaths: --title=value (glued) never appears in the extracted candidate paths either", () => {
+    const extracted = extractCommandPathsR10(
+      "gh issue create --title=Regression-in-bash-guard --body-file ./body.md",
+    );
+    expect(extracted.paths).not.toBeNull();
+    expect(extracted.paths).toEqual(["issue", "create", "./body.md"]);
+  });
+});
+
+describe("bash-guard.hook — round 10: gh free-text value flags, end to end (cortex#2493)", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-r10-matrix-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "GH-R10-CANARY-MARKER\n");
+    writeFileSync(join(allowedDir, "body.md"), "an ordinary in-scope PR comment body\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // `create` is not in DEFAULT_CONFIG's floor (only view|list|diff|checks|
+  // status|comment) — a real deployment widens its own CORTEX_BASH_GUARD for
+  // write subcommands (see DEFAULT_CONFIG's own module comment, and halden's
+  // allowlist at bash-guard.hook.test.ts:317). Mirror that shape here so the
+  // command reaches checkCommandPaths at all, exactly like a real stack's
+  // config would let the issue's own repro reach it.
+  function policyEnv(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+      CORTEX_BASH_GUARD: JSON.stringify({
+        rules: [{ pattern: "^gh\\s+(pr|issue)\\s+(create|comment)\\b" }],
+      }),
+    };
+  }
+
+  // ---- ALLOW: the exact issue repro, space-separated --title form ----
+
+  test('gh issue create --title "A title with spaces" --body-file <in-scope> ⇒ ALLOW (space-separated form)', () => {
+    const r = runHook(
+      `gh issue create --title "A title with spaces" --body-file ${join(allowedDir, "body.md")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- ALLOW: the same repro, `--title=value` glued form ----
+
+  test("gh issue create --title=Regression-in-bash-guard --body-file <in-scope> ⇒ ALLOW (`=` glued form)", () => {
+    const r = runHook(
+      `gh issue create --title=Regression-in-bash-guard --body-file ${join(allowedDir, "body.md")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- ALLOW: short-flag equivalents -t/-b, space-separated form ----
+
+  test('gh pr create -t "A title with spaces" -b "An ordinary prose body, with punctuation!" ⇒ ALLOW', () => {
+    const r = runHook(
+      'gh pr create -t "A title with spaces" -b "An ordinary prose body, with punctuation!"',
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- ALLOW: --body long form on a floor-permitted comment subcommand ----
+
+  test('gh pr comment 1 --body "A prose comment, with punctuation!" ⇒ ALLOW', () => {
+    const r = runHook(
+      'gh pr comment 1 --body "A prose comment, with punctuation!"',
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  // ---- DENY: the round-9 property MUST survive — --body-file containment
+  // is unaffected by fixing --title, even in the SAME command. ----
+
+  test("gh issue create --title \"A title with spaces\" --body-file <out-of-scope> ⇒ DENY (title fix does not weaken body-file containment)", () => {
+    const r = runHook(
+      `gh issue create --title "A title with spaces" --body-file ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("gh issue create --title=Regression-in-bash-guard --body-file <out-of-scope> ⇒ DENY (`=` form title fix does not weaken body-file containment)", () => {
+    const r = runHook(
+      `gh issue create --title=Regression-in-bash-guard --body-file ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  // ---- DENY: the round-9 findings themselves, restated, still close ----
+
+  test("gh pr comment 1 --body-file <out-of-scope> ⇒ DENY (round-9 finding, restated for round 10)", () => {
+    const r = runHook(
+      `gh pr comment 1 --body-file ${join(secretDir, "canary.txt")}`,
+      policyEnv(),
+      "Bash",
+      "test-session",
+      allowedDir,
+    );
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+});
+
