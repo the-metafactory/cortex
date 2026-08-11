@@ -183,7 +183,7 @@ inbound from a surface ─→ presence adapter ─→ tap (publish dispatch.* en
         adapters render to their platform; renderers project to dashboard / pagerduty / ...
 ```
 
-The **surface-router** (`src/bus/surface-router.ts`) is the single in-process fan-out point. Adapters and renderers do not subscribe to NATS directly; they register with the surface-router and the surface-router owns the JetStream consumer. **Anti-pattern (binding): DO NOT subscribe surfaces directly to NATS** — going through the surface-router is what gives every surface shared validation, dedup, and tracing. The one exception is an out-of-process consumer (e.g. a `cli-tail`-style tool) that does not run inside the cortex runtime at all.
+The **surface-router** (`src/bus/surface-router.ts`) is the single in-process fan-out point. Adapters and renderers do not subscribe to NATS directly; they register with the surface-router and the surface-router owns the JetStream consumer. **Anti-pattern (binding): DO NOT subscribe surfaces directly to NATS** — going through the surface-router is what gives every surface shared validation, dedup, and tracing. The rule is absolute for anything running inside the cortex runtime. A separate out-of-process tool (e.g. a `cli-tail`-style tailer) is not a cortex surface and is out of its scope — it is not an exception to the rule so much as a thing the rule does not reach.
 
 #### Direction A — dispatch-source inbound envelopes (Stage 4-B, cortex#409)
 

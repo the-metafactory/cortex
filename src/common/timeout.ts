@@ -16,9 +16,11 @@
  *   - `.timeoutMs` — the timeout that fired
  *   - `.message` — "${source} aborted after ${ms}ms"
  *
- * The `source` enum is mirrored in the `system.dispatch.aborted` event
- * payload (`src/bus/system-events.ts`) so log scraping and event emission share a
- * vocabulary.
+ * The `source` enum is mirrored in the `system.inbound.aborted` event payload
+ * (`src/bus/system-events.ts` — renamed from the older
+ * `system.dispatch.aborted`; `dispatch.*` is reserved for the
+ * principal-dispatches-work-to-agents domain) so log scraping and event
+ * emission share a vocabulary.
  */
 
 export type TimeoutSource =

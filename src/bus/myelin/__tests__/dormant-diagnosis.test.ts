@@ -16,8 +16,9 @@
  *
  * The per-lane boot tests only cover review + release. Two of the four emit
  * sites — brain and dev — had no assertion at all, so a hand-copied variant
- * could drift there unseen. Pinning the shared constant covers all four at
- * once, which is the point of having extracted it.
+ * could drift there unseen. This file therefore does TWO things: it pins the
+ * constant's meaning, and (second describe block) it verifies each of the four
+ * lanes actually uses it rather than inlining a fork.
  *
  * These assertions are deliberately about MEANING, not phrasing: each of the
  * three disabled-runtime returns in `runtime.ts` must be findable in the text,
@@ -25,7 +26,19 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DORMANT_RUNTIME_DIAGNOSIS } from "../runtime";
+
+/** The four lanes that emit a DORMANT line, relative to `src/`. */
+const EMIT_SITES = [
+  "runner/review-consumer-boot.ts",
+  "runner/release-consumer-boot.ts",
+  "runner/brain-consumer-boot.ts",
+  "cortex.ts",
+] as const;
+
+const SRC_ROOT = join(import.meta.dir, "..", "..", "..");
 
 describe("DORMANT_RUNTIME_DIAGNOSIS", () => {
   test("names the unset-nats.url cause AND flags that it logs nothing", () => {
@@ -54,4 +67,26 @@ describe("DORMANT_RUNTIME_DIAGNOSIS", () => {
   test("does not resurrect the retired G-1111 pointer", () => {
     expect(DORMANT_RUNTIME_DIAGNOSIS).not.toMatch(/g-?1111/i);
   });
+});
+
+/**
+ * Pinning the constant's TEXT does not, on its own, cover the four lanes —
+ * a lane could inline its own variant and every assertion above would still
+ * pass. That is the exact drift that let two of the four sites go unchecked
+ * before the constant existed. These tests check the wiring, not the words.
+ */
+describe("DORMANT_RUNTIME_DIAGNOSIS — every emit site uses it", () => {
+  for (const site of EMIT_SITES) {
+    test(`${site} references the shared constant`, () => {
+      const src = readFileSync(join(SRC_ROOT, site), "utf8");
+      expect(src).toContain("DORMANT_RUNTIME_DIAGNOSIS");
+    });
+
+    test(`${site} does not inline its own diagnosis text`, () => {
+      const src = readFileSync(join(SRC_ROOT, site), "utf8");
+      // The literal tail of the shared string must appear exactly zero times
+      // as inline source — if it does, that lane has forked its own copy.
+      expect(src).not.toContain('"myelin-runtime:" prefix)');
+    });
+  }
 });
