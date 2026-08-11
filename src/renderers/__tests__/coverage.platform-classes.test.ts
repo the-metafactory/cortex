@@ -64,7 +64,7 @@ describe("platform-class counting (cortex#2503)", () => {
     expect(msg).toContain("chat-gateway");
     expect(msg).toContain("PLATFORM CLASSES");
     // It must tell the principal that adding another chat kind won't help.
-    expect(msg).toContain("DIFFERENT class");
+    expect(msg).toContain("CANNOT overlap");
   });
 });
 
@@ -81,10 +81,43 @@ describe("mode-ambiguous kinds cannot satisfy diversity against themselves", () 
     expect(v.satisfied).toBe(false);
   });
 
-  test("mattermost + discord resolves to distinct classes → satisfied", () => {
-    // mattermost can take `webhook-out` while discord takes `chat-gateway`.
+  test("mattermost + discord is REFUSED — ambiguity resolves against the config", () => {
+    // Tempting to pass by assigning mattermost=webhook-out. But if that
+    // mattermost is running in bot mode, both sinks are chat gateways and one
+    // vendor outage takes out both. A fail-closed guard cannot assume the
+    // mode that makes the config pass.
     const v = evaluateSystemCoverage([r("mattermost"), r("discord")], CTX);
+    expect(v.satisfied).toBe(false);
+  });
+
+  test("mattermost + pagerduty IS satisfied — class sets are disjoint", () => {
+    // No mode of mattermost is `paging`, so diversity holds either way.
+    const v = evaluateSystemCoverage([r("mattermost"), r("pagerduty")], CTX);
     expect(v.satisfied).toBe(true);
+  });
+
+  test("the error does not claim 'fewer than two classes' while listing two", () => {
+    let msg = "";
+    try {
+      assertConfiguredSystemCoverage([r("mattermost"), r("discord")], CTX);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain("DISJOINT");
+    expect(msg).not.toContain("fewer than the two required");
+  });
+});
+
+describe("prototype keys are not classified kinds", () => {
+  for (const evil of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+    test(`\`${evil}\` resolves to undefined, not an Object.prototype member`, () => {
+      expect(platformClassesForKind(evil)).toBeUndefined();
+    });
+  }
+
+  test("a renderer kind named `constructor` cannot fake a class", () => {
+    const v = evaluateSystemCoverage([r("constructor"), r("toString")], CTX);
+    expect(v.satisfied).toBe(false);
   });
 });
 
@@ -92,7 +125,20 @@ describe("unknown kinds are refused, never counted", () => {
   test("an unclassified kind does not become a class of its own", () => {
     const v = evaluateSystemCoverage([r("pagerduty"), r("my-custom-sink")], CTX);
     expect(v.unclassifiedKinds).toEqual(["my-custom-sink"]);
+    // `pagerduty` alone is one class, and the custom sink cannot be counted.
     expect(v.satisfied).toBe(false);
+  });
+
+  test("a third-party renderer does NOT block a stack that is already covered", () => {
+    // ADR-0024 D5 exists so out-of-tree renderer bundles can ship. Refusing
+    // every stack that installs one would break that. The unclassified kind is
+    // ignored here because dashboard+pagerduty already satisfy the floor — it
+    // is only ever refused when the decision would otherwise rest on it.
+    const v = evaluateSystemCoverage(
+      [r("dashboard"), r("pagerduty"), r("some-third-party-sink")], CTX,
+    );
+    expect(v.unclassifiedKinds).toEqual(["some-third-party-sink"]);
+    expect(v.satisfied).toBe(true);
   });
 
   test("two unclassified kinds cannot fake diversity", () => {

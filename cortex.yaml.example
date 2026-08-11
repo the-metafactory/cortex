@@ -406,8 +406,11 @@ agents:
 #   paging           pagerduty, opsgenie
 #   local-projection dashboard, cli-tail
 # So `discord` + `slack` is ONE class and is refused — one vendor outage would
-# take out both. Pick your second sink from a different row. A renderer kind
-# cortex cannot classify is refused too, rather than counted as its own class.
+# take out both. Pick your second sink from a row that CANNOT overlap the first:
+# `mattermost` spans two rows, so `mattermost` + `discord` is refused too (that
+# mattermost might be in bot mode). A renderer kind cortex cannot classify is
+# never counted toward diversity; it only blocks boot if your remaining sinks
+# do not already satisfy the floor on their own.
 renderers:
   - kind: dashboard
     port: 8766

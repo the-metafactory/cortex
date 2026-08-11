@@ -122,6 +122,11 @@ export const PLATFORM_CLASS_BY_KIND: Readonly<Record<string, readonly string[]>>
  * `undefined` as *refuse*, not as *allow*.
  */
 export function platformClassesForKind(kind: string): readonly string[] | undefined {
+  // `hasOwnProperty`, not a bare index: `RendererKindSchema` is an open string,
+  // so a kind of `constructor` / `toString` / `__proto__` would otherwise
+  // resolve to an `Object.prototype` member and sail past the unknown-kind
+  // refusal as if it were a classified kind.
+  if (!Object.prototype.hasOwnProperty.call(PLATFORM_CLASS_BY_KIND, kind)) return undefined;
   return PLATFORM_CLASS_BY_KIND[kind];
 }
 
@@ -322,24 +327,35 @@ export function evaluateSystemCoverage(
     ...new Set(coveringKinds.flatMap((k) => platformClassesForKind(k) ?? [])),
   ].sort();
 
-  // Two DISTINCT KINDS must be assignable to two DISTINCT CLASSES. Requiring
-  // distinct kinds is what stops a mode-ambiguous kind (`mattermost`, which
-  // maps to both `chat-gateway` and `webhook-out`) from satisfying a
-  // vendor-diversity rule against itself — two mattermost renderers are one
-  // vendor whatever modes they run in.
-  const hasTwoDistinctClasses = coveringKinds.some((kindA, i) =>
-    coveringKinds.slice(i + 1).some((kindB) => {
+  // A pair proves diversity only when its class sets are DISJOINT — i.e. no
+  // assignment of modes could put both renderers in the same class.
+  //
+  // Disjointness rather than "some distinct assignment exists" because the
+  // guard is fail-CLOSED: `mattermost` may be a `chat-gateway` OR a
+  // `webhook-out` and the config does not say which, so `mattermost` +
+  // `discord` must NOT pass — if that mattermost is running in bot mode both
+  // sinks are chat gateways and one vendor outage takes out both. Ambiguity
+  // resolves against the config, never in its favour.
+  const classifiedKinds = coveringKinds.filter((k) => platformClassesForKind(k) !== undefined);
+  const hasTwoDisjointClasses = classifiedKinds.some((kindA, i) =>
+    classifiedKinds.slice(i + 1).some((kindB) => {
       const a = platformClassesForKind(kindA) ?? [];
       const b = platformClassesForKind(kindB) ?? [];
-      return a.some((ca) => b.some((cb) => ca !== cb));
+      return !a.some((ca) => b.includes(ca));
     }),
   );
 
+  // An unclassified kind only BLOCKS when the classified renderers do not
+  // already satisfy the floor on their own. ADR-0024 D5 exists so third-party
+  // renderer bundles can ship; refusing every stack that installs one would
+  // break that outright. What must never happen is an unclassified kind being
+  // COUNTED toward diversity — so it is ignored when coverage already holds,
+  // and refused when the decision would otherwise rest on it.
+  const blockedByUnclassified = unclassifiedKinds.length > 0 && !hasTwoDisjointClasses;
+
   const satisfied =
     !inScope ||
-    (unclassifiedKinds.length === 0 &&
-      hasTwoDistinctClasses &&
-      effectiveCoveringKinds.length >= 1);
+    (!blockedByUnclassified && hasTwoDisjointClasses && effectiveCoveringKinds.length >= 1);
 
   return {
     coveringKinds,
@@ -405,16 +421,27 @@ export class RendererCoverageConfigError extends Error {
         : "[none]";
     const classes =
       verdict.coveringClasses.length > 0 ? `[${verdict.coveringClasses.join(", ")}]` : "[none]";
+    // A mode-ambiguous kind (`mattermost` → chat-gateway OR webhook-out)
+    // contributes >1 class while still failing, so "fewer than two classes"
+    // would read as a contradiction against the list printed above it. Say
+    // what actually failed: no PAIR with disjoint class sets.
+    const ambiguous = verdict.coveringClasses.length >= 2;
+    const diagnosis = ambiguous
+      ? `No two of those renderers have DISJOINT class sets, so none of them ` +
+        `provably covers a different vendor than the others. A kind that could ` +
+        `belong to more than one class (e.g. \`mattermost\`, chat-gateway in bot ` +
+        `mode and webhook-out in webhook mode) is resolved conservatively — it ` +
+        `cannot be assumed to be in whichever class would make the config pass.`
+      : `Those resolve to a single platform class — fewer than the two required.`;
     super(
       `cortex: renderer coverage check FAILED (config). ${RULE_PREAMBLE}\n` +
         `Configured system-covering kinds: ${found} (effective: ${effective}).\n` +
-        `Those resolve to platform class(es): ${classes} — fewer than the two ` +
-        `distinct classes required.\n` +
-        `Add a system-covering renderer from a DIFFERENT class (e.g. a ` +
-        `\`pagerduty\` renderer — class \`paging\` — subscribed to ` +
+        `Platform class(es) present: ${classes}.\n` +
+        `${diagnosis}\n` +
+        `Add a system-covering renderer whose class CANNOT overlap the ones you ` +
+        `have (e.g. a \`pagerduty\` renderer — class \`paging\` — subscribed to ` +
         `\`local.{principal}.system.>\`) so one vendor outage cannot take out ` +
-        `every sink. Adding another kind from a class you already have does not ` +
-        `satisfy this. Decision: ADR-0024 §OQ9.`,
+        `every sink. Decision: ADR-0024 §OQ9.`,
     );
     this.name = "RendererCoverageConfigError";
     this.verdict = verdict;
