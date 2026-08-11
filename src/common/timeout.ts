@@ -16,16 +16,18 @@
  *   - `.timeoutMs` — the timeout that fired
  *   - `.message` — "${source} aborted after ${ms}ms"
  *
- * The `source` enum is mirrored in the `system.dispatch.aborted` event
- * payload (G-1111 §3.5.4) so log scraping and event emission share a
- * vocabulary.
+ * The `source` enum is mirrored in the `system.inbound.aborted` event payload
+ * (`src/bus/system-events.ts` — renamed from the older
+ * `system.dispatch.aborted`; `dispatch.*` is reserved for the
+ * principal-dispatches-work-to-agents domain) so log scraping and event
+ * emission share a vocabulary.
  */
 
 export type TimeoutSource =
   | "attachment_fetch"
   | "cloud_publisher"
   | "usage_monitor"
-  // Forward-compat for G-1111.G bus wiring; usage_fetcher and cc_session_spawn
+  // Forward-compat for bus wiring; usage_fetcher and cc_session_spawn
   // have no in-tree caller yet but the event-payload schema already references
   // these names.
   | "usage_fetcher"

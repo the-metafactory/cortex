@@ -65,6 +65,7 @@ import {
 import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
 import { verifySignedByChain } from "../bus/verify-signed-by-chain";
 import type { SystemEventSource } from "../bus/system-events";
+import { DORMANT_RUNTIME_DIAGNOSIS } from "../bus/myelin/runtime";
 import type { BusEnvelopeSigner, MyelinRuntime } from "../bus/myelin/runtime";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { GateFloorDecision } from "../bus/gate-floor";
@@ -473,16 +474,21 @@ export function wireReviewConsumers(
       // to `claude-code` in the log (matches the runtime fallthrough).
       //
       // cortex#334 — distinguish "ready" (subscription open) from
-      // "DORMANT" (subscribePull returned null; G-1111 pending or
-      // nats.subjects empty). The previous unconditional "ready" line
-      // misled principals into chasing phantom misconfigs.
+      // "DORMANT" (`subscribePull` returned null). The previous
+      // unconditional "ready" line misled principals into chasing phantom
+      // misconfigs. DORMANT means the MyelinRuntime came up disabled — see
+      // the three disabled-runtime returns in `src/bus/myelin/runtime.ts`
+      // (no `nats.url`, primary connect failed, or every configured push
+      // subscriber failed to bind). The log line names all three: the third
+      // has a healthy broker and a correct `nats.url`, so a hint that blamed
+      // only the connection would misdirect exactly as "G-1111 pending" did.
       if (started.subscribed) {
         console.log(
           `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"}`,
         );
       } else {
         console.log(
-          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.code-review.* envelopes will not be claimed by this consumer)`,
+          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.code-review.* envelopes will not be claimed by this consumer). ${DORMANT_RUNTIME_DIAGNOSIS}`,
         );
       }
 

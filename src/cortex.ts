@@ -68,6 +68,7 @@ import { DispatchHandler } from "./bus/dispatch-handler";
 import {
   makeSubjectPlaceholderSubstituter,
   startMyelinRuntime,
+  DORMANT_RUNTIME_DIAGNOSIS,
   type BusEnvelopeSigner,
   type MyelinRuntime,
 } from "./bus/myelin/runtime";
@@ -2950,8 +2951,9 @@ export async function startCortex(
       } else {
         console.log(
           `cortex: dev.implement consumer${scopeTag} DORMANT for agent=${consumer.agent.id} — ` +
-            `cortex MyelinRuntime subscriptions disabled (G-1111 pending; ${pattern} ` +
-            `envelopes will not be claimed by this consumer)`,
+            `cortex MyelinRuntime came up disabled — no subscriptions are open ` +
+            `(${pattern} envelopes will not be claimed by this consumer). ` +
+            DORMANT_RUNTIME_DIAGNOSIS,
         );
       }
     } catch (err) {
@@ -3546,7 +3548,7 @@ export async function startCortex(
   // MIG-7.2d: non-agent-bound renderers (dashboard, pagerduty, …).
   // Per architecture §9.2 these are activity-centric sinks that subscribe
   // to a slice of the bus and project envelopes into a UI / pager / log
-  // stream. The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform
+  // stream. The ADR-0024 §OQ9 fail-safe rule requires ≥2 distinct platform
   // classes covering `local.{principal}.system.>` so an operational alert
   // reliably reaches the principal even if one sink is the thing that
   // broke. Renderers never publish on the bus (architecture §9.3).
@@ -3635,7 +3637,7 @@ export async function startCortex(
       console.log(`cortex: ${kindForLog} renderer started (id: ${renderer.id})`);
     } catch (err) {
       // Parse failure (structural or registry pass), construction failure,
-      // or `start()` failure. Per the G-1111 fail-safe rule, ONE broken
+      // or `start()` failure. Per the ADR-0024 §OQ9 fail-safe rule, ONE broken
       // renderer must not prevent the others from coming up — log + skip.
       console.error(
         `cortex: ${kindForLog} renderer failed to start:`,
@@ -3658,7 +3660,7 @@ export async function startCortex(
   }
 
   // cortex#1893 (S12b-pre, ADR-0024 §OQ9) — the INSTALL-STATE half of the
-  // G-1111 §4.6 renderer-coverage HARD-FAIL guard. This is the post-S6 seam:
+  // ADR-0024 §OQ9 renderer-coverage HARD-FAIL guard. This is the post-S6 seam:
   // `loadExternalPlugins` (S6, above) has already imported+registered any
   // arc-installed renderer bundles, and the renderer boot loop just above has
   // STARTED every renderer whose kind resolved — populating `renderers[]`

@@ -35,7 +35,7 @@ features:
     status: planned
     description: >
       Lift the G-1100 ladder out of grove-v2's src/bot/lib/ into cortex/src/bus/.
-      Includes new code for the surface-router (G-1111.A target).
+      Includes new code for the surface-router.
     parent: C-100
     issue: 3
     depends_on: [C-101]

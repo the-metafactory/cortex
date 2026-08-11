@@ -19,7 +19,7 @@ cortex consumes contracts from M2–M6, owns no part of M1–M6 itself, and shar
 Internal componentisation (per `docs/architecture.md` §8):
 
 - `src/cortex.ts` — Top-level entrypoint (MIG-7.1). Wires bus + adapters + runner + taps + renderers.
-- `src/bus/` — M2–M6 client code: NATS connection, envelope validator, surface-router, dispatch-handler, system-events. The G-1100 ladder lifted from grove-v2 plus the surface-router (G-1111.A).
+- `src/bus/` — M2–M6 client code: NATS connection, envelope validator, surface-router, dispatch-handler, system-events. The G-1100 ladder lifted from grove-v2 plus the surface-router (cortex#25 + #27).
 - `src/bus/myelin/` — Vendored myelin schema + envelope + subscription primitives.
 - `src/bus/nats/` — NATS client wrapping.
 - `src/surface/mc/` — Mission Control v3 (149 files lifted from grove-v2 `src/mission-control/`). API, state, DB, dashboard-v2 React tree, worker (CF Worker REST API + WebSocket), notifications.

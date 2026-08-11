@@ -334,7 +334,13 @@ describe("startCortex — release-consumer boot wiring (cortex#835 F-4.1)", () =
     );
     expect(dormantLines.length).toBe(1);
     expect(dormantLines[0]!).toContain("agent=forge");
-    expect(dormantLines[0]!).toContain("G-1111 pending");
+    // Real causes + real next step, not the retired "G-1111 pending" pointer.
+    // All three disabled-runtime causes must be named, not just the first.
+    expect(dormantLines[0]!).toContain("came up disabled");
+    expect(dormantLines[0]!).toContain("nats.url is unset");
+    expect(dormantLines[0]!).toContain("failed to bind");
+    expect(dormantLines[0]!).toContain("silent — no log line");
+    expect(dormantLines[0]!).not.toContain("G-1111");
 
     const readyLines = logs.filter((l) =>
       l.includes("cortex: release consumer ready"),

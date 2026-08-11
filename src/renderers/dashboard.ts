@@ -19,7 +19,7 @@
  *     `RendererSchema` discriminated union; removing it is a config-breaking
  *     change (a principal carrying `kind: dashboard` would fail to boot), wider
  *     blast radius than the faithful demotion this slice owns; and
- *   - it still satisfies the G-1111 §4.6 fail-safe-pairing rule alongside
+ *   - it still satisfies the ADR-0024 §OQ9 fail-safe-pairing rule alongside
  *     `PagerDutyRenderer` (two operationally-distinct sinks on
  *     `local.{principal}.system.>` so a degraded subscription for one doesn't
  *     blind the principal on the other) — retiring it would also need that rule
@@ -143,7 +143,7 @@ export class DashboardRenderer implements Renderer {
  * cortex#1788 (S3, ADR-0024 D2/OQ8) — `dashboard`'s `RendererPlugin`.
  * `dashboard` is a permanent in-tree contract anchor (never extracts — D2,
  * design-pluggable-adapters.md §7.1): removing `kind: dashboard` from the
- * registered set is config-breaking, and it is one half of the G-1111 §4.6
+ * registered set is config-breaking, and it is one half of the ADR-0024 §OQ9
  * fail-safe pair. It registers through the SAME registry a bundle would
  * (dogfooding, ADR-0024 §3.3) even though it never ships as one.
  */

@@ -1,7 +1,7 @@
 /**
  * MIG-4.6 — `dispatch.task.*` envelope constructors.
  *
- * Per G-1111 §3.4 the `dispatch.task` domain captures the lifecycle of a
+ * The `dispatch.task` domain captures the lifecycle of a
  * task that a principal (or a sibling agent) dispatched to a runner-style
  * agent: `dispatched`, `accepted`, `rejected`, `started`, `completed`,
  * `failed`. This file ships the lifecycle helpers cortex's runner needs
@@ -307,7 +307,7 @@ export interface DispatchTaskStartedOpts extends DispatchTaskCommonOpts {
 }
 
 /**
- * Construct a `dispatch.task.started` envelope per G-1111 §3.4.
+ * Construct a `dispatch.task.started` envelope (lifecycle contract: `docs/architecture.md` §7.3).
  *
  * Emitted once when the runner begins executing a task — typically right
  * after spawning the CC session. Pairs with one of `completed`, `failed`,
@@ -358,7 +358,7 @@ export interface DispatchTaskCompletedOpts extends DispatchTaskCommonOpts {
 }
 
 /**
- * Construct a `dispatch.task.completed` envelope per G-1111 §3.4.
+ * Construct a `dispatch.task.completed` envelope (lifecycle contract: `docs/architecture.md` §7.3).
  *
  * Terminal success event. Carries both `started_at` and `completed_at`
  * so surfaces can render duration without joining to the `started` event;
@@ -413,7 +413,7 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
    *   - `substrate_unavailable` — runner couldn't construct a harness.
    *   - `validator_rejected`    — envelope validator failed late.
    *
-   * Append-only per G-1111 §3.1.
+   * Append-only — new kinds are additive siblings, never re-typed.
    */
   reason?: DispatchTaskFailedReason;
 }
@@ -425,7 +425,7 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
  * extends the union with the four-way nak taxonomy named in
  * `docs/architecture.md` §7.3 and surfaced to pilot per
  * `docs/design-pilot-restructure.md` §4.4. New kinds are append-only
- * siblings per G-1111 §3.1.
+ * siblings — the union is append-only, never re-typed.
  *
  * The discriminator `kind` enumerates five values today:
  *
@@ -502,7 +502,7 @@ export type DispatchTaskFailedReason =
     };
 
 /**
- * Construct a `dispatch.task.failed` envelope per G-1111 §3.4.
+ * Construct a `dispatch.task.failed` envelope (lifecycle contract: `docs/architecture.md` §7.3).
  *
  * Terminal failure event for tasks that ran to completion under their own
  * power but produced an error (CC exited non-zero, parsing failed, etc.).

@@ -1,8 +1,8 @@
 /**
- * G-1111.A — Payload filter (subset of EventBridge content-filter grammar).
+ * Payload filter (subset of EventBridge content-filter grammar).
  *
- * Per `/tmp/g-1111-spec.md` §4.3 — surfaces declare client-side payload
- * filters that run AFTER NATS broker-side subject matching. v1 supports a
+ * Surfaces declare client-side payload filters that run AFTER NATS
+ * broker-side subject matching. v1 supports a
  * deliberately small operator set; the rest of EventBridge's grammar
  * (numeric, cidr, wildcard, $or) is added only when a real adapter needs it.
  *

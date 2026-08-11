@@ -1,8 +1,8 @@
 /**
- * G-1111b — idempotent JetStream provisioning for cortex's ReviewConsumer
+ * cortex#338 — idempotent JetStream provisioning for cortex's ReviewConsumer
  * pull subscriptions (cortex#338).
  *
- * After cortex#337 (G-1111a) the MyelinRuntime opens a NATS link even
+ * After cortex#337 the MyelinRuntime opens a NATS link even
  * when `nats.subjects: []`, so `subscribePull` returns a real subscriber.
  * That subscriber binds to a JetStream pull consumer via
  * `js.consumers.get(stream, durable)` — which throws if the stream OR
@@ -105,7 +105,7 @@ export interface ProvisionStreamOpts {
    * resources", silently disabling the `dev.implement` consumer. 64 MiB
    * still absorbs ~100k typical envelopes yet fits ~16 streams per GB.
    * Principals can override via `cortex.yaml` `bus.review.maxBytes` once
-   * that surface lands (G-1111e / #341).
+   * that surface lands (cortex#341).
    */
   maxBytes?: number;
   /**

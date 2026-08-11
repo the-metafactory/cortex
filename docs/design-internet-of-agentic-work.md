@@ -98,7 +98,7 @@ Cortex consumption today:
 
 myelin's L6 is composition patterns — spec-pending (`myelin/docs/architecture.md:166-174`). Cortex implements its own M6 surface in the meantime:
 
-- **Surface-router** (`src/bus/surface-router.ts`) — G-1111.A. In-process fan-out point. Adapters declare interest via NATS-style subject patterns plus an optional payload filter; the router applies subject matching first, then payload filtering, then invokes `adapter.render(envelope)` with timeout + isolation (`surface-router.ts:259-270`, `surface-router.ts:291-319`).
+- **Surface-router** (`src/bus/surface-router.ts`) — in-process fan-out point. Adapters declare interest via NATS-style subject patterns plus an optional payload filter; the router applies subject matching first, then payload filtering, then invokes `adapter.render(envelope)` with timeout + isolation (`surface-router.ts:259-270`, `surface-router.ts:291-319`).
 - **Dispatch-handler** (`src/bus/dispatch-handler.ts`) — orchestrates one inbound surface event through to one runner session. The natural integration point for cortex#107's PolicyEngine.
 - **Trust resolver** (`src/common/agents/trust-resolver.ts`) — cortex#76 + cortex#105. Process-wide bidirectional `(platform, platformUserId) ↔ agentId` map, plus NSC operator-account-signing-key signature verification (the operator-account NKey is the NSC trust root, not the human principal).
 - **PolicyEngine** (cortex#107) — does not yet exist. The design issue specifies a `src/common/policy/` module with `PolicyEngine.check(principal, intent) → { allow, capabilities } | { allow: false, reason }`.

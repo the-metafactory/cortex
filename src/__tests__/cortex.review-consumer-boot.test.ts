@@ -600,7 +600,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // Test stands up a runtime whose `subscribePull` returns null
     // synchronously — same shape as the production disabled path —
     // and asserts the boot log carries DORMANT plus the actionable
-    // G-1111 hint, NOT the ready line.
+    // no-NATS-link hint, NOT the ready line.
     const onEnvelopeHandlers = new Set<EnvelopeHandler>();
     const published: Envelope[] = [];
     const subscribePullCalls: MyelinSubscribePullOpts[] = [];
@@ -655,7 +655,21 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     expect(dormantLines.length).toBe(1);
     expect(dormantLines[0]!).toContain("agent=sage");
     expect(dormantLines[0]!).toContain("flavors=[typescript]");
-    expect(dormantLines[0]!).toContain("G-1111 pending");
+    // The hint must name a REAL cause and a REAL next step. It used to say
+    // "G-1111 pending", a ticket that closed 2026-05-19 (cortex#335) — which
+    // sent principals chasing a phantom for two months (cortex#1875).
+    // It must name ALL THREE disabled-runtime causes, not just the first —
+    // "every configured subscriber failed to bind" is a case where nats.url is
+    // correct and no connect error was ever logged.
+    expect(dormantLines[0]!).toContain("came up disabled");
+    expect(dormantLines[0]!).toContain("nats.url is unset");
+    expect(dormantLines[0]!).toContain("the broker connect failed");
+    expect(dormantLines[0]!).toContain("failed to bind");
+    // The unset-`nats.url` return logs NOTHING, so the hint must not send the
+    // principal to a grep that comes back empty for that cause.
+    expect(dormantLines[0]!).toContain("silent — no log line");
+    expect(dormantLines[0]!).toContain('"myelin-runtime:" prefix');
+    expect(dormantLines[0]!).not.toContain("G-1111");
     expect(dormantLines[0]!).toContain(
       "tasks.code-review.* envelopes will not be claimed by this consumer",
     );

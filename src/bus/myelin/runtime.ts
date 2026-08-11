@@ -53,7 +53,7 @@ import {
  * Per-envelope handler. Receives validated envelopes from any active
  * subscription, with the actual NATS subject (so wildcard-pattern
  * subscribers can route on the concrete subject — see
- * `src/bus/surface-router.ts`, G-1111.A).
+ * `src/bus/surface-router.ts`).
  *
  * IAW Phase F-3d (cortex#666) — `sourceLink` ADDITIVELY tags WHICH pool
  * link (and therefore which federation network) delivered an inbound
@@ -88,6 +88,27 @@ export type EnvelopeHandler = (
   sourceLink?: string,
 ) => void;
 
+/**
+ * The DORMANT diagnosis every consumer lane prints when `subscribePull`
+ * returns null. Lives HERE, next to the three `enabled: false` returns it
+ * describes, so the explanation cannot drift away from the code that causes
+ * it — four lanes (review, release, brain, dev) previously carried
+ * hand-copied variants and only two were pinned by tests.
+ *
+ * It must stay accurate for ALL THREE disabled paths below:
+ *   1. `!config.nats?.url`                      — returns SILENTLY, logs nothing
+ *   2. primary connect threw                    — logs `myelin-runtime: failed to connect`
+ *   3. push subscribers configured, none bound  — logs `myelin-runtime: failed to subscribe`
+ *
+ * Cause 1 is the common one and emits no log at all, so a hint that sends the
+ * principal to a grep would come back empty exactly when they need it most.
+ * That is why the config check is named separately from the grep.
+ */
+export const DORMANT_RUNTIME_DIAGNOSIS =
+  "Either nats.url is unset in cortex.yaml (silent — no log line), or the " +
+  "broker connect failed / every configured subscriber failed to bind " +
+  '(both logged above with the "myelin-runtime:" prefix)';
+
 /** Lifecycle handle so cortex can clean up on shutdown. */
 export interface MyelinRuntime {
   readonly enabled: boolean;
@@ -104,7 +125,7 @@ export interface MyelinRuntime {
    * Publish an envelope to NATS.
    *
    * Subject is derived from `envelope.sovereignty.classification` +
-   * `envelope.type` per G-1111 §3.1 and the myelin grammar:
+   * `envelope.type` per the myelin subject grammar:
    *
    *   - `classification === "local"`     → `local.{principal}.{type}`
    *   - `classification === "federated"` → `federated.{principal}.{type}`

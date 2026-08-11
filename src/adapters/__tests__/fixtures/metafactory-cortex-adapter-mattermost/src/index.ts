@@ -490,7 +490,7 @@ export class MattermostAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * MIG-3b — Surface-adapter face for the surface-router (G-1111.A).
+   * MIG-3b — Surface-adapter face for the surface-router.
    *
    * Mirror of `DiscordAdapter.surfaceConfig` — see that doc for the shape +
    * wiring pattern. Mattermost-specific note: the adapter has no equivalent

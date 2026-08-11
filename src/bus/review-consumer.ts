@@ -404,9 +404,12 @@ export interface ReviewConsumerStartOpts {
  * `subscribed` distinguishes the two structurally-valid `start()` outcomes
  * (cortex#334): `true` when the pull subscription actually opened on the
  * NATS broker; `false` when `MyelinRuntime.subscribePull` returned null
- * (disabled runtime / empty `nats.subjects` / G-1111 pending). The boot
- * path uses this to log "ready" vs "DORMANT" honestly instead of always
- * claiming readiness while the consumer is silently dormant.
+ * (a disabled runtime — no `nats.url`, a failed primary connect, or every
+ * configured push subscriber failing to bind; see the three disabled returns
+ * in `src/bus/myelin/runtime.ts`). The boot path uses this to log "ready" vs
+ * "DORMANT" honestly instead of always claiming readiness while the consumer
+ * is silently dormant. NOTE: an empty `nats.subjects` no longer disables the
+ * runtime — cortex#337 made that the pull-only path.
  */
 export interface ReviewConsumerStartedInfo {
   agentId: string;

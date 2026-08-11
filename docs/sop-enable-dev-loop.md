@@ -145,7 +145,7 @@ cortex: dev.implement consumer ready for agent=<id> pattern=local.<principal>.<s
 cortex: release consumer ready for agent=<id> capability=release.cut … PRINCIPAL-GATED, ALWAYS-HUMAN
 ```
 
-(The exact readiness depends on the G-1111 runtime-subscription gate; a stack with
+(The exact readiness depends on whether the MyelinRuntime opened a NATS link; a stack with
 runtime subscriptions still disabled logs `DORMANT` — that is a runtime-enablement
 concern, not an offering one.)
 

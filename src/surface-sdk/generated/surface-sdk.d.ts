@@ -738,7 +738,7 @@ interface SurfaceAdapter {
 	 */
 	render(envelope: Envelope, signal?: AbortSignal, subject?: string): Promise<void>;
 	/** Optional liveness probe. Currently unused by the router; reserved
-	 *  for the dashboard's adapter-health panel (G-1111.E follow-on). */
+	 *  for the dashboard's adapter-health panel. */
 	health?(): Promise<{
 		ok: boolean;
 		lag?: number;

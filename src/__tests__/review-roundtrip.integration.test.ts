@@ -1,5 +1,5 @@
 /**
- * cortex#339 / G-1111c — live JetStream smoke.
+ * cortex#339 — live JetStream smoke.
  *
  * Starts an isolated `nats-server -js`, provisions the CODE_REVIEW stream and
  * durable, binds a real MyelinRuntime pull subscriber, publishes one
@@ -65,7 +65,7 @@ const VALID_PAYLOAD: ReviewRequestPayload = {
   repo: "the-metafactory/cortex",
   pr: 339,
   reviewer: "echo",
-  feature: "G-1111c",
+  feature: "review-roundtrip",
   title: "test: review roundtrip integration",
   cycle: 1,
 };

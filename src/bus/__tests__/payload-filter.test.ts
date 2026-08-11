@@ -1,5 +1,5 @@
 /**
- * Tests for `src/bus/payload-filter.ts` — G-1111.A v1 operator subset.
+ * Tests for `src/bus/payload-filter.ts` — v1 operator subset.
  */
 
 import { describe, expect, test } from "bun:test";

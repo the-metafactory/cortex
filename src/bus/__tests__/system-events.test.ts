@@ -2,7 +2,7 @@
  * MIG-3b-ii: tests for `system.*` envelope constructors.
  *
  * Two coverage axes:
- *   1. Shape — fields match G-1111 §3.5.4 verbatim, payload-only fields land
+ *   1. Shape — fields match the documented envelope contract verbatim, payload-only fields land
  *      in payload (not envelope top-level), optional fields are omitted (not
  *      `undefined`-valued) when callers don't pass them.
  *   2. Validation — every constructed envelope passes the vendored myelin
@@ -35,7 +35,7 @@ import { createAgentOnlineEvent } from "../agent-network/builders";
 import type { MyelinRuntime } from "../myelin/runtime";
 
 describe("adapterCorrelationKey", () => {
-  test("formats `adapter:{id}:{iso}` per G-1111 §3.5.6", () => {
+  test("formats `adapter:{id}:{iso}` per the correlation-id convention", () => {
     const key = adapterCorrelationKey(
       "discord-luna",
       new Date("2026-05-09T12:34:56.789Z"),

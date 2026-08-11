@@ -55,7 +55,7 @@ export const RendererVisibilitySchema = z.object({
 export type RendererVisibility = z.infer<typeof RendererVisibilitySchema>;
 
 /**
- * PagerDuty renderer config — operational events out per G-1111 §4.6.
+ * PagerDuty renderer config — operational events out per ADR-0024 §OQ9.
  * Subscribes to `system.adapter.degraded`, `system.process.crashed`, etc., and
  * routes them to PagerDuty via the events-v2 API.
  *

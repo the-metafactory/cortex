@@ -390,14 +390,21 @@ agents:
 # -----------------------------------------------------------------------------
 # renderers — non-agent-bound surfaces (dashboards, pagerduty, etc.)
 # -----------------------------------------------------------------------------
-# G-1111 §4.6 / ADR-0024 §OQ9 — a stack that configures a renderer covering
+# ADR-0024 §OQ9 — a stack that configures a renderer covering
 # `local.{principal}.system.>` MUST provide at least TWO distinct platform
-# classes there, with at least one EFFECTIVE (delivering) sink. The `dashboard`
+# classes there, with at least one EFFECTIVE (delivering) sink.
+# The `dashboard`
 # renderer is INERT (ADR-0005 §4 — it buffers but delivers nothing), so it
 # cannot be that effective sink: `dashboard` ALONE fails the boot coverage guard
 # (cortex#1893). Pair it with an effective system sink (e.g. `pagerduty`) so an
 # operational alert reliably reaches the principal even if one sink is the thing
 # that broke.
+#
+# ⚠ The boot guard currently counts distinct `kind` STRINGS, not platform
+# classes (cortex#2503) — so `discord` + `slack` passes the check while both
+# are the same class (`chat-gateway`) and a single vendor outage blinds you.
+# Until that lands, choose your second class yourself; the guard will not
+# catch it for you.
 renderers:
   - kind: dashboard
     port: 8766

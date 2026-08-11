@@ -1,5 +1,5 @@
 /**
- * cortex#338 (G-1111b) — provisioning helpers tests.
+ * cortex#338 — provisioning helpers tests.
  *
  * The provisioning helpers wrap a narrow `ProvisionJsm` surface — tests
  * pass a recording stub so the idempotency, drift-detection, and

@@ -235,7 +235,7 @@ export class WorklogManager {
   // ---------------------------------------------------------------------------
   // MIG-4.7: Bus-driven sibling-consumer entry point.
   //
-  // Per G-1111 §3.4, the worklog-manager can ALSO subscribe to
+  // Per `docs/architecture.md` §7.3, the worklog-manager can ALSO subscribe to
   // `dispatch.task.*` envelopes via the surface-router — alongside its
   // existing direct-call API. Adding this is purely additive: the existing
   // `handleEvent(PublishedEvent)` path stays intact for backwards

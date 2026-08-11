@@ -2,7 +2,7 @@
  * MIG-4.6: tests for `dispatch.task.*` envelope constructors.
  *
  * Mirrors the coverage axes of `system-events.test.ts`:
- *   1. Shape — fields match G-1111 §3.4 verbatim, lifecycle moments land
+ *   1. Shape — fields match the documented envelope contract verbatim, lifecycle moments land
  *      in payload (not envelope top-level), optional fields are omitted
  *      (not `undefined`-valued) when callers don't pass them.
  *   2. Validation — every constructed envelope passes the vendored myelin

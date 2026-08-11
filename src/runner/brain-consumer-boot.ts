@@ -86,6 +86,7 @@ import {
 } from "./brain-compose";
 import type { CCSessionFactory } from "../substrates/claude-code/harness";
 import type { SystemEventSource } from "../bus/system-events";
+import { DORMANT_RUNTIME_DIAGNOSIS } from "../bus/myelin/runtime";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { AgentPresenceProducer } from "./agent-presence-producer";
 import type { SurfacePrincipalGate } from "../bus/surface-principal-gate";
@@ -687,8 +688,9 @@ export function wireBrainConsumers(
           `cortex: brain consumer DORMANT for agent=${agent.id} kind=exec ` +
             `capabilities=[${capSummary}] ` +
             `gate=${opts.surfacePrincipalGate !== undefined ? "surface" : "deny-all"} ` +
-            `— cortex MyelinRuntime subscriptions disabled ` +
-            `(G-1111 pending; tasks.{capability} envelopes will not be claimed by this brain)`,
+            `— cortex MyelinRuntime came up disabled — no subscriptions are open ` +
+            `(tasks.{capability} envelopes will not be claimed by this brain). ` +
+            DORMANT_RUNTIME_DIAGNOSIS,
         );
       }
     } catch (err) {

@@ -2,7 +2,7 @@
  * MIG-4.5/4.6 — tests for the runner dispatch listener.
  *
  * Coverage axes:
- *   1. Registration shape — surfaceConfig matches G-1111 §4 SurfaceAdapter
+ *   1. Registration shape — surfaceConfig matches the `src/bus/surface-router.ts` SurfaceAdapter
  *      contract; default subjects derive from source.principal.
  *   2. Lifecycle — on success: started → completed; on non-zero exit:
  *      started → failed; on factory throw: started → failed; on exit 143:
