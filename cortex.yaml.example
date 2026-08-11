@@ -400,13 +400,16 @@ agents:
 # operational alert reliably reaches the principal even if one sink is the thing
 # that broke.
 #
-# Platform classes (cortex#2503) — the guard counts CLASSES, not kind names.
-# ✓ = usable today; the rest are classified so they count once their bundle
-# lands, but configuring one now fails with UnimplementedRendererKindError.
+# Platform classes (cortex#2503) — the guard counts CLASSES, not kind names:
 #   chat-gateway     discord, slack, mattermost
 #   webhook-out      webhook-out, webhook-generic, mattermost (webhook mode)
-#   paging         ✓ pagerduty (bundle), opsgenie
-#   local-projection ✓ dashboard, cli-tail
+#   paging           pagerduty, opsgenie
+#   local-projection dashboard, cli-tail
+# `renderers[].kind` is an open string (ADR-0024 D5), so any of these can be
+# configured once a bundle registers it — a kind with no registered renderer
+# fails boot with UnimplementedRendererKindError. Registered in-tree today:
+# `dashboard`; `pagerduty` ships as a bundle. The rest are classified ahead of
+# time so they count correctly the moment they land.
 # So `discord` + `slack` is ONE class and is refused — one vendor outage would
 # take out both. Pick your second sink from a row that CANNOT overlap the first:
 # `mattermost` spans two rows, so `mattermost` + `discord` is refused too (that
