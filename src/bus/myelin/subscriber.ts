@@ -136,11 +136,13 @@ export interface MyelinPullOptions {
    * message fully handled before the next is pulled). Values > 1 let the
    * iterator keep pulling while earlier handlers are still running.
    *
-   * Setting this ALSO pins `consume()`'s prefetch to the same ceiling
-   * (unless `maxMessages` is set explicitly). Both halves are needed:
-   * capping handler concurrency alone would leave the prefetch buffer
-   * pulling messages that then sit delivered-but-unhandled, burning their
-   * `ack_wait` while queued for a slot.
+   * Setting this ALSO pins `consume()`'s prefetch (`max_messages`) to the
+   * same ceiling, unless `maxMessages` is set explicitly. Both halves are
+   * intended to be needed: capping handler concurrency alone would leave the
+   * prefetch buffer pulling messages that then sit delivered-but-unhandled,
+   * burning their `ack_wait` while queued for a slot. The prefetch half is
+   * asserted only as far as "the option is passed" — see the note in
+   * `init()` for what this repo's tests do and do not establish.
    *
    * This matters for handlers that are slow by nature: the review
    * consumer awaits a spawned `sage review` subprocess, so at the default
@@ -448,9 +450,15 @@ class PullBackend implements SubscriberBackend {
       // backpressure: `consume()`'s own prefetch (nats.js default buffer)
       // keeps pulling regardless, so messages past the ceiling would sit
       // delivered-but-unhandled, burning their `ack_wait` while they wait
-      // for a slot and redelivering under a long enough backlog. Pinning
-      // the prefetch to the same ceiling is what actually stops the server
-      // handing us more than we can run.
+      // for a slot and redelivering under a long enough backlog.
+      //
+      // `max_messages` is nats.js's documented knob for how many messages a
+      // consume request keeps outstanding, so pinning it to the ceiling is
+      // the mechanism intended to stop the server handing us more than we
+      // can run. NOT verified here: our tests assert only that the option is
+      // passed (the fake harness pushes straight into the iterator and has
+      // no broker), so the delivered-but-unhandled / `ack_wait` / redelivery
+      // behaviour under a real JetStream server is unproven by this repo.
       //
       // Only applied when the caller opted into `maxConcurrent` AND left
       // `maxMessages` unset — an explicit `maxMessages` still wins, and

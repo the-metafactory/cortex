@@ -115,12 +115,22 @@ const DEFAULT_REVIEW_LOOP_CONCURRENCY = 3;
  * Resolve how many reviews one consumer may run at once.
  *
  * `runtime.maxConcurrent` is the operator's knob; absent it we use
- * {@link DEFAULT_REVIEW_LOOP_CONCURRENCY}. Note this is the SAME config field
- * `ReviewConsumerAgent.maxConcurrent` feeds, so the loop ceiling and the
- * consumer's own `not_now` gate agree by construction: the loop stops pulling
- * at the limit rather than admitting an envelope only to nak it, which would
- * churn redeliveries against the stream for no benefit. The gate remains as
- * defense-in-depth for the direct `processEnvelope` path used by tests.
+ * {@link DEFAULT_REVIEW_LOOP_CONCURRENCY}.
+ *
+ * The loop ceiling is the OPERATIVE limit: it stops pulling at the cap rather
+ * than admitting an envelope only to nak it, which would churn redeliveries
+ * against the stream for no benefit. `ReviewConsumer`'s own `not_now` gate
+ * reads this same config field but stays inert (the loop never admits more
+ * than the cap, so `inFlight` never reaches it); it remains as defense-in-depth
+ * for the direct `processEnvelope` path used by tests.
+ *
+ * The two values are derived by DIFFERENT paths and are not normalised
+ * together: this returns the field verbatim, while `PullBackend` floors
+ * fractions and clamps anything below 1 up to 1. They coincide only because
+ * `AgentRuntimeSchema` constrains the field to a positive integer
+ * (`common/types/cortex-config.ts` — `.int().positive()`), so a fractional
+ * value never survives config load. A caller that builds a `ReviewBootAgent`
+ * by hand, bypassing that schema, can still make them diverge.
  */
 function reviewLoopConcurrency(agent: ReviewBootAgent): number {
   return agent.runtime?.maxConcurrent ?? DEFAULT_REVIEW_LOOP_CONCURRENCY;
