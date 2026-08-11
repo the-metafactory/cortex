@@ -111,7 +111,7 @@ export interface AdapterPayloadFilter {
  * and a dedicated `kind: discord-channel` renderer lifts them out at
  * MIG-7.2d. Until then, `DiscordAdapter` reads them via `this.infra.*`.
  *
- * Anti-pattern note (ADR-0024 §OQ9): a degraded adapter publishing its OWN
+ * Anti-pattern note (self-emission, `src/bus/system-events.ts`): a degraded adapter publishing its OWN
  * `degraded` event is the wrong long-term home — that belongs to a sibling
  * `connection-watcher` component. MIG-3b-ii intentionally took the shorter
  * path so the wiring exists end-to-end; the watcher refactor is tracked as

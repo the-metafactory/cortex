@@ -52,6 +52,7 @@ import {
 } from "./release-consumer";
 import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
 import type { SystemEventSource } from "../bus/system-events";
+import { DORMANT_RUNTIME_DIAGNOSIS } from "../bus/myelin/runtime";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { GateFloorDecision } from "../bus/gate-floor";
@@ -186,7 +187,7 @@ export function wireReleaseConsumers(
         );
       } else {
         console.log(
-          `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.release.cut envelopes will not be claimed by this consumer). Either nats.url is unset in cortex.yaml (silent — no log line), or the broker connect failed / every configured subscriber failed to bind (both logged above with the "myelin-runtime:" prefix)`,
+          `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.release.cut envelopes will not be claimed by this consumer). ${DORMANT_RUNTIME_DIAGNOSIS}`,
         );
       }
       // CO-2 — extra offering scopes (federated/public) beyond the primary

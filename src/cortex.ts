@@ -68,6 +68,7 @@ import { DispatchHandler } from "./bus/dispatch-handler";
 import {
   makeSubjectPlaceholderSubstituter,
   startMyelinRuntime,
+  DORMANT_RUNTIME_DIAGNOSIS,
   type BusEnvelopeSigner,
   type MyelinRuntime,
 } from "./bus/myelin/runtime";
@@ -2951,10 +2952,8 @@ export async function startCortex(
         console.log(
           `cortex: dev.implement consumer${scopeTag} DORMANT for agent=${consumer.agent.id} — ` +
             `cortex MyelinRuntime came up disabled — no subscriptions are open ` +
-            `(${pattern} envelopes will not be claimed by this consumer). Either ` +
-            `nats.url is unset in cortex.yaml (silent — no log line), or the broker ` +
-            `connect failed / every configured subscriber failed to bind (both logged ` +
-            `above with the "myelin-runtime:" prefix)`,
+            `(${pattern} envelopes will not be claimed by this consumer). ` +
+            DORMANT_RUNTIME_DIAGNOSIS,
         );
       }
     } catch (err) {

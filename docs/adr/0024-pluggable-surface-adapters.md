@@ -6,9 +6,18 @@
 >
 > G-1111 is therefore retired as an identifier across cortex. The parts of §4.6 that are still binding are **carried over into §OQ9 below** (see *"Platform classes"* and *"Re-enforcement on reload"*) so that deleting the pointer does not delete the rule.
 >
-> ⚠️ **Ratification status — read this before treating the carried-over text as ratified.** No decision, rationale, or consequence that the principal ratified on 2026-07-11 has been altered or removed. But the two carried-over subsections are **NOT covered by that ratification** — they were ratified in the grove-era G-1111 draft, not here:
-> - *Platform classes* **clarifies** a term §OQ9 already used ("two distinct platform classes") without defining. Low risk; it makes the existing decision legible rather than changing it.
-> - *Re-enforcement on reload* introduces a **normative MUST that §OQ9 did not contain**. It is recorded here because it is the correct home for it and because losing it with G-1111 would erase a real invariant — but it is **pending principal ratification** and is tracked as cortex#2504. Do not cite it as a 2026-07-11 decision.
+> **What was carried over, and where — the full list, so completeness is checkable rather than asserted:**
+>
+> | Retired G-1111 rule | New home | Status |
+> |---|---|---|
+> | §4.6.1 platform-class table | **§OQ9 → *Platform classes*, below** | Definitional — pins a term §OQ9 already used without defining. Does not change the ratified decision. |
+> | §4.6.1 reload re-enforcement | **cortex#2504** (issue body carries the requirement verbatim) | A normative MUST §OQ9 never contained. **Deliberately NOT written into this ADR** — see below. |
+> | §4.6.2 self-emission anti-pattern | `src/bus/system-events.ts` module doc | Descriptive of behaviour cortex already implements. |
+> | §7.6 "no direct NATS subscription" | `docs/architecture.md` §3.4 | Restated inline with its reason and its exception. |
+>
+> ⚠️ **The reload requirement is deliberately absent from this ADR.** An earlier draft of this erratum wrote it in as a MUST and called the change "purely additive". It is not: this ADR's status header says **accepted, ratified 2026-07-11**, and that ratification did not cover a reload requirement. Labelling a new MUST "pending" while it sits inside an accepted ADR still lets a reader cite it as ratified. It therefore lives in **cortex#2504** until the principal ratifies it, at which point it belongs here as an amendment with its own date.
+>
+> No decision, rationale, or consequence that the principal ratified on 2026-07-11 has been altered or removed.
 
 **Vocabulary (`CONTEXT.md` is authoritative).** A **platform adapter** ("adapter") is agent-bound, inbound *and* outbound, one live connection per surface. A **renderer** is non-agent-bound, outbound only, with a `start`/`stop` lifecycle. A **render target** is the surface-router's render-only subscriber contract — named `SurfaceAdapter` in code today, a misnomer, and **not an adapter**. A **surface plugin** ("plugin") is an adapter *or* a renderer packaged as a separately-installable unit; it declares its `kind`. A **bundle** is arc's delivery unit — a plugin ships *in* a bundle; they are not synonyms.
 
@@ -117,17 +126,13 @@ All five pinned decisions and all outstanding open questions were ratified by th
 | `paging` | `pagerduty`, `opsgenie` | Out-of-band escalation; different vendor pool. |
 | `local-projection` | `dashboard`, `cli-tail` | In-process; survives any outbound vendor outage. |
 
-**Cortex deliberately diverges from the retired source on one point:** G-1111 §4.6.1 made `local-projection` a mandatory floor. It is not, here — ADR-0005 §4 demoted `DashboardRenderer` to an inert ring-buffer stub, so it counts toward class *diversity* but can never be the effective sink (see the inert-`dashboard` interpretation above). That divergence is intentional and ratified.
+**Cortex deliberately diverges from the retired source on one point:** G-1111 §4.6.1 made `local-projection` a mandatory floor. It is not, here — ADR-0005 §4 demoted `DashboardRenderer` to an inert ring-buffer stub, so it counts toward class *diversity* but can never be the effective sink (see the inert-`dashboard` interpretation above). That divergence is not new here: ADR-0005 §4 and §OQ9 above — both ratified 2026-07-11 — already treat `DashboardRenderer` as inert. This table only makes explicit that cortex therefore does not adopt the retired floor.
 
 > ⚠ **Known gap (not fixed by this ADR).** `evaluateSystemCoverage` (`src/renderers/coverage.ts`) currently counts distinct **`kind` strings**, and `RendererKindSchema` became an open `z.string().min(1)` in S4/D5. A `discord` + `slack` pair therefore satisfies the floor while being **one** platform class — fail-open against exactly the correlated-vendor blindness this rule exists to close. Tracked in **cortex#2503**; do not read the current implementation as the definition of the rule.
 
-#### Re-enforcement on reload — carried over from the retired G-1111 §4.6.1 (2026-08-11) · **PENDING RATIFICATION**
+#### Re-enforcement on reload — NOT recorded here (2026-08-11)
 
-> Not part of the 2026-07-11 ratification — see the erratum at the top. Recorded so the invariant survives G-1111's retirement; tracked as cortex#2504.
-
-The coverage rule MUST be re-enforced on **every config reload**, not only at process start. A reload that would violate it — a principal hot-removing the only `paging` renderer, leaving an inert `local-projection` — must be **rejected, with the prior valid config left active**, rather than silently applied. Without this the invariant erodes between cold starts, and the next outage meets an unprotected configuration.
-
-> ⚠ **Known gap (not fixed by this ADR).** `assertRuntimeSystemCoverage` is invoked once, at boot (`src/cortex.ts`). Neither the config watcher nor the `surface load/unload/reload` CLI re-runs it. D8's renderer hot-reload is what makes this reachable. Tracked in **cortex#2504**.
+The retired G-1111 §4.6.1 also required coverage to be re-enforced on **every config reload**, not only at process start. That is a normative MUST this ADR never contained, so writing it in would extend a ratified decision — see the erratum. The requirement is preserved verbatim in **cortex#2504**, together with the observation that D8's renderer hot-reload is what makes the gap reachable (`assertRuntimeSystemCoverage` runs once, at boot; neither the config watcher nor the `surface load/unload/reload` CLI re-runs it). It belongs in this ADR as a dated amendment once ratified — not before.
 
 ### Remaining open questions — RATIFIED as recommended
 

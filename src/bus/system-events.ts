@@ -30,6 +30,21 @@
  *     buffer caps, error class names). They're principal-only — no federation,
  *     no frontier-model processing.
  *
+ * **Self-emission anti-pattern (binding).** A degraded adapter cannot reliably
+ * publish its own `system.adapter.degraded` — the component being reported on
+ * is the failure mode. The publisher MUST be a sibling:
+ *
+ *   - `system.adapter.{disconnected,degraded,recovered}` → the connection
+ *     watcher alongside the surface-router, never the watched adapter.
+ *   - `system.inbound.{aborted,failed}` → the surrounding catch site
+ *     (`dispatch-handler`), which is healthy when it observes the failure.
+ *   - `system.buffer.*` → the buffer's owner (local state, owner authoritative).
+ *   - `system.process.*` → the top-level entry point.
+ *   - `system.subscription.*` → `MyelinRuntime` (healthy when the sub stalls).
+ *
+ * Never call `publish(...)` from inside the component the event is ABOUT.
+ * Publishers and subjects are decoupled by component boundary.
+ *
  * **Known contract gap — correlation_id format:**
  *   The correlation-id convention this module was designed against defines
  *   strings like
