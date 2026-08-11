@@ -84,9 +84,11 @@ describe("DORMANT_RUNTIME_DIAGNOSIS — every emit site uses it", () => {
 
     test(`${site} does not inline its own diagnosis text`, () => {
       const src = readFileSync(join(SRC_ROOT, site), "utf8");
-      // The literal tail of the shared string must appear exactly zero times
-      // as inline source — if it does, that lane has forked its own copy.
-      expect(src).not.toContain('"myelin-runtime:" prefix)');
+      // Derived from the constant, NOT a hand-copied literal: if the constant
+      // is reworded, this guard follows it instead of passing vacuously
+      // against a substring that no longer exists anywhere.
+      const tail = DORMANT_RUNTIME_DIAGNOSIS.slice(-40);
+      expect(src).not.toContain(tail);
     });
   }
 });

@@ -45,6 +45,10 @@
  * Never call `publish(...)` from inside the component the event is ABOUT.
  * Publishers and subjects are decoupled by component boundary.
  *
+ * ⚠ **Currently violated in-tree:** `DiscordAdapter.onDegraded` publishes its
+ * own `system.adapter.degraded`. Tracked as cortex#2506 — do not copy that
+ * shape into a new adapter.
+ *
  * **Known contract gap — correlation_id format:**
  *   The correlation-id convention this module was designed against defines
  *   strings like
