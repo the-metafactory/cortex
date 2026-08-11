@@ -511,6 +511,51 @@ export function assertConfiguredSystemCoverage(
 }
 
 /**
+ * cortex#2504 — would a runtime mutation drop `system.>` coverage below the
+ * floor? Returns `null` when the prospective set is fine, or a refusal string
+ * naming what would break.
+ *
+ * ## Why a runtime check exists at all
+ *
+ * The boot guards answer "is this stack covered *right now*". ADR-0024 D8 then
+ * made renderers hot-reloadable, so a live stack can drop below the floor
+ * without ever restarting: detach the only `paging` renderer and what remains
+ * is an inert `local-projection` that delivers nothing. The stack keeps
+ * running, reports healthy, and silently cannot page — which is exactly the
+ * *silent no-page* failure §OQ9 ratified moving away from, re-entering through
+ * the reload door instead of the boot door.
+ *
+ * The invariant otherwise holds only until the next mutation and is repaired
+ * only by a restart.
+ *
+ * ## Refuse the mutation, do not fail the process
+ *
+ * Boot's answer to a shortfall is to hard-fail, because there is no prior good
+ * state to keep. At runtime there is: the configuration currently serving the
+ * principal. So the mutation is REJECTED and the live set is left untouched —
+ * killing a running daemon because someone typo'd an unload would replace a
+ * monitoring gap with an outage.
+ */
+export function refuseIfMutationBreaksCoverage(
+  prospective: readonly RendererCoverageInput[],
+  ctx: { principal: string; stack?: string },
+): string | null {
+  const verdict = evaluateSystemCoverage(prospective, ctx);
+  if (verdict.satisfied) return null;
+  const classes =
+    verdict.coveringClasses.length > 0 ? `[${verdict.coveringClasses.join(", ")}]` : "[none]";
+  return (
+    `refused — this would drop \`local.{principal}.system.>\` coverage below the ` +
+    `ADR-0024 §OQ9 floor. Remaining system-covering kinds would be ` +
+    `[${verdict.coveringKinds.join(", ") || "none"}], resolving to platform ` +
+    `class(es) ${classes} with effective sink(s) ` +
+    `[${verdict.effectiveCoveringKinds.join(", ") || "none"}]. The stack would keep ` +
+    `running while silently unable to page. The live configuration is unchanged. ` +
+    `Attach a replacement sink from a non-overlapping class FIRST, then retry.`
+  );
+}
+
+/**
  * POST-S6 (install-state) guard: assert the renderers that ACTUALLY STARTED
  * still meet the §4.6 floor, now that plugin loading has run and "did the
  * bundle load?" is answerable.

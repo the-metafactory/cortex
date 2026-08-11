@@ -6016,6 +6016,13 @@ export async function startCortex(
     ...(gw !== undefined && { gateway: gw }),
     skippedRendererConfigs,
     registry: surfacePluginRegistry,
+    // cortex#2504 — the SAME subject context the boot-time
+    // `assertRuntimeSystemCoverage` above judged against, so a runtime
+    // `unload` re-checks the §OQ9 floor by exactly the rule boot used.
+    coverageCtx: {
+      principal: principalId,
+      stack: options.stack !== undefined ? derivedStack.stack : undefined,
+    },
     // cortex#2347 (EBH-5 follow-up) — the SAME posture + trust root the
     // boot-time `loadExternalPlugins` call above used, so `reload`/`load`
     // (which re-`import()` a bundle's entry module a SECOND time via
