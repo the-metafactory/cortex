@@ -688,9 +688,10 @@ export function wireBrainConsumers(
             `capabilities=[${capSummary}] ` +
             `gate=${opts.surfacePrincipalGate !== undefined ? "surface" : "deny-all"} ` +
             `— cortex MyelinRuntime came up disabled — no subscriptions are open ` +
-            `(tasks.{capability} envelopes will not be claimed by this brain). One of: ` +
-            `nats.url unset, the broker connect failed, or every configured subscriber ` +
-            `failed to bind — grep this log for "myelin-runtime:" to see which`,
+            `(tasks.{capability} envelopes will not be claimed by this brain). Either ` +
+            `nats.url is unset in cortex.yaml (silent — no log line), or the broker ` +
+            `connect failed / every configured subscriber failed to bind (both logged ` +
+            `above with the "myelin-runtime:" prefix)`,
         );
       }
     } catch (err) {

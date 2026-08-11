@@ -30,14 +30,15 @@
  *     buffer caps, error class names). They're principal-only — no federation,
  *     no frontier-model processing.
  *
- * **Known spec gap — correlation_id format:**
- *   The correlation-id convention defines strings like
+ * **Known contract gap — correlation_id format:**
+ *   The correlation-id convention this module was designed against defines
+ *   strings like
  *   `"adapter:{adapter_id}:{disconnected_since_iso}"`, but the vendored myelin
  *   envelope schema (G-1100.B) constrains `correlation_id` to UUID format —
  *   non-UUID values fail validation downstream. For MIG-3b-ii we therefore
  *   OMIT `correlation_id` from `system.*` envelopes; surfaces join the pair
  *   on `(payload.adapter_id, payload.disconnected_since)` instead, which is
- *   already the natural workflow key in §3.5.6's text.
+ *   already the natural workflow key that convention describes.
  *
  *   The `adapterCorrelationKey` helper below exposes the convention string
  *   for callers that want to log/index it locally; it's not assigned to

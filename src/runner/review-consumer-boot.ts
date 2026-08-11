@@ -487,7 +487,7 @@ export function wireReviewConsumers(
         );
       } else {
         console.log(
-          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.code-review.* envelopes will not be claimed by this consumer). One of: nats.url unset, the broker connect failed, or every configured subscriber failed to bind — grep this log for "myelin-runtime:" to see which`,
+          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.code-review.* envelopes will not be claimed by this consumer). Either nats.url is unset in cortex.yaml (silent — no log line), or the broker connect failed / every configured subscriber failed to bind (both logged above with the "myelin-runtime:" prefix)`,
         );
       }
 

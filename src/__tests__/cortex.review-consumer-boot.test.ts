@@ -662,10 +662,13 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // "every configured subscriber failed to bind" is a case where nats.url is
     // correct and no connect error was ever logged.
     expect(dormantLines[0]!).toContain("came up disabled");
-    expect(dormantLines[0]!).toContain("nats.url unset");
+    expect(dormantLines[0]!).toContain("nats.url is unset");
     expect(dormantLines[0]!).toContain("the broker connect failed");
     expect(dormantLines[0]!).toContain("failed to bind");
-    expect(dormantLines[0]!).toContain('grep this log for "myelin-runtime:"');
+    // The unset-`nats.url` return logs NOTHING, so the hint must not send the
+    // principal to a grep that comes back empty for that cause.
+    expect(dormantLines[0]!).toContain("silent — no log line");
+    expect(dormantLines[0]!).toContain('"myelin-runtime:" prefix');
     expect(dormantLines[0]!).not.toContain("G-1111");
     expect(dormantLines[0]!).toContain(
       "tasks.code-review.* envelopes will not be claimed by this consumer",

@@ -2,7 +2,7 @@
  * MIG-3b-ii: tests for `system.*` envelope constructors.
  *
  * Two coverage axes:
- *   1. Shape — fields match the `src/bus/system-events.ts` contract verbatim, payload-only fields land
+ *   1. Shape — fields match the documented envelope contract verbatim, payload-only fields land
  *      in payload (not envelope top-level), optional fields are omitted (not
  *      `undefined`-valued) when callers don't pass them.
  *   2. Validation — every constructed envelope passes the vendored myelin

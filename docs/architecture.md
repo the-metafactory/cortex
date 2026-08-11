@@ -164,7 +164,7 @@ Two consumer classes live on the same transport but at different latency / durab
 
 Cortex's projection layer (Mission Control DB on D1) checkpoints `last_event_id` per JetStream stream so reconnects resume cleanly. This is the operational meaning of **lost event ≠ lost state** — even if cortex's process crashes mid-stream, the dashboard reconstructs by replaying from the last checkpoint.
 
-`system.*` events specifically (per §3.3) require JetStream; the [ADR-0024](adr/0024-pluggable-surface-adapters.md) §OQ9 fail-safe rule depends on durability for `system.adapter.degraded` etc. to reach pager-class subscribers.
+`system.*` events specifically require JetStream; the [ADR-0024](adr/0024-pluggable-surface-adapters.md) §OQ9 fail-safe rule depends on durability for `system.adapter.degraded` etc. to reach pager-class subscribers.
 
 ### 3.4 Cortex's spine — the in-process flow
 

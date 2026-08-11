@@ -4,7 +4,11 @@
 
 > **Erratum (2026-08-11) — G-1111 retired, its binding rule absorbed here.** This ADR was originally written citing *"G-1111 §4.6"* as the normative source of the fail-safe renderer-pairing rule. That source is `docs/design-event-taxonomy.md`, which was **never ported into cortex**: it lives only on `the-metafactory/grove-v2` PR [#81](https://github.com/the-metafactory/grove-v2/pull/81) (branch `feat/g-1111-event-taxonomy`, still open since 2026-05-09). The decision is **not to port it** — it is grove-era, its per-surface grove YAML config model no longer exists, and its §4.6.1 rule that *"`local-projection` is always the floor — the dashboard adapter is mandatory"* is **directly overruled** by [ADR-0005](0005-mission-control-integration-architecture.md) §4 and by §OQ9 below, both of which treat `DashboardRenderer` as inert.
 >
-> G-1111 is therefore retired as an identifier across cortex. The parts of §4.6 that are still binding are **absorbed into §OQ9 below** (see *"Platform classes"* and *"Re-enforcement on reload"*) so that deleting the pointer does not delete the rule. **No decision, rationale, or consequence recorded in this ADR was changed** — the absorption is additive.
+> G-1111 is therefore retired as an identifier across cortex. The parts of §4.6 that are still binding are **carried over into §OQ9 below** (see *"Platform classes"* and *"Re-enforcement on reload"*) so that deleting the pointer does not delete the rule.
+>
+> ⚠️ **Ratification status — read this before treating the carried-over text as ratified.** No decision, rationale, or consequence that the principal ratified on 2026-07-11 has been altered or removed. But the two carried-over subsections are **NOT covered by that ratification** — they were ratified in the grove-era G-1111 draft, not here:
+> - *Platform classes* **clarifies** a term §OQ9 already used ("two distinct platform classes") without defining. Low risk; it makes the existing decision legible rather than changing it.
+> - *Re-enforcement on reload* introduces a **normative MUST that §OQ9 did not contain**. It is recorded here because it is the correct home for it and because losing it with G-1111 would erase a real invariant — but it is **pending principal ratification** and is tracked as cortex#2504. Do not cite it as a 2026-07-11 decision.
 
 **Vocabulary (`CONTEXT.md` is authoritative).** A **platform adapter** ("adapter") is agent-bound, inbound *and* outbound, one live connection per surface. A **renderer** is non-agent-bound, outbound only, with a `start`/`stop` lifecycle. A **render target** is the surface-router's render-only subscriber contract — named `SurfaceAdapter` in code today, a misnomer, and **not an adapter**. A **surface plugin** ("plugin") is an adapter *or* a renderer packaged as a separately-installable unit; it declares its `kind`. A **bundle** is arc's delivery unit — a plugin ships *in* a bundle; they are not synonyms.
 
@@ -100,7 +104,9 @@ All five pinned decisions and all outstanding open questions were ratified by th
 
 **Consequence for S12b:** the pagerduty renderer extraction is **unblocked**, but MUST land the boot-coverage hard-fail *before or with* the extraction, never after.
 
-#### Platform classes — absorbed from the retired G-1111 §4.6.1 (2026-08-11)
+#### Platform classes — carried over from the retired G-1111 §4.6.1 (2026-08-11)
+
+> Definitional: it pins down the term §OQ9 already used without defining. It does not change the ratified decision.
 
 "Two distinct platform classes" means two classes from **this table**, not two distinct `renderers[].kind` strings. The property column is the whole point: the rule exists so that one *vendor* going down cannot take out every sink at once.
 
@@ -115,7 +121,9 @@ All five pinned decisions and all outstanding open questions were ratified by th
 
 > ⚠ **Known gap (not fixed by this ADR).** `evaluateSystemCoverage` (`src/renderers/coverage.ts`) currently counts distinct **`kind` strings**, and `RendererKindSchema` became an open `z.string().min(1)` in S4/D5. A `discord` + `slack` pair therefore satisfies the floor while being **one** platform class — fail-open against exactly the correlated-vendor blindness this rule exists to close. Tracked in **cortex#2503**; do not read the current implementation as the definition of the rule.
 
-#### Re-enforcement on reload — absorbed from the retired G-1111 §4.6.1 (2026-08-11)
+#### Re-enforcement on reload — carried over from the retired G-1111 §4.6.1 (2026-08-11) · **PENDING RATIFICATION**
+
+> Not part of the 2026-07-11 ratification — see the erratum at the top. Recorded so the invariant survives G-1111's retirement; tracked as cortex#2504.
 
 The coverage rule MUST be re-enforced on **every config reload**, not only at process start. A reload that would violate it — a principal hot-removing the only `paging` renderer, leaving an inert `local-projection` — must be **rejected, with the prior valid config left active**, rather than silently applied. Without this the invariant erodes between cold starts, and the next outage meets an unprotected configuration.
 
