@@ -45,9 +45,18 @@
  * Never call `publish(...)` from inside the component the event is ABOUT.
  * Publishers and subjects are decoupled by component boundary.
  *
- * ⚠ **Currently violated in-tree:** `DiscordAdapter.onDegraded` publishes its
- * own `system.adapter.degraded`. Tracked as cortex#2506 — do not copy that
- * shape into a new adapter.
+ * **How cortex satisfies this today (cortex#1797, S12).** Adapters do NOT build
+ * or publish these envelopes. They call the host-injected
+ * `AdapterSystemEventPort` (`src/adapters/plugin-support.ts`), which owns
+ * envelope construction and the `MyelinRuntime.publish` call. So the publisher
+ * is a cortex-side sibling and the publish path never traverses the degraded
+ * platform connection — which is the property this rule actually protects.
+ *
+ * A new adapter MUST follow that shape: signal the transition through the port,
+ * never `publish(...)` from inside the component the event is about. The
+ * pre-extraction fixtures under `src/adapters/__tests__/fixtures/` still show
+ * the old inline form — they are frozen snapshots for the loader tests, not a
+ * pattern to copy (cortex#2506 was filed against one by mistake).
  *
  * **Known contract gap — correlation_id format:**
  *   The correlation-id convention this module was designed against defines

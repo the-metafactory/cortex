@@ -12,7 +12,7 @@
 > |---|---|---|
 > | §4.6.1 platform-class table | **§OQ9 → *Platform classes*, below** | Definitional — pins a term §OQ9 already used without defining. Does not change the ratified decision. |
 > | §4.6.1 reload re-enforcement | **cortex#2504** (issue body carries the requirement verbatim) | A normative MUST §OQ9 never contained. **Deliberately NOT written into this ADR** — see below. |
-> | §4.6.2 self-emission anti-pattern | `src/bus/system-events.ts` module doc | Binding, and **currently violated** — `DiscordAdapter` publishes its own `system.adapter.degraded`. Tracked as cortex#2506. |
+> | §4.6.2 self-emission anti-pattern | `src/bus/system-events.ts` module doc | Binding, and **satisfied** — cortex#1797 (S12) moved envelope construction and `MyelinRuntime.publish` out of the adapters into cortex's `buildAdapterSystemEventPort`. *(An earlier revision of this row claimed it was violated; that was filed against a pre-extraction test fixture, not shipped code — see cortex#2506, closed as not-a-bug.)* |
 > | §7.6 "no direct NATS subscription" | `docs/architecture.md` §3.4 | Restated inline with its reason and its exception. |
 >
 > ⚠️ **The reload requirement is deliberately absent from this ADR.** An earlier draft of this erratum wrote it in as a MUST and called the change "purely additive". It is not: this ADR's status header says **accepted, ratified 2026-07-11**, and that ratification did not cover a reload requirement. Labelling a new MUST "pending" while it sits inside an accepted ADR still lets a reader cite it as ratified. It therefore lives in **cortex#2504** until the principal ratifies it, at which point it belongs here as an amendment with its own date.
