@@ -129,6 +129,22 @@ export interface MyelinPullOptions {
   expiresMs?: number;
   /** Refill threshold (messages remaining before issuing another consume request). */
   thresholdMessages?: number;
+  /**
+   * cortex#2515 — how many handlers may be in flight concurrently.
+   *
+   * Defaults to `1`, which is byte-identical to the pre-#2515 loop (each
+   * message fully handled before the next is pulled). Values > 1 let the
+   * iterator keep pulling while earlier handlers are still running, and
+   * the loop applies backpressure by not pulling past the limit — no
+   * nak/redelivery churn.
+   *
+   * This matters for handlers that are slow by nature: the review
+   * consumer awaits a spawned `sage review` subprocess, so at the default
+   * of 1 a second `tasks.code-review.*` envelope is never surfaced to the
+   * consumer until the first review finishes, and the dispatching
+   * client's `--wait` expires first.
+   */
+  maxConcurrent?: number;
 }
 
 export interface MyelinSubscriberOptions {
@@ -385,12 +401,21 @@ class PullBackend implements SubscriberBackend {
   private loopPromise: Promise<void> | null = null;
   private stopped = false;
   private stopPromise: Promise<void> | null = null;
+  /** cortex#2515 — in-flight handler ceiling. 1 preserves pre-#2515 behaviour. */
+  private readonly maxConcurrent: number;
 
   constructor(
     link: NatsLink,
     opts: MyelinPullOptions,
     onRaw: (subject: string, data: Uint8Array, msg: JsMsg) => Promise<void>,
   ) {
+    // Guard against 0 / negative / NaN turning the loop into a no-op or an
+    // unbounded fan-out: anything not >= 1 falls back to the serial default.
+    const requested = opts.maxConcurrent;
+    this.maxConcurrent =
+      requested !== undefined && Number.isFinite(requested) && requested >= 1
+        ? Math.floor(requested)
+        : 1;
     this.ready = this.init(link, opts, onRaw);
   }
 
@@ -435,6 +460,17 @@ class PullBackend implements SubscriberBackend {
   ): Promise<void> {
     const messages = this.messages;
     if (!messages) return;
+    // cortex#2515 — handlers run as tracked promises instead of being
+    // awaited inline, so a slow handler (the review consumer awaits a
+    // spawned `sage review` subprocess) no longer stalls the iterator and
+    // starves later messages of delivery. Backpressure comes from not
+    // pulling past `maxConcurrent`, NOT from naking — a nak would send the
+    // message straight back for redelivery and churn the stream.
+    //
+    // At the default `maxConcurrent === 1` this is behaviourally identical
+    // to the pre-#2515 inline await: the race below resolves the single
+    // in-flight handler before the next iteration pulls.
+    const inFlight = new Set<Promise<void>>();
     try {
       for await (const m of messages) {
         if (this.stopped) {
@@ -443,18 +479,29 @@ class PullBackend implements SubscriberBackend {
           safeNak(m);
           return;
         }
-        try {
-          await onRaw(m.subject, m.data, m);
-        } catch (err) {
-          // onRaw owns its own ack/nak; a throw here means the
-          // dispatch logic itself failed (very rare — validator
-          // doesn't throw, handler errors are caught inside). Log and
-          // continue.
-          console.error(
-            `myelin-subscriber: pull dispatch error on "${sanitizeForLog(m.subject)}":`,
-            err instanceof Error ? err.message : String(err),
-          );
-          safeNak(m);
+        // Never rejects — the handler's own failure path is inside, so
+        // `race`/`allSettled` below can't see a rejection and the loop
+        // can't die on one bad message.
+        const task = (async () => {
+          try {
+            await onRaw(m.subject, m.data, m);
+          } catch (err) {
+            // onRaw owns its own ack/nak; a throw here means the
+            // dispatch logic itself failed (very rare — validator
+            // doesn't throw, handler errors are caught inside). Log and
+            // continue.
+            console.error(
+              `myelin-subscriber: pull dispatch error on "${sanitizeForLog(m.subject)}":`,
+              err instanceof Error ? err.message : String(err),
+            );
+            safeNak(m);
+          }
+        })();
+        inFlight.add(task);
+        void task.then(() => inFlight.delete(task));
+        if (inFlight.size >= this.maxConcurrent) {
+          // At the ceiling: wait for a slot before pulling again.
+          await Promise.race(inFlight);
         }
       }
     } catch (err) {
@@ -464,6 +511,11 @@ class PullBackend implements SubscriberBackend {
           err instanceof Error ? err.message : String(err),
         );
       }
+    } finally {
+      // Drain whatever is still running so `stop()` (which awaits this
+      // promise) gets deterministic teardown — a handler mid-review must
+      // publish its terminal envelope before the subscriber resolves.
+      await Promise.allSettled([...inFlight]);
     }
   }
 

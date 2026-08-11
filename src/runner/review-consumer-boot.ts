@@ -99,6 +99,33 @@ export interface ReviewBootAgent {
   };
 }
 
+/**
+ * cortex#2515 — default in-flight review ceiling per consumer.
+ *
+ * Before #2515 the consume loop awaited each handler inline, so reviews were
+ * serialized at 1 and a dispatch arriving mid-review was never surfaced to the
+ * consumer at all (the client's `--wait` expired first and sage misreported a
+ * DORMANT consumer). A review spawns a coding-agent subprocess, so the ceiling
+ * stays deliberately small — this is a concurrency limit, not a throughput
+ * target.
+ */
+const DEFAULT_REVIEW_LOOP_CONCURRENCY = 3;
+
+/**
+ * Resolve how many reviews one consumer may run at once.
+ *
+ * `runtime.maxConcurrent` is the operator's knob; absent it we use
+ * {@link DEFAULT_REVIEW_LOOP_CONCURRENCY}. Note this is the SAME config field
+ * `ReviewConsumerAgent.maxConcurrent` feeds, so the loop ceiling and the
+ * consumer's own `not_now` gate agree by construction: the loop stops pulling
+ * at the limit rather than admitting an envelope only to nak it, which would
+ * churn redeliveries against the stream for no benefit. The gate remains as
+ * defense-in-depth for the direct `processEnvelope` path used by tests.
+ */
+function reviewLoopConcurrency(agent: ReviewBootAgent): number {
+  return agent.runtime?.maxConcurrent ?? DEFAULT_REVIEW_LOOP_CONCURRENCY;
+}
+
 /** Inputs `cortex.ts` threads into the review-consumer boot wiring. */
 export interface WireReviewConsumersOpts {
   /** `{principal}` subject segment — durable names + the verifier's own-stack check. */
@@ -459,6 +486,7 @@ export function wireReviewConsumers(
         pattern: primaryReviewPattern,
         stream: opts.reviewStream,
         durable,
+        maxConcurrent: reviewLoopConcurrency(agent),
       });
       const flavorSummary =
         consumer.flavors.length > 0 ? consumer.flavors.join(",") : "(none)";
@@ -548,6 +576,7 @@ export function wireReviewConsumers(
           pattern: extraPattern,
           stream: opts.reviewStream,
           durable: offerDurable,
+          maxConcurrent: reviewLoopConcurrency(agent),
         });
         if (offerStarted.subscribed) {
           console.log(
@@ -619,6 +648,7 @@ export function wireReviewConsumers(
             pattern,
             stream: opts.reviewStream,
             durable: durableName,
+            maxConcurrent: reviewLoopConcurrency(agent),
           });
           if (federatedStarted.subscribed) {
             console.log(
