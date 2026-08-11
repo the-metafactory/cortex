@@ -367,42 +367,37 @@ export function evaluateSystemCoverage(
   };
 }
 
+/**
+ * The class table, rendered FROM {@link PLATFORM_CLASS_BY_KIND} rather than
+ * hand-written beside it — a duplicated list drifts the moment a kind is
+ * added, and this one already had.
+ */
+function renderClassTable(): string {
+  const byClass = new Map<string, string[]>();
+  for (const [kind, classes] of Object.entries(PLATFORM_CLASS_BY_KIND)) {
+    for (const c of classes) byClass.set(c, [...(byClass.get(c) ?? []), kind]);
+  }
+  return [...byClass.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([c, kinds]) => `\`${c}\` (${kinds.sort().join(", ")})`)
+    .join(", ");
+}
+
 const RULE_PREAMBLE =
-  "ADR-0024 §OQ9 requires at least two distinct renderer PLATFORM CLASSES " +
-  "covering `local.{principal}.system.>`, with at least one EFFECTIVE " +
-  "(delivering) sink, so a single vendor outage cannot blind the principal to " +
-  "system events. Classes group kinds by shared outage risk: `chat-gateway` " +
-  "(discord, slack, mattermost), `webhook-out` (webhook-generic, mattermost), " +
-  "`paging` (pagerduty, opsgenie), `local-projection` (dashboard, cli-tail). " +
+  "ADR-0024 §OQ9 requires at least two renderer PLATFORM CLASSES covering " +
+  "`local.{principal}.system.>` whose class sets cannot overlap, with at least " +
+  "one EFFECTIVE (delivering) sink, so one platform going down cannot blind " +
+  "the principal to system events. Classes group kinds by shared outage risk: " +
+  `${renderClassTable()}. ` +
   "Two kinds in the SAME class (e.g. discord + slack) are one class, not two. " +
   "The `dashboard` renderer is INERT (ADR-0005 §4: it buffers but delivers " +
   "nothing), so it counts toward class diversity but can never be the " +
-  "effective sink.";
+  "effective sink.\n" +
+  "LIMIT: class is derived from the renderer KIND, which does not identify the " +
+  "VENDOR behind it — a `webhook-out` posting to PagerDuty and a `pagerduty` " +
+  "renderer read as two classes but are one vendor. Class diversity is a floor, " +
+  "not a guarantee; choosing genuinely independent sinks is still yours.";
 
-/**
- * "You configured a renderer kind cortex cannot classify." Raised instead of
- * silently counting the unknown kind as a class of its own — since
- * `RendererKindSchema` is an open string (S4/ADR-0024 D5), doing that would
- * reinstate the very fail-open cortex#2503 closed.
- */
-export class RendererCoverageUnclassifiedKindError extends Error {
-  readonly unclassifiedKinds: string[];
-  constructor(verdict: CoverageVerdict) {
-    const kinds = verdict.unclassifiedKinds;
-    super(
-      `cortex: renderer coverage check FAILED (unclassified kind). ${RULE_PREAMBLE}\n` +
-        `These system-covering renderer kinds have no platform class: ` +
-        `[${kinds.join(", ")}]. Coverage cannot be judged for them, and cortex ` +
-        `will NOT assume an unknown kind is a class of its own — that is how a ` +
-        `stack ends up believing it is monitored while every sink shares one ` +
-        `vendor. Either use a classified kind, or add the mapping to ` +
-        `PLATFORM_CLASS_BY_KIND (src/renderers/coverage.ts) in a reviewed change. ` +
-        `Decision: ADR-0024 §OQ9.`,
-    );
-    this.name = "RendererCoverageUnclassifiedKindError";
-    this.unclassifiedKinds = kinds;
-  }
-}
 
 /**
  * "You configured one sink." A pure CONFIG authoring error — the declared
@@ -433,15 +428,24 @@ export class RendererCoverageConfigError extends Error {
         `mode and webhook-out in webhook mode) is resolved conservatively — it ` +
         `cannot be assumed to be in whichever class would make the config pass.`
       : `Those resolve to a single platform class — fewer than the two required.`;
+    const unclassifiedNote =
+      verdict.unclassifiedKinds.length > 0
+        ? `\nNOT COUNTED — cortex has no platform class for: ` +
+          `[${verdict.unclassifiedKinds.join(", ")}]. An unknown kind is never ` +
+          `assumed to be a class of its own (that is how every sink ends up ` +
+          `sharing one platform), so it cannot help satisfy this rule. It does ` +
+          `NOT have to be removed: once your other renderers meet the floor on ` +
+          `their own, it is simply an extra sink. To have it counted, add its ` +
+          `mapping to PLATFORM_CLASS_BY_KIND (src/renderers/coverage.ts).`
+        : "";
     super(
       `cortex: renderer coverage check FAILED (config). ${RULE_PREAMBLE}\n` +
         `Configured system-covering kinds: ${found} (effective: ${effective}).\n` +
         `Platform class(es) present: ${classes}.\n` +
-        `${diagnosis}\n` +
+        `${diagnosis}${unclassifiedNote}\n` +
         `Add a system-covering renderer whose class CANNOT overlap the ones you ` +
         `have (e.g. a \`pagerduty\` renderer — class \`paging\` — subscribed to ` +
-        `\`local.{principal}.system.>\`) so one vendor outage cannot take out ` +
-        `every sink. Decision: ADR-0024 §OQ9.`,
+        `\`local.{principal}.system.>\`). Decision: ADR-0024 §OQ9.`,
     );
     this.name = "RendererCoverageConfigError";
     this.verdict = verdict;
@@ -493,11 +497,12 @@ export function assertConfiguredSystemCoverage(
 ): void {
   const verdict = evaluateSystemCoverage(renderers, ctx);
   if (verdict.satisfied) return;
-  // An unclassifiable kind is its own failure: the principal cannot fix it by
-  // adding a renderer, so it must not be reported as "you configured one sink".
-  if (verdict.unclassifiedKinds.length > 0) {
-    throw new RendererCoverageUnclassifiedKindError(verdict);
-  }
+  // ONE error, carrying both facts. An earlier cut raised a separate
+  // "unclassified kind" error and preferred it whenever any unclassified kind
+  // was present — which MASKED the real failure (a same-class classified pair)
+  // and told the principal they could not fix it by adding a renderer. Both
+  // are false: adding a disjoint classified pair fixes either case, since an
+  // unclassified kind stops mattering once coverage holds without it.
   throw new RendererCoverageConfigError(verdict);
 }
 

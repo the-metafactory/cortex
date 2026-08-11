@@ -18,8 +18,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  PLATFORM_CLASS_BY_KIND,
   RendererCoverageConfigError,
-  RendererCoverageUnclassifiedKindError,
   assertConfiguredSystemCoverage,
   evaluateSystemCoverage,
   platformClassesForKind,
@@ -148,25 +148,62 @@ describe("unknown kinds are refused, never counted", () => {
     expect(v.satisfied).toBe(false);
   });
 
-  test("raises a DISTINCT error type — not reported as 'you configured one sink'", () => {
-    expect(() => assertConfiguredSystemCoverage([r("pagerduty"), r("weird")], CTX)).toThrow(
-      RendererCoverageUnclassifiedKindError,
-    );
-    // A genuine one-class config is still the config error.
-    expect(() => assertConfiguredSystemCoverage([r("discord"), r("slack")], CTX)).toThrow(
-      RendererCoverageConfigError,
-    );
+  test("ONE error carries both facts — the unclassified kind never masks the real failure", () => {
+    // An earlier cut raised a separate "unclassified kind" error and preferred
+    // it whenever any unclassified kind was present. That HID the actual
+    // problem: here the classified pair (discord+slack) is same-class, and
+    // that is what the principal has to fix.
+    let msg = "";
+    try {
+      assertConfiguredSystemCoverage([r("discord"), r("slack"), r("weird")], CTX);
+    } catch (e) {
+      expect(e).toBeInstanceOf(RendererCoverageConfigError);
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain("chat-gateway"); // the real failure, not masked
+    expect(msg).toContain("weird"); // and the uncounted kind is still named
+    expect(msg).toContain("PLATFORM_CLASS_BY_KIND");
   });
 
-  test("the unclassified error names the kind and how to fix it", () => {
+  test("the message does not tell the principal the kind must be removed", () => {
+    // It does not: once the other renderers meet the floor, it is just an
+    // extra sink. Saying otherwise sends them to delete a working renderer.
     let msg = "";
     try {
       assertConfiguredSystemCoverage([r("pagerduty"), r("weird")], CTX);
     } catch (e) {
       msg = (e as Error).message;
     }
-    expect(msg).toContain("weird");
-    expect(msg).toContain("PLATFORM_CLASS_BY_KIND");
+    expect(msg).toContain("does NOT have to be removed");
+  });
+});
+
+describe("the rule's stated limits", () => {
+  test("error text admits class does not identify vendor", () => {
+    // `webhook-out` posting to PagerDuty + a `pagerduty` renderer read as two
+    // classes but are one vendor. The guard cannot see that, and must not
+    // claim a guarantee it does not provide.
+    let msg = "";
+    try {
+      assertConfiguredSystemCoverage([r("discord"), r("slack")], CTX);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain("LIMIT");
+    expect(msg).toContain("does not identify the VENDOR");
+  });
+
+  test("the class table in the message is generated, not hand-copied", () => {
+    // It had already drifted once when maintained by hand.
+    let msg = "";
+    try {
+      assertConfiguredSystemCoverage([r("discord"), r("slack")], CTX);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    for (const kind of Object.keys(PLATFORM_CLASS_BY_KIND)) {
+      expect(msg).toContain(kind);
+    }
   });
 });
 
