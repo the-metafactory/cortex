@@ -61,7 +61,10 @@ describe("platform-class counting (cortex#2503)", () => {
     } catch (e) {
       msg = (e as Error).message;
     }
-    expect(msg).toContain("chat-gateway");
+    // NOT `toContain("chat-gateway")` — RULE_PREAMBLE prints the whole class
+    // table on every failure, so that assertion passes no matter what the
+    // verdict said. Assert on the line that reports THIS config's classes.
+    expect(msg).toContain("Platform class(es) present: [chat-gateway]");
     expect(msg).toContain("PLATFORM CLASSES");
     // It must tell the principal that adding another chat kind won't help.
     expect(msg).toContain("CANNOT overlap");
@@ -160,7 +163,8 @@ describe("unknown kinds are refused, never counted", () => {
       expect(e).toBeInstanceOf(RendererCoverageConfigError);
       msg = (e as Error).message;
     }
-    expect(msg).toContain("chat-gateway"); // the real failure, not masked
+    // Again the specific line, not the always-present class table.
+    expect(msg).toContain("Platform class(es) present: [chat-gateway]");
     expect(msg).toContain("weird"); // and the uncounted kind is still named
     expect(msg).toContain("PLATFORM_CLASS_BY_KIND");
   });

@@ -286,9 +286,13 @@ export interface CoverageVerdict {
    */
   coveringClasses: string[];
   /**
-   * Covering kinds with no entry in {@link PLATFORM_CLASS_BY_KIND}. A
-   * non-empty list means the verdict is REFUSED — an unclassified kind can
-   * never be counted toward diversity (that is the fail-open this closes).
+   * Covering kinds with no entry in {@link PLATFORM_CLASS_BY_KIND}.
+   *
+   * These are never COUNTED toward diversity — that is the fail-open this
+   * closes. They do not on their own refuse the verdict: if the classified
+   * renderers already satisfy the floor, an unclassified kind is simply an
+   * extra sink and the stack boots (ADR-0024 D5 ships out-of-tree renderers).
+   * It only blocks when the decision would otherwise rest on it.
    */
   unclassifiedKinds: string[];
   /** Whether ANY renderer covers `system.>` — i.e. the stack opted into system
