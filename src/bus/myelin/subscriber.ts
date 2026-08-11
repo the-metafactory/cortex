@@ -134,9 +134,13 @@ export interface MyelinPullOptions {
    *
    * Defaults to `1`, which is byte-identical to the pre-#2515 loop (each
    * message fully handled before the next is pulled). Values > 1 let the
-   * iterator keep pulling while earlier handlers are still running, and
-   * the loop applies backpressure by not pulling past the limit — no
-   * nak/redelivery churn.
+   * iterator keep pulling while earlier handlers are still running.
+   *
+   * Setting this ALSO pins `consume()`'s prefetch to the same ceiling
+   * (unless `maxMessages` is set explicitly). Both halves are needed:
+   * capping handler concurrency alone would leave the prefetch buffer
+   * pulling messages that then sit delivered-but-unhandled, burning their
+   * `ack_wait` while queued for a slot.
    *
    * This matters for handlers that are slow by nature: the review
    * consumer awaits a spawned `sage review` subprocess, so at the default
@@ -439,6 +443,20 @@ class PullBackend implements SubscriberBackend {
     } = {};
     if (opts.maxMessages !== undefined) {
       consumeOpts.max_messages = opts.maxMessages;
+    } else if (opts.maxConcurrent !== undefined) {
+      // cortex#2515 review — bounding HANDLER concurrency alone is not
+      // backpressure: `consume()`'s own prefetch (nats.js default buffer)
+      // keeps pulling regardless, so messages past the ceiling would sit
+      // delivered-but-unhandled, burning their `ack_wait` while they wait
+      // for a slot and redelivering under a long enough backlog. Pinning
+      // the prefetch to the same ceiling is what actually stops the server
+      // handing us more than we can run.
+      //
+      // Only applied when the caller opted into `maxConcurrent` AND left
+      // `maxMessages` unset — an explicit `maxMessages` still wins, and
+      // consumers that never set `maxConcurrent` keep the nats.js default
+      // buffer byte-identically.
+      consumeOpts.max_messages = this.maxConcurrent;
     }
     if (opts.expiresMs !== undefined) {
       consumeOpts.expires = opts.expiresMs;
@@ -463,9 +481,11 @@ class PullBackend implements SubscriberBackend {
     // cortex#2515 — handlers run as tracked promises instead of being
     // awaited inline, so a slow handler (the review consumer awaits a
     // spawned `sage review` subprocess) no longer stalls the iterator and
-    // starves later messages of delivery. Backpressure comes from not
-    // pulling past `maxConcurrent`, NOT from naking — a nak would send the
-    // message straight back for redelivery and churn the stream.
+    // starves later messages of delivery. The ceiling below throttles how
+    // many handlers run at once; the matching `max_messages` prefetch cap
+    // in `init()` is what keeps the server from handing us more than that.
+    // Neither path naks to shed load — a nak would send the message
+    // straight back for redelivery and churn the stream.
     //
     // At the default `maxConcurrent === 1` this is behaviourally identical
     // to the pre-#2515 inline await: the race below resolves the single

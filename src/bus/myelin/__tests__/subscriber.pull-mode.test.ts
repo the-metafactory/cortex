@@ -722,6 +722,64 @@ describe("MyelinSubscriber — pull mode", () => {
     await h.cleanup();
   });
 
+  test("cortex#2515: maxConcurrent pins consume() prefetch to the same ceiling", async () => {
+    const h = await makePullLink();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: {
+        stream: "ACME_TASKS",
+        durable: "myelin-test-consumer",
+        maxConcurrent: 3,
+      },
+      onEnvelope: () => {},
+    });
+    await sub.ready;
+    // Throttling handlers without throttling prefetch is not backpressure:
+    // the server would keep handing us messages that then sit
+    // delivered-but-unhandled, burning ack_wait while queued for a slot.
+    expect((h.consumeOpts() as { max_messages?: number }).max_messages).toBe(3);
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("cortex#2515: explicit maxMessages wins over the maxConcurrent-derived prefetch", async () => {
+    const h = await makePullLink();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: {
+        stream: "ACME_TASKS",
+        durable: "myelin-test-consumer",
+        maxConcurrent: 3,
+        maxMessages: 9,
+      },
+      onEnvelope: () => {},
+    });
+    await sub.ready;
+    expect((h.consumeOpts() as { max_messages?: number }).max_messages).toBe(9);
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("cortex#2515: without maxConcurrent the nats.js default buffer is untouched", async () => {
+    const h = await makePullLink();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "myelin-test-consumer" },
+      onEnvelope: () => {},
+    });
+    await sub.ready;
+    // Consumers that never opt in (brain / dev / release / reflex) must keep
+    // their prefetch behaviour byte-identical to pre-#2515.
+    expect(
+      (h.consumeOpts() as { max_messages?: number }).max_messages,
+    ).toBeUndefined();
+    await sub.stop();
+    await h.cleanup();
+  });
+
   test("cortex#2515: stop() drains in-flight handlers before resolving", async () => {
     const h = await makePullLink();
     let finished = false;
