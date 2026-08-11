@@ -537,10 +537,31 @@ export function assertConfiguredSystemCoverage(
  * monitoring gap with an outage.
  */
 export function refuseIfMutationBreaksCoverage(
+  current: readonly RendererCoverageInput[],
   prospective: readonly RendererCoverageInput[],
   ctx: { principal: string; stack?: string },
 ): string | null {
+  // BEFORE/AFTER, not after-alone. `evaluateSystemCoverage` reports
+  // `satisfied: true` for an out-of-scope stack (no system-covering renderer
+  // at all), which is right at boot — a stack that never opted into system
+  // alerting is not in breach. Judging only the prospective set therefore
+  // ALLOWED the worst mutation of all: detaching the LAST covering renderer
+  // empties the set, reads as out-of-scope, and passes. Total loss of paging
+  // permitted while partial loss was refused — the exact inversion of the
+  // rule. A stack that WAS in scope must stay in scope.
+  const before = evaluateSystemCoverage(current, ctx);
+  if (!before.inScope) return null; // never opted in; nothing to erode.
+
   const verdict = evaluateSystemCoverage(prospective, ctx);
+  if (!verdict.inScope) {
+    return (
+      `refused — this would remove the LAST renderer covering ` +
+      `\`local.{principal}.system.>\`, leaving the stack with no system sink at ` +
+      `all. It would then read as "never opted into system alerting" rather than ` +
+      `"broken", which is how a silent loss of paging looks healthy. The live ` +
+      `configuration is unchanged. Attach a replacement sink FIRST, then retry.`
+    );
+  }
   if (verdict.satisfied) return null;
   const classes =
     verdict.coveringClasses.length > 0 ? `[${verdict.coveringClasses.join(", ")}]` : "[none]";

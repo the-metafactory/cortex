@@ -220,10 +220,14 @@ export function listLivePlugins(deps: PluginRuntimeDeps): LivePluginRow[] {
  * detached, and ask the §OQ9 guard about it. Returns a refusal string, or
  * `null` when the mutation is safe (or cannot be judged).
  *
- * `subscribe` is read from the handle's parsed `config`, which holds the RAW
- * patterns (with `{principal}` / `{stack}.` placeholders) that
- * `rendererCoversSystem` expects — `renderer.surfaceConfig.subjects` has
- * already been substituted and would not match the probe.
+ * Reads `kind` + `subjects` off the LIVE renderer objects — byte-identical to
+ * what the boot-time `assertRuntimeSystemCoverage` call feeds the same rule
+ * (`renderers.map((r) => ({ kind: r.kind, subscribe: r.subjects }))`). An
+ * earlier cut read `handle.config.subscribe` behind a doc comment claiming it
+ * held RAW placeholder patterns; it does not — cortex substitutes before
+ * constructing (`src/cortex.ts`) — and the tests fabricated that shape, so
+ * they could not have caught the mismatch. Reading the same fields boot reads
+ * removes the chance to be wrong about it twice.
  */
 function coverageRefusalForProspective(
   deps: PluginRuntimeDeps,
@@ -239,14 +243,17 @@ function coverageRefusalForProspective(
     );
     return null;
   }
+  const current: RendererCoverageInput[] = [];
   const prospective: RendererCoverageInput[] = [];
   for (const [id, h] of deps.rendererHandles) {
-    if (id === removingId) continue;
-    const cfg = h.config as { subscribe?: unknown } | undefined;
-    const subscribe = Array.isArray(cfg?.subscribe) ? (cfg.subscribe as string[]) : [];
-    prospective.push({ kind: h.rendererKind, subscribe });
+    const entry = {
+      kind: h.renderer.kind,
+      subscribe: h.renderer.surfaceConfig.subjects,
+    };
+    current.push(entry);
+    if (id !== removingId) prospective.push(entry);
   }
-  return refuseIfMutationBreaksCoverage(prospective, deps.coverageCtx);
+  return refuseIfMutationBreaksCoverage(current, prospective, deps.coverageCtx);
 }
 
 export async function unloadLivePlugin(

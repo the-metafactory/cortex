@@ -140,7 +140,12 @@ The §OQ9 coverage floor MUST be re-checked on **every mutation of the live rend
 
 **Refuse the mutation; do not fail the process.** Boot hard-fails on a shortfall because there is no prior good state to keep. At runtime there is one — the configuration currently serving the principal — so the mutation is rejected instead. Killing a running daemon over a mistyped `unload` would trade a monitoring gap for an outage, which is a worse trade than the one §OQ9 makes at boot.
 
-**Scope shipped in cortex#2504:** the `unload` verb (`src/gateway/plugin-runtime.ts`), which is the erosion path the rule names. The config-watcher reload path does not currently rebuild the renderer set, so it cannot erode coverage today; if it ever does, it must adopt the same check.
+**Scope shipped in cortex#2504 — and what is deliberately NOT covered:**
+
+- **`unload`** (`src/gateway/plugin-runtime.ts`) — guarded. This is the erosion path the rule names verbatim: detach the only `paging` renderer and the stack runs on blind.
+- **`reload`** — *not* guarded, and it is a real window: it detaches before re-attaching, so a failed re-attach leaves coverage below the floor. It is narrower than `unload` (the principal intends the renderer to come back, and a failed reload already logs) but it is the same erosion, and closing it needs the check to run on the *result* of the re-attach rather than before it. Tracked as follow-up, named here rather than left to be rediscovered.
+- **`load`** — cannot erode coverage; it only ever adds a sink.
+- **The config-watcher reload path** does not rebuild the renderer set today, so it cannot erode coverage. If that changes it must adopt the same check.
 
 ### Remaining open questions — RATIFIED as recommended
 
