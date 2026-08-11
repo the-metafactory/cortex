@@ -511,6 +511,72 @@ export function assertConfiguredSystemCoverage(
 }
 
 /**
+ * cortex#2504 — would a runtime mutation drop `system.>` coverage below the
+ * floor? Returns `null` when the prospective set is fine, or a refusal string
+ * naming what would break.
+ *
+ * ## Why a runtime check exists at all
+ *
+ * The boot guards answer "is this stack covered *right now*". ADR-0024 D8 then
+ * made renderers hot-reloadable, so a live stack can drop below the floor
+ * without ever restarting: detach the only `paging` renderer and what remains
+ * is an inert `local-projection` that delivers nothing. The stack keeps
+ * running, reports healthy, and silently cannot page — which is exactly the
+ * *silent no-page* failure §OQ9 ratified moving away from, re-entering through
+ * the reload door instead of the boot door.
+ *
+ * The invariant otherwise holds only until the next mutation and is repaired
+ * only by a restart.
+ *
+ * ## Refuse the mutation, do not fail the process
+ *
+ * Boot's answer to a shortfall is to hard-fail, because there is no prior good
+ * state to keep. At runtime there is: the configuration currently serving the
+ * principal. So the mutation is REJECTED and the live set is left untouched —
+ * killing a running daemon because someone typo'd an unload would replace a
+ * monitoring gap with an outage.
+ */
+export function refuseIfMutationBreaksCoverage(
+  current: readonly RendererCoverageInput[],
+  prospective: readonly RendererCoverageInput[],
+  ctx: { principal: string; stack?: string },
+): string | null {
+  // BEFORE/AFTER, not after-alone. `evaluateSystemCoverage` reports
+  // `satisfied: true` for an out-of-scope stack (no system-covering renderer
+  // at all), which is right at boot — a stack that never opted into system
+  // alerting is not in breach. Judging only the prospective set therefore
+  // ALLOWED the worst mutation of all: detaching the LAST covering renderer
+  // empties the set, reads as out-of-scope, and passes. Total loss of paging
+  // permitted while partial loss was refused — the exact inversion of the
+  // rule. A stack that WAS in scope must stay in scope.
+  const before = evaluateSystemCoverage(current, ctx);
+  if (!before.inScope) return null; // never opted in; nothing to erode.
+
+  const verdict = evaluateSystemCoverage(prospective, ctx);
+  if (!verdict.inScope) {
+    return (
+      `refused — this would remove the LAST renderer covering ` +
+      `\`local.{principal}.system.>\`, leaving the stack with no system sink at ` +
+      `all. It would then read as "never opted into system alerting" rather than ` +
+      `"broken", which is how a silent loss of paging looks healthy. The live ` +
+      `configuration is unchanged. Attach a replacement sink FIRST, then retry.`
+    );
+  }
+  if (verdict.satisfied) return null;
+  const classes =
+    verdict.coveringClasses.length > 0 ? `[${verdict.coveringClasses.join(", ")}]` : "[none]";
+  return (
+    `refused — this would drop \`local.{principal}.system.>\` coverage below the ` +
+    `ADR-0024 §OQ9 floor. Remaining system-covering kinds would be ` +
+    `[${verdict.coveringKinds.join(", ") || "none"}], resolving to platform ` +
+    `class(es) ${classes} with effective sink(s) ` +
+    `[${verdict.effectiveCoveringKinds.join(", ") || "none"}]. The stack would keep ` +
+    `running while silently unable to page. The live configuration is unchanged. ` +
+    `Attach a replacement sink from a non-overlapping class FIRST, then retry.`
+  );
+}
+
+/**
  * POST-S6 (install-state) guard: assert the renderers that ACTUALLY STARTED
  * still meet the §4.6 floor, now that plugin loading has run and "did the
  * bundle load?" is answerable.

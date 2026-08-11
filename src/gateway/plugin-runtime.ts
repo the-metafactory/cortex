@@ -58,6 +58,10 @@ import {
 import type { RendererPlugin, SurfacePluginRegistry } from "../adapters/registry";
 import type { PluginSigningPosture } from "../adapters/plugin-signing";
 import type { Renderer } from "../renderers/types";
+import {
+  refuseIfMutationBreaksCoverage,
+  type RendererCoverageInput,
+} from "../renderers/coverage";
 import type { SurfaceGateway } from "./surface-gateway";
 
 // =============================================================================
@@ -128,6 +132,15 @@ export interface PluginRuntimeDeps {
   router: { register(adapter: Renderer["surfaceConfig"]): { unregister: () => void } };
   /** Present only when `CORTEX_GATEWAY=1` — gates adapter `unload`. */
   gateway?: SurfaceGateway;
+  /**
+   * cortex#2504 — the subject context `system.>` coverage is judged against,
+   * so a runtime mutation can re-check the ADR-0024 §OQ9 floor before it
+   * applies. Optional so a caller that has not wired it degrades to the
+   * pre-#2504 behaviour (mutate without re-checking) rather than crashing —
+   * but cortex.ts always supplies it, and its absence is logged where the
+   * check would have run.
+   */
+  coverageCtx?: { principal: string; stack?: string };
   /** Raw `renderers[]` entries that failed to resolve at boot, keyed by the
    *  entry's `kind` — the `load` verb's input. Live reference, mutated by
    *  `load` (matched entries are removed once successfully loaded). */
@@ -202,12 +215,61 @@ export function listLivePlugins(deps: PluginRuntimeDeps): LivePluginRow[] {
 // unload
 // =============================================================================
 
+/**
+ * cortex#2504 — build the renderer set that WOULD be live if `removingId` were
+ * detached, and ask the §OQ9 guard about it. Returns a refusal string, or
+ * `null` when the mutation is safe (or cannot be judged).
+ *
+ * Reads `kind` + `subjects` off the LIVE renderer objects — byte-identical to
+ * what the boot-time `assertRuntimeSystemCoverage` call feeds the same rule
+ * (`renderers.map((r) => ({ kind: r.kind, subscribe: r.subjects }))`). An
+ * earlier cut read `handle.config.subscribe` behind a doc comment claiming it
+ * held RAW placeholder patterns; it does not — cortex substitutes before
+ * constructing (`src/cortex.ts`) — and the tests fabricated that shape, so
+ * they could not have caught the mismatch. Reading the same fields boot reads
+ * removes the chance to be wrong about it twice.
+ */
+function coverageRefusalForProspective(
+  deps: PluginRuntimeDeps,
+  removingId: string,
+): string | null {
+  if (deps.coverageCtx === undefined) {
+    // Degrade loudly, not silently: a caller that never wired the context gets
+    // the old behaviour, but the gap is visible in the log rather than looking
+    // like a passing check.
+    console.warn(
+      `cortex: plugin-runtime has no coverageCtx — skipping the ADR-0024 §OQ9 ` +
+        `re-check for unload of "${removingId}" (cortex#2504).`,
+    );
+    return null;
+  }
+  const current: RendererCoverageInput[] = [];
+  const prospective: RendererCoverageInput[] = [];
+  for (const [id, h] of deps.rendererHandles) {
+    const entry = {
+      kind: h.renderer.kind,
+      subscribe: h.renderer.surfaceConfig.subjects,
+    };
+    current.push(entry);
+    if (id !== removingId) prospective.push(entry);
+  }
+  return refuseIfMutationBreaksCoverage(current, prospective, deps.coverageCtx);
+}
+
 export async function unloadLivePlugin(
   deps: PluginRuntimeDeps,
   instanceId: string,
 ): Promise<MutationResult> {
   const handle = deps.rendererHandles.get(instanceId);
   if (handle) {
+    // cortex#2504 — re-enforce the §OQ9 coverage floor BEFORE detaching.
+    // This is the erosion path the rule names: hot-remove the only `paging`
+    // renderer and the stack keeps running with an inert `local-projection`,
+    // believing it is monitored. Refuse the mutation; leave the live set as-is.
+    const refusal = coverageRefusalForProspective(deps, instanceId);
+    if (refusal !== null) {
+      return { ok: false, detail: `renderer "${instanceId}" ${refusal}` };
+    }
     handle.unregister();
     await handle.renderer.stop();
     deps.rendererHandles.delete(instanceId);
