@@ -658,8 +658,14 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // The hint must name a REAL cause and a REAL next step. It used to say
     // "G-1111 pending", a ticket that closed 2026-05-19 (cortex#335) — which
     // sent principals chasing a phantom for two months (cortex#1875).
-    expect(dormantLines[0]!).toContain("no NATS link");
-    expect(dormantLines[0]!).toContain("nats.url");
+    // It must name ALL THREE disabled-runtime causes, not just the first —
+    // "every configured subscriber failed to bind" is a case where nats.url is
+    // correct and no connect error was ever logged.
+    expect(dormantLines[0]!).toContain("came up disabled");
+    expect(dormantLines[0]!).toContain("nats.url unset");
+    expect(dormantLines[0]!).toContain("the broker connect failed");
+    expect(dormantLines[0]!).toContain("failed to bind");
+    expect(dormantLines[0]!).toContain('grep this log for "myelin-runtime:"');
     expect(dormantLines[0]!).not.toContain("G-1111");
     expect(dormantLines[0]!).toContain(
       "tasks.code-review.* envelopes will not be claimed by this consumer",

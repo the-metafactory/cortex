@@ -164,7 +164,7 @@ Two consumer classes live on the same transport but at different latency / durab
 
 Cortex's projection layer (Mission Control DB on D1) checkpoints `last_event_id` per JetStream stream so reconnects resume cleanly. This is the operational meaning of **lost event ≠ lost state** — even if cortex's process crashes mid-stream, the dashboard reconstructs by replaying from the last checkpoint.
 
-`system.*` events specifically (per §3.3) require JetStream; the §4.6 fail-safe rule depends on durability for `system.adapter.degraded` etc. to reach pager-class subscribers.
+`system.*` events specifically (per §3.3) require JetStream; the [ADR-0024](adr/0024-pluggable-surface-adapters.md) §OQ9 fail-safe rule depends on durability for `system.adapter.degraded` etc. to reach pager-class subscribers.
 
 ### 3.4 Cortex's spine — the in-process flow
 
@@ -432,7 +432,7 @@ Each M7 app is a microservice in the architectural sense: independently deployab
 - **Independent deployment.** cortex and pilot ship via separate `arc` packages, separate version cadences. A principal can run pilot at a different version than cortex; if their envelope contracts are intersecting versions, they interoperate.
 - **Data ownership.** Each M7 app owns its persistent state behind its own boundary. Cortex's Mission Control DB belongs to cortex; pilot's `errands.sqlite` belongs to pilot. No shared database, no foreign-key relationships across apps. State that needs to flow between apps flows as envelopes.
 - **Async-first communication.** Apps communicate via published envelopes (fire-and-forget), with M6 request/reply for synchronous needs. No app calls another app's HTTP endpoint as a primary integration mechanism. (CLI shell-outs for transitional integrations — e.g. `pilot fetch <PR>` — are tolerated short-term and tracked for removal.)
-- **Failure isolation.** An M7 app crashing degrades the system gracefully — its envelopes stop flowing, its surfaces go dark, but other apps keep running. The bus's `system.adapter.*` events make this visible per `src/bus/system-events.ts` + §4.6.
+- **Failure isolation.** An M7 app crashing degrades the system gracefully — its envelopes stop flowing, its surfaces go dark, but other apps keep running. The bus's `system.adapter.*` events make this visible per `src/bus/system-events.ts` + [ADR-0024](adr/0024-pluggable-surface-adapters.md) §OQ9.
 
 The microservices framing also says what cortex is NOT: cortex is not a monolith with multiple internal "services" calling each other through in-process function calls dressed up as services. Cortex is **one** microservice — internally decomposed (bus / surface / adapters / runner / taps) for code-organisation reasons, but a single deployable unit that talks to its peers (pilot, signal-collector, etc.) over the bus.
 

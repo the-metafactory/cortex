@@ -475,17 +475,19 @@ export function wireReviewConsumers(
       // cortex#334 — distinguish "ready" (subscription open) from
       // "DORMANT" (`subscribePull` returned null). The previous
       // unconditional "ready" line misled principals into chasing phantom
-      // misconfigs. DORMANT means the MyelinRuntime has no NATS link — see
+      // misconfigs. DORMANT means the MyelinRuntime came up disabled — see
       // the three disabled-runtime returns in `src/bus/myelin/runtime.ts`
       // (no `nats.url`, primary connect failed, or every configured push
-      // subscriber failed to bind).
+      // subscriber failed to bind). The log line names all three: the third
+      // has a healthy broker and a correct `nats.url`, so a hint that blamed
+      // only the connection would misdirect exactly as "G-1111 pending" did.
       if (started.subscribed) {
         console.log(
           `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"}`,
         );
       } else {
         console.log(
-          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime has no NATS link (tasks.code-review.* envelopes will not be claimed by this consumer; check nats.url in cortex.yaml and grep this log for "myelin-runtime: failed to connect")`,
+          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.code-review.* envelopes will not be claimed by this consumer). One of: nats.url unset, the broker connect failed, or every configured subscriber failed to bind — grep this log for "myelin-runtime:" to see which`,
         );
       }
 

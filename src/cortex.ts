@@ -2950,9 +2950,10 @@ export async function startCortex(
       } else {
         console.log(
           `cortex: dev.implement consumer${scopeTag} DORMANT for agent=${consumer.agent.id} — ` +
-            `cortex MyelinRuntime has no NATS link (${pattern} envelopes will not be ` +
-            `claimed by this consumer; check nats.url in cortex.yaml and grep this log ` +
-            `for "myelin-runtime: failed to connect")`,
+            `cortex MyelinRuntime came up disabled — no subscriptions are open ` +
+            `(${pattern} envelopes will not be claimed by this consumer). One of: ` +
+            `nats.url unset, the broker connect failed, or every configured subscriber ` +
+            `failed to bind — grep this log for "myelin-runtime:" to see which`,
         );
       }
     } catch (err) {

@@ -1,8 +1,8 @@
 /**
  * Surface router (cortex MIG-1.9, cortex#25 + #27).
  *
- * Per `/tmp/g-1111-spec.md` §5: the in-process fan-out point that
- * dispatches one validated envelope to N matching surface adapters.
+ * The in-process fan-out point that dispatches one validated envelope
+ * to N matching surface adapters.
  * Adapters declare interest via NATS-style subject patterns plus an
  * optional payload filter; the router applies broker-side subject
  * matching first (cheap), then payload filtering (expressive), then

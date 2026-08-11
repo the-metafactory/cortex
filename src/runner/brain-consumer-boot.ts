@@ -687,8 +687,10 @@ export function wireBrainConsumers(
           `cortex: brain consumer DORMANT for agent=${agent.id} kind=exec ` +
             `capabilities=[${capSummary}] ` +
             `gate=${opts.surfacePrincipalGate !== undefined ? "surface" : "deny-all"} ` +
-            `— cortex MyelinRuntime has no NATS link ` +
-            `(tasks.{capability} envelopes will not be claimed by this brain; check nats.url in cortex.yaml and grep this log for "myelin-runtime: failed to connect")`,
+            `— cortex MyelinRuntime came up disabled — no subscriptions are open ` +
+            `(tasks.{capability} envelopes will not be claimed by this brain). One of: ` +
+            `nats.url unset, the broker connect failed, or every configured subscriber ` +
+            `failed to bind — grep this log for "myelin-runtime:" to see which`,
         );
       }
     } catch (err) {

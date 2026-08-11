@@ -186,7 +186,7 @@ export function wireReleaseConsumers(
         );
       } else {
         console.log(
-          `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime has no NATS link (tasks.release.cut envelopes will not be claimed by this consumer; check nats.url in cortex.yaml and grep this log for "myelin-runtime: failed to connect")`,
+          `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime came up disabled — no subscriptions are open (tasks.release.cut envelopes will not be claimed by this consumer). One of: nats.url unset, the broker connect failed, or every configured subscriber failed to bind — grep this log for "myelin-runtime:" to see which`,
         );
       }
       // CO-2 — extra offering scopes (federated/public) beyond the primary
