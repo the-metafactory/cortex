@@ -186,7 +186,7 @@ export function wireReleaseConsumers(
         );
       } else {
         console.log(
-          `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.release.cut envelopes will not be claimed by this consumer)`,
+          `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime has no NATS link (tasks.release.cut envelopes will not be claimed by this consumer; check nats.url in cortex.yaml and grep this log for "myelin-runtime: failed to connect")`,
         );
       }
       // CO-2 — extra offering scopes (federated/public) beyond the primary

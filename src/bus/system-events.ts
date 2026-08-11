@@ -1,7 +1,7 @@
 /**
  * MIG-3b-ii: `system.*` envelope constructors.
  *
- * Per G-1111 §3.5, the `system.*` operational domain answers "what is grove
+ * The `system.*` operational domain answers "what is grove
  * itself doing right now?" — adapter health, inbound dispatch lifecycle,
  * subscription state, buffer pressure, process lifecycle. The 2026-05-09
  * outage is the canonical motivating incident: with N Discord adapters in
@@ -31,7 +31,7 @@
  *     no frontier-model processing.
  *
  * **Known spec gap — correlation_id format:**
- *   The G-1111 §3.5.6 convention defines correlation_id strings like
+ *   The correlation-id convention defines strings like
  *   `"adapter:{adapter_id}:{disconnected_since_iso}"`, but the vendored myelin
  *   envelope schema (G-1100.B) constrains `correlation_id` to UUID format —
  *   non-UUID values fail validation downstream. For MIG-3b-ii we therefore
@@ -191,7 +191,7 @@ export interface SystemAdapterDegradedOpts {
 }
 
 /**
- * Construct a `system.adapter.degraded` envelope per G-1111 §3.5.4.
+ * Construct a `system.adapter.degraded` envelope.
  *
  * Emitted once when an adapter has been disconnected long enough to cross
  * the principal-configured threshold (default 60 s). Mandatory paging event
@@ -249,7 +249,7 @@ export interface SystemAdapterRecoveredOpts {
 }
 
 /**
- * Construct a `system.adapter.recovered` envelope per G-1111 §3.5.4.
+ * Construct a `system.adapter.recovered` envelope.
  *
  * Pairs with the `degraded` event of the same `(adapter_id, disconnected_since)`
  * tuple. Surfaces use the pair to render incident length without parsing
@@ -303,7 +303,7 @@ export interface SystemAdapterDisconnectedOpts {
 }
 
 /**
- * Construct a `system.adapter.disconnected` envelope per G-1111 §3.5.3.
+ * Construct a `system.adapter.disconnected` envelope.
  *
  * Emitted on every shard disconnect — including transient flaps that recover
  * within the degraded threshold. Surfaces filter on `was_clean` to separate
@@ -380,7 +380,7 @@ export interface SystemInboundAbortedOpts {
 }
 
 /**
- * Construct a `system.inbound.aborted` envelope per G-1111 §3.5.4.
+ * Construct a `system.inbound.aborted` envelope.
  *
  * Replaces the bare `AbortError` log of the 2026-05-09 incident with a
  * structured envelope carrying the `timeout_source` enum, so a principal
@@ -892,8 +892,8 @@ export interface SystemAccessSignedBy {
 export interface SystemAccessDeniedReason {
   /**
    * Discriminator — `"unknown_principal"` | `"insufficient_role"`
-   * | `"sovereignty_mismatch"` today. Future kinds append per
-   * G-1111 §3.1 (no wire break).
+   * | `"sovereignty_mismatch"` today. Future kinds append
+   * (no wire break).
    *
    * cortex#932 (P-14 U0.2) — the consumer-side fail-closed drop sites
    * emit on this same open record. Their kinds (no wire break — the

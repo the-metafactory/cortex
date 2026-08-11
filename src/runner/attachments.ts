@@ -22,7 +22,7 @@ import {
  * timeout (TimeoutSourceError) during inbound attachment download.
  *
  * The adapter outbound path (Discord CDN fetch) sits in the `pre_dispatch`
- * phase per G-1111 §3.5.4: it runs before the message reaches the CC session
+ * phase (`src/bus/system-events.ts`): it runs before the message reaches the CC session
  * spawn. Today the timeout is caught and the attachment is reported as a
  * graceful failure (so the user gets a sensible "Download error" message);
  * this hook lets the caller emit a `system.inbound.aborted` envelope

@@ -334,7 +334,10 @@ describe("startCortex — release-consumer boot wiring (cortex#835 F-4.1)", () =
     );
     expect(dormantLines.length).toBe(1);
     expect(dormantLines[0]!).toContain("agent=forge");
-    expect(dormantLines[0]!).toContain("G-1111 pending");
+    // Real cause + real next step, not the retired "G-1111 pending" pointer.
+    expect(dormantLines[0]!).toContain("no NATS link");
+    expect(dormantLines[0]!).toContain("nats.url");
+    expect(dormantLines[0]!).not.toContain("G-1111");
 
     const readyLines = logs.filter((l) =>
       l.includes("cortex: release consumer ready"),

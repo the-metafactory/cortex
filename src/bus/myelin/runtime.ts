@@ -53,7 +53,7 @@ import {
  * Per-envelope handler. Receives validated envelopes from any active
  * subscription, with the actual NATS subject (so wildcard-pattern
  * subscribers can route on the concrete subject — see
- * `src/bus/surface-router.ts`, G-1111.A).
+ * `src/bus/surface-router.ts`).
  *
  * IAW Phase F-3d (cortex#666) — `sourceLink` ADDITIVELY tags WHICH pool
  * link (and therefore which federation network) delivered an inbound
@@ -104,7 +104,7 @@ export interface MyelinRuntime {
    * Publish an envelope to NATS.
    *
    * Subject is derived from `envelope.sovereignty.classification` +
-   * `envelope.type` per G-1111 §3.1 and the myelin grammar:
+   * `envelope.type` per the myelin subject grammar:
    *
    *   - `classification === "local"`     → `local.{principal}.{type}`
    *   - `classification === "federated"` → `federated.{principal}.{type}`

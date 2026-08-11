@@ -312,8 +312,8 @@ export class BusPeerHarness implements SessionHarness {
           // Terminal-envelope detection — when the peer signals end of
           // the dispatch, close the inbound queue so the generator
           // can exit cleanly. Conventional terminal types per
-          // G-1111 §3.4. Runs INSIDE the same chain link as the
-          // preceding push, so the queue contains every prior
+          // `docs/architecture.md` §7.3. Runs INSIDE the same chain link as
+          // the preceding push, so the queue contains every prior
           // envelope before close fires (Echo finding #2 fix).
           if (
             envelope.type === "dispatch.task.completed" ||

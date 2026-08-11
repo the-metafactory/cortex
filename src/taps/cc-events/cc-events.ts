@@ -1,12 +1,12 @@
 /**
  * MIG-5b — `cc.*` envelope constructor for relay-side bus publishing.
  *
- * Per G-1111 §7.4 ("Relationship to existing in-process taxonomy"), the
- * pre-myelin Claude Code hook taxonomy (`agent.task.started`,
- * `tool.bash.executed`, etc.) co-exists with the cross-process G-1111
- * vocabulary. The path forward is "Some in-process events MAY be lifted to
- * the bus by cortex-relay" — same correlation_id, separate vocabulary —
- * which is what this helper enables.
+ * Two taxonomies co-exist on purpose. The pre-myelin Claude Code hook
+ * taxonomy (`agent.task.started`, `tool.bash.executed`, etc.) is
+ * IN-PROCESS; the bus vocabulary (`src/bus/system-events.ts`,
+ * `src/bus/dispatch-events.ts`) is CROSS-PROCESS. They are not merged:
+ * some in-process events are *lifted* to the bus by cortex-relay — same
+ * correlation_id, separate vocabulary — which is what this helper enables.
  *
  * The cortex-relay (cc-events tap) reads CC hooks from
  * `~/.claude/events/raw/` (the hook-substrate boundary — stays put), applies
@@ -42,7 +42,7 @@
  *     (file paths, tool names, command previews) — principal-only, no
  *     federation, no frontier-model processing.
  *   - `type` is the PublishedEvent's `event_type` verbatim — it already has
- *     G-1111-grammar shape (`agent.task.started`, `tool.bash.executed`, etc.)
+ *     dotted `{entity}.{action}` grammar (`agent.task.started`, `tool.bash.executed`)
  *     thanks to the existing taxonomy in `hooks/lib/event-taxonomy.ts`.
  *   - `payload` carries the full PublishedEvent including its own event_id,
  *     so a downstream consumer that wants the legacy taxonomy fields can

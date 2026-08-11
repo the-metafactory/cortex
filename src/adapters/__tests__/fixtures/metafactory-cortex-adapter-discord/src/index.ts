@@ -111,7 +111,7 @@ export interface AdapterPayloadFilter {
  * and a dedicated `kind: discord-channel` renderer lifts them out at
  * MIG-7.2d. Until then, `DiscordAdapter` reads them via `this.infra.*`.
  *
- * Anti-pattern note (G-1111 §4.6.2): a degraded adapter publishing its OWN
+ * Anti-pattern note (ADR-0024 §OQ9): a degraded adapter publishing its OWN
  * `degraded` event is the wrong long-term home — that belongs to a sibling
  * `connection-watcher` component. MIG-3b-ii intentionally took the shorter
  * path so the wiring exists end-to-end; the watcher refactor is tracked as
@@ -301,7 +301,8 @@ export class DiscordAdapter implements PlatformAdapter {
       {
         instanceId: this.instanceId,
         // MIG-3b-ii: emit `system.adapter.{degraded,recovered}` envelopes so
-        // principals get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
+        // principals get out-of-band visibility (see `system.adapter.disconnected`
+        // in `src/bus/system-events.ts` + ADR-0024 §OQ9).
         // The callbacks are also wired to console.error for log retention;
         // the bus emission is additive, not a replacement.
         onDegraded: ({ instanceId, thresholdMs, since }) => {
@@ -1332,7 +1333,7 @@ export class DiscordAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * MIG-3b — Surface-adapter face for the surface-router (G-1111.A).
+   * MIG-3b — Surface-adapter face for the surface-router.
    *
    * Returns a fresh `RenderTarget` describing the bus-envelope-rendering
    * side of this Discord adapter:

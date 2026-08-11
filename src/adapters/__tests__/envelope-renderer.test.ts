@@ -79,17 +79,17 @@ describe("formatEnvelopeAsMarkdown — correlation_id", () => {
 
 describe("formatEnvelopeAsMarkdown — payload code block", () => {
   test("wraps payload in a ```json fenced block", () => {
-    const out = formatEnvelopeAsMarkdown(makeEnvelope({ payload: { ticket: "G-1111" } }));
+    const out = formatEnvelopeAsMarkdown(makeEnvelope({ payload: { ticket: "TICKET-42" } }));
     expect(out).toContain("```json");
     expect(out).toContain("```");
   });
 
   test("renders payload via JSON.stringify with 2-space indent", () => {
     const out = formatEnvelopeAsMarkdown(
-      makeEnvelope({ payload: { ticket: "G-1111", urgency: "high" } }),
+      makeEnvelope({ payload: { ticket: "TICKET-42", urgency: "high" } }),
     );
     // Pretty-printing → keys on their own indented lines.
-    expect(out).toContain('  "ticket": "G-1111"');
+    expect(out).toContain('  "ticket": "TICKET-42"');
     expect(out).toContain('  "urgency": "high"');
   });
 
@@ -102,7 +102,7 @@ describe("formatEnvelopeAsMarkdown — payload code block", () => {
 
   test("round-trips a complex nested payload through JSON.parse", () => {
     const payload = {
-      ticket: "G-1111",
+      ticket: "TICKET-42",
       reviewers: ["luna", "echo"],
       meta: { sovereignty: "local", attempts: 3, frontier: false },
     };
@@ -213,7 +213,7 @@ describe("formatEnvelopeAsMarkdown — overall shape", () => {
       makeEnvelope({
         type: "attention.item.enqueued",
         correlation_id: "22222222-2222-4222-8222-222222222222",
-        payload: { ticket: "G-1111" },
+        payload: { ticket: "TICKET-42" },
       }),
     );
     const lines = out.split("\n");
@@ -222,7 +222,7 @@ describe("formatEnvelopeAsMarkdown — overall shape", () => {
     expect(lines[2]).toBe("{");
     // Line 3 is the first payload field — exact whitespace pinned by
     // JSON.stringify's indent=2 contract.
-    expect(lines[3]).toBe('  "ticket": "G-1111"');
+    expect(lines[3]).toBe('  "ticket": "TICKET-42"');
     expect(lines[4]).toBe("}");
     expect(lines[5]).toBe("```");
     expect(lines).toHaveLength(6);

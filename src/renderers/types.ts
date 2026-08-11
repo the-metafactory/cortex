@@ -12,7 +12,7 @@
  * each instance up alongside the platform adapters and tear them down at
  * shutdown.
  *
- * The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform classes
+ * The ADR-0024 §OQ9 fail-safe rule requires ≥2 distinct platform classes
  * covering `local.{principal}.system.>` — dashboard + pagerduty is the
  * "recommended pair" the plan-cortex-migration.md §4 MIG-7.2d step calls
  * for. cli-tail and webhook-out kinds round out the discriminated union

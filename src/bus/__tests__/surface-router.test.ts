@@ -1,5 +1,5 @@
 /**
- * Tests for `src/bus/surface-router.ts` — G-1111.A.
+ * Tests for `src/bus/surface-router.ts`.
  *
  * Cover:
  *   - subjectMatches: > terminal, * single segment, literals, edge cases

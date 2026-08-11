@@ -7,7 +7,7 @@
 
 - `docs/plan-cortex-migration.md` — the working document covering current-state inventory + phase plan + checklists for the grove-v2 → cortex migration.
 - `docs/design-collaboration-surface.md` — the layer-7 framing + the flybridge cockpit metaphor; this design supersedes its "ecosystem L1–L7" framing per §1.2 below.
-- `docs/design-event-taxonomy.md` — G-1111 event vocabulary including §3.5 `system.*` operational domain + §4.6 fail-safe subscription rule.
+- The event vocabulary cortex emits and consumes is owned **in this repo**: §3 below for the subject classes and event architecture, `src/bus/system-events.ts` for the `system.*` operational domain, `src/bus/dispatch-events.ts` for the `dispatch.task` lifecycle, and [ADR-0024](adr/0024-pluggable-surface-adapters.md) §OQ9 for the renderer fail-safe coverage rule. *(There is no `design-event-taxonomy.md` here. An earlier grove-era draft — "G-1111" — was never ported; see `docs/plan-cortex-migration.md` for its provenance.)*
 - `~/Developer/myelin/README.md`, `~/Developer/myelin/specs/namespace.md`, myelin#7 (closed) — the canonical M1–M7 stack model.
 - `~/Developer/myelin/.specify/specs/f-018-my-400/spec.md` — M4 identity spec.
 - `~/Developer/myelin/docs/design-agent-task-routing.md` (currently myelin PR #36 — three distribution modes + M7 stratification + event lifecycle) — the M7 task-routing pattern cortex's dispatch handler implements.
@@ -45,7 +45,7 @@ Both failures share one root cause: **a single Discord surface is the only place
 
 **NATS + myelin landed underneath, and forced the OSI-style layered model into the open.** Sovereignty travels in the envelope (myelin); agents publish structured events to a bus (NATS) instead of message-creating in Discord; signal/OTLP arrives as a separate observability path on the same transport.
 
-The canonical layer model is **M1–M7 — the Myelin layer model** (myelin#7, JC + Andreas converged 2026-05-07): connectivity / transport / envelope / identity / discovery / composition / surfaces. G-1100..G-1110 implemented the bus glue (myelin client + envelope validator + subscription primitive at M2–M3); G-1111 specifies the M7-application-side event vocabulary cortex emits and consumes.
+The canonical layer model is **M1–M7 — the Myelin layer model** (myelin#7, JC + Andreas converged 2026-05-07): connectivity / transport / envelope / identity / discovery / composition / surfaces. G-1100..G-1110 implemented the bus glue (myelin client + envelope validator + subscription primitive at M2–M3); the M7-application-side event vocabulary cortex emits and consumes is specified here in §3 and in `src/bus/{system,dispatch}-events.ts`.
 
 Once the bus appeared, the question "which layer owns which concern?" became operationally real. You can't have your transport client (M2), your envelope handling (M3), your dispatch handler, your workflow runner, *and* your Discord surface adapter all sharing the same `src/bot/` files anymore — M1–M6 are real now, with their own contracts owned by myelin, and the M7 application that consumes them needs its own home with a clean internal split.
 
@@ -136,7 +136,7 @@ webhooks, cron)         │     mf.net-{op}.log.>      structured logs │   (Ve
 
 | Class | Subject prefix | Carries | Audience | Retention |
 |-------|----------------|---------|----------|-----------|
-| **Events** | `mf.net-{op}.events.>` | Domain + process lifecycle: `review.*`, `dispatch.*`, `attention.*`, `gate.*`, `system.*` (G-1111 vocabulary) | Hot-path: cortex subscriber → principal surfaces | JetStream — durable, replayable, last_event_id checkpointable |
+| **Events** | `mf.net-{op}.events.>` | Domain + process lifecycle: `review.*`, `dispatch.*`, `attention.*`, `gate.*`, `system.*` | Hot-path: cortex subscriber → principal surfaces | JetStream — durable, replayable, last_event_id checkpointable |
 | **Trace** | `mf.net-{op}.trace.>` | OTLP spans (CC tool calls, skill invocations, subagent spawn, session lifecycle) | Cold-path: signal-collector → Tempo / Honeycomb / Datadog | Per OTLP backend; not on JetStream |
 | **Metric** | `mf.net-{op}.metric.>` | Counters / gauges | Cold-path: signal-collector → TSDB (VictoriaMetrics / Prometheus) | Per TSDB |
 | **Log** | `mf.net-{op}.log.>` | Structured logs | Cold-path: signal-collector → Loki | Per logger |
@@ -164,7 +164,7 @@ Two consumer classes live on the same transport but at different latency / durab
 
 Cortex's projection layer (Mission Control DB on D1) checkpoints `last_event_id` per JetStream stream so reconnects resume cleanly. This is the operational meaning of **lost event ≠ lost state** — even if cortex's process crashes mid-stream, the dashboard reconstructs by replaying from the last checkpoint.
 
-`system.*` events specifically (per G-1111 §3.5.5) require JetStream; the §4.6 fail-safe rule depends on durability for `system.adapter.degraded` etc. to reach pager-class subscribers.
+`system.*` events specifically (per §3.3) require JetStream; the §4.6 fail-safe rule depends on durability for `system.adapter.degraded` etc. to reach pager-class subscribers.
 
 ### 3.4 Cortex's spine — the in-process flow
 
@@ -183,7 +183,7 @@ inbound from a surface ─→ presence adapter ─→ tap (publish dispatch.* en
         adapters render to their platform; renderers project to dashboard / pagerduty / ...
 ```
 
-The **surface-router** (G-1111.A target) is the single in-process fan-out point. Adapters and renderers do not subscribe to NATS directly; they register with the surface-router and the surface-router owns the JetStream consumer. Per `docs/design-event-taxonomy.md` §7.6 anti-pattern: "DO NOT subscribe surfaces directly to NATS."
+The **surface-router** (`src/bus/surface-router.ts`) is the single in-process fan-out point. Adapters and renderers do not subscribe to NATS directly; they register with the surface-router and the surface-router owns the JetStream consumer. **Anti-pattern (binding): DO NOT subscribe surfaces directly to NATS.**
 
 #### Direction A — dispatch-source inbound envelopes (Stage 4-B, cortex#409)
 
@@ -242,7 +242,7 @@ What cortex depends on, what cortex must not do, and what to read in each upstre
 | Spec home | `the-metafactory/myelin` — abstract bus interface; NATS is the v1 concrete implementation. |
 | Status | NATS pub/sub via `nats@2.x` JS client is operational; abstract transport interface (myelin-side spec) in flight. |
 | Cortex's dependency | `nats@2.x` JS client. Connection model: leaf node connecting to a hub. |
-| Cortex's contract | Cortex publishes on subjects under `local.{org}.>` (per myelin's M3 namespace spec) and `mf.net-{op}.>` per the §3 event architecture. JetStream is **required** for `system.*` events per G-1111 §3.5.5; plain NATS Core suffices otherwise. |
+| Cortex's contract | Cortex publishes on subjects under `local.{org}.>` (per myelin's M3 namespace spec) and `mf.net-{op}.>` per the §3 event architecture. JetStream is **required** for `system.*` events per §3.3; plain NATS Core suffices otherwise. |
 | Coupling discipline | Cortex MAY copy patterns from the bus client; cortex MUST NOT couple to NATS-specific surface area beyond what myelin's M2 abstraction exposes. |
 | Reading order | `~/Developer/myelin/specs/namespace.md` for subject grammar → upstream NATS client docs for the API. |
 
@@ -419,7 +419,7 @@ An M7 app's public surface is **the set of envelopes it publishes + the set it c
 For cortex, concretely:
 
 - **Inbound contract:** cortex consumes `local.{org}.{stack}.tasks.@{did-encoded-assistant}.{capability}` Direct/Delegate task envelopes (from adapters, taps, dashboards, or peer apps), `local.{org}.review.*` (from pilot), `local.{org}.attention.item.*` (from any source), `local.{org}.system.*` (operational events from any M7 app), and a few more. Each subject has a documented payload schema in cortex's domain catalogue.
-- **Outbound contract:** cortex publishes `local.{org}.dispatch.task.{started,progress,completed,failed,aborted}` (workflow runner emissions), `local.{org}.system.adapter.*` (per G-1111 §3.5), `local.{org}.review.*.decision` (principal decisions out of the surface).
+- **Outbound contract:** cortex publishes `local.{org}.dispatch.task.{started,progress,completed,failed,aborted}` (workflow runner emissions), `local.{org}.system.adapter.*` (per `src/bus/system-events.ts`), `local.{org}.review.*.decision` (principal decisions out of the surface).
 - The envelope schemas are versioned, append-only, and live in cortex's repo (`docs/api/` or `src/contracts/` — TBD; see open questions in the migration plan).
 - A consumer of cortex's contract can — in principle — replace cortex with a re-implementation that publishes/consumes the same envelopes, and the rest of the system doesn't notice. **That's the load-bearing property.**
 
@@ -432,7 +432,7 @@ Each M7 app is a microservice in the architectural sense: independently deployab
 - **Independent deployment.** cortex and pilot ship via separate `arc` packages, separate version cadences. A principal can run pilot at a different version than cortex; if their envelope contracts are intersecting versions, they interoperate.
 - **Data ownership.** Each M7 app owns its persistent state behind its own boundary. Cortex's Mission Control DB belongs to cortex; pilot's `errands.sqlite` belongs to pilot. No shared database, no foreign-key relationships across apps. State that needs to flow between apps flows as envelopes.
 - **Async-first communication.** Apps communicate via published envelopes (fire-and-forget), with M6 request/reply for synchronous needs. No app calls another app's HTTP endpoint as a primary integration mechanism. (CLI shell-outs for transitional integrations — e.g. `pilot fetch <PR>` — are tolerated short-term and tracked for removal.)
-- **Failure isolation.** An M7 app crashing degrades the system gracefully — its envelopes stop flowing, its surfaces go dark, but other apps keep running. The bus's `system.adapter.*` events make this visible per G-1111 §3.5 + §4.6.
+- **Failure isolation.** An M7 app crashing degrades the system gracefully — its envelopes stop flowing, its surfaces go dark, but other apps keep running. The bus's `system.adapter.*` events make this visible per `src/bus/system-events.ts` + §4.6.
 
 The microservices framing also says what cortex is NOT: cortex is not a monolith with multiple internal "services" calling each other through in-process function calls dressed up as services. Cortex is **one** microservice — internally decomposed (bus / surface / adapters / runner / taps) for code-organisation reasons, but a single deployable unit that talks to its peers (pilot, signal-collector, etc.) over the bus.
 
@@ -701,7 +701,7 @@ renderers:                          # multi-agent / non-agent-bound surfaces
       - source: system.adapter.degraded
         into: status-banner
 
-  - kind: pagerduty                 # operational events out (per G-1111 §4.6)
+  - kind: pagerduty                 # operational events out (per ADR-0024 §OQ9)
     routingKey: ${PAGERDUTY_ROUTING_KEY}
     subscribe:
       - "local.{org}.system.adapter.degraded"
@@ -751,7 +751,7 @@ To understand what cortex IS in two hours:
 2. **20 min** — myelin#7 issue body (the canonical M1–M7 stack model; until it lands as `myelin/docs/architecture.md`)
 3. **15 min** — `myelin/docs/design-agent-task-routing.md` (the M7 task routing pattern cortex's dispatch implements — §7 of this doc)
 4. **30 min** — `docs/design-collaboration-surface.md` (cortex's lineage as the layer-7 surface + flybridge cockpit framing + the event architecture diagram)
-5. **30 min** — `docs/design-event-taxonomy.md` (cortex's M7-side event vocabulary, including the system.* operational domain)
+5. **30 min** — §3 above + `src/bus/{system,dispatch}-events.ts` (cortex's M7-side event vocabulary, including the system.* operational domain)
 6. **15 min** — `docs/iteration-collaboration-surface.md` (G-1100 ladder retro — what got built, what was learned)
 7. **30 min** — this design doc (synthesis: what cortex IS, the M7 app principles, agent + renderer model)
 8. **20 min** — `docs/plan-cortex-migration.md` (the working migration plan; only relevant during the grove-v2 → cortex transition)
@@ -763,7 +763,7 @@ Skip on first pass: signal collector internals (still design), pilot's internals
 ## 11. References
 
 - **Stack model** — myelin#7 (canonical; doc landing pending), `~/Developer/myelin/specs/namespace.md`, `~/Developer/myelin/schemas/envelope.schema.json`, `~/Developer/myelin/.specify/specs/f-018-my-400/spec.md`, `~/Developer/myelin/docs/design-agent-task-routing.md` (myelin PR #36 — three distribution modes + M7 stratification + event lifecycle), myelin#31 (chain-of-stamps signing — drives Delegate auditability).
-- **Lineage docs** — `docs/design-collaboration-surface.md` (PR #58 + #83 — includes the event architecture diagram), `docs/design-event-taxonomy.md` (PR #81), `docs/iteration-collaboration-surface.md` (PR #79).
+- **Lineage docs** — `docs/design-collaboration-surface.md` (PR #58 + #83 — includes the event architecture diagram), `docs/iteration-collaboration-surface.md` (PR #79).
 - **M7 sibling apps** — `~/Developer/pilot/README.md`, `~/Developer/signal/README.md` + `~/Developer/signal/docs/design-signal-bundle-migration.md`.
 - **Knowledge artefacts** — `~/Developer/compass/sops/*.md`, `~/Developer/blueprint/README.md`, `~/Developer/blueprint/docs/design-event-sync.md`.
 - **Distribution layer** — `~/Developer/arc/README.md`, existing manifests at `~/.local/share/metafactory/arc/repos/*/arc-manifest.yaml` (concrete examples).

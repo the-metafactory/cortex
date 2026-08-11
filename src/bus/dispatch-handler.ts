@@ -466,7 +466,8 @@ export class DispatchHandler extends EventEmitter {
 
   /**
    * MIG-3.8 / C-104 — Publish a `system.inbound.aborted` envelope for the
-   * adapter-outbound attachment-fetch timeout case (G-1111 §3.5.4). Fire-and-
+   * adapter-outbound attachment-fetch timeout case (`system.inbound.aborted`,
+   * `src/bus/system-events.ts`). Fire-and-
    * forget: errors from `runtime.publish` are swallowed + logged so a bus
    * outage can't break the attachment pipeline.
    *
@@ -895,7 +896,8 @@ export class DispatchHandler extends EventEmitter {
           undefined,
           // MIG-3.8 / C-104 — emit `system.inbound.aborted` when an attachment
           // download trips TimeoutSourceError. `pre_dispatch` phase per
-          // G-1111 §3.5.4 — attachment download runs before CC session spawn.
+          // `system.inbound.aborted` contract — attachment download runs before
+          // CC session spawn.
           ({ err }) => {
             this.publishInboundAborted({
               adapterId: adapter.instanceId,

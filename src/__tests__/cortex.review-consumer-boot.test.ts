@@ -600,7 +600,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // Test stands up a runtime whose `subscribePull` returns null
     // synchronously — same shape as the production disabled path —
     // and asserts the boot log carries DORMANT plus the actionable
-    // G-1111 hint, NOT the ready line.
+    // no-NATS-link hint, NOT the ready line.
     const onEnvelopeHandlers = new Set<EnvelopeHandler>();
     const published: Envelope[] = [];
     const subscribePullCalls: MyelinSubscribePullOpts[] = [];
@@ -655,7 +655,12 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     expect(dormantLines.length).toBe(1);
     expect(dormantLines[0]!).toContain("agent=sage");
     expect(dormantLines[0]!).toContain("flavors=[typescript]");
-    expect(dormantLines[0]!).toContain("G-1111 pending");
+    // The hint must name a REAL cause and a REAL next step. It used to say
+    // "G-1111 pending", a ticket that closed 2026-05-19 (cortex#335) — which
+    // sent principals chasing a phantom for two months (cortex#1875).
+    expect(dormantLines[0]!).toContain("no NATS link");
+    expect(dormantLines[0]!).toContain("nats.url");
+    expect(dormantLines[0]!).not.toContain("G-1111");
     expect(dormantLines[0]!).toContain(
       "tasks.code-review.* envelopes will not be claimed by this consumer",
     );

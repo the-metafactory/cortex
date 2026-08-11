@@ -687,8 +687,8 @@ export function wireBrainConsumers(
           `cortex: brain consumer DORMANT for agent=${agent.id} kind=exec ` +
             `capabilities=[${capSummary}] ` +
             `gate=${opts.surfacePrincipalGate !== undefined ? "surface" : "deny-all"} ` +
-            `— cortex MyelinRuntime subscriptions disabled ` +
-            `(G-1111 pending; tasks.{capability} envelopes will not be claimed by this brain)`,
+            `— cortex MyelinRuntime has no NATS link ` +
+            `(tasks.{capability} envelopes will not be claimed by this brain; check nats.url in cortex.yaml and grep this log for "myelin-runtime: failed to connect")`,
         );
       }
     } catch (err) {

@@ -298,8 +298,8 @@ export interface DevConsumerOpts {
 /**
  * Boot/log entry the consumer produces — surfaced so `src/cortex.ts` can
  * render a uniform "ready"/"DORMANT" line. `subscribed: false` when the
- * runtime is disabled (no NATS / G-1111 pending) so the boot path logs
- * honestly. Mirrors `ReviewConsumerStartedInfo`.
+ * runtime is disabled (no NATS link) so the boot path logs honestly.
+ * Mirrors `ReviewConsumerStartedInfo`.
  */
 export interface DevConsumerStartedInfo {
   agentId: string;

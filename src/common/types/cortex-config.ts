@@ -1161,7 +1161,7 @@ export type Agent = z.infer<typeof AgentSchema>;
  * this kind actually installed" is checked, with the same loud failure shape
  * the closed enum used to give a typo.
  *
- * The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform classes
+ * The ADR-0024 §OQ9 fail-safe rule requires ≥2 distinct platform classes
  * covering `local.{principal}.system.>` — that check fires at config-load (MIG-1.10),
  * not in the Zod schema. Unchanged by S4 (ADR-0024 D5, explicitly out of
  * scope for this slice — S6 extends it to distinguish a config error from an

@@ -996,7 +996,7 @@ function loadCortexShape(
   }
 
   // cortex#1893 (S12b-pre, ADR-0024 §OQ9) — the CONFIG-LOAD half of the
-  // G-1111 §4.6 renderer-coverage HARD-FAIL guard. Fails LOUDLY when the
+  // ADR-0024 §OQ9 renderer-coverage HARD-FAIL guard. Fails LOUDLY when the
   // CONFIGURED renderers do not, on their own, meet the ≥2-distinct-classes /
   // ≥1-effective-sink floor (e.g. `dashboard` alone — the inert stub can never
   // be the effective sink). The install-state half (a class whose bundle

@@ -203,7 +203,7 @@ function truncate(str: string, max: number): string {
 // Why a separate formatter family:
 //   The `formatEventForThread` / `formatCompletionSummary` / `formatChannelStart`
 //   helpers above operate on `PublishedEvent` — the in-process CC-hook event
-//   format. The bus path delivers G-1111 envelopes (different shape:
+//   format. The bus path delivers myelin envelopes (different shape:
 //   `envelope.payload.task_id`, `envelope.payload.agent_id`, etc.). Rather
 //   than overloading the existing formatters with discriminated-union
 //   payload handling, we add a parallel, intentionally-thin formatter for

@@ -1,10 +1,10 @@
 /**
- * cortex#1893 (S12b-pre, epic #1784) — the G-1111 §4.6 renderer-coverage
+ * cortex#1893 (S12b-pre, epic #1784) — the ADR-0024 §OQ9 renderer-coverage
  * boot HARD-FAIL guard. ADR-0024 §OQ9 (ratified 2026-07-11).
  *
  * ## Why this exists
  *
- * G-1111 §4.6 requires **≥2 distinct renderer platform classes** covering
+ * ADR-0024 §OQ9 requires **≥2 distinct renderer platform classes** covering
  * `local.{principal}.system.>` so a single degraded sink cannot blind the
  * principal to system events (`src/renderers/types.ts:15-21`). Today the pair
  * is `dashboard` + `pagerduty`, both in-tree. Once `pagerduty` extracts to a
@@ -228,7 +228,7 @@ export interface CoverageVerdict {
 }
 
 /**
- * Evaluate a renderer set against the G-1111 §4.6 fail-safe rule.
+ * Evaluate a renderer set against the ADR-0024 §OQ9 fail-safe rule.
  *
  * SCOPE: the rule applies only to stacks that opted into system alerting —
  * i.e. that configured at least one renderer covering `system.>`. A stack with
@@ -253,7 +253,7 @@ export function evaluateSystemCoverage(
 }
 
 const RULE_PREAMBLE =
-  "G-1111 §4.6 requires at least two distinct renderer platform classes " +
+  "ADR-0024 §OQ9 requires at least two distinct renderer platform classes " +
   "covering `local.{principal}.system.>`, with at least one EFFECTIVE " +
   "(delivering) sink, so a single degraded sink cannot blind the principal to " +
   "system events. The `dashboard` renderer is INERT (ADR-0005 §4: it buffers " +

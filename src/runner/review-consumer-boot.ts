@@ -473,16 +473,19 @@ export function wireReviewConsumers(
       // to `claude-code` in the log (matches the runtime fallthrough).
       //
       // cortex#334 — distinguish "ready" (subscription open) from
-      // "DORMANT" (subscribePull returned null; G-1111 pending or
-      // nats.subjects empty). The previous unconditional "ready" line
-      // misled principals into chasing phantom misconfigs.
+      // "DORMANT" (`subscribePull` returned null). The previous
+      // unconditional "ready" line misled principals into chasing phantom
+      // misconfigs. DORMANT means the MyelinRuntime has no NATS link — see
+      // the three disabled-runtime returns in `src/bus/myelin/runtime.ts`
+      // (no `nats.url`, primary connect failed, or every configured push
+      // subscriber failed to bind).
       if (started.subscribed) {
         console.log(
           `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"}`,
         );
       } else {
         console.log(
-          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.code-review.* envelopes will not be claimed by this consumer)`,
+          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime has no NATS link (tasks.code-review.* envelopes will not be claimed by this consumer; check nats.url in cortex.yaml and grep this log for "myelin-runtime: failed to connect")`,
         );
       }
 

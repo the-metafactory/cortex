@@ -11,7 +11,7 @@
  * `import type`, erased at runtime.
  *
  * Forwards bus envelopes to PagerDuty's events-v2 API
- * (`https://events.pagerduty.com/v2/enqueue`). The G-1111 §4.6 fail-safe rule
+ * (`https://events.pagerduty.com/v2/enqueue`). The ADR-0024 §OQ9 fail-safe rule
  * recommends PagerDuty as one of the two distinct platform classes subscribed
  * to `local.{principal}.system.>` so an operational alert reliably pages even
  * if the dashboard is the thing that broke.

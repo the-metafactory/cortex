@@ -390,7 +390,7 @@ agents:
 # -----------------------------------------------------------------------------
 # renderers — non-agent-bound surfaces (dashboards, pagerduty, etc.)
 # -----------------------------------------------------------------------------
-# G-1111 §4.6 / ADR-0024 §OQ9 — a stack that configures a renderer covering
+# ADR-0024 §OQ9 — a stack that configures a renderer covering
 # `local.{principal}.system.>` MUST provide at least TWO distinct platform
 # classes there, with at least one EFFECTIVE (delivering) sink. The `dashboard`
 # renderer is INERT (ADR-0005 §4 — it buffers but delivers nothing), so it

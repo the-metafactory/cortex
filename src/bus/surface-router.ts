@@ -1,5 +1,5 @@
 /**
- * G-1111.A — Surface router (cortex MIG-1.9).
+ * Surface router (cortex MIG-1.9, cortex#25 + #27).
  *
  * Per `/tmp/g-1111-spec.md` §5: the in-process fan-out point that
  * dispatches one validated envelope to N matching surface adapters.
@@ -120,7 +120,7 @@ export interface SurfaceAdapter {
     subject?: string,
   ): Promise<void>;
   /** Optional liveness probe. Currently unused by the router; reserved
-   *  for the dashboard's adapter-health panel (G-1111.E follow-on). */
+   *  for the dashboard's adapter-health panel. */
   health?(): Promise<{ ok: boolean; lag?: number }>;
 }
 
