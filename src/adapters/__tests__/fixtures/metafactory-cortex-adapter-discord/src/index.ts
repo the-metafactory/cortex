@@ -111,11 +111,21 @@ export interface AdapterPayloadFilter {
  * and a dedicated `kind: discord-channel` renderer lifts them out at
  * MIG-7.2d. Until then, `DiscordAdapter` reads them via `this.infra.*`.
  *
+ * ⚠️ **THIS FILE IS A FROZEN PRE-EXTRACTION SNAPSHOT — do not read it as the
+ * shipped adapter, and do not copy its `system.adapter.*` shape.** It exists
+ * to exercise the plugin loader against the MIG-3b-ii-era bundle layout. The
+ * real adapter lives in `metafactory-cortex-adapter-discord`, and since
+ * cortex#1797 (S12) it no longer publishes these envelopes at all — it calls
+ * the host-injected `AdapterSystemEventPort` and cortex publishes. cortex#2506
+ * was filed as a live self-emission bug against THIS FILE and closed as
+ * not-a-bug; if you are here because something pointed you at a violation,
+ * check the shipped bundle before filing.
+ *
  * Anti-pattern note (self-emission, `src/bus/system-events.ts`): a degraded adapter publishing its OWN
  * `degraded` event is the wrong long-term home — that belongs to a sibling
  * `connection-watcher` component. MIG-3b-ii intentionally took the shorter
- * path so the wiring exists end-to-end; the watcher refactor is tracked as
- * a follow-on iteration.
+ * path so the wiring exists end-to-end; the watcher refactor landed as
+ * cortex#1797's port extraction.
  */
 export interface DiscordAdapterInfra {
   /** Surface-router + log-prefix key. Cortex derives `${agent.id}-discord-${guildId}` while
