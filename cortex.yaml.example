@@ -400,11 +400,22 @@ agents:
 # operational alert reliably reaches the principal even if one sink is the thing
 # that broke.
 #
-# ⚠ The boot guard currently counts distinct `kind` STRINGS, not platform
-# classes (cortex#2503) — so `discord` + `slack` passes the check while both
-# are the same class (`chat-gateway`) and a single vendor outage blinds you.
-# Until that lands, choose your second class yourself; the guard will not
-# catch it for you.
+# Platform classes (cortex#2503) — the guard counts CLASSES, not kind names:
+#   chat-gateway     discord, slack, mattermost
+#   webhook-out      webhook-out, webhook-generic, mattermost (webhook mode)
+#   paging           pagerduty, opsgenie
+#   local-projection dashboard, cli-tail
+# `renderers[].kind` is an open string (ADR-0024 D5), so any of these can be
+# configured once a bundle registers it — a kind with no registered renderer
+# fails boot with UnimplementedRendererKindError. Registered in-tree today:
+# `dashboard`; `pagerduty` ships as a bundle. The rest are classified ahead of
+# time so they count correctly the moment they land.
+# So `discord` + `slack` is ONE class and is refused — one vendor outage would
+# take out both. Pick your second sink from a row that CANNOT overlap the first:
+# `mattermost` spans two rows, so `mattermost` + `discord` is refused too (that
+# mattermost might be in bot mode). A renderer kind cortex cannot classify is
+# never counted toward diversity; it only blocks boot if your remaining sinks
+# do not already satisfy the floor on their own.
 renderers:
   - kind: dashboard
     port: 8766
