@@ -126,11 +126,11 @@ All five pinned decisions and all outstanding open questions were ratified by th
 | `paging` | `pagerduty`, `opsgenie` | Out-of-band escalation; different vendor pool. |
 | `local-projection` | `dashboard`, `cli-tail` | In-process; survives any outbound vendor outage. |
 
-> ⚠ **`mattermost` appears in two rows, and that is a real ambiguity for a counting rule.** Its class depends on the mode it runs in, which the counting implementation cannot see. Carried over as-is rather than silently resolved — whoever fixes cortex#2503 must decide it, and must not let a kind that maps to two classes satisfy the diversity floor against itself.
+> **`mattermost` appears in two rows — resolved in cortex#2503.** Its class depends on the mode it runs in, which the config does not expose. It therefore contributes an *ambiguous* class: it can pair with a kind from either class, but it can never satisfy the diversity floor **against itself** — two mattermost renderers are one vendor whatever modes they run in. The counting rule enforces this by requiring two distinct *kinds* before it will resolve two distinct classes.
 
 **Cortex deliberately diverges from the retired source on one point:** G-1111 §4.6.1 made `local-projection` a mandatory floor. It is not, here — ADR-0005 §4 demoted `DashboardRenderer` to an inert ring-buffer stub, so it counts toward class *diversity* but can never be the effective sink (see the inert-`dashboard` interpretation above). That divergence is not new here: ADR-0005 §4 and §OQ9 above — both ratified 2026-07-11 — already treat `DashboardRenderer` as inert. This table only makes explicit that cortex therefore does not adopt the retired floor.
 
-> ⚠ **Known gap (not fixed by this ADR).** `evaluateSystemCoverage` (`src/renderers/coverage.ts`) currently counts distinct **`kind` strings**, and `RendererKindSchema` became an open `z.string().min(1)` in S4/D5. A `discord` + `slack` pair therefore satisfies the floor while being **one** platform class — fail-open against exactly the correlated-vendor blindness this rule exists to close. Tracked in **cortex#2503**; do not read the current implementation as the definition of the rule.
+> ✅ **Enforced as written since cortex#2503.** `evaluateSystemCoverage` (`src/renderers/coverage.ts`) resolves each covering kind through `PLATFORM_CLASS_BY_KIND` and counts **classes**. It previously counted distinct `kind` STRINGS, which — with `RendererKindSchema` an open `z.string().min(1)` since S4/D5 — let `discord` + `slack` satisfy the floor while being one class. A kind absent from the map is **refused**, never treated as a class of its own; that was the same fail-open wearing a plugin's clothes.
 
 #### Re-enforcement on reload — NOT recorded here (2026-08-11)
 

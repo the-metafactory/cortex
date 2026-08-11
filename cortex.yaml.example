@@ -400,11 +400,14 @@ agents:
 # operational alert reliably reaches the principal even if one sink is the thing
 # that broke.
 #
-# ⚠ The boot guard currently counts distinct `kind` STRINGS, not platform
-# classes (cortex#2503) — so `discord` + `slack` passes the check while both
-# are the same class (`chat-gateway`) and a single vendor outage blinds you.
-# Until that lands, choose your second class yourself; the guard will not
-# catch it for you.
+# Platform classes (cortex#2503) — the guard counts CLASSES, not kind names:
+#   chat-gateway     discord, slack, mattermost
+#   webhook-out      webhook-out, webhook-generic, mattermost (webhook mode)
+#   paging           pagerduty, opsgenie
+#   local-projection dashboard, cli-tail
+# So `discord` + `slack` is ONE class and is refused — one vendor outage would
+# take out both. Pick your second sink from a different row. A renderer kind
+# cortex cannot classify is refused too, rather than counted as its own class.
 renderers:
   - kind: dashboard
     port: 8766

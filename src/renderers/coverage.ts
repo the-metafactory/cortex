@@ -72,6 +72,60 @@
 export const INERT_RENDERER_KINDS: ReadonlySet<string> = new Set(["dashboard"]);
 
 /**
+ * cortex#2503 — the **platform class** of each renderer kind (ADR-0024 §OQ9
+ * → *Platform classes*).
+ *
+ * ## Why this map has to exist
+ *
+ * The rule is "≥2 distinct **platform classes**", and a platform class groups
+ * kinds by *shared vendor-outage risk*. Counting distinct `kind` STRINGS —
+ * which is what this module did before — satisfies the floor with
+ * `discord` + `slack`, two kinds that are one class: when that vendor has a
+ * bad day BOTH sinks die and the principal is blind, which is the precise
+ * failure §OQ9 exists to prevent. Kind-counting is fail-open in a guard whose
+ * whole design is to fail loud.
+ *
+ * ## `mattermost` maps to TWO classes, on purpose
+ *
+ * A mattermost renderer is a `chat-gateway` in bot mode and a `webhook-out`
+ * in incoming-webhook mode, and the config does not tell us which. It
+ * therefore contributes an AMBIGUOUS class: it can pair with something from
+ * either class, but it can NEVER satisfy the diversity floor against
+ * *itself* (see {@link evaluateSystemCoverage}) — two mattermost renderers
+ * are one vendor no matter which modes they run in.
+ */
+export const PLATFORM_CLASS_BY_KIND: Readonly<Record<string, readonly string[]>> = {
+  discord: ["chat-gateway"],
+  slack: ["chat-gateway"],
+  mattermost: ["chat-gateway", "webhook-out"],
+  // NAME COLLISION, deliberate: cortex ships `webhook-out` as a renderer KIND
+  // (`RendererSchema`, `src/common/types/cortex-config.ts`) while the retired
+  // spec used the same token for the CLASS. They are the same concept at two
+  // levels here, so the kind maps to the like-named class. `webhook-generic`
+  // is the spec's own name for the kind and is accepted as a synonym.
+  "webhook-out": ["webhook-out"],
+  "webhook-generic": ["webhook-out"],
+  pagerduty: ["paging"],
+  opsgenie: ["paging"],
+  dashboard: ["local-projection"],
+  "cli-tail": ["local-projection"],
+};
+
+/**
+ * Platform class(es) for a renderer kind, or `undefined` when the kind is not
+ * in the curated map.
+ *
+ * An unknown kind is **not** given a class of its own. Doing that would
+ * reintroduce the exact fail-open this fix closes: since S4/ADR-0024 D5
+ * `RendererKindSchema` is an open `z.string().min(1)`, so any two arbitrary
+ * plugin kinds would once again read as "two classes". Callers must treat
+ * `undefined` as *refuse*, not as *allow*.
+ */
+export function platformClassesForKind(kind: string): readonly string[] | undefined {
+  return PLATFORM_CLASS_BY_KIND[kind];
+}
+
+/**
  * Known first-party renderer-bundle names, keyed by `rendererKind`. Used ONLY
  * to build the install-state remediation message. Follows the compass#115
  * `metafactory-cortex-renderer-<name>` standard (the renderer twin of the
@@ -216,10 +270,22 @@ export interface RendererCoverageInput {
 
 /** The outcome of evaluating a renderer set against the §4.6 fail-safe rule. */
 export interface CoverageVerdict {
-  /** Distinct classes (kinds) that cover `system.>`, sorted. */
+  /** Distinct renderer KINDS that cover `system.>`, sorted. */
   coveringKinds: string[];
-  /** Distinct covering classes that are EFFECTIVE (not inert), sorted. */
+  /** Distinct covering kinds that are EFFECTIVE (not inert), sorted. */
   effectiveCoveringKinds: string[];
+  /**
+   * cortex#2503 — distinct PLATFORM CLASSES reachable from the covering set,
+   * sorted. This is what the rule actually counts; `coveringKinds` is kept for
+   * message text and back-compat.
+   */
+  coveringClasses: string[];
+  /**
+   * Covering kinds with no entry in {@link PLATFORM_CLASS_BY_KIND}. A
+   * non-empty list means the verdict is REFUSED — an unclassified kind can
+   * never be counted toward diversity (that is the fail-open this closes).
+   */
+  unclassifiedKinds: string[];
   /** Whether ANY renderer covers `system.>` — i.e. the stack opted into system
    *  alerting. When false the rule does not apply (out of scope → satisfied). */
   inScope: boolean;
@@ -247,18 +313,80 @@ export function evaluateSystemCoverage(
     ...new Set(covering.filter((r) => !INERT_RENDERER_KINDS.has(r.kind)).map((r) => r.kind)),
   ].sort();
   const inScope = coveringKinds.length > 0;
+
+  // cortex#2503 — classes, not kind strings.
+  const unclassifiedKinds = coveringKinds.filter(
+    (k) => platformClassesForKind(k) === undefined,
+  );
+  const coveringClasses = [
+    ...new Set(coveringKinds.flatMap((k) => platformClassesForKind(k) ?? [])),
+  ].sort();
+
+  // Two DISTINCT KINDS must be assignable to two DISTINCT CLASSES. Requiring
+  // distinct kinds is what stops a mode-ambiguous kind (`mattermost`, which
+  // maps to both `chat-gateway` and `webhook-out`) from satisfying a
+  // vendor-diversity rule against itself — two mattermost renderers are one
+  // vendor whatever modes they run in.
+  const hasTwoDistinctClasses = coveringKinds.some((kindA, i) =>
+    coveringKinds.slice(i + 1).some((kindB) => {
+      const a = platformClassesForKind(kindA) ?? [];
+      const b = platformClassesForKind(kindB) ?? [];
+      return a.some((ca) => b.some((cb) => ca !== cb));
+    }),
+  );
+
   const satisfied =
-    !inScope || (coveringKinds.length >= 2 && effectiveCoveringKinds.length >= 1);
-  return { coveringKinds, effectiveCoveringKinds, inScope, satisfied };
+    !inScope ||
+    (unclassifiedKinds.length === 0 &&
+      hasTwoDistinctClasses &&
+      effectiveCoveringKinds.length >= 1);
+
+  return {
+    coveringKinds,
+    effectiveCoveringKinds,
+    coveringClasses,
+    unclassifiedKinds,
+    inScope,
+    satisfied,
+  };
 }
 
 const RULE_PREAMBLE =
-  "ADR-0024 §OQ9 requires at least two distinct renderer platform classes " +
+  "ADR-0024 §OQ9 requires at least two distinct renderer PLATFORM CLASSES " +
   "covering `local.{principal}.system.>`, with at least one EFFECTIVE " +
-  "(delivering) sink, so a single degraded sink cannot blind the principal to " +
-  "system events. The `dashboard` renderer is INERT (ADR-0005 §4: it buffers " +
-  "but delivers nothing), so it counts toward class diversity but can never be " +
-  "the effective sink.";
+  "(delivering) sink, so a single vendor outage cannot blind the principal to " +
+  "system events. Classes group kinds by shared outage risk: `chat-gateway` " +
+  "(discord, slack, mattermost), `webhook-out` (webhook-generic, mattermost), " +
+  "`paging` (pagerduty, opsgenie), `local-projection` (dashboard, cli-tail). " +
+  "Two kinds in the SAME class (e.g. discord + slack) are one class, not two. " +
+  "The `dashboard` renderer is INERT (ADR-0005 §4: it buffers but delivers " +
+  "nothing), so it counts toward class diversity but can never be the " +
+  "effective sink.";
+
+/**
+ * "You configured a renderer kind cortex cannot classify." Raised instead of
+ * silently counting the unknown kind as a class of its own — since
+ * `RendererKindSchema` is an open string (S4/ADR-0024 D5), doing that would
+ * reinstate the very fail-open cortex#2503 closed.
+ */
+export class RendererCoverageUnclassifiedKindError extends Error {
+  readonly unclassifiedKinds: string[];
+  constructor(verdict: CoverageVerdict) {
+    const kinds = verdict.unclassifiedKinds;
+    super(
+      `cortex: renderer coverage check FAILED (unclassified kind). ${RULE_PREAMBLE}\n` +
+        `These system-covering renderer kinds have no platform class: ` +
+        `[${kinds.join(", ")}]. Coverage cannot be judged for them, and cortex ` +
+        `will NOT assume an unknown kind is a class of its own — that is how a ` +
+        `stack ends up believing it is monitored while every sink shares one ` +
+        `vendor. Either use a classified kind, or add the mapping to ` +
+        `PLATFORM_CLASS_BY_KIND (src/renderers/coverage.ts) in a reviewed change. ` +
+        `Decision: ADR-0024 §OQ9.`,
+    );
+    this.name = "RendererCoverageUnclassifiedKindError";
+    this.unclassifiedKinds = kinds;
+  }
+}
 
 /**
  * "You configured one sink." A pure CONFIG authoring error — the declared
@@ -275,12 +403,18 @@ export class RendererCoverageConfigError extends Error {
       verdict.effectiveCoveringKinds.length > 0
         ? `[${verdict.effectiveCoveringKinds.join(", ")}]`
         : "[none]";
+    const classes =
+      verdict.coveringClasses.length > 0 ? `[${verdict.coveringClasses.join(", ")}]` : "[none]";
     super(
       `cortex: renderer coverage check FAILED (config). ${RULE_PREAMBLE}\n` +
-        `Configured system-covering classes: ${found} (effective: ${effective}).\n` +
-        `Add an effective system-covering renderer (e.g. a \`pagerduty\` renderer ` +
-        `subscribed to \`local.{principal}.system.>\`) so an operational alert ` +
-        `reliably reaches you. Decision: ADR-0024 §OQ9.`,
+        `Configured system-covering kinds: ${found} (effective: ${effective}).\n` +
+        `Those resolve to platform class(es): ${classes} — fewer than the two ` +
+        `distinct classes required.\n` +
+        `Add a system-covering renderer from a DIFFERENT class (e.g. a ` +
+        `\`pagerduty\` renderer — class \`paging\` — subscribed to ` +
+        `\`local.{principal}.system.>\`) so one vendor outage cannot take out ` +
+        `every sink. Adding another kind from a class you already have does not ` +
+        `satisfy this. Decision: ADR-0024 §OQ9.`,
     );
     this.name = "RendererCoverageConfigError";
     this.verdict = verdict;
@@ -331,7 +465,13 @@ export function assertConfiguredSystemCoverage(
   ctx: { principal: string; stack?: string },
 ): void {
   const verdict = evaluateSystemCoverage(renderers, ctx);
-  if (!verdict.satisfied) throw new RendererCoverageConfigError(verdict);
+  if (verdict.satisfied) return;
+  // An unclassifiable kind is its own failure: the principal cannot fix it by
+  // adding a renderer, so it must not be reported as "you configured one sink".
+  if (verdict.unclassifiedKinds.length > 0) {
+    throw new RendererCoverageUnclassifiedKindError(verdict);
+  }
+  throw new RendererCoverageConfigError(verdict);
 }
 
 /**
