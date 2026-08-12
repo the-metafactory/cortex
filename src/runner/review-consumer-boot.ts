@@ -114,7 +114,7 @@ const DEFAULT_REVIEW_LOOP_CONCURRENCY = 3;
 /**
  * Resolve how many reviews one consumer may run at once.
  *
- * `runtime.maxConcurrent` is the operator's knob; absent it we use
+ * `runtime.maxConcurrent` is the principal's knob; absent it we use
  * {@link DEFAULT_REVIEW_LOOP_CONCURRENCY}.
  *
  * The loop ceiling is the OPERATIVE limit: it stops pulling at the cap rather
