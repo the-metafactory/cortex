@@ -31,6 +31,7 @@ import type {
   Subscription,
 } from "nats";
 import { MyelinSubscriber } from "../subscriber";
+import type { Envelope } from "../envelope-validator";
 import { NatsLink } from "../../nats/connection";
 import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { type: "json" };
 
@@ -599,6 +600,161 @@ describe("MyelinSubscriber — pull mode", () => {
     expect(m.ack).not.toHaveBeenCalled();
     expect(m.nak).not.toHaveBeenCalled();
     await sub.stop();
+    await h.cleanup();
+  });
+
+  // -------------------------------------------------------------------------
+  // cortex#2515 — handler concurrency
+  //
+  // The loop used to `await onRaw(...)` inline, so a slow handler stalled
+  // the iterator: the review consumer awaits a spawned `sage review`
+  // subprocess, and a second `tasks.code-review.*` envelope was never
+  // surfaced until the first review finished (the dispatching client timed
+  // out and sage misreported a DORMANT consumer).
+  // -------------------------------------------------------------------------
+
+  /** A handler that blocks until the returned `release` is called. */
+  function gatedHandler() {
+    const started: string[] = [];
+    const releases: (() => void)[] = [];
+    const onEnvelope = async (_env: Envelope, subject: string): Promise<void> => {
+      started.push(subject);
+      await new Promise<void>((resolve) => releases.push(resolve));
+    };
+    return {
+      started,
+      releaseAll: () => {
+        for (const r of releases.splice(0)) r();
+      },
+      onEnvelope,
+    };
+  }
+
+  test("cortex#2515: default (no maxConcurrent) stays serial — second handler waits", async () => {
+    const h = await makePullLink();
+    const g = gatedHandler();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "myelin-test-consumer" },
+      onEnvelope: g.onEnvelope,
+    });
+    await sub.ready;
+
+    h.deliver("local.acme.first", bytes(validEnvelope));
+    h.deliver("local.acme.second", bytes(validEnvelope));
+    await flushMicrotasks();
+
+    // Only the first handler may have started; the loop must not have
+    // pulled the second while the first is still in flight.
+    expect(g.started).toEqual(["local.acme.first"]);
+
+    g.releaseAll();
+    await flushMicrotasks();
+    expect(g.started).toEqual(["local.acme.first", "local.acme.second"]);
+
+    g.releaseAll();
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("cortex#2515: maxConcurrent > 1 lets slow handlers overlap", async () => {
+    const h = await makePullLink();
+    const g = gatedHandler();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: {
+        stream: "ACME_TASKS",
+        durable: "myelin-test-consumer",
+        maxConcurrent: 3,
+      },
+      onEnvelope: g.onEnvelope,
+    });
+    await sub.ready;
+
+    h.deliver("local.acme.a", bytes(validEnvelope));
+    h.deliver("local.acme.b", bytes(validEnvelope));
+    h.deliver("local.acme.c", bytes(validEnvelope));
+    await flushMicrotasks();
+
+    // All three are in flight simultaneously — none has been released.
+    expect(g.started).toEqual([
+      "local.acme.a",
+      "local.acme.b",
+      "local.acme.c",
+    ]);
+
+    g.releaseAll();
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("cortex#2515: maxConcurrent is a ceiling — the N+1th waits for a slot", async () => {
+    const h = await makePullLink();
+    const g = gatedHandler();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: {
+        stream: "ACME_TASKS",
+        durable: "myelin-test-consumer",
+        maxConcurrent: 2,
+      },
+      onEnvelope: g.onEnvelope,
+    });
+    await sub.ready;
+
+    h.deliver("local.acme.a", bytes(validEnvelope));
+    h.deliver("local.acme.b", bytes(validEnvelope));
+    h.deliver("local.acme.c", bytes(validEnvelope));
+    await flushMicrotasks();
+
+    // Ceiling of 2: the third must not start until a slot frees.
+    expect(g.started).toEqual(["local.acme.a", "local.acme.b"]);
+
+    g.releaseAll();
+    await flushMicrotasks();
+    expect(g.started).toContain("local.acme.c");
+
+    g.releaseAll();
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("cortex#2515: stop() drains in-flight handlers before resolving", async () => {
+    const h = await makePullLink();
+    let finished = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: {
+        stream: "ACME_TASKS",
+        durable: "myelin-test-consumer",
+        maxConcurrent: 2,
+      },
+      onEnvelope: async () => {
+        await gate;
+        finished = true;
+      },
+    });
+    await sub.ready;
+
+    h.deliver("local.acme.slow", bytes(validEnvelope));
+    await flushMicrotasks();
+    expect(finished).toBe(false);
+
+    const stopping = sub.stop();
+    release();
+    await stopping;
+
+    // stop() must not resolve while a handler is still mid-flight — a
+    // review has to publish its terminal envelope before teardown.
+    expect(finished).toBe(true);
     await h.cleanup();
   });
 });

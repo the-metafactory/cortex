@@ -326,6 +326,12 @@ export interface MyelinSubscribePullOpts {
   maxMessages?: number;
   expiresMs?: number;
   thresholdMessages?: number;
+  /**
+   * cortex#2515 — in-flight handler ceiling for the consume loop. Omitted
+   * ⇒ 1 (serial), which is the pre-#2515 behaviour. See
+   * {@link MyelinPullOptions.maxConcurrent}.
+   */
+  maxConcurrent?: number;
 }
 
 /**
@@ -1886,11 +1892,15 @@ export async function startMyelinRuntime(
       maxMessages?: number;
       expiresMs?: number;
       thresholdMessages?: number;
+      maxConcurrent?: number;
     } = { stream: opts.stream, durable: opts.durable };
     if (opts.maxMessages !== undefined) pull.maxMessages = opts.maxMessages;
     if (opts.expiresMs !== undefined) pull.expiresMs = opts.expiresMs;
     if (opts.thresholdMessages !== undefined) {
       pull.thresholdMessages = opts.thresholdMessages;
+    }
+    if (opts.maxConcurrent !== undefined) {
+      pull.maxConcurrent = opts.maxConcurrent;
     }
     const sub = MyelinSubscriber.start(link, {
       pattern: opts.pattern,

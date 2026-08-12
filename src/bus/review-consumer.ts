@@ -394,6 +394,17 @@ export interface ReviewConsumerStartOpts {
   maxMessages?: number;
   expiresMs?: number;
   thresholdMessages?: number;
+  /**
+   * cortex#2515 — how many reviews this consumer may run concurrently.
+   *
+   * The consume loop awaits each handler, and `processEnvelope` awaits the
+   * whole pipeline (including the spawned `sage review` subprocess), so at
+   * the default of 1 a second `tasks.code-review.*` envelope is never even
+   * surfaced to this consumer until the in-flight review finishes — the
+   * dispatching client times out and sage reports a phantom DORMANT
+   * consumer. Values > 1 let concurrent dispatches proceed.
+   */
+  maxConcurrent?: number;
 }
 
 /**
@@ -530,6 +541,7 @@ export class ReviewConsumer {
       maxMessages?: number;
       expiresMs?: number;
       thresholdMessages?: number;
+      maxConcurrent?: number;
     } = {
       pattern: opts.pattern,
       stream: opts.stream,
@@ -545,6 +557,9 @@ export class ReviewConsumer {
     }
     if (opts.thresholdMessages !== undefined) {
       subscribePullOpts.thresholdMessages = opts.thresholdMessages;
+    }
+    if (opts.maxConcurrent !== undefined) {
+      subscribePullOpts.maxConcurrent = opts.maxConcurrent;
     }
     // `subscribePull` is OPTIONAL on the MyelinRuntime interface (the
     // additivity constraint per Architect cortex#290 review — legacy
