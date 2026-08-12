@@ -99,43 +99,6 @@ export interface ReviewBootAgent {
   };
 }
 
-/**
- * cortex#2515 — default in-flight review ceiling per consumer.
- *
- * Before #2515 the consume loop awaited each handler inline, so reviews were
- * serialized at 1 and a dispatch arriving mid-review was never surfaced to the
- * consumer at all (the client's `--wait` expired first and sage misreported a
- * DORMANT consumer). A review spawns a coding-agent subprocess, so the ceiling
- * stays deliberately small — this is a concurrency limit, not a throughput
- * target.
- */
-const DEFAULT_REVIEW_LOOP_CONCURRENCY = 3;
-
-/**
- * Resolve how many reviews one consumer may run at once.
- *
- * `runtime.maxConcurrent` is the principal's knob; absent it we use
- * {@link DEFAULT_REVIEW_LOOP_CONCURRENCY}.
- *
- * The loop ceiling is the OPERATIVE limit: it stops pulling at the cap rather
- * than admitting an envelope only to nak it, which would churn redeliveries
- * against the stream for no benefit. `ReviewConsumer`'s own `not_now` gate
- * reads this same config field but stays inert (the loop never admits more
- * than the cap, so `inFlight` never reaches it); it remains as defense-in-depth
- * for the direct `processEnvelope` path used by tests.
- *
- * The two values are derived by DIFFERENT paths and are not normalised
- * together: this returns the field verbatim, while `PullBackend` floors
- * fractions and clamps anything below 1 up to 1. They coincide only because
- * `AgentRuntimeSchema` constrains the field to a positive integer
- * (`common/types/cortex-config.ts` — `.int().positive()`), so a fractional
- * value never survives config load. A caller that builds a `ReviewBootAgent`
- * by hand, bypassing that schema, can still make them diverge.
- */
-function reviewLoopConcurrency(agent: ReviewBootAgent): number {
-  return agent.runtime?.maxConcurrent ?? DEFAULT_REVIEW_LOOP_CONCURRENCY;
-}
-
 /** Inputs `cortex.ts` threads into the review-consumer boot wiring. */
 export interface WireReviewConsumersOpts {
   /** `{principal}` subject segment — durable names + the verifier's own-stack check. */
@@ -496,7 +459,6 @@ export function wireReviewConsumers(
         pattern: primaryReviewPattern,
         stream: opts.reviewStream,
         durable,
-        maxConcurrent: reviewLoopConcurrency(agent),
       });
       const flavorSummary =
         consumer.flavors.length > 0 ? consumer.flavors.join(",") : "(none)";
@@ -586,7 +548,6 @@ export function wireReviewConsumers(
           pattern: extraPattern,
           stream: opts.reviewStream,
           durable: offerDurable,
-          maxConcurrent: reviewLoopConcurrency(agent),
         });
         if (offerStarted.subscribed) {
           console.log(
@@ -658,7 +619,6 @@ export function wireReviewConsumers(
             pattern,
             stream: opts.reviewStream,
             durable: durableName,
-            maxConcurrent: reviewLoopConcurrency(agent),
           });
           if (federatedStarted.subscribed) {
             console.log(
