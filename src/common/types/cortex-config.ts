@@ -1712,9 +1712,25 @@ export const ExecutionConfigSchema = z.object({
     type: z.enum(["cloudflare", "e2b", "ssh", "custom"]),
     endpoint: z.string(),
   })).default([]),
+  /**
+   * cortex#2195 (RFC-0005 §2.5) — the model-placement EXECUTE gate map. When
+   * present, the dispatch listener refuses (`policy_denied`/term) any dispatch
+   * whose selected harness is `frontier`-placement but whose envelope demands
+   * local execution (`frontier_ok`/`model_class`). Config-declared; there is NO
+   * hardcoded model list — a harness id absent from `harnesses` falls to
+   * `default` (fail-closed `frontier`). OMITTED ⇒ the gate is inert (dispatch is
+   * byte-identical). See `src/runner/model-placement-gate.ts`.
+   */
+  model_placement: z.object({
+    /** Selected `SessionHarness.id` → placement class. */
+    harnesses: z.record(z.string(), z.enum(["frontier", "local"])).default({}),
+    /** Placement for an id absent from `harnesses`. Fail-closed default. */
+    default: z.enum(["frontier", "local"]).default("frontier"),
+  }).optional(),
 });
 
 export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
+export type ModelPlacementSchemaConfig = NonNullable<ExecutionConfig["model_placement"]>;
 
 /**
  * EBH-2 (cortex#2344, epic #2341) — the `SessionSandbox` staged-rollout knob

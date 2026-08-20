@@ -110,6 +110,10 @@ import { extractAgentIdFromDid } from "../common/policy/did";
 // R26 P1 (cortex#1371) — the substrate admission gate (KV-arbitrated rate
 // limiting) + the anonymous public principal id it fails closed for.
 import type { AdmissionGate, AdmissionLease } from "../bus/admission";
+import {
+  evaluateModelPlacement,
+  type ModelPlacementConfig,
+} from "./model-placement-gate";
 import { PUBLIC_PRINCIPAL_ID } from "../common/policy/factory";
 import { deriveMcpGrants, intersectMcpGrants } from "../common/policy/resolve-access";
 import { isUuid } from "../common/types/uuid";
@@ -610,6 +614,17 @@ export interface DispatchListenerOptions {
    * byte-identical behaviour, zero admission reads.
    */
   admissionGate?: AdmissionGate;
+  /**
+   * cortex#2195 (RFC-0005 §2.5) — the model-placement EXECUTE gate map
+   * (`execution.model_placement`). When supplied, every dispatch is checked
+   * AFTER harness selection and BEFORE `harness.dispatch`: a `frontier`-placement
+   * harness running a local-only-required envelope is refused with a terminal
+   * `dispatch.task.failed { kind: "policy_denied" }` (the RFC-0010 permanent
+   * shape) and never spawns. `cortex.ts` supplies this ONLY when the config
+   * block is present — `undefined` (the default) is inert: byte-identical
+   * dispatch, zero placement reads.
+   */
+  modelPlacement?: ModelPlacementConfig;
 }
 
 export interface DispatchListener {
@@ -884,6 +899,7 @@ export function createDispatchListener(
     bashAllowlist,
     bashGuardDisabled,
     admissionGate,
+    modelPlacement,
     adapterId = "runner-dispatch-listener",
   } = opts;
   // v2.0.2 default: structural trust + ed25519 crypto verification.
@@ -971,6 +987,7 @@ export function createDispatchListener(
         bashAllowlist,
         bashGuardDisabled,
         admissionGate,
+        modelPlacement,
       });
     } catch (err) {
       process.stderr.write(
@@ -1460,6 +1477,11 @@ interface DispatchHandlerContext {
    * inertness). See {@link DispatchListenerOptions.admissionGate}.
    */
   admissionGate: AdmissionGate | undefined;
+  /**
+   * cortex#2195 — the model-placement gate map. `undefined` ⇒ inert (the
+   * placement check is skipped). See {@link DispatchListenerOptions.modelPlacement}.
+   */
+  modelPlacement: ModelPlacementConfig | undefined;
 }
 
 async function handleDispatchEnvelope(
@@ -1493,6 +1515,7 @@ async function handleDispatchEnvelope(
     bashAllowlist,
     bashGuardDisabled,
     admissionGate,
+    modelPlacement,
   } = ctx;
   // cortex#492 — pre-parse trace context from CLEARTEXT METADATA ONLY. M3
   // (cortex#1241, ADR-0019) reorder: NOTHING reads the payload before
@@ -2357,6 +2380,67 @@ async function handleDispatchEnvelope(
     receivingAgent,
     envelope.distribution_mode,
   );
+
+  // cortex#2195 (RFC-0005 §2.5) — MODEL-PLACEMENT EXECUTE GATE. The myelin half
+  // (myelin#260/PR#265) only validated the sovereignty block + exported the
+  // `parseSovereignty` reader; enforcement at execution lives HERE, the consumer.
+  // AFTER harness selection (so we know the ACTUAL placement about to run) and
+  // BEFORE `harness.dispatch` (the spawn): if the selected harness is
+  // frontier-placement but the envelope demands local execution, refuse
+  // permanently — `policy_denied`/term (the RFC-0010 permanent shape, same as the
+  // keySegment refusal), never the transient `not_now`. Inert when
+  // `modelPlacement` is unconfigured (CO-4 posture: byte-identical dispatch).
+  if (modelPlacement !== undefined) {
+    const placement = evaluateModelPlacement(envelope, harness.id, modelPlacement);
+    if (!placement.allow) {
+      trace(
+        traceDispatch,
+        runtime,
+        source,
+        "placement-checked",
+        "fail",
+        traceCtx,
+        `harness=${harness.id} placement=${placement.placement} (frontier-blocked)`,
+      );
+      process.stderr.write(
+        `[runner/dispatch-listener] model-placement REFUSED envelope ${envelope.id} ` +
+          `(correlation_id=${envelope.correlation_id ?? "<none>"} task_id=${payload.task_id}): ` +
+          `${placement.detail}\n`,
+      );
+      const now = new Date();
+      const failed = createDispatchTaskFailedEvent({
+        source,
+        taskId: payload.task_id,
+        agentId: payload.agent_id,
+        startedAt: now,
+        failedAt: now,
+        errorSummary: "refused — model placement violates sovereignty (local-only)",
+        reason: {
+          kind: "policy_denied",
+          deny: {
+            model_placement: placement.detail,
+            harness: harness.id,
+            placement: placement.placement,
+          },
+        },
+      });
+      await runtime.publish(failed);
+      // Refund the admission lease we acquired above — this dispatch never spawns.
+      if (admissionLease !== undefined && admissionGate !== undefined) {
+        await admissionGate.release(admissionLease);
+      }
+      return;
+    }
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "placement-checked",
+      "pass",
+      traceCtx,
+      `harness=${harness.id} placement=${placement.placement}`,
+    );
+  }
 
   // cortex#492 — emitted SYNCHRONOUSLY immediately before draining the
   // harness (the CC spawn). `harness.dispatch(req)` is the long-running

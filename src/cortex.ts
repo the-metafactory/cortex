@@ -3995,6 +3995,14 @@ export async function startCortex(
     // optional fields: an unconfigured stack passes NO gate and the listener's
     // admission stage is skipped entirely (CO-4 inertness).
     ...(admissionGate !== undefined && { admissionGate }),
+    // cortex#2195 (RFC-0005 §2.5) — model-placement execute gate. Spread-guarded
+    // like admission: absent `execution.model_placement` ⇒ the placement stage
+    // is skipped (CO-4 inertness, byte-identical dispatch). When present, a
+    // frontier-placement harness running a local-only-required envelope is
+    // refused `policy_denied`/term before the spawn.
+    ...(config.execution.model_placement !== undefined && {
+      modelPlacement: config.execution.model_placement,
+    }),
   };
   if (chatAgents.length >= 2) {
     // Multi-agent: each chat-capable agent gets its OWN listener on its OWN

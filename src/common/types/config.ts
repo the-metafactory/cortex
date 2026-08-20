@@ -728,6 +728,20 @@ export const AgentConfigSchema = z.object({
       type: z.enum(["cloudflare", "e2b", "ssh", "custom"]),
       endpoint: z.string(),
     })).default([]),
+    /**
+     * cortex#2195 (RFC-0005 §2.5) — the model-placement EXECUTE gate map.
+     * MIRROR of `CortexConfigSchema.execution.model_placement` (cortex-config.ts).
+     * When present, the dispatch listener refuses (`policy_denied`/term) any
+     * dispatch whose selected harness is `frontier`-placement but whose envelope
+     * demands local execution. Config-declared; no hardcoded model list — a
+     * harness id absent from `harnesses` falls to `default` (fail-closed
+     * `frontier`). OMITTED ⇒ the gate is inert. See
+     * `src/runner/model-placement-gate.ts`.
+     */
+    model_placement: z.object({
+      harnesses: z.record(z.string(), z.enum(["frontier", "local"])).default({}),
+      default: z.enum(["frontier", "local"]).default("frontier"),
+    }).optional(),
   }).default(emptyDefault()),
 
   /**
