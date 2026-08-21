@@ -226,6 +226,28 @@ export interface CCSessionResult {
    * (e.g. `authentication_failed`) that exit non-zero with no stdout response.
    */
   stderr?: string;
+  /**
+   * Stdout lines that were NOT parseable as stream-json (empty/absent when
+   * every line parsed). Bounded — see `RAW_STDOUT_CAP`.
+   *
+   * We ask CC for `--output-format stream-json`, so `processLine` drops
+   * anything that is not an event. That is right for the happy path and
+   * wrong for the failure path: some substrate-level errors are written to
+   * STDOUT as plain prose, exit non-zero, and put nothing on stderr at all.
+   * Measured, for a config dir with no credential:
+   *
+   *   exit 1 · stdout "Not logged in · Please run /login" · stderr empty
+   *
+   * With that line discarded, `response` and `stderr` are both empty, so
+   * `isCcAuthFailure` had an empty haystack and could not fire — the chat
+   * path retried three times and showed the generic apology, which is the
+   * exact outcome cortex#2055 was written to prevent. It guarded the stderr
+   * spelling of the error; this is the stdout spelling.
+   *
+   * Kept as raw text rather than parsed: the point is to stop throwing away
+   * the one string that names the fault, not to model CC's prose.
+   */
+  rawStdout?: string;
 }
 
 /**
@@ -435,6 +457,16 @@ export function deriveSandboxProfile(
   };
 }
 
+/**
+ * Upper bound on retained non-stream-json stdout (`CCSessionResult.rawStdout`).
+ *
+ * Sized for a diagnostic line or a short stack trace, not a transcript: this
+ * exists so a failure classifier can read the reason a session died, and a
+ * process that writes prose to stdout indefinitely must not be able to grow
+ * a cortex-side buffer while doing it.
+ */
+const RAW_STDOUT_CAP = 8192;
+
 export class CCSession extends EventEmitter {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private timeoutId: Timer | null = null;
@@ -442,6 +474,8 @@ export class CCSession extends EventEmitter {
   private startTime = 0;
   private stdoutDone: Promise<void> = Promise.resolve();
   private stderrDone: Promise<void> = Promise.resolve();
+  /** Non-stream-json stdout text, surfaced on the result as `rawStdout`. */
+  private rawStdoutText = "";
   /** cortex#2055 — accumulated stderr text, surfaced on the result so callers
    *  can detect substrate-level failures (e.g. `authentication_failed`) that
    *  never reach the stdout stream. */
@@ -916,6 +950,7 @@ export class CCSession extends EventEmitter {
           durationMs,
           usage: this.usage,
           ...(this.stderrText && { stderr: this.stderrText }),
+          ...(this.rawStdoutText && { rawStdout: this.rawStdoutText }),
           ...(this.timedOut && { aborted: true, abortReason: "timeout" as const }),
         });
       });
@@ -930,6 +965,7 @@ export class CCSession extends EventEmitter {
           durationMs,
           usage: this.usage,
           ...(this.stderrText && { stderr: this.stderrText }),
+          ...(this.rawStdoutText && { rawStdout: this.rawStdoutText }),
           // The exit path can also be reached on inactivity timeout —
           // wireExit() races with the error listener and may win when CC
           // exits in response to SIGINT before the error has been emitted.
@@ -1058,7 +1094,21 @@ export class CCSession extends EventEmitter {
 
   private processLine(line: string): void {
     const event = parseStreamLine(line);
-    if (!event) return;
+    if (!event) {
+      // Not a stream-json event. Almost always noise, occasionally the only
+      // record of WHY the session died (see `rawStdout`). Retained rather
+      // than dropped, capped so a chatty non-JSON writer cannot grow this
+      // without bound, and deliberately NOT treated as liveness: a process
+      // spraying prose is not making progress, so the inactivity timer is
+      // left alone (only a parsed event resets it, as before).
+      const text = line.trim();
+      if (text && this.rawStdoutText.length < RAW_STDOUT_CAP) {
+        this.rawStdoutText +=
+          (this.rawStdoutText ? "\n" : "") +
+          text.slice(0, RAW_STDOUT_CAP - this.rawStdoutText.length);
+      }
+      return;
+    }
 
     // Any parsed event = CC is alive. Reset inactivity timer.
     this.resetInactivityTimer();
