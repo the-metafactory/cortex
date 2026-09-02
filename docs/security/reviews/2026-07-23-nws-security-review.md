@@ -1,3 +1,4 @@
+**Finding-ID convention:** the findings in this document are cited elsewhere as R1-F1..R1-F6.
 # Cortex — Security & Architecture Review
 
 **Prepared by:** NorthWoods Sentinel Labs (Rob Chuvala)

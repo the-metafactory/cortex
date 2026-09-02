@@ -130,8 +130,8 @@
  *
  * ## Guard-off (G-300, principal DM) posture — EBH-1g, cortex#2377
  *
- * DECIDED (principal, 2026-07-25, option (b) of the EBH-6/F4 investigation,
- * `docs/security/ebh-6-posture-findings.md` §F4): a guard-off session
+ * DECIDED (principal, 2026-07-25, option (b) of the EBH-6/R1-F4 investigation,
+ * `docs/security/ebh-6-posture-findings.md` §R1-F4): a guard-off session
  * (`CORTEX_BASH_GUARD={"disabled":true}`) SKIPS the command-shape allowlist
  * entirely — the principal may still run ANY command, unchanged — but now
  * runs the SAME rounds 7-9 path-containment machinery (`checkCommandPaths`/
@@ -194,7 +194,7 @@
  *     to the platform's own authenticated sender id, resolved per-message;
  *     no traced producer (bus dispatch, GitHub webhook relay, web gateway,
  *     `async:`/`team:`) can induce it for content it didn't itself author
- *     as the mapped principal (§F4 investigation).
+ *     as the mapped principal (§R1-F4 investigation).
  *   - NOT PROTECTED (residual, matches the file-tool surface's own
  *     limitations above, applied to Bash): TOCTOU, a scripting language
  *     invoked via Bash reading a path from WITHIN its own script text
@@ -1272,7 +1272,7 @@ export function extractCommandPaths(
         // `git diff --no-index`, `gh … --body-file`) — relaxing this for
         // guard-off sessions would silently reopen those exact findings in
         // the one context that most needs the defense-in-depth (indirect
-        // prompt injection into an already-trusted session, per EBH-6/F4).
+        // prompt injection into an already-trusted session, per EBH-6/R1-F4).
         return {
           paths: null,
           reason:
@@ -1699,7 +1699,7 @@ async function main(): Promise<void> {
   // containment-checked in the very same sessions (EBH-1). The residual
   // this closes is INDIRECT prompt injection into an already-legitimate
   // guard-off session — the trigger itself cannot be forged (verified in
-  // docs/security/ebh-6-posture-findings.md §F4); the realistic risk is
+  // docs/security/ebh-6-posture-findings.md §R1-F4); the realistic risk is
   // the principal asking the agent to read a PR/issue/URL whose fetched
   // content carries an injection, with a previously-unbounded Bash tool.
   //
