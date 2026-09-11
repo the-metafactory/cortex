@@ -2407,6 +2407,7 @@ describe("bash-guard.hook — round 8: git path-check coverage + `--` end-of-opt
 // exact class impossible.
 // =============================================================================
 import {
+  checkTextValue,
   checkCommandPaths,
   COMMAND_FLAG_POLICIES,
   DEFAULT_CONFIG,
@@ -3257,3 +3258,162 @@ describe("bash-guard.hook — EBH-1h: bare numeric short flags (cortex#2384)", (
   });
 });
 
+
+// =============================================================================
+// cortex#2493 — free-text flag values (`gh --title/--body`, `git commit -m`).
+// Round 9 (#2371) put `gh` under path containment and, with it, every value
+// flag's value went through the path character whitelist — which has no
+// space in it. Any human-readable title or commit message was denied as a
+// malformed PATH. The fix separates "value is consumed but is free text"
+// (`shortText`/`longText`: text-checked, then skipped) from "value is a path"
+// (`shortValue`/`longValue`: containment-checked, unchanged). The round-9
+// finding itself — `--body-file <out-of-scope>` — must stay denied.
+// =============================================================================
+
+describe("bash-guard.hook — cortex#2493: free-text flag values are not paths", () => {
+  let root: string;
+  let allowedDir: string;
+  let secretDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bash-guard-2493-"));
+    allowedDir = join(root, "allowed");
+    secretDir = join(root, "secret");
+    mkdirSync(allowedDir, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "canary.txt"), "TEXT-FLAG-CANARY-MARKER\n");
+    writeFileSync(join(allowedDir, "body.md"), "an ordinary in-scope body\n");
+    writeFileSync(join(allowedDir, "msg.txt"), "an ordinary in-scope commit message\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Allowlist wide enough to reach the create/commit forms the floor omits. */
+  function env(): Record<string, string> {
+    return {
+      CORTEX_CHANNEL: "test-channel",
+      CORTEX_BASH_GUARD: JSON.stringify({
+        rules: [{ pattern: "^gh\\s+(issue|pr)\\s" }, { pattern: "^git\\s+commit\\s" }],
+      }),
+      CORTEX_PATH_GUARD: JSON.stringify({ allowedDirs: [allowedDir], readOnlyDirs: [] }),
+    };
+  }
+
+  function decision(command: string): { decision: string; reason: string } {
+    const r = runHook(command, env(), "Bash", "test-session", allowedDir);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    return {
+      decision: out.hookSpecificOutput?.permissionDecision,
+      reason: out.hookSpecificOutput?.permissionDecisionReason ?? "",
+    };
+  }
+
+  // ---- ALLOW: the issue's repro, and the commit path a coding agent needs ----
+
+  test('gh issue create --title "A title with spaces" --body-file body.md ⇒ ALLOW (the #2493 repro)', () => {
+    const d = decision('gh issue create --title "A title with spaces" --body-file body.md');
+    expect(d.decision).toBe("allow");
+  });
+
+  test('gh pr create -t "Two words" -b "a body with spaces and: punctuation, too." ⇒ ALLOW', () => {
+    const d = decision('gh pr create -t "Two words" -b "a body with spaces and: punctuation, too."');
+    expect(d.decision).toBe("allow");
+  });
+
+  test("gh issue list --search 'is:open label:bug' ⇒ ALLOW (single-quoted prose)", () => {
+    const d = decision("gh issue list --search 'is:open label:bug'");
+    expect(d.decision).toBe("allow");
+  });
+
+  test("gh issue create --title=Two-words --body-file body.md ⇒ ALLOW (glued text value)", () => {
+    const d = decision("gh issue create --title=Two-words --body-file body.md");
+    expect(d.decision).toBe("allow");
+  });
+
+  test('git commit -m "fix the thing" ⇒ ALLOW (was: unrecognised flag — an agent could push but never commit)', () => {
+    const d = decision('git commit -m "fix the thing"');
+    expect(d.decision).toBe("allow");
+  });
+
+  test('git commit --message "fix the thing" ⇒ ALLOW (long form)', () => {
+    const d = decision('git commit --message "fix the thing"');
+    expect(d.decision).toBe("allow");
+  });
+
+  test("git commit -F msg.txt ⇒ ALLOW (in-scope message FILE — a path, containment-checked, not blanket-denied)", () => {
+    const d = decision("git commit -F msg.txt");
+    expect(d.decision).toBe("allow");
+  });
+
+  test("--title with no value, followed by another flag ⇒ nothing consumed, still ALLOW (the tool rejects its own malformed call)", () => {
+    const d = decision("gh issue create --title --body-file body.md");
+    expect(d.decision).toBe("allow");
+  });
+
+  // ---- DENY: what text values may still not carry ----
+
+  test('gh issue create --title "$HOME" ⇒ DENY (a double-quoted $VAR would expand and leave the machine as a title)', () => {
+    const d = decision('gh issue create --title "$HOME" --body-file body.md');
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("free-text flag value");
+    expect(d.reason).toContain("cortex#2493");
+  });
+
+  test("gh issue create --title=a$b ⇒ DENY (glued text value is checked too)", () => {
+    const d = decision("gh issue create --title=a$b --body-file body.md");
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("free-text flag value");
+  });
+
+  test('git commit -m "back\\slash" ⇒ DENY (backslash escapes change what the tool receives)', () => {
+    const d = decision('git commit -m "back\\slash"');
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("free-text flag value");
+  });
+
+  test('gh issue create --title "it\'s" ⇒ DENY (embedded quote — tokeniser cannot tell what the shell passes)', () => {
+    const d = decision('gh issue create --title "it\'s" --body-file body.md');
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("embedded or unbalanced quote");
+  });
+
+  test("git commit -mfix ⇒ DENY (glued short text is not modeled — ambiguous with a flag bundle)", () => {
+    const d = decision("git commit -mfix");
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("unrecognised flag");
+  });
+
+  // ---- DENY preserved: the round-9 finding and its git twin stay path-checked ----
+
+  test("gh issue create --title ok --body-file <out-of-scope> ⇒ DENY (round 9's --body-file is still a PATH)", () => {
+    const d = decision(`gh issue create --title ok --body-file ${join(secretDir, "canary.txt")}`);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("EBH-1");
+  });
+
+  test("git commit -F <out-of-scope> ⇒ DENY (-F reads the message from a file: containment applies)", () => {
+    const d = decision(`git commit -F ${join(secretDir, "canary.txt")}`);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("EBH-1");
+  });
+
+  test("git commit --file=<out-of-scope> ⇒ DENY (glued path-shaped value, denied before classification)", () => {
+    const d = decision(`git commit --file=${join(secretDir, "canary.txt")}`);
+    expect(d.decision).toBe("deny");
+  });
+
+  // ---- unit: checkTextValue ----
+
+  test("checkTextValue — unwraps one quote pair, accepts ordinary prose, refuses $ / backslash / embedded quotes", () => {
+    expect(checkTextValue('"Coaching Hub tiles do not open"')).toBeUndefined();
+    expect(checkTextValue("'is:open label:bug'")).toBeUndefined();
+    expect(checkTextValue("plain")).toBeUndefined();
+    expect(checkTextValue('"fix: handle 100% of cases (#12), really!"')).toBeUndefined();
+    expect(checkTextValue('"$HOME"')).toContain("cortex#2493");
+    expect(checkTextValue("a\\b")).toContain("cortex#2493");
+    expect(checkTextValue('"it\'s"')).toContain("embedded or unbalanced quote");
+  });
+});
