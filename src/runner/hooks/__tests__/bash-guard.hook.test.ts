@@ -59,6 +59,10 @@ const GROVE_ENV_KEYS = [
   "CORTEX_ENTITY",
   "CORTEX_PRINCIPAL",
   "CORTEX_BASH_GUARD",
+  // Never inherit the parent's path policy into a hook spawn either: a test
+  // that wants one passes it explicitly, and a test that wants NONE must get
+  // none even if an earlier test left something in process.env.
+  "CORTEX_PATH_GUARD",
   // legacy grove read-fallbacks (transition window)
   "GROVE_CHANNEL",
   "GROVE_AGENT_ID",
