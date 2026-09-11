@@ -59,6 +59,10 @@ const GROVE_ENV_KEYS = [
   "CORTEX_ENTITY",
   "CORTEX_PRINCIPAL",
   "CORTEX_BASH_GUARD",
+  // Never inherit the parent's path policy into a hook spawn either: a test
+  // that wants one passes it explicitly, and a test that wants NONE must get
+  // none even if an earlier test left something in process.env.
+  "CORTEX_PATH_GUARD",
   // legacy grove read-fallbacks (transition window)
   "GROVE_CHANNEL",
   "GROVE_AGENT_ID",
@@ -2600,7 +2604,13 @@ describe("bash-guard.hook — round 9: floor coverage (cortex#2370 regression gu
         expect(result.allow).toBe(false);
         expect(result.reason).toContain("COMMAND_FLAG_POLICIES");
       } finally {
-        process.env.CORTEX_PATH_GUARD = prevGuard;
+        // Bun ≥ 1.4 (Node-compatible): assigning `undefined` to a
+        // process.env key stores the STRING "undefined" — which then leaked
+        // into every later runHook() spawn as an unparseable
+        // CORTEX_PATH_GUARD and failed the EBH-1g "no policy configured"
+        // test on CI (bun-version: latest) while passing on bun 1.3.
+        if (prevGuard === undefined) delete process.env.CORTEX_PATH_GUARD;
+        else process.env.CORTEX_PATH_GUARD = prevGuard;
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
