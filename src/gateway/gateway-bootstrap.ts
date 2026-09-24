@@ -67,6 +67,7 @@ import {
   SurfaceGateway,
   LoggingInboundSink,
   type GatewayInboundSink,
+  type InboundInterceptor,
 } from "./surface-gateway";
 
 // =============================================================================
@@ -110,6 +111,8 @@ export interface GatewayBootstrapOpts {
    * When absent the gateway's default `console.warn` fires.
    */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
+  /** cortex#2524 — forwarded verbatim to {@link SurfaceGatewayOptions.interceptInbound}. */
+  interceptInbound?: InboundInterceptor;
   /**
    * cortex#1951 — the `(kind, id)`-keyed plugin registry `buildBindingIndex`
    * derives each platform's demux key from. Defaults to
@@ -139,6 +142,23 @@ export function isGatewayEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return env.CORTEX_GATEWAY === "1";
+}
+
+/**
+ * cortex#2524 — whether the shared gateway will host `platform` this boot:
+ * the `CORTEX_GATEWAY` flag is on and `surfaces` binds at least one instance
+ * of it. A prediction for the boot window, before the gateway starts; boot
+ * then either starts the adapter or aborts (`planSurfaceOwnership` throws on
+ * an unregistered platform plugin; `startGatewayIfEnabled` rethrows adapter
+ * build/start failures). `syncGatewaySurfaceLiveness` replaces it with the
+ * started adapter set.
+ */
+export function gatewayHostsSurface(
+  env: Record<string, string | undefined>,
+  surfaces: Surfaces | undefined,
+  platform: string,
+): boolean {
+  return isGatewayEnabled(env) && (surfaces?.[platform]?.length ?? 0) > 0;
 }
 
 // =============================================================================
@@ -252,7 +272,10 @@ export function maybeCreateSurfaceGateway(
   const sink = opts.sink ?? new LoggingInboundSink();
   const live = !(sink instanceof LoggingInboundSink);
 
-  const gw = new SurfaceGateway(adapters, index, sink, { onUnroutable });
+  const gw = new SurfaceGateway(adapters, index, sink, {
+    onUnroutable,
+    ...(opts.interceptInbound !== undefined && { interceptInbound: opts.interceptInbound }),
+  });
 
   process.stdout.write(
     `[surface-gateway] surface gateway constructed (${live ? "LIVE" : "SHADOW"})` +

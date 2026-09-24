@@ -13,8 +13,9 @@
  * ## Layering (sage #1037 round 2)
  *
  * This bus-side module is deliberately blind to adapter DTOs: it takes a
- * bus-neutral {@link GateReplyOffer}, and the SURFACE layer (the adapter
- * inbound handler in `cortex.ts`) owns the `InboundMessage → offer` mapping.
+ * bus-neutral {@link GateReplyOffer}, and the SURFACE layer owns the
+ * `InboundMessage → offer` mapping (`adapters/gate-reply-offer.ts`, shared by
+ * the per-stack inbound handler in `cortex.ts` and the surface gateway).
  * The bus stays dumb about platform message shapes.
  *
  * ## What this router does NOT do (load-bearing)

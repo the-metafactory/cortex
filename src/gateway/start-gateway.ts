@@ -55,7 +55,7 @@ import { defaultUnroutableWarn } from "./surface-gateway";
 import { makeEmittingUnroutable } from "./gateway-unroutable-emit";
 import type { BoundPrincipalStack } from "./binding-resolver";
 import type { SurfaceOwnershipPlan } from "./surface-ownership-plan";
-import type { SurfaceGateway } from "./surface-gateway";
+import type { InboundInterceptor, SurfaceGateway } from "./surface-gateway";
 import type { Surfaces } from "../common/types/surfaces";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { SystemEventSource } from "../bus/system-events";
@@ -103,6 +103,13 @@ export interface StartGatewayOpts {
   /** Optional unroutable-message hook forwarded to the gateway. */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
   /**
+   * cortex#2524 — pre-route interceptor forwarded verbatim to the gateway
+   * (see `SurfaceGatewayOptions.interceptInbound`). cortex.ts passes the
+   * gate reply-bridge offer so a principal reply on a gateway-owned surface
+   * (the web adapter's only path) can resolve an open gate.
+   */
+  interceptInbound?: InboundInterceptor;
+  /**
    * Precomputed pure ownership plan from the boot path. Required so Gateway
    * start, per-stack suppression, and outbound sink subject derivation all use
    * the same ownership decision.
@@ -148,6 +155,32 @@ export interface StartedGateway {
    * {@link distinctBoundPrincipalStacks}.
    */
   principalStacks: readonly BoundPrincipalStack[];
+}
+
+/**
+ * Platforms whose ONLY boot path is the shared gateway — no per-stack
+ * adapter ever `add()`s them to the principal gate's `liveSurfaces`.
+ */
+export type GatewayOnlyPlatform = "web";
+
+/**
+ * cortex#2524 — set `platform`'s membership in the principal gate's
+ * `liveSurfaces` from what the gateway actually started: live iff a started
+ * gateway adapter serves it. Replaces the boot-window seed
+ * (`gatewayHostsSurface`) once the gateway is up. Typed to
+ * {@link GatewayOnlyPlatform}: a platform that also has per-stack adapters
+ * would lose their `add()` and fail its gates closed.
+ */
+export function syncGatewaySurfaceLiveness(
+  liveSurfaces: Set<string>,
+  started: Pick<StartedGateway, "adapters"> | undefined,
+  platform: GatewayOnlyPlatform,
+): void {
+  if (started?.adapters.some((a) => a.platform === platform) === true) {
+    liveSurfaces.add(platform);
+  } else {
+    liveSurfaces.delete(platform);
+  }
 }
 
 /**
@@ -296,6 +329,7 @@ export async function startGatewayIfEnabled(
     registry,
     ...(sink !== undefined && { sink }),
     ...(onUnroutable !== undefined && { onUnroutable }),
+    ...(opts.interceptInbound !== undefined && { interceptInbound: opts.interceptInbound }),
   });
 
   // `gw` is defined here (bindings > 0 + adapters built), but the factory

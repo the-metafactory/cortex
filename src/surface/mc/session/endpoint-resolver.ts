@@ -240,7 +240,18 @@ export function createControlledEndpoint(
       if (stdin === undefined || typeof stdin === "number") {
         throw new SessionClosed(sessionId, managed.proc.exitCode);
       }
-      void stdin.write(framed);
+      // A large payload (image input) makes `write` return a Promise that
+      // rejects with EPIPE if the process exits before the pipe drains. Log
+      // it instead of leaving an unhandled rejection.
+      const written = stdin.write(framed);
+      if (written instanceof Promise) {
+        written.catch((err: unknown) => {
+          process.stderr.write(
+            `[endpoint-resolver] stdin write failed for session '${sessionId}': ` +
+              `${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+      }
       // NOTE: FileSink backpressure (Promise return from write) is a Phase B
       // concern — Phase A dispatches small principal messages only. When the
       // dispatcher lands, switch to an async write path that awaits

@@ -146,7 +146,39 @@ export interface SurfaceGatewayOptions {
    * — `onUnroutable` must not throw.
    */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
+  /**
+   * cortex#2524 — pre-route interceptor. Called with every inbound message
+   * AFTER binding resolution but BEFORE the unroutable hook and the sink;
+   * returning `true` means the message is CONSUMED (not routed, sink not
+   * called). It receives the resolved binding (`null` when unroutable) so a
+   * per-stack consumer can refuse messages bound to another stack — one
+   * gateway may serve several bound stacks. Its one production use is the
+   * gate reply-bridge: a reply landing in a thread with an open
+   * `ask_principal` gate resolves the gate and must never also become a
+   * chat dispatch (the same contract the per-stack inbound handler in
+   * `cortex.ts` gives folded presences). Runs inside `handleInbound`'s
+   * never-throw body: an interceptor that throws is logged and the message
+   * is DROPPED (not routed) — fail-closed, since a half-run interceptor
+   * cannot say whether it consumed the message.
+   */
+  interceptInbound?: InboundInterceptor;
 }
+
+/**
+ * cortex#2524 — the pre-route inbound interceptor seam
+ * ({@link SurfaceGatewayOptions.interceptInbound}). `match` is the binding
+ * the message resolved to, or `null` when it is unroutable. Returns `true`
+ * when the message is consumed.
+ *
+ * A synchronous IN-PROCESS call: it reaches only state in the process that
+ * hosts the gateway (today, the cortex runtime that started it). A gateway
+ * split out into its own process (CONTEXT.md §Dispatch source) cannot use it
+ * for the gate reply-bridge — that needs the bus-carried path, cortex#2526.
+ */
+export type InboundInterceptor = (
+  msg: InboundMessage,
+  match: GatewayBindingMatch | null,
+) => boolean;
 
 /**
  * The shared surface gateway's inbound orchestrator.
@@ -164,6 +196,7 @@ export class SurfaceGateway {
   private readonly index: GatewayBindingIndex;
   private readonly sink: GatewayInboundSink;
   private readonly onUnroutable: (msg: InboundMessage, reason: string) => void;
+  private readonly interceptInbound: InboundInterceptor | undefined;
 
   /**
    * cortex#1793 (S8) — the seeds each ATTACHED (runtime, not boot) instance
@@ -204,6 +237,7 @@ export class SurfaceGateway {
     this.index = index;
     this.sink = sink;
     this.onUnroutable = opts?.onUnroutable ?? defaultUnroutableWarn;
+    this.interceptInbound = opts?.interceptInbound;
   }
 
   /**
@@ -543,6 +577,15 @@ export class SurfaceGateway {
           `author=${msg.authorName} contentLen=${msg.content.length}\n`,
       );
       const match = resolveBinding(this.index, msg);
+      // cortex#2524 — gate reply-bridge before dispatch (mirrors the
+      // per-stack `inboundWithGateBridge` order). The interceptor sees the
+      // resolved binding so it can refuse another stack's message; it runs
+      // before the `null` branch so an unroutable message can still be a
+      // gate reply. A consumed message: no unroutable hook, no sink, no chat
+      // dispatch.
+      if (this.interceptInbound?.(msg, match) === true) {
+        return;
+      }
 
       if (match === null) {
         const reason = unroutableReason(msg, this.index);

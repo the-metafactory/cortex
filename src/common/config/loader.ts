@@ -21,6 +21,7 @@ import {
   type MattermostPresence,
   type NotifyConfig,
   type Policy,
+  type PrincipalPlatformIds,
   type ReflexActivationConfig,
   type SlackPresence,
   type StackConfig,
@@ -113,7 +114,7 @@ export interface LoadedConfig {
    * input always yields `undefined`). The boot path reads these to wire
    * `DiscordAdapterInfra.principal.discordId` etc.
    */
-  principal?: {
+  principal?: PrincipalPlatformIds & {
     id: string;
     /**
      * cortex#429 PR-C — surface the principal's display name onto the
@@ -123,9 +124,6 @@ export interface LoadedConfig {
      * cortex.yaml and the boot path falls back to `principal.id`.
      */
     displayName?: string;
-    discordId?: string;
-    mattermostId?: string;
-    slackId?: string;
   };
   /**
    * Optional stack identity (IAW A.5.3, cortex#113). Populated only when the
@@ -1135,6 +1133,9 @@ function loadCortexShape(
       }),
       ...(cortexConfig.principal.slackId !== undefined && {
         slackId: cortexConfig.principal.slackId,
+      }),
+      ...(cortexConfig.principal.webId !== undefined && {
+        webId: cortexConfig.principal.webId,
       }),
     },
     // IAW A.5.3 — surface the validated `stack:` block to the boot path.

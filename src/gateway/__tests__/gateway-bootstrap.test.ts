@@ -20,6 +20,7 @@
 
 import { describe, expect, test, spyOn } from "bun:test";
 import {
+  gatewayHostsSurface,
   isGatewayEnabled,
   isGatewayPublishEnabled,
   maybeCreateSurfaceGateway,
@@ -140,6 +141,30 @@ describe("isGatewayEnabled", () => {
 
   test("returns false when CORTEX_GATEWAY is undefined in the env record", () => {
     expect(isGatewayEnabled({ CORTEX_GATEWAY: undefined })).toBe(false);
+  });
+});
+
+// =============================================================================
+// gatewayHostsSurface — cortex#2524, the web row of the gate's liveSurfaces
+// =============================================================================
+
+describe("gatewayHostsSurface", () => {
+  const withWeb: Surfaces = {
+    web: [{ agent: "arve", stack: "jc/switch", binding: { instanceId: "console" } }],
+  };
+
+  test("true when the flag is on and the platform has a binding", () => {
+    expect(gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, withWeb, "web")).toBe(true);
+  });
+
+  test("false when the flag is off, even with a binding", () => {
+    expect(gatewayHostsSurface({}, withWeb, "web")).toBe(false);
+  });
+
+  test("false when the platform has no binding", () => {
+    expect(gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, withWeb, "slack")).toBe(false);
+    expect(gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, { web: [] }, "web")).toBe(false);
+    expect(gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, undefined, "web")).toBe(false);
   });
 });
 

@@ -16,6 +16,7 @@ import { describe, expect, test } from "bun:test";
 import { SurfaceGateway, LoggingInboundSink } from "../surface-gateway";
 import { BusInboundSink } from "../bus-inbound-sink";
 import { startGatewayWithPlan, type RecordingGatewayFactory } from "./start-gateway-test-helper";
+import { syncGatewaySurfaceLiveness } from "../start-gateway";
 import type { PlatformAdapter } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
@@ -176,6 +177,27 @@ describe("startGatewayIfEnabled — flag off", () => {
 });
 
 describe("startGatewayIfEnabled — flag on", () => {
+  test("cortex#2524 — an adapter whose start() rejects fails the boot (no silently absent surface)", async () => {
+    const failing: RecordingGatewayFactory = {
+      ...makeCountingFactory([]).factory,
+      discord: (args) =>
+        makeFakeAdapter("discord", args.instanceId, () => {
+          throw new Error("adapter start failed");
+        }),
+    };
+    await expect(
+      startGatewayWithPlan({
+        env: { CORTEX_GATEWAY: "1" },
+        surfaces: DISCORD_SURFACES,
+        principal: "andreas",
+        runtime: RUNTIME_STUB,
+        source: SOURCE_STUB,
+        policyEngine: POLICY_ENGINE_STUB,
+        factory: failing,
+      }),
+    ).rejects.toThrow("adapter start failed");
+  });
+
   test("flag on + surfaces → builds adapters, returns a started SurfaceGateway", async () => {
     const started: string[] = [];
     const { factory, constructed } = makeCountingFactory(started);
@@ -583,5 +605,38 @@ describe("startGatewayIfEnabled — sink selection (CORTEX_GATEWAY_PUBLISH)", ()
     });
     expect(gw).toBeUndefined();
     expect(constructed).toEqual([]);
+  });
+});
+
+// =============================================================================
+// syncGatewaySurfaceLiveness — cortex#2524, the gate's web row after start
+// =============================================================================
+
+describe("syncGatewaySurfaceLiveness", () => {
+  const webAdapter = { platform: "web" } as PlatformAdapter;
+  const discordAdapter = { platform: "discord" } as PlatformAdapter;
+
+  test("keeps the platform live when a started gateway adapter serves it", () => {
+    const live = new Set(["web"]);
+    syncGatewaySurfaceLiveness(live, { adapters: [discordAdapter, webAdapter] }, "web");
+    expect(live.has("web")).toBe(true);
+  });
+
+  test("adds the platform when the gateway started it but the seed missed it", () => {
+    const live = new Set<string>();
+    syncGatewaySurfaceLiveness(live, { adapters: [webAdapter] }, "web");
+    expect(live.has("web")).toBe(true);
+  });
+
+  test("drops a seeded platform the gateway did not start", () => {
+    const live = new Set(["web", "discord"]);
+    syncGatewaySurfaceLiveness(live, { adapters: [discordAdapter] }, "web");
+    expect([...live]).toEqual(["discord"]);
+  });
+
+  test("drops the platform when no gateway started", () => {
+    const live = new Set(["web"]);
+    syncGatewaySurfaceLiveness(live, undefined, "web");
+    expect(live.has("web")).toBe(false);
   });
 });

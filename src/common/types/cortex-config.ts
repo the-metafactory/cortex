@@ -173,6 +173,15 @@ export const PrincipalConfigSchema = z.object({
   /** Principal's Slack user id (`U...`) — same purpose, Slack-side. */
   slackId: z.string().optional(),
   /**
+   * cortex#2524 — principal's caller identity on the `web` surface
+   * (`metafactory-cortex-adapter-web`). Must equal the `authorId` the
+   * binding's `authScheme` derives for the principal (CF Access JWT `sub`,
+   * or the `authHeader` value); the surface principal gate compares an
+   * inbound reply's `authorId` against it verbatim. Mirror it into
+   * `policy.principals[].platform_ids.web` like the other platform ids.
+   */
+  webId: z.string().optional(),
+  /**
    * Data residency stamped into `sovereignty.data_residency` on emitted
    * envelopes. ISO-3166-1 alpha-2 country code (two uppercase ASCII letters).
    * Defaults to "NZ" when omitted. Principals in AU/EU/US/etc. set this to
@@ -188,6 +197,17 @@ export const PrincipalConfigSchema = z.object({
 });
 
 export type PrincipalConfig = z.infer<typeof PrincipalConfigSchema>;
+
+/**
+ * The principal's platform user ids, one per surface. The one shape the
+ * loader's `LoadedConfig.principal`, `StartCortexOptions.principal` and the
+ * surface principal gate's `PrincipalIdentity` share, so a new surface's id
+ * is added once, here on the schema.
+ */
+export type PrincipalPlatformIds = Pick<
+  PrincipalConfig,
+  "discordId" | "mattermostId" | "slackId" | "webId"
+>;
 
 // R1 vocabulary migration (cortex#388) v3.0.0 BREAKING — the
 // `OperatorSchema` / `Operator` deprecated aliases were removed at

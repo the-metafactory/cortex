@@ -1079,6 +1079,17 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.principal?.discordId).toBe("555555555555555555");
   });
 
+  test("cortex#2524 — `principal.webId` is carried onto LoadedConfig.principal", () => {
+    const cfg = minimalCortexPrincipalShape();
+    (cfg.principal as Record<string, unknown>).webId = "jc@example.org";
+    const path = writeCortexConfig(testDir, cfg);
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.principal?.webId).toBe("jc@example.org");
+    // Absent on the config → absent on the loaded view (no empty-string default).
+    const bare = loadConfigWithAgents(writeCortexConfig(testDir, minimalCortexPrincipalShape()));
+    expect(bare.principal?.webId).toBeUndefined();
+  });
+
   // v4.0.0 BREAKING CUT — cortex.yaml requires the canonical `principal:`
   // key. The legacy top-level `operator:` block reader is GONE, and with it
   // the transition-era dual-block guard (`DualBlockConflictError`): there is
