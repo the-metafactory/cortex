@@ -158,17 +158,23 @@ export interface StartedGateway {
 }
 
 /**
+ * Platforms whose ONLY boot path is the shared gateway — no per-stack
+ * adapter ever `add()`s them to the principal gate's `liveSurfaces`.
+ */
+export type GatewayOnlyPlatform = "web";
+
+/**
  * cortex#2524 — set `platform`'s membership in the principal gate's
  * `liveSurfaces` from what the gateway actually started: live iff a started
  * gateway adapter serves it. Replaces the boot-window seed
- * (`gatewayHostsSurface`) once the gateway is up. Only for platforms whose
- * ONLY boot path is the gateway (`web`) — a platform that also has
- * per-stack adapters would lose their `add()`.
+ * (`gatewayHostsSurface`) once the gateway is up. Typed to
+ * {@link GatewayOnlyPlatform}: a platform that also has per-stack adapters
+ * would lose their `add()` and fail its gates closed.
  */
 export function syncGatewaySurfaceLiveness(
   liveSurfaces: Set<string>,
   started: Pick<StartedGateway, "adapters"> | undefined,
-  platform: string,
+  platform: GatewayOnlyPlatform,
 ): void {
   if (started?.adapters.some((a) => a.platform === platform) === true) {
     liveSurfaces.add(platform);
