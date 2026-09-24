@@ -110,6 +110,8 @@ export interface GatewayBootstrapOpts {
    * When absent the gateway's default `console.warn` fires.
    */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
+  /** cortex#2524 — forwarded verbatim to {@link SurfaceGatewayOptions.interceptInbound}. */
+  interceptInbound?: (msg: InboundMessage) => boolean;
   /**
    * cortex#1951 — the `(kind, id)`-keyed plugin registry `buildBindingIndex`
    * derives each platform's demux key from. Defaults to
@@ -252,7 +254,10 @@ export function maybeCreateSurfaceGateway(
   const sink = opts.sink ?? new LoggingInboundSink();
   const live = !(sink instanceof LoggingInboundSink);
 
-  const gw = new SurfaceGateway(adapters, index, sink, { onUnroutable });
+  const gw = new SurfaceGateway(adapters, index, sink, {
+    onUnroutable,
+    ...(opts.interceptInbound !== undefined && { interceptInbound: opts.interceptInbound }),
+  });
 
   process.stdout.write(
     `[surface-gateway] surface gateway constructed (${live ? "LIVE" : "SHADOW"})` +

@@ -805,6 +805,8 @@ export interface StartCortexOptions {
     discordId?: string;
     mattermostId?: string;
     slackId?: string;
+    /** cortex#2524 — the principal's `web` surface caller identity. */
+    webId?: string;
   };
 }
 
@@ -2517,6 +2519,20 @@ export async function startCortex(
       identityKey: "slackId" as const,
       principalId: options.principal?.slackId,
     },
+    {
+      // cortex#2524 — the web adapter has no per-stack presence: its ONLY
+      // boot path is the shared surface gateway (`CORTEX_GATEWAY=1` +
+      // `surfaces.web[]`), and gateway adapters never `add()` themselves to
+      // `liveSurfaces` at start. So "configured" here is exactly "the
+      // gateway will construct a web adapter this boot". Without this row a
+      // task routed to `surface: "web"` fails closed at the bus-only branch
+      // even with `principal.webId` set.
+      surface: "web",
+      configured:
+        isGatewayEnabled(process.env) && (options.surfaces?.web?.length ?? 0) > 0,
+      identityKey: "webId" as const,
+      principalId: options.principal?.webId,
+    },
   ];
   const liveSurfaces = new Set<string>(
     surfaceGateMeta.filter((m) => m.configured).map((m) => m.surface),
@@ -2536,24 +2552,34 @@ export async function startCortex(
   // here), not a chat dispatch. The InboundMessage → GateReplyOffer mapping
   // lives HERE (surface layer) so the bus-side router stays blind to adapter
   // DTOs (sage round 2, architecture).
+  // The ONE `InboundMessage → GateReplyOffer` mapping, shared by the
+  // per-stack inbound handler below AND the shared surface gateway's
+  // pre-route interceptor (cortex#2524) — the web adapter boots only through
+  // the gateway, whose inbound never passed the reply-bridge before, so a
+  // principal's reply on a web binding could not resolve an open gate. One
+  // helper, so the two paths cannot drift on the routing key.
+  //
+  // The routing key for both the gate reply-bridge and a brain task's
+  // response_routing. A top-level (non-threaded) surface message has no
+  // native thread, so the channel id is the key — used IDENTICALLY on the
+  // gate-await side and the offer side, so a gate prompt + the principal's
+  // reply correlate whether the conversation is threaded or not.
+  const gateRoutingThread = (msg: InboundMessage): string =>
+    msg.threadId !== undefined && msg.threadId.length > 0 ? msg.threadId : msg.channelId;
+  const offerInboundToGate = (msg: InboundMessage): boolean =>
+    gateReplyRouter.offer({
+      surface: msg.platform,
+      channel: msg.channelId,
+      thread: gateRoutingThread(msg),
+      authorId: msg.authorId,
+      text: msg.content,
+    });
+
   const inboundWithGateBridge =
     (adapter: PlatformAdapter, agent: Agent) =>
     (msg: InboundMessage): Promise<void> => {
-      // The routing key for both the gate reply-bridge and a brain task's
-      // response_routing. A top-level (non-threaded) surface message has no
-      // native thread, so the channel id is the key — used IDENTICALLY on the
-      // gate-await side and the offer side, so a gate prompt + the principal's
-      // reply correlate whether the conversation is threaded or not.
-      const thread = msg.threadId !== undefined && msg.threadId.length > 0
-        ? msg.threadId
-        : msg.channelId;
-      const consumed = gateReplyRouter.offer({
-        surface: msg.platform,
-        channel: msg.channelId,
-        thread,
-        authorId: msg.authorId,
-        text: msg.content,
-      });
+      const thread = gateRoutingThread(msg);
+      const consumed = offerInboundToGate(msg);
       if (consumed) return Promise.resolve();
       // B-3 routing (design-bot-packs.md §6, cortex#1021): an exec-brain agent
       // does NOT run the builtin claude-code chat pipeline (it has no CC
@@ -5999,6 +6025,14 @@ export async function startCortex(
     policyEngine: adapterPolicyEngine,
     ownershipPlan: surfaceOwnershipPlan,
     registry: surfacePluginRegistry,
+    // cortex#2524 — gate reply-bridge for gateway-owned surfaces (the web
+    // adapter's only path). Runs BEFORE binding resolution and the inbound
+    // sink, so a principal's reply in a thread with an open gate resolves
+    // the gate and never becomes a chat dispatch — the same contract the
+    // per-stack `inboundWithGateBridge` gives folded presences. Holds in
+    // SHADOW too (LoggingInboundSink): gate replies are consumed here,
+    // everything else is logged and dropped as before.
+    interceptInbound: offerInboundToGate,
   });
   const gw: SurfaceGateway | undefined = startedGateway?.gateway;
 

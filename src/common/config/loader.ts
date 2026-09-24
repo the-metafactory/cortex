@@ -126,6 +126,8 @@ export interface LoadedConfig {
     discordId?: string;
     mattermostId?: string;
     slackId?: string;
+    /** cortex#2524 — the principal's `web` surface caller identity. */
+    webId?: string;
   };
   /**
    * Optional stack identity (IAW A.5.3, cortex#113). Populated only when the
@@ -1135,6 +1137,9 @@ function loadCortexShape(
       }),
       ...(cortexConfig.principal.slackId !== undefined && {
         slackId: cortexConfig.principal.slackId,
+      }),
+      ...(cortexConfig.principal.webId !== undefined && {
+        webId: cortexConfig.principal.webId,
       }),
     },
     // IAW A.5.3 — surface the validated `stack:` block to the boot path.

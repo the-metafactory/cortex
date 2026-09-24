@@ -103,6 +103,13 @@ export interface StartGatewayOpts {
   /** Optional unroutable-message hook forwarded to the gateway. */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
   /**
+   * cortex#2524 — pre-route interceptor forwarded verbatim to the gateway
+   * (see `SurfaceGatewayOptions.interceptInbound`). cortex.ts passes the
+   * gate reply-bridge offer so a principal reply on a gateway-owned surface
+   * (the web adapter's only path) can resolve an open gate.
+   */
+  interceptInbound?: (msg: InboundMessage) => boolean;
+  /**
    * Precomputed pure ownership plan from the boot path. Required so Gateway
    * start, per-stack suppression, and outbound sink subject derivation all use
    * the same ownership decision.
@@ -296,6 +303,7 @@ export async function startGatewayIfEnabled(
     registry,
     ...(sink !== undefined && { sink }),
     ...(onUnroutable !== undefined && { onUnroutable }),
+    ...(opts.interceptInbound !== undefined && { interceptInbound: opts.interceptInbound }),
   });
 
   // `gw` is defined here (bindings > 0 + adapters built), but the factory

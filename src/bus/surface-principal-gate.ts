@@ -13,7 +13,8 @@
  *      a brain `post` rides; §5 property 1: the brain cannot choose the channel,
  *      the host-supplied routing does);
  *   2. AWAITS a reply from the CONFIGURED PRINCIPAL — resolved by IDENTITY
- *      (platform user id: `principal.mattermostId` / `discordId` / `slackId`),
+ *      (platform user id: `principal.mattermostId` / `discordId` / `slackId` /
+ *      `webId`),
  *      NEVER by message-text inference. This is the pulse#47 lesson made
  *      structural: "any channel member could say 'run it'" is impossible here
  *      because a reply from anyone but the configured principal id is IGNORED;
@@ -60,7 +61,7 @@ import { createDispatchTaskPostEvent } from "./dispatch-events";
 
 /**
  * The platform user ids of the configured principal, per surface. Resolved from
- * `principal.mattermostId` / `discordId` / `slackId` at boot (see
+ * `principal.mattermostId` / `discordId` / `slackId` / `webId` at boot (see
  * `PrincipalConfig`). A surface with NO configured id cannot run a real gate —
  * the gate cannot verify identity, so it fails closed for that surface.
  */
@@ -68,6 +69,13 @@ export interface PrincipalIdentity {
   mattermostId?: string;
   discordId?: string;
   slackId?: string;
+  /**
+   * cortex#2524 — the principal's caller identity on the `web` surface
+   * (`metafactory-cortex-adapter-web`): whatever the binding's `authScheme`
+   * derives as `authorId` (the CF Access JWT `sub`, or the `authHeader`
+   * value). Compared verbatim against an inbound reply's `authorId`.
+   */
+  webId?: string;
 }
 
 /**
@@ -87,6 +95,8 @@ export function principalIdForSurface(
       return identity.discordId;
     case "slack":
       return identity.slackId;
+    case "web":
+      return identity.webId;
     default:
       return undefined;
   }

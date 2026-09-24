@@ -159,7 +159,15 @@ describe("principalIdForSurface", () => {
     expect(principalIdForSurface(id, "mattermost")).toBe("m");
     expect(principalIdForSurface(id, "discord")).toBe("d");
     expect(principalIdForSurface(id, "slack")).toBeUndefined();
+    expect(principalIdForSurface(id, "web")).toBeUndefined();
     expect(principalIdForSurface(id, "bus")).toBeUndefined();
+  });
+
+  test("cortex#2524 — resolves the web surface from webId", () => {
+    const id = { webId: "jc@example.org", discordId: "d" };
+    expect(principalIdForSurface(id, "web")).toBe("jc@example.org");
+    // A web id never leaks onto another surface's check.
+    expect(principalIdForSurface(id, "mattermost")).toBeUndefined();
   });
 });
 

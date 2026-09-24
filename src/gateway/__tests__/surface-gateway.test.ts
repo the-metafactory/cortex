@@ -18,7 +18,7 @@
  *  13. LoggingInboundSink.publish writes to stdout (shadow stage)
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   SurfaceGateway,
   LoggingInboundSink,
@@ -677,6 +677,75 @@ describe("LoggingInboundSink", () => {
       void index;
     } finally {
       process.stdout.write = savedWrite;
+    }
+  });
+});
+
+// ─── cortex#2524. Pre-route interceptor (gate reply-bridge seam) ─────────────
+
+describe("interceptInbound — pre-route interceptor (cortex#2524)", () => {
+  function webGateway(opts: {
+    intercept: (m: InboundMessage) => boolean;
+  }): { adapter: MockAdapter; sink: FakeSink; unroutable: string[] } {
+    const adapter = new MockAdapter("discord", "discord-luna-mf");
+    const index = buildBindingIndex(DISCORD_SURFACES, testRegistryWithDiscord());
+    const sink = new FakeSink();
+    const unroutable: string[] = [];
+    const gw = new SurfaceGateway([adapter], index, sink, {
+      onUnroutable: (_m, reason) => unroutable.push(reason),
+      interceptInbound: opts.intercept,
+    });
+    // start() is async but only stores the callback on the mock.
+    void gw.start();
+    return { adapter, sink, unroutable };
+  }
+
+  test("a consumed message is neither routed nor published to the sink", async () => {
+    const seen: InboundMessage[] = [];
+    const { adapter, sink, unroutable } = webGateway({
+      intercept: (m) => {
+        seen.push(m);
+        return true;
+      },
+    });
+    await adapter.trigger(
+      msg({ guildId: "555555555555555555", channelId: "ch-9000", content: "yes" }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(sink.calls).toHaveLength(0);
+    expect(unroutable).toHaveLength(0);
+  });
+
+  test("a non-consumed message routes exactly as without an interceptor", async () => {
+    const { adapter, sink } = webGateway({ intercept: () => false });
+    await adapter.trigger(msg({ guildId: "555555555555555555", channelId: "ch-9000" }));
+    expect(sink.calls).toHaveLength(1);
+    expect(sink.calls[0]?.decision.responseRouting.channel_id).toBe("ch-9000");
+  });
+
+  test("the interceptor runs BEFORE routing — an unroutable message can still be consumed", async () => {
+    const { adapter, sink, unroutable } = webGateway({ intercept: () => true });
+    // No guildId → would be unroutable (DM) if it reached the resolver.
+    await adapter.trigger(msg({ channelId: "dm-ch", content: "yes" }));
+    expect(sink.calls).toHaveLength(0);
+    expect(unroutable).toHaveLength(0);
+  });
+
+  test("a throwing interceptor drops the message (fail-closed), logs, and the loop survives", async () => {
+    const stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { adapter, sink } = webGateway({
+        intercept: () => {
+          throw new Error("router exploded");
+        },
+      });
+      await adapter.trigger(msg({ guildId: "555555555555555555", channelId: "ch-9000" }));
+      expect(sink.calls).toHaveLength(0);
+      const logged = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(logged).toContain("handleInbound error");
+      expect(logged).toContain("router exploded");
+    } finally {
+      stderrSpy.mockRestore();
     }
   });
 });

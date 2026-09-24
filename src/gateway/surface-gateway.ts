@@ -146,6 +146,19 @@ export interface SurfaceGatewayOptions {
    * — `onUnroutable` must not throw.
    */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
+  /**
+   * cortex#2524 — pre-route interceptor. Called with every inbound message
+   * BEFORE binding resolution and the sink; returning `true` means the
+   * message is CONSUMED (not routed, sink not called). Its one production
+   * use is the gate reply-bridge: a reply landing in a thread with an open
+   * `ask_principal` gate resolves the gate and must never also become a
+   * chat dispatch (the same contract the per-stack inbound handler in
+   * `cortex.ts` gives folded presences). Runs inside `handleInbound`'s
+   * never-throw body: an interceptor that throws is logged and the message
+   * is DROPPED (not routed) — fail-closed, since a half-run interceptor
+   * cannot say whether it consumed the message.
+   */
+  interceptInbound?: (msg: InboundMessage) => boolean;
 }
 
 /**
@@ -164,6 +177,7 @@ export class SurfaceGateway {
   private readonly index: GatewayBindingIndex;
   private readonly sink: GatewayInboundSink;
   private readonly onUnroutable: (msg: InboundMessage, reason: string) => void;
+  private readonly interceptInbound: ((msg: InboundMessage) => boolean) | undefined;
 
   /**
    * cortex#1793 (S8) — the seeds each ATTACHED (runtime, not boot) instance
@@ -204,6 +218,7 @@ export class SurfaceGateway {
     this.index = index;
     this.sink = sink;
     this.onUnroutable = opts?.onUnroutable ?? defaultUnroutableWarn;
+    this.interceptInbound = opts?.interceptInbound;
   }
 
   /**
@@ -542,6 +557,12 @@ export class SurfaceGateway {
           `instanceId=${msg.instanceId} channel=${msg.channelId} ` +
           `author=${msg.authorName} contentLen=${msg.content.length}\n`,
       );
+      // cortex#2524 — gate reply-bridge first, routing second (mirrors the
+      // per-stack `inboundWithGateBridge` order). A consumed message is a
+      // gate reply: no binding lookup, no sink, no chat dispatch.
+      if (this.interceptInbound?.(msg) === true) {
+        return;
+      }
       const match = resolveBinding(this.index, msg);
 
       if (match === null) {
