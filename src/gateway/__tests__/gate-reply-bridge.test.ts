@@ -1,16 +1,12 @@
 /**
- * cortex#2524 — the surface-side gate reply-bridge helpers: the ONE
- * `InboundMessage → GateReplyOffer` mapping, and the own-stack filter the
- * gateway interceptor applies before offering a message to a runtime's gates.
+ * cortex#2524 — the gateway's gate reply-bridge: the own-stack filter the
+ * interceptor applies before offering a message to a runtime's gates. (The
+ * message → offer mapping is tested with `adapters/gate-reply-offer.ts`.)
  */
 
 import { describe, expect, test } from "bun:test";
-import {
-  createGateReplyInterceptor,
-  gateRoutingThread,
-  isOwnStackBinding,
-  toGateReplyOffer,
-} from "../gate-reply-bridge";
+import { createGateReplyInterceptor, isOwnStackBinding } from "../gate-reply-bridge";
+import { toGateReplyOffer } from "../../adapters/gate-reply-offer";
 import type { GatewayBindingMatch } from "../binding-resolver";
 import type { GateReplyOffer } from "../../bus/gate-reply-router";
 import type { InboundMessage } from "../../adapters/types";
@@ -35,27 +31,6 @@ function match(over: Partial<GatewayBindingMatch> = {}): GatewayBindingMatch {
 
 const OWN = { principal: "jc", stack: "switch" };
 
-describe("gateRoutingThread / toGateReplyOffer", () => {
-  test("an unthreaded message keys on the channel id", () => {
-    expect(gateRoutingThread(inbound())).toBe("ch-1");
-    expect(gateRoutingThread(inbound({ threadId: "" }))).toBe("ch-1");
-  });
-
-  test("a threaded message keys on the thread id", () => {
-    expect(gateRoutingThread(inbound({ threadId: "t-9" }))).toBe("t-9");
-  });
-
-  test("maps every offer field from the message", () => {
-    expect(toGateReplyOffer(inbound({ threadId: "t-9" }))).toEqual({
-      surface: "web",
-      channel: "ch-1",
-      thread: "t-9",
-      authorId: "principal-1",
-      text: "yes",
-    });
-  });
-});
-
 describe("isOwnStackBinding", () => {
   test("same principal and stack → own", () => {
     expect(isOwnStackBinding(match(), OWN)).toBe(true);
@@ -69,8 +44,8 @@ describe("isOwnStackBinding", () => {
     expect(isOwnStackBinding(match({ principal: "andreas" }), OWN)).toBe(false);
   });
 
-  test("a stackless (gap-4) binding publishes on the gateway principal's namespace → own", () => {
-    expect(isOwnStackBinding(match({ principal: undefined, stack: undefined }), OWN)).toBe(true);
+  test("a stackless (gap-4) binding publishes on the stackless subject no runtime listens on → not own", () => {
+    expect(isOwnStackBinding(match({ principal: undefined, stack: undefined }), OWN)).toBe(false);
   });
 });
 

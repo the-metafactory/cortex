@@ -169,6 +169,11 @@ export interface SurfaceGatewayOptions {
  * ({@link SurfaceGatewayOptions.interceptInbound}). `match` is the binding
  * the message resolved to, or `null` when it is unroutable. Returns `true`
  * when the message is consumed.
+ *
+ * A synchronous IN-PROCESS call: it reaches only state in the process that
+ * hosts the gateway (today, the cortex runtime that started it). A gateway
+ * split out into its own process (CONTEXT.md §Dispatch source) cannot use it
+ * for the gate reply-bridge — that needs the bus-carried path, cortex#2526.
  */
 export type InboundInterceptor = (
   msg: InboundMessage,

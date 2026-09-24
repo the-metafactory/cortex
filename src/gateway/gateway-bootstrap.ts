@@ -145,12 +145,13 @@ export function isGatewayEnabled(
 }
 
 /**
- * cortex#2524 — whether the shared gateway hosts `platform` this boot: the
- * `CORTEX_GATEWAY` flag is on and `surfaces` binds at least one instance of
- * it. A `true` never leaves the platform silently absent at boot: boot
- * either constructs one gateway adapter per binding or aborts
- * (`planSurfaceOwnership` throws on an unregistered platform plugin, and
- * `startGatewayIfEnabled` rethrows adapter build/start failures).
+ * cortex#2524 — whether the shared gateway will host `platform` this boot:
+ * the `CORTEX_GATEWAY` flag is on and `surfaces` binds at least one instance
+ * of it. A prediction for the boot window, before the gateway starts; boot
+ * then either starts the adapter or aborts (`planSurfaceOwnership` throws on
+ * an unregistered platform plugin; `startGatewayIfEnabled` rethrows adapter
+ * build/start failures). `syncGatewaySurfaceLiveness` replaces it with the
+ * started adapter set.
  */
 export function gatewayHostsSurface(
   env: Record<string, string | undefined>,

@@ -198,6 +198,17 @@ export const PrincipalConfigSchema = z.object({
 
 export type PrincipalConfig = z.infer<typeof PrincipalConfigSchema>;
 
+/**
+ * The principal's platform user ids, one per surface. The one shape the
+ * loader's `LoadedConfig.principal`, `StartCortexOptions.principal` and the
+ * surface principal gate's `PrincipalIdentity` share, so a new surface's id
+ * is added once, here on the schema.
+ */
+export type PrincipalPlatformIds = Pick<
+  PrincipalConfig,
+  "discordId" | "mattermostId" | "slackId" | "webId"
+>;
+
 // R1 vocabulary migration (cortex#388) v3.0.0 BREAKING — the
 // `OperatorSchema` / `Operator` deprecated aliases were removed at
 // v3.0.0 (manifest PR-11). External importers update to

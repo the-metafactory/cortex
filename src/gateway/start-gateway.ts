@@ -158,6 +158,26 @@ export interface StartedGateway {
 }
 
 /**
+ * cortex#2524 — set `platform`'s membership in the principal gate's
+ * `liveSurfaces` from what the gateway actually started: live iff a started
+ * gateway adapter serves it. Replaces the boot-window seed
+ * (`gatewayHostsSurface`) once the gateway is up. Only for platforms whose
+ * ONLY boot path is the gateway (`web`) — a platform that also has
+ * per-stack adapters would lose their `add()`.
+ */
+export function syncGatewaySurfaceLiveness(
+  liveSurfaces: Set<string>,
+  started: Pick<StartedGateway, "adapters"> | undefined,
+  platform: string,
+): void {
+  if (started?.adapters.some((a) => a.platform === platform) === true) {
+    liveSurfaces.add(platform);
+  } else {
+    liveSurfaces.delete(platform);
+  }
+}
+
+/**
  * Flag-gated: maybe construct + start the shared surface gateway.
  *
  * Returns the started {@link SurfaceGateway} when the flag is on AND surface

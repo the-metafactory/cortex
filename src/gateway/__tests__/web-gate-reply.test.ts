@@ -9,7 +9,8 @@
  *
  * The interceptor and the `liveSurfaces` web row come from the SAME
  * production helpers `cortex.ts` composes (`createGateReplyInterceptor`,
- * `gatewayHostsSurface`), so a drift in either fails here.
+ * `gatewayHostsSurface`, `syncGatewaySurfaceLiveness`), so a drift in any
+ * of them fails here.
  *
  * Proves, for one gate:
  *   1. the prompt renders with the web task source (wire routing intact);
@@ -25,6 +26,7 @@ import { describe, expect, test } from "bun:test";
 import { SurfaceGateway, type GatewayInboundDecision, type GatewayInboundSink } from "../surface-gateway";
 import { buildBindingIndex } from "../binding-resolver";
 import { gatewayHostsSurface } from "../gateway-bootstrap";
+import { syncGatewaySurfaceLiveness } from "../start-gateway";
 import { createGateReplyInterceptor, type GateOwnerStack } from "../gate-reply-bridge";
 import { testRegistryWithWeb } from "./test-registry-support";
 import { GateReplyRouter } from "../../bus/gate-reply-router";
@@ -128,12 +130,14 @@ async function compose(opts: { webId?: string; timeoutMs?: number; own?: GateOwn
       rendered.push({ prompt: r.prompt, source: r.source });
     },
   };
+  // cortex.ts's `surfaceGateMeta` web row (boot-window seed, gateway flag on),
+  // held by reference like the gate holds cortex.ts's set.
+  const liveSurfaces = new Set(
+    gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, WEB_SURFACES, "web") ? ["web"] : [],
+  );
   const gate = new SurfacePrincipalGate({
     principalIdentity: opts.webId !== undefined ? { webId: opts.webId } : {},
-    // cortex.ts's `surfaceGateMeta` web row, with the gateway flag on.
-    liveSurfaces: new Set(
-      gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, WEB_SURFACES, "web") ? ["web"] : [],
-    ),
+    liveSurfaces,
     renderer,
     replySource: router,
     timeoutMs: opts.timeoutMs ?? 2_000,
@@ -150,6 +154,8 @@ async function compose(opts: { webId?: string; timeoutMs?: number; own?: GateOwn
     },
   );
   await gw.start();
+  // cortex.ts's post-start sync from the adapters the gateway started.
+  syncGatewaySurfaceLiveness(liveSurfaces, { adapters: [adapter] }, "web");
   return { gate, adapter, sink, rendered, router, gw };
 }
 

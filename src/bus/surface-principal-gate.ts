@@ -46,6 +46,7 @@
  */
 
 import type { TaskSource } from "../brain/protocol";
+import type { PrincipalPlatformIds } from "../common/types/cortex-config";
 import {
   DenyAllPrincipalGate,
   type PrincipalGate,
@@ -62,21 +63,11 @@ import { createDispatchTaskPostEvent } from "./dispatch-events";
 /**
  * The platform user ids of the configured principal, per surface. Resolved from
  * `principal.mattermostId` / `discordId` / `slackId` / `webId` at boot (see
- * `PrincipalConfig`). A surface with NO configured id cannot run a real gate —
- * the gate cannot verify identity, so it fails closed for that surface.
+ * `PrincipalConfig`; the field docs live on `PrincipalConfigSchema`). A surface
+ * with NO configured id cannot run a real gate — the gate cannot verify
+ * identity, so it fails closed for that surface.
  */
-export interface PrincipalIdentity {
-  mattermostId?: string;
-  discordId?: string;
-  slackId?: string;
-  /**
-   * cortex#2524 — the principal's caller identity on the `web` surface
-   * (`metafactory-cortex-adapter-web`): whatever the binding's `authScheme`
-   * derives as `authorId` (the CF Access JWT `sub`, or the `authHeader`
-   * value). Compared verbatim against an inbound reply's `authorId`.
-   */
-  webId?: string;
-}
+export type PrincipalIdentity = PrincipalPlatformIds;
 
 /**
  * Resolve the configured principal's platform user id FOR A GIVEN SURFACE. The
