@@ -14,7 +14,7 @@
  *
  * This bus-side module is deliberately blind to adapter DTOs: it takes a
  * bus-neutral {@link GateReplyOffer}, and the SURFACE layer owns the
- * `InboundMessage → offer` mapping (`gateway/gate-reply-bridge.ts`, shared by
+ * `InboundMessage → offer` mapping (`adapters/gate-reply-offer.ts`, shared by
  * the per-stack inbound handler in `cortex.ts` and the surface gateway).
  * The bus stays dumb about platform message shapes.
  *
