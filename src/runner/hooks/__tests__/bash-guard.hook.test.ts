@@ -2599,7 +2599,12 @@ describe("bash-guard.hook — round 9: floor coverage (cortex#2370 regression gu
         expect(result.allow).toBe(false);
         expect(result.reason).toContain("COMMAND_FLAG_POLICIES");
       } finally {
-        process.env.CORTEX_PATH_GUARD = prevGuard;
+        // Delete rather than assign when it was unset: from Bun 1.4 (Node
+        // semantics) `process.env.X = undefined` stores the string
+        // "undefined", which leaks into later spawned-hook tests as a
+        // malformed CORTEX_PATH_GUARD.
+        if (prevGuard === undefined) delete process.env.CORTEX_PATH_GUARD;
+        else process.env.CORTEX_PATH_GUARD = prevGuard;
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
