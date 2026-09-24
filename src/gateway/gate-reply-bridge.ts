@@ -41,7 +41,9 @@ export interface GateOwnerStack {
  * Whether a gateway binding routes to the runtime's own stack: its parsed
  * `{principal}/{stack}` equals the one the runtime's chat listeners subscribe
  * under. A binding with no `stack` field (gap 4) publishes on the stackless
- * `local.{principal}.tasks.…` subject, while a runtime's chat listeners
+ * `local.{principal}.tasks.…` subject (myelin `directTaskSubject`:
+ * `stackInfix(undefined)` is empty — no `default` substitution), while a
+ * runtime's chat listeners
  * always subscribe under `local.{principal}.{stack}.tasks.*.>`
  * (`runner/dispatch-listener.ts`, `stack` = the boot-derived stack). So a
  * stackless binding is never own, and a gate reply on it fails closed (the
