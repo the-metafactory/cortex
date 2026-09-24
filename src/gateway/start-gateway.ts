@@ -55,7 +55,7 @@ import { defaultUnroutableWarn } from "./surface-gateway";
 import { makeEmittingUnroutable } from "./gateway-unroutable-emit";
 import type { BoundPrincipalStack } from "./binding-resolver";
 import type { SurfaceOwnershipPlan } from "./surface-ownership-plan";
-import type { SurfaceGateway } from "./surface-gateway";
+import type { InboundInterceptor, SurfaceGateway } from "./surface-gateway";
 import type { Surfaces } from "../common/types/surfaces";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { SystemEventSource } from "../bus/system-events";
@@ -108,7 +108,7 @@ export interface StartGatewayOpts {
    * gate reply-bridge offer so a principal reply on a gateway-owned surface
    * (the web adapter's only path) can resolve an open gate.
    */
-  interceptInbound?: (msg: InboundMessage) => boolean;
+  interceptInbound?: InboundInterceptor;
   /**
    * Precomputed pure ownership plan from the boot path. Required so Gateway
    * start, per-stack suppression, and outbound sink subject derivation all use

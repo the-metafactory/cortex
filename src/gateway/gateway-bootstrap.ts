@@ -67,6 +67,7 @@ import {
   SurfaceGateway,
   LoggingInboundSink,
   type GatewayInboundSink,
+  type InboundInterceptor,
 } from "./surface-gateway";
 
 // =============================================================================
@@ -111,7 +112,7 @@ export interface GatewayBootstrapOpts {
    */
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
   /** cortex#2524 — forwarded verbatim to {@link SurfaceGatewayOptions.interceptInbound}. */
-  interceptInbound?: (msg: InboundMessage) => boolean;
+  interceptInbound?: InboundInterceptor;
   /**
    * cortex#1951 — the `(kind, id)`-keyed plugin registry `buildBindingIndex`
    * derives each platform's demux key from. Defaults to
@@ -141,6 +142,22 @@ export function isGatewayEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return env.CORTEX_GATEWAY === "1";
+}
+
+/**
+ * cortex#2524 — whether the shared gateway hosts `platform` this boot: the
+ * `CORTEX_GATEWAY` flag is on and `surfaces` binds at least one instance of
+ * it. A `true` never leaves the platform silently absent at boot: boot
+ * either constructs one gateway adapter per binding or aborts
+ * (`planSurfaceOwnership` throws on an unregistered platform plugin, and
+ * `startGatewayIfEnabled` rethrows adapter build/start failures).
+ */
+export function gatewayHostsSurface(
+  env: Record<string, string | undefined>,
+  surfaces: Surfaces | undefined,
+  platform: string,
+): boolean {
+  return isGatewayEnabled(env) && (surfaces?.[platform]?.length ?? 0) > 0;
 }
 
 // =============================================================================

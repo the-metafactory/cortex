@@ -251,7 +251,12 @@ import {
 // onto the same system.attention.* bus path the cockpit loop publishes on.
 import { publishReconcileDelta } from "./surface/mc/attention-notify";
 import type { Database as BunDatabase } from "bun:sqlite";
-import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
+import { gatewayHostsSurface, isGatewayEnabled } from "./gateway/gateway-bootstrap";
+import {
+  createGateReplyInterceptor,
+  gateRoutingThread,
+  toGateReplyOffer,
+} from "./gateway/gate-reply-bridge";
 import {
   gatewayAdapterInstanceCollisions,
   planSurfaceOwnership,
@@ -2491,8 +2496,8 @@ export async function startCortex(
   //     arrive, so the gate times out to `fail`. Adapters still `add()` on
   //     start (idempotent) so a surface added by hot-reload joins late.
   // The gate itself only boots when the principal has at least one configured
-  // surface identity (`principal.mattermostId` / `discordId` / `slackId`) —
-  // with no platform id there is nothing to verify a reply against, so the
+  // surface identity (`principal.mattermostId` / `discordId` / `slackId` /
+  // `webId`) — with no platform id there is nothing to verify a reply against, so the
   // consumer keeps its DenyAll default (fail-closed, B-1 behaviour).
   const gateReplyRouter = new GateReplyRouter();
 
@@ -2521,15 +2526,14 @@ export async function startCortex(
     },
     {
       // cortex#2524 — the web adapter has no per-stack presence: its ONLY
-      // boot path is the shared surface gateway (`CORTEX_GATEWAY=1` +
-      // `surfaces.web[]`), and gateway adapters never `add()` themselves to
-      // `liveSurfaces` at start. So "configured" here is exactly "the
-      // gateway will construct a web adapter this boot". Without this row a
-      // task routed to `surface: "web"` fails closed at the bus-only branch
-      // even with `principal.webId` set.
+      // boot path is the shared surface gateway, and gateway adapters never
+      // `add()` themselves to `liveSurfaces` at start. `gatewayHostsSurface`
+      // is true when the gateway flag is on and `surfaces.web[]` is bound;
+      // boot then either constructs the web adapter or aborts (see the
+      // helper). Without this row a task routed to `surface: "web"` fails
+      // closed at the bus-only branch even with `principal.webId` set.
       surface: "web",
-      configured:
-        isGatewayEnabled(process.env) && (options.surfaces?.web?.length ?? 0) > 0,
+      configured: gatewayHostsSurface(process.env, options.surfaces, "web"),
       identityKey: "webId" as const,
       principalId: options.principal?.webId,
     },
@@ -2550,36 +2554,15 @@ export async function startCortex(
   // B-3 (cortex#1021 W-1): a message landing in a thread with an open
   // principal gate is that gate's reply (identity checked by the GATE, never
   // here), not a chat dispatch. The InboundMessage → GateReplyOffer mapping
-  // lives HERE (surface layer) so the bus-side router stays blind to adapter
-  // DTOs (sage round 2, architecture).
-  // The ONE `InboundMessage → GateReplyOffer` mapping, shared by the
-  // per-stack inbound handler below AND the shared surface gateway's
-  // pre-route interceptor (cortex#2524) — the web adapter boots only through
-  // the gateway, whose inbound never passed the reply-bridge before, so a
-  // principal's reply on a web binding could not resolve an open gate. One
-  // helper, so the two paths cannot drift on the routing key.
-  //
-  // The routing key for both the gate reply-bridge and a brain task's
-  // response_routing. A top-level (non-threaded) surface message has no
-  // native thread, so the channel id is the key — used IDENTICALLY on the
-  // gate-await side and the offer side, so a gate prompt + the principal's
-  // reply correlate whether the conversation is threaded or not.
-  const gateRoutingThread = (msg: InboundMessage): string =>
-    msg.threadId !== undefined && msg.threadId.length > 0 ? msg.threadId : msg.channelId;
-  const offerInboundToGate = (msg: InboundMessage): boolean =>
-    gateReplyRouter.offer({
-      surface: msg.platform,
-      channel: msg.channelId,
-      thread: gateRoutingThread(msg),
-      authorId: msg.authorId,
-      text: msg.content,
-    });
-
+  // lives in the surface layer (`gateway/gate-reply-bridge.ts`) so the
+  // bus-side router stays blind to adapter DTOs (sage round 2,
+  // architecture); the shared gateway's pre-route interceptor (cortex#2524)
+  // uses the SAME mapping, so the two paths cannot drift on the routing key.
   const inboundWithGateBridge =
     (adapter: PlatformAdapter, agent: Agent) =>
     (msg: InboundMessage): Promise<void> => {
       const thread = gateRoutingThread(msg);
-      const consumed = offerInboundToGate(msg);
+      const consumed = gateReplyRouter.offer(toGateReplyOffer(msg));
       if (consumed) return Promise.resolve();
       // B-3 routing (design-bot-packs.md §6, cortex#1021): an exec-brain agent
       // does NOT run the builtin claude-code chat pipeline (it has no CC
@@ -6026,13 +6009,17 @@ export async function startCortex(
     ownershipPlan: surfaceOwnershipPlan,
     registry: surfacePluginRegistry,
     // cortex#2524 — gate reply-bridge for gateway-owned surfaces (the web
-    // adapter's only path). Runs BEFORE binding resolution and the inbound
+    // adapter's only path). Runs BEFORE the unroutable hook and the inbound
     // sink, so a principal's reply in a thread with an open gate resolves
     // the gate and never becomes a chat dispatch — the same contract the
-    // per-stack `inboundWithGateBridge` gives folded presences. Holds in
-    // SHADOW too (LoggingInboundSink): gate replies are consumed here,
+    // per-stack `inboundWithGateBridge` gives folded presences. A message
+    // bound to another stack is never offered to THIS runtime's gates. Holds
+    // in SHADOW too (LoggingInboundSink): gate replies are consumed here,
     // everything else is logged and dropped as before.
-    interceptInbound: offerInboundToGate,
+    interceptInbound: createGateReplyInterceptor({
+      router: gateReplyRouter,
+      own: { principal: derivedStack.principal, stack: derivedStack.stack },
+    }),
   });
   const gw: SurfaceGateway | undefined = startedGateway?.gateway;
 

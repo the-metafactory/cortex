@@ -7,9 +7,9 @@
  * exactly as the bundle's `POST /message` handler does (the bundle itself is
  * out-of-tree — the S9b boundary guard forbids importing it here).
  *
- * The interceptor closure is the SAME mapping `cortex.ts`'s
- * `offerInboundToGate` uses (channel-keyed thread for an unthreaded message),
- * reproduced inline so this test states the contract it relies on.
+ * The interceptor and the `liveSurfaces` web row come from the SAME
+ * production helpers `cortex.ts` composes (`createGateReplyInterceptor`,
+ * `gatewayHostsSurface`), so a drift in either fails here.
  *
  * Proves, for one gate:
  *   1. the prompt renders with the web task source (wire routing intact);
@@ -17,12 +17,15 @@
  *      gateway's inbound sink is NEVER called for it (consumed, no chat
  *      dispatch);
  *   3. a reply from anyone else is ignored — the gate times out to `fail`;
- *   4. with no `webId` configured the gate fails closed before rendering.
+ *   4. with no `webId` configured the gate fails closed before rendering;
+ *   5. a runtime never takes a reply bound to another stack — it routes on.
  */
 
 import { describe, expect, test } from "bun:test";
 import { SurfaceGateway, type GatewayInboundDecision, type GatewayInboundSink } from "../surface-gateway";
 import { buildBindingIndex } from "../binding-resolver";
+import { gatewayHostsSurface } from "../gateway-bootstrap";
+import { createGateReplyInterceptor, type GateOwnerStack } from "../gate-reply-bridge";
 import { testRegistryWithWeb } from "./test-registry-support";
 import { GateReplyRouter } from "../../bus/gate-reply-router";
 import {
@@ -114,7 +117,10 @@ function tickSource(): TaskSource {
   return { surface: "web", channel: CHANNEL, thread: CHANNEL, user: "", adapter_instance: INSTANCE };
 }
 
-async function compose(opts: { webId?: string; timeoutMs?: number }) {
+/** The runtime the binding (`stack: "jc/switch"`) belongs to. */
+const OWN_STACK: GateOwnerStack = { principal: "jc", stack: "switch" };
+
+async function compose(opts: { webId?: string; timeoutMs?: number; own?: GateOwnerStack }) {
   const router = new GateReplyRouter();
   const rendered: { prompt: string; source: TaskSource }[] = [];
   const renderer: GatePromptRenderer = {
@@ -124,9 +130,10 @@ async function compose(opts: { webId?: string; timeoutMs?: number }) {
   };
   const gate = new SurfacePrincipalGate({
     principalIdentity: opts.webId !== undefined ? { webId: opts.webId } : {},
-    // What cortex.ts's `surfaceGateMeta` web row seeds when the gateway will
-    // construct a web adapter this boot.
-    liveSurfaces: new Set(["web"]),
+    // cortex.ts's `surfaceGateMeta` web row, with the gateway flag on.
+    liveSurfaces: new Set(
+      gatewayHostsSurface({ CORTEX_GATEWAY: "1" }, WEB_SURFACES, "web") ? ["web"] : [],
+    ),
     renderer,
     replySource: router,
     timeoutMs: opts.timeoutMs ?? 2_000,
@@ -139,15 +146,7 @@ async function compose(opts: { webId?: string; timeoutMs?: number }) {
     sink,
     {
       onUnroutable: () => {},
-      // cortex.ts `offerInboundToGate`, verbatim contract.
-      interceptInbound: (msg) =>
-        router.offer({
-          surface: msg.platform,
-          channel: msg.channelId,
-          thread: msg.threadId !== undefined && msg.threadId.length > 0 ? msg.threadId : msg.channelId,
-          authorId: msg.authorId,
-          text: msg.content,
-        }),
+      interceptInbound: createGateReplyInterceptor({ router, own: opts.own ?? OWN_STACK }),
     },
   );
   await gw.start();
@@ -225,6 +224,21 @@ describe("web surface principal gate (cortex#2524)", () => {
     expect(verdict.verdict).toBe("fail");
     expect(verdict.notes).toContain('no configured principal id for surface "web"');
     expect(rendered).toHaveLength(0);
+  });
+
+  test("a reply bound to another stack is never offered to this runtime's gate", async () => {
+    const { gate, adapter, sink, rendered } = await compose({
+      webId: PRINCIPAL_WEB_ID,
+      timeoutMs: 150,
+      own: { principal: "jc", stack: "default" },
+    });
+    const pending = gate.resolve(resolveOpts(tickSource()));
+    await untilRendered(rendered);
+    await adapter.post(PRINCIPAL_WEB_ID, "yes");
+    // The binding is jc/switch, this runtime is jc/default: the reply routes
+    // on to its own stack and the gate here never sees it.
+    expect((await pending).verdict).toBe("fail");
+    expect(sink.calls).toHaveLength(1);
   });
 
   test("an unrelated web message still routes to the sink (interceptor is a pass-through without an open gate)", async () => {
