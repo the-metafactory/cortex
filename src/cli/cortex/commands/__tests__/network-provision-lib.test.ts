@@ -17,7 +17,10 @@ import {
   type SigningIdentityPort,
   type ProvisionConfigWritePort,
   type OperatorModeExportPort,
+  type AgentsJetStreamPort,
+  accountJwtHasJetStream,
 } from "../network-provision-lib";
+import { accountJwt, ACCOUNT_JWT_WITH_JETSTREAM, ACCOUNT_JWT_WITHOUT_JETSTREAM } from "./account-jwt-test-helpers";
 
 const FED_PUB = "A" + "B".repeat(55);
 const AGENTS_PUB = "A" + "C".repeat(55);
@@ -33,11 +36,22 @@ function makePorts(overrides?: {
   federationWiring?: Partial<FederationWiringPort>;
   configWrite?: Partial<ProvisionConfigWritePort>;
   export?: Partial<OperatorModeExportPort>;
+  jetstream?: Partial<AgentsJetStreamPort>;
   /** cortex#1265 — make exportSystem report the SYS account absent (a clean skip). */
   systemAbsent?: boolean;
+  /**
+   * cortex#2534 — the JetStream state of an agents account that ALREADY exists
+   * in the nsc store. A freshly minted one always starts disabled (arc's plain
+   * `nsc add account`). Default: enabled (a converged stack).
+   */
+  agentsJetStream?: "enabled" | "disabled";
+  /** add-account finds every account already in the nsc store (created:false). */
+  accountsAlreadyExist?: boolean;
 }): { ports: ProvisionPorts; calls: string[]; written: Record<string, unknown>[] } {
   const calls: string[] = [];
   const written: Record<string, unknown>[] = [];
+  // The fake nsc store's view of the agents account's JWT.
+  let agentsJwt = (overrides?.agentsJetStream ?? "enabled") === "enabled" ? ACCOUNT_JWT_WITH_JETSTREAM : ACCOUNT_JWT_WITHOUT_JETSTREAM;
 
   const operator: OperatorProvisioningPort = {
     initOperator: async ({ name, force }) => {
@@ -50,6 +64,8 @@ function makePorts(overrides?: {
       if (name.endsWith("_AGENTS")) pubKey = AGENTS_PUB;
       else if (name === "SYS") pubKey = SYS_PUB;
       else pubKey = FED_PUB;
+      if (overrides?.accountsAlreadyExist) return { ok: true, account: name, pubKey, created: false, alreadyExisted: true };
+      if (name.endsWith("_AGENTS")) agentsJwt = ACCOUNT_JWT_WITHOUT_JETSTREAM;
       return { ok: true, account: name, pubKey, created: true, alreadyExisted: false };
     },
     ...overrides?.operator,
@@ -88,6 +104,7 @@ function makePorts(overrides?: {
     },
     exportAccount: async (name) => {
       calls.push(`export-account:${name}`);
+      if (name.endsWith("_AGENTS")) return { ok: true, pubKey: AGENTS_PUB, jwt: agentsJwt };
       return { ok: true, pubKey: FED_PUB, jwt: FED_JWT };
     },
     exportSystem: async ({ name }) => {
@@ -98,7 +115,16 @@ function makePorts(overrides?: {
     ...overrides?.export,
   };
 
-  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort }, calls, written };
+  const jetstream: AgentsJetStreamPort = {
+    enable: async ({ name }) => {
+      calls.push(`enable-jetstream:${name}`);
+      agentsJwt = ACCOUNT_JWT_WITH_JETSTREAM;
+      return { ok: true };
+    },
+    ...overrides?.jetstream,
+  };
+
+  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream }, calls, written };
 }
 
 function baseInputs(over?: Partial<ProvisionInputs>, state?: Partial<ProvisionState>): ProvisionInputs {
@@ -218,6 +244,9 @@ describe("provisionStack — apply on an empty stack", () => {
       "init-operator:OP_ANDREAS",
       "add-account:ANDREAS_RESEARCH_FED",
       "add-account:ANDREAS_RESEARCH_AGENTS",
+      // cortex#2534 — a fresh agents account gets JetStream, verified by read-back.
+      "enable-jetstream:ANDREAS_RESEARCH_AGENTS",
+      "export-account:ANDREAS_RESEARCH_AGENTS",
       "add-account:SYS",
       "signing-generate:~/.config/nats/andreas-research.seed",
       `wire:${FED_PUB}->${AGENTS_PUB}:apply`,
@@ -351,7 +380,8 @@ describe("provisionStack — cortex#1265 operator-mode JWT export", () => {
       ports,
     );
     expect(res.ok).toBe(true);
-    expect(calls.some((c) => c.startsWith("export-"))).toBe(false);
+    // The only export is cortex#2534's read-only agents-account JetStream probe.
+    expect(calls.filter((c) => c.startsWith("export-"))).toEqual(["export-account:ANDREAS_RESEARCH_AGENTS"]);
     expect(res.steps.join("\n")).toContain("operator-mode JWTs present in config (untouched)");
   });
 
@@ -408,7 +438,10 @@ describe("provisionStack — cortex#1265 operator-mode JWT export", () => {
     const driftPub = "A" + "Q".repeat(55);
     const { ports, calls } = makePorts({
       export: {
-        exportAccount: async () => ({ ok: true, pubKey: driftPub, jwt: FED_JWT }),
+        exportAccount: async (name) =>
+          name.endsWith("_AGENTS")
+            ? { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
+            : { ok: true, pubKey: driftPub, jwt: FED_JWT },
       },
     });
     const res = await provisionStack(baseInputs({ apply: true }), ports);
@@ -456,5 +489,280 @@ describe("provisionStack — fail-fast", () => {
     expect(res.ok).toBe(false);
     expect(res.reason).toContain("wiring");
     expect(calls).not.toContain("config-write");
+  });
+});
+
+describe("provisionStack — cortex#2534 agents account JetStream", () => {
+  const PROVISIONED = {
+    federationAccount: FED_PUB,
+    agentsAccount: AGENTS_PUB,
+    systemAccount: SYS_PUB,
+    signingSeedExists: true,
+    operatorModeJwtsPresent: true,
+  };
+  const jsRow = (plan: { step: string; status: string; detail: string }[]) =>
+    plan.find((p) => p.step === "agents account JetStream");
+
+  test("fresh stack: plan shows the JetStream grant as [wire]; apply enables it and verifies by read-back", async () => {
+    const { ports, calls } = makePorts();
+    const res = await provisionStack(baseInputs({ apply: true }), ports);
+    expect(res.ok).toBe(true);
+    expect(jsRow(res.plan)?.status).toBe("wire");
+    const enable = calls.indexOf("enable-jetstream:ANDREAS_RESEARCH_AGENTS");
+    expect(enable).toBeGreaterThan(calls.indexOf("add-account:ANDREAS_RESEARCH_AGENTS"));
+    expect(calls[enable + 1]).toBe("export-account:ANDREAS_RESEARCH_AGENTS");
+    expect(res.steps.join("\n")).toContain("agents account JetStream enabled");
+  });
+
+  test("existing agents account WITHOUT JetStream: dry-run reports [wire] via one read-only probe", async () => {
+    const { ports, calls, written } = makePorts({ agentsJetStream: "disabled" });
+    const res = await provisionStack(baseInputs({ apply: false }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(jsRow(res.plan)?.status).toBe("wire");
+    expect(jsRow(res.plan)?.detail).toContain("JetStream disabled");
+    expect(calls).toEqual(["export-account:ANDREAS_RESEARCH_AGENTS"]);
+    expect(written).toHaveLength(0);
+  });
+
+  test("existing agents account WITHOUT JetStream: apply repairs it (enable + verify), no re-mint", async () => {
+    const { ports, calls } = makePorts({ agentsJetStream: "disabled" });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(calls.some((c) => c.startsWith("add-account:"))).toBe(false);
+    expect(calls.filter((c) => c.startsWith("enable-jetstream:"))).toEqual(["enable-jetstream:ANDREAS_RESEARCH_AGENTS"]);
+    // probe, enable, verify
+    expect(calls.slice(0, 3)).toEqual([
+      "export-account:ANDREAS_RESEARCH_AGENTS",
+      "enable-jetstream:ANDREAS_RESEARCH_AGENTS",
+      "export-account:ANDREAS_RESEARCH_AGENTS",
+    ]);
+    // A repair of an existing account names the resolver_preload caveat for a live bus.
+    expect(res.steps.join("\n")).toContain("resolver_preload");
+  });
+
+  test("existing agents account WITH JetStream: [ok] and no enable call", async () => {
+    const { ports, calls } = makePorts({ agentsJetStream: "enabled" });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(jsRow(res.plan)?.status).toBe("ok");
+    expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+
+  test("hand-tuned positive limits count as enabled (never overwritten)", async () => {
+    const { ports, calls } = makePorts({
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          return { ok: true, pubKey: AGENTS_PUB, jwt: accountJwt({ mem_storage: 0, disk_storage: 1073741824 }) };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(jsRow(res.plan)?.status).toBe("ok");
+    expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+
+  test("tiered limits count as enabled", async () => {
+    const { ports, calls } = makePorts({
+      export: {
+        exportAccount: async () => ({
+          ok: true,
+          pubKey: AGENTS_PUB,
+          jwt: accountJwt({ tiered_limits: { R1: { mem_storage: -1, disk_storage: -1 } } }),
+        }),
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+
+  test("the FED and SYS accounts are never given JetStream", async () => {
+    const { ports, calls } = makePorts();
+    const res = await provisionStack(baseInputs({ apply: true }), ports);
+    expect(res.ok).toBe(true);
+    const enabled = calls.filter((c) => c.startsWith("enable-jetstream:"));
+    expect(enabled).toEqual(["enable-jetstream:ANDREAS_RESEARCH_AGENTS"]);
+    // No probe of the FED account for JetStream either — its only export is the
+    // cortex#1265 operator-mode JWT export.
+    expect(calls.filter((c) => c === "export-account:ANDREAS_RESEARCH_FED")).toHaveLength(1);
+  });
+
+  test("verification fails after the edit → provision FAILS before the config write", async () => {
+    const { ports, calls, written } = makePorts({
+      jetstream: {
+        enable: async ({ name }) => {
+          calls.push(`enable-jetstream:${name}`);
+          return { ok: true }; // reports success but the JWT never changes
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("still has JetStream disabled");
+    expect(calls).not.toContain("config-write");
+    expect(written).toHaveLength(0);
+  });
+
+  test("an enable failure aborts before the config write", async () => {
+    const { ports, calls } = makePorts({
+      jetstream: { enable: async () => ({ ok: false, reason: "nsc: boom" }) },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("nsc: boom");
+    expect(calls).not.toContain("config-write");
+  });
+
+  test("probe pubkey drift (wrong nsc operator context) refuses apply before ANY mutation", async () => {
+    const driftPub = "A" + "Q".repeat(55);
+    const { ports, calls } = makePorts({
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          return { ok: true, pubKey: driftPub, jwt: ACCOUNT_JWT_WITHOUT_JETSTREAM };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("pubkey drift");
+    expect(calls).toEqual(["export-account:ANDREAS_RESEARCH_AGENTS"]);
+  });
+
+  test("probe pubkey drift in dry-run → [wire] naming the drift, still no mutation", async () => {
+    const driftPub = "A" + "Q".repeat(55);
+    const { ports, written } = makePorts({
+      export: { exportAccount: async () => ({ ok: true, pubKey: driftPub, jwt: ACCOUNT_JWT_WITH_JETSTREAM }) },
+    });
+    const res = await provisionStack(baseInputs({ apply: false }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(jsRow(res.plan)?.status).toBe("wire");
+    expect(jsRow(res.plan)?.detail).toContain("pubkey drift");
+    expect(written).toHaveLength(0);
+  });
+
+  test("probe failure: dry-run reports [wire] (unknown), never [ok]", async () => {
+    const { ports } = makePorts({
+      export: { exportAccount: async () => ({ ok: false, reason: "arc not on PATH" }) },
+    });
+    const res = await provisionStack(baseInputs({ apply: false }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(jsRow(res.plan)?.status).toBe("wire");
+    expect(jsRow(res.plan)?.detail).toContain("unknown");
+  });
+
+  test("probe failure: apply refuses before ANY mutation (cannot verify)", async () => {
+    const { ports, calls } = makePorts({
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          return { ok: false, reason: "arc not on PATH" };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("arc not on PATH");
+    expect(calls).toEqual(["export-account:ANDREAS_RESEARCH_AGENTS"]);
+  });
+
+  test("--force with a drifted pre-probe is NOT refused: add-account's pubkey is re-probed", async () => {
+    // Recovery case: config records a stale pubkey; --force re-provisions and
+    // adopts whatever add-account resolves, so the guard must not block it.
+    const stalePub = "A" + "Q".repeat(55);
+    const { ports, calls, written } = makePorts({ agentsJetStream: "disabled" });
+    const res = await provisionStack(
+      baseInputs({ apply: true, force: true }, { ...PROVISIONED, agentsAccount: stalePub }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    // The fake add-account reports created:true, so the grant follows directly.
+    expect(calls).toContain("enable-jetstream:ANDREAS_RESEARCH_AGENTS");
+    expect(written[0]?.agentsAccount).toBe(AGENTS_PUB);
+  });
+
+  test("--force with an unreadable pre-probe re-probes the existing account after add-account", async () => {
+    let probes = 0;
+    const { ports, calls } = makePorts({
+      accountsAlreadyExist: true,
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          if (!name.endsWith("_AGENTS")) return { ok: true, pubKey: FED_PUB, jwt: FED_JWT };
+          probes += 1;
+          // The first (pre-mutation) probe fails; the re-probe reads the account.
+          return probes === 1
+            ? { ok: false, reason: "transient" }
+            : { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true, force: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(probes).toBe(2);
+    expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+
+  test("post-grant read-back drift is reported as drift, not as a failed grant", async () => {
+    const driftPub = "A" + "Q".repeat(55);
+    let granted = false;
+    const { ports, calls } = makePorts({
+      jetstream: {
+        enable: async () => {
+          granted = true;
+          return { ok: true };
+        },
+      },
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          if (!name.endsWith("_AGENTS")) return { ok: true, pubKey: FED_PUB, jwt: FED_JWT };
+          return granted
+            ? { ok: true, pubKey: driftPub, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
+            : { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITHOUT_JETSTREAM };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("pubkey drift");
+    expect(res.reason).not.toContain("still has JetStream disabled");
+    expect(calls).not.toContain("config-write");
+  });
+
+  test("an agents account already in nsc but not in config is probed after add-account (no blind edit)", async () => {
+    // add-account is idempotent: an account present in the nsc store but missing
+    // from config comes back created:false. Its JetStream state is read, not assumed.
+    const { ports, calls } = makePorts({
+      agentsJetStream: "enabled",
+      accountsAlreadyExist: true,
+    });
+    const res = await provisionStack(baseInputs({ apply: true }), ports);
+    expect(res.ok).toBe(true);
+    expect(calls).toContain("export-account:ANDREAS_RESEARCH_AGENTS");
+    expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+});
+
+describe("accountJwtHasJetStream (cortex#2534)", () => {
+  test("no limits object, or limits without storage → disabled", () => {
+    expect(accountJwtHasJetStream(accountJwt(undefined))).toBe(false);
+    expect(accountJwtHasJetStream(ACCOUNT_JWT_WITHOUT_JETSTREAM)).toBe(false);
+  });
+
+  test("unlimited or capped storage → enabled", () => {
+    expect(accountJwtHasJetStream(ACCOUNT_JWT_WITH_JETSTREAM)).toBe(true);
+    expect(accountJwtHasJetStream(accountJwt({ mem_storage: 0, disk_storage: 1073741824 }))).toBe(true);
+  });
+
+  test("a tier counts only with non-zero storage", () => {
+    expect(accountJwtHasJetStream(accountJwt({ tiered_limits: { R1: { disk_storage: -1 } } }))).toBe(true);
+    expect(accountJwtHasJetStream(accountJwt({ tiered_limits: { R1: { mem_storage: 0, disk_storage: 0 } } }))).toBe(false);
+  });
+
+  test("not a JWT → undefined (cannot tell)", () => {
+    expect(accountJwtHasJetStream("not-a-jwt")).toBeUndefined();
   });
 });

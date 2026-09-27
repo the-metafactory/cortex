@@ -15,7 +15,11 @@ import { join } from "path";
 import { readFileSync, writeFileSync } from "fs";
 import { parseDocument } from "yaml";
 
-import { buildSigningIdentityAdapter, buildProvisionConfigWriteAdapter } from "../network-provision-adapters";
+import {
+  buildAgentsJetStreamAdapter,
+  buildSigningIdentityAdapter,
+  buildProvisionConfigWriteAdapter,
+} from "../network-provision-adapters";
 
 describe("buildSigningIdentityAdapter — live, tilde expansion (cortex#1236)", () => {
   let home: string;
@@ -139,5 +143,51 @@ describe("buildProvisionConfigWriteAdapter — operator-mode JWT write-back (cor
     // The pre-existing system_account was NOT clobbered.
     expect(doc.getIn(["stack", "nats_infra", "system_account"])).toBe("AKEEPME");
     expect(doc.getIn(["stack", "nats_infra", "system_account_jwt"])).toBeUndefined();
+  });
+});
+
+describe("buildAgentsJetStreamAdapter — nsc edit account argv (cortex#2534)", () => {
+  test("grants unlimited mem + disk storage on the named account", async () => {
+    const record: string[][] = [];
+    const adapter = buildAgentsJetStreamAdapter(async (argv) => {
+      record.push([...argv]);
+      return { stdout: "", stderr: "[ OK ] changed jetstream", exitCode: 0 };
+    });
+    const res = await adapter.enable({ name: "ALICE_WORK_AGENTS" });
+    expect(res.ok).toBe(true);
+    expect(record).toEqual([
+      ["edit", "account", "-n", "ALICE_WORK_AGENTS", "--js-mem-storage", "-1", "--js-disk-storage", "-1"],
+    ]);
+  });
+
+  test("refuses a non-UPPER_SNAKE name without spawning nsc", async () => {
+    let spawned = false;
+    const adapter = buildAgentsJetStreamAdapter(async () => {
+      spawned = true;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const res = await adapter.enable({ name: "--js-disable" });
+    expect(res.ok).toBe(false);
+    expect(spawned).toBe(false);
+  });
+
+  test("a non-zero nsc exit surfaces stderr", async () => {
+    const adapter = buildAgentsJetStreamAdapter(async () => ({
+      stdout: "",
+      stderr: "account ALICE_WORK_AGENTS not found",
+      exitCode: 1,
+    }));
+    const res = await adapter.enable({ name: "ALICE_WORK_AGENTS" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("not found");
+  });
+
+  test("a spawn failure (nsc not installed) is a failure, not a throw", async () => {
+    const adapter = buildAgentsJetStreamAdapter(async () => {
+      throw new Error("ENOENT: nsc");
+    });
+    const res = await adapter.enable({ name: "ALICE_WORK_AGENTS" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("nsc on PATH");
   });
 });

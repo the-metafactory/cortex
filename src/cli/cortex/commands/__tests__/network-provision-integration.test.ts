@@ -28,6 +28,7 @@ import {
   type ProvisionConfigWritePort,
 } from "../network-provision-lib";
 import type { OperatorProvisioningPort } from "../operator-provisioning";
+import { ACCOUNT_JWT_WITH_JETSTREAM } from "./account-jwt-test-helpers";
 
 const FED_PUB = "A" + "F".repeat(55);
 const AGENTS_PUB = "A" + "G".repeat(55);
@@ -97,12 +98,16 @@ function buildPorts(runner: ArcFederationRunner): { ports: ProvisionPorts; writt
   // cortex#1265 — a fake export port (the export-arc seam is unit-tested separately).
   const exportPort = {
     exportOperator: async () => ({ ok: true as const, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }),
-    exportAccount: async () => ({ ok: true as const, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }),
+    exportAccount: async (name: string) =>
+      name.endsWith("_AGENTS")
+        ? { ok: true as const, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
+        : { ok: true as const, pubKey: FED_PUB, jwt: "eyJ.fed.sig" },
     exportSystem: async () => ({ ok: true as const, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }),
   };
   // The REAL wiring adapter — only the arc subprocess runner is swapped.
   const federationWiring = buildFederationWiringAdapter(runner);
-  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort }, written };
+  const jetstream = { enable: async () => ({ ok: true as const }) };
+  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream }, written };
 }
 
 function inputs(): ProvisionInputs {

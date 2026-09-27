@@ -12,6 +12,7 @@ import type { AgentConfig } from "../../../../common/types/config";
 import type { ProvisionPorts } from "../network-provision-lib";
 import type { FederationWiringPort } from "../network-ports";
 import type { OperatorProvisioningPort } from "../operator-provisioning";
+import { ACCOUNT_JWT_WITH_JETSTREAM } from "./account-jwt-test-helpers";
 
 const FED_PUB = "A" + "B".repeat(55);
 const AGENTS_PUB = "A" + "C".repeat(55);
@@ -75,9 +76,15 @@ function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; write
       configWrite: { write: (fields) => { calls.push("config-write"); written.push(fields); return { ok: true }; } },
       export: {
         exportOperator: async ({ name }) => { calls.push(`export-operator:${name}`); return { ok: true, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }; },
-        exportAccount: async (name) => { calls.push(`export-account:${name}`); return { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }; },
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          return name.endsWith("_AGENTS")
+            ? { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
+            : { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" };
+        },
         exportSystem: async ({ name }) => { calls.push(`export-system:${name}`); return { ok: true, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }; },
       },
+      jetstream: { enable: async ({ name }) => { calls.push(`enable-jetstream:${name}`); return { ok: true }; } },
     };
     return ports;
   };
@@ -132,6 +139,9 @@ describe("cortex network provision — apply", () => {
       "init-operator:OP_ANDREAS",
       "add-account:ANDREAS_RESEARCH_FED",
       "add-account:ANDREAS_RESEARCH_AGENTS",
+      // cortex#2534 — JetStream granted on the agents account, verified by read-back.
+      "enable-jetstream:ANDREAS_RESEARCH_AGENTS",
+      "export-account:ANDREAS_RESEARCH_AGENTS",
       "add-account:SYS",
       "signing",
       "wire",

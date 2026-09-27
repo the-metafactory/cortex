@@ -6,8 +6,10 @@
  * (`network-provision-lib.ts`); these adapters are only constructed on a real
  * `--apply` invocation. The arc account-tree seam reuses
  * `buildOperatorProvisioningAdapter` (operator-provisioning.ts) and the existing
- * `buildFederationWiringAdapter` (network-federation-wiring.ts) — cortex NEVER
- * runs nsc itself (ADR-0013 sovereign model invariant).
+ * `buildFederationWiringAdapter` (network-federation-wiring.ts) — cortex runs nsc
+ * through arc (ADR-0013 sovereign model). The one exception is
+ * {@link buildAgentsJetStreamAdapter}, which shells `nsc edit account` until arc
+ * ships a verb to grant an account JetStream (arc#384).
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -21,6 +23,7 @@ import { buildFederationWiringAdapter } from "./network-federation-wiring";
 import { buildOperatorProvisioningAdapter } from "./operator-provisioning";
 import { buildOperatorModeExportAdapter } from "./operator-mode-export";
 import type {
+  AgentsJetStreamPort,
   ProvisionPorts,
   SigningIdentityPort,
   ProvisionConfigWritePort,
@@ -112,6 +115,68 @@ export function buildProvisionConfigWriteAdapter(stackConfigPath: string): Provi
 }
 
 // =============================================================================
+// Agents-account JetStream adapter (cortex#2534) — nsc edit account
+// =============================================================================
+
+/** Result of one nsc subprocess invocation. */
+export interface NscRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/** Pluggable nsc subprocess driver. Tests inject a fake; production uses Bun.spawn. */
+export type NscRunner = (argv: readonly string[]) => Promise<NscRunResult>;
+
+async function defaultNscRunner(argv: readonly string[]): Promise<NscRunResult> {
+  const proc = Bun.spawn(["nsc", ...argv], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
+/** Same strict UPPER_SNAKE guard arc applies before any nsc call (no flag injection). */
+const NSC_ACCOUNT_NAME_RE = /^[A-Z][A-Z0-9_]+$/;
+
+/**
+ * Live {@link AgentsJetStreamPort}: `nsc edit account -n <name> --js-mem-storage -1
+ * --js-disk-storage -1` (unlimited). Like arc's add-account it acts on the CURRENT
+ * nsc operator; the orchestrator cross-checks the account pubkey before and after.
+ *
+ * This is the one place cortex runs nsc directly: arc has no verb to grant an
+ * account JetStream (arc#384). Replace this adapter with the arc verb once it ships.
+ */
+export function buildAgentsJetStreamAdapter(runner: NscRunner = defaultNscRunner): AgentsJetStreamPort {
+  return {
+    enable: async ({ name }) => {
+      if (!NSC_ACCOUNT_NAME_RE.test(name)) {
+        return { ok: false, reason: `refusing to edit account "${name}": not an UPPER_SNAKE account name` };
+      }
+      const argv = ["edit", "account", "-n", name, "--js-mem-storage", "-1", "--js-disk-storage", "-1"];
+      let res: NscRunResult;
+      try {
+        res = await runner(argv);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `failed to invoke 'nsc edit account' — ${err instanceof Error ? err.message : String(err)}. Is nsc on PATH?`,
+        };
+      }
+      if (res.exitCode !== 0) {
+        return {
+          ok: false,
+          reason: `nsc edit account ${name} exited ${res.exitCode}: ${res.stderr.trim() || res.stdout.trim() || "(no output)"}`,
+        };
+      }
+      return { ok: true };
+    },
+  };
+}
+
+// =============================================================================
 // Full live port bundle
 // =============================================================================
 
@@ -123,5 +188,6 @@ export function buildLiveProvisionPorts(stackConfigPath: string): ProvisionPorts
     federationWiring: buildFederationWiringAdapter(),
     configWrite: buildProvisionConfigWriteAdapter(stackConfigPath),
     export: buildOperatorModeExportAdapter(),
+    jetstream: buildAgentsJetStreamAdapter(),
   };
 }
