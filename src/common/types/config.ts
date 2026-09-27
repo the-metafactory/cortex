@@ -459,8 +459,8 @@ export const McSchema = z.object({
    * sibling roster and auto-discovery is skipped (precedence: explicit >
    * discovery). Each entry pins a sibling's `{stack}`, `{principal}`, bus `url`,
    * and `credsPath`, which is used as-is (no scope check). Point it at a scoped
-   * observer, not the sibling stack's own creds. Use it to add a bus the scan can't see or to narrow
-   * the roster. Empty (the default) ⇒ auto-discover.
+   * observer, not the sibling stack's own creds. Use it to add a bus the scan
+   * can't see or to narrow the roster. Empty (the default) ⇒ auto-discover.
    */
   aggregateLocalStacks: z
     .object({

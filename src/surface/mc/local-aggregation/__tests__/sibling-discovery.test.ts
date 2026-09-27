@@ -33,6 +33,7 @@ import {
   observerMintHint,
   observerUserName,
   type DiscoverSiblingStacksOptions,
+  type NoObserverReason,
   type SiblingCredential,
   type SiblingStackDescriptor,
 } from "../sibling-discovery";
@@ -299,7 +300,7 @@ describe("#989 sibling-discovery", () => {
       observer: string;
       stackCreds: string;
       discover(extra?: Partial<DiscoverSiblingStacksOptions>): SiblingStackDescriptor[];
-      noObserver(reason: string): SiblingCredential;
+      noObserver(reason: NoObserverReason): SiblingCredential;
     }
 
     /** A `work` sibling (principal `alice`) whose bus uses creds; self = `default`. */
@@ -330,13 +331,12 @@ describe("#989 sibling-discovery", () => {
             observerCredsDir: observerDir,
             ...extra,
           }),
-        noObserver: (reason) =>
-          ({
-            kind: "no-observer",
-            reason,
-            observerUser: OBSERVER_USER,
-            observerCredsPath: observer,
-          }) as SiblingCredential,
+        noObserver: (reason) => ({
+          kind: "no-observer",
+          reason,
+          observerUser: OBSERVER_USER,
+          observerCredsPath: observer,
+        }),
       };
     }
 

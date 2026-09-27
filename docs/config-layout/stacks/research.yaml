@@ -242,19 +242,22 @@ mc:
   # root), opens a READ-ONLY subscriber to each one's loopback NATS bus, and
   # folds its agent presence into this pane — so the Network view shows ALL
   # your local stacks as distinct stack-hubs, not just this one. NO federation,
-  # NO cross-principal trust (every bus is YOUR own loopback bus). A sibling that can't be reached/authed degrades to absent
-  # (its hub just doesn't appear) — it never blocks boot or perturbs this stack.
+  # NO cross-principal trust (every bus is YOUR own loopback bus). A sibling
+  # that can't be reached/authed degrades to absent (its hub just doesn't
+  # appear) — it never blocks boot or perturbs this stack.
   # A single-stack box is unaffected (discovery finds no siblings = no-op).
   #
   # #2536 — a discovered sibling is NEVER read with its own stack
   # nats.credsPath (that would give this stack the sibling stack's full user).
   # A sibling whose bus uses creds is read with a per-sibling observer file:
   #   ~/.config/nats/creds/mc-observer-<this-stack>-to-<sibling>.creds
-  # minted in the SIBLING's account with sub allow local.<principal>.<sibling>.agent.>
-  # and pub deny >. The file's JWT is checked for that scope; a missing or
-  # wider one leaves that sibling's hub dark, and boot logs the arc/nsc
-  # commands to mint it (fill in the sibling's account name). A sibling on an
-  # open bus (no credsPath) needs none.
+  # minted in the SIBLING's account with
+  # sub allow local.<principal>.<sibling>.agent.> and pub deny >. The file's
+  # JWT is checked for that scope; a missing or wider one leaves that sibling's
+  # hub dark, and boot logs the arc/nsc commands to mint it (fill in the
+  # sibling's account name). A sibling on an open bus (no credsPath) needs none.
+  # Scope: this keeps the sibling's NATS user out of this stack's process; it
+  # does not separate stacks that share an OS user (see dbRead below).
   aggregateLocalStacks:
     enabled: true                  # false = pin the pane to THIS stack only
     # #1008 — DB-read pane-of-glass: the PRIMARY mechanism for LOCAL siblings.
@@ -273,9 +276,10 @@ mc:
     configRoot: ""                 # empty = the serving config dir's parent (~/.config/metafactory/cortex)
     # Explicit roster OVERRIDES auto-discovery when non-empty (precedence:
     # explicit > discovery). Use it to add a bus the scan can't see, or to
-    # narrow the set. Each entry's credsPath is used as-is: point it at a
-    # scoped observer (see above), never the sibling stack's own creds.
-    # Explicit entries are not scope-checked.
+    # narrow the set. A non-empty list REPLACES discovery: list every sibling
+    # you want, not just the one you are pinning. Each entry's credsPath is
+    # used as-is (not scope-checked): point it at a scoped observer (see
+    # above), never the sibling stack's own creds.
     stacks: []
     #  - stack: work
     #    principal: <REPLACE_ME>

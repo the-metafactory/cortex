@@ -35,7 +35,7 @@
  * compares it to the account the join would render.
  */
 
-import { decodeJwtClaims, extractUserJwt } from "./nats-jwt";
+import { decodeJwtClaims, extractUserJwt } from "../../../common/nats/jwt";
 
 // =============================================================================
 // Shared — strip HOCON/nats config comments (line `//`/`#` + block slash-star).

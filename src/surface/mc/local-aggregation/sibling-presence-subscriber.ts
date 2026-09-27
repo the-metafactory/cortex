@@ -19,11 +19,15 @@
  * owns end-to-end (ADR-0005 — the principal sees their own interiors). There is
  * no cross-principal boundary to defend.
  *
- * There IS a cross-STACK boundary, though (#2536): stacks can sit in separate
- * NATS accounts precisely so one stack cannot reach another's traffic. So the
- * serving daemon never connects with a sibling DAEMON's creds; discovery hands
- * it a sub-only per-sibling observer (`local.{principal}.{sibling}.agent.>`,
- * pub denied) or marks the sibling `no-observer`, which is never connected.
+ * There IS a cross-STACK bus boundary, though (#2536): stacks can sit in
+ * separate NATS accounts so one stack's bus user cannot reach another's
+ * traffic. So this aggregator never connects with a sibling stack's own creds;
+ * discovery hands it a sub-only per-sibling observer
+ * (`local.{principal}.{sibling}.agent.>`, pub denied) or marks the sibling
+ * `no-observer`, which is never connected. Scope of that guarantee: it keeps
+ * the sibling's full NATS user out of THIS process. It is not OS-level
+ * isolation: stacks running as the same OS user can still read each other's
+ * files (creds, `mission-control.db`; see #2544).
  * We STILL call {@link AgentPresenceRegistry.applyForeign}
  * (not `apply`) because:
  *   - it tags the record with the sibling's origin so the view groups by hub, and

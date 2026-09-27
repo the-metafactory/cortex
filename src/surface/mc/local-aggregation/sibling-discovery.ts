@@ -64,7 +64,8 @@
  *   - community → a true operator-account (NSC) bus that REQUIRES a minted user. With only
  *     an account-signing NKey (not a connectable user), the `noauth` attempt
  *     fails with an Authorization Violation, so the aggregator degrades it to
- *     absent. Pin an observer for it via `mc.aggregateLocalStacks.stacks[]`.
+ *     absent. Pin an observer for it via `mc.aggregateLocalStacks.stacks[]`
+ *     (a non-empty list REPLACES discovery, so list every sibling).
  *
  * Rationale for "try no-auth, let the bus decide": config can't reliably
  * distinguish an open loopback bus from a locked one (both lack `credsPath`),
@@ -92,7 +93,7 @@ import { join, resolve } from "path";
 import { parse as parseYaml } from "yaml";
 import { expandTilde } from "../../../common/config/loader";
 import { DEFAULT_NATS_CREDS_DIR } from "../../../common/nats/creds-dir";
-import { decodeJwtClaims, extractUserJwt } from "../../../cli/cortex/commands/nats-jwt";
+import { decodeJwtClaims, extractUserJwt } from "../../../common/nats/jwt";
 
 /**
  * How to authenticate a read-only subscriber to a sibling bus.
