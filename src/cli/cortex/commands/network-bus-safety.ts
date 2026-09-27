@@ -35,7 +35,7 @@
  * compares it to the account the join would render.
  */
 
-import { decodeJwtClaims } from "./nats-jwt";
+import { decodeJwtClaims, extractUserJwt } from "../../../common/nats/jwt";
 
 // =============================================================================
 // Shared — strip HOCON/nats config comments (line `//`/`#` + block slash-star).
@@ -352,19 +352,6 @@ export function decodeCredsIssuerAccount(credsText: string): string | undefined 
   // `issuer_account`, and `iss` IS that account.
   const iss = claims.iss;
   return typeof iss === "string" && iss.length > 0 ? iss : undefined;
-}
-
-/** Pull the user-JWT body out of a decorated `.creds` file. */
-function extractUserJwt(credsText: string): string | undefined {
-  const m =
-    /-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----?END NATS USER JWT-----?/.exec(
-      credsText,
-    );
-  const body = m?.[1];
-  if (body === undefined) return undefined;
-  // The JWT may be wrapped across lines in the block; collapse whitespace.
-  const jwt = body.replace(/\s+/g, "");
-  return jwt.length > 0 ? jwt : undefined;
 }
 
 /** The verdict of the leaf-account-vs-creds check. */

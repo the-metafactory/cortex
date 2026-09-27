@@ -77,7 +77,7 @@
  * BEFORE the config write so no half-provisioned config block is left behind.
  */
 
-import { decodeJwtClaims } from "./nats-jwt";
+import { decodeJwtClaims } from "../../../common/nats/jwt";
 import type { FederationWiringPort } from "./network-ports";
 import type { OperatorProvisioningPort } from "./operator-provisioning";
 
