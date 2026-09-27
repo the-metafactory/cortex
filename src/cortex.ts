@@ -1890,11 +1890,13 @@ export async function startCortex(
   // surface-router and capability-registry boot paths use; reading the
   // shared `principalId` keeps publisher and consumer aligned across the
   // ladder. Durable name convention per
-  // `docs/design-capability-dispatch-review-consumer.md` §2.3:
-  // `cortex-review-consumer-{principal}-{agent}` — unique per
-  // (principal, agent) pair so dev + prod instances on the same principal
-  // share competing-consumer semantics and a daemon restart resumes from
-  // the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
+  // `docs/design-capability-dispatch-review-consumer.md` §2.3, stack-scoped
+  // by cortex#1503: `cortex-review-consumer-{principal}_{stack}-{agent}`
+  // (`reviewDurableNames`) — unique per (principal, stack, agent), matching
+  // the `local.{principal}.{stack}.…` filter, so two stacks of one principal
+  // on one NATS account never share (and fight over) a durable, while two
+  // daemons on the SAME stack still share competing-consumer semantics and a
+  // daemon restart resumes from the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
   // API parameter to `principalId`; this local alias keeps the review-
   // consumer wiring readable alongside the dashboard's `operatorId`
   // column name (still on the MC surface — PR-R2b).
@@ -2436,6 +2438,7 @@ export async function startCortex(
   // hot-added agent's consumers drain on shutdown identically to a boot agent's.
   const { startForAgent } = wireReviewConsumers({
     reviewPrincipalId,
+    stack: derivedStack.stack,
     trustResolver,
     signingKnobs,
     ...(signer !== undefined && { signer }),

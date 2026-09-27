@@ -27,6 +27,9 @@ export interface ProvisionJsm {
   streams: {
     info(name: string): Promise<StreamInfo>;
     add(cfg: Partial<StreamConfig>): Promise<StreamInfo>;
+    // cortex#1503 — a stream shared by several stacks of one principal (one
+    // NATS account) gains each stack's subjects by additive union.
+    update(name: string, cfg: Partial<StreamConfig>): Promise<StreamInfo>;
   };
   consumers: {
     info(stream: string, durable: string): Promise<ConsumerInfo>;

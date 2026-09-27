@@ -26,6 +26,7 @@ import type { ConsumerInfo, StreamInfo } from "nats";
 interface RecorderState {
   streamInfoCalls: string[];
   streamAddCalls: Partial<StreamInfo["config"]>[];
+  streamUpdateCalls: { name: string; cfg: Partial<StreamInfo["config"]> }[];
   consumerInfoCalls: { stream: string; durable: string }[];
   consumerAddCalls: { stream: string; cfg: Record<string, unknown> }[];
   consumerUpdateCalls: { stream: string; durable: string; cfg: Record<string, unknown> }[];
@@ -39,6 +40,7 @@ function makeJsm(opts: {
   const state: RecorderState = {
     streamInfoCalls: [],
     streamAddCalls: [],
+    streamUpdateCalls: [],
     consumerInfoCalls: [],
     consumerAddCalls: [],
     consumerUpdateCalls: [],
@@ -60,6 +62,10 @@ function makeJsm(opts: {
       },
       add: async (cfg) => {
         state.streamAddCalls.push(cfg);
+        return { config: cfg } as unknown as StreamInfo;
+      },
+      update: async (name, cfg) => {
+        state.streamUpdateCalls.push({ name, cfg });
         return { config: cfg } as unknown as StreamInfo;
       },
     },
@@ -182,6 +188,26 @@ describe("describeStreamDrift", () => {
     ).toContain("subjects differ");
   });
 
+  test("null when the live subjects are a superset (another stack shares the stream — cortex#1503)", () => {
+    expect(
+      describeStreamDrift(
+        streamInfo(["a.default.>", "a.work.>"], 24 * 3600 * 1e9),
+        ["a.default.>"],
+        24 * 3600 * 1e9,
+      ),
+    ).toBeNull();
+  });
+
+  test("null when a broader live subject covers the expected one", () => {
+    expect(
+      describeStreamDrift(
+        streamInfo(["local.*.*.tasks.code-review.>"], 24 * 3600 * 1e9),
+        ["local.a.default.tasks.code-review.*"],
+        24 * 3600 * 1e9,
+      ),
+    ).toBeNull();
+  });
+
   test("non-null when max_age drifts beyond 1s slack", () => {
     expect(
       describeStreamDrift(
@@ -267,10 +293,14 @@ describe("provisionReviewStream", () => {
   });
 
   test("config drift warns + leaves alone (v1 no-auto-update policy)", async () => {
+    // cortex#1503: a merely-missing subject is now added by union (see
+    // provision-shared-account.test.ts); a PARTIALLY overlapping live subject
+    // can't be unioned without the stream rejecting it, so it keeps the v1
+    // warn-and-leave behaviour.
     const existing = {
       config: {
         name: "CODE_REVIEW",
-        subjects: ["local.OLD.default.tasks.code-review.>"], // diverged
+        subjects: ["local.jc.*.tasks.code-review.x"], // overlaps, doesn't cover
         max_age: 24 * 3600 * 1e9,
       },
     } as unknown as StreamInfo;
@@ -289,6 +319,7 @@ describe("provisionReviewStream", () => {
     });
     expect(outcome).toBe("config-drift-warning");
     expect(state.streamAddCalls.length).toBe(0);
+    expect(state.streamUpdateCalls.length).toBe(0);
     expect(warns.length).toBe(1);
     expect(warns[0]).toContain("config drifts");
     expect(warns[0]).toContain("nats stream edit"); // actionable hint

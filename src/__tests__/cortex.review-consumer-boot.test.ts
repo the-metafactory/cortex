@@ -299,8 +299,8 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     ]);
     const durables = runtime.subscribePullCalls.map((c) => c.durable).sort();
     expect(durables).toEqual([
-      "cortex-review-consumer-test-op-echo",
-      "cortex-review-consumer-test-op-luna",
+      "cortex-review-consumer-test-op_default-echo",
+      "cortex-review-consumer-test-op_default-luna",
     ]);
     // All calls bind to the same stream — operationally provisioned by
     // ops tooling; the consumer side only binds, never provisions.
@@ -336,7 +336,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
       "local.test-op.default.tasks.code-review.*",
     );
     expect(runtime.subscribePullCalls[0]!.durable).toBe(
-      "cortex-review-consumer-test-op-echo",
+      "cortex-review-consumer-test-op_default-echo",
     );
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });
@@ -582,7 +582,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // for agents whose init crashed.
     expect(runtime.subscribePullCalls.length).toBe(1);
     expect(runtime.subscribePullCalls[0]!.durable).toBe(
-      "cortex-review-consumer-test-op-luna",
+      "cortex-review-consumer-test-op_default-luna",
     );
 
     await handle.stop();

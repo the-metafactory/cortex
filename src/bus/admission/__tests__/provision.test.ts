@@ -27,6 +27,9 @@ function stubJsm(existingStreams: readonly string[]): ProvisionJsm {
       add: async () => {
         throw new Error("unexpected streams.add in admission provisioning");
       },
+      update: async () => {
+        throw new Error("unexpected streams.update in admission provisioning");
+      },
     },
     consumers: {
       info: async () => {

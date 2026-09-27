@@ -63,6 +63,7 @@ import {
   type SignatureVerifier,
 } from "../bus/review-consumer";
 import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
+import { reviewDurableNames } from "../bus/jetstream/review-durables";
 import { verifySignedByChain } from "../bus/verify-signed-by-chain";
 import type { SystemEventSource } from "../bus/system-events";
 import { DORMANT_RUNTIME_DIAGNOSIS } from "../bus/myelin/runtime";
@@ -104,6 +105,11 @@ export interface ReviewBootAgent {
 export interface WireReviewConsumersOpts {
   /** `{principal}` subject segment — durable names + the verifier's own-stack check. */
   reviewPrincipalId: string;
+  /**
+   * `{stack}` subject segment — scopes the durable names (cortex#1503) so two
+   * stacks of one principal sharing a NATS account never share a durable.
+   */
+  stack: string;
   /** B.1a structural-trust resolver backing the per-agent signature verifier. */
   trustResolver: TrustResolver;
   /** `security.signing` posture knobs — `cryptoVerify` + `rejectEmpty` are read. */
@@ -397,7 +403,12 @@ export function wireReviewConsumers(
       // the consumer stays dormant — `started.subscribed` distinguishes
       // the two cases so the boot log can be honest (cortex#334)
       // instead of unconditionally claiming "ready".
-      const durable = `cortex-review-consumer-${opts.reviewPrincipalId}-${agent.id}`;
+      // cortex#1503 — durable names carry `{principal}_{stack}` so two stacks
+      // of one principal on one NATS account each own their durables. `legacy`
+      // is the pre-#1503 unscoped name, migrated (or left alone when another
+      // stack owns it) by `provisionReviewConsumer`.
+      const durableNames = reviewDurableNames(opts.reviewPrincipalId, opts.stack, agent.id);
+      const { durable, legacy: legacyDurable } = durableNames.local;
 
       // The durable's filter MUST match the subscription pattern this consumer
       // binds (`consumer.start({ pattern })` below), or the durable claims every
@@ -420,6 +431,7 @@ export function wireReviewConsumers(
             jsm: opts.reviewJsm,
             stream: opts.reviewStream,
             durable,
+            legacyDurable,
             filterSubject: primaryReviewPattern,
             maxDeliver: opts.reviewConsumerMaxDeliver,
           });
@@ -522,13 +534,15 @@ export function wireReviewConsumers(
               : "public";
         const offerConsumer = makeConsumer(offerScope);
         opts.reviewConsumers.push(offerConsumer);
-        const offerDurable = `cortex-review-consumer-offer-${scopeToken}-${opts.reviewPrincipalId}-${agent.id}`;
+        const { durable: offerDurable, legacy: offerLegacyDurable } =
+          durableNames.offer(scopeToken);
         if (opts.reviewJsm !== null) {
           try {
             const outcome = await provisionReviewConsumer({
               jsm: opts.reviewJsm,
               stream: opts.reviewStream,
               durable: offerDurable,
+              legacyDurable: offerLegacyDurable,
               // Filter to THIS offer scope's pattern so it doesn't claim the
               // local/other-scope durables' traffic (cortex#1186 fan-out).
               filterSubject: extraPattern,
@@ -585,8 +599,9 @@ export function wireReviewConsumers(
         const startFederatedConsumer = async (
           mode: "offer" | "direct",
           pattern: string,
-          durableName: string,
+          names: { durable: string; legacy: string },
         ): Promise<void> => {
+          const durableName = names.durable;
           // CO-7 — the cortex#686/#725 federated-policy consumers bind on
           // `federated.` subjects, so they wire the `federated`-scope M1/M2/M4
           // hardening (untrusted-content boundary + least-privilege + egress
@@ -599,6 +614,7 @@ export function wireReviewConsumers(
                 jsm: opts.reviewJsm,
                 stream: opts.reviewStream,
                 durable: durableName,
+                legacyDurable: names.legacy,
                 // Filter to THIS federated consumer's `federated.…` pattern so
                 // it claims only cross-principal traffic, never the local
                 // durable's `local.…` requests (cortex#1186 fan-out).
@@ -641,7 +657,7 @@ export function wireReviewConsumers(
         await startFederatedConsumer(
           "offer",
           opts.reviewFederatedSubjectPattern,
-          `cortex-review-consumer-federated-${opts.reviewPrincipalId}-${agent.id}`,
+          durableNames.federated,
         );
         // cortex#725 (ADR 0001/0002 §2) — Direct: this stack's OWN
         // `federated.{me}.{stack}.tasks.@{did}.code-review.>` (the `@{did}` is
@@ -650,7 +666,7 @@ export function wireReviewConsumers(
         await startFederatedConsumer(
           "direct",
           opts.reviewFederatedDirectSubjectPattern,
-          `cortex-review-consumer-federated-direct-${opts.reviewPrincipalId}-${agent.id}`,
+          durableNames.federatedDirect,
         );
       }
     } catch (err) {

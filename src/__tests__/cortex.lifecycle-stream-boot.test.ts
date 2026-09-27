@@ -87,6 +87,10 @@ function makeRecordingJsm(): JsmRecorder {
         streamAdds.push(cfg);
         return { config: cfg } as unknown as StreamInfo;
       },
+      // Never reached: `info` always 404s, so provisioning takes the add path.
+      update: async () => {
+        throw new Error("unexpected streams.update");
+      },
     },
     consumers: {
       info: async () => {
