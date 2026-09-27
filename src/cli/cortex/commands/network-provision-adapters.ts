@@ -13,18 +13,21 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { dirname, join, resolve } from "path";
 
 import { parseDocument } from "yaml";
 
-import { expandTilde } from "../../../common/config/loader";
+import { composeRawConfig, expandTilde } from "../../../common/config/loader";
+import { discoverStacks, type DiscoveredStack } from "./stack-lib";
 import { generateStackIdentity } from "../../../bus/stack-provisioning";
 import { buildFederationWiringAdapter } from "./network-federation-wiring";
 import { buildOperatorProvisioningAdapter } from "./operator-provisioning";
 import { buildOperatorModeExportAdapter } from "./operator-mode-export";
 import type {
   AgentsJetStreamPort,
+  NatsConfigLocatorPort,
   ProvisionPorts,
+  SiblingStackRead,
   SigningIdentityPort,
   ProvisionConfigWritePort,
 } from "./network-provision-lib";
@@ -83,8 +86,14 @@ export function buildProvisionConfigWriteAdapter(stackConfigPath: string): Provi
         doc.setIn(["stack", "nats_infra", "creds_path"], fields.credsPath);
         // cortex#1265 (PR8) — the per-stack nats-server config path make-live
         // derives its `--nats-config` target from. Closes the provision→make-live
-        // loop: without it make-live has no bus to bootstrap.
-        doc.setIn(["stack", "nats_infra", "config_path"], fields.configPath);
+        // loop: without it make-live has no bus to bootstrap. cortex#2535 — absent
+        // when provision found no existing file; then nothing is written.
+        if (fields.configPath !== undefined) {
+          doc.setIn(["stack", "nats_infra", "config_path"], fields.configPath);
+        }
+        if (fields.plistPath !== undefined) {
+          doc.setIn(["stack", "nats_infra", "plist_path"], fields.plistPath);
+        }
         doc.setIn(["stack", "nkey_seed_path"], fields.seedPath);
         if (fields.nkeyPub !== undefined) {
           doc.setIn(["stack", "nkey_pub"], fields.nkeyPub);
@@ -177,11 +186,86 @@ export function buildAgentsJetStreamAdapter(runner: NscRunner = defaultNscRunner
 }
 
 // =============================================================================
+// nats-server config locator (cortex#2535) — file checks + sibling stack reads
+// =============================================================================
+
+/**
+ * The config dir that holds every stack, from the `--config` path: a
+ * config-split pointer `<base>/<slug>/<slug>.yaml` → `<base>`; a legacy
+ * monolith `<base>/cortex*.yaml` → `<base>`.
+ */
+function stacksBaseDir(cortexConfigPath: string): string {
+  const dir = dirname(expandTilde(cortexConfigPath));
+  return existsSync(join(dir, "system", "system.yaml")) ? dirname(dir) : dir;
+}
+
+/** A string at `obj[key]`, else undefined. */
+function stringAt(obj: unknown, key: string): string | undefined {
+  if (obj === null || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  return typeof v === "string" && v !== "" ? v : undefined;
+}
+
+/**
+ * Read a discovered sibling's `nats.url` + `stack.nats_infra.{config_path,
+ * plist_path}` from its composed raw config. A split stack is composed from its
+ * pointer path (`<base>/<slug>/<slug>.yaml`, the file need not exist) so the
+ * `system/` layer that carries `nats.url` is merged in.
+ */
+function readSiblingStack(base: string, s: DiscoveredStack & { stackId: string }): SiblingStackRead {
+  const loadPath = s.layout === "split" ? join(base, s.slugLocator, `${s.slugLocator}.yaml`) : s.configPath;
+  let raw: Record<string, unknown>;
+  try {
+    raw = composeRawConfig(loadPath);
+  } catch (err) {
+    return { ok: false, stackId: s.stackId, reason: err instanceof Error ? err.message : String(err) };
+  }
+  const natsInfra = (raw.stack as Record<string, unknown> | undefined)?.nats_infra;
+  const natsUrl = stringAt(raw.nats, "url");
+  const configPath = stringAt(natsInfra, "config_path");
+  const plistPath = stringAt(natsInfra, "plist_path");
+  return {
+    ok: true,
+    stack: {
+      stackId: s.stackId,
+      ...(natsUrl !== undefined && { natsUrl }),
+      ...(configPath !== undefined && { configPath }),
+      ...(plistPath !== undefined && { plistPath }),
+    },
+  };
+}
+
+/**
+ * Live {@link NatsConfigLocatorPort}. Siblings come from the existing stack
+ * discovery (`discoverStacks`) over the config dir `cortexConfigPath` lives in,
+ * filtered to the same principal. Reads files only; never touches a process.
+ */
+export function buildNatsConfigLocatorAdapter(cortexConfigPath: string): NatsConfigLocatorPort {
+  return {
+    exists: (path) => existsSync(expandTilde(path)),
+    resolvePath: (path) => resolve(expandTilde(path)),
+    siblingStacks: (principal, selfStackId) => {
+      const base = stacksBaseDir(cortexConfigPath);
+      return discoverStacks(base)
+        .filter(
+          (s): s is DiscoveredStack & { stackId: string } =>
+            s.stackId !== undefined && s.stackId !== selfStackId && s.stackId.startsWith(`${principal}/`),
+        )
+        .map((s) => readSiblingStack(base, s));
+    },
+  };
+}
+
+// =============================================================================
 // Full live port bundle
 // =============================================================================
 
-/** Build the full live {@link ProvisionPorts} bundle for a real `--apply` run. */
-export function buildLiveProvisionPorts(stackConfigPath: string): ProvisionPorts {
+/**
+ * Build the full live {@link ProvisionPorts} bundle for a real `--apply` run.
+ * `cortexConfigPath` is the `--config` path; sibling stacks are discovered
+ * beside it (defaults to `stackConfigPath` for a legacy monolith).
+ */
+export function buildLiveProvisionPorts(stackConfigPath: string, cortexConfigPath: string = stackConfigPath): ProvisionPorts {
   return {
     operator: buildOperatorProvisioningAdapter(),
     signing: buildSigningIdentityAdapter(),
@@ -189,5 +273,6 @@ export function buildLiveProvisionPorts(stackConfigPath: string): ProvisionPorts
     configWrite: buildProvisionConfigWriteAdapter(stackConfigPath),
     export: buildOperatorModeExportAdapter(),
     jetstream: buildAgentsJetStreamAdapter(),
+    natsConfig: buildNatsConfigLocatorAdapter(cortexConfigPath),
   };
 }

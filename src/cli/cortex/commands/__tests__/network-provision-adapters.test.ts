@@ -8,7 +8,7 @@
  * with a tilde path. HOME is pinned to a tmpdir; the signing port is NOT mocked.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -17,6 +17,7 @@ import { parseDocument } from "yaml";
 
 import {
   buildAgentsJetStreamAdapter,
+  buildNatsConfigLocatorAdapter,
   buildSigningIdentityAdapter,
   buildProvisionConfigWriteAdapter,
 } from "../network-provision-adapters";
@@ -189,5 +190,88 @@ describe("buildAgentsJetStreamAdapter — nsc edit account argv (cortex#2534)", 
     const res = await adapter.enable({ name: "ALICE_WORK_AGENTS" });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain("nsc on PATH");
+  });
+});
+
+describe("buildProvisionConfigWriteAdapter — config_path / plist_path (cortex#2535)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cortex-provision-cfgpath-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const base = { account: "A" + "B".repeat(55), agentsAccount: "A" + "C".repeat(55), credsPath: "~/c.creds", seedPath: "~/s.seed" };
+
+  test("an omitted configPath writes no config_path", () => {
+    const path = join(dir, "lab.yaml");
+    writeFileSync(path, "stack:\n  id: alice/lab\n", "utf-8");
+    expect(buildProvisionConfigWriteAdapter(path).write(base).ok).toBe(true);
+    const doc = parseDocument(readFileSync(path, "utf-8"));
+    expect(doc.getIn(["stack", "nats_infra", "config_path"])).toBeUndefined();
+    expect(doc.getIn(["stack", "nats_infra", "plist_path"])).toBeUndefined();
+  });
+
+  test("a sibling's configPath + plistPath are both written", () => {
+    const path = join(dir, "lab.yaml");
+    writeFileSync(path, "stack:\n  id: alice/lab\n", "utf-8");
+    buildProvisionConfigWriteAdapter(path).write({ ...base, configPath: "~/shared.conf", plistPath: "~/shared.plist" });
+    const doc = parseDocument(readFileSync(path, "utf-8"));
+    expect(doc.getIn(["stack", "nats_infra", "config_path"])).toBe("~/shared.conf");
+    expect(doc.getIn(["stack", "nats_infra", "plist_path"])).toBe("~/shared.plist");
+  });
+});
+
+describe("buildNatsConfigLocatorAdapter — live sibling discovery (cortex#2535)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cortex-provision-locator-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A config-split stack dir: nats.url in system/, stack block in stacks/. */
+  function splitStack(slug: string, stackYaml: string, natsUrl = "nats://localhost:4222"): void {
+    mkdirSync(join(dir, slug, "system"), { recursive: true });
+    mkdirSync(join(dir, slug, "stacks"), { recursive: true });
+    writeFileSync(join(dir, slug, "system", "system.yaml"), `nats:\n  url: ${natsUrl}\n`, "utf-8");
+    writeFileSync(join(dir, slug, "stacks", `${slug}.yaml`), stackYaml, "utf-8");
+  }
+
+  test("reads same-principal siblings (split + monolith), skipping self and other principals", () => {
+    const shared = join(dir, "local.conf");
+    writeFileSync(shared, "# bus\n", "utf-8");
+    splitStack(
+      "work",
+      `stack:\n  id: alice/work\n  nats_infra:\n    config_path: ${shared}\n    plist_path: ~/nats.plist\n`,
+    );
+    splitStack("lab", "stack:\n  id: alice/lab\n");
+    splitStack("guest", `stack:\n  id: bob/guest\n  nats_infra:\n    config_path: ${shared}\n`);
+    const mono = join(dir, "cortex.ops.yaml");
+    writeFileSync(mono, "nats:\n  url: nats://127.0.0.1:4300\nstack:\n  id: alice/ops\n", "utf-8");
+    chmodSync(mono, 0o600);
+
+    // --config is lab's split pointer; discovery runs over the parent dir.
+    const locator = buildNatsConfigLocatorAdapter(join(dir, "lab", "lab.yaml"));
+    const reads = locator.siblingStacks("alice", "alice/lab");
+    expect(reads).toEqual([
+      { ok: true, stack: { stackId: "alice/work", natsUrl: "nats://localhost:4222", configPath: shared, plistPath: "~/nats.plist" } },
+      { ok: true, stack: { stackId: "alice/ops", natsUrl: "nats://127.0.0.1:4300" } },
+    ]);
+    expect(locator.exists(shared)).toBe(true);
+    expect(locator.exists(join(dir, "missing.conf"))).toBe(false);
+  });
+
+  test("an unreadable sibling config is reported, not dropped", () => {
+    splitStack("lab", "stack:\n  id: alice/lab\n");
+    const mono = join(dir, "cortex.ops.yaml");
+    writeFileSync(mono, "stack:\n  id: alice/ops\n", "utf-8");
+    chmodSync(mono, 0o644); // the loader refuses a monolith that is not chmod 600
+    const reads = buildNatsConfigLocatorAdapter(join(dir, "lab", "lab.yaml")).siblingStacks("alice", "alice/lab");
+    expect(reads).toHaveLength(1);
+    expect(reads[0]?.ok).toBe(false);
+    if (reads[0] !== undefined && !reads[0].ok) expect(reads[0].stackId).toBe("alice/ops");
   });
 });

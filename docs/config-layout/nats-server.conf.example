@@ -15,7 +15,8 @@
 #   1. cortex network provision <stack> --apply
 #        → mints your NSC operator + accounts, and records the per-stack
 #          nats-server config path under `stack.nats_infra.config_path`
-#          (conventionally ~/.config/nats/<stack>.conf).
+#          (~/.config/nats/<stack>.conf when it exists, else a sibling stack's
+#          config on the same bus; left unset when neither is found).
 #   2. cortex network make-live <stack> --apply
 #        → BOOTSTRAPS exactly the operator-mode blocks below (operator +
 #          system_account + `resolver: MEMORY` + `resolver_preload`) onto the
