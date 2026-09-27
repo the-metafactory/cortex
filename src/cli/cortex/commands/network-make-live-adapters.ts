@@ -9,10 +9,23 @@
  * tree + JWT come from arc (ADR-0013 sovereign model invariant).
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync, mkdirSync, renameSync, rmSync } from "fs";
-import { homedir } from "os";
-import { join, dirname } from "path";
-import { Socket } from "net";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  chmodSync,
+  readdirSync,
+  mkdirSync,
+  mkdtempSync,
+  cpSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "fs";
+import { homedir, tmpdir } from "os";
+import { join, dirname, isAbsolute } from "path";
+import { Socket, createServer } from "net";
 
 import { parseDocument } from "yaml";
 
@@ -36,6 +49,7 @@ import {
   selectNatsServiceManager,
   currentServicePlatform,
   bunExecRunner,
+  type NatsServiceManager,
   type ServicePlatform,
 } from "../../../common/nats/nats-service-manager";
 import { backupConfigFile } from "../../../common/nats/config-backup";
@@ -55,7 +69,18 @@ import type {
   MakeLivePorts,
   NatsCanaryPort,
   NatsConfigSnapshot,
+  GStorePort,
+  SnapshotBootOutcome,
 } from "./network-make-live-lib";
+import {
+  hasUnresolvedInclude,
+  inlineConfigIncludes,
+  parseJetStreamStoreDecl,
+  gStoreMoveTarget,
+  renderBootTestConfig,
+  type GStoreStream,
+} from "./network-make-live-preflight";
+import type { ConfigFileReader } from "./network-bus-safety";
 
 // =============================================================================
 // Arc subprocess driver (injectable for tests — mirrors operator-provisioning.ts)
@@ -356,6 +381,27 @@ export function buildServiceRestartAdapter(mutate: boolean): ServiceRestartPort 
   // $XDG_CONFIG_HOME is honored (was a module-level hardcoded ~/.config/systemd/
   // user, blind to a relocated config home — the exact var this epic honors).
   const SYSTEMD_USER_DIR = systemdUserDir();
+  const natsManager = (
+    natsConfigPath: string,
+  ): { ok: true; manager: NatsServiceManager } | { ok: false; reason: string } => {
+    const descriptor = findNatsServerDescriptor({
+      platform,
+      natsConfigPath,
+      launchAgentsDir: LAUNCH_AGENTS_DIR,
+      systemdUserDir: SYSTEMD_USER_DIR,
+      io: realLocatorIO,
+    });
+    if (descriptor === undefined) {
+      return {
+        ok: false,
+        reason: `could not find the launchd/systemd service running nats-server -c ${natsConfigPath}.`,
+      };
+    }
+    return {
+      ok: true,
+      manager: selectNatsServiceManager({ platform, descriptorPath: descriptor, mutate, exec: bunExecRunner }),
+    };
+  };
   return {
     // BLOCK 2 — read-only descriptor resolution for the dry-run preview. Reuses
     // the SAME finders the restarts use, so the previewed target is exactly the
@@ -381,23 +427,24 @@ export function buildServiceRestartAdapter(mutate: boolean): ServiceRestartPort 
       };
     },
     restartNats: async (natsConfigPath) => {
-      const descriptor = findNatsServerDescriptor({
-        platform,
-        natsConfigPath,
-        launchAgentsDir: LAUNCH_AGENTS_DIR,
-        systemdUserDir: SYSTEMD_USER_DIR,
-        io: realLocatorIO,
-      });
-      if (descriptor === undefined) {
+      const mgr = natsManager(natsConfigPath);
+      if (!mgr.ok) {
         return {
           ok: false,
-          reason:
-            `could not find the launchd/systemd service running nats-server -c ${natsConfigPath}. ` +
-            `Restart the nats-server manually (its MEMORY resolver must reload to pick up the new account).`,
+          reason: `${mgr.reason} Restart the nats-server manually (its MEMORY resolver must reload to pick up the new account).`,
         };
       }
-      const mgr = selectNatsServiceManager({ platform, descriptorPath: descriptor, mutate, exec: bunExecRunner });
-      return mgr.restart();
+      return mgr.manager.restart();
+    },
+    // cortex#2533 — stop/start around the `--move-g-store` move (same descriptor
+    // discovery as restartNats, so the SAME service is stopped and started).
+    stopNats: async (natsConfigPath) => {
+      const mgr = natsManager(natsConfigPath);
+      return mgr.ok ? mgr.manager.stop() : { ok: false, reason: mgr.reason };
+    },
+    startNats: async (natsConfigPath) => {
+      const mgr = natsManager(natsConfigPath);
+      return mgr.ok ? mgr.manager.start() : { ok: false, reason: mgr.reason };
     },
     restartDaemon: async (cortexConfigPath) => {
       const descriptor = findCortexDaemonDescriptor({
@@ -534,8 +581,15 @@ export function buildNatsCanaryAdapter(
   mutate: boolean,
   healthProbeTimeoutMs?: number,
   tcpConnect: TcpConnectProbe = realTcpConnectProbe,
+  bootDeps: BootTestDeps = realBootTestDeps,
 ): NatsCanaryPort {
   return {
+    // cortex#2533 — boot the rollback snapshot on a throwaway copy. Dry-run is
+    // inert (the orchestrator never calls it on a dry-run anyway).
+    async bootTest(snapshot) {
+      if (!mutate) return { status: "skipped", reason: "dry-run" };
+      return bootTestSnapshotConfig(snapshot, bootDeps);
+    },
     async validateConfig(natsConfigPath) {
       // #821 MAJOR-1 parity — cheap pre-restart syntax gate. Dry-run is inert.
       // cortex#1495 v2 (suggestion) — the "invalid config → -t refuses the reload"
@@ -642,6 +696,295 @@ export function buildNatsCanaryAdapter(
   };
 }
 
+// =============================================================================
+// Rollback snapshot boot-test (cortex#2533)
+// =============================================================================
+
+/** A spawned throwaway nats-server. */
+export interface BootTestProcess {
+  /** Settles once the process exits, with its exit code + everything it wrote to stderr. */
+  exited: Promise<{ code: number; stderr: string }>;
+  kill(signal?: NodeJS.Signals): void;
+}
+
+/**
+ * The effects {@link bootTestSnapshotConfig} needs, injectable so tests script
+ * a clean boot / an early exit / a missing binary without spawning anything.
+ */
+export interface BootTestDeps {
+  /** Spawn `argv` in `cwd`. THROWS when the binary cannot be spawned (ENOENT). */
+  spawn(argv: string[], cwd: string): BootTestProcess;
+  /** A loopback TCP port that was free a moment ago. */
+  pickPort(): Promise<number>;
+  /** Is the throwaway server's HTTP monitor answering on `port`? Never rejects. */
+  monitorUp(port: number): Promise<boolean>;
+  sleep(ms: number): Promise<void>;
+  /** Monotonic-enough wall clock (ms) for the come-up deadline. */
+  now(): number;
+  /** How long the server gets to come up before the snapshot counts as unbootable. */
+  timeoutMs: number;
+  /** Poll interval while waiting. */
+  pollMs: number;
+}
+
+const realConfigReader: ConfigFileReader = {
+  read: (path) => {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch (_err) {
+      // Missing/unreadable include — the caller reports it as the reason the
+      // snapshot cannot boot (nats-server would refuse it the same way).
+      return undefined;
+    }
+  },
+  dirname,
+  join,
+};
+
+const realPickPort = (): Promise<number> =>
+  new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      server.close(() => {
+        resolve(port);
+      });
+    });
+  });
+
+const realBootTestDeps: BootTestDeps = {
+  spawn: (argv, cwd) => {
+    const proc = Bun.spawn(argv, { cwd, stdout: "ignore", stderr: "pipe" });
+    const stderr = new Response(proc.stderr).text();
+    return {
+      exited: Promise.all([proc.exited, stderr]).then(([code, text]) => ({ code, stderr: text })),
+      kill: (signal) => {
+        proc.kill(signal);
+      },
+    };
+  },
+  pickPort: realPickPort,
+  monitorUp: async (port) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port.toString()}/varz`, { signal: AbortSignal.timeout(1000) });
+      return res.ok;
+    } catch (_err) {
+      // Not listening yet (or already gone) — the poll loop decides what that means.
+      return false;
+    }
+  },
+  // unref'd: a pending kill-grace timer must not hold the CLI open after the
+  // boot-test process has already exited.
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms).unref();
+    }),
+  now: () => Date.now(),
+  timeoutMs: 15_000,
+  pollMs: 250,
+};
+
+/** Last few stderr lines — enough to carry nats-server's one-line fatal error. */
+function stderrTail(stderr: string): string {
+  const lines = stderr.trim().split("\n").filter((l) => l.trim().length > 0);
+  return lines.slice(-3).join(" | ") || "(no output)";
+}
+
+/**
+ * cortex#2533 — boot `snapshot` on a throwaway copy and report whether it came
+ * up. The copy (see {@link renderBootTestConfig}) inlines every include, binds
+ * every listener to a random loopback port, points every outbound URL at a
+ * dead loopback port (it never dials the real hub), keeps its store/resolver in
+ * a scratch dir and drops the pid/log files — so it cannot disturb the live
+ * server. It keeps the accounts and leaf remote `account:` lines, which is the
+ * boot-time check `nats-server -t` skips. "Came up" = the throwaway monitor
+ * answers `/varz`; exiting first, or not answering within `timeoutMs`, is
+ * `unbootable`. The process is always killed and the scratch dir removed.
+ */
+export async function bootTestSnapshotConfig(
+  snapshot: NatsConfigSnapshot,
+  deps: BootTestDeps,
+): Promise<SnapshotBootOutcome> {
+  if (snapshot.contents === undefined) {
+    return { status: "skipped", reason: `${snapshot.natsConfigPath} did not exist before make-live` };
+  }
+  const configPath = expandTilde(snapshot.natsConfigPath);
+  const flat = inlineConfigIncludes(configPath, snapshot.contents, realConfigReader);
+  if (!flat.ok) return { status: "unbootable", reason: flat.reason };
+  // An include shape the inliner did not parse would not resolve from the
+  // scratch dir — the copy would fail for OUR reason, not the config's. Warn
+  // (skipped) rather than block a bus that may boot fine.
+  if (hasUnresolvedInclude(flat.text)) {
+    return { status: "skipped", reason: "the config has an include directive the boot test could not inline" };
+  }
+
+  const scratchDir = mkdtempSync(join(tmpdir(), "cortex-makelive-boottest-"));
+  let proc: BootTestProcess | undefined;
+  let exit: { code: number; stderr: string } | undefined;
+  try {
+    const [monitorPort, deadPort] = [await deps.pickPort(), await deps.pickPort()];
+    const rendered = renderBootTestConfig(flat.text, { monitorPort, deadPort, scratchDir });
+    const bootConfPath = join(scratchDir, "boot-test.conf");
+    // 0600 — the copy carries the same account JWTs the live config does.
+    writeFileSync(bootConfPath, rendered.conf, { mode: 0o600 });
+    // A full resolver's stored account JWTs must be present in the copy too.
+    const liveResolverDir = rendered.resolverDirs.map(expandTilde).find((d) => isAbsolute(d) && existsSync(d));
+    if (liveResolverDir !== undefined) {
+      cpSync(liveResolverDir, join(scratchDir, "resolver"), { recursive: true });
+    }
+
+    try {
+      proc = deps.spawn(["nats-server", "-c", bootConfPath, ...rendered.args], dirname(configPath));
+    } catch (err) {
+      return {
+        status: "skipped",
+        reason: `could not run nats-server: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    void proc.exited.then((r) => {
+      exit = r;
+    });
+
+    const exitedEarly = (e: { code: number; stderr: string }): SnapshotBootOutcome => ({
+      status: "unbootable",
+      reason: `nats-server exited ${e.code.toString()} on boot: ${stderrTail(e.stderr)}`,
+    });
+    const deadline = deps.now() + deps.timeoutMs;
+    do {
+      if (exit !== undefined) return exitedEarly(exit);
+      if (await deps.monitorUp(monitorPort)) return { status: "bootable" };
+      await deps.sleep(deps.pollMs);
+    } while (deps.now() < deadline);
+    // An exit during the last sleep carries the fatal line — report it, not a
+    // timeout. (Read through a function: `exit` is assigned in a callback, which
+    // the checker's flow narrowing cannot see.)
+    const lateExit = ((): { code: number; stderr: string } | undefined => exit)();
+    if (lateExit !== undefined) return exitedEarly(lateExit);
+    return {
+      status: "unbootable",
+      reason: `nats-server did not come up within ${(deps.timeoutMs / 1000).toString()}s`,
+    };
+  } finally {
+    if (proc !== undefined && exit === undefined) {
+      proc.kill("SIGTERM");
+      const stopped = await Promise.race([proc.exited.then(() => true), deps.sleep(5000).then(() => false)]);
+      if (!stopped) proc.kill("SIGKILL");
+    }
+    rmSync(scratchDir, { recursive: true, force: true });
+  }
+}
+
+// =============================================================================
+// $G JetStream store adapter (cortex#2533)
+// =============================================================================
+
+/** Total bytes under `path` (files only). Undefined when any entry cannot be read. */
+function dirBytes(path: string): number | undefined {
+  try {
+    let total = 0;
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) {
+        const sub = dirBytes(child);
+        if (sub === undefined) return undefined;
+        total += sub;
+      } else if (entry.isFile()) {
+        total += statSync(child).size;
+      }
+    }
+    return total;
+  } catch (_err) {
+    // Unreadable entry — the size is reported as unknown, the stream name still shows.
+    return undefined;
+  }
+}
+
+/** `20260927T081500Z` — a filesystem-safe UTC stamp for the move target. */
+function moveStamp(now: Date): string {
+  return now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+}
+
+/**
+ * Live {@link GStorePort}. `inspect` resolves `store_dir` from the config with
+ * its includes inlined; `moveAside`/`moveBack` are single `rename`s (same
+ * filesystem — the target is inside `store_dir`) that never delete or merge.
+ * Dry-run (`mutate=false`) moves nothing.
+ */
+export function buildGStoreAdapter(mutate: boolean, now: () => Date = () => new Date()): GStorePort {
+  return {
+    inspect(natsConfigPath) {
+      const abs = expandTilde(natsConfigPath);
+      // No config yet (the from-scratch path) — no server, so no store to strand.
+      if (!existsSync(abs)) return { status: "no-jetstream" };
+      const flat = inlineConfigIncludes(abs, readFileSync(abs, "utf-8"), realConfigReader);
+      if (!flat.ok) return { status: "unknown", reason: `cannot resolve the config: ${flat.reason}` };
+      if (hasUnresolvedInclude(flat.text)) {
+        return { status: "unknown", reason: `${abs} has an include directive make-live could not follow` };
+      }
+      const decl = parseJetStreamStoreDecl(flat.text);
+      if (!decl.jetstream) return { status: "no-jetstream" };
+      if (decl.storeDir === undefined) {
+        return {
+          status: "unknown",
+          reason: `${abs} enables JetStream without a store_dir (nats-server falls back to its temp-dir default)`,
+        };
+      }
+      const storeDir = expandTilde(decl.storeDir);
+      if (!isAbsolute(storeDir)) {
+        return {
+          status: "unknown",
+          reason: `store_dir "${decl.storeDir}" in ${abs} is relative (resolved against nats-server's working dir)`,
+        };
+      }
+      const gStorePath = join(storeDir, "jetstream", "$G");
+      if (!existsSync(gStorePath)) return { status: "absent", storeDir };
+      const streamsDir = join(gStorePath, "streams");
+      let streams: GStoreStream[];
+      try {
+        streams = existsSync(streamsDir)
+          ? readdirSync(streamsDir, { withFileTypes: true })
+              .filter((e) => e.isDirectory())
+              .map((e) => ({ name: e.name, bytes: dirBytes(join(streamsDir, e.name)) }))
+          : [];
+      } catch (_err) {
+        // Unlistable streams dir — the store still EXISTS, which is what gates the
+        // refusal; the report just carries no stream names.
+        streams = [];
+      }
+      return { status: "present", storeDir, gStorePath, streams };
+    },
+    moveAside({ gStorePath, storeDir }) {
+      const movedTo = gStoreMoveTarget(storeDir, moveStamp(now()));
+      if (!mutate) return { ok: true, movedTo };
+      if (existsSync(movedTo)) return { ok: false, reason: `${movedTo} already exists — refusing to overwrite it` };
+      try {
+        renameSync(gStorePath, movedTo);
+      } catch (err) {
+        return { ok: false, reason: `rename ${gStorePath} → ${movedTo}: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      return { ok: true, movedTo };
+    },
+    moveBack({ movedTo, gStorePath }) {
+      if (!mutate) return { ok: true };
+      if (existsSync(gStorePath)) {
+        return {
+          ok: false,
+          reason: `${gStorePath} exists again — refusing to overwrite or merge it with the moved store at ${movedTo}`,
+        };
+      }
+      if (!existsSync(movedTo)) return { ok: false, reason: `the moved store ${movedTo} is gone` };
+      try {
+        renameSync(movedTo, gStorePath);
+      } catch (err) {
+        return { ok: false, reason: `rename ${movedTo} → ${gStorePath}: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      return { ok: true };
+    },
+  };
+}
+
 /** Build the live {@link MakeLivePorts} bundle for a real `--apply` run. */
 export function buildLiveMakeLivePorts(mutate: boolean): MakeLivePorts {
   return {
@@ -651,5 +994,6 @@ export function buildLiveMakeLivePorts(mutate: boolean): MakeLivePorts {
     restart: buildServiceRestartAdapter(mutate),
     configWrite: buildMakeLiveConfigWriteAdapter(mutate),
     natsCanary: buildNatsCanaryAdapter(mutate),
+    gStore: buildGStoreAdapter(mutate),
   };
 }

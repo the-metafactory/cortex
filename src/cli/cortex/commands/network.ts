@@ -545,6 +545,9 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--nats-config": "value",
         "--creds": "value",
         "--force": "bool",
+        // cortex#2533 — move an existing `$G` JetStream store aside (server
+        // stopped, never deleted) on an anonymous → operator-mode conversion.
+        "--move-g-store": "bool",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -3928,6 +3931,7 @@ function deriveMakeLiveInputs(
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return { ok: false, reason: applyRes.reason, usage: true };
   const force = flags["--force"] === true;
+  const moveGStore = flags["--move-g-store"] === true;
 
   // Read-only state probes (cheap fs reads via the resolver adapter).
   const resolverProbe = buildResolverPreloadAdapter();
@@ -3997,6 +4001,7 @@ function deriveMakeLiveInputs(
     natsConfigPath,
     force,
     apply: applyRes.apply,
+    moveGStore,
     state,
     ...(operatorModePackage !== undefined && { operatorModePackage }),
     ...(baseIdentity !== undefined && { baseIdentity }),
@@ -4423,7 +4428,7 @@ Usage:
   cortex network provision <stack> [--config <p>] [--principal <id>] [--seed-path <p>]
                         [--creds <p>] [--force] [--apply] [--dry-run] [--json]
   cortex network make-live <stack> [--config <p>] [--principal <id>] [--nats-config <p>]
-                        [--creds <p>] [--force] [--apply] [--dry-run] [--json]
+                        [--creds <p>] [--force] [--move-g-store] [--apply] [--dry-run] [--json]
   cortex network secret <add-member|revoke-member|rotate> <network> <member-pubkey>
                         --admin-seed <hub-admin-seed> [--registry-url <url>] [--hub-config <p>]
                         [--deliver sealed|oob] [--leaf-user <u>] [--seal-only] [--hub-account <A…>]
@@ -4544,6 +4549,16 @@ Subcommands:
           operator-mode). The dry-run prints the resolved nats-server + daemon
           restart targets so the (possibly shared-server) blast radius is
           verifiable before --apply.
+          Before mutating, --apply boots a throwaway copy of the current nats
+          config (the rollback target) on random loopback ports and refuses if
+          it does not come up (\`nats-server -t\` misses a leaf remote whose
+          \`account:\` the server does not define); when the boot test cannot
+          run (no nats-server binary) it warns instead. Converting an anonymous bus
+          that holds a \`<store_dir>/jetstream/$G\` JetStream store is refused
+          (operator-mode cannot recover it, so the canary could never pass);
+          --move-g-store instead stops nats-server, moves the store to
+          \`<store_dir>/G-moved-aside-<timestamp>\` (never deleted), starts it,
+          and moves the store back if the canary rolls back.
           Idempotent + dry-run by default; --apply mutates; --force re-mints.
           Run AFTER \`cortex network provision <stack> --apply\`.
   admit   (ADR-0015) One-command admin admission decision. Verifies the admin
