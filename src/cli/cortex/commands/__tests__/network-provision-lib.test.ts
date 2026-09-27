@@ -18,6 +18,7 @@ import {
   type ProvisionConfigWritePort,
   type OperatorModeExportPort,
   type AgentsJetStreamPort,
+  accountJwtHasJetStream,
 } from "../network-provision-lib";
 import { accountJwt, ACCOUNT_JWT_WITH_JETSTREAM, ACCOUNT_JWT_WITHOUT_JETSTREAM } from "./account-jwt-test-helpers";
 
@@ -27,9 +28,6 @@ const SYS_PUB = "A" + "S".repeat(55);
 const OP_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJPUCJ9.sig";
 const FED_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBRkVEIn0.sig";
 const SYS_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBU1lTIn0.sig";
-
-const AGENTS_JWT_NO_JS = ACCOUNT_JWT_WITHOUT_JETSTREAM;
-const AGENTS_JWT_JS = ACCOUNT_JWT_WITH_JETSTREAM;
 
 /** Spy ports recording every effectful call in order. */
 function makePorts(overrides?: {
@@ -47,11 +45,13 @@ function makePorts(overrides?: {
    * `nsc add account`). Default: enabled (a converged stack).
    */
   agentsJetStream?: "enabled" | "disabled";
+  /** add-account finds every account already in the nsc store (created:false). */
+  accountsAlreadyExist?: boolean;
 }): { ports: ProvisionPorts; calls: string[]; written: Record<string, unknown>[] } {
   const calls: string[] = [];
   const written: Record<string, unknown>[] = [];
   // The fake nsc store's view of the agents account's JWT.
-  let agentsJwt = (overrides?.agentsJetStream ?? "enabled") === "enabled" ? AGENTS_JWT_JS : AGENTS_JWT_NO_JS;
+  let agentsJwt = (overrides?.agentsJetStream ?? "enabled") === "enabled" ? ACCOUNT_JWT_WITH_JETSTREAM : ACCOUNT_JWT_WITHOUT_JETSTREAM;
 
   const operator: OperatorProvisioningPort = {
     initOperator: async ({ name, force }) => {
@@ -61,11 +61,11 @@ function makePorts(overrides?: {
     addAccount: async ({ name }) => {
       calls.push(`add-account:${name}`);
       let pubKey: string;
-      if (name.endsWith("_AGENTS")) {
-        pubKey = AGENTS_PUB;
-        agentsJwt = AGENTS_JWT_NO_JS;
-      } else if (name === "SYS") pubKey = SYS_PUB;
+      if (name.endsWith("_AGENTS")) pubKey = AGENTS_PUB;
+      else if (name === "SYS") pubKey = SYS_PUB;
       else pubKey = FED_PUB;
+      if (overrides?.accountsAlreadyExist) return { ok: true, account: name, pubKey, created: false, alreadyExisted: true };
+      if (name.endsWith("_AGENTS")) agentsJwt = ACCOUNT_JWT_WITHOUT_JETSTREAM;
       return { ok: true, account: name, pubKey, created: true, alreadyExisted: false };
     },
     ...overrides?.operator,
@@ -118,7 +118,7 @@ function makePorts(overrides?: {
   const jetstream: AgentsJetStreamPort = {
     enable: async ({ name }) => {
       calls.push(`enable-jetstream:${name}`);
-      agentsJwt = AGENTS_JWT_JS;
+      agentsJwt = ACCOUNT_JWT_WITH_JETSTREAM;
       return { ok: true };
     },
     ...overrides?.jetstream,
@@ -440,7 +440,7 @@ describe("provisionStack — cortex#1265 operator-mode JWT export", () => {
       export: {
         exportAccount: async (name) =>
           name.endsWith("_AGENTS")
-            ? { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JWT_JS }
+            ? { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
             : { ok: true, pubKey: driftPub, jwt: FED_JWT },
       },
     });
@@ -621,7 +621,7 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
       export: {
         exportAccount: async (name) => {
           calls.push(`export-account:${name}`);
-          return { ok: true, pubKey: driftPub, jwt: AGENTS_JWT_NO_JS };
+          return { ok: true, pubKey: driftPub, jwt: ACCOUNT_JWT_WITHOUT_JETSTREAM };
         },
       },
     });
@@ -634,7 +634,7 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
   test("probe pubkey drift in dry-run → [wire] naming the drift, still no mutation", async () => {
     const driftPub = "A" + "Q".repeat(55);
     const { ports, written } = makePorts({
-      export: { exportAccount: async () => ({ ok: true, pubKey: driftPub, jwt: AGENTS_JWT_JS }) },
+      export: { exportAccount: async () => ({ ok: true, pubKey: driftPub, jwt: ACCOUNT_JWT_WITH_JETSTREAM }) },
     });
     const res = await provisionStack(baseInputs({ apply: false }, PROVISIONED), ports);
     expect(res.ok).toBe(true);
@@ -686,13 +686,7 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
   test("--force with an unreadable pre-probe re-probes the existing account after add-account", async () => {
     let probes = 0;
     const { ports, calls } = makePorts({
-      operator: {
-        addAccount: async ({ name }) => {
-          calls.push(`add-account:${name}`);
-          const pubKey = name.endsWith("_AGENTS") ? AGENTS_PUB : name === "SYS" ? SYS_PUB : FED_PUB;
-          return { ok: true, account: name, pubKey, created: false, alreadyExisted: true };
-        },
-      },
+      accountsAlreadyExist: true,
       export: {
         exportAccount: async (name) => {
           calls.push(`export-account:${name}`);
@@ -701,7 +695,7 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
           // The first (pre-mutation) probe fails; the re-probe reads the account.
           return probes === 1
             ? { ok: false, reason: "transient" }
-            : { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JWT_JS };
+            : { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM };
         },
       },
     });
@@ -726,8 +720,8 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
           calls.push(`export-account:${name}`);
           if (!name.endsWith("_AGENTS")) return { ok: true, pubKey: FED_PUB, jwt: FED_JWT };
           return granted
-            ? { ok: true, pubKey: driftPub, jwt: AGENTS_JWT_JS }
-            : { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JWT_NO_JS };
+            ? { ok: true, pubKey: driftPub, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
+            : { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITHOUT_JETSTREAM };
         },
       },
     });
@@ -743,17 +737,32 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
     // from config comes back created:false. Its JetStream state is read, not assumed.
     const { ports, calls } = makePorts({
       agentsJetStream: "enabled",
-      operator: {
-        addAccount: async ({ name }) => {
-          calls.push(`add-account:${name}`);
-          const pubKey = name.endsWith("_AGENTS") ? AGENTS_PUB : name === "SYS" ? SYS_PUB : FED_PUB;
-          return { ok: true, account: name, pubKey, created: false, alreadyExisted: true };
-        },
-      },
+      accountsAlreadyExist: true,
     });
     const res = await provisionStack(baseInputs({ apply: true }), ports);
     expect(res.ok).toBe(true);
     expect(calls).toContain("export-account:ANDREAS_RESEARCH_AGENTS");
     expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+});
+
+describe("accountJwtHasJetStream (cortex#2534)", () => {
+  test("no limits object, or limits without storage → disabled", () => {
+    expect(accountJwtHasJetStream(accountJwt(undefined))).toBe(false);
+    expect(accountJwtHasJetStream(ACCOUNT_JWT_WITHOUT_JETSTREAM)).toBe(false);
+  });
+
+  test("unlimited or capped storage → enabled", () => {
+    expect(accountJwtHasJetStream(ACCOUNT_JWT_WITH_JETSTREAM)).toBe(true);
+    expect(accountJwtHasJetStream(accountJwt({ mem_storage: 0, disk_storage: 1073741824 }))).toBe(true);
+  });
+
+  test("a tier counts only with non-zero storage", () => {
+    expect(accountJwtHasJetStream(accountJwt({ tiered_limits: { R1: { disk_storage: -1 } } }))).toBe(true);
+    expect(accountJwtHasJetStream(accountJwt({ tiered_limits: { R1: { mem_storage: 0, disk_storage: 0 } } }))).toBe(false);
+  });
+
+  test("not a JWT → undefined (cannot tell)", () => {
+    expect(accountJwtHasJetStream("not-a-jwt")).toBeUndefined();
   });
 });

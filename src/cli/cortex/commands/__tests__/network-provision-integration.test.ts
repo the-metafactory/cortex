@@ -33,7 +33,6 @@ import { ACCOUNT_JWT_WITH_JETSTREAM } from "./account-jwt-test-helpers";
 const FED_PUB = "A" + "F".repeat(55);
 const AGENTS_PUB = "A" + "G".repeat(55);
 
-
 /** The options arc's `nats add-federation-export` ACTUALLY defines (src/cli.ts). */
 const ARC_KNOWN_OPTS = new Set([
   "--from-account",

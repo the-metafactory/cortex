@@ -17,7 +17,6 @@ import { ACCOUNT_JWT_WITH_JETSTREAM } from "./account-jwt-test-helpers";
 const FED_PUB = "A" + "B".repeat(55);
 const AGENTS_PUB = "A" + "C".repeat(55);
 
-
 function loaded(partial: Partial<LoadedConfig>): LoadedConfig {
   return { config: {} as AgentConfig, inlineAgents: [], ...partial };
 }

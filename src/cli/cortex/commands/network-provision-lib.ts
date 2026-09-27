@@ -73,7 +73,7 @@
  * BEFORE the config write so no half-provisioned config block is left behind.
  */
 
-import { decodeJwtClaims } from "./network-bus-safety";
+import { decodeJwtClaims } from "./nats-jwt";
 import type { FederationWiringPort } from "./network-ports";
 import type { OperatorProvisioningPort } from "./operator-provisioning";
 
@@ -214,8 +214,8 @@ export interface ProvisionPorts {
 
 /**
  * Does an account JWT carry JetStream limits? JetStream counts as on when `nats.limits.mem_storage` or `disk_storage` is non-zero (-1 =
- * unlimited, >0 = a byte cap), or any `tiered_limits` tier is set. `undefined`
- * when the JWT does not decode.
+ * unlimited, >0 = a byte cap), at the top level or in any `tiered_limits` tier.
+ * `undefined` when the JWT does not decode.
  */
 export function accountJwtHasJetStream(jwt: string): boolean | undefined {
   const claims = decodeJwtClaims(jwt);
@@ -228,7 +228,10 @@ export function accountJwtHasJetStream(jwt: string): boolean | undefined {
   const nonZero = (v: unknown): boolean => typeof v === "number" && v !== 0;
   if (nonZero(l.mem_storage) || nonZero(l.disk_storage)) return true;
   const tiers = l.tiered_limits;
-  return tiers !== null && typeof tiers === "object" && Object.keys(tiers).length > 0;
+  if (tiers === null || typeof tiers !== "object") return false;
+  return Object.values(tiers).some(
+    (t) => t !== null && typeof t === "object" && (nonZero((t as Record<string, unknown>).mem_storage) || nonZero((t as Record<string, unknown>).disk_storage)),
+  );
 }
 
 /** What the read-only probe of the agents account found. */
@@ -339,7 +342,8 @@ function agentsJetStreamPlanItem(inputs: ProvisionInputs, probe: AgentsJetStream
         status: "wire",
         detail:
           `${name} (pubkey drift: config records ${inputs.state.agentsAccount}, nsc resolves ` +
-          `${probe.exportedPubKey} — check the current nsc operator; --apply refuses)`,
+          `${probe.exportedPubKey} — check the current nsc operator; ` +
+          `${inputs.force ? "--force re-probes after add-account" : "--apply refuses"})`,
       };
     case "not-probed":
       return { step, status: "wire", detail: `${name} (grant unlimited mem/disk after mint)` };
