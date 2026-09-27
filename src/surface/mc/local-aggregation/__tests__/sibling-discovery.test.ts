@@ -24,11 +24,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
   discoverSiblingStacks,
+  observerCredsPath,
+  observerMintHint,
+  observerUserName,
   type SiblingStackDescriptor,
 } from "../sibling-discovery";
 
@@ -99,10 +102,14 @@ describe("#989 sibling-discovery", () => {
         credsPath: "~/.config/nats/cortex-halden.creds",
       });
 
+      // #2536 — an empty observer dir: no sibling has an observer minted yet.
+      const observerDir = join(root, "observer-creds");
+      mkdirSync(observerDir);
       const result = discoverSiblingStacks({
         configRoot: root,
         selfPrincipal: "andreas",
         selfStack: "meta-factory",
+        observerCredsDir: observerDir,
       });
 
       // self (meta-factory) excluded; work + halden present.
@@ -111,9 +118,13 @@ describe("#989 sibling-discovery", () => {
       const work = findStack(result, "work");
       expect(work?.principal).toBe("andreas");
       expect(work?.url).toBe("nats://127.0.0.1:4222");
+      // #2536 — the sibling daemon's own creds are NEVER surfaced; with no
+      // observer minted the sibling is non-connectable.
       expect(work?.credential).toEqual({
-        kind: "creds",
-        credsPath: "~/.config/nats/cortex-work.creds",
+        kind: "no-observer",
+        reason: "missing",
+        observerUser: "mc-observer-meta-factory-to-work",
+        observerCredsPath: join(observerDir, "mc-observer-meta-factory-to-work.creds"),
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -302,5 +313,207 @@ describe("#989 sibling-discovery", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // #2536 — MC must never connect to a sibling with that sibling daemon's own
+  // creds (stack A would hold stack B's full daemon user). An auto-discovered
+  // sibling that declares a `credsPath` connects ONLY with a per-sibling
+  // observer creds file found by convention; otherwise it is non-connectable.
+  describe("#2536 per-sibling observer creds", () => {
+    function setup(): { root: string; observerDir: string; daemonCreds: string } {
+      const root = mkdtempSync(join(tmpdir(), "cortex-disc-obs-"));
+      const observerDir = join(root, "observer-creds");
+      mkdirSync(observerDir);
+      const daemonCreds = join(root, "daemon-work.creds");
+      writeFileSync(daemonCreds, "daemon-user-placeholder\n", { mode: 0o600 });
+      writeStackDir(root, "work", {
+        principal: "alice",
+        stackId: "alice/work",
+        url: "nats://127.0.0.1:4222",
+        credsPath: daemonCreds,
+      });
+      return { root, observerDir, daemonCreds };
+    }
+
+    test("observer path convention: mc-observer-<self>-to-<sibling>.creds", () => {
+      expect(observerUserName("default", "work")).toBe("mc-observer-default-to-work");
+      expect(observerCredsPath("/creds", "default", "work")).toBe(
+        "/creds/mc-observer-default-to-work.creds",
+      );
+    });
+
+    test("observer file present ⇒ connects with the OBSERVER path, not the daemon's", () => {
+      const { root, observerDir, daemonCreds } = setup();
+      try {
+        const observer = join(observerDir, "mc-observer-default-to-work.creds");
+        writeFileSync(observer, "observer-user-placeholder\n", { mode: 0o600 });
+
+        const result = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+        });
+
+        const work = findStack(result, "work");
+        expect(work?.credential).toEqual({ kind: "creds", credsPath: observer });
+        expect(JSON.stringify(result)).not.toContain(daemonCreds);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("no observer file ⇒ `no-observer` (missing), sibling stays in the roster", () => {
+      const { root, observerDir, daemonCreds } = setup();
+      try {
+        const result = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+        });
+
+        // The sibling is still listed (the #1008 DB-read roster needs it), but
+        // it carries no connectable credential.
+        const work = findStack(result, "work");
+        expect(work?.credential).toEqual({
+          kind: "no-observer",
+          reason: "missing",
+          observerUser: "mc-observer-default-to-work",
+          observerCredsPath: join(observerDir, "mc-observer-default-to-work.creds"),
+        });
+        expect(JSON.stringify(result)).not.toContain(daemonCreds);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("observer path that IS the daemon creds (symlink) ⇒ refused", () => {
+      const { root, observerDir, daemonCreds } = setup();
+      try {
+        // A principal "shortcut": point the observer name at the daemon file.
+        symlinkSync(daemonCreds, join(observerDir, "mc-observer-default-to-work.creds"));
+
+        const result = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+        });
+
+        const work = findStack(result, "work");
+        expect(work?.credential).toEqual({
+          kind: "no-observer",
+          reason: "is-daemon-creds",
+          observerUser: "mc-observer-default-to-work",
+          observerCredsPath: join(observerDir, "mc-observer-default-to-work.creds"),
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("observer dir IS the daemon creds location with the same name ⇒ refused", () => {
+      const root = mkdtempSync(join(tmpdir(), "cortex-disc-obs-"));
+      try {
+        // The sibling daemon's creds file happens to sit at the observer path.
+        const observerDir = join(root, "creds");
+        mkdirSync(observerDir);
+        const clash = join(observerDir, "mc-observer-default-to-work.creds");
+        writeFileSync(clash, "daemon-user-placeholder\n", { mode: 0o600 });
+        writeStackDir(root, "work", {
+          principal: "alice",
+          stackId: "alice/work",
+          url: "nats://127.0.0.1:4222",
+          credsPath: clash,
+        });
+
+        const result = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+        });
+
+        expect(findStack(result, "work")?.credential).toEqual({
+          kind: "no-observer",
+          reason: "is-daemon-creds",
+          observerUser: "mc-observer-default-to-work",
+          observerCredsPath: clash,
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("sibling WITHOUT a daemon credsPath keeps the noauth behaviour (open bus)", () => {
+      const root = mkdtempSync(join(tmpdir(), "cortex-disc-obs-"));
+      try {
+        const observerDir = join(root, "observer-creds");
+        mkdirSync(observerDir);
+        writeStackDir(root, "work", {
+          principal: "alice",
+          stackId: "alice/work",
+          url: "nats://127.0.0.1:4223",
+        });
+
+        const result = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+        });
+
+        expect(findStack(result, "work")?.credential).toEqual({ kind: "noauth" });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("explicit stacks[] entry keeps its configured credsPath unchanged", () => {
+      const { root, observerDir, daemonCreds } = setup();
+      try {
+        const result = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+          explicit: [
+            {
+              stack: "work",
+              principal: "alice",
+              url: "nats://127.0.0.1:4222",
+              credential: { kind: "creds", credsPath: "~/.config/nats/pinned-observer.creds" },
+            },
+          ],
+        });
+        expect(findStack(result, "work")?.credential).toEqual({
+          kind: "creds",
+          credsPath: "~/.config/nats/pinned-observer.creds",
+        });
+        expect(JSON.stringify(result)).not.toContain(daemonCreds);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("mint hint names the exact scope and the path discovery looks for", () => {
+      const hint = observerMintHint({
+        principal: "alice",
+        siblingStack: "work",
+        observerUser: "mc-observer-default-to-work",
+        observerCredsPath: "/creds/mc-observer-default-to-work.creds",
+      });
+      expect(hint).toContain("local.alice.work.agent.>");
+      expect(hint).toContain("--deny-pub '>'");
+      expect(hint).toContain(
+        "arc nats add-bot mc-observer-default-to-work --account <work-account> " +
+          "--sub 'local.alice.work.agent.>' --output /creds/mc-observer-default-to-work.creds",
+      );
+      expect(hint).toContain(
+        "nsc generate creds -a <work-account> -n mc-observer-default-to-work " +
+          "-o /creds/mc-observer-default-to-work.creds",
+      );
+    });
   });
 });

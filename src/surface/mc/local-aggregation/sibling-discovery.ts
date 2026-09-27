@@ -28,9 +28,28 @@
  *
  * ## Credential resolution
  *
+ * **Never the sibling daemon's own creds (#2536).** A sibling's
+ * `nats.credsPath` is that sibling DAEMON's full user in the sibling's
+ * account. Connecting with it would put a process of THIS stack inside the
+ * sibling's account with everything the sibling daemon may read and publish,
+ * which defeats per-stack account isolation. The aggregator needs only
+ * `local.{principal}.{sibling}.agent.>`, so a sibling that declares a
+ * `credsPath` connects with a per-sibling OBSERVER creds file found by
+ * convention ({@link observerCredsPath}):
+ *
+ *     <observerCredsDir>/mc-observer-<selfStack>-to-<siblingStack>.creds
+ *
+ * (`observerCredsDir` defaults to {@link DEFAULT_NATS_CREDS_DIR}.) The file is
+ * a sub-only user minted in the SIBLING's account (sub allow
+ * `local.{principal}.{sibling}.agent.>`, pub deny `>`; see
+ * {@link observerMintHint}). No observer file ⇒ `credential.kind:
+ * "no-observer"` and the aggregator never connects to that sibling. An
+ * observer path that resolves to the daemon creds file (same path, or a
+ * symlink to it) is refused the same way.
+ *
  * Per-bus auth varies (#989 probe findings on the live machine):
- *   - meta-factory / work → a `nats.credsPath` (operator-account `.creds`) →
- *     `credential.kind: "creds"`.
+ *   - meta-factory / work → a daemon `nats.credsPath` → the per-sibling
+ *     observer `credential.kind: "creds"`, or `"no-observer"` (#2536).
  *   - halden → an OPEN bus (`nats-server -js`, no operator-account config) that
  *     accepts an unauthenticated connection. Its `system.yaml` declares only an
  *     account-signing NKey seed (no `credsPath`), so config alone can't tell it
@@ -41,7 +60,7 @@
  *   - community → a true operator-account (NSC) bus that REQUIRES a minted user. With only
  *     an account-signing NKey (not a connectable user), the `noauth` attempt
  *     fails with an Authorization Violation, so the aggregator degrades it to
- *     absent. Minting a read-only observer user for it is a #989 follow-up.
+ *     absent. Pin an observer for it via `mc.aggregateLocalStacks.stacks[]`.
  *
  * Rationale for "try no-auth, let the bus decide": config can't reliably
  * distinguish an open loopback bus from a locked one (both lack `credsPath`),
@@ -64,16 +83,19 @@
  * the serving daemon's boot.
  */
 
-import { readdirSync, readFileSync, existsSync, statSync } from "fs";
-import { join } from "path";
+import { readdirSync, readFileSync, existsSync, realpathSync, statSync } from "fs";
+import { join, resolve } from "path";
 import { parse as parseYaml } from "yaml";
+import { expandTilde } from "../../../common/config/loader";
+import { DEFAULT_NATS_CREDS_DIR } from "../../../common/nats/creds-dir";
 
 /**
  * How to authenticate a read-only subscriber to a sibling bus.
  *
- *   - `creds` — an operator-mode `.creds` file path (expanded + chmod-gated by
- *     the NATS connection layer). The declared-credential case (meta-factory /
- *     work).
+ *   - `creds` — a `.creds` file path (expanded + chmod-gated by the NATS
+ *     connection layer). For a DISCOVERED sibling this is always the
+ *     per-sibling observer file, never the sibling daemon's `credsPath`
+ *     (#2536). For an explicit `stacks[]` entry it is the configured path.
  *   - `noauth` — the stack declares NO `credsPath`. We attempt an
  *     unauthenticated connect and let the BUS decide: an OPEN loopback bus
  *     (e.g. halden's `nats-server -js`) connects; a LOCKED NSC bus (e.g.
@@ -81,6 +103,12 @@ import { parse as parseYaml } from "yaml";
  *     aggregator degrades it to absent (logged). This avoids a fragile
  *     config heuristic for "open vs locked" — the connect attempt is the ground
  *     truth, and a failed read-only connect is already harmless.
+ *   - `no-observer` — the sibling declares a daemon `credsPath` (its bus
+ *     isolates accounts) but no usable observer creds exist. NON-connectable:
+ *     the aggregator degrades it to absent without a connect attempt and logs
+ *     {@link observerMintHint}. `reason: "is-daemon-creds"` ⇒ the observer path
+ *     resolved to the daemon's own creds file and was refused. The sibling
+ *     stays in the roster so the #1008 DB-read path still sees it.
  *
  * (There is no `unresolved` kind: an undecidable config no longer guesses — it
  * tries `noauth` and degrades on failure, which is strictly more capable than
@@ -88,7 +116,15 @@ import { parse as parseYaml } from "yaml";
  */
 export type SiblingCredential =
   | { kind: "creds"; credsPath: string }
-  | { kind: "noauth" };
+  | { kind: "noauth" }
+  | {
+      kind: "no-observer";
+      reason: "missing" | "is-daemon-creds";
+      /** The observer NATS user name to mint ({@link observerUserName}). */
+      observerUser: string;
+      /** Where discovery looked for the observer creds. */
+      observerCredsPath: string;
+    };
 
 /** One sibling stack the serving daemon should subscribe to read-only. */
 export interface SiblingStackDescriptor {
@@ -98,7 +134,7 @@ export interface SiblingStackDescriptor {
   principal: string;
   /** The sibling bus url (a 127.0.0.1 loopback). */
   url: string;
-  /** How to connect read-only. `unresolved` ⇒ degrade to absent. */
+  /** How to connect read-only. `no-observer` ⇒ degrade to absent. */
   credential: SiblingCredential;
 }
 
@@ -115,6 +151,96 @@ export interface DiscoverSiblingStacksOptions {
    * (precedence: explicit > discovery). Self is still excluded by stack slug.
    */
   explicit?: SiblingStackDescriptor[];
+  /**
+   * #2536 — directory holding per-sibling observer creds. Leading `~` is
+   * expanded. Default {@link DEFAULT_NATS_CREDS_DIR}.
+   */
+  observerCredsDir?: string;
+}
+
+/**
+ * #2536 — the observer NATS user name for `selfStack` watching `siblingStack`.
+ * Stack slugs are lowercase-hyphen, so the name satisfies `arc nats add-bot`'s
+ * naming rule.
+ */
+export function observerUserName(selfStack: string, siblingStack: string): string {
+  return `mc-observer-${selfStack}-to-${siblingStack}`;
+}
+
+/**
+ * #2536 — the convention path of the observer creds `selfStack` uses to read
+ * `siblingStack`'s presence: `<dir>/mc-observer-<self>-to-<sibling>.creds`.
+ * `dir` is returned as given (no tilde expansion).
+ */
+export function observerCredsPath(
+  dir: string,
+  selfStack: string,
+  siblingStack: string,
+): string {
+  return join(dir, `${observerUserName(selfStack, siblingStack)}.creds`);
+}
+
+/**
+ * #2536 — the principal-facing hint for minting a sibling observer. Names the
+ * exact scope (sub allow `local.<principal>.<sibling>.agent.>`, pub deny `>`).
+ * `arc nats add-bot` has allow flags only, so the deny is a separate `nsc edit`
+ * and the creds are regenerated afterwards to carry it. The account is the
+ * SIBLING's account (the one its daemon user lives in).
+ */
+export function observerMintHint(args: {
+  principal: string;
+  siblingStack: string;
+  observerUser: string;
+  observerCredsPath: string;
+}): string {
+  const { principal, siblingStack, observerUser, observerCredsPath: path } = args;
+  const subject = `local.${principal}.${siblingStack}.agent.>`;
+  const account = `<${siblingStack}-account>`;
+  return (
+    `mint a read-only observer in the "${siblingStack}" stack's NATS account ` +
+    `(sub allow ${subject}, pub deny >), then restart this stack:\n` +
+    `  arc nats add-bot ${observerUser} --account ${account} --sub '${subject}' --output ${path}\n` +
+    `  nsc edit user -a ${account} -n ${observerUser} --deny-pub '>'\n` +
+    `  nsc generate creds -a ${account} -n ${observerUser} -o ${path}\n`
+  );
+}
+
+/** Canonical path for a same-file comparison: tilde-expanded, absolute, symlinks resolved. */
+function canonicalPath(p: string): string {
+  const abs = resolve(expandTilde(p));
+  try {
+    return realpathSync(abs);
+  } catch (_err) {
+    // The file doesn't exist (or a parent isn't readable) — compare the
+    // absolute path as-is; a missing file can't alias the daemon creds.
+    return abs;
+  }
+}
+
+/**
+ * #2536 — resolve a discovered sibling's credential. No daemon `credsPath` ⇒
+ * `noauth` (open bus; unchanged). Otherwise the per-sibling observer file, or
+ * `no-observer` when it is absent or resolves to the daemon's own creds. The
+ * daemon `credsPath` itself is never returned.
+ */
+function resolveSiblingCredential(args: {
+  daemonCredsPath: string | undefined;
+  selfStack: string;
+  siblingStack: string;
+  observerCredsDir: string;
+}): SiblingCredential {
+  const { daemonCredsPath, selfStack, siblingStack, observerCredsDir } = args;
+  if (daemonCredsPath === undefined) return { kind: "noauth" };
+
+  const observerUser = observerUserName(selfStack, siblingStack);
+  const path = observerCredsPath(observerCredsDir, selfStack, siblingStack);
+  if (canonicalPath(path) === canonicalPath(daemonCredsPath)) {
+    return { kind: "no-observer", reason: "is-daemon-creds", observerUser, observerCredsPath: path };
+  }
+  if (!existsSync(path)) {
+    return { kind: "no-observer", reason: "missing", observerUser, observerCredsPath: path };
+  }
+  return { kind: "creds", credsPath: path };
 }
 
 /** Hosts treated as the principal's own local loopback bus. */
@@ -139,15 +265,24 @@ function stackSlugOf(stackId: string): string {
   return idx >= 0 ? stackId.slice(idx + 1) : stackId;
 }
 
+/** What {@link readStackDir} reads from one stack dir (before credential resolution). */
+interface StackDirInfo {
+  stack: string;
+  principal: string;
+  url: string;
+  /** The stack DAEMON's own `nats.credsPath`, when declared. Never connected with. */
+  daemonCredsPath: string | undefined;
+}
+
 /**
- * Read one stack dir's `{principal, stack, url, credential}` from its
+ * Read one stack dir's `{principal, stack, url, daemonCredsPath}` from its
  * `system/system.yaml` + `stacks/*.yaml`. Returns `null` (logged) when the dir
  * is not a parseable config-split stack — never throws.
  */
 function readStackDir(
   configRoot: string,
   dirName: string,
-): SiblingStackDescriptor | null {
+): StackDirInfo | null {
   const dir = join(configRoot, dirName);
   const systemPath = join(dir, "system", "system.yaml");
   if (!existsSync(systemPath)) {
@@ -213,15 +348,13 @@ function readStackDir(
 
   const stack = stackId !== undefined ? stackSlugOf(stackId) : dirName;
 
-  // Credential: a declared credsPath ⇒ creds auth; otherwise attempt no-auth
-  // (open loopback bus) and let the connect decide (a locked bus degrades).
+  // The daemon's credsPath is recorded only to pick the credential KIND and to
+  // refuse an observer that aliases it (#2536). It is never connected with.
   const credsPath = typeof nats?.credsPath === "string" ? nats.credsPath : undefined;
-  const credential: SiblingCredential =
-    credsPath !== undefined && credsPath.length > 0
-      ? { kind: "creds", credsPath }
-      : { kind: "noauth" };
+  const daemonCredsPath =
+    credsPath !== undefined && credsPath.length > 0 ? credsPath : undefined;
 
-  return { stack, principal, url, credential };
+  return { stack, principal, url, daemonCredsPath };
 }
 
 /**
@@ -235,9 +368,11 @@ export function discoverSiblingStacks(
   opts: DiscoverSiblingStacksOptions,
 ): SiblingStackDescriptor[] {
   const { configRoot, selfPrincipal, selfStack, explicit } = opts;
+  const observerCredsDir = expandTilde(opts.observerCredsDir ?? DEFAULT_NATS_CREDS_DIR);
 
   // PRECEDENCE: explicit config wins. A non-empty explicit list IS the roster;
-  // discovery is skipped. Self is still excluded by stack slug.
+  // discovery is skipped. Self is still excluded by stack slug. Explicit
+  // entries keep their configured credential untouched (principal intent).
   if (explicit !== undefined && explicit.length > 0) {
     return explicit
       .filter((d) => d.stack !== selfStack)
@@ -267,17 +402,27 @@ export function discoverSiblingStacks(
     }
     if (!isDir) continue;
 
-    const desc = readStackDir(configRoot, name);
-    if (desc === null) continue;
+    const info = readStackDir(configRoot, name);
+    if (info === null) continue;
 
     // FILTER 1 — same principal only.
-    if (desc.principal !== selfPrincipal) continue;
+    if (info.principal !== selfPrincipal) continue;
     // FILTER 2 — local loopback bus only.
-    if (!isLoopbackUrl(desc.url)) continue;
+    if (!isLoopbackUrl(info.url)) continue;
     // FILTER 3 — exclude self.
-    if (desc.stack === selfStack) continue;
+    if (info.stack === selfStack) continue;
 
-    siblings.push(desc);
+    siblings.push({
+      stack: info.stack,
+      principal: info.principal,
+      url: info.url,
+      credential: resolveSiblingCredential({
+        daemonCredsPath: info.daemonCredsPath,
+        selfStack,
+        siblingStack: info.stack,
+        observerCredsDir,
+      }),
+    });
   }
 
   // De-dupe by stack slug (two dirs claiming the same stack — keep the first

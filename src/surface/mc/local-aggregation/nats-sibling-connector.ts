@@ -3,7 +3,8 @@
  *
  * Adapts the bus-layer {@link NatsLink} + {@link NatsSubscription} primitives to
  * the aggregator's {@link SiblingBusConnection} interface. One {@link NatsLink}
- * per sibling bus (its OWN loopback url + its OWN `.creds`), one
+ * per sibling bus (its OWN loopback url + a per-sibling observer `.creds`,
+ * never the sibling daemon's; #2536), one
  * {@link NatsSubscription} bound to the sibling's `local.{principal}.{stack}.agent.>`
  * subtree. READ-ONLY: it only subscribes, never publishes.
  *
@@ -61,24 +62,43 @@ class NatsSiblingBusConnection implements SiblingBusConnection {
 /**
  * The production {@link SiblingBusConnector}. Opens a read-only `NatsLink` to the
  * sibling's bus:
- *   - `creds`  → connect with the declared `.creds` file (operator-mode auth).
+ *   - `creds`  → connect with the resolved `.creds` file (the per-sibling
+ *     observer for a discovered sibling, or an explicit `stacks[]` path).
  *   - `noauth` → connect with NO credential. An OPEN loopback bus (e.g. halden's
  *     `nats-server -js`) accepts it; a LOCKED NSC bus rejects it with an
  *     Authorization Violation — `NatsLink.connect` throws, the aggregator
  *     catches it, and that sibling degrades to absent (logged). The throw is
  *     intentional — this connector lets the aggregator's single degrade path
  *     own the policy rather than swallowing here.
+ *   - `no-observer` → THROWS without connecting. The aggregator already skips
+ *     these (#2536); the throw is a backstop so a new call path can never turn
+ *     a missing observer into an unauthenticated connect.
  */
 export const natsSiblingBusConnector: SiblingBusConnector = async (
   sibling: SiblingStackDescriptor,
 ): Promise<SiblingBusConnection> => {
+  const credential = sibling.credential;
+  let auth: { credsPath?: string };
+  switch (credential.kind) {
+    case "creds":
+      auth = { credsPath: credential.credsPath };
+      break;
+    case "noauth":
+      // Unauthenticated connect — the open-bus path.
+      auth = {};
+      break;
+    case "no-observer":
+      throw new Error(
+        `no observer creds for sibling "${sibling.stack}" (${credential.reason}: ${credential.observerCredsPath})`,
+      );
+    default: {
+      const unreachable: never = credential;
+      throw new Error(`unknown sibling credential: ${JSON.stringify(unreachable)}`);
+    }
+  }
   const link = await NatsLink.connect({
     url: sibling.url,
-    // `creds` ⇒ supply the credsPath; `noauth` ⇒ omit it (unauthenticated
-    // connect — the open-bus path).
-    ...(sibling.credential.kind === "creds"
-      ? { credsPath: sibling.credential.credsPath }
-      : {}),
+    ...auth,
     // A distinct connection name so the sibling bus's `varz` shows WHO is
     // observing (the serving stack aggregating that sibling read-only).
     name: `cortex-mc-aggregator:${sibling.stack}`,

@@ -430,12 +430,21 @@ export const McSchema = z.object({
    *
    * When `enabled`, the dashboard-serving daemon auto-discovers the principal's
    * OTHER local stacks (by scanning the config root for sibling config-split
-   * dirs), opens a READ-ONLY subscriber to each one's local loopback NATS bus
-   * using that stack's own credential, and folds its `agent.*` presence into the
-   * shared presence registry — so the Network view shows ALL of a principal's
-   * local stacks as distinct stack-hubs, not just the serving one. This is a
-   * LOCAL read-only multi-subscription (same principal, loopback buses the
-   * principal owns); NO federation, NO cross-principal trust.
+   * dirs), opens a READ-ONLY subscriber to each one's local loopback NATS bus,
+   * and folds its `agent.*` presence into the shared presence registry — so the
+   * Network view shows ALL of a principal's local stacks as distinct
+   * stack-hubs, not just the serving one. This is a LOCAL read-only
+   * multi-subscription (same principal, loopback buses the principal owns);
+   * NO federation, NO cross-principal trust.
+   *
+   * **Discovered-sibling creds (#2536).** A discovered sibling is NEVER
+   * connected with its daemon's own `nats.credsPath` (that would hand this
+   * stack the sibling daemon's full user in the sibling's account). A sibling
+   * with a `credsPath` connects with a per-sibling observer file,
+   * `~/.config/nats/creds/mc-observer-<self>-to-<sibling>.creds` (sub allow
+   * `local.<principal>.<sibling>.agent.>`, pub deny `>`). Without it the
+   * sibling's hub stays dark and boot logs the mint commands. A sibling with no
+   * `credsPath` (open bus) is connected unauthenticated, as before.
    *
    * **Default ON.** The principal runs several stacks on one machine and expects
    * the localhost pane to be the one-pane-over-all-my-stacks surface (#989); a
@@ -448,8 +457,9 @@ export const McSchema = z.object({
    * **`stacks[]` (explicit override).** When non-empty, this EXACT list is the
    * sibling roster and auto-discovery is skipped (precedence: explicit >
    * discovery). Each entry pins a sibling's `{stack}`, `{principal}`, bus `url`,
-   * and `credsPath`. Use it to add a bus the scan can't see or to narrow the
-   * roster. Empty (the default) ⇒ auto-discover.
+   * and `credsPath`, which is used as-is. Point it at a scoped observer, not the
+   * sibling daemon's creds. Use it to add a bus the scan can't see or to narrow
+   * the roster. Empty (the default) ⇒ auto-discover.
    */
   aggregateLocalStacks: z
     .object({
