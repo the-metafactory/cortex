@@ -19,6 +19,7 @@ import {
   type OperatorModeExportPort,
   type AgentsJetStreamPort,
 } from "../network-provision-lib";
+import { accountJwt, ACCOUNT_JWT_WITH_JETSTREAM, ACCOUNT_JWT_WITHOUT_JETSTREAM } from "./account-jwt-test-helpers";
 
 const FED_PUB = "A" + "B".repeat(55);
 const AGENTS_PUB = "A" + "C".repeat(55);
@@ -27,16 +28,8 @@ const OP_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJPUCJ9.
 const FED_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBRkVEIn0.sig";
 const SYS_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBU1lTIn0.sig";
 
-/** cortex#2534 — an account JWT whose claims carry `nats.limits` (base64url body). */
-function accountJwt(limits: Record<string, unknown> | undefined): string {
-  const claims = { sub: AGENTS_PUB, nats: limits === undefined ? { type: "account" } : { type: "account", limits } };
-  const body = btoa(JSON.stringify(claims)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return `eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.${body}.sig`;
-}
-/** `arc nats add-account` today: no JetStream limits in the JWT. */
-const AGENTS_JWT_NO_JS = accountJwt({ subs: -1, conn: -1 });
-/** After `nsc edit account --js-mem-storage -1 --js-disk-storage -1`. */
-const AGENTS_JWT_JS = accountJwt({ subs: -1, conn: -1, mem_storage: -1, disk_storage: -1 });
+const AGENTS_JWT_NO_JS = ACCOUNT_JWT_WITHOUT_JETSTREAM;
+const AGENTS_JWT_JS = ACCOUNT_JWT_WITH_JETSTREAM;
 
 /** Spy ports recording every effectful call in order. */
 function makePorts(overrides?: {
@@ -673,6 +666,76 @@ describe("provisionStack — cortex#2534 agents account JetStream", () => {
     expect(res.ok).toBe(false);
     expect(res.reason).toContain("arc not on PATH");
     expect(calls).toEqual(["export-account:ANDREAS_RESEARCH_AGENTS"]);
+  });
+
+  test("--force with a drifted pre-probe is NOT refused: add-account's pubkey is re-probed", async () => {
+    // Recovery case: config records a stale pubkey; --force re-provisions and
+    // adopts whatever add-account resolves, so the guard must not block it.
+    const stalePub = "A" + "Q".repeat(55);
+    const { ports, calls, written } = makePorts({ agentsJetStream: "disabled" });
+    const res = await provisionStack(
+      baseInputs({ apply: true, force: true }, { ...PROVISIONED, agentsAccount: stalePub }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    // The fake add-account reports created:true, so the grant follows directly.
+    expect(calls).toContain("enable-jetstream:ANDREAS_RESEARCH_AGENTS");
+    expect(written[0]?.agentsAccount).toBe(AGENTS_PUB);
+  });
+
+  test("--force with an unreadable pre-probe re-probes the existing account after add-account", async () => {
+    let probes = 0;
+    const { ports, calls } = makePorts({
+      operator: {
+        addAccount: async ({ name }) => {
+          calls.push(`add-account:${name}`);
+          const pubKey = name.endsWith("_AGENTS") ? AGENTS_PUB : name === "SYS" ? SYS_PUB : FED_PUB;
+          return { ok: true, account: name, pubKey, created: false, alreadyExisted: true };
+        },
+      },
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          if (!name.endsWith("_AGENTS")) return { ok: true, pubKey: FED_PUB, jwt: FED_JWT };
+          probes += 1;
+          // The first (pre-mutation) probe fails; the re-probe reads the account.
+          return probes === 1
+            ? { ok: false, reason: "transient" }
+            : { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JWT_JS };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true, force: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(true);
+    expect(probes).toBe(2);
+    expect(calls.some((c) => c.startsWith("enable-jetstream:"))).toBe(false);
+  });
+
+  test("post-grant read-back drift is reported as drift, not as a failed grant", async () => {
+    const driftPub = "A" + "Q".repeat(55);
+    let granted = false;
+    const { ports, calls } = makePorts({
+      jetstream: {
+        enable: async () => {
+          granted = true;
+          return { ok: true };
+        },
+      },
+      export: {
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          if (!name.endsWith("_AGENTS")) return { ok: true, pubKey: FED_PUB, jwt: FED_JWT };
+          return granted
+            ? { ok: true, pubKey: driftPub, jwt: AGENTS_JWT_JS }
+            : { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JWT_NO_JS };
+        },
+      },
+    });
+    const res = await provisionStack(baseInputs({ apply: true }, PROVISIONED), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("pubkey drift");
+    expect(res.reason).not.toContain("still has JetStream disabled");
+    expect(calls).not.toContain("config-write");
   });
 
   test("an agents account already in nsc but not in config is probed after add-account (no blind edit)", async () => {

@@ -256,6 +256,72 @@ async function probeAgentsJetStream(
   return { status: enabled ? "enabled" : "disabled" };
 }
 
+/**
+ * The refusal message when a probe cannot vouch for the account (`unknown`, or
+ * nsc resolves a different pubkey than expected), else `undefined`. Shared by the
+ * pre-mutation guard and step 3a so both report the same cause.
+ */
+function agentsProbeProblem(
+  name: string,
+  probe: AgentsJetStreamProbe,
+  expectedPubKey: string | undefined,
+): string | undefined {
+  if (probe.status === "unknown") {
+    return `cannot read the ${name} account JWT to check JetStream: ${probe.reason}.`;
+  }
+  if (probe.status === "drift") {
+    return (
+      `agents account pubkey drift: expected ${expectedPubKey ?? "(unset)"} but nsc resolves ${name} ` +
+      `to ${probe.exportedPubKey}. Check the current nsc operator context.`
+    );
+  }
+  return undefined;
+}
+
+/**
+ * Step 3a (cortex#2534) — make sure the agents account carries JetStream limits.
+ * The runtime provisions its streams there after make-live. Granted only when
+ * the JWT has none (hand-set limits are never overwritten), then verified by
+ * reading the JWT back. `existedBefore` adds the resolver_preload caveat: a bus
+ * that is already live keeps the old JWT (make-live only appends a MISSING
+ * account — cortex#2539).
+ */
+async function ensureAgentsJetStream(
+  name: string,
+  probe: AgentsJetStreamProbe,
+  pubKey: string,
+  existedBefore: boolean,
+  ports: ProvisionPorts,
+): Promise<{ ok: true; steps: string[] } | { ok: false; reason: string }> {
+  const problem = agentsProbeProblem(name, probe, pubKey);
+  if (problem !== undefined) return { ok: false, reason: problem };
+  if (probe.status === "enabled") {
+    return { ok: true, steps: [`agents account JetStream present (untouched): ${name}`] };
+  }
+
+  const en = await ports.jetstream.enable({ name });
+  if (!en.ok) return { ok: false, reason: `enabling JetStream on ${name} failed: ${en.reason}` };
+
+  const check = await probeAgentsJetStream(name, pubKey, ports.export);
+  if (check.status !== "enabled") {
+    const seen = agentsProbeProblem(name, check, pubKey) ?? `the account still has JetStream disabled.`;
+    return {
+      ok: false,
+      reason: `JetStream grant on ${name} could not be verified — ${seen} Aborting before the config write.`,
+    };
+  }
+
+  const steps = [`agents account JetStream enabled (mem/disk unlimited, verified): ${name}`];
+  if (existedBefore) {
+    steps.push(
+      `  if this stack is already live, its nats-server resolver_preload still holds the old ${name} JWT: ` +
+        `replace it with \`arc nats export-account ${name} --json\`'s jwt and restart nats-server ` +
+        `(a SIGHUP does not reload resolver_preload; cortex#2539).`,
+    );
+  }
+  return { ok: true, steps };
+}
+
 /** The JetStream plan row, from the probe. `[ok]` only when limits were read. */
 function agentsJetStreamPlanItem(inputs: ProvisionInputs, probe: AgentsJetStreamProbe): PlanItem {
   const name = inputs.agentsAccountName;
@@ -484,17 +550,10 @@ export async function provisionStack(
 
   // cortex#2534 — refuse BEFORE the first mutation when the agents account's
   // JetStream state cannot be verified, or nsc resolves a different account.
-  if (agentsProbe.status === "unknown") {
-    return fail(plan, steps, `cannot read the ${inputs.agentsAccountName} account JWT to check JetStream: ${agentsProbe.reason}`);
-  }
-  if (agentsProbe.status === "drift") {
-    return fail(
-      plan,
-      steps,
-      `agents account pubkey drift: config records ${state.agentsAccount} but nsc resolves ` +
-        `${inputs.agentsAccountName} to ${agentsProbe.exportedPubKey}. Check the current nsc operator ` +
-        `context before re-running.`,
-    );
+  // `--force` re-mints the tree, so there the account is re-probed after step 3.
+  if (!force) {
+    const problem = agentsProbeProblem(inputs.agentsAccountName, agentsProbe, state.agentsAccount);
+    if (problem !== undefined) return fail(plan, steps, `${problem} Aborting before any change.`);
   }
 
   // The pubkeys we resolve (minted-or-existing) and write back to config.
@@ -529,58 +588,35 @@ export async function provisionStack(
 
   // 3. Per-stack agents account (ADR-0012 isolation).
   let agentsJetStream: AgentsJetStreamProbe = agentsProbe;
+  let agentsMintedNow = false;
   if (agentsNeeded) {
     const r = await ports.operator.addAccount({ name: inputs.agentsAccountName });
     if (!r.ok) return fail(plan, steps, `add-account (agents) failed: ${r.reason}`);
     resolvedAgents = r.pubKey;
+    agentsMintedNow = r.created;
     steps.push(`agents account ${r.created ? "minted" : "present"}: ${r.account} (${r.pubKey})`);
     if (r.created) {
       // arc mints the account with no JetStream limits.
       agentsJetStream = { status: "disabled" };
-    } else if (agentsProbe.status === "not-probed" || r.pubKey !== state.agentsAccount) {
-      // It already sat in the nsc store: read its state rather than assume it.
+    } else if (
+      (agentsProbe.status !== "enabled" && agentsProbe.status !== "disabled") ||
+      r.pubKey !== state.agentsAccount
+    ) {
+      // It already sat in the nsc store and the pre-probe does not describe it:
+      // read its state rather than assume it.
       agentsJetStream = await probeAgentsJetStream(inputs.agentsAccountName, r.pubKey, ports.export);
     }
   } else {
     steps.push(`agents account present: ${resolvedAgents}`);
   }
 
-  // 3a. (cortex#2534) JetStream on the agents account — the daemon provisions its
-  //     streams there after make-live. Granted only when the JWT has no limits
-  //     (hand-tuned limits are never overwritten), then verified by read-back.
-  if (agentsJetStream.status === "unknown" || agentsJetStream.status === "drift") {
-    const why =
-      agentsJetStream.status === "unknown"
-        ? agentsJetStream.reason
-        : `nsc resolves it to ${agentsJetStream.exportedPubKey}, add-account returned ${resolvedAgents}`;
-    return fail(plan, steps, `cannot verify JetStream on ${inputs.agentsAccountName}: ${why}`);
+  // 3a. (cortex#2534) JetStream on the agents account.
+  if (resolvedAgents === undefined) {
+    return fail(plan, steps, "internal: agents account pubkey unresolved after mint (should not happen)");
   }
-  if (agentsJetStream.status === "enabled") {
-    steps.push(`agents account JetStream present (untouched): ${inputs.agentsAccountName}`);
-  } else if (resolvedAgents !== undefined) {
-    const en = await ports.jetstream.enable({ name: inputs.agentsAccountName });
-    if (!en.ok) return fail(plan, steps, `enabling JetStream on ${inputs.agentsAccountName} failed: ${en.reason}`);
-    const check = await probeAgentsJetStream(inputs.agentsAccountName, resolvedAgents, ports.export);
-    if (check.status !== "enabled") {
-      const seen = check.status === "unknown" ? `could not be read back: ${check.reason}` : "still has JetStream disabled";
-      return fail(
-        plan,
-        steps,
-        `JetStream grant on ${inputs.agentsAccountName} did not take — the account ${seen}. ` +
-          `Aborting before the config write.`,
-      );
-    }
-    steps.push(`agents account JetStream enabled (mem/disk unlimited, verified): ${inputs.agentsAccountName}`);
-    if (!agentsNeeded || agentsProbe.status !== "not-probed") {
-      // A repair of an account that may already be live: make-live only appends a
-      // MISSING account to resolver_preload, so a running bus keeps the old JWT.
-      steps.push(
-        `  if this stack is already live, its nats-server resolver_preload still holds the old ` +
-          `${inputs.agentsAccountName} JWT: replace it with \`arc nats export-account ${inputs.agentsAccountName} --json\`'s jwt ` +
-          `and restart nats-server (a SIGHUP does not reload resolver_preload; cortex#2539).`,
-      );
-    }
-  }
+  const js = await ensureAgentsJetStream(inputs.agentsAccountName, agentsJetStream, resolvedAgents, !agentsMintedNow, ports);
+  if (!js.ok) return fail(plan, steps, js.reason);
+  steps.push(...js.steps);
 
   // 3.5 (cortex#1333) — ensure the SYS (system) account; see the rationale on the
   //     "system account" plan item above. Gated on state.systemAccount: mint only
@@ -608,8 +644,9 @@ export async function provisionStack(
     steps.push(`signing seed present (untouched): ${inputs.seedPath}`);
   }
 
-  // Defensive: both account pubkeys must be resolved before wiring/write-back.
-  if (resolvedAccount === undefined || resolvedAgents === undefined) {
+  // Defensive: both account pubkeys must be resolved before wiring/write-back
+  // (the agents pubkey is already checked before step 3a).
+  if (resolvedAccount === undefined) {
     return fail(plan, steps, "internal: account pubkeys unresolved after mint (should not happen)");
   }
 

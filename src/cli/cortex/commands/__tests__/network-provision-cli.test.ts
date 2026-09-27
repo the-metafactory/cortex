@@ -12,15 +12,11 @@ import type { AgentConfig } from "../../../../common/types/config";
 import type { ProvisionPorts } from "../network-provision-lib";
 import type { FederationWiringPort } from "../network-ports";
 import type { OperatorProvisioningPort } from "../operator-provisioning";
+import { ACCOUNT_JWT_WITH_JETSTREAM } from "./account-jwt-test-helpers";
 
 const FED_PUB = "A" + "B".repeat(55);
 const AGENTS_PUB = "A" + "C".repeat(55);
 
-/** cortex#2534 — an agents-account JWT carrying unlimited JetStream limits. */
-const AGENTS_JS_JWT = `eyJ0eXAiOiJKV1QifQ.${btoa(JSON.stringify({ nats: { limits: { mem_storage: -1, disk_storage: -1 } } }))
-  .replace(/\+/g, "-")
-  .replace(/\//g, "_")
-  .replace(/=+$/, "")}.sig`;
 
 function loaded(partial: Partial<LoadedConfig>): LoadedConfig {
   return { config: {} as AgentConfig, inlineAgents: [], ...partial };
@@ -84,7 +80,7 @@ function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; write
         exportAccount: async (name) => {
           calls.push(`export-account:${name}`);
           return name.endsWith("_AGENTS")
-            ? { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JS_JWT }
+            ? { ok: true, pubKey: AGENTS_PUB, jwt: ACCOUNT_JWT_WITH_JETSTREAM }
             : { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" };
         },
         exportSystem: async ({ name }) => { calls.push(`export-system:${name}`); return { ok: true, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }; },
