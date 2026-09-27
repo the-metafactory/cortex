@@ -56,18 +56,15 @@ export function subjectsOverlap(a: string, b: string): boolean {
 
 /**
  * The desired subjects the live stream can safely gain: those no live subject
- * covers AND none partially overlaps (appending an overlapping one would make
- * the stream's subjects overlap, which the server rejects — that case stays
- * uncovered and `describeStreamDrift` reports it). Never proposes removing a
- * live subject — the other stacks sharing the stream own those.
+ * overlaps. A live subject that COVERS a desired one also overlaps it (nothing
+ * to add); one that only PARTIALLY overlaps it can't be joined by it (the
+ * server rejects overlapping subjects) — that case stays uncovered and
+ * `describeStreamDrift` reports it. Never proposes removing a live subject —
+ * the other stacks sharing the stream own those.
  */
 export function missingSubjects(
   existing: readonly string[],
   desired: readonly string[],
 ): string[] {
-  return [...new Set(desired)].filter(
-    (d) =>
-      !existing.some((e) => subjectCovers(e, d)) &&
-      !existing.some((e) => subjectsOverlap(e, d)),
-  );
+  return [...new Set(desired)].filter((d) => !existing.some((e) => subjectsOverlap(e, d)));
 }

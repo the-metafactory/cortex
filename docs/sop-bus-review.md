@@ -41,7 +41,8 @@ Upgrading from the unscoped `cortex-review-consumer-<principal>-<agent>` durable
 
 - **The legacy durable's filter is this stack's own pattern and it is idle** (no ack-pending messages, no live pull requests). The new durable starts right after the legacy's last delivery, so nothing is replayed and nothing stored afterwards is lost. The legacy durable is then deleted.
 - **The legacy durable's filter is this stack's own pattern, but it is busy.** For example, a review was in flight when the old runtime stopped, or an old-version runtime of this stack is still pulling. The legacy durable stays bound this boot (`binding legacy JetStream durable … migration … deferred`), so in-flight requests redeliver as on any restart and a live puller keeps competing-consumer semantics. The first idle boot migrates.
-- **The legacy durable's filter belongs to another stack, or is empty.** It is left in place and logged. The new durable starts from `New`. The owning stack removes the legacy durable when it upgrades.
+- **The legacy durable's filter belongs to another stack.** It is left in place and logged. The new durable starts from `New`. The owning stack removes the legacy durable when it upgrades.
+- **The legacy durable has no filter.** This is a pre-cortex#1186 durable that no version has re-provisioned since. No stack can prove it owns it, so it is **never removed automatically**. A warning asks you to check it and remove it with `nats consumer rm`. The new durable starts from `New`.
 - Upgrade all runtimes of a stack together. If an old-version runtime recreates the legacy durable after migration, both durables receive that stack's requests until it is upgraded. A warning naming it is logged.
 
 Remove a leftover legacy durable by hand only after checking its filter: `nats consumer info CODE_REVIEW cortex-review-consumer-<principal>-<agent>`.

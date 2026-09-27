@@ -94,7 +94,7 @@ Wired in `src/cortex.ts` alongside the existing `busDispatchListener` (which tod
 - **Legacy durables.** Pre-#1503 `cortex-review-consumer-{principal}-{agent}` durables are migrated by `provisionStackScopedConsumer`:
   - A durable that is this stack's and idle is replaced without replay and deleted.
   - A durable that is this stack's but busy stays bound until an idle boot.
-  - Another stack's durable is never touched.
+  - Another stack's durable, or an unfiltered one, is never touched. An unfiltered durable is logged for manual removal.
 
 **Caveat — pull-consumer support in `MyelinSubscriber`.** The current `MyelinSubscriber` wraps `NatsSubscription`, which from a quick survey of `src/bus/nats/subscription.ts` is the **push** subscription primitive. We have two options:
 

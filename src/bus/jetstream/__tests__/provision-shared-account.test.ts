@@ -272,11 +272,13 @@ describe("provisionStackScopedConsumer — legacy durable migration (cortex#1503
     expect(js.pull("CODE_REVIEW", SCOPED_DEFAULT)).toEqual(["local.alice.default.tasks.code-review.fresh"]);
   });
 
-  test("an unfiltered legacy durable (pre-cortex#1186) is not provably ours — left alone", async () => {
+  test("an unfiltered legacy durable (pre-cortex#1186) is claimed by no stack — left alone, flagged for manual removal", async () => {
     const js = await streamWithLegacy("");
-    await migrate(js);
+    const r = recordingLog();
+    await migrate(js, r.log);
     expect(js.consumerNames("CODE_REVIEW")).toContain(LEGACY);
     expect(js.consumerDeletes).toEqual([]);
+    expect(r.warn.join("\n")).toContain("never removed automatically");
   });
 
   test("no legacy durable: fresh stack keeps the default deliver policy", async () => {
