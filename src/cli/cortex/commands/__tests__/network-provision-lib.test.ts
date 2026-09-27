@@ -18,7 +18,11 @@ import {
   type ProvisionConfigWritePort,
   type OperatorModeExportPort,
   type AgentsJetStreamPort,
+  type NatsConfigLocatorPort,
+  type SiblingStackRead,
   accountJwtHasJetStream,
+  busEndpoint,
+  resolveNatsConfigPath,
 } from "../network-provision-lib";
 import { accountJwt, ACCOUNT_JWT_WITH_JETSTREAM, ACCOUNT_JWT_WITHOUT_JETSTREAM } from "./account-jwt-test-helpers";
 
@@ -37,6 +41,7 @@ function makePorts(overrides?: {
   configWrite?: Partial<ProvisionConfigWritePort>;
   export?: Partial<OperatorModeExportPort>;
   jetstream?: Partial<AgentsJetStreamPort>;
+  natsConfig?: Partial<NatsConfigLocatorPort>;
   /** cortex#1265 — make exportSystem report the SYS account absent (a clean skip). */
   systemAbsent?: boolean;
   /**
@@ -124,7 +129,15 @@ function makePorts(overrides?: {
     ...overrides?.jetstream,
   };
 
-  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream }, calls, written };
+  // cortex#2535 — no files on disk and no sibling stacks unless a test says so.
+  const natsConfig: NatsConfigLocatorPort = {
+    exists: () => false,
+    resolvePath: (path) => path,
+    siblingStacks: () => [],
+    ...overrides?.natsConfig,
+  };
+
+  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream, natsConfig }, calls, written };
 }
 
 function baseInputs(over?: Partial<ProvisionInputs>, state?: Partial<ProvisionState>): ProvisionInputs {
@@ -764,5 +777,346 @@ describe("accountJwtHasJetStream (cortex#2534)", () => {
 
   test("not a JWT → undefined (cannot tell)", () => {
     expect(accountJwtHasJetStream("not-a-jwt")).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// cortex#2535 — how provision picks stack.nats_infra.config_path when the
+// stack config has none. Pure over a fake NatsConfigLocatorPort.
+// =============================================================================
+
+const SHARED_CONF = "~/.config/nats/local.conf";
+const SHARED_PLIST = "~/Library/LaunchAgents/nats.plist";
+const OWN_CONF = "~/.config/nats/lab.conf";
+
+function locator(opts: { files?: string[]; siblings?: SiblingStackRead[]; home?: string } = {}): NatsConfigLocatorPort {
+  const home = opts.home ?? "/home/alice";
+  const resolvePath = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
+  const files = new Set((opts.files ?? []).map(resolvePath));
+  return {
+    exists: (p) => files.has(resolvePath(p)),
+    resolvePath,
+    siblingStacks: () => opts.siblings ?? [],
+  };
+}
+
+/** A locator that fails the test if it is consulted at all. */
+const UNTOUCHED: NatsConfigLocatorPort = {
+  exists: () => {
+    throw new Error("locator consulted");
+  },
+  resolvePath: () => {
+    throw new Error("locator consulted");
+  },
+  siblingStacks: () => {
+    throw new Error("locator consulted");
+  },
+};
+
+function sibling(stackId: string, natsUrl: string | undefined, configPath?: string, plistPath?: string): SiblingStackRead {
+  return {
+    ok: true,
+    stack: {
+      stackId,
+      ...(natsUrl !== undefined && { natsUrl }),
+      ...(configPath !== undefined && { configPath }),
+      ...(plistPath !== undefined && { plistPath }),
+    },
+  };
+}
+
+function labInputs(over: Partial<ProvisionInputs> = {}): ProvisionInputs {
+  return {
+    principal: "alice",
+    stackSlug: "lab",
+    stackId: "alice/lab",
+    operatorName: "OP_ALICE",
+    federationAccountName: "ALICE_LAB_FED",
+    agentsAccountName: "ALICE_LAB_AGENTS",
+    systemAccountName: "SYS",
+    seedPath: "~/.config/nats/alice-lab.seed",
+    credsPath: "~/.config/nats/lab.creds",
+    natsUrl: "nats://localhost:4222",
+    plistPathSet: false,
+    force: false,
+    apply: false,
+    state: {
+      federationAccount: undefined,
+      agentsAccount: undefined,
+      systemAccount: undefined,
+      signingSeedExists: false,
+      operatorModeJwtsPresent: false,
+    },
+    ...over,
+  };
+}
+
+describe("busEndpoint", () => {
+  test("folds loopback aliases, defaults the port, ignores the scheme", () => {
+    expect(busEndpoint("nats://localhost:4222")).toBe("loopback:4222");
+    expect(busEndpoint("nats://127.0.0.1")).toBe("loopback:4222");
+    expect(busEndpoint("tls://[::1]:4222")).toBe("loopback:4222");
+    expect(busEndpoint("nats://user:pw@Bus.Example:4300")).toBe("bus.example:4300");
+  });
+
+  test("a scheme-less url is read as nats://", () => {
+    expect(busEndpoint("localhost:4222")).toBe("loopback:4222");
+    expect(busEndpoint("127.0.0.1:4222")).toBe("loopback:4222");
+  });
+
+  test("uses the first server of a comma list; unusable input is undefined", () => {
+    expect(busEndpoint("nats://localhost:4223, nats://localhost:4224")).toBe("loopback:4223");
+    expect(busEndpoint(undefined)).toBeUndefined();
+    expect(busEndpoint("")).toBeUndefined();
+    expect(busEndpoint("not a url")).toBeUndefined();
+  });
+
+  test("different ports are different buses", () => {
+    expect(busEndpoint("nats://localhost:4222")).not.toBe(busEndpoint("nats://localhost:4223"));
+  });
+});
+
+describe("resolveNatsConfigPath (cortex#2535)", () => {
+  test("an already-set config_path is kept and nothing on disk is consulted", () => {
+    const res = resolveNatsConfigPath(labInputs({ configPath: "~/.config/nats/hand-set.conf" }), UNTOUCHED);
+    expect(res).toEqual({ source: "explicit", configPath: "~/.config/nats/hand-set.conf" });
+  });
+
+  test("<slug>.conf exists → the convention path", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({ files: [OWN_CONF, SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF)] }),
+    );
+    expect(res).toEqual({ source: "convention", configPath: OWN_CONF, exists: true, why: "exists on disk" });
+  });
+
+  test("<slug>.conf missing + one sibling on the same bus → the sibling's config_path + plist_path", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
+        files: [SHARED_CONF],
+        siblings: [sibling("alice/work", "nats://127.0.0.1:4222", SHARED_CONF, SHARED_PLIST)],
+      }),
+    );
+    expect(res).toEqual({
+      source: "sibling",
+      configPath: SHARED_CONF,
+      plistPath: SHARED_PLIST,
+      siblingStackId: "alice/work",
+      endpoint: "loopback:4222",
+    });
+  });
+
+  test("a sibling's plist_path is not adopted when the stack already sets one", () => {
+    const res = resolveNatsConfigPath(
+      labInputs({ plistPathSet: true }),
+      locator({ files: [SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF, SHARED_PLIST)] }),
+    );
+    expect(res.source).toBe("sibling");
+    if (res.source === "sibling") expect(res.plistPath).toBeUndefined();
+  });
+
+  test("siblings naming the same file (tilde vs absolute) agree", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
+        files: [SHARED_CONF],
+        siblings: [
+          sibling("alice/work", "nats://localhost:4222", SHARED_CONF),
+          sibling("alice/ops", "nats://localhost:4222", "/home/alice/.config/nats/local.conf"),
+        ],
+      }),
+    );
+    expect(res.source).toBe("sibling");
+  });
+
+  test("<slug>.conf missing + conflicting siblings → unset, naming both", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
+        files: [SHARED_CONF, "~/.config/nats/other.conf"],
+        siblings: [
+          sibling("alice/work", "nats://localhost:4222", SHARED_CONF),
+          sibling("alice/ops", "nats://localhost:4222", "~/.config/nats/other.conf"),
+        ],
+      }),
+    );
+    expect(res.source).toBe("unset");
+    if (res.source === "unset") {
+      expect(res.why).toContain("disagree");
+      expect(res.why).toContain("alice/work");
+      expect(res.why).toContain("alice/ops");
+    }
+  });
+
+  test("<slug>.conf missing + no sibling → the convention path (the stack's own bus, cortex#1265 PR8)", () => {
+    const res = resolveNatsConfigPath(labInputs(), locator());
+    expect(res.source).toBe("convention");
+    if (res.source === "convention") {
+      expect(res.configPath).toBe(OWN_CONF);
+      expect(res.exists).toBe(false);
+      expect(res.why).toContain("no other stack of alice is on loopback:4222");
+    }
+  });
+
+  test("siblings on another port do not count as sharing the bus → the convention path", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
+        files: ["~/.config/nats/elsewhere.conf"],
+        siblings: [sibling("alice/far", "nats://localhost:4300", "~/.config/nats/elsewhere.conf")],
+      }),
+    );
+    expect(res).toMatchObject({ source: "convention", configPath: OWN_CONF, exists: false });
+  });
+
+  test("siblings on the same bus without an existing config_path → unset", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
+        siblings: [
+          sibling("alice/bare", "nats://localhost:4222"),
+          sibling("alice/stale", "nats://localhost:4222", "~/.config/nats/gone.conf"),
+        ],
+      }),
+    );
+    expect(res.source).toBe("unset");
+    if (res.source === "unset") expect(res.why).toContain("the stacks sharing loopback:4222 (alice/bare, alice/stale)");
+  });
+
+  test("an unreadable sibling config → unset (it could be the conflicting one)", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
+        files: [SHARED_CONF],
+        siblings: [
+          sibling("alice/work", "nats://localhost:4222", SHARED_CONF),
+          { ok: false, stackId: "alice/broken", reason: "parse error" },
+        ],
+      }),
+    );
+    expect(res.source).toBe("unset");
+    if (res.source === "unset") expect(res.why).toContain("alice/broken (parse error)");
+  });
+
+  test("a stack with no nats.url cannot be matched to a sibling → the convention path", () => {
+    const res = resolveNatsConfigPath(
+      labInputs({ natsUrl: undefined }),
+      locator({ files: [SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF)] }),
+    );
+    expect(res.source).toBe("convention");
+    if (res.source === "convention") expect(res.why).toContain("no usable nats.url");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Through provisionStack: the plan row, the note, and the write-back.
+// -----------------------------------------------------------------------------
+
+function labPorts(natsConfig: NatsConfigLocatorPort): { ports: ProvisionPorts; written: Record<string, unknown>[] } {
+  const { ports, written } = makePorts({ natsConfig });
+  return { ports, written };
+}
+
+const natsRow = (plan: { step: string; status: string; detail: string }[]) =>
+  plan.find((p) => p.step === "nats-server config path");
+
+describe("provisionStack — nats-server config path (cortex#2535)", () => {
+  test("dry-run shows the sibling branch in the plan", async () => {
+    const { ports: p } = labPorts(
+      locator({ files: [SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF, SHARED_PLIST)] }),
+    );
+    const res = await provisionStack(labInputs(), p);
+    expect(res.ok).toBe(true);
+    expect(res.natsConfig?.source).toBe("sibling");
+    expect(natsRow(res.plan)?.status).toBe("wire");
+    expect(natsRow(res.plan)?.detail).toContain("from sibling stack alice/work on loopback:4222");
+    expect(res.steps.join("\n")).toContain(`plist_path ${SHARED_PLIST}`);
+  });
+
+  test("dry-run with a same-bus sibling that has no config_path shows [skip] and the --nats-config note", async () => {
+    const { ports: p } = labPorts(locator({ siblings: [sibling("alice/work", "nats://localhost:4222")] }));
+    const res = await provisionStack(labInputs(), p);
+    expect(res.ok).toBe(true);
+    expect(natsRow(res.plan)?.status).toBe("skip");
+    const out = res.steps.join("\n");
+    expect(out).toContain("left unset");
+    expect(out).toContain("will need --nats-config");
+  });
+
+  test("dry-run with conflicting siblings shows [skip], names both, and prints the note", async () => {
+    const { ports: p } = labPorts(
+      locator({
+        files: [SHARED_CONF, "~/.config/nats/other.conf"],
+        siblings: [
+          sibling("alice/work", "nats://localhost:4222", SHARED_CONF),
+          sibling("alice/ops", "nats://localhost:4222", "~/.config/nats/other.conf"),
+        ],
+      }),
+    );
+    const res = await provisionStack(labInputs(), p);
+    expect(res.ok).toBe(true);
+    expect(natsRow(res.plan)?.status).toBe("skip");
+    const out = res.steps.join("\n");
+    expect(out).toContain("left unset");
+    expect(out).toContain("disagree (alice/work");
+    expect(out).toContain("will need --nats-config");
+  });
+
+  test("dry-run with the conventional file present shows it", async () => {
+    const { ports: p } = labPorts(locator({ files: [OWN_CONF] }));
+    const res = await provisionStack(labInputs(), p);
+    expect(natsRow(res.plan)?.detail).toBe(`${OWN_CONF} (exists on disk)`);
+  });
+
+  test("dry-run with no sibling on the bus keeps the convention and says make-live creates it", async () => {
+    const { ports: p } = labPorts(locator());
+    const res = await provisionStack(labInputs(), p);
+    expect(natsRow(res.plan)?.status).toBe("wire");
+    expect(natsRow(res.plan)?.detail).toContain(`${OWN_CONF} (not created yet; no other stack of alice is on loopback:4222`);
+    expect(res.steps.join("\n")).not.toContain("will need --nats-config");
+  });
+
+  test("apply adopts the sibling's config_path + plist_path in the write-back", async () => {
+    const { ports: p, written } = labPorts(
+      locator({ files: [SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF, SHARED_PLIST)] }),
+    );
+    const res = await provisionStack(labInputs({ apply: true }), p);
+    expect(res.ok).toBe(true);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.configPath).toBe(SHARED_CONF);
+    expect(written[0]?.plistPath).toBe(SHARED_PLIST);
+    expect(res.resolved?.configPath).toBe(SHARED_CONF);
+    expect(res.steps.join("\n")).toContain("config_path, plist_path, nkey_seed_path");
+  });
+
+  test("apply with a same-bus sibling that has no config_path writes none and prints the note", async () => {
+    const { ports: p, written } = labPorts(locator({ siblings: [sibling("alice/work", "nats://localhost:4222")] }));
+    const res = await provisionStack(labInputs({ apply: true }), p);
+    expect(res.ok).toBe(true);
+    expect(written).toHaveLength(1);
+    expect("configPath" in (written[0] ?? {})).toBe(false);
+    expect("plistPath" in (written[0] ?? {})).toBe(false);
+    expect(res.resolved?.configPath).toBeUndefined();
+    const out = res.steps.join("\n");
+    expect(out).not.toContain("config_path, nkey_seed_path");
+    expect(out).toContain("will need --nats-config");
+  });
+
+  test("apply with no sibling on the bus writes the convention path", async () => {
+    const { ports: p, written } = labPorts(locator());
+    const res = await provisionStack(labInputs({ apply: true }), p);
+    expect(res.ok).toBe(true);
+    expect(written[0]?.configPath).toBe(OWN_CONF);
+    expect("plistPath" in (written[0] ?? {})).toBe(false);
+  });
+
+  test("apply with an already-set config_path writes it back unchanged and adopts no plist", async () => {
+    const { ports: p, written } = labPorts(UNTOUCHED);
+    const res = await provisionStack(labInputs({ apply: true, configPath: SHARED_CONF }), p);
+    expect(res.ok).toBe(true);
+    expect(written[0]?.configPath).toBe(SHARED_CONF);
+    expect("plistPath" in (written[0] ?? {})).toBe(false);
+    expect(natsRow(res.plan)?.status).toBe("ok");
   });
 });

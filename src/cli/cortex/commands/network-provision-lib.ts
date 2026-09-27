@@ -29,11 +29,15 @@
  *
  * cortex#1265 (PR8) also closes the provision→make-live loop: provision now
  * records the per-stack nats-server config path under `stack.nats_infra.config_path`
- * (the conventional `~/.config/nats/<slug>.conf`, the same field `make-live` /
- * `network join` derive their `--nats-config` from). Without it make-live had NO
- * per-stack target and could not find the bus to bootstrap — the operator fell
- * back to a manual `nsc generate config --mem-resolver`. The value is preserved
- * if already set (never clobbered) and falls back to the convention otherwise.
+ * (the same field `make-live` / `network join` derive their `--nats-config` from).
+ * Without it make-live had NO per-stack target and could not find the bus to
+ * bootstrap — the operator fell back to a manual `nsc generate config --mem-resolver`.
+ * The value is preserved if already set (never clobbered) and falls back to the
+ * convention otherwise, with one exception (cortex#2535): when `<slug>.conf` does
+ * not exist and another stack of the same principal shares the bus (same
+ * `nats.url` host:port), provision adopts that stack's existing `config_path`
+ * (+ `plist_path`), or leaves the field unset when none or several are found.
+ * See {@link resolveNatsConfigPath}.
  *
  * This module is PURE over injected ports — zero fs / arc / nsc. The live
  * adapters live in `network-provision-adapters.ts`; the arc account-tree seam is
@@ -142,8 +146,12 @@ export interface ProvisionConfigWritePort {
      * make-live derives its `--nats-config` target from this exact field; without
      * it make-live has no bus to bootstrap and the operator falls back to a manual
      * `nsc generate config`. Closes the provision→make-live loop.
+     * Omitted when provision could not find one (cortex#2535): nothing is
+     * written, so make-live keeps its `--nats-config` refusal.
      */
-    configPath: string;
+    configPath?: string;
+    /** cortex#2535 — a sibling stack's `plist_path`, adopted with its config path. */
+    plistPath?: string;
     seedPath: string;
     nkeyPub?: string;
     /**
@@ -198,6 +206,36 @@ export interface AgentsJetStreamPort {
   enable(opts: { name: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
+/** A sibling stack's bus endpoint + nats-server paths, read from its config (cortex#2535). */
+export interface SiblingStackBus {
+  stackId: string;
+  /** The sibling's `nats.url`, if set. */
+  natsUrl?: string;
+  /** The sibling's `stack.nats_infra.config_path`, if set. */
+  configPath?: string;
+  /** The sibling's `stack.nats_infra.plist_path`, if set. */
+  plistPath?: string;
+}
+
+/** One discovered sibling: its bus fields, or why its config could not be read. */
+export type SiblingStackRead =
+  | { ok: true; stack: SiblingStackBus }
+  | { ok: false; stackId: string; reason: string };
+
+/**
+ * cortex#2535 — read-only fs seam for picking `stack.nats_infra.config_path`
+ * when config has none. File checks and config reads only; it never probes a
+ * live process or port, so provision stays deterministic.
+ */
+export interface NatsConfigLocatorPort {
+  /** Does the file at `path` (may be `~`-prefixed) exist? */
+  exists(path: string): boolean;
+  /** Absolute form of `path`, so `~/x` and `$HOME/x` compare equal. */
+  resolvePath(path: string): string;
+  /** The OTHER stacks of `principal` discovered on this host (never `selfStackId`). */
+  siblingStacks(principal: string, selfStackId: string): SiblingStackRead[];
+}
+
 /** The full port bundle the orchestrator depends on. */
 export interface ProvisionPorts {
   operator: OperatorProvisioningPort;
@@ -206,6 +244,201 @@ export interface ProvisionPorts {
   configWrite: ProvisionConfigWritePort;
   export: OperatorModeExportPort;
   jetstream: AgentsJetStreamPort;
+  natsConfig: NatsConfigLocatorPort;
+}
+
+// =============================================================================
+// nats-server config path resolution (cortex#2535)
+// =============================================================================
+
+/** The NATS default client port, used when `nats.url` carries none. */
+const DEFAULT_NATS_PORT = "4222";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Normalise a `nats.url` to a comparable `host:port`: the first server of a
+ * comma list, lowercase host, loopback aliases folded together, default port
+ * 4222, scheme ignored (a scheme-less `host:port` is read as `nats://`).
+ * `undefined` when absent or unparseable.
+ */
+export function busEndpoint(url: string | undefined): string | undefined {
+  const first = url?.split(",")[0]?.trim();
+  if (first === undefined || first === "") return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(first) ? first : `nats://${first}`);
+  } catch (_err) {
+    // Unparseable url: no endpoint to compare, so no sibling can match. Safe to ignore.
+    return undefined;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host === "") return undefined;
+  const port = parsed.port === "" ? DEFAULT_NATS_PORT : parsed.port;
+  return `${LOOPBACK_HOSTS.has(host) ? "loopback" : host}:${port}`;
+}
+
+/** Where `stack.nats_infra.config_path` comes from on this run. */
+export type NatsConfigResolution =
+  /** Set by `--nats-config` or already in the stack config. Never touched. */
+  | { source: "explicit"; configPath: string }
+  /**
+   * `~/.config/nats/<slug>.conf`: it exists on disk, or no other stack of the
+   * principal shares this stack's bus, so it names the stack's own server that
+   * make-live creates from `nats.url` (cortex#1265 PR8). `why` says which.
+   */
+  | { source: "convention"; configPath: string; exists: boolean; why: string }
+  /** Adopted from the one sibling stack of the same principal on the same bus. */
+  | { source: "sibling"; configPath: string; plistPath?: string; siblingStackId: string; endpoint: string }
+  /** Left unset: make-live and join need `--nats-config`. */
+  | { source: "unset"; why: string };
+
+/** Step 1: a value from `--nats-config` or the stack config, kept as given. */
+function explicitNatsConfig(inputs: Pick<ProvisionInputs, "configPath">): NatsConfigResolution | undefined {
+  return inputs.configPath !== undefined && inputs.configPath !== ""
+    ? { source: "explicit", configPath: inputs.configPath }
+    : undefined;
+}
+
+/** The `config_path` / `plist_path` a resolution writes back (absent = not written). */
+export function natsConfigPaths(res: NatsConfigResolution): { configPath?: string; plistPath?: string } {
+  if (res.source === "unset") return {};
+  if (res.source === "sibling" && res.plistPath !== undefined) return { configPath: res.configPath, plistPath: res.plistPath };
+  return { configPath: res.configPath };
+}
+
+/** Conventional per-stack nats-server config path. */
+export function conventionalNatsConfigPath(slug: string): string {
+  return `~/.config/nats/${slug}.conf`;
+}
+
+/**
+ * Pick the stack's nats-server config path (cortex#2535). In order:
+ *
+ *   1. a value from `--nats-config` or the stack config wins, untouched;
+ *   2. `~/.config/nats/<slug>.conf` when that file exists;
+ *   3. when a sibling stack of the same principal has a `nats.url` with the
+ *      same host:port (a SHARED bus): that sibling's `config_path`, when
+ *      exactly one distinct existing file is named (its `plist_path` comes
+ *      along if this stack has none). Siblings that disagree, or none naming
+ *      an existing file, leave the field unset;
+ *   4. no sibling on the same bus: `<slug>.conf` even though it does not exist
+ *      yet. It names the stack's own server, which make-live creates from
+ *      `nats.url` (the cortex#1265 PR8 bootstrap), so the convention stays.
+ *
+ * A sibling config that cannot be read also leaves the field unset: it may be
+ * on the same bus, so neither branch can be chosen safely. On a shared bus a
+ * `<slug>.conf` that no server runs would turn make-live's clear
+ * `--nats-config` refusal into a misleading "restart target NOT FOUND".
+ */
+export function resolveNatsConfigPath(
+  inputs: Pick<ProvisionInputs, "principal" | "stackId" | "stackSlug" | "configPath" | "natsUrl" | "plistPathSet">,
+  locator: NatsConfigLocatorPort,
+): NatsConfigResolution {
+  const explicit = explicitNatsConfig(inputs);
+  if (explicit !== undefined) return explicit;
+  const conventional = conventionalNatsConfigPath(inputs.stackSlug);
+  if (locator.exists(conventional)) {
+    return { source: "convention", configPath: conventional, exists: true, why: "exists on disk" };
+  }
+
+  const missing = `${conventional} does not exist`;
+  const endpoint = busEndpoint(inputs.natsUrl);
+  if (endpoint === undefined) {
+    return {
+      source: "convention",
+      configPath: conventional,
+      exists: false,
+      why: "not created yet; the stack has no usable nats.url to compare with other stacks",
+    };
+  }
+
+  const reads = locator.siblingStacks(inputs.principal, inputs.stackId);
+  const unreadable = reads.flatMap((r) => (r.ok ? [] : [`${r.stackId} (${r.reason})`]));
+  const sameBus = reads.flatMap((r) =>
+    r.ok && busEndpoint(r.stack.natsUrl) === endpoint ? [r.stack] : [],
+  );
+  const matches = sameBus.filter(
+    (s) => s.configPath !== undefined && s.configPath !== "" && locator.exists(s.configPath),
+  );
+  const byPath = new Map<string, SiblingStackBus[]>();
+  for (const m of matches) {
+    const key = locator.resolvePath(m.configPath ?? "");
+    byPath.set(key, [...(byPath.get(key) ?? []), m]);
+  }
+
+  if (byPath.size > 1) {
+    const listed = matches.map((m) => `${m.stackId} → ${m.configPath ?? ""}`).join(", ");
+    return { source: "unset", why: `${missing} and sibling stacks on ${endpoint} disagree (${listed})` };
+  }
+  if (unreadable.length > 0) {
+    return {
+      source: "unset",
+      why: `${missing} and sibling stack config(s) could not be read, so the bus's config cannot be confirmed: ${unreadable.join(", ")}`,
+    };
+  }
+  if (sameBus.length === 0) {
+    return {
+      source: "convention",
+      configPath: conventional,
+      exists: false,
+      why: `not created yet; no other stack of ${inputs.principal} is on ${endpoint}, so make-live creates it from nats.url`,
+    };
+  }
+  const agreeing = [...byPath.values()][0];
+  const sibling = agreeing?.[0];
+  if (agreeing === undefined || sibling?.configPath === undefined) {
+    const shared = sameBus.map((s) => s.stackId).join(", ");
+    return { source: "unset", why: `${missing} and the stacks sharing ${endpoint} (${shared}) record no existing config_path` };
+  }
+
+  // The plist comes along only when this stack has none and the agreeing
+  // siblings name one plist between them.
+  const plists = new Set(
+    agreeing.flatMap((s) => (s.plistPath !== undefined && s.plistPath !== "" ? [locator.resolvePath(s.plistPath)] : [])),
+  );
+  const plistPath =
+    inputs.plistPathSet !== true && plists.size === 1
+      ? agreeing.find((s) => s.plistPath !== undefined && s.plistPath !== "")?.plistPath
+      : undefined;
+  return {
+    source: "sibling",
+    configPath: sibling.configPath,
+    ...(plistPath !== undefined && { plistPath }),
+    siblingStackId: sibling.stackId,
+    endpoint,
+  };
+}
+
+/** The plan row describing the chosen nats-server config path. */
+function natsConfigPlanItem(res: NatsConfigResolution): PlanItem {
+  const step = "nats-server config path";
+  switch (res.source) {
+    case "explicit":
+      return { step, status: "ok", detail: `${res.configPath} (from --nats-config or the stack config; untouched)` };
+    case "convention":
+      return { step, status: "wire", detail: `${res.configPath} (${res.why})` };
+    case "sibling":
+      return {
+        step,
+        status: "wire",
+        detail:
+          `${res.configPath} (from sibling stack ${res.siblingStackId} on ${res.endpoint}` +
+          (res.plistPath !== undefined ? `; plist_path ${res.plistPath}` : "") +
+          ")",
+      };
+    case "unset":
+      return { step, status: "skip", detail: `left unset: ${res.why}` };
+  }
+}
+
+/** The follow-up note printed when the config path is left unset. */
+function natsConfigUnsetNote(res: NatsConfigResolution): string[] {
+  if (res.source !== "unset") return [];
+  return [
+    "NOTE: stack.nats_infra.config_path was left unset. `cortex network make-live` and `cortex network join` " +
+      "will need --nats-config <path> (the nats-server config serving this stack's nats.url), or set " +
+      "stack.nats_infra.config_path in the stack config.",
+  ];
 }
 
 // =============================================================================
@@ -395,17 +628,21 @@ export interface ProvisionInputs {
   credsPath: string;
   /**
    * cortex#1265 (PR8) — the per-stack nats-server config path recorded under
-   * `stack.nats_infra.config_path` (conventional `~/.config/nats/<slug>.conf`).
-   * make-live derives its `--nats-config` from this; writing it here closes the
-   * provision→make-live loop (no manual `nsc generate config`).
+   * `stack.nats_infra.config_path`. make-live derives its `--nats-config` from
+   * it. Here it is only the EXPLICIT value (`--nats-config` or the stack
+   * config); when absent, {@link resolveNatsConfigPath} picks one (cortex#2535).
    */
-  configPath: string;
+  configPath?: string;
+  /** The stack's `nats.url` — matched against sibling stacks when `configPath` is absent. */
+  natsUrl?: string;
+  /** Does the stack config already set `stack.nats_infra.plist_path`? A sibling's is then not adopted. */
+  plistPathSet?: boolean;
   force: boolean;
   apply: boolean;
   state: ProvisionState;
 }
 
-export type PlanStatus = "mint" | "generate" | "wire" | "export" | "ok";
+export type PlanStatus = "mint" | "generate" | "wire" | "export" | "ok" | "skip";
 
 export interface PlanItem {
   step: string;
@@ -421,7 +658,17 @@ export interface ProvisionResult {
   /** Human-readable plan/result lines for the CLI renderer. */
   steps: string[];
   /** The resolved fields (present on a successful apply). */
-  resolved?: { account: string; agentsAccount: string; credsPath: string; configPath: string; seedPath: string };
+  resolved?: {
+    account: string;
+    agentsAccount: string;
+    credsPath: string;
+    /** Absent when the nats-server config path was left unset (cortex#2535). */
+    configPath?: string;
+    plistPath?: string;
+    seedPath: string;
+  };
+  /** cortex#2535 — which branch picked `stack.nats_infra.config_path` (dry-run too). */
+  natsConfig?: NatsConfigResolution;
 }
 
 // =============================================================================
@@ -438,6 +685,9 @@ export interface ProvisionResult {
 export function buildProvisionPlan(
   inputs: ProvisionInputs,
   agentsJetStream: AgentsJetStreamProbe = { status: "not-probed" },
+  // Callers that skip resolution (plan-only tests) get the explicit value, or
+  // an unset row when there is none.
+  natsConfig: NatsConfigResolution = explicitNatsConfig(inputs) ?? { source: "unset", why: "not resolved" },
 ): PlanItem[] {
   const { force, state } = inputs;
   const operatorPresent = !force && state.federationAccount !== undefined;
@@ -496,12 +746,21 @@ export function buildProvisionPlan(
       status: jwtsPresent ? "ok" : "export",
       detail: `operator + ${inputs.federationAccountName} + ${inputs.systemAccountName} (system, ensured)`,
     },
+    natsConfigPlanItem(natsConfig),
     {
       step: "stack.nats_infra write-back",
       status: "wire",
-      detail: "account, agents_account, creds_path, config_path, nkey_seed_path, operator_jwt, account_jwt, system_account[_jwt]",
+      detail:
+        `account, agents_account, creds_path, ${writtenPathFields(natsConfig)}nkey_seed_path, ` +
+        "operator_jwt, account_jwt, system_account[_jwt]",
     },
   ];
+}
+
+/** The `config_path` / `plist_path` names the write-back sets, with a trailing ", ". */
+function writtenPathFields(res: NatsConfigResolution): string {
+  const paths = natsConfigPaths(res);
+  return (paths.configPath !== undefined ? "config_path, " : "") + (paths.plistPath !== undefined ? "plist_path, " : "");
 }
 
 /** Render a plan item as a CLI line (`[mint ] nsc operator   OP_ANDREAS`). */
@@ -532,7 +791,10 @@ export async function provisionStack(
     inputs.state.agentsAccount !== undefined
       ? await probeAgentsJetStream(inputs.agentsAccountName, inputs.state.agentsAccount, ports.export)
       : { status: "not-probed" };
-  const plan = buildProvisionPlan(inputs, agentsProbe);
+  // cortex#2535 — pick the nats-server config path (read-only fs checks).
+  const natsConfig = resolveNatsConfigPath(inputs, ports.natsConfig);
+  const natsPaths = natsConfigPaths(natsConfig);
+  const plan = buildProvisionPlan(inputs, agentsProbe, natsConfig);
   const planLines = plan.map(renderPlanLine);
 
   if (!inputs.apply) {
@@ -540,8 +802,10 @@ export async function provisionStack(
       ok: true,
       applied: false,
       plan,
+      natsConfig,
       steps: [
         ...planLines,
+        ...natsConfigUnsetNote(natsConfig),
         "",
         "Re-run with --apply to execute.",
         "AFTER this: exchange the leaf shared secret + agree hub topology with your peer, then `cortex network join <network>`.",
@@ -740,7 +1004,7 @@ export async function provisionStack(
     account: resolvedAccount,
     agentsAccount: resolvedAgents,
     credsPath: inputs.credsPath,
-    configPath: inputs.configPath,
+    ...natsPaths,
     seedPath: inputs.seedPath,
     ...(resolvedNkeyPub !== undefined && { nkeyPub: resolvedNkeyPub }),
     ...(operatorJwt !== undefined && { operatorJwt }),
@@ -750,11 +1014,13 @@ export async function provisionStack(
   });
   if (!written.ok) return fail(plan, steps, `config write-back failed: ${written.reason}`);
   steps.push(
-    "stack.nats_infra written (account, agents_account, creds_path, config_path, nkey_seed_path" +
+    `stack.nats_infra written (account, agents_account, creds_path, ${writtenPathFields(natsConfig)}nkey_seed_path` +
       (operatorJwt !== undefined ? ", operator_jwt, account_jwt" : "") +
       (systemAccount !== undefined ? ", system_account, system_account_jwt" : "") +
       ")",
   );
+  steps.push(`nats-server config path: ${natsConfigPlanItem(natsConfig).detail}`);
+  steps.push(...natsConfigUnsetNote(natsConfig));
 
   steps.push("");
   steps.push("Ready for `cortex network join <network>` — remaining: leaf shared secret + hub topology (two-party, out-of-band).");
@@ -764,11 +1030,12 @@ export async function provisionStack(
     applied: true,
     plan,
     steps,
+    natsConfig,
     resolved: {
       account: resolvedAccount,
       agentsAccount: resolvedAgents,
       credsPath: inputs.credsPath,
-      configPath: inputs.configPath,
+      ...natsPaths,
       seedPath: inputs.seedPath,
     },
   };

@@ -107,7 +107,8 @@ function buildPorts(runner: ArcFederationRunner): { ports: ProvisionPorts; writt
   // The REAL wiring adapter — only the arc subprocess runner is swapped.
   const federationWiring = buildFederationWiringAdapter(runner);
   const jetstream = { enable: async () => ({ ok: true as const }) };
-  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream }, written };
+  const natsConfig = { exists: () => false, resolvePath: (path: string) => path, siblingStacks: () => [] };
+  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream, natsConfig }, written };
 }
 
 function inputs(): ProvisionInputs {
