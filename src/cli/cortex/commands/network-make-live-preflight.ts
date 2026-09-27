@@ -73,7 +73,17 @@ function unquote(value: string): string {
  * `include "file"`, `include 'file'` or `include file`. nats-server resolves a
  * relative include against the including file's directory.
  */
-const INCLUDE_LINE_RE = /^[ \t]*include[ \t]+(?:"([^"]+)"|'([^']+)'|(\S+))[ \t;]*$/gm;
+const INCLUDE_LINE_RE = /^[ \t]*include[ \t]+(?:"([^"]+)"|'([^']+)'|([^\s"';]+))[ \t;]*(?:(?:#|\/\/).*)?$/gm;
+
+/**
+ * Does `text` still carry an `include` directive? After
+ * {@link inlineConfigIncludes} that means a shape the inliner did not parse —
+ * a throwaway copy in a scratch dir could not resolve it, so the caller must
+ * treat the result as "cannot check" rather than "does not boot".
+ */
+export function hasUnresolvedInclude(text: string): boolean {
+  return /^[ \t]*include\b/m.test(stripConfigComments(text));
+}
 
 /**
  * Inline every `include` of `rootText` (the root file's bytes, which may be a

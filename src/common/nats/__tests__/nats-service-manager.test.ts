@@ -535,7 +535,7 @@ describe("stop/start — cortex#2533", () => {
     return unitPath;
   }
 
-  test("launchd: stop = `launchctl bootout gui/<uid>/<label>`, start = `launchctl bootstrap gui/<uid> <plist>`", async () => {
+  test("launchd: stop = `bootout gui/<uid>/<label>`, start = `bootstrap gui/<uid> <plist>` THEN `kickstart` (runs it even without RunAtLoad)", async () => {
     const dir = freshDir();
     const plistPath = join(dir, "nats-server.plist");
     writeFileSync(plistPath, barePlist(), "utf-8");
@@ -547,6 +547,7 @@ describe("stop/start — cortex#2533", () => {
     expect(calls).toEqual([
       ["launchctl", "bootout", "gui/501/homebrew.mxcl.nats-server"],
       ["launchctl", "bootstrap", "gui/501", plistPath],
+      ["launchctl", "kickstart", "gui/501/homebrew.mxcl.nats-server"],
     ]);
   });
 

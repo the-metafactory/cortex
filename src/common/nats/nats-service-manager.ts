@@ -289,7 +289,9 @@ class LaunchdServiceManager implements NatsServiceManager {
 
   // cortex#2533 — `bootout` unloads the job, so launchd's KeepAlive cannot
   // respawn nats-server while make-live moves the $G store; `bootstrap` loads it
-  // back from the same plist.
+  // back from the same plist. `bootstrap` only RUNS the job when the plist says
+  // RunAtLoad/KeepAlive, so start() follows it with a plain `kickstart` (no
+  // `-k`: a no-op when the job is already running).
   async stop(): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (!this.mutate) return { ok: true };
     const l = this.label();
@@ -302,10 +304,16 @@ class LaunchdServiceManager implements NatsServiceManager {
     if (!this.mutate) return { ok: true };
     const l = this.label();
     if (!l.ok) return l;
-    return runServiceCommand(
+    const loaded = await runServiceCommand(
       this.exec,
       ["launchctl", "bootstrap", `gui/${this.uid.toString()}`, this.plistPath],
       `launchctl bootstrap ${l.label}`,
+    );
+    if (!loaded.ok) return loaded;
+    return runServiceCommand(
+      this.exec,
+      ["launchctl", "kickstart", `gui/${this.uid.toString()}/${l.label}`],
+      `launchctl kickstart ${l.label}`,
     );
   }
 }

@@ -1068,8 +1068,9 @@ function gStorePreflight(
       reason:
         `${inputs.natsConfigPath} is an anonymous ($G) bus with a JetStream $G account store at ` +
         `${g.gStorePath} (${contents}). After the switch to operator-mode, nats-server cannot recover ` +
-        "those streams, so /healthz stays 503 and the canary would roll the change back. Nothing was " +
-        "changed. To proceed, migrate or drain those streams first, or re-run with --move-g-store: " +
+        "those streams, so /healthz stays 503 and the canary would roll the change back. On a bus shared " +
+        "by several stacks this store may hold their streams too. Nothing was changed. To proceed, " +
+        "migrate or drain those streams first, or re-run with --move-g-store: " +
         `make-live then stops nats-server, moves the store to ${target} (never deleted), starts it on ` +
         "the operator-mode config, and moves the store back if the canary rolls back.",
     };

@@ -8,6 +8,12 @@ import { describe, test, expect } from "bun:test";
 import { dirname, join } from "path";
 
 import {
+  ensureLeafInclude,
+  leafIncludeFileName,
+  renderLeafIncludeFile,
+} from "../../../../common/nats/leaf-remote-renderer";
+import {
+  hasUnresolvedInclude,
   inlineConfigIncludes,
   parseJetStreamStoreDecl,
   describeGStoreStreams,
@@ -98,6 +104,36 @@ describe("inlineConfigIncludes", () => {
     expect(res.text).toContain(`account: "${FED}"`);
     expect(res.text).toContain("max_payload: 1MB");
     expect(res.text).not.toMatch(/^\s*include/m);
+  });
+
+  test("inlines the leaf include exactly as cortex join renders it (ensureLeafInclude + renderLeafIncludeFile)", () => {
+    const leafFile = renderLeafIncludeFile(
+      { network_id: "net1", hub_url: "tls://hub.example.invalid:7422", leaf_port: 7422, members: ["alice"] },
+      { credentials: "/secrets/leaf.creds", account: FED },
+    );
+    const root = ensureLeafInclude(`listen: "127.0.0.1:4222"\n`, "net1");
+    const io = memReader({ [`/cfg/${leafIncludeFileName("net1")}`]: leafFile });
+    const res = inlineConfigIncludes("/cfg/bus.conf", root, io);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(hasUnresolvedInclude(res.text)).toBe(false);
+    const { conf } = renderBootTestConfig(res.text, { monitorPort: 18123, deadPort: 19001, scratchDir: "/scratch/bt" });
+    expect(conf).toContain(`account: ${FED}`); // the renderer emits the nkey bare
+    expect(conf).not.toContain("hub.example.invalid");
+  });
+
+  test("an include with a trailing inline comment is still inlined", () => {
+    const io = memReader({ "/cfg/extra.conf": `max_payload: 1MB\n` });
+    const res = inlineConfigIncludes("/cfg/bus.conf", `include "extra.conf"  // added by hand\n`, io);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.text).toContain("max_payload: 1MB");
+    expect(hasUnresolvedInclude(res.text)).toBe(false);
+  });
+
+  test("hasUnresolvedInclude flags an include shape the inliner leaves behind", () => {
+    expect(hasUnresolvedInclude(`listen: 4222\n  include "a.conf" "b.conf"\n`)).toBe(true);
+    expect(hasUnresolvedInclude(`listen: 4222\n# include "a.conf"\n`)).toBe(false);
   });
 
   test("a missing include is a failure naming the path", () => {

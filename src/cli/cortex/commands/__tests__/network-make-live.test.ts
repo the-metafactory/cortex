@@ -1502,6 +1502,16 @@ describe("bootTestSnapshotConfig (live adapter, scripted process) — cortex#253
     expect(deps.spawned).toEqual([]);
   });
 
+  test("an include the inliner cannot parse → skipped (warn), never a false 'unbootable'", async () => {
+    const deps = fakeBootDeps("bootable");
+    const res = await bootTestSnapshotConfig(
+      { natsConfigPath: join(dir, "bus.conf"), contents: `listen: 4222\ninclude "a.conf" "b.conf"\n` },
+      deps,
+    );
+    expect(res.status).toBe("skipped");
+    expect(deps.spawned).toEqual([]);
+  });
+
   test("`jetstream: enabled` without store_dir → -sd <scratch>/store (never the live default store)", async () => {
     const deps = fakeBootDeps("bootable");
     await bootTestSnapshotConfig({ natsConfigPath: join(dir, "bus.conf"), contents: "listen: 4222\njetstream: enabled\n" }, deps);

@@ -72,6 +72,7 @@ import type {
   SnapshotBootOutcome,
 } from "./network-make-live-lib";
 import {
+  hasUnresolvedInclude,
   inlineConfigIncludes,
   parseJetStreamStoreDecl,
   gStoreMoveTarget,
@@ -803,6 +804,12 @@ export async function bootTestSnapshotConfig(
   const configPath = expandTilde(snapshot.natsConfigPath);
   const flat = inlineConfigIncludes(configPath, snapshot.contents, realConfigReader);
   if (!flat.ok) return { status: "unbootable", reason: flat.reason };
+  // An include shape the inliner did not parse would not resolve from the
+  // scratch dir — the copy would fail for OUR reason, not the config's. Warn
+  // (skipped) rather than block a bus that may boot fine.
+  if (hasUnresolvedInclude(flat.text)) {
+    return { status: "skipped", reason: "the config has an include directive the boot test could not inline" };
+  }
 
   const scratchDir = mkdtempSync(join(tmpdir(), "cortex-makelive-boottest-"));
   let proc: BootTestProcess | undefined;
@@ -895,6 +902,9 @@ export function buildGStoreAdapter(mutate: boolean, now: () => Date = () => new 
       if (!existsSync(abs)) return { status: "no-jetstream" };
       const flat = inlineConfigIncludes(abs, readFileSync(abs, "utf-8"), realConfigReader);
       if (!flat.ok) return { status: "unknown", reason: `cannot resolve the config: ${flat.reason}` };
+      if (hasUnresolvedInclude(flat.text)) {
+        return { status: "unknown", reason: `${abs} has an include directive make-live could not follow` };
+      }
       const decl = parseJetStreamStoreDecl(flat.text);
       if (!decl.jetstream) return { status: "no-jetstream" };
       if (decl.storeDir === undefined) {
