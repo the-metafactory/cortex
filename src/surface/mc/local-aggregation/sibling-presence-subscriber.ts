@@ -59,7 +59,19 @@
 
 import { tryParseEnvelope } from "../../../bus/myelin/envelope-validator";
 import type { AgentPresenceRegistry } from "../../../bus/agent-network/registry";
-import { observerMintHint, type SiblingStackDescriptor } from "./sibling-discovery";
+import {
+  observerMintHint,
+  type NoObserverReason,
+  type SiblingStackDescriptor,
+} from "./sibling-discovery";
+
+/** #2536 — log wording for each {@link NoObserverReason}. */
+const NO_OBSERVER_DETAIL: Record<NoObserverReason, string> = {
+  missing: "file not found",
+  "is-stack-creds": "refused: it is the sibling stack's own creds",
+  "over-scoped": "refused: not limited to sub on the presence subtree with pub denied",
+  unreadable: "refused: no readable user JWT",
+};
 
 /**
  * The read-only handle on ONE sibling bus the aggregator drives. A test passes
@@ -140,14 +152,11 @@ export async function startSiblingPresenceAggregator(
   const degraded: DegradedSibling[] = [];
 
   for (const sibling of siblings) {
-    // #2536 — no observer creds ⇒ no connection at all. The sibling daemon's
+    // #2536 — no observer creds ⇒ no connection at all. The sibling stack's
     // own creds are never a fallback. Log the mint hint once, here at start.
     if (sibling.credential.kind === "no-observer") {
       const { reason: why, observerCredsPath, observerUser } = sibling.credential;
-      const reason =
-        why === "is-daemon-creds"
-          ? `no observer creds: ${observerCredsPath} resolves to the sibling daemon's own creds (refused)`
-          : `no observer creds at ${observerCredsPath}`;
+      const reason = `no observer creds (${NO_OBSERVER_DETAIL[why]}): ${observerCredsPath}`;
       degraded.push({ stack: sibling.stack, reason });
       process.stderr.write(
         `sibling-presence: "${sibling.stack}" (${sibling.url}) not aggregated — ${reason}. ` +

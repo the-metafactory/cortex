@@ -1,8 +1,25 @@
 /**
  * Shared NATS JWT helpers (read-only, public claim material only). Used by the
- * bus-safety creds check (issuer account of a user JWT) and by provision's
- * agents-account JetStream probe (cortex#2534).
+ * bus-safety creds check (issuer account of a user JWT), by provision's
+ * agents-account JetStream probe (cortex#2534), and by the MC sibling-observer
+ * scope check (cortex#2536).
  */
+
+/**
+ * Pull the user-JWT body out of a decorated `.creds` file. Reads only the JWT
+ * block, never the seed block. `undefined` when no JWT block is present.
+ */
+export function extractUserJwt(credsText: string): string | undefined {
+  const m =
+    /-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----?END NATS USER JWT-----?/.exec(
+      credsText,
+    );
+  const body = m?.[1];
+  if (body === undefined) return undefined;
+  // The JWT may be wrapped across lines in the block; collapse whitespace.
+  const jwt = body.replace(/\s+/g, "");
+  return jwt.length > 0 ? jwt : undefined;
+}
 
 /**
  * Decode a JWT's middle (claims) segment as JSON. `undefined` on any failure,

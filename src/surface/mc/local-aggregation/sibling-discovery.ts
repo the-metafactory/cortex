@@ -28,10 +28,10 @@
  *
  * ## Credential resolution
  *
- * **Never the sibling daemon's own creds (#2536).** A sibling's
- * `nats.credsPath` is that sibling DAEMON's full user in the sibling's
+ * **Never the sibling stack's own creds (#2536).** A sibling's
+ * `nats.credsPath` is that sibling STACK's full user in the sibling's
  * account. Connecting with it would put a process of THIS stack inside the
- * sibling's account with everything the sibling daemon may read and publish,
+ * sibling's account with everything the sibling stack may read and publish,
  * which defeats per-stack account isolation. The aggregator needs only
  * `local.{principal}.{sibling}.agent.>`, so a sibling that declares a
  * `credsPath` connects with a per-sibling OBSERVER creds file found by
@@ -42,13 +42,17 @@
  * (`observerCredsDir` defaults to {@link DEFAULT_NATS_CREDS_DIR}.) The file is
  * a sub-only user minted in the SIBLING's account (sub allow
  * `local.{principal}.{sibling}.agent.>`, pub deny `>`; see
- * {@link observerMintHint}). No observer file ⇒ `credential.kind:
- * "no-observer"` and the aggregator never connects to that sibling. An
- * observer path that resolves to the daemon creds file (same path, or a
- * symlink to it) is refused the same way.
+ * {@link observerMintHint}). Discovery decodes the file's user JWT (claims
+ * only; the bus verifies the signature) and accepts it only when publish is
+ * denied `>` with no publish allow, and every subscribe allow sits inside that
+ * sibling's presence subtree ({@link checkObserverScope}). Anything else is
+ * `credential.kind: "no-observer"` and the aggregator never connects to that
+ * sibling: no file (`missing`), a path that resolves to the sibling stack's own
+ * creds file (`is-stack-creds`), a wider scope such as a copy of the stack's
+ * creds (`over-scoped`), or no decodable JWT (`unreadable`).
  *
  * Per-bus auth varies (#989 probe findings on the live machine):
- *   - meta-factory / work → a daemon `nats.credsPath` → the per-sibling
+ *   - meta-factory / work → a stack `nats.credsPath` → the per-sibling
  *     observer `credential.kind: "creds"`, or `"no-observer"` (#2536).
  *   - halden → an OPEN bus (`nats-server -js`, no operator-account config) that
  *     accepts an unauthenticated connection. Its `system.yaml` declares only an
@@ -88,13 +92,14 @@ import { join, resolve } from "path";
 import { parse as parseYaml } from "yaml";
 import { expandTilde } from "../../../common/config/loader";
 import { DEFAULT_NATS_CREDS_DIR } from "../../../common/nats/creds-dir";
+import { decodeJwtClaims, extractUserJwt } from "../../../cli/cortex/commands/nats-jwt";
 
 /**
  * How to authenticate a read-only subscriber to a sibling bus.
  *
  *   - `creds` — a `.creds` file path (expanded + chmod-gated by the NATS
  *     connection layer). For a DISCOVERED sibling this is always the
- *     per-sibling observer file, never the sibling daemon's `credsPath`
+ *     per-sibling observer file, never the sibling stack's `credsPath`
  *     (#2536). For an explicit `stacks[]` entry it is the configured path.
  *   - `noauth` — the stack declares NO `credsPath`. We attempt an
  *     unauthenticated connect and let the BUS decide: an OPEN loopback bus
@@ -103,12 +108,12 @@ import { DEFAULT_NATS_CREDS_DIR } from "../../../common/nats/creds-dir";
  *     aggregator degrades it to absent (logged). This avoids a fragile
  *     config heuristic for "open vs locked" — the connect attempt is the ground
  *     truth, and a failed read-only connect is already harmless.
- *   - `no-observer` — the sibling declares a daemon `credsPath` (its bus
+ *   - `no-observer` — the sibling declares a stack `credsPath` (its bus
  *     isolates accounts) but no usable observer creds exist. NON-connectable:
  *     the aggregator degrades it to absent without a connect attempt and logs
- *     {@link observerMintHint}. `reason: "is-daemon-creds"` ⇒ the observer path
- *     resolved to the daemon's own creds file and was refused. The sibling
- *     stays in the roster so the #1008 DB-read path still sees it.
+ *     {@link observerMintHint}. `reason` says why (see
+ *     {@link NoObserverReason}). The sibling stays in the roster so the #1008
+ *     DB-read path still sees it.
  *
  * (There is no `unresolved` kind: an undecidable config no longer guesses — it
  * tries `noauth` and degrades on failure, which is strictly more capable than
@@ -119,12 +124,23 @@ export type SiblingCredential =
   | { kind: "noauth" }
   | {
       kind: "no-observer";
-      reason: "missing" | "is-daemon-creds";
+      reason: NoObserverReason;
       /** The observer NATS user name to mint ({@link observerUserName}). */
       observerUser: string;
       /** Where discovery looked for the observer creds. */
       observerCredsPath: string;
     };
+
+/**
+ * #2536 — why a sibling has no usable observer:
+ *   - `missing` — no file at the convention path.
+ *   - `is-stack-creds` — the path resolves to the sibling stack's own creds
+ *     file (same path, or a symlink to it).
+ *   - `over-scoped` — the user JWT may publish, or may subscribe outside
+ *     `local.{principal}.{sibling}.agent.>` (e.g. a copy of the stack's creds).
+ *   - `unreadable` — the file can't be read or carries no decodable user JWT.
+ */
+export type NoObserverReason = "missing" | "is-stack-creds" | "over-scoped" | "unreadable";
 
 /** One sibling stack the serving daemon should subscribe to read-only. */
 export interface SiblingStackDescriptor {
@@ -185,7 +201,7 @@ export function observerCredsPath(
  * exact scope (sub allow `local.<principal>.<sibling>.agent.>`, pub deny `>`).
  * `arc nats add-bot` has allow flags only, so the deny is a separate `nsc edit`
  * and the creds are regenerated afterwards to carry it. The account is the
- * SIBLING's account (the one its daemon user lives in).
+ * SIBLING's account (the one its stack user lives in).
  */
 export function observerMintHint(args: {
   principal: string;
@@ -212,35 +228,93 @@ function canonicalPath(p: string): string {
     return realpathSync(abs);
   } catch (_err) {
     // The file doesn't exist (or a parent isn't readable) — compare the
-    // absolute path as-is; a missing file can't alias the daemon creds.
+    // absolute path as-is; a missing file can't alias the stack creds.
     return abs;
   }
 }
 
+/** A string array claim, or `undefined` when absent / not a string array. */
+function stringList(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v.every((x): x is string => typeof x === "string") ? v : undefined;
+}
+
 /**
- * #2536 — resolve a discovered sibling's credential. No daemon `credsPath` ⇒
- * `noauth` (open bus; unchanged). Otherwise the per-sibling observer file, or
- * `no-observer` when it is absent or resolves to the daemon's own creds. The
- * daemon `credsPath` itself is never returned.
+ * #2536 — is this `.creds` text a correctly scoped observer for
+ * `{principal}/{sibling}`? Reads the user JWT's permission claims (never the
+ * seed; the signature is the bus's job). `ok` only when:
+ *   - publish: deny contains `>` and there is no publish allow, and
+ *   - subscribe: allow is non-empty and every entry is
+ *     `local.{principal}.{sibling}.agent.>` or a subject under
+ *     `local.{principal}.{sibling}.agent.`.
+ * No permissions claim means an unrestricted user, which is `over-scoped`.
+ */
+export function checkObserverScope(
+  credsText: string,
+  principal: string,
+  sibling: string,
+): "ok" | "over-scoped" | "unreadable" {
+  const jwt = extractUserJwt(credsText);
+  const claims = jwt === undefined ? undefined : decodeJwtClaims(jwt);
+  if (claims === undefined) return "unreadable";
+  const nats = claims.nats;
+  const perms = nats !== null && typeof nats === "object" ? (nats as Record<string, unknown>) : {};
+  const pub = (perms.pub ?? {}) as Record<string, unknown>;
+  const sub = (perms.sub ?? {}) as Record<string, unknown>;
+
+  const pubAllow = stringList(pub.allow) ?? [];
+  const pubDeny = stringList(pub.deny) ?? [];
+  if (pubAllow.length > 0 || !pubDeny.includes(">")) return "over-scoped";
+
+  const prefix = `local.${principal}.${sibling}.agent.`;
+  const subAllow = stringList(sub.allow) ?? [];
+  if (subAllow.length === 0) return "over-scoped";
+  if (!subAllow.every((s) => s.startsWith(prefix) && s.length > prefix.length)) {
+    return "over-scoped";
+  }
+  return "ok";
+}
+
+/**
+ * #2536 — resolve a discovered sibling's credential. No stack `credsPath` ⇒
+ * `noauth` (open bus; unchanged). Otherwise the per-sibling observer file when
+ * it exists, isn't the stack's own creds file, and is scoped to the sibling's
+ * presence subtree; else `no-observer`. The stack `credsPath` itself is never
+ * returned.
  */
 function resolveSiblingCredential(args: {
-  daemonCredsPath: string | undefined;
+  stackCredsPath: string | undefined;
+  principal: string;
   selfStack: string;
   siblingStack: string;
   observerCredsDir: string;
 }): SiblingCredential {
-  const { daemonCredsPath, selfStack, siblingStack, observerCredsDir } = args;
-  if (daemonCredsPath === undefined) return { kind: "noauth" };
+  const { stackCredsPath, principal, selfStack, siblingStack, observerCredsDir } = args;
+  if (stackCredsPath === undefined) return { kind: "noauth" };
 
   const observerUser = observerUserName(selfStack, siblingStack);
   const path = observerCredsPath(observerCredsDir, selfStack, siblingStack);
-  if (canonicalPath(path) === canonicalPath(daemonCredsPath)) {
-    return { kind: "no-observer", reason: "is-daemon-creds", observerUser, observerCredsPath: path };
+  const refuse = (reason: NoObserverReason): SiblingCredential => ({
+    kind: "no-observer",
+    reason,
+    observerUser,
+    observerCredsPath: path,
+  });
+  if (canonicalPath(path) === canonicalPath(stackCredsPath)) return refuse("is-stack-creds");
+  if (!existsSync(path)) return refuse("missing");
+
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `sibling-discovery: cannot read observer creds for "${siblingStack}": ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return refuse("unreadable");
   }
-  if (!existsSync(path)) {
-    return { kind: "no-observer", reason: "missing", observerUser, observerCredsPath: path };
-  }
-  return { kind: "creds", credsPath: path };
+  const scope = checkObserverScope(text, principal, siblingStack);
+  return scope === "ok" ? { kind: "creds", credsPath: path } : refuse(scope);
 }
 
 /** Hosts treated as the principal's own local loopback bus. */
@@ -270,12 +344,12 @@ interface StackDirInfo {
   stack: string;
   principal: string;
   url: string;
-  /** The stack DAEMON's own `nats.credsPath`, when declared. Never connected with. */
-  daemonCredsPath: string | undefined;
+  /** The stack's own `nats.credsPath`, when declared. Never connected with. */
+  stackCredsPath: string | undefined;
 }
 
 /**
- * Read one stack dir's `{principal, stack, url, daemonCredsPath}` from its
+ * Read one stack dir's `{principal, stack, url, stackCredsPath}` from its
  * `system/system.yaml` + `stacks/*.yaml`. Returns `null` (logged) when the dir
  * is not a parseable config-split stack — never throws.
  */
@@ -348,13 +422,13 @@ function readStackDir(
 
   const stack = stackId !== undefined ? stackSlugOf(stackId) : dirName;
 
-  // The daemon's credsPath is recorded only to pick the credential KIND and to
+  // The stack's credsPath is recorded only to pick the credential KIND and to
   // refuse an observer that aliases it (#2536). It is never connected with.
   const credsPath = typeof nats?.credsPath === "string" ? nats.credsPath : undefined;
-  const daemonCredsPath =
+  const stackCredsPath =
     credsPath !== undefined && credsPath.length > 0 ? credsPath : undefined;
 
-  return { stack, principal, url, daemonCredsPath };
+  return { stack, principal, url, stackCredsPath };
 }
 
 /**
@@ -417,7 +491,8 @@ export function discoverSiblingStacks(
       principal: info.principal,
       url: info.url,
       credential: resolveSiblingCredential({
-        daemonCredsPath: info.daemonCredsPath,
+        stackCredsPath: info.stackCredsPath,
+        principal: info.principal,
         selfStack,
         siblingStack: info.stack,
         observerCredsDir,

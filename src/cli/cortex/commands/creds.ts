@@ -76,7 +76,6 @@ export interface CredsItem {
 }
 
 const AGENT_ID_REGEX = /^[a-z0-9-]+$/;
-const DEFAULT_CREDS_DIR = DEFAULT_NATS_CREDS_DIR;
 
 /**
  * Safe-default subject scope applied on `issue` when `--pub`/`--sub` are
@@ -249,7 +248,7 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
     return { exitCode: 0, stdout: listHelp(), stderr: "" };
   }
 
-  const dir = expandTilde(args.credsDir ?? DEFAULT_CREDS_DIR);
+  const dir = expandTilde(args.credsDir ?? DEFAULT_NATS_CREDS_DIR);
 
   if (!existsSync(dir)) {
     if (args.json) {

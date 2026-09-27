@@ -26,7 +26,7 @@
  */
 
 import { describe, expect, test, mock, spyOn } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -47,6 +47,11 @@ import {
   discoverSiblingStacks,
   type SiblingStackDescriptor,
 } from "../sibling-discovery";
+import {
+  writeCredsWithPermissions,
+  writeObserverCreds,
+  writeStackDir,
+} from "./fixtures";
 
 /** Build an `agent.online` envelope for `{principal}/{stack}` + `agentId`. */
 function onlineEnvelope(
@@ -354,33 +359,32 @@ describe("#989 sibling-presence-subscriber", () => {
       }
     });
 
-    test("discovery → aggregator: the sibling daemon's creds path never reaches the connect port", async () => {
+    test("discovery → aggregator: a sibling stack's own creds path never reaches the connect port", async () => {
       const root = mkdtempSync(join(tmpdir(), "cortex-agg-obs-"));
       const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
       try {
         const observerDir = join(root, "observer-creds");
         mkdirSync(observerDir);
-        // Three siblings, all with a DAEMON credsPath:
-        //   work     — a real observer minted  → connects with the observer path
-        //   research — no observer             → never connected
-        //   lab      — observer symlinked to the daemon creds → refused
-        const daemon = (s: string): string => join(root, `daemon-${s}.creds`);
-        for (const s of ["work", "research", "lab"]) {
-          writeFileSync(daemon(s), "daemon-user-placeholder\n", { mode: 0o600 });
-          mkdirSync(join(root, s, "system"), { recursive: true });
-          mkdirSync(join(root, s, "stacks"), { recursive: true });
-          writeFileSync(
-            join(root, s, "system", "system.yaml"),
-            `nats:\n  url: nats://127.0.0.1:4222\n  credsPath: ${daemon(s)}\n`,
-          );
-          writeFileSync(
-            join(root, s, "stacks", `${s}.yaml`),
-            `principal:\n  id: alice\nstack:\n  id: alice/${s}\n`,
-          );
+        // Four siblings, all with their own stack credsPath (unrestricted user):
+        //   work     — scoped observer minted       → connects with the observer path
+        //   research — no observer                  → never connected
+        //   lab      — observer symlinked to lab's creds → refused
+        //   ops      — byte copy of ops's creds as the observer → refused (over-scoped)
+        const stackCreds = (s: string): string => join(root, `stack-${s}.creds`);
+        for (const s of ["work", "research", "lab", "ops"]) {
+          writeCredsWithPermissions(stackCreds(s), {});
+          writeStackDir(root, s, {
+            principal: "alice",
+            stackId: `alice/${s}`,
+            url: "nats://127.0.0.1:4222",
+            credsPath: stackCreds(s),
+          });
         }
-        const workObserver = join(observerDir, "mc-observer-default-to-work.creds");
-        writeFileSync(workObserver, "observer-user-placeholder\n", { mode: 0o600 });
-        symlinkSync(daemon("lab"), join(observerDir, "mc-observer-default-to-lab.creds"));
+        const observer = (s: string): string =>
+          join(observerDir, `mc-observer-default-to-${s}.creds`);
+        writeObserverCreds(observer("work"), "alice", "work");
+        symlinkSync(stackCreds("lab"), observer("lab"));
+        writeCredsWithPermissions(observer("ops"), {});
 
         const siblings = discoverSiblingStacks({
           configRoot: root,
@@ -402,13 +406,13 @@ describe("#989 sibling-presence-subscriber", () => {
 
         // Only `work` reached the connect port — with its OBSERVER creds.
         expect(seen.map((s) => s.stack)).toEqual(["work"]);
-        expect(seen[0]!.credential).toEqual({ kind: "creds", credsPath: workObserver });
-        // No daemon creds path, for ANY sibling, was ever handed to connect.
+        expect(seen[0]!.credential).toEqual({ kind: "creds", credsPath: observer("work") });
+        // No sibling stack's own creds path was ever handed to connect.
         const handed = JSON.stringify(seen);
-        for (const s of ["work", "research", "lab"]) {
-          expect(handed).not.toContain(daemon(s));
+        for (const s of ["work", "research", "lab", "ops"]) {
+          expect(handed).not.toContain(stackCreds(s));
         }
-        expect(handle.degraded.map((d) => d.stack).sort()).toEqual(["lab", "research"]);
+        expect(handle.degraded.map((d) => d.stack).sort()).toEqual(["lab", "ops", "research"]);
         await handle.stop();
       } finally {
         stderr.mockRestore();

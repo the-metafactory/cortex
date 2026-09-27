@@ -4,7 +4,7 @@
  * Adapts the bus-layer {@link NatsLink} + {@link NatsSubscription} primitives to
  * the aggregator's {@link SiblingBusConnection} interface. One {@link NatsLink}
  * per sibling bus (its OWN loopback url + a per-sibling observer `.creds`,
- * never the sibling daemon's; #2536), one
+ * never the sibling stack's own; #2536), one
  * {@link NatsSubscription} bound to the sibling's `local.{principal}.{stack}.agent.>`
  * subtree. READ-ONLY: it only subscribes, never publishes.
  *
