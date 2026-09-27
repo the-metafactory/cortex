@@ -16,6 +16,12 @@ import type { OperatorProvisioningPort } from "../operator-provisioning";
 const FED_PUB = "A" + "B".repeat(55);
 const AGENTS_PUB = "A" + "C".repeat(55);
 
+/** cortex#2534 — an agents-account JWT carrying unlimited JetStream limits. */
+const AGENTS_JS_JWT = `eyJ0eXAiOiJKV1QifQ.${btoa(JSON.stringify({ nats: { limits: { mem_storage: -1, disk_storage: -1 } } }))
+  .replace(/\+/g, "-")
+  .replace(/\//g, "_")
+  .replace(/=+$/, "")}.sig`;
+
 function loaded(partial: Partial<LoadedConfig>): LoadedConfig {
   return { config: {} as AgentConfig, inlineAgents: [], ...partial };
 }
@@ -75,9 +81,15 @@ function fakeFactory(): { factory: ProvisionPortsFactory; calls: string[]; write
       configWrite: { write: (fields) => { calls.push("config-write"); written.push(fields); return { ok: true }; } },
       export: {
         exportOperator: async ({ name }) => { calls.push(`export-operator:${name}`); return { ok: true, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }; },
-        exportAccount: async (name) => { calls.push(`export-account:${name}`); return { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }; },
+        exportAccount: async (name) => {
+          calls.push(`export-account:${name}`);
+          return name.endsWith("_AGENTS")
+            ? { ok: true, pubKey: AGENTS_PUB, jwt: AGENTS_JS_JWT }
+            : { ok: true, pubKey: FED_PUB, jwt: "eyJ.fed.sig" };
+        },
         exportSystem: async ({ name }) => { calls.push(`export-system:${name}`); return { ok: true, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }; },
       },
+      jetstream: { enable: async ({ name }) => { calls.push(`enable-jetstream:${name}`); return { ok: true }; } },
     };
     return ports;
   };
@@ -132,6 +144,9 @@ describe("cortex network provision — apply", () => {
       "init-operator:OP_ANDREAS",
       "add-account:ANDREAS_RESEARCH_FED",
       "add-account:ANDREAS_RESEARCH_AGENTS",
+      // cortex#2534 — JetStream granted on the agents account, verified by read-back.
+      "enable-jetstream:ANDREAS_RESEARCH_AGENTS",
+      "export-account:ANDREAS_RESEARCH_AGENTS",
       "add-account:SYS",
       "signing",
       "wire",

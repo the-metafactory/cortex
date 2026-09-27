@@ -366,7 +366,7 @@ function extractUserJwt(credsText: string): string | undefined {
 }
 
 /** Decode a JWT's middle (claims) segment as JSON. `undefined` on any failure. */
-function decodeJwtClaims(jwt: string): Record<string, unknown> | undefined {
+export function decodeJwtClaims(jwt: string): Record<string, unknown> | undefined {
   const parts = jwt.split(".");
   if (parts.length !== 3) return undefined;
   const payload = parts[1];

@@ -32,6 +32,12 @@ import type { OperatorProvisioningPort } from "../operator-provisioning";
 const FED_PUB = "A" + "F".repeat(55);
 const AGENTS_PUB = "A" + "G".repeat(55);
 
+/** cortex#2534 — an agents-account JWT carrying unlimited JetStream limits. */
+const AGENTS_JS_JWT = `eyJ0eXAiOiJKV1QifQ.${btoa(JSON.stringify({ nats: { limits: { mem_storage: -1, disk_storage: -1 } } }))
+  .replace(/\+/g, "-")
+  .replace(/\//g, "_")
+  .replace(/=+$/, "")}.sig`;
+
 /** The options arc's `nats add-federation-export` ACTUALLY defines (src/cli.ts). */
 const ARC_KNOWN_OPTS = new Set([
   "--from-account",
@@ -97,12 +103,16 @@ function buildPorts(runner: ArcFederationRunner): { ports: ProvisionPorts; writt
   // cortex#1265 — a fake export port (the export-arc seam is unit-tested separately).
   const exportPort = {
     exportOperator: async () => ({ ok: true as const, operatorJwt: "eyJ.op.sig", pubKey: "OD4D" }),
-    exportAccount: async () => ({ ok: true as const, pubKey: FED_PUB, jwt: "eyJ.fed.sig" }),
+    exportAccount: async (name: string) =>
+      name.endsWith("_AGENTS")
+        ? { ok: true as const, pubKey: AGENTS_PUB, jwt: AGENTS_JS_JWT }
+        : { ok: true as const, pubKey: FED_PUB, jwt: "eyJ.fed.sig" },
     exportSystem: async () => ({ ok: true as const, pubKey: "A" + "S".repeat(55), jwt: "eyJ.sys.sig" }),
   };
   // The REAL wiring adapter — only the arc subprocess runner is swapped.
   const federationWiring = buildFederationWiringAdapter(runner);
-  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort }, written };
+  const jetstream = { enable: async () => ({ ok: true as const }) };
+  return { ports: { operator, signing, federationWiring, configWrite, export: exportPort, jetstream }, written };
 }
 
 function inputs(): ProvisionInputs {

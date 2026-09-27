@@ -9,6 +9,7 @@
  *   1. ensure the NSC operator        (arc nats init-operator)   — per principal
  *   2. ensure the federation account  (arc nats add-account)     — per stack, leaf-bound
  *   3. ensure the per-stack agents account (arc nats add-account)— ADR-0012 isolation
+ *   3a. ensure JetStream on the agents account (nsc edit account) — cortex#2534
  *   4. ensure the stack signing seed  (provision-stack generate) — chmod 600, no-clobber
  *   5. wire federated.> export/import (arc nats add-federation-export) — fed → agents
  *   6. export operator-mode JWTs       (arc nats export-{operator,account,system}) — cortex#1265
@@ -37,7 +38,20 @@
  * This module is PURE over injected ports — zero fs / arc / nsc. The live
  * adapters live in `network-provision-adapters.ts`; the arc account-tree seam is
  * {@link OperatorProvisioningPort} (operator-provisioning.ts) + the existing
- * {@link FederationWiringPort}. cortex NEVER runs nsc itself (ADR-0013 invariant).
+ * {@link FederationWiringPort}. cortex runs nsc through arc (ADR-0013), with ONE
+ * exception: {@link AgentsJetStreamPort}, whose live adapter shells
+ * `nsc edit account` because arc has no verb to grant an account JetStream yet
+ * (arc#384). Swap that adapter for the arc verb once it ships.
+ *
+ * ## Agents-account JetStream (cortex#2534)
+ *
+ * The daemon lands in the agents account (make-live) and provisions its streams
+ * there, so that account needs JetStream limits. arc's `add-account` mints it
+ * WITHOUT any, so step 3a grants unlimited mem/disk storage and reads the JWT
+ * back to verify. An existing agents account is PROBED first (a read-only
+ * `arc nats export-account`, also in dry-run): limits present ⇒ `[ok]`, absent ⇒
+ * `[wire]`. That repairs accounts minted before the fix. The FED and SYS accounts
+ * never get JetStream.
  *
  * ## Idempotency & no-clobber
  *
@@ -52,12 +66,14 @@
  *
  * Dry-run (the DEFAULT-safe posture) computes the plan from config + filesystem
  * state and mutates NOTHING — it never shells the account-tree mint verbs (which
- * have no dry-run mode in arc). `--apply` executes the mints + wiring + config
- * write-back, fail-fast: the whole plan is validated before the first mutation,
- * and any arc failure aborts BEFORE the config write so no half-provisioned
- * config block is left behind.
+ * have no dry-run mode in arc). Its only arc call is the read-only agents-account
+ * JetStream probe, made when config already records the agents account.
+ * `--apply` executes the mints + wiring + config write-back, fail-fast: the
+ * whole plan is validated before the first mutation, and any arc failure aborts
+ * BEFORE the config write so no half-provisioned config block is left behind.
  */
 
+import { decodeJwtClaims } from "./network-bus-safety";
 import type { FederationWiringPort } from "./network-ports";
 import type { OperatorProvisioningPort } from "./operator-provisioning";
 
@@ -172,6 +188,16 @@ export interface OperatorModeExportPort {
   >;
 }
 
+/**
+ * cortex#2534 — grants the per-stack agents account JetStream (unlimited mem +
+ * disk storage). The live adapter shells `nsc edit account` (arc has no verb for
+ * it yet — arc#384). Idempotent; NEVER throws. The orchestrator verifies the
+ * grant by reading the account JWT back through {@link OperatorModeExportPort}.
+ */
+export interface AgentsJetStreamPort {
+  enable(opts: { name: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
 /** The full port bundle the orchestrator depends on. */
 export interface ProvisionPorts {
   operator: OperatorProvisioningPort;
@@ -179,6 +205,79 @@ export interface ProvisionPorts {
   federationWiring: FederationWiringPort;
   configWrite: ProvisionConfigWritePort;
   export: OperatorModeExportPort;
+  jetstream: AgentsJetStreamPort;
+}
+
+// =============================================================================
+// Agents-account JetStream probe (cortex#2534)
+// =============================================================================
+
+/**
+ * Does an account JWT carry JetStream limits? JetStream counts as on when `nats.limits.mem_storage` or `disk_storage` is non-zero (-1 =
+ * unlimited, >0 = a byte cap), or any `tiered_limits` tier is set. `undefined`
+ * when the JWT does not decode.
+ */
+export function accountJwtHasJetStream(jwt: string): boolean | undefined {
+  const claims = decodeJwtClaims(jwt);
+  if (claims === undefined) return undefined;
+  const nats = claims.nats;
+  if (nats === null || typeof nats !== "object") return false;
+  const limits = (nats as Record<string, unknown>).limits;
+  if (limits === null || typeof limits !== "object") return false;
+  const l = limits as Record<string, unknown>;
+  const nonZero = (v: unknown): boolean => typeof v === "number" && v !== 0;
+  if (nonZero(l.mem_storage) || nonZero(l.disk_storage)) return true;
+  const tiers = l.tiered_limits;
+  return tiers !== null && typeof tiers === "object" && Object.keys(tiers).length > 0;
+}
+
+/** What the read-only probe of the agents account found. */
+export type AgentsJetStreamProbe =
+  | { status: "enabled" }
+  | { status: "disabled" }
+  /** The export failed or the JWT did not decode — cannot tell. */
+  | { status: "unknown"; reason: string }
+  /** The account nsc resolves by name is not the one config records (wrong nsc operator context?). */
+  | { status: "drift"; exportedPubKey: string }
+  /** Not probed: config records no agents account yet (it is minted this run). */
+  | { status: "not-probed" };
+
+/** Read the agents account's JWT (read-only) and classify its JetStream state. */
+async function probeAgentsJetStream(
+  name: string,
+  expectedPubKey: string,
+  exportPort: OperatorModeExportPort,
+): Promise<AgentsJetStreamProbe> {
+  const res = await exportPort.exportAccount(name);
+  if (!res.ok) return { status: "unknown", reason: res.reason };
+  if (res.pubKey !== expectedPubKey) return { status: "drift", exportedPubKey: res.pubKey };
+  const enabled = accountJwtHasJetStream(res.jwt);
+  if (enabled === undefined) return { status: "unknown", reason: `the ${name} account JWT did not decode` };
+  return { status: enabled ? "enabled" : "disabled" };
+}
+
+/** The JetStream plan row, from the probe. `[ok]` only when limits were read. */
+function agentsJetStreamPlanItem(inputs: ProvisionInputs, probe: AgentsJetStreamProbe): PlanItem {
+  const name = inputs.agentsAccountName;
+  const step = "agents account JetStream";
+  switch (probe.status) {
+    case "enabled":
+      return { step, status: "ok", detail: `${name} (JetStream limits present)` };
+    case "disabled":
+      return { step, status: "wire", detail: `${name} (JetStream disabled → grant unlimited mem/disk)` };
+    case "unknown":
+      return { step, status: "wire", detail: `${name} (JetStream state unknown: ${probe.reason})` };
+    case "drift":
+      return {
+        step,
+        status: "wire",
+        detail:
+          `${name} (pubkey drift: config records ${inputs.state.agentsAccount}, nsc resolves ` +
+          `${probe.exportedPubKey} — check the current nsc operator; --apply refuses)`,
+      };
+    case "not-probed":
+      return { step, status: "wire", detail: `${name} (grant unlimited mem/disk after mint)` };
+  }
 }
 
 // =============================================================================
@@ -266,7 +365,10 @@ export interface ProvisionResult {
  * idempotent). The operator is treated as present iff the federation account is
  * (an account cannot exist without its operator).
  */
-export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
+export function buildProvisionPlan(
+  inputs: ProvisionInputs,
+  agentsJetStream: AgentsJetStreamProbe = { status: "not-probed" },
+): PlanItem[] {
   const { force, state } = inputs;
   const operatorPresent = !force && state.federationAccount !== undefined;
   const fedPresent = !force && state.federationAccount !== undefined;
@@ -291,6 +393,7 @@ export function buildProvisionPlan(inputs: ProvisionInputs): PlanItem[] {
       status: agentsPresent ? "ok" : "mint",
       detail: agentsPresent ? `${inputs.agentsAccountName} (${state.agentsAccount})` : inputs.agentsAccountName,
     },
+    agentsJetStreamPlanItem(inputs, agentsJetStream),
     {
       // cortex#1333 — the SYS (system) account. An operator-mode NATS bus with
       // JetStream enabled FATALS at boot without a configured system_account. This
@@ -353,7 +456,13 @@ export async function provisionStack(
   inputs: ProvisionInputs,
   ports: ProvisionPorts,
 ): Promise<ProvisionResult> {
-  const plan = buildProvisionPlan(inputs);
+  // cortex#2534 — read-only probe of an agents account config already records,
+  // so the plan (dry-run included) reports its JetStream state.
+  const agentsProbe: AgentsJetStreamProbe =
+    inputs.state.agentsAccount !== undefined
+      ? await probeAgentsJetStream(inputs.agentsAccountName, inputs.state.agentsAccount, ports.export)
+      : { status: "not-probed" };
+  const plan = buildProvisionPlan(inputs, agentsProbe);
   const planLines = plan.map(renderPlanLine);
 
   if (!inputs.apply) {
@@ -372,6 +481,21 @@ export async function provisionStack(
 
   const { force, state } = inputs;
   const steps: string[] = [];
+
+  // cortex#2534 — refuse BEFORE the first mutation when the agents account's
+  // JetStream state cannot be verified, or nsc resolves a different account.
+  if (agentsProbe.status === "unknown") {
+    return fail(plan, steps, `cannot read the ${inputs.agentsAccountName} account JWT to check JetStream: ${agentsProbe.reason}`);
+  }
+  if (agentsProbe.status === "drift") {
+    return fail(
+      plan,
+      steps,
+      `agents account pubkey drift: config records ${state.agentsAccount} but nsc resolves ` +
+        `${inputs.agentsAccountName} to ${agentsProbe.exportedPubKey}. Check the current nsc operator ` +
+        `context before re-running.`,
+    );
+  }
 
   // The pubkeys we resolve (minted-or-existing) and write back to config.
   let resolvedAccount = state.federationAccount;
@@ -404,13 +528,58 @@ export async function provisionStack(
   }
 
   // 3. Per-stack agents account (ADR-0012 isolation).
+  let agentsJetStream: AgentsJetStreamProbe = agentsProbe;
   if (agentsNeeded) {
     const r = await ports.operator.addAccount({ name: inputs.agentsAccountName });
     if (!r.ok) return fail(plan, steps, `add-account (agents) failed: ${r.reason}`);
     resolvedAgents = r.pubKey;
     steps.push(`agents account ${r.created ? "minted" : "present"}: ${r.account} (${r.pubKey})`);
+    if (r.created) {
+      // arc mints the account with no JetStream limits.
+      agentsJetStream = { status: "disabled" };
+    } else if (agentsProbe.status === "not-probed" || r.pubKey !== state.agentsAccount) {
+      // It already sat in the nsc store: read its state rather than assume it.
+      agentsJetStream = await probeAgentsJetStream(inputs.agentsAccountName, r.pubKey, ports.export);
+    }
   } else {
     steps.push(`agents account present: ${resolvedAgents}`);
+  }
+
+  // 3a. (cortex#2534) JetStream on the agents account — the daemon provisions its
+  //     streams there after make-live. Granted only when the JWT has no limits
+  //     (hand-tuned limits are never overwritten), then verified by read-back.
+  if (agentsJetStream.status === "unknown" || agentsJetStream.status === "drift") {
+    const why =
+      agentsJetStream.status === "unknown"
+        ? agentsJetStream.reason
+        : `nsc resolves it to ${agentsJetStream.exportedPubKey}, add-account returned ${resolvedAgents}`;
+    return fail(plan, steps, `cannot verify JetStream on ${inputs.agentsAccountName}: ${why}`);
+  }
+  if (agentsJetStream.status === "enabled") {
+    steps.push(`agents account JetStream present (untouched): ${inputs.agentsAccountName}`);
+  } else if (resolvedAgents !== undefined) {
+    const en = await ports.jetstream.enable({ name: inputs.agentsAccountName });
+    if (!en.ok) return fail(plan, steps, `enabling JetStream on ${inputs.agentsAccountName} failed: ${en.reason}`);
+    const check = await probeAgentsJetStream(inputs.agentsAccountName, resolvedAgents, ports.export);
+    if (check.status !== "enabled") {
+      const seen = check.status === "unknown" ? `could not be read back: ${check.reason}` : "still has JetStream disabled";
+      return fail(
+        plan,
+        steps,
+        `JetStream grant on ${inputs.agentsAccountName} did not take — the account ${seen}. ` +
+          `Aborting before the config write.`,
+      );
+    }
+    steps.push(`agents account JetStream enabled (mem/disk unlimited, verified): ${inputs.agentsAccountName}`);
+    if (!agentsNeeded || agentsProbe.status !== "not-probed") {
+      // A repair of an account that may already be live: make-live only appends a
+      // MISSING account to resolver_preload, so a running bus keeps the old JWT.
+      steps.push(
+        `  if this stack is already live, its nats-server resolver_preload still holds the old ` +
+          `${inputs.agentsAccountName} JWT: replace it with \`arc nats export-account ${inputs.agentsAccountName} --json\`'s jwt ` +
+          `and restart nats-server (a SIGHUP does not reload resolver_preload; cortex#2539).`,
+      );
+    }
   }
 
   // 3.5 (cortex#1333) — ensure the SYS (system) account; see the rationale on the
