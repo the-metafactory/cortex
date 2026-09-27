@@ -270,7 +270,7 @@ function makePorts(over?: {
  * poll, "exits" exits 1 with a fatal line, "enoent" throws on spawn, "hangs"
  * never answers. Records the argv it was spawned with + kills.
  */
-function fakeBootDeps(mode: "bootable" | "exits" | "enoent" | "hangs"): BootTestDeps & {
+function fakeBootDeps(mode: "bootable" | "exits" | "late-exit" | "enoent" | "hangs"): BootTestDeps & {
   spawned: string[][];
   kills: string[];
   confs: string[];
@@ -279,6 +279,8 @@ function fakeBootDeps(mode: "bootable" | "exits" | "enoent" | "hangs"): BootTest
   const kills: string[] = [];
   const confs: string[] = [];
   let port = 20000;
+  let clock = 0;
+  let lateExit: (() => void) | undefined;
   return {
     spawned,
     kills,
@@ -291,6 +293,11 @@ function fakeBootDeps(mode: "bootable" | "exits" | "enoent" | "hangs"): BootTest
       const exited = new Promise<{ code: number; stderr: string }>((r) => {
         resolveExit = r;
       });
+      if (mode === "late-exit") {
+        lateExit = () => {
+          resolveExit({ code: 1, stderr: "nats-server: late fatal\n" });
+        };
+      }
       if (mode === "exits") {
         resolveExit({ code: 1, stderr: 'nats-server: cannot find local account "AFED" specified in leafnode remote\n' });
       }
@@ -304,9 +311,13 @@ function fakeBootDeps(mode: "bootable" | "exits" | "enoent" | "hangs"): BootTest
     },
     pickPort: async () => ++port,
     monitorUp: async () => mode === "bootable",
-    sleep: async () => {
+    sleep: async (ms) => {
+      clock += ms;
+      // "late-exit": the process dies during the final poll sleep.
+      if (lateExit !== undefined && clock >= 100) lateExit();
       await Promise.resolve();
     },
+    now: () => clock,
     timeoutMs: 100,
     pollMs: 10,
   };
@@ -1476,6 +1487,33 @@ describe("bootTestSnapshotConfig (live adapter, scripted process) — cortex#253
       expect(res.reason).toContain("exited 1");
       expect(res.reason).toContain("cannot find local account");
     }
+  });
+
+  test("an exit during the last poll sleep reports the fatal line, not a timeout", async () => {
+    const res = await bootTestSnapshotConfig(snapshotWithLeafInclude(), fakeBootDeps("late-exit"));
+    expect(res.status).toBe("unbootable");
+    if (res.status === "unbootable") expect(res.reason).toContain("late fatal");
+  });
+
+  test("a full resolver's stored account JWTs are copied into the throwaway resolver dir", async () => {
+    const liveResolver = join(dir, "jwt");
+    mkdirSync(liveResolver, { recursive: true });
+    writeFileSync(join(liveResolver, "ACCT.jwt"), "eyJ.stored.jwt");
+    let copied: string | undefined;
+    const deps = fakeBootDeps("bootable");
+    const spawn = deps.spawn;
+    deps.spawn = (argv, cwd) => {
+      const scratch = (argv[2] ?? "").replace(/\/boot-test\.conf$/, "");
+      copied = readFileSync(join(scratch, "resolver", "ACCT.jwt"), "utf-8");
+      return spawn(argv, cwd);
+    };
+    const res = await bootTestSnapshotConfig(
+      { natsConfigPath: join(dir, "bus.conf"), contents: `listen: 4222\nresolver { type: full, dir: "${liveResolver}" }\n` },
+      deps,
+    );
+    expect(res.status).toBe("bootable");
+    expect(copied).toBe("eyJ.stored.jwt");
+    expect(existsSync(join(liveResolver, "ACCT.jwt"))).toBe(true); // live dir untouched
   });
 
   test("never comes up → unbootable (timeout), and the process is killed", async () => {

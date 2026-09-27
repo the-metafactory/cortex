@@ -4552,7 +4552,8 @@ Subcommands:
           Before mutating, --apply boots a throwaway copy of the current nats
           config (the rollback target) on random loopback ports and refuses if
           it does not come up (\`nats-server -t\` misses a leaf remote whose
-          \`account:\` the server does not define). Converting an anonymous bus
+          \`account:\` the server does not define); when the boot test cannot
+          run (no nats-server binary) it warns instead. Converting an anonymous bus
           that holds a \`<store_dir>/jetstream/$G\` JetStream store is refused
           (operator-mode cannot recover it, so the canary could never pass);
           --move-g-store instead stops nats-server, moves the store to

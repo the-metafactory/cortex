@@ -109,7 +109,7 @@ describe("inlineConfigIncludes", () => {
   test("inlines the leaf include exactly as cortex join renders it (ensureLeafInclude + renderLeafIncludeFile)", () => {
     const leafFile = renderLeafIncludeFile(
       { network_id: "net1", hub_url: "tls://hub.example.invalid:7422", leaf_port: 7422, members: ["alice"] },
-      { credentials: "/secrets/leaf.creds", account: FED },
+      { credentials: "/placeholder/leaf-identity", account: FED },
     );
     const root = ensureLeafInclude(`listen: "127.0.0.1:4222"\n`, "net1");
     const io = memReader({ [`/cfg/${leafIncludeFileName("net1")}`]: leafFile });
@@ -219,6 +219,17 @@ describe("renderBootTestConfig", () => {
     // jetstream domain + server_name are left alone
     expect(conf).toContain(`domain: "work-alice"`);
     expect(args).toEqual([]);
+  });
+
+  test("reports the resolver dir it rewrote, and never presents the live leaf identity file", () => {
+    const { conf, resolverDirs } = renderBootTestConfig(
+      `resolver { type: full, dir: "/data/jwt" }\nleafnodes { remotes: [ { url: "tls://hub.example.invalid:7422", credentials: "/placeholder/leaf-identity", account: "${FED}" } ] }\n`,
+      OPTS,
+    );
+    expect(resolverDirs).toEqual(["/data/jwt"]);
+    expect(conf).not.toContain("/placeholder/leaf-identity");
+    expect(conf).toContain(`credentials: "/scratch/bt/no-credentials"`);
+    expect(conf).toContain(`account: "${FED}"`);
   });
 
   test("`jetstream: enabled` with no store_dir ⇒ -sd <scratch>/store (never the live default store)", () => {

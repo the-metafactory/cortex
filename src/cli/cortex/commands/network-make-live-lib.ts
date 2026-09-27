@@ -647,7 +647,8 @@ export async function makeLiveStack(
         ? [
             "",
             `rollback snapshot: --apply boots a throwaway copy of ${inputs.natsConfigPath} (random loopback ports, ` +
-              "scratch store) BEFORE mutating, and refuses if it does not come up.",
+              "scratch store) BEFORE mutating, and refuses if it does not come up (it only warns when the " +
+              "boot test cannot run, e.g. no nats-server binary).",
           ]
         : [];
     return {
@@ -863,6 +864,13 @@ export async function makeLiveStack(
         : undefined;
     let natsStopped = false;
     let movedTo: string | undefined;
+    const startAndProbe = async (): Promise<UpResult> => {
+      if (moveOps === undefined) return restartAndProbe();
+      const started = await moveOps.startNats(inputs.natsConfigPath);
+      if (!started.ok) return { ok: false, reason: `nats-server start failed: ${started.reason}` };
+      natsStopped = false;
+      return probe();
+    };
     const bringUpWithMove = async (): Promise<UpResult> => {
       if (moveOps === undefined) return restartAndProbe();
       const stopped = await moveOps.stopNats(inputs.natsConfigPath);
@@ -872,10 +880,7 @@ export async function makeLiveStack(
       if (!moved.ok) return { ok: false, reason: `moving the $G store aside failed: ${moved.reason}` };
       movedTo = moved.movedTo;
       steps.push(`$G store moved aside (nats-server stopped, NOT deleted): ${moveOps.gStorePath} → ${moved.movedTo}`);
-      const started = await moveOps.startNats(inputs.natsConfigPath);
-      if (!started.ok) return { ok: false, reason: `nats-server start failed: ${started.reason}` };
-      natsStopped = false;
-      return probe();
+      return startAndProbe();
     };
 
     // cortex#2533 — recovery after the config was restored. Without a move this
@@ -887,11 +892,7 @@ export async function makeLiveStack(
       const notes: string[] = [];
       if (movedTo === undefined) {
         // Nothing was moved: bring the server up on the restored config.
-        if (!natsStopped) return { up: await restartAndProbe(), notes };
-        const started = await moveOps.startNats(inputs.natsConfigPath);
-        if (!started.ok) return { up: { ok: false, reason: `nats-server start failed: ${started.reason}` }, notes };
-        natsStopped = false;
-        return { up: await probe(), notes };
+        return { up: natsStopped ? await startAndProbe() : await restartAndProbe(), notes };
       }
       const strandedNote = (why: string, at: string): string =>
         `$G store NOT moved back (${why}) — it is still at ${at}; stop nats-server and move it to ` +
@@ -911,10 +912,7 @@ export async function makeLiveStack(
       } else {
         notes.push(strandedNote(back.reason, movedTo));
       }
-      const started = await moveOps.startNats(inputs.natsConfigPath);
-      if (!started.ok) return { up: { ok: false, reason: `nats-server start failed: ${started.reason}` }, notes };
-      natsStopped = false;
-      return { up: await probe(), notes };
+      return { up: await startAndProbe(), notes };
     };
 
     const initial = await bringUpWithMove();
@@ -1034,7 +1032,7 @@ function gStorePreflight(
   ports: MakeLivePorts,
   converting: boolean,
 ):
-  | { ok: true; move?: { gStorePath: string; storeDir: string; streams: GStoreStream[] }; notes: string[] }
+  | { ok: true; move?: Omit<Extract<GStoreInspection, { status: "present" }>, "status">; notes: string[] }
   | { ok: false; reason: string } {
   const nothingToMove = (why: string): string[] =>
     inputs.moveGStore === true ? [`--move-g-store: ${why} — nothing to move`] : [];

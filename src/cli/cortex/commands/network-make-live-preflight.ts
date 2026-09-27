@@ -223,6 +223,12 @@ export interface BootTestConfig {
    * is one or the other.)
    */
   args: string[];
+  /**
+   * The resolver `dir` values the copy rewrote to `<scratch>/resolver`. The
+   * adapter copies the (first existing) one there, so a full resolver's stored
+   * account JWTs are present in the copy just as they are live.
+   */
+  resolverDirs: string[];
 }
 
 /** Monitor, profiling, pid/ports/log directives — dropped from the throwaway copy. */
@@ -254,8 +260,13 @@ const DROPPED_KEYS = [
  *   - `store_dir` → `<scratch>/store`, resolver `dir` → `<scratch>/resolver`;
  *   - monitor/profiling/pid/ports/log directives dropped, then one
  *     `http: "127.0.0.1:<monitorPort>"` appended.
- * Account definitions, `operator`/`resolver_preload`, and every leaf remote's
- * `account:` line are left as they are — those are what the boot test is for.
+ * Account definitions, the NSC trust chain (`resolver_preload`, the resolver's
+ * account JWTs — copied into the scratch dir by the adapter, see
+ * {@link BootTestConfig.resolverDirs}) and every leaf remote's `account:` line
+ * are kept — those are what the boot test is for. A remote's `credentials`
+ * file is pointed at a nonexistent scratch path, so the copy never presents
+ * the live leaf identity to whatever answers on the dead port (a missing
+ * credentials file does not stop nats-server from booting).
  */
 export function renderBootTestConfig(flatText: string, opts: BootTestRenderOptions): BootTestConfig {
   const scratchStore = join(opts.scratchDir, "store");
@@ -272,7 +283,15 @@ export function renderBootTestConfig(flatText: string, opts: BootTestRenderOptio
 
   const storeDirRewritten = keyValueRe("store_dir").test(text);
   text = text.replace(keyValueRe("store_dir"), (_m, key: string) => `${key}: "${scratchStore}"`);
-  text = text.replace(keyValueRe("dir"), (_m, key: string) => `${key}: "${scratchResolver}"`);
+  const resolverDirs: string[] = [];
+  text = text.replace(keyValueRe("dir"), (_m, key: string, value: string) => {
+    resolverDirs.push(unquote(value));
+    return `${key}: "${scratchResolver}"`;
+  });
+  text = text.replace(
+    keyValueRe("credentials"),
+    (_m, key: string) => `${key}: "${join(opts.scratchDir, "no-credentials")}"`,
+  );
 
   for (const key of DROPPED_KEYS) {
     text = text.replace(keyValueRe(key), "");
@@ -285,5 +304,5 @@ export function renderBootTestConfig(flatText: string, opts: BootTestRenderOptio
     `http: "127.0.0.1:${opts.monitorPort.toString()}"`,
     "",
   ].join("\n");
-  return { conf, args: storeDirRewritten ? [] : ["-sd", scratchStore] };
+  return { conf, args: storeDirRewritten ? [] : ["-sd", scratchStore], resolverDirs };
 }

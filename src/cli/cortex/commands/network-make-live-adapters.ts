@@ -18,6 +18,7 @@ import {
   readdirSync,
   mkdirSync,
   mkdtempSync,
+  cpSync,
   renameSync,
   rmSync,
   statSync,
@@ -718,6 +719,8 @@ export interface BootTestDeps {
   /** Is the throwaway server's HTTP monitor answering on `port`? Never rejects. */
   monitorUp(port: number): Promise<boolean>;
   sleep(ms: number): Promise<void>;
+  /** Monotonic-enough wall clock (ms) for the come-up deadline. */
+  now(): number;
   /** How long the server gets to come up before the snapshot counts as unbootable. */
   timeoutMs: number;
   /** Poll interval while waiting. */
@@ -772,7 +775,13 @@ const realBootTestDeps: BootTestDeps = {
       return false;
     }
   },
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  // unref'd: a pending kill-grace timer must not hold the CLI open after the
+  // boot-test process has already exited.
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms).unref();
+    }),
+  now: () => Date.now(),
   timeoutMs: 15_000,
   pollMs: 250,
 };
@@ -818,8 +827,13 @@ export async function bootTestSnapshotConfig(
     const [monitorPort, deadPort] = [await deps.pickPort(), await deps.pickPort()];
     const rendered = renderBootTestConfig(flat.text, { monitorPort, deadPort, scratchDir });
     const bootConfPath = join(scratchDir, "boot-test.conf");
-    // 0600 — the copy carries the same operator/account JWTs the live config does.
+    // 0600 — the copy carries the same account JWTs the live config does.
     writeFileSync(bootConfPath, rendered.conf, { mode: 0o600 });
+    // A full resolver's stored account JWTs must be present in the copy too.
+    const liveResolverDir = rendered.resolverDirs.map(expandTilde).find((d) => isAbsolute(d) && existsSync(d));
+    if (liveResolverDir !== undefined) {
+      cpSync(liveResolverDir, join(scratchDir, "resolver"), { recursive: true });
+    }
 
     try {
       proc = deps.spawn(["nats-server", "-c", bootConfPath, ...rendered.args], dirname(configPath));
@@ -833,17 +847,21 @@ export async function bootTestSnapshotConfig(
       exit = r;
     });
 
-    const attempts = Math.max(1, Math.ceil(deps.timeoutMs / deps.pollMs));
-    for (let i = 0; i < attempts; i++) {
-      if (exit !== undefined) {
-        return {
-          status: "unbootable",
-          reason: `nats-server exited ${exit.code.toString()} on boot: ${stderrTail(exit.stderr)}`,
-        };
-      }
+    const exitedEarly = (e: { code: number; stderr: string }): SnapshotBootOutcome => ({
+      status: "unbootable",
+      reason: `nats-server exited ${e.code.toString()} on boot: ${stderrTail(e.stderr)}`,
+    });
+    const deadline = deps.now() + deps.timeoutMs;
+    do {
+      if (exit !== undefined) return exitedEarly(exit);
       if (await deps.monitorUp(monitorPort)) return { status: "bootable" };
       await deps.sleep(deps.pollMs);
-    }
+    } while (deps.now() < deadline);
+    // An exit during the last sleep carries the fatal line — report it, not a
+    // timeout. (Read through a function: `exit` is assigned in a callback, which
+    // the checker's flow narrowing cannot see.)
+    const lateExit = ((): { code: number; stderr: string } | undefined => exit)();
+    if (lateExit !== undefined) return exitedEarly(lateExit);
     return {
       status: "unbootable",
       reason: `nats-server did not come up within ${(deps.timeoutMs / 1000).toString()}s`,
