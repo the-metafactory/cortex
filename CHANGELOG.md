@@ -1,5 +1,67 @@
 # Cortex — Changelog
 
+## 6.15.0 — 2026-09-27 — Per-stack NATS account cutover fixes and stack isolation on a shared bus
+
+Five fixes from a live conversion of a two-stack laptop bus from anonymous
+`$G` mode to signed per-stack NATS accounts. Each one was hand-repaired
+during that cutover; this release makes the tooling do it.
+
+- **make-live refuses a stranded `$G` JetStream store** (#2533, #2537). The
+  post-restart health check can never pass while `<store_dir>/jetstream/$G`
+  exists, so the canary always rolled back. make-live now refuses before any
+  mutation and lists what the store holds. An explicit opt-in flag moves the
+  store aside (never deletes it) with the server stopped, and moves it back on
+  rollback. The rollback snapshot is now boot-tested on a throwaway port and
+  store dir before the mutation: `nats-server -t` does not resolve leaf-remote
+  accounts, so a snapshot could pass `-t` and still fail to boot.
+- **provision grants JetStream on the agents account** (#2534, #2540). The
+  per-stack agents account was minted with JetStream disabled, so the daemon
+  could not provision its streams after make-live. New accounts get unlimited
+  mem/disk storage, verified by reading the account JWT back. An existing
+  agents account without JetStream limits now shows `[wire]`, and `--apply`
+  repairs it; hand-set limits are never overwritten. FED and SYS are untouched.
+  This adds the one direct `nsc` call in cortex (released arc has no verb for
+  it; arc#433 adds one).
+- **provision no longer invents a server config for a shared bus** (#2535,
+  #2542). With no `nats_infra.config_path`, a second stack on a shared bus got
+  a non-existent `<slug>.conf`. provision now adopts the config_path (and
+  plist_path) of the same-principal stack on the same host:port, or leaves the
+  field unset so make-live asks for `--nats-config`. A stack alone on its bus
+  keeps the `<slug>.conf` bootstrap convention.
+- **Mission Control never holds a sibling stack's daemon creds** (#2536,
+  #2545). Local-stack presence aggregation connected to each auto-discovered
+  sibling with that sibling's own daemon creds. It now needs a subscribe-only
+  observer creds file (`mc-observer-<self>-to-<sibling>.creds` in the NATS
+  creds directory) whose JWT is checked: publish denied, subscribe limited to
+  `local.<principal>.<sibling>.agent.>`. Without one the sibling is skipped and
+  the boot log prints how to mint it. Open buses (no creds) and explicit
+  `mc.aggregateLocalStacks.stacks[]` entries behave as before.
+- **Two stacks sharing one NATS account no longer fight** (#1503, #2548). The
+  review streams and durables had no stack in their names. The second stack's
+  subjects were never stored (the "config drifts" warning), and each boot
+  recreated the other stack's durable. Shared fixed-name streams now take the
+  additive union of every stack's subjects, and the four review durables are
+  named `cortex-review-consumer-{principal}_{stack}-{agent}`.
+
+### Upgrade notes
+
+- **Review durables migrate on boot.** An idle legacy
+  `cortex-review-consumer-{principal}-{agent}` durable owned by this stack is
+  replaced by the scoped one, starting after its last delivery (no replay, no
+  loss). A busy one stays bound until the first idle boot. A durable with no
+  filter (pre-#1186) is never removed automatically; the log asks for
+  `nats consumer rm`. Upgrade all runtimes of a stack together.
+- **Sibling presence on an account-isolated bus** disappears from the Network
+  view until an observer creds file is minted (see the boot log). Session trees
+  from `dbRead` are unaffected.
+- **Live agents accounts minted before this release** get JetStream in the
+  account JWT on the next `provision --apply`, but a running nats-server keeps
+  the old JWT until it is refreshed. provision prints the steps (#2539).
+
+Follow-ups: #2539, #2544, #2547, arc#433, arc#434.
+
+Releases 6.13.1–6.14.0 are described on their GitHub release pages.
+
 ## 6.13.0 — 2026-07-26 — Execution-boundary hardening: the NWS review response (epic #2341)
 
 The response to NorthWoods Sentinel Labs' 2026-07-23 adversarial review is
