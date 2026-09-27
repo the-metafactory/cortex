@@ -1218,6 +1218,7 @@ describe("makeLiveStack — cortex#2533 $G store pre-flight", () => {
     expect(res.reason).toContain("/data/nats/jetstream/$G");
     expect(res.reason).toContain("ORDERS (2.0 KiB), EVENTS (0 B)");
     expect(res.reason).toContain("--move-g-store");
+    expect(res.reason).toContain("Only if they are empty or disposable");
     expect(res.reason).toContain("Nothing was changed");
     expect(calls).toEqual([]); // no snapshot, bootstrap, restart, mint
   });
@@ -1259,9 +1260,13 @@ describe("makeLiveStack — cortex#2533 $G store pre-flight", () => {
     ]);
     expect(calls.at(-2)?.startsWith("mint:")).toBe(true);
     expect(calls.at(-1)).toBe("restart-daemon");
-    expect(res.steps.join("\n")).toContain(
+    const out = res.steps.join("\n");
+    expect(out).toContain(
       "$G store moved aside (nats-server stopped, NOT deleted): /data/nats/jetstream/$G → /data/nats/G-moved-aside-T1",
     );
+    // Honest about the outcome: the moved streams are offline, not migrated.
+    expect(out).toContain("NOTE: the $G streams are now OFFLINE — the store at /data/nats/G-moved-aside-T1");
+    expect(out).toContain("will be moved to /data/nats/G-moved-aside-<timestamp>");
   });
 
   test("--move-g-store + unhealthy canary → rollback: restore config → stop → move $G BACK → start → probe", async () => {
@@ -1327,6 +1332,9 @@ describe("makeLiveStack — cortex#2533 $G store pre-flight", () => {
     const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
     expect(res.ok).toBe(false);
     expect(calls.filter((c) => c === "start-nats").length).toBe(2);
+    // The bus came back, but NOT to its prior state — never claim it did.
+    expect(res.reason).not.toContain("restored to prior state");
+    expect(res.reason).toContain("$G streams are OFFLINE until the store is moved back");
     expect(res.reason).toContain("$G store NOT moved back ($G exists again) — it is still at /data/nats/G-moved-aside-T1");
     expect(res.reason).toContain("/data/nats/jetstream/$G by hand");
   });

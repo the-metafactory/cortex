@@ -887,12 +887,12 @@ export async function makeLiveStack(
     // is the plain restart. With one, the `$G` store goes back while the server
     // is stopped. If it cannot go back, the bus is still started on the restored
     // config (a DOWN bus is the worse outcome) and the note names both paths.
-    const recoverWithMove = async (): Promise<{ up: UpResult; notes: string[] }> => {
-      if (moveOps === undefined) return { up: await restartAndProbe(), notes: [] };
+    const recoverWithMove = async (): Promise<{ up: UpResult; notes: string[]; stranded: boolean }> => {
+      if (moveOps === undefined) return { up: await restartAndProbe(), notes: [], stranded: false };
       const notes: string[] = [];
       if (movedTo === undefined) {
         // Nothing was moved: bring the server up on the restored config.
-        return { up: natsStopped ? await startAndProbe() : await restartAndProbe(), notes };
+        return { up: natsStopped ? await startAndProbe() : await restartAndProbe(), notes, stranded: false };
       }
       const strandedNote = (why: string, at: string): string =>
         `$G store NOT moved back (${why}) — it is still at ${at}; stop nats-server and move it to ` +
@@ -901,7 +901,7 @@ export async function makeLiveStack(
         const stopped = await moveOps.stopNats(inputs.natsConfigPath);
         if (!stopped.ok) {
           notes.push(strandedNote(`could not stop nats-server: ${stopped.reason}`, movedTo));
-          return { up: await restartAndProbe(), notes };
+          return { up: await restartAndProbe(), notes, stranded: true };
         }
         natsStopped = true;
       }
@@ -912,7 +912,7 @@ export async function makeLiveStack(
       } else {
         notes.push(strandedNote(back.reason, movedTo));
       }
-      return { up: await startAndProbe(), notes };
+      return { up: await startAndProbe(), notes, stranded: !back.ok };
     };
 
     const initial = await bringUpWithMove();
@@ -928,10 +928,15 @@ export async function makeLiveStack(
       if (natsSnapshot !== undefined && canary !== undefined) {
         try {
           canary.restore(natsSnapshot);
-          const { up: recovery, notes } = await recoverWithMove();
+          const { up: recovery, notes, stranded } = await recoverWithMove();
           const extra = notes.length > 0 ? `; ${notes.join("; ")}` : "";
+          const health = recovery.ok && recovery.inconclusive ? INCONCLUSIVE_HEALTH_NOTICE : "verified healthy";
+          // A bus that came back WITHOUT its $G store is not "the prior state" —
+          // never claim so when the operator has a manual move-back to do.
           rollbackNote = recovery.ok
-            ? `rolled back nats config + restarted (bus restored to prior state, ${recovery.inconclusive ? INCONCLUSIVE_HEALTH_NOTICE : "verified healthy"})${extra}`
+            ? stranded
+              ? `rolled back nats config + restarted (bus up, ${health}) but its $G streams are OFFLINE until the store is moved back — intervene manually${extra}`
+              : `rolled back nats config + restarted (bus restored to prior state, ${health})${extra}`
             : `rolled back nats config but the recovery restart did NOT bring the bus back up (${recovery.reason}) — bus may be DOWN, intervene manually${extra}`;
         } catch (err) {
           rollbackNote =
@@ -945,6 +950,13 @@ export async function makeLiveStack(
       }
       steps.push(`WARN: ${rollbackNote}`);
       return fail(plan, steps, `nats-server restart failed (${initial.reason}); ${rollbackNote}`);
+    }
+    if (movedTo !== undefined) {
+      steps.push(
+        `NOTE: the $G streams are now OFFLINE — the store at ${movedTo} is kept on disk (not deleted) but no ` +
+          "server serves it. On a shared bus this includes other stacks' streams. Recover any you still need " +
+          "by re-creating them under an operator-mode account; delete the moved dir only once nothing needs it.",
+      );
     }
     steps.push(
       `nats-server restarted (loaded ${inputs.agentsAccountName} into MEMORY resolver` +
@@ -1068,9 +1080,10 @@ function gStorePreflight(
         `${g.gStorePath} (${contents}). After the switch to operator-mode, nats-server cannot recover ` +
         "those streams, so /healthz stays 503 and the canary would roll the change back. On a bus shared " +
         "by several stacks this store may hold their streams too. Nothing was changed. To proceed, " +
-        "migrate or drain those streams first, or re-run with --move-g-store: " +
-        `make-live then stops nats-server, moves the store to ${target} (never deleted), starts it on ` +
-        "the operator-mode config, and moves the store back if the canary rolls back.",
+        "migrate or drain those streams first. Only if they are empty or disposable, re-run with " +
+        `--move-g-store: make-live then stops nats-server, moves the store to ${target}, starts it on ` +
+        "the operator-mode config, and moves the store back if the canary rolls back. On success those " +
+        "streams go OFFLINE: the moved store is kept on disk (never deleted) but no server serves it.",
     };
   }
   if (ports.restart.stopNats === undefined || ports.restart.startNats === undefined) {
@@ -1092,7 +1105,10 @@ function gStorePreflight(
   return {
     ok: true,
     move: { gStorePath: g.gStorePath, storeDir: g.storeDir, streams: g.streams },
-    notes: [`$G store at ${g.gStorePath} (${contents}) — --move-g-store: moved to ${target} with nats-server stopped`],
+    notes: [
+      `$G store at ${g.gStorePath} (${contents}) — --move-g-store: will be moved to ${target} with nats-server ` +
+        "stopped; its streams go OFFLINE after the switch (kept on disk, not served)",
+    ],
   };
 }
 
