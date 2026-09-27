@@ -42,7 +42,7 @@
 // spurious join REFUSAL, not a crash — but still avoidable).
 // =============================================================================
 
-function stripConfigComments(natsConfigText: string): string {
+export function stripConfigComments(natsConfigText: string): string {
   const noBlocks = natsConfigText.replace(/\/\*[\s\S]*?\*\//g, (m) =>
     m.replace(/[^\n]/g, " "),
   );

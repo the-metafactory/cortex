@@ -377,3 +377,87 @@ describe("cortex network make-live — credsPath write-back (v5.30.2, C-1265c)",
     expect(configWrites[0]?.credsPath).toBe(BUS_CREDS_DEFAULT);
   });
 });
+
+// ── cortex#2533 — --move-g-store ─────────────────────────────────────────────
+
+/** A provisioned stack whose bus is still anonymous (conversion) and carries the operator-mode JWTs. */
+const CONVERTIBLE = loaded({
+  principal: { id: "alice" },
+  config: { nats: { name: "cortex-work", credsPath: ABSENT_CREDS } } as unknown as AgentConfig,
+  stack: {
+    id: "alice/work",
+    nkey_seed_path: PROVISIONED.stack?.nkey_seed_path,
+    nats_infra: {
+      account: "A" + "B".repeat(55),
+      account_jwt: "eyJhY2N0.eyJhY2N0.sig",
+      operator_jwt: "eyJvcA.eyJvcA.sig",
+      agents_account: AGENTS_PUB,
+      creds_path: PROVISIONED.stack?.nats_infra?.creds_path,
+    },
+  },
+});
+
+/** The fake factory, turned into an anonymous bus with a `$G` store + stop/start + canary. */
+function gStoreFactory(): { factory: MakeLivePortsFactory; calls: string[] } {
+  const base = fakeFactory();
+  const factory: MakeLivePortsFactory = (mutate) => {
+    const ports = base.factory(mutate);
+    ports.resolver.hasResolverPreload = () => false;
+    ports.restart.stopNats = async () => { base.calls.push("stop-nats"); return { ok: true }; };
+    ports.restart.startNats = async () => { base.calls.push("start-nats"); return { ok: true }; };
+    ports.natsCanary = {
+      validateConfig: async () => ({ status: "valid" }),
+      snapshot: (natsConfigPath) => ({ natsConfigPath, contents: "listen: 4222\n" }),
+      restore: () => { base.calls.push("restore"); },
+      isHealthy: async () => ({ healthy: true }),
+      bootTest: async () => { base.calls.push("boot-test"); return { status: "bootable" }; },
+    };
+    ports.gStore = {
+      inspect: () => ({
+        status: "present",
+        storeDir: "/data/nats",
+        gStorePath: "/data/nats/jetstream/$G",
+        streams: [{ name: "ORDERS", bytes: 0 }],
+      }),
+      moveAside: () => { base.calls.push("g-move-aside"); return { ok: true, movedTo: "/data/nats/G-moved-aside-T1" }; },
+      moveBack: () => { base.calls.push("g-move-back"); return { ok: true }; },
+    };
+    return ports;
+  };
+  return { factory, calls: base.calls };
+}
+
+describe("cortex network make-live — --move-g-store (cortex#2533)", () => {
+  test("without the flag, a $G store refuses (exit ≠ 0) and names the flag", async () => {
+    const { factory, calls } = gStoreFactory();
+    const res = await run(["make-live", "work", "--config", "/x/work.yaml", "--nats-config", ABSENT_NATS], CONVERTIBLE, factory);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stdout + res.stderr).toContain("--move-g-store");
+    expect(calls).toEqual([]);
+  });
+
+  test("the flag parses; dry-run shows the move-aside plan line and mutates nothing", async () => {
+    const { factory, calls } = gStoreFactory();
+    const res = await run(
+      ["make-live", "work", "--config", "/x/work.yaml", "--nats-config", ABSENT_NATS, "--move-g-store"],
+      CONVERTIBLE,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("$G store move-aside");
+    expect(res.stdout).toContain("/data/nats/jetstream/$G → /data/nats/G-moved-aside-<timestamp>");
+    expect(calls).toEqual([]);
+  });
+
+  test("--apply --move-g-store stops, moves aside, starts — never deletes", async () => {
+    const { factory, calls } = gStoreFactory();
+    const res = await run(
+      ["make-live", "work", "--config", "/x/work.yaml", "--nats-config", ABSENT_NATS, "--move-g-store", "--apply"],
+      CONVERTIBLE,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    const ops = calls.filter((c) => ["boot-test", "bootstrap", "stop-nats", "g-move-aside", "start-nats", "restart-nats"].includes(c));
+    expect(ops).toEqual(["boot-test", "bootstrap", "stop-nats", "g-move-aside", "start-nats"]);
+  });
+});

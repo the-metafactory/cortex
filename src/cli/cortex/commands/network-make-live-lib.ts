@@ -77,6 +77,7 @@ import {
   type HealthProbeResult,
   type SettleWindowOptions,
 } from "../../../common/nats/restart-with-settle";
+import { describeGStoreStreams, gStoreMoveTarget, type GStoreStream } from "./network-make-live-preflight";
 
 // =============================================================================
 // Ports
@@ -176,6 +177,14 @@ export interface ServiceRestartPort {
   restartNats(natsConfigPath: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Restart the cortex daemon loading `cortexConfigPath` (reconnect with new creds). */
   restartDaemon(cortexConfigPath: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /**
+   * cortex#2533 — stop the nats-server bound to `natsConfigPath` and keep it
+   * stopped (the `$G` store is moved aside in that window). OPTIONAL: absent ⇒
+   * `--move-g-store` refuses (never move the store under a live server).
+   */
+  stopNats?(natsConfigPath: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** cortex#2533 — start the nats-server {@link stopNats} stopped. */
+  startNats?(natsConfigPath: string): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
 /**
@@ -246,6 +255,48 @@ export interface NatsCanaryPort {
    * treated as healthy" rather than "verified healthy".
    */
   isHealthy(natsConfigPath: string): Promise<HealthProbeResult>;
+  /**
+   * cortex#2533 — BOOT the rollback snapshot on a throwaway copy (random
+   * loopback ports, scratch store, outbound URLs pointed at a dead port) and
+   * report whether it came up. `nats-server -t` does not resolve a leaf
+   * remote's `account:`, so a snapshot can pass `-t` and still refuse to boot —
+   * and the canary's rollback restores exactly that snapshot. Three states,
+   * like {@link validateConfig}: refuse on `unbootable`, warn + proceed on
+   * `skipped` (no `nats-server` binary / no prior config).
+   */
+  bootTest(snapshot: NatsConfigSnapshot): Promise<SnapshotBootOutcome>;
+}
+
+/** cortex#2533 — the verdict of {@link NatsCanaryPort.bootTest}. */
+export type SnapshotBootOutcome =
+  | { status: "bootable" }
+  | { status: "unbootable"; reason: string }
+  | { status: "skipped"; reason: string };
+
+/** cortex#2533 — what make-live found at `<store_dir>/jetstream/$G`. */
+export type GStoreInspection =
+  /** JetStream is off (or there is no config yet) — no store to worry about. */
+  | { status: "no-jetstream" }
+  | { status: "absent"; storeDir: string }
+  | { status: "present"; storeDir: string; gStorePath: string; streams: GStoreStream[] }
+  /** JetStream is on but the store dir cannot be resolved (no/relative `store_dir`). */
+  | { status: "unknown"; reason: string };
+
+/**
+ * cortex#2533 — the anonymous `$G` JetStream store an operator-mode server
+ * cannot recover. make-live refuses a conversion while it exists unless
+ * `--move-g-store` is passed; then it is MOVED aside (never deleted) while the
+ * server is stopped, and moved back on rollback.
+ */
+export interface GStorePort {
+  /** Read-only: resolve `store_dir` from the config (includes followed) and look for `jetstream/$G`. */
+  inspect(natsConfigPath: string): GStoreInspection;
+  /** Rename `gStorePath` to a timestamped dir beside `<storeDir>/jetstream`. */
+  moveAside(opts: { gStorePath: string; storeDir: string }):
+    | { ok: true; movedTo: string }
+    | { ok: false; reason: string };
+  /** Rename `movedTo` back to `gStorePath`. Refuses (never merges) when `gStorePath` exists again. */
+  moveBack(opts: { movedTo: string; gStorePath: string }): { ok: true } | { ok: false; reason: string };
 }
 
 export interface MakeLivePorts {
@@ -264,6 +315,11 @@ export interface MakeLivePorts {
    * restart (validate/snapshot/health/rollback). Absent ⇒ pre-#1483 behaviour.
    */
   natsCanary?: NatsCanaryPort;
+  /**
+   * cortex#2533 — OPTIONAL: the `$G` store pre-flight for an anonymous →
+   * operator-mode conversion. Absent ⇒ no check (callers/tests that predate it).
+   */
+  gStore?: GStorePort;
   /**
    * cortex#1483 (join-4) — settle-window tuning for the post-restart health
    * verdict (see {@link probeHealthWithSettle}). Only consulted when
@@ -343,10 +399,16 @@ export interface MakeLiveInputs {
   natsConfigPath: string;
   force: boolean;
   apply: boolean;
+  /**
+   * cortex#2533 — `--move-g-store`: on an anonymous → operator-mode conversion,
+   * move an existing `<store_dir>/jetstream/$G` aside (server stopped, never
+   * deleted, moved back on rollback) instead of refusing.
+   */
+  moveGStore?: boolean;
   state: MakeLiveState;
 }
 
-export type StepStatus = "mint" | "wire" | "restart" | "ok";
+export type StepStatus = "mint" | "wire" | "restart" | "move" | "ok";
 
 export interface PlanItem {
   step: string;
@@ -494,7 +556,39 @@ export async function makeLiveStack(
 
   const { credsNeeded, resolverNeeded, natsRestartNeeded, daemonRestartNeeded, plan: corePlan } =
     planMakeLive(inputs);
+
+  // cortex#2533 — the `$G` store pre-flight, decided BEFORE any mutation (so it
+  // shows in dry-run too). Only an anonymous → operator-mode conversion (no
+  // resolver_preload block yet) leaves a `$G` store the new server cannot
+  // recover; an already-operator-mode bus has no live `$G` store to strand.
+  const preflight = gStorePreflight(inputs, ports, bootstrapNeeded && !resolverBlockPresent);
+  if (!preflight.ok) {
+    return { ok: false, applied: false, plan: [], reason: preflight.reason, steps: [] };
+  }
+  const gStoreMove = preflight.move;
+
   // cortex#1265 — prepend the bootstrap step to the plan when it is needed.
+  // cortex#2533 — the `$G` move sits right before the nats-server restart it rides on.
+  const movePlan: PlanItem[] =
+    gStoreMove === undefined
+      ? []
+      : [
+          {
+            step: "$G store move-aside",
+            status: "move",
+            detail:
+              `${gStoreMove.gStorePath} → ${gStoreMoveTarget(gStoreMove.storeDir, "<timestamp>")} ` +
+              `(${describeGStoreStreams(gStoreMove.streams)}); nats-server stopped first, never deleted, moved back on rollback`,
+          },
+        ];
+  const corePlanWithMove = corePlan.flatMap((item) =>
+    item.step === "nats-server restart"
+      ? [
+          ...movePlan,
+          gStoreMove === undefined ? item : { ...item, detail: `${item.detail} (stop → move $G aside → start)` },
+        ]
+      : [item],
+  );
   const plan: PlanItem[] = bootstrapNeeded
     ? [
         {
@@ -504,9 +598,9 @@ export async function makeLiveStack(
             `ensure operator + resolver_preload carries the federation account (+ system, if any) → ` +
             inputs.natsConfigPath,
         },
-        ...corePlan,
+        ...corePlanWithMove,
       ]
-    : corePlan;
+    : corePlanWithMove;
   const planLines = plan.map(renderPlanLine);
 
   // BLOCK 2 — resolve (read-only) the launchd/systemd descriptors the nats-server +
@@ -547,6 +641,15 @@ export async function makeLiveStack(
             `nats.credsPath defaulted → ${inputs.credsPath} (would be written to config ${inputs.systemConfigWritePath} on --apply)`,
           ]
         : [];
+    // cortex#2533 — preview the pre-mutation rollback boot-test.
+    const bootTestNote =
+      natsRestartNeeded && ports.natsCanary !== undefined
+        ? [
+            "",
+            `rollback snapshot: --apply boots a throwaway copy of ${inputs.natsConfigPath} (random loopback ports, ` +
+              "scratch store) BEFORE mutating, and refuses if it does not come up.",
+          ]
+        : [];
     return {
       ok: true,
       applied: false,
@@ -555,7 +658,9 @@ export async function makeLiveStack(
         ...planLines,
         "",
         ...targetLines,
+        ...(preflight.notes.length > 0 ? ["", ...preflight.notes] : []),
         ...(warnings.length > 0 ? ["", ...warnings] : []),
+        ...bootTestNote,
         ...defaultNote,
         "",
         credsNeeded || resolverNeeded
@@ -567,7 +672,7 @@ export async function makeLiveStack(
 
   // Prefix the apply transcript with the resolved blast targets too (so the
   // post-hoc record shows exactly which services were restarted).
-  const steps: string[] = [...targetLines];
+  const steps: string[] = [...targetLines, ...preflight.notes];
 
   // cortex#1483 (join-4) — CANARY safety: snapshot the nats config BEFORE any
   // mutation (bootstrap/resolver) so a restart that leaves the bus unhealthy
@@ -578,6 +683,17 @@ export async function makeLiveStack(
     natsRestartNeeded && ports.natsCanary !== undefined
       ? ports.natsCanary.snapshot(inputs.natsConfigPath)
       : undefined;
+
+  // cortex#2533 — BOOT-TEST the rollback target before mutating. The rollback
+  // restores exactly this snapshot; if it cannot boot, a failed canary leaves
+  // the bus DOWN, so refuse while nothing has changed yet.
+  if (natsSnapshot !== undefined && ports.natsCanary !== undefined) {
+    const boot = await bootTestSnapshot(ports.natsCanary, natsSnapshot);
+    if (!boot.ok) {
+      return { ok: false, applied: false, plan, steps, reason: boot.reason };
+    }
+    steps.push(boot.note);
+  }
 
   // 0. (cortex#1265) Bootstrap the operator-mode skeleton when the bus has no
   //    resolver_preload yet — renders operator + resolver: MEMORY + the federation
@@ -710,11 +826,8 @@ export async function makeLiveStack(
     // restores the WHOLE nats config into a MakeLiveResult). A further helper would
     // need callbacks for restart/restore/result-shape and add coupling for little
     // gain, so the parallel is documented rather than abstracted.
-    const restartAndProbe = async (): Promise<
-      { ok: true; inconclusive: boolean } | { ok: false; reason: string }
-    > => {
-      const r = await ports.restart.restartNats(inputs.natsConfigPath);
-      if (!r.ok) return r;
+    type UpResult = { ok: true; inconclusive: boolean } | { ok: false; reason: string };
+    const probe = async (): Promise<UpResult> => {
       if (canary === undefined) return { ok: true, inconclusive: false };
       const settled = await probeHealthWithSettle(
         () => canary.isHealthy(inputs.natsConfigPath),
@@ -726,8 +839,85 @@ export async function makeLiveStack(
       }
       return { ok: true, inconclusive: settled.inconclusive === true };
     };
+    const restartAndProbe = async (): Promise<UpResult> => {
+      const r = await ports.restart.restartNats(inputs.natsConfigPath);
+      if (!r.ok) return r;
+      return probe();
+    };
 
-    const initial = await restartAndProbe();
+    // cortex#2533 — the `--move-g-store` bring-up: stop → move `$G` aside →
+    // start → probe, tracking how far it got so the rollback can undo exactly
+    // that. `gStorePreflight` only yields a move when stopNats/startNats and the
+    // gStore port are all wired; `moveOps` re-narrows them for the type checker.
+    const moveOps =
+      gStoreMove !== undefined &&
+      ports.gStore !== undefined &&
+      ports.restart.stopNats !== undefined &&
+      ports.restart.startNats !== undefined
+        ? {
+            gStore: ports.gStore,
+            stopNats: ports.restart.stopNats.bind(ports.restart),
+            startNats: ports.restart.startNats.bind(ports.restart),
+            ...gStoreMove,
+          }
+        : undefined;
+    let natsStopped = false;
+    let movedTo: string | undefined;
+    const bringUpWithMove = async (): Promise<UpResult> => {
+      if (moveOps === undefined) return restartAndProbe();
+      const stopped = await moveOps.stopNats(inputs.natsConfigPath);
+      if (!stopped.ok) return { ok: false, reason: `nats-server stop failed: ${stopped.reason}` };
+      natsStopped = true;
+      const moved = moveOps.gStore.moveAside({ gStorePath: moveOps.gStorePath, storeDir: moveOps.storeDir });
+      if (!moved.ok) return { ok: false, reason: `moving the $G store aside failed: ${moved.reason}` };
+      movedTo = moved.movedTo;
+      steps.push(`$G store moved aside (nats-server stopped, NOT deleted): ${moveOps.gStorePath} → ${moved.movedTo}`);
+      const started = await moveOps.startNats(inputs.natsConfigPath);
+      if (!started.ok) return { ok: false, reason: `nats-server start failed: ${started.reason}` };
+      natsStopped = false;
+      return probe();
+    };
+
+    // cortex#2533 — recovery after the config was restored. Without a move this
+    // is the plain restart. With one, the `$G` store goes back while the server
+    // is stopped. If it cannot go back, the bus is still started on the restored
+    // config (a DOWN bus is the worse outcome) and the note names both paths.
+    const recoverWithMove = async (): Promise<{ up: UpResult; notes: string[] }> => {
+      if (moveOps === undefined) return { up: await restartAndProbe(), notes: [] };
+      const notes: string[] = [];
+      if (movedTo === undefined) {
+        // Nothing was moved: bring the server up on the restored config.
+        if (!natsStopped) return { up: await restartAndProbe(), notes };
+        const started = await moveOps.startNats(inputs.natsConfigPath);
+        if (!started.ok) return { up: { ok: false, reason: `nats-server start failed: ${started.reason}` }, notes };
+        natsStopped = false;
+        return { up: await probe(), notes };
+      }
+      const strandedNote = (why: string, at: string): string =>
+        `$G store NOT moved back (${why}) — it is still at ${at}; stop nats-server and move it to ` +
+        `${moveOps.gStorePath} by hand`;
+      if (!natsStopped) {
+        const stopped = await moveOps.stopNats(inputs.natsConfigPath);
+        if (!stopped.ok) {
+          notes.push(strandedNote(`could not stop nats-server: ${stopped.reason}`, movedTo));
+          return { up: await restartAndProbe(), notes };
+        }
+        natsStopped = true;
+      }
+      const back = moveOps.gStore.moveBack({ movedTo, gStorePath: moveOps.gStorePath });
+      if (back.ok) {
+        notes.push(`$G store moved back: ${movedTo} → ${moveOps.gStorePath}`);
+        movedTo = undefined;
+      } else {
+        notes.push(strandedNote(back.reason, movedTo));
+      }
+      const started = await moveOps.startNats(inputs.natsConfigPath);
+      if (!started.ok) return { up: { ok: false, reason: `nats-server start failed: ${started.reason}` }, notes };
+      natsStopped = false;
+      return { up: await probe(), notes };
+    };
+
+    const initial = await bringUpWithMove();
     if (!initial.ok) {
       // cortex#1483 (join-4) — AUTO-ROLLBACK: restore the pre-mutation snapshot
       // and re-restart, health-probing the RECOVERY restart too (never trust its
@@ -740,12 +930,15 @@ export async function makeLiveStack(
       if (natsSnapshot !== undefined && canary !== undefined) {
         try {
           canary.restore(natsSnapshot);
-          const recovery = await restartAndProbe();
+          const { up: recovery, notes } = await recoverWithMove();
+          const extra = notes.length > 0 ? `; ${notes.join("; ")}` : "";
           rollbackNote = recovery.ok
-            ? `rolled back nats config + restarted (bus restored to prior state, ${recovery.inconclusive ? INCONCLUSIVE_HEALTH_NOTICE : "verified healthy"})`
-            : `rolled back nats config but the recovery restart did NOT bring the bus back up (${recovery.reason}) — bus may be DOWN, intervene manually`;
+            ? `rolled back nats config + restarted (bus restored to prior state, ${recovery.inconclusive ? INCONCLUSIVE_HEALTH_NOTICE : "verified healthy"})${extra}`
+            : `rolled back nats config but the recovery restart did NOT bring the bus back up (${recovery.reason}) — bus may be DOWN, intervene manually${extra}`;
         } catch (err) {
-          rollbackNote = `rollback FAILED (${err instanceof Error ? err.message : String(err)}) — bus may be DOWN, intervene manually`;
+          rollbackNote =
+            `rollback FAILED (${err instanceof Error ? err.message : String(err)}) — bus may be DOWN, intervene manually` +
+            (movedTo !== undefined ? `; the $G store is at ${movedTo}` : "");
         }
       } else {
         rollbackNote =
@@ -827,6 +1020,131 @@ export async function makeLiveStack(
   }
 
   return { ok: true, applied: true, plan, steps };
+}
+
+/**
+ * cortex#2533 — the `$G` store pre-flight. `converting` is true only for an
+ * anonymous → operator-mode bootstrap (no resolver_preload block yet). Refuses
+ * (before any mutation) when a `$G` store exists and `--move-g-store` was not
+ * passed, or when it was passed but the stop/start or canary ports it needs
+ * are missing. Returns the move to perform (if any) plus transcript notes.
+ */
+function gStorePreflight(
+  inputs: MakeLiveInputs,
+  ports: MakeLivePorts,
+  converting: boolean,
+):
+  | { ok: true; move?: { gStorePath: string; storeDir: string; streams: GStoreStream[] }; notes: string[] }
+  | { ok: false; reason: string } {
+  const nothingToMove = (why: string): string[] =>
+    inputs.moveGStore === true ? [`--move-g-store: ${why} — nothing to move`] : [];
+  if (!converting) {
+    return { ok: true, notes: nothingToMove("not an anonymous → operator-mode conversion") };
+  }
+  if (ports.gStore === undefined) return { ok: true, notes: [] };
+
+  const g = ports.gStore.inspect(inputs.natsConfigPath);
+  if (g.status === "no-jetstream") {
+    return { ok: true, notes: nothingToMove("JetStream is not enabled on this bus") };
+  }
+  if (g.status === "absent") {
+    return { ok: true, notes: nothingToMove(`no $G store under ${g.storeDir}/jetstream`) };
+  }
+  if (g.status === "unknown") {
+    return {
+      ok: true,
+      notes: [
+        `WARN: could not check for a $G JetStream store (${g.reason}). If <store_dir>/jetstream/$G exists, ` +
+          "the operator-mode server cannot recover it: /healthz stays 503 and the canary rolls back.",
+      ],
+    };
+  }
+
+  const contents = describeGStoreStreams(g.streams);
+  const target = gStoreMoveTarget(g.storeDir, "<timestamp>");
+  if (inputs.moveGStore !== true) {
+    return {
+      ok: false,
+      reason:
+        `${inputs.natsConfigPath} is an anonymous ($G) bus with a JetStream $G account store at ` +
+        `${g.gStorePath} (${contents}). After the switch to operator-mode, nats-server cannot recover ` +
+        "those streams, so /healthz stays 503 and the canary would roll the change back. Nothing was " +
+        "changed. To proceed, migrate or drain those streams first, or re-run with --move-g-store: " +
+        `make-live then stops nats-server, moves the store to ${target} (never deleted), starts it on ` +
+        "the operator-mode config, and moves the store back if the canary rolls back.",
+    };
+  }
+  if (ports.restart.stopNats === undefined || ports.restart.startNats === undefined) {
+    return {
+      ok: false,
+      reason:
+        `--move-g-store: cannot stop/start the nats-server for ${inputs.natsConfigPath} on this host, and ` +
+        `the $G store at ${g.gStorePath} must never be moved under a running server. Nothing was changed.`,
+    };
+  }
+  if (ports.natsCanary === undefined) {
+    return {
+      ok: false,
+      reason:
+        "--move-g-store needs the canary (snapshot + health check + rollback) to move the $G store back " +
+        "on a failed restart, and it is not wired. Nothing was changed.",
+    };
+  }
+  return {
+    ok: true,
+    move: { gStorePath: g.gStorePath, storeDir: g.storeDir, streams: g.streams },
+    notes: [`$G store at ${g.gStorePath} (${contents}) — --move-g-store: moved to ${target} with nats-server stopped`],
+  };
+}
+
+/**
+ * cortex#2533 — boot-test the rollback snapshot through the canary port. A
+ * throwing port is a contract violation and fails SAFE (refuse), like the
+ * `-t` gate. A snapshot of a config that did not exist has nothing to boot:
+ * the rollback just removes the file.
+ */
+async function bootTestSnapshot(
+  canary: NatsCanaryPort,
+  snapshot: NatsConfigSnapshot,
+): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
+  if (snapshot.contents === undefined) {
+    return {
+      ok: true,
+      note: `rollback snapshot: ${snapshot.natsConfigPath} did not exist before make-live (rollback removes it) — nothing to boot-test`,
+    };
+  }
+  let outcome: SnapshotBootOutcome;
+  try {
+    outcome = await canary.bootTest(snapshot);
+  } catch (err) {
+    outcome = {
+      status: "unbootable",
+      reason: `the boot test could not run: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (outcome.status === "bootable") {
+    return {
+      ok: true,
+      note: `rollback snapshot boot-tested: a throwaway copy of ${snapshot.natsConfigPath} came up (random loopback ports, scratch store)`,
+    };
+  }
+  if (outcome.status === "skipped") {
+    return {
+      ok: true,
+      note:
+        `WARN: rollback snapshot NOT boot-tested (${outcome.reason}). \`nats-server -t\` does not resolve a ` +
+        "leaf remote's `account:`, so a snapshot that passes -t can still refuse to boot — if the canary " +
+        "rolls back, the bus may stay DOWN.",
+    };
+  }
+  return {
+    ok: false,
+    reason:
+      `the rollback snapshot of ${snapshot.natsConfigPath} does not boot (${outcome.reason}). make-live ` +
+      "restores this exact file if the canary fails, so a failed canary would leave the bus DOWN. Nothing " +
+      "was changed. Fix the current config so it boots, then re-run (`nats-server -t` does not catch a " +
+      "leaf remote whose `account:` the server does not define).",
+  };
 }
 
 function fail(plan: PlanItem[], steps: string[], reason: string): MakeLiveResult {

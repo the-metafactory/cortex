@@ -18,7 +18,7 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -518,5 +518,83 @@ describe("dry-run posture — no exec, no write", () => {
     const res = await mgr.restart();
     expect(res.ok).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// cortex#2533 — stop/start (make-live moves the $G store aside while stopped)
+// =============================================================================
+
+describe("stop/start — cortex#2533", () => {
+  function userUnit(): string {
+    const dir = freshDir();
+    const userDir = join(dir, "systemd", "user");
+    mkdirSync(userDir, { recursive: true });
+    const unitPath = join(userDir, "nats-server.service");
+    writeFileSync(unitPath, bareUnit(), "utf-8");
+    return unitPath;
+  }
+
+  test("launchd: stop = `launchctl bootout gui/<uid>/<label>`, start = `launchctl bootstrap gui/<uid> <plist>`", async () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "nats-server.plist");
+    writeFileSync(plistPath, barePlist(), "utf-8");
+    const { runner, calls } = capturingExec();
+    const mgr = selectNatsServiceManager({ descriptorPath: plistPath, platform: "darwin", mutate: true, exec: runner, uid: 501 });
+
+    expect((await mgr.stop()).ok).toBe(true);
+    expect((await mgr.start()).ok).toBe(true);
+    expect(calls).toEqual([
+      ["launchctl", "bootout", "gui/501/homebrew.mxcl.nats-server"],
+      ["launchctl", "bootstrap", "gui/501", plistPath],
+    ]);
+  });
+
+  test("systemd: stop = `systemctl --user stop`, start = daemon-reload THEN `systemctl --user start`", async () => {
+    const unitPath = userUnit();
+    const { runner, calls } = capturingExec();
+    const mgr = selectNatsServiceManager({ descriptorPath: unitPath, platform: "linux", mutate: true, exec: runner });
+
+    expect((await mgr.stop()).ok).toBe(true);
+    expect((await mgr.start()).ok).toBe(true);
+    expect(calls).toEqual([
+      ["systemctl", "--user", "stop", "nats-server.service"],
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "start", "nats-server.service"],
+    ]);
+  });
+
+  test("dry-run (mutate=false): stop/start exec nothing", async () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "nats-server.plist");
+    writeFileSync(plistPath, barePlist(), "utf-8");
+    const { runner, calls } = capturingExec();
+    const mgr = selectNatsServiceManager({ descriptorPath: plistPath, platform: "darwin", mutate: false, exec: runner });
+    expect((await mgr.stop()).ok).toBe(true);
+    expect((await mgr.start()).ok).toBe(true);
+    const sysd = selectNatsServiceManager({ descriptorPath: userUnit(), platform: "linux", mutate: false, exec: runner });
+    expect((await sysd.stop()).ok).toBe(true);
+    expect((await sysd.start()).ok).toBe(true);
+    expect(calls).toEqual([]);
+  });
+
+  test("a non-zero exit is { ok: false } naming the command; a spawn throw never escapes", async () => {
+    const unitPath = userUnit();
+    const failing: ExecRunner = async () => ({ code: 5, stderr: "Unit not loaded" });
+    const mgr = selectNatsServiceManager({ descriptorPath: unitPath, platform: "linux", mutate: true, exec: failing });
+    const stopped = await mgr.stop();
+    expect(stopped.ok).toBe(false);
+    if (!stopped.ok) expect(stopped.reason).toContain("stop nats-server.service exited 5");
+
+    const dir = freshDir();
+    const plistPath = join(dir, "nats-server.plist");
+    writeFileSync(plistPath, barePlist(), "utf-8");
+    const throwing: ExecRunner = () => {
+      throw new Error("spawn launchctl ENOENT");
+    };
+    const lmgr = selectNatsServiceManager({ descriptorPath: plistPath, platform: "darwin", mutate: true, exec: throwing, uid: 501 });
+    const started = await lmgr.start();
+    expect(started.ok).toBe(false);
+    if (!started.ok) expect(started.reason).toContain("ENOENT");
   });
 });
