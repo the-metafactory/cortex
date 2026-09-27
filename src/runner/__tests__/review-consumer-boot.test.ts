@@ -75,6 +75,7 @@ function fakeRuntime(): RecordingRuntime {
 function baseOpts(overrides: Partial<WireReviewConsumersOpts> = {}): WireReviewConsumersOpts {
   return {
     reviewPrincipalId: "andreas",
+    stack: "work",
     trustResolver: new TrustResolver(AgentRegistry.fromAgents([])),
     signingKnobs: resolveSigningKnobs("off"),
     systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
@@ -123,7 +124,7 @@ describe("wireReviewConsumers — local binding", () => {
       "local.andreas.work.tasks.code-review.*",
     );
     expect(runtime.subscribePullCalls[0]!.durable).toBe(
-      "cortex-review-consumer-andreas-echo",
+      "cortex-review-consumer-andreas_work-echo",
     );
     expect(runtime.subscribePullCalls[0]!.stream).toBe("CODE_REVIEW");
   });
@@ -190,11 +191,11 @@ describe("wireReviewConsumers — CO-2 offer-scope + ADR-0001 federation", () =>
     expect(patterns).toContain("federated.andreas.work.tasks.*.code-review.>");
     const durables = runtime.subscribePullCalls.map((c) => c.durable);
     expect(
-      durables.some((d) => d === "cortex-review-consumer-federated-andreas-echo"),
+      durables.some((d) => d === "cortex-review-consumer-federated-andreas_work-echo"),
     ).toBe(true);
     expect(
       durables.some(
-        (d) => d === "cortex-review-consumer-federated-direct-andreas-echo",
+        (d) => d === "cortex-review-consumer-federated-direct-andreas_work-echo",
       ),
     ).toBe(true);
   });

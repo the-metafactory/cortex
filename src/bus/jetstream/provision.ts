@@ -18,6 +18,10 @@
  *     `add` on 404. Returns `"created"` / `"exists"` so the caller can
  *     log differently. Does NOT auto-update on config drift — logs a
  *     warning instead. Auto-update is too magic for the first cut.
+ *     One exception (cortex#1503): subjects this stack needs that the
+ *     live stream lacks are ADDED (never removed), because the stream
+ *     name is fixed and two stacks of one principal on one NATS account
+ *     share it.
  *
  *   - `provisionReviewConsumer({ jsm, stream, durable, … })` — same
  *     pattern for the per-agent durable pull consumer.
@@ -26,7 +30,9 @@
  *
  *   - Don't drop streams/consumers on shutdown — JetStream state
  *     outlives the process.
- *   - Don't auto-update on config drift in v1 — log + leave alone.
+ *   - Don't auto-update on config drift in v1 — log + leave alone
+ *     (except the additive subject union above; subjects are never
+ *     removed and retention is never touched).
  *   - Disabled runtime → caller skips provisioning entirely (no JSM to
  *     call against).
  *
@@ -39,7 +45,7 @@
 // values keeps the wire-config strings centralised in nats.js rather
 // than duplicating literals here.
 import { AckPolicy, DeliverPolicy, RetentionPolicy, StorageType } from "nats";
-import type { ConsumerConfig, StreamInfo } from "nats";
+import type { ConsumerConfig, ConsumerInfo, StreamInfo } from "nats";
 
 // Re-exported from the neutral types module so existing callers
 // importing `ProvisionJsm` from this file keep working AND new
@@ -49,15 +55,23 @@ import type { ConsumerConfig, StreamInfo } from "nats";
 export type { ProvisionJsm } from "./types";
 import type { ProvisionJsm } from "./types";
 import { DEFAULT_STREAM_MAX_BYTES } from "../../common/types/cortex-config";
+import { missingSubjects, subjectCovers } from "./subject-set";
 
 /**
  * Outcome of `provisionReviewStream`. Includes `config-drift-warning`
  * for the case where the live stream exists but its config differs
  * from what we'd create — see `describeStreamDrift`. Consumer
  * provisioning has no analogous drift surface in v1, so its outcome
- * is the narrower `ProvisionConsumerOutcome`.
+ * is the narrower `ProvisionConsumerOutcome`. `subjects-extended`
+ * (cortex#1503): the live stream lacked some of this stack's subjects and
+ * gained them by additive union — another stack of the principal, sharing
+ * the NATS account, owns the rest.
  */
-export type ProvisionStreamOutcome = "created" | "exists" | "config-drift-warning";
+export type ProvisionStreamOutcome =
+  | "created"
+  | "exists"
+  | "subjects-extended"
+  | "config-drift-warning";
 
 /**
  * Outcome of `provisionReviewConsumer`. Narrower than the stream
@@ -77,11 +91,17 @@ export type ProvisionConsumerOutcome = "created" | "exists" | "updated";
  */
 export type ProvisionOutcome = ProvisionStreamOutcome;
 
+/** Logger the provisioning helpers write to. Defaults to `console`. */
+export interface ProvisionLog {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+}
+
 export interface ProvisionStreamOpts {
   jsm: ProvisionJsm;
   /** Stream name. ReviewConsumer always binds to `"CODE_REVIEW"`. */
   name: string;
-  /** Subject filter list. e.g. `["local.jc.default.tasks.code-review.>"]`. */
+  /** Subject filter list. e.g. `["local.alice.default.tasks.code-review.*"]`. */
   subjects: readonly string[];
   /**
    * Max age in nanoseconds. Default 24h (`24 * 3600 * 1e9`). Stale
@@ -113,14 +133,14 @@ export interface ProvisionStreamOpts {
    * pin the boot-log shape and lets future deployments swap in a
    * structured logger.
    */
-  log?: { info: (msg: string) => void; warn: (msg: string) => void };
+  log?: ProvisionLog;
 }
 
 export interface ProvisionConsumerOpts {
   jsm: ProvisionJsm;
   /** Stream the consumer binds to. */
   stream: string;
-  /** Durable consumer name, e.g. `"cortex-review-consumer-jc-sage"`. */
+  /** Durable consumer name, e.g. `"cortex-review-consumer-alice_default-sage"` (see `reviewDurableNames`). */
   durable: string;
   /**
    * Optional narrow filter subject. Omitted → consumer claims every
@@ -153,7 +173,7 @@ export interface ProvisionConsumerOpts {
    * never reconciled (JetStream forbids changing it in place).
    */
   deliverPolicy?: DeliverPolicy;
-  log?: { info: (msg: string) => void; warn: (msg: string) => void };
+  log?: ProvisionLog;
 }
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
@@ -194,14 +214,18 @@ export async function provisionReviewStream(
   }
 
   if (existing) {
-    const drift = describeStreamDrift(existing, opts.subjects, maxAgeNs);
+    // cortex#1503 — add this stack's missing subjects before judging drift, so
+    // a stream another stack of the principal created is extended rather than
+    // left capturing only that stack's subjects.
+    const extension = await extendStreamSubjects(opts.jsm, opts.name, existing, opts.subjects, log);
+    const drift = describeStreamDrift(extension.info, opts.subjects, maxAgeNs);
     if (drift !== null) {
       log.warn(
         `jetstream-provision: stream "${opts.name}" exists but config drifts (${drift}); leaving alone (v1 policy — no auto-update). Update manually with \`nats stream edit\` if intentional.`,
       );
       return "config-drift-warning";
     }
-    return "exists";
+    return extension.extended ? "subjects-extended" : "exists";
   }
 
   await opts.jsm.streams.add({
@@ -233,12 +257,240 @@ export async function provisionReviewStream(
   return "created";
 }
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Bounded retries for the additive subject union. JetStream's stream update
+ * has no compare-and-swap: two stacks extending the same stream at the same
+ * instant can each write the subject set they read, dropping the other's
+ * addition. Re-reading after every write and retrying closes the window for
+ * the writer that loses; a stack whose addition is dropped AFTER its own
+ * verification is repaired on its next boot (documented residual, cortex#1503).
+ */
+const MAX_SUBJECT_UNION_ATTEMPTS = 3;
+
+/**
+ * cortex#1503 — add the desired subjects the live stream does not yet cover.
+ * Never removes a subject (other stacks sharing the stream own them) and
+ * never touches any other field: the update re-sends the live config with
+ * only `subjects` grown. A desired subject that partially overlaps a live one
+ * is not added, and a rejected update (no stream-edit permission, a subject
+ * another stream owns) is logged — in both cases `describeStreamDrift` then
+ * reports the uncovered subjects and the caller keeps the v1 warn-and-leave.
+ */
+async function extendStreamSubjects(
+  jsm: ProvisionJsm,
+  name: string,
+  existing: StreamInfo,
+  desired: readonly string[],
+  log: ProvisionLog,
+): Promise<{ info: StreamInfo; extended: boolean }> {
+  let info = existing;
+  let extended = false;
+  for (let attempt = 1; attempt <= MAX_SUBJECT_UNION_ATTEMPTS; attempt++) {
+    const live = info.config.subjects;
+    const missing = missingSubjects(live, desired);
+    if (missing.length === 0) return { info, extended };
+    try {
+      await jsm.streams.update(name, { ...info.config, subjects: [...live, ...missing] });
+    } catch (err) {
+      log.warn(
+        `jetstream-provision: could not extend stream "${name}" subjects with [${missing.join(", ")}] (${errMsg(err)}) (cortex#1503)`,
+      );
+      return { info, extended };
+    }
+    log.info(
+      `jetstream-provision: extended stream "${name}" subjects with [${missing.join(", ")}] (additive union, cortex#1503)`,
+    );
+    extended = true;
+    // Verify against a fresh read: a concurrent writer may have dropped ours.
+    try {
+      info = await jsm.streams.info(name);
+    } catch (err) {
+      log.warn(
+        `jetstream-provision: could not re-read stream "${name}" after extending its subjects (${errMsg(err)}) — not verified (cortex#1503)`,
+      );
+      return { info, extended };
+    }
+  }
+  return { info, extended };
+}
+
+/** Read a consumer, or `null` when it doesn't exist. Other errors propagate. */
+async function consumerInfoOrNull(
+  jsm: ProvisionJsm,
+  stream: string,
+  durable: string,
+): Promise<ConsumerInfo | null> {
+  try {
+    return await jsm.consumers.info(stream, durable);
+  } catch (err) {
+    if (isNotFoundError(err)) return null;
+    throw err;
+  }
+}
+
+/** A legacy durable is provably this stack's only when its filter is exactly this durable's filter. */
+function isLegacyOurs(legacy: ConsumerInfo, filterSubject: string | undefined): boolean {
+  const legacyFilter = legacy.config.filter_subject ?? "";
+  return filterSubject !== undefined && filterSubject !== "" && legacyFilter === filterSubject;
+}
+
+/**
+ * Idle = nothing in flight and nobody pulling. nats-server prunes pull
+ * requests whose reply interest has gone (the requesting connection closed)
+ * when it builds consumer info (`consumer.processWaiting`, nats-server 2.10),
+ * so `num_waiting > 0` means a live puller (e.g. an old-version Cortex runtime
+ * of the same stack still running), not a request left by the stopped process.
+ * One server-side exception: with leaf nodes or gateways enabled, a request
+ * younger than the recent-subscription grace window (2s) is kept. A
+ * boot that lands inside it only defers the migration one more boot — the
+ * deferral binds the legacy durable, so nothing is lost or delivered twice.
+ */
+function isIdle(c: ConsumerInfo): boolean {
+  return c.num_ack_pending === 0 && c.num_waiting === 0;
+}
+
+/** Outcome of {@link provisionStackScopedConsumer}: the durable to bind, and what provisioning did. */
+export interface StackScopedConsumerResult {
+  /** The durable `consumer.start({ durable })` must bind this boot. */
+  durable: string;
+  /** `deferred`: the busy legacy durable is bound this boot; migration retries next boot. */
+  outcome: ProvisionConsumerOutcome | "deferred";
+}
+
+/**
+ * cortex#1503 — provision a stack-scoped durable that replaces a pre-#1503
+ * unscoped one (`legacyDurable`), and say which durable to bind.
+ *
+ * The legacy durable is read BEFORE the scoped one can be created, and it
+ * never goes through the filter-drift recreate in {@link ensureConsumer}
+ * (which would rewrite another stack's durable). Cases:
+ *
+ *  - No legacy durable → the scoped durable with the caller's default policy
+ *    (a fresh stack behaves exactly as before).
+ *  - Legacy filter is another stack's → never touched; that stack migrates it
+ *    when it upgrades. An EMPTY filter (a pre-cortex#1186 durable no version
+ *    has re-provisioned since) is claimed by no stack and never auto-removed —
+ *    it is logged for manual removal. Either way the scoped durable starts
+ *    from `New`: the legacy's positions say nothing about this stack's
+ *    subjects, and `All` would re-run reviews.
+ *  - Legacy is ours and idle → the scoped durable starts at
+ *    `legacy.delivered.stream_seq + 1` (nothing already delivered is
+ *    replayed; every request stored after, including one published during the
+ *    upgrade, is delivered), then the legacy durable is deleted.
+ *  - Legacy is ours and busy, scoped absent → migration DEFERRED: the legacy
+ *    durable is bound this boot. A live legacy puller keeps competing-consumer
+ *    semantics (no double delivery), and ack-pending requests redeliver as on
+ *    any restart. The first idle boot migrates.
+ *  - Legacy is ours and busy, scoped present → an old-version runtime of this
+ *    stack recreated it after migration. Kept and warned: the two durables
+ *    double-deliver until every runtime of the stack is upgraded.
+ */
+export async function provisionStackScopedConsumer(
+  opts: ProvisionConsumerOpts & { legacyDurable: string },
+): Promise<StackScopedConsumerResult> {
+  const log = opts.log ?? console;
+  const { legacyDurable } = opts;
+  if (legacyDurable === opts.durable) {
+    return { durable: opts.durable, outcome: await ensureConsumer(opts, undefined) };
+  }
+
+  let legacy: ConsumerInfo | null;
+  let scopedExists: boolean;
+  try {
+    legacy = await consumerInfoOrNull(opts.jsm, opts.stream, legacyDurable);
+    scopedExists = (await consumerInfoOrNull(opts.jsm, opts.stream, opts.durable)) !== null;
+  } catch (err) {
+    // Unknown state: never replay, never touch the legacy durable.
+    log.warn(
+      `jetstream-provision: could not read durables "${legacyDurable}"/"${opts.durable}" on stream "${opts.stream}" (${errMsg(err)}) — "${opts.durable}" starts from New if created; legacy left in place (cortex#1503)`,
+    );
+    return {
+      durable: opts.durable,
+      outcome: await ensureConsumer(opts, { deliver_policy: DeliverPolicy.New }),
+    };
+  }
+
+  if (legacy === null) {
+    return { durable: opts.durable, outcome: await ensureConsumer(opts, undefined) };
+  }
+
+  if (!isLegacyOurs(legacy, opts.filterSubject)) {
+    const legacyFilter = legacy.config.filter_subject ?? "";
+    if (legacyFilter === "") {
+      log.warn(
+        `jetstream-provision: legacy durable "${legacyDurable}" on stream "${opts.stream}" has no filter (pre-cortex#1186) — no stack can prove it owns it, so it is never removed automatically; check it and remove it with \`nats consumer rm\` (cortex#1503)`,
+      );
+    } else {
+      log.info(
+        `jetstream-provision: legacy durable "${legacyDurable}" on stream "${opts.stream}" filters "${legacyFilter}", not this stack's "${opts.filterSubject ?? "<none>"}" — left in place for its stack to migrate (cortex#1503)`,
+      );
+    }
+    return {
+      durable: opts.durable,
+      outcome: await ensureConsumer(opts, scopedExists ? undefined : { deliver_policy: DeliverPolicy.New }),
+    };
+  }
+
+  const busy = `jetstream-provision: legacy durable "${legacyDurable}" on stream "${opts.stream}" is busy (ack_pending=${legacy.num_ack_pending}, waiting=${legacy.num_waiting})`;
+  if (!isIdle(legacy) && !scopedExists) {
+    log.warn(
+      `${busy} — binding it this boot; migration to "${opts.durable}" retries on the next boot (cortex#1503)`,
+    );
+    // Same filter, so this only reconciles ack_wait (never a recreate).
+    await ensureConsumer({ ...opts, durable: legacyDurable }, undefined);
+    return { durable: legacyDurable, outcome: "deferred" };
+  }
+
+  const outcome = await ensureConsumer(
+    opts,
+    scopedExists
+      ? undefined
+      : { deliver_policy: DeliverPolicy.StartSequence, opt_start_seq: legacy.delivered.stream_seq + 1 },
+  );
+  if (!isIdle(legacy)) {
+    log.warn(
+      `${busy} although "${opts.durable}" exists — an old-version runtime of this stack recreated it; both durables receive this stack's requests until every runtime is upgraded (cortex#1503)`,
+    );
+    return { durable: opts.durable, outcome };
+  }
+  try {
+    await opts.jsm.consumers.delete(opts.stream, legacyDurable);
+    log.info(
+      `jetstream-provision: removed legacy durable "${legacyDurable}" on stream "${opts.stream}" (replaced by "${opts.durable}", cortex#1503)`,
+    );
+  } catch (err) {
+    // The scoped durable is provisioned; a failed delete only leaves an idle
+    // orphan behind, retried on the next boot.
+    log.warn(
+      `jetstream-provision: removing legacy durable "${legacyDurable}" on stream "${opts.stream}" failed (${errMsg(err)}) — retried next boot (cortex#1503)`,
+    );
+  }
+  return { durable: opts.durable, outcome };
+}
+
 /**
  * Provision (or assert presence of) a per-agent durable pull consumer on
  * the given stream. Idempotent — safe on every boot.
  */
 export async function provisionReviewConsumer(
   opts: ProvisionConsumerOpts,
+): Promise<ProvisionConsumerOutcome> {
+  return ensureConsumer(opts, undefined);
+}
+
+/**
+ * The idempotent ensure behind {@link provisionReviewConsumer}. `start`
+ * overrides the caller's deliver policy on a genuine first create (the
+ * cortex#1503 migration start position); a filter-drift recreate still
+ * forces `New`.
+ */
+async function ensureConsumer(
+  opts: ProvisionConsumerOpts,
+  start: Pick<ConsumerConfig, "deliver_policy" | "opt_start_seq"> | undefined,
 ): Promise<ProvisionConsumerOutcome> {
   const log = opts.log ?? console;
   const maxDeliver = opts.maxDeliver ?? DEFAULT_MAX_DELIVER;
@@ -301,10 +553,16 @@ export async function provisionReviewConsumer(
     ack_policy: AckPolicy.Explicit,
     // A filter-drift recreate forces `New` so the migration never replays the
     // backlog (cortex#1186). A genuine first create honours the caller's policy.
-    deliver_policy: recreatedForFilter ? DeliverPolicy.New : (opts.deliverPolicy ?? DeliverPolicy.All),
+    // cortex#1503: a durable replacing a legacy one starts where `start` says.
+    deliver_policy: recreatedForFilter
+      ? DeliverPolicy.New
+      : (start?.deliver_policy ?? opts.deliverPolicy ?? DeliverPolicy.All),
     max_deliver: maxDeliver,
     ack_wait: ackWaitNs,
   };
+  if (!recreatedForFilter && start?.opt_start_seq !== undefined) {
+    cfg.opt_start_seq = start.opt_start_seq;
+  }
   if (opts.filterSubject !== undefined) {
     cfg.filter_subject = opts.filterSubject;
   }
@@ -354,17 +612,17 @@ export function describeStreamDrift(
 ): string | null {
   const cfg = existing.config;
   const actualSubjects = cfg.subjects;
-  // JetStream stream subjects are semantically a set — order on the
-  // wire is implementation-detail. Compare as sets so a re-ordered live
-  // config doesn't false-warn on every boot (sage review on #338
-  // round 3 — CodeQuality suggestion).
-  const actualSet = new Set(actualSubjects);
-  const expectedSet = new Set(expectedSubjects);
-  const subjectsEqual =
-    actualSet.size === expectedSet.size &&
-    [...expectedSet].every((s) => actualSet.has(s));
-  if (!subjectsEqual) {
-    return `subjects differ (expected {${[...expectedSet].sort().join(", ")}}, got {${[...actualSet].sort().join(", ")}})`;
+  // cortex#1503 — drift means some expected subject is NOT captured by the
+  // live stream. Extra live subjects are not drift: another stack of the
+  // principal sharing the NATS account owns them, and a deliberately broader
+  // subject (arc's `local.*.*.tasks.code-review.>`, or `local.>`) captures
+  // ours. Coverage is order-independent, so a re-ordered live config never
+  // false-warns (sage review on #338 round 3).
+  const uncovered = [...new Set(expectedSubjects)].filter(
+    (e) => !actualSubjects.some((a) => subjectCovers(a, e)),
+  );
+  if (uncovered.length > 0) {
+    return `subjects differ (expected {${[...new Set(expectedSubjects)].sort().join(", ")}}, got {${[...new Set(actualSubjects)].sort().join(", ")}}; not captured: {${uncovered.sort().join(", ")}})`;
   }
   // Allow ±1s slack on max_age to absorb floating-point round-trips
   // through the wire JSON.

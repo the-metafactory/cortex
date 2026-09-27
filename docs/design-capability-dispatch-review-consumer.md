@@ -86,6 +86,16 @@ Wired in `src/cortex.ts` alongside the existing `busDispatchListener` (which tod
 | **Max delivery** | `3` | After 3 redeliveries (crash, re-delivery, crash again) the task moves to `local.{org}.tasks.dead-letter.code-review` per architecture §7.2. Principals investigate dead-letters out of band. **Co-emission of `dispatch.task.aborted` on redelivery > 1:** when the consumer detects it's processing an envelope for the second+ time (JetStream redelivery counter on the delivery metadata), emit `dispatch.task.aborted` with `reason: "redelivery"` to give pilot a structured "this task is in trouble" signal BEFORE the max-delivery threshold is reached. Operationally kinder than letting pilot's `--wait` time out on a struggling consumer. |
 | **Filter** | None (subscribed pattern IS the filter) | NATS's subject filter is the only matching layer we need; in-handler filtering (e.g. by `<flavor>` segment) happens after the envelope is parsed. |
 
+**Update (cortex#1503) — durable names are stack-scoped.** The shipped durable is `cortex-review-consumer-{principal}_{stack}-{agent}`, with the same suffix for the `offer-{scope}-`, `federated-` and `federated-direct-` variants. `reviewDurableNames` in `src/bus/jetstream/review-durables.ts` builds all of them.
+
+- **Why the stack is in the name.** Subjects carry `{principal}.{stack}`, so the durable does too. Two stacks of one principal on one NATS account then never share a durable.
+- **Why the separator is `_`.** Slugs never contain `_`, so the name can't be ambiguous.
+- **Competing consumers are unchanged within a stack.** Cortex runtimes on the *same* stack still share one durable.
+- **Legacy durables.** Pre-#1503 `cortex-review-consumer-{principal}-{agent}` durables are migrated by `provisionStackScopedConsumer`:
+  - A durable that is this stack's and idle is replaced without replay and deleted.
+  - A durable that is this stack's but busy stays bound until an idle boot.
+  - Another stack's durable, or an unfiltered one, is never touched. An unfiltered durable is logged for manual removal.
+
 **Caveat — pull-consumer support in `MyelinSubscriber`.** The current `MyelinSubscriber` wraps `NatsSubscription`, which from a quick survey of `src/bus/nats/subscription.ts` is the **push** subscription primitive. We have two options:
 
 - **Extend `MyelinSubscriber` / `NatsSubscription` with a `mode: "pull"` option** that swaps to JetStream's `pullSubscribe` under the hood. Single primitive, two modes. Preferred — keeps the surface narrow and the type signature uniform for consumers. PR scope per §10.
