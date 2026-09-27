@@ -170,6 +170,22 @@ describe("cortex network provision — apply", () => {
     ]);
   });
 
+  test("write-back records config_path at the convention default `~/.config/nats/<slug>.conf`", async () => {
+    // UNPROVISIONED carries no `nats_infra.config_path` and no sibling shares its
+    // bus, so provision falls back to the convention — the field make-live
+    // derives `--nats-config` from (and creates the file from nats.url; cortex#1265 PR8).
+    const { factory, written } = fakeFactory();
+    const res = await dispatchNetwork(
+      ["provision", "andreas/research", "--config", "/x/research.yaml", "--apply"],
+      reader(UNPROVISIONED),
+      undefined,
+      factory,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.configPath).toBe("~/.config/nats/research.conf");
+  });
+
   test("write-back records config_path as `~/.config/nats/<slug>.conf` when that file exists", async () => {
     // UNPROVISIONED carries no `nats_infra.config_path`; the conventional file
     // exists, so provision records it — the field make-live derives `--nats-config` from.
@@ -240,6 +256,8 @@ describe("cortex network provision — nats-server config path (cortex#2535)", (
     ok: true,
     stack: { stackId: "alice/work", natsUrl: "nats://127.0.0.1:4222", configPath: SHARED_CONF, plistPath: SHARED_PLIST },
   };
+  /** A sibling on the same bus that records no config_path. */
+  const BARE_SIBLING: SiblingStackRead = { ok: true, stack: { stackId: "alice/ops", natsUrl: "nats://localhost:4222" } };
 
   test("dry-run: <slug>.conf missing + a sibling on the same bus → shows the sibling's path", async () => {
     const { factory } = fakeFactory({ files: [SHARED_CONF], siblings: [WORK_SIBLING] });
@@ -262,8 +280,8 @@ describe("cortex network provision — nats-server config path (cortex#2535)", (
     expect(written[0]?.plistPath).toBe(SHARED_PLIST);
   });
 
-  test("apply: nothing found → config_path not written, note printed", async () => {
-    const { factory, written } = fakeFactory();
+  test("apply: a same-bus sibling with no config_path → config_path not written, note printed", async () => {
+    const { factory, written } = fakeFactory({ siblings: [BARE_SIBLING] });
     const res = await dispatchNetwork(
       ["provision", "alice/lab", "--config", "/x/lab.yaml", "--apply"],
       reader(SECOND_STACK),
@@ -302,7 +320,7 @@ describe("cortex network provision — nats-server config path (cortex#2535)", (
     expect(envSib.data?.config_path).toBe(SHARED_CONF);
     expect(envSib.data?.plist_path).toBe(SHARED_PLIST);
 
-    const none = fakeFactory();
+    const none = fakeFactory({ siblings: [BARE_SIBLING] });
     const resNone = await dispatchNetwork(
       ["provision", "alice/lab", "--config", "/x/lab.yaml", "--json"],
       reader(SECOND_STACK),
@@ -312,6 +330,17 @@ describe("cortex network provision — nats-server config path (cortex#2535)", (
     const envNone = JSON.parse(resNone.stdout) as { data?: Record<string, string> };
     expect(envNone.data?.config_path_source).toBe("unset");
     expect(envNone.data?.config_path).toBeUndefined();
+
+    const own = fakeFactory();
+    const resOwn = await dispatchNetwork(
+      ["provision", "alice/lab", "--config", "/x/lab.yaml", "--json"],
+      reader(SECOND_STACK),
+      undefined,
+      own.factory,
+    );
+    const envOwn = JSON.parse(resOwn.stdout) as { data?: Record<string, string> };
+    expect(envOwn.data?.config_path_source).toBe("convention");
+    expect(envOwn.data?.config_path).toBe("~/.config/nats/lab.conf");
   });
 });
 

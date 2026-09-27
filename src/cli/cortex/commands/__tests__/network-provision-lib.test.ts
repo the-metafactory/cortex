@@ -859,6 +859,11 @@ describe("busEndpoint", () => {
     expect(busEndpoint("nats://user:pw@Bus.Example:4300")).toBe("bus.example:4300");
   });
 
+  test("a scheme-less url is read as nats://", () => {
+    expect(busEndpoint("localhost:4222")).toBe("loopback:4222");
+    expect(busEndpoint("127.0.0.1:4222")).toBe("loopback:4222");
+  });
+
   test("uses the first server of a comma list; unusable input is undefined", () => {
     expect(busEndpoint("nats://localhost:4223, nats://localhost:4224")).toBe("loopback:4223");
     expect(busEndpoint(undefined)).toBeUndefined();
@@ -882,7 +887,7 @@ describe("resolveNatsConfigPath (cortex#2535)", () => {
       labInputs(),
       locator({ files: [OWN_CONF, SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF)] }),
     );
-    expect(res).toEqual({ source: "convention", configPath: OWN_CONF });
+    expect(res).toEqual({ source: "convention", configPath: OWN_CONF, exists: true, why: "exists on disk" });
   });
 
   test("<slug>.conf missing + one sibling on the same bus → the sibling's config_path + plist_path", () => {
@@ -944,25 +949,39 @@ describe("resolveNatsConfigPath (cortex#2535)", () => {
     }
   });
 
-  test("<slug>.conf missing + no sibling → unset", () => {
+  test("<slug>.conf missing + no sibling → the convention path (the stack's own bus, cortex#1265 PR8)", () => {
     const res = resolveNatsConfigPath(labInputs(), locator());
-    expect(res.source).toBe("unset");
-    if (res.source === "unset") expect(res.why).toContain("no sibling stack of alice on loopback:4222");
+    expect(res.source).toBe("convention");
+    if (res.source === "convention") {
+      expect(res.configPath).toBe(OWN_CONF);
+      expect(res.exists).toBe(false);
+      expect(res.why).toContain("no other stack of alice is on loopback:4222");
+    }
   });
 
-  test("siblings on another port, without config_path, or pointing at a missing file are ignored", () => {
+  test("siblings on another port do not count as sharing the bus → the convention path", () => {
     const res = resolveNatsConfigPath(
       labInputs(),
       locator({
         files: ["~/.config/nats/elsewhere.conf"],
+        siblings: [sibling("alice/far", "nats://localhost:4300", "~/.config/nats/elsewhere.conf")],
+      }),
+    );
+    expect(res).toMatchObject({ source: "convention", configPath: OWN_CONF, exists: false });
+  });
+
+  test("siblings on the same bus without an existing config_path → unset", () => {
+    const res = resolveNatsConfigPath(
+      labInputs(),
+      locator({
         siblings: [
-          sibling("alice/far", "nats://localhost:4300", "~/.config/nats/elsewhere.conf"),
           sibling("alice/bare", "nats://localhost:4222"),
           sibling("alice/stale", "nats://localhost:4222", "~/.config/nats/gone.conf"),
         ],
       }),
     );
     expect(res.source).toBe("unset");
+    if (res.source === "unset") expect(res.why).toContain("the stacks sharing loopback:4222 (alice/bare, alice/stale)");
   });
 
   test("an unreadable sibling config → unset (it could be the conflicting one)", () => {
@@ -980,13 +999,13 @@ describe("resolveNatsConfigPath (cortex#2535)", () => {
     if (res.source === "unset") expect(res.why).toContain("alice/broken (parse error)");
   });
 
-  test("a stack with no nats.url → unset", () => {
+  test("a stack with no nats.url cannot be matched to a sibling → the convention path", () => {
     const res = resolveNatsConfigPath(
       labInputs({ natsUrl: undefined }),
       locator({ files: [SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF)] }),
     );
-    expect(res.source).toBe("unset");
-    if (res.source === "unset") expect(res.why).toContain("no usable nats.url");
+    expect(res.source).toBe("convention");
+    if (res.source === "convention") expect(res.why).toContain("no usable nats.url");
   });
 });
 
@@ -1015,8 +1034,8 @@ describe("provisionStack — nats-server config path (cortex#2535)", () => {
     expect(res.steps.join("\n")).toContain(`plist_path ${SHARED_PLIST}`);
   });
 
-  test("dry-run with nothing found shows [skip] and the --nats-config note", async () => {
-    const { ports: p } = labPorts(locator());
+  test("dry-run with a same-bus sibling that has no config_path shows [skip] and the --nats-config note", async () => {
+    const { ports: p } = labPorts(locator({ siblings: [sibling("alice/work", "nats://localhost:4222")] }));
     const res = await provisionStack(labInputs(), p);
     expect(res.ok).toBe(true);
     expect(natsRow(res.plan)?.status).toBe("skip");
@@ -1050,6 +1069,14 @@ describe("provisionStack — nats-server config path (cortex#2535)", () => {
     expect(natsRow(res.plan)?.detail).toBe(`${OWN_CONF} (exists on disk)`);
   });
 
+  test("dry-run with no sibling on the bus keeps the convention and says make-live creates it", async () => {
+    const { ports: p } = labPorts(locator());
+    const res = await provisionStack(labInputs(), p);
+    expect(natsRow(res.plan)?.status).toBe("wire");
+    expect(natsRow(res.plan)?.detail).toContain(`${OWN_CONF} (not created yet; no other stack of alice is on loopback:4222`);
+    expect(res.steps.join("\n")).not.toContain("will need --nats-config");
+  });
+
   test("apply adopts the sibling's config_path + plist_path in the write-back", async () => {
     const { ports: p, written } = labPorts(
       locator({ files: [SHARED_CONF], siblings: [sibling("alice/work", "nats://localhost:4222", SHARED_CONF, SHARED_PLIST)] }),
@@ -1063,8 +1090,8 @@ describe("provisionStack — nats-server config path (cortex#2535)", () => {
     expect(res.steps.join("\n")).toContain("config_path, plist_path, nkey_seed_path");
   });
 
-  test("apply with nothing found writes no config_path and prints the note", async () => {
-    const { ports: p, written } = labPorts(locator());
+  test("apply with a same-bus sibling that has no config_path writes none and prints the note", async () => {
+    const { ports: p, written } = labPorts(locator({ siblings: [sibling("alice/work", "nats://localhost:4222")] }));
     const res = await provisionStack(labInputs({ apply: true }), p);
     expect(res.ok).toBe(true);
     expect(written).toHaveLength(1);
@@ -1074,6 +1101,14 @@ describe("provisionStack — nats-server config path (cortex#2535)", () => {
     const out = res.steps.join("\n");
     expect(out).not.toContain("config_path, nkey_seed_path");
     expect(out).toContain("will need --nats-config");
+  });
+
+  test("apply with no sibling on the bus writes the convention path", async () => {
+    const { ports: p, written } = labPorts(locator());
+    const res = await provisionStack(labInputs({ apply: true }), p);
+    expect(res.ok).toBe(true);
+    expect(written[0]?.configPath).toBe(OWN_CONF);
+    expect("plistPath" in (written[0] ?? {})).toBe(false);
   });
 
   test("apply with an already-set config_path writes it back unchanged and adopts no plist", async () => {

@@ -121,6 +121,7 @@ import {
 } from "./network-ping-lib";
 import {
   deriveProvisionNames,
+  natsConfigPaths,
   provisionStack,
   type ProvisionInputs,
   type ProvisionPorts,
@@ -4137,8 +4138,10 @@ function deriveProvisionInputs(
   // cortex#1265 (PR8) — the per-stack nats-server config path make-live + join
   // derive their `--nats-config` from. Preserve a value already in config (the
   // SOP §B2 / hand-set path — never clobber). When absent, provisionStack picks
-  // one from what exists on disk (cortex#2535: `<slug>.conf`, else a sibling
-  // stack on the same bus, else unset) — never a path to a missing file.
+  // one (resolveNatsConfigPath): the convention `~/.config/nats/<slug>.conf`
+  // (docs/sop-stack-onboarding.md §B0.1 + §B2), except on a bus shared with
+  // another stack of the principal, where it adopts that stack's existing
+  // config_path or leaves the field unset (cortex#2535).
   const natsConfigPath = optionalValueFlag(flags, "--nats-config") ?? cfg.stack?.nats_infra?.config_path;
   const plistPath = cfg.stack?.nats_infra?.plist_path;
 
@@ -4210,10 +4213,9 @@ async function runProvision(
     if (res.natsConfig !== undefined) {
       // cortex#2535 — which branch picked the nats-server config path (dry-run too).
       data.config_path_source = res.natsConfig.source;
-      if (res.natsConfig.source !== "unset") data.config_path = res.natsConfig.configPath;
-      if (res.natsConfig.source === "sibling" && res.natsConfig.plistPath !== undefined) {
-        data.plist_path = res.natsConfig.plistPath;
-      }
+      const paths = natsConfigPaths(res.natsConfig);
+      if (paths.configPath !== undefined) data.config_path = paths.configPath;
+      if (paths.plistPath !== undefined) data.plist_path = paths.plistPath;
     }
     if (res.resolved !== undefined) {
       data.account = res.resolved.account;
