@@ -793,7 +793,7 @@ export async function provisionStack(
       : { status: "not-probed" };
   // cortex#2535 — pick the nats-server config path (read-only fs checks).
   const natsConfig = resolveNatsConfigPath(inputs, ports.natsConfig);
-  const { configPath: resolvedConfigPath, plistPath: resolvedPlistPath } = natsConfigPaths(natsConfig);
+  const natsPaths = natsConfigPaths(natsConfig);
   const plan = buildProvisionPlan(inputs, agentsProbe, natsConfig);
   const planLines = plan.map(renderPlanLine);
 
@@ -1004,8 +1004,7 @@ export async function provisionStack(
     account: resolvedAccount,
     agentsAccount: resolvedAgents,
     credsPath: inputs.credsPath,
-    ...(resolvedConfigPath !== undefined && { configPath: resolvedConfigPath }),
-    ...(resolvedPlistPath !== undefined && { plistPath: resolvedPlistPath }),
+    ...natsPaths,
     seedPath: inputs.seedPath,
     ...(resolvedNkeyPub !== undefined && { nkeyPub: resolvedNkeyPub }),
     ...(operatorJwt !== undefined && { operatorJwt }),
@@ -1036,8 +1035,7 @@ export async function provisionStack(
       account: resolvedAccount,
       agentsAccount: resolvedAgents,
       credsPath: inputs.credsPath,
-      ...(resolvedConfigPath !== undefined && { configPath: resolvedConfigPath }),
-      ...(resolvedPlistPath !== undefined && { plistPath: resolvedPlistPath }),
+      ...natsPaths,
       seedPath: inputs.seedPath,
     },
   };

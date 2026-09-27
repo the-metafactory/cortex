@@ -87,7 +87,8 @@ export function buildProvisionConfigWriteAdapter(stackConfigPath: string): Provi
         // cortex#1265 (PR8) — the per-stack nats-server config path make-live
         // derives its `--nats-config` target from. Closes the provision→make-live
         // loop: without it make-live has no bus to bootstrap. cortex#2535 — absent
-        // when provision found no existing file; then nothing is written.
+        // only when provision left it unset (a shared bus with no usable sibling
+        // config_path); then nothing is written.
         if (fields.configPath !== undefined) {
           doc.setIn(["stack", "nats_infra", "config_path"], fields.configPath);
         }
