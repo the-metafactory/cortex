@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { planSubjectUnion, subjectCovers, subjectsOverlap } from "../subject-set";
+import { missingSubjects, subjectCovers, subjectsOverlap } from "../subject-set";
 
 describe("subjectCovers", () => {
   test("identical subjects cover each other", () => {
@@ -62,37 +62,30 @@ describe("subjectsOverlap", () => {
   });
 });
 
-describe("planSubjectUnion", () => {
+describe("missingSubjects", () => {
   const DEFAULT = "local.alice.default.tasks.code-review.*";
   const WORK = "local.alice.work.tasks.code-review.*";
 
-  test("nothing to do when every desired subject is covered", () => {
-    expect(planSubjectUnion([DEFAULT], [DEFAULT])).toEqual({ missing: [], conflicting: [] });
-    expect(planSubjectUnion(["local.*.*.tasks.code-review.>"], [WORK])).toEqual({
-      missing: [],
-      conflicting: [],
-    });
+  test("nothing to add when every desired subject is covered", () => {
+    expect(missingSubjects([DEFAULT], [DEFAULT])).toEqual([]);
+    expect(missingSubjects(["local.*.*.tasks.code-review.>"], [WORK])).toEqual([]);
   });
 
   test("a second stack's disjoint subject is missing (safe to add)", () => {
-    expect(planSubjectUnion([DEFAULT], [WORK])).toEqual({ missing: [WORK], conflicting: [] });
+    expect(missingSubjects([DEFAULT], [WORK])).toEqual([WORK]);
   });
 
-  test("a subject that partially overlaps a live one is conflicting, never added", () => {
+  test("a subject that partially overlaps a live one is never proposed", () => {
     // Live `local.alice.*.tasks.code-review.x` overlaps the desired pattern but
     // does not cover it — appending would make the stream's subjects overlap.
-    expect(planSubjectUnion(["local.alice.*.tasks.code-review.x"], [WORK])).toEqual({
-      missing: [],
-      conflicting: [WORK],
-    });
+    expect(missingSubjects(["local.alice.*.tasks.code-review.x"], [WORK])).toEqual([]);
   });
 
-  test("never proposes removing a live subject", () => {
-    const plan = planSubjectUnion([DEFAULT, "local.bob.default.tasks.code-review.*"], [WORK]);
-    expect(plan.missing).toEqual([WORK]);
+  test("proposes only additions, whatever else the stream carries", () => {
+    expect(missingSubjects([DEFAULT, "local.bob.default.tasks.code-review.*"], [WORK])).toEqual([WORK]);
   });
 
-  test("duplicate desired subjects are planned once", () => {
-    expect(planSubjectUnion([DEFAULT], [WORK, WORK]).missing).toEqual([WORK]);
+  test("duplicate desired subjects are proposed once", () => {
+    expect(missingSubjects([DEFAULT], [WORK, WORK])).toEqual([WORK]);
   });
 });

@@ -94,13 +94,16 @@ export function createFakeJetStream(): FakeJetStream {
       }
     }
   };
+  const undelivered = (c: FakeConsumer, s: FakeStream): StoredMessage[] => {
+    const filter = c.config.filter_subject ?? "";
+    return s.messages.filter(
+      (m) => m.seq > c.deliveredSeq && (filter === "" || subjectCovers(filter, m.subject)),
+    );
+  };
   const streamInfo = (s: FakeStream): StreamInfo =>
     ({ config: { ...s.config, subjects: [...s.config.subjects] } }) as unknown as StreamInfo;
   const consumerInfo = (c: FakeConsumer, stream: FakeStream): ConsumerInfo => {
-    const filter = c.config.filter_subject ?? "";
-    const numPending = stream.messages.filter(
-      (m) => m.seq > c.deliveredSeq && (filter === "" || subjectCovers(filter, m.subject)),
-    ).length;
+    const numPending = undelivered(c, stream).length;
     return {
       name: c.config.durable_name,
       config: { ...c.config },
@@ -185,10 +188,7 @@ export function createFakeJetStream(): FakeJetStream {
     pull(stream, durable, opts = {}) {
       const s = getStream(stream);
       const c = getConsumer(stream, durable);
-      const filter = c.config.filter_subject ?? "";
-      const out = s.messages.filter(
-        (m) => m.seq > c.deliveredSeq && (filter === "" || subjectCovers(filter, m.subject)),
-      );
+      const out = undelivered(c, s);
       // Like the server: `delivered.stream_seq` is the last message handed out.
       const last = out.at(-1);
       if (last !== undefined) c.deliveredSeq = last.seq;

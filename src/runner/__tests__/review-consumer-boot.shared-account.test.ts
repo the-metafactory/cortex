@@ -152,6 +152,28 @@ describe("review lane — single stack (cortex#1503 migration)", () => {
     );
   });
 
+  test("a busy legacy durable (live puller) is bound this boot instead of the scoped one", async () => {
+    const js = createFakeJetStream();
+    const pats = reviewScopePatterns(PRINCIPAL, "default");
+    await provisionReviewStream({ jsm: js.jsm, name: STREAM, subjects: [pats.local], log: quietLog });
+    await js.jsm.consumers.add(STREAM, {
+      durable_name: "cortex-review-consumer-alice-sage",
+      filter_subject: pats.local,
+      deliver_policy: DeliverPolicy.All,
+    });
+    js.setWaiting(STREAM, "cortex-review-consumer-alice-sage", 1);
+    const origWarn = console.warn;
+    console.warn = () => {};
+    let binds: MyelinSubscribePullOpts[];
+    try {
+      binds = await bootStack(js, "default", false);
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(binds.map((b) => b.durable)).toEqual(["cortex-review-consumer-alice-sage"]);
+    expect(js.consumerNames(STREAM)).toEqual(["cortex-review-consumer-alice-sage"]);
+  });
+
   test("upgrading replaces each idle legacy durable without replaying what it already processed", async () => {
     const js = createFakeJetStream();
     const pats = reviewScopePatterns(PRINCIPAL, "default");

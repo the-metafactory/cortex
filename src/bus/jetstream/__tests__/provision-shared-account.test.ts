@@ -12,8 +12,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { DeliverPolicy } from "nats";
-import { provisionReviewConsumer, provisionReviewStream } from "../provision";
-import { createFakeJetStream } from "./fake-jetstream";
+import { provisionReviewStream, provisionStackScopedConsumer } from "../provision";
+import { createFakeJetStream, type FakeJetStream } from "./fake-jetstream";
 
 const DEFAULT_PAT = "local.alice.default.tasks.code-review.*";
 const WORK_PAT = "local.alice.work.tasks.code-review.*";
@@ -112,6 +112,20 @@ describe("provisionReviewStream — shared stream across stacks (cortex#1503)", 
     expect(js.streamUpdates).toEqual([]);
   });
 
+  test("a rejected update (e.g. no stream-edit permission) warns instead of throwing", async () => {
+    const js = createFakeJetStream();
+    await provisionReviewStream({ jsm: js.jsm, name: "CODE_REVIEW", subjects: [DEFAULT_PAT], log: recordingLog().log });
+    js.jsm.streams.update = async () => {
+      throw new Error("permissions violation");
+    };
+    const r = recordingLog();
+    expect(
+      await provisionReviewStream({ jsm: js.jsm, name: "CODE_REVIEW", subjects: [WORK_PAT], log: r.log }),
+    ).toBe("config-drift-warning");
+    expect(r.warn.join("\n")).toContain("permissions violation");
+    expect(r.warn.join("\n")).toContain("config drifts");
+  });
+
   test("keeps the whole live config on update (only subjects grow)", async () => {
     const js = createFakeJetStream();
     await js.jsm.streams.add({ name: "CODE_REVIEW", subjects: [DEFAULT_PAT], max_age: 24 * 3600 * 1e9, max_bytes: 123 });
@@ -144,7 +158,7 @@ describe("provisionReviewStream — shared stream across stacks (cortex#1503)", 
   });
 });
 
-describe("provisionReviewConsumer — legacy durable migration (cortex#1503)", () => {
+describe("provisionStackScopedConsumer — legacy durable migration (cortex#1503)", () => {
   async function streamWithLegacy(legacyFilter: string) {
     const js = createFakeJetStream();
     await js.jsm.streams.add({ name: "CODE_REVIEW", subjects: [DEFAULT_PAT, WORK_PAT], max_age: 24 * 3600 * 1e9 });
@@ -156,12 +170,24 @@ describe("provisionReviewConsumer — legacy durable migration (cortex#1503)", (
     return js;
   }
 
+  /** One boot of the default stack's local review durable. */
+  function migrate(js: FakeJetStream, log = recordingLog().log) {
+    return provisionStackScopedConsumer({
+      jsm: js.jsm,
+      stream: "CODE_REVIEW",
+      durable: SCOPED_DEFAULT,
+      legacyDurable: LEGACY,
+      filterSubject: DEFAULT_PAT,
+      log,
+    });
+  }
+
   test("ours + idle: new durable starts after the legacy's last delivery (no replay), legacy deleted", async () => {
     const js = await streamWithLegacy(DEFAULT_PAT);
     js.publish("local.alice.default.tasks.code-review.one");
     js.publish("local.alice.default.tasks.code-review.two");
     expect(js.pull("CODE_REVIEW", LEGACY)).toHaveLength(2); // processed pre-upgrade
-    js.publish("local.alice.default.tasks.code-review.three"); // arrived while the daemon was down
+    js.publish("local.alice.default.tasks.code-review.three"); // arrived while the runtime was down
 
     // A request that lands between the legacy read and the new durable's create
     // must still be delivered.
@@ -172,16 +198,7 @@ describe("provisionReviewConsumer — legacy durable migration (cortex#1503)", (
     };
 
     const r = recordingLog();
-    expect(
-      await provisionReviewConsumer({
-        jsm: js.jsm,
-        stream: "CODE_REVIEW",
-        durable: SCOPED_DEFAULT,
-        legacyDurable: LEGACY,
-        filterSubject: DEFAULT_PAT,
-        log: r.log,
-      }),
-    ).toBe("created");
+    expect(await migrate(js, r.log)).toEqual({ durable: SCOPED_DEFAULT, outcome: "created" });
 
     expect(js.pull("CODE_REVIEW", SCOPED_DEFAULT)).toEqual([
       "local.alice.default.tasks.code-review.three",
@@ -192,83 +209,61 @@ describe("provisionReviewConsumer — legacy durable migration (cortex#1503)", (
     expect(r.warn).toEqual([]);
   });
 
-  test("ours but ack-pending: legacy kept and named in a warning; retried and deleted on a later boot", async () => {
+  test("ours + ack-pending: migration deferred — the legacy durable is bound, so the in-flight request redelivers as on any restart", async () => {
     const js = await streamWithLegacy(DEFAULT_PAT);
     js.publish("local.alice.default.tasks.code-review.inflight");
-    js.pull("CODE_REVIEW", LEGACY, { ack: false }); // mid-review when the old daemon stopped
+    js.pull("CODE_REVIEW", LEGACY, { ack: false }); // mid-review when the old runtime stopped
 
     const first = recordingLog();
-    await provisionReviewConsumer({
-      jsm: js.jsm,
-      stream: "CODE_REVIEW",
-      durable: SCOPED_DEFAULT,
-      legacyDurable: LEGACY,
-      filterSubject: DEFAULT_PAT,
-      log: first.log,
-    });
-    expect(js.consumerNames("CODE_REVIEW").sort()).toEqual([LEGACY, SCOPED_DEFAULT].sort());
-    expect(first.warn.join("\n")).toContain(LEGACY);
+    expect(await migrate(js, first.log)).toEqual({ durable: LEGACY, outcome: "deferred" });
+    expect(js.consumerNames("CODE_REVIEW")).toEqual([LEGACY]); // no scoped durable yet
     expect(first.warn.join("\n")).toContain("ack_pending=1");
-    // The already-delivered in-flight request is not replayed onto the new durable.
-    expect(js.pull("CODE_REVIEW", SCOPED_DEFAULT)).toEqual([]);
 
-    // Later boot, once the principal has dealt with it (or it was terminated
-    // after max_deliver): the legacy durable is idle → cleaned up.
+    // The redelivered request is acked on the legacy durable; the next boot is idle → migrates.
     js.ackAll("CODE_REVIEW", LEGACY);
-    await provisionReviewConsumer({
-      jsm: js.jsm,
-      stream: "CODE_REVIEW",
-      durable: SCOPED_DEFAULT,
-      legacyDurable: LEGACY,
-      filterSubject: DEFAULT_PAT,
-      log: recordingLog().log,
-    });
+    expect(await migrate(js)).toEqual({ durable: SCOPED_DEFAULT, outcome: "created" });
     expect(js.consumerNames("CODE_REVIEW")).toEqual([SCOPED_DEFAULT]);
+    expect(js.pull("CODE_REVIEW", SCOPED_DEFAULT)).toEqual([]); // not replayed
   });
 
-  test("ours but a live pull request is waiting: legacy kept, then deleted once idle", async () => {
+  test("ours + a live puller: migration deferred, so a new request is delivered once, not to two durables", async () => {
     const js = await streamWithLegacy(DEFAULT_PAT);
-    js.setWaiting("CODE_REVIEW", LEGACY, 1);
+    js.setWaiting("CODE_REVIEW", LEGACY, 1); // an old-version runtime of this stack is pulling
     const first = recordingLog();
-    await provisionReviewConsumer({
-      jsm: js.jsm,
-      stream: "CODE_REVIEW",
-      durable: SCOPED_DEFAULT,
-      legacyDurable: LEGACY,
-      filterSubject: DEFAULT_PAT,
-      log: first.log,
-    });
-    expect(js.consumerNames("CODE_REVIEW")).toContain(LEGACY);
+    expect(await migrate(js, first.log)).toEqual({ durable: LEGACY, outcome: "deferred" });
     expect(first.warn.join("\n")).toContain("waiting=1");
 
-    // Next boot: the scoped durable already exists; the expired pull leaves the legacy idle.
+    js.publish("local.alice.default.tasks.code-review.during-upgrade");
+    expect(js.consumerNames("CODE_REVIEW")).toEqual([LEGACY]); // competing consumers on one durable
+
+    // Once nobody pulls it any more, the next boot migrates without replay.
+    js.pull("CODE_REVIEW", LEGACY);
     js.setWaiting("CODE_REVIEW", LEGACY, 0);
-    const second = recordingLog();
-    expect(
-      await provisionReviewConsumer({
-        jsm: js.jsm,
-        stream: "CODE_REVIEW",
-        durable: SCOPED_DEFAULT,
-        legacyDurable: LEGACY,
-        filterSubject: DEFAULT_PAT,
-        log: second.log,
-      }),
-    ).toBe("exists");
+    expect(await migrate(js)).toEqual({ durable: SCOPED_DEFAULT, outcome: "created" });
     expect(js.consumerNames("CODE_REVIEW")).toEqual([SCOPED_DEFAULT]);
+    expect(js.pull("CODE_REVIEW", SCOPED_DEFAULT)).toEqual([]);
+  });
+
+  test("scoped durable exists and an old-version runtime recreated a busy legacy one: kept, warned", async () => {
+    const js = await streamWithLegacy(DEFAULT_PAT);
+    await migrate(js); // migrated; legacy deleted
+    await js.jsm.consumers.add("CODE_REVIEW", {
+      durable_name: LEGACY,
+      filter_subject: DEFAULT_PAT,
+      deliver_policy: DeliverPolicy.All,
+    });
+    js.setWaiting("CODE_REVIEW", LEGACY, 1);
+    const r = recordingLog();
+    expect(await migrate(js, r.log)).toEqual({ durable: SCOPED_DEFAULT, outcome: "exists" });
+    expect(js.consumerNames("CODE_REVIEW").sort()).toEqual([LEGACY, SCOPED_DEFAULT].sort());
+    expect(r.warn.join("\n")).toContain("old-version");
   });
 
   test("another stack's legacy durable is never touched; ours starts from New", async () => {
     const js = await streamWithLegacy(WORK_PAT); // the work stack provisioned it last
     js.publish("local.alice.default.tasks.code-review.stale"); // never reachable pre-fix
     const r = recordingLog();
-    await provisionReviewConsumer({
-      jsm: js.jsm,
-      stream: "CODE_REVIEW",
-      durable: SCOPED_DEFAULT,
-      legacyDurable: LEGACY,
-      filterSubject: DEFAULT_PAT,
-      log: r.log,
-    });
+    expect(await migrate(js, r.log)).toEqual({ durable: SCOPED_DEFAULT, outcome: "created" });
     expect(js.consumerFilter("CODE_REVIEW", LEGACY)).toBe(WORK_PAT);
     expect(js.consumerDeletes).toEqual([]);
     expect(r.info.join("\n")).toContain(LEGACY);
@@ -279,14 +274,7 @@ describe("provisionReviewConsumer — legacy durable migration (cortex#1503)", (
 
   test("an unfiltered legacy durable (pre-cortex#1186) is not provably ours — left alone", async () => {
     const js = await streamWithLegacy("");
-    await provisionReviewConsumer({
-      jsm: js.jsm,
-      stream: "CODE_REVIEW",
-      durable: SCOPED_DEFAULT,
-      legacyDurable: LEGACY,
-      filterSubject: DEFAULT_PAT,
-      log: recordingLog().log,
-    });
+    await migrate(js);
     expect(js.consumerNames("CODE_REVIEW")).toContain(LEGACY);
     expect(js.consumerDeletes).toEqual([]);
   });
@@ -295,14 +283,7 @@ describe("provisionReviewConsumer — legacy durable migration (cortex#1503)", (
     const js = createFakeJetStream();
     await js.jsm.streams.add({ name: "CODE_REVIEW", subjects: [DEFAULT_PAT], max_age: 24 * 3600 * 1e9 });
     js.publish("local.alice.default.tasks.code-review.queued");
-    await provisionReviewConsumer({
-      jsm: js.jsm,
-      stream: "CODE_REVIEW",
-      durable: SCOPED_DEFAULT,
-      legacyDurable: LEGACY,
-      filterSubject: DEFAULT_PAT,
-      log: recordingLog().log,
-    });
+    expect(await migrate(js)).toEqual({ durable: SCOPED_DEFAULT, outcome: "created" });
     // Same as before #1503: a first-boot durable reads the (interest-retained) backlog.
     expect(js.pull("CODE_REVIEW", SCOPED_DEFAULT)).toEqual(["local.alice.default.tasks.code-review.queued"]);
   });

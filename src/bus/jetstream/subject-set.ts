@@ -54,33 +54,20 @@ export function subjectsOverlap(a: string, b: string): boolean {
   return at.length === bt.length;
 }
 
-/** What `provisionReviewStream` may do with a live stream's subjects. */
-export interface SubjectUnionPlan {
-  /** Desired subjects no existing subject covers, safe to append (no partial overlap). */
-  missing: string[];
-  /** Desired subjects that partially overlap an existing subject — adding them would be rejected. */
-  conflicting: string[];
-}
-
 /**
- * Split `desired` into subjects the live stream already covers (dropped),
- * subjects it can safely gain (`missing`), and subjects that partially overlap
- * a live subject (`conflicting`). Never proposes removing a live subject — the
- * other stacks sharing the stream own those.
+ * The desired subjects the live stream can safely gain: those no live subject
+ * covers AND none partially overlaps (appending an overlapping one would make
+ * the stream's subjects overlap, which the server rejects — that case stays
+ * uncovered and `describeStreamDrift` reports it). Never proposes removing a
+ * live subject — the other stacks sharing the stream own those.
  */
-export function planSubjectUnion(
+export function missingSubjects(
   existing: readonly string[],
   desired: readonly string[],
-): SubjectUnionPlan {
-  const missing: string[] = [];
-  const conflicting: string[] = [];
-  for (const d of new Set(desired)) {
-    if (existing.some((e) => subjectCovers(e, d))) continue;
-    if (existing.some((e) => subjectsOverlap(e, d))) {
-      conflicting.push(d);
-    } else {
-      missing.push(d);
-    }
-  }
-  return { missing, conflicting };
+): string[] {
+  return [...new Set(desired)].filter(
+    (d) =>
+      !existing.some((e) => subjectCovers(e, d)) &&
+      !existing.some((e) => subjectsOverlap(e, d)),
+  );
 }

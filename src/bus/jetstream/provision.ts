@@ -55,7 +55,7 @@ import type { ConsumerConfig, ConsumerInfo, StreamInfo } from "nats";
 export type { ProvisionJsm } from "./types";
 import type { ProvisionJsm } from "./types";
 import { DEFAULT_STREAM_MAX_BYTES } from "../../common/types/cortex-config";
-import { planSubjectUnion, subjectCovers } from "./subject-set";
+import { missingSubjects, subjectCovers } from "./subject-set";
 
 /**
  * Outcome of `provisionReviewStream`. Includes `config-drift-warning`
@@ -90,6 +90,12 @@ export type ProvisionConsumerOutcome = "created" | "exists" | "updated";
  * once no internal callers reference it.
  */
 export type ProvisionOutcome = ProvisionStreamOutcome;
+
+/** Logger the provisioning helpers write to. Defaults to `console`. */
+export interface ProvisionLog {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+}
 
 export interface ProvisionStreamOpts {
   jsm: ProvisionJsm;
@@ -127,7 +133,7 @@ export interface ProvisionStreamOpts {
    * pin the boot-log shape and lets future deployments swap in a
    * structured logger.
    */
-  log?: { info: (msg: string) => void; warn: (msg: string) => void };
+  log?: ProvisionLog;
 }
 
 export interface ProvisionConsumerOpts {
@@ -167,16 +173,7 @@ export interface ProvisionConsumerOpts {
    * never reconciled (JetStream forbids changing it in place).
    */
   deliverPolicy?: DeliverPolicy;
-  /**
-   * cortex#1503 — the pre-#1503 unscoped durable this one replaces (e.g.
-   * `cortex-review-consumer-{principal}-{agent}`). On first create the new
-   * durable starts after the legacy's last delivery when the legacy is
-   * provably ours (same filter); the legacy is removed once idle. A legacy
-   * durable with any other filter belongs to another stack and is never
-   * touched.
-   */
-  legacyDurable?: string;
-  log?: { info: (msg: string) => void; warn: (msg: string) => void };
+  log?: ProvisionLog;
 }
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
@@ -275,23 +272,31 @@ const MAX_SUBJECT_UNION_ATTEMPTS = 3;
  * Never removes a subject (other stacks sharing the stream own them) and
  * never touches any other field: the update re-sends the live config with
  * only `subjects` grown. A desired subject that partially overlaps a live one
- * is not added — `describeStreamDrift` then reports it and the caller keeps
- * the v1 warn-and-leave behaviour.
+ * is not added, and a rejected update (no stream-edit permission, a subject
+ * another stream owns) is logged — in both cases `describeStreamDrift` then
+ * reports the uncovered subjects and the caller keeps the v1 warn-and-leave.
  */
 async function extendStreamSubjects(
   jsm: ProvisionJsm,
   name: string,
   existing: StreamInfo,
   desired: readonly string[],
-  log: { info: (msg: string) => void; warn: (msg: string) => void },
+  log: ProvisionLog,
 ): Promise<{ info: StreamInfo; extended: boolean }> {
   let info = existing;
   let extended = false;
   for (let attempt = 1; attempt <= MAX_SUBJECT_UNION_ATTEMPTS; attempt++) {
     const live = info.config.subjects;
-    const { missing } = planSubjectUnion(live, desired);
+    const missing = missingSubjects(live, desired);
     if (missing.length === 0) return { info, extended };
-    await jsm.streams.update(name, { ...info.config, subjects: [...live, ...missing] });
+    try {
+      await jsm.streams.update(name, { ...info.config, subjects: [...live, ...missing] });
+    } catch (err) {
+      log.warn(
+        `jetstream-provision: could not extend stream "${name}" subjects with [${missing.join(", ")}] (${err instanceof Error ? err.message : String(err)}) (cortex#1503)`,
+      );
+      return { info, extended };
+    }
     log.info(
       `jetstream-provision: extended stream "${name}" subjects with [${missing.join(", ")}] (shared by another stack of this principal — cortex#1503)`,
     );
@@ -316,34 +321,6 @@ async function consumerInfoOrNull(
   }
 }
 
-/**
- * cortex#1503 — the create-time start position for a stack-scoped durable
- * that replaces a pre-#1503 unscoped one.
- *
- *  - No legacy durable → `undefined` (the caller's default policy — a fresh
- *    stack behaves exactly as before).
- *  - Legacy filter is THIS durable's filter → start right after the legacy's
- *    last delivery: nothing it already handed out is replayed, and every
- *    request stored after it (including one published during the upgrade) is
- *    delivered to the new durable.
- *  - Legacy filter is another stack's (or empty) → `New`: its sequence
- *    positions say nothing about this stack's subjects, and replaying from
- *    `All` would re-run reviews.
- */
-function legacyStartPosition(
-  legacy: ConsumerInfo | null,
-  filterSubject: string | undefined,
-): Pick<ConsumerConfig, "deliver_policy" | "opt_start_seq"> | undefined {
-  if (legacy === null) return undefined;
-  if (isLegacyOurs(legacy, filterSubject)) {
-    return {
-      deliver_policy: DeliverPolicy.StartSequence,
-      opt_start_seq: legacy.delivered.stream_seq + 1,
-    };
-  }
-  return { deliver_policy: DeliverPolicy.New };
-}
-
 /** A legacy durable is provably this stack's only when its filter is exactly this durable's filter. */
 function isLegacyOurs(legacy: ConsumerInfo, filterSubject: string | undefined): boolean {
   const legacyFilter = legacy.config.filter_subject ?? "";
@@ -351,92 +328,132 @@ function isLegacyOurs(legacy: ConsumerInfo, filterSubject: string | undefined): 
 }
 
 /**
- * cortex#1503 — remove the pre-#1503 unscoped durable once the scoped one
- * exists, but only when it is provably ours AND idle:
- *
- *  - filter ≠ ours → another stack's (possibly still on the old version).
- *    Never touched; that stack cleans it up when it upgrades.
- *  - `num_ack_pending > 0` → reviews were in flight when the old daemon
- *    stopped. They are NOT replayed onto the new durable (it starts after the
- *    legacy's last delivery), so the durable is kept and named in a warning.
- *  - `num_waiting > 0` → a pull request is open on it (a live puller, or a
- *    dead process's request that hasn't expired yet). Kept; retried next boot.
+ * Idle = nothing in flight and nobody pulling. The server prunes pull
+ * requests whose connection has gone when it builds consumer info, so
+ * `num_waiting > 0` means a live puller (e.g. an old-version Cortex runtime of
+ * the same stack still running), not a request left by the stopped process.
  */
-async function cleanupLegacyDurable(
-  jsm: ProvisionJsm,
-  stream: string,
-  legacyDurable: string,
-  legacy: ConsumerInfo,
-  durable: string,
-  filterSubject: string | undefined,
-  log: { info: (msg: string) => void; warn: (msg: string) => void },
-): Promise<void> {
-  if (!isLegacyOurs(legacy, filterSubject)) {
+function isIdle(c: ConsumerInfo): boolean {
+  return c.num_ack_pending === 0 && c.num_waiting === 0;
+}
+
+/** Outcome of {@link provisionStackScopedConsumer}: the durable to bind, and what provisioning did. */
+export interface StackScopedConsumerResult {
+  /** The durable `consumer.start({ durable })` must bind this boot. */
+  durable: string;
+  /** `deferred`: the busy legacy durable is bound this boot; migration retries next boot. */
+  outcome: ProvisionConsumerOutcome | "deferred";
+}
+
+/**
+ * cortex#1503 — provision a stack-scoped durable that replaces a pre-#1503
+ * unscoped one (`legacyDurable`), and say which durable to bind.
+ *
+ * The legacy durable is read BEFORE the scoped one can be created, and it
+ * never goes through the filter-drift recreate in {@link ensureConsumer}
+ * (which would rewrite another stack's durable). Cases:
+ *
+ *  - No legacy durable → the scoped durable with the caller's default policy
+ *    (a fresh stack behaves exactly as before).
+ *  - Legacy filter is another stack's (or empty) → never touched. The scoped
+ *    durable starts from `New`: the legacy's positions say nothing about this
+ *    stack's subjects, and `All` would re-run reviews.
+ *  - Legacy is ours and idle → the scoped durable starts at
+ *    `legacy.delivered.stream_seq + 1` (nothing already delivered is
+ *    replayed; every request stored after, including one published during the
+ *    upgrade, is delivered), then the legacy durable is deleted.
+ *  - Legacy is ours and busy, scoped absent → migration DEFERRED: the legacy
+ *    durable is bound this boot. A live legacy puller keeps competing-consumer
+ *    semantics (no double delivery), and ack-pending requests redeliver as on
+ *    any restart. The first idle boot migrates.
+ *  - Legacy is ours and busy, scoped present → an old-version runtime of this
+ *    stack recreated it after migration. Kept and warned: the two durables
+ *    double-deliver until every runtime of the stack is upgraded.
+ */
+export async function provisionStackScopedConsumer(
+  opts: ProvisionConsumerOpts & { legacyDurable: string },
+): Promise<StackScopedConsumerResult> {
+  const log = opts.log ?? console;
+  const { legacyDurable } = opts;
+  if (legacyDurable === opts.durable) {
+    return { durable: opts.durable, outcome: await ensureConsumer(opts, undefined) };
+  }
+
+  let legacy: ConsumerInfo | null;
+  let scopedExists: boolean;
+  try {
+    legacy = await consumerInfoOrNull(opts.jsm, opts.stream, legacyDurable);
+    scopedExists = (await consumerInfoOrNull(opts.jsm, opts.stream, opts.durable)) !== null;
+  } catch (err) {
+    // Unknown state: never replay, never touch the legacy durable.
+    log.warn(
+      `jetstream-provision: could not read durables "${legacyDurable}"/"${opts.durable}" on stream "${opts.stream}" (${err instanceof Error ? err.message : String(err)}) — "${opts.durable}" starts from New if created; legacy left in place (cortex#1503)`,
+    );
+    return {
+      durable: opts.durable,
+      outcome: await ensureConsumer(opts, { deliver_policy: DeliverPolicy.New }),
+    };
+  }
+
+  if (legacy === null) {
+    return { durable: opts.durable, outcome: await ensureConsumer(opts, undefined) };
+  }
+
+  if (!isLegacyOurs(legacy, opts.filterSubject)) {
     const legacyFilter = legacy.config.filter_subject ?? "";
     log.info(
-      `jetstream-provision: legacy durable "${legacyDurable}" on stream "${stream}" filters "${legacyFilter || "<none>"}", not this stack's "${filterSubject ?? "<none>"}" — left in place (cortex#1503)`,
+      `jetstream-provision: legacy durable "${legacyDurable}" on stream "${opts.stream}" filters "${legacyFilter || "<none>"}", not this stack's "${opts.filterSubject ?? "<none>"}" — left in place (cortex#1503)`,
     );
-    return;
+    return {
+      durable: opts.durable,
+      outcome: await ensureConsumer(opts, scopedExists ? undefined : { deliver_policy: DeliverPolicy.New }),
+    };
   }
-  if (legacy.num_ack_pending > 0 || legacy.num_waiting > 0) {
+
+  if (!isIdle(legacy) && !scopedExists) {
     log.warn(
-      `jetstream-provision: legacy durable "${legacyDurable}" on stream "${stream}" is not idle (ack_pending=${legacy.num_ack_pending}, waiting=${legacy.num_waiting}) — kept; "${durable}" replaces it and cleanup retries next boot. Ack-pending requests are not replayed: re-fire them if needed (cortex#1503)`,
+      `jetstream-provision: legacy durable "${legacyDurable}" on stream "${opts.stream}" is busy (ack_pending=${legacy.num_ack_pending}, waiting=${legacy.num_waiting}) — binding it this boot; migration to "${opts.durable}" retries on the next boot (cortex#1503)`,
     );
-    return;
+    // Same filter, so this only reconciles ack_wait (never a recreate).
+    await ensureConsumer({ ...opts, durable: legacyDurable }, undefined);
+    return { durable: legacyDurable, outcome: "deferred" };
   }
-  await jsm.consumers.delete(stream, legacyDurable);
-  log.info(
-    `jetstream-provision: removed legacy durable "${legacyDurable}" on stream "${stream}" (replaced by "${durable}", cortex#1503)`,
+
+  const outcome = await ensureConsumer(
+    opts,
+    scopedExists
+      ? undefined
+      : { deliver_policy: DeliverPolicy.StartSequence, opt_start_seq: legacy.delivered.stream_seq + 1 },
   );
+  if (!isIdle(legacy)) {
+    log.warn(
+      `jetstream-provision: legacy durable "${legacyDurable}" on stream "${opts.stream}" is busy (ack_pending=${legacy.num_ack_pending}, waiting=${legacy.num_waiting}) although "${opts.durable}" exists — an old-version runtime of this stack recreated it; both durables receive this stack's requests until every runtime is upgraded (cortex#1503)`,
+    );
+    return { durable: opts.durable, outcome };
+  }
+  try {
+    await opts.jsm.consumers.delete(opts.stream, legacyDurable);
+    log.info(
+      `jetstream-provision: removed legacy durable "${legacyDurable}" on stream "${opts.stream}" (replaced by "${opts.durable}", cortex#1503)`,
+    );
+  } catch (err) {
+    // The scoped durable is provisioned; a failed delete only leaves an idle
+    // orphan behind, retried on the next boot.
+    log.warn(
+      `jetstream-provision: removing legacy durable "${legacyDurable}" on stream "${opts.stream}" failed (${err instanceof Error ? err.message : String(err)}) — retried next boot (cortex#1503)`,
+    );
+  }
+  return { durable: opts.durable, outcome };
 }
 
 /**
  * Provision (or assert presence of) a per-agent durable pull consumer on
  * the given stream. Idempotent — safe on every boot.
- *
- * With `legacyDurable` (cortex#1503), a first create starts where the
- * provably-ours legacy durable left off, and the legacy durable is removed
- * once idle — see {@link legacyStartPosition} / {@link cleanupLegacyDurable}.
- * The legacy name is only read and (guardedly) deleted; it never goes
- * through the filter-drift recreate below, which would rewrite another
- * stack's durable.
  */
 export async function provisionReviewConsumer(
   opts: ProvisionConsumerOpts,
 ): Promise<ProvisionConsumerOutcome> {
-  const log = opts.log ?? console;
-  const legacyDurable =
-    opts.legacyDurable !== undefined && opts.legacyDurable !== opts.durable
-      ? opts.legacyDurable
-      : undefined;
-  if (legacyDurable === undefined) return ensureConsumer(opts, undefined);
-
-  // Read the legacy durable BEFORE the scoped one can be created, so the
-  // scoped durable's start sequence precedes every request stored after it.
-  let legacy: ConsumerInfo | null;
-  try {
-    legacy = await consumerInfoOrNull(opts.jsm, opts.stream, legacyDurable);
-  } catch (err) {
-    // Unknown legacy state: start the scoped durable from `New` (never replay)
-    // and leave the legacy durable alone.
-    log.warn(
-      `jetstream-provision: could not read legacy durable "${legacyDurable}" on stream "${opts.stream}" (${err instanceof Error ? err.message : String(err)}) — "${opts.durable}" starts from New; legacy left in place (cortex#1503)`,
-    );
-    return ensureConsumer(opts, { deliver_policy: DeliverPolicy.New });
-  }
-  const outcome = await ensureConsumer(opts, legacyStartPosition(legacy, opts.filterSubject));
-  if (legacy !== null) {
-    try {
-      await cleanupLegacyDurable(opts.jsm, opts.stream, legacyDurable, legacy, opts.durable, opts.filterSubject, log);
-    } catch (err) {
-      // The scoped durable is provisioned; a failed cleanup only leaves an
-      // orphan behind, retried on the next boot.
-      log.warn(
-        `jetstream-provision: cleanup of legacy durable "${legacyDurable}" on stream "${opts.stream}" failed (${err instanceof Error ? err.message : String(err)}) — retried next boot (cortex#1503)`,
-      );
-    }
-  }
-  return outcome;
+  return ensureConsumer(opts, undefined);
 }
 
 /**

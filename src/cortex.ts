@@ -1895,8 +1895,8 @@ export async function startCortex(
   // (`reviewDurableNames`) — unique per (principal, stack, agent), matching
   // the `local.{principal}.{stack}.…` filter, so two stacks of one principal
   // on one NATS account never share (and fight over) a durable, while two
-  // daemons on the SAME stack still share competing-consumer semantics and a
-  // daemon restart resumes from the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
+  // Cortex runtimes on the SAME stack still share competing-consumer semantics
+  // and a restart resumes from the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
   // API parameter to `principalId`; this local alias keeps the review-
   // consumer wiring readable alongside the dashboard's `operatorId`
   // column name (still on the MC surface — PR-R2b).
