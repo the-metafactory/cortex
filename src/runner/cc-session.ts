@@ -437,6 +437,15 @@ export function deriveSandboxProfile(
 
 export class CCSession extends EventEmitter {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
+  /**
+   * Set when `start()` failed before a process existed (spawn threw: ENOENT,
+   * EACCES, E2BIG, the EBH-4 fail-closed refusal). `start()` emits
+   * `error`/`exit` synchronously in that case, so a `wait()` called
+   * afterwards would attach its listeners too late and stay pending forever
+   * (and, seeing `proc === null`, would call `start()` a second time).
+   * `wait()` reads this first and settles at once.
+   */
+  private spawnFailure: Error | null = null;
   private timeoutId: Timer | null = null;
   private lineBuffer = new StreamLineBuffer();
   private startTime = 0;
@@ -470,8 +479,8 @@ export class CCSession extends EventEmitter {
     // session: load NO ambient setting source (not the principal's global
     // `user`, nor the cwd repo's `project`/`local` `.claude/`) and load a
     // cortex-owned curated settings file with ONLY cortex's hooks. The args
-    // are appended to additionalArgs so they sit before `-p <prompt>`
-    // (buildClaudeArgs puts the prompt last).
+    // are appended to additionalArgs (the prompt itself is not in argv —
+    // it is written to the child's stdin below).
     const isolate = this.opts.settingsIsolation !== false;
     // cortex#710 — per-skill grants. Non-empty → curated settings registers
     // the Skill Guard hook AND the grant list is exported to it via env. The
@@ -743,6 +752,10 @@ export class CCSession extends EventEmitter {
       }
 
       this.proc = sandbox.spawn(["claude", ...args], sandboxProfile, {
+        // The prompt rides stdin, never argv — see `buildClaudeArgs`. A
+        // single argv element over 131,071 bytes fails `execve` with E2BIG
+        // on Linux; stdin has no such limit.
+        stdin: new TextEncoder().encode(this.opts.prompt),
         stdout: "pipe",
         stderr: "pipe",
         env,
@@ -850,6 +863,10 @@ export class CCSession extends EventEmitter {
       this.cleanupSettings();
       egressProxy?.stop();
       const err = error instanceof Error ? error : new Error(String(error));
+      // Recorded BEFORE emitting: with no `error` listener attached the
+      // emit below re-throws out of `start()`, and `wait()` must still be
+      // able to settle afterwards.
+      this.spawnFailure = err;
       this.emit("error", err);
       this.emit("exit", 1);
     }
@@ -893,6 +910,18 @@ export class CCSession extends EventEmitter {
    * that listen.
    */
   async wait(): Promise<CCSessionResult> {
+    // The spawn already failed (see `spawnFailure`): its `error`/`exit`
+    // events fired inside `start()`, before any listener below could exist.
+    // Settle now with the failure, and never re-run `start()`.
+    if (this.spawnFailure) {
+      return {
+        success: false,
+        response: "",
+        exitCode: 1,
+        durationMs: Math.round(performance.now() - this.startTime),
+        stderr: this.stderrText || this.spawnFailure.message,
+      };
+    }
     if (!this.proc) {
       this.start();
     }

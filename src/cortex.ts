@@ -3997,6 +3997,11 @@ export async function startCortex(
     ...(config.claude.bashAllowlist !== undefined && {
       bashAllowlist: config.claude.bashAllowlist,
     }),
+    // Receiving-stack session budget: a dispatch whose payload carries no
+    // `timeout_ms` (every gateway-routed message) runs under this stack's
+    // own `claude.timeoutMs` inactivity budget rather than CCSession's
+    // hard-coded 120 s. An explicit request `timeout_ms` still wins.
+    defaultTimeoutMs: config.claude.timeoutMs,
     // R26 P1 (cortex#1371) — admission gate. Spread-guarded like the other
     // optional fields: an unconfigured stack passes NO gate and the listener's
     // admission stage is skipped entirely (CO-4 inertness).
