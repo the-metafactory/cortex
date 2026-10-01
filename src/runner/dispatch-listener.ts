@@ -598,6 +598,20 @@ export interface DispatchListenerOptions {
    */
   bashGuardDisabled?: boolean;
   /**
+   * Receiving-stack session budget (RECEIVING-STACK fallback). The EXECUTING
+   * stack's own `claude.timeoutMs` — CCSession's inactivity timer, which
+   * resets on every stream event. Applied ONLY when the inbound payload
+   * carries no `timeout_ms`: an explicit request timeout still wins.
+   *
+   * Without it a gateway-routed message (`bus-inbound-sink` publishes
+   * `timeoutMs: undefined`) fell through to CCSession's hard-coded 120 s
+   * default, so the bound stack's configured budget never applied on that
+   * path. `cortex.ts` threads `config.claude.timeoutMs` here, the same way it
+   * threads `claude.bashAllowlist`. Snapshotted at listener construction —
+   * a hot-reloaded `claude.timeoutMs` reaches it on the next restart.
+   */
+  defaultTimeoutMs?: number;
+  /**
    * R26 P1 (cortex#1371) — the substrate ADMISSION GATE (design
    * `docs/design-substrate-rate-limiting.md` Design B; myelin
    * `specs/admission.md`). When supplied, every policy-ALLOWED dispatch is
@@ -883,6 +897,7 @@ export function createDispatchListener(
     resolveFederatedPeer,
     bashAllowlist,
     bashGuardDisabled,
+    defaultTimeoutMs,
     admissionGate,
     adapterId = "runner-dispatch-listener",
   } = opts;
@@ -970,6 +985,7 @@ export function createDispatchListener(
         traceDispatch,
         bashAllowlist,
         bashGuardDisabled,
+        defaultTimeoutMs,
         admissionGate,
       });
     } catch (err) {
@@ -1455,6 +1471,11 @@ interface DispatchHandlerContext {
    */
   bashGuardDisabled: boolean | undefined;
   /**
+   * Receiving-stack `claude.timeoutMs`, used when the payload carries no
+   * `timeout_ms`. See {@link DispatchListenerOptions.defaultTimeoutMs}.
+   */
+  defaultTimeoutMs: number | undefined;
+  /**
    * R26 P1 (cortex#1371) — admission gate. `undefined` ⇒ `policy.admission`
    * is not configured ⇒ the admission stage is skipped entirely (CO-4
    * inertness). See {@link DispatchListenerOptions.admissionGate}.
@@ -1492,6 +1513,7 @@ async function handleDispatchEnvelope(
     traceDispatch,
     bashAllowlist,
     bashGuardDisabled,
+    defaultTimeoutMs,
     admissionGate,
   } = ctx;
   // cortex#492 — pre-parse trace context from CLEARTEXT METADATA ONLY. M3
@@ -2190,6 +2212,14 @@ async function handleDispatchEnvelope(
   // structurally compatible between `SystemEventSource` and the harness's
   // `DispatchEventSource` (both alias the same shape in `dispatch-events.ts`).
   const req = buildDispatchRequest(payload, gatedPrincipal);
+
+  // Receiving-stack session budget. A payload without `timeout_ms` (every
+  // gateway-routed message) takes the executing stack's own
+  // `claude.timeoutMs` instead of CCSession's hard-coded 120 s default. An
+  // explicit request value is left alone.
+  if (req.timeoutMs === undefined && defaultTimeoutMs !== undefined) {
+    req.timeoutMs = defaultTimeoutMs;
+  }
 
   // cortex#127 — RECEIVING-STACK-AUTHORITATIVE bash guard injection.
   //

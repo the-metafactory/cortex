@@ -958,6 +958,55 @@ describe("dispatch-listener — success path", () => {
     expect(opts.bashAllowlist).toBeUndefined();
   });
 
+  // Receiving-stack session budget. A gateway-routed message (bus-inbound-sink)
+  // publishes NO timeout_ms, so before this the session fell to cc-session's
+  // hard-coded 120 s inactivity default and the executing stack's own
+  // `claude.timeoutMs` never applied. The listener now falls back to the
+  // stack's configured value — same receiving-side authority as bashAllowlist.
+  test("no timeout_ms on the payload → the receiving stack's claude.timeoutMs applies", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      // As cortex.ts threads `config.claude.timeoutMs`.
+      defaultTimeoutMs: 240_000,
+    });
+    await listener.start();
+    await router.start();
+
+    // Bare payload — exactly what the gateway's bus-inbound-sink publishes.
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    expect(optsCaptured[0]!.timeoutMs).toBe(240_000);
+  });
+
+  test("an explicit request timeout_ms still wins over the stack default", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      defaultTimeoutMs: 240_000,
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope({ timeout_ms: 60_000 }), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    expect(optsCaptured[0]!.timeoutMs).toBe(60_000);
+  });
+
   test("allowed_skills round-trips payload → harness → CCSessionOpts (cortex#710)", async () => {
     // The grant decision rides the payload's `allowed_skills`; the harness
     // turns it into {broad Skill allow + allowedSkills (→ gate hook)} —

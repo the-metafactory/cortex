@@ -470,8 +470,8 @@ export class CCSession extends EventEmitter {
     // session: load NO ambient setting source (not the principal's global
     // `user`, nor the cwd repo's `project`/`local` `.claude/`) and load a
     // cortex-owned curated settings file with ONLY cortex's hooks. The args
-    // are appended to additionalArgs so they sit before `-p <prompt>`
-    // (buildClaudeArgs puts the prompt last).
+    // are appended to additionalArgs (the prompt itself is not in argv —
+    // it is written to the child's stdin below).
     const isolate = this.opts.settingsIsolation !== false;
     // cortex#710 — per-skill grants. Non-empty → curated settings registers
     // the Skill Guard hook AND the grant list is exported to it via env. The
@@ -743,6 +743,10 @@ export class CCSession extends EventEmitter {
       }
 
       this.proc = sandbox.spawn(["claude", ...args], sandboxProfile, {
+        // The prompt rides stdin, never argv — see `buildClaudeArgs`. A
+        // single argv element over 131,071 bytes fails `execve` with E2BIG
+        // on Linux; stdin has no such limit.
+        stdin: new TextEncoder().encode(this.opts.prompt),
         stdout: "pipe",
         stderr: "pipe",
         env,

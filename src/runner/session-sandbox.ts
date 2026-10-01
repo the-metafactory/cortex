@@ -271,6 +271,13 @@ export interface SandboxDenial {
 export interface SandboxSpawnOpts {
   env: Record<string, string>;
   cwd?: string;
+  /**
+   * Bytes written to the child's stdin, then closed. `cc-session.ts` sends
+   * the prompt here rather than in argv: Linux caps one argv element at
+   * 131,072 bytes (MAX_ARG_STRLEN), so a larger `-p <prompt>` fails `execve`
+   * with E2BIG. Every backend passes this through to `Bun.spawn` untouched.
+   */
+  stdin?: Uint8Array;
   stdout: "pipe";
   stderr: "pipe";
 }

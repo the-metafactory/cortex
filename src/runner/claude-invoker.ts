@@ -17,7 +17,9 @@
  *     future `JsonInvoker` (e.g. for SSE streaming) can reuse the type.
  *   - `buildClaudeArgs(opts)` — pure function: opts → string[] of CLI args
  *     to spawn `claude` with. No side effects. Tested directly by
- *     `claude-invoker-resume.test.ts`.
+ *     `claude-invoker-resume.test.ts`. The returned argv NEVER contains
+ *     `opts.prompt`: the caller delivers the prompt on the child's stdin
+ *     (see the note at the end of `buildClaudeArgs`).
  */
 
 export interface ClaudeInvocationOpts {
@@ -77,8 +79,12 @@ export function buildClaudeArgs(opts: ClaudeInvocationOpts): string[] {
     args.push(...opts.additionalArgs);
   }
 
-  // Use -p flag instead of positional arg — positional gets consumed by variadic flags like --add-dir
-  args.push("-p", opts.prompt);
+  // The prompt is NOT in argv. `claude --print` with no positional prompt
+  // reads it from stdin, and `cc-session.ts` writes `opts.prompt` there.
+  // Linux caps ONE argv element at MAX_ARG_STRLEN (131,072 bytes incl. NUL),
+  // so `-p <prompt>` failed `execve` with E2BIG for any larger prompt before
+  // `claude` ever ran. Keeping argv prompt-free also removes the old hazard
+  // of a positional prompt being consumed by variadic flags like --add-dir.
 
   return args;
 }
