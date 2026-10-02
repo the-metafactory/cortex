@@ -802,6 +802,7 @@ describe("ReflexActivationListener — lifecycle", () => {
       streams: {
         info: async () => ({}) as never,
         add: async () => ({}) as never,
+        update: async () => ({}) as never,
       },
       consumers: {
         info: async () => {
@@ -852,7 +853,11 @@ describe("ReflexActivationListener — lifecycle", () => {
     const ctrl = fakeRuntime();
     const consumerAdds: { stream: string }[] = [];
     const jsm: ProvisionJsm = {
-      streams: { info: async () => ({}) as never, add: async () => ({}) as never },
+      streams: {
+        info: async () => ({}) as never,
+        add: async () => ({}) as never,
+        update: async () => ({}) as never,
+      },
       consumers: {
         info: async () => {
           throw Object.assign(new Error("consumer not found"), {

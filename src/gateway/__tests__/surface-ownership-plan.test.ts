@@ -307,6 +307,17 @@ describe("planSurfaceOwnership — web surfaces", () => {
     expect(plan.outboundStacks).toContain("acme");
   });
 
+  test("cortex#2524 — flag on with a web binding and no web plugin registered aborts (never silently absent)", () => {
+    expect(() =>
+      planSurfaceOwnership({
+        surfaces: WEB_SURFACES,
+        gatewayEnabled: true,
+        principal: "andreas",
+        registry: testRegistryWithDiscord(),
+      }),
+    ).toThrow('no adapter installed for platform "web"');
+  });
+
   test("flag off with web-only surfaces keeps the inactive plan (gateway never starts)", () => {
     const plan = planSurfaceOwnership({
       surfaces: WEB_SURFACES,

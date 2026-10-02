@@ -534,9 +534,8 @@ export interface IsolatedSettings {
    * CLI args to append: `--setting-sources "" --settings <path>` (empty
    * source list ⇒ load no ambient source; only the curated file). When the
    * session is granted skills, ALSO carries `--plugin-dir <pluginDir>` (the
-   * materialised granted-skills plugin, cortex#990 A1). Order matters only in
-   * that all must precede `-p <prompt>` (handled by buildClaudeArgs putting
-   * the prompt last).
+   * materialised granted-skills plugin, cortex#990 A1). Order does not
+   * matter: the prompt is not in argv (cc-session writes it to stdin).
    */
   args: string[];
   /**

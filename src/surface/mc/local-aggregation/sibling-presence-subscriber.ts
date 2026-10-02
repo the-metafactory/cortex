@@ -15,10 +15,20 @@
  * This MIRRORS the federated subscriber's fold (`federated-subscriber.ts`) —
  * same registry, same origin-tagged record — but DROPS the cross-principal trust
  * machinery (accept-list gate + `signed_by[]` chain verification). It is safe to
- * drop because this is the PRINCIPAL'S OWN bus: the daemon connects with the
- * principal's own credential to a loopback bus the principal owns end-to-end
- * (ADR-0005 — the principal sees their own interiors). There is no cross-
- * principal boundary to defend. We STILL call {@link AgentPresenceRegistry.applyForeign}
+ * drop because this is the PRINCIPAL'S OWN bus: a loopback bus the principal
+ * owns end-to-end (ADR-0005 — the principal sees their own interiors). There is
+ * no cross-principal boundary to defend.
+ *
+ * There IS a cross-STACK bus boundary, though (#2536): stacks can sit in
+ * separate NATS accounts so one stack's bus user cannot reach another's
+ * traffic. So this aggregator never connects with a sibling stack's own creds;
+ * discovery hands it a sub-only per-sibling observer
+ * (`local.{principal}.{sibling}.agent.>`, pub denied) or marks the sibling
+ * `no-observer`, which is never connected. Scope of that guarantee: it keeps
+ * the sibling's full NATS user out of THIS process. It is not OS-level
+ * isolation: stacks running as the same OS user can still read each other's
+ * files (creds, `mission-control.db`; see #2544).
+ * We STILL call {@link AgentPresenceRegistry.applyForeign}
  * (not `apply`) because:
  *   - it tags the record with the sibling's origin so the view groups by hub, and
  *   - it source-binds identity to the DISCOVERED `{principal}/{stack}` (the
@@ -34,8 +44,10 @@
  *     simply doesn't appear until the next process start.
  *   - A sibling with a `noauth` credential is connected WITHOUT a credential
  *     (an open loopback bus accepts it; a locked NSC bus rejects it and the
- *     connect-failure path above degrades it to absent + logs why). Minting a
- *     read-only observer user for a locked bus is a #989 follow-up.
+ *     connect-failure path above degrades it to absent + logs why).
+ *   - A sibling with a `no-observer` credential (#2536) is NEVER connected: it
+ *     is recorded in `degraded[]` and the mint hint ({@link observerMintHint})
+ *     is logged once, at start.
  *   - Malformed bytes / bad envelopes on a sibling bus are dropped by the
  *     registry's best-effort fold (logged), never thrown.
  *   - The serving stack's OWN presence path (B.3 + the producer) is untouched —
@@ -51,7 +63,19 @@
 
 import { tryParseEnvelope } from "../../../bus/myelin/envelope-validator";
 import type { AgentPresenceRegistry } from "../../../bus/agent-network/registry";
-import type { SiblingStackDescriptor } from "./sibling-discovery";
+import {
+  observerMintHint,
+  type NoObserverReason,
+  type SiblingStackDescriptor,
+} from "./sibling-discovery";
+
+/** #2536 — log wording for each {@link NoObserverReason}. */
+const NO_OBSERVER_DETAIL: Record<NoObserverReason, string> = {
+  missing: "file not found",
+  "is-stack-creds": "refused: it is the sibling stack's own creds",
+  "over-scoped": "refused: not limited to sub on the presence subtree with pub denied",
+  unreadable: "refused: no readable user JWT",
+};
 
 /**
  * The read-only handle on ONE sibling bus the aggregator drives. A test passes
@@ -90,7 +114,7 @@ export interface DegradedSibling {
 /** Lifecycle handle for the sibling-presence aggregator. */
 export interface SiblingPresenceAggregatorHandle {
   /**
-   * Siblings that are NOT being aggregated — an unresolved credential, or a
+   * Siblings that are NOT being aggregated — no observer creds (#2536), or a
    * connection that failed at start. Surfaced so the boot log (and a future
    * `/api/agents` diagnostics field) can show which local stacks are dark and
    * why. Empty when every sibling connected.
@@ -132,9 +156,26 @@ export async function startSiblingPresenceAggregator(
   const degraded: DegradedSibling[] = [];
 
   for (const sibling of siblings) {
-    // Every credential kind (`creds` + `noauth`) gets a connect attempt — a
-    // `noauth` open bus connects, a locked one fails the connect below and is
-    // degraded there. No pre-judging.
+    // #2536 — no observer creds ⇒ no connection at all. The sibling stack's
+    // own creds are never a fallback. Log the mint hint once, here at start.
+    if (sibling.credential.kind === "no-observer") {
+      const { reason: why, observerCredsPath, observerUser } = sibling.credential;
+      const reason = `no observer creds (${NO_OBSERVER_DETAIL[why]}): ${observerCredsPath}`;
+      degraded.push({ stack: sibling.stack, reason });
+      process.stderr.write(
+        `sibling-presence: "${sibling.stack}" (${sibling.url}) not aggregated — ${reason}. ` +
+          observerMintHint({
+            principal: sibling.principal,
+            siblingStack: sibling.stack,
+            observerUser,
+            observerCredsPath,
+          }),
+      );
+      continue;
+    }
+
+    // `creds` + `noauth` get a connect attempt — a `noauth` open bus connects,
+    // a locked one fails the connect below and is degraded there.
     let conn: SiblingBusConnection;
     try {
       conn = await connect(sibling);

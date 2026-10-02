@@ -25,7 +25,10 @@
  *   7. Malformed bytes on a sibling bus are dropped (not thrown).
  */
 
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, test, mock, spyOn } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   AgentPresenceRegistry,
   isForeignOrigin,
@@ -40,7 +43,15 @@ import {
   type SiblingBusConnection,
   type SiblingBusConnector,
 } from "../sibling-presence-subscriber";
-import type { SiblingStackDescriptor } from "../sibling-discovery";
+import {
+  discoverSiblingStacks,
+  type SiblingStackDescriptor,
+} from "../sibling-discovery";
+import {
+  writeCredsWithPermissions,
+  writeObserverCreds,
+  writeStackDir,
+} from "./fixtures";
 
 /** Build an `agent.online` envelope for `{principal}/{stack}` + `agentId`. */
 function onlineEnvelope(
@@ -304,5 +315,109 @@ describe("#989 sibling-presence-subscriber", () => {
     });
     expect(connect).not.toHaveBeenCalled();
     await handle.stop();
+  });
+
+  // #2536 — a sibling with no observer creds is NEVER connected; the principal
+  // gets one boot-time hint with the exact scope to mint.
+  describe("#2536 no-observer siblings", () => {
+    test("a no-observer sibling is degraded WITHOUT a connect attempt, and the mint hint is logged", async () => {
+      const registry = new AgentPresenceRegistry();
+      const connect = mock<SiblingBusConnector>(async () => new FakeBus());
+      const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const handle = await startSiblingPresenceAggregator({
+          registry,
+          siblings: [
+            {
+              stack: "work",
+              principal: "alice",
+              url: "nats://127.0.0.1:4222",
+              credential: {
+                kind: "no-observer",
+                reason: "missing",
+                observerUser: "mc-observer-default-to-work",
+                observerCredsPath: "/creds/mc-observer-default-to-work.creds",
+              },
+            },
+          ],
+          connect,
+        });
+
+        expect(connect).not.toHaveBeenCalled();
+        expect(handle.degraded.map((d) => d.stack)).toEqual(["work"]);
+        expect(handle.degraded[0]!.reason).toContain("no observer creds");
+
+        const logged = stderr.mock.calls.map((c) => String(c[0])).join("");
+        expect(logged).toContain("local.alice.work.agent.>");
+        expect(logged).toContain("--deny-pub '>'");
+        expect(logged).toContain("/creds/mc-observer-default-to-work.creds");
+        // Logged ONCE for the sibling (one boot-time hint, not per retry).
+        expect(logged.split("arc nats add-bot").length - 1).toBe(1);
+        await handle.stop();
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    test("discovery → aggregator: a sibling stack's own creds path never reaches the connect port", async () => {
+      const root = mkdtempSync(join(tmpdir(), "cortex-agg-obs-"));
+      const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const observerDir = join(root, "observer-creds");
+        mkdirSync(observerDir);
+        // Four siblings, all with their own stack credsPath (unrestricted user):
+        //   work     — scoped observer minted       → connects with the observer path
+        //   research — no observer                  → never connected
+        //   lab      — observer symlinked to lab's creds → refused
+        //   ops      — byte copy of ops's creds as the observer → refused (over-scoped)
+        const stackCreds = (s: string): string => join(root, `stack-${s}.creds`);
+        for (const s of ["work", "research", "lab", "ops"]) {
+          writeCredsWithPermissions(stackCreds(s), {});
+          writeStackDir(root, s, {
+            principal: "alice",
+            stackId: `alice/${s}`,
+            url: "nats://127.0.0.1:4222",
+            credsPath: stackCreds(s),
+          });
+        }
+        const observer = (s: string): string =>
+          join(observerDir, `mc-observer-default-to-${s}.creds`);
+        writeObserverCreds(observer("work"), "alice", "work");
+        symlinkSync(stackCreds("lab"), observer("lab"));
+        writeCredsWithPermissions(observer("ops"), {});
+
+        const siblings = discoverSiblingStacks({
+          configRoot: root,
+          selfPrincipal: "alice",
+          selfStack: "default",
+          observerCredsDir: observerDir,
+        });
+
+        const seen: SiblingStackDescriptor[] = [];
+        const connect: SiblingBusConnector = async (sib) => {
+          seen.push(sib);
+          return new FakeBus();
+        };
+        const handle = await startSiblingPresenceAggregator({
+          registry: new AgentPresenceRegistry(),
+          siblings,
+          connect,
+        });
+
+        // Only `work` reached the connect port — with its OBSERVER creds.
+        expect(seen.map((s) => s.stack)).toEqual(["work"]);
+        expect(seen[0]!.credential).toEqual({ kind: "creds", credsPath: observer("work") });
+        // No sibling stack's own creds path was ever handed to connect.
+        const handed = JSON.stringify(seen);
+        for (const s of ["work", "research", "lab", "ops"]) {
+          expect(handed).not.toContain(stackCreds(s));
+        }
+        expect(handle.degraded.map((d) => d.stack).sort()).toEqual(["lab", "ops", "research"]);
+        await handle.stop();
+      } finally {
+        stderr.mockRestore();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });

@@ -9,7 +9,8 @@
  * the operator-mode `.conf` with ZERO manual `nsc generate config`. Today nothing
  * populates them; this driver closes that gap.
  *
- * cortex NEVER runs nsc directly — arc owns the nsc boundary (ADR-0013 invariant).
+ * cortex runs nsc through arc — arc owns the nsc boundary (ADR-0013). The one
+ * exception is the agents-account JetStream grant (cortex#2534, arc#384).
  * cortex shells `arc nats export-{operator,account,system} --json` and surfaces the
  * result. Same arc-shell pattern as `operator-provisioning.ts`:
  *   cortex shells to arc → arc calls nsc (`describe … --raw`) → JWT text back.

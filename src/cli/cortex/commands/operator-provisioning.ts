@@ -9,8 +9,10 @@
  * federation account + a per-stack agents account — so the stack can federate
  * (ADR-0013: every principal runs their own nsc operator, hub mints nothing).
  *
- * cortex NEVER calls nsc directly — arc owns the nsc boundary; cortex shells to
- * `arc nats …` and surfaces the result. Same arc-shell pattern as `creds.ts`
+ * cortex calls nsc through arc — arc owns the nsc boundary; cortex shells to
+ * `arc nats …` and surfaces the result. The one exception is the agents-account
+ * JetStream grant (`buildAgentsJetStreamAdapter`, cortex#2534), which shells
+ * `nsc edit account` until arc ships a verb for it (arc#384). Same arc-shell pattern as `creds.ts`
  * (`callArcNats` / `ArcRunner`) and `network-federation-wiring.ts`:
  *   cortex shells to arc → arc calls nsc → nsc mutates the local nsc store.
  *

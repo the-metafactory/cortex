@@ -121,6 +121,7 @@ import {
 } from "./network-ping-lib";
 import {
   deriveProvisionNames,
+  natsConfigPaths,
   provisionStack,
   type ProvisionInputs,
   type ProvisionPorts,
@@ -545,6 +546,9 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--nats-config": "value",
         "--creds": "value",
         "--force": "bool",
+        // cortex#2533 — move an existing `$G` JetStream store aside (server
+        // stopped, never deleted) on an anonymous → operator-mode conversion.
+        "--move-g-store": "bool",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -3823,9 +3827,10 @@ async function runKeyRotation(
  * (arc account-tree seam + signing + config write-back) targeting the stack's
  * config file; tests inject fakes that record calls without touching arc/fs.
  */
-export type ProvisionPortsFactory = (stackConfigPath: string) => ProvisionPorts;
+export type ProvisionPortsFactory = (stackConfigPath: string, cortexConfigPath?: string) => ProvisionPorts;
 
-const DEFAULT_PROVISION_PORTS_FACTORY: ProvisionPortsFactory = (p) => buildLiveProvisionPorts(p);
+const DEFAULT_PROVISION_PORTS_FACTORY: ProvisionPortsFactory = (p, cortexConfigPath) =>
+  buildLiveProvisionPorts(p, cortexConfigPath);
 
 /**
  * Factory for the make-live port bundle. Production builds the live adapters
@@ -3928,6 +3933,7 @@ function deriveMakeLiveInputs(
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return { ok: false, reason: applyRes.reason, usage: true };
   const force = flags["--force"] === true;
+  const moveGStore = flags["--move-g-store"] === true;
 
   // Read-only state probes (cheap fs reads via the resolver adapter).
   const resolverProbe = buildResolverPreloadAdapter();
@@ -3997,6 +4003,7 @@ function deriveMakeLiveInputs(
     natsConfigPath,
     force,
     apply: applyRes.apply,
+    moveGStore,
     state,
     ...(operatorModePackage !== undefined && { operatorModePackage }),
     ...(baseIdentity !== undefined && { baseIdentity }),
@@ -4096,7 +4103,9 @@ function deriveProvisionInputs(
   stackArg: string,
   flags: FlagMap,
   load: ConfigReader,
-): { ok: true; inputs: ProvisionInputs; stackConfigPath: string } | { ok: false; reason: string; usage: boolean } {
+):
+  | { ok: true; inputs: ProvisionInputs; stackConfigPath: string; cortexConfigPath: string }
+  | { ok: false; reason: string; usage: boolean } {
   const configPath = expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
   let cfg: LoadedConfig;
   try {
@@ -4128,10 +4137,13 @@ function deriveProvisionInputs(
   const credsPath = optionalValueFlag(flags, "--creds") ?? cfg.stack?.nats_infra?.creds_path ?? `~/.config/nats/${slug}.creds`;
   // cortex#1265 (PR8) — the per-stack nats-server config path make-live + join
   // derive their `--nats-config` from. Preserve a value already in config (the
-  // SOP §B2 / hand-set path — never clobber), else the convention `~/.config/
-  // nats/<slug>.conf` (docs/sop-stack-onboarding.md §B0.1 + §B2). Writing it here
-  // is what closes the provision→make-live loop (no manual `nsc generate config`).
-  const natsConfigPath = optionalValueFlag(flags, "--nats-config") ?? cfg.stack?.nats_infra?.config_path ?? `~/.config/nats/${slug}.conf`;
+  // SOP §B2 / hand-set path — never clobber). When absent, provisionStack picks
+  // one (resolveNatsConfigPath): the convention `~/.config/nats/<slug>.conf`
+  // (docs/sop-stack-onboarding.md §B0.1 + §B2), except on a bus shared with
+  // another stack of the principal, where it adopts that stack's existing
+  // config_path or leaves the field unset (cortex#2535).
+  const natsConfigPath = optionalValueFlag(flags, "--nats-config") ?? cfg.stack?.nats_infra?.config_path;
+  const plistPath = cfg.stack?.nats_infra?.plist_path;
 
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return { ok: false, reason: applyRes.reason, usage: true };
@@ -4158,7 +4170,9 @@ function deriveProvisionInputs(
     systemAccountName,
     seedPath,
     credsPath,
-    configPath: natsConfigPath,
+    ...(natsConfigPath !== undefined && natsConfigPath !== "" && { configPath: natsConfigPath }),
+    ...(cfg.config.nats?.url !== undefined && { natsUrl: cfg.config.nats.url }),
+    plistPathSet: plistPath !== undefined && plistPath !== "",
     force: flags["--force"] === true,
     apply: applyRes.apply,
     state: {
@@ -4169,7 +4183,7 @@ function deriveProvisionInputs(
       operatorModeJwtsPresent,
     },
   };
-  return { ok: true, inputs, stackConfigPath: resolveStackWriteConfigPath(configPath) };
+  return { ok: true, inputs, stackConfigPath: resolveStackWriteConfigPath(configPath), cortexConfigPath: configPath };
 }
 
 async function runProvision(
@@ -4183,9 +4197,9 @@ async function runProvision(
   if (!derived.ok) {
     return derived.usage ? usageError("provision", derived.reason, json) : opError("provision", derived.reason, json);
   }
-  const { inputs, stackConfigPath } = derived;
+  const { inputs, stackConfigPath, cortexConfigPath } = derived;
 
-  const ports = portsFactory(stackConfigPath);
+  const ports = portsFactory(stackConfigPath, cortexConfigPath);
   const res = await provisionStack(inputs, ports);
 
   if (json) {
@@ -4196,10 +4210,16 @@ async function runProvision(
       federation_account: inputs.federationAccountName,
       agents_account: inputs.agentsAccountName,
     };
+    if (res.natsConfig !== undefined) {
+      // cortex#2535 — which branch picked the nats-server config path (dry-run too).
+      data.config_path_source = res.natsConfig.source;
+      const paths = natsConfigPaths(res.natsConfig);
+      if (paths.configPath !== undefined) data.config_path = paths.configPath;
+      if (paths.plistPath !== undefined) data.plist_path = paths.plistPath;
+    }
     if (res.resolved !== undefined) {
       data.account = res.resolved.account;
       data.agents_account_pubkey = res.resolved.agentsAccount;
-      data.config_path = res.resolved.configPath;
     }
     const env = res.ok
       ? envelopeOk([{ stack: inputs.stackId, plan: res.plan }], data)
@@ -4423,7 +4443,7 @@ Usage:
   cortex network provision <stack> [--config <p>] [--principal <id>] [--seed-path <p>]
                         [--creds <p>] [--force] [--apply] [--dry-run] [--json]
   cortex network make-live <stack> [--config <p>] [--principal <id>] [--nats-config <p>]
-                        [--creds <p>] [--force] [--apply] [--dry-run] [--json]
+                        [--creds <p>] [--force] [--move-g-store] [--apply] [--dry-run] [--json]
   cortex network secret <add-member|revoke-member|rotate> <network> <member-pubkey>
                         --admin-seed <hub-admin-seed> [--registry-url <url>] [--hub-config <p>]
                         [--deliver sealed|oob] [--leaf-user <u>] [--seal-only] [--hub-account <A…>]
@@ -4544,6 +4564,16 @@ Subcommands:
           operator-mode). The dry-run prints the resolved nats-server + daemon
           restart targets so the (possibly shared-server) blast radius is
           verifiable before --apply.
+          Before mutating, --apply boots a throwaway copy of the current nats
+          config (the rollback target) on random loopback ports and refuses if
+          it does not come up (\`nats-server -t\` misses a leaf remote whose
+          \`account:\` the server does not define); when the boot test cannot
+          run (no nats-server binary) it warns instead. Converting an anonymous bus
+          that holds a \`<store_dir>/jetstream/$G\` JetStream store is refused
+          (operator-mode cannot recover it, so the canary could never pass);
+          --move-g-store instead stops nats-server, moves the store to
+          \`<store_dir>/G-moved-aside-<timestamp>\` (never deleted), starts it,
+          and moves the store back if the canary rolls back.
           Idempotent + dry-run by default; --apply mutates; --force re-mints.
           Run AFTER \`cortex network provision <stack> --apply\`.
   admit   (ADR-0015) One-command admin admission decision. Verifies the admin

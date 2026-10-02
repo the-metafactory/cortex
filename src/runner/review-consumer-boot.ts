@@ -62,7 +62,8 @@ import {
   type ReviewConsumerAgent,
   type SignatureVerifier,
 } from "../bus/review-consumer";
-import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
+import { provisionStackScopedConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
+import { reviewDurableNames, type ReviewDurableName } from "../bus/jetstream/review-durables";
 import { verifySignedByChain } from "../bus/verify-signed-by-chain";
 import type { SystemEventSource } from "../bus/system-events";
 import { DORMANT_RUNTIME_DIAGNOSIS } from "../bus/myelin/runtime";
@@ -104,6 +105,11 @@ export interface ReviewBootAgent {
 export interface WireReviewConsumersOpts {
   /** `{principal}` subject segment — durable names + the verifier's own-stack check. */
   reviewPrincipalId: string;
+  /**
+   * `{stack}` subject segment — scopes the durable names (cortex#1503) so two
+   * stacks of one principal sharing a NATS account never share a durable.
+   */
+  stack: string;
   /** B.1a structural-trust resolver backing the per-agent signature verifier. */
   trustResolver: TrustResolver;
   /** `security.signing` posture knobs — `cryptoVerify` + `rejectEmpty` are read. */
@@ -397,7 +403,59 @@ export function wireReviewConsumers(
       // the consumer stays dormant — `started.subscribed` distinguishes
       // the two cases so the boot log can be honest (cortex#334)
       // instead of unconditionally claiming "ready".
-      const durable = `cortex-review-consumer-${opts.reviewPrincipalId}-${agent.id}`;
+      // cortex#1503 — durable names carry `{principal}_{stack}` so two stacks
+      // of one principal on one NATS account each own their durables. `legacy`
+      // is the pre-#1503 unscoped name, migrated (or left alone when another
+      // stack owns it) by `provisionStackScopedConsumer`.
+      const durableNames = reviewDurableNames(opts.reviewPrincipalId, opts.stack, agent.id);
+
+      // cortex#338 — provision a durable consumer up-front so
+      // `consumer.start()` binds successfully against a virgin broker. Reuses
+      // `reviewJsm` resolved once before this loop. Idempotent — safe across
+      // restarts. Skipped when JSM isn't available (runtime dormant); the
+      // subsequent `consumer.start()` then stays dormant too. Returns the
+      // durable to bind: the scoped name, or — while a busy pre-#1503 durable
+      // of this stack is still being drained (cortex#1503) — the legacy one.
+      const provisionDurable = async (
+        names: ReviewDurableName,
+        filterSubject: string,
+      ): Promise<string> => {
+        if (opts.reviewJsm === null) return names.durable;
+        try {
+          const { durable: bound, outcome } = await provisionStackScopedConsumer({
+            jsm: opts.reviewJsm,
+            stream: opts.reviewStream,
+            durable: names.durable,
+            legacyDurable: names.legacy,
+            filterSubject,
+            maxDeliver: opts.reviewConsumerMaxDeliver,
+          });
+          if (outcome === "created") {
+            console.log(
+              `cortex: provisioned JetStream durable "${bound}" on stream "${opts.reviewStream}"`,
+            );
+          } else if (outcome === "updated") {
+            console.log(
+              `cortex: reconciled JetStream durable "${bound}" ack_wait (cortex#422) on stream "${opts.reviewStream}"`,
+            );
+          } else if (outcome === "deferred") {
+            console.log(
+              `cortex: binding legacy JetStream durable "${bound}" on stream "${opts.reviewStream}" this boot (migration to "${names.durable}" deferred, cortex#1503)`,
+            );
+          }
+          return bound;
+        } catch (provisionErr) {
+          // Don't abort — let consumer.start surface the bind failure
+          // through its own error path so the principal sees the same
+          // stderr shape they'd see if the consumer existed but bind
+          // failed for another reason.
+          process.stderr.write(
+            `cortex: provisionReviewConsumer failed for "${names.durable}": ` +
+              `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
+          );
+          return names.durable;
+        }
+      };
 
       // The durable's filter MUST match the subscription pattern this consumer
       // binds (`consumer.start({ pattern })` below), or the durable claims every
@@ -408,41 +466,7 @@ export function wireReviewConsumers(
       // feeds BOTH the provision filter and the start pattern below.
       const primaryReviewPattern = opts.reviewOfferingPatterns[0] ?? opts.reviewSubjectPattern;
 
-      // cortex#338 — provision the per-agent durable consumer up-front
-      // so `consumer.start()` below binds successfully against a virgin
-      // broker. Reuses `reviewJsm` resolved once before this loop.
-      // Idempotent — safe across restarts. Skipped when JSM isn't
-      // available (runtime dormant); the subsequent `consumer.start()`
-      // will then stay dormant too.
-      if (opts.reviewJsm !== null) {
-        try {
-          const outcome = await provisionReviewConsumer({
-            jsm: opts.reviewJsm,
-            stream: opts.reviewStream,
-            durable,
-            filterSubject: primaryReviewPattern,
-            maxDeliver: opts.reviewConsumerMaxDeliver,
-          });
-          if (outcome === "created") {
-            console.log(
-              `cortex: provisioned JetStream durable "${durable}" on stream "${opts.reviewStream}"`,
-            );
-          } else if (outcome === "updated") {
-            console.log(
-              `cortex: reconciled JetStream durable "${durable}" ack_wait (cortex#422) on stream "${opts.reviewStream}"`,
-            );
-          }
-        } catch (provisionErr) {
-          // Don't abort — let consumer.start surface the bind failure
-          // through its own error path so the principal sees the same
-          // stderr shape they'd see if the consumer existed but bind
-          // failed for another reason.
-          process.stderr.write(
-            `cortex: provisionReviewConsumer failed for "${durable}": ` +
-              `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-          );
-        }
-      }
+      const durable = await provisionDurable(durableNames.local, primaryReviewPattern);
 
       // CO-2 (cortex#941) — bind the Offer consumer on the scope prefixes the
       // `code-review` offering admits. `reviewOfferingPatterns[0]` is the
@@ -522,34 +546,9 @@ export function wireReviewConsumers(
               : "public";
         const offerConsumer = makeConsumer(offerScope);
         opts.reviewConsumers.push(offerConsumer);
-        const offerDurable = `cortex-review-consumer-offer-${scopeToken}-${opts.reviewPrincipalId}-${agent.id}`;
-        if (opts.reviewJsm !== null) {
-          try {
-            const outcome = await provisionReviewConsumer({
-              jsm: opts.reviewJsm,
-              stream: opts.reviewStream,
-              durable: offerDurable,
-              // Filter to THIS offer scope's pattern so it doesn't claim the
-              // local/other-scope durables' traffic (cortex#1186 fan-out).
-              filterSubject: extraPattern,
-              maxDeliver: opts.reviewConsumerMaxDeliver,
-            });
-            if (outcome === "created") {
-              console.log(
-                `cortex: provisioned JetStream durable "${offerDurable}" on stream "${opts.reviewStream}"`,
-              );
-            } else if (outcome === "updated") {
-              console.log(
-                `cortex: reconciled JetStream durable "${offerDurable}" ack_wait (cortex#422) on stream "${opts.reviewStream}"`,
-              );
-            }
-          } catch (provisionErr) {
-            process.stderr.write(
-              `cortex: provisionReviewConsumer failed for "${offerDurable}": ` +
-                `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-            );
-          }
-        }
+        // Filtered to THIS offer scope's pattern so it doesn't claim the
+        // local/other-scope durables' traffic (cortex#1186 fan-out).
+        const offerDurable = await provisionDurable(durableNames.offer(scopeToken), extraPattern);
         const offerStarted = await offerConsumer.start({
           pattern: extraPattern,
           stream: opts.reviewStream,
@@ -585,7 +584,7 @@ export function wireReviewConsumers(
         const startFederatedConsumer = async (
           mode: "offer" | "direct",
           pattern: string,
-          durableName: string,
+          names: ReviewDurableName,
         ): Promise<void> => {
           // CO-7 — the cortex#686/#725 federated-policy consumers bind on
           // `federated.` subjects, so they wire the `federated`-scope M1/M2/M4
@@ -593,34 +592,10 @@ export function wireReviewConsumers(
           // guard) for cross-principal review requests.
           const federatedConsumer = makeConsumer("federated");
           opts.reviewConsumers.push(federatedConsumer);
-          if (opts.reviewJsm !== null) {
-            try {
-              const outcome = await provisionReviewConsumer({
-                jsm: opts.reviewJsm,
-                stream: opts.reviewStream,
-                durable: durableName,
-                // Filter to THIS federated consumer's `federated.…` pattern so
-                // it claims only cross-principal traffic, never the local
-                // durable's `local.…` requests (cortex#1186 fan-out).
-                filterSubject: pattern,
-                maxDeliver: opts.reviewConsumerMaxDeliver,
-              });
-              if (outcome === "created") {
-                console.log(
-                  `cortex: provisioned JetStream durable "${durableName}" on stream "${opts.reviewStream}"`,
-                );
-              } else if (outcome === "updated") {
-                console.log(
-                  `cortex: reconciled JetStream durable "${durableName}" ack_wait (cortex#422) on stream "${opts.reviewStream}"`,
-                );
-              }
-            } catch (provisionErr) {
-              process.stderr.write(
-                `cortex: provisionReviewConsumer failed for "${durableName}": ` +
-                  `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-              );
-            }
-          }
+          // Filtered to THIS federated consumer's `federated.…` pattern so it
+          // claims only cross-principal traffic, never the local durable's
+          // `local.…` requests (cortex#1186 fan-out).
+          const durableName = await provisionDurable(names, pattern);
           const federatedStarted = await federatedConsumer.start({
             pattern,
             stream: opts.reviewStream,
@@ -641,7 +616,7 @@ export function wireReviewConsumers(
         await startFederatedConsumer(
           "offer",
           opts.reviewFederatedSubjectPattern,
-          `cortex-review-consumer-federated-${opts.reviewPrincipalId}-${agent.id}`,
+          durableNames.federated,
         );
         // cortex#725 (ADR 0001/0002 §2) — Direct: this stack's OWN
         // `federated.{me}.{stack}.tasks.@{did}.code-review.>` (the `@{did}` is
@@ -650,7 +625,7 @@ export function wireReviewConsumers(
         await startFederatedConsumer(
           "direct",
           opts.reviewFederatedDirectSubjectPattern,
-          `cortex-review-consumer-federated-direct-${opts.reviewPrincipalId}-${agent.id}`,
+          durableNames.federatedDirect,
         );
       }
     } catch (err) {

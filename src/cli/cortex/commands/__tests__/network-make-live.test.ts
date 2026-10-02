@@ -19,13 +19,23 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   makeLiveStack,
   planMakeLive,
+  type GStoreInspection,
   type MakeLiveInputs,
   type MakeLivePorts,
   type MakeLiveState,
+  type SnapshotBootOutcome,
 } from "../network-make-live-lib";
-import { insertIntoResolverPreload, findNatsServerDescriptor, buildResolverPreloadAdapter, buildNatsCanaryAdapter } from "../network-make-live-adapters";
+import {
+  insertIntoResolverPreload,
+  findNatsServerDescriptor,
+  buildResolverPreloadAdapter,
+  buildNatsCanaryAdapter,
+  buildGStoreAdapter,
+  bootTestSnapshotConfig,
+  type BootTestDeps,
+} from "../network-make-live-adapters";
 import type { DaemonLocatorIO } from "../daemon-locator";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { SettleWindowOptions } from "../../../../common/nats/restart-with-settle";
@@ -100,13 +110,28 @@ function makePorts(over?: {
   canaryNatsHealthyAfterAttempt?: number;
   /** cortex#1483 — settle-window tuning threaded onto `ports.settle`. */
   settle?: SettleWindowOptions;
+  /** cortex#2533 — the canary's rollback-snapshot boot-test verdict. Default: bootable. */
+  canaryBoot?: SnapshotBootOutcome;
+  /** cortex#2533 — the snapshot's prior contents (undefined ⇒ the config did not exist). */
+  canarySnapshotContents?: string | undefined;
+  /** cortex#2533 — wire a fake `gStore` port answering this inspection. */
+  gStore?: GStoreInspection;
+  gMoveAsideFails?: boolean;
+  gMoveBackFails?: boolean;
+  /** cortex#2533 — wire fake stopNats/startNats on the restart port. */
+  withStopStart?: boolean;
+  stopNatsFails?: boolean;
+  /** cortex#2533 — fail the Nth startNats call (1-based). */
+  startNatsFailsOnCall?: number;
 }): { ports: MakeLivePorts; calls: string[] } {
   const calls: string[] = [];
   // cortex#1483 — the canary's snapshot is whatever `snapshot()` was called
   // with; `restore()` records the restore + lets tests assert it ran.
   let canaryConfigContents = "ORIGINAL-CONFIG-BYTES";
   let canaryRestartCount = 0;
+  let startNatsCalls = 0;
   const canaryPhaseAttempts: Record<number, number> = {};
+  const gInspection = over?.gStore;
   const ports: MakeLivePorts = {
     creds: {
       mint: async ({ botName, account, credsPath }) => {
@@ -152,7 +177,39 @@ function makePorts(over?: {
         calls.push("restart-daemon");
         return { ok: true };
       },
+      ...(over?.withStopStart === true
+        ? {
+            stopNats: async () => {
+              calls.push("stop-nats");
+              return over.stopNatsFails === true ? { ok: false as const, reason: "bootout boom" } : { ok: true as const };
+            },
+            startNats: async () => {
+              calls.push("start-nats");
+              startNatsCalls++;
+              if (over.startNatsFailsOnCall === startNatsCalls) return { ok: false as const, reason: "bootstrap boom" };
+              canaryRestartCount++; // a start is a (re)boot for the canary's phase counter
+              return { ok: true as const };
+            },
+          }
+        : {}),
     },
+    ...(gInspection !== undefined
+      ? {
+          gStore: {
+            inspect: () => gInspection,
+            moveAside: ({ gStorePath, storeDir }) => {
+              calls.push(`g-move-aside:${gStorePath}`);
+              return over?.gMoveAsideFails === true
+                ? { ok: false, reason: "rename boom" }
+                : { ok: true, movedTo: `${storeDir}/G-moved-aside-T1` };
+            },
+            moveBack: ({ movedTo }) => {
+              calls.push(`g-move-back:${movedTo}`);
+              return over?.gMoveBackFails === true ? { ok: false, reason: "$G exists again" } : { ok: true };
+            },
+          },
+        }
+      : {}),
     ...(over?.withNatsCanary === true
       ? {
           natsCanary: {
@@ -168,7 +225,14 @@ function makePorts(over?: {
             },
             snapshot(natsConfigPath) {
               calls.push("canary-snapshot");
-              return { natsConfigPath, contents: canaryConfigContents };
+              return {
+                natsConfigPath,
+                contents: "canarySnapshotContents" in over ? over.canarySnapshotContents : canaryConfigContents,
+              };
+            },
+            async bootTest() {
+              calls.push("canary-bootTest");
+              return over.canaryBoot ?? { status: "bootable" };
             },
             restore(snapshot) {
               calls.push("canary-restore");
@@ -198,6 +262,65 @@ function makePorts(over?: {
     clock: instantClock(),
   };
   return { ports, calls };
+}
+
+/**
+ * cortex#2533 — scripted {@link BootTestDeps} so the live boot-test adapter
+ * runs without a real nats-server: "bootable" answers the monitor on the first
+ * poll, "exits" exits 1 with a fatal line, "enoent" throws on spawn, "hangs"
+ * never answers. Records the argv it was spawned with + kills.
+ */
+function fakeBootDeps(mode: "bootable" | "exits" | "late-exit" | "enoent" | "hangs"): BootTestDeps & {
+  spawned: string[][];
+  kills: string[];
+  confs: string[];
+} {
+  const spawned: string[][] = [];
+  const kills: string[] = [];
+  const confs: string[] = [];
+  let port = 20000;
+  let clock = 0;
+  let lateExit: (() => void) | undefined;
+  return {
+    spawned,
+    kills,
+    confs,
+    spawn: (argv) => {
+      if (mode === "enoent") throw new Error("spawn nats-server ENOENT");
+      spawned.push(argv);
+      confs.push(readFileSync(argv[2] ?? "", "utf-8"));
+      let resolveExit: (r: { code: number; stderr: string }) => void = () => {};
+      const exited = new Promise<{ code: number; stderr: string }>((r) => {
+        resolveExit = r;
+      });
+      if (mode === "late-exit") {
+        lateExit = () => {
+          resolveExit({ code: 1, stderr: "nats-server: late fatal\n" });
+        };
+      }
+      if (mode === "exits") {
+        resolveExit({ code: 1, stderr: 'nats-server: cannot find local account "AFED" specified in leafnode remote\n' });
+      }
+      return {
+        exited,
+        kill: (signal) => {
+          kills.push(signal ?? "SIGTERM");
+          resolveExit({ code: 0, stderr: "" });
+        },
+      };
+    },
+    pickPort: async () => ++port,
+    monitorUp: async () => mode === "bootable",
+    sleep: async (ms) => {
+      clock += ms;
+      // "late-exit": the process dies during the final poll sleep.
+      if (lateExit !== undefined && clock >= 100) lateExit();
+      await Promise.resolve();
+    },
+    now: () => clock,
+    timeoutMs: 100,
+    pollMs: 10,
+  };
 }
 
 // ── plan ──────────────────────────────────────────────────────────────────────
@@ -496,7 +619,13 @@ describe("makeLiveStack — cortex#1483 canary safety (natsCanary port)", () => 
     const res = await makeLiveStack(makeInputs({ credsFileExists: true, resolverHasAccount: false }), ports);
     expect(res.ok).toBe(true);
     const order = calls.filter((c) => c.startsWith("canary-") || c === "restart-nats");
-    expect(order).toEqual(["canary-snapshot", "canary-validate", "restart-nats", "canary-isHealthy"]);
+    expect(order).toEqual([
+      "canary-snapshot",
+      "canary-bootTest", // cortex#2533 — the rollback target is boot-tested before any mutation
+      "canary-validate",
+      "restart-nats",
+      "canary-isHealthy",
+    ]);
     expect(res.steps.join("\n")).toContain("verified healthy");
   });
 
@@ -559,7 +688,7 @@ describe("makeLiveStack — cortex#1483 canary safety (natsCanary port)", () => 
       const conf = join(cdir, "local.conf");
       writeFileSync(conf, "listen: 127.0.0.1:4222\n", "utf-8"); // valid HOCON, NO http monitor
       const { ports, calls } = makePorts({ settle: { maxAttempts: 2, initialDelayMs: 1 } });
-      ports.natsCanary = buildNatsCanaryAdapter(true, undefined, async () => false); // client port DOWN
+      ports.natsCanary = buildNatsCanaryAdapter(true, undefined, async () => false, fakeBootDeps("bootable")); // client port DOWN
       const res = await makeLiveStack(
         makeInputs({ credsFileExists: true, resolverHasAccount: false }, { natsConfigPath: conf }),
         ports,
@@ -580,7 +709,7 @@ describe("makeLiveStack — cortex#1483 canary safety (natsCanary port)", () => 
       const conf = join(cdir, "local.conf");
       writeFileSync(conf, "listen: 127.0.0.1:4222\n", "utf-8");
       const { ports, calls } = makePorts({ settle: { maxAttempts: 2, initialDelayMs: 1 } });
-      ports.natsCanary = buildNatsCanaryAdapter(true, undefined, async () => true); // client port UP
+      ports.natsCanary = buildNatsCanaryAdapter(true, undefined, async () => true, fakeBootDeps("bootable")); // client port UP
       const res = await makeLiveStack(
         makeInputs({ credsFileExists: true, resolverHasAccount: false }, { natsConfigPath: conf }),
         ports,
@@ -1045,5 +1174,485 @@ describe("buildNatsCanaryAdapter (live)", () => {
     } else {
       expect(res.status).toBe("valid");
     }
+  });
+});
+
+// ── cortex#2533 — $G store pre-flight + rollback snapshot boot-test ───────────
+
+const OP_PKG = {
+  operatorJwt: "eyJop.eyJop.sig",
+  account: "A" + "F".repeat(55),
+  accountJwt: "eyJfed.eyJfed.sig",
+};
+const G_PRESENT: GStoreInspection = {
+  status: "present",
+  storeDir: "/data/nats",
+  gStorePath: "/data/nats/jetstream/$G",
+  streams: [
+    { name: "ORDERS", bytes: 2048 },
+    { name: "EVENTS", bytes: 0 },
+  ],
+};
+/** An anonymous → operator-mode conversion (no resolver_preload yet, package present). */
+function conversionInputs(over?: Partial<MakeLiveInputs>): MakeLiveInputs {
+  return makeInputs(
+    { credsFileExists: true, resolverHasAccount: false },
+    { operatorModePackage: OP_PKG, natsConfigPath: "/cfg/work.conf", ...over },
+  );
+}
+const MOVE_PORTS = {
+  hasResolverPreload: false,
+  withNatsCanary: true,
+  withStopStart: true,
+  gStore: G_PRESENT,
+} as const;
+const natsOps = (calls: string[]): string[] =>
+  calls.filter((c) => /^(canary-|restart-nats|stop-nats|start-nats|g-move|bootstrap)/.test(c));
+
+describe("makeLiveStack — cortex#2533 $G store pre-flight", () => {
+  test("refuses BY DEFAULT when the bus holds a $G store — before any mutation, naming the store + the way forward", async () => {
+    const { ports, calls } = makePorts(MOVE_PORTS);
+    const res = await makeLiveStack(conversionInputs(), ports);
+    expect(res.ok).toBe(false);
+    expect(res.applied).toBe(false);
+    expect(res.reason).toContain("/data/nats/jetstream/$G");
+    expect(res.reason).toContain("ORDERS (2.0 KiB), EVENTS (0 B)");
+    expect(res.reason).toContain("--move-g-store");
+    expect(res.reason).toContain("Only if they are empty or disposable");
+    expect(res.reason).toContain("Nothing was changed");
+    expect(calls).toEqual([]); // no snapshot, bootstrap, restart, mint
+  });
+
+  test("the refusal holds in dry-run too", async () => {
+    const { ports, calls } = makePorts(MOVE_PORTS);
+    const res = await makeLiveStack(conversionInputs({ apply: false }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("--move-g-store");
+    expect(calls).toEqual([]);
+  });
+
+  test("--move-g-store dry-run shows the move in the plan and mutates nothing", async () => {
+    const { ports, calls } = makePorts(MOVE_PORTS);
+    const res = await makeLiveStack(conversionInputs({ apply: false, moveGStore: true }), ports);
+    expect(res.ok).toBe(true);
+    const out = res.steps.join("\n");
+    expect(out).toContain("[move    ] $G store move-aside");
+    expect(out).toContain("/data/nats/jetstream/$G → /data/nats/G-moved-aside-<timestamp>");
+    expect(out).toContain("ORDERS (2.0 KiB)");
+    expect(out).toContain("(stop → move $G aside → start)");
+    expect(out).toContain("rollback snapshot: --apply boots a throwaway copy");
+    expect(calls).toEqual([]);
+  });
+
+  test("--move-g-store apply: stop → move aside → start → probe (no plain restart), then mint + daemon", async () => {
+    const { ports, calls } = makePorts(MOVE_PORTS);
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(true);
+    expect(natsOps(calls)).toEqual([
+      "canary-snapshot",
+      "canary-bootTest",
+      "bootstrap:/cfg/work.conf",
+      "canary-validate",
+      "stop-nats",
+      "g-move-aside:/data/nats/jetstream/$G",
+      "start-nats",
+      "canary-isHealthy",
+    ]);
+    expect(calls.at(-2)?.startsWith("mint:")).toBe(true);
+    expect(calls.at(-1)).toBe("restart-daemon");
+    const out = res.steps.join("\n");
+    expect(out).toContain(
+      "$G store moved aside (nats-server stopped, NOT deleted): /data/nats/jetstream/$G → /data/nats/G-moved-aside-T1",
+    );
+    // Honest about the outcome: the moved streams are offline, not migrated.
+    expect(out).toContain("NOTE: the $G streams are now OFFLINE — the store at /data/nats/G-moved-aside-T1");
+    expect(out).toContain("will be moved to /data/nats/G-moved-aside-<timestamp>");
+  });
+
+  test("--move-g-store + unhealthy canary → rollback: restore config → stop → move $G BACK → start → probe", async () => {
+    const { ports, calls } = makePorts({
+      ...MOVE_PORTS,
+      canaryNatsHealthy: false,
+      settle: { maxAttempts: 2, initialDelayMs: 1 },
+    });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(false);
+    const ops = natsOps(calls);
+    expect(ops.slice(ops.indexOf("canary-restore"))).toEqual([
+      "canary-restore",
+      "stop-nats",
+      "g-move-back:/data/nats/G-moved-aside-T1",
+      "start-nats",
+      "canary-isHealthy",
+    ]);
+    expect(res.reason).toContain("restored to prior state");
+    expect(res.reason).toContain("$G store moved back: /data/nats/G-moved-aside-T1 → /data/nats/jetstream/$G");
+    expect(calls).not.toContain("restart-daemon");
+  });
+
+  test("move-aside fails after the stop → config restored and the server STARTED again (never left stopped)", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, gMoveAsideFails: true });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("moving the $G store aside failed: rename boom");
+    const ops = natsOps(calls);
+    expect(ops.slice(ops.indexOf("stop-nats"))).toEqual([
+      "stop-nats",
+      "g-move-aside:/data/nats/jetstream/$G",
+      "canary-restore",
+      "start-nats",
+      "canary-isHealthy",
+    ]);
+    expect(calls.some((c) => c.startsWith("g-move-back"))).toBe(false);
+    expect(res.reason).toContain("restored to prior state");
+  });
+
+  test("start fails after the move → rollback moves $G back and starts on the restored config", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, startNatsFailsOnCall: 1 });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("nats-server start failed: bootstrap boom");
+    const ops = natsOps(calls);
+    // The server is already stopped: no second stop before the move back.
+    expect(ops.slice(ops.indexOf("canary-restore"))).toEqual([
+      "canary-restore",
+      "g-move-back:/data/nats/G-moved-aside-T1",
+      "start-nats",
+      "canary-isHealthy",
+    ]);
+  });
+
+  test("move-back fails → the bus is still started, and the note names where the store is stranded", async () => {
+    const { ports, calls } = makePorts({
+      ...MOVE_PORTS,
+      gMoveBackFails: true,
+      canaryNatsHealthy: false,
+      settle: { maxAttempts: 1, initialDelayMs: 1 },
+    });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(calls.filter((c) => c === "start-nats").length).toBe(2);
+    // The bus came back, but NOT to its prior state — never claim it did.
+    expect(res.reason).not.toContain("restored to prior state");
+    expect(res.reason).toContain("$G streams are OFFLINE until the store is moved back");
+    expect(res.reason).toContain("$G store NOT moved back ($G exists again) — it is still at /data/nats/G-moved-aside-T1");
+    expect(res.reason).toContain("/data/nats/jetstream/$G by hand");
+  });
+
+  test("--move-g-store without a stop/start-capable restart port → refuses, nothing changed", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, withStopStart: false });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.applied).toBe(false);
+    expect(res.reason).toContain("must never be moved under a running server");
+    expect(calls).toEqual([]);
+  });
+
+  test("--move-g-store without the canary → refuses (nothing could move the store back)", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, withNatsCanary: false });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("needs the canary");
+    expect(calls).toEqual([]);
+  });
+
+  test("no $G store → unchanged path: plain restart, no stop/move", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, gStore: { status: "absent", storeDir: "/data/nats" } });
+    const res = await makeLiveStack(conversionInputs(), ports);
+    expect(res.ok).toBe(true);
+    expect(calls).toContain("restart-nats");
+    expect(calls).not.toContain("stop-nats");
+    expect(calls.some((c) => c.startsWith("g-move"))).toBe(false);
+  });
+
+  test("no $G store + --move-g-store → proceeds with a 'nothing to move' note", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, gStore: { status: "absent", storeDir: "/data/nats" } });
+    const res = await makeLiveStack(conversionInputs({ moveGStore: true }), ports);
+    expect(res.ok).toBe(true);
+    expect(res.steps.join("\n")).toContain("--move-g-store: no $G store under /data/nats/jetstream — nothing to move");
+    expect(calls).toContain("restart-nats");
+    expect(calls).not.toContain("stop-nats");
+  });
+
+  test("an already-operator-mode bus is not a conversion: the $G check never gates it", async () => {
+    const { ports, calls } = makePorts({ ...MOVE_PORTS, hasResolverPreload: true });
+    const res = await makeLiveStack(conversionInputs(), ports);
+    expect(res.ok).toBe(true);
+    expect(calls).toContain("restart-nats");
+  });
+
+  test("undeterminable store_dir → WARN and proceed", async () => {
+    const { ports } = makePorts({
+      ...MOVE_PORTS,
+      gStore: { status: "unknown", reason: "JetStream enabled without a store_dir" },
+    });
+    const res = await makeLiveStack(conversionInputs(), ports);
+    expect(res.ok).toBe(true);
+    expect(res.steps.join("\n")).toContain(
+      "WARN: could not check for a $G JetStream store (JetStream enabled without a store_dir)",
+    );
+  });
+});
+
+describe("makeLiveStack — cortex#2533 rollback snapshot boot-test", () => {
+  const RESTART = { credsFileExists: true, resolverHasAccount: false };
+
+  test("an unbootable snapshot is refused BEFORE any mutation (applied:false)", async () => {
+    const { ports, calls } = makePorts({
+      withNatsCanary: true,
+      canaryBoot: { status: "unbootable", reason: 'cannot find local account "AFED" specified in leafnode remote' },
+    });
+    const res = await makeLiveStack(makeInputs(RESTART), ports);
+    expect(res.ok).toBe(false);
+    expect(res.applied).toBe(false);
+    expect(res.reason).toContain("does not boot");
+    expect(res.reason).toContain("cannot find local account");
+    expect(res.reason).toContain("Nothing was changed");
+    expect(calls).toEqual(["canary-snapshot", "canary-bootTest"]);
+  });
+
+  test("a bootable snapshot passes and the transcript says so", async () => {
+    const { ports, calls } = makePorts({ withNatsCanary: true });
+    const res = await makeLiveStack(makeInputs(RESTART), ports);
+    expect(res.ok).toBe(true);
+    expect(calls.indexOf("canary-bootTest")).toBeLessThan(calls.findIndex((c) => c.startsWith("resolver-append")));
+    expect(res.steps.join("\n")).toContain("rollback snapshot boot-tested");
+  });
+
+  test("a skipped boot-test WARNS that -t does not resolve leaf-remote accounts, then proceeds", async () => {
+    const { ports } = makePorts({
+      withNatsCanary: true,
+      canaryBoot: { status: "skipped", reason: "could not run nats-server: spawn nats-server ENOENT" },
+    });
+    const res = await makeLiveStack(makeInputs(RESTART), ports);
+    expect(res.ok).toBe(true);
+    const out = res.steps.join("\n");
+    expect(out).toContain("WARN: rollback snapshot NOT boot-tested");
+    expect(out).toContain("`nats-server -t` does not resolve a leaf remote's `account:`");
+  });
+
+  test("a throwing boot-test fails SAFE (refuse)", async () => {
+    const { ports, calls } = makePorts({ withNatsCanary: true });
+    const canary = ports.natsCanary;
+    if (canary === undefined) throw new Error("fake canary not wired");
+    ports.natsCanary = {
+      ...canary,
+      bootTest: async () => {
+        throw new Error("kaboom");
+      },
+    };
+    const res = await makeLiveStack(makeInputs(RESTART), ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("the boot test could not run: kaboom");
+    expect(calls.some((c) => c.startsWith("resolver-append"))).toBe(false);
+  });
+
+  test("no prior config (from-scratch) → nothing to boot-test; bootTest is not called", async () => {
+    const { ports, calls } = makePorts({ withNatsCanary: true, canarySnapshotContents: undefined });
+    const res = await makeLiveStack(makeInputs(RESTART), ports);
+    expect(res.ok).toBe(true);
+    expect(calls).not.toContain("canary-bootTest");
+    expect(res.steps.join("\n")).toContain("nothing to boot-test");
+  });
+});
+
+describe("bootTestSnapshotConfig (live adapter, scripted process) — cortex#2533", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "cortex-boottest-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const FED_ACC = "A" + "F".repeat(55);
+  function snapshotWithLeafInclude(): { natsConfigPath: string; contents: string } {
+    writeFileSync(
+      join(dir, "leaf-net.conf"),
+      `leafnodes {\n  remotes: [ { url: "nats-leaf://hub.example.invalid:7422", account: "${FED_ACC}" } ]\n}\n`,
+    );
+    const contents = `listen: "127.0.0.1:4222"\nhttp: "127.0.0.1:8222"\njetstream { store_dir: "/data/nats" }\ninclude "leaf-net.conf"\n`;
+    return { natsConfigPath: join(dir, "bus.conf"), contents };
+  }
+
+  test("bootable: spawns nats-server -c <throwaway copy> (includes inlined, hub never dialled, account kept), then kills it + removes the copy", async () => {
+    const deps = fakeBootDeps("bootable");
+    const res = await bootTestSnapshotConfig(snapshotWithLeafInclude(), deps);
+    expect(res).toEqual({ status: "bootable" });
+    expect(deps.spawned.length).toBe(1);
+    const argv = deps.spawned[0] ?? [];
+    expect(argv.slice(0, 2)).toEqual(["nats-server", "-c"]);
+    expect(argv.length).toBe(3); // store_dir declared ⇒ no -sd
+    const conf = deps.confs[0] ?? "";
+    expect(conf).toContain(`account: "${FED_ACC}"`);
+    expect(conf).not.toContain("hub.example.invalid");
+    expect(conf).not.toContain("4222");
+    expect(conf).not.toContain("/data/nats");
+    expect(deps.kills).toEqual(["SIGTERM"]);
+    expect(existsSync(argv[2] ?? "")).toBe(false); // scratch dir cleaned up
+  });
+
+  test("exits on boot → unbootable, carrying nats-server's fatal line", async () => {
+    const res = await bootTestSnapshotConfig(snapshotWithLeafInclude(), fakeBootDeps("exits"));
+    expect(res.status).toBe("unbootable");
+    if (res.status === "unbootable") {
+      expect(res.reason).toContain("exited 1");
+      expect(res.reason).toContain("cannot find local account");
+    }
+  });
+
+  test("an exit during the last poll sleep reports the fatal line, not a timeout", async () => {
+    const res = await bootTestSnapshotConfig(snapshotWithLeafInclude(), fakeBootDeps("late-exit"));
+    expect(res.status).toBe("unbootable");
+    if (res.status === "unbootable") expect(res.reason).toContain("late fatal");
+  });
+
+  test("a full resolver's stored account JWTs are copied into the throwaway resolver dir", async () => {
+    const liveResolver = join(dir, "jwt");
+    mkdirSync(liveResolver, { recursive: true });
+    writeFileSync(join(liveResolver, "ACCT.jwt"), "eyJ.stored.jwt");
+    let copied: string | undefined;
+    const deps = fakeBootDeps("bootable");
+    const spawn = deps.spawn;
+    deps.spawn = (argv, cwd) => {
+      const scratch = (argv[2] ?? "").replace(/\/boot-test\.conf$/, "");
+      copied = readFileSync(join(scratch, "resolver", "ACCT.jwt"), "utf-8");
+      return spawn(argv, cwd);
+    };
+    const res = await bootTestSnapshotConfig(
+      { natsConfigPath: join(dir, "bus.conf"), contents: `listen: 4222\nresolver { type: full, dir: "${liveResolver}" }\n` },
+      deps,
+    );
+    expect(res.status).toBe("bootable");
+    expect(copied).toBe("eyJ.stored.jwt");
+    expect(existsSync(join(liveResolver, "ACCT.jwt"))).toBe(true); // live dir untouched
+  });
+
+  test("never comes up → unbootable (timeout), and the process is killed", async () => {
+    const deps = fakeBootDeps("hangs");
+    const res = await bootTestSnapshotConfig(snapshotWithLeafInclude(), deps);
+    expect(res.status).toBe("unbootable");
+    if (res.status === "unbootable") expect(res.reason).toContain("did not come up");
+    expect(deps.kills).toEqual(["SIGTERM"]);
+  });
+
+  test("nats-server not on PATH → skipped (the orchestrator warns), never a pass", async () => {
+    const res = await bootTestSnapshotConfig(snapshotWithLeafInclude(), fakeBootDeps("enoent"));
+    expect(res.status).toBe("skipped");
+    if (res.status === "skipped") expect(res.reason).toContain("ENOENT");
+  });
+
+  test("a missing include → unbootable without spawning", async () => {
+    const deps = fakeBootDeps("bootable");
+    const res = await bootTestSnapshotConfig(
+      { natsConfigPath: join(dir, "bus.conf"), contents: `include "gone.conf"\n` },
+      deps,
+    );
+    expect(res.status).toBe("unbootable");
+    expect(deps.spawned).toEqual([]);
+  });
+
+  test("an include the inliner cannot parse → skipped (warn), never a false 'unbootable'", async () => {
+    const deps = fakeBootDeps("bootable");
+    const res = await bootTestSnapshotConfig(
+      { natsConfigPath: join(dir, "bus.conf"), contents: `listen: 4222\ninclude "a.conf" "b.conf"\n` },
+      deps,
+    );
+    expect(res.status).toBe("skipped");
+    expect(deps.spawned).toEqual([]);
+  });
+
+  test("`jetstream: enabled` without store_dir → -sd <scratch>/store (never the live default store)", async () => {
+    const deps = fakeBootDeps("bootable");
+    await bootTestSnapshotConfig({ natsConfigPath: join(dir, "bus.conf"), contents: "listen: 4222\njetstream: enabled\n" }, deps);
+    const argv = deps.spawned[0] ?? [];
+    expect(argv[3]).toBe("-sd");
+    expect(argv[4]?.endsWith("/store")).toBe(true);
+  });
+
+  test("the canary adapter's bootTest is inert on a dry-run", async () => {
+    const deps = fakeBootDeps("bootable");
+    const adapter = buildNatsCanaryAdapter(false, undefined, undefined, deps);
+    expect(await adapter.bootTest(snapshotWithLeafInclude())).toEqual({ status: "skipped", reason: "dry-run" });
+    expect(deps.spawned).toEqual([]);
+  });
+});
+
+describe("buildGStoreAdapter (live) — cortex#2533", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "cortex-gstore-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  const FIXED = (): Date => new Date("2026-09-27T08:15:00.123Z");
+
+  function busWithGStore(): { conf: string; storeDir: string; gStorePath: string } {
+    const storeDir = join(dir, "store");
+    const gStorePath = join(storeDir, "jetstream", "$G");
+    mkdirSync(join(gStorePath, "streams", "ORDERS", "msgs"), { recursive: true });
+    writeFileSync(join(gStorePath, "streams", "ORDERS", "msgs", "1.blk"), "x".repeat(100));
+    mkdirSync(join(gStorePath, "streams", "EVENTS"), { recursive: true });
+    const conf = join(dir, "bus.conf");
+    writeFileSync(conf, `listen: 4222\njetstream { store_dir: "${storeDir}" }\n`);
+    return { conf, storeDir, gStorePath };
+  }
+
+  test("inspect finds the $G store with stream names + sizes", () => {
+    const { conf, storeDir, gStorePath } = busWithGStore();
+    const g = buildGStoreAdapter(true).inspect(conf);
+    expect(g.status).toBe("present");
+    if (g.status !== "present") return;
+    expect(g.storeDir).toBe(storeDir);
+    expect(g.gStorePath).toBe(gStorePath);
+    expect([...g.streams].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: "EVENTS", bytes: 0 },
+      { name: "ORDERS", bytes: 100 },
+    ]);
+  });
+
+  test("inspect follows includes to find store_dir", () => {
+    const { storeDir } = busWithGStore();
+    writeFileSync(join(dir, "js.conf"), `jetstream { store_dir: "${storeDir}" }\n`);
+    const conf = join(dir, "split.conf");
+    writeFileSync(conf, `listen: 4222\ninclude "js.conf"\n`);
+    expect(buildGStoreAdapter(true).inspect(conf).status).toBe("present");
+  });
+
+  test("absent / no-jetstream / unknown", () => {
+    const conf = join(dir, "bus.conf");
+    writeFileSync(conf, `jetstream { store_dir: "${join(dir, "empty")}" }\n`);
+    expect(buildGStoreAdapter(true).inspect(conf)).toEqual({ status: "absent", storeDir: join(dir, "empty") });
+    writeFileSync(conf, "listen: 4222\n");
+    expect(buildGStoreAdapter(true).inspect(conf)).toEqual({ status: "no-jetstream" });
+    expect(buildGStoreAdapter(true).inspect(join(dir, "missing.conf"))).toEqual({ status: "no-jetstream" });
+    writeFileSync(conf, "jetstream: enabled\n");
+    expect(buildGStoreAdapter(true).inspect(conf).status).toBe("unknown");
+    writeFileSync(conf, `jetstream { store_dir: "relative/store" }\n`);
+    expect(buildGStoreAdapter(true).inspect(conf).status).toBe("unknown");
+  });
+
+  test("moveAside renames $G to a timestamped dir BESIDE jetstream/ (never deleted), moveBack restores it", () => {
+    const { storeDir, gStorePath } = busWithGStore();
+    const adapter = buildGStoreAdapter(true, FIXED);
+    const moved = adapter.moveAside({ gStorePath, storeDir });
+    expect(moved).toEqual({ ok: true, movedTo: join(storeDir, "G-moved-aside-20260927T081500Z") });
+    expect(existsSync(gStorePath)).toBe(false);
+    expect(existsSync(join(storeDir, "G-moved-aside-20260927T081500Z", "streams", "ORDERS", "msgs", "1.blk"))).toBe(true);
+
+    expect(adapter.moveBack({ movedTo: join(storeDir, "G-moved-aside-20260927T081500Z"), gStorePath })).toEqual({ ok: true });
+    expect(readFileSync(join(gStorePath, "streams", "ORDERS", "msgs", "1.blk"), "utf-8")).toBe("x".repeat(100));
+  });
+
+  test("moveBack refuses (never merges) when $G exists again", () => {
+    const { storeDir, gStorePath } = busWithGStore();
+    const adapter = buildGStoreAdapter(true, FIXED);
+    const moved = adapter.moveAside({ gStorePath, storeDir });
+    if (!moved.ok) throw new Error(moved.reason);
+    mkdirSync(gStorePath, { recursive: true });
+    const back = adapter.moveBack({ movedTo: moved.movedTo, gStorePath });
+    expect(back.ok).toBe(false);
+    if (!back.ok) expect(back.reason).toContain("refusing to overwrite or merge");
+    expect(existsSync(moved.movedTo)).toBe(true);
+  });
+
+  test("dry-run moves nothing", () => {
+    const { storeDir, gStorePath } = busWithGStore();
+    const adapter = buildGStoreAdapter(false, FIXED);
+    expect(adapter.moveAside({ gStorePath, storeDir }).ok).toBe(true);
+    expect(existsSync(gStorePath)).toBe(true);
   });
 });

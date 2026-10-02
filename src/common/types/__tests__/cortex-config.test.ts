@@ -184,6 +184,12 @@ describe("PrincipalConfigSchema", () => {
     expect(parsed.mattermostId).toBe("abc123def456");
   });
 
+  test("cortex#2524 — accepts optional webId (web surface caller identity)", () => {
+    const parsed = PrincipalConfigSchema.parse({ id: "andreas", webId: "andreas@example.org" });
+    expect(parsed.webId).toBe("andreas@example.org");
+    expect(PrincipalConfigSchema.parse({ id: "andreas" }).webId).toBeUndefined();
+  });
+
   test("accepts explicit dataResidency override", () => {
     const parsed = PrincipalConfigSchema.parse({ id: "andreas", dataResidency: "CH" });
     expect(parsed.dataResidency).toBe("CH");

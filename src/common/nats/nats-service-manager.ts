@@ -84,6 +84,35 @@ export interface NatsServiceManager {
   dropConfigArg(configPath: string): void;
   /** Restart nats-server so it reloads its config. Never throws. */
   restart(): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /**
+   * cortex#2533 — STOP nats-server and keep it stopped (launchd `bootout` — a
+   * plain `kill`/`stop` is respawned by `KeepAlive`; systemd `stop`). make-live
+   * moves the `$G` JetStream store aside in that window. Never throws.
+   */
+  stop(): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** cortex#2533 — start a {@link stop}ped nats-server again. Never throws. */
+  start(): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
+/**
+ * Run one service-management command. `exec` (Bun.spawn) THROWS SYNCHRONOUSLY on
+ * ENOENT, so a spawn failure becomes `{ ok: false }` (#821 item-2), never an
+ * uncaught escape.
+ */
+async function runServiceCommand(
+  exec: ExecRunner,
+  argv: string[],
+  label: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  let code: number;
+  let stderr: string;
+  try {
+    ({ code, stderr } = await exec(argv));
+  } catch (err) {
+    return { ok: false, reason: `${label} could not run: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (code !== 0) return { ok: false, reason: `${label} exited ${code.toString()}: ${stderr.trim()}` };
+  return { ok: true };
 }
 
 /** Inputs to {@link selectNatsServiceManager}. */
@@ -245,6 +274,48 @@ class LaunchdServiceManager implements NatsServiceManager {
     }
     return { ok: true };
   }
+
+  /** Label + plist existence check shared by stop/start. */
+  private label(): { ok: true; label: string } | { ok: false; reason: string } {
+    if (!existsSync(this.plistPath)) {
+      return { ok: false, reason: `nats-server plist not found at ${this.plistPath}` };
+    }
+    const label = readPlistLabel(this.plistPath);
+    if (label === undefined) {
+      return { ok: false, reason: `no <key>Label</key> in nats-server plist ${this.plistPath}` };
+    }
+    return { ok: true, label };
+  }
+
+  // cortex#2533 — `bootout` unloads the job, so launchd's KeepAlive cannot
+  // respawn nats-server while make-live moves the $G store; `bootstrap` loads it
+  // back from the same plist. `bootstrap` only RUNS the job when the plist says
+  // RunAtLoad/KeepAlive, so start() follows it with a plain `kickstart` (no
+  // `-k`: a no-op when the job is already running).
+  async stop(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.mutate) return { ok: true };
+    const l = this.label();
+    if (!l.ok) return l;
+    const target = `gui/${this.uid.toString()}/${l.label}`;
+    return runServiceCommand(this.exec, ["launchctl", "bootout", target], `launchctl bootout ${l.label}`);
+  }
+
+  async start(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.mutate) return { ok: true };
+    const l = this.label();
+    if (!l.ok) return l;
+    const loaded = await runServiceCommand(
+      this.exec,
+      ["launchctl", "bootstrap", `gui/${this.uid.toString()}`, this.plistPath],
+      `launchctl bootstrap ${l.label}`,
+    );
+    if (!loaded.ok) return loaded;
+    return runServiceCommand(
+      this.exec,
+      ["launchctl", "kickstart", `gui/${this.uid.toString()}/${l.label}`],
+      `launchctl kickstart ${l.label}`,
+    );
+  }
 }
 
 // =============================================================================
@@ -363,6 +434,47 @@ class SystemdServiceManager implements NatsServiceManager {
       };
     }
     return { ok: true };
+  }
+
+  /** Unit existence + service id + scope, shared by stop/start. */
+  private unit():
+    | { ok: true; serviceId: string; scopeFlag: string[]; scopeLabel: string }
+    | { ok: false; reason: string } {
+    if (!existsSync(this.unitPath)) {
+      return { ok: false, reason: `nats-server systemd unit not found at ${this.unitPath}` };
+    }
+    const serviceId = systemdUnitServiceId(this.unitPath, readFileSync(this.unitPath, "utf-8"));
+    const user = systemdScope(this.unitPath) === "user";
+    return { ok: true, serviceId, scopeFlag: user ? ["--user"] : [], scopeLabel: user ? "--user " : "" };
+  }
+
+  async stop(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.mutate) return { ok: true };
+    const u = this.unit();
+    if (!u.ok) return u;
+    return runServiceCommand(
+      this.exec,
+      ["systemctl", ...u.scopeFlag, "stop", u.serviceId],
+      `systemctl ${u.scopeLabel}stop ${u.serviceId}`,
+    );
+  }
+
+  // daemon-reload first, for the same cached-unit reason restart() does it.
+  async start(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.mutate) return { ok: true };
+    const u = this.unit();
+    if (!u.ok) return u;
+    const reloaded = await runServiceCommand(
+      this.exec,
+      ["systemctl", ...u.scopeFlag, "daemon-reload"],
+      `systemctl ${u.scopeLabel}daemon-reload`,
+    );
+    if (!reloaded.ok) return reloaded;
+    return runServiceCommand(
+      this.exec,
+      ["systemctl", ...u.scopeFlag, "start", u.serviceId],
+      `systemctl ${u.scopeLabel}start ${u.serviceId}`,
+    );
   }
 }
 

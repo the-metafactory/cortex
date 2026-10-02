@@ -156,6 +156,7 @@ import type {
   AgentRuntime,
   BusConfig,
   Policy,
+  PrincipalPlatformIds,
   ReflexActivationConfig,
   NotifyConfig,
   StackConfig,
@@ -175,7 +176,7 @@ import {
 import type { InboundMessage, PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
-import { startGatewayIfEnabled } from "./gateway/start-gateway";
+import { startGatewayIfEnabled, syncGatewaySurfaceLiveness } from "./gateway/start-gateway";
 // G-1113 ML.5 — cockpit live-refresh loop (opt-in via config.cockpit).
 import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
@@ -251,7 +252,9 @@ import {
 // onto the same system.attention.* bus path the cockpit loop publishes on.
 import { publishReconcileDelta } from "./surface/mc/attention-notify";
 import type { Database as BunDatabase } from "bun:sqlite";
-import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
+import { gatewayHostsSurface, isGatewayEnabled } from "./gateway/gateway-bootstrap";
+import { createGateReplyInterceptor } from "./gateway/gate-reply-bridge";
+import { gateRoutingThread, toGateReplyOffer } from "./adapters/gate-reply-offer";
 import {
   gatewayAdapterInstanceCollisions,
   planSurfaceOwnership,
@@ -794,7 +797,7 @@ export interface StartCortexOptions {
    *
    * @internal — not part of the public API; semver does not apply.
    */
-  principal?: {
+  principal?: PrincipalPlatformIds & {
     id: string;
     /**
      * cortex#429 PR-C — replaces the removed `AgentConfig.agent.operatorName`.
@@ -802,9 +805,6 @@ export interface StartCortexOptions {
      * to `id` otherwise.
      */
     displayName?: string;
-    discordId?: string;
-    mattermostId?: string;
-    slackId?: string;
   };
 }
 
@@ -1890,11 +1890,13 @@ export async function startCortex(
   // surface-router and capability-registry boot paths use; reading the
   // shared `principalId` keeps publisher and consumer aligned across the
   // ladder. Durable name convention per
-  // `docs/design-capability-dispatch-review-consumer.md` §2.3:
-  // `cortex-review-consumer-{principal}-{agent}` — unique per
-  // (principal, agent) pair so dev + prod instances on the same principal
-  // share competing-consumer semantics and a daemon restart resumes from
-  // the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
+  // `docs/design-capability-dispatch-review-consumer.md` §2.3, stack-scoped
+  // by cortex#1503: `cortex-review-consumer-{principal}_{stack}-{agent}`
+  // (`reviewDurableNames`) — unique per (principal, stack, agent), matching
+  // the `local.{principal}.{stack}.…` filter, so two stacks of one principal
+  // on one NATS account never share (and fight over) a durable, while two
+  // Cortex runtimes on the SAME stack still share competing-consumer semantics
+  // and a restart resumes from the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
   // API parameter to `principalId`; this local alias keeps the review-
   // consumer wiring readable alongside the dashboard's `operatorId`
   // column name (still on the MC surface — PR-R2b).
@@ -2436,6 +2438,7 @@ export async function startCortex(
   // hot-added agent's consumers drain on shutdown identically to a boot agent's.
   const { startForAgent } = wireReviewConsumers({
     reviewPrincipalId,
+    stack: derivedStack.stack,
     trustResolver,
     signingKnobs,
     ...(signer !== undefined && { signer }),
@@ -2489,8 +2492,8 @@ export async function startCortex(
   //     arrive, so the gate times out to `fail`. Adapters still `add()` on
   //     start (idempotent) so a surface added by hot-reload joins late.
   // The gate itself only boots when the principal has at least one configured
-  // surface identity (`principal.mattermostId` / `discordId` / `slackId`) —
-  // with no platform id there is nothing to verify a reply against, so the
+  // surface identity (`principal.mattermostId` / `discordId` / `slackId` /
+  // `webId`) — with no platform id there is nothing to verify a reply against, so the
   // consumer keeps its DenyAll default (fail-closed, B-1 behaviour).
   const gateReplyRouter = new GateReplyRouter();
 
@@ -2517,6 +2520,20 @@ export async function startCortex(
       identityKey: "slackId" as const,
       principalId: options.principal?.slackId,
     },
+    {
+      // cortex#2524 — the web adapter has no per-stack presence: its ONLY
+      // boot path is the shared surface gateway, and gateway adapters never
+      // `add()` themselves to `liveSurfaces` at start. `gatewayHostsSurface`
+      // (gateway flag on + `surfaces.web[]` bound) seeds the boot window;
+      // once the gateway starts, `syncGatewaySurfaceLiveness` below replaces
+      // it with the adapters the gateway actually started. Without this row
+      // a task routed to `surface: "web"` fails closed at the bus-only
+      // branch even with `principal.webId` set.
+      surface: "web",
+      configured: gatewayHostsSurface(process.env, options.surfaces, "web"),
+      identityKey: "webId" as const,
+      principalId: options.principal?.webId,
+    },
   ];
   const liveSurfaces = new Set<string>(
     surfaceGateMeta.filter((m) => m.configured).map((m) => m.surface),
@@ -2534,26 +2551,15 @@ export async function startCortex(
   // B-3 (cortex#1021 W-1): a message landing in a thread with an open
   // principal gate is that gate's reply (identity checked by the GATE, never
   // here), not a chat dispatch. The InboundMessage → GateReplyOffer mapping
-  // lives HERE (surface layer) so the bus-side router stays blind to adapter
-  // DTOs (sage round 2, architecture).
+  // lives in the surface layer (`adapters/gate-reply-offer.ts`) so the
+  // bus-side router stays blind to adapter DTOs (sage round 2,
+  // architecture); the shared gateway's pre-route interceptor (cortex#2524)
+  // uses the SAME mapping, so the two paths cannot drift on the routing key.
   const inboundWithGateBridge =
     (adapter: PlatformAdapter, agent: Agent) =>
     (msg: InboundMessage): Promise<void> => {
-      // The routing key for both the gate reply-bridge and a brain task's
-      // response_routing. A top-level (non-threaded) surface message has no
-      // native thread, so the channel id is the key — used IDENTICALLY on the
-      // gate-await side and the offer side, so a gate prompt + the principal's
-      // reply correlate whether the conversation is threaded or not.
-      const thread = msg.threadId !== undefined && msg.threadId.length > 0
-        ? msg.threadId
-        : msg.channelId;
-      const consumed = gateReplyRouter.offer({
-        surface: msg.platform,
-        channel: msg.channelId,
-        thread,
-        authorId: msg.authorId,
-        text: msg.content,
-      });
+      const thread = gateRoutingThread(msg);
+      const consumed = gateReplyRouter.offer(toGateReplyOffer(msg));
       if (consumed) return Promise.resolve();
       // B-3 routing (design-bot-packs.md §6, cortex#1021): an exec-brain agent
       // does NOT run the builtin claude-code chat pipeline (it has no CC
@@ -3991,6 +3997,11 @@ export async function startCortex(
     ...(config.claude.bashAllowlist !== undefined && {
       bashAllowlist: config.claude.bashAllowlist,
     }),
+    // Receiving-stack session budget: a dispatch whose payload carries no
+    // `timeout_ms` (every gateway-routed message) runs under this stack's
+    // own `claude.timeoutMs` inactivity budget rather than CCSession's
+    // hard-coded 120 s. An explicit request `timeout_ms` still wins.
+    defaultTimeoutMs: config.claude.timeoutMs,
     // R26 P1 (cortex#1371) — admission gate. Spread-guarded like the other
     // optional fields: an unconfigured stack passes NO gate and the listener's
     // admission stage is skipped entirely (CO-4 inertness).
@@ -5999,8 +6010,26 @@ export async function startCortex(
     policyEngine: adapterPolicyEngine,
     ownershipPlan: surfaceOwnershipPlan,
     registry: surfacePluginRegistry,
+    // cortex#2524 — gate reply-bridge for gateway-owned surfaces (the web
+    // adapter's only path). Runs BEFORE the unroutable hook and the inbound
+    // sink, so a principal's reply in a thread with an open gate resolves
+    // the gate and never becomes a chat dispatch — the same contract the
+    // per-stack `inboundWithGateBridge` gives folded presences. A message
+    // bound to another stack is never offered to THIS runtime's gates. Holds
+    // in SHADOW too (LoggingInboundSink): gate replies are consumed here,
+    // everything else is logged and dropped as before.
+    // `own` is the `{principal}/{stack}` this runtime's chat listeners
+    // subscribe under (`sharedDispatchListenerOpts` below).
+    interceptInbound: createGateReplyInterceptor({
+      router: gateReplyRouter,
+      own: { principal: principalId, stack: derivedStack.stack },
+    }),
   });
   const gw: SurfaceGateway | undefined = startedGateway?.gateway;
+  // cortex#2524 — `web` is live for the principal gate iff the gateway
+  // actually started a web adapter; replaces the boot-window seed from
+  // `gatewayHostsSurface` in `surfaceGateMeta`.
+  syncGatewaySurfaceLiveness(liveSurfaces, startedGateway, "web");
 
   // cortex#1793 (S8, ADR-0024 D3) — the `cortex plugin list|unload|reload|load`
   // control channel. `deps` is the SAME live `adapters`/`rendererHandles`/
