@@ -1,3 +1,4 @@
+**Finding-ID convention:** the findings in this document are cited elsewhere as R1-F1..R1-F6.
 # Cortex review — high-level assessment
 
 *Rob → Andreas. The plain-language read on top of the hard findings.*

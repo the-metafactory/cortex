@@ -158,7 +158,7 @@ describe("parsePathGuardConfig", () => {
     expect(r.ok).toBe(false);
   });
 
-  // -- cortex#2359 round 2, finding F2 --------------------------------------
+  // -- cortex#2341 round 2, finding R2-F2 (docs/security/reviews/2026-07-26-nws-round-2.md) --------------------------------------
   // A present-but-wrong-type field must FAIL CLOSED (ok:false), never
   // silently coerce to [] — coercion is how a config-shape MISTAKE (a
   // string where an array was required) became indistinguishable from a
@@ -350,7 +350,7 @@ describe("decidePath", () => {
     expect(d.allow).toBe(false);
   });
 
-  // -- cortex#2359 round 2, finding F1 --------------------------------------
+  // -- cortex#2341 round 2, finding R2-F1 (docs/security/reviews/2026-07-26-nws-round-2.md) --------------------------------------
   // Read-only must win on overlap, independent of whether the overlap is an
   // EXACT string match or one dir merely CONTAINING the other — deny wins
   // (deny-precedence), never "most specific match" (see the hook's module
@@ -1223,7 +1223,7 @@ describe("path-guard.hook — round 6: NUL-byte file_path fails closed (reducer,
 });
 
 // =============================================================================
-// cortex#2359 round 2, finding F1 (HIGH) — full-process regression for the
+// cortex#2341 round 2, finding R2-F1 (docs/security/reviews/2026-07-26-nws-round-2.md) (HIGH) — full-process regression for the
 // exact repro: a readOnlyDirs entry NESTED inside a broader allowedDirs
 // entry used to be silently overridden (never read-only) because
 // decidePath's `inReadOnly` was gated on `!inAllowed`. Covers both
@@ -1289,7 +1289,7 @@ describe("path-guard.hook — F1: nested read-only inside a broader allowed dir 
 });
 
 // =============================================================================
-// cortex#2359 round 2, finding F2 (HIGH) — full-process regression for the
+// cortex#2341 round 2, finding R2-F2 (docs/security/reviews/2026-07-26-nws-round-2.md) (HIGH) — full-process regression for the
 // exact repro: a present-but-malformed CORTEX_PATH_GUARD field (a string
 // where an array was required) used to coerce to [] and, combined with an
 // empty readOnlyDirs, produce a fully-empty policy that reads as "no

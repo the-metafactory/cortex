@@ -240,7 +240,7 @@ get the exact same `allowedTools`/`mcpGrants`/`agentEnv` as whoever typed
 general-purpose reasoning personas and the invoking principal's own grant.
 Concretely: if a principal's session is manipulated by indirect prompt
 injection (fetched issue text, a webhook-relayed comment, etc. — the exact
-threat class this epic's F1/F6 findings are about) into emitting a `team:`
+threat class this epic's R1-F1/R1-F6 findings are about) into emitting a `team:`
 message, the attacker rides the **full 3-way fan-out** with the principal's
 own Bash/MCP reach, not a scoped-down "just discuss this" surface. This
 showed up as 4 of the 6 excessive-permission findings (moderator + 3

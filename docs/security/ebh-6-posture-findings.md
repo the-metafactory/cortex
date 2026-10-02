@@ -1,19 +1,19 @@
-# EBH-6 — sovereignty enforcement posture (F3) + principal-DM guard-disable / principal-map integrity (F4)
+# EBH-6 — sovereignty enforcement posture (R1-F3) + principal-DM guard-disable / principal-map integrity (R1-F4)
 
 Investigation for cortex#2348 (epic #2341, execution-boundary hardening), responding to the
-NorthWoods Sentinel review's F3/F4 (`docs/security/reviews/2026-07-23-nws-security-review.md`).
+NorthWoods Sentinel review's R1-F3/R1-F4 (`docs/security/reviews/2026-07-23-nws-security-review.md`).
 Read-only investigation; no application code, config, or security posture changed.
 
 **Method note.** Every claim below is tagged **VERIFIED** (with `file:line` or a command
 citation) or **UNVERIFIED**. Two claims carried in the review or the hardening plan turned out
-to be stale — see F4 §4. Line numbers are as of `origin/main` at commit `2a270262` plus
-`c25a7c3d` (EBH-1, merged the same day this investigation was run) — several F1/F6-adjacent
+to be stale — see R1-F4 §4. Line numbers are as of `origin/main` at commit `2a270262` plus
+`c25a7c3d` (EBH-1, merged the same day this investigation was run) — several R1-F1/R1-F6-adjacent
 files changed shape today; where the review's cited line numbers no longer match, the current
 number is used and the drift is called out.
 
 ---
 
-## F3 — sovereignty enforcement posture
+## R1-F3 — sovereignty enforcement posture
 
 ### Headline
 
@@ -37,7 +37,7 @@ to close it (a config-declared harness→placement map, independent of self-decl
   drifted.
 - **New finding, not in the review:** `src/bus/brain-consumer.ts` carries the **identical**
   pattern independently — `sovereigntyEnforce?: boolean` (`:243`), default `?? false` (`:390`),
-  gated deny at `:513`. The review's F3 only names `review-consumer.ts`; brain-consumer is a
+  gated deny at `:513`. The review's R1-F3 only names `review-consumer.ts`; brain-consumer is a
   second, separately-defaulted instance of the exact same audit-only posture.
 
 ### 2. `evaluateSovereignty` decision core — VERIFIED fail-closed
@@ -136,7 +136,7 @@ prerequisite (#327) is what's pending is imprecise — #327 shipped and is a gen
 
 ---
 
-## F4 — principal-DM guard-disable + principal-map integrity
+## R1-F4 — principal-DM guard-disable + principal-map integrity
 
 ### Headline
 
@@ -224,7 +224,7 @@ that point:
   cortex config directory is never itself included in that principal's `allowedDirs`**, a
   Write/Edit into the config tree is deterministically denied even in a guard-off DM
   (`src/runner/hooks/path-guard.hook.ts:436–465`). This is new since the review was written and
-  meaningfully narrows F4 for the file-tool surface.
+  meaningfully narrows R1-F4 for the file-tool surface.
 - **Bash remains a full blind spot.** `bash-guard.hook.ts`'s `config === null` branch
   (`:1150–1153`) returns `pass()` **before** reaching its own EBH-1-added path-containment checks
   for `cat`/`head`/`tail`/`ls`/`wc`/`file`/`git` (`PATH_CHECKED_COMMANDS`, `:384`) — so a
@@ -277,17 +277,17 @@ that point:
 
 ## Open questions for the principal (binary)
 
-1. **F3 — Config exposure.** Should `sovereigntyEnforce` be promoted to a real (still
+1. **R1-F3 — Config exposure.** Should `sovereigntyEnforce` be promoted to a real (still
    default-`false`) config key now, independent of the #2117/#2201 prerequisite work, so enabling
    it is a principal action rather than a code change? Yes / No.
-2. **F3 — Enforce-now vs. explicit-deferral for `api-agent`.** Per #2117's own framing: enforce
+2. **R1-F3 — Enforce-now vs. explicit-deferral for `api-agent`.** Per #2117's own framing: enforce
    the *resolved* inference-profile `modelClass` now (small, closes the design's stated intent),
    or document the deferral explicitly and wait for #2201 (model-placement gate)? Enforce-now /
    Defer.
-3. **F4 — Bash path-awareness in guard-off sessions.** Should `bash-guard.hook.ts`'s
+3. **R1-F4 — Bash path-awareness in guard-off sessions.** Should `bash-guard.hook.ts`'s
    `disabled`-branch also run the EBH-1 path-containment checks (not the command-shape allowlist,
    just containment) rather than a bare `pass()`? Yes / No.
-4. **F4 — G-301.** File G-301 as an actual GitHub issue now, and correct the two stale `#42`
+4. **R1-F4 — G-301.** File G-301 as an actual GitHub issue now, and correct the two stale `#42`
    citations (review + hardening-plan)? Yes / No.
 
 ---
