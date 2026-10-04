@@ -55,7 +55,24 @@ Three developments make this timely:
 
 **Pattern adopted:** short-lived, audience-bound tokens; secrets injected outside the sandbox; per-transaction approval bound to the exact details, on the principal's phone, never inside the agent's own chat.
 
-### 1.4 Xero: where money actually moves (NZ)
+### 1.4 Prior art: Hermes Agent (Nous Research)
+
+- **Profiles** are agents, each with its own config, memory, skills and sessions. **Bots** are profiles bound to a messaging account through a gateway. One bot token per gateway. ([profiles](https://hermes-agent.nousresearch.com/docs/user-guide/profiles), [gateways](https://hermes-agent.nousresearch.com/docs/user-guide/multi-profile-gateways))
+- **Kanban** (v0.12.0) is a durable task board in SQLite:
+  - each board is a separate database;
+  - parent → child dependencies;
+  - atomic claiming plus worker heartbeat;
+  - `block(needs_input)`, then a human comment, then the worker is re-spawned with the comment thread;
+  - implementer ↔ reviewer handoff;
+  - an append-only `task_events` table.
+  ([kanban](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban))
+- **Multiple model providers**, including Codex. A Claude subscription is used by driving the real Claude Code CLI (herdr, or the official plugin of 2026-09-20).
+- **Trust model:** "trusted-local-user, single-host by design". Every profile sees every task, there are no per-agent ACLs, and dashboard routes skip authentication on the assumption they're only reachable locally.
+
+**What we take from it:** the board semantics (claim/heartbeat, `needs_input` → human comment → resume, dependencies, review handoff), which match the Mission Control vision (DD-12).
+**What we do differently:** the board's events are signed and audited, each agent sees only what it's granted, and approvals go through the broker.
+
+### 1.5 Xero: where money actually moves (NZ)
 
 - **The API records payments; it does not make them.** `/Payments` and `/BatchPayments` mark bills paid in the ledger. In NZ, money moves when a human uploads a bank file and approves it with the bank's MFA. Bill payment from inside Xero (Melio) is US-only, and I found no public API for it. ([Payments](https://developer.xero.com/documentation/api/accounting/payments), [BatchPayments](https://developer.xero.com/documentation/api/accounting/batchpayments/))
 - **The real attack surface is earlier.** An agent with write scopes can authorise a fraudulent bill, **change a contact's bank details**, or record false payments. Xero's user-role approval does not apply to API apps: any token with `accounting.invoices` can set a bill to AUTHORISED.
@@ -77,6 +94,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 | Action broker: generic proposal → approval → execute, with **connectors as plugins** (§5.3) | |
 | Tamper-evident audit (§5.4) | |
 | Step-up via grove-auth (DD-4) | |
+| **Mission Control = the board** (DD-12) | |
 
 **A use case is "done" when it needs no foundation change:** a new agent bundle, a connector, policy and tier rules in its deploy repo, and optionally an event source. If a use case forces a foundation change, the foundation was wrong. Fix it there, generically.
 
@@ -96,7 +114,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 
 - Moving money. The bank approval stays human.
 - Third-party (non-first-party) agent bundles. EBH-5 stays trigger-gated.
-- Replacing Claude Code as the agent runtime.
+- Choosing one agent runtime. The runtime is a per-agent choice: cortex's `substrate` (`claude-code`, `codex`, `pi-dev`, `api-agent`, bus peers) plus the sage engine's `model` (`claude`, `codex`, `pi`). The container boundary (DD-1) and the broker, audit and workspace layers don't depend on it.
 - Multi-principal hosting. One principal per host.
 
 ---
@@ -106,15 +124,16 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 | # | Decision | Grounded in |
 |---|---|---|
 | **DD-1** | **The container (or VM) is the agent boundary.** One container per agent, with **no host directories mounted**: its working state is a cloned workspace repo (DD-11). The DD-8a mount-table check confirms nothing from the host is mounted. No nested sandbox. | sandbox-platforms E5, DD-8; §1.1 (Grok's shared VM is not a boundary) |
-| **DD-2** | **Agents propose, the broker executes.** Write credentials for business systems live only in the action broker. Agents get read scopes or no credentials. | §1.2, §1.3, §1.4; distributed-execution S2/S4 |
+| **DD-2** | **Agents propose, the broker executes.** Write credentials for business systems live only in the action broker. Agents get read scopes or no credentials. | §1.2, §1.3, §1.5; distributed-execution S2/S4 |
 | **DD-3** | **An approval is bound to the exact action.** It is single-use, tied to a hash of the full proposal (action, target, amount, payee, rendered artefact), expires after hours rather than minutes, and is void if the target changes after approval. | §1.3 (RAR, SPC); gap: the current gate is word-matched and expires after 5 minutes |
 | **DD-4** | **Passkey (WebAuthn) for money-adjacent actions; TOTP is not enough.** A TOTP code doesn't show what is being approved, so it can't protect against approving the wrong thing. This revisits D-2 in `decisions-mc-future-state.md` *for runner actions only*. TOTP stays valid for the federation-admin routes. **Reuse `grove-auth`** (`docs/design-auth-aaa.md`, already designed): passkeys with `rpId` set to the ecosystem domain, and single-use signed **action tokens** for the highest-stakes operations. Money-adjacent actions use action tokens, never grove-auth's sliding "elevation window". | §1.3; grove-auth design |
-| **DD-5** | **Review, then approve.** For artefacts (invoices, emails, documents), the agent creates a draft (for example a Xero DRAFT invoice). The approval page renders the artefact (for example the invoice PDF), and the approval hash covers the rendered bytes. | principal requirement; §1.4 |
+| **DD-5** | **Review, then approve.** For artefacts (invoices, emails, documents), the agent creates a draft (for example a Xero DRAFT invoice). The approval page renders the artefact (for example the invoice PDF), and the approval hash covers the rendered bytes. | principal requirement; §1.5 |
 | **DD-6** | **Audit is recorded outside the agent and stored append-only off the host.** Hash-chained batches go to object storage with compliance-mode retention. Signed hourly checkpoints are published to a public git repo. A heartbeat makes silence detectable. | gap: no tamper-evident log exists today |
 | **DD-7** | **Every layer in git, in open formats; the host only pulls.** Config is YAML, secrets are SOPS+age, data is markdown+YAML+JSON Schema, audit is JSONL. Changes made on the host are drift: detected and audited. | principal requirement (§6) |
 | **DD-8** | **The NATS hub leaves the Mac.** A stable hub on the new host; the Mac stack joins as a leaf. Fully sovereign per-stack operators come later. | isolated-stack-hosting §2 |
 | **DD-9** | **Cloud sessions are for low-risk hands only.** They never hold a privileged credential. They reach the broker as an MCP connector, which is the only route to a write. | §1.2 |
 | **DD-11** | **An agent's world is a git repo, from the start.** Each agent (and each task, where useful) gets a workspace repo created by code from a template, with a token scoped to that one repo. The container clones it at start and pushes commits; nothing else persists. Agent outputs are commits, and a proposal's `artefact_sha256` is the commit hash. The **workspace store is pluggable**: Cloudflare Artifacts with **EU jurisdiction** is the default, and a self-hosted git backend keeps the foundation provider-independent (§5.9). | §5.9; DD-7; principal requirement |
+| **DD-12** | **Mission Control is the task board.** The MC vision (`design-mission-control.md`: "many agents against a curated backlog", the iteration kanban, the attention queue) is the board shared by all of a stack's agents. It gains the semantics Hermes' Kanban proves out: <br>• atomic claim plus heartbeat; <br>• dependencies; <br>• `needs_input` → attention card → human comment → the agent resumes with the thread; <br>• implementer ↔ reviewer handoff. <br>Every transition is a signed bus event, so it lands in the audit log (DD-6). "Blocked on approval" is a broker proposal (DD-2). Each agent sees and claims only what policy grants it, and each stack has its own board. | §1.4; design-mission-control |
 | **DD-10** | **The session sandbox is re-scoped, not abandoned.** The *primary* boundary on hosted stacks is the container or VM (DD-1). The session sandbox becomes defence in depth: <br>• **macOS SBPL** stays the boundary for sessions on a Mac (E1/E2 proved it works). <br>• **`linux-bwrap`** applies inside a per-agent **VM** where unprivileged user namespaces work (E6). <br>• **`container-delegated`** plus the DD-8a mount check covers per-agent containers. <br>• The **L1 string guards** stay as fail-closed tripwires whose denials feed the audit log, but we stop chasing L1 bypass rounds: L1 can never be sound (TOCTOU). <br>EBH-3b (container-delegated) moves onto the critical path; further L1 hardening comes off it. | sandbox-platforms §1, E1/E2/E5/E6, DD-8 |
 
 ---
