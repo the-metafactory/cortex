@@ -208,7 +208,18 @@ Mission Control is exposed via **Cloudflare Tunnel + Access**. No inbound ports 
 
 ### 5.5 Business data
 
-The principal's customer and engagement registry moves to a private git repo: one markdown + YAML file per entity, a JSON Schema, a validator in CI, a generated SQLite/CSV index (never the source of truth), a small CLI and skill, and a one-way export to Drive. Fields such as billing email, bank details and payee are marked `sensitive` in the schema. A diff touching them goes through broker step-up (§5.3). This is built separately, outside cortex. The broker and agents treat it as one more git-backed data source.
+The principal's customer, contact and engagement registry is split into **a tool** and **data**. They are granted separately.
+
+| Part | Repo | Holds | Visibility |
+|---|---|---|---|
+| **Tool** | `the-metafactory/metafactory-bundle-crm` (arc skill bundle) | The `crm` CLI (`add / set / show / find / validate / export / init`) and the CRM skill. **No data, config or credentials.** The manifest declares no network access and no secrets. CI fails if registry files ever appear in the bundle. | metafactory members |
+| **Data** | A private registry repo in the principal's business org | `crm.config.json` (types, ID prefixes, pinned bundle version), `schema/` (JSON Schema 2020-12 with `x-ref`, `x-ref-owner` and `x-sensitive` annotations, so the tool stays generic), `ids.ledger` (append-only), and one markdown + YAML file per record | principal only |
+
+- **How the tool finds data**, in order: `--registry=<dir>`, then `$CRM_REGISTRY`, then the nearest folder above the caller that contains `crm.config.json` (under arc's launcher, `ARC_INVOCATION_CWD`). It never searches the machine.
+- **Two grants per agent.** Installing the bundle gives the ability; access to the registry repo is a separate, per-agent grant (§5.9). An agent with the bundle but no registry grant can do nothing with business data.
+- **Validation:** `crm validate --against=<ref>` checks schema, references, ID/ledger integrity and that the ledger is append-only. It emits **notices for `x-sensitive` changes**: billing email, bank account, payee. Today the notice is informational. It becomes the broker's step-up trigger (§5.3): a diff touching an `x-sensitive` field always goes through passkey approval.
+- **Generated, never canonical:** a SQLite/CSV index for queries, and a one-way export to Drive (CSV plus the source commit) for people.
+- **Interface today:** Claude Code with the CRM skill. Cortex agents come later, through the same two grants.
 
 ### 5.6 Where the code lives
 
@@ -224,7 +235,8 @@ Most of the work is in cortex. The two parts that hold credentials or judge cort
 | Host infrastructure roles | `smithy` | Existing Ansible roles |
 | Stack deployment (infra, config, policy, encrypted secrets) | **new, private, principal-owned**: `<stack>-deploy` | Deployment-specific; never in a metafactory product repo |
 | Audit checkpoints | **new, public, principal-owned**: `audit-checkpoints` | The public witness |
-| Business registry | principal's business org | Not ecosystem code |
+| CRM tool (CLI + skill) | `the-metafactory/metafactory-bundle-crm` (private) | Generic tool, holds no data |
+| Business registry (data) | principal's business org (private) | Principal-only data; granted to agents separately |
 
 ### 5.7 Portability — decoupled from the infrastructure layer
 
@@ -305,6 +317,8 @@ This shows the foundation generalises. Nothing below is new foundation work.
 
 **Rule:** which store a given agent uses is set in `<stack>-deploy` per agent (`workspace.store: artifacts | local-git`). Moving an agent between stores is a `git push --mirror`. This keeps §5.7's "no provider lock-in" true even though the default is a Cloudflare service.
 
+**Data repos next to the workspace.** An agent that needs business data (for example a bookkeeping agent and the registry, §5.5) clones that **canonical** repo as a second, read-only checkout, using its own scoped read token. It never writes there. A change (a new contact, an updated billing email) is made in the agent's workspace repo as a proposal commit. `crm validate --against` runs on it, and any `x-sensitive` notice raises the step-up tier. The broker applies the approved change to the canonical registry. The tool comes from the agent's image (arc bundle); the data access comes from its token. Both grants are listed per agent in `<stack>-deploy`.
+
 **Dev agents** (the existing review and implementation agents) clone their *target* GitHub repo as today. Their workspace repo holds their notes and state, not the code they work on.
 
 ---
@@ -320,7 +334,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 | Agents, personas, skills | YAML, markdown | arc bundles | Already done |
 | Agent workspaces (state, memory, outputs) | git repos | Artifacts or self-hosted git (§5.9) | One per agent/task; host keeps none |
 | Policy and approval rules | YAML | `<stack>-deploy` | A change to the rules is a reviewed diff |
-| Business data | markdown + YAML + JSON Schema | `registry` (private) | §5.5 |
+| Business data | markdown + YAML + JSON Schema 2020-12 (`x-ref`, `x-sensitive`) | registry repo (private) + `metafactory-bundle-crm` tool | §5.5 |
 | Audit log | JSONL + hash chain | object store | Git is not append-only (force-push), so only checkpoints go to git |
 | Audit checkpoints | signed JSON | `audit-checkpoints` (public) | Hashes only |
 | Runtime state (JetStream, MC SQLite, live sessions) | — | none | Operational state, not source. The host is disposable: rebuild = git + age key, losing only in-flight work. |
