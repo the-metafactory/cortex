@@ -4,6 +4,10 @@
 
 > **One sentence.** Run a cortex stack on infrastructure off the principal's Mac that hosts several always-on agents, each in its own container. Privileged actions go through an approval broker with passkey step-up. Every action is recorded in a tamper-evident audit log kept outside the agents' reach. Every layer of the stack is defined in git, in open formats.
 
+![Sovereign agent stack — layered architecture](diagrams/sovereign-agent-stack-layers.png)
+
+*L0 provision (the only provider-specific layer, below the crucible seam) → L1 Smithy roles → L2 stack (hub, daemon, broker, audit shipper) → L3 one boundary per agent with a git workspace → L4 use cases. Left: git defines every layer. Right: propose → approve → audit. Source: `diagrams/src/sovereign-agent-stack-layers.html` (render at 1600×900, scale 1.6).*
+
 ---
 
 ## 0. Why now
