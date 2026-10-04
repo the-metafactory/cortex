@@ -1,0 +1,51 @@
+#cloud-config
+# cloud-init for a first off-Mac cortex host on Hetzner Cloud (design-sovereign-agent-stack §8.1).
+#
+# Secret-free BY DESIGN. Hetzner user-data is readable by any process on the host
+# via the metadata service, so NO token, seed or ID goes in here. Secrets arrive
+# later over SSH as a 0600 .env (see push-env-and-start.sh).
+#
+# Rendered by provision.sh: __SSH_PUBKEY__ and __CORTEX_REF__ are substituted.
+
+users:
+  - name: ops
+    groups: [docker]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "__SSH_PUBKEY__"
+
+disable_root: true
+ssh_pwauth: false
+
+package_update: true
+package_upgrade: true
+packages:
+  - docker.io
+  - docker-buildx
+  - docker-compose-v2
+  - git
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-cortex-hardening.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AllowUsers ops
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+runcmd:
+  - systemctl enable --now docker
+  - systemctl restart ssh
+  # cortex at a pinned RELEASE tag (never main). The compose project lives in deploy/compose.
+  - git clone --depth 1 --branch "__CORTEX_REF__" https://github.com/the-metafactory/cortex /opt/cortex
+  - chown -R ops:ops /opt/cortex
+  - touch /var/lib/cloud/instance/cortex-host-ready

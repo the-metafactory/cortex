@@ -452,7 +452,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 - **Q1** Passkey for money-adjacent actions (recommended), or TOTP as an interim?
 - **Q2** Does the broker run on the off-Mac host (recommended, follows from G1) or the Mac?
 - **Q3** Execution: own containers (recommended for anything credentialled) vs cloud sessions for low-risk hands. Both are allowed under DD-9; the question is the default.
-- **Q4** Host: Hetzner VPS (recommended: cheapest, fully separate), Proxmox via Smithy (free, but on-premises), or a personal AWS account.
+- ~~**Q4** Host~~ — **decided 2026-10-04:** Hetzner Cloud, EU (cax21: 4 vCPU ARM / 8 GB, ≈ €11 / NZ$22 a month). Created headless with `deploy/hetzner/` (hcloud CLI + secret-free cloud-init + `.env` over SSH).
 - **Q5** Hub shape: stable hub on the host (recommended first) vs sovereign per-stack operators.
 - **Q6** Audit store: S3 Object Lock compliance mode (proven) vs R2 bucket lock (stays on Cloudflare; confirm it matches compliance-mode semantics).
 - **Q7** Checkpoints: public git repo (fits DD-7) — Sigstore Rekor as an optional second witness?
