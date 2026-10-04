@@ -110,7 +110,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 | **DD-7** | **Every layer in git, in open formats; the host only pulls.** Config is YAML, secrets are SOPS+age, data is markdown+YAML+JSON Schema, audit is JSONL. Changes made on the host are drift: detected and audited. | principal requirement (§6) |
 | **DD-8** | **The NATS hub leaves the Mac.** A stable hub on the new host; the Mac stack joins as a leaf. Fully sovereign per-stack operators come later. | isolated-stack-hosting §2 |
 | **DD-9** | **Cloud sessions are for low-risk hands only.** They never hold a privileged credential. They reach the broker as an MCP connector, which is the only route to a write. | §1.2 |
-| **DD-11** | **An agent's world is a git repo, from the start.** Each agent (and each task, where useful) gets a workspace repo created by code from a template, with a token scoped to that one repo. The container clones it at start and pushes commits; nothing else persists. Agent outputs are commits, and a proposal's `artefact_sha256` is the commit hash. The **workspace store is pluggable**: Cloudflare Artifacts first, with a self-hosted git fallback, so the foundation never depends on one beta service (§5.9). | §5.9; DD-7; principal requirement |
+| **DD-11** | **An agent's world is a git repo, from the start.** Each agent (and each task, where useful) gets a workspace repo created by code from a template, with a token scoped to that one repo. The container clones it at start and pushes commits; nothing else persists. Agent outputs are commits, and a proposal's `artefact_sha256` is the commit hash. The **workspace store is pluggable**: Cloudflare Artifacts with **EU jurisdiction** is the default, and a self-hosted git backend keeps the foundation provider-independent (§5.9). | §5.9; DD-7; principal requirement |
 | **DD-10** | **The session sandbox is re-scoped, not abandoned.** The *primary* boundary on hosted stacks is the container or VM (DD-1). The session sandbox becomes defence in depth: <br>• **macOS SBPL** stays the boundary for sessions on a Mac (E1/E2 proved it works). <br>• **`linux-bwrap`** applies inside a per-agent **VM** where unprivileged user namespaces work (E6). <br>• **`container-delegated`** plus the DD-8a mount check covers per-agent containers. <br>• The **L1 string guards** stay as fail-closed tripwires whose denials feed the audit log, but we stop chasing L1 bypass rounds: L1 can never be sound (TOCTOU). <br>EBH-3b (container-delegated) moves onto the critical path; further L1 hardening comes off it. | sandbox-platforms §1, E1/E2/E5/E6, DD-8 |
 
 ---
@@ -295,8 +295,8 @@ This shows the foundation generalises. Nothing below is new foundation work.
 
 | Backend | Use | Notes |
 |---|---|---|
-| **Cloudflare Artifacts** | Default for general agents | Programmatic create/fork, repo-scoped tokens, push events. Open beta; billing from 2026-10-15; data held in the **US or EU only**. ([blog](https://blog.cloudflare.com/next-git-platform-on-cloudflare/)) |
-| **Self-hosted git** (a small git server on the host or a sibling VM, e.g. Forgejo or soft-serve) | Client-confidential agents that must stay in-region; offline or Artifacts outage; Phase 1 rehearsal on Smithy | The same interface. Push events come from server hooks. |
+| **Cloudflare Artifacts** (EU jurisdiction) | **Default for all agents** | Programmatic create/fork, repo-scoped tokens, push events. Open beta; billing from 2026-10-15. EU residency is accepted by the principal (EU data protection is stronger than NZ's). ([blog](https://blog.cloudflare.com/next-git-platform-on-cloudflare/)) |
+| **Self-hosted git** (a small git server on the host or a sibling VM, e.g. Forgejo or soft-serve) | **Provider independence**: exit path if Artifacts changes terms or pricing, or leaves beta badly; outages; any agent whose client contract requires it; Phase 1 rehearsal on Smithy | The same interface, kept working in CI so the exit path is real, not theoretical. Push events come from server hooks. |
 | GitHub | Canonical repos only | Not a workspace store. Agents never hold write tokens to canonical repos. |
 
 **Rule:** which store a given agent uses is set in `<stack>-deploy` per agent (`workspace.store: artifacts | local-git`). Moving an agent between stores is a `git push --mirror`. This keeps §5.7's "no provider lock-in" true even though the default is a Cloudflare service.
@@ -323,7 +323,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 
 **GitOps rule:** the host deploys a tagged version of `<stack>-deploy` and never edits it in place. A `cortex doctor` drift check compares the running config with the deployed tag and emits an audit event on any difference.
 
-**Cloudflare Artifacts** is the default **workspace** store (§5.9, DD-11). It is not used for canonical principal data (deploy repo, registry) until it leaves beta and data residency is resolved.
+**Cloudflare Artifacts** (EU) is the default **workspace** store (§5.9, DD-11). Canonical principal data (deploy repo, registry) stays on GitHub until Artifacts leaves beta.
 
 ---
 
@@ -419,7 +419,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 - **Q5** Hub shape: stable hub on the host (recommended first) vs sovereign per-stack operators.
 - **Q6** Audit store: S3 Object Lock compliance mode (proven) vs R2 bucket lock (stays on Cloudflare; confirm it matches compliance-mode semantics).
 - **Q7** Checkpoints: public git repo (fits DD-7) — Sigstore Rekor as an optional second witness?
-- **Q8** Workspace store default: Cloudflare Artifacts (recommended for general agents) with local-git for client-confidential agents — or local-git everywhere until Artifacts leaves beta?
+- ~~**Q8** Workspace store default~~ — **decided 2026-10-04:** Cloudflare Artifacts with EU jurisdiction for all agents. The self-hosted git backend stays as a tested provider-independence path.
 
 ---
 
