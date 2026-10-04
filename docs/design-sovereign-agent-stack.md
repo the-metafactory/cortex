@@ -208,7 +208,8 @@ The architecture sits **above** the seam described in crucible (`docs/design-inf
 | Layer | What | Provider-dependent? |
 |---|---|---|
 | L0 Provision | OpenTofu module per provider: `vm-pve` (Smithy, built), `vm-aws` (crucible spec, not built), Hetzner etc. (not built). An existing host can skip L0 and go straight to L1 over SSH. | **Yes** — the only layer that is |
-| L1 Configure | Smithy Ansible roles (`base`, `nats_server`, `bun`, `claude`, `docker`, `metafactory_arc`) | No, but **Ubuntu/apt only** today |
+| L1 Configure | Smithy Ansible roles (upstream `vpzed-dev/smithy`): `base`, `nats_server`, `bun`, `claude`, `docker`, `metafactory_arc`, `metafactory_cortex` (installs cortex natively via arc at a pinned commit, and checks that the pin took), `assay_env` (environment fingerprint) | No, but **Ubuntu/apt only** today |
+| L1.5 Stack wiring | **Missing:** a `cortex_stack` role that renders the `<stack>-deploy` config, decrypts SOPS secrets and starts the stack. `metafactory_cortex` deliberately leaves stack, secrets and NATS wiring to "a later layer"; this is that layer. Native (systemd) and compose are alternatives here. | No |
 | L2 Stack | compose: NATS, cortex, broker, audit shipper, one container per agent | No — anywhere Docker runs (amd64 and arm64; the Dockerfile uses `TARGETARCH`) |
 | External services | S3-API object lock, Cloudflare Tunnel + Access, git remotes, WebAuthn domain | No — reached over standard protocols |
 
