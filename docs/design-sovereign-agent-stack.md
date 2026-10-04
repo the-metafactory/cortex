@@ -87,7 +87,7 @@ Three developments make this timely:
 | **DD-1** | **The container (or VM) is the agent boundary.** One container per agent, mounting only that agent's work directories, verified by the DD-8a mount-table check. No nested sandbox. | sandbox-platforms E5, DD-8; §1.1 (Grok's shared VM is not a boundary) |
 | **DD-2** | **Agents propose, the broker executes.** Write credentials for business systems live only in the action broker. Agents get read scopes or no credentials. | §1.2, §1.3, §1.4; distributed-execution S2/S4 |
 | **DD-3** | **An approval is bound to the exact action.** It is single-use, tied to a hash of the full proposal (action, target, amount, payee, rendered artefact), expires after hours rather than minutes, and is void if the target changes after approval. | §1.3 (RAR, SPC); gap: the current gate is word-matched and expires after 5 minutes |
-| **DD-4** | **Passkey (WebAuthn) for money-adjacent actions; TOTP is not enough.** A TOTP code doesn't show what is being approved, so it can't protect against approving the wrong thing. This revisits D-2 in `decisions-mc-future-state.md` *for runner actions only*. TOTP stays valid for the federation-admin routes. | §1.3 |
+| **DD-4** | **Passkey (WebAuthn) for money-adjacent actions; TOTP is not enough.** A TOTP code doesn't show what is being approved, so it can't protect against approving the wrong thing. This revisits D-2 in `decisions-mc-future-state.md` *for runner actions only*. TOTP stays valid for the federation-admin routes. **Reuse `grove-auth`** (`docs/design-auth-aaa.md`, already designed): passkeys with `rpId` set to the ecosystem domain, and single-use signed **action tokens** for the highest-stakes operations. Money-adjacent actions use action tokens, never grove-auth's sliding "elevation window". | §1.3; grove-auth design |
 | **DD-5** | **Review, then approve.** For artefacts (invoices, emails, documents), the agent creates a draft (for example a Xero DRAFT invoice). The approval page renders the artefact (for example the invoice PDF), and the approval hash covers the rendered bytes. | principal requirement; §1.4 |
 | **DD-6** | **Audit is recorded outside the agent and stored append-only off the host.** Hash-chained batches go to object storage with compliance-mode retention. Signed hourly checkpoints are published to a public git repo. A heartbeat makes silence detectable. | gap: no tamper-evident log exists today |
 | **DD-7** | **Every layer in git, in open formats; the host only pulls.** Config is YAML, secrets are SOPS+age, data is markdown+YAML+JSON Schema, audit is JSONL. Changes made on the host are drift: detected and audited. | principal requirement (§6) |
@@ -184,6 +184,22 @@ Mission Control is exposed via **Cloudflare Tunnel + Access**. No inbound ports 
 ### 5.5 Business data
 
 The principal's customer and engagement registry moves to a private git repo: one markdown + YAML file per entity, a JSON Schema, a validator in CI, a generated SQLite/CSV index (never the source of truth), a small CLI and skill, and a one-way export to Drive. Fields such as billing email, bank details and payee are marked `sensitive` in the schema. A diff touching them goes through broker step-up (§5.3). This is built separately, outside cortex. The broker and agents treat it as one more git-backed data source.
+
+### 5.6 Where the code lives
+
+Most of the work is in cortex. The two parts that hold credentials or judge cortex's honesty get their own small repos. A small codebase can be audited on its own, and the audit verifier must not depend on the system it checks.
+
+| Concern | Repo | Why |
+|---|---|---|
+| This design, per-agent containers (execution backend), DD-8a check, env allowlist, proposal envelope, MC review page | `cortex` | Runner and Mission Control concerns; companion designs already live here |
+| Passkey enrolment, step-up, action tokens | `grove-auth` (existing, design-only since 2026-04) | Already designed for exactly this; revive rather than reinvent |
+| Action broker + vault + business connectors (Xero first) | **new**: `the-metafactory/<broker>` | Holds write credentials, so it's a separate trust domain and process; small and reviewable on its own |
+| Audit shipper + `audit verify` | **new**: `the-metafactory/<audit>` | Must not trust cortex; open source so anyone can verify |
+| "On behalf of" claim on `signed_by` | `myelin` | Envelope-level (distributed-execution S5) |
+| Host infrastructure roles | `smithy` | Existing Ansible roles |
+| Stack deployment (infra, config, policy, encrypted secrets) | **new, private, principal-owned**: `<stack>-deploy` | Deployment-specific; never in a metafactory product repo |
+| Audit checkpoints | **new, public, principal-owned**: `audit-checkpoints` | The public witness |
+| Business registry | principal's business org | Not ecosystem code |
 
 ---
 
