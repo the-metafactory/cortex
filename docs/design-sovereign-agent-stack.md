@@ -303,6 +303,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 |---|---|
 | Daemon env leaks to the session (`scopeSessionEnv` strips only `CLAUDE_*`) | 2 |
 | Guard-off DM Bash bypass (#2377) | 2 |
+| Session sandbox is **dormant**: the macOS SBPL backend is built and the boot probe resolves it, but no dispatch path passes `sandboxMode`, so `system.sandbox.mode` is parsed and ignored (`cc-session.ts:658` defaults to `off`). On Linux the probe resolves to `none`. | 2 (wire it; enabling is a principal decision) |
 | `container-delegated` backend + DD-8a check not built (EBH-3b) | 2 |
 | No tamper-evident audit (no chain, no off-host store, step-up decisions not logged) | 2b |
 | No way to hold a running session until approval (SPX-8); verdicts are word-matched and not bound to the action | 3 |
