@@ -69,7 +69,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 |---|---|
 | Host + provisioning (§5.1, §5.7) | **A. Personal agents:** bookkeeping, inbox, research (§5.3 Xero tiers, §5.5) |
 | `<stack>-deploy` repo + stack wiring (§6) | **B. Ops responders:** bots that react to monitoring events (§5.8) |
-| One container/VM per agent (§5.2) | **C. Future:** anything that's an event source plus agents plus gated actions |
+| One container/VM per agent, workspace = git repo (§5.2, §5.9) | **C. Future:** anything that's an event source plus agents plus gated actions |
 | Action broker: generic proposal → approval → execute, with **connectors as plugins** (§5.3) | |
 | Tamper-evident audit (§5.4) | |
 | Step-up via grove-auth (DD-4) | |
@@ -101,7 +101,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 
 | # | Decision | Grounded in |
 |---|---|---|
-| **DD-1** | **The container (or VM) is the agent boundary.** One container per agent, mounting only that agent's work directories, verified by the DD-8a mount-table check. No nested sandbox. | sandbox-platforms E5, DD-8; §1.1 (Grok's shared VM is not a boundary) |
+| **DD-1** | **The container (or VM) is the agent boundary.** One container per agent, with **no host directories mounted**: its working state is a cloned workspace repo (DD-11). The DD-8a mount-table check confirms nothing from the host is mounted. No nested sandbox. | sandbox-platforms E5, DD-8; §1.1 (Grok's shared VM is not a boundary) |
 | **DD-2** | **Agents propose, the broker executes.** Write credentials for business systems live only in the action broker. Agents get read scopes or no credentials. | §1.2, §1.3, §1.4; distributed-execution S2/S4 |
 | **DD-3** | **An approval is bound to the exact action.** It is single-use, tied to a hash of the full proposal (action, target, amount, payee, rendered artefact), expires after hours rather than minutes, and is void if the target changes after approval. | §1.3 (RAR, SPC); gap: the current gate is word-matched and expires after 5 minutes |
 | **DD-4** | **Passkey (WebAuthn) for money-adjacent actions; TOTP is not enough.** A TOTP code doesn't show what is being approved, so it can't protect against approving the wrong thing. This revisits D-2 in `decisions-mc-future-state.md` *for runner actions only*. TOTP stays valid for the federation-admin routes. **Reuse `grove-auth`** (`docs/design-auth-aaa.md`, already designed): passkeys with `rpId` set to the ecosystem domain, and single-use signed **action tokens** for the highest-stakes operations. Money-adjacent actions use action tokens, never grove-auth's sliding "elevation window". | §1.3; grove-auth design |
@@ -110,6 +110,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 | **DD-7** | **Every layer in git, in open formats; the host only pulls.** Config is YAML, secrets are SOPS+age, data is markdown+YAML+JSON Schema, audit is JSONL. Changes made on the host are drift: detected and audited. | principal requirement (§6) |
 | **DD-8** | **The NATS hub leaves the Mac.** A stable hub on the new host; the Mac stack joins as a leaf. Fully sovereign per-stack operators come later. | isolated-stack-hosting §2 |
 | **DD-9** | **Cloud sessions are for low-risk hands only.** They never hold a privileged credential. They reach the broker as an MCP connector, which is the only route to a write. | §1.2 |
+| **DD-11** | **An agent's world is a git repo, from the start.** Each agent (and each task, where useful) gets a workspace repo created by code from a template, with a token scoped to that one repo. The container clones it at start and pushes commits; nothing else persists. Agent outputs are commits, and a proposal's `artefact_sha256` is the commit hash. The **workspace store is pluggable**: Cloudflare Artifacts first, with a self-hosted git fallback, so the foundation never depends on one beta service (§5.9). | §5.9; DD-7; principal requirement |
 | **DD-10** | **The session sandbox is re-scoped, not abandoned.** The *primary* boundary on hosted stacks is the container or VM (DD-1). The session sandbox becomes defence in depth: <br>• **macOS SBPL** stays the boundary for sessions on a Mac (E1/E2 proved it works). <br>• **`linux-bwrap`** applies inside a per-agent **VM** where unprivileged user namespaces work (E6). <br>• **`container-delegated`** plus the DD-8a mount check covers per-agent containers. <br>• The **L1 string guards** stay as fail-closed tripwires whose denials feed the audit log, but we stop chasing L1 bypass rounds: L1 can never be sound (TOCTOU). <br>EBH-3b (container-delegated) moves onto the critical path; further L1 hardening comes off it. | sandbox-platforms §1, E1/E2/E5/E6, DD-8 |
 
 ---
@@ -160,7 +161,7 @@ Mission Control is exposed via **Cloudflare Tunnel + Access**. No inbound ports 
 
 ### 5.2 One container per agent (Phase 2)
 
-- Each agent is a container with its own named volume, **only** its work directories mounted, and its own credentials (none for business write actions; DD-2).
+- Each agent is a container with **no host mounts**. At start it clones its workspace repo (DD-11, §5.9) using a token scoped to that repo, works in an ephemeral volume, and pushes commits. It has its own credentials (none for business write actions; DD-2).
 - **Boundary check:** the DD-8a mount-table check resolves to `container-delegated` only when the scoping is proven. A broad bind-mount is a misconfiguration warning.
 - **Egress:** each agent's Docker network has no default route. The only way out is the egress proxy (EBH-4) with a per-agent allowlist. Without a default route this is a network-level boundary, not a request for cooperation.
 - **Prerequisite fixes before any business credential exists:**
@@ -169,7 +170,7 @@ Mission Control is exposed via **Cloudflare Tunnel + Access**. No inbound ports 
 
 ### 5.3 Action broker and approvals (Phase 3)
 
-1. **Propose.** The agent publishes a signed `action.proposed` envelope: `{action, target, params, artefact_ref, artefact_sha256, requested_by, request_id}`.
+1. **Propose.** The agent publishes a signed `action.proposed` envelope: `{action, target, params, artefact_ref, artefact_sha256, requested_by, request_id}`. When the artefact lives in the agent's workspace repo, `artefact_ref` is `repo@commit` and the commit hash is the binding. A workspace push event can raise the proposal directly (§5.9).
 2. **Classify.** Policy maps the action to a capability with limits (for example `action.xero.bill.authorise`, `max_amount`) and to an approval tier: `auto`, `review`, or `step-up`. This replaces today's whole-agent `dispatch.<agent>` granularity for privileged actions. The rules are YAML in the deployment repo (§6).
 3. **Review.** The Mission Control attention queue plus a Discord or push ping with a deep link. The page renders the artefact (DD-5) and the exact parameters.
 4. **Approve.** A WebAuthn assertion whose challenge = `H(request_id ‖ artefact_sha256 ‖ params)` (DD-3, DD-4). The resulting verdict is single-use and has an expiry.
@@ -263,6 +264,45 @@ This shows the foundation generalises. Nothing below is new foundation work.
 - **Audit.** The incident timeline (alert, triage, proposals, approvals, actions) is the audit log, with no extra work.
 - **Loop guard.** Responders must not trigger on their own effects. Every action carries the triggering `request_id`, and the policy rate limit per alert fingerprint stops remediation storms.
 
+### 5.9 Agent workspaces as git repos (DD-11)
+
+**What.** Every agent works in a git repo instead of host folders. Optionally, every task does too, as a fork of the agent's repo.
+
+| Lifecycle | How |
+|---|---|
+| Create | The broker or daemon creates the repo from a template (persona-specific scaffold, `CLAUDE.md`, skills config) and mints a **token scoped to that one repo** |
+| Start | The agent container receives only that token and the repo URL, clones it into an ephemeral volume, and starts the Claude Code session there |
+| Work | The agent commits as it goes: outputs, notes, memory, and optionally session transcripts |
+| Propose | A push to a `proposals/*` ref fires a push event → Worker → broker `action.proposed {repo@commit}` |
+| Approve | Review in Mission Control renders the diff at that commit. The passkey challenge covers the commit hash (DD-3). |
+| Land | The broker, not the agent, merges or copies the approved commit into the canonical repo (GitHub: registry, deploy, docs) with its own credential |
+| End | The container is destroyed. The repo stays as the inspectable record of what the agent did and knew. |
+
+**Why it's better than mounted folders.**
+- **No host access by construction.** There is no host directory to escape into, so the DD-8a check only has to confirm "nothing mounted" rather than "the right things mounted".
+- **Inspectable memory.** Agent memory and context are versioned and readable. Grok Bot's memory can't be inspected or exported; this fixes that.
+- **Approvals bind to content for free.** A commit hash changes if one byte changes.
+- **Disposable hosts.** Agent state lives in repos, not on the host. Rebuilding the host loses no agent state, which strengthens §8.1's rebuild criterion.
+- **Cheap forks for parallel work.** Many tasks can run at once without sharing a working tree.
+
+**What does *not* go in a workspace repo.**
+- Secrets. Tokens arrive at container start and are never committed; the `shippable-hygiene` and gitleaks checks run on workspace pushes too.
+- Toolchains and caches. They belong in the container image or the ephemeral volume.
+- Large binaries.
+- The audit log. It isn't append-only in git (§5.4).
+
+**Pluggable store (`WorkspaceStore`).** Interface: `create(template) / fork(repo) / mintToken(repo, scope, ttl) / subscribe(events) / archive(repo)`.
+
+| Backend | Use | Notes |
+|---|---|---|
+| **Cloudflare Artifacts** | Default for general agents | Programmatic create/fork, repo-scoped tokens, push events. Open beta; billing from 2026-10-15; data held in the **US or EU only**. ([blog](https://blog.cloudflare.com/next-git-platform-on-cloudflare/)) |
+| **Self-hosted git** (a small git server on the host or a sibling VM, e.g. Forgejo or soft-serve) | Client-confidential agents that must stay in-region; offline or Artifacts outage; Phase 1 rehearsal on Smithy | The same interface. Push events come from server hooks. |
+| GitHub | Canonical repos only | Not a workspace store. Agents never hold write tokens to canonical repos. |
+
+**Rule:** which store a given agent uses is set in `<stack>-deploy` per agent (`workspace.store: artifacts | local-git`). Moving an agent between stores is a `git push --mirror`. This keeps §5.7's "no provider lock-in" true even though the default is a Cloudflare service.
+
+**Dev agents** (the existing review and implementation agents) clone their *target* GitHub repo as today. Their workspace repo holds their notes and state, not the code they work on.
+
 ---
 
 ## 6. Open: every layer in git (DD-7)
@@ -274,6 +314,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 | Stack config | config-split YAML | `<stack>-deploy` | Never in the cortex repo (Critical Rules) |
 | Secrets | **SOPS + age** encrypted YAML | `<stack>-deploy` | The age key lives only on the host and in an offline backup |
 | Agents, personas, skills | YAML, markdown | arc bundles | Already done |
+| Agent workspaces (state, memory, outputs) | git repos | Artifacts or self-hosted git (§5.9) | One per agent/task; host keeps none |
 | Policy and approval rules | YAML | `<stack>-deploy` | A change to the rules is a reviewed diff |
 | Business data | markdown + YAML + JSON Schema | `registry` (private) | §5.5 |
 | Audit log | JSONL + hash chain | object store | Git is not append-only (force-push), so only checkpoints go to git |
@@ -282,7 +323,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 
 **GitOps rule:** the host deploys a tagged version of `<stack>-deploy` and never edits it in place. A `cortex doctor` drift check compares the running config with the deployed tag and emits an audit event on any difference.
 
-**Future option:** Cloudflare Artifacts (git for agents, open beta; billing from 2026-10-15) fits per-agent or per-task working repos with scoped tokens and push events. It could deliver `action.proposed` diffs to the broker. It is not used for principal data until it leaves beta and data residency is resolved (US/EU only today). ([blog](https://blog.cloudflare.com/next-git-platform-on-cloudflare/))
+**Cloudflare Artifacts** is the default **workspace** store (§5.9, DD-11). It is not used for canonical principal data (deploy repo, registry) until it leaves beta and data residency is resolved.
 
 ---
 
@@ -319,7 +360,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 | Phase | Scope | Exit criteria | Estimate* |
 |---|---|---|---|
 | **1 — Off the Mac** | Host, compose/systemd, NKey + operator generated on the host, hub on the host, Mac joins as a leaf, MC via Tunnel + Access. **No business credentials.** Rehearse on a Smithy VM first, then apply the same Ansible to the real host. | The stack keeps serving Discord with the Mac off; the federation link survives a restart | 1–3 days |
-| **2 — One container per agent** | Per-agent containers + DD-8a check, no-default-route networks + egress proxy, env allowlist, #2377 | An Assay case: an out-of-scope host path is unreadable from an agent container; outbound traffic to a non-allowlisted host fails | ~1 week |
+| **2 — One container per agent** | Per-agent containers with no host mounts + DD-8a check; `WorkspaceStore` with the Artifacts and local-git backends, repo-scoped tokens, clone-on-start; no-default-route networks + egress proxy, env allowlist, #2377 | An Assay case: an out-of-scope host path is unreadable from an agent container; outbound traffic to a non-allowlisted host fails | ~1 week |
 | **2b — Audit** | Shipper, hash chain, locked store, audit key + checkpoints, verifier, heartbeat alert | An Assay case: deleting or altering a batch makes `cortex audit verify` fail; stopping the shipper raises an alert | 1–2 weeks |
 | **3 — Broker + approvals** | Proposal envelope, policy tiers, MC review page with artefact rendering, WebAuthn, vault, Xero connector (read + draft + step-up writes) | A draft invoice is reviewed and approved on the phone → authorised + sent; changing it after approval voids the approval | 1–2 weeks |
 | **4 — Agents** | First agents (bookkeeping, inbox/research, existing dev agents); routines via reflex-edge; low-risk work optionally on cloud sessions via the MCP connector | Each agent runs in its own container with an audited action history | ongoing |
@@ -378,6 +419,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 - **Q5** Hub shape: stable hub on the host (recommended first) vs sovereign per-stack operators.
 - **Q6** Audit store: S3 Object Lock compliance mode (proven) vs R2 bucket lock (stays on Cloudflare; confirm it matches compliance-mode semantics).
 - **Q7** Checkpoints: public git repo (fits DD-7) — Sigstore Rekor as an optional second witness?
+- **Q8** Workspace store default: Cloudflare Artifacts (recommended for general agents) with local-git for client-confidential agents — or local-git everywhere until Artifacts leaves beta?
 
 ---
 
