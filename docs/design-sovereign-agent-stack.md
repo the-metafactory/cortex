@@ -201,6 +201,28 @@ Most of the work is in cortex. The two parts that hold credentials or judge cort
 | Audit checkpoints | **new, public, principal-owned**: `audit-checkpoints` | The public witness |
 | Business registry | principal's business org | Not ecosystem code |
 
+### 5.7 Portability — decoupled from the infrastructure layer
+
+The architecture sits **above** the seam described in crucible (`docs/design-infrastructure-factory.md` §3). Only the bottom layer depends on the provider.
+
+| Layer | What | Provider-dependent? |
+|---|---|---|
+| L0 Provision | OpenTofu module per provider: `vm-pve` (Smithy, built), `vm-aws` (crucible spec, not built), Hetzner etc. (not built). An existing host can skip L0 and go straight to L1 over SSH. | **Yes** — the only layer that is |
+| L1 Configure | Smithy Ansible roles (`base`, `nats_server`, `bun`, `claude`, `docker`, `metafactory_arc`) | No, but **Ubuntu/apt only** today |
+| L2 Stack | compose: NATS, cortex, broker, audit shipper, one container per agent | No — anywhere Docker runs (amd64 and arm64; the Dockerfile uses `TARGETARCH`) |
+| External services | S3-API object lock, Cloudflare Tunnel + Access, git remotes, WebAuthn domain | No — reached over standard protocols |
+
+**Where it runs:**
+- **Linux box / Proxmox VM / Hetzner:** yes, today (Hetzner needs an L0 module, or skip L0).
+- **EC2:** yes once `vm-aws` exists. A prior EC2 + systemd agent-host (Ubuntu 24.04 arm64) has already run a cortex stack.
+- **macOS:** L2 runs (compose under OrbStack/Colima; the container bench already runs this way). L1 does not: the roles are apt-only, so a macOS host would need a brew/launchd role set or manual setup. Fine for a dedicated Mac mini; not the recommended primary host.
+
+**Rules that keep it decoupled:**
+- **No provider secret stores.** Secrets are SOPS+age. The only per-host secret, the age key, is delivered by cloud-init or SSH.
+- **No provider-specific audit storage.** The store is addressed through the S3 API only. Put it in a different account or provider from the host, so one stolen cloud credential doesn't reach both.
+- **Isolation strength is a deployment choice, not an architecture change.** On a single box an agent is a container (shared kernel). Where Smithy/crucible can provision VMs, a credentialled agent can be a **VM** reached through the existing `ssh` execution backend (`src/runner/execution-backend.ts`). That is a stronger boundary, and crucible's own rule ("the sandbox tier must be a real VM") already prefers it. Same envelopes, same broker, different backend.
+- **The host's identity is recorded.** At boot the host emits its crucible environment fingerprint and digest as the first audit event. A changed host shows up in the log.
+
 ---
 
 ## 6. Open: every layer in git (DD-7)
