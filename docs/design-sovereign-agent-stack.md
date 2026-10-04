@@ -1,4 +1,4 @@
-# Design — Sovereign agent stack (always-on personal agents, off the Mac)
+# Design — Sovereign agent stack (a reusable foundation for hosting cortex agents off the Mac)
 
 **Status:** design / pre-ADR · **Date:** 2026-10-04 · **Author:** Luna (with Andreas) · **Extends:** `docs/design-isolated-stack-hosting.md` (Mode B — the hosting axis), `docs/design-distributed-agent-execution.md` (Mode A — slices S2–S5) · **Refs:** `docs/design-session-sandbox-platforms.md` (DD-8, E5), `EBH-HARDENING-LEDGER.md` (epic #2341), ADR-0013, ADR-0019, ADR-0024
 
@@ -61,7 +61,24 @@ Three developments make this timely:
 
 ---
 
-## 2. Goals and non-goals
+## 2. Shape: one foundation, many use cases
+
+The doc has two parts. The **foundation** is generic and project-agnostic. **Use cases** are agents that run on it and add only connectors, policy rules and agent bundles.
+
+| Foundation (build once) | Use cases (add per project) |
+|---|---|
+| Host + provisioning (§5.1, §5.7) | **A. Personal agents:** bookkeeping, inbox, research (§5.3 Xero tiers, §5.5) |
+| `<stack>-deploy` repo + stack wiring (§6) | **B. Ops responders:** bots that react to monitoring events (§5.8) |
+| One container/VM per agent (§5.2) | **C. Future:** anything that's an event source plus agents plus gated actions |
+| Action broker: generic proposal → approval → execute, with **connectors as plugins** (§5.3) | |
+| Tamper-evident audit (§5.4) | |
+| Step-up via grove-auth (DD-4) | |
+
+**A use case is "done" when it needs no foundation change:** a new agent bundle, a connector, policy and tier rules in its deploy repo, and optionally an event source. If a use case forces a foundation change, the foundation was wrong. Fix it there, generically.
+
+**Every stack is an instance of the foundation.** A monitoring-responder stack for another project is a second `<stack>-deploy` repo pointing at the same roles, images and broker, with its own identity, credentials and audit trail.
+
+## 2.1 Goals and non-goals
 
 **Goals**
 
@@ -93,6 +110,7 @@ Three developments make this timely:
 | **DD-7** | **Every layer in git, in open formats; the host only pulls.** Config is YAML, secrets are SOPS+age, data is markdown+YAML+JSON Schema, audit is JSONL. Changes made on the host are drift: detected and audited. | principal requirement (§6) |
 | **DD-8** | **The NATS hub leaves the Mac.** A stable hub on the new host; the Mac stack joins as a leaf. Fully sovereign per-stack operators come later. | isolated-stack-hosting §2 |
 | **DD-9** | **Cloud sessions are for low-risk hands only.** They never hold a privileged credential. They reach the broker as an MCP connector, which is the only route to a write. | §1.2 |
+| **DD-10** | **The session sandbox is re-scoped, not abandoned.** The *primary* boundary on hosted stacks is the container or VM (DD-1). The session sandbox becomes defence in depth: <br>• **macOS SBPL** stays the boundary for sessions on a Mac (E1/E2 proved it works). <br>• **`linux-bwrap`** applies inside a per-agent **VM** where unprivileged user namespaces work (E6). <br>• **`container-delegated`** plus the DD-8a mount check covers per-agent containers. <br>• The **L1 string guards** stay as fail-closed tripwires whose denials feed the audit log, but we stop chasing L1 bypass rounds: L1 can never be sound (TOCTOU). <br>EBH-3b (container-delegated) moves onto the critical path; further L1 hardening comes off it. | sandbox-platforms §1, E1/E2/E5/E6, DD-8 |
 
 ---
 
@@ -156,6 +174,8 @@ Mission Control is exposed via **Cloudflare Tunnel + Access**. No inbound ports 
 3. **Review.** The Mission Control attention queue plus a Discord or push ping with a deep link. The page renders the artefact (DD-5) and the exact parameters.
 4. **Approve.** A WebAuthn assertion whose challenge = `H(request_id ‖ artefact_sha256 ‖ params)` (DD-3, DD-4). The resulting verdict is single-use and has an expiry.
 5. **Execute.** The broker re-fetches the target, checks it still matches the hash, executes with a short-lived scoped token (Xero access tokens last 30 minutes; the refresh token never leaves the broker's vault), and emits `action.executed` or `action.rejected` with an "on behalf of" claim (distributed-execution S5).
+
+**Connectors are plugins.** The broker core knows only *proposal → policy tier → approval → execute → audit*. A connector supplies: its action names, parameter schema, how to render the artefact for review, how to re-fetch and hash the target, and how to execute with a scoped credential. Xero (use case A) and infrastructure runbooks (use case B, §5.8) are two connectors on the same core. Connectors are first-party bundles under the same trust rule as surface plugins (ADR-0024): no third-party connector without EBH-5 signing.
 
 **Tiers for the first connector (Xero):**
 
@@ -224,6 +244,25 @@ The architecture sits **above** the seam described in crucible (`docs/design-inf
 - **Isolation strength is a deployment choice, not an architecture change.** On a single box an agent is a container (shared kernel). Where Smithy/crucible can provision VMs, a credentialled agent can be a **VM** reached through the existing `ssh` execution backend (`src/runner/execution-backend.ts`). That is a stronger boundary, and crucible's own rule ("the sandbox tier must be a real VM") already prefers it. Same envelopes, same broker, different backend.
 - **The host's identity is recorded.** At boot the host emits its crucible environment fingerprint and digest as the first audit event. A changed host shows up in the log.
 
+### 5.8 Use case B — ops responders (monitoring events)
+
+This shows the foundation generalises. Nothing below is new foundation work.
+
+- **Event in.** Alerts reach the bus through a tap. The pattern is the existing GitHub webhook path (`src/taps/gh-webhook/`): a Cloudflare Worker checks the sender's signature and forwards the alert to a localhost receiver, which publishes an envelope. New sources (Alertmanager, Grafana, uptime checks) are new taps of that shape. `cue` (the trigger daemon) covers condition-based and scheduled triggers.
+- **Triage.** A responder agent in its own container gets **read-only** access to logs and metrics. It correlates the alert and posts a summary to the stack's channel or thread.
+- **Act.** Remediation is a broker proposal through an infrastructure-runbook connector. Tiers come from policy:
+
+  | Action | Tier |
+  |---|---|
+  | Read logs and metrics, open an incident thread | auto |
+  | Idempotent, allowlisted runbook (restart one named container, clear a named cache) | auto, rate-limited |
+  | Scale, roll back a deploy, change config | review |
+  | Delete data, change credentials or firewall | step-up |
+
+- **Escalate.** If the responder can't resolve the alert, it pages through the PagerDuty renderer bundle.
+- **Audit.** The incident timeline (alert, triage, proposals, approvals, actions) is the audit log, with no extra work.
+- **Loop guard.** Responders must not trigger on their own effects. Every action carries the triggering `request_id`, and the policy rate limit per alert fingerprint stops remediation storms.
+
 ---
 
 ## 6. Open: every layer in git (DD-7)
@@ -287,6 +326,31 @@ The architecture sits **above** the seam described in crucible (`docs/design-inf
 \*Estimates are judgement, not measurement. Phase 2b runs in parallel with Phase 2 and must be finished before Phase 3, so that approvals are audited from the first one.
 
 **Crucible, Assay and Smithy** check each phase's exit criteria. They are not a gate before Phase 1 starts.
+
+### 8.1 Phase 1 runbook — first stack off the Mac
+
+**Approach: stand up a new stack, don't migrate the Mac one.** The new stack is created on the host, born aligned (`cortex stack create`), with fresh identity. The Mac stack keeps running throughout, so the rollback is "nothing changed". Agents move over one at a time once the host has proven itself.
+
+**Deliberately out of scope:** business credentials, the broker, per-agent containers, audit. The host runs the stack exactly as the Mac does today.
+
+| # | Step | Produces | Who |
+|---|---|---|---|
+| 1 | Decide the host (Q4) and the hub shape (Q5) | decisions | principal |
+| 2 | Create `<stack>-deploy` (private): inventory, config-split YAML from `docs/config-layout/`, `.sops.yaml` with the host's age recipient plus an offline recipient | repo skeleton | agent, principal reviews |
+| 3 | Write the **`cortex_stack` Ansible role**: render config from the deploy repo, decrypt SOPS secrets, generate the NKey seed + NSC operator **on the host** if absent, start the stack (systemd or compose). It's foundation work that every future stack reuses. | role (in Smithy, above the seam) | agent |
+| 4 | Rehearse on a Smithy Proxmox VM: `base, nats_server, bun, claude, docker, metafactory_arc, metafactory_cortex, cortex_stack, assay_env` | a running test stack + environment digest | agent |
+| 5 | Apply the same roles to the real host. Only L0 differs, or there's no L0 if the box already exists. | the live stack | principal runs `apply` |
+| 6 | Hub on the host. Mac stack joins as a leaf (`cortex network join`, dry-run first). | federation link | principal |
+| 7 | Mission Control via Cloudflare Tunnel + Access (no inbound ports, no bypass policies) | MC reachable | principal |
+| 8 | Bind one surface (a Discord channel or bot) and one low-risk agent | first agent live off-Mac | agent |
+
+**Exit criteria (become Assay cases):**
+- With the Mac powered off, the agent answers in Discord.
+- Rebooting the host brings the stack back unattended (supervisor + healthcheck).
+- Rebuilding from scratch on a fresh VM, from `<stack>-deploy` + the age key, gives a working stack with the **same `stack.id`**, without copying anything off the old host. The identity seed comes from encrypted backup.
+- `assay_env` digest recorded; the same role set on a second VM gives the same core digest.
+
+**Reuse check:** a second stack (for example an ops-responder stack for another project) is created by copying `<stack>-deploy`, changing the slug, identity and agents, and re-running step 5. If that needs a role change, step 3 wasn't generic enough.
 
 ---
 
