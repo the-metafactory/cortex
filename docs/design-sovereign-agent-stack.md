@@ -134,6 +134,7 @@ The doc has two parts. The **foundation** is generic and project-agnostic. **Use
 | **DD-9** | **Cloud sessions are for low-risk hands only.** They never hold a privileged credential. They reach the broker as an MCP connector, which is the only route to a write. | §1.2 |
 | **DD-11** | **An agent's world is a git repo, from the start.** Each agent (and each task, where useful) gets a workspace repo created by code from a template, with a token scoped to that one repo. The container clones it at start and pushes commits; nothing else persists. Agent outputs are commits, and a proposal's `artefact_sha256` is the commit hash. The **workspace store is pluggable**: Cloudflare Artifacts with **EU jurisdiction** is the default, and a self-hosted git backend keeps the foundation provider-independent (§5.9). | §5.9; DD-7; principal requirement |
 | **DD-12** | **Mission Control is the task board.** The MC vision (`design-mission-control.md`: "many agents against a curated backlog", the iteration kanban, the attention queue) is the board shared by all of a stack's agents. It gains the semantics Hermes' Kanban proves out: <br>• atomic claim plus heartbeat; <br>• dependencies; <br>• `needs_input` → attention card → human comment → the agent resumes with the thread; <br>• implementer ↔ reviewer handoff. <br>Every transition is a signed bus event, so it lands in the audit log (DD-6). "Blocked on approval" is a broker proposal (DD-2). Each agent sees and claims only what policy grants it, and each stack has its own board. | §1.4; design-mission-control |
+| **DD-13** | **Privileged commands are held for the principal's approval, command by command.** The bash guard gets a third verdict besides allow and deny: **hold**. A command matching a `privileged` pattern is not run. The session is told it's waiting for approval. The principal gets the exact command, working directory and hash, approves it (today a principal-only reply naming the request id; later a passkey via grove-auth action tokens, DD-4), and cortex resumes the session with a **single-use grant for that exact command hash**. Sessions not started by the principal (reflexes, cues, other agents) can't request a hold at all: their privileged commands are denied outright, so a privileged command always traces back to something the principal started. Every step is audited. | principal requirement; gap: bash guard is allow/deny only |
 | **DD-10** | **The session sandbox is re-scoped, not abandoned.** The *primary* boundary on hosted stacks is the container or VM (DD-1). The session sandbox becomes defence in depth: <br>• **macOS SBPL** stays the boundary for sessions on a Mac (E1/E2 proved it works). <br>• **`linux-bwrap`** applies inside a per-agent **VM** where unprivileged user namespaces work (E6). <br>• **`container-delegated`** plus the DD-8a mount check covers per-agent containers. <br>• The **L1 string guards** stay as fail-closed tripwires whose denials feed the audit log, but we stop chasing L1 bypass rounds: L1 can never be sound (TOCTOU). <br>EBH-3b (container-delegated) moves onto the critical path; further L1 hardening comes off it. | sandbox-platforms §1, E1/E2/E5/E6, DD-8 |
 
 ---
@@ -239,6 +240,22 @@ The principal's customer, contact and engagement registry is split into **a tool
 - **Validation:** `crm validate --against=<ref>` checks schema, references, ID/ledger integrity and that the ledger is append-only. It emits **notices for `x-sensitive` changes**: billing email, bank account, payee. Today the notice is informational. It becomes the broker's step-up trigger (§5.3): a diff touching an `x-sensitive` field always goes through passkey approval.
 - **Generated, never canonical:** a SQLite/CSV index for queries, and a one-way export to Drive (CSV plus the source commit) for people.
 - **Interface today:** Claude Code with the CRM skill. Cortex agents come later, through the same two grants.
+
+### 5.10 Command-level approval (DD-13)
+
+Today the bash guard (`src/runner/hooks/bash-guard.hook.ts`) answers allow or deny only. Headless `claude --print` sessions can't stop to ask, so anything not on the allowlist is simply blocked. That pushes towards either broad allowlists or agents that can't do privileged work at all.
+
+**Flow**
+
+1. **Classify.** `session_config.<…>.bash_allowlist.privileged: [{ pattern, reason }]` lists commands that need approval (`git push`, `arb … --yes`, `wrangler deploy`, `tofu apply`, …). A match yields **hold**.
+2. **Hold, without blocking.** The hook denies the command with a structured reason (`HELD: approval <id> requested`). It writes a hold event to the existing raw-events path and returns at once. It makes no network calls; hooks stay non-blocking (Critical Rules). The hold carries the request id, session id, agent, the exact command, the cwd, and `sha256(command ‖ cwd ‖ session)`.
+3. **Ask.** The daemon publishes `action.hold.requested`, raises an attention card, and DMs the principal the exact command, cwd, hash and id. Only the principal's own platform identity can answer, through the existing principal-only gate. Unlike today's word-matched gate, the reply has to name the id: `approve <id>` or `deny <id>`.
+4. **Grant.** On approval the daemon writes a **single-use grant** (hash, session, expiry about 10 minutes) where only that session's hook reads it. It then resumes the session (`--resume`) with "approved: run it now".
+5. **Consume.** The hook allows exactly that hash once and marks the grant consumed with an atomic rename. A different command, a different cwd or a second attempt all fall back to hold.
+6. **Initiation rule.** A hold is only possible in a session started by the principal (a principal message or DM). Sessions started by reflexes, cues or other agents get **deny** for privileged commands. The principal is therefore always the origin.
+7. **Audit.** Each stage (`requested`, `approved`, `denied`, `expired`, `consumed`) is a signed bus event and lands in the tamper-evident log (DD-6).
+
+**Upgrade path:** step 3 moves to grove-auth passkey action tokens bound to the same hash (DD-3/DD-4) once the broker exists. Steps 4 to 7 stay the same. This also covers non-money privileged actions that never go through a connector.
 
 ### 5.6 Where the code lives
 
@@ -384,7 +401,7 @@ This shows the foundation generalises. Nothing below is new foundation work.
 | Session sandbox is **dormant**: the macOS SBPL backend is built and the boot probe resolves it, but no dispatch path passes `sandboxMode`, so `system.sandbox.mode` is parsed and ignored (`cc-session.ts:658` defaults to `off`). On Linux the probe resolves to `none`. | 2 (wire it; enabling is a principal decision) |
 | `container-delegated` backend + DD-8a check not built (EBH-3b) | 2 |
 | No tamper-evident audit (no chain, no off-host store, step-up decisions not logged) | 2b |
-| No way to hold a running session until approval (SPX-8); verdicts are word-matched and not bound to the action | 3 |
+| No way to hold a running session until approval (SPX-8); verdicts are word-matched and not bound to the action; bash guard has no hold verdict (DD-13) | 3 |
 | No per-action capabilities, no risk tiers (S3) | 3 |
 | No vault, no business connectors | 3 |
 | No WebAuthn | 3 |
