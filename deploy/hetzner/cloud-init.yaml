@@ -1,0 +1,68 @@
+#cloud-config
+# cloud-init for a first off-Mac cortex host on Hetzner Cloud (design-sovereign-agent-stack §8.1).
+#
+# Network posture: NO public inbound at all. The Hetzner firewall drops everything
+# inbound, and the host joins your tailnet outbound-only. SSH listens for the
+# tailnet; ufw allows tcp/22 only on tailscale0.
+#
+# Secrets: Hetzner user-data is readable by any process on the host via the
+# metadata service, so the ONLY secret here is a Tailscale pre-auth key that is
+# single-use, pre-approved, tagged and short-lived (expiry ≤ 1h). By the time
+# anything could read it, it is consumed or expired. Cortex tokens arrive later
+# over SSH as a 0600 .env (push-env-and-start.sh).
+#
+# Rendered by provision.sh: __SSH_PUBKEY__, __CORTEX_REF__, __TS_AUTHKEY__, __HOSTNAME__.
+
+users:
+  - name: ops
+    groups: [docker]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "__SSH_PUBKEY__"
+
+disable_root: true
+ssh_pwauth: false
+
+package_update: true
+package_upgrade: true
+packages:
+  - docker.io
+  - docker-buildx
+  - docker-compose-v2
+  - git
+  - ufw
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-cortex-hardening.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AllowUsers ops
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+runcmd:
+  # Tailscale from its signed apt repo (Ubuntu 24.04 "noble").
+  - curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+  - curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
+  - apt-get update && apt-get install -y tailscale
+  - tailscale up --auth-key="__TS_AUTHKEY__" --hostname="__HOSTNAME__" --advertise-tags=tag:cortex-host --ssh=false
+  # Host firewall, second layer behind the Hetzner firewall: SSH only on the tailnet interface.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow in on tailscale0 to any port 22 proto tcp
+  - ufw --force enable
+  - systemctl enable --now docker
+  - systemctl restart ssh
+  # cortex at a pinned RELEASE tag (never main). The compose project lives in deploy/compose.
+  - git clone --depth 1 --branch "__CORTEX_REF__" https://github.com/the-metafactory/cortex /opt/cortex
+  - chown -R ops:ops /opt/cortex
+  - touch /var/lib/cloud/instance/cortex-host-ready
