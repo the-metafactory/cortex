@@ -250,7 +250,7 @@ Every cortex stack implicitly trusts its own signing identity — the chain veri
 _Avoid_: self-trust (too generic), loopback-trust (overloads NATS loopback semantics)
 
 **NSC operator**:
-The NATS account-tree root (`nsc` operator, e.g. `OP_ANDREAS`) that issues and signs the NATS accounts/users a deployment authenticates the bus connection with — a NATS-infrastructure identity (operator-account NKey + operator JWT), arc-managed via `nsc`. It is **not** the **principal**: the principal is the human trust/policy root that scopes subjects (M3) and stack policy; the NSC operator is the NATS auth-tree root that gates connection auth (M1). They often share a name (`OP_ANDREAS` ↔ principal `andreas`) but are different layers. This is the one place the word "operator" legitimately survives the operator→principal migration — and only ever qualified.
+The NATS account-tree root (`nsc` operator, e.g. `OP_ANDREAS`) that issues and signs the NATS accounts/users a deployment authenticates the bus connection with — a NATS-infrastructure identity (operator-account NKey + operator JWT), arc-managed via `nsc`. It is **not** the **principal**: the principal is the human trust/policy root that scopes subjects (M3) and stack policy; the NSC operator is the NATS auth-tree root that gates connection auth (M1). They often share a name (`OP_ANDREAS` ↔ principal `andreas`) but are different layers. The word "operator" survives here only qualified; the Mission Control authorization role and proposed cross-Borg administration role are separate concepts.
 _Avoid_: bare/unqualified "operator" (that means **principal**) — say "NSC operator" or "NATS account operator" when you mean the NATS root.
 
 **Local federation account**:
@@ -340,7 +340,7 @@ _Avoid_: "two signing systems" / two signing authorities (there is **one root** 
 
 ## Flagged ambiguities
 
-- **`operator` → `principal`.** cortex historically said `operator` (`operator.id`, "operator cockpit", the `{org}` segment). Resolved: **`principal`** ecosystem-wide, matching `soma:principal`. Carries into `cortex.yaml` schema, subject derivation, Mission Control copy. **Carve-outs (two distinct concepts keep the word):** (1) the NATS **NSC operator** (account-tree root, `OP_ANDREAS`) — a NATS-infra identity (see §Identity & trust → NSC operator), always qualified ("NSC operator"), never bare; (2) the **Mission Control authorization role** `operator` (the `viewer | operator | admin` AAA tier) — a surface-only dashboard privilege level, *not* the identity (see §Identity & trust → Mission Control authorization role).
+- **`operator` → `principal`.** cortex historically said `operator` (`operator.id`, "operator cockpit", the `{org}` segment). Resolved: **`principal`** ecosystem-wide, matching `soma:principal`. Carries into `cortex.yaml` schema, subject derivation, Mission Control copy. **Qualified carve-outs:** (1) the NATS **NSC operator** (account-tree root, `OP_ANDREAS`) — a NATS-infra identity (see §Identity & trust → NSC operator); (2) the **Mission Control authorization role** `operator` (the `viewer | operator | admin` AAA tier) — a surface-only dashboard privilege level, *not* the identity; (3) the proposed **cross-Borg operator role** — the human administering a Borg or stack (see the adapter table below), not a synonym for principal or either of the other roles.
 - **`agent` was overloaded** — the named being, the runtime identity, *and* a Claude Code spawned task. Resolved into **assistant** / **agent** / **sub-agent**.
 - **`agent`/`sub-agent` are substrate-projection labels, not the MC domain model.** Resolved 2026-06-11: cortex's **agent** is the bus runtime identity; a Claude Code `Agent`-tool spawn is a **child session**. Mission Control carries the substrate-agnostic spine — **agent → session → child session** (`parent_session_id` tree), with **substrate** an attribute — and "sub-agent"/CC-"agent" survive only as labels *projected per substrate* (soma already qualifies them "Cortex agent" / "Claude Code sub-agent"). The current `agents`-row-per-session orphan model (`db/sessions.ts` `registerOrphanSession`) is the violation; refactor map in `docs/refactor-mc-session-tree.md`.
 - **`persona` → `assistant`.** `persona` is not a domain entity. `personas/luna.md` stays a valid filename ("the assistant's persona file").
@@ -360,6 +360,33 @@ _Avoid_: "two signing systems" / two signing authorities (there is **one root** 
 - **`~/.claude` is host-owned and trending toward tool-enforced protection — cortex state does NOT belong there.** The authoritative rule is compass-core's XDG standard §6 (third-party substrate boundary) + its protected-paths hard constraint: only artifacts Claude Code discovers by fixed path (hooks, `settings.json`, skills, statusline commands) STAY under `~/.claude`; everything cortex-only reads/writes belongs in the metafactory XDG tree (`~/.config`, `~/.local/share`, `~/.local/state` under `metafactory/cortex`). Anthropic is moving `~/.claude` toward [protected paths](https://code.claude.com/docs/en/permission-modes#protected-paths), so this is a **future-breakage** constraint, not tidiness — **new cortex writes never go under `~/.claude`**. The one live exception (cortex's cc-events `~/.claude/{events,relay}`) contradicts this — kept by #2420, flagged as a MOVE candidate by #1867 — and its STAYS-vs-MOVES disposition is being reconciled in **#2475** (a grandfathered write is migration debt, not precedent). `~/.claude/session-env` is a legitimate STAY: Claude Code writes it (the systemd unit only had to punch a writable hole for it — #2451).
 
 ## Boundary with adjacent contexts
+
+### Cross-Borg contract adapter (proposal)
+
+The shared vocabulary belongs to [Myelin's glossary](https://github.com/the-metafactory/myelin/blob/main/CONTEXT.md), proposed under [the Borg glossary task](https://github.com/the-metafactory/meta-factory/issues/592) from the [approved authority resolution](https://github.com/the-metafactory/meta-factory/issues/581#issuecomment-5969165860). These rows map its concepts to Cortex without renaming existing entities or claiming runtime support. Ratification remains pending [the Myelin ADR-0001 trigger decision](https://github.com/the-metafactory/meta-factory/issues/590); [the request-contract decision](https://github.com/the-metafactory/meta-factory/issues/583) owns wire fields and the signed set.
+
+| Shared contract concept | Cortex mapping and boundary |
+| --- | --- |
+| Organization | Governing body above stacks; distinct from a human principal or a network. One organization may govern several separately signing peers. |
+| Borg (peer) | A stack is Cortex's peer-level counterpart: its own signing identity and sovereignty boundary. Two stacks or namespaces alone do not prove two independent organizations. |
+| Principal | The human, unchanged. |
+| Agent / assistant / session | Existing Cortex meanings, unchanged: runtime identity / named being / one substrate run. |
+| Seat | A durable named role inside one stack, with one accountable human seat owner. A new contract concept; neither agent, assistant nor session owns its obligations. |
+| Occupant | The agent and assistant currently bound to a seat; replaceable independently of the seat's obligations. |
+| Pack | Arc's installable content that can fill a seat; neither a seat nor its obligation owner. |
+| Capability offering | Map a named, versioned, per-peer contract offering to an assistant capability exposed under the stack's offering policy. The existing Cortex `(capability, offer-scope, accept-policy)` concept remains; an advertised tag or Offer-mode dispatch alone is not the contract offering. |
+| Requested permission | The authority requested for one act, bounded by the receiver's per-peer offering; a capability tag alone is not a grant. |
+| Originator | Existing signed policy-actor attribution, distinct from `source` and the stack signer. The cross-Borg contract decides its mandatory presence. |
+| Seal (request approval) | A human approval under the sealer role. Distinct from Cortex's **Seal (transport-credential issuance)** and from payload encryption or a cryptographic stamp alone. |
+| Operator (Borg or stack administration) | Human role administering keys, peer connections, offerings and kill switch. Distinct from principal as an identity, the NSC operator and the Mission Control authorization role. |
+| Requester / sealer / recipient | Human roles for requesting work / approving outbound or admitting inbound work / accepting the returned result. One human may hold several roles; acceptance is separate from supplying-side result release. |
+| Seat owner | The one accountable human for a seat, with supplying-side delegation authority; distinct from its occupant. |
+
+Effective cross-Borg authority is **stamp ∩ originator ∩ seal ∩ receiver's per-peer offering**. A stack stamp authenticates the sending peer; it does not grant whatever authority its originator requests. Seat ownership and orchestration belong to the collaboration runtime, not to Myelin transport.
+
+Borgir's adapter rows, Cube packaging and any internal renames remain Magnús's decision (Q-M6 on the authority resolution); this table records only the Cortex side.
+
+### Existing context boundaries
 
 Reconciled in full in `compass/ecosystem/CONTEXT-MAP.md`:
 
