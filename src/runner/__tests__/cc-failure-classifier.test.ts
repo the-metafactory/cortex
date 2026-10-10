@@ -202,6 +202,27 @@ describe("isCcAuthFailure", () => {
     expect(isCcAuthFailure(failed({ response: "You are not logged in." }))).toBe(true);
   });
 
+  // The stdout spelling. Measured against a config dir with no credential:
+  //   CLAUDE_CONFIG_DIR=<dir> claude -p "say ok"
+  //   → exit 1 · stdout "Not logged in · Please run /login" · stderr EMPTY
+  // We spawn with --output-format stream-json, so that line is not an event
+  // and cc-session used to drop it: response empty, stderr empty, empty
+  // haystack, no detection. Three futile retries, then the generic apology —
+  // the outcome #2055 exists to prevent, reached by a channel it did not read.
+  test("detects the auth error when CC writes it to STDOUT, not stderr", () => {
+    expect(
+      isCcAuthFailure(
+        failed({ rawStdout: "Not logged in · Please run /login", stderr: "" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("the pre-fix shape is exactly what used to escape detection", () => {
+    // Same failure, rawStdout dropped: this is what the classifier saw before
+    // cc-session retained unparseable stdout, and why it returned false.
+    expect(isCcAuthFailure(failed({ response: "", stderr: "" }))).toBe(false);
+  });
+
   test("does NOT fire on a clean success", () => {
     expect(isCcAuthFailure(successResult())).toBe(false);
   });
@@ -210,6 +231,10 @@ describe("isCcAuthFailure", () => {
     expect(isCcAuthFailure(failed({ stderr: "TypeError: cannot read property 'x' of undefined" }))).toBe(false);
     expect(isCcAuthFailure(failed({ stderr: "" }))).toBe(false);
     expect(isCcAuthFailure(failed({ response: "partial answer then crash" }))).toBe(false);
+    // rawStdout widened the haystack; it must not have widened what matches.
+    expect(
+      isCcAuthFailure(failed({ rawStdout: "Compiling... done in 1.2s" })),
+    ).toBe(false);
   });
 
   test("CC_AUTH_FAILURE_MESSAGE is actionable (names the fix: run claude to re-login)", () => {
