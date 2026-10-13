@@ -76,6 +76,7 @@ import { loadStackSigningKey } from "./common/config/stack-signing-key";
 import { BusDispatchListener } from "./bus/bus-dispatch-listener";
 import { DID_RE } from "@the-metafactory/myelin/identity";
 import { createSurfaceRouter, type SurfaceRouter } from "./bus/surface-router";
+import { createRunLedgerFunnel } from "./bus/run-ledger-funnel";
 import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 // R26 P1 (cortex#1371) — the substrate admission gate + its loud degrade event.
@@ -3175,6 +3176,23 @@ export async function startCortex(
       console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
     },
   });
+
+  // Dispatch ledger funnel: the named derived-event producer exception to the
+  // render-only contract (CONTEXT.md). Every stack registers it independently
+  // of Mission Control.
+  router.register(createRunLedgerFunnel({
+    principal: principalId,
+    stack: derivedStack.stack,
+    publish: async (envelope, subject) => {
+      if (runtime.publishOnSubject === undefined) {
+        throw new Error("runtime lacks publishOnSubject");
+      }
+      await runtime.publishOnSubject(envelope, subject);
+    },
+    log: (line) => {
+      console.error(line);
+    },
+  }));
 
   // IAW Phase D.4.3 (refs cortex#116) — registry client. Opt-in:
   // instantiated only when `policy.federated.registry.url` is set

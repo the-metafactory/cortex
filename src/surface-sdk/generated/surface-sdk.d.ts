@@ -694,6 +694,11 @@ export interface PayloadFilter {
  * NATS subject patterns + an optional payload filter and a `render()`
  * function. The router does the matching + isolation; the adapter just
  * renders.
+ *
+ * The built-in dispatch ledger funnel is the sole derived-event producer
+ * exception to this render-only use; see CONTEXT.md §Dispatch ledger funnel.
+ * Its registration reuses matching and isolation without granting other
+ * render targets permission to publish.
  */
 interface SurfaceAdapter {
 	/** Stable identifier — used in error reporting and metrics. */
