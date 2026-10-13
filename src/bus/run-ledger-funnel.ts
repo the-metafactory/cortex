@@ -9,8 +9,14 @@ export interface RunLedgerFunnelOptions {
   principal: string;
   stack: string;
   publish(envelope: MyelinEnvelope, subject: string): Promise<void>;
-  log(message: string): void;
+  log(line: string): void;
 }
+
+const TERMINAL = {
+  "dispatch.task.completed": { outcome: "succeeded", endedAt: "completed_at" },
+  "dispatch.task.failed": { outcome: "failed", endedAt: "failed_at" },
+  "dispatch.task.aborted": { outcome: "cancelled", endedAt: "aborted_at" },
+} as const;
 
 function requiredString(payload: Record<string, unknown>, field: string): string {
   const value = payload[field];
@@ -20,27 +26,20 @@ function requiredString(payload: Record<string, unknown>, field: string): string
   return value;
 }
 
-/** One run per local terminal dispatch; ledger failures never fail the dispatch. */
+/**
+ * Derived-event producer exception to SurfaceAdapter's render-only use
+ * (CONTEXT.md §Dispatch ledger funnel). Ledger failures never fail the dispatch.
+ */
 export function createRunLedgerFunnel(options: RunLedgerFunnelOptions): SurfaceAdapter {
-  const prefix = `local.${options.principal}.${options.stack}.dispatch.task`;
-  const subjects = [
-    `${prefix}.completed`,
-    `${prefix}.failed`,
-    `${prefix}.aborted`,
-  ];
+  const subjects = Object.keys(TERMINAL).map(type =>
+    `local.${options.principal}.${options.stack}.${type}`);
 
   return {
     id: "run-ledger-funnel",
     subjects,
     async render(envelope, _signal, subject) {
-      const mapping = envelope.type === "dispatch.task.completed"
-        ? { outcome: "succeeded" as const, endedAt: "completed_at" }
-        : envelope.type === "dispatch.task.failed"
-          ? { outcome: "failed" as const, endedAt: "failed_at" }
-          : envelope.type === "dispatch.task.aborted"
-            ? { outcome: "cancelled" as const, endedAt: "aborted_at" }
-            : undefined;
-      if (mapping === undefined) return;
+      if (!Object.hasOwn(TERMINAL, envelope.type)) return;
+      const mapping = TERMINAL[envelope.type as keyof typeof TERMINAL];
       if ((subject ?? deriveNatsSubject(envelope, options.stack)) !==
         `local.${options.principal}.${options.stack}.${envelope.type}`) return;
 
@@ -66,10 +65,10 @@ export function createRunLedgerFunnel(options: RunLedgerFunnelOptions): SurfaceA
           sovereignty: envelope.sovereignty,
         }), event.subject);
       } catch (error) {
-        const message =
+        const line =
           `run-ledger-funnel: task_id=${String(envelope.payload.task_id)}: ` +
           (error instanceof Error ? error.message : String(error));
-        options.log(message.replace(/[\r\n]+/g, " "));
+        options.log(line.replace(/[\r\n]+/g, " "));
       }
     },
   };

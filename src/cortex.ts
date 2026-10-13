@@ -3177,7 +3177,9 @@ export async function startCortex(
     },
   });
 
-  // Run-ledger production belongs to every stack, independent of Mission Control.
+  // Dispatch ledger funnel: the named derived-event producer exception to the
+  // render-only contract (CONTEXT.md). Every stack registers it independently
+  // of Mission Control.
   router.register(createRunLedgerFunnel({
     principal: principalId,
     stack: derivedStack.stack,
@@ -3187,7 +3189,7 @@ export async function startCortex(
       }
       await runtime.publishOnSubject(envelope, subject);
     },
-    log: (message) => console.error(message),
+    log: (line) => console.error(line),
   }));
 
   // IAW Phase D.4.3 (refs cortex#116) — registry client. Opt-in:

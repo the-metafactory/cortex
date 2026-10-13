@@ -133,6 +133,17 @@ describe("run-ledger funnel", () => {
     expect(logs).toEqual([]);
   });
 
+  test.each(["constructor", "toString", "__proto__"])(
+    "ignores unrelated type %s inherited by the mapping table", async (type) => {
+      const { funnel, published, logs } = harness();
+      const input = completed();
+      input.type = type;
+      await funnel.render(input, undefined, `local.jc.default.${type}`);
+      expect(published).toEqual([]);
+      expect(logs).toEqual([]);
+    },
+  );
+
   test.each([
     [completed, "started_at"], [completed, "completed_at"], [completed, "agent_id"],
     [failed, "started_at"], [failed, "failed_at"], [failed, "agent_id"],

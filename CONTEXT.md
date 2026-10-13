@@ -178,12 +178,17 @@ _Avoid_: backend, executor, engine, runtime (overloaded with `MyelinRuntime`)
 **Platform adapter** (or just **adapter**):
 A live connection to ONE surface (Discord, Mattermost, Slack, web/SSE), holding that surface's credential and speaking its native protocol. An adapter is BOTH a **dispatch source** (inbound: platform message → envelope) and the driver of a **dispatch sink** (outbound: lifecycle envelope → `postResponse`/`sendProgress`). It is agent-bound: it acts as an **agent presence** on the surface. Contract: the `PlatformAdapter` interface.
 
-The unqualified word **adapter** always means this. The bus **surface-router**'s render-only subscriber contract is NOT an adapter — see **Render target**.
+The unqualified word **adapter** always means this. The bus **surface-router**'s `SurfaceAdapter` contract is NOT a platform adapter — see **Render target** and **Dispatch ledger funnel**.
 _Avoid_: surface adapter (names the router's render-only subscriber — a different thing entirely), bot, integration, connector, driver.
 
 **Render target**:
 A render-only subscriber registered on the **surface-router**: it declares NATS subject patterns (plus optional payload/visibility filters) and a `render()` function, and the router does the matching, isolation, and timeout. It never publishes on the bus as a side effect of rendering. It is the in-code shape of the **dispatch sink** role. Contract: the interface at `src/bus/surface-router.ts` (named `SurfaceAdapter` for historical reasons — the rename to `RenderTarget` is tracked; do not read that name as "a kind of adapter").
 _Avoid_: surface adapter, sink (bare — say dispatch sink for the role, render target for the contract), listener, subscriber (too generic — every bus consumer subscribes).
+
+**Dispatch ledger funnel**:
+The built-in derived-event producer at `src/bus/run-ledger-funnel.ts`. It implements `SurfaceAdapter` and registers on the surface-router to reuse subject matching and failure isolation, as required by [node #2558](https://github.com/the-metafactory/cortex/issues/2558). It is a named exception to the contract's render-only use, rather than a render target or a dispatch sink: its `render()` publishes one `execution.run.finished` envelope through the cortex runtime for each of this stack's local terminal `dispatch.task.completed`, `dispatch.task.failed` or `dispatch.task.aborted` envelopes. It consumes only those three subjects, so its output cannot feed back into itself.
+
+The exception is limited to this funnel; ordinary render targets remain render-only. The payload contains dispatch identifiers and timestamps, with `ran.ref = agent_id` and outcomes `succeeded`, `failed` and `cancelled`, respectively. Publication failures log and never fail the dispatch. There is no outbox. This implements [soma#787 Q15/Q22–Q24/A4](https://github.com/the-metafactory/soma/issues/787) and [Amendment 1 Q33/Q34/Q40](https://github.com/the-metafactory/soma/issues/787#issuecomment-6126301493).
 
 **Renderer**:
 A **render target** with a lifecycle (`start`/`stop`) and a `kind`, which is **not agent-bound**: it projects bus state to a destination that is not a conversational surface — the Mission Control dashboard, PagerDuty, a webhook. Three properties separate a renderer from an **adapter**: a renderer has no inbound path (it is never a **dispatch source**), carries no **agent presence**, and holds no chat-surface credential. Both are **dispatch sinks**; only the adapter is also a dispatch source.
