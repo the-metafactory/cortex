@@ -58,6 +58,7 @@ import {
   CockpitSchema,
   GroveSchema,
   McSchema,
+  VigilSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
   NetworkFileSchema,
@@ -3482,6 +3483,7 @@ export const CortexConfigSchema = z.object({
    * `AgentConfig` (the `merged` passthrough), same as `security`.
    */
   mc: McSchema,
+  vigil: VigilSchema,
   cockpit: CockpitSchema,
 
   /**

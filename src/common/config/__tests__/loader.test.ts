@@ -472,6 +472,13 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(config.cockpit.repo).toBe("the-metafactory/cortex");
   });
 
+  test("carries vigil through loadCortexShape and defaults it off when absent", () => {
+    const cfg = minimalCortex();
+    cfg.vigil = { enabled: true };
+    expect(loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.vigil.enabled).toBe(true);
+    expect(loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex())).config.vigil.enabled).toBe(false);
+  });
+
   test("defaults mc + cockpit to disabled on the cortex shape when absent", () => {
     const { config } = loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex()));
     expect(config.mc.enabled).toBe(false);

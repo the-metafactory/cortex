@@ -22,6 +22,10 @@
 # -----------------------------------------------------------------------------
 # cortex.yaml — example configuration (single-file form)
 #
+# Optional run-health ledger on the default stack (requires mc.enabled: true).
+# vigil:
+#   enabled: true
+#
 # Copy this file to one of the locations the cortex CLI scans (default:
 # `~/.config/metafactory/cortex/cortex.yaml`) and replace every `<REPLACE_ME>` marker
 # below with your own values. The file parses cleanly out of the box —

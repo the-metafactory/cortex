@@ -1088,6 +1088,7 @@ function loadCortexShape(
     // re-default them to `enabled: false` and MC would never boot on any
     // cortex-shape deployment (same failure mode the `security` comment warns of).
     mc: cortexConfig.mc,
+    vigil: cortexConfig.vigil,
     cockpit: cortexConfig.cockpit,
     // F-11 (fix/c-844) — carry the grove block (Discord push toggle + dashboard
     // deep-link baseUrl) through to the synthesized AgentConfig. Now on

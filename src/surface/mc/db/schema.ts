@@ -27,9 +27,42 @@ export const TABLE_NAMES = [
   "work_items",
   "attention_items",
   "observability_events",
+  "vigil_subjects",
+  "vigil_events",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  // Vigil stores goal IDs only. All Vigil timestamps are epoch milliseconds.
+  `CREATE TABLE IF NOT EXISTS vigil_subjects (
+    subject_key TEXT PRIMARY KEY,
+    subject_kind TEXT NOT NULL CHECK(subject_kind IN ('run','state')),
+    vocab TEXT,
+    ref TEXT NOT NULL,
+    value TEXT NOT NULL,
+    healthy INTEGER NOT NULL CHECK(healthy IN (0,1)),
+    goal_id TEXT,
+    producer TEXT NOT NULL,
+    run_kind TEXT,
+    last_run_id TEXT NOT NULL,
+    last_ended_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    cadence_ms INTEGER NOT NULL DEFAULT 93600000,
+    updated_at INTEGER NOT NULL,
+    CHECK((subject_kind = 'run' AND vocab IS NULL) OR
+      (subject_kind = 'state' AND vocab IS NOT NULL AND vocab IN ('goal','escalation','check','unknown')))
+  )`,
+  `CREATE TABLE IF NOT EXISTS vigil_events (
+    id TEXT PRIMARY KEY,
+    subject_key TEXT NOT NULL REFERENCES vigil_subjects(subject_key),
+    event_kind TEXT NOT NULL CHECK(event_kind IN ('transition')),
+    from_value TEXT,
+    to_value TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('worse','better')),
+    run_id TEXT NOT NULL,
+    occurred_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_vigil_events_subject_created ON vigil_events(subject_key, created_at)`,
   // --- tasks ---
   // Schema follows design-mission-control.md §3.2: flat three-field sourceRef
   // (source_system, source_url, source_external_id) with no nesting; INTEGER

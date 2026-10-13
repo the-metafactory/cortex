@@ -45,6 +45,7 @@
 // values keeps the wire-config strings centralised in nats.js rather
 // than duplicating literals here.
 import { AckPolicy, DeliverPolicy, RetentionPolicy, StorageType } from "nats";
+import { executionRunFinishedPattern } from "@the-metafactory/myelin";
 import type { ConsumerConfig, ConsumerInfo, StreamInfo } from "nats";
 
 // Re-exported from the neutral types module so existing callers
@@ -178,6 +179,45 @@ export interface ProvisionConsumerOpts {
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
 const DEFAULT_MAX_BYTES = DEFAULT_STREAM_MAX_BYTES;
+export const LEDGER_MAX_AGE_NS = 90 * 24 * 3600 * 1_000_000_000;
+
+/** The default account's run ledger. Subject overlap errors propagate to boot. */
+export async function provisionLedgerStream(opts: {
+  jsm: ProvisionJsm;
+  principal: string;
+  log?: ProvisionLog;
+}): Promise<ProvisionStreamOutcome> {
+  const log = opts.log ?? console;
+  const name = "LEDGER";
+  const subjects = [executionRunFinishedPattern(opts.principal)];
+  let existing: StreamInfo | null = null;
+  try {
+    existing = await opts.jsm.streams.info(name);
+  } catch (err) {
+    if (!isNotFoundError(err)) throw err;
+  }
+  if (existing) {
+    const extension = await extendStreamSubjects(opts.jsm, name, existing, subjects, log);
+    const drift = describeStreamDrift(extension.info, subjects, LEDGER_MAX_AGE_NS, RetentionPolicy.Limits);
+    if (drift !== null) {
+      log.warn(`jetstream-provision: stream "${name}" exists but config drifts (${drift}); leaving alone (v1 policy — no auto-update).`);
+      return "config-drift-warning";
+    }
+    return extension.extended ? "subjects-extended" : "exists";
+  }
+  await opts.jsm.streams.add({
+    name,
+    subjects,
+    retention: RetentionPolicy.Limits,
+    storage: StorageType.File,
+    max_age: LEDGER_MAX_AGE_NS,
+    max_bytes: DEFAULT_STREAM_MAX_BYTES,
+    max_msgs: -1,
+    num_replicas: 1,
+  });
+  log.info(`jetstream-provision: created stream "${name}" (retention=limits, max_age=90d)`);
+  return "created";
+}
 const DEFAULT_MAX_DELIVER = 5;
 /**
  * Default per-message ack deadline: 20 minutes in nanoseconds. Sized well
@@ -601,7 +641,8 @@ export function isNotFoundError(err: unknown): boolean {
  * match, otherwise a short human-readable string for the log line.
  *
  * Drift detection is deliberately narrow — only the fields that
- * meaningfully affect routing (`subjects`) and retention (`max_age`).
+ * meaningfully affect routing (`subjects`) and retention (`max_age`, plus
+ * retention policy when explicitly requested by the ledger provisioner).
  * Principals tuning `max_bytes` / `num_replicas` for their own reasons
  * should NOT see a drift warning every boot.
  */
@@ -609,6 +650,7 @@ export function describeStreamDrift(
   existing: StreamInfo,
   expectedSubjects: readonly string[],
   expectedMaxAgeNs: number,
+  expectedRetention?: RetentionPolicy,
 ): string | null {
   const cfg = existing.config;
   const actualSubjects = cfg.subjects;
@@ -628,6 +670,9 @@ export function describeStreamDrift(
   // through the wire JSON.
   if (Math.abs(cfg.max_age - expectedMaxAgeNs) > 1_000_000_000) {
     return `max_age differs (expected ${expectedMaxAgeNs}ns, got ${cfg.max_age}ns)`;
+  }
+  if (expectedRetention !== undefined && cfg.retention !== expectedRetention) {
+    return `retention differs (expected ${expectedRetention}, got ${cfg.retention})`;
   }
   return null;
 }
