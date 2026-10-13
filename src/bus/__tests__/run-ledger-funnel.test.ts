@@ -27,6 +27,7 @@ function harness(publishError?: unknown) {
     principal: "jc",
     stack: "default",
     publish: async (envelope, subject) => {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- a test deliberately rejects with a non-Error value to pin the funnel's String(err) log branch
       if (publishError !== undefined) throw publishError;
       published.push({ envelope, subject });
     },
@@ -150,8 +151,8 @@ describe("run-ledger funnel", () => {
     [aborted, "started_at"], [aborted, "aborted_at"], [aborted, "agent_id"],
   ] as const)("drops missing terminal field and logs once (%#)", async (makeEvent, field) => {
     const { funnel, published, logs } = harness();
-    const input = makeEvent();
-    delete input.payload[field];
+    const event = makeEvent();
+    const input = { ...event, payload: Object.fromEntries(Object.entries(event.payload).filter(([key]) => key !== field)) };
     await expect(funnel.render(input)).resolves.toBeUndefined();
     expect(published).toEqual([]);
     expect(logs).toHaveLength(1);

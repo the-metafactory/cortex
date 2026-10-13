@@ -3189,7 +3189,9 @@ export async function startCortex(
       }
       await runtime.publishOnSubject(envelope, subject);
     },
-    log: (line) => console.error(line),
+    log: (line) => {
+      console.error(line);
+    },
   }));
 
   // IAW Phase D.4.3 (refs cortex#116) — registry client. Opt-in:
