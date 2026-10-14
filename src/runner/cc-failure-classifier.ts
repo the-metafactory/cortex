@@ -145,9 +145,10 @@ export function isTransientFailure(
  * patterns let the chat path detect it, skip the retries, and tell the
  * principal what to actually do.
  *
- * Matched case-insensitively against `response + stderr`. Kept broad because
- * the exact wording varies by CLI version (OAuth vs API-key, login-expired vs
- * invalid-key), but every variant is principal-recoverable the same way.
+ * Matched case-insensitively against `response + stderr + rawStdout`. Kept
+ * broad because the exact wording varies by CLI version (OAuth vs API-key,
+ * login-expired vs invalid-key), but every variant is principal-recoverable
+ * the same way.
  */
 const CC_AUTH_FAILURE_SIGNATURES: readonly RegExp[] = [
   /authentication_failed/i,
@@ -170,13 +171,31 @@ export const CC_AUTH_FAILURE_MESSAGE =
 
 /**
  * cortex#2055 — True when a `CCSessionResult` bears the fingerprint of an auth
- * failure (checks the captured stderr and any partial response). The chat path
- * uses this to classify the failure as terminal (no retry) and to swap the
- * opaque apology for `CC_AUTH_FAILURE_MESSAGE`.
+ * failure. The chat path uses this to classify the failure as terminal (no
+ * retry) and to swap the opaque apology for `CC_AUTH_FAILURE_MESSAGE`.
+ *
+ * Reads three fields, and the third is the one that took a night to find.
+ * #2055 checked `response` and `stderr`, which covers the spelling where CC
+ * writes the auth error to stderr. It does not cover this one, measured
+ * against a config dir with no credential:
+ *
+ *   exit 1 · stdout "Not logged in · Please run /login" · stderr EMPTY
+ *
+ * We spawn with `--output-format stream-json`, so that plain-text line was
+ * dropped by `processLine` as an unparseable event and never reached a
+ * result field. Both `response` and `stderr` came back empty, the
+ * empty-haystack short-circuit below returned `false`, and the dispatch was
+ * classified `not_now` — three futile retries, then the generic apology.
+ * Exactly the outcome the comment above says this function prevents.
+ *
+ * `rawStdout` (cc-session) now retains those discarded lines, so the stdout
+ * spelling is visible to the same signature list as the stderr one. The fix
+ * is at the haystack rather than in the signatures on purpose: the bug was
+ * never a missing pattern, it was a channel nobody was listening on.
  */
 export function isCcAuthFailure(result: CCSessionResult): boolean {
   if (result.success) return false;
-  const haystack = `${result.response}\n${result.stderr ?? ""}`;
+  const haystack = `${result.response}\n${result.stderr ?? ""}\n${result.rawStdout ?? ""}`;
   if (!haystack.trim()) return false;
   return CC_AUTH_FAILURE_SIGNATURES.some((re) => re.test(haystack));
 }
