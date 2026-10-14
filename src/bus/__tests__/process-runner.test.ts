@@ -20,6 +20,7 @@ import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import type { FiredActivation } from "../reflex-activation-listener";
 import type { ReflexTarget } from "../../common/types/cortex-config";
+import { buildProcessEnv } from "../process-env";
 import {
   createProcessRunner,
   loadProcessSpec,
@@ -202,23 +203,39 @@ describe("createProcessRunner", () => {
     expect(last(published)!.process).toBe("build-journal");
   });
 
-  test("env allow-list → child gets only the listed vars (omitted → inherit)", async () => {
-    globalThis.process.env.PR_TEST_ALLOWED = "yes";
-    globalThis.process.env.PR_TEST_SECRET = "nope";
-    // allow-list set → restricted env
-    const sp1 = fakeSpawn({ exitCode: 0 });
-    const allowSpec: ProcessSpec = { ...SPEC, env: ["PR_TEST_ALLOWED"] };
-    await createProcessRunner({ runtime: fakeRuntime().runtime, source: SOURCE, processesDir: "/x", loadSpec: () => allowSpec, spawn: sp1.spawn })(activation({}), target());
-    await flush();
-    expect(sp1.calls[0]!.env).toEqual({ PR_TEST_ALLOWED: "yes" }); // PR_TEST_SECRET excluded
-    // omitted → inherit (no env passed to spawn)
-    const sp2 = fakeSpawn({ exitCode: 0 });
-    await createProcessRunner({ runtime: fakeRuntime().runtime, source: SOURCE, processesDir: "/x", loadSpec: () => SPEC, spawn: sp2.spawn })(activation({}), target());
-    await flush();
-    expect(sp2.calls[0]!.env).toBeUndefined();
-    delete globalThis.process.env.PR_TEST_ALLOWED;
-    delete globalThis.process.env.PR_TEST_SECRET;
-  });
+  for (const env of [undefined, ["HOME", "PATH"]]) {
+    test(`spawn receives explicit builder env (${env ? "allow-list" : "full env"})`, async () => {
+      const seeded = {
+        PULSE_PRINCIPAL: "jc", PULSE_STACK: "default",
+        PULSE_NATS_URL: "nats://localhost:4222", PULSE_NATS_CREDS: "/test/pulse.creds",
+        MF_SERVES_GOAL: "old-goal", MF_SERVES_NODE: "old-node", MF_CORRELATION_ID: "old-correlation",
+        PR_TEST_SECRET: "nope",
+      };
+      const saved = Object.fromEntries(Object.keys(seeded).map((key) => [key, process.env[key]]));
+      Object.assign(process.env, seeded);
+      try {
+        const spec = { ...SPEC, env };
+        for (const serves of [{ goal: "G1", node: "n1" }, { goal: "G1" }, undefined]) {
+          const act = { ...activation({}), serves, correlationId: serves ? "c1" : undefined };
+          const expected = buildProcessEnv({ spec, activation: act, parentEnv: process.env });
+          const sp = fakeSpawn({ exitCode: 0 });
+          await createProcessRunner({ runtime: fakeRuntime().runtime, source: SOURCE, processesDir: "/x", loadSpec: () => spec, spawn: sp.spawn })(act, target());
+          await flush();
+          expect(sp.calls[0]!.env).toEqual(expected);
+          expect(sp.calls[0]!.env!.PULSE_NATS_CREDS).toBe(seeded.PULSE_NATS_CREDS);
+          expect(sp.calls[0]!.env!.MF_SERVES_GOAL).toBe(serves?.goal);
+          expect(sp.calls[0]!.env!.MF_SERVES_NODE).toBe(serves?.node);
+          expect(sp.calls[0]!.env!.MF_CORRELATION_ID).toBe(act.correlationId);
+          expect(sp.calls[0]!.env!.PR_TEST_SECRET).toBe(env ? undefined : "nope");
+        }
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    });
+  }
 
   test("the spec name comes from target.process, NOT the payload", async () => {
     const { runtime } = fakeRuntime();
