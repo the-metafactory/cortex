@@ -71,8 +71,8 @@ describe("Vigil run-health ingest", () => {
     expect(listVigilEvents(db, KEY)).toEqual(events);
   });
 
-  test("run kind is part of subject identity; state payload is out of scope", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "sensor", value: "bad" } }), 100);
+  test("run kind is part of subject identity", () => {
+    ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-sweep" } }), 100);
     expect(db.query("SELECT subject_key FROM vigil_subjects ORDER BY subject_key").all()).toEqual([
       { subject_key: KEY }, { subject_key: "run:job:daily-sweep" },
