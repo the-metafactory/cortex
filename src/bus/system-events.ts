@@ -1539,6 +1539,12 @@ export type SystemDispatchStage =
   // when `policy.admission` is configured — absent config skips the stage
   // entirely (CO-4 inertness).
   | "admission-checked"
+  // cortex#2195 (RFC-0005 §2.5) — the model-placement gate between harness
+  // selection and the spawn. `pass` = placement conforms; `fail` = a
+  // frontier-placement harness was refused a local-only-required envelope
+  // (`policy_denied` terminal emitted, no spawn). Only emitted when
+  // `execution.model_placement` is configured — absent config skips the stage.
+  | "placement-checked"
   | "session-spawning"
   | "started";
 
