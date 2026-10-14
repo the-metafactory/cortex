@@ -42,6 +42,8 @@ import {
 // (e.g. an agent whose `trust:` names an id not in the test config) crash
 // registry assembly — the whole suite then fails on machine state, not code.
 const HERMETIC_AGENTS_DIR = mkdtempSync(join(tmpdir(), "cortex-test-agents-hermetic-"));
+// Empty plugin-bundle root: bundles arc installed on the host must not load into these boots.
+const HERMETIC_PKG_ROOT = mkdtempSync(join(tmpdir(), "cortex-test-pkg-root-hermetic-"));
 import { join, basename } from "path";
 import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
@@ -136,6 +138,7 @@ describe("startCortex — construction", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -160,6 +163,7 @@ describe("startCortex — construction", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -182,6 +186,7 @@ describe("startCortex — construction", () => {
       stack: { id: "test-op/research" },
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -209,6 +214,7 @@ describe("startCortex — wire-up", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -245,6 +251,7 @@ describe("startCortex — wire-up", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -322,6 +329,7 @@ describe("startCortex — wire-up", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -354,6 +362,7 @@ describe("startCortex — wire-up", () => {
       await startCortex(noPrincipal, {
         disableConfigWatcher: true,
         agentsDir: HERMETIC_AGENTS_DIR,
+        pluginPkgRoot: HERMETIC_PKG_ROOT,
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
@@ -392,6 +401,7 @@ describe("startCortex — wire-up", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -432,6 +442,7 @@ describe("startCortex — wire-up", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
@@ -459,6 +470,7 @@ describe("startCortex — shutdown", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -475,6 +487,7 @@ describe("startCortex — shutdown", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -515,6 +528,7 @@ describe("startCortex — shutdown", () => {
       handle = await startCortex(minimalConfig(), {
         disableConfigWatcher: true,
         agentsDir: HERMETIC_AGENTS_DIR,
+        pluginPkgRoot: HERMETIC_PKG_ROOT,
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
@@ -560,6 +574,7 @@ describe("startCortex — error surface", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },
@@ -577,6 +592,7 @@ describe("startCortex — error surface", () => {
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       agentsDir: HERMETIC_AGENTS_DIR,
+      pluginPkgRoot: HERMETIC_PKG_ROOT,
       disableDashboard: true,
       disableOutboundPoller: true,
       principal: { id: "test-op" },

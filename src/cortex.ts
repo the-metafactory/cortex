@@ -559,6 +559,13 @@ export interface StartCortexOptions {
   /** Skip the GitHub webhook receiver even if config.github.receiver.enabled is true (tests). */
   disableGithubReceiver?: boolean;
   /**
+   * Plugin-bundle install root for boot discovery and the reload/load verbs.
+   * Defaults to arc's real install root (`defaultPkgRoot()`). Tests point it
+   * at an empty dir, so bundles installed on the host can't load (and publish
+   * `system.plugin.loaded`) into a test's boot.
+   */
+  pluginPkgRoot?: string;
+  /**
    * Inject a runtime instead of constructing one via `startMyelinRuntime`.
    * Tests pass a recording fake to assert observable side-effects (e.g. that
    * the surface-router actually called `runtime.onEnvelope`). Production
@@ -3375,6 +3382,7 @@ export async function startCortex(
   const pluginLoadResult = await loadExternalPlugins({
     registry: surfacePluginRegistry,
     externalEnabled: config.plugins.external,
+    pkgRoot: options.pluginPkgRoot,
     // cortex#2347 (EBH-5, ADR-0024 D4) — `system.plugins.signing` posture.
     // Default "off" (the schema default) keeps this call byte-identical to
     // pre-EBH-5 boot. `pluginTrustedSigners` is passed explicitly (not left
@@ -6063,6 +6071,7 @@ export async function startCortex(
     ...(gw !== undefined && { gateway: gw }),
     skippedRendererConfigs,
     registry: surfacePluginRegistry,
+    pkgRoot: options.pluginPkgRoot,
     // cortex#2504 — the SAME subject context the boot-time
     // `assertRuntimeSystemCoverage` above judged against, so a runtime
     // `unload` re-checks the §OQ9 floor by exactly the rule boot used.
