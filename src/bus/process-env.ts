@@ -1,7 +1,12 @@
 import type { ProcessSpec } from "./process-runner";
 import type { FiredActivation } from "./reflex-activation-listener";
 
-/** Pulse connection settings pass through even when a spec restricts its env. */
+/**
+ * Required by node #2559: Pulse connection settings bypass the spec allow-list
+ * so the child can report its run on the bus. This includes PULSE_NATS_CREDS;
+ * an env allow-list does not isolate a process from that credential's permissions.
+ * Only run trusted specs. See docs/process-runner.md for the credential boundary.
+ */
 export const PULSE_ENV_KEYS = [
   "PULSE_PRINCIPAL",
   "PULSE_STACK",

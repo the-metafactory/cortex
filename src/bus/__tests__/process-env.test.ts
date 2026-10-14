@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildProcessEnv } from "../process-env";
+import { buildProcessEnv, MF_CORRELATION_ID, MF_SERVES_GOAL, MF_SERVES_NODE } from "../process-env";
 import type { FiredActivation } from "../reflex-activation-listener";
 
 const PARENT = {
@@ -29,9 +29,9 @@ describe("buildProcessEnv", () => {
       PULSE_STACK: PARENT.PULSE_STACK,
       PULSE_NATS_URL: PARENT.PULSE_NATS_URL,
       PULSE_NATS_CREDS: PARENT.PULSE_NATS_CREDS,
-      MF_SERVES_GOAL: "G1",
-      MF_SERVES_NODE: "n1",
-      MF_CORRELATION_ID: "c1",
+      [MF_SERVES_GOAL]: "G1",
+      [MF_SERVES_NODE]: "n1",
+      [MF_CORRELATION_ID]: "c1",
     });
   });
 

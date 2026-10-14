@@ -90,6 +90,8 @@ export type ParseFiredResult =
   | { ok: true; activation: FiredActivation }
   | { ok: false; reason: string };
 
+type WarnLog = { warn: (msg: string) => void };
+
 /** Decision-id keyed idempotency surface (plan API contract). */
 export interface ReflexDedup {
   seen(decisionId: string): Promise<boolean>;
@@ -165,7 +167,7 @@ export function reflexActivationFilterSubject(
  */
 export function parseFiredEnvelope(
   envelope: Envelope,
-  log: { warn: (msg: string) => void } = console,
+  log: WarnLog = console,
 ): ParseFiredResult {
   if (envelope.type !== FIRED_EVENT_TYPE) {
     return { ok: false, reason: `unexpected-type:${envelope.type}` };
@@ -206,7 +208,7 @@ export function parseFiredEnvelope(
 function parseServes(
   raw: unknown,
   decisionId: string,
-  log: { warn: (msg: string) => void },
+  log: WarnLog,
 ): FiredActivation["serves"] {
   if (raw === undefined) return undefined;
   // Escape identifiers and omit rejected values so diagnostics stay one line
