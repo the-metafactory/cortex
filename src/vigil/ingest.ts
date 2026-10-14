@@ -1,8 +1,17 @@
 // glossary-ignore: run
 import type { Database } from "bun:sqlite";
-import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
+import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import { getVigilSubject } from "./db";
+
+/**
+ * Ledger consumer timing (live and replay), set explicitly so the
+ * review-consumer defaults (sized for a 20-minute review) never leak into
+ * Vigil. Ingest is one SQLite transaction; a delivery still unacked after a
+ * minute is redelivered.
+ */
+export const LEDGER_ACK_WAIT_NS = 60 * 1_000_000_000;
+export const LEDGER_MAX_DELIVER = 5;
 
 /**
  * Run-health subject key, `run:{kind}:{ref}` (soma#787 Amendment 1, Q30).
@@ -21,8 +30,26 @@ export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
   return envelope.source.split(".")[1] ?? "";
 }
 
-/** Caller validates A5b first. Subject and transition are committed atomically. */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number): void {
+/**
+ * A5b ledger-field check, as `field: message` of the first error, or `null`
+ * when the envelope is a valid `execution.run.finished`. The wire subscriber
+ * already checked the envelope; A5b's newer chain-only signature type differs
+ * from our vendored type, so only the fields it reads are passed.
+ */
+export function ledgerEnvelopeError(envelope: Envelope): string | null {
+  const { id, source, type, timestamp, sovereignty, payload, economics, correlation_id } = envelope;
+  const validation = validateExecutionRunFinished({ id, source, type, timestamp, sovereignty, payload, economics, correlation_id });
+  if (validation.valid) return null;
+  const first = validation.errors[0];
+  return `${first?.field}: ${first?.message}`;
+}
+
+/**
+ * Caller validates A5b first. Subject and transition are committed atomically.
+ * `replay` (rebuild from LEDGER, node #2561) updates the subject row the same
+ * way and writes no Vigil event.
+ */
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean } = {}): void {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const key = runHealthKey(payload);
   const stack = stackOfEnvelope(envelope);
@@ -45,7 +72,7 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: numb
       payload.serves?.goal ?? null, payload.producer, stack, payload.ran.kind,
       payload.run_id, endedAt, now, now,
     );
-    if (changed) {
+    if (changed && !opts.replay) {
       db.query(`INSERT INTO vigil_events
         (id, subject_key, event_kind, from_value, to_value, direction, run_id, occurred_at, created_at)
         VALUES (?, ?, 'transition', ?, ?, ?, ?, ?, ?)`).run(

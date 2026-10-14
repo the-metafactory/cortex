@@ -1,20 +1,16 @@
 // glossary-ignore: subscriber
 import type { Database } from "bun:sqlite";
-import { executionRunFinishedPattern, validateExecutionRunFinished } from "@the-metafactory/myelin";
+import { executionRunFinishedPattern } from "@the-metafactory/myelin";
 import { DeliverPolicy } from "nats";
 import type { AgentConfig } from "../common/types/config";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { EnvelopeErrorHandler, EnvelopeHandler } from "../bus/myelin/subscriber";
 import { LEDGER_STREAM, provisionLedgerStream, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
-import { ingestLedgerEnvelope } from "./ingest";
+import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
+import { hasVigilSubjects } from "./db";
+import { replayLedger } from "./replay";
 
-/**
- * Ledger consumer timing, set explicitly so the review-consumer defaults
- * (sized for a 20-minute review) never leak into Vigil. Ingest is one SQLite
- * transaction; a delivery still unacked after a minute is redelivered.
- */
-export const LEDGER_ACK_WAIT_NS = 60 * 1_000_000_000;
-export const LEDGER_MAX_DELIVER = 5;
+export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
 
 export interface VigilHandle {
   stop(): Promise<void>;
@@ -55,14 +51,18 @@ export async function startVigil(opts: {
   });
   const db = opts.db;
   const now = opts.now ?? Date.now;
+  // An empty table is the rebuild trigger (soma#787 Q8); replay never blocks
+  // boot. The live durable is provisioned first, so its `New` start is fixed
+  // before replay reads the stream and nothing published meanwhile is lost.
+  // Such an envelope reaches both consumers; replay applies it without an
+  // event and the order guard makes the live copy a no-op.
+  if (!hasVigilSubjects(db)) {
+    await replayLedger({ jsm, runtime: opts.runtime, db, principal: opts.principal, log, now });
+  }
   const onEnvelope: EnvelopeHandler = (envelope) => {
-    // The wire subscriber already checked the envelope. A5b checks ledger
-    // fields; its newer chain-only signature type differs from our vendored type.
-    const { id, source, type, timestamp, sovereignty, payload, economics, correlation_id } = envelope;
-    const validation = validateExecutionRunFinished({ id, source, type, timestamp, sovereignty, payload, economics, correlation_id });
-    if (!validation.valid) {
-      const first = validation.errors[0];
-      log.warn(`vigil: envelope ${envelope.id} invalid: ${first?.field}: ${first?.message}`);
+    const invalid = ledgerEnvelopeError(envelope);
+    if (invalid !== null) {
+      log.warn(`vigil: envelope ${envelope.id} invalid: ${invalid}`);
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.

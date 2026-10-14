@@ -41,3 +41,8 @@ export function listVigilEvents(db: Database, key: string): VigilEventRow[] {
     "SELECT * FROM vigil_events WHERE subject_key = ? ORDER BY created_at, rowid",
   ).all(key);
 }
+
+/** True when any subject row exists — an empty table triggers LEDGER replay (node #2561). */
+export function hasVigilSubjects(db: Database): boolean {
+  return db.query("SELECT 1 FROM vigil_subjects LIMIT 1").get() !== null;
+}
