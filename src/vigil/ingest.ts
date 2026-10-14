@@ -1,4 +1,4 @@
-// glossary-ignore: run
+// glossary-ignore: run, subscriber, message
 import type { Database } from "bun:sqlite";
 import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
@@ -31,7 +31,7 @@ export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
 }
 
 /**
- * A5b ledger-field check, as `field: message` of the first error, or `null`
+ * A5b ledger-field check, as `field: reason` of the first error, or `null`
  * when the envelope is a valid `execution.run.finished`. The wire subscriber
  * already checked the envelope; A5b's newer chain-only signature type differs
  * from our vendored type, so only the fields it reads are passed.
@@ -46,7 +46,7 @@ export function ledgerEnvelopeError(envelope: Envelope): string | null {
 
 /**
  * Caller validates A5b first. Subject and transition are committed atomically.
- * `replay` (rebuild from LEDGER, node #2561) updates the subject row the same
+ * `replay` (rebuild from LEDGER, see `replay.ts`) updates the subject row the same
  * way and writes no Vigil event.
  */
 export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean } = {}): void {

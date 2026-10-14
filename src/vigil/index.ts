@@ -7,7 +7,7 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { EnvelopeErrorHandler, EnvelopeHandler } from "../bus/myelin/subscriber";
 import { LEDGER_STREAM, provisionLedgerStream, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
-import { hasVigilSubjects } from "./db";
+import { hasVigilSubjects, isVigilReplayPending } from "./db";
 import { replayLedger } from "./replay";
 
 export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
@@ -51,12 +51,13 @@ export async function startVigil(opts: {
   });
   const db = opts.db;
   const now = opts.now ?? Date.now;
-  // An empty table is the rebuild trigger (soma#787 Q8); replay never blocks
-  // boot. The live durable is provisioned first, so its `New` start is fixed
+  // An empty table is the rebuild trigger (soma#787 Q8); a replay that did not
+  // finish is retried even once some rows exist. Replay never blocks boot.
+  // The live durable is provisioned first, so its `New` start is fixed
   // before replay reads the stream and nothing published meanwhile is lost.
   // Such an envelope reaches both consumers; replay applies it without an
   // event and the order guard makes the live copy a no-op.
-  if (!hasVigilSubjects(db)) {
+  if (!hasVigilSubjects(db) || isVigilReplayPending(db)) {
     await replayLedger({ jsm, runtime: opts.runtime, db, principal: opts.principal, log, now });
   }
   const onEnvelope: EnvelopeHandler = (envelope) => {

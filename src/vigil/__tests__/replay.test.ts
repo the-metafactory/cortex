@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber, agent
+// glossary-ignore: subscriber, agent, data
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { ConsumerConfig, ConsumerMessages, JsMsg } from "nats";
@@ -10,7 +10,7 @@ import type { NatsLink } from "../../bus/nats/connection";
 import { createFakeJetStream, type FakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
 import { LEDGER_STREAM, provisionLedgerStream } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
-import { getVigilSubject } from "../db";
+import { getVigilSubject, isVigilReplayPending } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { startVigil } from "../index";
 import { replayLedger } from "../replay";
@@ -18,6 +18,7 @@ import { KEY, SUBJECT, ledgerEnvelope } from "./fixtures";
 
 const REPLAY = "cortex-vigil-replay-jc";
 const LIVE = "cortex-vigil-jc";
+const OTHER_KEY = "run:flow:nightly-backup";
 
 function config() {
   return AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil: { enabled: true }, mc: { enabled: true } });
@@ -28,7 +29,7 @@ function quietLog() {
 }
 
 /**
- * The fake JetStream stores subjects only, so the envelope bodies live in
+ * The fake JetStream stores subjects only, so the envelopes live in
  * `ledger`, index-aligned with stream sequence. Subscribing pulls the
  * durable's undelivered messages from the fake and feeds them through a real
  * pull subscriber; the fake's pending counts clear once all are settled.
@@ -45,11 +46,11 @@ function ledgerHarness() {
   };
   let consume = (durable: string): ConsumerMessages => {
     const start = ledger.length - fake.pull(LEDGER_STREAM, durable, { ack: false }).length;
-    const bodies = ledger.slice(start);
+    const envelopes = ledger.slice(start);
     let settled = 0;
-    const settle = () => { settled += 1; if (settled === bodies.length) fake.ackAll(LEDGER_STREAM, durable); };
-    const deliveries = bodies.map((body) => ({
-      subject: SUBJECT, data: new TextEncoder().encode(JSON.stringify(body)),
+    const settle = () => { settled += 1; if (settled === envelopes.length) fake.ackAll(LEDGER_STREAM, durable); };
+    const deliveries = envelopes.map((envelope) => ({
+      subject: SUBJECT, data: new TextEncoder().encode(JSON.stringify(envelope)),
       ack: mock(settle), nak: mock(settle), term: mock(settle),
     }));
     let closed = false;
@@ -60,6 +61,7 @@ function ledgerHarness() {
       close: async () => { closed = true; },
     } as unknown as ConsumerMessages;
   };
+  const fullConsume = consume;
   const runtime = {
     jetstreamManager: async () => fake.jsm,
     subscribePull: (opts: MyelinSubscribePullOpts) => {
@@ -75,6 +77,17 @@ function ledgerHarness() {
       for (const envelope of envelopes) { ledger.push(envelope); fake.publish(SUBJECT); }
     },
     setConsume(fn: (durable: string) => ConsumerMessages) { consume = fn; },
+    /** Delivers only the first envelope, then stalls. */
+    deliverFirstOnly() {
+      consume = (durable) => {
+        const all = fullConsume(durable);
+        return {
+          async *[Symbol.asyncIterator]() { for await (const delivery of all) { yield delivery; return; } },
+          close: () => all.close(),
+        } as unknown as ConsumerMessages;
+      };
+    },
+    restoreConsume() { consume = fullConsume; },
   };
 }
 
@@ -100,6 +113,17 @@ describe("Vigil LEDGER replay", () => {
     expect(h.calls.map((c) => c.durable)).toEqual([REPLAY]);
     expect(h.fake.consumerNames(LEDGER_STREAM)).toEqual([]);
     expect(log.warn).not.toHaveBeenCalled();
+    expect(isVigilReplayPending(db)).toBe(false);
+  });
+
+  test("a replay that fails after writing rows stays pending", async () => {
+    const h = ledgerHarness();
+    await h.publish(ledgerEnvelope(), ledgerEnvelope({ ran: { kind: "flow", ref: "nightly-backup" } }));
+    h.deliverFirstOnly();
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1, stallMs: 5 })).toBeNull();
+    expect(getVigilSubject(db, KEY)?.value).toBe("failed");
+    expect(getVigilSubject(db, OTHER_KEY)).toBeNull();
+    expect(isVigilReplayPending(db)).toBe(true);
   });
 
   test("out-of-order envelopes end at the latest ended_at", async () => {
@@ -149,7 +173,7 @@ describe("Vigil LEDGER replay", () => {
     expect(h.fake.consumerNames(LEDGER_STREAM)).toEqual([]);
   });
 
-  test("a replay durable left by an interrupted run is recreated from sequence 1", async () => {
+  test("a replay durable left by an interrupted replay is recreated from sequence 1", async () => {
     const h = ledgerHarness();
     await h.publish(ledgerEnvelope(), ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z" }));
     await h.fake.jsm.consumers.add(LEDGER_STREAM, { durable_name: REPLAY, deliver_policy: DeliverPolicy.All });
@@ -215,6 +239,22 @@ describe("Vigil startup replay", () => {
     const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default", log: quietLog() });
     expect(h.calls.map((c) => c.durable)).toEqual([LIVE]);
     expect(h.added.map((cfg) => cfg.durable_name)).toEqual([LIVE]);
+    await handle!.stop();
+  });
+
+  test("a replay that failed part-way is retried on the next start, with rows present", async () => {
+    const h = ledgerHarness();
+    await h.publish(ledgerEnvelope(), ledgerEnvelope({ ran: { kind: "flow", ref: "nightly-backup" } }));
+    h.deliverFirstOnly();
+    await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1, stallMs: 5 });
+    expect(getVigilSubject(db, OTHER_KEY)).toBeNull();
+    h.restoreConsume();
+    const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default", log: quietLog() });
+    expect(h.calls.map((c) => c.durable)).toEqual([REPLAY, REPLAY, LIVE]);
+    expect(getVigilSubject(db, KEY)?.value).toBe("failed");
+    expect(getVigilSubject(db, OTHER_KEY)?.value).toBe("failed");
+    expect(isVigilReplayPending(db)).toBe(false);
+    expect(db.query("SELECT COUNT(*) AS n FROM vigil_events").get()).toEqual({ n: 0 });
     await handle!.stop();
   });
 

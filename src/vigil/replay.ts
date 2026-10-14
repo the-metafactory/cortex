@@ -7,6 +7,7 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { EnvelopeHandler, MyelinSubscriber } from "../bus/myelin/subscriber";
 import { LEDGER_STREAM, isNotFoundError, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
 import type { ProvisionJsm } from "../bus/jetstream/types";
+import { clearVigilReplay, markVigilReplayStarted } from "./db";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
 
 /** Rebuilds Vigil state from one non-`execution.run.finished` ledger envelope. Writes no Vigil event. */
@@ -25,11 +26,13 @@ export function replayDurable(principal: string): string {
 
 /**
  * Rebuild `vigil_subjects` by reading the whole LEDGER stream through the live
- * ingest path with delivery suppressed (soma#787 Q8). A temporary durable
- * starts at sequence 1 and is deleted afterwards; replay is done when it
- * reports nothing pending and nothing awaiting ack. Any failure logs one line
- * and returns `null`, leaving whatever was rebuilt so far — Vigil then runs on
- * the live consumer alone. Returns the number of envelopes applied.
+ * ingest with delivery suppressed (soma#787 Q8). A temporary durable starts at
+ * sequence 1 and is deleted afterwards; replay is done when it reports nothing
+ * pending and nothing awaiting ack. `vigil_replay` holds a marker from start
+ * to finish. Any failure logs one line and returns `null`, leaving whatever
+ * was rebuilt so far and the marker, so the next startup replays again — the
+ * order guard makes re-applied envelopes no-ops. Vigil meanwhile runs on the
+ * live consumer alone. Returns the number of envelopes applied.
  */
 export async function replayLedger(opts: {
   jsm: ProvisionJsm;
@@ -70,6 +73,7 @@ export async function replayLedger(opts: {
 
   let pull: MyelinSubscriber | null = null;
   try {
+    markVigilReplayStarted(db, now());
     // A durable left by an interrupted replay sits mid-stream; start over.
     await deleteConsumerIfExists(jsm, durable);
     await provisionPullConsumer({
@@ -88,6 +92,7 @@ export async function replayLedger(opts: {
       await pull.ready;
       await waitDrained(jsm, durable, opts.pollMs ?? REPLAY_POLL_MS, opts.stallMs ?? REPLAY_STALL_MS);
     }
+    clearVigilReplay(db);
     log.info(`vigil: rebuilt subject state from ${applied} ledger envelope(s)`);
     return applied;
   } catch (err) {

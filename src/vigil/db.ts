@@ -42,7 +42,20 @@ export function listVigilEvents(db: Database, key: string): VigilEventRow[] {
   ).all(key);
 }
 
-/** True when any subject row exists — an empty table triggers LEDGER replay (node #2561). */
+/** True when any subject row exists — an empty table triggers LEDGER replay. */
 export function hasVigilSubjects(db: Database): boolean {
   return db.query("SELECT 1 FROM vigil_subjects LIMIT 1").get() !== null;
+}
+
+/** True while a LEDGER replay has started and not finished; startup retries it. */
+export function isVigilReplayPending(db: Database): boolean {
+  return db.query("SELECT 1 FROM vigil_replay WHERE id = 1").get() !== null;
+}
+
+export function markVigilReplayStarted(db: Database, now: number): void {
+  db.query("INSERT OR REPLACE INTO vigil_replay (id, started_at) VALUES (1, ?)").run(now);
+}
+
+export function clearVigilReplay(db: Database): void {
+  db.query("DELETE FROM vigil_replay WHERE id = 1").run();
 }
