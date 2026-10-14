@@ -42,7 +42,7 @@ import {
 // (e.g. an agent whose `trust:` names an id not in the test config) crash
 // registry assembly — the whole suite then fails on machine state, not code.
 const HERMETIC_AGENTS_DIR = mkdtempSync(join(tmpdir(), "cortex-test-agents-hermetic-"));
-// Empty plugin-bundle root: bundles arc installed on the host must not load into these boots.
+// Empty plugin-bundle root: bundles arc installed on this machine must not load into these boots.
 const HERMETIC_PKG_ROOT = mkdtempSync(join(tmpdir(), "cortex-test-pkg-root-hermetic-"));
 import { join, basename } from "path";
 import { tmpdir } from "os";

@@ -561,7 +561,7 @@ export interface StartCortexOptions {
   /**
    * Plugin-bundle install root for boot discovery and the reload/load verbs.
    * Defaults to arc's real install root (`defaultPkgRoot()`). Tests point it
-   * at an empty dir, so bundles installed on the host can't load (and publish
+   * at an empty dir, so bundles arc installed on the machine can't load (and publish
    * `system.plugin.loaded`) into a test's boot.
    */
   pluginPkgRoot?: string;
