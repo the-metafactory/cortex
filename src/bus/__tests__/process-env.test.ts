@@ -66,6 +66,24 @@ describe("buildProcessEnv", () => {
     });
   }
 
+  test("empty allow-list includes configured Pulse credentials but excludes secrets and inherited fire metadata", () => {
+    expect(buildProcessEnv({
+      spec: { env: [] },
+      activation: { ...ACTIVATION, serves: undefined, correlationId: undefined },
+      parentEnv: {
+        ...PARENT,
+        [MF_SERVES_GOAL]: "old-goal",
+        [MF_SERVES_NODE]: "old-work-item",
+        [MF_CORRELATION_ID]: "old-correlation",
+      },
+    })).toEqual({
+      PULSE_PRINCIPAL: PARENT.PULSE_PRINCIPAL,
+      PULSE_STACK: PARENT.PULSE_STACK,
+      PULSE_NATS_URL: PARENT.PULSE_NATS_URL,
+      PULSE_NATS_CREDS: PARENT.PULSE_NATS_CREDS,
+    });
+  });
+
   test("empty allow-list still passes available Pulse variables; unset variables are absent", () => {
     expect(buildProcessEnv({ spec: { env: [] }, activation: { ...ACTIVATION, serves: undefined, correlationId: undefined }, parentEnv: {
       HOME: "/h", PULSE_PRINCIPAL: "jc", PULSE_NATS_CREDS: undefined,
