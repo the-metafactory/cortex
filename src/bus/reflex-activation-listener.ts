@@ -91,7 +91,7 @@ export type ParseFiredResult =
   | { ok: true; activation: FiredActivation }
   | { ok: false; reason: string };
 
-type WarnLog = { warn: (msg: string) => void };
+interface WarnLog { warn: (msg: string) => void }
 
 /** Decision-id keyed idempotency surface (plan API contract). */
 export interface ReflexDedup {
@@ -216,9 +216,11 @@ function parseServes(
   if (raw === undefined) return undefined;
   // Escape identifiers and omit rejected values so diagnostics stay one line
   // and never turn private goal wording into a log entry.
-  const drop = (key: string) => log.warn(
-    `reflex-activation-listener: decision ${JSON.stringify(decisionId)} dropped serves key ${JSON.stringify(key)}`,
-  );
+  const drop = (key: string) => {
+    log.warn(
+      `reflex-activation-listener: decision ${JSON.stringify(decisionId)} dropped serves key ${JSON.stringify(key)}`,
+    );
+  };
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     drop("serves");
     return undefined;

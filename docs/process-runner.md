@@ -1,8 +1,9 @@
 # Process handler environment
 
 The reflex bridge's `process` handler runs a deployment-controlled spec from
-`~/.config/cortex/processes/*.yaml`. Specs must be trusted: their commands run
-with cortex's operating-system permissions.
+the processes directory: `$CORTEX_PROCESSES_DIR` when set, otherwise the
+`processes/` directory beside the stack's config file. Specs must be trusted:
+their commands run with cortex's operating-system permissions.
 
 ## Environment contract
 

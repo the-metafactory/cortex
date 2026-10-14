@@ -21,6 +21,9 @@ export const MF_SERVES_GOAL = "MF_SERVES_GOAL";
 export const MF_SERVES_NODE = "MF_SERVES_NODE";
 export const MF_CORRELATION_ID = "MF_CORRELATION_ID";
 
+/** Fire metadata keys: set only from the activation, never inherited. */
+const FIRE_ENV_KEYS: ReadonlySet<string> = new Set([MF_SERVES_GOAL, MF_SERVES_NODE, MF_CORRELATION_ID]);
+
 /** Build a fresh child env; fire metadata never inherits from cortex's env. */
 export function buildProcessEnv({ spec, activation, parentEnv }: {
   spec: Pick<ProcessSpec, "env">;
@@ -32,13 +35,11 @@ export function buildProcessEnv({ spec, activation, parentEnv }: {
     : [...spec.env, ...PULSE_ENV_KEYS];
   const env = Object.fromEntries(
     keys
+      .filter((key) => !FIRE_ENV_KEYS.has(key))
       .map((key) => [key, parentEnv[key]] as const)
       .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
   );
 
-  delete env[MF_SERVES_GOAL];
-  delete env[MF_SERVES_NODE];
-  delete env[MF_CORRELATION_ID];
   if (activation.serves?.goal !== undefined) env[MF_SERVES_GOAL] = activation.serves.goal;
   if (activation.serves?.node !== undefined) env[MF_SERVES_NODE] = activation.serves.node;
   if (activation.correlationId !== undefined) env[MF_CORRELATION_ID] = activation.correlationId;
