@@ -1,9 +1,10 @@
+// glossary-ignore: run
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { getVigilSubject, listVigilEvents } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
+import { ingestLedgerEnvelope, runHealthKey, stackOfEnvelope } from "../ingest";
 import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("Vigil run-health ingest", () => {
@@ -16,7 +17,7 @@ describe("Vigil run-health ingest", () => {
     ingestLedgerEnvelope(db, envelope, 100);
     expect(getVigilSubject(db, KEY)).toEqual({
       subject_key: KEY, subject_kind: "run", vocab: null, ref: "daily-sweep",
-      value: "failed", healthy: 0, goal_id: "M0", producer: "pulse", run_kind: "flow",
+      value: "failed", healthy: 0, goal_id: "M0", producer: "pulse", stack: "default", run_kind: "flow",
       last_run_id: String(envelope.payload.run_id), last_ended_at: ENDED_AT,
       last_seen_at: 100, updated_at: 100, cadence_ms: 93600000,
     });
@@ -76,6 +77,16 @@ describe("Vigil run-health ingest", () => {
     expect(db.query("SELECT subject_key FROM vigil_subjects ORDER BY subject_key").all()).toEqual([
       { subject_key: KEY }, { subject_key: "run:job:daily-sweep" },
     ]);
+  });
+
+  test("key is run:{kind}:{ref} without a stack (soma#787 Q30); the latest stack is recorded", () => {
+    const fromSwitch = ledgerEnvelope({ ended_at: "2026-10-12T10:01:00.000Z" }, "switch");
+    expect(stackOfEnvelope(fromSwitch)).toBe("switch");
+    expect(runHealthKey(fromSwitch.payload as never)).toBe(KEY);
+    ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
+    ingestLedgerEnvelope(db, fromSwitch, 200);
+    expect(db.query("SELECT subject_key, stack FROM vigil_subjects").all()).toEqual([{ subject_key: KEY, stack: "switch" }]);
+    expect(listVigilEvents(db, KEY)).toHaveLength(1);
   });
 
   test("event failure rolls back subject write; retry applies the transition once", () => {

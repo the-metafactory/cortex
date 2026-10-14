@@ -22,7 +22,8 @@
 # -----------------------------------------------------------------------------
 # cortex.yaml — example configuration (single-file form)
 #
-# Optional run-health ledger on the default stack (requires mc.enabled: true).
+# Optional Vigil ledger of finished executions on the default stack (soma#787);
+# requires mc.enabled: true.
 # vigil:
 #   enabled: true
 #

@@ -1,3 +1,4 @@
+// glossary-ignore: path, subscriber, agent, server
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -8,6 +9,7 @@ import { startCortex } from "../cortex";
 import type { MyelinRuntime, MyelinSubscribePullOpts } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
 import { createFakeJetStream } from "../bus/jetstream/__tests__/fake-jetstream";
+import { LEDGER_STREAM } from "../bus/jetstream/provision";
 import { KEY, SUBJECT, ledgerEnvelope } from "../vigil/__tests__/fixtures";
 
 describe("cortex Vigil boot/drain wiring", () => {
@@ -27,9 +29,9 @@ describe("cortex Vigil boot/drain wiring", () => {
       jetstreamManager: async () => fake.jsm,
       subscribePull: (opts) => {
         calls.push(opts);
-        if (opts.stream === "LEDGER") handler = opts;
+        if (opts.stream === LEDGER_STREAM) handler = opts;
         return { ready: Promise.resolve(), stop: async () => {
-          if (opts.stream === "LEDGER") {
+          if (opts.stream === LEDGER_STREAM) {
             // A final in-flight delivery must still be able to commit on drain.
             await opts.onEnvelope(ledgerEnvelope({ outcome: "succeeded" }), SUBJECT);
             stopped.push("vigil");
@@ -50,7 +52,7 @@ describe("cortex Vigil boot/drain wiring", () => {
         disableConfigWatcher: true, disableAgentsWatcher: true, disableOutboundPoller: true,
         agentsDir, inlineAgents: [], injectRuntime: runtime, principal: { id: "jc" },
       });
-      expect(calls.filter((opts) => opts.stream === "LEDGER")).toHaveLength(1);
+      expect(calls.filter((opts) => opts.stream === LEDGER_STREAM)).toHaveLength(1);
       await handler.onEnvelope(ledgerEnvelope(), SUBJECT);
       const read = new Database(dbPath, { readonly: true });
       try { expect(read.query("SELECT value FROM vigil_subjects WHERE subject_key = ?").get(KEY)).toEqual({ value: "failed" }); }

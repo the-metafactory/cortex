@@ -549,6 +549,7 @@ export const McSchema = z.object({
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 
+// glossary-ignore: run
 /** Opt-in Vigil run-health projection, hosted by the default stack's MC embed. */
 export const VigilSchema = z.object({
   enabled: z.boolean().default(false),

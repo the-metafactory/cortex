@@ -33,6 +33,9 @@ export const TABLE_NAMES = [
 
 export const SCHEMA_SQL: string[] = [
   // Vigil stores goal IDs only. All Vigil timestamps are epoch milliseconds.
+  // `stack` is the stack segment of the latest observation's source; the key
+  // itself is `run:{kind}:{ref}` per soma#787 Amendment 1 (see src/vigil/ingest.ts).
+  // glossary-ignore: run
   `CREATE TABLE IF NOT EXISTS vigil_subjects (
     subject_key TEXT PRIMARY KEY,
     subject_kind TEXT NOT NULL CHECK(subject_kind IN ('run','state')),
@@ -42,6 +45,7 @@ export const SCHEMA_SQL: string[] = [
     healthy INTEGER NOT NULL CHECK(healthy IN (0,1)),
     goal_id TEXT,
     producer TEXT NOT NULL,
+    stack TEXT NOT NULL,
     run_kind TEXT,
     last_run_id TEXT NOT NULL,
     last_ended_at INTEGER NOT NULL,

@@ -1,11 +1,20 @@
+// glossary-ignore: subscriber
 import type { Database } from "bun:sqlite";
 import { executionRunFinishedPattern, validateExecutionRunFinished } from "@the-metafactory/myelin";
 import { DeliverPolicy } from "nats";
 import type { AgentConfig } from "../common/types/config";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { EnvelopeErrorHandler, EnvelopeHandler } from "../bus/myelin/subscriber";
-import { provisionLedgerStream, provisionReviewConsumer, type ProvisionLog } from "../bus/jetstream/provision";
+import { LEDGER_STREAM, provisionLedgerStream, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
 import { ingestLedgerEnvelope } from "./ingest";
+
+/**
+ * Ledger consumer timing, set explicitly so the review-consumer defaults
+ * (sized for a 20-minute review) never leak into Vigil. Ingest is one SQLite
+ * transaction; a delivery still unacked after a minute is redelivered.
+ */
+export const LEDGER_ACK_WAIT_NS = 60 * 1_000_000_000;
+export const LEDGER_MAX_DELIVER = 5;
 
 export interface VigilHandle {
   stop(): Promise<void>;
@@ -40,9 +49,9 @@ export async function startVigil(opts: {
   await provisionLedgerStream({ jsm, principal: opts.principal, log });
   const durable = `cortex-vigil-${opts.principal}`;
   const pattern = executionRunFinishedPattern(opts.principal);
-  await provisionReviewConsumer({
-    jsm, stream: "LEDGER", durable, filterSubject: pattern,
-    deliverPolicy: DeliverPolicy.New, log,
+  await provisionPullConsumer({
+    jsm, stream: LEDGER_STREAM, durable, filterSubject: pattern,
+    deliverPolicy: DeliverPolicy.New, ackWaitNs: LEDGER_ACK_WAIT_NS, maxDeliver: LEDGER_MAX_DELIVER, log,
   });
   const db = opts.db;
   const now = opts.now ?? Date.now;
@@ -56,23 +65,23 @@ export async function startVigil(opts: {
       log.warn(`vigil: envelope ${envelope.id} invalid: ${first?.field}: ${first?.message}`);
       return { kind: "ack" };
     }
-    // Throws deliberately reach the subscriber's onError + NAK path.
+    // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
     ingestLedgerEnvelope(db, envelope, now());
     return { kind: "ack" };
   };
-  const subscriber = opts.runtime.subscribePull({
-    stream: "LEDGER", durable, pattern, onEnvelope,
+  const pull = opts.runtime.subscribePull({
+    stream: LEDGER_STREAM, durable, pattern, onEnvelope,
     onError: opts.onError ?? ((err) => { log.warn(`vigil: ingest error: ${err.message}`); }),
   });
-  if (!subscriber) {
+  if (!pull) {
     log.warn("vigil: runtime dormant — not started");
     return null;
   }
   try {
-    await subscriber.ready;
+    await pull.ready;
   } catch (err) {
-    await subscriber.stop();
+    await pull.stop();
     throw err;
   }
-  return { stop: () => subscriber.stop() };
+  return { stop: () => pull.stop() };
 }
