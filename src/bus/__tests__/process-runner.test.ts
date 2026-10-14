@@ -203,6 +203,7 @@ describe("createProcessRunner", () => {
     expect(last(published)!.process).toBe("build-journal");
   });
 
+  // glossary-ignore: path, node
   for (const env of [undefined, ["HOME", "PATH"]]) {
     test(`spawn receives explicit builder env (${env ? "allow-list" : "full env"})`, async () => {
       const seeded = {

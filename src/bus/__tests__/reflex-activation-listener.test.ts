@@ -185,6 +185,7 @@ describe("parseFiredEnvelope", () => {
     expect(Object.hasOwn(res.activation, "serves")).toBe(false);
   });
 
+  // glossary-ignore: node, character, owner
   test("parses sibling serves without changing the Activation Payload", () => {
     const serves = { goal: "G1", node: "the-metafactory/soma#781" };
     const payload = { issue: 42, title: "Bug" };
@@ -572,6 +573,7 @@ describe("ReflexActivationListener.handleFired", () => {
     expect((fail!.payload).reason as string).toContain("handler:");
   });
 
+  // glossary-ignore: listener, node, owner
   test("invalid serves still dispatches the handler and uses the listener logger", async () => {
     const ctrl = fakeRuntime();
     const calls: FiredActivation[] = [];

@@ -1,3 +1,4 @@
+// glossary-ignore: listener, path, node
 import { describe, expect, test } from "bun:test";
 import { buildProcessEnv, MF_CORRELATION_ID, MF_SERVES_GOAL, MF_SERVES_NODE } from "../process-env";
 import type { FiredActivation } from "../reflex-activation-listener";

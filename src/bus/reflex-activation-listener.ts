@@ -83,6 +83,7 @@ export interface FiredActivation {
   decisionId: string;
   correlationId: string | undefined;
   classification: Classification;
+  // glossary-ignore: node
   serves?: { goal?: string; node?: string };
 }
 
@@ -203,6 +204,8 @@ export function parseFiredEnvelope(
     },
   };
 }
+
+// glossary-ignore: listener, node
 
 /** Same ID grammar as reflex's blueprint parser; bad metadata does not reject a fire. */
 function parseServes(
