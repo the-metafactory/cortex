@@ -138,7 +138,10 @@ forward_link_legacy_bin cortex
 assert_eq "C2: first backup intact (not clobbered)" \
   "seed data" "$(cat "${HOME}/bin/cortex.pre-arc")"
 # Exactly one timestamped sidecar exists, holding the second file.
-mapfile -t STAMPED < <(find "${HOME}/bin" -maxdepth 1 -name 'cortex.pre-arc.*' | sort)
+STAMPED=()
+while IFS= read -r sidecar; do
+  STAMPED+=("${sidecar}")
+done < <(find "${HOME}/bin" -maxdepth 1 -name 'cortex.pre-arc.*' | sort)
 assert_eq "C2: one timestamped sidecar created" "1" "${#STAMPED[@]}"
 if [ "${#STAMPED[@]}" -eq 1 ]; then
   assert_eq "C2: second file preserved at timestamped sidecar" \

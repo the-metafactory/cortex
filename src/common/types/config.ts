@@ -549,6 +549,16 @@ export const McSchema = z.object({
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 
+// glossary-ignore: run
+/** Opt-in Vigil run-health projection, hosted by the default stack's MC embed. */
+export const VigilSchema = z.object({
+  enabled: z.boolean().default(false),
+}).default(emptyDefault()).transform((val) => ({
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+  enabled: val.enabled ?? false,
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+}));
+
 /**
  * G-1113 ML.5: Mission Control Cockpit live-refresh schema. SHARED const
  * (fix/c-844) for the same reason as {@link McSchema} — referenced by both
@@ -863,6 +873,7 @@ export const AgentConfigSchema = z.object({
    * `port` resolve to the per-slug default / the MC yaml's port at boot.
    */
   mc: McSchema,
+  vigil: VigilSchema,
 
   paths: z.object({
     // XDG wave-5 (#1902): the published-events buffer is DATA and moves under the

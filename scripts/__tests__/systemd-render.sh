@@ -459,8 +459,9 @@ assert_eq "wraps a successful command through the real timeout binary" "hello" \
 # Degrade path: PATH with no `timeout` on it at all → falls back to a bare
 # call. `echo` is a shell builtin so it needs no PATH resolution, isolating
 # this case to exactly the `command -v timeout` branch under test.
+# glossary-ignore: path
 assert_eq "degrades to a bare call when timeout is absent from PATH" "hi" \
-  "$(PATH="${MOCK_BIN}" run_with_timeout echo hi)"
+  "$(PATH="${MOCK_BIN}"; hash -r; run_with_timeout echo hi)"
 
 # ─── Results ──────────────────────────────────────────────────────
 printf '\nResults: %d passed, %d failed\n' "${PASS}" "${FAIL}"

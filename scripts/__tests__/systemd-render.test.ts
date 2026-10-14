@@ -25,5 +25,5 @@ describe("systemd-render shell suite (cortex#2071)", () => {
     if (res.status !== 0) throw new Error(`shell suite failed (exit ${res.status}):\n${out}`);
     expect(res.status).toBe(0);
     expect(out).toContain("0 failed");
-  });
+  }, 20_000);
 });

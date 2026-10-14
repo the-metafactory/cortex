@@ -183,6 +183,7 @@ import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
+import { startVigil, type VigilHandle } from "./vigil";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 import type { NetworksView } from "./surface/mc/api/networks";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner: the MC
@@ -5902,6 +5903,13 @@ export async function startCortex(
     }
   }
 
+  let vigilHandle: VigilHandle | null = null;
+  try {
+    vigilHandle = await startVigil({ config, db: mcDb, runtime, principal: principalId, stack: derivedStack.stack });
+  } catch (err) {
+    console.error(`cortex: Vigil startup error (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // G-1113 ML.5 — cockpit live-refresh loop. Opt-in via `config.cockpit.enabled`;
   // runs refreshCockpit (ingest → reconcile) on an interval and publishes
   // `system.attention.*` notifications via the bus (the review-sink renders them
@@ -6181,6 +6189,7 @@ export async function startCortex(
       "agent-presence broadcast unsubscribe",
       "agent-presence registry stop",
       "cockpit refresh loop stop",
+      "vigil stop",
       "mc embed stop",
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
@@ -6308,6 +6317,7 @@ export async function startCortex(
       // any in-flight refreshCockpit tick, so the bun:sqlite handle the embed
       // closes is only released after the last tick settles (no use-after-close).
       await completeAsync("cockpit refresh loop stop", cockpitLoop?.stop());
+      await completeAsync("vigil stop", vigilHandle?.stop());
       await completeAsync("mc embed stop", mcHandle?.stop());
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {

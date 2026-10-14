@@ -45,6 +45,7 @@
 // values keeps the wire-config strings centralised in nats.js rather
 // than duplicating literals here.
 import { AckPolicy, DeliverPolicy, RetentionPolicy, StorageType } from "nats";
+import { executionRunFinishedPattern } from "@the-metafactory/myelin";
 import type { ConsumerConfig, ConsumerInfo, StreamInfo } from "nats";
 
 // Re-exported from the neutral types module so existing callers
@@ -129,6 +130,14 @@ export interface ProvisionStreamOpts {
    */
   maxBytes?: number;
   /**
+   * Retention policy. Default {@link RetentionPolicy.Interest} — the review
+   * work-queue contract (see the comment at the `streams.add` call). When set
+   * explicitly, a live stream whose retention differs is reported as drift
+   * (warn + leave alone); the default is not drift-checked, preserving the
+   * pre-ledger behaviour for the review streams.
+   */
+  retention?: RetentionPolicy;
+  /**
    * Optional logger. Defaults to `console`. Surfacing this lets tests
    * pin the boot-log shape and lets future deployments swap in a
    * structured logger.
@@ -178,6 +187,34 @@ export interface ProvisionConsumerOpts {
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
 const DEFAULT_MAX_BYTES = DEFAULT_STREAM_MAX_BYTES;
+
+/** Vigil's ledger stream (soma#787 Q6): every `execution.run.finished` of the principal. */
+export const LEDGER_STREAM = "LEDGER";
+export const LEDGER_MAX_AGE_NS = 90 * 24 * 3600 * 1_000_000_000;
+
+/**
+ * The default account's ledger of finished execution runs — limits retention,
+ * 90-day max age. A thin wrapper over {@link provisionStream}, so subject
+ * union, drift policy and not-found handling are shared with every other
+ * stream. Errors (including a subject-overlap rejection from `streams.add`)
+ * throw to the caller; `startVigil`'s caller in cortex.ts logs them as a
+ * non-fatal Vigil startup error and boots without Vigil.
+ */
+// glossary-ignore: run
+export async function provisionLedgerStream(opts: {
+  jsm: ProvisionJsm;
+  principal: string;
+  log?: ProvisionLog;
+}): Promise<ProvisionStreamOutcome> {
+  return provisionStream({
+    jsm: opts.jsm,
+    name: LEDGER_STREAM,
+    subjects: [executionRunFinishedPattern(opts.principal)],
+    retention: RetentionPolicy.Limits,
+    maxAgeNs: LEDGER_MAX_AGE_NS,
+    log: opts.log,
+  });
+}
 const DEFAULT_MAX_DELIVER = 5;
 /**
  * Default per-message ack deadline: 20 minutes in nanoseconds. Sized well
@@ -189,16 +226,18 @@ const DEFAULT_MAX_DELIVER = 5;
 export const DEFAULT_ACK_WAIT_NS = 20 * 60 * 1_000_000_000;
 
 /**
- * Provision (or assert presence of) the JetStream stream that carries
- * `tasks.code-review.*` envelopes. Idempotent — safe to call on every
- * boot.
+ * Provision (or assert presence of) a JetStream stream. Idempotent — safe to
+ * call on every boot. The review streams (`tasks.code-review.*`) use the
+ * defaults; the ledger passes `retention`/`maxAgeNs` (see
+ * {@link provisionLedgerStream}).
  */
-export async function provisionReviewStream(
+export async function provisionStream(
   opts: ProvisionStreamOpts,
 ): Promise<ProvisionStreamOutcome> {
   const log = opts.log ?? console;
   const maxAgeNs = opts.maxAgeNs ?? DEFAULT_MAX_AGE_NS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const retention = opts.retention ?? RetentionPolicy.Interest;
 
   let existing: StreamInfo | null = null;
   try {
@@ -218,7 +257,7 @@ export async function provisionReviewStream(
     // a stream another stack of the principal created is extended rather than
     // left capturing only that stack's subjects.
     const extension = await extendStreamSubjects(opts.jsm, opts.name, existing, opts.subjects, log);
-    const drift = describeStreamDrift(extension.info, opts.subjects, maxAgeNs);
+    const drift = describeStreamDrift(extension.info, opts.subjects, maxAgeNs, opts.retention);
     if (drift !== null) {
       log.warn(
         `jetstream-provision: stream "${opts.name}" exists but config drifts (${drift}); leaving alone (v1 policy — no auto-update). Update manually with \`nats stream edit\` if intentional.`,
@@ -231,7 +270,7 @@ export async function provisionReviewStream(
   await opts.jsm.streams.add({
     name: opts.name,
     subjects: [...opts.subjects],
-    // `Interest` retention (not Workqueue): JetStream keeps a message
+    // Default `Interest` retention (not Workqueue): JetStream keeps a message
     // only while at least one consumer has unacked interest in it.
     // Workqueue would block the per-agent-durable model — each new
     // unfiltered durable on the same subject space conflicts with the
@@ -244,7 +283,7 @@ export async function provisionReviewStream(
     // the intended shape for sage#43 + fern routing (each agent sees
     // every task it claims a capability for, then the routing layer
     // decides via the cortex.yaml `provided_by` table).
-    retention: RetentionPolicy.Interest,
+    retention,
     storage: StorageType.File,
     max_age: maxAgeNs,
     max_msgs: -1,
@@ -252,10 +291,16 @@ export async function provisionReviewStream(
     num_replicas: 1,
   });
   log.info(
-    `jetstream-provision: created stream "${opts.name}" (subjects=[${opts.subjects.join(", ")}], retention=interest, max_age=${Math.round(maxAgeNs / 1_000_000_000)}s, max_bytes=${Math.round(maxBytes / 1024 / 1024)}MiB)`,
+    `jetstream-provision: created stream "${opts.name}" (subjects=[${opts.subjects.join(", ")}], retention=${retention}, max_age=${Math.round(maxAgeNs / 1_000_000_000)}s, max_bytes=${Math.round(maxBytes / 1024 / 1024)}MiB)`,
   );
   return "created";
 }
+
+/**
+ * The review-stream name for {@link provisionStream}, kept for the existing
+ * review / release / brain consumer boots. Same function, same defaults.
+ */
+export const provisionReviewStream = provisionStream;
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -473,14 +518,22 @@ export async function provisionStackScopedConsumer(
 }
 
 /**
- * Provision (or assert presence of) a per-agent durable pull consumer on
- * the given stream. Idempotent — safe on every boot.
+ * Provision (or assert presence of) a durable pull consumer on the given
+ * stream. Idempotent — safe on every boot. The defaults (`max_deliver`,
+ * `ack_wait`) are the review-consumer contract; a consumer with different
+ * timing (Vigil's ledger ingest) passes them explicitly.
  */
-export async function provisionReviewConsumer(
+export async function provisionPullConsumer(
   opts: ProvisionConsumerOpts,
 ): Promise<ProvisionConsumerOutcome> {
   return ensureConsumer(opts, undefined);
 }
+
+/**
+ * The review-consumer name for {@link provisionPullConsumer}, kept for the
+ * existing review / release / brain consumer boots. Same function, same defaults.
+ */
+export const provisionReviewConsumer = provisionPullConsumer;
 
 /**
  * The idempotent ensure behind {@link provisionReviewConsumer}. `start`
@@ -601,7 +654,8 @@ export function isNotFoundError(err: unknown): boolean {
  * match, otherwise a short human-readable string for the log line.
  *
  * Drift detection is deliberately narrow — only the fields that
- * meaningfully affect routing (`subjects`) and retention (`max_age`).
+ * meaningfully affect routing (`subjects`) and retention (`max_age`, plus
+ * retention policy when explicitly requested by the ledger provisioner).
  * Principals tuning `max_bytes` / `num_replicas` for their own reasons
  * should NOT see a drift warning every boot.
  */
@@ -609,6 +663,7 @@ export function describeStreamDrift(
   existing: StreamInfo,
   expectedSubjects: readonly string[],
   expectedMaxAgeNs: number,
+  expectedRetention?: RetentionPolicy,
 ): string | null {
   const cfg = existing.config;
   const actualSubjects = cfg.subjects;
@@ -628,6 +683,9 @@ export function describeStreamDrift(
   // through the wire JSON.
   if (Math.abs(cfg.max_age - expectedMaxAgeNs) > 1_000_000_000) {
     return `max_age differs (expected ${expectedMaxAgeNs}ns, got ${cfg.max_age}ns)`;
+  }
+  if (expectedRetention !== undefined && cfg.retention !== expectedRetention) {
+    return `retention differs (expected ${expectedRetention}, got ${cfg.retention})`;
   }
   return null;
 }

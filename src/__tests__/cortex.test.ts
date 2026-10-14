@@ -415,7 +415,7 @@ describe("startCortex — wire-up", () => {
     // runtime.onEnvelope) — the count stays at the four core subscribers.
     expect(runtime.onEnvelopeHandlers.size).toBe(4);
     // No adapter started → no `system.adapter.*` envelope leaked.
-    expect(runtime.published).toEqual([]);
+    expect(runtime.published.filter((event) => event.type.startsWith("system.adapter."))).toEqual([]);
     await handle.stop();
   });
 
@@ -455,7 +455,7 @@ describe("startCortex — wire-up", () => {
     // (adapters register with the surface-router via router.register, not
     // runtime.onEnvelope) — the count stays at the four core subscribers.
     expect(runtime.onEnvelopeHandlers.size).toBe(4);
-    expect(runtime.published).toEqual([]);
+    expect(runtime.published.filter((event) => event.type.startsWith("system.adapter."))).toEqual([]);
     await handle.stop();
   });
 });

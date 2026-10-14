@@ -99,6 +99,9 @@ function createRecordingRuntime(): RecordingRuntime {
       };
     },
     publish: async (envelope: Envelope) => {
+      // Count and inject failures only for this suite's capability events;
+      // installed Arc plugins may independently emit lifecycle events at boot.
+      if (envelope.type !== CAPABILITY_REGISTERED_EVENT_TYPE) return;
       const idx = publishCallIndex++;
       const outcome = publishOutcomes[idx];
       if (outcome && !outcome.ok) {
