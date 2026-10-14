@@ -50,7 +50,7 @@ describe("Vigil run-health ingest", () => {
 
   test.each(["succeeded", "blocked", "cancelled"] as const)("failed to %s is a transition", (outcome) => {
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome }), 200);
+    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome, ended_at: "2026-10-12T10:01:00.000Z" }), 200);
     expect(getVigilSubject(db, KEY)).toMatchObject({ value: outcome, healthy: outcome === "succeeded" ? 1 : 0 });
     expect(listVigilEvents(db, KEY)[1]).toMatchObject({
       from_value: "failed", to_value: outcome, direction: outcome === "succeeded" ? "better" : "worse",
@@ -69,6 +69,17 @@ describe("Vigil run-health ingest", () => {
     ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:00:04.000Z" }), 400);
     expect(getVigilSubject(db, KEY)).toEqual(prior);
     expect(listVigilEvents(db, KEY)).toEqual(events);
+  });
+
+  test("equal ended_at: the higher run_id wins whatever the arrival order", () => {
+    const a = ledgerEnvelope({ run_id: "run-a", outcome: "failed" });
+    const b = ledgerEnvelope({ run_id: "run-b", outcome: "succeeded" });
+    for (const [order, directions] of [[[a, b, a], ["worse", "better"]], [[b, a, b], []]] as const) {
+      db.run("DELETE FROM vigil_events"); db.run("DELETE FROM vigil_subjects");
+      for (const envelope of order) ingestLedgerEnvelope(db, envelope, 100);
+      expect(getVigilSubject(db, KEY)).toMatchObject({ value: "succeeded", healthy: 1, last_run_id: "run-b" });
+      expect(listVigilEvents(db, KEY).map((e) => e.direction)).toEqual([...directions]);
+    }
   });
 
   test("run kind is part of subject identity", () => {

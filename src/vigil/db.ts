@@ -74,7 +74,16 @@ export function writeVigilTransition(
   );
 }
 
-/** A redelivered run, or one that ended before the latest observation, changes nothing. */
+// glossary-ignore: run
+/**
+ * Observations are ordered by `(ended_at, run_id)`; only one past the latest
+ * changes the row. A redelivered `run_id` (whatever its `ended_at`), one that
+ * ended earlier, or one with the same `ended_at` and a lower `run_id` changes nothing, so the row converges
+ * on the same latest observation whatever order the deliveries arrive in.
+ */
 export function isNewObservation(prior: VigilSubjectRow | null, runId: string, endedAt: number): boolean {
-  return !prior || (endedAt >= prior.last_ended_at && runId !== prior.last_run_id);
+  if (!prior) return true;
+  if (runId === prior.last_run_id) return false;
+  if (endedAt !== prior.last_ended_at) return endedAt > prior.last_ended_at;
+  return runId > prior.last_run_id;
 }

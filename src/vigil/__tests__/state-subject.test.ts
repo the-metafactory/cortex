@@ -161,6 +161,19 @@ describe("Vigil state-subject ingest", () => {
     expect(listVigilEvents(db, key)).toEqual(events);
   });
 
+  test("two runs with one ended_at converge on the higher run_id in any arrival order", () => {
+    const key = "state:goal:G1";
+    const endedAt = new Date(ENDED_AT).toISOString();
+    const a = ledgerEnvelope({ run_id: "run-a", ended_at: endedAt, state: { subject: "G1", value: "at-risk" } });
+    const b = ledgerEnvelope({ run_id: "run-b", ended_at: endedAt, state: { subject: "G1", value: "on-track" } });
+    for (const [order, directions] of [[[a, b, a], ["worse", "better"]], [[b, a, b], []]] as const) {
+      db.run("DELETE FROM vigil_events"); db.run("DELETE FROM vigil_subjects");
+      for (const envelope of order) ingestLedgerEnvelope(db, envelope, 100);
+      expect(getVigilSubject(db, key)).toMatchObject({ value: "on-track", healthy: 1, last_run_id: "run-b" });
+      expect(listVigilEvents(db, key).map((e) => e.direction)).toEqual([...directions]);
+    }
+  });
+
   test("state subject dedupes on its own timeline, not the run-health one", () => {
     report("G1", "at-risk", { ran: { kind: "job", ref: "a" } });
     report("G1", "on-track", { ran: { kind: "job", ref: "b" } });
