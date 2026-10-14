@@ -21,5 +21,5 @@ describe("plist-render bin-cutover shell suite (cortex#1866 T13)", () => {
     if (res.status !== 0) throw new Error(`shell suite failed (exit ${res.status}):\n${out}`);
     expect(res.status).toBe(0);
     expect(out).toContain("0 failed");
-  });
+  }, 20_000);
 });

@@ -567,6 +567,12 @@ describe.skipIf(!isDarwin || !hasClaude)(
       "fresh session + --resume of it BOTH complete successfully under strict",
       async () => {
         const denials: SandboxDenialEvent[] = [];
+        // Current Claude builds use a per-user runtime scratch directory.
+        // Grant that named directory, plus any configured TLS certificate as
+        // read-only, while keeping the strict profile and workspace assertions.
+        const runtimeDir = join("/tmp", `claude-${process.getuid!()}`);
+        mkdirSync(runtimeDir, { recursive: true });
+        const readOnlyDirs = process.env.NODE_EXTRA_CA_CERTS ? [process.env.NODE_EXTRA_CA_CERTS] : [];
 
         const first = new CCSession({
           prompt: "Say just the word hi, nothing else",
@@ -575,7 +581,8 @@ describe.skipIf(!isDarwin || !hasClaude)(
           sandboxMode: "audit",
           sandboxPosture: "strict",
           cwd: workDir,
-          allowedDirs: [workDir],
+          allowedDirs: [workDir, runtimeDir],
+          readOnlyDirs,
         });
         first.on("security-event", (event: unknown) => {
           const e = event as { type: string };
@@ -583,7 +590,7 @@ describe.skipIf(!isDarwin || !hasClaude)(
         });
 
         const firstResult = await first.start().wait();
-        expect(firstResult.success).toBe(true);
+        expect(firstResult.success, firstResult.stderr ?? firstResult.response).toBe(true);
         expect(firstResult.exitCode).toBe(0);
         expect(firstResult.sessionId).toBeDefined();
         expect(firstResult.response.toLowerCase()).toContain("hi");
@@ -595,7 +602,8 @@ describe.skipIf(!isDarwin || !hasClaude)(
           sandboxMode: "audit",
           sandboxPosture: "strict",
           cwd: workDir,
-          allowedDirs: [workDir],
+          allowedDirs: [workDir, runtimeDir],
+          readOnlyDirs,
           resumeSessionId: firstResult.sessionId,
         });
         second.on("security-event", (event: unknown) => {
