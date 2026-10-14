@@ -55,6 +55,7 @@ function firedEnvelope(opts: {
   type?: string;
   target?: unknown;
   payload?: Record<string, unknown>;
+  serves?: unknown;
   decisionId?: string | null;
   decisionInExtensionsOnly?: boolean;
   correlationId?: string | undefined;
@@ -65,6 +66,7 @@ function firedEnvelope(opts: {
     ...(opts.target !== undefined ? { target: opts.target } : { target: "@jc/notify-discord" }),
     payload: opts.payload ?? { issue: 42, title: "Bug" },
     idempotency_key: "idem-1",
+    ...(opts.serves !== undefined ? { serves: opts.serves } : {}),
   };
   const extensions: Record<string, unknown> = {};
   if (decisionId !== null) {
@@ -180,6 +182,100 @@ describe("parseFiredEnvelope", () => {
     expect(res.activation.correlationId).toBe(CORRELATION);
     expect(res.activation.classification).toBe("federated");
     expect(res.activation.payload).toEqual({ issue: 42, title: "Bug" });
+    expect(Object.hasOwn(res.activation, "serves")).toBe(false);
+  });
+
+  // glossary-ignore: node, character, owner
+  test("parses sibling serves without changing the Activation Payload", () => {
+    const serves = { goal: "G1", node: "the-metafactory/soma#781" };
+    const payload = { issue: 42, title: "Bug" };
+    const env = firedEnvelope({ serves, payload });
+    const res = parseFiredEnvelope(env);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.activation).toEqual({ ...activationFixture(), payload, serves });
+  });
+
+  test("does not read serves from inside the Activation Payload", () => {
+    const res = parseFiredEnvelope(firedEnvelope({ payload: { serves: { goal: "G1" } } }));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(Object.hasOwn(res.activation, "serves")).toBe(false);
+    expect(res.activation.payload).toEqual({ serves: { goal: "G1" } });
+  });
+
+  for (const key of ["goal", "node"] as const) {
+    test(`accepts ${key} alone and the 200-character boundary`, () => {
+      const serves = { [key]: "x".repeat(200) };
+      const warnings: string[] = [];
+      const res = parseFiredEnvelope(firedEnvelope({ serves }), { warn: (line) => warnings.push(line) });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.activation.serves).toEqual(serves);
+      expect(warnings).toEqual([]);
+    });
+
+    const invalidValues: unknown[] = [null, 1, true, {}, [], "", "x".repeat(201), "a b", "a\tb", "a\nb", "a\u00a0b", "a\u2003b"];
+    for (let code = 0; code <= 0x9f; code++) {
+      if (code <= 0x1f || code >= 0x7f) invalidValues.push(`a${String.fromCharCode(code)}b`);
+    }
+    test(`drops invalid ${key} values, preserves the other key, and logs one line per rejection`, () => {
+      const other = key === "goal" ? "node" : "goal";
+      for (const value of invalidValues) {
+        const warnings: string[] = [];
+        const res = parseFiredEnvelope(firedEnvelope({ serves: { [key]: value, [other]: "valid-id" } }), { warn: (line) => warnings.push(line) });
+        expect(res.ok).toBe(true);
+        if (!res.ok) continue;
+        expect(res.activation.serves).toEqual({ [other]: "valid-id" });
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain("decision-123");
+        expect(warnings[0]).toContain(key);
+        expect(warnings[0]).not.toMatch(/[\r\n]/);
+      }
+    });
+  }
+
+  test("drops unknown keys and escapes diagnostic identifiers without logging values", () => {
+    const warnings: string[] = [];
+    const res = parseFiredEnvelope(firedEnvelope({
+      decisionId: "decision\n123", serves: { goal: "G1", "owner\nkey": "private goal wording" },
+    }), { warn: (line) => warnings.push(line) });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.activation.serves).toEqual({ goal: "G1" });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("decision\\n123");
+    expect(warnings[0]).toContain("owner\\nkey");
+    expect(warnings[0]).not.toContain("private goal wording");
+    expect(warnings[0]).not.toMatch(/[\r\n]/);
+  });
+
+  test("omits serves when every key is dropped", () => {
+    const warnings: string[] = [];
+    const res = parseFiredEnvelope(firedEnvelope({ serves: { goal: "", node: 42, owner: "jc" } }), { warn: (line) => warnings.push(line) });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(Object.hasOwn(res.activation, "serves")).toBe(false);
+    expect(warnings).toHaveLength(3);
+  });
+
+  test("non-object serves is dropped with one diagnostic; an empty object is simply absent", () => {
+    for (const serves of [null, "G1", 1, true, []]) {
+      const warnings: string[] = [];
+      const res = parseFiredEnvelope(firedEnvelope({ serves }), { warn: (line) => warnings.push(line) });
+      expect(res.ok).toBe(true);
+      if (!res.ok) continue;
+      expect(Object.hasOwn(res.activation, "serves")).toBe(false);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("decision-123");
+      expect(warnings[0]).toContain("serves");
+    }
+    const warnings: string[] = [];
+    const res = parseFiredEnvelope(firedEnvelope({ serves: {} }), { warn: (line) => warnings.push(line) });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(Object.hasOwn(res.activation, "serves")).toBe(false);
+    expect(warnings).toEqual([]);
   });
 
   test("wrong type → typed failure", () => {
@@ -475,6 +571,28 @@ describe("ReflexActivationListener.handleFired", () => {
       (e) => e.type === "system.bus.reflex-activation-failed",
     );
     expect((fail!.payload).reason as string).toContain("handler:");
+  });
+
+  // glossary-ignore: listener, node, owner
+  test("invalid serves still dispatches the handler and uses the listener logger", async () => {
+    const ctrl = fakeRuntime();
+    const calls: FiredActivation[] = [];
+    const warnings: string[] = [];
+    const { listener, dedup } = listenerWith(ctrl, {
+      resolveTarget: () => ({ ...TARGETS[0]!, handler: "process" }),
+      handlers: { process: async (act) => { calls.push(act); } },
+      log: { info: () => {}, warn: (line) => { warnings.push(line); } },
+    });
+    const decision = await listener.handleFired(firedEnvelope({ serves: { goal: "bad goal", node: "n1", owner: "jc" } }), "subj");
+    expect(decision).toEqual({ kind: "ack" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.serves).toEqual({ node: "n1" });
+    expect(calls[0]!.correlationId).toBe(CORRELATION);
+    expect(await dedup.seen("decision-123")).toBe(true);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain("goal");
+    expect(warnings[1]).toContain("owner");
+    expect(ctrl.published.some((e) => e.type === "system.bus.reflex-activation-dispatched")).toBe(true);
   });
 
   test("handler target with no registered handler → _failed + ack", async () => {

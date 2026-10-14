@@ -52,6 +52,7 @@ import { isAbsolute, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { MyelinRuntime } from "./myelin/runtime";
+import { buildProcessEnv } from "./process-env";
 import type {
   FiredActivation,
   ReflexActivationHandler,
@@ -152,8 +153,11 @@ export const ProcessSpecSchema = z.object({
   detach: z.boolean().default(false),
   /**
    * Environment ALLOW-LIST: names of vars passed through from cortex's env to
-   * the child. When set, the child gets ONLY these (so a process can't read
-   * unrelated cortex secrets — bus creds, webhook tokens, LLM keys). When
+   * the child, plus the PULSE connection variables and fire-owned MF metadata.
+   * PULSE_NATS_CREDS is always passed when set, including with `env: []`:
+   * the allow-list does NOT deny bus access under that credential's permissions.
+   * Run only trusted specs; see docs/process-runner.md for the contract.
+   * When set, unrelated cortex secrets (webhook tokens, LLM keys) are excluded. When
    * OMITTED, the child inherits cortex's FULL environment — convenient for a
    * trusted spec that needs many vars (build-journal needs claude / wrangler /
    * discord auth + HOME/PATH), but it means that spec sees every cortex secret.
@@ -174,11 +178,10 @@ export interface SpawnedProc {
 }
 
 /**
- * Spawn function — defaults to `Bun.spawn`; injected in tests. `env` undefined
- * means "inherit the parent environment" (Bun's default); a record restricts
- * the child to exactly those vars.
+ * Spawn function — defaults to `Bun.spawn`; injected in tests. The runner
+ * always supplies an explicit env built from the spec, fire and parent env.
  */
-export type Spawn = (cmd: string[], opts: { cwd: string; env?: Record<string, string> }) => SpawnedProc;
+export type Spawn = (cmd: string[], opts: { cwd: string; env: Record<string, string> }) => SpawnedProc;
 
 const defaultSpawn: Spawn = (cmd, opts) => {
   // stdio inherit → the (verbose, minutes-long) run streams into cortex-prod's
@@ -188,7 +191,7 @@ const defaultSpawn: Spawn = (cmd, opts) => {
     cwd: opts.cwd,
     stdout: "inherit",
     stderr: "inherit",
-    ...(opts.env !== undefined && { env: opts.env }),
+    env: opts.env,
   });
   return { exited: p.exited, kill: (signal) => { p.kill(signal as never); } };
 };
@@ -341,20 +344,11 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     log.info(`process-runner: running "${processName}" → ${spec.argv.join(" ")} (decision ${activation.decisionId})`);
     emit("started", processName, activation);
 
-    // Restrict the child to the spec's env allow-list when present; omitted →
-    // inherit the full cortex env (see `env` on ProcessSpecSchema for the risk).
-    const childEnv =
-      spec.env !== undefined
-        ? Object.fromEntries(
-            spec.env
-              .map((k) => [k, process.env[k]] as const)
-              .filter((e): e is readonly [string, string] => e[1] !== undefined),
-          )
-        : undefined;
+    const childEnv = buildProcessEnv({ spec, activation, parentEnv: process.env });
 
     let proc: SpawnedProc;
     try {
-      proc = spawn(argv, { cwd: spec.cwd, ...(childEnv !== undefined && { env: childEnv }) });
+      proc = spawn(argv, { cwd: spec.cwd, env: childEnv });
     } catch (err) {
       emit("failed", processName, activation, `spawn:${errMsg(err)}`);
       throw err instanceof Error ? err : new Error(String(err));

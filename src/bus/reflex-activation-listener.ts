@@ -83,11 +83,15 @@ export interface FiredActivation {
   decisionId: string;
   correlationId: string | undefined;
   classification: Classification;
+  // glossary-ignore: node
+  serves?: { goal?: string; node?: string };
 }
 
 export type ParseFiredResult =
   | { ok: true; activation: FiredActivation }
   | { ok: false; reason: string };
+
+interface WarnLog { warn: (msg: string) => void }
 
 /** Decision-id keyed idempotency surface (plan API contract). */
 export interface ReflexDedup {
@@ -162,7 +166,10 @@ export function reflexActivationFilterSubject(
  * deterministically. The Decision id is read from `payload.decision_id`
  * (canonical) with a fallback to `extensions.decision_id` (mirror).
  */
-export function parseFiredEnvelope(envelope: Envelope): ParseFiredResult {
+export function parseFiredEnvelope(
+  envelope: Envelope,
+  log: WarnLog = console,
+): ParseFiredResult {
   if (envelope.type !== FIRED_EVENT_TYPE) {
     return { ok: false, reason: `unexpected-type:${envelope.type}` };
   }
@@ -184,6 +191,7 @@ export function parseFiredEnvelope(envelope: Envelope): ParseFiredResult {
     p.payload !== null && typeof p.payload === "object"
       ? (p.payload as Record<string, unknown>)
       : {};
+  const serves = parseServes(p.serves, decisionId, log);
   return {
     ok: true,
     activation: {
@@ -192,8 +200,42 @@ export function parseFiredEnvelope(envelope: Envelope): ParseFiredResult {
       decisionId,
       correlationId: envelope.correlation_id,
       classification: envelope.sovereignty.classification,
+      ...(serves !== undefined ? { serves } : {}),
     },
   };
+}
+
+// glossary-ignore: listener, node
+
+/** Same ID grammar as reflex's blueprint parser; bad metadata does not reject a fire. */
+function parseServes(
+  raw: unknown,
+  decisionId: string,
+  log: WarnLog,
+): FiredActivation["serves"] {
+  if (raw === undefined) return undefined;
+  // Escape identifiers and omit rejected values so diagnostics stay one line
+  // and never turn private goal wording into a log entry.
+  const drop = (key: string) => {
+    log.warn(
+      `reflex-activation-listener: decision ${JSON.stringify(decisionId)} dropped serves key ${JSON.stringify(key)}`,
+    );
+  };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    drop("serves");
+    return undefined;
+  }
+  const serves: NonNullable<FiredActivation["serves"]> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if ((key !== "goal" && key !== "node") ||
+        typeof value !== "string" || value.length === 0 || value.length > 200 ||
+        !/^[^\s\p{Cc}]+$/u.test(value)) {
+      drop(key);
+      continue;
+    }
+    serves[key] = value;
+  }
+  return serves.goal !== undefined || serves.node !== undefined ? serves : undefined;
 }
 
 /**
@@ -530,7 +572,7 @@ export class ReflexActivationListener {
     envelope: Envelope,
     _subject: string,
   ): Promise<AckDecision> {
-    const parsed = parseFiredEnvelope(envelope);
+    const parsed = parseFiredEnvelope(envelope, this.log);
     if (!parsed.ok) {
       await this.emitFailed(envelope, undefined, `parse:${parsed.reason}`);
       return { kind: "term", reason: parsed.reason };
