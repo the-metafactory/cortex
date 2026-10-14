@@ -561,7 +561,7 @@ The agent task routing pattern thus exercises M2–M7 end-to-end and is the cano
 
 ## 8. Cortex internal componentisation
 
-The five top-level `src/` subdirectories below are **modules of one M7 application**. They are NOT layers — they are the internal componentisation of cortex, much as any application has internal modules. They map to the bus stack as consumers (bus client subscribes to M2; surface adapters render envelopes; etc.), but cortex-the-app sits at M7 of the Myelin layer model as a whole.
+The top-level `src/` subdirectories below are **modules of one M7 application**. They are NOT layers — they are the internal componentisation of cortex, much as any application has internal modules. They map to the bus stack as consumers (bus client subscribes to M2; surface adapters render envelopes; etc.), but cortex-the-app sits at M7 of the Myelin layer model as a whole.
 
 ```
 cortex/
@@ -597,6 +597,30 @@ cortex/
                           ADR-0024 §OQ9 / #1893).
     runner/           ── Workflow runner. Spawns Claude Code, owns session state,
                           manages worklog threads, emits dispatch.* lifecycle events.
+                          harness-resolver.ts is the single seam that maps a
+                          (receiving agent, distribution mode) pair onto the
+                          SessionHarness that runs the dispatch: `delegate` mode
+                          → AgentTeamHarness; otherwise the agent's configured
+                          `substrate`, DEFAULTING to `claude-code` when unset
+                          (#2055 D3).
+    substrates/       ── The SessionHarness implementations the resolver selects
+                          between — claude-code/ (the default full agent runtime),
+                          bus-peer/, and api-agent/ (#2055 Phase 1). ApiAgentHarness
+                          is a PEER of ClaudeCodeHarness, not a replacement: it owns
+                          the agent loop, the two limit caps (wall-clock +
+                          inactivity), cancellation, and the one-started/one-terminal
+                          lifecycle contract. It ships NO TOOLS (D5) — enforced
+                          structurally, since `ModelRequest` has no `tools` field —
+                          and fails closed with `unsupported_capability` on an
+                          attachment/tool request BEFORE any provider call.
+    providers/        ── Model-provider adapters: anthropic/ (native Messages API)
+                          and openai-compatible/ (streamed Chat Completions), each a
+                          provider + stream-parser pair. These are INTERNAL
+                          implementation components BELOW the agent loop — NOT M6
+                          substrates, and never `HarnessId` variants (#2055 D1).
+                          A provider translates the normalized contract to one
+                          vendor wire format and yields `{type:"error"}` events
+                          rather than throwing (D2).
     taps/             ── Cortex-side publishers that turn external events into bus
                           envelopes (so the surface-router and runner can act on them).
       gh-webhook/     ── GitHub webhook → NATS
@@ -605,6 +629,13 @@ cortex/
       discord/        ── ~/.local/bin/discord (subdir: discord.ts entry + lib/ + skill/)
       cldyo-live      ── CC instrumentation wrapper (single bash script, NOT a directory)
     common/           ── Shared types, utilities.
+      inference/      ── The normalized, provider-neutral model contract
+                          (ModelProvider, ModelRequest, ModelEvent, ProviderError)
+                          + the inference-profile registry, the `inference` config
+                          schema, and `env:NAME` secret-reference resolution.
+                          Deliberately smaller than any provider's full API; the
+                          harness consumes ONLY this, so no vendor wire field
+                          reaches the runner or the Myelin lifecycle layer.
   docs/
     architecture.md   ── This doc, copied in at MIG-0.10.
     api/              ── Envelope contract docs (per §6.1) — schemas + examples.
@@ -623,6 +654,18 @@ cortex core carries **zero in-tree platform adapters and one in-tree renderer**.
 **Transparent upgrade (no config change, no major version).** Each bundle is declared a **first-party arc dependency** in cortex's own `arc-manifest.yaml`, so `arc upgrade cortex` auto-installs it and the loader loads it **even when `system.plugins.external` is off** (the default-off external-plugin gate). This **first-party bundle exemption** is un-spoofable: it is keyed on cortex's OWN arc-manifest dependencies plus the arc-recorded `repoUrl`, narrowed by the `ADAPTER_BUNDLE_DEP_NAME_RE` / `RENDERER_BUNDLE_DEP_NAME_RE` name patterns — not a naming convention a third-party bundle could claim. A principal who has not opted into external plugins still runs the full set of platform adapters and the pager, unchanged.
 
 **Fail-safe anchors + the boot coverage guard.** The `mock` adapter and the `dashboard` renderer are the permanent, never-extracted in-tree anchors ([ADR-0024](adr/0024-pluggable-surface-adapters.md) D2/OQ8): `dashboard` stays in-tree because extraction of *every* renderer could otherwise leave a stack silently un-paged. To close that fail-open, boot **hard-fails** (`#1893`, ADR-0024 §OQ9) when a stack's `system.>` renderer coverage drops below **two distinct classes with at least one EFFECTIVE sink** — `dashboard` counts toward the class pair but is inert (ADR-0005 §4), so "dashboard alone" never satisfies the floor. The guard emits two distinct errors: a **config** error ("you configured only one sink") versus an **install-state** error ("you configured two, one's covering bundle isn't loaded — run `arc install`"), the latter naming the missing bundle.
+
+### 8.2 Substrates and model providers — two different layers ([design](design-api-model-provider-support.md))
+
+The `api-agent` substrate (epic #2055, Phases 0 + 1 shipped) adds direct model-API inference beneath a cortex-owned harness. Its componentisation turns on a distinction that is easy to collapse and expensive to get wrong:
+
+**A substrate is an M6 harness; a model provider is not.** `HarnessId` is the closed enum of substrates the runner can dispatch onto (`claude-code`, `bus-peer`, `openai-codex`, `cursor`, `gemini`, `mistral`, `pi-dev`, `agent-team`, `api-agent`). `api-agent` is one member. `anthropic` and `openai-compatible` are **not** members and must never become members ([design](design-api-model-provider-support.md) §"Expected implementation surface", D1): they are internal implementation components *below* the agent loop, selected by an **inference profile**, not by the harness resolver. Adding a provider as a `HarnessId` variant would put a vendor wire format on the runner's dispatch seam — exactly the coupling the normalized contract exists to prevent.
+
+**The chain runs seam → substrate → profile → provider.** `runner/harness-resolver.ts` picks a `SessionHarness` from the receiving agent's `substrate` (defaulting to `claude-code`, D3). When that harness is `ApiAgentHarness`, it resolves the agent's `runtime.inferenceProfile` name through the `InferenceRegistry`, which yields the concrete `ModelProvider` + model + bound. Each hop **fails closed**: an agent with `substrate: api-agent` and no profile, an unknown profile name, a profile naming a missing provider, or a protocol with no registered factory each surface a typed failure — at config load, at the boot pre-flight (`validateAll()` resolves every profile at startup), or as a clean `failed` terminal at dispatch. Never a throw deep in the token stream, and never a silent fallback to a default model.
+
+**`claude-code` remains the default and is unchanged** (D3). Claude Code is an agent *runtime* — model loop, tools, hooks, permissions, filesystem behaviour, resumable sessions. A model API supplies *inference* only. `api-agent` is the opt-in text-only peer for chat, classification, summarization, and synthesis; it does not claim coding-agent parity, and an agent that does not declare `substrate: api-agent` never touches this path.
+
+**What Phases 0 + 1 do not yet do.** Profiles carry `modelClass` and `dataResidency`, and the config schema restricts `modelClass` to `local-only`/`frontier`/`any` — but no policy layer *enforces* either axis for an api-agent dispatch yet (#2117); they are carried, not checked. A `completed` envelope is stamped with the provider-reported token `usage` (input/output/cache-read) for Mission Control; **cost** is provider-reported-only and neither shipped provider reports one, so MC reads a null cost as an honest 0. There is no streaming progress envelope — the harness emits one `started` and one terminal, with assistant text on the terminal. Durable conversations (Phase 2), a restricted tool loop (Phase 3), and mutation/routing (Phase 4) are designed but held.
 
 ---
 

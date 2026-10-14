@@ -1,6 +1,6 @@
 # API model-provider support
 
-**Status:** Proposed  
+**Status:** Accepted — **Phases 0 + 1 IMPLEMENTED** (epic [#2055](https://github.com/the-metafactory/cortex/issues/2055)); Phases 2–4 held. See [Rollout](#rollout) for per-phase state.  
 **Date:** 2026-07-16  
 **Scope:** Direct Anthropic Messages API and OpenAI-compatible model inference in Cortex
 
@@ -484,7 +484,20 @@ decision rather than a transport retry.
 
 ## Rollout
 
-### Phase 0 — contracts and configuration
+**State (epic #2055):** Phases 0 and 1 are **implemented and merged** — the
+architectural homes for what shipped are `docs/architecture.md` §8 (module tree)
+and §8.2 (substrates vs model providers), plus the `CONTEXT.md` glossary entries
+for **inference profile**, **model provider**, and the **api-agent substrate**.
+Phases 2–4 below are **held**: designed, not built. Nothing under Phase 2, 3, or
+4 exists in the codebase — read those sections as intent, not description.
+
+Known gaps in the shipped surface, tracked separately: `modelClass` and
+`dataResidency` are carried on profiles but **not enforced** (#2117); usage is
+stamped on the `completed` envelope as tokens only, since cost is
+provider-reported and neither shipped provider reports one; there is no
+streaming progress envelope (one `started`, one terminal).
+
+### Phase 0 — contracts and configuration ✅ shipped
 
 - Add `api-agent` to the harness/runtime enums.
 - Add inference provider/profile schemas and secret resolution.
@@ -492,7 +505,7 @@ decision rather than a transport retry.
 - Extract harness selection behind a resolver.
 - Preserve `claude-code` defaults and behaviour.
 
-### Phase 1 — text-only API harness
+### Phase 1 — text-only API harness ✅ shipped
 
 - Add `AnthropicMessagesProvider`.
 - Add `OpenAICompatibleProvider` targeting streamed Chat Completions.
@@ -504,21 +517,21 @@ decision rather than a transport retry.
 This phase provides useful API-backed chat, classification, summarization, and
 research synthesis without claiming coding-agent parity.
 
-### Phase 2 — durable conversations
+### Phase 2 — durable conversations ⏸ held
 
 - Add `ConversationStore` and thread mapping.
 - Persist normalized turns, usage, and provider metadata.
 - Add deterministic context-window budgeting and compaction records.
 - Support resume and explicit provider/model branching.
 
-### Phase 3 — restricted tool loop
+### Phase 3 — restricted tool loop ⏸ held
 
 - Add a host-side tool registry and executor.
 - Start with read-only, bounded tools.
 - Add schema validation, loop limits, audit events, and policy re-checks.
 - Integrate MCP tools only through an explicit, filtered inventory.
 
-### Phase 4 — mutation and routing
+### Phase 4 — mutation and routing ⏸ held
 
 - Add sandboxed shell/edit tools under explicit grants.
 - Add profile routing based on capability, sovereignty, cost, and availability.
