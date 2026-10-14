@@ -1,0 +1,99 @@
+# cc-plugin-dir pin — arms the Claude Code `--plugin-dir` behaviour pin in CI.
+# Issue: cortex#2157 (parent epic #990 · arms the test from #2151).
+#
+# ─── WHY THIS LANE EXISTS ────────────────────────────────────────────────────
+# `src/runner/__tests__/cc-plugin-dir-pin.integration.test.ts` (#2151) pins the
+# observable Claude Code CLI `--plugin-dir` skill semantics that cortex's reviewer
+# dispatch relies on (epic #990's original production failure was a CC behaviour
+# shift). That test is opt-in: it runs ONLY when `CLAUDE_BIN` is set and SKIPS
+# cleanly otherwise, so the default per-PR `Test` job in ci.yml stays free (zero
+# model calls). The gap #2157 closes: nothing in the repo set `CLAUDE_BIN`, so the
+# pin only ran when a human ran it locally. This lane sets `CLAUDE_BIN` against a
+# real, freshly-installed `claude` so "the next CC behaviour shift fails a test,
+# not a production reviewer" is actually automated.
+#
+# ─── TRIGGER CHOICE (both, per #2157 planner-confirmed) ──────────────────────
+#  1. schedule (nightly): catches a CC behaviour shift that ships in a NEW upstream
+#     `claude` release even when cortex itself did not change — this job installs
+#     the LATEST claude each run, so a breaking upstream change turns it red within
+#     ~24h regardless of repo activity.
+#  2. push to main touching `arc-manifest.yaml`: a cortex/CC version bump is exactly
+#     when the pinned behaviour can shift. The bump lands on main via a merged PR,
+#     so gating on `push: branches:[main] paths:[arc-manifest.yaml]` fires on the
+#     merge — WITHOUT making this a per-PR check (see next block).
+#  3. workflow_dispatch: manual re-run (e.g. to confirm a suspected shift on demand).
+#
+# ─── NOT A REQUIRED PER-PR CHECK (deliberate, per #2157) ─────────────────────
+# This lane costs one haiku model call per run and is intentionally NOT wired to
+# fire on `pull_request`, and NOT to be enrolled in the `protect-main` ruleset's
+# required status checks. It must never block an unrelated PR. A RED run here is a
+# signal that CC's pinned `--plugin-dir` semantics shifted — triage it against the
+# named per-fact assertions in the test, do not treat it as a merge blocker.
+#
+# ─── AUTH — UNRESOLVED ESCALATION (owner: Andreas) ───────────────────────────
+# The test's single haiku call needs a Claude credential. As of this workflow's
+# authoring there is NO existing Claude auth mechanism anywhere in cortex CI
+# (grep confirmed: no ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN secret is
+# referenced by any workflow). Per #2157, inventing a secret path is a STOP-and-ask.
+# The credential wiring is left as an explicit TODO below. Until it is wired this
+# job will FAIL at the test step (the model call is unauthenticated) — that is the
+# honest state, not a silent pass. Everything else in the lane is correct and
+# verified; only the credential is outstanding.
+name: cc-plugin-dir pin (CLAUDE_BIN)
+
+on:
+  schedule:
+    # 03:14 UTC nightly. Off the hour to avoid the top-of-hour scheduler surge.
+    - cron: "14 3 * * *"
+  push:
+    branches: [main]
+    # A cortex/CC version bump is the moment the pinned behaviour can shift.
+    paths:
+      - "arc-manifest.yaml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  cc-plugin-dir-pin:
+    name: cc-plugin-dir pin (spawns real claude — one haiku call)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # Install the LATEST Claude Code CLI (not a pinned version): the pin's whole
+      # purpose is to catch when upstream CC behaviour drifts from what the test
+      # pins (currently 2.1.211), so we deliberately track latest here. If this
+      # turns the lane red, that IS the signal — the test's per-fact assertions
+      # name which pinned semantic moved.
+      - name: Install Claude Code CLI (latest)
+        run: |
+          bun add --global @anthropic-ai/claude-code
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Show claude version (informational — pinned test target is 2.1.211)
+        run: claude --version
+
+      # TODO(owner:Andreas): wire CI Claude credential — see #2157.
+      # No Claude auth exists in cortex CI today; DO NOT invent a secret name.
+      # When a credential is provisioned, expose it to the step below via `env:`
+      # using whatever mechanism the Claude Code CLI accepts in non-interactive
+      # mode (e.g. an `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` repo/org
+      # secret). Example shape once the secret exists (leave commented until then):
+      #   env:
+      #     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      #
+      # SCOPE: run ONLY the CLAUDE_BIN-gated pin test(s), never the full suite.
+      # Today exactly one file opts into the CLAUDE_BIN gate; if a sibling
+      # `*.integration.test.ts` later gates on CLAUDE_BIN too, add its path here.
+      - name: Run cc-plugin-dir pin test (CLAUDE_BIN set)
+        run: |
+          CLAUDE_BIN="$(command -v claude)" \
+            bun test src/runner/__tests__/cc-plugin-dir-pin.integration.test.ts
