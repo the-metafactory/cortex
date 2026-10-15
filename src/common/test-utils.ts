@@ -57,12 +57,16 @@ function probeSandboxExec(): { usable: boolean; reason: string } {
 }
 
 /**
- * `describe` for a block that spawns a real `sandbox-exec`: skipped, with
- * {@link sandboxExecProbe}'s reason on stderr, when the probe fails.
+ * `describe` for a block that spawns a real `sandbox-exec`. Report the probe
+ * outcome in both environments so a green suite with skips cannot be cited
+ * as evidence that real sandbox enforcement passed. Bun reports test counts.
  */
 export function describeWithSandboxExec(name: string, fn: () => void): void {
+  const environment = `${process.platform}/${process.arch}, Bun ${Bun.version}`;
   if (!sandboxExecProbe.usable) {
-    process.stderr.write(`[skip] "${name}": ${sandboxExecProbe.reason}\n`);
+    process.stderr.write(`[skip] "${name}": ${sandboxExecProbe.reason}; real sandbox-exec coverage unavailable (${environment})\n`);
+  } else {
+    process.stderr.write(`[sandbox-exec] "${name}": profile probe succeeded; real sandbox-exec tests enabled (${environment})\n`);
   }
   describe.skipIf(!sandboxExecProbe.usable)(name, fn);
 }
