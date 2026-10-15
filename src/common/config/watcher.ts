@@ -464,8 +464,8 @@ export class AgentsDirectoryWatcher {
     this.debounceMs = options.debounceMs ?? 200;
   }
 
-  /** The newest probe of an in-flight `waitForReady()`, and what its event resolves. */
-  private readyProbeExpected: { name: string; seen: () => void } | null = null;
+  /** Set while `waitForReady()` waits: any event resolves it. */
+  private readySeen: (() => void) | null = null;
   /** Every probe `waitForReady()` wrote; removed by `stop()`. */
   private readyProbePaths: string[] = [];
   /** {@link fragmentSignature} as of `start()` / the last reload. */
@@ -493,15 +493,15 @@ export class AgentsDirectoryWatcher {
 
     this.watcher = watch(this.agentsDir, { persistent: false }, (eventType: string, filename: string | null) => {
       // Only react to YAML file events. Don't fire on dotfile flutter.
+      // Any event shows the watch is live (see waitForReady).
+      this.readySeen?.();
       if (!filename) return;
       if (filename.startsWith(READY_PROBE_PREFIX)) {
-        if (filename === this.readyProbeExpected?.name) {
-          this.readyProbeExpected.seen();
-        } else if (this.readyProbeExpected === null && this.fragmentSignature() !== this.loadedSignature) {
-          // A probe write can be reported twice, the second time after the
-          // handshake ended. Bun 1.3 reports only the first filename of a
-          // coalesced batch, so that late event may be all that is left of
-          // a fragment write in the same batch: reload if fragments changed.
+        // A probe write can be reported after its handshake ended (twice, or
+        // late under an fseventsd backlog). Bun 1.3 reports only the first
+        // filename of a coalesced batch, so that event may be all that is left
+        // of a fragment write in the same batch: reload if fragments changed.
+        if (this.readySeen === null && this.fragmentSignature() !== this.loadedSignature) {
           triggerReload("watcher");
         }
         return;
@@ -521,17 +521,19 @@ export class AgentsDirectoryWatcher {
    * asynchronously after `start()` returns, and a write that lands before it
    * binds is never reported; under load that takes far longer than any fixed
    * grace (node #2576). So this is a handshake, not a sleep: it writes dotfile
-   * probes (never a reload), each under a new name and backing off, until the
-   * watcher reports the NEWEST one. Events arrive in order, so no earlier
-   * probe's event is then still pending to share a batch with the caller's
-   * next write — Bun 1.3 reports only the first filename of a coalesced
-   * batch, which would hide that write. For the same reason the probes stay
-   * until `stop()`: removing one now would emit an event. Rejects after
-   * `timeoutMs`. Tests await it before writing fixtures; production does not
-   * need it.
+   * probes (never a reload), backing off, until the watcher reports any event.
+   * A probe's event that arrives after the handshake is handled in the watch
+   * callback. The probes stay until `stop()`, since removing one would emit
+   * another such event. Rejects after `timeoutMs`. Tests await it before
+   * writing fixtures; production does not need it.
    */
   async waitForReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
     if (this.watcher === null) return;
+    const seen = new Promise<true>((resolve) => {
+      this.readySeen = () => {
+        resolve(true);
+      };
+    });
     const deadline = Date.now() + timeoutMs;
     let waitMs = READY_PROBE_FIRST_WAIT_MS;
     try {
@@ -539,16 +541,7 @@ export class AgentsDirectoryWatcher {
         // Stopped mid-handshake (a test timed out and cleaned up): stop probing.
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stop() can clear it across the await
         if (this.watcher === null) return;
-        const name = `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`;
-        const seen = new Promise<true>((resolve) => {
-          this.readyProbeExpected = {
-            name,
-            seen: () => {
-              resolve(true);
-            },
-          };
-        });
-        const probePath = join(this.agentsDir, name);
+        const probePath = join(this.agentsDir, `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`);
         writeFileSync(probePath, "");
         this.readyProbePaths.push(probePath);
         if (await probeReported(seen, waitMs, deadline)) return;
@@ -560,7 +553,7 @@ export class AgentsDirectoryWatcher {
         waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
       }
     } finally {
-      this.readyProbeExpected = null;
+      this.readySeen = null;
     }
   }
 
