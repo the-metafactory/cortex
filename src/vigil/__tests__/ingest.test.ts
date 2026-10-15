@@ -104,7 +104,7 @@ describe("Vigil run-health ingest", () => {
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     const prior = getVigilSubject(db, KEY);
     db.run("CREATE TRIGGER fail_vigil BEFORE INSERT ON vigil_events BEGIN SELECT RAISE(ABORT, 'db failure'); END");
-    const recovery = ledgerEnvelope({ outcome: "succeeded" });
+    const recovery = ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z" });
     expect(() => ingestLedgerEnvelope(db, recovery, 200)).toThrow("db failure");
     expect(getVigilSubject(db, KEY)).toEqual(prior);
     expect(listVigilEvents(db, KEY)).toHaveLength(1);
