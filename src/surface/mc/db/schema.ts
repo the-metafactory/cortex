@@ -29,6 +29,7 @@ export const TABLE_NAMES = [
   "observability_events",
   "vigil_subjects",
   "vigil_events",
+  "vigil_replay",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -67,6 +68,12 @@ export const SCHEMA_SQL: string[] = [
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_vigil_events_subject_created ON vigil_events(subject_key, created_at)`,
+  // One row while a LEDGER replay is incomplete; startup retries the replay
+  // until it finishes, even once some subject rows exist (src/vigil/replay.ts).
+  `CREATE TABLE IF NOT EXISTS vigil_replay (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    started_at INTEGER NOT NULL
+  )`,
   // --- tasks ---
   // Schema follows design-mission-control.md §3.2: flat three-field sourceRef
   // (source_system, source_url, source_external_id) with no nesting; INTEGER

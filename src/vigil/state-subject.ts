@@ -69,8 +69,12 @@ export type LedgerObservation = Pick<VigilObservation, "goal_id" | "producer" | 
 /**
  * Update `state:{vocab}:{subject}` inside the caller's transaction. A repeated
  * value refreshes the observation (staleness counts from it) but writes no event.
+ * Replay rebuilds the row without emitting transitions.
  */
-export function updateStateSubject(db: Database, state: ExecutionRunState, observation: LedgerObservation, now: number): void {
+export function updateStateSubject(
+  db: Database, state: ExecutionRunState, observation: LedgerObservation, now: number,
+  opts: { replay?: boolean } = {},
+): void {
   const vocab = vocabularyOf(state.value);
   const key = stateSubjectKey(vocab, state.subject);
   const prior = getVigilSubject(db, key);
@@ -81,7 +85,7 @@ export function updateStateSubject(db: Database, state: ExecutionRunState, obser
     healthy: stateHealthy(vocab, state.value) ? 1 : 0, run_kind: null,
   }, now);
   const direction = stateDirection(vocab, prior?.value ?? null, state.value);
-  if (direction) {
+  if (direction && !opts.replay) {
     writeVigilTransition(db, {
       subject_key: key, from_value: prior?.value ?? null, to_value: state.value, direction,
       run_id: observation.last_run_id, occurred_at: observation.last_ended_at,

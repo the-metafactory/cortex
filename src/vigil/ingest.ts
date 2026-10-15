@@ -1,9 +1,18 @@
-// glossary-ignore: run
+// glossary-ignore: run, subscriber, message
 import type { Database } from "bun:sqlite";
-import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
+import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition } from "./db";
 import { updateStateSubject, type LedgerObservation } from "./state-subject";
+
+/**
+ * Ledger consumer timing (live and replay), set explicitly so the
+ * review-consumer defaults (sized for a 20-minute review) never leak into
+ * Vigil. Ingest is one SQLite transaction; a delivery still unacked after a
+ * minute is redelivered.
+ */
+export const LEDGER_ACK_WAIT_NS = 60 * 1_000_000_000;
+export const LEDGER_MAX_DELIVER = 5;
 
 /**
  * Run-health subject key, `run:{kind}:{ref}` (soma#787 Amendment 1, Q30).
@@ -22,27 +31,43 @@ export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
   return envelope.source.split(".")[1] ?? "";
 }
 
+/**
+ * A5b ledger-field check, as `field: reason` of the first error, or `null`
+ * when the envelope is a valid `execution.run.finished`. The wire subscriber
+ * already checked the envelope; A5b's newer chain-only signature type differs
+ * from our vendored type, so only the fields it reads are passed.
+ */
+export function ledgerEnvelopeError(envelope: Envelope): string | null {
+  const { id, source, type, timestamp, sovereignty, payload, economics, correlation_id } = envelope;
+  const validation = validateExecutionRunFinished({ id, source, type, timestamp, sovereignty, payload, economics, correlation_id });
+  if (validation.valid) return null;
+  const first = validation.errors[0];
+  return `${first?.field}: ${first?.message}`;
+}
+
 // glossary-ignore: run
 /**
  * Run-health is an Execution Run contract term, distinct from a Cortex Session.
  * Caller validates A5b first. Every envelope updates its run-health subject,
  * and its state subject when `state` is present (soma#787 Q6). Each subject
- * dedupes on its own; all writes commit atomically.
+ * dedupes on its own; all writes commit atomically. `replay` (rebuild from
+ * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number): void {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean } = {}): void {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
     goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(envelope),
     last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
   };
   db.transaction(() => {
-    updateRunHealthSubject(db, payload, observation, now);
-    if (payload.state) updateStateSubject(db, payload.state, observation, now);
+    updateRunHealthSubject(db, payload, observation, now, opts);
+    if (payload.state) updateStateSubject(db, payload.state, observation, now, opts);
   }).immediate();
 }
 
 function updateRunHealthSubject(
   db: Database, payload: ExecutionRunFinishedPayload, observation: LedgerObservation, now: number,
+  opts: { replay?: boolean },
 ): void {
   const key = runHealthKey(payload);
   const prior = getVigilSubject(db, key);
@@ -55,7 +80,7 @@ function updateRunHealthSubject(
     subject_key: key, subject_kind: "run", vocab: null, ref: payload.ran.ref, value: payload.outcome,
     healthy: healthy ? 1 : 0, run_kind: payload.ran.kind,
   }, now);
-  if (changed) {
+  if (changed && !opts.replay) {
     writeVigilTransition(db, {
       subject_key: key, from_value: prior?.value ?? null, to_value: payload.outcome,
       direction: healthy ? "better" : "worse",
