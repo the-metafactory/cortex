@@ -4,7 +4,7 @@
 // files, assert the handler receives the right events. Debounce overridden
 // to 50ms for test speed.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   mkdtempSync,
   writeFileSync,
@@ -16,6 +16,10 @@ import { tmpdir } from "os";
 
 import { AgentsDirectoryWatcher, type AgentsChangeEvent } from "../watcher";
 import { loadAgentsDirectory } from "../loader";
+
+// Room for the readiness handshake plus an event wait on a loaded machine.
+// Per file: bunfig.toml's `[test] timeout` is not read by Bun 1.3 (node #2576).
+setDefaultTimeout(20_000);
 
 // 50ms debounce, plus 80ms grace = ~130ms per assertion. Each test awaits a
 // real fs.watch event, so don't tighten this further without measurement.
@@ -29,8 +33,8 @@ const WAIT_AFTER_EVENT = 130;
  *
  * Default deadline 8000ms: these tests await a real `node:fs.watch` event plus
  * the 50ms debounce on a loaded machine (cortex#771, node #2576). With
- * `startWatcher`'s handshake (up to 8s) it stays inside the 20s per-test
- * timeout in bunfig.toml.
+ * `startWatcher`'s handshake (up to 8s) it stays inside this file's 20s
+ * per-test timeout.
  */
 async function pollUntil(
   condition: () => boolean,

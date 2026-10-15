@@ -2,12 +2,16 @@
  * F-092: Config Watcher Tests
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { writeFileSync, unlinkSync, existsSync, chmodSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { ConfigWatcher } from "../watcher";
 import type { AgentConfig } from "../../types/config";
+
+// Room for the readiness handshake plus an event wait on a loaded machine.
+// Per file: bunfig.toml's `[test] timeout` is not read by Bun 1.3 (node #2576).
+setDefaultTimeout(20_000);
 
 /**
  * Poll `condition` every `intervalMs` until it returns truthy or `timeoutMs`
@@ -19,7 +23,7 @@ import type { AgentConfig } from "../../types/config";
  * The default deadline is 8000ms (cortex#771, node #2576): the reload tests
  * depend on a real `node:fs.watch` event PLUS the watcher's 200ms debounce on
  * a loaded machine. With the `waitForReady()` handshake (up to 8s) it stays
- * inside the 20s per-test timeout in bunfig.toml.
+ * inside this file's 20s per-test timeout.
  */
 async function pollUntil(
   condition: () => boolean,

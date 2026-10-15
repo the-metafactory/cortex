@@ -1,8 +1,8 @@
 # Bun configuration.
 #
-# Per-test timeout — 20s (cortex#771). Bun's default is 5000ms. A handful of
-# suite tests spawn child processes (`cortex` / `bun` CLIs) or wait on real
-# `node:fs.watch` events; on a loaded/shared CI runner these legitimately
+# [test] timeout — per-test timeout in ms (cortex#771). Bun's default is 5000ms.
+# A handful of suite tests spawn child processes (`cortex` / `bun` CLIs) or wait
+# on real `node:fs.watch` events; on a loaded/shared CI runner these legitimately
 # approach the 5s ceiling and time out non-deterministically (observed in the
 # #771 investigation: `cortex network --help`, the bash-guard PreToolUse hook,
 # `updateIteration`, and the agents-directory watcher all timed out at 5–6.7s
@@ -12,8 +12,9 @@
 # about — those are fixed at the source (terminal-event waits + de-raced fixtures
 # in the runner/config tests); this is defense-in-depth for the timeout class.
 #
-# The ceiling is set by `scripts/test-preload.ts` (`setDefaultTimeout`): Bun
-# 1.3's bunfig `[test]` table has no `timeout` key, so the `timeout = 20000`
-# this file used to carry was silently ignored (node #2576).
+# Bun 1.3 does not read this key: its bunfig `[test]` table has no `timeout`, so
+# every test runs under the 5000ms default unless it passes its own timeout or
+# its file calls `setDefaultTimeout` (node #2576 found this; the fs.watch test
+# files do). `setDefaultTimeout` in a preload covers only the first test file.
 [test]
-preload = ["./scripts/test-preload.ts"]
+timeout = 20000

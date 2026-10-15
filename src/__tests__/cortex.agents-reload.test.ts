@@ -507,7 +507,8 @@ describe("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () =
       "luna",
     ]);
     expect(reloaded.some((added) => added.includes("luna"))).toBe(true);
-  });
+    // Room for the readiness handshake (up to 8s) plus the 8s event wait.
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------------------

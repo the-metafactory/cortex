@@ -324,6 +324,9 @@ export class ConfigWatcher {
     let waitMs = READY_PROBE_FIRST_WAIT_MS;
     try {
       for (;;) {
+        // Stopped mid-handshake (a test timed out and cleaned up): stop probing.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stop() can clear it across the await
+        if (this.watcher === null) return;
         const now = new Date();
         utimesSync(this.configPath, now, now);
         if (await probeReported(seen, waitMs, deadline)) return;
@@ -533,6 +536,9 @@ export class AgentsDirectoryWatcher {
     let waitMs = READY_PROBE_FIRST_WAIT_MS;
     try {
       for (;;) {
+        // Stopped mid-handshake (a test timed out and cleaned up): stop probing.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stop() can clear it across the await
+        if (this.watcher === null) return;
         const name = `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`;
         const seen = new Promise<true>((resolve) => {
           this.readyProbeExpected = {
