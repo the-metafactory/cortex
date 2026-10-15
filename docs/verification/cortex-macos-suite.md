@@ -1,14 +1,99 @@
 # macOS suite evidence (work-graph node #2576)
 
-## Acceptance status
+## Current acceptance evidence — review round 5 repair
 
-The final worker full-suite command in the principal-ruling fix pass failed:
-11,505 pass, 66 skip, 60 todo, 10 fail. Full-suite acceptance remains unmet.
-The historical green supervisor executions below do not establish three
-consecutive green executions of the current revision from a clean checkout of main. The worker
-records results here; the supervisor and principal retain the
-`cortex-suite-green-on-host` checkpoint. This document grants no closure or
-merge ratification.
+The repaired suite is green on plain macOS and inside the actual Codex worker
+sandbox. The earlier failing executions retained below are historical, not the
+status of the repaired source. The supervisor and principal retain the
+`cortex-suite-green-on-host` checkpoint; this record does not close it.
+
+All four measurements tested commit `9d106c635e8001e76d88f9b5992b6f37220419f6`,
+which includes fetched main `9d4752402ecfe2465ed9f945dc94962f53d95285` through
+merge `60310a0f`. Each command started from the clean assigned worker branch;
+no branch switch or other branch update was needed. The final evidence commit
+changes only this document. These are fresh measurements of the candidate
+containing main, not a claim that the unmodified main branch contains this fix.
+The original clean-main baseline remains in the historical reproduction split.
+
+Command in every case: `bun test && bunx tsc --noEmit`. Every combined command
+exited **0**, so typechecking actually ran and passed after each test execution.
+The three plain-macOS test executions ran consecutively on unchanged source.
+
+Environment: Darwin 25.6.0 arm64, 10 cores, Bun 1.4.2, `/bin/bash` 3.2.57 on
+PATH. All starting one-minute loads exceeded the core count.
+
+| Measurement | Starting load (1 minute) | Tests | Test time | Combined wall time |
+| --- | --- | --- | --- | --- |
+| Plain macOS 1 | 17.25 | 11,613 pass, 8 skip, 60 todo, 0 fail | 353.14 s | 364.91 s |
+| Plain macOS 2 | 12.17 | 11,613 pass, 8 skip, 60 todo, 0 fail | 385.84 s | 405.03 s |
+| Plain macOS 3 | 31.63 | 11,613 pass, 8 skip, 60 todo, 0 fail | 406.05 s | 440.34 s |
+| Actual Codex worker sandbox | not sampled separately | 11,555 pass, 66 skip, 60 todo, 0 fail | 382.75 s | 411.40 s |
+
+Timing caveat: the worker command was launched while the third plain-macOS
+**typecheck** was finishing. The host test phases did not overlap. The third
+combined timing includes that brief additional load; these are loaded-machine
+measurements, not isolated performance benchmarks.
+
+Logs: `/tmp/cortex-2576-r5-host-full-{1,2,3}.log` and
+`/tmp/cortex-2576-r5-worker-full.log`. Every command covered 11,681 tests across
+665 files. No source or test changed between these measurements.
+
+### Capability split in the fresh measurements
+
+| Environment | Shared native watcher probe | Watcher assertions | Real Seatbelt assertions |
+| --- | --- | --- | --- |
+| Plain macOS 1 | 1 event, 1 write, 26 ms | enabled | enabled |
+| Plain macOS 2 | 8 events, 30 writes, 1,498 ms | enabled | enabled |
+| Plain macOS 3 | 8 events, 34 writes, 1,738 ms | enabled | enabled |
+| Codex worker sandbox | 0 events, 195 writes, 10,002 ms (10,000 ms deadline) | 17 skipped with the measurement | 41 skipped with the failed profile probe reason |
+
+Each full-suite log has one shared native watcher measurement. The worker's
+66 skips comprise the same eight existing skips as plain macOS plus those
+17 watcher and 41 real-Seatbelt tests. Skipped assertions are not enforcement
+passes. The Bash shell suites passed in both environments without a new skip.
+
+### Repair and focused evidence
+
+- Temporary HOME fixtures: the three affected files reproduced **90 pass,
+  1 skip, 9 fail** before the repair and **99 pass, 1 skip, 0 fail** after it
+  inside the worker. HOME is fresh per test and restored afterward. The NatsLink
+  fixture uses that HOME rather than Bun's cached `os.homedir()`. CLI PID
+  fixtures pass an explicit scratch state directory through the existing PID
+  derivation seam; tilde derivation also receives the scratch home. Existing
+  assertions and production defaults remain unchanged. Logs:
+  `/tmp/cortex-2576-r5-before-fixtures.log`, `/tmp/cortex-2576-r5-fixtures.log`.
+- Watch readiness: both wrappers now use `watch-handshake.ts`, which owns the
+  hook promise and timer cleanup. It removes the hook synchronously on the
+  first event, so a later event in the same callback batch is not swallowed.
+  The config probe rewrites its first byte unchanged instead of relying on a
+  metadata-only touch; it probes the content-write event the tests require.
+  Four deterministic handshake checks cover synchronous hook release, probe
+  failure, silence and a stopped watcher. The final plain-macOS focused watcher
+  check passed **47 tests, 0 skips, 0 failures** in 17.16 s.
+- Probe interval errors: a failed interval write resolves an error outcome,
+  clears the interval and propagates through cleanup. A child-process fault
+  injection proves the second write error rejects, closes the watcher, removes
+  the temporary directory and exits promptly. Together with the fixture,
+  handshake and purge checks: **105 pass, 1 existing skip, 0 fail** in 3.02 s.
+  Logs: `/tmp/cortex-2576-r5-host-watchers-final.log` and
+  `/tmp/cortex-2576-r5-focused-final.log`.
+- Purge deadline: the historical plain-macOS full-suite failures below exceeded
+  the default 5-second test deadline. A fresh isolated plain-macOS baseline
+  passed in 1,916.80 ms; the shell command separately passed all 32 assertions
+  in 1.67 s. This is intermittent full-suite timing, not a failed shell assertion.
+  Its wrapper now has a 20-second deadline, with the same shell assertions.
+  It passed all three fresh host checks and the worker check. Baseline logs:
+  `/tmp/cortex-2576-r5-before-host.log`, `/tmp/cortex-2576-r5-purge-host.log`.
+- Regression checks: **24 PID lifecycle tests passed**; typechecking,
+  `bun run lint:errors` and the whole-tree XDG gate passed. The two legacy-state
+  references in this document were reworded; no allowlist entry was added.
+
+Native Linux confirmation remains with supervisor CI after push. The earlier
+[CI Test failure](https://github.com/the-metafactory/cortex/actions/runs/38802252059/job/116654025945)
+showed four reload assertions returning null after readiness had resolved. The
+content-write probe and synchronous hook release address that readiness path,
+and the deterministic regressions pass here, but Darwin execution does not
+establish a native Linux pass. No Linux runtime, VM or container was started.
 
 ## Coverage contract
 
@@ -87,11 +172,11 @@ The actual base-merge worker's 25 failures were: one boot-level watcher test,
 tilde-expansion test, one `loadAgentsDirectory` tilde-expansion test, six
 `runAgentsReload` tests (tilde expansion and PID/signal handling), and one
 `pidFileFor` tilde-expansion test. These results precede the principal's
-fs.watch ruling. The non-watcher failures remain outside the permitted skip
-conditions; this pass leaves those tests unchanged as the brief requires.
+fs.watch ruling. At that time the non-watcher failures were outside the permitted skip
+conditions, so that historical pass left those tests unchanged.
 This historical result does **not** establish a green worker-sandbox suite.
 The later principal ruling 2 authorizes temporary-home isolation for those
-permission failures; its implementation and fresh results appear below.
+permission failures; its implementation and fresh results appear above.
 
 ## Review round 3 validation
 
@@ -189,9 +274,10 @@ All 17 watcher tests skipped, alongside 49 existing skips; no watcher failed.
 All four files are byte-identical to merge base
 `56794cd1c76a9ac3905d74ac68fdaea2734ec2ed` (`git diff --exit-code` passed).
 The nine permission failures match the previously recorded worker failures;
-the brief explicitly leaves sandbox-only failures outside the authorized
-probe conditions unchanged. The worker SOP leaves unrelated base failures to
-the supervisor's comparison. No current base rerun or plain-macOS full pass is
+the then-current brief left sandbox-only failures outside the authorized
+probe conditions unchanged. Principal ruling 2 subsequently authorized the
+temporary-home repairs recorded above. The worker SOP leaves unrelated base
+failures to the supervisor's comparison. No current base rerun or plain-macOS full pass is
 claimed here. Full log: `/tmp/cortex-2576-ruling-worker-full.log`.
 
 The failed tests short-circuited `&&`; typechecking was also checked separately
