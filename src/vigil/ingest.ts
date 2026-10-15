@@ -2,7 +2,8 @@
 import type { Database } from "bun:sqlite";
 import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import { getVigilSubject } from "./db";
+import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition } from "./db";
+import { updateStateSubject, type LedgerObservation } from "./state-subject";
 
 /**
  * Ledger consumer timing (live and replay), set explicitly so the
@@ -44,41 +45,46 @@ export function ledgerEnvelopeError(envelope: Envelope): string | null {
   return `${first?.field}: ${first?.message}`;
 }
 
+// glossary-ignore: run
 /**
- * Caller validates A5b first. Subject and transition are committed atomically.
- * `replay` (rebuild from LEDGER, see `replay.ts`) updates the subject row the same
- * way and writes no Vigil event.
+ * Run-health is an Execution Run contract term, distinct from a Cortex Session.
+ * Caller validates A5b first. Every envelope updates its run-health subject,
+ * and its state subject when `state` is present (soma#787 Q6). Each subject
+ * dedupes on its own; all writes commit atomically. `replay` (rebuild from
+ * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
 export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean } = {}): void {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
-  const key = runHealthKey(payload);
-  const stack = stackOfEnvelope(envelope);
-  const endedAt = Date.parse(payload.ended_at);
+  const observation: LedgerObservation = {
+    goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(envelope),
+    last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
+  };
   db.transaction(() => {
-    const prior = getVigilSubject(db, key);
-    if (prior && (endedAt < prior.last_ended_at || payload.run_id === prior.last_run_id)) return;
-    const healthy = payload.outcome === "succeeded";
-    const changed = prior ? prior.value !== payload.outcome : !healthy;
-    db.query(`INSERT INTO vigil_subjects
-      (subject_key, subject_kind, vocab, ref, value, healthy, goal_id, producer, stack,
-       run_kind, last_run_id, last_ended_at, last_seen_at, updated_at)
-      VALUES (?, 'run', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(subject_key) DO UPDATE SET
-        value = excluded.value, healthy = excluded.healthy, goal_id = excluded.goal_id,
-        producer = excluded.producer, stack = excluded.stack, run_kind = excluded.run_kind,
-        last_run_id = excluded.last_run_id, last_ended_at = excluded.last_ended_at,
-        last_seen_at = excluded.last_seen_at, updated_at = excluded.updated_at`).run(
-      key, payload.ran.ref, payload.outcome, healthy ? 1 : 0,
-      payload.serves?.goal ?? null, payload.producer, stack, payload.ran.kind,
-      payload.run_id, endedAt, now, now,
-    );
-    if (changed && !opts.replay) {
-      db.query(`INSERT INTO vigil_events
-        (id, subject_key, event_kind, from_value, to_value, direction, run_id, occurred_at, created_at)
-        VALUES (?, ?, 'transition', ?, ?, ?, ?, ?, ?)`).run(
-        crypto.randomUUID(), key, prior?.value ?? null, payload.outcome,
-        healthy ? "better" : "worse", payload.run_id, endedAt, now,
-      );
-    }
+    updateRunHealthSubject(db, payload, observation, now, opts);
+    if (payload.state) updateStateSubject(db, payload.state, observation, now, opts);
   }).immediate();
+}
+
+function updateRunHealthSubject(
+  db: Database, payload: ExecutionRunFinishedPayload, observation: LedgerObservation, now: number,
+  opts: { replay?: boolean },
+): void {
+  const key = runHealthKey(payload);
+  const prior = getVigilSubject(db, key);
+  if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return;
+  const healthy = payload.outcome === "succeeded";
+  const changed = prior ? prior.value !== payload.outcome : !healthy;
+  // glossary-ignore: run
+  writeVigilSubject(db, {
+    ...observation,
+    subject_key: key, subject_kind: "run", vocab: null, ref: payload.ran.ref, value: payload.outcome,
+    healthy: healthy ? 1 : 0, run_kind: payload.ran.kind,
+  }, now);
+  if (changed && !opts.replay) {
+    writeVigilTransition(db, {
+      subject_key: key, from_value: prior?.value ?? null, to_value: payload.outcome,
+      direction: healthy ? "better" : "worse",
+      run_id: observation.last_run_id, occurred_at: observation.last_ended_at,
+    }, now);
+  }
 }

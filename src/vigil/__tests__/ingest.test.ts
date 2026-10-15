@@ -50,7 +50,7 @@ describe("Vigil run-health ingest", () => {
 
   test.each(["succeeded", "blocked", "cancelled"] as const)("failed to %s is a transition", (outcome) => {
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome }), 200);
+    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome, ended_at: "2026-10-12T10:01:00.000Z" }), 200);
     expect(getVigilSubject(db, KEY)).toMatchObject({ value: outcome, healthy: outcome === "succeeded" ? 1 : 0 });
     expect(listVigilEvents(db, KEY)[1]).toMatchObject({
       from_value: "failed", to_value: outcome, direction: outcome === "succeeded" ? "better" : "worse",
@@ -71,8 +71,28 @@ describe("Vigil run-health ingest", () => {
     expect(listVigilEvents(db, KEY)).toEqual(events);
   });
 
-  test("run kind is part of subject identity; state payload is out of scope", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "sensor", value: "bad" } }), 100);
+  // glossary-ignore: run
+  // Execution Run identifiers belong to the myelin contract, not Cortex Sessions.
+  test("equal ended_at: the higher run_id wins whatever the arrival order", () => {
+    const a = ledgerEnvelope({ run_id: "run-a", outcome: "failed" });
+    const b = ledgerEnvelope({ run_id: "run-b", outcome: "succeeded" });
+    for (const [order, directions] of [[[a, b], ["worse", "better"]], [[b, a], []]] as const) {
+      db.run("DELETE FROM vigil_events"); db.run("DELETE FROM vigil_subjects");
+      order.forEach((envelope, i) => ingestLedgerEnvelope(db, envelope, 100 * (i + 1)));
+      expect(getVigilSubject(db, KEY)).toMatchObject({ value: "succeeded", healthy: 1, last_run_id: "run-b" });
+      expect(listVigilEvents(db, KEY).map((e) => e.direction)).toEqual([...directions]);
+      const prior = getVigilSubject(db, KEY);
+      const events = listVigilEvents(db, KEY);
+      [a, b, a, b].forEach((envelope, i) => {
+        ingestLedgerEnvelope(db, envelope, 300 + 100 * i);
+        expect(getVigilSubject(db, KEY)).toEqual(prior);
+        expect(listVigilEvents(db, KEY)).toEqual(events);
+      });
+    }
+  });
+
+  test("run kind is part of subject identity", () => {
+    ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-sweep" } }), 100);
     expect(db.query("SELECT subject_key FROM vigil_subjects ORDER BY subject_key").all()).toEqual([
       { subject_key: KEY }, { subject_key: "run:job:daily-sweep" },
@@ -93,7 +113,7 @@ describe("Vigil run-health ingest", () => {
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     const prior = getVigilSubject(db, KEY);
     db.run("CREATE TRIGGER fail_vigil BEFORE INSERT ON vigil_events BEGIN SELECT RAISE(ABORT, 'db failure'); END");
-    const recovery = ledgerEnvelope({ outcome: "succeeded" });
+    const recovery = ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z" });
     expect(() => ingestLedgerEnvelope(db, recovery, 200)).toThrow("db failure");
     expect(getVigilSubject(db, KEY)).toEqual(prior);
     expect(listVigilEvents(db, KEY)).toHaveLength(1);
