@@ -12,6 +12,7 @@ import { createFakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstrea
 import { LEDGER_STREAM } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
+import { ingestLedgerEnvelope } from "../ingest";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, startVigil } from "../index";
 import { KEY, SUBJECT, ledgerEnvelope } from "./fixtures";
 
@@ -114,6 +115,8 @@ describe("Vigil startup and delivery", () => {
     const { provisionLedgerStream } = await import("../../bus/jetstream/provision");
     await provisionLedgerStream({ jsm: fake.jsm, principal: "jc" });
     fake.publish(SUBJECT);
+    // A non-empty table skips replay (covered in replay.test.ts).
+    ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     const h = pullRuntime(fake);
     const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default" });
     expect(fake.pull(LEDGER_STREAM, "cortex-vigil-jc")).toEqual([]);
