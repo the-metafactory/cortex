@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startCortex, type StartCortexOptions } from "../cortex";
+import { hermeticBootPaths } from "../common/test-utils";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
@@ -121,6 +122,7 @@ async function bootWithPolicy(
   // the resolved view via the test-only `onBootResolvedPolicy` observation seam.
   let resolvedPolicy: Policy | undefined;
   const options: StartCortexOptions = {
+    ...hermeticBootPaths(),
     disableConfigWatcher: true,
     disableDashboard: true,
     disableOutboundPoller: true,

@@ -16,16 +16,14 @@ import type { AgentConfig } from "../../types/config";
  * runners where fs.watch + the 200ms ConfigWatcher debounce together could
  * exceed 300ms (cortex#699).
  *
- * The default deadline is 4000ms (cortex#771): the reload tests depend on a
- * real `node:fs.watch` event PLUS the watcher's 200ms debounce, and under
- * full-suite concurrency the 2000ms default was still occasionally missed
- * (observed: an `identifies restart-required field changes` reload that landed
- * at ~2.1s). 4000ms stays inside Bun's default 5s per-test timeout while
- * absorbing kernel inotify/FSEvents latency on a loaded runner.
+ * The default deadline is 8000ms (cortex#771, node #2576): the reload tests
+ * depend on a real `node:fs.watch` event PLUS the watcher's 200ms debounce on
+ * a loaded machine. With the `waitForReady()` handshake (up to 8s) it stays
+ * inside the 20s per-test timeout in bunfig.toml.
  */
 async function pollUntil(
   condition: () => boolean,
-  timeoutMs = 4000,
+  timeoutMs = 8000,
   intervalMs = 30,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -34,18 +32,6 @@ async function pollUntil(
     await new Promise<void>((r) => setTimeout(r, intervalMs));
   }
   return condition();
-}
-
-/**
- * Small grace period after `watcher.start()` before writing a file.
- * ConfigWatcher uses `node:fs.watch` whose subscription is not guaranteed to
- * be bound synchronously — writing the file immediately after start() risks
- * missing the event (macOS FSEvents / Linux inotify subscription races).
- * 100ms is deliberately larger than AgentsDirectoryWatcher's 30ms
- * `registrationGraceMs` to provide margin on slow CI runners (cortex#699).
- */
-function watcherReady(): Promise<void> {
-  return new Promise<void>((r) => setTimeout(r, 100));
 }
 
 /**
@@ -245,16 +231,13 @@ paths:
 `;
 
     watcher.start();
-    // Grace period: ensure the fs.watch subscription is bound before writing
-    // (cortex#699 — see watcherReady() above).
-    await watcherReady();
+    // A write that lands before fs.watch binds is never reported (node #2576).
+    await watcher.waitForReady();
     writeConfigFixture(testConfigPath, updatedYaml);
 
     // Poll until callback fires: fs.watch + 200ms debounce can exceed a fixed
-    // 300ms wait on loaded CI runners (cortex#699). 4 s stays inside the bun
-    // default 5 s per-test timeout while absorbing kernel inotify/FSEvents
-    // delays under peak I/O.
-    await pollUntil(() => capturedEvent !== null, 4_000);
+    // 300ms wait on loaded CI runners (cortex#699); see pollUntil for the bound.
+    await pollUntil(() => capturedEvent !== null);
     watcher.stop();
 
     expect(capturedEvent).not.toBeNull();
@@ -309,7 +292,7 @@ paths:
 `;
 
     watcher.start();
-    await watcherReady();
+    await watcher.waitForReady();
     writeConfigFixture(testConfigPath, updatedYaml);
 
     // Poll until callback fires (cortex#699 — see comment in "identifies safe
@@ -421,7 +404,7 @@ paths:
 `;
 
     watcher.start();
-    await watcherReady();
+    await watcher.waitForReady();
     writeConfigFixture(testConfigPath, updatedYaml);
     await pollUntil(() => capturedEvent !== null);
     watcher.stop();
@@ -489,7 +472,7 @@ paths:
 `;
 
     watcher.start();
-    await watcherReady();
+    await watcher.waitForReady();
     writeConfigFixture(testConfigPath, updatedYaml);
     await pollUntil(() => capturedEvent !== null);
     watcher.stop();

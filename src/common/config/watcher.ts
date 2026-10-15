@@ -3,7 +3,8 @@
  * Watches bot.yaml for changes and applies safe fields without restart.
  */
 
-import { watch, type FSWatcher, existsSync } from "fs";
+import { watch, type FSWatcher, existsSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "fs";
+import { join } from "path";
 import { loadConfig, loadAgentsDirectory, FragmentLoadError, expandTilde } from "./loader";
 import type { AgentConfig } from "../types/config";
 import type { Agent } from "../types/cortex-config";
@@ -238,6 +239,24 @@ function compareConfigs(oldConfig: AgentConfig, newConfig: AgentConfig): {
   return { applied, requiresRestart };
 }
 
+/** Upper bound on a watcher's `waitForReady()` handshake. */
+const READY_TIMEOUT_MS = 8_000;
+/** How long a handshake first waits for its probe's event; doubles per unanswered probe. */
+const READY_PROBE_FIRST_WAIT_MS = 100;
+const READY_PROBE_MAX_WAIT_MS = 1_600;
+/** Filename prefix of `AgentsDirectoryWatcher`'s probe dotfiles. */
+const READY_PROBE_PREFIX = ".cortex-watch-ready-";
+let readyProbeCounter = 0;
+
+/**
+ * Race `seen` against `waitMs` (clipped to `deadline`): `true` once the
+ * watcher reported the probe, `false` when the wait ran out first.
+ */
+function probeReported(seen: Promise<true>, waitMs: number, deadline: number): Promise<boolean> {
+  const wait = Math.max(0, Math.min(waitMs, deadline - Date.now()));
+  return Promise.race([seen, new Promise<false>((resolve) => setTimeout(() => { resolve(false); }, wait))]);
+}
+
 /**
  * Watches bot.yaml for changes and triggers reload events.
  */
@@ -247,6 +266,8 @@ export class ConfigWatcher {
   private handler: ConfigChangeHandler;
   private watcher: FSWatcher | null = null;
   private reloadTimeout: NodeJS.Timeout | null = null;
+  /** Set while `waitForReady()` probes: every event resolves it instead of reloading. */
+  private readyProbeSeen: (() => void) | null = null;
 
   constructor(configPath: string, initialConfig: AgentConfig, handler: ConfigChangeHandler) {
     this.configPath = configPath.replace(/^~/, process.env.HOME ?? "~");
@@ -271,10 +292,49 @@ export class ConfigWatcher {
     };
 
     this.watcher = watch(this.configPath, { persistent: false }, (eventType: string) => {
+      if (this.readyProbeSeen) {
+        this.readyProbeSeen();
+        return;
+      }
       if (eventType === "change") {
         triggerReload();
       }
     });
+  }
+
+  /**
+   * Resolves once fs.watch is delivering events for the config file —
+   * immediately if the watcher is not watching. Bun binds the watch
+   * asynchronously after `start()` returns, and a write that lands before it
+   * binds is never reported; under load that takes far longer than any fixed
+   * grace (node #2576). So this is a handshake: it touches the file's times
+   * (content unchanged), backing off, until the watcher reports a touch.
+   * Events seen while probing do not reload. Rejects after
+   * `timeoutMs`. Tests await it before writing the change they assert on;
+   * production does not need it.
+   */
+  async waitForReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
+    if (this.watcher === null) return;
+    const seen = new Promise<true>((resolve) => {
+      this.readyProbeSeen = () => {
+        resolve(true);
+      };
+    });
+    const deadline = Date.now() + timeoutMs;
+    let waitMs = READY_PROBE_FIRST_WAIT_MS;
+    try {
+      for (;;) {
+        const now = new Date();
+        utimesSync(this.configPath, now, now);
+        if (await probeReported(seen, waitMs, deadline)) return;
+        if (Date.now() >= deadline) {
+          throw new Error(`config-watcher: fs.watch on ${this.configPath} reported no event within ${timeoutMs}ms`);
+        }
+        waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
+      }
+    } finally {
+      this.readyProbeSeen = null;
+    }
   }
 
   stop(): void {
@@ -401,15 +461,12 @@ export class AgentsDirectoryWatcher {
     this.debounceMs = options.debounceMs ?? 200;
   }
 
-  /**
-   * Registration grace window in ms. macOS FSEvents subscribes asynchronously;
-   * if a test (or production code) writes a file immediately after `start()`
-   * returns, the event may be lost. `waitForReady()` waits this long for the
-   * watcher to fully bind before resolving. Tests should `await` it after
-   * `start()` to eliminate the race (Echo M4 on cortex#62).
-   */
-  private readonly registrationGraceMs = 30;
-  private readyPromise: Promise<void> | null = null;
+  /** The newest probe of an in-flight `waitForReady()`, and what its event resolves. */
+  private readyProbeExpected: { name: string; seen: () => void } | null = null;
+  /** Every probe `waitForReady()` wrote; removed by `stop()`. */
+  private readyProbePaths: string[] = [];
+  /** {@link fragmentSignature} as of `start()` / the last reload. */
+  private loadedSignature = "";
 
   start(): void {
     if (!existsSync(this.agentsDir)) {
@@ -418,11 +475,11 @@ export class AgentsDirectoryWatcher {
       // but that widens scope. For v1: log + return. Principal restarts cortex
       // after creating the dir, or invokes `cortex agents reload` (F-3).
       console.warn(`agents-watcher: agents.d directory not found at ${this.agentsDir} — watcher idle`);
-      this.readyPromise = Promise.resolve();
       return;
     }
 
     console.log(`agents-watcher: watching ${this.agentsDir} for fragment changes`);
+    this.loadedSignature = this.fragmentSignature();
 
     const triggerReload = (source: "watcher" | "sighup" | "cli" = "watcher") => {
       if (this.reloadTimeout) clearTimeout(this.reloadTimeout);
@@ -434,6 +491,18 @@ export class AgentsDirectoryWatcher {
     this.watcher = watch(this.agentsDir, { persistent: false }, (eventType: string, filename: string | null) => {
       // Only react to YAML file events. Don't fire on dotfile flutter.
       if (!filename) return;
+      if (filename.startsWith(READY_PROBE_PREFIX)) {
+        if (filename === this.readyProbeExpected?.name) {
+          this.readyProbeExpected.seen();
+        } else if (this.readyProbeExpected === null && this.fragmentSignature() !== this.loadedSignature) {
+          // A probe write can be reported twice, the second time after the
+          // handshake ended. Bun 1.3 reports only the first filename of a
+          // coalesced batch, so that late event may be all that is left of
+          // a fragment write in the same batch: reload if fragments changed.
+          triggerReload("watcher");
+        }
+        return;
+      }
       if (filename.startsWith(".")) return;
       if (!filename.endsWith(".yaml") && !filename.endsWith(".yml")) return;
       // eventType is "rename" (create/delete) or "change" — both warrant a reload.
@@ -441,23 +510,52 @@ export class AgentsDirectoryWatcher {
         triggerReload("watcher");
       }
     });
-
-    // Register a small grace promise — tests await this before writing
-    // fixtures to ensure the fs.watch subscription is fully bound.
-    this.readyPromise = new Promise((resolve) =>
-      setTimeout(resolve, this.registrationGraceMs),
-    );
   }
 
   /**
-   * Resolves once the underlying fs.watch is bound (or immediately if the
-   * watcher is idle because agents.d/ doesn't exist). Useful for tests that
-   * want to write a fragment file right after `start()` without racing the
-   * macOS FSEvents subscription. Production code typically doesn't need it —
-   * the registration grace is short (30ms).
+   * Resolves once fs.watch is delivering events for agents.d/ — immediately
+   * if the watcher is idle (no agents.d/) or not started. Bun binds the watch
+   * asynchronously after `start()` returns, and a write that lands before it
+   * binds is never reported; under load that takes far longer than any fixed
+   * grace (node #2576). So this is a handshake, not a sleep: it writes dotfile
+   * probes (never a reload), each under a new name and backing off, until the
+   * watcher reports the NEWEST one. Events arrive in order, so no earlier
+   * probe's event is then still pending to share a batch with the caller's
+   * next write — Bun 1.3 reports only the first filename of a coalesced
+   * batch, which would hide that write. For the same reason the probes stay
+   * until `stop()`: removing one now would emit an event. Rejects after
+   * `timeoutMs`. Tests await it before writing fixtures; production does not
+   * need it.
    */
-  waitForReady(): Promise<void> {
-    return this.readyPromise ?? Promise.resolve();
+  async waitForReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
+    if (this.watcher === null) return;
+    const deadline = Date.now() + timeoutMs;
+    let waitMs = READY_PROBE_FIRST_WAIT_MS;
+    try {
+      for (;;) {
+        const name = `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`;
+        const seen = new Promise<true>((resolve) => {
+          this.readyProbeExpected = {
+            name,
+            seen: () => {
+              resolve(true);
+            },
+          };
+        });
+        const probePath = join(this.agentsDir, name);
+        writeFileSync(probePath, "");
+        this.readyProbePaths.push(probePath);
+        if (await probeReported(seen, waitMs, deadline)) return;
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `agents-watcher: fs.watch on ${this.agentsDir} reported no event within ${timeoutMs}ms`,
+          );
+        }
+        waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
+      }
+    } finally {
+      this.readyProbeExpected = null;
+    }
   }
 
   stop(): void {
@@ -469,6 +567,8 @@ export class AgentsDirectoryWatcher {
       clearTimeout(this.reloadTimeout);
       this.reloadTimeout = null;
     }
+    for (const probePath of this.readyProbePaths) rmSync(probePath, { force: true });
+    this.readyProbePaths = [];
   }
 
   /**
@@ -487,8 +587,37 @@ export class AgentsDirectoryWatcher {
     return this.agents;
   }
 
+  /**
+   * Name, size and mtime of every fragment file the reload reads (the same
+   * dotfile / extension filter as the fs.watch callback) — enough to tell
+   * whether fragments changed since the last load without loading them.
+   */
+  private fragmentSignature(): string {
+    let names: string[];
+    try {
+      names = readdirSync(this.agentsDir);
+    } catch (_err) {
+      // agents.d/ removed under the watcher: no fragments to compare.
+      return "";
+    }
+    return names
+      .filter((n) => !n.startsWith(".") && (n.endsWith(".yaml") || n.endsWith(".yml")))
+      .sort()
+      .map((n) => {
+        try {
+          const s = statSync(join(this.agentsDir, n));
+          return `${n}:${s.size}:${s.mtimeMs}`;
+        } catch (_err) {
+          // Removed between readdir and stat — absent from the signature.
+          return "";
+        }
+      })
+      .join("|");
+  }
+
   private reload(source: "watcher" | "sighup" | "cli"): void {
     try {
+      this.loadedSignature = this.fragmentSignature();
       const fresh = loadAgentsDirectory(this.agentsDir);
       const diff = diffAgents(this.agents, fresh);
       this.agents = fresh;

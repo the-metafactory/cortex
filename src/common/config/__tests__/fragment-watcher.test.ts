@@ -27,14 +27,14 @@ const WAIT_AFTER_EVENT = 130;
  * Returns true when satisfied, false on deadline. Replaces fixed-duration
  * sleeps that proved racy under loaded CI runners (cortex#699).
  *
- * Default deadline 4000ms (cortex#771): these tests await a real
- * `node:fs.watch` event plus the 50ms debounce, and the 2000ms default was
- * still occasionally missed under full-suite concurrency. 4000ms stays inside
- * Bun's 5s per-test timeout while absorbing kernel inotify/FSEvents latency.
+ * Default deadline 8000ms: these tests await a real `node:fs.watch` event plus
+ * the 50ms debounce on a loaded machine (cortex#771, node #2576). With
+ * `startWatcher`'s handshake (up to 8s) it stays inside the 20s per-test
+ * timeout in bunfig.toml.
  */
 async function pollUntil(
   condition: () => boolean,
-  timeoutMs = 4000,
+  timeoutMs = 8000,
   intervalMs = 30,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -80,8 +80,8 @@ async function startWatcher(
     { debounceMs: DEBOUNCE_MS },
   );
   watcher.start();
-  // Echo M4 — wait for fs.watch registration to bind before tests write
-  // fixtures, eliminating the macOS FSEvents subscription race.
+  // Echo M4 — wait until fs.watch reports events before tests write fixtures:
+  // a write that lands before the watch binds is never reported (node #2576).
   await watcher.waitForReady();
 }
 
@@ -229,9 +229,8 @@ describe("AgentsDirectoryWatcher", () => {
     test("triggerReload(cli) emits source: cli", async () => {
       dropFragment("echo");
       await startWatcher();
+      // Sync call — the handler has run by the time triggerReload returns.
       watcher!.triggerReload("cli");
-      // Sync call — no debounce wait needed for explicit triggers.
-      await sleep(20);
       const last = events[events.length - 1]!;
       expect(last.source).toBe("cli");
       expect(last.failed).toBe(false);
@@ -241,7 +240,6 @@ describe("AgentsDirectoryWatcher", () => {
       dropFragment("echo");
       await startWatcher();
       watcher!.triggerReload("sighup");
-      await sleep(20);
       const last = events[events.length - 1]!;
       expect(last.source).toBe("sighup");
     });
