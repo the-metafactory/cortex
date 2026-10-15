@@ -29,6 +29,7 @@ import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import { startCortex, type CortexHandle } from "../cortex";
 import { hermeticBootPaths, hermeticHomeDir } from "../common/test-utils";
+import { describeWithFsWatch } from "../common/test-fs-watch";
 import { replayPending } from "../common/agents/agent-state-scaffold";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type {
@@ -467,7 +468,7 @@ runtime:
 // Tests — live fs.watch path
 // ---------------------------------------------------------------------------
 
-describe("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () => {
+describeWithFsWatch("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () => {
   test("fs.watch fires the reconcile on a fragment add", async () => {
     const runtime = createRecordingRuntime();
     writeFragment("echo", ["code-review.typescript"]);

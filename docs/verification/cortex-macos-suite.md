@@ -1,5 +1,15 @@
 # macOS suite evidence (work-graph node #2576)
 
+## Acceptance status
+
+The final worker full-suite command in the principal-ruling fix pass failed:
+11,505 pass, 66 skip, 60 todo, 10 fail. Full-suite acceptance remains unmet.
+The historical green supervisor executions below do not establish three
+consecutive green executions of the current revision from a clean checkout of main. The worker
+records results here; the supervisor and principal retain the
+`cortex-suite-green-on-host` checkpoint. This document grants no closure or
+merge ratification.
+
 ## Coverage contract
 
 `describeWithSandboxExec` probes `(version 1)(allow default)` with
@@ -12,6 +22,19 @@ The skip is required when an outer Seatbelt sandbox prevents `sandbox_apply`.
 It proves neither guarded nor strict enforcement. Enforcement evidence must
 come from a macOS execution where the probe succeeds and the tests run. A green
 supervisor result does not establish that the full suite is green in a worker.
+
+The principal's 2026-10-15 ruling additionally permits a measured native
+`fs.watch` capability gate. `src/common/test-fs-watch.ts` measures once per test
+process, shared by all three importing test files. It watches a temporary
+directory and writes new files every 50 ms until an event arrives or 10 seconds
+expire. The diagnostic reports events, writes, elapsed time and deadline.
+Setup and filesystem I/O errors remain failures. The watcher, timers and
+temporary files are cleaned up on completion.
+
+Only `AgentsDirectoryWatcher`, both `ConfigWatcher` groups and the boot-level
+`startCortex — agents.d/ fs.watch reconcile` group use that gate. When no events
+arrive they skip with the measured reason; where an event arrives their
+assertions still run. Deterministic `reloadAgents()` coverage remains enabled.
 
 ## Recorded executions before review round 3
 
@@ -55,7 +78,7 @@ Codex worker sandbox.
 | Boot wire-up, capabilities, federated peers | Passed, but discovered installed Arc bundles | Isolate plugin/pack roots, sibling scan and replay fixtures under temporary directories. |
 | Last-known-good config | Passed | State-directory seam avoids writes to the real `~/.config/grove/state`. |
 | Bash shell suites | Passed on Bash 3.2; `mapfile` dependency already removed upstream | No missing-feature skip added. `systemd-render` timeout-absent case failed only in actual Codex; leave it alone under the brief's skip criteria. |
-| Watchers | Passed idle, failed under load | Bounded event handshakes replace startup grace sleeps. No sandbox-only watcher skip. |
+| Watchers | Passed idle, failed under load | Bounded event handshakes replace startup grace sleeps. The later principal ruling adds a measured no-event skip (see coverage contract). |
 | Whole-tree carveout scan | Exceeded timeout under load (18 s idle, 47 s loaded) | Give the scan 120 s; assertions unchanged. |
 | MC endpoint listeners | Random port collision during full-suite validation | Bind ephemeral port 0. |
 
@@ -63,9 +86,10 @@ The actual base-merge worker's 25 failures were: one boot-level watcher test,
 11 `AgentsDirectoryWatcher` tests, four `ConfigWatcher` tests, one NatsLink
 tilde-expansion test, one `loadAgentsDirectory` tilde-expansion test, six
 `runAgentsReload` tests (tilde expansion and PID/signal handling), and one
-`pidFileFor` tilde-expansion test. Those are outside the permitted Bash-feature
-and nested-Seatbelt skip conditions; they remain visible failures. This record
-does **not** claim the full worker-sandbox suite is green.
+`pidFileFor` tilde-expansion test. These results precede the principal's
+fs.watch ruling. The non-watcher failures remain outside the permitted skip
+conditions; this pass leaves those tests unchanged as the brief requires.
+This historical result does **not** establish a green worker-sandbox suite.
 
 ## Review round 3 validation
 
@@ -116,3 +140,57 @@ attempt is **not** a green full-suite result. Log:
 Because the failed tests short-circuited `&&`, typechecking was run separately.
 `bunx tsc --noEmit` passed (exit 0, 20.83 s wall time), logged in
 `/tmp/cortex-2576-review3-typecheck.log`.
+
+## Principal-ruling fix pass, 2026-10-15
+
+The shared event probe implements the principal's fs.watch ruling without
+changing any watcher assertion or selecting by environment name. Sage's
+duplicated fragment-file filter suggestion is also applied: the watch callback
+and signature calculation now share `isFragmentFile`.
+
+Focused command in each environment:
+
+```sh
+bun test src/common/config/__tests__/watcher.test.ts \
+  src/common/config/__tests__/fragment-watcher.test.ts \
+  src/__tests__/cortex.agents-reload.test.ts
+```
+
+| Execution | Probe measurement | Focused result |
+| --- | --- | --- |
+| Actual Codex worker sandbox | 0 events, 194 writes, 10,004 ms | 30 pass, 17 skip, 0 fail; 10.68 s |
+| Plain macOS outside the sandbox | 8 events, 24 writes, 1,214 ms | 47 pass, 0 skip, 0 fail; 8.62 s (8.76 s wall) |
+
+Each log contains exactly one `[fs.watch probe]` measurement, reused across
+the four gated groups. The plain-macOS check started at one-minute load 11.34
+on 10 cores, so all watcher assertions ran under the requested load condition.
+Logs: `/tmp/cortex-2576-ruling-worker-focused.log` and
+`/tmp/cortex-2576-ruling-host-focused.log`.
+
+The fix-pass SOP reserves one full-suite command immediately before the final
+commit and forbids switching branches. No fresh clean-main baseline or three
+new full-suite measurements are claimed by this pass. The original baseline
+and three reported timings remain above with their revision and provenance.
+
+Final worker-sandbox command: `bun test && bunx tsc --noEmit`, exit 1.
+Tests: **11,505 pass, 66 skip, 60 todo, 10 fail**, 315.77 s (315.90 s wall).
+The single shared watcher probe measured 0 events from 191 writes in 10,001 ms.
+All 17 watcher tests skipped, alongside 49 existing skips; no watcher failed.
+
+| Unchanged failing file | Tests / cause |
+| --- | --- |
+| `scripts/__tests__/purge-supervision.test.ts` | Shell suite exceeded its 5,000 ms deadline (5,063.23 ms). The same deadline failure is recorded in earlier plain-macOS validation above. |
+| `src/bus/nats/__tests__/connection.test.ts` | NatsLink leading-tilde creds fixture: EPERM writing a file directly under the real home. |
+| `src/common/config/__tests__/fragment-loader.test.ts` | Persona tilde-expansion fixture: EPERM creating a directory directly under the real home. |
+| `src/cli/cortex/commands/__tests__/agents.test.ts` | Seven failures: tilde-persona fixture, delivered signal, partial-numeric PID, stale PID, JSON failed signal, JSON delivered signal, and pidFileFor tilde spellings. All are EPERM while creating fixtures in the real home or its `.config/grove/state` directory. |
+
+All four files are byte-identical to merge base
+`56794cd1c76a9ac3905d74ac68fdaea2734ec2ed` (`git diff --exit-code` passed).
+The nine permission failures match the previously recorded worker failures;
+the brief explicitly leaves sandbox-only failures outside the authorized
+probe conditions unchanged. The worker SOP leaves unrelated base failures to
+the supervisor's comparison. No current base rerun or plain-macOS full pass is
+claimed here. Full log: `/tmp/cortex-2576-ruling-worker-full.log`.
+
+The failed tests short-circuited `&&`; typechecking was also checked separately
+and passed (exit 0, 15.06 s wall). Log: `/tmp/cortex-2576-ruling-typecheck.log`.

@@ -2,12 +2,13 @@
  * F-092: Config Watcher Tests
  */
 
-import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import { test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { writeFileSync, unlinkSync, existsSync, chmodSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { ConfigWatcher } from "../watcher";
 import type { AgentConfig } from "../../types/config";
+import { describeWithFsWatch } from "../../test-fs-watch";
 
 // Room for the readiness handshake plus an event wait on a loaded machine.
 // Per file: bunfig.toml's `[test] timeout` is not read by Bun 1.3 (node #2576).
@@ -129,7 +130,7 @@ const TEST_CONFIG: AgentConfig = {
   networks: [],
 };
 
-describe("ConfigWatcher", () => {
+describeWithFsWatch("ConfigWatcher", () => {
   let testConfigPath: string;
 
   beforeEach(() => {
@@ -314,7 +315,7 @@ paths:
 // cortex#135 — github.repos hot-reload regression test
 // ---------------------------------------------------------------------------
 
-describe("ConfigWatcher — github.repos hot-reload (cortex#135)", () => {
+describeWithFsWatch("ConfigWatcher — github.repos hot-reload (cortex#135)", () => {
   let testConfigPath: string;
   const INITIAL_YAML = `
 agent:

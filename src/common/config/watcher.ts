@@ -9,6 +9,9 @@ import { loadConfig, loadAgentsDirectory, FragmentLoadError, expandTilde } from 
 import type { AgentConfig } from "../types/config";
 import type { Agent } from "../types/cortex-config";
 
+const isFragmentFile = (name: string): boolean =>
+  !name.startsWith(".") && (name.endsWith(".yaml") || name.endsWith(".yml"));
+
 export interface ConfigChangeEvent {
   /** Fields that were applied without requiring restart */
   applied: string[];
@@ -523,8 +526,7 @@ export class AgentsDirectoryWatcher {
         }
         return;
       }
-      if (filename.startsWith(".")) return;
-      if (!filename.endsWith(".yaml") && !filename.endsWith(".yml")) return;
+      if (!isFragmentFile(filename)) return;
       // eventType is "rename" (create/delete) or "change" — both warrant a reload.
       if (eventType === "rename" || eventType === "change") {
         triggerReload("watcher");
@@ -611,7 +613,7 @@ export class AgentsDirectoryWatcher {
       return "";
     }
     return names
-      .filter((n) => !n.startsWith(".") && (n.endsWith(".yaml") || n.endsWith(".yml")))
+      .filter(isFragmentFile)
       .sort()
       .map((n) => {
         try {

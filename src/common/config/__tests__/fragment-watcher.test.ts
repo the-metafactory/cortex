@@ -16,6 +16,7 @@ import { tmpdir } from "os";
 
 import { AgentsDirectoryWatcher, type AgentsChangeEvent } from "../watcher";
 import { loadAgentsDirectory } from "../loader";
+import { describeWithFsWatch } from "../../test-fs-watch";
 
 // Room for the readiness handshake plus an event wait on a loaded machine.
 // Per file: bunfig.toml's `[test] timeout` is not read by Bun 1.3 (node #2576).
@@ -114,7 +115,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe("AgentsDirectoryWatcher", () => {
+describeWithFsWatch("AgentsDirectoryWatcher", () => {
   describe("file events", () => {
     test("drop a fragment → fires with agentsAdded", async () => {
       await startWatcher();
