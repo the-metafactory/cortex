@@ -134,10 +134,10 @@ describe("Vigil LEDGER replay", () => {
   ])("rebuilds $vocab state without events, then records a live transition", async ({ vocab, values, healthy, direction }) => {
     const h = ledgerHarness();
     const stateKey = `state:${vocab}:watched`;
-    const first = ledgerEnvelope({ state: { subject: "watched", value: values[0]! } });
+    const first = ledgerEnvelope({ state: { subject: "watched", value: values[0] } });
     const second = ledgerEnvelope({
       outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z",
-      serves: { goal: "G1" }, state: { subject: "watched", value: values[1]! },
+      serves: { goal: "G1" }, state: { subject: "watched", value: values[1] },
     });
     await h.publish(first, second);
     expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBe(2);
@@ -149,7 +149,7 @@ describe("Vigil LEDGER replay", () => {
 
     const live = ledgerEnvelope({
       outcome: "succeeded", ended_at: "2026-10-12T10:02:00.000Z",
-      state: { subject: "watched", value: values[2]! },
+      state: { subject: "watched", value: values[2] },
     });
     ingestLedgerEnvelope(db, live, Date.parse("2026-10-12T10:03:00.000Z"));
     expect(getVigilSubject(db, stateKey)).toMatchObject({ value: values[2], healthy, last_run_id: live.payload.run_id });
