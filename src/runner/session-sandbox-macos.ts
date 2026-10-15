@@ -1294,7 +1294,9 @@ export class MacosSbplSandbox implements SessionSandbox {
 
     // Strict only: a per-session claude scratch root (see the strict
     // generator's "claude scratch dir" section). Lives under profileDir so
-    // the exit cleanup below removes it with the profile.
+    // the exit cleanup below removes it with the profile. `opts.env` is
+    // required (SandboxSpawnOpts) and is the caller's deliberately scoped
+    // session env, so it is extended, never replaced by `process.env`.
     let spawnOpts = opts;
     let claudeTmpDir: string | undefined;
     if (profile.posture === "strict") {

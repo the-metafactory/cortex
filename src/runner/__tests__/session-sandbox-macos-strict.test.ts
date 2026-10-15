@@ -35,7 +35,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { SandboxProfile } from "../session-sandbox";
@@ -502,6 +502,29 @@ describeWithSandboxExec("MacosSbplSandbox — posture gating (guarded vs strict)
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  }, 15_000);
+
+  test("posture 'strict': the child gets the caller's env plus its own CLAUDE_CODE_TMPDIR", async () => {
+    // node #2576 — the strict branch adds CLAUDE_CODE_TMPDIR to opts.env;
+    // every other var the caller scoped (cc-session's session env) must
+    // still reach the child unchanged.
+    const sandbox = new MacosSbplSandbox();
+    const profile = baseProfile({ mode: "audit", posture: "strict", readWrite: [], execAllow: ["env"] });
+    const proc = sandbox.spawn(["/usr/bin/env"], profile, {
+      env: { CORTEX_TEST_MARKER: "kept", HOME: "/nonexistent-home" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout =
+      typeof proc.stdout === "object" && proc.stdout !== null
+        ? await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
+        : "";
+    expect(await proc.exited).toBe(0);
+    const lines = stdout.trim().split("\n");
+    expect(lines).toContain("CORTEX_TEST_MARKER=kept");
+    expect(lines).toContain("HOME=/nonexistent-home");
+    const tmpLine = lines.find((l) => l.startsWith("CLAUDE_CODE_TMPDIR="));
+    expect(tmpLine).toMatch(/cortex-sbpl-[^/]+\/claude-tmp$/);
   }, 15_000);
 
   test("posture 'strict': an out-of-scope read is denied end-to-end via the real class", async () => {

@@ -249,12 +249,33 @@ const READY_PROBE_PREFIX = ".cortex-watch-ready-";
 let readyProbeCounter = 0;
 
 /**
- * Race `seen` against `waitMs` (clipped to `deadline`): `true` once the
- * watcher reported the probe, `false` when the wait ran out first.
+ * The `waitForReady()` handshake both watchers share: call `probe`, wait for
+ * `seen` (the watcher reported an event), and on silence probe again with a
+ * doubling wait, until `seen` resolves (resolve), `isStopped` turns true
+ * (resolve — a test timed out and cleaned up), or `timeoutMs` runs out
+ * (reject with `timeoutMessage`).
  */
-function probeReported(seen: Promise<true>, waitMs: number, deadline: number): Promise<boolean> {
-  const wait = Math.max(0, Math.min(waitMs, deadline - Date.now()));
-  return Promise.race([seen, new Promise<false>((resolve) => setTimeout(() => { resolve(false); }, wait))]);
+async function awaitWatchHandshake(opts: {
+  seen: Promise<true>;
+  probe: () => void;
+  isStopped: () => boolean;
+  timeoutMs: number;
+  timeoutMessage: string;
+}): Promise<void> {
+  const deadline = Date.now() + opts.timeoutMs;
+  let waitMs = READY_PROBE_FIRST_WAIT_MS;
+  for (;;) {
+    if (opts.isStopped()) return;
+    opts.probe();
+    const wait = Math.max(0, Math.min(waitMs, deadline - Date.now()));
+    const reported = await Promise.race([
+      opts.seen,
+      new Promise<false>((resolve) => setTimeout(() => { resolve(false); }, wait)),
+    ]);
+    if (reported) return;
+    if (Date.now() >= deadline) throw new Error(opts.timeoutMessage);
+    waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
+  }
 }
 
 /**
@@ -320,21 +341,17 @@ export class ConfigWatcher {
         resolve(true);
       };
     });
-    const deadline = Date.now() + timeoutMs;
-    let waitMs = READY_PROBE_FIRST_WAIT_MS;
     try {
-      for (;;) {
-        // Stopped mid-handshake (a test timed out and cleaned up): stop probing.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stop() can clear it across the await
-        if (this.watcher === null) return;
-        const now = new Date();
-        utimesSync(this.configPath, now, now);
-        if (await probeReported(seen, waitMs, deadline)) return;
-        if (Date.now() >= deadline) {
-          throw new Error(`config-watcher: fs.watch on ${this.configPath} reported no event within ${timeoutMs}ms`);
-        }
-        waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
-      }
+      await awaitWatchHandshake({
+        seen,
+        probe: () => {
+          const now = new Date();
+          utimesSync(this.configPath, now, now);
+        },
+        isStopped: () => this.watcher === null,
+        timeoutMs,
+        timeoutMessage: `config-watcher: fs.watch on ${this.configPath} reported no event within ${timeoutMs}ms`,
+      });
     } finally {
       this.readyProbeSeen = null;
     }
@@ -534,24 +551,18 @@ export class AgentsDirectoryWatcher {
         resolve(true);
       };
     });
-    const deadline = Date.now() + timeoutMs;
-    let waitMs = READY_PROBE_FIRST_WAIT_MS;
     try {
-      for (;;) {
-        // Stopped mid-handshake (a test timed out and cleaned up): stop probing.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stop() can clear it across the await
-        if (this.watcher === null) return;
-        const probePath = join(this.agentsDir, `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`);
-        writeFileSync(probePath, "");
-        this.readyProbePaths.push(probePath);
-        if (await probeReported(seen, waitMs, deadline)) return;
-        if (Date.now() >= deadline) {
-          throw new Error(
-            `agents-watcher: fs.watch on ${this.agentsDir} reported no event within ${timeoutMs}ms`,
-          );
-        }
-        waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
-      }
+      await awaitWatchHandshake({
+        seen,
+        probe: () => {
+          const probePath = join(this.agentsDir, `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`);
+          writeFileSync(probePath, "");
+          this.readyProbePaths.push(probePath);
+        },
+        isStopped: () => this.watcher === null,
+        timeoutMs,
+        timeoutMessage: `agents-watcher: fs.watch on ${this.agentsDir} reported no event within ${timeoutMs}ms`,
+      });
     } finally {
       this.readySeen = null;
     }
