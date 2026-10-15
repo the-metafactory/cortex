@@ -10,7 +10,7 @@ import type { NatsLink } from "../../bus/nats/connection";
 import { createFakeJetStream, type FakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
 import { LEDGER_STREAM, provisionLedgerStream } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
-import { getVigilSubject, isVigilReplayPending } from "../db";
+import { getVigilSubject, isVigilReplayPending, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { startVigil } from "../index";
 import { replayLedger } from "../replay";
@@ -124,6 +124,39 @@ describe("Vigil LEDGER replay", () => {
     expect(getVigilSubject(db, KEY)?.value).toBe("failed");
     expect(getVigilSubject(db, OTHER_KEY)).toBeNull();
     expect(isVigilReplayPending(db)).toBe(true);
+  });
+
+  test.each([
+    { vocab: "goal", values: ["off-track", "at-risk", "on-track"], healthy: 1, direction: "better" },
+    { vocab: "escalation", values: ["overdue", "needs-principal", "resolved"], healthy: 1, direction: "better" },
+    { vocab: "check", values: ["regressed", "ok", "regressed"], healthy: 0, direction: "worse" },
+    { vocab: "unknown", values: ["green", "amber", "red"], healthy: 0, direction: "worse" },
+  ])("rebuilds $vocab state without events, then records a live transition", async ({ vocab, values, healthy, direction }) => {
+    const h = ledgerHarness();
+    const stateKey = `state:${vocab}:watched`;
+    const first = ledgerEnvelope({ state: { subject: "watched", value: values[0] } });
+    const second = ledgerEnvelope({
+      outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z",
+      serves: { goal: "G1" }, state: { subject: "watched", value: values[1] },
+    });
+    await h.publish(first, second);
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBe(2);
+    expect(getVigilSubject(db, stateKey)).toMatchObject({
+      subject_kind: "state", vocab, value: values[1], goal_id: "G1", last_run_id: second.payload.run_id,
+    });
+    expect(getVigilSubject(db, KEY)).toMatchObject({ value: "succeeded", healthy: 1 });
+    expect(db.query("SELECT COUNT(*) AS n FROM vigil_events").get()).toEqual({ n: 0 });
+
+    const live = ledgerEnvelope({
+      outcome: "succeeded", ended_at: "2026-10-12T10:02:00.000Z",
+      state: { subject: "watched", value: values[2] },
+    });
+    ingestLedgerEnvelope(db, live, Date.parse("2026-10-12T10:03:00.000Z"));
+    expect(getVigilSubject(db, stateKey)).toMatchObject({ value: values[2], healthy, last_run_id: live.payload.run_id });
+    expect(listVigilEvents(db, stateKey)).toEqual([expect.objectContaining({
+      from_value: values[1], to_value: values[2], direction, run_id: live.payload.run_id,
+    })]);
+    expect(listVigilEvents(db, KEY)).toEqual([]);
   });
 
   test("out-of-order envelopes end at the latest ended_at", async () => {

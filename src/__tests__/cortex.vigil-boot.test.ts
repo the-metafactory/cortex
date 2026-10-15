@@ -33,7 +33,9 @@ describe("cortex Vigil boot/drain wiring", () => {
         return { ready: Promise.resolve(), stop: async () => {
           if (opts.stream === LEDGER_STREAM) {
             // A final in-flight delivery must still be able to commit on drain.
-            await opts.onEnvelope(ledgerEnvelope({ outcome: "succeeded" }), SUBJECT);
+            await opts.onEnvelope(ledgerEnvelope({
+              outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z",
+            }), SUBJECT);
             stopped.push("vigil");
           }
         } } as unknown as MyelinSubscriber;
