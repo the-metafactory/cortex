@@ -1,9 +1,69 @@
 # macOS suite evidence (work-graph node #2576)
 
-## Current acceptance evidence — review round 5 repair
+## CI follow-up — ConfigWatcher coalesced notifications
 
-The repaired suite is green on plain macOS and inside the actual Codex worker
-sandbox. The earlier failing executions retained below are historical, not the
+The Linux Test job at `7b6ddf93` still failed all four ConfigWatcher reload
+assertions with `Received: null` after approximately eight seconds. Its log
+reports Bun 1.4.3. The failing step was `bun test`; the other CI checks passed.
+Source: [CI run 38822683317](https://github.com/the-metafactory/cortex/actions/runs/38822683317).
+
+Before this repair, the focused command below also reproduced the repo-removal
+failure on plain Darwin 25.6.0, Bun 1.4.2: **7 pass, 1 fail in 17.36 s**.
+Readiness resolved, but no reload followed the actual config write.
+
+```sh
+bun test src/common/config/__tests__/watcher.test.ts \
+  src/common/config/__tests__/watch-handshake.test.ts
+```
+
+The readiness callback consumed its change notification without scheduling the
+normal debounced reload. When the probe and the subsequent config write share
+a notification, no second callback is available to trigger that reload.
+ConfigWatcher now resolves readiness **and** retains the normal debounce for
+the change event. The deferred reload reads the subsequent write. The probe,
+handshake deadlines, skip criteria and existing reload assertions are unchanged;
+principal ruling 1 remains in effect.
+
+An isolated child-process regression supplies exactly one notification for the
+readiness probe and the following real config write. It fails before the repair
+with `coalesced change was lost` (**0 pass, 1 fail, 2.20 s**) and passes after it
+(**5 pass, 0 fail, 444 ms**, including the four shared-handshake checks).
+The child keeps its mocked backend out of native watcher tests.
+
+The first broader plain-host check passed all four ConfigWatcher cases and
+the new regression, but one AgentsDirectoryWatcher readiness handshake timed
+out: **51 pass, 1 fail, 42.26 s**. Its unchanged directory-watcher code reported
+no event within 8,000 ms. Log: `/tmp/cortex-2576-ci-host-focused.log`.
+This is separate from the Linux ConfigWatcher null assertions.
+
+Three consecutive repeats of the broader focused command then passed, each
+with **52 pass, 0 skip, 0 fail**, in **15.28 s, 13.74 s and 13.26 s**. They
+cover the config and fragment watchers, boot-level agents reload, the shared
+handshake and the new regression. Logs:
+`/tmp/cortex-2576-ci-host-repeat-{1,2,3}.log`. Changed-file ESLint,
+`bunx tsc --noEmit` and `bun scripts/xdg-audit.ts --repos .` also passed.
+
+The single final worker-sandbox command required by the CI fix-pass SOP,
+`bun test && bunx tsc --noEmit`, exited **0**: **11,556 pass, 66 skip, 60 todo,
+0 fail** across 666 files, **264.46 s** for tests and **275.09 s** combined wall
+time. The new deterministic regression passed. The shared native probe measured
+**0 events from 190 writes in 10,003 ms** (10,000 ms deadline), so the existing
+17 watcher skips named that measurement; the other 49 skips were unchanged.
+Log: `/tmp/cortex-2576-ci-worker-full.log`.
+
+This fix pass adds one full worker execution and the three focused plain-host
+repeats above. The three full plain-host timings in the next section remain
+evidence for their explicitly named prior revision, not new measurements of
+this callback repair.
+
+Native Linux validation of this follow-up remains with supervisor CI after
+push. No Linux runtime, VM or container was started.
+
+## Review round 5 acceptance evidence — prior revision
+
+At the revision measured in this section, the suite was green on plain macOS
+and inside the actual Codex worker sandbox. The earlier failing executions
+retained below are historical, not the
 status of the repaired source. The supervisor and principal retain the
 `cortex-suite-green-on-host` checkpoint; this record does not close it.
 
@@ -88,12 +148,12 @@ passes. The Bash shell suites passed in both environments without a new skip.
   `bun run lint:errors` and the whole-tree XDG gate passed. The two legacy-state
   references in this document were reworded; no allowlist entry was added.
 
-Native Linux confirmation remains with supervisor CI after push. The earlier
+This revision did not establish a native Linux pass. The earlier
 [CI Test failure](https://github.com/the-metafactory/cortex/actions/runs/38802252059/job/116654025945)
 showed four reload assertions returning null after readiness had resolved. The
-content-write probe and synchronous hook release address that readiness path,
-and the deterministic regressions pass here, but Darwin execution does not
-establish a native Linux pass. No Linux runtime, VM or container was started.
+content-write probe and synchronous hook release were insufficient: the next
+CI execution at `7b6ddf93` still failed those four tests. The follow-up above
+preserves the debounced reload when notifications coalesce.
 
 ## Coverage contract
 
