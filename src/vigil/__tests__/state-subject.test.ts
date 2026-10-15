@@ -161,16 +161,25 @@ describe("Vigil state-subject ingest", () => {
     expect(listVigilEvents(db, key)).toEqual(events);
   });
 
-  test("two runs with one ended_at converge on the higher run_id in any arrival order", () => {
+  // glossary-ignore: run
+  // Execution Run identifiers belong to the myelin contract, not Cortex Sessions.
+  test("two executions with one ended_at converge on the higher run_id in any arrival order", () => {
     const key = "state:goal:G1";
     const endedAt = new Date(ENDED_AT).toISOString();
     const a = ledgerEnvelope({ run_id: "run-a", ended_at: endedAt, state: { subject: "G1", value: "at-risk" } });
     const b = ledgerEnvelope({ run_id: "run-b", ended_at: endedAt, state: { subject: "G1", value: "on-track" } });
-    for (const [order, directions] of [[[a, b, a], ["worse", "better"]], [[b, a, b], []]] as const) {
+    for (const [order, directions] of [[[a, b], ["worse", "better"]], [[b, a], []]] as const) {
       db.run("DELETE FROM vigil_events"); db.run("DELETE FROM vigil_subjects");
-      for (const envelope of order) ingestLedgerEnvelope(db, envelope, 100);
+      order.forEach((envelope, i) => ingestLedgerEnvelope(db, envelope, 100 * (i + 1)));
       expect(getVigilSubject(db, key)).toMatchObject({ value: "on-track", healthy: 1, last_run_id: "run-b" });
       expect(listVigilEvents(db, key).map((e) => e.direction)).toEqual([...directions]);
+      const prior = getVigilSubject(db, key);
+      const events = listVigilEvents(db, key);
+      [a, b, a, b].forEach((envelope, i) => {
+        ingestLedgerEnvelope(db, envelope, 300 + 100 * i);
+        expect(getVigilSubject(db, key)).toEqual(prior);
+        expect(listVigilEvents(db, key)).toEqual(events);
+      });
     }
   });
 

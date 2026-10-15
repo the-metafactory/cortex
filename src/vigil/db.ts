@@ -76,10 +76,12 @@ export function writeVigilTransition(
 
 // glossary-ignore: run
 /**
+ * Execution Run identifiers are myelin contract terms, not Cortex Sessions.
  * Observations are ordered by `(ended_at, run_id)`; only one past the latest
  * changes the row. A redelivered `run_id` (whatever its `ended_at`), one that
- * ended earlier, or one with the same `ended_at` and a lower `run_id` changes nothing, so the row converges
- * on the same latest observation whatever order the deliveries arrive in.
+ * ended earlier, or one with the same `ended_at` and a lower `run_id` changes
+ * nothing, so the row converges on the same latest observation whatever order
+ * the deliveries arrive in.
  */
 export function isNewObservation(prior: VigilSubjectRow | null, runId: string, endedAt: number): boolean {
   if (!prior) return true;

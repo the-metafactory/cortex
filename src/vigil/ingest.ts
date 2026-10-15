@@ -22,7 +22,9 @@ export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
   return envelope.source.split(".")[1] ?? "";
 }
 
+// glossary-ignore: run
 /**
+ * Run-health is an Execution Run contract term, distinct from a Cortex Session.
  * Caller validates A5b first. Every envelope updates its run-health subject,
  * and its state subject when `state` is present (soma#787 Q6). Each subject
  * dedupes on its own; all writes commit atomically.
@@ -47,6 +49,7 @@ function updateRunHealthSubject(
   if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return;
   const healthy = payload.outcome === "succeeded";
   const changed = prior ? prior.value !== payload.outcome : !healthy;
+  // glossary-ignore: run
   writeVigilSubject(db, {
     ...observation,
     subject_key: key, subject_kind: "run", vocab: null, ref: payload.ran.ref, value: payload.outcome,

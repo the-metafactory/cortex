@@ -71,14 +71,23 @@ describe("Vigil run-health ingest", () => {
     expect(listVigilEvents(db, KEY)).toEqual(events);
   });
 
+  // glossary-ignore: run
+  // Execution Run identifiers belong to the myelin contract, not Cortex Sessions.
   test("equal ended_at: the higher run_id wins whatever the arrival order", () => {
     const a = ledgerEnvelope({ run_id: "run-a", outcome: "failed" });
     const b = ledgerEnvelope({ run_id: "run-b", outcome: "succeeded" });
-    for (const [order, directions] of [[[a, b, a], ["worse", "better"]], [[b, a, b], []]] as const) {
+    for (const [order, directions] of [[[a, b], ["worse", "better"]], [[b, a], []]] as const) {
       db.run("DELETE FROM vigil_events"); db.run("DELETE FROM vigil_subjects");
-      for (const envelope of order) ingestLedgerEnvelope(db, envelope, 100);
+      order.forEach((envelope, i) => ingestLedgerEnvelope(db, envelope, 100 * (i + 1)));
       expect(getVigilSubject(db, KEY)).toMatchObject({ value: "succeeded", healthy: 1, last_run_id: "run-b" });
       expect(listVigilEvents(db, KEY).map((e) => e.direction)).toEqual([...directions]);
+      const prior = getVigilSubject(db, KEY);
+      const events = listVigilEvents(db, KEY);
+      [a, b, a, b].forEach((envelope, i) => {
+        ingestLedgerEnvelope(db, envelope, 300 + 100 * i);
+        expect(getVigilSubject(db, KEY)).toEqual(prior);
+        expect(listVigilEvents(db, KEY)).toEqual(events);
+      });
     }
   });
 
