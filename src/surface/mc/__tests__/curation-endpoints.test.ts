@@ -75,20 +75,27 @@ interface TestContext {
   tmpDir: string;
 }
 
-function makePort(): number {
-  return 21000 + Math.floor(Math.random() * 1000);
+/**
+ * The port the OS bound for a `port: 0` server. A random port in a fixed
+ * window collided with other processes on a shared machine (EADDRINUSE,
+ * node #2576).
+ */
+function boundPort(ctx: ServerContext): number {
+  const port = ctx.server.port;
+  if (port === undefined) throw new Error("server.port unresolved after start");
+  return port;
 }
 
 async function setup(): Promise<TestContext> {
   const tmpDir = join(tmpdir(), `mc-f12-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
   const pm = new ProcessManager();
-  const port = makePort();
   const ctx = startServer(
-    { ...DEFAULT_CONFIG, port },
+    { ...DEFAULT_CONFIG, port: 0 },
     db,
     { processManager: pm, spawn: fakeCatSpawn }
   );
+  const port = boundPort(ctx);
   return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
 }
 
