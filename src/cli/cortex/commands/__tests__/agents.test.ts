@@ -8,12 +8,21 @@ import { spawn, type ChildProcess } from "child_process";
 
 import {
   parseAgentsArgs,
-  runAgentsReload,
+  runAgentsReload as reloadAgents,
   runAgentsList,
   dispatchAgents,
   AgentsArgsError,
 } from "../agents";
-import { pidFileFor } from "../../../../common/pidfile";
+import { pidFileForIn } from "../../../../common/pidfile";
+import { useTemporaryHome } from "../../../../common/test-home";
+
+const testHome = useTemporaryHome();
+// The production default is captured at import. Pass the same scratch state
+// root to the CLI and fixture writer without mutating a cached module constant.
+const testStateDir = () => join(testHome(), "state");
+const runAgentsReload = (args: ReturnType<typeof parseAgentsArgs>) =>
+  reloadAgents(args, testStateDir());
+const pidFileFor = (config: string) => pidFileForIn(testStateDir(), config, testHome());
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const VALID_DIR = join(FIXTURES, "agents.d-valid");

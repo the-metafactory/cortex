@@ -3,11 +3,12 @@
  * Watches bot.yaml for changes and applies safe fields without restart.
  */
 
-import { watch, type FSWatcher, existsSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "fs";
+import { watch, type FSWatcher, closeSync, existsSync, openSync, readSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from "fs";
 import { join } from "path";
 import { loadConfig, loadAgentsDirectory, FragmentLoadError, expandTilde } from "./loader";
 import type { AgentConfig } from "../types/config";
 import type { Agent } from "../types/cortex-config";
+import { awaitWatchHandshake } from "./watch-handshake";
 
 const isFragmentFile = (name: string): boolean =>
   !name.startsWith(".") && (name.endsWith(".yaml") || name.endsWith(".yml"));
@@ -244,42 +245,9 @@ function compareConfigs(oldConfig: AgentConfig, newConfig: AgentConfig): {
 
 /** Upper bound on a watcher's `waitForReady()` handshake. */
 const READY_TIMEOUT_MS = 8_000;
-/** How long a handshake first waits for its probe's event; doubles per unanswered probe. */
-const READY_PROBE_FIRST_WAIT_MS = 100;
-const READY_PROBE_MAX_WAIT_MS = 1_600;
 /** Filename prefix of `AgentsDirectoryWatcher`'s probe dotfiles. */
 const READY_PROBE_PREFIX = ".cortex-watch-ready-";
 let readyProbeCounter = 0;
-
-/**
- * The `waitForReady()` handshake both watchers share: call `probe`, wait for
- * `seen` (the watcher reported an event), and on silence probe again with a
- * doubling wait, until `seen` resolves (resolve), `isStopped` turns true
- * (resolve — a test timed out and cleaned up), or `timeoutMs` runs out
- * (reject with `timeoutMessage`).
- */
-async function awaitWatchHandshake(opts: {
-  seen: Promise<true>;
-  probe: () => void;
-  isStopped: () => boolean;
-  timeoutMs: number;
-  timeoutMessage: string;
-}): Promise<void> {
-  const deadline = Date.now() + opts.timeoutMs;
-  let waitMs = READY_PROBE_FIRST_WAIT_MS;
-  for (;;) {
-    if (opts.isStopped()) return;
-    opts.probe();
-    const wait = Math.max(0, Math.min(waitMs, deadline - Date.now()));
-    const reported = await Promise.race([
-      opts.seen,
-      new Promise<false>((resolve) => setTimeout(() => { resolve(false); }, wait)),
-    ]);
-    if (reported) return;
-    if (Date.now() >= deadline) throw new Error(opts.timeoutMessage);
-    waitMs = Math.min(waitMs * 2, READY_PROBE_MAX_WAIT_MS);
-  }
-}
 
 /**
  * Watches bot.yaml for changes and triggers reload events.
@@ -331,33 +299,29 @@ export class ConfigWatcher {
    * immediately if the watcher is not watching. Bun binds the watch
    * asynchronously after `start()` returns, and a write that lands before it
    * binds is never reported; under load that takes far longer than any fixed
-   * grace (node #2576). So this is a handshake: it touches the file's times
-   * (content unchanged), backing off, until the watcher reports a touch.
+   * grace (node #2576). So this is a handshake: it rewrites the first byte
+   * unchanged, backing off, until the watcher reports a write. Unlike a
+   * metadata-only touch this exercises the content-change event on Linux too.
    * Events seen while probing do not reload. Rejects after
    * `timeoutMs`. Tests await it before writing the change they assert on;
    * production does not need it.
    */
   async waitForReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
-    if (this.watcher === null) return;
-    const seen = new Promise<true>((resolve) => {
-      this.readyProbeSeen = () => {
-        resolve(true);
-      };
+    await awaitWatchHandshake({
+      setHook: (hook) => { this.readyProbeSeen = hook; },
+      probe: () => {
+        const fd = openSync(this.configPath, "r+");
+        try {
+          const byte = Buffer.alloc(1);
+          if (readSync(fd, byte, 0, 1, 0) === 1) writeSync(fd, byte, 0, 1, 0);
+        } finally {
+          closeSync(fd);
+        }
+      },
+      isStopped: () => this.watcher === null,
+      timeoutMs,
+      label: `config-watcher: fs.watch on ${this.configPath}`,
     });
-    try {
-      await awaitWatchHandshake({
-        seen,
-        probe: () => {
-          const now = new Date();
-          utimesSync(this.configPath, now, now);
-        },
-        isStopped: () => this.watcher === null,
-        timeoutMs,
-        timeoutMessage: `config-watcher: fs.watch on ${this.configPath} reported no event within ${timeoutMs}ms`,
-      });
-    } finally {
-      this.readyProbeSeen = null;
-    }
   }
 
   stop(): void {
@@ -547,27 +511,17 @@ export class AgentsDirectoryWatcher {
    * writing fixtures; production does not need it.
    */
   async waitForReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
-    if (this.watcher === null) return;
-    const seen = new Promise<true>((resolve) => {
-      this.readySeen = () => {
-        resolve(true);
-      };
+    await awaitWatchHandshake({
+      setHook: (hook) => { this.readySeen = hook; },
+      probe: () => {
+        const probePath = join(this.agentsDir, `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`);
+        writeFileSync(probePath, "");
+        this.readyProbePaths.push(probePath);
+      },
+      isStopped: () => this.watcher === null,
+      timeoutMs,
+      label: `agents-watcher: fs.watch on ${this.agentsDir}`,
     });
-    try {
-      await awaitWatchHandshake({
-        seen,
-        probe: () => {
-          const probePath = join(this.agentsDir, `${READY_PROBE_PREFIX}${process.pid}-${++readyProbeCounter}`);
-          writeFileSync(probePath, "");
-          this.readyProbePaths.push(probePath);
-        },
-        isStopped: () => this.watcher === null,
-        timeoutMs,
-        timeoutMessage: `agents-watcher: fs.watch on ${this.agentsDir} reported no event within ${timeoutMs}ms`,
-      });
-    } finally {
-      this.readySeen = null;
-    }
   }
 
   stop(): void {

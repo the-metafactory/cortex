@@ -27,7 +27,7 @@
 import { existsSync, statSync, readFileSync } from "fs";
 import { dirname } from "path";
 
-import { pidFileFor } from "../../../common/pidfile";
+import { pidFileForIn, STATE_DIR } from "../../../common/pidfile";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
@@ -134,7 +134,7 @@ function defaultCortexConfigPath(): string {
   return resolveConfigFilePath("cortex.yaml");
 }
 
-export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
+export function runAgentsReload(args: ParsedAgentsArgs, stateDir = STATE_DIR): ExitResult {
   if (args.help) {
     return { exitCode: 0, stdout: reloadHelp(), stderr: "" };
   }
@@ -157,7 +157,7 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
     // reported as "delivered", NOT "reload applied" (we can't prove the async
     // reload finished); an ATTEMPTED-but-FAILED signal (stale/malformed PID,
     // ESRCH/EPERM) is an error → non-zero exit + JSON error.
-    const signal = args.validateOnly ? null : signalDaemonReload(args.config);
+    const signal = args.validateOnly ? null : signalDaemonReload(args.config, stateDir);
 
     // Sage cortex#1027 — a signal that was ATTEMPTED but FAILED is an error for
     // machine consumers: the reload the caller asked for did NOT happen. Exit
@@ -252,9 +252,9 @@ type SignalOutcome =
  * existence check and the read, we report `signalled: false, failed` rather than
  * letting `readFileSync` throw out of the reload command as an unexpected error.
  */
-function signalDaemonReload(configPath: string | undefined): SignalOutcome {
+function signalDaemonReload(configPath: string | undefined, stateDir: string): SignalOutcome {
   const resolvedConfig = expandTilde(configPath ?? defaultCortexConfigPath());
-  const pidFile = pidFileFor(resolvedConfig);
+  const pidFile = pidFileForIn(stateDir, resolvedConfig);
   if (!existsSync(pidFile)) {
     // No runtime to signal — benign. Validation passed; nothing to reload.
     return {

@@ -16,6 +16,8 @@ async function probeFsWatch(): Promise<{ usable: boolean; reason: string }> {
   let watcher: ReturnType<typeof watch> | undefined;
   let writer: ReturnType<typeof setInterval> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
+  let reportWriteError!: (result: { error: unknown }) => void;
+  const failed = new Promise<{ error: unknown }>((resolve) => { reportWriteError = resolve; });
   try {
     // Setup and I/O errors are failures, not evidence of suppressed events.
     watcher = watch(dir, { persistent: false }, () => {
@@ -24,13 +26,24 @@ async function probeFsWatch(): Promise<{ usable: boolean; reason: string }> {
     });
     // New names keep generating directory events even if watch registration
     // is delayed. Resolve on the event itself, never a startup grace sleep.
-    const writeProbe = () => writeFileSync(join(dir, `.probe-${++writes}`), "");
+    const writeProbe = () => {
+      writeFileSync(join(dir, `.probe-${++writes}`), "");
+    };
     writeProbe();
-    writer = setInterval(writeProbe, 50);
-    await Promise.race([
+    writer = setInterval(() => {
+      try {
+        writeProbe();
+      } catch (err) {
+        clearInterval(writer);
+        reportWriteError({ error: err });
+      }
+    }, 50);
+    const result = await Promise.race([
       seen,
+      failed,
       new Promise<void>((resolve) => { deadline = setTimeout(resolve, PROBE_TIMEOUT_MS); }),
     ]);
+    if (result) throw result.error;
     const elapsedMs = Math.round(performance.now() - started);
     return {
       usable: events > 0,

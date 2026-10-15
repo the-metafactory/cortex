@@ -76,7 +76,7 @@ Codex worker sandbox.
 | --- | --- | --- |
 | Strict macos-sbpl acceptance | Claude Code startup denied at shared `/tmp/claude-<uid>` | Keep that shared directory denied; strict spawns use a private `CLAUDE_CODE_TMPDIR`. Real sandbox suites skip only when the capability probe fails. |
 | Boot wire-up, capabilities, federated peers | Passed, but discovered installed Arc bundles | Isolate plugin/pack roots, sibling scan and replay fixtures under temporary directories. |
-| Last-known-good config | Passed | State-directory seam avoids writes to the real `~/.config/grove/state`. |
+| Last-known-good config | Passed | State-directory seam avoids writes to the real the legacy PID-state directory. |
 | Bash shell suites | Passed on Bash 3.2; `mapfile` dependency already removed upstream | No missing-feature skip added. `systemd-render` timeout-absent case failed only in actual Codex; leave it alone under the brief's skip criteria. |
 | Watchers | Passed idle, failed under load | Bounded event handshakes replace startup grace sleeps. The later principal ruling adds a measured no-event skip (see coverage contract). |
 | Whole-tree carveout scan | Exceeded timeout under load (18 s idle, 47 s loaded) | Give the scan 120 s; assertions unchanged. |
@@ -90,6 +90,8 @@ tilde-expansion test, one `loadAgentsDirectory` tilde-expansion test, six
 fs.watch ruling. The non-watcher failures remain outside the permitted skip
 conditions; this pass leaves those tests unchanged as the brief requires.
 This historical result does **not** establish a green worker-sandbox suite.
+The later principal ruling 2 authorizes temporary-home isolation for those
+permission failures; its implementation and fresh results appear below.
 
 ## Review round 3 validation
 
@@ -182,7 +184,7 @@ All 17 watcher tests skipped, alongside 49 existing skips; no watcher failed.
 | `scripts/__tests__/purge-supervision.test.ts` | Shell suite exceeded its 5,000 ms deadline (5,063.23 ms). The same deadline failure is recorded in earlier plain-macOS validation above. |
 | `src/bus/nats/__tests__/connection.test.ts` | NatsLink leading-tilde creds fixture: EPERM writing a file directly under the real home. |
 | `src/common/config/__tests__/fragment-loader.test.ts` | Persona tilde-expansion fixture: EPERM creating a directory directly under the real home. |
-| `src/cli/cortex/commands/__tests__/agents.test.ts` | Seven failures: tilde-persona fixture, delivered signal, partial-numeric PID, stale PID, JSON failed signal, JSON delivered signal, and pidFileFor tilde spellings. All are EPERM while creating fixtures in the real home or its `.config/grove/state` directory. |
+| `src/cli/cortex/commands/__tests__/agents.test.ts` | Seven failures: tilde-persona fixture, delivered signal, partial-numeric PID, stale PID, JSON failed signal, JSON delivered signal, and pidFileFor tilde spellings. All are EPERM while creating fixtures in the real home or its legacy PID-state directory. |
 
 All four files are byte-identical to merge base
 `56794cd1c76a9ac3905d74ac68fdaea2734ec2ed` (`git diff --exit-code` passed).
