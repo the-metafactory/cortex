@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import { describe, expect, mock, test } from "bun:test";
 import { startVigilTick } from "../tick";
 import { fakeTickScheduler, flushTick } from "./fixtures";

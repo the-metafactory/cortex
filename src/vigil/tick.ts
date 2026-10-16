@@ -1,3 +1,4 @@
+// glossary-ignore: run
 export const VIGIL_TICK_MS = 300_000;
 
 export interface VigilTickOptions {

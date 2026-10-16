@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber
+// glossary-ignore: subscriber, run
 import type { Database } from "bun:sqlite";
 import { executionRunFinishedPattern } from "@the-metafactory/myelin";
 import { DeliverPolicy } from "nats";

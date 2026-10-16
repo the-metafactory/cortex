@@ -1,4 +1,4 @@
-// glossary-ignore: run
+// glossary-ignore: run, node
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";

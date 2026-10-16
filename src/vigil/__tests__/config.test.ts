@@ -1,4 +1,4 @@
-// glossary-ignore: agent, persona
+// glossary-ignore: agent, persona, run, node
 import { describe, expect, test } from "bun:test";
 import { AgentConfigSchema } from "../../common/types/config";
 import { CortexConfigSchema } from "../../common/types/cortex-config";
