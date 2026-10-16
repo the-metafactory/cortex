@@ -41,6 +41,9 @@ const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 // Looser than myelin/wire STACK_ID_RE (accepts `_`); swapping before the flag-day tightens the wire: https://github.com/the-metafactory/cortex/issues/2034
 const STACK_ID_RE = /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/;
 
+type FlagValue = FlagMap[string] | undefined;
+type StackIdResult = { ok: true; stackId: string } | { ok: false; reason: string };
+
 const SPEC: SubcommandSpec<ProvisionSubcommand> = {
   cliName: "provision-stack",
   subcommands: {
@@ -87,8 +90,8 @@ const SPEC: SubcommandSpec<ProvisionSubcommand> = {
 
 function resolveStackId(
   principalId: string,
-  stackIdFlag: string | true | string[] | undefined,
-): { ok: true; stackId: string } | { ok: false; reason: string } {
+  stackIdFlag: FlagValue,
+): StackIdResult {
   if (stackIdFlag === undefined) {
     return { ok: true, stackId: `${principalId}/default` };
   }
@@ -112,7 +115,7 @@ function resolveStackId(
 }
 
 function resolveNetworkId(
-  networkFlag: string | true | string[] | undefined,
+  networkFlag: FlagValue,
 ): { ok: true; networkId: string | undefined } | { ok: false; reason: string } {
   if (networkFlag === undefined) return { ok: true, networkId: undefined };
   if (networkFlag === true || typeof networkFlag !== "string") {
@@ -633,8 +636,8 @@ function admissionFailedResult(
 
 function requireExplicitStackId(
   principalId: string,
-  stackIdFlag: string | true | string[] | undefined,
-): { ok: true; stackId: string } | { ok: false; reason: string } {
+  stackIdFlag: FlagValue,
+): StackIdResult {
   if (stackIdFlag === undefined) {
     return { ok: false, reason: "--stack-id is required for retire (name the stack explicitly; no default)" };
   }
