@@ -1,4 +1,5 @@
 // glossary-ignore: listener, node
+import { userInfo } from "node:os";
 import type { ProcessSpec } from "./process-runner";
 import type { FiredActivation } from "./reflex-activation-listener";
 
@@ -17,6 +18,13 @@ export const PULSE_ENV_KEYS = [
   "PULSE_NATS_CREDS",
 ] as const;
 
+/**
+ * Login identity: from cortex's env, else the OS account when it resolves. launchd
+ * starts cortex without USER, and keychain-backed CLIs such as `claude -p` then
+ * report "Not logged in" even with an allow-list naming USER.
+ */
+export const IDENTITY_ENV_KEYS = ["USER", "LOGNAME"] as const;
+
 export const MF_SERVES_GOAL = "MF_SERVES_GOAL";
 export const MF_SERVES_NODE = "MF_SERVES_NODE";
 export const MF_CORRELATION_ID = "MF_CORRELATION_ID";
@@ -24,11 +32,21 @@ export const MF_CORRELATION_ID = "MF_CORRELATION_ID";
 /** Fire metadata keys: set only from the activation, never inherited. */
 const FIRE_ENV_KEYS: ReadonlySet<string> = new Set([MF_SERVES_GOAL, MF_SERVES_NODE, MF_CORRELATION_ID]);
 
+/** `userInfo()` throws for a uid with no passwd entry, as in some containers. */
+function osAccount(): string | undefined {
+  try {
+    return userInfo().username;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Build a fresh child env; fire metadata never inherits from cortex's env. */
-export function buildProcessEnv({ spec, activation, parentEnv }: {
+export function buildProcessEnv({ spec, activation, parentEnv, account }: {
   spec: Pick<ProcessSpec, "env">;
   activation: Pick<FiredActivation, "serves" | "correlationId">;
   parentEnv: Readonly<Record<string, string | undefined>>;
+  account?: string;
 }): Record<string, string> {
   const keys = spec.env === undefined
     ? Object.keys(parentEnv)
@@ -39,6 +57,12 @@ export function buildProcessEnv({ spec, activation, parentEnv }: {
       .map((key) => [key, parentEnv[key]] as const)
       .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
   );
+
+  const login = account ?? osAccount();
+  for (const key of IDENTITY_ENV_KEYS) {
+    const value = parentEnv[key] ?? login;
+    if (value !== undefined) env[key] = value;
+  }
 
   if (activation.serves?.goal !== undefined) env[MF_SERVES_GOAL] = activation.serves.goal;
   if (activation.serves?.node !== undefined) env[MF_SERVES_NODE] = activation.serves.node;

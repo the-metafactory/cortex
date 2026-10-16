@@ -153,7 +153,7 @@ export const ProcessSpecSchema = z.object({
   detach: z.boolean().default(false),
   /**
    * Environment ALLOW-LIST: names of vars passed through from cortex's env to
-   * the child, plus the PULSE connection variables and fire-owned MF metadata.
+   * the child, plus the PULSE connection variables, USER/LOGNAME and fire-owned MF metadata.
    * PULSE_NATS_CREDS is always passed when set, including with `env: []`:
    * the allow-list does NOT deny bus access under that credential's permissions.
    * Run only trusted specs; see docs/process-runner.md for the contract.
