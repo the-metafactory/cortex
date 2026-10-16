@@ -474,9 +474,14 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
 
   test("carries vigil through loadCortexShape and defaults it off when absent", () => {
     const cfg = minimalCortex();
-    cfg.vigil = { enabled: true };
-    expect(loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.vigil.enabled).toBe(true);
-    expect(loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex())).config.vigil.enabled).toBe(false);
+    // glossary-ignore: run
+    cfg.vigil = { enabled: true, cadence: { "run:job:harness-gate": 3_600_000 } };
+    expect(loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.vigil).toEqual({
+      enabled: true, cadence: { "run:job:harness-gate": 3_600_000 },
+    });
+    expect(loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex())).config.vigil).toEqual({
+      enabled: false, cadence: {},
+    });
   });
 
   test("defaults mc + cockpit to disabled on the cortex shape when absent", () => {

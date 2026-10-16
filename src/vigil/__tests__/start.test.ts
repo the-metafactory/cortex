@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber, agent, data, persona
+// glossary-ignore: subscriber, agent, data, persona, run
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { ConsumerMessages, JsMsg } from "nats";
@@ -14,7 +14,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, startVigil } from "../index";
-import { KEY, SUBJECT, ledgerEnvelope } from "./fixtures";
+import { ENDED_AT, KEY, SUBJECT, fakeTickScheduler, flushTick, ledgerEnvelope } from "./fixtures";
 
 function config(vigil = true, mc = true) {
   return AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil: { enabled: vigil }, mc: { enabled: mc } });
@@ -70,6 +70,59 @@ describe("Vigil startup and delivery", () => {
     expect(await startVigil({ config: config(false), db, runtime: { jetstreamManager: manager, subscribePull }, principal: "jc", stack: "default" })).toBeNull();
     expect(manager).not.toHaveBeenCalled();
     expect(subscribePull).not.toHaveBeenCalled();
+  });
+
+  test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
+    const jobKey = "run:job:harness-gate";  // glossary-ignore: run
+    const otherKey = "run:job:daily-check";  // glossary-ignore: run
+    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
+    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-check" }, outcome: "succeeded" }), ENDED_AT);
+    const cfg = config();
+    cfg.vigil.cadence = { [jobKey]: 3_600_000 };
+    const scheduler = fakeTickScheduler();
+    let now = ENDED_AT + 7_200_001;
+    const h = pullRuntime(createFakeJetStream());
+    const handle = await startVigil({
+      config: cfg, db, runtime: h.runtime, principal: "jc", stack: "default",
+      now: () => now, schedule: scheduler.schedule,
+    });
+    try {
+      await flushTick();
+      expect(scheduler.intervalMs).toBe(300_000);
+      expect(getVigilSubject(db, jobKey)?.value).toBe("stale");
+      expect(getVigilSubject(db, otherKey)?.value).toBe("succeeded");
+      now = ENDED_AT + 52 * 60 * 60 * 1000 + 1;
+      scheduler.tick(); await flushTick();
+      expect(getVigilSubject(db, otherKey)?.value).toBe("stale");
+      expect(listVigilEvents(db, jobKey)).toHaveLength(1);
+      expect(listVigilEvents(db, otherKey)).toHaveLength(1);
+    } finally { await handle!.stop(); }
+    await handle!.stop();
+    expect(scheduler.cancellations).toBe(1);
+    expect(h.stream.close).toHaveBeenCalledTimes(1);
+    scheduler.tick(); await flushTick();
+    expect(listVigilEvents(db, otherKey)).toHaveLength(1);
+  });
+
+  test("a sweep failure is logged and the next scheduled sweep still runs", async () => {
+    const jobKey = "run:job:harness-gate";  // glossary-ignore: run
+    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
+    db.run("CREATE TRIGGER fail_sweep BEFORE UPDATE ON vigil_subjects BEGIN SELECT RAISE(ABORT, 'sweep failure'); END");
+    const scheduler = fakeTickScheduler();
+    const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
+    const h = pullRuntime(createFakeJetStream());
+    const handle = await startVigil({
+      config: config(), db, runtime: h.runtime, principal: "jc", stack: "default", log,
+      now: () => ENDED_AT + 52 * 60 * 60 * 1000 + 1, schedule: scheduler.schedule,
+    });
+    try {
+      await flushTick();
+      expect(log.warn.mock.calls.map(([msg]) => msg)).toEqual([expect.stringContaining("vigil: tick failed: sweep failure")]);
+      expect(getVigilSubject(db, jobKey)?.value).toBe("succeeded");
+      db.run("DROP TRIGGER fail_sweep");
+      scheduler.tick(); await flushTick();
+      expect(getVigilSubject(db, jobKey)?.value).toBe("stale");
+    } finally { await handle!.stop(); }
   });
 
   test.each(["mc-off", "no-db", "no-manager", "null-manager", "other-stack"])("%s skips with one log line", async (gate) => {

@@ -553,9 +553,12 @@ export const McSchema = z.object({
 /** Opt-in Vigil run-health projection, hosted by the default stack's MC embed. */
 export const VigilSchema = z.object({
   enabled: z.boolean().default(false),
+  /** Per-subject cadence in milliseconds; only jobs and goal state can go stale. */
+  cadence: z.record(z.string(), z.number().int().positive()).default({}),
 }).default(emptyDefault()).transform((val) => ({
   /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   enabled: val.enabled ?? false,
+  cadence: val.cadence ?? {},
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 

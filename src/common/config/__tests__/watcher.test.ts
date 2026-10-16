@@ -116,7 +116,7 @@ const TEST_CONFIG: AgentConfig = {
     refreshIntervalMs: 300_000,
     attention: { surface: "discord", channel: "" },
   },
-  vigil: { enabled: false },
+  vigil: { enabled: false, cadence: {} },
   mc: {
     enabled: false,
     configPath: "",
