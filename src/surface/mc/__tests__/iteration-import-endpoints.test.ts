@@ -783,19 +783,14 @@ describe("POST /api/github/webhook — auth + dispatch", () => {
   });
 
   it("rejects an oversized webhook body before buffering it into memory (M1)", async () => {
-    // 1.5 MB payload — well over the 1 MB cap. The streaming reader
-    // should bail with 413 the moment cumulative bytes cross the cap,
-    // without first allocating the whole 1.5 MB string.
-    //
-    // The signed body never reaches the HMAC verify because the cap
-    // fires first — so we don't bother signing it. The cap is the
-    // first line of defence; auth comes after.
-    const oversized = "x".repeat(1_500_000);
+    const bytesWellOverTheOneMbCap = 1_500_000;
+    const oversized = "x".repeat(bytesWellOverTheOneMbCap);
+    const unsignedBecauseTheSizeCapRunsBeforeHmac = "sha256=" + "00".repeat(32);
     const res = await fetch(`${t.baseUrl}/api/github/webhook`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-hub-signature-256": "sha256=" + "00".repeat(32),
+        "x-hub-signature-256": unsignedBecauseTheSizeCapRunsBeforeHmac,
         "x-github-event": "issues",
         "x-github-delivery": "oversized-1",
       },
@@ -854,26 +849,21 @@ describe("iterationLabel server option", () => {
     });
     const port = ctx.port;
     try {
-      // Webhook with a payload labelled `iteration` should NOT trigger
-      // import on this server (custom label is `epic`).
+      const labelledDefaultIterationNotCustomEpic = {
+        action: "labeled",
+        label: { name: "iteration" },
+        issue: {
+          number: 42,
+          title: "T",
+          body: "b",
+          html_url: "https://github.com/x/y/issues/42",
+          labels: [{ name: "iteration" }],
+        },
+        repository: { full_name: "x/y", name: "y", owner: { login: "x" } },
+      };
       const sig = await signBody(
         WEBHOOK_SECRET,
-        JSON.stringify({
-          action: "labeled",
-          label: { name: "iteration" },
-          issue: {
-            number: 42,
-            title: "T",
-            body: "b",
-            html_url: "https://github.com/x/y/issues/42",
-            labels: [{ name: "iteration" }],
-          },
-          repository: {
-            full_name: "x/y",
-            name: "y",
-            owner: { login: "x" },
-          },
-        })
+        JSON.stringify(labelledDefaultIterationNotCustomEpic)
       );
       const res = await fetch(`http://localhost:${port}/api/github/webhook`, {
         method: "POST",
@@ -883,18 +873,7 @@ describe("iterationLabel server option", () => {
           "x-github-event": "issues",
           "x-github-delivery": "d-1",
         },
-        body: JSON.stringify({
-          action: "labeled",
-          label: { name: "iteration" },
-          issue: {
-            number: 42,
-            title: "T",
-            body: "b",
-            html_url: "https://github.com/x/y/issues/42",
-            labels: [{ name: "iteration" }],
-          },
-          repository: { full_name: "x/y", name: "y", owner: { login: "x" } },
-        }),
+        body: JSON.stringify(labelledDefaultIterationNotCustomEpic),
       });
       expect(res.status).toBe(200);
       const count = (db
