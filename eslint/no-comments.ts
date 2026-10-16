@@ -3,6 +3,7 @@ import type { AST, Rule, SourceCode } from "eslint";
 const TS_SUPPRESSION = /^\s*@ts-(ignore|expect-error|nocheck)\b/;
 const LICENSE = /licen[cs]e|copyright|SPDX-License-Identifier/i;
 const URL = /https?:\/\//;
+const TOOL_DIRECTIVE = /^\s*(prettier-ignore\b|glossary-ignore:)/;
 
 type Comment = AST.Program["comments"][number];
 
@@ -25,7 +26,7 @@ function isAllowed(source: SourceCode, comment: Comment, first: boolean): boolea
   const { type, value } = comment;
   if (first && LICENSE.test(value)) return true;
   if (type === "Line" && /^\/\s*<reference\b/.test(value)) return true;
-  if (/^\s*prettier-ignore\b/.test(value)) return true;
+  if (TOOL_DIRECTIVE.test(value)) return true;
   if (URL.test(value)) return true;
   return type === "Block" && value.startsWith("*") && documentsExport(source, comment);
 }

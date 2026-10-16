@@ -39,6 +39,7 @@ describe("cortex/no-comments", () => {
       "export default LANE;",
       "// git drops the trailer here: https://github.com/git/git/issues/1",
       "// prettier-ignore",
+      "// glossary-ignore: server",
       "const grid = [1,0,",
       "  0,1];",
       "parse(String(grid));",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { enabledOnBaseFrom, grownRules } from "../suppressions-guard.ts";
+import { enabledOnBaseFrom, grownRules, presetRules } from "../suppressions-guard.ts";
 
 const base = {
   "src/a.ts": { "cortex/no-comments": { count: 3 }, "no-empty": { count: 1 } },
@@ -56,4 +56,11 @@ describe("enabledOnBaseFrom", () => {
     const head = { ...base, "src/b.ts": { "cortex/no-comments": { count: 9 } } };
     expect(grownRules(base, head, () => false)).toEqual(["cortex/no-comments: 5 -> 12"]);
   });
+});
+
+test("naming a preset rule in the config for the first time does not let it start a baseline", () => {
+  const baseConfig = `rules: { "cortex/no-comments": "error" }`;
+  const enabled = enabledOnBaseFrom(baseConfig, `${baseConfig} "require-yield": "error"`, presetRules());
+  const head = { ...base, "src/b.ts": { "cortex/no-comments": { count: 2 }, "require-yield": { count: 1 } } };
+  expect(grownRules(base, head, enabled)).toEqual(["require-yield: 0 -> 1"]);
 });

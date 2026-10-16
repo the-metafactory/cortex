@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitShow, requireBaseRef } from "./lib/git";
+import { gitShow, resolveBaseRef } from "./lib/git";
 
 export const BASELINE = "scripts/duplication-baseline.json";
 const SCAN_ROOTS = ["src", "scripts"];
@@ -62,13 +62,12 @@ function scan(): Clone[] {
     ["bunx", "jscpd", "--silent", "--format", "typescript", "--reporters", "json", "--output", out, "--ignore", IGNORE.join(","), ...SCAN_ROOTS],
     { stdout: "pipe", stderr: "pipe" },
   );
-  if (run.exitCode !== 0) {
+  try {
+    if (run.exitCode !== 0) throw new Error(`jscpd failed (exit ${run.exitCode}): ${run.stderr.toString()}`);
+    return (JSON.parse(readFileSync(join(out, "jscpd-report.json"), "utf8")) as { duplicates: Clone[] }).duplicates;
+  } finally {
     rmSync(out, { recursive: true, force: true });
-    throw new Error(`jscpd failed (exit ${run.exitCode}): ${run.stderr.toString()}`);
   }
-  const report = JSON.parse(readFileSync(join(out, "jscpd-report.json"), "utf8")) as { duplicates: Clone[] };
-  rmSync(out, { recursive: true, force: true });
-  return report.duplicates;
 }
 
 function readBaseline(): Baseline {
@@ -97,8 +96,7 @@ if (import.meta.main) {
   }
 
   const { grown, shrunk } = compare(readBaseline(), current);
-  const baseRef = process.env.DUPLICATION_BASE_REF ?? "origin/main";
-  requireBaseRef(baseRef, "check-duplication");
+  const baseRef = resolveBaseRef("DUPLICATION_BASE_REF", "check-duplication");
   const base = baseRefBaseline(baseRef);
   const inflated = base === undefined ? [] : inflatedAgainst(base, readBaseline());
 
