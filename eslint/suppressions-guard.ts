@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
+import { gitShow, requireBaseRef } from "../scripts/lib/git.ts";
 
 export const SUPPRESSIONS = "eslint-suppressions.json";
+const CONFIG = "eslint.config.js";
 
 type Suppressions = Record<string, Record<string, { count: number }>>;
 
@@ -12,32 +14,33 @@ export function totalsByRule(suppressions: Suppressions): Map<string, number> {
   return totals;
 }
 
-/** A rule the base config does not enable yet starts its baseline in the change that enables it. */
+/**
+ * Only a rule this change switches on by name in the config may start a baseline. A rule that was
+ * already in force on base, by name or through a preset such as strictTypeChecked, counts as enabled.
+ */
+export function enabledOnBaseFrom(baseConfig: string, headConfig: string): (rule: string) => boolean {
+  return (rule) => {
+    const named = JSON.stringify(rule);
+    return !(headConfig.includes(named) && !baseConfig.includes(named));
+  };
+}
+
 export function grownRules(base: Suppressions, head: Suppressions, enabledOnBase: (rule: string) => boolean = () => true): string[] {
   const before = totalsByRule(base);
   return [...totalsByRule(head)]
-    .filter(([rule, n]) => enabledOnBase(rule) && n > (before.get(rule) ?? 0))
+    .filter(([rule, n]) => (before.has(rule) || enabledOnBase(rule)) && n > (before.get(rule) ?? 0))
     .map(([rule, n]) => `${rule}: ${before.get(rule) ?? 0} -> ${n}`);
-}
-
-function git(args: string[]) {
-  const run = Bun.spawnSync(["git", ...args], { stderr: "pipe" });
-  return { ok: run.exitCode === 0, out: run.stdout.toString() };
 }
 
 if (import.meta.main) {
   const baseRef = process.env.LINT_BASE_REF ?? "origin/main";
-  if (!git(["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`]).ok) {
-    console.error(`suppressions guard: cannot read ${baseRef}. Fetch it first: git fetch origin main`);
-    process.exit(2);
-  }
-  const base = git(["show", `${baseRef}:${SUPPRESSIONS}`]);
-  if (!base.ok) process.exit(0);
-  const baseConfig = git(["show", `${baseRef}:eslint.config.js`]).out;
+  requireBaseRef(baseRef, "suppressions guard");
+  const base = gitShow(baseRef, SUPPRESSIONS);
+  if (base === undefined) process.exit(0);
   const grown = grownRules(
-    JSON.parse(base.out) as Suppressions,
+    JSON.parse(base) as Suppressions,
     JSON.parse(readFileSync(SUPPRESSIONS, "utf8")) as Suppressions,
-    (rule) => baseConfig.includes(JSON.stringify(rule)),
+    enabledOnBaseFrom(gitShow(baseRef, CONFIG) ?? "", readFileSync(CONFIG, "utf8")),
   );
   if (grown.length > 0) {
     console.error(

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Clone, clonesPerFile, compare, total } from "../check-duplication";
+import { type Clone, clonesPerFile, compare, inflatedAgainst, total } from "../check-duplication";
 
 const side = (name: string) => ({ name, start: 1, end: 6 });
 const clone = (a: string, b: string): Clone => ({ firstFile: side(a), secondFile: side(b) });
@@ -28,4 +28,18 @@ describe("compare", () => {
 
 test("total sums clone sides", () => {
   expect(total({ "a.ts": 2, "b.ts": 3 })).toBe(5);
+});
+
+describe("inflatedAgainst", () => {
+  test("raising one file while lowering another fails, though the total is unchanged", () => {
+    expect(inflatedAgainst({ "a.ts": 2, "b.ts": 2 }, { "a.ts": 3, "b.ts": 1 })).toEqual(["a.ts: 2 -> 3"]);
+  });
+
+  test("a renamed file carries its count without failing", () => {
+    expect(inflatedAgainst({ "a.ts": 2 }, { "a-moved.ts": 2 })).toEqual([]);
+  });
+
+  test("a higher total fails", () => {
+    expect(inflatedAgainst({ "a.ts": 2 }, { "a.ts": 2, "c.ts": 1 })).toEqual(["total: 2 -> 3"]);
+  });
 });

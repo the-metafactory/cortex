@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gitShow, requireBaseRef } from "./lib/git";
 
 export const BASELINE = "scripts/duplication-baseline.json";
 const SCAN_ROOTS = ["src", "scripts"];
@@ -46,6 +47,15 @@ export function total(baseline: Baseline): number {
   return Object.values(baseline).reduce((sum, n) => sum + n, 0);
 }
 
+/** Baseline entries raised above base: a file base already lists may not go up, and the total may not either. */
+export function inflatedAgainst(base: Baseline, head: Baseline): string[] {
+  const raised = Object.entries(head)
+    .filter(([file, n]) => base[file] !== undefined && n > base[file])
+    .map(([file, n]) => `${file}: ${String(base[file])} -> ${n}`);
+  if (total(head) > total(base)) raised.push(`total: ${total(base)} -> ${total(head)}`);
+  return raised;
+}
+
 function scan(): Clone[] {
   const out = mkdtempSync(join(tmpdir(), "cortex-jscpd-"));
   const run = Bun.spawnSync(
@@ -66,8 +76,8 @@ function readBaseline(): Baseline {
 }
 
 function baseRefBaseline(baseRef: string): Baseline | undefined {
-  const show = Bun.spawnSync(["git", "show", `${baseRef}:${BASELINE}`], { stdout: "pipe", stderr: "pipe" });
-  return show.exitCode === 0 ? (JSON.parse(show.stdout.toString()) as Baseline) : undefined;
+  const text = gitShow(baseRef, BASELINE);
+  return text === undefined ? undefined : (JSON.parse(text) as Baseline);
 }
 
 function clonesTouching(clones: Clone[], files: Set<string>): string[] {
@@ -88,8 +98,9 @@ if (import.meta.main) {
 
   const { grown, shrunk } = compare(readBaseline(), current);
   const baseRef = process.env.DUPLICATION_BASE_REF ?? "origin/main";
+  requireBaseRef(baseRef, "check-duplication");
   const base = baseRefBaseline(baseRef);
-  const inflated = base !== undefined && total(readBaseline()) > total(base);
+  const inflated = base === undefined ? [] : inflatedAgainst(base, readBaseline());
 
   if (grown.length > 0) {
     const files = new Set(grown.map((line) => line.slice(0, line.lastIndexOf(":"))));
@@ -106,8 +117,11 @@ if (import.meta.main) {
         shrunk.map((s) => `  ${s}`).join("\n"),
     );
   }
-  if (inflated) {
-    console.error(`${BASELINE} records more clones than ${baseRef} does. Remove the copies instead of raising the baseline.`);
+  if (inflated.length > 0) {
+    console.error(
+      `${BASELINE} records more clones than ${baseRef} does. Remove the copies instead of raising the baseline:\n` +
+        inflated.map((line) => `  ${line}`).join("\n"),
+    );
   }
-  process.exit(grown.length > 0 || shrunk.length > 0 || inflated ? 1 : 0);
+  process.exit(grown.length > 0 || shrunk.length > 0 || inflated.length > 0 ? 1 : 0);
 }
