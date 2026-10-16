@@ -29,6 +29,20 @@ export interface ContextMessage {
 	timestamp: string;
 	attachments?: ContextAttachment[];
 }
+/** Outcome of sending a notification to the principal. */
+export type NotifyResult = {
+	delivered: true;
+	messageId?: string;
+} | {
+	delivered: false;
+	kind: "permanent" | "transient";
+	code: string;
+	detail?: string;
+};
+/** Options for notifying the principal. `buffer` defaults to true. */
+export interface NotifyOptions {
+	buffer?: boolean;
+}
 /** Platform-agnostic inbound message */
 export interface InboundMessage {
 	/** Platform identifier: "discord", "mattermost", "slack", etc. */
@@ -357,8 +371,12 @@ export interface PlatformAdapter {
 		channel: string;
 		thread?: string;
 	}): Promise<ResponseTarget | null>;
-	/** Send a notification to the principal */
-	notifyPrincipal(text: string): Promise<void>;
+	/**
+	 * Send a notification to the principal. Buffering defaults to true;
+	 * buffer: false disables adapter-side buffering so callers can handle failure.
+	 * Legacy adapters may return void instead of reporting delivery.
+	 */
+	notifyPrincipal(text: string, opts?: NotifyOptions): Promise<NotifyResult | void>;
 	/** F-092: Hot-reload adapter config (optional, for adapters that support it) */
 	updateConfig?(config: unknown): void;
 	/**
@@ -1043,6 +1061,15 @@ export type SurfacePlugin = AdapterPlugin | RendererPlugin;
  *
  * ## Changelog (OQ5 — plugin-author migration notes)
  *
+ * - **1.2.0** (cortex#2582) — ADDITIVE, non-breaking. `notifyPrincipal` takes
+ *   an optional `opts?: NotifyOptions` (`{ buffer?: boolean }`, default
+ *   `true`) and may resolve to a `NotifyResult` (`delivered: true` with an
+ *   optional `messageId`, or `delivered: false` with `kind: "permanent" |
+ *   "transient"`, a `code` and an optional `detail`). No migration required:
+ *   a bundle that keeps `notifyPrincipal(text): Promise<void>` still compiles,
+ *   and the Cortex runtime treats `void` as delivered. Bundles that feed Vigil SHOULD
+ *   honour `buffer: false` and return a `NotifyResult` so undelivered DMs can
+ *   be detected. Minor bump — no `sdkRange` change needed for existing plugins.
  * - **1.1.0** (cortex#2002, C-1853) — ADDITIVE, non-breaking. `PlatformAdapter`
  *   gains an OPTIONAL `readonly maxUploadBytes?: number` (a platform's single
  *   outbound-file ceiling in bytes). No migration required: a bundle that does
@@ -1053,7 +1080,7 @@ export type SurfacePlugin = AdapterPlugin | RendererPlugin;
  *   existing plugins.
  * - **1.0.0** — initial versioned SDK barrel (cortex#1790, S5).
  */
-export declare const SURFACE_SDK_VERSION = "1.1.0";
+export declare const SURFACE_SDK_VERSION = "1.2.0";
 /**
  * cortex#1794 (S9b) — the narrow, TYPE-ONLY behavioral contract an adapter
  * uses to authorise an inbound message, in place of importing cortex's

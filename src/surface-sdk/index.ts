@@ -61,6 +61,15 @@
  *
  * ## Changelog (OQ5 — plugin-author migration notes)
  *
+ * - **1.2.0** (cortex#2582) — ADDITIVE, non-breaking. `notifyPrincipal` takes
+ *   an optional `opts?: NotifyOptions` (`{ buffer?: boolean }`, default
+ *   `true`) and may resolve to a `NotifyResult` (`delivered: true` with an
+ *   optional `messageId`, or `delivered: false` with `kind: "permanent" |
+ *   "transient"`, a `code` and an optional `detail`). No migration required:
+ *   a bundle that keeps `notifyPrincipal(text): Promise<void>` still compiles,
+ *   and the Cortex runtime treats `void` as delivered. Bundles that feed Vigil SHOULD
+ *   honour `buffer: false` and return a `NotifyResult` so undelivered DMs can
+ *   be detected. Minor bump — no `sdkRange` change needed for existing plugins.
  * - **1.1.0** (cortex#2002, C-1853) — ADDITIVE, non-breaking. `PlatformAdapter`
  *   gains an OPTIONAL `readonly maxUploadBytes?: number` (a platform's single
  *   outbound-file ceiling in bytes). No migration required: a bundle that does
@@ -71,7 +80,7 @@
  *   existing plugins.
  * - **1.0.0** — initial versioned SDK barrel (cortex#1790, S5).
  */
-export const SURFACE_SDK_VERSION = "1.1.0";
+export const SURFACE_SDK_VERSION = "1.2.0";
 
 // =============================================================================
 // Platform adapter contract (src/adapters/types.ts)
@@ -79,6 +88,8 @@ export const SURFACE_SDK_VERSION = "1.1.0";
 
 export type {
   PlatformAdapter,
+  NotifyOptions,
+  NotifyResult,
   InboundMessage,
   InboundAttachment,
   AccessDecision,

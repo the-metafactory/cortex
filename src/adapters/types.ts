@@ -10,6 +10,16 @@ import type { ContextMessage } from "../common/types/context";
 // Re-export for convenience
 export type { ContextMessage };
 
+/** Outcome of sending a notification to the principal. */
+export type NotifyResult =
+  | { delivered: true; messageId?: string }
+  | { delivered: false; kind: "permanent" | "transient"; code: string; detail?: string };
+
+/** Options for notifying the principal. `buffer` defaults to true. */
+export interface NotifyOptions {
+  buffer?: boolean;
+}
+
 /** Platform-agnostic inbound message */
 export interface InboundMessage {
   /** Platform identifier: "discord", "mattermost", "slack", etc. */
@@ -340,8 +350,13 @@ export interface PlatformAdapter {
     channel: string;
     thread?: string;
   }): Promise<ResponseTarget | null>;
-  /** Send a notification to the principal */
-  notifyPrincipal(text: string): Promise<void>;
+  /**
+   * Send a notification to the principal. Buffering defaults to true;
+   * buffer: false disables adapter-side buffering so callers can handle failure.
+   * Legacy adapters may return void instead of reporting delivery.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- void keeps adapters that return Promise<void> (mattermost, slack, web) assignable; undefined would not
+  notifyPrincipal(text: string, opts?: NotifyOptions): Promise<NotifyResult | void>;
   /** F-092: Hot-reload adapter config (optional, for adapters that support it) */
   updateConfig?(config: unknown): void;
   /**
