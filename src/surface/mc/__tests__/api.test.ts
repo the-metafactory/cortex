@@ -1,11 +1,3 @@
-/**
- * Grove Mission Control v2 — REST API end-to-end tests.
- *
- * Exercises the three Phase A endpoints through the real Bun.serve HTTP
- * stack, with a fake spawn for controlled sessions so CI does not need
- * the `claude` CLI on PATH.
- */
-
 import {
   describe,
   it,
@@ -68,10 +60,6 @@ interface TestContext {
   tmpDir: string;
 }
 
-// Port 0 → OS assigns a free port; the bound port is read back from
-// `ctx.server.port`. The previous `19000 + random(1000)` approach
-// produced EADDRINUSE flakes under parallel test execution because
-// 120 tests against a 1000-port window collide with ~50% probability.
 const PORT_BIND_ANY = 0;
 
 async function setup(): Promise<TestContext> {
@@ -193,7 +181,6 @@ describe("GET /api/focus-area", () => {
   });
 
   it("returns mostActiveAgent: null when no assignment is running", async () => {
-    // Only a blocked assignment — nothing running → no most-active agent.
     const permissionReason = JSON.stringify({
       kind: "permission.request",
       payload: { requested_action: "tool.edit" },
@@ -207,8 +194,6 @@ describe("GET /api/focus-area", () => {
   });
 
   it("returns only blocked assignments, ordered by priority ASC then updated_at ASC", async () => {
-    // Priority 0 (P0) is highest. Within a priority lane, older updated_at
-    // surfaces first (longest-waiting). Not-blocked states must be excluded.
     const permissionReason = JSON.stringify({
       kind: "permission.request",
       payload: { requested_action: "tool.edit" },
@@ -217,15 +202,14 @@ describe("GET /api/focus-area", () => {
     seed("p0-newer", "blocked", 0, 10, permissionReason);
     seed("p0-older", "blocked", 0, 100, permissionReason);
     seed("p1-only", "blocked", 1, 30, permissionReason);
-    seed("running", "running", 0, 0); // must not appear
-    seed("completed", "completed", 0, 0); // must not appear
+    seed("running", "running", 0, 0);
+    seed("completed", "completed", 0, 0);
 
     const res = await fetch(`${t.baseUrl}/api/focus-area`);
     expect(res.status).toBe(200);
     const body = await res.json();
     const ids = body.items.map((x: { id: string }) => x.id);
     expect(ids).toEqual(["p0-older", "p0-newer", "p1-only", "p2-newer"]);
-    // Every returned item is blocked and has a parsed block_reason.
     for (const item of body.items) {
       expect(item.state).toBe("blocked");
       expect(item.block_reason).not.toBeNull();
@@ -242,10 +226,6 @@ describe("GET /api/focus-area", () => {
 describe("POST /api/sessions", () => {
   let t: TestContext;
   beforeEach(async () => {
-    // Hoisted from per-test calls — the dispatch debounce is module
-    // state that persists across tests in this file. Reset once per
-    // case so future POST-/api/sessions tests with `taskId` don't have
-    // to remember the dance. Per Echo's PR-#55 review.
     _resetDispatchDebounceForTests();
     t = await setup();
   });
@@ -264,19 +244,16 @@ describe("POST /api/sessions", () => {
     expect(typeof body.assignmentId).toBe("string");
     expect(typeof body.sessionId).toBe("string");
 
-    // Assignment reached 'running' via dispatch + start transitions.
     const row = t.db
       .query("SELECT state FROM agent_task_assignment WHERE id = ?")
       .get(body.assignmentId) as { state: string } | null;
     expect(row?.state).toBe("running");
 
-    // A session row was created with endpoint_kind = controlled.
     const sess = t.db
       .query("SELECT endpoint_kind FROM sessions WHERE id = ?")
       .get(body.sessionId) as { endpoint_kind: string } | null;
     expect(sess?.endpoint_kind).toBe("local.process.controlled");
 
-    // A ManagedProcess landed in the ProcessManager.
     expect(t.pm.size).toBe(1);
   });
 
@@ -288,8 +265,6 @@ describe("POST /api/sessions", () => {
     });
     expect(res.status).toBe(201);
     const body = await res.json();
-    // Give Bun a tick for the insertEvent to land — synchronous under the hood,
-    // but the parsed JSON body has already resolved so the DB write is complete.
     const events = t.db
       .query("SELECT type, payload FROM events WHERE session_id = ? ORDER BY timestamp")
       .all(body.sessionId) as { type: string; payload: string }[];
@@ -313,10 +288,6 @@ describe("POST /api/sessions", () => {
     expect(res.status).toBe(400);
   });
 
-  // PR #30 W1 — the manual-dispatch audit trail. F-12 Decision 9 defines
-  // the principal.curation event family with `kind: "dispatch"`; without an
-  // emitter here the type union + dashboard renderer are dead code and
-  // manual dispatches don't show up in the audit view.
   it("emits a principal.curation event with kind=dispatch on successful create", async () => {
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
@@ -338,13 +309,7 @@ describe("POST /api/sessions", () => {
     expect(payload.newAssignmentId).toBe(body.assignmentId);
   });
 
-  // F-19 Decision 5 — cross-tab two-click protection via a 2s server-side
-  // debounce keyed on (taskId, agentId). The first POST succeeds; a second
-  // POST against the same taskId within the cooldown gets a 409. The
-  // 409 path is what the dashboard hook treats as success-from-other-tab.
   it("debounces a same-taskId dispatch within 2 seconds (409)", async () => {
-    // Create a task row up front so the second POST goes through the
-    // debounce path (debounce only fires when body.taskId is provided).
     t.db.exec(
       `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-debounce', 'task', 1, 'op', 'internal')`
@@ -368,7 +333,6 @@ describe("POST /api/sessions", () => {
     const secondBody = await second.json();
     expect(secondBody.error).toContain(firstBody.assignmentId);
 
-    // No second assignment row was created.
     const rows = t.db
       .query(
         "SELECT id FROM agent_task_assignment WHERE task_id = 't-debounce'"
@@ -392,10 +356,6 @@ describe("POST /api/sessions", () => {
     expect(second.status).toBe(201);
   });
 
-  // F-19 — concurrent same-taskId POSTs (the cross-tab case Echo flagged
-  // as TOCTOU on cycle-1). With the soft-lock-at-CHECK fix, exactly one
-  // wins with 201 + spawned process; the other gets 409. Without the fix
-  // both passed CHECK before either SET and both spawned.
   it("concurrent same-taskId dispatches: exactly one 201, the other 409", async () => {
     t.db.exec(
       `INSERT INTO tasks (id, title, priority, principal_id, source_system)
@@ -416,7 +376,6 @@ describe("POST /api/sessions", () => {
     const codes = [a.status, b.status].sort();
     expect(codes).toEqual([201, 409]);
 
-    // Exactly one assignment row, one ManagedProcess.
     const rows = t.db
       .query(`SELECT id FROM agent_task_assignment WHERE task_id = 't-race'`)
       .all() as { id: string }[];
@@ -424,8 +383,6 @@ describe("POST /api/sessions", () => {
     expect(t.pm.size).toBe(1);
   });
 
-  // F-20 — observed sessions register without spawning a CC subprocess.
-  // The wrapper supplies the cc_session_id; MC v2 just records the row.
   it("kind=local.observed registers a session without spawning", async () => {
     const ccUuid = "11111111-2222-3333-4444-555555555555";
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
@@ -444,10 +401,8 @@ describe("POST /api/sessions", () => {
     expect(typeof body.assignmentId).toBe("string");
     expect(typeof body.sessionId).toBe("string");
 
-    // No subprocess managed — observed sessions don't spawn.
     expect(t.pm.size).toBe(0);
 
-    // Session row has the observed kind + cc_session_id.
     const sess = t.db
       .query(
         "SELECT endpoint_kind, cc_session_id FROM sessions WHERE id = ?"
@@ -459,14 +414,11 @@ describe("POST /api/sessions", () => {
     expect(sess?.endpoint_kind).toBe("local.observed");
     expect(sess?.cc_session_id).toBe(ccUuid);
 
-    // Assignment ends in `dispatched` (not `running`) — the running
-    // transition fires on first ingested event.
     const ata = t.db
       .query("SELECT state FROM agent_task_assignment WHERE id = ?")
       .get(body.assignmentId) as { state: string } | null;
     expect(ata?.state).toBe("dispatched");
 
-    // Agent row was registered on the supplied id with the display name.
     const agent = t.db
       .query("SELECT name FROM agents WHERE id = 'andreas'")
       .get() as { name: string } | null;
@@ -504,7 +456,6 @@ describe("POST /api/sessions", () => {
     expect(a.status).toBe(201);
     const aBody = await a.json();
 
-    // Snapshot row counts before the duplicate POST.
     const taskCountBefore = (
       t.db.query("SELECT count(*) AS n FROM tasks").get() as { n: number }
     ).n;
@@ -521,9 +472,6 @@ describe("POST /api/sessions", () => {
     });
     expect(b.status).toBe(409);
 
-    // Rollback parity check (per Echo's PR-#56 major review): the
-    // rejected call must NOT have left a zombie task or assignment row
-    // behind. Same guarantee the controlled spawn-failure path provides.
     const taskCountAfter = (
       t.db.query("SELECT count(*) AS n FROM tasks").get() as { n: number }
     ).n;
@@ -535,18 +483,12 @@ describe("POST /api/sessions", () => {
     expect(taskCountAfter).toBe(taskCountBefore);
     expect(ataCountAfter).toBe(ataCountBefore);
 
-    // The first call's rows are still present.
     const stillThere = t.db
       .query("SELECT id FROM agent_task_assignment WHERE id = ?")
       .get(aBody.assignmentId);
     expect(stillThere).not.toBeNull();
   });
 
-  // F-20 — `ensureNamedAgent` uses ON CONFLICT(id) DO NOTHING, which is
-  // intentional: once an agent is registered, the principal owns its
-  // display name. Pin that policy with a test so a future contributor
-  // doesn't "fix" the no-op-on-update by switching to DO UPDATE SET
-  // name = excluded.name. Per Echo's PR-#56 review.
   it("ensureNamedAgent: re-POST with a different agentName does NOT update the existing row", async () => {
     const u1 = "11111111-1111-1111-1111-111111111111";
     const u2 = "22222222-2222-2222-2222-222222222222";
@@ -579,11 +521,6 @@ describe("POST /api/sessions", () => {
   });
 });
 
-// F-11 — verify the create-session loop's two transitions (queued→dispatched,
-// dispatched→running) drive `maybeNotifyDiscord` exactly twice and that the
-// fake sink observes zero outbound messages because both transitions are
-// "Notify=No" per Decision 1's matrix. This is the addendum's
-// loop-double-fire invariant in test form.
 describe("POST /api/sessions — F-11 Discord notification hook", () => {
   let t: TestContext;
   let calls: { from: string; to: string }[];
@@ -684,7 +621,6 @@ describe("POST /api/assignments/:id/input", () => {
   });
 
   it("returns 404 when the assignment has no active session", async () => {
-    // Set up assignment with no session.
     t.db.exec(
       `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-x', 'Orphan', 2, 'op', 'internal')`
@@ -821,8 +757,6 @@ describe("POST /api/assignments/:id/input", () => {
     expect(body.error).toBe("Request body exceeds the size limit.");
   });
 
-  // --- Image input coverage (docs/design-mc-image-input.md) ---
-
   const ONE_PIXEL_TRANSPARENT_PNG_B64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
@@ -861,7 +795,6 @@ describe("POST /api/assignments/:id/input", () => {
       }),
     });
     expect(res.status).toBe(200);
-    // Verify the stored event payload carries images but not text.
     const stored = t.db
       .query(
         "SELECT payload FROM events WHERE type = 'principal.input' ORDER BY id DESC LIMIT 1"
@@ -978,8 +911,6 @@ describe("POST /api/assignments/:id/input", () => {
   });
 
   it("returns 409 on an observed session even with valid images", async () => {
-    // Seed an observed session explicitly — observed sessions never accept
-    // writes regardless of payload shape (Decision 8 belt-and-braces).
     t.db.exec(
       `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-obs', 'Observed', 2, 'op', 'internal')`
@@ -1019,10 +950,6 @@ describe("GET /api/assignments/:id/events", () => {
     await teardown(t);
   });
 
-  /**
-   * Seed an assignment + session + N ascending-id events of varying types.
-   * Returns { assignmentId, sessionId, eventIds } in insertion order.
-   */
   function seedEvents(eventCount: number): {
     assignmentId: string;
     sessionId: string;
@@ -1046,8 +973,6 @@ describe("GET /api/assignments/:id/events", () => {
       endpointKind: "local.process.controlled",
     });
 
-    // Use insertEvent so ids are generated the same way the dispatcher does
-    // — guarantees the before-cursor pagination behaves like real data.
     const eventIds: string[] = [];
     for (let i = 0; i < eventCount; i += 1) {
       const ev = insertEvent(t.db, {
@@ -1130,9 +1055,6 @@ describe("GET /api/assignments/:id/events", () => {
   });
 
   it("clamps limit at EVENTS_LIST_MAX_LIMIT and sets hasMore=true", async () => {
-    // Seed more rows than the clamp so we can prove the cap fires: with
-    // MAX_LIMIT=200 and 205 rows, a ?limit=99999 request must return exactly
-    // 200 events and hasMore=true. A missing clamp would return all 205.
     const extra = 5;
     const { assignmentId } = seedEvents(EVENTS_LIST_MAX_LIMIT + extra);
     const res = await fetch(
@@ -1162,7 +1084,6 @@ describe("GET /api/assignments/:id/events", () => {
     );
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
-    // Error must not reflect attacker-controlled input back to the client.
     expect(body.error).not.toContain("attacker-payload-xyz");
   });
 
@@ -1177,7 +1098,6 @@ describe("GET /api/assignments/:id/events", () => {
 });
 
 describe("REST unavailable without ProcessManager", () => {
-  // Startup path used by older callers / tests: no processManager passed.
   it("returns 503 on POST /api/sessions", async () => {
     const tmpDir = join(tmpdir(), `mc-api-test-noop-${Date.now()}`);
     const db = initDatabase(join(tmpDir, "test.db"));
@@ -1207,11 +1127,6 @@ describe("GET /api/tasks", () => {
     await teardown(t);
   });
 
-  /**
-   * Insert a task + optional assignments. `assignments` is a list of
-   * [agentId, state] tuples — one assignment row per tuple. Agents are
-   * created on demand.
-   */
   function seedTask(
     id: string,
     opts: {
@@ -1259,7 +1174,6 @@ describe("GET /api/tasks", () => {
           `INSERT OR IGNORE INTO agents (id, name, type) VALUES (?, ?, 'hands')`
         )
         .run(a.agentId, `Agent ${a.agentId}`);
-      // blocked assignments require a block_reason (CHECK constraint).
       const blockReason =
         a.state === "blocked"
           ? JSON.stringify({
@@ -1295,7 +1209,6 @@ describe("GET /api/tasks", () => {
 
   it("includes closed tasks when includeClosed=true and sinks them to the bottom", async () => {
     seedTask("t-open-p2", { priority: 2, status: "open" });
-    // A closed P0 must NOT float above the open P2 — partition-first sort.
     seedTask("t-done-p0", { priority: 0, status: "done" });
     const res = await fetch(`${t.baseUrl}/api/tasks?includeClosed=true`);
     const body = await res.json();
@@ -1306,7 +1219,6 @@ describe("GET /api/tasks", () => {
   });
 
   it("computes aggregate_state as the worst-case rank", async () => {
-    // Two assignments: one blocked (rank 0), one running (rank 1) → expect 'blocked'.
     seedTask("t-mixed", {
       assignments: [
         { id: "a-run", agentId: "ag-1", state: "running" },
@@ -1316,7 +1228,6 @@ describe("GET /api/tasks", () => {
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     const body = await res.json();
     expect(body.tasks[0].aggregate_state).toBe("blocked");
-    // Assignments array is present with both rows, oldest-first by created_at.
     expect(body.tasks[0].assignments).toHaveLength(2);
   });
 
@@ -1332,7 +1243,6 @@ describe("GET /api/tasks", () => {
     seedTask("t-iso");
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     const body = await res.json();
-    // Both fields end with 'Z' (UTC), contain 'T' (ISO), and parse.
     const row = body.tasks[0];
     expect(row.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T.+Z$/);
     expect(row.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T.+Z$/);
@@ -1366,19 +1276,11 @@ describe("GET /api/tasks", () => {
     ]);
   });
 
-  // F-12b widened /api/tasks into a method router (POST → create from
-  // GitHub via handleCreateTask). 405 now fires on methods other than
-  // GET or POST. PUT stands in for any non-routed method.
   it("405s on PUT (GET and POST are the only routed methods)", async () => {
     const res = await fetch(`${t.baseUrl}/api/tasks`, { method: "PUT" });
     expect(res.status).toBe(405);
   });
 
-  // C8 (PR #13 review): `in_progress` is a valid TaskStatus per schema.ts and
-  // types.ts, but nothing in the F-8 tests exercises it end-to-end. The
-  // server's `status NOT IN ('done','cancelled')` filter and the client's
-  // symmetric check both include `in_progress`; this pins that against a
-  // future refactor that naively filters on `status = 'open'`.
   it("surfaces in_progress tasks in the default open-only list", async () => {
     seedTask("t-open", { status: "open" });
     seedTask("t-in-progress", { status: "in_progress" });
@@ -1393,18 +1295,8 @@ describe("GET /api/tasks", () => {
     expect(statuses["t-in-progress"]).toBe("in_progress");
   });
 
-  // C6 (PR #13 review): `TASKS_QUERY_LIMIT = 500` is a safety cap. The design
-  // addendum (Decision 1) calls out that hitting it is "a signal to add keyset
-  // pagination, not a user-facing error" — so a future refactor that dropped
-  // the LIMIT (query-builder change, ORM migration) would silently breach the
-  // contract. Seed > cap and pin both the length and the priority-ordered
-  // top-window invariant in one pass.
   it("caps the response at TASKS_QUERY_LIMIT and returns the priority-ordered top window", async () => {
-    // Seed 501 tasks. Priorities distribute across three bands so the
-    // truncation boundary is inside a priority band and the "priority ASC"
-    // invariant is visible.
     const TOTAL = 501;
-    // Batch insert for test speed (501 individual queries = ~500ms on CI).
     t.db.transaction(() => {
       for (let i = 0; i < TOTAL; i++) {
         const roundRobinPriority = i % 3;
@@ -1422,29 +1314,17 @@ describe("GET /api/tasks", () => {
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    // Cap holds.
     expect(body.tasks.length).toBe(500);
-    // Priority monotonically non-decreasing across the window — the safety
-    // cap truncates the lowest-priority tail, not the highest-priority head.
     for (let i = 1; i < body.tasks.length; i++) {
       expect(body.tasks[i].priority).toBeGreaterThanOrEqual(
         body.tasks[i - 1].priority
       );
     }
-    // Top of the window is the highest-priority partition.
     expect(body.tasks[0].priority).toBe(0);
     expect(body.tasks[499].priority).toBeLessThanOrEqual(2);
   });
 
-  // C5 (PR #13 review): `fetchTasks` catches and forwards errors into the
-  // dashboard error pill. Pin the server-side contract that a failed
-  // listTasks query returns a 500 JSON response (not an uncaught throw
-  // exposing a default Bun error page, and not a 200 with empty data).
-  // The dashboard's catch branch relies on `!res.ok` → throw → surfaced
-  // error — this test pins that path.
   it("returns a 500 JSON error when the underlying query fails", async () => {
-    // Close the DB underneath the server. The next read-query will raise;
-    // the handler's try/catch must turn that into a structured 500.
     t.db.close();
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     expect(res.status).toBe(500);
@@ -1565,7 +1445,6 @@ describe("GET /api/working-agents", () => {
     expect(body.agents[0].additional_active_count).toBe(2);
   });
 
-  // ST-P4 — the endpoint projects the per-agent session tree (additive).
   function seedSession(
     sessionId: string,
     assignmentId: string,
@@ -1608,7 +1487,6 @@ describe("GET /api/working-agents", () => {
     const res = await fetch(`${t.baseUrl}/api/working-agents`);
     const body = await res.json();
     const tile = body.agents.find((x: { agent_id: string }) => x.agent_id === "ag-add");
-    // Pre-ST-P4 field surface, verbatim.
     expect(tile.agent_id).toBe("ag-add");
     expect(tile.agent_name).toBe("Echo");
     expect(tile.agent_type).toBe("hands");
@@ -1619,7 +1497,6 @@ describe("GET /api/working-agents", () => {
     expect(tile.primary_assignment.task_title).toBe("Task t-add");
     expect(tile.primary_assignment.task_priority).toBe(1);
     expect(tile.additional_active_count).toBe(0);
-    // New field present and well-typed (empty: no open sessions seeded).
     expect(tile.sessions).toEqual([]);
   });
 
@@ -1639,10 +1516,6 @@ describe("GET /api/working-agents", () => {
     reopenDatabaseForTeardown(t);
   });
 });
-
-// =============================================================================
-// F-13 — iteration planning surface (read endpoints)
-// =============================================================================
 
 describe("GET /api/iterations", () => {
   let t: TestContext;
@@ -1696,8 +1569,6 @@ describe("GET /api/iterations", () => {
     expect(body.error).toMatch(/Invalid 'state' filter/);
   });
 
-  // F-15 wired POST (create) — see the dedicated POST /api/iterations
-  // describe block below. The PUT method remains unrouted.
   it("405s on PUT (only GET + POST are wired)", async () => {
     const res = await fetch(`${t.baseUrl}/api/iterations`, { method: "PUT" });
     expect(res.status).toBe(405);
@@ -1767,9 +1638,6 @@ describe("GET /api/inbox", () => {
   });
 
   it("?source=internal returns 400 — silently always-empty otherwise", async () => {
-    // The inbox query already filters internal-only tasks out via
-    // `AND source_system != 'internal'`, so accepting `?source=internal`
-    // would silently always-return-empty. Reject loudly instead.
     const res = await fetch(`${t.baseUrl}/api/inbox?source=internal`);
     expect(res.status).toBe(400);
   });
@@ -1779,15 +1647,6 @@ describe("GET /api/inbox", () => {
     expect(res.status).toBe(405);
   });
 });
-
-// =============================================================================
-// F-15 — Iteration mutation endpoints
-// =============================================================================
-//
-// Smoke tests for the four new mutation endpoints + GET /api/iterations/:id.
-// 200 happy path + the 4xx cases the design spec spells (404, 400, 409).
-// Plus a couple of cross-cutting assertions (state-transition rejection,
-// idempotent attach).
 
 describe("GET /api/iterations/:id", () => {
   let t: TestContext;
@@ -1813,7 +1672,7 @@ describe("GET /api/iterations/:id", () => {
     expect(body.iteration.id).toBe("it-1");
     expect(body.iteration.body).toBe("design notes");
     expect(body.iteration.tasks).toHaveLength(2);
-    expect(body.iteration.tasks[0].id).toBe("task-a"); // priority 0 first
+    expect(body.iteration.tasks[0].id).toBe("task-a");
   });
 
   it("returns 404 for an unknown id", async () => {
@@ -2046,7 +1905,6 @@ describe("POST /api/iterations/:id/tasks (attach existing OR create+attach)", ()
     expect(body.iteration.tasks).toHaveLength(1);
     expect(body.iteration.tasks[0].title).toBe("Quick chore");
     expect(body.iteration.tasks[0].priority).toBe(1);
-    // Confirm DB rows.
     const row = t.db
       .query(`SELECT source_system FROM tasks WHERE id = ?`)
       .get(body.iteration.tasks[0].id) as { source_system: string };
@@ -2097,15 +1955,10 @@ describe("POST /api/iterations/:id/tasks (attach existing OR create+attach)", ()
     expect(res.status).toBe(200);
   });
 
-  // Per Echo grove-v2#42 (Major 2) — two concurrent attaches of the
-  // same unattached task to TWO different iterations must produce
-  // exactly one success and one 409, not two silent FK overwrites
-  // (the DB-layer `attachTask` is permissive — it would otherwise
-  // happily move the task and the loser would never know).
   it("Major 2 — concurrent attaches of the same task to two iterations resolve to 1× success + 1× 409", async () => {
     seedIter("i-1");
     seedIter("i-2");
-    seedTask("t-a"); // unattached — both calls race the same row
+    seedTask("t-a");
     const [r1, r2] = await Promise.all([
       fetch(`${t.baseUrl}/api/iterations/i-1/tasks`, {
         method: "POST",
@@ -2120,8 +1973,6 @@ describe("POST /api/iterations/:id/tasks (attach existing OR create+attach)", ()
     ]);
     const statuses = [r1.status, r2.status].sort();
     expect(statuses).toEqual([200, 409]);
-    // The DB row carries exactly one iteration id (the winner's), and
-    // the iteration that lost the race shows zero attached tasks.
     const link = t.db
       .query(`SELECT iteration_id FROM tasks WHERE id = ?`)
       .get("t-a") as { iteration_id: string };
@@ -2245,20 +2096,6 @@ describe("DELETE /api/iterations/:id/tasks/:taskId", () => {
   });
 });
 
-// =============================================================================
-// F-16 — cross-surface integration: task & assignment iteration denormalisation
-// =============================================================================
-//
-// The kanban (F-14) and detail (F-15) surfaces fetch iteration rows
-// directly. F-16 cross-references those rows onto the EXECUTION-side
-// surfaces — F-7 drill-down + F-8 task table — by denormalising the
-// (id, title, state) tag onto each `TaskListItem` and
-// `AssignmentListItem` via a LEFT JOIN at fetch time.
-//
-// These tests pin the wire shape: present + correctly-shaped when the
-// task is attached, null when the task is ungrouped, no N+1 (one
-// query for the whole list).
-
 describe("F-16 — GET /api/tasks `iteration` denormalisation", () => {
   let t: TestContext;
   beforeEach(async () => {
@@ -2334,10 +2171,6 @@ describe("F-16 — GET /api/tasks `iteration` denormalisation", () => {
   });
 
   it("reflects the iteration's CURRENT state, not a snapshot at attach time", async () => {
-    // The denormalisation is a JOIN, not a copy — flipping the
-    // iteration state must show up on the next fetch without
-    // re-attaching the tasks. Pins the LEFT JOIN behaviour against
-    // a future regression that materialised the columns.
     seedIteration("it-1", "Iter one", "designing");
     seedTaskWithIter("t-a", "it-1");
     t.db.exec(`UPDATE iterations SET state = 'queued' WHERE id = 'it-1'`);
@@ -2364,9 +2197,6 @@ describe("F-16 — GET /api/tasks `iteration` denormalisation", () => {
     seedTaskWithIter("t-a", "it-1");
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     const body = await res.json();
-    // The denormalised tag is the tight 3-key shape; body / source are
-    // NOT in the task projection (they live on the iteration detail
-    // endpoint).
     expect(Object.keys(body.tasks[0].iteration).sort()).toEqual([
       "id",
       "state",
@@ -2448,10 +2278,6 @@ describe("F-16 — GET /api/focus-area `iteration` denormalisation", () => {
     await teardown(t);
   });
 
-  // The focus-area endpoint shares the assignment JOIN, so the iteration
-  // tag flows through identically. Pin one happy-path assertion so a
-  // future refactor that forks the SELECT for performance reasons
-  // doesn't drop the column.
   it("blocked assignment carries the iteration tag through to the focus row", async () => {
     t.db.exec(
       `INSERT INTO iterations (id, title, state, priority) VALUES ('it-1', 'Block iter', 'in_flight', 1)`
