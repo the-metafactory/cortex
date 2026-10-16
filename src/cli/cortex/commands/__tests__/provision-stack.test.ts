@@ -13,7 +13,7 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, statSync, readFileSync, existsSync } from "fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, readFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -166,6 +166,17 @@ describe("cortex provision-stack claim (TC-1b #632)", () => {
     expect(body.signature.length).toBeGreaterThan(0);
     // The printed body is public — but the raw seed must still not appear.
     expect(res.stdout).not.toContain(seedOnDisk(seedPath));
+  });
+
+  test.skipIf(process.platform === "win32")("[5b] refuses to read a group/world-readable seed (exit 1, nothing signed)", async () => {
+    const seedPath = join(freshDir(), "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    chmodSync(seedPath, 0o644);
+
+    const res = await dispatchProvisionStack(["claim", "andreas", "--seed-path", seedPath]);
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toMatch(/must be chmod 600, found 644/);
   });
 });
 
@@ -1078,6 +1089,44 @@ describe("cortex provision-stack retire (C-1351 Slice 2 #1351)", () => {
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toMatch(/--stack-id is required/);
   });
+
+  test("--registry-pubkey and --principal-seed are both required → usage error exit 2", async () => {
+    const { registryPubkey } = await configuredEnv();
+    const seedPath = join(freshDir(), "root.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seedPath]);
+    const noPin = await dispatchProvisionStack([
+      "retire", "andreas", "--stack-id", "andreas/laptop",
+      "--principal-seed", seedPath, "--registry-url", "http://registry.test", "--apply",
+    ]);
+    expect(noPin.exitCode).toBe(2);
+    expect(noPin.stderr).toMatch(/--registry-pubkey is required/);
+    const noRoot = await dispatchProvisionStack([
+      "retire", "andreas", "--stack-id", "andreas/laptop",
+      "--registry-url", "http://registry.test", "--registry-pubkey", registryPubkey, "--apply",
+    ]);
+    expect(noRoot.exitCode).toBe(2);
+    expect(noRoot.stderr).toMatch(/--principal-seed is required/);
+  });
+
+  test("a record that does not verify against the pinned --registry-pubkey fails closed → exit 1, nothing retired", async () => {
+    const { env } = await configuredEnv();
+    const seedPath = join(freshDir(), "root.nk");
+    await seed(env, "andreas", seedPath, "andreas/laptop");
+    const otherRegistry = await makeRegistryKey();
+    const restore = patchFetch(env);
+    try {
+      const res = await dispatchProvisionStack([
+        "retire", "andreas", "--stack-id", "andreas/laptop",
+        "--principal-seed", seedPath, "--registry-url", "http://registry.test", "--registry-pubkey", otherRegistry.publicKey,
+        "--apply",
+      ]);
+      expect(res.exitCode).toBe(1);
+      expect(res.stderr).toMatch(/verified fetch failed/);
+      expect(await getRetiredAt(env, "andreas", "andreas/laptop")).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
 });
 
 // =============================================================================
@@ -1112,6 +1161,17 @@ describe("cortex#1742 — resolveRegistryPubkey", () => {
   test("no flag + unreadable config → undefined, never throws (best-effort)", () => {
     const r = resolveRegistryPubkey(ctx({}), cfgThrows);
     expect(r).toEqual({ ok: true, pubkey: undefined });
+  });
+
+  test("no flag + $HOME unset while --config needs tilde expansion → undefined, never throws", () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      const r = resolveRegistryPubkey(ctx({ "--config": "~/.config/metafactory/cortex/cortex.yaml" }), cfgWithPin);
+      expect(r).toEqual({ ok: true, pubkey: undefined });
+    } finally {
+      process.env.HOME = savedHome;
+    }
   });
 
   test("malformed flag value (bare --registry-pubkey) → usage error", () => {
