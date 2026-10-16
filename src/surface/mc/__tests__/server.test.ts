@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { startServer } from "../server";
+import { startServer, DASHBOARD_DIST as SERVER_DASHBOARD_DIST } from "../server";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
 import { dirname, join } from "path";
@@ -126,6 +126,10 @@ describe("mission-control server", () => {
   // The first server is bound by beforeAll on testPort — a second startServer on
   // the same port must throw, and the error must mention the port number so the
   // principal knows what to override.
+  it("resolves the dashboard dist tree at the repo root, not under src/", () => {
+    expect(SERVER_DASHBOARD_DIST).toBe(DASHBOARD_DIST);
+  });
+
   it("throws when starting on a port already in use, with the port in the message", () => {
     let err: unknown;
     try {
