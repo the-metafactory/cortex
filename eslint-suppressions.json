@@ -5113,9 +5113,6 @@
   "src/surface/mc/server.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 2
-    },
-    "cortex/no-comments": {
-      "count": 302
     }
   },
   "src/surface/mc/session/endpoint-resolver.ts": {
