@@ -30,9 +30,15 @@ export const TABLE_NAMES = [
   "vigil_subjects",
   "vigil_events",
   "vigil_replay",
+  "vigil_budget",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  // One shared text budget per Zurich day, beginning at 07:00 (soma#787).
+  `CREATE TABLE IF NOT EXISTS vigil_budget (
+    budget_day TEXT PRIMARY KEY,
+    texts_spent INTEGER NOT NULL DEFAULT 0 CHECK(texts_spent >= 0)
+  )`,
   // Vigil stores goal IDs only. All Vigil timestamps are epoch milliseconds.
   // `stack` is the stack segment of the latest observation's source; the key
   // itself is `run:{kind}:{ref}` per soma#787 Amendment 1 (see src/vigil/ingest.ts).

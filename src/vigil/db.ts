@@ -1,6 +1,23 @@
 // glossary-ignore: run
 import type { Database } from "bun:sqlite";
 
+/** An unseen budget day starts at zero; reading never creates a row. */
+export function getVigilTextsSpent(db: Database, budgetDay: string): number {
+  return db.query<{ texts_spent: number }, [string]>(
+    "SELECT texts_spent FROM vigil_budget WHERE budget_day = ?",
+  ).get(budgetDay)?.texts_spent ?? 0;
+}
+
+/**
+ * Record one confirmed text delivery, by DM or fallback (soma#823 Q5).
+ * The delivery caller supplies the budget day and calls this only on success,
+ * never for attempts, held events or the free digest. This is not a reservation.
+ */
+export function recordVigilTextDelivered(db: Database, budgetDay: string): void {
+  db.query(`INSERT INTO vigil_budget (budget_day, texts_spent) VALUES (?, 1)
+    ON CONFLICT(budget_day) DO UPDATE SET texts_spent = texts_spent + 1`).run(budgetDay);
+}
+
 export interface VigilSubjectRow {
   subject_key: string;
   subject_kind: "run" | "state";
