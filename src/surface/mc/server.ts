@@ -1,7 +1,3 @@
-/**
- * Grove Mission Control v2 — HTTP + WebSocket server.
- */
-
 import type { Server, ServerWebSocket } from "bun";
 import type { Database } from "bun:sqlite";
 import type { Config } from "./types";
@@ -42,9 +38,7 @@ import {
 import { handleListGitLinks } from "./api/git-links";
 import { handleListAgents, type AgentPresenceView } from "./api/agents";
 import { handleListNetworks, type NetworksView } from "./api/networks";
-// FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner read seam.
 import { handleGetHandoff, type HandoffView } from "./api/handoff";
-// FLG-3 (docs/plan-mc-future-state.md §4.D) — network doctor-on-glass read seam.
 import { handleGetDoctor, type DoctorView } from "./api/doctor";
 import {
   handleAdmissionDecision,
@@ -54,7 +48,6 @@ import {
   type AdmissionDecider,
   type AdmissionAuthContext,
 } from "./api/networks-admission";
-// FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — authorize-from-glass.
 import {
   handleAuthorize,
   AUTHORIZE_PATH,
@@ -98,18 +91,6 @@ import { fileURLToPath } from "url";
 const VERSION = "0.1.0";
 const startTime = Date.now();
 
-// MIG-6 cutover: the React app at dist/dashboard-v2/ is now the only
-// dashboard, served at /. The legacy `dashboard/index.html` monolith
-// was deleted in this cycle. `bun run build:dashboard` must run before
-// booting the server — when the dist/ tree is missing the / route 404s
-// instead of falling back to the legacy HTML.
-//
-// Path resolution is three levels above the running server.ts at
-// src/surface/mc/ (the grove-v2 lift moved it down one level from
-// src/mission-control/ — two `..` left it pointing at `src/dist/`,
-// which never exists, so `/` 500'd on every install). When packaged,
-// the resolver follows the same relative offset, but a `dist/` folder
-// is still expected to sit at the project root.
 export const DASHBOARD_DIST = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -119,182 +100,41 @@ export const DASHBOARD_DIST = join(
   "dashboard-v2"
 );
 
-/**
- * File extensions the bundled React app emits as static assets. Used to
- * decide whether an unmatched root-relative path should be served from
- * `DASHBOARD_DIST/<filename>` (vs falling through to 404). Anchored
- * against the build output of `bun build … --target browser`; expand
- * here if the bundler ever emits new asset types (e.g. WASM).
- */
 const DASHBOARD_ASSET_EXT = /^\/[\w.-]+\.(js|css|svg|png|jpe?g|gif|webp|ico|map|woff2?)$/;
 
-/** Server-initiated ping interval in ms. Clients that don't respond within
- *  `idleTimeoutSec` are closed by Bun's built-in idle-timeout mechanism. */
 const SERVER_PING_INTERVAL_MS = 30_000;
 
 export interface ServerContext {
   server: Server<WsData>;
-  /** The bound listen port: `config.port`, or the one Bun assigned when it was 0. */
   port: number;
   wsRegistry: WsClientRegistry;
-  /**
-   * Stop the server AND clear the server-initiated ping interval.
-   * Always prefer this over calling `server.stop()` directly — a raw
-   * `server.stop()` leaves the setInterval firing, which keeps the event
-   * loop alive (tests hang, processes don't exit cleanly).
-   */
   stop: (closeActive?: boolean) => void;
 }
 
 export interface HealthResponse {
-  /**
-   * `"ok"` on a healthy boot; `"degraded"` when the daemon booted on the
-   * last-known-good config snapshot because the LIVE config failed to load
-   * (FS-7 / D-3, cortex#1839). A monitor can alert on `status !== "ok"`.
-   */
   status: "ok" | "degraded";
   version: string;
-  /** Seconds since startServer. */
   uptime: number;
-  /** Count of currently-connected WebSocket clients. */
   wsClients: number;
-  /**
-   * FS-7 / D-3 — present ONLY on a degraded boot: the precise live-config load
-   * error + the snapshot path the daemon fell back to. Absent on a healthy boot.
-   */
   degraded?: DegradedInfo;
 }
 
 export interface StartServerOptions {
-  /**
-   * ProcessManager for controlled-session spawning. Required for the REST
-   * endpoints that manage CC processes. If omitted (legacy tests), any
-   * REST request that tries to spawn or resolve a controlled endpoint will
-   * 503. The tests that don't exercise REST can keep calling without it.
-   */
   processManager?: ProcessManager;
-  /**
-   * FS-7 / D-3 (cortex#1839) — set when the daemon booted DEGRADED on the
-   * last-known-good config snapshot (the LIVE config failed to load). Surfaced on
-   * `GET /health` so the degraded state is visible to monitors + the dashboard.
-   * Static (degraded status is fixed at boot); absent on a healthy boot.
-   */
   degraded?: DegradedInfo;
-  /**
-   * Spawn override for CC children. Tests inject a `cat`-based fake; in
-   * production this is left undefined and endpoint-resolver's default
-   * (spawns `claude`) is used.
-   */
   spawn?: SpawnFn;
-  /**
-   * F-11 Discord notification deps. Optional — when omitted, transitions
-   * still broadcast to WS as before; only the Discord push surface is
-   * skipped. See `docs/design-mc-f11-discord-notifications.md`.
-   */
   notify?: MaybeNotifyDeps;
-  /**
-   * F-12b Decision 4 — optional `owner/repo` default for `#N` / `repo#N`
-   * shorthand parsing. Source: principal's `mission-control.yaml` or
-   * equivalent. When absent, shorthands fail with a clear message.
-   */
   defaultGithubRepo?: string;
-  /**
-   * F-12b Decision 3 — gh CLI spawn override for tests. Omitted in
-   * production; real `Bun.spawn(['gh', 'api', ...])` is used.
-   */
   ghSpawn?: import("./adapters/github").GhSpawnFn;
-  /**
-   * F-17 — per-network iteration label override. Defaults to
-   * `"iteration"` when absent. Plumbed through to `ApiDeps.iterationLabel`
-   * which the import logic honours (per-network yaml: `github.iterationLabel`).
-   */
   iterationLabel?: string;
-  /**
-   * F-17 — GitHub webhook HMAC secret. When omitted, the
-   * `POST /api/github/webhook` route 503s — no implicit bypass. The
-   * principal wires this from the same `GITHUB_WEBHOOK_SECRET` they
-   * configure on the upstream `webhook-proxy`.
-   */
   githubWebhookSecret?: string;
-  /**
-   * G-1114.B.4 — accessor for the stack-local runtime agent-presence registry
-   * (its `getAgents()` read-only view), serving `GET /api/agents`.
-   *
-   * A GETTER (not the value) because the registry boots AFTER the MC server in
-   * `cortex.ts` — the embed is started, THEN the presence registry self-
-   * subscribes. Resolving lazily at request time lets the server bind before
-   * the registry exists and pick it up once it does, without a boot-ordering
-   * dance. Returns `null` until/unless a registry is wired (MC enabled but no
-   * presence registry → the handler serves an empty list gracefully).
-   */
   agentPresence?: () => AgentPresenceView | null;
-  /**
-   * #1008 — lazy accessor for the local-stack DB-read aggregation context (the
-   * pane-of-glass mechanism). When it resolves to a context, `/api/working-agents`
-   * and `/api/agents` return the origin-tagged UNION across the local db + each
-   * readable LOCAL sibling stack's `mission-control.db`. A GETTER (like
-   * `agentPresence`) because the discovered-sibling context is built at boot,
-   * after the embed starts; resolved per request. Returns `null` ⇒ DB-read
-   * aggregation OFF (single-db feed, byte-identical to pre-#1008).
-   */
   localAggregation?: LocalAggregationProvider;
-  /**
-   * MC-A1 (cortex#1275) — lazy accessor for the networks view (serves
-   * `GET /api/networks`: joined networks + their admitted roster ⋈ presence →
-   * membership verdict). A GETTER like `agentPresence` because the registry
-   * client + presence registry boot AFTER the embed in `cortex.ts`; resolved per
-   * request. Returns `null` ⇒ no federation/registry configured → the route
-   * serves an empty `{networks:[]}`.
-   */
   networks?: () => NetworksView | null;
-  /**
-   * MC-B2 (cortex#1279) — lazy accessor for the admission-decision signer: the
-   * mutating Tier-2 admit/reject action (`POST /api/networks/admission-decision`).
-   * A GETTER like `networks` because the stack identity material + registry
-   * client boot AFTER the embed in `cortex.ts`; resolved per request. Returns
-   * `null` ⇒ no federation/registry/signing identity → the route 503s honestly.
-   * The signer runs LOCALLY (the daemon holds the stack seed); the CF worker
-   * never wires this.
-   */
   admissionDecider?: () => AdmissionDecider | null;
-  /**
-   * FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — lazy accessor
-   * for the authorize-from-glass signer: the hub-admin-signed
-   * `POST /api/networks/authorize` that stamps `hub_authorized_at` on an
-   * ADMITTED admission row. A GETTER like `admissionDecider` because the
-   * hub-admin material + registry client boot AFTER the embed in `cortex.ts`;
-   * resolved per request. Returns `null` ⇒ no hub-admin seed / registry
-   * configured → the route returns a structured 503 `hub_admin_not_configured`
-   * (fail-closed — never a silent success). Signs LOCALLY (the daemon holds the
-   * hub-admin seed); the CF worker never wires this.
-   */
   authorizer?: () => Authorizer | null;
-  /**
-   * FLG-1 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the guided-join
-   * handoff view (serves `GET /api/networks/:net/handoff/:member`: the 3-leg
-   * seal → hub-authorize → leaf-up state via the pure `deriveHandoffState`). A
-   * GETTER like `networks` because the registry client + stack identity boot
-   * AFTER the embed in `cortex.ts`; resolved per request. Read-only (no signing);
-   * `null` ⇒ no federation/registry → the route 503s honestly.
-   */
   handoffView?: () => HandoffView | null;
-  /**
-   * FLG-3 (docs/plan-mc-future-state.md §4.D) — lazy accessor for the network
-   * doctor view (serves `GET /api/networks/:net/doctor`: the 8-leg
-   * status/fix/owner matrix via the pure `runDoctorChecks`). A GETTER like
-   * `handoffView` because the registry client + stack identity + runtime boot
-   * AFTER the embed in `cortex.ts`; resolved per request. Read-only (no signing —
-   * one bounded probe echo per peer, the SAME transport `cortex network ping`
-   * uses); `null` ⇒ no federation/registry → the route 503s honestly.
-   */
   doctorView?: () => DoctorView | null;
-  /**
-   * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
-   * `/api/observability/*` routes proxy to it server-side. Loopback-enforced
-   * at config-parse time; the proxy re-checks at the request boundary.
-   * Forwarded to `ApiDeps.sidebandUrl`. Omitted → the observability routes
-   * return a structured not-available error.
-   */
   sidebandUrl?: string;
 }
 
@@ -306,10 +146,6 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const maxClients = config.ws.maxClients;
 
-  // cortex#1410 — bind-conditioned Gate 1 for the admission-decision route.
-  // On a loopback bind we keep trusting the CF-Access email header; off
-  // loopback we require a verified CF-Access JWT. Computed once here (the bind
-  // + config are fixed for the server's lifetime) and passed into handleApi.
   const isLoopback = isLoopbackBind(config.hostname);
   const cfAccess = config.cfAccess;
   const cfAccessVerifier: AdmissionAuthContext["verifyJwt"] = cfAccess
@@ -320,10 +156,6 @@ export function startServer(
         })
     : undefined;
 
-  // FND-6 — mutation-surface hardening. The Host/Origin allowlist + principal
-  // allowlist are fixed for the server's lifetime (bind + config are fixed), so
-  // build the invariant part once; `listenPort` is resolved per request from
-  // `server.port` (differs from `config.port` on an ephemeral bind — tests).
   const guardBase: Omit<MutationGuardContext, "listenPort"> = {
     isLoopback,
     allowedHostnames: buildAllowedHostnames(config.hostname),
@@ -336,11 +168,6 @@ export function startServer(
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
 
-  // FND-3 — step-up MFA secret path. Absolute, tilde-expanded once (the config
-  // is fixed for the server's lifetime). The enrollment itself is loaded
-  // LAZILY per control-verb request (below) so re-enrollment never requires a
-  // daemon restart. Default `~/.config/cortex/step-up-totp.json`; overridable
-  // via `mc.governance.stepUp.secretPath`.
   const stepUpSecretPath = expandTilde(
     config.governance?.stepUp?.secretPath ?? defaultStepUpSecretPath(),
   );
@@ -367,17 +194,12 @@ export function startServer(
 
   const server = Bun.serve<WsData>({
     port: config.port,
-    // SEV-2 fix: bind to loopback only — never 0.0.0.0 without auth.
-    // CLAUDE.md: "NEVER add CF Access bypass-everyone policies or disable
-    // authentication on any endpoint."
     hostname: config.hostname,
 
     async fetch(req, server) {
       const url = new URL(req.url);
 
-      // WebSocket upgrade
       if (req.method === "GET" && url.pathname === "/ws") {
-        // Connection cap — reject before upgrade when at capacity.
         if (maxClients > 0 && wsRegistry.size >= maxClients) {
           return new Response("Too many WebSocket clients", { status: 503 });
         }
@@ -392,17 +214,7 @@ export function startServer(
         return undefined;
       }
 
-      // Health endpoint.
-      // Threat model: /health exposes wsClients count — benign because the
-      // server binds loopback-only (config.hostname = "127.0.0.1" by default,
-      // enforced by the SEV-2 fix above). If MC is ever fronted by a reverse
-      // proxy or exposed beyond loopback, either strip wsClients from this
-      // response or gate /health behind auth. Principal-liveness probes should
-      // only see `status` + `version`.
       if (req.method === "GET" && url.pathname === "/health") {
-        // FS-7 / D-3 (cortex#1839) — a degraded boot flips `status` to
-        // `"degraded"` and attaches the load error + snapshot path so a monitor
-        // or the dashboard can alert on it instead of a silent fallback.
         const body: HealthResponse = {
           status: options.degraded !== undefined ? "degraded" : "ok",
           version: VERSION,
@@ -413,31 +225,14 @@ export function startServer(
         return Response.json(body);
       }
 
-      // --- REST API ---
       if (url.pathname.startsWith("/api/")) {
-        // Resolve the agent-presence view lazily per request — the registry
-        // may not have booted when the server started (see StartServerOptions).
         const agentPresence = options.agentPresence?.() ?? null;
-        // #1008 — resolve the DB-read aggregation context lazily too; null ⇒
-        // single-db feeds (the pre-#1008 path).
         const localAggregation = options.localAggregation?.() ?? null;
-        // MC-A1 — resolve the networks view lazily too (registry/presence boot
-        // after the server). null ⇒ the route serves an empty list.
         const networks = options.networks?.() ?? null;
-        // MC-B2 — resolve the admission-decision signer lazily too (stack
-        // identity + registry client boot after the server). null ⇒ 503.
         const admissionDecider = options.admissionDecider?.() ?? null;
-        // FLG-2 — resolve the authorize-from-glass signer lazily too (hub-admin
-        // material + registry boot after the server). null ⇒ 503
-        // `hub_admin_not_configured`.
         const authorizer = options.authorizer?.() ?? null;
-        // FLG-1 — resolve the handoff view lazily (same boot-order reason as
-        // `networks`). null ⇒ the handoff route 503s honestly.
         const handoffView = options.handoffView?.() ?? null;
-        // FLG-3 — resolve the doctor view lazily (same boot-order reason).
-        // null ⇒ the doctor route 503s honestly.
         const doctorView = options.doctorView?.() ?? null;
-        // FND-6 — finalize the guard context with the ACTUAL bound port.
         const guard: MutationGuardContext = {
           ...guardBase,
           listenPort: server.port ?? config.port,
@@ -459,25 +254,14 @@ export function startServer(
         );
       }
 
-      // --- Dashboard static ---
-      // Dashboard shell — React SPA at / + /index.html.
-      // Bun.file is streaming and sets Content-Length + keeps the file
-      // handle off the heap.
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
 
-      // Bundled assets — the React shell references its hashed
-      // js/css/etc with document-relative URLs (`./index-XXX.js`),
-      // which the browser resolves to `/index-XXX.js`. Restricted to
-      // a known asset-extension allowlist so unknown root paths still
-      // 404 instead of leaking the dist/ tree's directory shape.
       if (req.method === "GET" && DASHBOARD_ASSET_EXT.test(url.pathname)) {
         const rel = url.pathname.slice(1);
-        // Belt-and-braces against `..` slipping through — the regex
-        // already excludes them but cheap to re-verify.
         if (rel.includes("..") || rel.length === 0) {
           return new Response("Not Found", { status: 404 });
         }
@@ -488,14 +272,8 @@ export function startServer(
     },
 
     websocket: {
-      // FR-6: idle-timeout acts as server-initiated dead-client detection.
-      // Bun automatically closes connections with no activity within this
-      // window. The server-initiated ping (below) ensures active clients
-      // reset the timer even when they have no application messages to send.
       idleTimeout: config.ws.idleTimeoutSec,
 
-      // Payload cap — prevents a single client from allocating unbounded
-      // memory with oversized messages. Dashboard JSON messages are small.
       maxPayloadLength: config.ws.maxPayloadLength,
 
       open(ws: ServerWebSocket<WsData>) {
@@ -513,9 +291,6 @@ export function startServer(
       message(ws: ServerWebSocket<WsData>, msg: string | Buffer) {
         const raw = typeof msg === "string" ? msg : msg.toString();
 
-        // Parse as `unknown` first — the payload is attacker-controlled and
-        // cannot be trusted to match WsClientMessage. We narrow via explicit
-        // type-tag checks below.
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -524,8 +299,6 @@ export function startServer(
           return;
         }
 
-        // Narrow to an object with an optional string `type` field. Anything
-        // else (primitives, arrays, null) falls through to the error branch.
         const typeField =
           typeof parsed === "object" && parsed !== null && "type" in parsed
             ? parsed.type
@@ -536,16 +309,12 @@ export function startServer(
           return;
         }
 
-        // Client pong in response to server-initiated ping — no reply needed,
-        // the message itself resets the idle timer.
         if (typeField === "pong") {
           return;
         }
 
         if (typeField === "subscribe") {
           const assignmentIds = (parsed as { assignmentIds?: unknown }).assignmentIds;
-          // Subscription filtering is a Phase C concern — acknowledge for now.
-          // The "subscribed" type is part of WsServerMessage (F-5 fix #4).
           ws.send(
             JSON.stringify({
               type: "subscribed",
@@ -572,10 +341,6 @@ export function startServer(
     },
   });
 
-  // FR-6: server-initiated ping. Sends a JSON `{ type: "ping" }` to every
-  // connected client on interval. Clients that respond (with `pong` or any
-  // message) reset Bun's idle timer. Those that don't respond within
-  // `idleTimeoutSec` are closed automatically by Bun.
   const pingInterval = setInterval(() => {
     wsRegistry.broadcast({ type: "ping" });
   }, SERVER_PING_INTERVAL_MS);
@@ -588,24 +353,6 @@ export function startServer(
   return { server, port: server.port ?? config.port, wsRegistry, stop };
 }
 
-// ---------- REST router ----------
-
-/**
- * Route `/api/*` requests to the appropriate handler. Kept out of the fetch
- * closure to keep that hot path compact and to let us unit-test the router.
- *
- * Dispatch rules:
- *   GET  /api/assignments                — list
- *   GET  /api/focus-area                 — blocked-only feed for dashboard §8.2
- *   GET  /api/tasks                      — task-keyed feed for dashboard §8.4 (F-8)
- *   GET  /api/working-agents             — agent-keyed feed for dashboard §8.3 (F-9)
- *   GET  /api/working-aggregation        — cross-stack WORKING rollup (CK-4b, metadata-only)
- *   GET  /api/assignments/:id/events     — paged event feed (F-7 drill-down)
- *   POST /api/sessions                   — create controlled session
- *   POST /api/assignments/:id/input      — write turn to an active session
- *
- * Any other `/api/*` path is 404. Method mismatch is 405.
- */
 async function handleApi(
   req: Request,
   url: URL,
@@ -623,30 +370,14 @@ async function handleApi(
 ): Promise<Response> {
   const { pathname } = url;
 
-  // FND-6 — mutation-surface hardening, BEFORE any route match or body read.
-  // (a)+(b) Host/Origin anti-rebinding on every mutating route except HMAC M2M;
-  // (c)+(d) identity gate + authorization binding on the governed glass set.
-  // Runs first so no unauthenticated/rebound request can reach a handler.
   if (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname)) {
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
-  // A high-blast control verb (FND-3) is ALSO identity-gated: step-up without
-  // knowing WHO is stepping up is meaningless. Per invariant 3 the hardened
-  // decider pattern is Host/Origin + identity + authz + step-up, composed — so
-  // control routes run the identity+authz gate here and the step-up gate below.
   if (isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
   }
-  // FND-3 — step-up MFA on the high-blast `'control'` verb set (seal / rotate-K
-  // / revoke / escalation-approve). Runs AFTER the identity gate and is
-  // bind-agnostic: loopback is challenged too (terminal possession ≠ step-up).
-  // Enrollment is loaded lazily here (control verbs are rare + high-blast; a
-  // per-request read means re-enrollment needs no daemon restart). A malformed
-  // / bad-permission secret THROWS from the loader — mapped to 500 rather than
-  // a silent downgrade. The secret is never logged (the loader's error carries
-  // only the path + reason, never the secret).
   if (requiresStepUp(req.method, pathname)) {
     let enrollment: StepUpEnrollment | null;
     try {
@@ -684,8 +415,6 @@ async function handleApi(
     return handleListFocusArea(db);
   }
 
-  // G-1113.C.6 — GET /api/git/links?refs=… — batch task→PR/branch link lookup
-  // for the dashboard's PR/branch chips.
   if (pathname === "/api/git/links") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -693,8 +422,6 @@ async function handleApi(
     return handleListGitLinks(db, url);
   }
 
-  // G-1113.C.7 — GET /api/git/repositories — repos grouped with branches/PRs/
-  // releases for the software-mode Repositories panel.
   if (pathname === "/api/git/repositories") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -702,8 +429,6 @@ async function handleApi(
     return handleListRepositories(db);
   }
 
-  // G-1113.D.3 — GET /api/plans — plans with ordered phases + status tally for
-  // the Plans overview surface.
   if (pathname === "/api/plans") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -711,8 +436,6 @@ async function handleApi(
     return handleListPlans(db);
   }
 
-  // G-1113.D.4 — GET /api/phases/:id — phase detail (plan + work items + linked
-  // PRs) for the phase-detail surface.
   if (pathname.startsWith("/api/phases/")) {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -727,9 +450,6 @@ async function handleApi(
     return handleGetPhaseDetail(db, phaseId);
   }
 
-  // G-1113.D.5 — GET /api/work-items?id=… — work-item detail (plan/phase context
-  // + linked PRs with reviews). The id is a query param (not a path segment)
-  // because work-item ids are `owner/repo#N` and carry `/` and `#`.
   if (pathname === "/api/work-items") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -744,7 +464,6 @@ async function handleApi(
     return handleGetWorkItemDetail(db, id);
   }
 
-  // G-1113.E.3 — GET /api/attention — open attention items with deep-links.
   if (pathname === "/api/attention") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -752,10 +471,6 @@ async function handleApi(
     return handleListAttention(db);
   }
 
-  // CK-6a — POST /api/attention/:id/resolve|dismiss — attention lifecycle.
-  // A real db state op (db/attention setStatus), gated by the FND-6 identity
-  // guard above (see isIdentityGatedMutation). Approve/Deny stays theater until
-  // SPX-8 and is deliberately NOT mounted here.
   const attentionLifecycleMatch =
     /^\/api\/attention\/([^/]+)\/(resolve|dismiss)$/.exec(pathname);
   if (attentionLifecycleMatch) {
@@ -769,7 +484,6 @@ async function handleApi(
     return handleAttentionLifecycle(db, id, action);
   }
 
-  // G-1115 — GET /api/governance — governance verdicts + summary + alarm tier.
   if (pathname === "/api/governance") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -777,12 +491,6 @@ async function handleApi(
     return handleGetGovernance(db);
   }
 
-  // P-14 U2.1 (#934) — GET /api/observability-events — the Observability tab's
-  // per-section rows + counts over `observability_events`. Registered BEFORE the
-  // U0.1 `/api/observability/*` proxy below: the proxy matches the trailing-slash
-  // prefix `/api/observability/`, which `/api/observability-events` does NOT
-  // start with (the next char is `-`, not `/`), so the two never collide — but
-  // ordering this first makes the disjointness explicit and robust to refactors.
   if (pathname === "/api/observability-events") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -790,17 +498,7 @@ async function handleApi(
     return handleGetObservability(db);
   }
 
-  // P-14 U0.1 — GET /api/observability/* — Tier-3 sideband drill-down proxy.
-  // MC proxies to the loopback-only sideband server-side (the browser only ever
-  // talks to MC; no CORS opening). The proxy allowlists the contract's read
-  // surface (/traces, /logs, /traces/{id}/timeline, /healthz), re-checks the
-  // loopback invariant, bounds the request, and maps every failure to a
-  // structured SidebandError (with deep_link) — never a 500 splat. See
-  // `src/common/sideband/`.
   if (pathname.startsWith("/api/observability/")) {
-    // When no sideband is configured (e.g. cloud worker parity, or MC booted
-    // without the dep), return the structured not-available error so the
-    // frontend (#933) renders "interior capture not available" honestly.
     if (!deps?.sidebandUrl) {
       return new Response(
         JSON.stringify({
@@ -818,9 +516,6 @@ async function handleApi(
   }
 
   if (pathname === "/api/tasks") {
-    // F-12b widens the original GET-only branch into a method router.
-    //   GET  /api/tasks  — F-8 listing (existing behaviour).
-    //   POST /api/tasks  — F-12b create-from-GitHub.
     if (req.method === "GET") {
       return handleListTasks(db, url);
     }
@@ -838,9 +533,6 @@ async function handleApi(
     return methodNotAllowed(["GET", "POST"]);
   }
 
-  // F-12b — POST /api/tasks/preview
-  // Validates + fetches + dedup-checks. No write. See
-  // `docs/design-mc-f12b-add-to-queue.md` Decision 6.
   if (pathname === "/api/tasks/preview") {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -856,7 +548,6 @@ async function handleApi(
     return handlePreviewTask(db, deps, body.value);
   }
 
-  // F-12b — POST /api/tasks/:taskId/abandon (inherited from F-12 Decision 5)
   const abandonTaskMatch = /^\/api\/tasks\/([^/]+)\/abandon$/.exec(pathname);
   if (abandonTaskMatch) {
     if (req.method !== "POST") {
@@ -883,9 +574,6 @@ async function handleApi(
     return handleListWorkingAgents(db, localAggregation);
   }
 
-  // CK-4b (cortex#1295) — GET /api/working-aggregation — cross-stack WORKING
-  // rollup (schema-origin-keyed metadata) for the cockpit's pane-of-glass lane.
-  // Metadata-only (ADR-0005): counts + provider-retry, never a session interior.
   if (pathname === "/api/working-aggregation") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -893,9 +581,6 @@ async function handleApi(
     return handleListWorkingAggregation(db);
   }
 
-  // G-1114.B.4 — GET /api/agents — stack-local runtime agent-presence snapshot
-  // for the dashboard's agents panel. Registry-derived (not DB), read-only.
-  // `agentPresence === null` (MC enabled but no presence registry) → empty list.
   if (pathname === "/api/agents") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -903,10 +588,6 @@ async function handleApi(
     return handleListAgents(db, agentPresence, localAggregation);
   }
 
-  // MC-A1 (cortex#1275) — GET /api/networks — joined networks as first-class
-  // trust groups + their admitted roster (admission rows = source of truth,
-  // ADR-0018 Q3) reconciled ⋈ presence into a membership verdict. `networks ===
-  // null` (no federation/registry) → empty list. Read-only.
   if (pathname === "/api/networks") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -914,16 +595,6 @@ async function handleApi(
     return handleListNetworks(networks, agentPresence);
   }
 
-  // FLG-1 (docs/plan-mc-future-state.md §4.D) — GET
-  // /api/networks/:net/handoff/:member — the guided-join two-party handoff
-  // banner's read seam. Wraps the PURE `deriveHandoffState` (#1479) via the
-  // injected HandoffView. Read-only (GET), so it is NOT identity-gated — the
-  // FND-6 guard above only wraps MUTATING_METHODS; this read carries
-  // metadata-only DTO (no interiors — invariant 1). The `?confirmed=` toggle
-  // maps to the member attestation (`undefined`→done only, NEVER a real
-  // `false` — invariant 9 / Sage #1499). The `/handoff/` segment disambiguates
-  // from the exact-match `/api/networks` + `/api/networks/admission-decision`
-  // routes, so registration order is immaterial.
   const networkHandoffMatch = /^\/api\/networks\/([^/]+)\/handoff\/([^/]+)$/.exec(pathname);
   if (networkHandoffMatch) {
     if (req.method !== "GET") {
@@ -936,20 +607,10 @@ async function handleApi(
     }
     const networkId = decodeURIComponent(netCaptured);
     const member = decodeURIComponent(memberCaptured);
-    // Fail-closed: only an explicit `?confirmed=true` attests. Any other value
-    // (absent, "false", garbage) is treated as no attestation.
     const confirmed = url.searchParams.get("confirmed") === "true";
     return handleGetHandoff(handoffView, { networkId, member, confirmed });
   }
 
-  // FLG-3 (docs/plan-mc-future-state.md §4.D) — GET /api/networks/:net/doctor —
-  // the "why is this link red" drill. Wraps the PURE `runDoctorChecks` (#1484/
-  // #1482) via the injected DoctorView. Read-only (GET), so it is NOT identity-
-  // gated — the FND-6 guard above only wraps MUTATING_METHODS; this read carries
-  // a metadata-only DTO (no interiors/secrets — invariant 1). The `/doctor`
-  // suffix disambiguates from the exact-match `/api/networks` +
-  // `/api/networks/admission-decision` routes and the `/handoff/` route above,
-  // so registration order is immaterial.
   const networkDoctorMatch = /^\/api\/networks\/([^/]+)\/doctor$/.exec(pathname);
   if (networkDoctorMatch) {
     if (req.method !== "GET") {
@@ -963,20 +624,10 @@ async function handleApi(
     return handleGetDoctor(doctorView, { networkId });
   }
 
-  // MC-B2 (cortex#1279) — POST /api/networks/admission-decision — the mutating
-  // Tier-2 admit/reject action from the glass. Two gates (both required): the
-  // CF-Access principal identity header + a typed-confirm echo of the request_id.
-  // The decision is signed LOCALLY by the daemon with the stack seed (the CF
-  // worker never wires `admissionDecider`, so this route 503s there — the seed
-  // stays local). The loopback bind (SEV-2, above) is the boundary the identity
-  // gate composes on top of.
   if (pathname === "/api/networks/admission-decision") {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
     }
-    // The FND-6 guard already enforced Host/Origin + identity + authorization
-    // for this route; the handler re-resolves the principal for signing/audit
-    // (typed-confirm is its intent gate). `guard` carries the bind + verifier.
     const emailHeader = req.headers.get(CF_ACCESS_EMAIL_HEADER) ?? undefined;
     const jwtAssertion = req.headers.get(CF_ACCESS_JWT_HEADER) ?? undefined;
     const body = await parseJsonBody(req);
@@ -991,17 +642,6 @@ async function handleApi(
     return handleAdmissionDecision(admissionDecider, auth, body.value);
   }
 
-  // FLG-2 (docs/plan-mc-future-state.md Track FLG, cortex#1706) — POST
-  // /api/networks/authorize — the trust-GRANTING authorize-from-glass verb:
-  // stamp `hub_authorized_at` on an ADMITTED admission row (registry
-  // cortex#1498, hub-admin-signed). Placed AFTER the FND-3 step-up gate block
-  // above: this path is in `STEP_UP_CONTROL_ROUTES`, so a POST without a valid
-  // current TOTP code was already refused (403) before reaching here, and the
-  // FND-6 identity gate ran first. The handler owns the typed-confirm intent
-  // gate + the fail-closed hub-admin seam (null ⇒ 503 `hub_admin_not_configured`)
-  // + the registry-verdict passthrough. Signs LOCALLY (the daemon holds the
-  // hub-admin seed); the CF worker never wires `authorizer`, so this route 503s
-  // there.
   if (pathname === AUTHORIZE_PATH) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -1011,11 +651,6 @@ async function handleApi(
     return handleAuthorize(authorizer, body.value);
   }
 
-  // F-17 — principal-driven GitHub iteration import.
-  //   POST /api/iterations/from-github  — gh CLI fetch + import logic
-  //
-  // Matched BEFORE the broader `/api/iterations/:id` regex below so the
-  // literal `from-github` path doesn't get captured as an id.
   if (pathname === "/api/iterations/from-github") {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -1031,9 +666,6 @@ async function handleApi(
     return handleImportIterationFromGithub(db, deps, body.value);
   }
 
-  // F-17 — webhook receiver for GitHub `issues` events. HMAC-validated,
-  // dispatches to iteration-import logic. Per Decision 7 only `issues`
-  // is acted on; `pull_request` / `push` / etc. are ack-and-ignore.
   if (pathname === "/api/github/webhook") {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -1047,16 +679,6 @@ async function handleApi(
     const signature = req.headers.get("x-hub-signature-256") ?? "";
     const event = req.headers.get("x-github-event") ?? "";
     const deliveryId = req.headers.get("x-github-delivery") ?? "";
-    // Webhooks legitimately carry payloads larger than the default 128 KB
-    // (a parent issue body capped at 50 KB plus surrounding metadata can
-    // easily land in the 200-300 KB range). Cap at 1 MB.
-    //
-    // Read the body via the request stream rather than `req.text()` so
-    // the cap fires BEFORE we buffer the full payload into memory.
-    // `req.text()` would honour Bun.serve's `maxRequestBodySize` (default
-    // 128 MB), letting an unauthenticated attacker pin worker RAM with
-    // concurrent multi-megabyte payloads — the HMAC verify is the only
-    // auth boundary on this route and it can only fire post-buffer.
     const limited = await readBodyWithCap(req, WEBHOOK_BODY_MAX_BYTES);
     if (limited.error) return limited.error;
     return handleGithubWebhook(db, deps, limited.text, {
@@ -1066,13 +688,6 @@ async function handleApi(
     });
   }
 
-  // F-13 / F-15 — iteration planning surface.
-  //   GET  /api/iterations         — kanban list (F-13)
-  //   POST /api/iterations         — create (F-15)
-  //   GET  /api/iterations/:id     — detail (F-15)
-  //   PATCH /api/iterations/:id    — header / state mutation (F-15)
-  //   POST /api/iterations/:id/tasks       — attach existing or create+attach (F-15)
-  //   DELETE /api/iterations/:id/tasks/:tid — detach (F-15)
   if (pathname === "/api/iterations") {
     if (req.method === "GET") {
       return handleListIterations(db, url);
@@ -1091,9 +706,6 @@ async function handleApi(
     return methodNotAllowed(["GET", "POST"]);
   }
 
-  // F-15 — iteration tasks (attach / detach). Match before the
-  // single-id GET/PATCH route so `/iterations/:id/tasks(/:tid)` doesn't
-  // get swallowed by the broader regex below.
   const detachTaskMatch =
     /^\/api\/iterations\/([^/]+)\/tasks\/([^/]+)$/.exec(pathname);
   if (detachTaskMatch) {
@@ -1106,9 +718,6 @@ async function handleApi(
         503
       );
     }
-    // Captures [1] and [2] are guaranteed by the regex's anchored groups,
-    // but noUncheckedIndexedAccess types them as possibly undefined. Use
-    // explicit ?? "" fallbacks rather than `!` assertions.
     const iterationId = decodeURIComponent(detachTaskMatch[1] ?? "");
     const taskId = decodeURIComponent(detachTaskMatch[2] ?? "");
     return handleDetachTaskFromIteration(db, deps, iterationId, taskId);
@@ -1132,7 +741,6 @@ async function handleApi(
     return handleAttachTaskToIteration(db, deps, iterationId, body.value);
   }
 
-  // GET / PATCH /api/iterations/:id
   const iterationByIdMatch = /^\/api\/iterations\/([^/]+)$/.exec(pathname);
   if (iterationByIdMatch) {
     const iterationId = decodeURIComponent(iterationByIdMatch[1] ?? "");
@@ -1160,7 +768,6 @@ async function handleApi(
     return handleListInbox(db, url);
   }
 
-  // F-18 — fleet metrics. Read-only; no deps dependency.
   if (pathname === "/api/metrics/fleet") {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -1168,9 +775,6 @@ async function handleApi(
     return handleGetFleetMetrics(db, url);
   }
 
-  // F-18 — assignment-scoped metrics. Matched BEFORE the broader assignment
-  // routes so the `/metrics/` prefix doesn't get captured as an id segment
-  // by a later regex.
   const metricsAssignmentMatch =
     /^\/api\/metrics\/assignment\/([^/]+)$/.exec(pathname);
   if (metricsAssignmentMatch) {
@@ -1198,7 +802,6 @@ async function handleApi(
     return handleCreateSession(db, deps, body.value);
   }
 
-  // GET /api/assignments/:id/events
   const eventsMatch = /^\/api\/assignments\/([^/]+)\/events$/.exec(pathname);
   if (eventsMatch) {
     if (req.method !== "GET") {
@@ -1210,8 +813,6 @@ async function handleApi(
     return handleListEvents(db, assignmentId, url);
   }
 
-  // F-12 — POST /api/assignments/:id/requeue
-  // F-12 Decision 7 — principal_requeue (blocked → queued | failed → queued).
   const requeueMatch =
     /^\/api\/assignments\/([^/]+)\/requeue$/.exec(pathname);
   if (requeueMatch) {
@@ -1232,8 +833,6 @@ async function handleApi(
     return handleRequeueAssignment(db, deps, assignmentId, body.value);
   }
 
-  // F-12 — POST /api/assignments/:id/abandon
-  // F-12 Decision 5 — branches on context (assignment vs task scope).
   const abandonMatch =
     /^\/api\/assignments\/([^/]+)\/abandon$/.exec(pathname);
   if (abandonMatch) {
@@ -1254,8 +853,6 @@ async function handleApi(
     return handleAbandonAssignment(db, deps, assignmentId, body.value);
   }
 
-  // F-12 — POST /api/assignments/:id/handoff
-  // F-12 Decision 6 — cancel-and-respawn (in-flight) / new-only (failed).
   const handoffMatch =
     /^\/api\/assignments\/([^/]+)\/handoff$/.exec(pathname);
   if (handoffMatch) {
@@ -1276,7 +873,6 @@ async function handleApi(
     return handleHandoffAssignment(db, deps, assignmentId, body.value);
   }
 
-  // POST /api/assignments/:id/input
   const inputMatch = /^\/api\/assignments\/([^/]+)\/input$/.exec(pathname);
   if (inputMatch) {
     if (req.method !== "POST") {
@@ -1288,15 +884,9 @@ async function handleApi(
         503
       );
     }
-    // inputMatch[1] is the captured group — guaranteed present because the
-    // regex matched; the explicit check satisfies strict noUncheckedIndexedAccess.
     const captured = inputMatch[1];
     if (!captured) return new Response("Not Found", { status: 404 });
     const assignmentId = decodeURIComponent(captured);
-    // Per-endpoint upstream cap: the image-input path legitimately carries
-    // bodies up to IMAGE_BODY_MAX_BYTES (25 MB). All other endpoints keep the
-    // default 128 KB text-only cap. The handler's per-image / per-body caps
-    // remain authoritative for user-visible errors.
     const body = await parseJsonBody(req, { maxBytes: IMAGE_BODY_MAX_BYTES });
     if (body.error) return body.error;
     return handleSendInput(db, deps, assignmentId, body.value);
@@ -1322,29 +912,8 @@ function jsonError(message: string, status: number): Response {
   });
 }
 
-/**
- * Default upstream cap on raw JSON request body size (bytes, UTF-8).
- *
- * Defence-in-depth: prevents a client from making the server allocate an
- * arbitrarily large string in `req.text()` before per-endpoint validators
- * (e.g. `DRILL_INPUT_MAX_BYTES` = 50 KB) get a chance to reject. Sized
- * generously above the largest legitimate text-only payload so per-field
- * caps remain the authoritative bound for user-visible errors.
- *
- * Routes that legitimately carry larger bodies (e.g. the image-input
- * endpoint) override this default by passing `{ maxBytes }` to
- * `parseJsonBody`. See the `/api/assignments/:id/input` route for an
- * example (uses `IMAGE_BODY_MAX_BYTES` from api/handlers.ts).
- */
 const MAX_JSON_BODY_BYTES = 128 * 1024;
 
-/**
- * Parse a JSON request body. Returns either { value } or { error: Response }.
- *
- * @param req  Incoming request.
- * @param opts.maxBytes  Optional per-endpoint upstream cap (UTF-8 bytes).
- *                       Defaults to `MAX_JSON_BODY_BYTES` (128 KB).
- */
 async function parseJsonBody(
   req: Request,
   opts?: { maxBytes?: number }
@@ -1353,9 +922,6 @@ async function parseJsonBody(
     opts && typeof opts.maxBytes === "number" && opts.maxBytes > 0
       ? opts.maxBytes
       : MAX_JSON_BODY_BYTES;
-  // Cheap pre-check: if the client advertises a body larger than the cap,
-  // reject before allocating the text. `content-length` is advisory (may be
-  // absent or wrong on chunked requests), so we re-check after reading.
   const advertised = req.headers.get("content-length");
   if (advertised !== null) {
     const n = Number(advertised);
@@ -1363,7 +929,6 @@ async function parseJsonBody(
       return { error: jsonError("Request body exceeds the size limit.", 413) };
     }
   }
-  // Empty body is allowed (becomes `null`) — handlers treat null as "no input".
   const text = await req.text();
   if (Buffer.byteLength(text, "utf8") > cap) {
     return { error: jsonError("Request body exceeds the size limit.", 413) };
@@ -1378,45 +943,12 @@ async function parseJsonBody(
   }
 }
 
-/**
- * Cap on raw GitHub webhook body size (bytes, UTF-8).
- *
- * Sized to fit a parent issue body (50 KB cap upstream) plus surrounding
- * payload metadata with comfortable headroom. Defence-in-depth above the
- * HMAC verify, since the verify is the only auth boundary on the
- * `/api/github/webhook` route.
- */
 const WEBHOOK_BODY_MAX_BYTES = 1 * 1024 * 1024;
 
-/**
- * Read a request body up to `cap` bytes via the underlying `ReadableStream`,
- * bailing with 413 the moment cumulative bytes exceed the cap.
- *
- * Why not `req.text()`: that buffers up to Bun.serve's `maxRequestBodySize`
- * (default 128 MB) into a single allocation BEFORE the caller can check the
- * length. For unauthenticated routes (the webhook receiver runs HMAC AFTER
- * the body is in hand) that turns the cap into purely advisory memory
- * pressure — concurrent multi-megabyte payloads pin RAM regardless of the
- * route's documented limit.
- *
- * Streaming-with-truncation lets us keep the HMAC verify's preferred shape
- * (it needs the raw bytes anyway) while bounding the worst-case allocation
- * to `cap` per concurrent request.
- *
- * Returns:
- *   - `{ text }`  on success (decoded UTF-8 string of the read body).
- *   - `{ error }` on cap-exceeded (413), missing body (400), or decode
- *                  failure (400). Does not consume more than `cap` bytes
- *                  in any failure mode.
- */
 async function readBodyWithCap(
   req: Request,
   cap: number
 ): Promise<{ text: string; error?: undefined } | { text?: undefined; error: Response }> {
-  // Fast-path the cheap pre-check: if the client advertises a body larger
-  // than the cap, reject before draining the stream. `content-length` is
-  // advisory on chunked transfers but if it's present and over cap it's
-  // an unambiguous early-out.
   const advertised = req.headers.get("content-length");
   if (advertised !== null) {
     const n = Number(advertised);
@@ -1427,7 +959,6 @@ async function readBodyWithCap(
 
   const stream = req.body;
   if (stream === null) {
-    // GitHub webhooks always have a body; absent body is a malformed call.
     return { error: jsonError("missing request body", 400) };
   }
 
@@ -1435,24 +966,12 @@ async function readBodyWithCap(
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
-    // Intentional infinite loop: `done` from the stream reader is the
-    // exit condition. The "always-truthy" lint rule flags `while (true)`
-    // as redundant; keep it explicit for clarity since the body has
-    // multiple `break`/`continue` branches.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      // value is `Uint8Array | undefined` at runtime for empty pulls;
-      // TS narrows it to `Uint8Array` after `done === false` but the
-      // skip-empty guard is load-bearing if the underlying reader
-      // signals a no-op chunk before the next real chunk.
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (value === undefined) continue;
       total += value.byteLength;
       if (total > cap) {
-        // Cancel the underlying stream so we don't keep pulling bytes
-        // we'll never read; release the lock so GC can reclaim.
         await reader.cancel().catch(() => undefined);
         return { error: jsonError("webhook body exceeds 1 MB cap", 413) };
       }
@@ -1462,7 +981,6 @@ async function readBodyWithCap(
     reader.releaseLock();
   }
 
-  // Concatenate chunks into a single Uint8Array, then decode once.
   const buf = new Uint8Array(total);
   let offset = 0;
   for (const c of chunks) {
@@ -1472,7 +990,6 @@ async function readBodyWithCap(
   try {
     return { text: new TextDecoder("utf-8", { fatal: false }).decode(buf) };
   } catch (_err) {
-    // TextDecoder with `fatal: false` won't throw, but guard against it.
     return { error: jsonError("invalid UTF-8 in request body", 400) };
   }
 }
