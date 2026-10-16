@@ -29,6 +29,16 @@ export interface ContextMessage {
 	timestamp: string;
 	attachments?: ContextAttachment[];
 }
+/** Outcome of sending a notification to the principal. */
+export type NotifyResult = {
+	delivered: true;
+	messageId?: string;
+} | {
+	delivered: false;
+	kind: "permanent" | "transient";
+	code: string;
+	detail?: string;
+};
 /** Platform-agnostic inbound message */
 export interface InboundMessage {
 	/** Platform identifier: "discord", "mattermost", "slack", etc. */
@@ -357,8 +367,14 @@ export interface PlatformAdapter {
 		channel: string;
 		thread?: string;
 	}): Promise<ResponseTarget | null>;
-	/** Send a notification to the principal */
-	notifyPrincipal(text: string): Promise<void>;
+	/**
+	 * Send a notification to the principal. Buffering defaults to true;
+	 * buffer: false disables adapter-side buffering so callers can handle failure.
+	 * Legacy adapters may return void instead of reporting delivery.
+	 */
+	notifyPrincipal(text: string, opts?: {
+		buffer?: boolean;
+	}): Promise<NotifyResult | void>;
 	/** F-092: Hot-reload adapter config (optional, for adapters that support it) */
 	updateConfig?(config: unknown): void;
 	/**

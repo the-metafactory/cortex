@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach, spyOn } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -458,6 +458,30 @@ describe("DispatchHandler", () => {
 
       expect(adapter.principalNotifications).toHaveLength(1);
       expect(adapter.principalNotifications[0]!).toContain("Stranger");
+      expect(adapter.principalNotificationCalls[0]!.opts).toBeUndefined();
+    });
+
+    test("logs and swallows a principal notification throw", async () => {
+      const notify = spyOn(adapter, "notifyPrincipal").mockRejectedValue(new Error("DM unavailable"));
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await router.handleMessage(adapter, makeMsg({ content: "/help" }));
+        expect(notify).toHaveBeenCalledWith(expect.any(String));
+        expect(warn).toHaveBeenCalledWith("dispatch-handler: failed to notify principal:", "DM unavailable");
+        expect(adapter.sentMessages[0]!.text).toContain("**Chat**");
+      } finally {
+        notify.mockRestore();
+        warn.mockRestore();
+      }
+    });
+
+    test("ignores a reported notification failure and keeps buffering enabled", async () => {
+      adapter.notifyPrincipalResult = { delivered: false, kind: "transient", code: "offline" };
+      await router.handleMessage(adapter, makeMsg({ content: "/help" }));
+      expect(adapter.principalNotificationCalls).toEqual([
+        { text: expect.any(String), opts: undefined },
+      ]);
+      expect(adapter.sentMessages[0]!.text).toContain("**Chat**");
     });
 
     test("principal does not trigger notification", async () => {

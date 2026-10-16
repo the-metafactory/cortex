@@ -79,6 +79,7 @@ export const SURFACE_SDK_VERSION = "1.1.0";
 
 export type {
   PlatformAdapter,
+  NotifyResult,
   InboundMessage,
   InboundAttachment,
   AccessDecision,

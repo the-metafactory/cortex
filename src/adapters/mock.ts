@@ -7,6 +7,7 @@
 
 import type {
   PlatformAdapter,
+  NotifyResult,
   InboundMessage,
   AccessDecision,
   ResponseTarget,
@@ -56,6 +57,9 @@ export class MockAdapter implements PlatformAdapter {
   logicalSurface = "mock";
   /** Recorded notifyPrincipal calls */
   principalNotifications: string[] = [];
+  principalNotificationCalls: { text: string; opts?: { buffer?: boolean } }[] = [];
+  /** Configurable delivery outcome. */
+  notifyPrincipalResult: NotifyResult = { delivered: true, messageId: "mock" };
   /** MIG-3b: Recorded envelopes received via surfaceConfig.render() */
   envelopesRendered: Envelope[] = [];
 
@@ -167,8 +171,10 @@ export class MockAdapter implements PlatformAdapter {
     return { ok: true, threadId: `mock-private-thread-${this.threadCounter}` };
   }
 
-  async notifyPrincipal(text: string): Promise<void> {
+  async notifyPrincipal(text: string, opts?: { buffer?: boolean }): Promise<NotifyResult> {
     this.principalNotifications.push(text);
+    this.principalNotificationCalls.push({ text, opts });
+    return this.notifyPrincipalResult;
   }
 
   /**
@@ -216,6 +222,7 @@ export class MockAdapter implements PlatformAdapter {
     this.threadsCreated = [];
     this.logicalTargetsResolved = [];
     this.principalNotifications = [];
+    this.principalNotificationCalls = [];
     this.envelopesRendered = [];
     this.threadCounter = 0;
   }
