@@ -8,15 +8,9 @@ import {
   afterAll,
 } from "bun:test";
 import { Database } from "bun:sqlite";
-import { join } from "path";
-import { tmpdir } from "os";
-import { rmSync } from "fs";
 
-import { startServer } from "../server";
-import type { ServerContext } from "../server";
-import { initDatabase } from "../db/init";
-import { DEFAULT_CONFIG } from "../config";
-import { ProcessManager } from "../session/process-manager";
+import { startMcTestServer, stopMcTestServer } from "./__fixtures__/mc-test-server";
+import type { McTestServer } from "./__fixtures__/mc-test-server";
 import type { SpawnFn } from "../session/endpoint-resolver";
 import { createSession } from "../db/sessions";
 import { generateId } from "../db/events";
@@ -43,33 +37,55 @@ afterAll(() => {
   globalThis.fetch = realFetch;
 });
 
-interface TestContext {
-  db: Database;
-  ctx: ServerContext;
-  pm: ProcessManager;
-  port: number;
-  baseUrl: string;
-  tmpDir: string;
-}
+type TestContext = McTestServer;
 
 async function setup(): Promise<TestContext> {
-  const tmpDir = join(tmpdir(), `mc-f12-${Date.now()}-${Math.random()}`);
-  const db = initDatabase(join(tmpDir, "test.db"));
-  const pm = new ProcessManager();
-  const ctx = startServer(
-    { ...DEFAULT_CONFIG, port: 0 },
-    db,
-    { processManager: pm, spawn: neverExitingCatSpawn }
-  );
-  const port = ctx.port;
-  return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
+  return startMcTestServer("mc-f12", { spawn: neverExitingCatSpawn });
 }
 
-async function teardown(t: TestContext): Promise<void> {
-  await t.pm.closeAll();
-  t.ctx.stop(true);
-  t.db.close();
-  rmSync(t.tmpDir, { recursive: true, force: true });
+const teardown = stopMcTestServer;
+
+const PERMISSION_BLOCK_REASON = JSON.stringify({
+  kind: "permission.request",
+  payload: { requested_action: "tool.edit" },
+});
+
+function postAssignmentVerb(
+  t: TestContext,
+  assignmentId: string,
+  verb: "requeue" | "abandon" | "handoff",
+  body?: unknown
+): Promise<Response> {
+  return fetch(
+    `${t.baseUrl}/api/assignments/${assignmentId}/${verb}`,
+    body === undefined
+      ? { method: "POST" }
+      : {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }
+  );
+}
+
+function curationEvents(db: Database, sessionId: string): { payload: string }[] {
+  return db
+    .query(
+      "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
+    )
+    .all(sessionId) as { payload: string }[];
+}
+
+function readAssignmentState(db: Database, assignmentId: string): { state: string } {
+  return db
+    .query("SELECT state FROM agent_task_assignment WHERE id = ?")
+    .get(assignmentId) as { state: string };
+}
+
+function readTaskStatus(db: Database, taskId: string): { status: string } {
+  return db.query("SELECT status FROM tasks WHERE id = ?").get(taskId) as {
+    status: string;
+  };
 }
 
 function endSessionToFreeUniqueActiveSessionSlot(db: Database, sessionId: string): void {
@@ -119,18 +135,12 @@ describe("POST /api/assignments/:id/requeue", () => {
   });
 
   it("requeues from blocked → queued and inserts principal.curation kind=requeue", async () => {
-    const blockReason = JSON.stringify({
-      kind: "permission.request",
-      payload: { requested_action: "tool.edit" },
-    });
+    const blockReason = PERMISSION_BLOCK_REASON;
     const { assignmentId, sessionId } = seedAssignment(t.db, "blocked", {
       blockReason,
     });
 
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/requeue`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "requeue");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
@@ -146,11 +156,7 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(row.state).toBe("queued");
     expect(row.block_reason).toBeNull();
 
-    const events = t.db
-      .query(
-        "SELECT type, payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
-      )
-      .all(sessionId) as { type: string; payload: string }[];
+    const events = curationEvents(t.db, sessionId);
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("requeue");
@@ -158,10 +164,7 @@ describe("POST /api/assignments/:id/requeue", () => {
 
   it("requeues from failed → queued", async () => {
     const { assignmentId } = seedAssignment(t.db, "failed");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/requeue`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "requeue");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.from).toBe("failed");
@@ -170,49 +173,29 @@ describe("POST /api/assignments/:id/requeue", () => {
 
   it("captures optional reason in the curation event payload", async () => {
     const { assignmentId, sessionId } = seedAssignment(t.db, "failed");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/requeue`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason: "external dep recovered" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "requeue", { reason: "external dep recovered" });
     expect(res.status).toBe(200);
-    const events = t.db
-      .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
-      )
-      .all(sessionId) as { payload: string }[];
+    const events = curationEvents(t.db, sessionId);
     expect(events).toHaveLength(1);
     expect(JSON.parse(events[0]!.payload).reason).toBe("external dep recovered");
   });
 
   it("returns 409 from running (Decision 3 — disabled)", async () => {
     const { assignmentId } = seedAssignment(t.db, "running");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/requeue`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "requeue");
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toContain("Invalid transition");
   });
 
   it("returns 404 on unknown assignment id", async () => {
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/does-not-exist/requeue`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, "does-not-exist", "requeue");
     expect(res.status).toBe(404);
   });
 
   it("returns 405 on GET", async () => {
     const { assignmentId } = seedAssignment(t.db, "blocked", {
-      blockReason: JSON.stringify({
-        kind: "permission.request",
-        payload: { requested_action: "tool.edit" },
-      }),
+      blockReason: PERMISSION_BLOCK_REASON,
     });
     const res = await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/requeue`
@@ -222,27 +205,13 @@ describe("POST /api/assignments/:id/requeue", () => {
 
   it("returns 400 on non-string reason", async () => {
     const { assignmentId } = seedAssignment(t.db, "failed");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/requeue`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason: 42 }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "requeue", { reason: 42 });
     expect(res.status).toBe(400);
   });
 
   it("rejects unknown body keys (400)", async () => {
     const { assignmentId } = seedAssignment(t.db, "failed");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/requeue`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason: "ok", bogus: 1 }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "requeue", { reason: "ok", bogus: 1 });
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain("bogus");
@@ -260,30 +229,19 @@ describe("POST /api/assignments/:id/abandon", () => {
 
   it("Decision 5: cancels assignment when state is non-terminal (default scope)", async () => {
     const { assignmentId, sessionId, taskId } = seedAssignment(t.db, "queued");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.scope).toBe("assignment");
     expect(body.from).toBe("queued");
     expect(body.to).toBe("cancelled");
 
-    const ataRow = t.db
-      .query("SELECT state FROM agent_task_assignment WHERE id = ?")
-      .get(assignmentId) as { state: string };
+    const ataRow = readAssignmentState(t.db, assignmentId);
     expect(ataRow.state).toBe("cancelled");
-    const taskRow = t.db
-      .query("SELECT status FROM tasks WHERE id = ?")
-      .get(taskId) as { status: string };
+    const taskRow = readTaskStatus(t.db, taskId);
     expect(taskRow.status).toBe("open");
 
-    const events = t.db
-      .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
-      )
-      .all(sessionId) as { payload: string }[];
+    const events = curationEvents(t.db, sessionId);
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("abandon");
@@ -292,29 +250,18 @@ describe("POST /api/assignments/:id/abandon", () => {
 
   it("Decision 5: cancels task when state is terminal (default scope)", async () => {
     const { assignmentId, sessionId, taskId } = seedAssignment(t.db, "completed");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.scope).toBe("task");
     expect(body.from).toBeUndefined();
 
-    const taskRow = t.db
-      .query("SELECT status FROM tasks WHERE id = ?")
-      .get(taskId) as { status: string };
+    const taskRow = readTaskStatus(t.db, taskId);
     expect(taskRow.status).toBe("cancelled");
-    const ataRow = t.db
-      .query("SELECT state FROM agent_task_assignment WHERE id = ?")
-      .get(assignmentId) as { state: string };
+    const ataRow = readAssignmentState(t.db, assignmentId);
     expect(ataRow.state).toBe("completed");
 
-    const events = t.db
-      .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
-      )
-      .all(sessionId) as { payload: string }[];
+    const events = curationEvents(t.db, sessionId);
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.targetKind).toBe("task");
@@ -322,15 +269,9 @@ describe("POST /api/assignments/:id/abandon", () => {
 
   it("Decision 5: from blocked, cancels assignment AND clears block_reason", async () => {
     const { assignmentId } = seedAssignment(t.db, "blocked", {
-      blockReason: JSON.stringify({
-        kind: "permission.request",
-        payload: { requested_action: "tool.edit" },
-      }),
+      blockReason: PERMISSION_BLOCK_REASON,
     });
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon");
     expect(res.status).toBe(200);
     const row = t.db
       .query(
@@ -343,27 +284,13 @@ describe("POST /api/assignments/:id/abandon", () => {
 
   it("rejects scope=task on non-terminal assignment (409)", async () => {
     const { assignmentId } = seedAssignment(t.db, "running");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "task" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon", { scope: "task" });
     expect(res.status).toBe(409);
   });
 
   it("rejects scope=assignment on terminal assignment (409)", async () => {
     const { assignmentId } = seedAssignment(t.db, "completed");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "assignment" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon", { scope: "assignment" });
     expect(res.status).toBe(409);
   });
 
@@ -372,31 +299,18 @@ describe("POST /api/assignments/:id/abandon", () => {
     t.db
       .query(`UPDATE tasks SET status = 'cancelled' WHERE id = ?`)
       .run(taskId);
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon");
     expect(res.status).toBe(409);
   });
 
   it("rejects unknown scope (400)", async () => {
     const { assignmentId } = seedAssignment(t.db, "queued");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/abandon`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "everything" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "abandon", { scope: "everything" });
     expect(res.status).toBe(400);
   });
 
   it("returns 404 on unknown assignment id", async () => {
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/does-not-exist/abandon`,
-      { method: "POST" }
-    );
+    const res = await postAssignmentVerb(t, "does-not-exist", "abandon");
     expect(res.status).toBe(404);
   });
 });
@@ -437,14 +351,7 @@ describe("POST /api/assignments/:id/handoff", () => {
       await spawnControlledRunningSession();
     ensureAgent("agent-b");
 
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${oldId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: "agent-b", reason: "swap to head" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, oldId, "handoff", { newAgentId: "agent-b", reason: "swap to head" });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(typeof body.newAssignmentId).toBe("string");
@@ -452,9 +359,7 @@ describe("POST /api/assignments/:id/handoff", () => {
     expect(body.from).toBe("running");
     expect(body.to).toBe("cancelled");
 
-    const oldRow = t.db
-      .query("SELECT state FROM agent_task_assignment WHERE id = ?")
-      .get(oldId) as { state: string };
+    const oldRow = readAssignmentState(t.db, oldId);
     expect(oldRow.state).toBe("cancelled");
 
     const newRow = t.db
@@ -463,11 +368,7 @@ describe("POST /api/assignments/:id/handoff", () => {
     expect(newRow.state).toBe("running");
     expect(newRow.agent_id).toBe("agent-b");
 
-    const events = t.db
-      .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
-      )
-      .all(body.newSessionId) as { payload: string }[];
+    const events = curationEvents(t.db, body.newSessionId);
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("handoff");
@@ -490,88 +391,44 @@ describe("POST /api/assignments/:id/handoff", () => {
     const { assignmentId } = seedAssignment(t.db, "failed");
     ensureAgent("agent-c");
 
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: "agent-c" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", { newAgentId: "agent-c" });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.from).toBeUndefined();
     expect(body.to).toBeUndefined();
 
-    const oldRow = t.db
-      .query("SELECT state FROM agent_task_assignment WHERE id = ?")
-      .get(assignmentId) as { state: string };
+    const oldRow = readAssignmentState(t.db, assignmentId);
     expect(oldRow.state).toBe("failed");
   });
 
   it("rejects from `completed` (Decision 3 — disabled, 409)", async () => {
     const { assignmentId } = seedAssignment(t.db, "completed");
     ensureAgent("agent-d");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: "agent-d" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", { newAgentId: "agent-d" });
     expect(res.status).toBe(409);
   });
 
   it("rejects from `cancelled` (409)", async () => {
     const { assignmentId } = seedAssignment(t.db, "cancelled");
     ensureAgent("agent-e");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: "agent-e" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", { newAgentId: "agent-e" });
     expect(res.status).toBe(409);
   });
 
   it("returns 400 when newAgentId is missing", async () => {
     const { assignmentId } = await spawnControlledRunningSession();
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", {});
     expect(res.status).toBe(400);
   });
 
   it("returns 400 when newAgentId references an unknown agent", async () => {
     const { assignmentId } = await spawnControlledRunningSession();
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: "no-such-agent" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", { newAgentId: "no-such-agent" });
     expect(res.status).toBe(400);
   });
 
   it("returns 404 on unknown assignment id", async () => {
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/does-not-exist/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: "anyone" }),
-      }
-    );
+    const res = await postAssignmentVerb(t, "does-not-exist", "handoff", { newAgentId: "anyone" });
     expect(res.status).toBe(404);
   });
 
@@ -580,14 +437,7 @@ describe("POST /api/assignments/:id/handoff", () => {
     const { agent_id: defaultAgentId } = t.db
       .query("SELECT agent_id FROM agent_task_assignment WHERE id = ?")
       .get(assignmentId) as { agent_id: string };
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: defaultAgentId }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", { newAgentId: defaultAgentId });
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain("same agent");
@@ -596,18 +446,11 @@ describe("POST /api/assignments/:id/handoff", () => {
   it("rejects unknown body keys (400)", async () => {
     const { assignmentId } = await spawnControlledRunningSession();
     ensureAgent("agent-strict");
-    const res = await fetch(
-      `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          newAgentId: "agent-strict",
-          reason: "ok",
-          nefarious: true,
-        }),
-      }
-    );
+    const res = await postAssignmentVerb(t, assignmentId, "handoff", {
+    newAgentId: "agent-strict",
+    reason: "ok",
+    nefarious: true,
+  });
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain("nefarious");

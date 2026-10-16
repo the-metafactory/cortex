@@ -5,16 +5,9 @@ import {
   beforeEach,
   afterEach,
 } from "bun:test";
-import { Database } from "bun:sqlite";
-import { join } from "path";
-import { tmpdir } from "os";
-import { rmSync } from "fs";
 
-import { startServer } from "../server";
-import type { ServerContext } from "../server";
-import { initDatabase } from "../db/init";
-import { DEFAULT_CONFIG } from "../config";
-import { ProcessManager } from "../session/process-manager";
+import { startMcTestServer, stopMcTestServer } from "./__fixtures__/mc-test-server";
+import type { McTestServer } from "./__fixtures__/mc-test-server";
 import type { GhSpawnFn } from "../adapters/github";
 import { getRepository, getBranch, getCommit, getPullRequest } from "../db/git-objects";
 import { SHADOW_AGENT_ID } from "../db/sessions";
@@ -72,43 +65,16 @@ function makeFakeProc(r: CannedResponse) {
   };
 }
 
-interface TestContext {
-  db: Database;
-  ctx: ServerContext;
-  pm: ProcessManager;
-  port: number;
-  baseUrl: string;
-  tmpDir: string;
+interface TestContext extends McTestServer {
   gh: FakeGh;
 }
 
 async function setup(): Promise<TestContext> {
-  const tmpDir = join(tmpdir(), `mc-f12b-${Date.now()}-${Math.random()}`);
-  const db = initDatabase(join(tmpDir, "test.db"));
-  const pm = new ProcessManager();
   const gh = new FakeGh();
-  const ctx = startServer({ ...DEFAULT_CONFIG, port: 0 }, db, {
-    processManager: pm,
-    ghSpawn: gh.spawn,
-  });
-  const port = ctx.port;
-  return {
-    db,
-    ctx,
-    pm,
-    port,
-    baseUrl: `http://localhost:${port}`,
-    tmpDir,
-    gh,
-  };
+  return { ...startMcTestServer("mc-f12b", { ghSpawn: gh.spawn }), gh };
 }
 
-async function teardown(t: TestContext): Promise<void> {
-  await t.pm.closeAll();
-  t.ctx.stop(true);
-  t.db.close();
-  rmSync(t.tmpDir, { recursive: true, force: true });
-}
+const teardown = stopMcTestServer;
 
 const HAPPY_ISSUE_BODY = JSON.stringify({
   title: "fix webhook HMAC verification bypass",
