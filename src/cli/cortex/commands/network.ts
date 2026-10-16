@@ -1,44 +1,4 @@
 #!/usr/bin/env bun
-/**
- * `cortex network <subcommand>` — S4 (#738) the headline one-command join.
- *
- * Spec `docs/design-network-join-control-plane.md` §6 F4 + §9 ("feel like
- * TCP/IP"). Connecting a stack to a network used to be ~10 manual steps across
- * four Myelin layers + two config files + an out-of-band key swap (the §1
- * friction table). This command is the executable form: hand it a network name,
- * it does everything (DD-4).
- *
- *   join <network>     register → pull VERIFIED descriptor (DD-9; cached
- *                      fallback DD-10) → render leaf + load plist (DD-6) →
- *                      write policy.federated.networks[] with registry-resolved
- *                      peers (DD-5) + the OWN accept-subject → restart.
- *                      Idempotent (DD-4).
- *   status             leaf link state + joined networks + peers + counters.
- *   leave <network>    reverse it all, cleanly + idempotently.
- *
- * ## Wiring (the S1–S3 pieces this command composes)
- *
- *   - S1 `NetworkRegistryClient` — `fetchAndCache`/`loadCached`, pin+verify
- *     (DD-9). Wrapped by the {@link NetworkRegistryPort} adapter.
- *   - S1 `registerStackIdentity` (via provision-stack's register flow) —
- *     idempotent proof-of-possession registration.
- *   - S3 `renderLeafIncludeFile` + `leafIncludeFileName` — the leaf include
- *     file. S3 `ensureConfigArg`/`renderProgramArguments` — the plist loader.
- *   - The branded {@link VerifiedNetworkDescriptor} — only a signature-verified
- *     descriptor flows into the renderer (compiler-enforced, S3-review N2).
- *
- * ## SAFETY (S4 brief)
- *
- * The real adapters MUTATE the live deployment (leaf file, plist, config,
- * launchctl). The orchestration is pure over injected ports
- * (`network-lib.ts`); the live adapters live in `network-adapters.ts` and are
- * only constructed on a real invocation. `--dry-run` (the DEFAULT-safe posture
- * for `join`/`leave`) swaps in no-op effect adapters that record the intended
- * actions and print them WITHOUT touching disk or daemons — so an accidental
- * run during development is inert.
- *
- * Exit codes: 0 success · 1 operational failure · 2 usage error.
- */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
@@ -58,12 +18,6 @@ import {
   type StackIdentityMaterial,
   type SignedNetworkCreateBody,
 } from "../../../bus/stack-provisioning";
-// O-5 community-fleet role grant (ADR-0015). These runtime helpers live in
-// cortex (src/cli/cortex/lib/discord-roles.ts) — NOT the metafactory-bundle-discord
-// bundle the CLI tooling moved to (ADR-0017, epic #1171 S2): the daemon-side
-// admit path cannot import from an external arc bundle. Admit's ASSIGN side
-// moved to network-admit-adapters.ts (S5); reject's REMOVE side (shared with
-// `secret revoke-member`, out of scope for S5) still uses these directly.
 import {
   removeRole,
   resolveRoleId,
@@ -78,14 +32,7 @@ import {
   type ConfigReader,
 } from "./network-derive";
 import { DEFAULT_REGISTRY } from "./default-registry";
-// network-leaf-package import removed — ADR-0015 retired O-4b / hub-minted identity.
 
-/**
- * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
- * MISSING cortex.yaml is benign (a fully-flagged back-compat invocation works
- * on a machine with no config), while a present-but-broken file still surfaces
- * its parse/schema error. Tests inject their own reader through `dispatchNetwork`.
- */
 const DEFAULT_READER: ConfigReader = tolerantReader(
   loadConfigWithAgents,
   (path) => existsSync(expandTilde(path)),
@@ -208,54 +155,20 @@ import { buildLiveAdmitPorts } from "./network-admit-adapters";
 import { NETWORK_ID_RE } from "../../../common/network-id";
 
 export { type ExitResult } from "./_shared/exit-result";
-// Re-exported for backward compatibility: `SecretPortsFactory` is homed in
-// network-admit-ports.ts (S5 #1586 review) so both network.ts and
-// network-admit-adapters.ts import the SAME type without a circular import;
-// external consumers (tests) still import it from here.
 export type { SecretPortsFactory };
-
-// =============================================================================
-// Grammar
-// =============================================================================
 
 type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping" | "doctor" | "admit" | "reject" | "provision" | "make-live" | "secret" | "handoff" | "authorize";
 
-/**
- * Default registry URL when neither --registry-url nor config provides one.
- * cortex#1228 — sourced from the single compiled-in {@link DEFAULT_REGISTRY}
- * anchor (the host that actually serves `/registry/pubkey`).
- */
 const DEFAULT_REGISTRY_URL = DEFAULT_REGISTRY.url;
 
-/**
- * #753 — default cortex.yaml path the config-deriver reads when no `--config`
- * is passed. Same canonical path as `cortex agents` (`agents.ts`). The
- * one-liner `cortex network join <network>` reads here.
- */
-/**
- * The default cortex.yaml to read when no `--config` is passed — fallback-aware
- * (canonical `~/.config/metafactory/cortex` → legacy `~/.config/cortex` →
- * `~/.config/grove`), resolved at CALL time so tests that plant a fixture after
- * import are honored (cortex#1869, XDG wave-4).
- */
 function defaultCortexConfigPath(): string {
   return resolveConfigFilePath("cortex.yaml");
 }
 
-/**
- * #800 — the cortex.yaml the stack's CORTEX daemon loads (the join's `--config`,
- * default {@link defaultCortexConfigPath}). Threaded into the ports config so the
- * daemon-restart can LOCATE the daemon's launchd/systemd service by its
- * `--config` arg instead of guessing `ai.meta-factory.cortex.<stack-slug>`.
- */
 function cortexConfigPathFromFlags(flags: FlagMap): string {
   return expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
 }
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
-// S5 — capability id grammar (`<domain>.<entity>`, matches the schema's
-// announce_capabilities[] rule) + principal-id grammar for the allowlist.
-// TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire capability
-// terminal once RFC-0001 lands (blocked-on #2020 capability-regex tightening).
 const CAPABILITY_ID_RE = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
 
 const SPEC: SubcommandSpec<NetworkSubcommand> = {
@@ -264,76 +177,29 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     join: {
       positionals: ["network"],
       flags: {
-        // #753 — `--config` points the deriver at the cortex.yaml to read
-        // principal / stack / seed / registry / nats-infra from. All other
-        // value-flags below are now OPTIONAL OVERRIDES: present ⇒ wins;
-        // absent ⇒ derived from this config (or convention). The one-liner is
-        // `cortex network join <network>` with NO other flags.
         "--config": "value",
         "--principal": "value",
         "--stack": "value",
         "--registry-url": "value",
         "--registry-pubkey": "value",
         "--seed-path": "value",
-        // C-791 — the principal ROOT seed (the FIRST stack's seed). Present ONLY
-        // when joining a SECOND+ stack of an already-registered principal: the
-        // register step then signs the add-stack claim with the root + fetch-
-        // merges the existing stacks (mirrors `provision-stack register
-        // --principal-seed`). Omit for a first-stack join (then `--seed-path` is
-        // itself the root). The flag wins over config; no config field is
-        // derived for it (no natural cortex.yaml field exists — see help).
         "--principal-seed": "value",
         "--creds": "value",
         "--account": "value",
-        // C-1224 (ADR-0013 sovereign model) — the secret-authenticated leaf pipe. When
-        // set, the join renders a leaf that authenticates to the hub via URL
-        // userinfo (`tls://<user>:<secret>@host`) and binds the principal's OWN
-        // local account, instead of a `.creds`-file leaf. Map to
-        // stack.nats_infra.{leaf_secret,leaf_user}; `--leaf-user` defaults to the
-        // principal id. The secret DISTRIBUTION is out-of-band (held PR5).
         "--leaf-secret": "value",
         "--leaf-user": "value",
-        // O-3 (cortex#1053) — the operator-mode "leaf package" flags. When the
-        // stack's bus is anonymous/hard-isolated (the #794 fail-fast input),
-        // these let `cortex network join` AUTO-CONVERT it to operator-mode
-        // (render the SOP §B0.1 blocks) instead of refusing. Map to
-        // stack.nats_infra.{operator_jwt,account_jwt,system_account,
-        // system_account_jwt}. O-4 supplies them via the register→issue
-        // handshake; these flags/config fields are the manual/interim path.
         "--operator-jwt": "value",
         "--account-jwt": "value",
         "--system-account": "value",
         "--system-account-jwt": "value",
         "--nats-config": "value",
         "--plist": "value",
-        // #763 — Linux/systemd: the nats-server systemd unit path (the
-        // launchd plist's sibling). Maps to stack.nats_infra.unit_path.
         "--unit": "value",
         "--max-hop": "value",
         "--leaf-node": "value",
-        // S5 (#739) — public-scope flags. `--capabilities` (comma-separated)
-        // announces to the public index; `--allow` (comma-separated) is the
-        // INBOUND allowlist (empty ⇒ deny-by-default, OQ1 safe). Only consumed
-        // on `join public`; ignored on a federated join.
         "--capabilities": "value",
         "--allow": "value",
-        // cortex#1485 (epic #1479, join-6) — opt-in guided-join. When set, the
-        // leaf-up step is GATED on the 3-leg handoff state: it refuses (fails
-        // closed) unless the seal leg is done AND the hub-authorize leg is
-        // effectively done, instead of storming the hub with an unauthorized leaf.
-        // OPT-IN, never the default. The hub-authorize leg now reads a REAL
-        // registry signal (cortex#1498 — `cortex network authorize` stamps
-        // `hub_authorized_at`); when that read is unreachable/unconfigured it
-        // degrades to the documented undefined fallback, so --guided remains a
-        // DELIBERATE-CONFIRMATION gate: --hub-authorized-confirmed lets the
-        // member acknowledge an un-auto-verifiable leg — but NEVER overrides a
-        // real negative (Sage #1499).
         "--guided": "bool",
-        // cortex#1485 (Sage #1499) — member ATTESTATION for the guided-join gate:
-        // "the hub owner has confirmed to me they applied my authorization". Under
-        // --guided, upgrades an un-auto-verifiable (undefined) hub-authorize leg to
-        // treated-done so the leaf-up step PROCEEDS — but NEVER overrides a real
-        // negative (#1498) hub-authorize signal. Meaningless without --guided.
         "--hub-authorized-confirmed": "bool",
         "--apply": "bool",
         "--dry-run": "bool",
@@ -342,7 +208,6 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     leave: {
       positionals: ["network"],
       flags: {
-        // #753 — same config-derivation seam as join (subset of inputs).
         "--config": "value",
         "--principal": "value",
         "--stack": "value",
@@ -361,20 +226,9 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal": "value",
         "--stack": "value",
         "--monitor-url": "value",
-        // #814 — explicit cortex.yaml override (highest precedence). When
-        // omitted, the status path resolves the NAMED stack's config from
-        // --principal + the --stack slug, layout-aware (see runStatus). Without
-        // this, status fell through to the default monolith ~/.config/cortex/
-        // cortex.yaml and read the wrong file for a config-split stack — so a
-        // joined config-split stack reported "no networks joined".
         "--config": "value",
       },
     },
-    // #747 — signed-admin network create/update. Dry-run by DEFAULT (like
-    // join): prints the claim it WOULD POST; `--apply` actually POSTs it to
-    // `<registry-url>/networks/<network_id>`. The admin seed is an nkey seed
-    // (SU…) — the same key shape `provision-stack` uses — so `admin_pubkey`
-    // is consistent with how principal registration derives its pubkey.
     create: {
       positionals: ["network"],
       flags: {
@@ -383,46 +237,24 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--admin-seed": "value",
         "--network-admins": "value",
         "--registry-url": "value",
-        // #1598 — hub-mode / resolver-mode attestation (closed enums; the
-        // registry re-validates and serves them on the SIGNED descriptor).
         "--hub-mode": "value",
         "--resolver-mode": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
     },
-    // signal#113 P-11 (#56) — active federated reachability probe. Fires a
-    // Direct `probe.echo` at <peer>, awaits the built-in echo on our own
-    // `probe.reply.echo`, measures RTT, prints + returns the verdict per the
-    // §3.3 taxonomy + exit codes (0 reachable / 2 not-configured / 3
-    // no-responder / 4 timeout / 5 refused). Derives principal/stack from
-    // cortex.yaml like join (#753).
     ping: {
       positionals: ["peer"],
       flags: {
         "--config": "value",
         "--principal": "value",
         "--stack": "value",
-        // Direct-probe target assistant. Omitted ⇒ the target stack's reserved
-        // DID (`did:mf:{target}-{target-stack}`).
         "--assistant": "value",
-        // Topology selector ONLY — scopes peer resolution when the peer is
-        // reachable on more than one shared network. NEVER a wire segment
-        // (ADR-0002 §4).
         "--network": "value",
-        // `ping -c` — number of echo probes. Default 1.
         "--count": "value",
-        // Per-probe echo wait budget (ms). Default 2000.
         "--timeout": "value",
       },
     },
-    // cortex#1484 (epic #1479) — verify the WHOLE federation path from the
-    // joining member's own machine: config → local monitor → leaf established
-    // → leaf account binding → a real echoed round-trip per configured peer.
-    // Read-only (+ one bounded probe echo per peer, reusing `ping`'s
-    // transport). Reports pass/fail/warn/skip + a fix + the responsible role
-    // PER LEG, so a broken link pinpoints the failing leg instead of a bare
-    // "not reachable". Derives principal/stack from cortex.yaml like status.
     doctor: {
       positionals: ["network"],
       flags: {
@@ -432,21 +264,7 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--monitor-url": "value",
       },
     },
-    // ADR-0015 — one-command admin admission decision. Signs an admission
-    // decision claim → POSTs to `/admission-requests/:id/admit` → principal
-    // is ADMITTED on the roster. Mints nothing (no arc nats add-bot).
-    // Dry-run by DEFAULT: prints the claim it WOULD post; --apply executes.
-    //
-    // NOTE: --network is intentionally absent. The admission request's
-    // network_id is set at register time (when the principal calls
-    // POST /principals/:id/register). The admit subcommand reads the stored
-    // request and acts on whatever network_id the registry recorded.
-    // Tracking issue: cortex#1145 — thread network_id from register through
-    // the admission gate so the stored row is always network-scoped.
     admit: {
-      // C-1314 — request-id is OPTIONAL (trailing `?`): the discovery mode
-      // `admit --list-pending` takes no request-id. The admit-a-request path
-      // still validates its presence in runAdmit.
       positionals: ["request-id?"],
       flags: {
         "--admin-seed": "value",
@@ -457,48 +275,15 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--discord-role": "value",
         "--apply": "bool",
         "--dry-run": "bool",
-        // C-1314 — DISCOVERY mode. `cortex network admit --list-pending` admin-
-        // signs a read (`x-admin-signed`) and GETs
-        // `/admission-requests?status=<status>`, printing the queue so an admin
-        // can find the request-id to admit. Read-only (no --apply; no request-id
-        // positional). `--status` defaults to PENDING; `--network` filters the
-        // returned rows client-side (the endpoint lists all networks at once).
         "--list-pending": "bool",
         "--status": "value",
         "--network": "value",
-        // C-1316 — admit-and-seal. After the roster admission commits, admit ALSO
-        // mints + seals + delivers the per-member leaf PSK (the `secret add-member`
-        // motion), so an admitted peer is CONNECTABLE, not just rostered. The seal
-        // runs the hub-local nats-server config through the same reload path as
-        // `cortex network secret`, so it needs to know which hub config to edit.
         "--hub-config": "value",
-        // Opt-out: commit the roster row ONLY, skip the seal (the rare
-        // admit-without-seal case, or a fully-separable deployment where the
-        // hub-admin ≠ the registry-admin and sealing is a genuinely separate step).
         "--roster-only": "bool",
-        // cortex#1481 — force the seal-only path (registry seal + hub-owner
-        // artifact, NEVER a local hub write) even when the auto-detected hub
-        // locality would otherwise call the hub local. Distinct from
-        // --roster-only: the seal (mint + deliver) STILL runs here.
         "--seal-only": "bool",
-        // cortex#1481 — the hub's OWN federation account nkey-U, when the admin
-        // already knows it. Rides the hub-owner artifact's `account:` field.
         "--hub-account": "value",
       },
     },
-    // C-1348 (ADR-0015) — the admission DENIAL verb, the mirror of `admit`.
-    // Signs an admission decision claim carrying decision:"reject" → POSTs to
-    // `/admission-requests/:id/reject` → the PENDING row moves to REJECTED.
-    // Grants + seals NOTHING (rejection has no roster row to make connectable),
-    // so it omits admit's --hub-config/--roster-only seal controls. Dry-run by
-    // DEFAULT: prints the claim it WOULD post; --apply executes. The row's
-    // network_id is fixed at register time; the registry authorises and acts on
-    // that stored value, so there is no network selector.
-    //
-    // C-1350 S3 — Tier-1 de-admission pairing: `--discord-member` (+
-    // `--discord-guild/--discord-server/--discord-role`) mirrors admit's flag
-    // block, but REMOVES the community-fleet role as a final non-fatal step. A
-    // role-removal failure NEVER fails the reject (the decision already committed).
     reject: {
       positionals: ["request-id?"],
       flags: {

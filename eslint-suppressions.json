@@ -1978,7 +1978,7 @@
   },
   "src/cli/cortex/commands/network.ts": {
     "cortex/no-comments": {
-      "count": 878
+      "count": 726
     }
   },
   "src/cli/cortex/commands/normalize-config.ts": {
