@@ -51,9 +51,9 @@ bun src/cli/cortex/commands/cortex.ts start \
 ### Local checks
 
 ```bash
-bun run test      # run the test suite under a temp HOME (a bare `bun test` refuses)
-bun run lint      # eslint (see eslint.config.js)
-bun run typecheck # tsc, if your change touches types
+bun run check     # every CI gate, in CI order, plus "branch is not behind origin/main"
+bun run check lint typecheck  # just those gates
+bun run test      # the suite alone, under a temp HOME (a bare `bun test` refuses)
 ```
 
 (Confirm the exact script names in `package.json`; run the equivalents your

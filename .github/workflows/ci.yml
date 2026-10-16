@@ -59,7 +59,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: ESLint (errors only — blocking gate)
-        run: bun run lint:errors
+        run: bun scripts/check.ts lint
 
   # Copied code ratchet: a file may not gain jscpd clones past
   # scripts/duplication-baseline.json, and the baseline may not exceed main's.
@@ -78,7 +78,7 @@ jobs:
       - run: git fetch --depth=1 origin main
 
       - name: check-duplication
-        run: bun scripts/check-duplication.ts
+        run: bun scripts/check.ts duplication
 
   # ──────────────────────────────────────────────────────────────────
   # Typecheck — `tsc --noEmit` against the project's tsconfig.json.
@@ -99,7 +99,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: tsc --noEmit
-        run: bunx tsc --noEmit
+        run: bun scripts/check.ts typecheck
 
   # ──────────────────────────────────────────────────────────────────
   # Vocab carve-out gate — the 0002 vocabulary-migration ratchet.
@@ -138,9 +138,7 @@ jobs:
       # design target), so a PR fails only if IT introduces a violation — and there
       # are no diff-mode false-positives on pre-existing carve-out lines in files a
       # PR happens to touch (the reason the old diff-mode forced --admin merges).
-      - name: check-carveouts (whole-tree)
-        run: bash scripts/check-carveouts.sh
-
+      # Both vocab checks run as one gate: scripts/check.ts vocab.
       # Wire-layer-notation rules (compass#125, standards/domain-grounding.md
       # §5) — EXTENDS this gate with the M-notation layer-model rule set the
       # carve-out ratchet never knew. It proved blind to the historical layer
@@ -150,10 +148,10 @@ jobs:
       # during the L→M doc-sweep burn-in (promote with --enforce-l4). Also runs
       # the §2.2 RFC-filename no-drift check against the myelin pack (resolved
       # via `gh api`; skips non-blocking if myelin is unreachable).
-      - name: check-wire-vocab (layer-model notation + RFC no-drift)
+      - name: check-carveouts (whole-tree) + check-wire-vocab (layer-model notation + RFC no-drift)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bun scripts/check-wire-vocab.ts
+        run: bun scripts/check.ts vocab
 
   # ──────────────────────────────────────────────────────────────────
   # Test — `bun test` runs the full unit/integration suite. Pre-cortex#376
@@ -178,7 +176,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: bun run test
-        run: bun run test
+        run: bun scripts/check.ts test
 
   # ──────────────────────────────────────────────────────────────────
   # Surface-SDK .d.ts drift guard (cortex#1950). The shippable, self-contained
@@ -202,15 +200,13 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: regenerate + diff (bun run sdk:dts:check)
-        run: bun run sdk:dts:check
-
       - run: git fetch --depth=1 origin main
 
-      # A changed SDK contract carries a SURFACE_SDK_VERSION bump; git
-      # dependencies pin release tags, not commits (#2611, #2568).
-      - name: release pins
-        run: bun scripts/check-release-pins.ts
+      # Regenerate + diff the .d.ts, then the release pins: a changed SDK
+      # contract carries a SURFACE_SDK_VERSION bump; git dependencies pin
+      # release tags, not commits (#2611, #2568).
+      - name: sdk:dts:check + release pins
+        run: bun scripts/check.ts sdk
 
   # ──────────────────────────────────────────────────────────────────
   # Shippable-config hygiene gate — L2 of the confidentiality program
@@ -246,7 +242,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: check-shippable-hygiene (whole-tree)
-        run: bun scripts/check-shippable-hygiene.ts
+        run: bun scripts/check.ts shippable
 
   # ──────────────────────────────────────────────────────────────────
   # XDG gate — runs the xdg-audit REPO GATE against THIS checkout only
@@ -282,7 +278,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: xdg-audit --repos (self-repo scope)
-        run: bun scripts/xdg-audit.ts --repos .
+        run: bun scripts/check.ts xdg
 
   # ──────────────────────────────────────────────────────────────────
   # systemd-e2e — systemd-user session capability for e2e jobs (cortex#2092).
