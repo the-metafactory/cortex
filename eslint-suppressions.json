@@ -4156,11 +4156,6 @@
       "count": 4
     }
   },
-  "src/surface/mc/__tests__/api.test.ts": {
-    "cortex/no-comments": {
-      "count": 210
-    }
-  },
   "src/surface/mc/__tests__/assignments-db.test.ts": {
     "cortex/no-comments": {
       "count": 1
