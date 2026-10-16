@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { grownRules } from "../suppressions-guard.ts";
+import { enabledOnBaseFrom, grownRules } from "../suppressions-guard.ts";
 
 const base = {
   "src/a.ts": { "cortex/no-comments": { count: 3 }, "no-empty": { count: 1 } },
@@ -34,5 +34,26 @@ describe("suppressions guard", () => {
   test("fails a rule the base config enables, though the base never suppressed it", () => {
     const head = { ...base, "src/b.ts": { "cortex/no-comments": { count: 2 }, "no-restricted-syntax": { count: 2 } } };
     expect(grownRules(base, head, () => true)).toEqual(["no-restricted-syntax: 0 -> 2"]);
+  });
+});
+
+describe("enabledOnBaseFrom", () => {
+  const baseConfig = `rules: { "cortex/no-comments": "error" }`;
+
+  test("a preset rule never named in either config was already in force, so its growth fails", () => {
+    const enabled = enabledOnBaseFrom(baseConfig, baseConfig);
+    const head = { ...base, "src/b.ts": { "cortex/no-comments": { count: 2 }, "require-yield": { count: 3 } } };
+    expect(grownRules(base, head, enabled)).toEqual(["require-yield: 0 -> 3"]);
+  });
+
+  test("a rule this change names in the config for the first time may start its baseline", () => {
+    const enabled = enabledOnBaseFrom(baseConfig, `${baseConfig} "no-restricted-syntax": "error"`);
+    const head = { ...base, "src/b.ts": { "cortex/no-comments": { count: 2 }, "no-restricted-syntax": { count: 2 } } };
+    expect(grownRules(base, head, enabled)).toEqual([]);
+  });
+
+  test("a rule base already suppresses may not grow, whatever the config says", () => {
+    const head = { ...base, "src/b.ts": { "cortex/no-comments": { count: 9 } } };
+    expect(grownRules(base, head, () => false)).toEqual(["cortex/no-comments: 5 -> 12"]);
   });
 });

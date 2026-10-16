@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contractShape, sdkBumpMissing, untaggedGitPins } from "../check-release-pins";
+import { contractShape, sdkBumpMissing, unlockedGitDeps, untaggedGitPins } from "../check-release-pins";
 
 describe("untaggedGitPins", () => {
   const today = "2026-10-16";
@@ -45,5 +45,31 @@ describe("sdkBumpMissing", () => {
   test("a doc-comment-only change needs no bump", () => {
     expect(sdkBumpMissing(base, base.replace("export interface", "/** Docs. */\nexport interface"))).toBe(false);
     expect(contractShape("// note\nexport type T = 1;")).toBe("export type T = 1;");
+  });
+});
+
+describe("release tag shape", () => {
+  test("a branch name is not a release tag", () => {
+    expect(untaggedGitPins({ x: "github:o/x#main", y: "github:o/y#semver:^1.2.0" }, {}, "2026-10-16")).toEqual([
+      "x: github:o/x#main is not a release tag",
+    ]);
+  });
+
+  test("a contract change after a URL string on the same line still needs a bump", () => {
+    const base = 'export declare const SURFACE_SDK_VERSION = "1.1.0";\nexport type U = "https://a" | "b";\n';
+    expect(sdkBumpMissing(base, base.replace('| "b"', '| "b" | "c"'))).toBe(true);
+  });
+});
+
+describe("unlockedGitDeps", () => {
+  const deps = { "@o/x": "github:o/x#v1.0.0", y: "^1.0.0" };
+
+  test("passes a tag the lockfile fixes to a commit with an integrity hash", () => {
+    const lock = '    "@o/x": ["@o/x@github:o/x#0e4968c", { "dependencies": {} }, "o-x-0e4968c", "sha512-abc=="],\n';
+    expect(unlockedGitDeps(deps, lock)).toEqual([]);
+  });
+
+  test("fails a git dep the lockfile does not fix", () => {
+    expect(unlockedGitDeps(deps, '    "y": ["y@1.0.0", "", {}, "sha512-def=="],\n')).toHaveLength(1);
   });
 });
