@@ -1,12 +1,3 @@
-/**
- * MC-A1 (cortex#1275) — `GET /api/networks` end-to-end route tests.
- *
- * Drives the route through the real Bun.serve HTTP stack with stub
- * `NetworksView` + `AgentPresenceView` getters — confirming the route is wired,
- * the lazy getter resolves per request, the no-view path serves an empty list,
- * and non-GET methods are rejected.
- */
-
 import { describe, it, expect, afterEach } from "bun:test";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -113,9 +104,6 @@ describe("GET /api/networks (HTTP)", () => {
         m.verdict,
       ]),
     );
-    // FS-6 — the view stub exposes no `receivedPresenceFrom`, so the absent
-    // family collapses to the conservative `absent-offline` (never over-claim
-    // "unheard" without the receipt ledger).
     expect(byPrincipal).toEqual({ andreas: "admitted-present", jc: "absent-offline" });
   });
 

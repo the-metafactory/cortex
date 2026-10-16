@@ -1,12 +1,3 @@
-/**
- * #1008 — `/api/working-agents` + `/api/agents` DB-read aggregation, end-to-end.
- *
- * Drives the real Bun.serve HTTP stack with a `localAggregation` getter that
- * points at fixture sibling MC dbs. Asserts both feeds return the origin-tagged
- * UNION across the local db + the sibling dbs, and that omitting the getter
- * yields the byte-identical single-db feed (no regression).
- */
-
 import { describe, it, expect, afterEach } from "bun:test";
 import { join } from "path";
 import { tmpdir } from "os";

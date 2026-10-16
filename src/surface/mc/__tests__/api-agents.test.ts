@@ -1,14 +1,3 @@
-/**
- * G-1114.B.4 — `GET /api/agents` end-to-end tests.
- *
- * Drives the route through the real Bun.serve HTTP stack with a stub
- * `AgentPresenceView` (the minimal read-only contract the server depends on —
- * the bus registry isn't imported here). Covers: snapshot projection to the
- * snake_case DTO, the graceful empty-list path when no registry is wired (the
- * gating-mismatch case), lazy resolution of the getter (registry attaches after
- * boot), and method gating.
- */
-
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -77,7 +66,7 @@ describe("GET /api/agents", () => {
   });
 
   it("returns an empty list when no presence registry is wired (gating mismatch)", async () => {
-    c = startWith(); // no agentPresence getter
+    c = startWith();
     const res = await fetch(`${c.baseUrl}/api/agents`);
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -145,8 +134,6 @@ describe("GET /api/agents", () => {
       getAgents: () => [
         rec({ agentId: "luna", origin: "local" }),
         rec({
-          // A federated peer agent: keyed + scoped under the peer's VERIFIED
-          // {principal}/{stack} (#914 source-bound identity).
           agentId: "sage",
           key: "jc/research/sage",
           principal: "jc",
@@ -159,13 +146,9 @@ describe("GET /api/agents", () => {
     const body = await (await fetch(`${c.baseUrl}/api/agents`)).json();
 
     const luna = body.agents.find((a: { agent_id: string }) => a.agent_id === "luna");
-    // A local agent surfaces the bare "local" string (object-vs-string is the
-    // foreign discriminant on the wire).
     expect(luna.origin).toBe("local");
 
     const sage = body.agents.find((a: { agent_id: string }) => a.agent_id === "sage");
-    // A foreign agent flattens to {principal, stack} — the `kind` discriminant is
-    // dropped (object shape already discriminates foreign from local).
     expect(sage.origin).toEqual({ principal: "jc", stack: "research" });
   });
 
@@ -187,19 +170,14 @@ describe("GET /api/agents", () => {
 
     const luna = body.agents.find((a: { agent_id: string }) => a.agent_id === "luna");
     expect(luna.state).toBe("online");
-    // Online agents carry no offline reason.
     expect(luna.offline_reason).toBeNull();
 
     const sage = body.agents.find((a: { agent_id: string }) => a.agent_id === "sage");
     expect(sage.state).toBe("offline");
-    // The reaper-inferred reason rides the DTO so the panel can render it as a
-    // timed-out / "no heartbeat" agent distinct from a graceful shutdown.
     expect(sage.offline_reason).toBe("ttl_lapse");
   });
 
   it("resolves the getter lazily per request (registry attaches after boot)", async () => {
-    // Holder is empty at boot — mirrors cortex.ts where the registry starts
-    // AFTER the MC embed. A later assignment must become visible.
     let live: AgentPresenceView | null = null;
     c = startWith(() => live);
 

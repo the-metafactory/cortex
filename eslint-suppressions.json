@@ -4151,11 +4151,6 @@
       "count": 9
     }
   },
-  "src/surface/mc/__tests__/api-agents.test.ts": {
-    "cortex/no-comments": {
-      "count": 13
-    }
-  },
   "src/surface/mc/__tests__/api-observability.test.ts": {
     "cortex/no-comments": {
       "count": 4
@@ -4286,11 +4281,6 @@
       "count": 24
     }
   },
-  "src/surface/mc/__tests__/focus-area-ws.test.ts": {
-    "cortex/no-comments": {
-      "count": 27
-    }
-  },
   "src/surface/mc/__tests__/git-links.test.ts": {
     "cortex/no-comments": {
       "count": 1
@@ -4371,11 +4361,6 @@
       "count": 10
     }
   },
-  "src/surface/mc/__tests__/local-aggregation-api.test.ts": {
-    "cortex/no-comments": {
-      "count": 1
-    }
-  },
   "src/surface/mc/__tests__/metrics-endpoints.test.ts": {
     "cortex/no-comments": {
       "count": 3
@@ -4391,11 +4376,6 @@
       "count": 23
     }
   },
-  "src/surface/mc/__tests__/networks-admission-http.test.ts": {
-    "cortex/no-comments": {
-      "count": 13
-    }
-  },
   "src/surface/mc/__tests__/networks-api.test.ts": {
     "cortex/no-comments": {
       "count": 15
@@ -4404,11 +4384,6 @@
   "src/surface/mc/__tests__/networks-flg4-roster-states.test.ts": {
     "cortex/no-comments": {
       "count": 5
-    }
-  },
-  "src/surface/mc/__tests__/networks-http.test.ts": {
-    "cortex/no-comments": {
-      "count": 4
     }
   },
   "src/surface/mc/__tests__/networks-membership.test.ts": {
@@ -4745,11 +4720,6 @@
       "count": 11
     }
   },
-  "src/surface/mc/api/networks-admission.ts": {
-    "cortex/no-comments": {
-      "count": 23
-    }
-  },
   "src/surface/mc/api/networks-authorize.ts": {
     "cortex/no-comments": {
       "count": 15
@@ -4934,9 +4904,6 @@
   "src/surface/mc/embed.ts": {
     "@typescript-eslint/require-await": {
       "count": 2
-    },
-    "cortex/no-comments": {
-      "count": 45
     }
   },
   "src/surface/mc/governance/__tests__/hub-locality-guard.test.ts": {

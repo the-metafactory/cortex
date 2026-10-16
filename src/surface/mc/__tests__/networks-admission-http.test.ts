@@ -1,24 +1,3 @@
-/**
- * MC-B2 (cortex#1279) — loopback-invariant guard for the mutating
- * `POST /api/networks/admission-decision` route.
- *
- * ## Why this test exists (review nit adv-N1)
- *
- * Gate 1 of the admission-decision handler trusts the
- * `Cf-Access-Authenticated-User-Email` header AS-IS — it never validates the
- * `Cf-Access-Jwt-Assertion`. That is only safe because the daemon binds
- * **loopback-only** (server.ts SEV-2): the sole path on which a request can both
- * (a) carry that header and (b) reach the local signer is the principal's own
- * CF-Access tunnel to their own daemon. A future regression that binds the server
- * beyond loopback (e.g. `0.0.0.0`) would make the un-validated header trivially
- * forgeable from the network — turning admission-signing into a remote-forge.
- *
- * These cases lock that trust boundary: they boot the REAL Bun.serve stack with a
- * stub {@link AdmissionDecider} wired and assert the route is served on the
- * loopback interface, and that Gate 1 (401 without the header) is enforced there.
- * If the default bind ever moves off loopback, the hostname assertion fails loud.
- */
-
 import { describe, it, expect, afterEach } from "bun:test";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -46,10 +25,6 @@ interface Ctx {
   calls: AdmissionDecisionInput[];
 }
 
-/**
- * Boot the real server with a recording {@link AdmissionDecider} stub — no seed,
- * no registry, no crypto; just enough to prove the route is wired and reachable.
- */
 function startWithDecider(): Ctx {
   const tmpDir = join(tmpdir(), `mc-admission-http-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
@@ -80,20 +55,11 @@ describe("POST /api/networks/admission-decision — loopback invariant", () => {
 
   it("binds the admission-decision route to a loopback interface only", () => {
     c = startWithDecider();
-    // The signing route's ONLY safety for the un-validated CF-Access header is
-    // that it is unreachable off loopback. If a regression binds beyond loopback
-    // (e.g. 0.0.0.0), this fails — do NOT relax it without re-designing Gate 1.
     expect(LOOPBACK_HOSTS.has(c.ctx.server.hostname ?? "")).toBe(true);
     expect(DEFAULT_CONFIG.hostname).toBe("127.0.0.1");
   });
 
   it("resolves to the local principal (FND-6 posture A) when the CF-Access header is absent on loopback — reaches the signer, no 401", async () => {
-    // Posture A: on loopback the CF-Access email header is audit metadata, not
-    // authentication (a local process can forge it; Host+Origin is the
-    // boundary). A headerless request therefore resolves to the default local
-    // principal and reaches the signer rather than 401ing — this is what keeps
-    // the headerless local dashboard working. Authorization is still enforced
-    // (principals unset here → permissive on loopback).
     c = startWithDecider();
     const res = await fetch(`${c.baseUrl}/api/networks/admission-decision`, {
       method: "POST",
@@ -127,8 +93,6 @@ describe("POST /api/networks/admission-decision — loopback invariant", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "ADMITTED", request_id: "req-abc-123" });
-    // Proves the route resolved the injected decider through the loopback stack,
-    // carrying the CF-Access principal for audit.
     expect(c.calls).toHaveLength(1);
     expect(c.calls[0]?.principal).toBe("principal@example.com");
     expect(c.calls[0]?.decision).toBe("admit");
