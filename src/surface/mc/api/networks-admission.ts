@@ -1,43 +1,3 @@
-/**
- * MC-B2 (cortex#1279) — the **mutating** Tier-2 admit/reject action from the
- * Mission Control glass: `POST /api/networks/admission-decision`.
- *
- * ## Scope (principal decision, 2026-07-02)
- *
- * Ship the grant/reject action behind **CF-Access session + typed-confirm**;
- * full step-up MFA (#1194) is a follow-up. The decision is **signed by the
- * LOCAL daemon** with the principal's own stack seed (the daemon already holds it
- * to PoP-sign roster reads) — the seed NEVER goes in the CF worker and the
- * browser NEVER signs. This handler is the surface seam; `cortex.ts` injects the
- * bus-layer signer as an {@link AdmissionDecider} (mirroring how it injects the
- * member-roster read provider). The surface never imports the bus.
- *
- * ## The two gates (both required — reject if either is absent)
- *
- *  1. **CF-Access principal identity — bind-conditioned (#1410).** On a
- *     **loopback** bind (every current deployment; server.ts SEV-2) the
- *     `Cf-Access-Authenticated-User-Email` header is trusted as-is — the
- *     request can only reach the local signer over the principal's own
- *     loopback interface (the invariant the #1279 http test locks). On a
- *     **non-loopback** bind that header is forgeable, so the route instead
- *     REQUIRES a `Cf-Access-Jwt-Assertion` verified against the CF Access team
- *     JWKS (`aud`/`iss`/`exp`/`nbf` + RS256 signature) and takes the principal
- *     from the verified `email` claim. Fail-closed off loopback: no
- *     `cfAccess.aud` configured ⇒ 503; missing/invalid JWT ⇒ 401. This turns
- *     the loopback bind into defense-in-depth rather than the sole gate.
- *  2. **Typed-confirm.** The client must echo the target `request_id` in the
- *     `confirm` field — the deliberate, mirror of the CLI's
- *     `cortex network admit <request-id> --apply` posture (the principal types the
- *     id they mean to act on). Mismatch/absent ⇒ 400. This is the intent gate for
- *     a control-plane mutation.
- *
- * Request-id-driven (Option A): the principal supplies the `request_id`
- * (obtained from `cortex network admit --list-pending` or the registry). Auto-
- * populating a PENDING queue with request_ids on the pier-queue rows is a
- * documented follow-up (it needs the admin-list read path, which hits the
- * ADR-0020 global-admin-read scoping and is admit-lane-adjacent).
- */
-
 import { NETWORK_ID_RE } from "../../../common/network-id";
 
 /** admit | reject — selects the registry route + claim decision. */
@@ -48,7 +8,6 @@ export interface AdmissionDecisionInput {
   networkId: string;
   requestId: string;
   decision: AdmissionDecisionVerb;
-  /** The CF-Access-authenticated principal email (audit/correlation). */
   principal: string;
 }
 
@@ -100,7 +59,6 @@ export const CF_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
  */
 export const DEFAULT_LOCAL_PRINCIPAL = "local-principal@loopback";
 
-/** Hostnames that denote a loopback bind. Single source of "is this loopback". */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
 
 /**
@@ -122,43 +80,20 @@ export function isLoopbackBind(hostname: string): boolean {
  * which identity proof is required (see {@link isLoopbackBind}).
  */
 export interface AdmissionAuthContext {
-  /** True when MC is bound to a loopback interface. */
   isLoopback: boolean;
-  /**
-   * Raw `Cf-Access-Authenticated-User-Email`. On a loopback bind this is
-   * self-asserted AUDIT METADATA — used when present, but its absence is not an
-   * auth failure (see `localPrincipal`). Off loopback it is ignored entirely (a
-   * verified JWT is the only accepted identity).
-   */
   emailHeader: string | undefined;
-  /**
-   * FND-6 posture A — the loopback fallback identity when `emailHeader` is
-   * absent (`mc.governance.local_principal`; defaults to
-   * `DEFAULT_LOCAL_PRINCIPAL`). Only consulted on a loopback bind. The resolved
-   * identity is still enforced against `mc.governance.principals`.
-   */
   localPrincipal?: string;
-  /** Raw `Cf-Access-Jwt-Assertion` — verified on a non-loopback bind. */
   jwtAssertion: string | undefined;
-  /**
-   * CF-Access JWT verifier, pre-bound to the configured `aud` + `teamDomain`.
-   * Present iff `cfAccess.aud` is configured. On a non-loopback bind its
-   * ABSENCE fails the route closed (503). Returns the verified claims, or
-   * `null` to reject (fail closed).
-   */
   verifyJwt?: (token: string) => Promise<Record<string, unknown> | null>;
 }
 
-/** The POST body the dashboard sends. */
 interface AdmissionDecisionBody {
   network_id: string;
   request_id: string;
   decision: AdmissionDecisionVerb;
-  /** Typed-confirm: must exactly equal `request_id`. */
   confirm: string;
 }
-// A conservative request-id shape (registry `isValidRequestId` is the authority;
-// this is a cheap client-side pre-check so we never sign an obviously-bad id).
+
 const REQUEST_ID_PRECHECK_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/;
 
 function json(body: unknown, status: number): Response {
@@ -168,7 +103,6 @@ function json(body: unknown, status: number): Response {
   });
 }
 
-/** Map a decider failure reason to the HTTP status the dashboard branches on. */
 function failureStatus(reason: AdmissionDecisionFailure): number {
   switch (reason) {
     case "not_authorized":
@@ -189,10 +123,6 @@ function failureStatus(reason: AdmissionDecisionFailure): number {
   }
 }
 
-/**
- * Validate the body shape (typed-confirm included). Pure — no I/O. Returns the
- * normalised body or a `Response` (already the right status) to return verbatim.
- */
 function parseBody(
   raw: unknown,
 ): { ok: true; body: AdmissionDecisionBody } | { ok: false; response: Response } {
@@ -210,7 +140,6 @@ function parseBody(
   if (b.decision !== "admit" && b.decision !== "reject") {
     return { ok: false, response: json({ error: 'decision must be "admit" or "reject"' }, 400) };
   }
-  // Typed-confirm: the principal must echo the request_id they mean to act on.
   if (typeof b.confirm !== "string" || b.confirm !== b.request_id) {
     return {
       ok: false,
@@ -270,17 +199,12 @@ export async function resolveRequestPrincipal(
   auth: AdmissionAuthContext,
 ): Promise<string | Response> {
   if (auth.isLoopback) {
-    // Header present → attribute to it (audit metadata). Absent → fall back to
-    // the configured local principal (posture A); NEVER 401 on loopback for a
-    // missing header — Host+Origin is the boundary, and the resolved identity is
-    // still authorization-checked against `mc.governance.principals`.
     const header = (auth.emailHeader ?? "").trim();
     if (header.length > 0) return header;
     const fallback = (auth.localPrincipal ?? "").trim();
     return fallback.length > 0 ? fallback : DEFAULT_LOCAL_PRINCIPAL;
   }
 
-  // Non-loopback: do NOT trust the raw email header — verify the JWT.
   if (!auth.verifyJwt) {
     return json(
       {
@@ -347,15 +271,12 @@ export async function handleAdmissionDecision(
   auth: AdmissionAuthContext,
   rawBody: unknown,
 ): Promise<Response> {
-  // Gate 1 — a CF-Access principal identity is required for a mutation.
   const who = await resolveRequestPrincipal(auth);
   if (who instanceof Response) return who;
 
-  // Gate 2 — body shape + typed-confirm.
   const parsed = parseBody(rawBody);
   if (!parsed.ok) return parsed.response;
 
-  // The signer seam must be wired (federation + registry + stack seed present).
   if (decider === null) {
     return json(
       {

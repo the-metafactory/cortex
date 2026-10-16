@@ -1,25 +1,3 @@
-/**
- * Grove Mission Control v2 — F-6 focus-area WS→refetch integration test.
- *
- * design-mc-f6-focus-area.md §4 acceptance criterion:
- *   "the WS re-fetch trigger has one integration test that drives `block`
- *    then `principal_requeue` and asserts two re-renders."
- *
- * Strategy: we can't observe dashboard rendering from the server side, but
- * we can verify the signal the dashboard uses to trigger a re-render —
- * namely, the two `state.transition` WS broadcasts where either `from` or
- * `to` equals `blocked`. The dashboard code (dashboard/index.html) calls
- * `scheduleFocusRefetch()` (→ `fetchFocusArea()`) exactly once per such
- * broadcast; receiving two broadcasts with the right shape is the
- * necessary-and-sufficient server-side condition for two re-renders.
- *
- * In addition we assert the DB state after each transition so the two
- * re-renders would observe the correct focus-area contents (card appears
- * after `block`, disappears after `principal_requeue`).
- *
- * Added for PR #8 review finding W2.
- */
-
 import {
   describe,
   it,
@@ -114,8 +92,6 @@ describe("F-6 focus-area WS→refetch integration", () => {
     ctx = startServer({ ...DEFAULT_CONFIG, port: 0 }, db);
     port = ctx.port;
 
-    // Seed an assignment in `running` state with a session so we have
-    // something to block → unblock.
     db.exec(
       `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-1', 'F-6 WS test task', 0, 'op', 'internal')`
@@ -140,17 +116,12 @@ describe("F-6 focus-area WS→refetch integration", () => {
   });
 
   it("broadcasts two state.transition messages across block + principal_requeue, and focus-area membership flips accordingly", async () => {
-    // --- Connect a dashboard-like WS client before any transitions fire ---
     const client = await createClient(port);
-    await client.waitFor(1); // initial `connected` envelope
+    await client.waitFor(1);
     await waitUntil(() => ctx.wsRegistry.size >= 1);
 
-    // --- Pre-state: no blocked assignments, so focus area is empty ---
     expect(listFocusArea(db)).toHaveLength(0);
 
-    // --- Transition 1: block the running assignment ---
-    // Mirrors the production call pattern in api/handlers.ts and
-    // session/stdout-dispatcher.ts: applyTransition → broadcastTransition.
     const blockReason: BlockReason = {
       kind: "permission.request",
       payload: { requested_action: "tool.edit" },
@@ -164,7 +135,7 @@ describe("F-6 focus-area WS→refetch integration", () => {
       reason: blockReason,
     });
     expect(blockResult.ok).toBe(true);
-    if (!blockResult.ok) return; // type narrowing
+    if (!blockResult.ok) return;
 
     broadcastTransition(
       ctx.wsRegistry,
@@ -174,14 +145,10 @@ describe("F-6 focus-area WS→refetch integration", () => {
       blockResult.assignment.block_reason
     );
 
-    // Wait for the first transition broadcast to land on the client.
-    const after1 = await client.waitFor(2); // connected + transition#1
+    const after1 = await client.waitFor(2);
 
-    // Focus area now contains the blocked assignment — dashboard re-render #1
-    // would observe the new card.
     expect(listFocusArea(db)).toHaveLength(1);
 
-    // --- Transition 2: principal_requeue the blocked assignment ---
     const requeueResult = applyTransition(db, "ata-1", sessionRow.id, {
       type: "principal_requeue",
     });
@@ -196,15 +163,10 @@ describe("F-6 focus-area WS→refetch integration", () => {
       requeueResult.assignment.block_reason
     );
 
-    const after2 = await client.waitFor(3); // connected + transition#1 + transition#2
+    const after2 = await client.waitFor(3);
 
-    // Focus area is empty again — dashboard re-render #2 would observe the
-    // card disappear.
     expect(listFocusArea(db)).toHaveLength(0);
 
-    // --- Assertions on the broadcast sequence ---
-    // Filter to state.transition frames only so this test isn't coupled to
-    // any unrelated WS traffic (e.g. a future heartbeat frame).
     const transitions = after2.filter(
       (m): m is { type: string; assignmentId: string; from: string; to: string } =>
         typeof m === "object" &&
@@ -213,7 +175,6 @@ describe("F-6 focus-area WS→refetch integration", () => {
     );
     expect(transitions).toHaveLength(2);
 
-    // Transition 1: running → blocked (dashboard re-renders focus area).
     expect(transitions[0]).toMatchObject({
       type: "state.transition",
       assignmentId: "ata-1",
@@ -221,8 +182,6 @@ describe("F-6 focus-area WS→refetch integration", () => {
       to: "blocked",
     });
 
-    // Transition 2: blocked → queued (dashboard re-renders focus area —
-    // this is the "card disappears without reload" half of AC §4).
     expect(transitions[1]).toMatchObject({
       type: "state.transition",
       assignmentId: "ata-1",
@@ -230,9 +189,6 @@ describe("F-6 focus-area WS→refetch integration", () => {
       to: "queued",
     });
 
-    // Dashboard behavior under test (dashboard/index.html handleWsMessage):
-    //   `if (msg.from === "blocked" || msg.to === "blocked") scheduleFocusRefetch();`
-    // Both transitions satisfy that predicate → two re-renders fire.
     for (const t of transitions) {
       expect(isFocusAreaTransition(t)).toBe(true);
     }
