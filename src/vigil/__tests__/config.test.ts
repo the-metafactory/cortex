@@ -27,3 +27,29 @@ describe("Vigil cadence config", () => {
     }
   });
 });
+
+describe("Vigil fallback email config", () => {
+  const email = { command: "email", account: "alerts", to: "principal@example.test" };
+
+  test("both schemas retain the email block and default its timeout", () => {
+    const vigil = { fallback: { email } };
+    for (const parsed of [
+      CortexConfigSchema.parse({ ...base, vigil }),
+      AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil }),
+    ]) {
+      expect(parsed.vigil.fallback?.email).toEqual({ ...email, timeout_ms: 10000 });
+    }
+    expect(CortexConfigSchema.parse(base).vigil.fallback).toBeUndefined();
+    expect(CortexConfigSchema.parse({ ...base, vigil: { fallback: { email: { ...email, timeout_ms: 250 } } } }).vigil.fallback?.email?.timeout_ms).toBe(250);
+  });
+
+  test.each([0, -1, 1.5, "10000", null, true, NaN, Infinity])("rejects invalid timeout %s", (timeout_ms) => {
+    expect(CortexConfigSchema.safeParse({ ...base, vigil: { fallback: { email: { ...email, timeout_ms } } } }).success).toBe(false);
+  });
+
+  test.each(["command", "account", "to"])("requires nonempty %s when an email block is present", (field) => {
+    for (const value of ["", undefined]) {
+      expect(CortexConfigSchema.safeParse({ ...base, vigil: { fallback: { email: { ...email, [field]: value } } } }).success).toBe(false);
+    }
+  });
+});
