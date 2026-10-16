@@ -841,12 +841,9 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
       __setLeafCredsInstallDirForTests(installDir);
       fakeV2Fetcher(FAKE_CREDS);
 
-      let err = "";
-      try {
-        err = await stderrOf(() => dn(joinArgs(writeJoinerSeed("joiner10.seed")), (() => ({})) as never));
-      } finally {
+      const err = await stderrOf(() => dn(joinArgs(writeJoinerSeed("joiner10.seed")), (() => ({})) as never)).finally(() => {
         chmodSync(installed, 0o600);
-      }
+      });
 
       expect(err).toContain("could not install it");
       expect(err).not.toContain(FAKE_CREDS);
