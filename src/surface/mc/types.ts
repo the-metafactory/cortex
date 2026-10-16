@@ -385,6 +385,7 @@ export type AttentionKind =
   | "input_needed"
   | "permission"
   | "review"
+  | "state_change"
   | "failed_dispatch"
   | "stale"
   | "blocked";

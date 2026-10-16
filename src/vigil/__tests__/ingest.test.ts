@@ -23,6 +23,7 @@ describe("Vigil run-health ingest", () => {
     });
     expect(listVigilEvents(db, KEY)).toEqual([{
       id: expect.any(String), subject_key: KEY, event_kind: "transition",
+      severity: "high", attention_id: `att:vigil:${KEY}`,
       from_value: null, to_value: "failed", direction: "worse",
       run_id: String(envelope.payload.run_id), occurred_at: ENDED_AT, created_at: 100,
     }]);

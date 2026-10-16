@@ -31,6 +31,7 @@ describe("Vigil staleness", () => {
     expect(getVigilSubject(db, JOB_KEY)).toEqual({ ...before, value: "stale", healthy: 0, updated_at: DEADLINE + 1 });
     expect(listVigilEvents(db, JOB_KEY)).toEqual([{
       id: expect.any(String), subject_key: JOB_KEY, event_kind: "transition",
+      severity: "normal", attention_id: `att:vigil:${JOB_KEY}`,
       from_value: "succeeded", to_value: "stale", direction: "worse",
       run_id: before.last_run_id, occurred_at: DEADLINE + 1, created_at: DEADLINE + 1,
     }]);

@@ -47,6 +47,8 @@ export interface VigilEventRow {
   run_id: string;
   occurred_at: number;
   created_at: number;
+  severity: "high" | "normal" | null;
+  attention_id: string | null;
 }
 
 export function getVigilSubject(db: Database, key: string): VigilSubjectRow | null {
@@ -82,13 +84,15 @@ export function writeVigilTransition(
   db: Database,
   event: Pick<VigilEventRow, "subject_key" | "from_value" | "to_value" | "direction" | "run_id" | "occurred_at">,
   now: number,
-): void {
+): VigilEventRow {
+  const id = crypto.randomUUID();
   db.query(`INSERT INTO vigil_events
     (id, subject_key, event_kind, from_value, to_value, direction, run_id, occurred_at, created_at)
     VALUES (?, ?, 'transition', ?, ?, ?, ?, ?, ?)`).run(
-    crypto.randomUUID(), event.subject_key, event.from_value, event.to_value,
+    id, event.subject_key, event.from_value, event.to_value,
     event.direction, event.run_id, event.occurred_at, now,
   );
+  return { ...event, id, event_kind: "transition", created_at: now, severity: null, attention_id: null };
 }
 
 // glossary-ignore: run

@@ -56,6 +56,65 @@ describe("Vigil startup and delivery", () => {
   beforeEach(() => { db = initDatabase(":memory:"); });
   afterEach(() => db.close());
 
+  test("live and tick transitions publish MC deltas with the failed-dispatch notify source", async () => {
+    const first = ledgerEnvelope();
+    const recovery = ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" });
+    const h = pullRuntime(createFakeJetStream(), [first, first, recovery]);
+    const publish = mock(async (_envelope: import("../../bus/myelin/envelope-validator").Envelope) => {});
+    const scheduler = fakeTickScheduler();
+    const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default", now: () => ENDED_AT, schedule: scheduler.schedule });
+    try {
+      await h.delivered;
+      expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened", "system.attention.resolved"]);
+      expect(publish.mock.calls[0]?.[0]).toMatchObject({ source: "jc.cortex.local", payload: { attention: { id: `att:vigil:${KEY}`, kind: "state_change", severity: "normal", stack_id: "default", session_id: null, work_item_id: null }, deep_link_url: null } });
+      ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "old-job" }, outcome: "succeeded", started_at: "2026-10-09T10:00:00Z", ended_at: "2026-10-09T10:00:05Z" }), ENDED_AT);
+      scheduler.tick();
+      await flushTick();
+      expect(publish.mock.calls[2]?.[0]).toMatchObject({ type: "system.attention.opened", payload: { attention: { id: "att:vigil:run:job:old-job", severity: "normal" } } });
+      scheduler.tick();
+      await flushTick();
+      expect(publish).toHaveBeenCalledTimes(3);
+    } finally { await handle!.stop(); }
+  });
+
+  test("slow notifications preserve order without delaying acknowledgment and drain on stop", async () => {
+    const h = pullRuntime(createFakeJetStream(), [ledgerEnvelope(), ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" })]);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const publish = mock(async (_envelope: import("../../bus/myelin/envelope-validator").Envelope) => { await pending; });
+    const scheduler = fakeTickScheduler();
+    const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default", schedule: scheduler.schedule });
+    try {
+      await flushTick();
+      expect(h.deliveries.every((delivery) => delivery.ack.mock.calls.length === 1)).toBe(true);
+      expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened"]);
+      expect(listVigilEvents(db, KEY).map((event) => event.direction)).toEqual(["worse", "better"]);
+      let stopped = false;
+      const stopping = handle!.stop().then(() => { stopped = true; });
+      await flushTick();
+      expect(stopped).toBe(false);
+      release();
+      await stopping;
+      expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened", "system.attention.resolved"]);
+    } finally {
+      release();
+      await handle!.stop();
+    }
+  });
+
+  test("notification failure is logged without undoing or redelivering a persisted transition", async () => {
+    const h = pullRuntime(createFakeJetStream(), [ledgerEnvelope()]);
+    const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
+    const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publish: async () => { throw new Error("publish unavailable"); } }, principal: "jc", stack: "default", log });
+    try {
+      await h.delivered;
+      expect(h.deliveries[0]!.ack).toHaveBeenCalledTimes(1);
+      expect(h.deliveries[0]!.nak).not.toHaveBeenCalled();
+      expect(log.warn.mock.calls.map(([message]) => message)).toContain("vigil: attention notification failed: publish unavailable");
+      expect(listVigilEvents(db, KEY)[0]?.attention_id).toBe(`att:vigil:${KEY}`);
+    } finally { await handle!.stop(); }
+  });
+
   test("both config schemas default Vigil off and retain explicit opt-in", () => {
     expect(AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" } }).vigil.enabled).toBe(false);
     const base = { principal: { id: "jc" }, agents: [{ id: "ivy", displayName: "Ivy", persona: "./ivy.md", presence: {} }], claude: {} };
