@@ -114,7 +114,7 @@
   },
   "src/__tests__/cortex.vigil-boot.test.ts": {
     "cortex/no-comments": {
-      "count": 2
+      "count": 1
     }
   },
   "src/__tests__/cortex.yaml-example.test.ts": {
@@ -730,19 +730,14 @@
       "count": 39
     }
   },
-  "src/bus/__tests__/process-env.test.ts": {
-    "cortex/no-comments": {
-      "count": 1
-    }
-  },
   "src/bus/__tests__/process-runner.test.ts": {
     "cortex/no-comments": {
-      "count": 11
+      "count": 10
     }
   },
   "src/bus/__tests__/reflex-activation-listener.test.ts": {
     "cortex/no-comments": {
-      "count": 52
+      "count": 50
     }
   },
   "src/bus/__tests__/renamed-envelope-types-roundtrip.test.ts": {
@@ -1141,7 +1136,7 @@
   },
   "src/bus/jetstream/provision.ts": {
     "cortex/no-comments": {
-      "count": 87
+      "count": 86
     }
   },
   "src/bus/jetstream/review-durables.ts": {
@@ -1315,7 +1310,7 @@
   },
   "src/bus/process-env.ts": {
     "cortex/no-comments": {
-      "count": 3
+      "count": 2
     }
   },
   "src/bus/process-runner.ts": {
@@ -1325,7 +1320,7 @@
   },
   "src/bus/reflex-activation-listener.ts": {
     "cortex/no-comments": {
-      "count": 96
+      "count": 94
     }
   },
   "src/bus/review-consumer.ts": {
@@ -2300,7 +2295,7 @@
   },
   "src/common/config/__tests__/loader.test.ts": {
     "cortex/no-comments": {
-      "count": 260
+      "count": 259
     }
   },
   "src/common/config/__tests__/migrate-config-dir.test.ts": {
@@ -3098,7 +3093,7 @@
       "count": 1
     },
     "cortex/no-comments": {
-      "count": 249
+      "count": 248
     }
   },
   "src/common/types/cortex-config.ts": {
@@ -4898,7 +4893,7 @@
   },
   "src/surface/mc/db/schema.ts": {
     "cortex/no-comments": {
-      "count": 318
+      "count": 317
     }
   },
   "src/surface/mc/db/session-join.ts": {
@@ -5396,44 +5391,34 @@
       "count": 2
     }
   },
-  "src/vigil/__tests__/config.test.ts": {
-    "cortex/no-comments": {
-      "count": 1
-    }
-  },
-  "src/vigil/__tests__/fixtures.ts": {
-    "cortex/no-comments": {
-      "count": 1
-    }
-  },
   "src/vigil/__tests__/ingest.test.ts": {
     "cortex/no-comments": {
-      "count": 3
+      "count": 1
     }
   },
   "src/vigil/__tests__/replay.test.ts": {
     "cortex/no-comments": {
-      "count": 3
+      "count": 2
     }
   },
   "src/vigil/__tests__/staleness.test.ts": {
     "cortex/no-comments": {
-      "count": 3
+      "count": 2
     }
   },
   "src/vigil/__tests__/start.test.ts": {
     "cortex/no-comments": {
-      "count": 6
+      "count": 2
     }
   },
   "src/vigil/__tests__/state-subject.test.ts": {
     "cortex/no-comments": {
-      "count": 4
+      "count": 2
     }
   },
   "src/vigil/__tests__/tick.test.ts": {
     "cortex/no-comments": {
-      "count": 2
+      "count": 1
     }
   },
   "src/vigil/budget.ts": {
@@ -5443,27 +5428,17 @@
   },
   "src/vigil/db.ts": {
     "cortex/no-comments": {
-      "count": 3
+      "count": 1
     }
   },
   "src/vigil/index.ts": {
     "cortex/no-comments": {
-      "count": 9
-    }
-  },
-  "src/vigil/ingest.ts": {
-    "cortex/no-comments": {
-      "count": 3
+      "count": 7
     }
   },
   "src/vigil/replay.ts": {
     "cortex/no-comments": {
-      "count": 4
-    }
-  },
-  "src/vigil/staleness.ts": {
-    "cortex/no-comments": {
-      "count": 1
+      "count": 3
     }
   },
   "src/vigil/state-subject.ts": {
@@ -5473,7 +5448,7 @@
   },
   "src/vigil/tick.ts": {
     "cortex/no-comments": {
-      "count": 4
+      "count": 3
     }
   }
 }
