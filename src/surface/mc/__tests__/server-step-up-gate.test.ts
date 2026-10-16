@@ -1,14 +1,14 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { join } from "path";
-import { tmpdir } from "os";
-import { rmSync } from "fs";
+import type { Database } from "bun:sqlite";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { startServer, type ServerContext } from "../server";
-import { initDatabase } from "../db/init";
-import { DEFAULT_CONFIG } from "../config";
 import { AUTHORIZE_PATH, type Authorizer } from "../api/networks-authorize";
 import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrollment";
-import type { Database } from "bun:sqlite";
+import { DEFAULT_CONFIG } from "../config";
+import { initDatabase } from "../db/init";
+import { startServer, type ServerContext } from "../server";
 
 const PRINCIPAL = "principal@example.com";
 

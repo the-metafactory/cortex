@@ -521,10 +521,7 @@ async function handleApi(
     }
     if (req.method === "POST") {
       if (!deps) {
-        return jsonError(
-          "REST session endpoints are unavailable (no ProcessManager configured)",
-          503
-        );
+        return sessionDepsUnavailable();
       }
       const body = await parseJsonBody(req);
       if (body.error) return body.error;
@@ -534,18 +531,7 @@ async function handleApi(
   }
 
   if (pathname === "/api/tasks/preview") {
-    if (req.method !== "POST") {
-      return methodNotAllowed(["POST"]);
-    }
-    if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
-    }
-    const body = await parseJsonBody(req);
-    if (body.error) return body.error;
-    return handlePreviewTask(db, deps, body.value);
+    return postJsonWithSessionDeps(req, deps, (d, body) => handlePreviewTask(db, d, body));
   }
 
   const abandonTaskMatch = /^\/api\/tasks\/([^/]+)\/abandon$/.exec(pathname);
@@ -554,10 +540,7 @@ async function handleApi(
       return methodNotAllowed(["POST"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return sessionDepsUnavailable();
     }
     const captured = abandonTaskMatch[1];
     if (!captured) return new Response("Not Found", { status: 404 });
@@ -656,10 +639,7 @@ async function handleApi(
       return methodNotAllowed(["POST"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST iteration mutation endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return iterationDepsUnavailable();
     }
     const body = await parseJsonBody(req);
     if (body.error) return body.error;
@@ -671,10 +651,7 @@ async function handleApi(
       return methodNotAllowed(["POST"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST iteration mutation endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return iterationDepsUnavailable();
     }
     const signature = req.headers.get("x-hub-signature-256") ?? "";
     const event = req.headers.get("x-github-event") ?? "";
@@ -694,10 +671,7 @@ async function handleApi(
     }
     if (req.method === "POST") {
       if (!deps) {
-        return jsonError(
-          "REST iteration mutation endpoints are unavailable (no ProcessManager configured)",
-          503
-        );
+        return iterationDepsUnavailable();
       }
       const body = await parseJsonBody(req);
       if (body.error) return body.error;
@@ -713,10 +687,7 @@ async function handleApi(
       return methodNotAllowed(["DELETE"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST iteration mutation endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return iterationDepsUnavailable();
     }
     const iterationId = decodeURIComponent(detachTaskMatch[1] ?? "");
     const taskId = decodeURIComponent(detachTaskMatch[2] ?? "");
@@ -730,10 +701,7 @@ async function handleApi(
       return methodNotAllowed(["POST"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST iteration mutation endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return iterationDepsUnavailable();
     }
     const iterationId = decodeURIComponent(attachTaskMatch[1] ?? "");
     const body = await parseJsonBody(req);
@@ -749,10 +717,7 @@ async function handleApi(
     }
     if (req.method === "PATCH") {
       if (!deps) {
-        return jsonError(
-          "REST iteration mutation endpoints are unavailable (no ProcessManager configured)",
-          503
-        );
+        return iterationDepsUnavailable();
       }
       const body = await parseJsonBody(req);
       if (body.error) return body.error;
@@ -788,18 +753,7 @@ async function handleApi(
   }
 
   if (pathname === "/api/sessions") {
-    if (req.method !== "POST") {
-      return methodNotAllowed(["POST"]);
-    }
-    if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
-    }
-    const body = await parseJsonBody(req);
-    if (body.error) return body.error;
-    return handleCreateSession(db, deps, body.value);
+    return postJsonWithSessionDeps(req, deps, (d, body) => handleCreateSession(db, d, body));
   }
 
   const eventsMatch = /^\/api\/assignments\/([^/]+)\/events$/.exec(pathname);
@@ -813,64 +767,22 @@ async function handleApi(
     return handleListEvents(db, assignmentId, url);
   }
 
-  const requeueMatch =
-    /^\/api\/assignments\/([^/]+)\/requeue$/.exec(pathname);
-  if (requeueMatch) {
+  const assignmentActionMatch =
+    /^\/api\/assignments\/([^/]+)\/(requeue|abandon|handoff)$/.exec(pathname);
+  if (assignmentActionMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return sessionDepsUnavailable();
     }
-    const captured = requeueMatch[1];
+    const captured = assignmentActionMatch[1];
     if (!captured) return new Response("Not Found", { status: 404 });
     const assignmentId = decodeURIComponent(captured);
+    const action = assignmentActionMatch[2] as AssignmentAction;
     const body = await parseJsonBody(req);
     if (body.error) return body.error;
-    return handleRequeueAssignment(db, deps, assignmentId, body.value);
-  }
-
-  const abandonMatch =
-    /^\/api\/assignments\/([^/]+)\/abandon$/.exec(pathname);
-  if (abandonMatch) {
-    if (req.method !== "POST") {
-      return methodNotAllowed(["POST"]);
-    }
-    if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
-    }
-    const captured = abandonMatch[1];
-    if (!captured) return new Response("Not Found", { status: 404 });
-    const assignmentId = decodeURIComponent(captured);
-    const body = await parseJsonBody(req);
-    if (body.error) return body.error;
-    return handleAbandonAssignment(db, deps, assignmentId, body.value);
-  }
-
-  const handoffMatch =
-    /^\/api\/assignments\/([^/]+)\/handoff$/.exec(pathname);
-  if (handoffMatch) {
-    if (req.method !== "POST") {
-      return methodNotAllowed(["POST"]);
-    }
-    if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
-    }
-    const captured = handoffMatch[1];
-    if (!captured) return new Response("Not Found", { status: 404 });
-    const assignmentId = decodeURIComponent(captured);
-    const body = await parseJsonBody(req);
-    if (body.error) return body.error;
-    return handleHandoffAssignment(db, deps, assignmentId, body.value);
+    return ASSIGNMENT_ACTION_HANDLERS[action](db, deps, assignmentId, body.value);
   }
 
   const inputMatch = /^\/api\/assignments\/([^/]+)\/input$/.exec(pathname);
@@ -879,10 +791,7 @@ async function handleApi(
       return methodNotAllowed(["POST"]);
     }
     if (!deps) {
-      return jsonError(
-        "REST session endpoints are unavailable (no ProcessManager configured)",
-        503
-      );
+      return sessionDepsUnavailable();
     }
     const captured = inputMatch[1];
     if (!captured) return new Response("Not Found", { status: 404 });
@@ -895,6 +804,17 @@ async function handleApi(
   return new Response("Not Found", { status: 404 });
 }
 
+type AssignmentAction = "requeue" | "abandon" | "handoff";
+
+const ASSIGNMENT_ACTION_HANDLERS: Record<
+  AssignmentAction,
+  (db: Database, deps: ApiDeps, assignmentId: string, rawBody: unknown) => Response | Promise<Response>
+> = {
+  requeue: handleRequeueAssignment,
+  abandon: handleAbandonAssignment,
+  handoff: handleHandoffAssignment,
+};
+
 function methodNotAllowed(allow: string[]): Response {
   return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
     status: 405,
@@ -903,6 +823,30 @@ function methodNotAllowed(allow: string[]): Response {
       allow: allow.join(", "),
     },
   });
+}
+
+async function postJsonWithSessionDeps(
+  req: Request,
+  deps: ApiDeps | null,
+  handle: (deps: ApiDeps, body: unknown) => Promise<Response>,
+): Promise<Response> {
+  if (req.method !== "POST") {
+    return methodNotAllowed(["POST"]);
+  }
+  if (!deps) {
+    return sessionDepsUnavailable();
+  }
+  const body = await parseJsonBody(req);
+  if (body.error) return body.error;
+  return handle(deps, body.value);
+}
+
+function sessionDepsUnavailable(): Response {
+  return jsonError("REST session endpoints are unavailable (no ProcessManager configured)", 503);
+}
+
+function iterationDepsUnavailable(): Response {
+  return jsonError("REST iteration mutation endpoints are unavailable (no ProcessManager configured)", 503);
 }
 
 function jsonError(message: string, status: number): Response {
