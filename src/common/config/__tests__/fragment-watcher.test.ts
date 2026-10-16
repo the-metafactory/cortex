@@ -20,7 +20,7 @@ import { describeWithFsWatch } from "../../test-fs-watch";
 
 // Room for the readiness handshake plus an event wait on a loaded machine.
 // Per file: bunfig.toml's `[test] timeout` is not read by Bun 1.3 (node #2576).
-setDefaultTimeout(60_000);
+setDefaultTimeout(20_000);
 
 // 50ms debounce, plus 80ms grace = ~130ms per assertion. Each test awaits a
 // real fs.watch event, so don't tighten this further without measurement.
@@ -32,14 +32,14 @@ const WAIT_AFTER_EVENT = 130;
  * Returns true when satisfied, false on deadline. Replaces fixed-duration
  * sleeps that proved racy under loaded CI runners (cortex#699).
  *
- * Default deadline 20s: these tests await a real `node:fs.watch` event plus
- * the 50ms debounce, and a saturated fseventsd delivered events up to 9.4s
- * late (cortex#771, node #2576). With `startWatcher`'s handshake (up to 30s)
- * it stays inside this file's 60s per-test timeout.
+ * Default deadline 8000ms: these tests await a real `node:fs.watch` event plus
+ * the 50ms debounce on a loaded machine (cortex#771, node #2576). With
+ * `startWatcher`'s handshake (up to 8s) it stays inside this file's 20s
+ * per-test timeout.
  */
 async function pollUntil(
   condition: () => boolean,
-  timeoutMs = 20_000,
+  timeoutMs = 8000,
   intervalMs = 30,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;

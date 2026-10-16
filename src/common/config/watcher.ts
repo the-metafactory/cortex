@@ -243,12 +243,8 @@ function compareConfigs(oldConfig: AgentConfig, newConfig: AgentConfig): {
   return { applied, requiresRestart };
 }
 
-/**
- * Upper bound on a watcher's `waitForReady()` handshake. A saturated
- * fseventsd delivered first events up to 9.4s late on the macOS host (node
- * #2576), so the bound sits well above that.
- */
-const READY_TIMEOUT_MS = 30_000;
+/** Upper bound on a watcher's `waitForReady()` handshake. */
+const READY_TIMEOUT_MS = 8_000;
 /** Filename prefix of `AgentsDirectoryWatcher`'s probe dotfiles. */
 const READY_PROBE_PREFIX = ".cortex-watch-ready-";
 let readyProbeCounter = 0;

@@ -4,8 +4,7 @@ import { mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// fseventsd can deliver a first event 9.4s late on a loaded macOS host (node #2576).
-const PROBE_TIMEOUT_MS = 30_000;
+const PROBE_TIMEOUT_MS = 10_000;
 
 async function probeFsWatch(): Promise<{ usable: boolean; reason: string }> {
   const dir = mkdtempSync(join(tmpdir(), "cortex-fs-watch-probe-"));

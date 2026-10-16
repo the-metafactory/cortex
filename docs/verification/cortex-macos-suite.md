@@ -1,5 +1,66 @@
 # macOS suite evidence (work-graph node #2576)
 
+## Hand fix pass, 2026-10-16 — status of this PR
+
+**What this PR delivers.** Linux CI is green. The `$HOME` isolation from
+ruling 2 is in place. Watcher and nested-Seatbelt tests skip, gated by a
+probe, where the probe measures the capability as missing. On the macOS
+host, the full suite is **not** green yet: native `fs.watch` events get lost
+inside a full `bun test` run. Following this node's Assumptions, that group
+is escalated to
+[#2604](https://github.com/the-metafactory/cortex/issues/2604) (a possible
+Bun cause), and the other groups are finished here.
+
+**Linux root cause.** Bun's path watcher drops a `change` event for the same
+path if it arrives within 1 ms of the previous one
+(`ChangeEvent::should_emit`, `src/runtime/node/path_watcher.rs`). The
+readiness probe's event fires, and the config write the test makes right
+after it reports nothing. At `7b6ddf93`, probe events never triggered a
+reload, so nothing reloaded. Evidence comes from a Linux arm64 host with
+Bun 1.4.3, the version CI downloads:
+
+- Minimal repro: the probe event arrived at 5 ms, a real write right after
+  it got **no event**, and a write 1.5 s later got one. Bun 1.3.9 delivered
+  both events.
+- `watcher.ts` at `7b6ddf93` failed the same four tests as CI, about 8 s
+  each. At `cb4d6877`, `watcher.test.ts` and `watcher-readiness.test.ts`
+  gave **5 pass, 0 fail** on three runs in a row.
+- On Linux, a `utimes`-only probe (the `a4d27922` design) gets no event at
+  all under Bun 1.3.9.
+
+**macOS host runs, with the 8 s watcher bounds widened to 30 s** (`0614b2a0`,
+Darwin 25.6.0 arm64, Bun 1.4.2), `bun test && bunx tsc --noEmit`:
+
+| Run | Starting load (1 min) | Tests | Test time | Combined |
+| --- | --- | --- | --- | --- |
+| 1 | 27.0 | 11,607 pass, 8 skip, 60 todo, 7 fail | 641 s | 676 s |
+| 2 | 125.0 | 11,608 pass, 8 skip, 60 todo, 6 fail | 862 s | 881 s |
+
+Typechecking passed in both runs. The watcher failures ran into the 30 s
+bound, just as they had run into the 8 s one, so the events were lost, not
+late. The widening was reverted. Run 2 also hit Bun's 5 s default timeout in
+two unrelated tests at load 125. Run 3 was stopped once the split was clear.
+
+Before that, three runs at `625d20d2` with the 8 s bounds (starting loads
+100.7, 25.8 and 59.5; test times 356 s, 499 s and 534 s) failed the same way:
+1, 10 and 16 failures. They also failed in two places this PR now fixes:
+
+- `startCortex — federated-peer boot resolution` boots twice and exceeded
+  Bun's 5 s default timeout at 5.6 s. The file timeout is now 30 s.
+- `MacosSbplSandbox — denial observation` used a fixed 1.5 s grace before
+  reading the unified log. It is now a bounded 10 s poll.
+
+`fseventsd` ran at ~180% CPU during these runs. A standalone first-event
+probe measured latencies of 0.3–9.4 s. When run on their own, the same
+watcher, fragment-watcher, readiness, agents-reload, federated-peer and
+Seatbelt suites gave **100 pass, 0 fail** (69 s).
+
+**Sandbox runs pass with skips, not with coverage.** Inside the Codex worker
+sandbox, a passing suite means exit 0 with the probe-gated skips from ruling
+1 (17 watcher tests and 41 real-Seatbelt tests). Those assertions do not run
+there. Their coverage has to come from plain-host runs, and on this host
+that coverage is the open item in #2604.
+
 ## CI follow-up — ConfigWatcher coalesced notifications
 
 The Linux Test job at `7b6ddf93` still failed all four ConfigWatcher reload
@@ -34,7 +95,10 @@ The first broader plain-host check passed all four ConfigWatcher cases and
 the new regression, but one AgentsDirectoryWatcher readiness handshake timed
 out: **51 pass, 1 fail, 42.26 s**. Its unchanged directory-watcher code reported
 no event within 8,000 ms. Log: `/tmp/cortex-2576-ci-host-focused.log`.
-This is separate from the Linux ConfigWatcher null assertions.
+This failure differs from the Linux ConfigWatcher null assertions: there the
+handshake succeeded and the next write was dropped. Here the handshake itself
+saw no event. The 2026-10-16 runs above put it in the macOS lost-event group
+(#2604); the three green repeats that follow do not show that it is gone.
 
 Three consecutive repeats of the broader focused command then passed, each
 with **52 pass, 0 skip, 0 fail**, in **15.28 s, 13.74 s and 13.26 s**. They
@@ -56,8 +120,8 @@ repeats above. The three full plain-host timings in the next section remain
 evidence for their explicitly named prior revision, not new measurements of
 this callback repair.
 
-Native Linux validation of this follow-up remains with supervisor CI after
-push. No Linux runtime, VM or container was started.
+Native Linux validation came later, on a Linux host and in CI. See the
+2026-10-16 section at the top. No VM or container was started.
 
 ## Review round 5 acceptance evidence — prior revision
 

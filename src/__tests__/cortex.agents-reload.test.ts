@@ -497,7 +497,7 @@ describeWithFsWatch("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1
     // Drop a fragment; the fs.watch + debounce should fire the reconcile.
     writeFragment("luna", ["code-review.security"]);
 
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 8000;
     while (Date.now() < deadline && lastGeneration < 1) {
       await new Promise<void>((r) => setTimeout(r, 30));
     }
@@ -508,8 +508,8 @@ describeWithFsWatch("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1
       "luna",
     ]);
     expect(reloaded.some((added) => added.includes("luna"))).toBe(true);
-    // Room for the readiness handshake (up to 30s) plus the 20s event wait.
-  }, 60_000);
+    // Room for the readiness handshake (up to 8s) plus the 8s event wait.
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------------------
