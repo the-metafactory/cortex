@@ -4201,11 +4201,6 @@
       "count": 23
     }
   },
-  "src/surface/mc/__tests__/curation-endpoints.test.ts": {
-    "cortex/no-comments": {
-      "count": 41
-    }
-  },
   "src/surface/mc/__tests__/curation-events.test.ts": {
     "cortex/no-comments": {
       "count": 7
@@ -4514,11 +4509,6 @@
   "src/surface/mc/__tests__/stream-json.test.ts": {
     "cortex/no-comments": {
       "count": 5
-    }
-  },
-  "src/surface/mc/__tests__/task-create-endpoints.test.ts": {
-    "cortex/no-comments": {
-      "count": 45
     }
   },
   "src/surface/mc/__tests__/task-source-ref.test.ts": {

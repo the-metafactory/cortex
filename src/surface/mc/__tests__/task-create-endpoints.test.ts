@@ -1,19 +1,3 @@
-/**
- * Grove Mission Control v2 — F-12b add-to-queue endpoint coverage.
- *
- * Exercises the three new endpoints (preview / create / abandon-task)
- * against a real Bun.serve instance with a fake `gh` CLI. The fake spawn
- * returns a canned JSON response so tests don't depend on the principal's
- * `gh auth` state or network.
- *
- * Decisions referenced inline:
- *   D4 — URL parser (covered standalone in github-ref-parser.test.ts)
- *   D5 — application-level dedup at preview, 409 + deeplink shape
- *   D6 — endpoint shapes (status codes + body keys)
- *   D8 — shadow assignment + session created in the same transaction
- *   D10 — principal.curation event with kind: "task.imported"
- */
-
 import {
   describe,
   it,
@@ -41,12 +25,6 @@ interface CannedResponse {
   stderr: string;
 }
 
-/**
- * Fake `gh` spawn — returns the test-controlled response without shelling
- * out. Each test pushes responses onto the queue; the spawn pops the next
- * one. A single "default OK" can be set for tests that don't care about
- * specific shape.
- */
 class FakeGh {
   queue: CannedResponse[] = [];
   default: CannedResponse | null = null;
@@ -73,9 +51,6 @@ class FakeGh {
 }
 
 function makeFakeProc(r: CannedResponse) {
-  // ReadableStream from bytes — same shape Bun.spawn returns. Use
-  // ReadableStream directly so the existing `new Response(stream).text()`
-  // drains it without binding to a real subprocess.
   const enc = new TextEncoder();
   const stdout = new ReadableStream<Uint8Array>({
     start(c) {
@@ -144,7 +119,6 @@ const HAPPY_ISSUE_BODY = JSON.stringify({
     "closes the window.",
   html_url: "https://github.com/the-metafactory/grove-v2/issues/42",
   labels: [{ name: "bug" }, { name: "security" }],
-  // No `pull_request` field → kind=issue.
 });
 
 const HAPPY_PR_BODY = JSON.stringify({
@@ -166,10 +140,6 @@ const HAPPY_PR_PULLS_BODY = JSON.stringify({
   head: { ref: "feat/session-mgr", sha: "abc1234def", repo: { full_name: "the-metafactory/grove-v2" } },
   base: { ref: "main" },
 });
-
-// ============================================================================
-// POST /api/tasks/preview
-// ============================================================================
 
 describe("POST /api/tasks/preview", () => {
   let t: TestContext;
@@ -216,7 +186,6 @@ describe("POST /api/tasks/preview", () => {
   });
 
   it("returns 409 conflict + deeplink shape without calling gh when an existing task tracks the same ref", async () => {
-    // Seed an existing GitHub-source task with the canonical ref.
     t.db.exec(`
       INSERT INTO tasks (id, title, priority, principal_id, source_system,
                          source_url, source_external_id, status)
@@ -239,7 +208,6 @@ describe("POST /api/tasks/preview", () => {
     expect(body.existingTitle).toBe("old title");
     expect(body.existingStatus).toBe("open");
     expect(body.message).toMatch(/T-existing/);
-    // Crucially, the gh CLI was NOT called — dedup short-circuits before fetch.
     expect(t.gh.calls.length).toBe(0);
   });
 
@@ -332,10 +300,6 @@ describe("POST /api/tasks/preview", () => {
   });
 });
 
-// ============================================================================
-// POST /api/tasks
-// ============================================================================
-
 describe("POST /api/tasks", () => {
   let t: TestContext;
   beforeEach(async () => {
@@ -367,7 +331,6 @@ describe("POST /api/tasks", () => {
     );
     expect(body.priority).toBe(1);
 
-    // Task row: source_system='github', priority=1, status='open'.
     const task = t.db
       .query(
         "SELECT title, priority, status, source_system, source_external_id, source_url FROM tasks WHERE id = ?"
@@ -378,7 +341,6 @@ describe("POST /api/tasks", () => {
     expect(task!.priority).toBe(1);
     expect(task!.status).toBe("open");
 
-    // Shadow assignment: agent_id=mc-shadow-agent, state='cancelled'.
     const ata = t.db
       .query(
         "SELECT agent_id, state FROM agent_task_assignment WHERE id = ?"
@@ -387,7 +349,6 @@ describe("POST /api/tasks", () => {
     expect(ata.agent_id).toBe(SHADOW_AGENT_ID);
     expect(ata.state).toBe("cancelled");
 
-    // Shadow session: endpoint_kind='local.observed', ended_at non-null.
     const sess = t.db
       .query(
         "SELECT endpoint_kind, ended_at FROM sessions WHERE id = ?"
@@ -399,7 +360,6 @@ describe("POST /api/tasks", () => {
     expect(sess.endpoint_kind).toBe("local.observed");
     expect(sess.ended_at).not.toBeNull();
 
-    // principal.curation event with kind='task.imported' on the shadow session.
     const events = t.db
       .query(
         "SELECT type, payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
@@ -417,10 +377,7 @@ describe("POST /api/tasks", () => {
   });
 
   it("G-1113.C.5 — a PR-ref create populates the software-mode Git model (repo+PR+branches+commit)", async () => {
-    // First gh call: fetchIssueOrPr (runPreviewFlow) → PR body.
     t.gh.push({ exitCode: 0, stdout: HAPPY_PR_BODY, stderr: "" });
-    // Second gh call: fetchPullRequest (/pulls) → head/base/sha. Pinning that
-    // the create path makes exactly this second call, in this order.
     t.gh.push({ exitCode: 0, stdout: HAPPY_PR_PULLS_BODY, stderr: "" });
 
     const res = await fetch(`${t.baseUrl}/api/tasks`, {
@@ -463,7 +420,6 @@ describe("POST /api/tasks", () => {
   });
 
   it("returns 409 conflict when racing the dedup window after preview", async () => {
-    // Seed dedup target.
     t.db.exec(`
       INSERT INTO tasks (id, title, priority, principal_id, source_system,
                          source_url, source_external_id, status)
@@ -471,8 +427,6 @@ describe("POST /api/tasks", () => {
               'https://github.com/x/y/issues/3', 'x/y#3', 'open');
     `);
 
-    // No gh canned response queued — the dedup short-circuit means we
-    // never call gh.
     const res = await fetch(`${t.baseUrl}/api/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -516,10 +470,6 @@ describe("POST /api/tasks", () => {
   });
 });
 
-// ============================================================================
-// POST /api/tasks/:taskId/abandon
-// ============================================================================
-
 describe("POST /api/tasks/:taskId/abandon", () => {
   let t: TestContext;
   beforeEach(async () => {
@@ -529,7 +479,6 @@ describe("POST /api/tasks/:taskId/abandon", () => {
     await teardown(t);
   });
 
-  /** Helper: create a real F-12b task via POST /api/tasks. */
   async function createImportedTask(): Promise<{
     taskId: string;
     shadowSessionId: string;
@@ -568,7 +517,6 @@ describe("POST /api/tasks/:taskId/abandon", () => {
       .get(taskId) as { status: string };
     expect(row.status).toBe("cancelled");
 
-    // Curation event lands on the shadow session.
     const curationEventsNewestFirst = t.db
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation' ORDER BY id DESC"
@@ -588,12 +536,10 @@ describe("POST /api/tasks/:taskId/abandon", () => {
 
   it("409s when the task is already cancelled", async () => {
     const { taskId } = await createImportedTask();
-    // First call succeeds.
     const firstAbandon = await fetch(`${t.baseUrl}/api/tasks/${taskId}/abandon`, {
       method: "POST",
     });
     expect(firstAbandon.status).toBe(200);
-    // Second call hits the already-cancelled guard.
     const repeatAbandon = await fetch(`${t.baseUrl}/api/tasks/${taskId}/abandon`, {
       method: "POST",
     });
@@ -620,7 +566,6 @@ describe("POST /api/tasks/:taskId/abandon", () => {
 
   it("409s when a non-shadow non-terminal assignment exists on the task", async () => {
     const { taskId } = await createImportedTask();
-    // Add a real assignment in 'running' state — F-12b should refuse.
     t.db.exec(`
       INSERT OR IGNORE INTO agents (id, name, type) VALUES ('a-real', 'real', 'hands');
     `);
@@ -649,10 +594,6 @@ describe("POST /api/tasks/:taskId/abandon", () => {
   });
 });
 
-// ============================================================================
-// Shadow filter on listWorkingAgents
-// ============================================================================
-
 describe("F-9 working-agent filter", () => {
   let t: TestContext;
   beforeEach(async () => {
@@ -663,7 +604,6 @@ describe("F-9 working-agent filter", () => {
   });
 
   it("does not surface mc-shadow-agent in GET /api/working-agents even when its assignment is running", async () => {
-    // Create an F-12b task; this seeds the shadow agent + assignment.
     t.gh.push({ exitCode: 0, stdout: HAPPY_ISSUE_BODY, stderr: "" });
     await fetch(`${t.baseUrl}/api/tasks`, {
       method: "POST",
@@ -674,8 +614,6 @@ describe("F-9 working-agent filter", () => {
       }),
     });
 
-    // Defensive: even if a future bug flipped the shadow assignment to
-    // 'running', the agent-id filter still excludes it.
     t.db
       .query(
         "UPDATE agent_task_assignment SET state = 'running' WHERE agent_id = ?"
@@ -691,10 +629,6 @@ describe("F-9 working-agent filter", () => {
     expect(ids).not.toContain(SHADOW_AGENT_ID);
   });
 });
-
-// ============================================================================
-// Task projection — shadow_assignment_id surface
-// ============================================================================
 
 describe("GET /api/tasks projection", () => {
   let t: TestContext;
@@ -728,14 +662,11 @@ describe("GET /api/tasks projection", () => {
     }[]).find((tt) => tt.id === created.taskId);
     expect(row).toBeTruthy();
     expect(row!.shadow_assignment_id).toBe(created.shadowAssignmentId);
-    // The assignments roll-up does NOT include the shadow row.
     expect(row!.assignments.length).toBe(0);
-    // aggregate_state = null when the only assignment is the shadow.
     expect(row!.aggregate_state).toBeNull();
   });
 
   it("shadow_assignment_id is null for internal-source tasks", async () => {
-    // Insert a task with no shadow assignment.
     t.db.exec(`
       INSERT INTO tasks (id, title, priority, principal_id, source_system, status)
       VALUES ('T-internal', 'plain', 2, 'op', 'internal', 'open');
