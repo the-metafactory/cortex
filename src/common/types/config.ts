@@ -550,15 +550,23 @@ export const McSchema = z.object({
 }));
 
 // glossary-ignore: run
-/** Opt-in Vigil run-health projection, hosted by the default stack's MC embed. */
+export const VigilFallbackEmailSchema = z.object({
+  command: z.string().min(1),
+  account: z.string().min(1),
+  to: z.string().min(1),
+  timeout_ms: z.number().int().positive().default(10000),
+});
+
 export const VigilSchema = z.object({
   enabled: z.boolean().default(false),
   /** Per-subject cadence in milliseconds; only jobs and goal state can go stale. */
   cadence: z.record(z.string(), z.number().int().positive()).default({}),
+  fallback: z.object({ email: VigilFallbackEmailSchema.optional() }).optional(),
 }).default(emptyDefault()).transform((val) => ({
   /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   enabled: val.enabled ?? false,
   cadence: val.cadence ?? {},
+  ...(val.fallback ? { fallback: val.fallback } : {}),
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 

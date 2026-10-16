@@ -375,6 +375,15 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
   };
 }
 
+export async function runBoundedProcess(
+  argv: string[],
+  options: { timeout_ms: number; spawn?: Spawn; sigkillGraceMs?: number },
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const proc = (options.spawn ?? defaultSpawn)(argv, { cwd: process.cwd(), env });
+  return superviseRun(proc, options.timeout_ms, options.sigkillGraceMs ?? SIGKILL_GRACE_MS, false);
+}
+
 /**
  * Await a spawned run under a SIGTERM→SIGKILL watchdog. Returns a typed outcome
  * (never throws); the caller decides whether a failure also THROWS (synchronous
@@ -385,6 +394,7 @@ async function superviseRun(
   proc: SpawnedProc,
   timeoutMs: number,
   sigkillGraceMs: number,
+  acceptExitAfterTimeout = true,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   // A holder object (not a bare `let`) so the watchdog's async mutation is
   // visible to readers below — and so static analysis doesn't treat the flag as
@@ -405,7 +415,7 @@ async function superviseRun(
     clearTimers();
     // exit 0 = the run finished its own work (a watchdog-killed run exits
     // non-zero), so treat it as success even if the watchdog just fired.
-    if (exitCode === 0) return { ok: true };
+    if (exitCode === 0 && (acceptExitAfterTimeout || !state.timedOut)) return { ok: true };
     if (state.timedOut) return { ok: false, reason: `timeout-${timeoutMs}ms` };
     return { ok: false, reason: `exit-${exitCode}` };
   } catch (err) {

@@ -4,10 +4,11 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import { budgetDay, canSendVigilText, inQuietHours, VIGIL_DAILY_TEXT_LIMIT } from "./budget";
 import { getVigilSubject, getVigilTextsSpent, markVigilTextSent, type VigilEventRow, type VigilSubjectRow } from "./db";
 import type { GoalWordingResolver } from "./goal-wording";
+import type { VigilFallback } from "./fallback-email";
 import { createVigilRenderer } from "./render";
 
-export interface VigilFallbackText {
-  event: VigilEventRow;
+interface VigilFallbackText {
+  eventId: string;
   text: string;
 }
 
@@ -19,7 +20,8 @@ export interface FlushTextsOptions {
   publish?: MyelinRuntime["publish"];
   render?: (event: VigilEventRow, subject: VigilSubjectRow) => string | Promise<string>;
   readChannelHealth?: () => "ok" | "regressed";
-  fallback?: (batch: readonly VigilFallbackText[]) => Promise<void>;
+  fallback?: VigilFallback | null;
+  channelNotice?: () => { eventId: string; text: string } | null;
 }
 
 const activeFlushes = new WeakMap<Database, Promise<void>>();
@@ -61,7 +63,7 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
       db.query("UPDATE vigil_events SET last_error = ?, transient_failures = ? WHERE id = ?")
         .run(result.code, transientFailures, event.id);
       if (result.kind === "permanent" || transientFailures >= TRANSIENT_FALLBACK_THRESHOLD || options.readChannelHealth?.() === "regressed") {
-        batch.push({ event: { ...event, attempts: event.attempts + 1, last_error: result.code, transient_failures: transientFailures }, text });
+        batch.push({ eventId: event.id, text });
       }
     }
   } finally {
@@ -70,17 +72,38 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
 }
 
 async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly VigilFallbackText[]): Promise<void> {
-  if (batch.length === 0 || !options.fallback) return;
+  if (batch.length === 0) return;
   const { db, now } = options;
   const day = budgetDay(now);
   const remaining = Math.max(0, VIGIL_DAILY_TEXT_LIMIT - getVigilTextsSpent(db, day));
   const eligible = batch.slice(0, remaining);
-  if (eligible.length > 0) await options.fallback(eligible);
+  for (const { eventId } of batch.slice(remaining)) {
+    db.query("UPDATE vigil_events SET delivery = 'held', held_reason = 'budget' WHERE id = ? AND delivery = 'pending'")
+      .run(eventId);
+  }
+  if (eligible.length === 0) return;
+  const notice = options.channelNotice?.();
+  const body = [...(notice ? [notice.text] : []), ...eligible.map(({ text }) => text)].join("\n");
+  let result: Awaited<ReturnType<VigilFallback>>;
+  try {
+    result = options.fallback
+      ? await options.fallback(`[Vigil] ${eligible.length} text(s)`, body)
+      : { ok: false, error: "no-fallback" };
+  } catch (error) {
+    result = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (!result.ok) {
+    for (const { eventId } of eligible) {
+      db.query("UPDATE vigil_events SET last_error = ? WHERE id = ? AND delivery = 'pending'")
+        .run(result.error ?? "fallback-failed", eventId);
+    }
+    return;
+  }
   db.transaction(() => {
-    for (const { event } of eligible) markVigilTextSent(db, event.id, "email", now, day);
-    for (const { event } of batch.slice(remaining)) {
-      db.query("UPDATE vigil_events SET delivery = 'held', held_reason = 'budget' WHERE id = ? AND delivery = 'pending'")
-        .run(event.id);
+    for (const { eventId } of eligible) markVigilTextSent(db, eventId, "email", now, day);
+    if (notice) {
+      db.query("UPDATE vigil_events SET delivery = 'sent', via = 'email', sent_at = ?, last_error = NULL WHERE id = ? AND delivery = 'pending'")
+        .run(now, notice.eventId);
     }
   })();
 }

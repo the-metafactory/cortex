@@ -40,7 +40,7 @@ test("delivery columns migrate without losing rows and retries survive reopening
     const batches: number[] = [];
     for (let i = 0; i < 2; i++) await flushTexts({
       db: reopened, now, send: async () => ({ delivered: false, kind: "transient", code: "timeout" }),
-      fallback: async (batch) => { batches.push(batch.length); },
+      fallback: async (_subject, body) => { batches.push(body.split("\n").length); return { ok: true }; },
     });
     expect(batches).toEqual([1]);
     expect(listVigilEvents(reopened, KEY)[0]).toMatchObject({ delivery: "sent", via: "email", attempts: 3, transient_failures: 0 });
