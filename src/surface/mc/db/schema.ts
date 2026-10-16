@@ -30,6 +30,7 @@ export const TABLE_NAMES = [
   "vigil_subjects",
   "vigil_events",
   "vigil_replay",
+  "vigil_budget",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -73,6 +74,11 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS vigil_replay (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     started_at INTEGER NOT NULL
+  )`,
+  // One shared text budget per Zurich day, beginning at 07:00 (soma#787).
+  `CREATE TABLE IF NOT EXISTS vigil_budget (
+    budget_day TEXT PRIMARY KEY CHECK(budget_day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    texts_spent INTEGER NOT NULL DEFAULT 0 CHECK(texts_spent >= 0)
   )`,
   // --- tasks ---
   // Schema follows design-mission-control.md §3.2: flat three-field sourceRef
