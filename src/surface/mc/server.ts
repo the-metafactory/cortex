@@ -110,7 +110,7 @@ const startTime = Date.now();
 // which never exists, so `/` 500'd on every install). When packaged,
 // the resolver follows the same relative offset, but a `dist/` folder
 // is still expected to sit at the project root.
-const DASHBOARD_DIST = join(
+export const DASHBOARD_DIST = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
   "..",
