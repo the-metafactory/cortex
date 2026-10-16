@@ -1,21 +1,14 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { initDatabase } from "../../surface/mc/db/init";
 import { SCHEMA_SQL, REBUILD_MIGRATIONS } from "../../surface/mc/db/schema";
 import { ingestLedgerEnvelope } from "../ingest";
 import { listVigilEvents, type VigilEventRow } from "../db";
-import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
-
-const paths: string[] = [];
-afterEach(() => { for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true }); });
+import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 test("old attention CHECK widens once, retaining rows, timestamps, indexes and foreign keys", () => {
-  const dir = mkdtempSync(join(tmpdir(), "vigil-attention-"));
-  paths.push(dir);
-  const path = join(dir, "mc.db");
+  using file = temporaryVigilDatabaseFile("vigil-attention-");
+  const { path } = file;
   const old = new Database(path, { create: true });
   for (const sql of SCHEMA_SQL) old.run(sql.replace(",'state_change'", ""));
   const envelope = ledgerEnvelope();
@@ -23,6 +16,7 @@ test("old attention CHECK widens once, retaining rows, timestamps, indexes and f
   const event: VigilEventRow = {
     id: crypto.randomUUID(), event_kind: "transition", created_at: ENDED_AT,
     severity: null, attention_id: null, route: null, delivery: "pending",
+    ...DELIVERY_DEFAULTS,
     subject_key: KEY, from_value: null, to_value: "failed", direction: "worse",
     run_id: String(envelope.payload.run_id), occurred_at: ENDED_AT,
   };
@@ -82,9 +76,8 @@ test("fresh databases retain the kind CHECK", () => {
 });
 
 test("route and delivery migrate once, preserving historical events without a sendable route", () => {
-  const dir = mkdtempSync(join(tmpdir(), "vigil-routing-"));
-  paths.push(dir);
-  const path = join(dir, "mc.db");
+  using file = temporaryVigilDatabaseFile("vigil-routing-");
+  const { path } = file;
   const old = initDatabase(path);
   ingestLedgerEnvelope(old, ledgerEnvelope(), ENDED_AT);
   old.run("ALTER TABLE vigil_events DROP COLUMN route");

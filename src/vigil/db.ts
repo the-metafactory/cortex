@@ -53,6 +53,12 @@ export interface VigilEventRow {
   attention_id: string | null;
   route: VigilRoute | null;
   delivery: "pending" | "sent" | "held" | "digested";
+  held_reason: "quiet" | "budget" | null;
+  sent_at: number | null;
+  via: "dm" | "email" | null;
+  attempts: number;
+  last_error: string | null;
+  transient_failures: number;
 }
 
 export function getVigilSubject(db: Database, key: string): VigilSubjectRow | null {
@@ -99,7 +105,19 @@ export function writeVigilTransition(
     id, event.subject_key, event.from_value, event.to_value,
     event.direction, event.run_id, event.occurred_at, now, route,
   );
-  return { ...event, id, event_kind: "transition", created_at: now, severity: null, attention_id: null, route, delivery: "pending" };
+  return {
+    ...event, id, event_kind: "transition", created_at: now, severity: null, attention_id: null, route, delivery: "pending",
+    held_reason: null, sent_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
+  };
+}
+
+export function markVigilTextSent(db: Database, id: string, via: "dm" | "email", now: number, day: string): void {
+  db.transaction(() => {
+    const updated = db.query(`UPDATE vigil_events SET delivery = 'sent', sent_at = ?, via = ?,
+      held_reason = NULL, last_error = NULL, transient_failures = 0
+      WHERE id = ? AND delivery = 'pending' AND route = 'text'`).run(now, via, id);
+    if (updated.changes === 1) recordVigilTextDelivered(db, day);
+  })();
 }
 
 // glossary-ignore: run

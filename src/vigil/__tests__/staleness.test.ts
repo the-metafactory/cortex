@@ -5,7 +5,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { DEFAULT_CADENCE_MS, effectiveCadenceMs, sweepStale } from "../staleness";
-import { ENDED_AT, ledgerEnvelope } from "./fixtures";
+import { DELIVERY_DEFAULTS, ENDED_AT, ledgerEnvelope } from "./fixtures";
 
 const JOB_KEY = "run:job:harness-gate";
 const GOAL_KEY = "state:goal:G1";
@@ -30,6 +30,7 @@ describe("Vigil staleness", () => {
     sweepStale(db, DEADLINE + 1, {});
     expect(getVigilSubject(db, JOB_KEY)).toEqual({ ...before, value: "stale", healthy: 0, updated_at: DEADLINE + 1 });
     expect(listVigilEvents(db, JOB_KEY)).toEqual([{
+      ...DELIVERY_DEFAULTS,
       id: expect.any(String), subject_key: JOB_KEY, event_kind: "transition",
       severity: "normal", attention_id: `att:vigil:${JOB_KEY}`,
       route: "digest", delivery: "pending",

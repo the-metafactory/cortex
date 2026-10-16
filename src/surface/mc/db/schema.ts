@@ -747,6 +747,36 @@ export interface ColumnAddMigration {
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   {
     table: "vigil_events",
+    column: "held_reason",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN held_reason TEXT CHECK(held_reason IN ('quiet','budget'))`,
+  },
+  {
+    table: "vigil_events",
+    column: "sent_at",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN sent_at INTEGER`,
+  },
+  {
+    table: "vigil_events",
+    column: "via",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN via TEXT CHECK(via IN ('dm','email'))`,
+  },
+  {
+    table: "vigil_events",
+    column: "attempts",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0)`,
+  },
+  {
+    table: "vigil_events",
+    column: "last_error",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN last_error TEXT`,
+  },
+  {
+    table: "vigil_events",
+    column: "transient_failures",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN transient_failures INTEGER NOT NULL DEFAULT 0 CHECK(transient_failures >= 0)`,
+  },
+  {
+    table: "vigil_events",
     column: "route",
     ddl: `ALTER TABLE vigil_events ADD COLUMN route TEXT CHECK(route IN ('text','digest'))`,
   },

@@ -1,9 +1,23 @@
 // glossary-ignore: run
 import { createEnvelope, createExecutionRunFinished, type ExecutionRunFinishedPayloadInput } from "@the-metafactory/myelin";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export const SUBJECT = "local.jc.default.execution.run.finished";
 export const KEY = "run:flow:daily-sweep";
 export const ENDED_AT = Date.parse("2026-10-12T10:00:05.000Z");
+export const DELIVERY_DEFAULTS = {
+  held_reason: null, sent_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
+} as const;
+
+export function temporaryVigilDatabaseFile(prefix: string) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  return {
+    path: join(dir, "mc.db"),
+    [Symbol.dispose]() { rmSync(dir, { recursive: true, force: true }); },
+  };
+}
 
 /** Captures an interval so tests can advance Vigil without wall-clock waits. */
 export function fakeTickScheduler() {
