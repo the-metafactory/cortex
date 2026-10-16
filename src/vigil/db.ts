@@ -1,5 +1,7 @@
 // glossary-ignore: run
 import type { Database } from "bun:sqlite";
+import { subjectClass } from "./policy";
+import { routeFor, type VigilRoute } from "./routing";
 
 /** An unseen budget day starts at zero; reading never creates a row. */
 export function getVigilTextsSpent(db: Database, budgetDay: string): number {
@@ -49,6 +51,8 @@ export interface VigilEventRow {
   created_at: number;
   severity: "high" | "normal" | null;
   attention_id: string | null;
+  route: VigilRoute | null;
+  delivery: "pending" | "sent" | "held" | "digested";
 }
 
 export function getVigilSubject(db: Database, key: string): VigilSubjectRow | null {
@@ -85,14 +89,17 @@ export function writeVigilTransition(
   event: Pick<VigilEventRow, "subject_key" | "from_value" | "to_value" | "direction" | "run_id" | "occurred_at">,
   now: number,
 ): VigilEventRow {
+  const subject = getVigilSubject(db, event.subject_key);
+  if (!subject) throw new Error(`Vigil transition has no subject: ${event.subject_key}`);
+  const route = routeFor(subjectClass(subject), event.to_value, event.direction);
   const id = crypto.randomUUID();
   db.query(`INSERT INTO vigil_events
-    (id, subject_key, event_kind, from_value, to_value, direction, run_id, occurred_at, created_at)
-    VALUES (?, ?, 'transition', ?, ?, ?, ?, ?, ?)`).run(
+    (id, subject_key, event_kind, from_value, to_value, direction, run_id, occurred_at, created_at, route, delivery)
+    VALUES (?, ?, 'transition', ?, ?, ?, ?, ?, ?, ?, 'pending')`).run(
     id, event.subject_key, event.from_value, event.to_value,
-    event.direction, event.run_id, event.occurred_at, now,
+    event.direction, event.run_id, event.occurred_at, now, route,
   );
-  return { ...event, id, event_kind: "transition", created_at: now, severity: null, attention_id: null };
+  return { ...event, id, event_kind: "transition", created_at: now, severity: null, attention_id: null, route, delivery: "pending" };
 }
 
 // glossary-ignore: run

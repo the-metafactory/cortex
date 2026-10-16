@@ -747,6 +747,16 @@ export interface ColumnAddMigration {
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   {
     table: "vigil_events",
+    column: "route",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN route TEXT CHECK(route IN ('text','digest'))`,
+  },
+  {
+    table: "vigil_events",
+    column: "delivery",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN delivery TEXT NOT NULL DEFAULT 'pending' CHECK(delivery IN ('pending','sent','held','digested'))`,
+  },
+  {
+    table: "vigil_events",
     column: "severity",
     ddl: `ALTER TABLE vigil_events ADD COLUMN severity TEXT CHECK(severity IN ('normal','high'))`,
   },

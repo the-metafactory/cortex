@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { initDatabase } from "../../surface/mc/db/init";
 import { SCHEMA_SQL, REBUILD_MIGRATIONS } from "../../surface/mc/db/schema";
 import { ingestLedgerEnvelope } from "../ingest";
-import { listVigilEvents, writeVigilTransition } from "../db";
+import { listVigilEvents, type VigilEventRow } from "../db";
 import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 const paths: string[] = [];
@@ -20,10 +20,17 @@ test("old attention CHECK widens once, retaining rows, timestamps, indexes and f
   for (const sql of SCHEMA_SQL) old.run(sql.replace(",'state_change'", ""));
   const envelope = ledgerEnvelope();
   ingestLedgerEnvelope(old, envelope, ENDED_AT, { replay: true });
-  const event = writeVigilTransition(old, {
+  const event: VigilEventRow = {
+    id: crypto.randomUUID(), event_kind: "transition", created_at: ENDED_AT,
+    severity: null, attention_id: null, route: null, delivery: "pending",
     subject_key: KEY, from_value: null, to_value: "failed", direction: "worse",
     run_id: String(envelope.payload.run_id), occurred_at: ENDED_AT,
-  }, ENDED_AT);
+  };
+  old.query(`INSERT INTO vigil_events
+    (id, subject_key, event_kind, from_value, to_value, direction, run_id, occurred_at, created_at)
+    VALUES (?, ?, 'transition', NULL, 'failed', 'worse', ?, ?, ?)`).run(
+    event.id, event.subject_key, event.run_id, event.occurred_at, event.created_at,
+  );
   old.run("INSERT INTO work_items (id, title, status, provider) VALUES ('work', 'Work', 'open', 'internal')");
   old.run("INSERT INTO agents (id, name, type) VALUES ('agent', 'Agent', 'head')");
   old.run("INSERT INTO tasks (id, title, principal_id, source_system) VALUES ('task', 'Task', 'principal', 'internal')");
@@ -72,4 +79,37 @@ test("fresh databases retain the kind CHECK", () => {
     expect(() => db.run("INSERT INTO attention_items (id, stack_id, kind) VALUES ('valid', 'default', 'state_change')")).not.toThrow();
     expect(() => db.run("INSERT INTO attention_items (id, stack_id, kind) VALUES ('invalid', 'default', 'unknown-kind')")).toThrow();
   } finally { db.close(); }
+});
+
+test("route and delivery migrate once, preserving historical events without a sendable route", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vigil-routing-"));
+  paths.push(dir);
+  const path = join(dir, "mc.db");
+  const old = initDatabase(path);
+  ingestLedgerEnvelope(old, ledgerEnvelope(), ENDED_AT);
+  old.run("ALTER TABLE vigil_events DROP COLUMN route");
+  old.run("ALTER TABLE vigil_events DROP COLUMN delivery");
+  const historical = old.query<Omit<VigilEventRow, "route" | "delivery">, []>("SELECT * FROM vigil_events").all();
+  const subjects = old.query("SELECT * FROM vigil_subjects").all();
+  old.close();
+
+  const migrated = initDatabase(path);
+  let events;
+  try {
+    events = listVigilEvents(migrated, KEY);
+    expect(events).toEqual(historical.map((event) => ({ ...event, route: null, delivery: "pending" })));
+    expect(migrated.query("SELECT * FROM vigil_subjects").all()).toEqual(subjects);
+    expect(migrated.query("SELECT * FROM vigil_events WHERE route IS NOT NULL AND delivery = 'pending'").all()).toEqual([]);
+    expect(() => migrated.run("UPDATE vigil_events SET route = 'dashboard'")).toThrow();
+    expect(() => migrated.run("UPDATE vigil_events SET delivery = 'unknown'")).toThrow();
+    expect(() => migrated.run("UPDATE vigil_events SET delivery = NULL")).toThrow();
+    expect(migrated.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally { migrated.close(); }
+
+  const reopened = initDatabase(path);
+  try {
+    expect(listVigilEvents(reopened, KEY)).toEqual(events);
+    ingestLedgerEnvelope(reopened, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);
+    expect(listVigilEvents(reopened, KEY)[1]).toMatchObject({ route: "digest", delivery: "pending" });
+  } finally { reopened.close(); }
 });
