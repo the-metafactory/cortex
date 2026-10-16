@@ -493,6 +493,8 @@ function resolveStackSlug(
   return { ok: true, slug };
 }
 
+const BARE_NAME_DEFAULT_STACK_SLUG = "meta-factory";
+
 /**
  * #814 — resolve the cortex config path the `status` read should target for a
  * NAMED stack, layout-aware. A faithful TS mirror of `resolve_stack_config_path`
@@ -528,13 +530,13 @@ function resolveStatusConfigPath(slug: string): string {
   const base = resolveConfigDir();
   // The no-`--stack` sentinel `"default"` IS the `meta-factory` bare-name default
   // in the locator system (scoped to status; see doc comment above).
-  const locatorSlug = slug === "default" ? "meta-factory" : slug;
+  const locatorSlug = slug === "default" ? BARE_NAME_DEFAULT_STACK_SLUG : slug;
   if (existsSync(join(base, locatorSlug, "system", "system.yaml"))) {
     // Config-split — point at the per-stack sentinel.
     return join(base, locatorSlug, `${locatorSlug}.yaml`);
   }
   // Legacy monolith. `meta-factory` is the bare-name default-stack special case.
-  const filename = locatorSlug === "meta-factory" ? "cortex.yaml" : `cortex.${locatorSlug}.yaml`;
+  const filename = locatorSlug === BARE_NAME_DEFAULT_STACK_SLUG ? "cortex.yaml" : `cortex.${locatorSlug}.yaml`;
   return join(base, filename);
 }
 
@@ -656,11 +658,7 @@ function installLeafCreds(
       renameSync(tmp, path);
     } catch (err) {
       // Never leave the credential text behind under the tmp name.
-      try {
-        rmSync(tmp, { force: true });
-      } catch (_cleanupErr) {
-        // Best-effort cleanup only — the write/rename failure is the real error.
-      }
+      tryRemove(tmp);
       throw err;
     }
   }
@@ -670,6 +668,15 @@ function installLeafCreds(
   const tightened = (statSync(path).mode & 0o777) !== 0o600;
   if (tightened) chmodSync(path, 0o600);
   return { path, wrote, tightened };
+}
+
+function tryRemove(path: string): boolean {
+  try {
+    rmSync(path, { force: true });
+    return true;
+  } catch (_err) {
+    return false;
+  }
 }
 
 /**
