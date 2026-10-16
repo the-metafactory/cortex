@@ -31,7 +31,7 @@ Earlier allow-list documentation promised exclusion of bus credentials; that
 guarantee no longer applies to the listed Pulse variables. Their actual NATS
 permissions come from the credential provisioned for Pulse.
 
-`USER` and `LOGNAME` are always set, with or without an allow-list: from
+`USER` and `LOGNAME` are set for every spec, with or without an allow-list: from
 cortex's environment when present, otherwise from the operating-system account
 cortex runs as (when it resolves). launchd starts cortex without them, and keychain-backed CLIs
 such as `claude -p` report "Not logged in" without `USER`.
