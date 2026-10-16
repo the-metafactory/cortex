@@ -210,11 +210,14 @@ describe("Vigil startup and delivery", () => {
     }
   });
 
-  test.each(["result_ref", "proposal_refs"])("failed run with %s logs invalid and ACKs without changing state", async (field) => {
+  test.each([
+    { field: "result_ref", value: "soma:results/daily-sweep.md" },
+    { field: "proposal_refs", value: ["soma:proposals/first.md"] },
+  ])("failed run with $field logs invalid and ACKs without changing state", async ({ field, value }) => {
     ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded" }), 50);
     const prior = getVigilSubject(db, KEY);
     const envelope = ledgerEnvelope({ ended_at: "2026-10-12T10:01:05.000Z" });
-    envelope.payload[field] = field === "result_ref" ? "soma:results/daily-sweep.md" : ["soma:proposals/first.md"];
+    Object.assign(envelope.payload, { [field]: value });
     const h = pullRuntime(createFakeJetStream(), [envelope]);
     const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
     const onError = mock(() => {});
