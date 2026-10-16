@@ -9,13 +9,7 @@ export interface PinException {
   expires: string;
 }
 
-export const PIN_EXCEPTIONS: Record<string, PinException> = {
-  "@metafactory/content-filter": {
-    pin: "github:the-metafactory/metafactory-bundle-content-filter#0e4968c6b48bf9887198fa4c5ef34736dc10a68d",
-    reason: "metafactory-bundle-content-filter has no release tags yet; tag it and pin the tag",
-    expires: "2027-01-31",
-  },
-};
+export const PIN_EXCEPTIONS: Record<string, PinException> = {};
 
 const COMMIT_PIN = /#[0-9a-f]{7,40}$/;
 const GIT_SPEC = /^(github:|git\+|git:|https?:\/\/.*\.git)/;
