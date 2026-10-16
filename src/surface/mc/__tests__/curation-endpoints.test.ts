@@ -1,21 +1,3 @@
-/**
- * Grove Mission Control v2 — F-12 task curation endpoints.
- *
- * Exercises the three new endpoints (requeue/abandon/handoff) and pins:
- *   - per-state enablement matrix (Decision 3) on the wire side: legal verbs
- *     return 200; illegal verbs return 409 with the state-machine's error
- *     string (or the handler's friendlier 409 for the abandon-scope branches).
- *   - 404 on unknown assignment id, 400 on malformed body.
- *   - Decision 5 abandon-scope branching: active assignment → cancel
- *     assignment; terminal assignment → cancel task.
- *   - Decision 6 hand-off semantics: in-flight cancels-then-spawns; failed
- *     spawns only.
- *   - Decision 9 principal.curation events are inserted with the correct
- *     `kind` discriminator and broadcast via the WS surface.
- *   - Decision 11 observer side effects (process-kill on cancelled / requeue
- *     from blocked) are exercised with a fake `cat` spawn.
- */
-
 import {
   describe,
   it,
@@ -39,7 +21,6 @@ import type { SpawnFn } from "../session/endpoint-resolver";
 import { createSession } from "../db/sessions";
 import { generateId } from "../db/events";
 
-/** `cat` stands in for `claude` — reads stdin, never exits on its own. */
 const neverExitingCatSpawn: SpawnFn = () =>
   Bun.spawn(["cat"], {
     stdin: "pipe",
@@ -47,11 +28,6 @@ const neverExitingCatSpawn: SpawnFn = () =>
     stderr: "pipe",
   });
 
-// FND-6: the curation mutations (requeue/abandon/handoff) now require a
-// CF-Access identity on the loopback bind (mutation-guard identity gate). These
-// tests exercise HANDLER behavior, not the gate — the gate has its own coverage
-// in mutation-guard-rebinding.test.ts — so inject the loopback principal header
-// on every test-server call here.
 const realFetch = globalThis.fetch;
 function installLoopbackPrincipalIdentityOnEveryRequest(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -96,13 +72,6 @@ async function teardown(t: TestContext): Promise<void> {
   rmSync(t.tmpDir, { recursive: true, force: true });
 }
 
-/**
- * Seed a self-contained assignment + session in `state`. Returns ids for
- * subsequent endpoint calls. Avoids POST /api/sessions because we want
- * direct control over the assignment state — the spawn loop forces
- * queued→dispatched→running, which is the wrong starting state for several
- * matrix entries.
- */
 function endSessionToFreeUniqueActiveSessionSlot(db: Database, sessionId: string): void {
   db.query(`UPDATE sessions SET ended_at = datetime('now') WHERE id = ?`).run(
     sessionId
@@ -135,16 +104,10 @@ function seedAssignment(
     endpointKind: "local.observed",
   });
 
-  // Mark observed sessions (the seed helper) ended_at so the spawn-controlled
-  // path can run without colliding on the unique-active-session index.
   endSessionToFreeUniqueActiveSessionSlot(db, session.id);
 
   return { assignmentId, sessionId: session.id, agentId, taskId };
 }
-
-// ============================================================================
-// POST /api/assignments/:id/requeue
-// ============================================================================
 
 describe("POST /api/assignments/:id/requeue", () => {
   let t: TestContext;
@@ -175,7 +138,6 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(body.to).toBe("queued");
     expect(typeof body.eventId).toBe("string");
 
-    // DB: state moved to queued, block_reason cleared.
     const row = t.db
       .query(
         "SELECT state, block_reason FROM agent_task_assignment WHERE id = ?"
@@ -184,7 +146,6 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(row.state).toBe("queued");
     expect(row.block_reason).toBeNull();
 
-    // principal.curation event present with kind=requeue.
     const events = t.db
       .query(
         "SELECT type, payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
@@ -272,8 +233,6 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(res.status).toBe(400);
   });
 
-  // PR #30 S3 — strict shape validation. Unknown keys must be rejected
-  // (the RequeueRequest type only defines `reason`).
   it("rejects unknown body keys (400)", async () => {
     const { assignmentId } = seedAssignment(t.db, "failed");
     const res = await fetch(
@@ -289,10 +248,6 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(body.error).toContain("bogus");
   });
 });
-
-// ============================================================================
-// POST /api/assignments/:id/abandon
-// ============================================================================
 
 describe("POST /api/assignments/:id/abandon", () => {
   let t: TestContext;
@@ -315,7 +270,6 @@ describe("POST /api/assignments/:id/abandon", () => {
     expect(body.from).toBe("queued");
     expect(body.to).toBe("cancelled");
 
-    // Assignment cancelled, task UNTOUCHED.
     const ataRow = t.db
       .query("SELECT state FROM agent_task_assignment WHERE id = ?")
       .get(assignmentId) as { state: string };
@@ -325,7 +279,6 @@ describe("POST /api/assignments/:id/abandon", () => {
       .get(taskId) as { status: string };
     expect(taskRow.status).toBe("open");
 
-    // Curation event with kind=abandon, targetKind=assignment.
     const events = t.db
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
@@ -348,7 +301,6 @@ describe("POST /api/assignments/:id/abandon", () => {
     expect(body.scope).toBe("task");
     expect(body.from).toBeUndefined();
 
-    // Task moved to cancelled; assignment row UNTOUCHED.
     const taskRow = t.db
       .query("SELECT status FROM tasks WHERE id = ?")
       .get(taskId) as { status: string };
@@ -358,7 +310,6 @@ describe("POST /api/assignments/:id/abandon", () => {
       .get(assignmentId) as { state: string };
     expect(ataRow.state).toBe("completed");
 
-    // Curation event landed on the latest (terminal) session.
     const events = t.db
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
@@ -450,10 +401,6 @@ describe("POST /api/assignments/:id/abandon", () => {
   });
 });
 
-// ============================================================================
-// POST /api/assignments/:id/handoff
-// ============================================================================
-
 describe("POST /api/assignments/:id/handoff", () => {
   let t: TestContext;
   beforeEach(async () => {
@@ -463,11 +410,6 @@ describe("POST /api/assignments/:id/handoff", () => {
     await teardown(t);
   });
 
-  /**
-   * Hand-off needs a controlled session in flight to exercise step 1's
-   * cancel — so we POST /api/sessions to spawn one rather than seeding
-   * with `local.observed`.
-   */
   async function spawnControlledRunningSession(): Promise<{
     assignmentId: string;
     sessionId: string;
@@ -510,20 +452,17 @@ describe("POST /api/assignments/:id/handoff", () => {
     expect(body.from).toBe("running");
     expect(body.to).toBe("cancelled");
 
-    // OLD assignment cancelled.
     const oldRow = t.db
       .query("SELECT state FROM agent_task_assignment WHERE id = ?")
       .get(oldId) as { state: string };
     expect(oldRow.state).toBe("cancelled");
 
-    // NEW assignment exists, in `running`, owned by `agent-b`.
     const newRow = t.db
       .query("SELECT state, agent_id FROM agent_task_assignment WHERE id = ?")
       .get(body.newAssignmentId) as { state: string; agent_id: string };
     expect(newRow.state).toBe("running");
     expect(newRow.agent_id).toBe("agent-b");
 
-    // Curation event on the NEW session with kind=handoff.
     const events = t.db
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
@@ -536,7 +475,6 @@ describe("POST /api/assignments/:id/handoff", () => {
     expect(payload.newAssignmentId).toBe(body.newAssignmentId);
     expect(payload.reason).toBe("swap to head");
 
-    // OLD session has the cancel state.transition event.
     const cancelEvents = t.db
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'state.transition'"
@@ -562,11 +500,9 @@ describe("POST /api/assignments/:id/handoff", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    // No cancel happened — `from`/`to` are absent on the response.
     expect(body.from).toBeUndefined();
     expect(body.to).toBeUndefined();
 
-    // Source assignment row still `failed`.
     const oldRow = t.db
       .query("SELECT state FROM agent_task_assignment WHERE id = ?")
       .get(assignmentId) as { state: string };
@@ -639,12 +575,8 @@ describe("POST /api/assignments/:id/handoff", () => {
     expect(res.status).toBe(404);
   });
 
-  // PR #30 W3 — self-handoff rejection. Without this guard the endpoint
-  // cancel-and-respawns to the same agent and emits a misleading `handoff`
-  // audit event. Return 400 with a clear message instead.
   it("rejects self-handoff (new agent == current agent, 400)", async () => {
     const { assignmentId } = await spawnControlledRunningSession();
-    // The POST /api/sessions path assigns the well-known default agent.
     const { agent_id: defaultAgentId } = t.db
       .query("SELECT agent_id FROM agent_task_assignment WHERE id = ?")
       .get(assignmentId) as { agent_id: string };
@@ -661,9 +593,6 @@ describe("POST /api/assignments/:id/handoff", () => {
     expect(body.error).toContain("same agent");
   });
 
-  // PR #30 S2 — strict shape validation. Unknown keys must be rejected
-  // rather than silently ignored (the loose `as HandoffRequest` cast used
-  // to accept arbitrary payloads).
   it("rejects unknown body keys (400)", async () => {
     const { assignmentId } = await spawnControlledRunningSession();
     ensureAgent("agent-strict");
