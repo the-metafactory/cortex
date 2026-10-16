@@ -387,7 +387,7 @@
   "src/surface/mc/__tests__/governance-denial.test.ts": 3,
   "src/surface/mc/__tests__/governance-verdict.test.ts": 3,
   "src/surface/mc/__tests__/index.test.ts": 2,
-  "src/surface/mc/__tests__/iteration-import-endpoints.test.ts": 16,
+  "src/surface/mc/__tests__/iteration-import-endpoints.test.ts": 14,
   "src/surface/mc/__tests__/iteration-import.test.ts": 3,
   "src/surface/mc/__tests__/iterations.test.ts": 2,
   "src/surface/mc/__tests__/jsonl-reader.test.ts": 4,
