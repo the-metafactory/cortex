@@ -50,10 +50,6 @@ const fakeCatSpawn: SpawnFn = () =>
     stderr: "pipe",
   });
 
-// FND-6: session spawn/control mutations now require a CF-Access identity on the
-// loopback bind (mutation-guard identity gate). These tests exercise HANDLER
-// behavior, not the gate (covered by mutation-guard-rebinding.test.ts), so
-// inject the loopback principal header on every test-server call here.
 const _realFetch = globalThis.fetch;
 beforeAll(() => {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -339,6 +335,20 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
     };
   }
 
+  function blockLiveSessionOnPermissionRequest(
+    assignmentId: string,
+    sessionId: string
+  ): void {
+    const result = applyTransition(t.db, assignmentId, sessionId, {
+      type: "block",
+      reason: {
+        kind: "permission.request",
+        payload: { requested_action: "tool.edit" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  }
+
   it("Abandon on running closes the live process", async () => {
     const { assignmentId, sessionId, proc } = await spawnRunning();
     expect(proc.proc.exitCode).toBeNull();
@@ -405,17 +415,8 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
   });
 
   it("Requeue from blocked closes the blocked process (state.transition observer fires)", async () => {
-    // Drive the running session into `blocked` via applyTransition directly,
-    // matching the addendum's "live blocked process" scenario.
     const { assignmentId, sessionId, proc } = await spawnRunning();
-    const result = applyTransition(t.db, assignmentId, sessionId, {
-      type: "block",
-      reason: {
-        kind: "permission.request",
-        payload: { requested_action: "tool.edit" },
-      },
-    });
-    expect(result.ok).toBe(true);
+    blockLiveSessionOnPermissionRequest(assignmentId, sessionId);
 
     // Sanity: process still alive in the blocked state.
     expect(proc.proc.exitCode).toBeNull();
@@ -520,9 +521,7 @@ describe("Hand-off ordering (PR #30 S1)", () => {
     );
     expect(res.status).toBe(200);
 
-    // Expected order: spawn (original) → old-exited → spawn (new). An
-    // inverted implementation (spawn new first, then await kill) would
-    // produce ["spawn", "spawn", "old-exited"] and fail this assertion.
-    expect(sequence).toEqual(["spawn", "old-exited", "spawn"]);
+    const spawnOriginalThenOldExitedThenSpawnNew = ["spawn", "old-exited", "spawn"];
+    expect(sequence).toEqual(spawnOriginalThenOldExitedThenSpawnNew);
   });
 });
