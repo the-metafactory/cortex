@@ -2,7 +2,9 @@
 import type { Database } from "bun:sqlite";
 import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition } from "./db";
+import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
+import type { AttentionDelta } from "../surface/mc/attention-notify";
+import { applyVigilTransitions } from "./attention";
 import { updateStateSubject, type LedgerObservation } from "./state-subject";
 
 /**
@@ -53,25 +55,26 @@ export function ledgerEnvelopeError(envelope: Envelope): string | null {
  * dedupes on its own; all writes commit atomically. `replay` (rebuild from
  * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean } = {}): void {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean; stackId?: string } = {}): AttentionDelta {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
     goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(envelope),
     last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
   };
-  db.transaction(() => {
-    updateRunHealthSubject(db, payload, observation, now, opts);
-    if (payload.state) updateStateSubject(db, payload.state, observation, now, opts);
+  return db.transaction(() => {
+    const events = [updateRunHealthSubject(db, payload, observation, now, opts)];
+    if (payload.state) events.push(updateStateSubject(db, payload.state, observation, now, opts));
+    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.stackId ?? "default");
   }).immediate();
 }
 
 function updateRunHealthSubject(
   db: Database, payload: ExecutionRunFinishedPayload, observation: LedgerObservation, now: number,
   opts: { replay?: boolean },
-): void {
+): VigilEventRow | null {
   const key = runHealthKey(payload);
   const prior = getVigilSubject(db, key);
-  if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return;
+  if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return null;
   const healthy = payload.outcome === "succeeded";
   const changed = prior ? prior.value !== payload.outcome : !healthy;
   // glossary-ignore: run
@@ -81,10 +84,11 @@ function updateRunHealthSubject(
     healthy: healthy ? 1 : 0, run_kind: payload.ran.kind,
   }, now);
   if (changed && !opts.replay) {
-    writeVigilTransition(db, {
+    return writeVigilTransition(db, {
       subject_key: key, from_value: prior?.value ?? null, to_value: payload.outcome,
       direction: healthy ? "better" : "worse",
       run_id: observation.last_run_id, occurred_at: observation.last_ended_at,
     }, now);
   }
+  return null;
 }

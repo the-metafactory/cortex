@@ -84,6 +84,7 @@ describe("Vigil state-subject ingest", () => {
     });
     expect(listVigilEvents(db, key)).toEqual([{
       id: expect.any(String), subject_key: key, event_kind: "transition",
+      severity: "normal", attention_id: `att:vigil:${key}`,
       from_value: null, to_value: "needs-principal", direction: "worse",
       run_id: String(envelope.payload.run_id), occurred_at: ENDED_AT + 60_000, created_at: 100,
     }]);

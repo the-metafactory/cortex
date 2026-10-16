@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { ExecutionRunState } from "@the-metafactory/myelin";
-import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilObservation } from "./db";
+import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilObservation, type VigilEventRow } from "./db";
 
 /**
  * The fixed state registry (soma#787 Amendment 2, Q41): three ordered
@@ -74,11 +74,11 @@ export type LedgerObservation = Pick<VigilObservation, "goal_id" | "producer" | 
 export function updateStateSubject(
   db: Database, state: ExecutionRunState, observation: LedgerObservation, now: number,
   opts: { replay?: boolean } = {},
-): void {
+): VigilEventRow | null {
   const vocab = vocabularyOf(state.value);
   const key = stateSubjectKey(vocab, state.subject);
   const prior = getVigilSubject(db, key);
-  if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return;
+  if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return null;
   writeVigilSubject(db, {
     ...observation,
     subject_key: key, subject_kind: "state", vocab, ref: state.subject, value: state.value,
@@ -86,9 +86,10 @@ export function updateStateSubject(
   }, now);
   const direction = stateDirection(vocab, prior?.value ?? null, state.value);
   if (direction && !opts.replay) {
-    writeVigilTransition(db, {
+    return writeVigilTransition(db, {
       subject_key: key, from_value: prior?.value ?? null, to_value: state.value, direction,
       run_id: observation.last_run_id, occurred_at: observation.last_ended_at,
     }, now);
   }
+  return null;
 }

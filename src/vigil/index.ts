@@ -12,6 +12,8 @@ import { replayLedger } from "./replay";
 import { sweepStale } from "./staleness";
 import { startVigilTick, type VigilTickOptions } from "./tick";
 
+import { publishReconcileDelta } from "../surface/mc/attention-notify";
+
 export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
 
 export interface VigilHandle {
@@ -22,7 +24,7 @@ export interface VigilHandle {
 export async function startVigil(opts: {
   config: Pick<AgentConfig, "vigil" | "mc">;
   db: Database | null;
-  runtime: Pick<MyelinRuntime, "jetstreamManager" | "subscribePull">;
+  runtime: Pick<MyelinRuntime, "jetstreamManager" | "subscribePull"> & Partial<Pick<MyelinRuntime, "publish">>;
   principal: string;
   stack: string;
   log?: ProvisionLog;
@@ -63,14 +65,25 @@ export async function startVigil(opts: {
   if (!hasVigilSubjects(db) || isVigilReplayPending(db)) {
     await replayLedger({ jsm, runtime: opts.runtime, db, principal: opts.principal, log, now });
   }
-  const onEnvelope: EnvelopeHandler = (envelope) => {
+  const publish = opts.runtime.publish?.bind(opts.runtime);
+  const publishDelta = async (delta: Parameters<typeof publishReconcileDelta>[0]) => {
+    if (!publish) return;
+    try {
+      await publishReconcileDelta(delta, {
+        source: { principal: opts.principal, agent: "cortex", instance: "local" },
+      }, publish);
+    } catch (err) {
+      log.warn(`vigil: attention notification failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  const onEnvelope: EnvelopeHandler = async (envelope) => {
     const invalid = ledgerEnvelopeError(envelope);
     if (invalid !== null) {
       log.warn(`vigil: envelope ${envelope.id} invalid: ${invalid}`);
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
-    ingestLedgerEnvelope(db, envelope, now());
+    await publishDelta(ingestLedgerEnvelope(db, envelope, now(), { stackId: opts.stack }));
     return { kind: "ack" };
   };
   const pull = opts.runtime.subscribePull({
@@ -88,7 +101,7 @@ export async function startVigil(opts: {
     throw err;
   }
   const tick = startVigilTick({
-    run: () => { sweepStale(db, now(), opts.config.vigil.cadence); },  // glossary-ignore: run
+    run: async () => { await publishDelta(sweepStale(db, now(), opts.config.vigil.cadence, opts.stack)); },  // glossary-ignore: run
     schedule: opts.schedule,
     onError: (err) => { log.warn(`vigil: tick failed: ${err instanceof Error ? err.message : String(err)}`); },
   });

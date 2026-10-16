@@ -1,6 +1,8 @@
 // glossary-ignore: run
 import type { Database } from "bun:sqlite";
-import { writeVigilTransition, type VigilSubjectRow } from "./db";
+import { writeVigilTransition, type VigilSubjectRow, type VigilEventRow } from "./db";
+import type { AttentionDelta } from "../surface/mc/attention-notify";
+import { applyVigilTransitions } from "./attention";
 import { STALE_VALUE } from "./state-subject";
 
 export const DEFAULT_CADENCE_MS = 26 * 60 * 60 * 1000;
@@ -19,8 +21,9 @@ export function effectiveCadenceMs(
 }
 
 /** A7c: silence strictly beyond twice the cadence is an ordinary worse transition. */
-export function sweepStale(db: Database, now: number, cadence: VigilCadence): void {
-  db.transaction(() => {
+export function sweepStale(db: Database, now: number, cadence: VigilCadence, stackId = "default"): AttentionDelta {
+  return db.transaction(() => {
+    const events: VigilEventRow[] = [];
     const subjects = db.query<VigilSubjectRow, [string]>(`SELECT * FROM vigil_subjects
       WHERE value != ? AND ((subject_kind = 'run' AND run_kind = 'job')
         OR (subject_kind = 'state' AND vocab = 'goal'))`).all(STALE_VALUE);
@@ -29,10 +32,11 @@ export function sweepStale(db: Database, now: number, cadence: VigilCadence): vo
       const cadenceMs = effectiveCadenceMs(subject, cadence);
       if (cadenceMs === null || now - subject.last_ended_at <= 2 * cadenceMs) continue;
       update.run(STALE_VALUE, now, subject.subject_key);
-      writeVigilTransition(db, {
+      events.push(writeVigilTransition(db, {
         subject_key: subject.subject_key, from_value: subject.value, to_value: STALE_VALUE,
         direction: "worse", run_id: subject.last_run_id, occurred_at: now,
-      }, now);
+      }, now));
     }
+    return applyVigilTransitions(db, events, stackId);
   }).immediate();
 }
