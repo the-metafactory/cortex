@@ -67,6 +67,7 @@ describe("notifyWithResult", () => {
   });
 
   test("normalizes synchronous and non-Error throws", async () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- a test deliberately throws a non-Error value to pin notifyWithResult's String(err) detail branch
     const adapter = adapterWith(() => { throw "offline"; });
     expect(await notifyWithResult(adapter, "hello")).toEqual({
       delivered: false, kind: "transient", code: "exception", detail: "offline",

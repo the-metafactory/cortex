@@ -16,7 +16,9 @@ export type NotifyResult =
   | { delivered: false; kind: "permanent" | "transient"; code: string; detail?: string };
 
 /** Options for notifying the principal. `buffer` defaults to true. */
-export type NotifyOptions = { buffer?: boolean };
+export interface NotifyOptions {
+  buffer?: boolean;
+}
 
 /** Platform-agnostic inbound message */
 export interface InboundMessage {
@@ -353,6 +355,7 @@ export interface PlatformAdapter {
    * buffer: false disables adapter-side buffering so callers can handle failure.
    * Legacy adapters may return void instead of reporting delivery.
    */
+  // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- void keeps adapters that return Promise<void> (mattermost, slack, web) assignable; undefined would not
   notifyPrincipal(text: string, opts?: NotifyOptions): Promise<NotifyResult | void>;
   /** F-092: Hot-reload adapter config (optional, for adapters that support it) */
   updateConfig?(config: unknown): void;

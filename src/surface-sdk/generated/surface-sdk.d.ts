@@ -40,9 +40,9 @@ export type NotifyResult = {
 	detail?: string;
 };
 /** Options for notifying the principal. `buffer` defaults to true. */
-export type NotifyOptions = {
+export interface NotifyOptions {
 	buffer?: boolean;
-};
+}
 /** Platform-agnostic inbound message */
 export interface InboundMessage {
 	/** Platform identifier: "discord", "mattermost", "slack", etc. */
