@@ -178,6 +178,66 @@ describe("Vigil startup and delivery", () => {
     await handle!.stop();
   });
 
+  test.each([
+    { result_ref: "soma:results/daily-sweep.md" },
+    { proposal_refs: ["soma:proposals/first.md", "soma:proposals/second.md"] },
+    { result_ref: "soma:results/daily-sweep.md", proposal_refs: ["soma:proposals/first.md"] },
+  ])("succeeded run with %j ACKs and records run state without invalid warnings", async (refs) => {
+    ingestLedgerEnvelope(db, ledgerEnvelope(), 50);
+    const envelope = ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05.000Z" });
+    Object.assign(envelope.payload, refs);
+    const h = pullRuntime(createFakeJetStream(), [envelope]);
+    const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
+    const onError = mock(() => {});
+    const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default", log, onError, now: () => 100 });
+    try {
+      await h.delivered;
+      expect(h.deliveries[0]!.ack).toHaveBeenCalledTimes(1);
+      expect(h.deliveries[0]!.nak).not.toHaveBeenCalled();
+      expect(h.deliveries[0]!.term).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(getVigilSubject(db, KEY)).toMatchObject({
+        value: "succeeded", healthy: 1, last_run_id: envelope.payload.run_id,
+        last_ended_at: ENDED_AT + 60_000, last_seen_at: 100,
+      });
+      expect(listVigilEvents(db, KEY)).toHaveLength(2);
+      expect(listVigilEvents(db, KEY)[1]).toMatchObject({
+        from_value: "failed", to_value: "succeeded", direction: "better", run_id: envelope.payload.run_id,
+      });
+    } finally {
+      await handle!.stop();
+    }
+  });
+
+  test.each([
+    { field: "result_ref", value: "soma:results/daily-sweep.md" },
+    { field: "proposal_refs", value: ["soma:proposals/first.md"] },
+  ])("failed run with $field logs invalid and ACKs without changing state", async ({ field, value }) => {
+    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded" }), 50);
+    const prior = getVigilSubject(db, KEY);
+    const envelope = ledgerEnvelope({ ended_at: "2026-10-12T10:01:05.000Z" });
+    Object.assign(envelope.payload, { [field]: value });
+    const h = pullRuntime(createFakeJetStream(), [envelope]);
+    const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
+    const onError = mock(() => {});
+    const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default", log, onError });
+    try {
+      await h.delivered;
+      expect(h.deliveries[0]!.ack).toHaveBeenCalledTimes(1);
+      expect(h.deliveries[0]!.nak).not.toHaveBeenCalled();
+      expect(h.deliveries[0]!.term).not.toHaveBeenCalled();
+      expect(log.warn.mock.calls.map(([msg]) => msg)).toEqual([
+        `vigil: envelope ${envelope.id} invalid: payload.${field}: is only allowed when outcome is succeeded`,
+      ]);
+      expect(onError).not.toHaveBeenCalled();
+      expect(getVigilSubject(db, KEY)).toEqual(prior);
+      expect(listVigilEvents(db, KEY)).toEqual([]);
+    } finally {
+      await handle!.stop();
+    }
+  });
+
   test("invalid payload or wrong type logs envelope ID and first error then ACKs", async () => {
     const invalid = ledgerEnvelope();
     invalid.payload.outcome = "unknown";
