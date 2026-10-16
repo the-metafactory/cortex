@@ -4,18 +4,11 @@ import { dirname, join } from "path";
 import type { DegradedInfo } from "../../common/config/degraded-state";
 import { loadConfig } from "./config";
 import { initDatabase } from "./db/init";
-import { startServer } from "./server";
+import { startServer, type MissionControlViews } from "./server";
 import { ProcessManager } from "./session/process-manager";
 import { HookStreamPoller } from "./hooks/poller";
 import type { Config } from "./types";
 import type { WsClientRegistry } from "./ws/client-registry";
-import type { AgentPresenceView } from "./api/agents";
-import type { NetworksView } from "./api/networks";
-import type { AdmissionDecider } from "./api/networks-admission";
-import type { Authorizer } from "./api/networks-authorize";
-import type { HandoffView } from "./api/handoff";
-import type { DoctorView } from "./api/doctor";
-import type { LocalAggregationProvider } from "./local-aggregation/sibling-db-reader";
 
 export interface MissionControlHandle {
   db: Database;
@@ -24,19 +17,11 @@ export interface MissionControlHandle {
   stop(): Promise<void>;
 }
 
-export interface StartMissionControlOptions {
+export interface StartMissionControlOptions extends MissionControlViews {
   configPath?: string;
   dbPath: string;
   port?: number;
   headless?: boolean;
-  agentPresence?: () => AgentPresenceView | null;
-  localAggregation?: LocalAggregationProvider;
-  networks?: () => NetworksView | null;
-  admissionDecider?: () => AdmissionDecider | null;
-  authorizer?: () => Authorizer | null;
-  handoffView?: () => HandoffView | null;
-  doctorView?: () => DoctorView | null;
-  sidebandUrl?: string;
   degraded?: DegradedInfo;
 }
 

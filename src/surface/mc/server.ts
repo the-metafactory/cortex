@@ -119,15 +119,8 @@ export interface HealthResponse {
   degraded?: DegradedInfo;
 }
 
-export interface StartServerOptions {
-  processManager?: ProcessManager;
-  degraded?: DegradedInfo;
-  spawn?: SpawnFn;
-  notify?: MaybeNotifyDeps;
-  defaultGithubRepo?: string;
-  ghSpawn?: import("./adapters/github").GhSpawnFn;
-  iterationLabel?: string;
-  githubWebhookSecret?: string;
+/** The read views and providers Mission Control serves, shared by startServer and startMissionControl. */
+export interface MissionControlViews {
   agentPresence?: () => AgentPresenceView | null;
   localAggregation?: LocalAggregationProvider;
   networks?: () => NetworksView | null;
@@ -136,6 +129,17 @@ export interface StartServerOptions {
   handoffView?: () => HandoffView | null;
   doctorView?: () => DoctorView | null;
   sidebandUrl?: string;
+}
+
+export interface StartServerOptions extends MissionControlViews {
+  processManager?: ProcessManager;
+  degraded?: DegradedInfo;
+  spawn?: SpawnFn;
+  notify?: MaybeNotifyDeps;
+  defaultGithubRepo?: string;
+  ghSpawn?: import("./adapters/github").GhSpawnFn;
+  iterationLabel?: string;
+  githubWebhookSecret?: string;
 }
 
 export function startServer(
