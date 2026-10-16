@@ -2014,11 +2014,6 @@
       "count": 9
     }
   },
-  "src/cli/cortex/commands/provision-stack.ts": {
-    "cortex/no-comments": {
-      "count": 195
-    }
-  },
   "src/cli/cortex/commands/quickstart-adapters.ts": {
     "cortex/no-comments": {
       "count": 85
