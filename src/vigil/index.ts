@@ -9,6 +9,8 @@ import { LEDGER_STREAM, provisionLedgerStream, provisionPullConsumer, type Provi
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
 import { hasVigilSubjects, isVigilReplayPending } from "./db";
 import { replayLedger } from "./replay";
+import { sweepStale } from "./staleness";
+import { startVigilTick, type VigilTickOptions } from "./tick";
 
 export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
 
@@ -26,6 +28,7 @@ export async function startVigil(opts: {
   log?: ProvisionLog;
   onError?: EnvelopeErrorHandler;
   now?: () => number;
+  schedule?: VigilTickOptions["schedule"];
 }): Promise<VigilHandle | null> {
   if (!opts.config.vigil.enabled) return null;
   const log = opts.log ?? console;
@@ -84,5 +87,16 @@ export async function startVigil(opts: {
     await pull.stop();
     throw err;
   }
-  return { stop: () => pull.stop() };
+  const tick = startVigilTick({
+    run: () => { sweepStale(db, now(), opts.config.vigil.cadence); },
+    schedule: opts.schedule,
+    onError: (err) => { log.warn(`vigil: tick failed: ${err instanceof Error ? err.message : String(err)}`); },
+  });
+  let stopping: Promise<void> | undefined;
+  return {
+    stop: () => stopping ??= (async () => {
+      await tick.stop();
+      await pull.stop();
+    })(),
+  };
 }
